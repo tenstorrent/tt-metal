@@ -8,8 +8,7 @@ import pytest
 import ttnn
 import ttml
 
-HEADS = 4
-HEAD_DIM = 64
+HEAD_COUNTS = (4, 2)  # Q heads, then K heads under GQA
 MAX_SEQ_LEN = 256
 STARTS = np.array([0, 5, 17, 100])
 
@@ -34,23 +33,39 @@ def _rope_and_grad(x_np, w_np, rope_fn):
     return result
 
 
-@pytest.mark.requires_device
-@pytest.mark.parametrize("seq_len", [1, 32])
-def test_rope_position_ids_matches_per_row_scalar_rope(seq_len):
-    rng = np.random.default_rng(0)
-    params = ttml.ops.rope.build_rope_params(MAX_SEQ_LEN, HEAD_DIM)
-    batch = len(STARTS)
-    x_np = rng.standard_normal((batch, HEADS, seq_len, HEAD_DIM)).astype(np.float32)
-    w_np = rng.standard_normal((batch, HEADS, seq_len, HEAD_DIM)).astype(np.float32)
+def _ids(starts: np.ndarray, seq_len: int) -> ttml.autograd.Tensor:
+    ids_np = (starts[:, None] + np.arange(seq_len)[None, :]).astype(np.uint32)
+    return ttml.autograd.Tensor.from_numpy(ids_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
 
-    ids_np = (STARTS[:, None] + np.arange(seq_len)[None, :]).astype(np.uint32)
-    ids = ttml.autograd.Tensor.from_numpy(ids_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
-    cos, sin = ttml.ops.rope.gather_rows(params, ids, HEADS)
-    out, grad = _rope_and_grad(x_np, w_np, lambda x: ttml.ops.rope.rope(x, params, cos, sin))
 
-    for b, start in enumerate(STARTS):
+def _assert_matches_scalar_rope(params, ids, starts, num_heads, seq_len, head_dim, rng):
+    x_np = rng.standard_normal((len(starts), num_heads, seq_len, head_dim)).astype(np.float32)
+    w_np = rng.standard_normal((len(starts), num_heads, seq_len, head_dim)).astype(np.float32)
+    out, grad = _rope_and_grad(x_np, w_np, lambda x: ttml.ops.rope.rope(x, params, ids))
+
+    for b, start in enumerate(starts):
         ref_out, ref_grad = _rope_and_grad(
             x_np[b : b + 1], w_np[b : b + 1], lambda x: ttml.ops.rope.rope(x, params, int(start))
         )
         np.testing.assert_allclose(out[b : b + 1], ref_out, atol=2e-2, rtol=2e-2)
         np.testing.assert_allclose(grad[b : b + 1], ref_grad, atol=5e-2, rtol=5e-2)
+
+
+@pytest.mark.requires_device
+@pytest.mark.parametrize("head_dim, seq_len", [(64, 1), (64, 32), (128, 1), (128, 5)])
+def test_rope_position_ids_matches_per_row_scalar_rope(head_dim, seq_len):
+    rng = np.random.default_rng(0)
+    params = ttml.ops.rope.build_rope_params(MAX_SEQ_LEN, head_dim)
+    shifted = STARTS + 1
+
+    ids = _ids(STARTS, seq_len)
+    # The second pass reads the cached rows.
+    for num_heads in HEAD_COUNTS + HEAD_COUNTS:
+        _assert_matches_scalar_rope(params, ids, STARTS, num_heads, seq_len, head_dim, rng)
+
+    ids.set_value(_ids(shifted, seq_len).get_value())
+    for num_heads in HEAD_COUNTS:
+        _assert_matches_scalar_rope(params, ids, shifted, num_heads, seq_len, head_dim, rng)
+
+    for num_heads in HEAD_COUNTS:
+        _assert_matches_scalar_rope(params, _ids(shifted, seq_len), shifted, num_heads, seq_len, head_dim, rng)

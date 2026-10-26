@@ -201,19 +201,11 @@ class Qwen3(AbstractModuleBase):
         if past_key_values is not None:
             position_offset = past_key_values.get_seq_length()
 
-        rope_rows = None
-        if position_ids is not None:
-            attn = self.blocks[0].self_attn
-            rope_rows = (
-                ttml.ops.rope.gather_rows(attn.rope_params, position_ids, attn.num_heads),
-                ttml.ops.rope.gather_rows(attn.rope_params, position_ids, attn.num_kv_heads),
-            )
-
         for i, block in enumerate(self.blocks):
             if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
-                out = memory_efficient_runner(block, out, mask, past_key_values, position_offset, rope_rows)
+                out = memory_efficient_runner(block, out, mask, past_key_values, position_offset, position_ids)
             elif self.config.runner_type == ttml.models.RunnerType.Default:
-                out = block(out, mask, past_key_values, position_offset, rope_rows)
+                out = block(out, mask, past_key_values, position_offset, position_ids)
             else:
                 raise ValueError("Unknown runner type. Supported runner types ['default', 'memory_efficient']")
             if self.track_memory and (i + 1) % self.track_memory == 0:

@@ -87,7 +87,7 @@ class Qwen3Block(AbstractModuleBase):
         mask: Optional[ttml.autograd.Tensor] = None,
         past_key_values=None,
         position_offset: int = 0,
-        rope_rows: Optional[tuple] = None,
+        position_ids: Optional[ttml.autograd.Tensor] = None,
     ):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -96,7 +96,7 @@ class Qwen3Block(AbstractModuleBase):
             mask,
             past_key_values,
             position_offset,
-            rope_rows,
+            position_ids,
         )
         hidden_states = ttml.ops.binary.add(residual, hidden_states)
 

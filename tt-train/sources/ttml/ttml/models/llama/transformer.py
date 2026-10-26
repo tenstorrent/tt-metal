@@ -201,11 +201,11 @@ class LlamaBlock(AbstractModuleBase):
         kv_cache: Optional[ttml.models.KvCache] = None,
         layer_idx: Optional[int] = None,
         new_tokens: Optional[int] = None,
-        rope_rows: Optional[tuple] = None,
+        position_ids: Optional[ttml.autograd.Tensor] = None,
     ) -> ttml.autograd.Tensor:
         residual = input
         h = self.attention_norm(input)
-        h = self.attention(h, mask, kv_cache, layer_idx, new_tokens, rope_rows)
+        h = self.attention(h, mask, kv_cache, layer_idx, new_tokens, position_ids)
         h = ttml.ops.binary.add(h, residual)
 
         residual = h

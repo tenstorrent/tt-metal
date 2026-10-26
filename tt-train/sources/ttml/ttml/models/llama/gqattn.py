@@ -106,20 +106,11 @@ class GroupedQueryAttention(AbstractModuleBase):
                 bias_init=ttml.init.zeros(),
             )
 
-    def _rope_qk(self, q_heads, k_heads, token_pos, rope_rows):
-        if rope_rows is None:
-            return (
-                ttml.ops.rope.rope(q_heads, self.rope_params, token_pos),
-                ttml.ops.rope.rope(k_heads, self.rope_params, token_pos),
-            )
-        q_rows, k_rows = rope_rows
-        return (
-            ttml.ops.rope.rope(q_heads, self.rope_params, *q_rows),
-            ttml.ops.rope.rope(k_heads, self.rope_params, *k_rows),
-        )
-
     def forward_no_kv(
-        self, input: ttml.autograd.Tensor, mask: ttml.autograd.Tensor, rope_rows: Optional[tuple] = None
+        self,
+        input: ttml.autograd.Tensor,
+        mask: ttml.autograd.Tensor,
+        position_ids: Optional[ttml.autograd.Tensor] = None,
     ) -> ttml.autograd.Tensor:
         q = self.q_linear(input)
         kv = self.kv_linear(input)
@@ -128,7 +119,10 @@ class GroupedQueryAttention(AbstractModuleBase):
             q, kv, self.num_heads, self.num_groups
         )
 
-        q_heads, k_heads = self._rope_qk(q_heads, k_heads, 0, rope_rows)
+        token_pos = 0 if position_ids is None else position_ids
+
+        q_heads = ttml.ops.rope.rope(q_heads, self.rope_params, token_pos)
+        k_heads = ttml.ops.rope.rope(k_heads, self.rope_params, token_pos)
 
         attention = ttml.ops.attention.scaled_dot_product_attention(q_heads, k_heads, v_heads, mask)
         attention = ttml.ops.multi_head_utils.heads_fusion(attention)
@@ -148,7 +142,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         kv_cache: ttml.models.KvCache,
         layer_idx: int,
         new_tokens: int,
-        rope_rows: Optional[tuple] = None,
+        position_ids: Optional[ttml.autograd.Tensor] = None,
     ) -> ttml.autograd.Tensor:
         q = self.q_linear(input)
         kv = self.kv_linear(input)
@@ -157,7 +151,10 @@ class GroupedQueryAttention(AbstractModuleBase):
             q, kv, self.num_heads, self.num_groups
         )
 
-        q_heads, k_heads = self._rope_qk(q_heads, k_heads, kv_cache.get_cache_position(), rope_rows)
+        token_pos = kv_cache.get_cache_position() if position_ids is None else position_ids
+
+        q_heads = ttml.ops.rope.rope(q_heads, self.rope_params, token_pos)
+        k_heads = ttml.ops.rope.rope(k_heads, self.rope_params, token_pos)
 
         kv_cache.update(layer_idx, k_heads.get_value(), v_heads.get_value(), new_tokens)
 
@@ -198,10 +195,10 @@ class GroupedQueryAttention(AbstractModuleBase):
         kv_cache: Optional[ttml.models.KvCache] = None,
         layer_idx: Optional[int] = None,
         new_tokens: Optional[int] = None,
-        rope_rows: Optional[tuple] = None,
+        position_ids: Optional[ttml.autograd.Tensor] = None,
     ) -> ttml.autograd.Tensor:
         if kv_cache is None:
-            return self.forward_no_kv(input, mask, rope_rows)
+            return self.forward_no_kv(input, mask, position_ids)
         if layer_idx is None or new_tokens is None:
             raise ValueError("forward with kv_cache requires layer_idx and new_tokens to be set")
-        return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens, rope_rows)
+        return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens, position_ids)
