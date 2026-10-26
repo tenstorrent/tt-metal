@@ -562,14 +562,19 @@ void kernel_main() {
                 meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(4), meta_l1);
             if constexpr (has_sliding_window) {
                 kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
-                    kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
+                    kv_actual_isl,
+                    q_local_padded_Nt,
+                    ring_size,
+                    kv_local_padded_Nt,
+                    SLIDING_HALO_SLOT_COUNT,
+                    circular_kv_slab_count);
             } else {
                 kv_actual_isl =
                     trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
             }
             const uint32_t kv_actual_tile_count = kv_actual_isl / 32;
             logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
-                kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+                kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size, circular_kv_slab_count);
             if constexpr (has_kv_valid_end) {
                 const uint32_t kv_valid_end = trace_metadata::read_metadata_scalar_u32(
                     meta_noc, kv_valid_end_args, get_common_arg_val<uint32_t>(kv_valid_end_common_arg), meta_l1);

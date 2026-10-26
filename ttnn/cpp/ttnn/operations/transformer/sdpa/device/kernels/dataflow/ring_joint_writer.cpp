@@ -509,6 +509,7 @@ void kernel_main() {
     constexpr bool chunked_enabled = get_compile_time_arg_val(26) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(27);
     constexpr uint32_t kv_stripe_split = get_named_compile_time_arg_val("kv_stripe_split");
+    constexpr uint32_t circular_kv_slab_count = get_named_compile_time_arg_val("circular_kv_slab_count");
     static_assert(
         kv_stripe_split > 0 && q_local_padded_Nt % kv_stripe_split == 0, "Q slab must split into whole KV regions");
     constexpr uint32_t kv_region_Nt = q_local_padded_Nt / kv_stripe_split;
@@ -715,13 +716,18 @@ void kernel_main() {
             noc, meta_args, get_common_arg_val<uint32_t>(0), cb_meta_scratch.get_write_ptr());
         if constexpr (has_sliding_window) {
             kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
-                kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
+                kv_actual_isl,
+                q_local_padded_Nt,
+                ring_size,
+                kv_local_padded_Nt,
+                SLIDING_HALO_SLOT_COUNT,
+                circular_kv_slab_count);
         } else {
             kv_actual_isl =
                 trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
         }
         logical_nt = trace_metadata::logical_tile_rows_clamped_to_cache(
-            kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
+            kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size, circular_kv_slab_count);
         if constexpr (has_kv_valid_end) {
             const uint32_t kv_valid_end = trace_metadata::read_metadata_scalar_u32(
                 noc,

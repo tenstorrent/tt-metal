@@ -711,8 +711,13 @@ void bind_sdpa(nb::module_& mod) {
             circular_kv_cache (bool): The sliding KV cache is a circular buffer of whole chunk-sized
                 slabs (chunk group g lives in local slab g % n_slabs; the writer wraps host-side). The
                 slab count is derived on-device from the cache/Q geometry (>= 2 whole slabs required).
-                logical_n / kv_actual_isl stay TRUE ABSOLUTE values. Requires sliding_window_size +
-                kv_actual_isl with complete aligned groups. The metadata path is unsupported.
+                logical_n / kv_actual_isl stay TRUE ABSOLUTE values. Requires sliding_window_size and
+                either kv_actual_isl or slot_id + kv_actual_isl_tensor, with complete aligned groups.
+                On the metadata path the host logical_n is only a placeholder, for example the cache
+                capacity, but it must still be a positive multiple of the chunk group (Q local seq *
+                ring size). Every kv_actual_isl_tensor value must lie on a chunk-group boundary. Any
+                other value triggers the device assertion, or the prefix-zero fallback when assertions
+                are disabled.
                 Defaults to False.
             persistent_output_buffer_joint_k (ttnn.Tensor, optional): Persistent buffer for the
                 gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
