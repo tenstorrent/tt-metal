@@ -133,6 +133,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         S = page_table_tensor.value().padded_shape()[-1] * block_size;
         has_block_padding = original_block_size < TILE_HEIGHT;
     }
+    TT_FATAL(B > 0, "SDPA decode batch size must be > 0");
 
     // ========== Q Sharding & MLA Parallelization ==========
     // Q is "locally available" when sharded for MLA with data replicated across all worker cores.
@@ -302,6 +303,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     if (use_col_major_group_indexing) {
         num_groups_total = num_active_cores / num_cores_per_head;
         num_group_rows = grid_size.x / num_cores_per_head;
+        TT_FATAL(
+            num_group_rows > 0,
+            "grid_size.x ({}) must be at least num_cores_per_head ({}) for column major core groups",
+            grid_size.x,
+            num_cores_per_head);
         num_group_cols = num_groups_total / num_group_rows;
         TT_FATAL(
             num_group_cols % q_heads_parallel_factor == 0,

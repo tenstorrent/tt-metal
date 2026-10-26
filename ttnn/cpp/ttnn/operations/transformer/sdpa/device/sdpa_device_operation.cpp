@@ -88,6 +88,16 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 "Head dimension of V must be less than or equal to head dim of K, got {} and {}",
                 attrs.head_dim_v.value(),
                 q_shape[3]);
+            if (tensors.v.has_value()) {
+                // The K/V chain grouping divides Q heads by V heads.
+                const uint32_t nvh = tensors.v->logical_shape()[1];
+                TT_FATAL(
+                    nvh > 0 && nqh >= nvh && nqh % nvh == 0,
+                    "Q num_heads must be >= V num_heads and divisible by V num_heads, and V num_heads must be greater "
+                    "than 0. Got Q: {}, V: {}",
+                    nqh,
+                    nvh);
+            }
         } else {
             TT_FATAL(
                 k_shape[0] == B && v_shape[0] == B,
@@ -197,6 +207,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
             const auto& map_shape = map.logical_shape();
             const uint32_t qc = attrs.program_config->q_chunk_size;
             const uint32_t kc = attrs.program_config->k_chunk_size;
+            TT_FATAL(qc > 0 && kc > 0, "q_chunk_size ({}) and k_chunk_size ({}) must be greater than 0", qc, kc);
             const uint32_t nq = (q.logical_shape()[2] + qc - 1) / qc;
             const uint32_t nk = (k.logical_shape()[2] + kc - 1) / kc;
             TT_FATAL(

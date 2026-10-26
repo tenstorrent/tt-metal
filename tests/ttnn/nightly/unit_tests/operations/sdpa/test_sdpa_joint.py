@@ -203,3 +203,14 @@ def test_joint_sdpa_zero_heads(device, expect_error):
         ttnn.transformer.joint_scaled_dot_product_attention(
             q, k, v, joint_q, joint_k, joint_v, joint_strategy="rear", program_config=program_config
         )
+
+
+@pytest.mark.parametrize("grid", [(0, 1), (1, 0)])
+def test_joint_sdpa_zero_grid(device, expect_error, grid):
+    # The factory splits batch, heads and Q chunks over grid.x * grid.y cores.
+    q, k, v, joint_q, joint_k, joint_v = _zero_div_tensors(device, 6)
+    program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid, q_chunk_size=32, k_chunk_size=32)
+    with expect_error(RuntimeError, "compute_with_storage_grid_size must be non-zero"):
+        ttnn.transformer.joint_scaled_dot_product_attention(
+            q, k, v, joint_q, joint_k, joint_v, joint_strategy="rear", program_config=program_config
+        )
