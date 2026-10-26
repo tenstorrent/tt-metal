@@ -316,6 +316,14 @@ void kernel_main() {
             if (pushed % 8 == 0) {
                 SE_MARK("W_LANDED");
             }
+#if defined(SE_ZONES) && defined(SE_DYN)  // (each expert's first / last gate/up block landed: the stream's gaps)
+            if (pushed % (total_w_ct / num_e_dyn) == 1 % (total_w_ct / num_e_dyn)) {
+                SE_MARK("W_E0");
+            }
+            if (pushed % (total_w_ct / num_e_dyn) == 0) {
+                SE_MARK("W_E1");
+            }
+#endif
         }
 #if defined(SE_X_RESIDENT)
         // perf probe: x is resident - a slot's block counts as arrived as soon as compute has freed the slot
@@ -341,6 +349,9 @@ void kernel_main() {
             ++x_pub;
             if (x_pub % 8 == 0) {
                 SE_MARK("X_ARR");
+            }
+            if (x_pub == 1) {
+                SE_MARK("X_FIRST");
             }
         }
         if (x_cons < x_pub && cb_pages_reservable_at_back(x_cb, (x_slots - (x_pub - x_cons) + 1) * x_blk)) {

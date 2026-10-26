@@ -1796,3 +1796,55 @@ over the compute cores (flat 64 gate/up + 32 down, K3 + 28; main 11 x 8 = 88) an
 - The one-dispatch hybrid op costs over the separate ops: T 320 (all fused) +5-9% over the fused op alone, its unified
   half (T 128 at M >= 160) +12-15% over unified alone. Under zipf routing the two-op forward at T 128 is main's best.
 Logs: /localdev/mstaletovic/re_cmp/ (fl_*, mn_*, mz_*, main_all.out, flat_all.out, table.md).
+
+### Fixed costs per call: what sits 90-150 us above the DRAM floor (2026-10-26, one chip bh-lb-09, DRISC-only defaults)
+Why: at the Galaxy loads every model runs ~90-150 us above its DRAM floor (weights + x bf16 + y bf16 at 512 GB/s); K3
+hides it under 28 experts, GLM-5.3 (8) cannot. Two methods: an E x M regression, and per-role zone timestamps.
+
+**1. Regression.** test_flat_balanced_sweep, E 1 / 2 / 4 / 8 / 16 / 28 x M 32 / 64 / 96 / 128 / 160 / 256, uniform,
+rows_hint = M (64-row sub-blocks at every point), 144 points, no hang. The overhead (time - floor) is linear in E at
+each M (rms 1-5 us), with a per-call intercept a(M) and a per-expert slope b(M):
+| M | GLM-5.3 a / b | GLM-5.3-Flash a / b | K3 a / b | K2.7 a / b |
+|---|---|---|---|---|
+| 32 | 18 / 5.7 | 18 / 3.8 | 26 / 1.6 | 18 / 6.7 |
+| 64 | 36 / 4.8 | 28 / 3.1 | 35 / 2.5 | 39 / 5.8 |
+| 96 | 41 / 6.1 | 32 / 4.2 | 45 / 3.4 | 46 / 7.0 |
+| 128 | 49 / 7.8 | 38 / 5.4 | 51 / 5.0 | 53 / 8.9 |
+| 160 | 53 / 9.6 | 44 / 6.5 | 52 / 8.9 | 60 / 10.9 |
+| 256 | 59 / 17.2 | 49 / 12.0 | 62 / 15.2 | 69 / 19.4 |
+(us per call / us per expert.) One global fit over M <= 160, a + b E + c E ceil(M / 64) + d E M, leaves rms 9-13 us
+(max 22-32): a 32-43 us a call, b -2..2.5 an expert, c 1.0-1.6 an expert sub-block, d 19-39 ns an expert row. So:
+the per-call part grows with M (18 -> 53-60 us from M 32 to 160), the per-expert part is 2-7 us at small M and grows
+with M (the x / y traffic, then math above M ~160). Galaxy loads from the per-M fits: GLM-5.3 E 8 M 160 53 + 77 = 130
+(measured 129), GLM-Flash E 9 M 142 ~41 + ~55, K3 E 28 M 91 ~43 + ~90, K2.7 E 12 M 107 ~48 + ~90.
+
+**2. Pieces (zones, MIMO_FL_ZONES=1, the second of 2 calls; new receiver marks W_E0 / W_E1 = each expert's first /
+last gate/up weight block landed on a core, X_FIRST = its first x block; K3 / K2.7 with the every-8-blocks marks off,
+or the profiler buffer drops the tail).** us from the call's first kernel start; floor/expert = (w + x + y) / 512.
+| | GLM-5.3 E 8 M 160 | GLM-Flash E 9 M 142 | K3 E 28 M 91 | K2.7 E 12 M 107 |
+|---|---|---|---|---|
+| call (profiled) / floor | 529 / 393 | 381 / 290 | 1234 / 1087 | 805 / 653 |
+| first weight block landed (min / med) | 8.7 / 10.4 | 8.5 / 10.3 | 12.6 / 14.4 | 9.3 / 10.9 |
+| first x block landed (med / max) | 15.6 / 22.6 | 15.8 / 22.9 | 14.9 / 22.1 | 16.4 / 24.0 |
+| weight landing per expert on a core (med) / gap to the next expert | 47.2 / 3.0 | 31.3 / 3.1 | 36.0 / 3.9 | 54.6 / 2.5 |
+| sum of the gaps (median core) | 45 (1.9-3 early, 6.5 / 11.7 / 16.5 at experts 4-6) | 28 | ~100 | 28 |
+| last weight block landed (med / max) | 439 / 453 | 320 / 341 | 1164 / 1195 | 711 / 764 |
+| last gate/up K loop end (max) | 512 | 365 | 1212 | 780 |
+| kernel end (max: down cores, y writes) | 529 | 381 | 1234 | 805 |
+Fixed-cost table (us at the Galaxy load):
+| fixed cost | GLM-5.3 | GLM-Flash | K3 | K2.7 | scales with | lever |
+|---|---|---|---|---|---|---|
+| head: launch -> first weight block lands (DRAM idle) | 10 | 10 | 14 | 11 | nothing (K3 +4: the 28-expert schedule) | start the first expert's weight stream before the op (in the dispatch / previous op's window) |
+| x head: first x block on the gate/up cores (med / max) | 16 / 23 | 16 / 23 | 15 / 22 | 16 / 24 | nothing; hidden under the weights' head + first expert | - |
+| weight stream excess: (last weight landed max - first landed) - E x floor/expert | 49 | 41 | 93 | 100 | E (per-expert gaps 2.5-3.9 us + backpressure) and M (x / y reads interfere) | see the two rows below |
+| ... of which per-expert switch gaps (median core) | 45 (21 base + 24 backpressure at experts 4-6) | 28 | ~100 | 28 | E | grant the next expert's slots before the current one drains (ring credit at the switch) |
+| ... of which slot skew (last weight landed max - med) | 15 | 20 | 31 | 53 | E (accumulated imbalance across DRISC slots) | balance the slots' loads / work stealing at the end |
+| tail: last weight landed -> last gate/up K loop | 59 | 24 | 17 | 16 | sub-blocks of the last expert (x passes ~13 us each at H 6144) | split the last expert's rows over idle cores / put the smallest expert last |
+| tail: last gate/up -> last down / y write -> kernel end | 17 | 16 | 22 | 25 | nothing much (down of the last sub-block + y) | overlap with the next op (the fused flat + combine already does) |
+| sum (head + stream excess + tail) | 135 | 91 | 146 | 152 | | |
+| measured overhead above floor (profiled call) | 136 | 91 | 147 | 152 | | |
+Takeaways: the head (10-14) and the drain (16-25) are true per-call constants; the rest scales. GLM-5.3's large tail
+is its last expert's three 64-row sub-blocks re-running the x passes after its weights landed (59 us), and its stream
+stalls behind the weight ring at experts 4-6 (backpressure: the ring holds two experts, the compute falls behind).
+K3 / K2.7 pay mostly in the stream (per-expert switch gaps x 28, slot skew 31-53 us).
+Logs / scripts: /localdev/mstaletovic/fixed_cost/ (fc_*.log the sweep, fit.py, pz_* / pz2_* + csv, pieces.py).
