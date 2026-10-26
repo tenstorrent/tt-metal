@@ -55,7 +55,8 @@ D2DStreamConfig make_config(
     const tt::tt_metal::CoreRange& receiver_worker_cores,
     uint32_t metadata_size_bytes,
     bool share_fabric_links,
-    std::optional<D2DStageGateConfig> stage_gate = std::nullopt) {
+    std::optional<D2DStageGateConfig> stage_gate = std::nullopt,
+    bool relay = false) {
     return D2DStreamConfig{
         .global_spec = global_spec,
         .mapper = std::move(mapper),
@@ -65,6 +66,7 @@ D2DStreamConfig make_config(
         .metadata_size_bytes = metadata_size_bytes,
         .share_fabric_links = share_fabric_links,
         .stage_gate = stage_gate,
+        .relay = relay,
     };
 }
 
@@ -255,7 +257,8 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::BufferType socket_buffer_type,
                uint32_t metadata_size_bytes,
                bool share_fabric_links,
-               const std::optional<D2DStageGateConfig>& stage_gate) {
+               const std::optional<D2DStageGateConfig>& stage_gate,
+               bool relay) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -265,7 +268,8 @@ void py_module_types(nb::module_& mod) {
                     receiver_worker_cores,
                     metadata_size_bytes,
                     share_fabric_links,
-                    stage_gate);
+                    stage_gate,
+                    relay);
                 return D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg));
             },
             nb::arg("sender_mesh"),
@@ -279,6 +283,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("metadata_size_bytes") = 0u,
             nb::arg("share_fabric_links") = true,
             nb::arg("stage_gate") = nb::none(),
+            nb::arg("relay") = false,
             R"doc(
                 Build a sender+receiver pair in a SINGLE process (both meshes owned here).
 
@@ -300,7 +305,8 @@ void py_module_types(nb::module_& mod) {
                int receiver_rank,
                tt::tt_metal::BufferType socket_buffer_type,
                uint32_t metadata_size_bytes,
-               bool share_fabric_links) {
+               bool share_fabric_links,
+               bool relay) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -309,7 +315,9 @@ void py_module_types(nb::module_& mod) {
                     sender_worker_cores,
                     receiver_worker_cores,
                     metadata_size_bytes,
-                    share_fabric_links);
+                    share_fabric_links,
+                    std::nullopt,
+                    relay);
                 // distributed_context left null -> the service uses get_current_world().
                 D2DEndpointConfig endpoints{
                     .sender_rank = Rank{sender_rank},
@@ -328,6 +336,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("socket_buffer_type") = tt::tt_metal::BufferType::L1,
             nb::arg("metadata_size_bytes") = 0u,
             nb::arg("share_fabric_links") = true,
+            nb::arg("relay") = false,
             R"doc(
                 Build the SENDER endpoint in this (sender-rank) process. Must be called on
                 the rank equal to `sender_rank`; the matching `create_receiver` runs in the
@@ -351,7 +360,8 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::BufferType socket_buffer_type,
                uint32_t metadata_size_bytes,
                bool share_fabric_links,
-               const std::optional<D2DStageGateConfig>& stage_gate) {
+               const std::optional<D2DStageGateConfig>& stage_gate,
+               bool relay) {
                 auto cfg = make_config(
                     global_spec,
                     std::move(mapper),
@@ -361,7 +371,8 @@ void py_module_types(nb::module_& mod) {
                     receiver_worker_cores,
                     metadata_size_bytes,
                     share_fabric_links,
-                    stage_gate);
+                    stage_gate,
+                    relay);
                 D2DEndpointConfig endpoints{
                     .sender_rank = Rank{sender_rank},
                     .receiver_rank = Rank{receiver_rank},
@@ -380,6 +391,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("metadata_size_bytes") = 0u,
             nb::arg("share_fabric_links") = true,
             nb::arg("stage_gate") = nb::none(),
+            nb::arg("relay") = false,
             R"doc(
                 Build the RECEIVER endpoint in this (receiver-rank) process. Must be called
                 on the rank equal to `receiver_rank`; the matching `create_sender` runs in

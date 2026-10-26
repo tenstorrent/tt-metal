@@ -259,6 +259,11 @@ def _socket_next(h2d_service, sockets, n_mtp: int = 0) -> tuple:
     return tokens, overhang, _decode_metadata(sockets.metadata)
 
 
+# PREFILL_D2D_RELAY=1: send the D2D traffic between galaxies over the direct cables through
+# relay cores (D2DStreamConfig::relay), instead of one fabric route per chip.
+D2D_RELAY = os.environ.get("PREFILL_D2D_RELAY", "0") == "1"
+
+
 def build_d2d_pipeline_endpoints(
     mesh_device,
     rank: int,
@@ -283,6 +288,7 @@ def build_d2d_pipeline_endpoints(
             metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
             share_fabric_links=True,
             socket_buffer_type=ttnn.BufferType.L1,
+            relay=D2D_RELAY,
         )
 
     inbound = None
@@ -316,6 +322,7 @@ def build_d2d_index_endpoints(mesh_device, rank: int, per_chip_shape, *, inbound
             metadata_size_bytes=METADATA_SIZE_BYTES,
             share_fabric_links=True,
             socket_buffer_type=ttnn.BufferType.L1,
+            relay=D2D_RELAY,
         )
 
     idx_in = None

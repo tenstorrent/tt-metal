@@ -4,11 +4,13 @@
 
 #include "tensor/d2d_stream_service.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -22,6 +24,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -409,6 +412,180 @@ struct ServiceCoreReleaseGuard {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Relay mode (D2DStreamConfig::relay)
+// ---------------------------------------------------------------------------
+//
+// A cable is a direct ethernet link from an exit chip of the sender mesh to an entry chip of
+// the receiver mesh. Every coord is assigned to one cable; slot k of a cable is the k-th of
+// its coords (sorted), on both ends. The exit chip's service core runs the exit relay instead
+// of a sender service, the entry chip's service core runs the entry relay instead of a
+// receiver service, and every other coord keeps its unchanged sender / receiver kernel, with
+// its socket config pointed at its relay. Both sides build the same plan from the same inputs:
+// the sender and receiver fabric node of every coord (known from the MeshSocket handshake).
+
+struct RelayCable {
+    distributed::MeshCoordinate exit_coord;
+    distributed::MeshCoordinate entry_coord;
+    std::vector<distributed::MeshCoordinate> slots;
+};
+
+struct RelayPlan {
+    std::vector<RelayCable> cables;
+    // coord -> (cable index, slot index)
+    std::map<distributed::MeshCoordinate, std::pair<uint32_t, uint32_t>> slot_of;
+    uint32_t max_slots = 0;
+};
+
+// Hops between two coords of one mesh, with wrap-around on the axes the fabric closes into a
+// ring (torus). Only used to pick a cable, so a rough count is enough.
+uint32_t relay_hops(
+    const distributed::MeshCoordinate& a, const distributed::MeshCoordinate& b, const distributed::MeshShape& shape) {
+    const auto fabric = tt::tt_fabric::GetFabricConfig();
+    const bool wrap_y = fabric == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+                        fabric == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+    const bool wrap_x = fabric == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+                        fabric == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+    uint32_t hops = 0;
+    for (size_t dim = 0; dim < a.dims(); ++dim) {
+        const uint32_t n = shape[dim];
+        const uint32_t d = a[dim] > b[dim] ? a[dim] - b[dim] : b[dim] - a[dim];
+        const bool wrap = dim == 0 ? wrap_y : wrap_x;  // dim 0 = rows (Y), dim 1 = columns (X)
+        hops += wrap ? std::min(d, n - d) : d;
+    }
+    return hops;
+}
+
+// is_sender: this process owns the sender nodes (it asks the control plane about its own chips).
+RelayPlan make_relay_plan(
+    const std::vector<distributed::MeshCoordinate>& coords,
+    const std::map<distributed::MeshCoordinate, tt::tt_fabric::FabricNodeId>& sender_nodes,
+    const std::map<distributed::MeshCoordinate, tt::tt_fabric::FabricNodeId>& receiver_nodes,
+    const distributed::MeshShape& shape,
+    bool is_sender) {
+    using tt::tt_fabric::RoutingDirection;
+    const auto& local_nodes = is_sender ? sender_nodes : receiver_nodes;
+    const auto& peer_nodes = is_sender ? receiver_nodes : sender_nodes;
+
+    // 1. Every (exit, entry) coord pair joined by a direct link, seen from this side's chips.
+    std::set<std::pair<distributed::MeshCoordinate, distributed::MeshCoordinate>> candidates;
+    for (const auto& c : coords) {
+        const auto node = local_nodes.at(c);
+        for (const auto dir :
+             {RoutingDirection::N,
+              RoutingDirection::E,
+              RoutingDirection::S,
+              RoutingDirection::W,
+              RoutingDirection::Z}) {
+            const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(node, dir);
+            for (const auto& [peer_coord, peer_node] : peer_nodes) {
+                auto it = neighbors.find(*peer_node.mesh_id);
+                if (it == neighbors.end() ||
+                    std::find(it->second.begin(), it->second.end(), peer_node.chip_id) == it->second.end()) {
+                    continue;
+                }
+                candidates.emplace(is_sender ? c : peer_coord, is_sender ? peer_coord : c);
+            }
+        }
+    }
+
+    // 2. Keep at most one cable per chip. A coord may not be the exit of one cable and the
+    //    entry of another: its data would have to use both.
+    RelayPlan plan;
+    std::set<distributed::MeshCoordinate> exits;
+    std::set<distributed::MeshCoordinate> entries;
+    for (const auto& [exit_coord, entry_coord] : candidates) {
+        if (exits.contains(exit_coord) || entries.contains(entry_coord) ||
+            (entries.contains(exit_coord) && exit_coord != entry_coord) ||
+            (exits.contains(entry_coord) && exit_coord != entry_coord)) {
+            continue;
+        }
+        exits.insert(exit_coord);
+        entries.insert(entry_coord);
+        plan.cables.push_back(RelayCable{exit_coord, entry_coord, {}});
+    }
+    TT_FATAL(!plan.cables.empty(), "D2DStreamService relay: no direct link between the sender and receiver meshes");
+
+    // 3. Assign coords. A cable chip takes its own coord. Every other coord goes to the cable
+    //    with the fewest hops (exit side + entry side), at most ceil(coords / cables) each.
+    const uint32_t num_cables = static_cast<uint32_t>(plan.cables.size());
+    const uint32_t cap = std::max<uint32_t>(2, (coords.size() + num_cables - 1) / num_cables);
+    std::vector<uint32_t> load(num_cables, 0);
+    std::map<distributed::MeshCoordinate, uint32_t> cable_of;
+    for (uint32_t p = 0; p < num_cables; ++p) {
+        for (const auto& c : {plan.cables[p].exit_coord, plan.cables[p].entry_coord}) {
+            if (cable_of.emplace(c, p).second) {
+                load[p] += 1;
+            }
+        }
+    }
+    for (const auto& c : coords) {
+        if (cable_of.contains(c)) {
+            continue;
+        }
+        uint32_t best = num_cables;
+        uint32_t best_cost = std::numeric_limits<uint32_t>::max();
+        for (uint32_t p = 0; p < num_cables; ++p) {
+            if (load[p] >= cap) {
+                continue;
+            }
+            const uint32_t cost =
+                relay_hops(c, plan.cables[p].exit_coord, shape) + relay_hops(plan.cables[p].entry_coord, c, shape);
+            if (cost < best_cost || (cost == best_cost && load[p] < load[best])) {
+                best = p;
+                best_cost = cost;
+            }
+        }
+        TT_FATAL(best < num_cables, "D2DStreamService relay: no cable left for coord {}", c);
+        cable_of.emplace(c, best);
+        load[best] += 1;
+    }
+    for (const auto& [c, p] : cable_of) {  // std::map order = sorted coords
+        plan.slot_of[c] = {p, static_cast<uint32_t>(plan.cables[p].slots.size())};
+        plan.cables[p].slots.push_back(c);
+    }
+    for (const auto& cable : plan.cables) {
+        TT_FATAL(
+            cable.slots.size() <= 32, "D2DStreamService relay: {} coords on one cable (max 32)", cable.slots.size());
+        plan.max_slots = std::max<uint32_t>(plan.max_slots, cable.slots.size());
+        log_info(
+            tt::LogMetal,
+            "D2DStreamService relay: cable {} -> {} carries {} coords",
+            cable.exit_coord,
+            cable.entry_coord,
+            cable.slots.size());
+    }
+    return plan;
+}
+
+// This side's relay state: the plan, the staging tensors (max_slots of them, the same
+// address on every chip) and, per cable, the relay words on this side's relay core.
+struct RelayCableWords {
+    DeviceAddr arrived_base = 0;  // [slot], word_stride apart
+    DeviceAddr acked_base = 0;    // exit: cable_acked[slot]; entry: recv_acked[slot]
+    DeviceAddr md_base = 0;       // [slot], metadata_span apart (0 = no metadata)
+    DeviceAddr go_slot_addr = 0;
+    // Lane sync of this relay (master -> sub, sub -> master). The receiver side has no
+    // go/done words of its own, so both sides allocate these here.
+    DeviceAddr go_count_addr = 0;
+    DeviceAddr done_count_addr = 0;
+};
+
+struct RelayLocal {
+    RelayPlan plan;
+    std::map<distributed::MeshCoordinate, tt::tt_fabric::FabricNodeId> sender_nodes;
+    std::map<distributed::MeshCoordinate, tt::tt_fabric::FabricNodeId> receiver_nodes;
+    std::vector<Tensor> staging;
+    std::vector<RelayCableWords> words;  // [cable]
+    uint32_t word_stride = 0;
+    // Service-core L1 the relay words use; freed by the handle destructor.
+    std::vector<std::pair<distributed::MeshCoordinate, DeviceAddr>> l1_allocs;
+    // What build_relay_* needs from the config (it runs after finalize_*).
+    CommonPlan common;
+    uint32_t max_lanes = 0;
+    std::map<distributed::MeshCoordinate, DeviceAddr> receiver_tensor_addrs;  // sender side only
+};
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
 // ===========================================================================
@@ -473,6 +650,9 @@ struct D2DStreamServiceSender::Impl {
     // grant==0) AFTER. Both CQ-ordered — no host PCIe poke. Null in OWN mode.
     std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_wait_workload;
     std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_release_workload;
+
+    // Relay mode only (null otherwise). The workload above stays empty until build_relay_sender.
+    std::shared_ptr<CMAKE_UNIQUE_NAMESPACE::RelayLocal> relay;
 };
 
 struct D2DStreamServiceReceiver::Impl {
@@ -533,6 +713,9 @@ struct D2DStreamServiceReceiver::Impl {
     // Cached lease workloads (LEASE mode only), mirror of the sender's. Null in OWN mode.
     std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_wait_workload;
     std::unique_ptr<tt::tt_metal::distributed::MeshWorkload> lease_release_workload;
+
+    // Relay mode only (null otherwise). The workload above stays empty until build_relay_receiver.
+    std::shared_ptr<CMAKE_UNIQUE_NAMESPACE::RelayLocal> relay;
 };
 
 // ===========================================================================
@@ -599,6 +782,11 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
             }
             for (const auto& [coord, addr] : impl_->metadata_addrs) {
                 svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+            }
+            if (impl_->relay) {
+                for (const auto& [coord, addr] : impl_->relay->l1_allocs) {
+                    svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                }
             }
         }
 
@@ -748,6 +936,11 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
             }
             for (const auto& [coord, addr] : impl_->link_grant_addrs) {
                 svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+            }
+            if (impl_->relay) {
+                for (const auto& [coord, addr] : impl_->relay->l1_allocs) {
+                    svc.deallocate_l1(mesh->get_device(coord), impl_->service_cores.at(coord), addr);
+                }
             }
         }
 
@@ -1169,6 +1362,69 @@ std::unique_ptr<distributed::MeshWorkload> build_lease_workload(
 // finalize_receiver, which then assemble the handle Impl. They take the socket +
 // service cores by const ref (finalize_* moves them into the Impl afterwards).
 
+// Relay mode, both sides: build the plan and allocate this side's relay state. Called by
+// build_*_side after the socket region is reserved, so the words cannot alias it.
+std::shared_ptr<RelayLocal> allocate_relay(
+    const std::shared_ptr<distributed::MeshDevice>& mesh,
+    const distributed::MeshSocket& socket,
+    const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
+    const Tensor& backing,
+    const std::vector<distributed::MeshCoordinate>& coords,
+    const CommonPlan& common,
+    const D2DStreamConfig& cfg,
+    bool is_sender) {
+    TT_FATAL(
+        cfg.share_fabric_links, "D2DStreamService relay: needs share_fabric_links (the relays hold links per lease)");
+    TT_FATAL(!enabled_stage_gate(cfg), "D2DStreamService relay: stage_gate is not supported");
+    TT_FATAL(
+        tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+        "D2DStreamService relay: needs a 2D fabric (the relays route by chip id)");
+
+    auto relay = std::make_shared<RelayLocal>();
+    for (const auto& c : coords) {
+        relay->sender_nodes.emplace(
+            c,
+            is_sender ? mesh->get_fabric_node_id(c)
+                      : socket.get_fabric_node_id(distributed::SocketEndpoint::SENDER, c));
+        relay->receiver_nodes.emplace(
+            c,
+            is_sender ? socket.get_fabric_node_id(distributed::SocketEndpoint::RECEIVER, c)
+                      : mesh->get_fabric_node_id(c));
+    }
+    relay->plan = make_relay_plan(coords, relay->sender_nodes, relay->receiver_nodes, mesh->shape(), is_sender);
+    relay->common = common;
+    relay->max_lanes = cfg.max_sender_lanes;
+    relay->word_stride = common.l1_alignment;
+
+    for (uint32_t k = 0; k < relay->plan.max_slots; ++k) {
+        relay->staging.push_back(create_device_tensor(backing.tensor_spec(), mesh.get(), backing.tensor_topology()));
+    }
+
+    auto& svc = tt::tt_metal::internal::service_core_manager(*mesh);
+    for (const auto& cable : relay->plan.cables) {
+        const auto coord = is_sender ? cable.exit_coord : cable.entry_coord;
+        auto* device = mesh->get_device(coord);
+        const CoreCoord core = service_cores.at(coord);
+        auto alloc = [&](uint32_t bytes) {
+            const DeviceAddr addr = svc.allocate_l1(device, core, bytes);
+            std::vector<uint32_t> zero(bytes / sizeof(uint32_t), 0u);
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, static_cast<uint32_t>(addr), zero);
+            relay->l1_allocs.emplace_back(coord, addr);
+            return addr;
+        };
+        const auto num_slots = static_cast<uint32_t>(cable.slots.size());
+        RelayCableWords words;
+        words.arrived_base = alloc(num_slots * relay->word_stride);
+        words.acked_base = alloc(num_slots * relay->word_stride);
+        words.go_slot_addr = alloc(relay->word_stride);
+        words.go_count_addr = alloc(relay->word_stride);
+        words.done_count_addr = alloc(relay->word_stride);
+        words.md_base = common.metadata_enabled ? alloc(num_slots * common.metadata_span_bytes) : 0;
+        relay->words.push_back(words);
+    }
+    return relay;
+}
+
 struct SenderSideResources {
     std::map<distributed::MeshCoordinate, DeviceAddr> data_ready_counter_addrs;
     std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs;
@@ -1185,6 +1441,7 @@ struct SenderSideResources {
     // grant==0) after. Null in OWN mode.
     std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
     std::unique_ptr<distributed::MeshWorkload> lease_release_workload;
+    std::shared_ptr<RelayLocal> relay;  // relay mode only
 };
 
 SenderSideResources build_sender_side(
@@ -1238,11 +1495,19 @@ SenderSideResources build_sender_side(
     auto consumed_sem = ttnn::global_semaphore::create_global_semaphore(
         mesh.get(), CoreRangeSet(cfg.sender_worker_cores), /*initial_value=*/0, BufferType::L1);
 
+    // Relay mode: allocate the relay state; build_relay_sender builds the programs later.
+    std::shared_ptr<RelayLocal> relay;
+    if (cfg.relay) {
+        relay = allocate_relay(mesh, sender_socket, service_cores, backing, coords, common, cfg, /*is_sender=*/true);
+        relay->receiver_tensor_addrs = receiver_tensor_addrs;
+    }
+    const std::vector<distributed::MeshCoordinate> no_coords;
+
     constexpr bool worker_sync_enabled = true;
     auto workload = std::make_unique<distributed::MeshWorkload>();
     const uint32_t socket_config_addr = static_cast<uint32_t>(sender_socket.get_config_buffer()->address());
 
-    for (const auto& coord : coords) {
+    for (const auto& coord : cfg.relay ? no_coords : coords) {
         const Buffer* send_buf = backing.mesh_buffer().get_device_buffer(coord);
         TT_FATAL(send_buf != nullptr, "D2DStreamService: sender device buffer missing for coord {}", coord);
         auto* device = mesh->get_device(coord);
@@ -1318,6 +1583,7 @@ SenderSideResources build_sender_side(
         .workload = std::move(workload),
         .lease_wait_workload = std::move(lease_wait_workload),
         .lease_release_workload = std::move(lease_release_workload),
+        .relay = std::move(relay),
     };
 }
 
@@ -1333,6 +1599,7 @@ struct ReceiverSideResources {
     // Cached lease workloads (LEASE mode only), mirror of the sender's. Null in OWN mode.
     std::unique_ptr<distributed::MeshWorkload> lease_wait_workload;
     std::unique_ptr<distributed::MeshWorkload> lease_release_workload;
+    std::shared_ptr<RelayLocal> relay;  // relay mode only
 };
 
 ReceiverSideResources build_receiver_side(
@@ -1398,11 +1665,18 @@ ReceiverSideResources build_receiver_side(
         metadata_l1_addr = metadata_buffer->address();
     }
 
+    // Relay mode: allocate the relay state; build_relay_receiver builds the programs later.
+    std::shared_ptr<RelayLocal> relay;
+    if (cfg.relay) {
+        relay = allocate_relay(mesh, receiver_socket, service_cores, backing, coords, common, cfg, /*is_sender=*/false);
+    }
+    const std::vector<distributed::MeshCoordinate> no_coords;
+
     constexpr bool worker_sync_enabled = true;
     auto workload = std::make_unique<distributed::MeshWorkload>();
     const uint32_t socket_config_addr = static_cast<uint32_t>(receiver_socket.get_config_buffer()->address());
 
-    for (const auto& coord : coords) {
+    for (const auto& coord : cfg.relay ? no_coords : coords) {
         const Buffer* recv_buf = backing.mesh_buffer().get_device_buffer(coord);
         TT_FATAL(recv_buf != nullptr, "D2DStreamService: receiver device buffer missing for coord {}", coord);
         auto* device = mesh->get_device(coord);
@@ -1471,7 +1745,531 @@ ReceiverSideResources build_receiver_side(
         .workload = std::move(workload),
         .lease_wait_workload = std::move(lease_wait_workload),
         .lease_release_workload = std::move(lease_release_workload),
+        .relay = std::move(relay),
     };
+}
+
+// ---------------------------------------------------------------------------
+// Relay mode: what the two sides trade, socket config patches, relay programs
+// ---------------------------------------------------------------------------
+
+constexpr int kRelayExchangeTag = 0x44325252;  // 'D2RR'
+
+// What one side tells the other about its relay cores. Both sides build the same plan, so
+// both know the cable and slot counts, and the packed words need no length header.
+struct RelayPeerCable {
+    uint32_t exit_row = 0, exit_col = 0, entry_row = 0, entry_col = 0;  // to check both plans match
+    uint32_t noc_x = 0, noc_y = 0;                                      // relay service core, virtual NoC
+    uint32_t arrived_base = 0, md_base = 0, acked_base = 0;
+    uint32_t z_lanes = 0;  // cable lanes; only the sender side sets it
+};
+constexpr uint32_t kRelayCableWords = 10;
+
+struct RelayPeer {
+    std::vector<RelayPeerCable> cables;
+    std::vector<uint32_t> staging_addrs;  // [slot], the same on every chip of that side
+};
+
+CoreCoord relay_noc(
+    const std::shared_ptr<distributed::MeshDevice>& mesh,
+    const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
+    const distributed::MeshCoordinate& c) {
+    return mesh->get_device(c)->worker_core_from_logical_core(service_cores.at(c));
+}
+
+// Lanes of the unchanged sender kernel at `src` toward its exit relay. Same rule as
+// build_sender_side; the exit relay waits for this many arrived increments.
+uint32_t relay_source_lanes(const RelayLocal& relay, const distributed::MeshCoordinate& src, uint32_t p) {
+    const auto links = tt::tt_fabric::get_forwarding_link_indices(
+        relay.sender_nodes.at(src), relay.sender_nodes.at(relay.plan.cables[p].exit_coord));
+    TT_FATAL(!links.empty(), "D2DStreamService relay: no fabric link from coord {} to its exit chip", src);
+    return std::min<uint32_t>(relay.max_lanes, links.size());
+}
+
+// Lanes from the entry relay to target `t`. The relay kernels have at most two lanes.
+uint32_t relay_target_lanes(const RelayLocal& relay, const distributed::MeshCoordinate& t, uint32_t p) {
+    const auto links = tt::tt_fabric::get_forwarding_link_indices(
+        relay.receiver_nodes.at(relay.plan.cables[p].entry_coord), relay.receiver_nodes.at(t));
+    TT_FATAL(!links.empty(), "D2DStreamService relay: no fabric link from the entry chip to coord {}", t);
+    return std::min<uint32_t>({relay.max_lanes, static_cast<uint32_t>(links.size()), 2u});
+}
+
+// Lanes over cable p (sender side only; the receiver side gets it from the peer).
+uint32_t relay_cable_lanes(const RelayLocal& relay, uint32_t p) {
+    const auto& cable = relay.plan.cables[p];
+    const auto links = tt::tt_fabric::get_forwarding_link_indices(
+        relay.sender_nodes.at(cable.exit_coord), relay.receiver_nodes.at(cable.entry_coord));
+    TT_FATAL(!links.empty(), "D2DStreamService relay: no fabric link on cable {}", p);
+    return std::min<uint32_t>({relay.max_lanes, static_cast<uint32_t>(links.size()), 2u});
+}
+
+RelayPeer make_relay_peer(
+    const RelayLocal& relay,
+    const std::shared_ptr<distributed::MeshDevice>& mesh,
+    const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
+    bool is_sender) {
+    RelayPeer peer;
+    for (uint32_t p = 0; p < relay.plan.cables.size(); ++p) {
+        const auto& cable = relay.plan.cables[p];
+        const auto noc = relay_noc(mesh, service_cores, is_sender ? cable.exit_coord : cable.entry_coord);
+        const auto& words = relay.words[p];
+        peer.cables.push_back(RelayPeerCable{
+            .exit_row = cable.exit_coord[0],
+            .exit_col = cable.exit_coord[1],
+            .entry_row = cable.entry_coord[0],
+            .entry_col = cable.entry_coord[1],
+            .noc_x = static_cast<uint32_t>(noc.x),
+            .noc_y = static_cast<uint32_t>(noc.y),
+            .arrived_base = static_cast<uint32_t>(words.arrived_base),
+            .md_base = static_cast<uint32_t>(words.md_base),
+            .acked_base = static_cast<uint32_t>(words.acked_base),
+            .z_lanes = is_sender ? relay_cable_lanes(relay, p) : 0u,
+        });
+    }
+    for (const auto& t : relay.staging) {
+        peer.staging_addrs.push_back(static_cast<uint32_t>(t.mesh_buffer().address()));
+    }
+    return peer;
+}
+
+// Both plans must name the same cables in the same order, or slot k means two different coords.
+void check_relay_peer(const RelayPeer& peer, const RelayLocal& relay) {
+    TT_FATAL(
+        peer.cables.size() == relay.plan.cables.size() && peer.staging_addrs.size() == relay.plan.max_slots,
+        "D2DStreamService relay: the peer plan has {} cables / {} slots, this side has {} / {}",
+        peer.cables.size(),
+        peer.staging_addrs.size(),
+        relay.plan.cables.size(),
+        relay.plan.max_slots);
+    for (uint32_t p = 0; p < peer.cables.size(); ++p) {
+        const auto& a = peer.cables[p];
+        const auto& b = relay.plan.cables[p];
+        TT_FATAL(
+            a.exit_row == b.exit_coord[0] && a.exit_col == b.exit_coord[1] && a.entry_row == b.entry_coord[0] &&
+                a.entry_col == b.entry_coord[1],
+            "D2DStreamService relay: cable {} differs between the two sides ({} -> {} here)",
+            p,
+            b.exit_coord,
+            b.entry_coord);
+    }
+}
+
+// Trade RelayPeer with the other process, in the same send/recv order as exchange_service_cores.
+RelayPeer exchange_relay_peer(
+    const std::shared_ptr<distributed::multihost::DistributedContext>& ctx,
+    bool is_sender,
+    distributed::multihost::Rank peer_rank,
+    const RelayPeer& local,
+    const RelayLocal& relay) {
+    std::vector<uint32_t> out;
+    for (const auto& c : local.cables) {
+        out.insert(
+            out.end(),
+            {c.exit_row,
+             c.exit_col,
+             c.entry_row,
+             c.entry_col,
+             c.noc_x,
+             c.noc_y,
+             c.arrived_base,
+             c.md_base,
+             c.acked_base,
+             c.z_lanes});
+    }
+    out.insert(out.end(), local.staging_addrs.begin(), local.staging_addrs.end());
+    std::vector<uint32_t> in(out.size(), 0u);
+
+    const distributed::multihost::Tag tag{kRelayExchangeTag};
+    const auto as_bytes = [](std::vector<uint32_t>& v) {
+        return ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(v.data()), v.size() * sizeof(uint32_t));
+    };
+    if (is_sender) {
+        ctx->send(as_bytes(out), peer_rank, tag);
+        ctx->recv(as_bytes(in), peer_rank, tag);
+    } else {
+        ctx->recv(as_bytes(in), peer_rank, tag);
+        ctx->send(as_bytes(out), peer_rank, tag);
+    }
+
+    RelayPeer peer;
+    const size_t n = local.cables.size();
+    for (size_t p = 0; p < n; ++p) {
+        const uint32_t* w = in.data() + p * kRelayCableWords;
+        peer.cables.push_back(RelayPeerCable{w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9]});
+    }
+    peer.staging_addrs.assign(in.begin() + n * kRelayCableWords, in.end());
+    check_relay_peer(peer, relay);
+    return peer;
+}
+
+// Sender config (tt_metal/hw/inc/hostdev/socket.h): sender_socket_md (7 words, padded to the
+// L1 alignment), then bytes_acked[1] (one aligned word), then the downstream encoding
+// {mesh_id, chip_id, noc_y, noc_x}.
+constexpr uint32_t kSenderSocketMdBytes = 7 * sizeof(uint32_t);
+
+uint32_t sender_bytes_acked_addr(uint32_t config_addr, uint32_t l1_alignment) {
+    return config_addr + tt::align(kSenderSocketMdBytes, l1_alignment);
+}
+
+// Point the sender at coord `core` to its exit relay: its bytes_sent increments go to the
+// relay's arrived[k], its metadata to md slot k, and its route to the exit chip.
+void patch_sender_config(
+    tt::tt_metal::IDevice* device,
+    const CoreCoord& core,
+    uint32_t config_addr,
+    uint32_t l1_alignment,
+    uint32_t bytes_sent_addr,
+    uint32_t fifo_addr,
+    const tt::tt_fabric::FabricNodeId& relay_node,
+    const CoreCoord& relay_noc) {
+    const uint32_t enc_word =
+        (tt::align(kSenderSocketMdBytes, l1_alignment) + tt::align(sizeof(uint32_t), l1_alignment)) / sizeof(uint32_t);
+    std::vector<uint32_t> w;
+    tt::tt_metal::detail::ReadFromDeviceL1(device, core, config_addr, (enc_word + 4) * sizeof(uint32_t), w);
+    w[3] = bytes_sent_addr;  // downstream_bytes_sent_addr
+    w[4] = fifo_addr;        // downstream_fifo_addr (where the metadata goes)
+    w[enc_word + 0] = *relay_node.mesh_id;
+    w[enc_word + 1] = static_cast<uint32_t>(relay_node.chip_id);
+    w[enc_word + 2] = static_cast<uint32_t>(relay_noc.y);
+    w[enc_word + 3] = static_cast<uint32_t>(relay_noc.x);
+    tt::tt_metal::detail::WriteToDeviceL1(device, core, config_addr, w);
+}
+
+// Receiver config: receiver_socket_md is 6 words, then D2DSocketRecvInterface
+// {upstream_mesh_id, upstream_chip_id, noc_y, noc_x, upstream_bytes_acked_addr}. Point the
+// receiver's credits at the entry relay's recv_acked[k].
+void patch_receiver_config(
+    tt::tt_metal::IDevice* device,
+    const CoreCoord& core,
+    uint32_t config_addr,
+    uint32_t bytes_acked_addr,
+    const tt::tt_fabric::FabricNodeId& relay_node,
+    const CoreCoord& relay_noc) {
+    std::vector<uint32_t> w;
+    tt::tt_metal::detail::ReadFromDeviceL1(device, core, config_addr, 11 * sizeof(uint32_t), w);
+    w[6] = *relay_node.mesh_id;
+    w[7] = static_cast<uint32_t>(relay_node.chip_id);
+    w[8] = static_cast<uint32_t>(relay_noc.y);
+    w[9] = static_cast<uint32_t>(relay_noc.x);
+    w[10] = bytes_acked_addr;
+    tt::tt_metal::detail::WriteToDeviceL1(device, core, config_addr, w);
+}
+
+// Both relays: one scratch CB (each lane uses its own ring of kSenderReadRingSlots pages) and
+// one header CB (three headers per lane). The kernels add the sub lane's offsets themselves.
+void create_relay_cbs(Program& program, const CoreCoord& core, uint32_t page_size, tt::tt_metal::DataType dtype) {
+    const uint32_t scratch_bytes = 2 * kSenderReadRingSlots * page_size;
+    auto scratch_cfg =
+        CircularBufferConfig(scratch_bytes, {{tt::CBIndex::c_0, datatype_to_dataformat_converter(dtype)}})
+            .set_page_size(tt::CBIndex::c_0, scratch_bytes);
+    CreateCircularBuffer(program, core, scratch_cfg);
+    const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    auto ph_cfg = CircularBufferConfig(6 * header_size, {{kPacketHeaderCbIndex, tt::DataFormat::UInt32}})
+                      .set_page_size(kPacketHeaderCbIndex, header_size);
+    CreateCircularBuffer(program, core, ph_cfg);
+}
+
+// The words of the relay coord's own service (the relay takes over its job).
+struct RelayCoordWords {
+    uint32_t termination_addr = 0;
+    uint32_t link_grant_addr = 0;
+    uint32_t metadata_addr = 0;  // exit: own sender md buffer; entry: worker md buffer
+};
+
+const DataMovementProcessor kRelayProcs[2] = {DataMovementProcessor::RISCV_0, DataMovementProcessor::RISCV_1};
+const NOC kRelayNocs[2] = {NOC::RISCV_0_default, NOC::RISCV_1_default};
+
+// The exit relay of cable p. CT / RT layout must stay in sync with persistent_d2d_exit_relay.cpp.
+Program build_exit_relay_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh,
+    const RelayLocal& relay,
+    uint32_t p,
+    const RelayPeer& peer,
+    const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
+    const Tensor& backing,
+    const WorkerSyncArgs& ws,
+    const RelayCoordWords& own,
+    uint32_t socket_config_addr) {
+    const auto& cable = relay.plan.cables[p];
+    const auto& words = relay.words[p];
+    const auto& common = relay.common;
+    const auto e = cable.exit_coord;
+    const CoreCoord core = service_cores.at(e);
+    const auto exit_node = relay.sender_nodes.at(e);
+    const auto entry_node = relay.receiver_nodes.at(cable.entry_coord);
+    const auto num_slots = static_cast<uint32_t>(cable.slots.size());
+    const uint32_t own_slot = relay.plan.slot_of.at(e).second;
+
+    const auto z_links = tt::tt_fabric::get_forwarding_link_indices(exit_node, entry_node);
+    const uint32_t z_lanes = relay_cable_lanes(relay, p);
+    const auto cable_dir = tt::tt_fabric::pipeline_get_forwarding_direction(exit_node, entry_node);
+
+    // Credit connections: one per first-hop direction toward the remote sources.
+    std::vector<std::pair<tt::tt_fabric::FabricNodeId, uint32_t>> credit_conns;  // (a node that way, link)
+    std::map<tt::tt_fabric::RoutingDirection, uint32_t> conn_of_dir;
+    std::vector<uint32_t> credit_conn(num_slots, 0);
+    for (uint32_t k = 0; k < num_slots; ++k) {
+        if (k == own_slot) {
+            continue;
+        }
+        const auto src_node = relay.sender_nodes.at(cable.slots[k]);
+        const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(exit_node, src_node);
+        TT_FATAL(dir.has_value(), "D2DStreamService relay: no route from exit chip {} to coord {}", e, cable.slots[k]);
+        TT_FATAL(dir != cable_dir, "D2DStreamService relay: a credit route at {} leaves over the cable", e);
+        const auto [it, added] = conn_of_dir.emplace(*dir, static_cast<uint32_t>(credit_conns.size()));
+        if (added) {
+            credit_conns.emplace_back(
+                src_node, tt::tt_fabric::get_forwarding_link_indices(exit_node, src_node).front());
+        }
+        credit_conn[k] = it->second;
+    }
+
+    auto program = CreateProgram();
+    create_relay_cbs(program, core, common.tensor_page_size, backing.dtype());
+    const auto accessor_ct = TensorAccessorArgs(*backing.mesh_buffer().get_device_buffer(e)).get_compile_time_args();
+    const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;
+    const uint32_t half = (total_pages + 1) / 2;
+    const auto backing_addr = static_cast<uint32_t>(backing.mesh_buffer().address());
+    const uint32_t acked_addr = sender_bytes_acked_addr(socket_config_addr, common.l1_alignment);
+
+    for (uint32_t lane = 0; lane < z_lanes; ++lane) {
+        const bool master = lane == 0;
+        const std::unordered_map<std::string, uint32_t> named = {
+            {"terminate_value", kTerminateValue},
+            {"termination_addr", own.termination_addr},
+            {"link_grant_addr", own.link_grant_addr},
+            {"is_master", master ? 1u : 0u},
+            {"z_lanes", z_lanes},
+            {"num_slots", num_slots},
+            {"own_slot", own_slot},
+            {"page_size", common.tensor_page_size},
+            {"max_payload", common.fabric_max_payload_size},
+            {"page_start", master ? 0u : half},
+            {"page_end", (master && z_lanes > 1) ? half : total_pages},
+            {"ring_slots", kSenderReadRingSlots},
+            {"scratch_cb", static_cast<uint32_t>(tt::CBIndex::c_0)},
+            {"header_cb", static_cast<uint32_t>(kPacketHeaderCbIndex)},
+            {"metadata_enabled", common.metadata_enabled ? 1u : 0u},
+            {"metadata_span", common.metadata_span_bytes},
+            {"own_md_addr", own.metadata_addr},
+            {"arrived_base", static_cast<uint32_t>(words.arrived_base)},
+            {"md_base", static_cast<uint32_t>(words.md_base)},
+            {"cable_acked_base", static_cast<uint32_t>(words.acked_base)},
+            {"word_stride", relay.word_stride},
+            {"go_count_addr", static_cast<uint32_t>(words.go_count_addr)},
+            {"go_slot_addr", static_cast<uint32_t>(words.go_slot_addr)},
+            {"done_count_addr", static_cast<uint32_t>(words.done_count_addr)},
+            {"data_ready_counter_addr", ws.counter_addr},
+            {"consumed_sem_addr", ws.data_ready_sem_addr},
+            {"mcast_x_start", ws.mcast_noc_x_start},
+            {"mcast_y_start", ws.mcast_noc_y_start},
+            {"mcast_x_end", ws.mcast_noc_x_end},
+            {"mcast_y_end", ws.mcast_noc_y_end},
+            {"num_workers", ws.num_workers},
+            {"entry_chip", static_cast<uint32_t>(entry_node.chip_id)},
+            {"entry_mesh", *entry_node.mesh_id},
+            {"entry_noc_x", peer.cables[p].noc_x},
+            {"entry_noc_y", peer.cables[p].noc_y},
+            {"entry_arrived_base", peer.cables[p].arrived_base},
+            {"entry_md_base", peer.cables[p].md_base},
+            {"num_credit_conns", master ? static_cast<uint32_t>(credit_conns.size()) : 0u},
+        };
+        auto kernel = CreateKernel(
+            program,
+            "ttnn/core/tensor/kernels/persistent_d2d_exit_relay.cpp",
+            core,
+            DataMovementConfig{
+                .processor = kRelayProcs[lane],
+                .noc = kRelayNocs[lane],
+                .compile_args = accessor_ct,
+                .named_compile_args = named,
+            });
+
+        // RT args: the cable connection on this lane's link, the credit connections
+        // (master only), then the per-slot words.
+        std::vector<uint32_t> rt;
+        tt::tt_fabric::append_fabric_connection_rt_args(exit_node, entry_node, z_links[lane], program, core, rt);
+        if (master) {
+            for (const auto& [node, link] : credit_conns) {
+                tt::tt_fabric::append_fabric_connection_rt_args(exit_node, node, link, program, core, rt);
+            }
+        }
+        for (uint32_t k = 0; k < num_slots; ++k) {
+            const auto& s = cable.slots[k];
+            // Source: this chip's own backing, or staging k. Destination: the entry chip's
+            // backing when slot k is the entry coord, else the entry side's staging k.
+            rt.push_back(
+                k == own_slot ? backing_addr : static_cast<uint32_t>(relay.staging[k].mesh_buffer().address()));
+            rt.push_back(
+                s == cable.entry_coord ? static_cast<uint32_t>(relay.receiver_tensor_addrs.at(s))
+                                       : peer.staging_addrs[k]);
+            if (!master) {
+                continue;
+            }
+            if (k == own_slot) {
+                rt.insert(rt.end(), {0u, 0u, 0u, 0u, 0u, 0u, 0u});
+                continue;
+            }
+            const auto src_node = relay.sender_nodes.at(s);
+            const auto src_noc = relay_noc(mesh, service_cores, s);
+            rt.insert(
+                rt.end(),
+                {relay_source_lanes(relay, s, p),
+                 static_cast<uint32_t>(src_node.chip_id),
+                 *src_node.mesh_id,
+                 static_cast<uint32_t>(src_noc.x),
+                 static_cast<uint32_t>(src_noc.y),
+                 acked_addr,
+                 credit_conn[k]});
+        }
+        SetRuntimeArgs(program, kernel, core, rt);
+    }
+    return program;
+}
+
+// The entry relay of cable p. CT / RT layout must stay in sync with persistent_d2d_entry_relay.cpp.
+Program build_entry_relay_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh,
+    const RelayLocal& relay,
+    uint32_t p,
+    const RelayPeer& peer,
+    const std::map<distributed::MeshCoordinate, CoreCoord>& service_cores,
+    const Tensor& backing,
+    const WorkerSyncArgs& ws,
+    const RelayCoordWords& own,
+    uint32_t socket_config_addr,
+    uint32_t socket_fifo_addr) {
+    const auto& cable = relay.plan.cables[p];
+    const auto& words = relay.words[p];
+    const auto& common = relay.common;
+    const auto e = cable.entry_coord;
+    const CoreCoord core = service_cores.at(e);
+    const auto entry_node = relay.receiver_nodes.at(e);
+    const auto exit_node = relay.sender_nodes.at(cable.exit_coord);
+    const auto num_slots = static_cast<uint32_t>(cable.slots.size());
+    const uint32_t own_slot = relay.plan.slot_of.at(e).second;
+    const uint32_t z_lanes = peer.cables[p].z_lanes;
+    TT_FATAL(z_lanes >= 1 && z_lanes <= 2, "D2DStreamService relay: bad cable lane count {} from the peer", z_lanes);
+    const auto z_link = tt::tt_fabric::get_forwarding_link_indices(entry_node, exit_node).front();
+
+    // Per lane: one connection per first-hop direction toward the targets that use that lane.
+    std::vector<std::pair<tt::tt_fabric::FabricNodeId, uint32_t>> conns[2];
+    std::map<tt::tt_fabric::RoutingDirection, uint32_t> conn_of_dir[2];
+    std::vector<uint32_t> lanes(num_slots, 1);
+    std::vector<uint32_t> conn_idx[2] = {std::vector<uint32_t>(num_slots, 0), std::vector<uint32_t>(num_slots, 0)};
+    for (uint32_t k = 0; k < num_slots; ++k) {
+        if (k == own_slot) {
+            continue;
+        }
+        const auto& t = cable.slots[k];
+        const auto t_node = relay.receiver_nodes.at(t);
+        const auto dir = tt::tt_fabric::pipeline_get_forwarding_direction(entry_node, t_node);
+        TT_FATAL(dir.has_value(), "D2DStreamService relay: no route from entry chip {} to coord {}", e, t);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(entry_node, t_node);
+        lanes[k] = relay_target_lanes(relay, t, p);
+        for (uint32_t lane = 0; lane < lanes[k]; ++lane) {
+            const auto [it, added] = conn_of_dir[lane].emplace(*dir, static_cast<uint32_t>(conns[lane].size()));
+            if (added) {
+                conns[lane].emplace_back(t_node, links[lane]);
+            }
+            conn_idx[lane][k] = it->second;
+        }
+    }
+    const uint32_t num_lanes = conns[1].empty() ? 1 : 2;
+
+    auto program = CreateProgram();
+    create_relay_cbs(program, core, common.tensor_page_size, backing.dtype());
+    const auto accessor_ct = TensorAccessorArgs(*backing.mesh_buffer().get_device_buffer(e)).get_compile_time_args();
+    const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;
+    const auto backing_addr = static_cast<uint32_t>(backing.mesh_buffer().address());
+
+    for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+        const bool master = lane == 0;
+        const std::unordered_map<std::string, uint32_t> named = {
+            {"terminate_value", kTerminateValue},
+            {"termination_addr", own.termination_addr},
+            {"link_grant_addr", own.link_grant_addr},
+            {"is_master", master ? 1u : 0u},
+            {"z_lanes", z_lanes},
+            {"num_slots", num_slots},
+            {"own_slot", own_slot},
+            {"page_size", common.tensor_page_size},
+            {"max_payload", common.fabric_max_payload_size},
+            {"total_pages", total_pages},
+            {"half_pages", (total_pages + 1) / 2},
+            {"ring_slots", kSenderReadRingSlots},
+            {"scratch_cb", static_cast<uint32_t>(tt::CBIndex::c_0)},
+            {"header_cb", static_cast<uint32_t>(kPacketHeaderCbIndex)},
+            {"metadata_enabled", common.metadata_enabled ? 1u : 0u},
+            {"metadata_span", common.metadata_span_bytes},
+            {"metadata_size", common.metadata_size_bytes},
+            {"worker_md_addr", own.metadata_addr},
+            {"arrived_base", static_cast<uint32_t>(words.arrived_base)},
+            {"md_base", static_cast<uint32_t>(words.md_base)},
+            {"recv_acked_base", static_cast<uint32_t>(words.acked_base)},
+            {"word_stride", relay.word_stride},
+            {"go_count_addr", static_cast<uint32_t>(words.go_count_addr)},
+            {"go_slot_addr", static_cast<uint32_t>(words.go_slot_addr)},
+            {"done_count_addr", static_cast<uint32_t>(words.done_count_addr)},
+            {"data_ready_sem_addr", ws.data_ready_sem_addr},
+            {"consumed_counter_addr", ws.counter_addr},
+            {"mcast_x_start", ws.mcast_noc_x_start},
+            {"mcast_y_start", ws.mcast_noc_y_start},
+            {"mcast_x_end", ws.mcast_noc_x_end},
+            {"mcast_y_end", ws.mcast_noc_y_end},
+            {"num_workers", ws.num_workers},
+            {"exit_chip", static_cast<uint32_t>(exit_node.chip_id)},
+            {"exit_mesh", *exit_node.mesh_id},
+            {"exit_noc_x", peer.cables[p].noc_x},
+            {"exit_noc_y", peer.cables[p].noc_y},
+            {"exit_cable_acked_base", peer.cables[p].acked_base},
+            {"num_dir_conns", static_cast<uint32_t>(conns[lane].size())},
+        };
+        auto kernel = CreateKernel(
+            program,
+            "ttnn/core/tensor/kernels/persistent_d2d_entry_relay.cpp",
+            core,
+            DataMovementConfig{
+                .processor = kRelayProcs[lane],
+                .noc = kRelayNocs[lane],
+                .compile_args = accessor_ct,
+                .named_compile_args = named,
+            });
+
+        // RT args: the cable connection (master only, for the credits), this lane's
+        // direction connections, then 11 words per slot (the same for both lanes).
+        std::vector<uint32_t> rt;
+        if (master) {
+            tt::tt_fabric::append_fabric_connection_rt_args(entry_node, exit_node, z_link, program, core, rt);
+        }
+        for (const auto& [node, link] : conns[lane]) {
+            tt::tt_fabric::append_fabric_connection_rt_args(entry_node, node, link, program, core, rt);
+        }
+        for (uint32_t k = 0; k < num_slots; ++k) {
+            if (k == own_slot) {
+                rt.insert(rt.end(), {0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 1u, 0u, 0u});
+                continue;
+            }
+            const auto& t = cable.slots[k];
+            const auto t_node = relay.receiver_nodes.at(t);
+            const auto t_noc = relay_noc(mesh, service_cores, t);
+            rt.insert(
+                rt.end(),
+                {static_cast<uint32_t>(relay.staging[k].mesh_buffer().address()),
+                 backing_addr,
+                 static_cast<uint32_t>(t_node.chip_id),
+                 *t_node.mesh_id,
+                 static_cast<uint32_t>(t_noc.x),
+                 static_cast<uint32_t>(t_noc.y),
+                 socket_fifo_addr,    // the receiver reads its metadata from its FIFO base
+                 socket_config_addr,  // receiver_socket_md::bytes_sent is word 0
+                 lanes[k],
+                 conn_idx[0][k],
+                 conn_idx[1][k]});
+        }
+        SetRuntimeArgs(program, kernel, core, rt);
+    }
+    return program;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -1521,6 +2319,7 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::finalize_sender(
         .launched = false,
         .lease_wait_workload = std::move(res.lease_wait_workload),
         .lease_release_workload = std::move(res.lease_release_workload),
+        .relay = std::move(res.relay),
     });
     auto handle = std::unique_ptr<D2DStreamServiceSender>(new D2DStreamServiceSender(std::move(impl)));
     ok = true;
@@ -1565,10 +2364,200 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::finalize_receiver(
         .launched = false,
         .lease_wait_workload = std::move(res.lease_wait_workload),
         .lease_release_workload = std::move(res.lease_release_workload),
+        .relay = std::move(res.relay),
     });
     auto handle = std::unique_ptr<D2DStreamServiceReceiver>(new D2DStreamServiceReceiver(std::move(impl)));
     ok = true;
     return handle;
+}
+
+// ===========================================================================
+// Relay mode: build the workloads (after both sides know each other's relay words)
+// ===========================================================================
+
+struct D2DStreamService::RelayInfo : CMAKE_UNIQUE_NAMESPACE::RelayPeer {};
+
+void D2DStreamService::build_relay_sender(D2DStreamServiceSender& sender, const RelayInfo& peer) {
+    namespace tm_distributed = tt::tt_metal::distributed;
+    auto& impl = *sender.impl_;
+    const auto& relay = *impl.relay;
+    const auto& common = relay.common;
+    const auto& plan = relay.plan;
+    const auto& mesh = impl.mesh_device;
+    CMAKE_UNIQUE_NAMESPACE::check_relay_peer(peer, relay);
+    const auto config_addr = static_cast<uint32_t>(impl.socket->get_config_buffer()->address());
+    const auto ws_for = [&](const tm_distributed::MeshCoordinate& c) {
+        return CMAKE_UNIQUE_NAMESPACE::make_worker_sync_args(
+            mesh->get_device(c),
+            impl.worker_cores,
+            impl.num_workers,
+            static_cast<uint32_t>(impl.consumed_sem->address()),
+            static_cast<uint32_t>(impl.data_ready_counter_addrs.at(c)),
+            /*enabled=*/true);
+    };
+
+    // The socket constructor wrote the configs through the command queue. Patch them only
+    // after that write has landed, or it would overwrite the patch.
+    tm_distributed::Finish(mesh->mesh_command_queue());
+
+    auto workload = std::make_unique<tm_distributed::MeshWorkload>();
+    // 1. Every coord except an exit chip: the unchanged sender kernel, aimed at its exit relay.
+    for (const auto& [c, pk] : plan.slot_of) {
+        const auto [p, k] = pk;
+        const auto& cable = plan.cables[p];
+        if (c == cable.exit_coord) {
+            continue;
+        }
+        const auto& words = relay.words[p];
+        auto* device = mesh->get_device(c);
+        const CoreCoord core = impl.service_cores.at(c);
+        const auto src_node = relay.sender_nodes.at(c);
+        const auto exit_node = relay.sender_nodes.at(cable.exit_coord);
+        CMAKE_UNIQUE_NAMESPACE::patch_sender_config(
+            device,
+            core,
+            config_addr,
+            common.l1_alignment,
+            static_cast<uint32_t>(words.arrived_base + k * relay.word_stride),
+            common.metadata_enabled ? static_cast<uint32_t>(words.md_base + k * common.metadata_span_bytes) : 0u,
+            exit_node,
+            CMAKE_UNIQUE_NAMESPACE::relay_noc(mesh, impl.service_cores, cable.exit_coord));
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_node, exit_node);
+        const uint32_t lanes = CMAKE_UNIQUE_NAMESPACE::relay_source_lanes(relay, c, p);
+        const std::vector<uint32_t> lane_links(links.begin(), links.begin() + lanes);
+        workload->add_program(
+            tm_distributed::MeshCoordinateRange(c),
+            CMAKE_UNIQUE_NAMESPACE::build_sender_program(
+                *impl.backing_tensor.mesh_buffer().get_device_buffer(c),
+                core,
+                config_addr,
+                static_cast<uint32_t>(impl.termination_addrs.at(c)),
+                common.plan,
+                common.tensor_page_size,
+                common.fabric_max_payload_size,
+                impl.backing_tensor.dtype(),
+                ws_for(c),
+                common.metadata_enabled,
+                common.metadata_span_bytes,
+                common.metadata_enabled ? static_cast<uint32_t>(impl.metadata_addrs.at(c)) : 0u,
+                /*share_fabric_links=*/true,
+                static_cast<uint32_t>(impl.link_grant_addrs.at(c)),
+                static_cast<uint32_t>(relay.staging[k].mesh_buffer().address()),
+                static_cast<uint32_t>(impl.go_count_addrs.at(c)),
+                static_cast<uint32_t>(impl.done_count_addrs.at(c)),
+                lanes,
+                src_node,
+                exit_node,
+                lane_links));
+    }
+    // 2. Exit chips: the exit relay, in place of their sender service.
+    for (uint32_t p = 0; p < plan.cables.size(); ++p) {
+        const auto e = plan.cables[p].exit_coord;
+        workload->add_program(
+            tm_distributed::MeshCoordinateRange(e),
+            CMAKE_UNIQUE_NAMESPACE::build_exit_relay_program(
+                mesh,
+                relay,
+                p,
+                peer,
+                impl.service_cores,
+                impl.backing_tensor,
+                ws_for(e),
+                {.termination_addr = static_cast<uint32_t>(impl.termination_addrs.at(e)),
+                 .link_grant_addr = static_cast<uint32_t>(impl.link_grant_addrs.at(e)),
+                 .metadata_addr = common.metadata_enabled ? static_cast<uint32_t>(impl.metadata_addrs.at(e)) : 0u},
+                config_addr));
+    }
+    impl.workload = std::move(workload);
+}
+
+void D2DStreamService::build_relay_receiver(D2DStreamServiceReceiver& receiver, const RelayInfo& peer) {
+    namespace tm_distributed = tt::tt_metal::distributed;
+    auto& impl = *receiver.impl_;
+    const auto& relay = *impl.relay;
+    const auto& common = relay.common;
+    const auto& plan = relay.plan;
+    const auto& mesh = impl.mesh_device;
+    CMAKE_UNIQUE_NAMESPACE::check_relay_peer(peer, relay);
+    const auto config_addr = static_cast<uint32_t>(impl.socket->get_config_buffer()->address());
+    const auto fifo_addr = static_cast<uint32_t>(impl.socket->get_data_buffer()->address());
+    const auto ws_for = [&](const tm_distributed::MeshCoordinate& c) {
+        return CMAKE_UNIQUE_NAMESPACE::make_worker_sync_args(
+            mesh->get_device(c),
+            impl.worker_cores,
+            impl.num_workers,
+            static_cast<uint32_t>(impl.data_ready_sem->address()),
+            static_cast<uint32_t>(impl.consumed_counter_addrs.at(c)),
+            /*enabled=*/true);
+    };
+
+    tm_distributed::Finish(mesh->mesh_command_queue());
+
+    auto workload = std::make_unique<tm_distributed::MeshWorkload>();
+    // 1. Every coord except an entry chip: the unchanged receiver kernel. Its data now
+    //    comes from the entry relay, and its credits go back there.
+    for (const auto& [c, pk] : plan.slot_of) {
+        const auto [p, k] = pk;
+        const auto& cable = plan.cables[p];
+        if (c == cable.entry_coord) {
+            continue;
+        }
+        auto* device = mesh->get_device(c);
+        const CoreCoord core = impl.service_cores.at(c);
+        const auto t_node = relay.receiver_nodes.at(c);
+        const auto entry_node = relay.receiver_nodes.at(cable.entry_coord);
+        CMAKE_UNIQUE_NAMESPACE::patch_receiver_config(
+            device,
+            core,
+            config_addr,
+            static_cast<uint32_t>(relay.words[p].acked_base + k * relay.word_stride),
+            entry_node,
+            CMAKE_UNIQUE_NAMESPACE::relay_noc(mesh, impl.service_cores, cable.entry_coord));
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(t_node, entry_node);
+        TT_FATAL(!links.empty(), "D2DStreamService relay: no fabric link from coord {} to its entry chip", c);
+        workload->add_program(
+            tm_distributed::MeshCoordinateRange(c),
+            CMAKE_UNIQUE_NAMESPACE::build_receiver_program(
+                *impl.backing_tensor.mesh_buffer().get_device_buffer(c),
+                core,
+                config_addr,
+                static_cast<uint32_t>(impl.termination_addrs.at(c)),
+                common.plan,
+                common.tensor_page_size,
+                ws_for(c),
+                common.metadata_enabled,
+                common.metadata_size_bytes,
+                static_cast<uint32_t>(impl.metadata_l1_addr),
+                /*share_fabric_links=*/true,
+                static_cast<uint32_t>(impl.link_grant_addrs.at(c)),
+                // The entry relay sends one bytes_sent increment per lane it uses for c.
+                CMAKE_UNIQUE_NAMESPACE::relay_target_lanes(relay, c, p),
+                std::nullopt,
+                0u,
+                t_node,
+                entry_node,
+                links.front()));
+    }
+    // 2. Entry chips: the entry relay, in place of their receiver service.
+    for (uint32_t p = 0; p < plan.cables.size(); ++p) {
+        const auto e = plan.cables[p].entry_coord;
+        workload->add_program(
+            tm_distributed::MeshCoordinateRange(e),
+            CMAKE_UNIQUE_NAMESPACE::build_entry_relay_program(
+                mesh,
+                relay,
+                p,
+                peer,
+                impl.service_cores,
+                impl.backing_tensor,
+                ws_for(e),
+                {.termination_addr = static_cast<uint32_t>(impl.termination_addrs.at(e)),
+                 .link_grant_addr = static_cast<uint32_t>(impl.link_grant_addrs.at(e)),
+                 .metadata_addr = static_cast<uint32_t>(impl.metadata_l1_addr)},
+                config_addr,
+                fifo_addr));
+    }
+    impl.workload = std::move(workload);
 }
 
 // ===========================================================================
@@ -1637,6 +2626,18 @@ D2DStreamService::create_pair(
         cfg);
     auto receiver_handle = finalize_receiver(
         receiver_mesh, std::move(receiver_socket), std::move(receiver_service_cores), receiver_backing, cfg);
+
+    // Relay mode: both sides are local, so each side's relay words are known directly.
+    if (cfg.relay) {
+        const auto& s = *sender_handle->impl_;
+        const auto& r = *receiver_handle->impl_;
+        const RelayInfo sender_info{
+            CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*s.relay, s.mesh_device, s.service_cores, /*is_sender=*/true)};
+        const RelayInfo receiver_info{
+            CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*r.relay, r.mesh_device, r.service_cores, /*is_sender=*/false)};
+        build_relay_receiver(*receiver_handle, sender_info);
+        build_relay_sender(*sender_handle, receiver_info);
+    }
 
     // Launch the persistent kernels (non-blocking). Receiver first so it's parked
     // on its socket wait before the sender starts pushing pages.
@@ -1720,6 +2721,15 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
         receiver_tensor_addrs,
         sender_backing,
         cfg);
+    if (cfg.relay) {
+        const auto& s = *sender_handle->impl_;
+        const auto local =
+            CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*s.relay, s.mesh_device, s.service_cores, /*is_sender=*/true);
+        build_relay_sender(
+            *sender_handle,
+            RelayInfo{CMAKE_UNIQUE_NAMESPACE::exchange_relay_peer(
+                ctx, /*is_sender=*/true, endpoints.receiver_rank, local, *s.relay)});
+    }
     EnqueueMeshWorkload(
         sender_handle->impl_->mesh_device->mesh_command_queue(), *sender_handle->impl_->workload, /*blocking=*/false);
     sender_handle->impl_->launched = true;
@@ -1782,6 +2792,15 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
     // handle Impl here, emptying the map receiver_guard references.
     auto receiver_handle = finalize_receiver(
         receiver_mesh, std::move(receiver_socket), std::move(receiver_service_cores), receiver_backing, cfg);
+    if (cfg.relay) {
+        const auto& r = *receiver_handle->impl_;
+        const auto local =
+            CMAKE_UNIQUE_NAMESPACE::make_relay_peer(*r.relay, r.mesh_device, r.service_cores, /*is_sender=*/false);
+        build_relay_receiver(
+            *receiver_handle,
+            RelayInfo{CMAKE_UNIQUE_NAMESPACE::exchange_relay_peer(
+                ctx, /*is_sender=*/false, endpoints.sender_rank, local, *r.relay)});
+    }
     EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), *receiver_handle->impl_->workload, /*blocking=*/false);
     receiver_handle->impl_->launched = true;
 

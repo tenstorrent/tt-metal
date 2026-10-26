@@ -133,6 +133,15 @@ struct D2DStreamConfig {
 
     // Receiver only.
     std::optional<D2DStageGateConfig> stage_gate;
+
+    // Relay mode. Every chip still sends to the same coord of the receiver mesh, but no
+    // packet crosses into the receiver mesh further than the chip at the other end of
+    // the cable. A cable chip on the sender mesh runs an exit relay; its partner on the
+    // receiver mesh runs an entry relay. Other chips send to their exit relay inside the
+    // sender mesh, and the entry relay writes into the receivers inside the receiver
+    // mesh. Both sides must set the same value. Requires a 2D fabric, share_fabric_links
+    // and no stage_gate.
+    bool relay = false;
 };
 
 // Identifies the two endpoints of a MULTI-HOST D2D pair and the communicator the
@@ -373,6 +382,14 @@ private:
         std::map<tt::tt_metal::distributed::MeshCoordinate, tt::tt_metal::CoreCoord> service_cores,
         const Tensor& backing,
         const D2DStreamConfig& cfg);
+
+    // Relay mode (D2DStreamConfig::relay). finalize_* allocates the relay words and the
+    // staging tensors but builds no persistent program, because each side's relay programs
+    // need addresses that the other side allocates. The factory swaps those (RelayInfo,
+    // defined in the .cpp), then these build the programs. Neither launches them.
+    struct RelayInfo;
+    static void build_relay_sender(D2DStreamServiceSender& sender, const RelayInfo& peer);
+    static void build_relay_receiver(D2DStreamServiceReceiver& receiver, const RelayInfo& peer);
 };
 
 }  // namespace ttnn
