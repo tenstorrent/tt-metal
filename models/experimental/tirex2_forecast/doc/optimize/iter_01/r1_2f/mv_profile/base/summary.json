@@ -1,0 +1,387 @@
+{
+  "shape": "multivariate",
+  "precision": "accuracy",
+  "window": [
+    "MODEL_START",
+    "MODEL_END"
+  ],
+  "reduced_window": {
+    "device_us": 1048648.9959999982,
+    "op_to_op_gap_us": 2957764.2300000004,
+    "ops": 2137
+  },
+  "sections": {
+    "embed": {
+      "device_us": 92731.023,
+      "op_to_op_gap_us": 2.24,
+      "ops": 5
+    },
+    "layer_mlstm": {
+      "device_us": 454001.99700000003,
+      "op_to_op_gap_us": 87.13200000000002,
+      "ops": 159
+    },
+    "slstm_pre": {
+      "device_us": 102793.652,
+      "op_to_op_gap_us": 1.16,
+      "ops": 3
+    },
+    "slstm_first": {
+      "device_us": 140.84799999999998,
+      "op_to_op_gap_us": 1240.808,
+      "ops": 9
+    },
+    "slstm_steps": {
+      "device_us": 38788.300000000076,
+      "op_to_op_gap_us": 2307040.7620000006,
+      "ops": 1917
+    },
+    "slstm_post": {
+      "device_us": 306744.97099999996,
+      "op_to_op_gap_us": 20.324,
+      "ops": 37
+    },
+    "head": {
+      "device_us": 53448.204999999994,
+      "op_to_op_gap_us": 3.34,
+      "ops": 7
+    }
+  },
+  "counts": {
+    "embed": 1,
+    "layer_mlstm": 6,
+    "slstm_pre": 6,
+    "slstm_first": 6,
+    "slstm_steps": 24,
+    "slstm_post": 6,
+    "head": 1
+  },
+  "full_model_estimate": {
+    "device_ms": 6259.187236000002,
+    "ops": 47268
+  },
+  "measured": null,
+  "category_percent": {
+    "Compute": 84.67,
+    "TM": 13.330000000000002,
+    "Other": 1.99
+  },
+  "matmul_weighted_flops_percent": 9.29,
+  "stacked": [
+    {
+      "op": "MatmulDeviceOperation (in0:dram_interleaved)",
+      "percent": 65.28,
+      "device_us": 684537.02,
+      "count": 106,
+      "category": "Compute"
+    },
+    {
+      "op": "BinaryNgDeviceOperation (in0:dram_interleaved)",
+      "percent": 12.15,
+      "device_us": 127367.44,
+      "count": 936,
+      "category": "Compute"
+    },
+    {
+      "op": "PermuteDeviceOperation (in0:dram_interleaved)",
+      "percent": 7.26,
+      "device_us": 76175.74,
+      "count": 8,
+      "category": "TM"
+    },
+    {
+      "op": "UnaryDeviceOperation (in0:dram_interleaved)",
+      "percent": 4.75,
+      "device_us": 49773.29,
+      "count": 593,
+      "category": "Compute"
+    },
+    {
+      "op": "MinimalMatmulDeviceOperation (in0:dram_interleaved)",
+      "percent": 1.99,
+      "device_us": 20820.04,
+      "count": 2,
+      "category": "Other"
+    },
+    {
+      "op": "SliceDeviceOperation (in0:dram_interleaved)",
+      "percent": 1.92,
+      "device_us": 20138.82,
+      "count": 382,
+      "category": "TM"
+    },
+    {
+      "op": "LayerNormDeviceOperation (in0:dram_interleaved)",
+      "percent": 1.8,
+      "device_us": 18825.14,
+      "count": 10,
+      "category": "Compute"
+    },
+    {
+      "op": "NlpCreateHeadsDeviceOperation (in0:dram_interleaved)",
+      "percent": 1.31,
+      "device_us": 13772.93,
+      "count": 3,
+      "category": "TM"
+    },
+    {
+      "op": "ConcatDeviceOperation (in0:dram_interleaved)",
+      "percent": 1.13,
+      "device_us": 11896.58,
+      "count": 7,
+      "category": "TM"
+    },
+    {
+      "op": "NLPConcatHeadsDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.59,
+      "device_us": 6238.62,
+      "count": 3,
+      "category": "TM"
+    },
+    {
+      "op": "ReduceDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.37,
+      "device_us": 3900.28,
+      "count": 4,
+      "category": "Compute"
+    },
+    {
+      "op": "TilizeWithValPaddingDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.33,
+      "device_us": 3431.7,
+      "count": 2,
+      "category": "TM"
+    },
+    {
+      "op": "UntilizeWithUnpaddingDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.31,
+      "device_us": 3266.21,
+      "count": 1,
+      "category": "TM"
+    },
+    {
+      "op": "TransposeDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.24,
+      "device_us": 2528.35,
+      "count": 3,
+      "category": "TM"
+    },
+    {
+      "op": "SoftmaxDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.22,
+      "device_us": 2333.14,
+      "count": 2,
+      "category": "Compute"
+    },
+    {
+      "op": "UntilizeDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.1,
+      "device_us": 1088.57,
+      "count": 1,
+      "category": "TM"
+    },
+    {
+      "op": "AccumulationDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.1,
+      "device_us": 1067.81,
+      "count": 1,
+      "category": "Compute"
+    },
+    {
+      "op": "FillPadDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.08,
+      "device_us": 829.5,
+      "count": 1,
+      "category": "TM"
+    },
+    {
+      "op": "TypecastDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.06,
+      "device_us": 657.81,
+      "count": 72,
+      "category": "TM"
+    }
+  ],
+  "slowest_ops": [
+    {
+      "id": "2311",
+      "op": "MatmulDeviceOperation 327680 x 512 x 2048",
+      "device_us": 85673.312,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 6.889351960619895,
+      "flops_percent": 5.32321570033252,
+      "fidelity": "HiFi4 BF16 x BF16 => FP32",
+      "in0_block_w": "2",
+      "subblock": "1x2"
+    },
+    {
+      "id": "2143",
+      "op": "MatmulDeviceOperation 327680 x 2048 x 512",
+      "device_us": 69681.53,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 4.708415558613595,
+      "flops_percent": 6.5448838384846955,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x2"
+    },
+    {
+      "id": "4275",
+      "op": "MatmulDeviceOperation 327680 x 2048 x 512",
+      "device_us": 69464.142,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 4.723150542908886,
+      "flops_percent": 6.565366049405555,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x2"
+    },
+    {
+      "id": "2301",
+      "op": "MatmulDeviceOperation 327680 x 2048 x 512",
+      "device_us": 68756.728,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 4.771745391956406,
+      "flops_percent": 6.632914811447782,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x2"
+    },
+    {
+      "id": "2289",
+      "op": "MatmulDeviceOperation 327680 x 512 x 1536",
+      "device_us": 36047.54,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 7.28069654683787,
+      "flops_percent": 9.488668010449947,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x3"
+    },
+    {
+      "id": "4263",
+      "op": "MatmulDeviceOperation 327680 x 512 x 1536",
+      "device_us": 36045.867,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 7.281034466447983,
+      "flops_percent": 9.48910840883408,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x3"
+    },
+    {
+      "id": "2149",
+      "op": "MatmulDeviceOperation 327680 x 512 x 1536",
+      "device_us": 35978.339,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 7.294700291750544,
+      "flops_percent": 9.506918583801626,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x3"
+    },
+    {
+      "id": "4259",
+      "op": "MatmulDeviceOperation 327680 x 1408 x 512",
+      "device_us": 34328.644,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 7.1672391137849765,
+      "flops_percent": 9.133467220036332,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x2"
+    },
+    {
+      "id": "2285",
+      "op": "MatmulDeviceOperation 327680 x 1408 x 512",
+      "device_us": 34086.243,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 7.218208237264517,
+      "flops_percent": 9.198418983350466,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x2"
+    },
+    {
+      "id": "4286",
+      "op": "MatmulDeviceOperation 327680 x 2048 x 288",
+      "device_us": 24075.414,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 12.429210978469571,
+      "flops_percent": 10.655366289446203,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x3"
+    },
+    {
+      "id": "4270",
+      "op": "MatmulDeviceOperation 327680 x 512 x 512",
+      "device_us": 17911.404,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 7.323512997641056,
+      "flops_percent": 6.3654630248121045,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x2"
+    },
+    {
+      "id": "2157",
+      "op": "MatmulDeviceOperation 327680 x 512 x 512",
+      "device_us": 17679.339,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 7.4196439131576115,
+      "flops_percent": 6.449018251444334,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x2"
+    },
+    {
+      "id": "2281",
+      "op": "MatmulDeviceOperation 327680 x 512 x 512",
+      "device_us": 17586.845,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 7.4586658380169935,
+      "flops_percent": 6.482935392020095,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x2"
+    },
+    {
+      "id": "2296",
+      "op": "MatmulDeviceOperation 327680 x 512 x 512",
+      "device_us": 17360.436,
+      "bound": "SLOW",
+      "cores": "109",
+      "dram_percent": 7.555939263276567,
+      "flops_percent": 6.56748366714244,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x2"
+    },
+    {
+      "id": "4261",
+      "op": "PermuteDeviceOperation",
+      "device_us": 15881.777,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    }
+  ]
+}

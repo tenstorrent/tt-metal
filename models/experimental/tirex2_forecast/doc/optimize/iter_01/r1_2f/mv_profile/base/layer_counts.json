@@ -1,0 +1,36 @@
+{
+  "shape": "multivariate",
+  "precision": "accuracy",
+  "test": "forward",
+  "window": [
+    "MODEL_START",
+    "MODEL_END"
+  ],
+  "rows": 1024,
+  "pad_cut": 0,
+  "device_rows": 1024,
+  "sections": [
+    "embed",
+    "layer_mlstm",
+    "slstm_pre",
+    "slstm_first",
+    "slstm_steps",
+    "slstm_post",
+    "head"
+  ],
+  "counts": {
+    "embed": 1,
+    "layer_mlstm": 6,
+    "slstm_pre": 6,
+    "slstm_first": 6,
+    "slstm_steps": 24,
+    "slstm_post": 6,
+    "head": 1
+  },
+  "blocks": {
+    "layer_mlstm": 0,
+    "slstm_*": 1
+  },
+  "slstm_step_scaling": "71 of 284 ordinary steps profiled, counted 4 x 6 times",
+  "profiler_drain_every_steps": 20
+}
