@@ -471,6 +471,36 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_LCM_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "lcm_tile_init();"},
       {"SFPU_OP_CHAIN_0", "lcm_tile(0, 1, 0);"}}},
+    // DST[0] op= broadcast of DST[1]'s column 0 (col) or row 0 (row), in a 32-bit Dest.
+    {"sfpu_add_bcast_col",
+     {{"SFPU_OP_BINARY_BCAST_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_add_bcast_col_init();"},
+      {"SFPU_OP_CHAIN_0", "sfpu_add_bcast_col(0, 1);"}}},
+    {"sfpu_sub_bcast_col",
+     {{"SFPU_OP_BINARY_BCAST_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_sub_bcast_col_init();"},
+      {"SFPU_OP_CHAIN_0", "sfpu_sub_bcast_col(0, 1);"}}},
+    {"sfpu_mul_bcast_col",
+     {{"SFPU_OP_BINARY_BCAST_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_mul_bcast_col_init();"},
+      {"SFPU_OP_CHAIN_0", "sfpu_mul_bcast_col(0, 1);"}}},
+    {"sfpu_add_bcast_row",
+     {{"SFPU_OP_BINARY_BCAST_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_add_bcast_row_init();"},
+      {"SFPU_OP_CHAIN_0", "sfpu_add_bcast_row(0, 1);"}}},
+    {"sfpu_sub_bcast_row",
+     {{"SFPU_OP_BINARY_BCAST_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_sub_bcast_row_init();"},
+      {"SFPU_OP_CHAIN_0", "sfpu_sub_bcast_row(0, 1);"}}},
+    {"sfpu_mul_bcast_row",
+     {{"SFPU_OP_BINARY_BCAST_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_mul_bcast_row_init();"},
+      {"SFPU_OP_CHAIN_0", "sfpu_mul_bcast_row(0, 1);"}}},
+    // The compile-time-dispatched form, with the init ADD and the call SUB: one init serves every binop.
+    {"sfpu_bcast_col_sub",
+     {{"SFPU_OP_BINARY_BCAST_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "sfpu_bcast_init<BroadcastType::COL>();"},
+      {"SFPU_OP_CHAIN_0", "sfpu_bcast<BroadcastType::COL, EltwiseBinaryType::ELWSUB>(0, 1);"}}},
 };
 
 // ---- Tile-layout ops (goldens mirror the tt-llk SFPU tests' UnarySFPUGolden) --------------------
@@ -480,6 +510,25 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
 inline size_t tile_order_index(size_t row, size_t col) {
     const size_t face = (row / 16) * 2 + (col / 16);
     return face * 256 + (row % 16) * 16 + (col % 16);
+}
+
+// SFPU binary broadcast ops: the binop, and whether the RHS's column 0 (else its row 0) is broadcast.
+bool is_sfpu_bcast_op(const std::string& op_name) {
+    return op_name.starts_with("sfpu_") && op_name.find("_bcast_") != std::string::npos;
+}
+
+bool is_sfpu_bcast_col_op(const std::string& op_name) {
+    return op_name.ends_with("_col") || op_name.starts_with("sfpu_bcast_col_");
+}
+
+float sfpu_bcast_binop(const std::string& op_name, float lhs, float rhs) {
+    if (op_name.find("add") != std::string::npos) {
+        return lhs + rhs;
+    }
+    if (op_name.find("sub") != std::string::npos) {
+        return lhs - rhs;
+    }
+    return lhs * rhs;
 }
 
 // reshuffle_rows: byte r of the mask is the row that input row r is added to; 0xFF skips the row, and so does
@@ -1478,7 +1527,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         auto lhs = uniform(0.5f, 8.0f, seed);
         return {lhs, map_lhs(lhs, [](float f) { return std::log(f); })};
     }
-    if (op_name == "add_top_row") {
+    if (op_name == "add_top_row" || is_sfpu_bcast_op(op_name)) {
         return {uniform(-4.0f, 4.0f, seed), uniform(-4.0f, 4.0f, seed + 1)};
     }
     if (op_name == "logaddexp_binary" || op_name == "logaddexp2_binary") {
@@ -2552,7 +2601,7 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
         std::vector<bfloat16> golden(lhs.size());
         if (test_config.sfpu_op == "reshuffle_rows") {
             golden = sfpu_util::reshuffle_rows_golden(lhs, rhs);
-        } else {
+        } else if (!sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op)) {
             std::transform(
                 lhs.begin(), lhs.end(), rhs.begin(), golden.begin(), [&](const bfloat16& a, const bfloat16& b) {
                     return sfpu_util::sfpu_binary_function(test_config.sfpu_op, a, b);
@@ -2563,6 +2612,21 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
             for (size_t i = 0; i < golden.size(); ++i) {
                 if (!sfpu_util::is_add_top_row_element(i % 1024)) {
                     golden[i] = lhs[i];
+                }
+            }
+        }
+        if (sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op)) {
+            // Tiles are in face order: broadcast the RHS tile's column 0 (col) or row 0 (row).
+            const bool col = sfpu_util::is_sfpu_bcast_col_op(test_config.sfpu_op);
+            for (size_t base = 0; base < golden.size(); base += 1024) {
+                for (size_t row = 0; row < 32; ++row) {
+                    for (size_t c = 0; c < 32; ++c) {
+                        const size_t i = base + sfpu_util::tile_order_index(row, c);
+                        const size_t b =
+                            base + (col ? sfpu_util::tile_order_index(row, 0) : sfpu_util::tile_order_index(0, c));
+                        golden[i] = bfloat16(sfpu_util::sfpu_bcast_binop(
+                            test_config.sfpu_op, static_cast<float>(lhs[i]), static_cast<float>(rhs[b])));
+                    }
                 }
             }
         }
@@ -2633,7 +2697,8 @@ bool run_sfpu_binary_two_input_buffer(distributed::MeshDevice& mesh_device, cons
     compute_hw_config = experimental::ComputeHardwareConfig{
         .sfpu_precision_mode =
             test_config.approx_mode ? tt::tt_metal::Precision::Approximate : tt::tt_metal::Precision::Precise,
-        .enable_32_bit_dest = is_int8_op || test_config.sfpu_op == "add_top_row",
+        .enable_32_bit_dest =
+            is_int8_op || test_config.sfpu_op == "add_top_row" || sfpu_util::is_sfpu_bcast_op(test_config.sfpu_op),
     };
 
     experimental::KernelSpec compute_spec{
@@ -3864,7 +3929,14 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "gcd"),
         std::make_tuple(1, "lcm"),
         std::make_tuple(1, "reshuffle_rows"),
-        std::make_tuple(2, "reshuffle_rows")),
+        std::make_tuple(2, "reshuffle_rows"),
+        std::make_tuple(1, "sfpu_add_bcast_col"),
+        std::make_tuple(1, "sfpu_sub_bcast_col"),
+        std::make_tuple(1, "sfpu_mul_bcast_col"),
+        std::make_tuple(1, "sfpu_add_bcast_row"),
+        std::make_tuple(1, "sfpu_sub_bcast_row"),
+        std::make_tuple(1, "sfpu_mul_bcast_row"),
+        std::make_tuple(1, "sfpu_bcast_col_sub")),
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });

@@ -6,14 +6,12 @@
 
 #include "api/compute/common_globals.h"
 
-#if defined(TRISC_MATH) && (defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE))
+#ifdef TRISC_MATH
 #include "ckernel_sfpu_binary_bcast.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
-
-#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
 
 // ============================================================================
 // BCAST_COL: broadcast column 0 of the bcast tile across all 32 tile columns
@@ -418,7 +416,5 @@ ALWI void sfpu_bcast(uint32_t dst_data_idx, uint32_t dst_bcast_idx) {
         }
     }
 }
-
-#endif  // ARCH_WORMHOLE || ARCH_BLACKHOLE
 
 }  // namespace ckernel
