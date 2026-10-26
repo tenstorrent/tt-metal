@@ -1221,10 +1221,7 @@ def test_construction_names_the_slab_knob_when_the_dram_admission_refuses_the_sl
 
 
 def test_construction_names_the_slab_knob_when_the_model_refuses_the_slab(construction, monkeypatch) -> None:
-    refusal = Qwen38SlabRefused(
-        "the 2048-row prefill slab is refused: moe_compute refuses its one 2048-token call "
-        "(Too many tokens in input, got: 2048 but expected max: 128); serve without the slab"
-    )
+    refusal = Qwen38SlabRefused("the slab reduces in 512-row blocks; 768 rows is not a multiple")
     # A refusal can arrive wrapped, with the refusal as the cause (a failed open whose cleanup also failed).
     wrapped = RuntimeError("chain open failed and its cleanup also failed")
     wrapped.__cause__ = refusal
@@ -1235,7 +1232,7 @@ def test_construction_names_the_slab_knob_when_the_model_refuses_the_slab(constr
         raise raised["error"]
 
     monkeypatch.setattr(vllm_module, "Qwen38TracedChain", SimpleNamespace(open=open_chain))
-    monkeypatch.setenv("QWEN38_PREFILL_SLAB", "2048")
+    monkeypatch.setenv("QWEN38_PREFILL_SLAB", "768")
     for refused in (refusal, wrapped):
         raised["error"] = refused
         construction.calls.clear()
@@ -1243,7 +1240,7 @@ def test_construction_names_the_slab_knob_when_the_model_refuses_the_slab(constr
             _initialize(construction)
         assert str(error.value) == f"{refusal} (unset QWEN38_PREFILL_SLAB or set it to 0)", str(error.value)
         assert error.value.__cause__ is refused, error.value.__cause__
-        assert _recorded(construction)[2]["slab_rows"] == 2048, _recorded(construction)[2]
+        assert _recorded(construction)[2]["slab_rows"] == 768, _recorded(construction)[2]
     # The type is the mark: the same text in a plain ValueError, or a refusal without a slab, is not re-worded.
     for slab, other in (("2048", ValueError(str(refusal))), ("off", refusal)):
         monkeypatch.setenv("QWEN38_PREFILL_SLAB", slab)
