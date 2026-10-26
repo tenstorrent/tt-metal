@@ -1,0 +1,266 @@
+model: deepseek-ai/DeepSeek-V4.1-Flash
+target:
+  seq: 56320
+  chunk: 5120
+  dtype: bf16
+seed:
+  spec: models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml
+  commit: 34d20d4ee70ffde890d5416fd4fdfa9c7dbb3b5a
+  carried:
+  - R.1
+  - R.2
+  - R.3
+  - R.5
+  - SC.1
+  - PL.0
+  - PL.1
+  not_passed: []
+tasks:
+- id: CK.1
+  title: Checkpoint on this host at the pinned revision, intake approval, canonical prompt
+  step: intake
+  deps: []
+  gate:
+    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m models.demos.common.bringup.reference.prompt
+    metrics:
+      intake_approved: == 1
+      prompt_hash_ok: == 1
+      missing_tensors: == 0
+      shape_mismatches: == 0
+      count_mismatches: == 0
+      config_mismatches: == 0
+      checkpoint_tensors: '>= 1'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml
+- id: G.s10240
+  title: 'Golden s10240: 10240 tokens in 5120-token chunks, made elsewhere, imported and checked'
+  step: goldens
+  deps: []
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.golden_import --rung s10240
+    metrics:
+      golden_layers: == 40
+      golden_chunks: == 2
+      golden_hash_ok: == 1
+      drift_metrics: '>= 1'
+      drift_layers_above_res: '>= 1'
+- id: G.s56320
+  title: 'Golden s56320: 56320 tokens in 5120-token chunks, made elsewhere, imported and checked'
+  step: goldens
+  deps: []
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.golden_import --rung s56320
+    metrics:
+      golden_layers: == 40
+      golden_chunks: == 11
+      golden_hash_ok: == 1
+      drift_metrics: '>= 1'
+      drift_layers_above_res: '>= 1'
+- id: B.1
+  title: 'Box: mesh opens with the spec''s device params, collectives are exact'
+  step: box
+  deps: []
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_box.py
+    metrics:
+      chips: == 32
+      all_gather_maxabs: == 0
+  device: true
+- id: W.1
+  title: The seed's layers [0, 1, 2, 3, 14, 20, 21, 24] on 8x4 at this run's size, each block from its golden input
+  step: assemble
+  deps:
+  - B.1
+  - CK.1
+  - G.s10240
+  gate:
+    cmd: BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+  device: true
+  paths: &id001
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  role: port
+  brief:
+    details: 'This run grows the seed''s model (the same tt/) to this box at this run''s size. The gate runs the seed''s layers,
+      each contiguous run from the golden input of its first layer, so every block type is checked in its new mesh at once.
+      What differs from the seed box is in the plan''s `## Boxes` (per-chip shares, collective group sizes, topology, payload
+      and link constants): derive each from the mesh and the config, never hard-code this box. A failing layer is located
+      with its block type''s swap and component tests (the seed''s rendered tests; they read the spec and its goldens) and
+      the CPU at the device''s formats (agent rule 14).'
+- id: M.1
+  title: Every layer (40) on 8x4 at this run's size, from the ported blocks
+  step: assemble
+  deps:
+  - W.1
+  gate:
+    cmd: BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+  device: true
+  paths: *id001
+  role: port
+  brief:
+    details: 'Every layer of the model on this box, from the blocks W.1 ported: the layers the seed never ran (more state
+      sources and readers, the deep layers, the final norm and LM head) and the whole stack''s depth. Locate a failing layer
+      as in W.1.'
+- id: L.s10240
+  title: 'Ladder s10240: all chunks of 10240 in 5120'
+  step: integrate
+  deps:
+  - M.1
+  - G.s10240
+  gate:
+    cmd: BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id001
+- id: L.last
+  title: 'Ladder last: last chunk after a golden prefix of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.s10240
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+  device: true
+  paths: *id001
+- id: L.s56320
+  title: 'Ladder s56320: all chunks of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.last
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id001
+- id: L.smoke
+  title: 'Intake smoke on the device model: R.1''s prompt, greedy, the expected answer'
+  step: integrate
+  deps:
+  - L.s56320
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_smoke.py
+    metrics:
+      smoke_device_ok: == 1
+  device: true
+  paths: *id001
+- id: K.1
+  title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
+  step: contract
+  deps:
+  - L.s10240
+  - L.smoke
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+- id: X.1
+  title: Warm per-section, per-chip profile of one long chunk
+  step: perf
+  deps:
+  - L.s56320
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total: '> 0'
+      profiled_programs: '>= 1'
+  device: true
+- id: X.2
+  title: Opportunity list ranked by measured device time
+  step: perf
+  deps:
+  - X.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.opportunities --profile X.1
+    metrics:
+      opportunities_listed: '>= 1'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/opportunities.md
+- id: X.3
+  title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
+  step: perf
+  deps:
+  - X.2
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
+      BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/common/bringup/tests/test_positions.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      prefill_ms_full: '> 0'
+      pos_chunk: '>= 1'
+      op_rows: '>= 1'
+      timeline_ok: == 1
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+  device: true
+- id: O.1
+  title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
+  step: optests
+  deps:
+  - X.3
+  gate:
+    cmd: BRINGUP_CAPTURE_FORKS=models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/fork_calls.json
+      BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      -p models.demos.common.bringup.testing.fork_capture && python -m models.demos.common.bringup.testing.fork_cases --capture
+      models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/fork_calls.json --run-tests --lint
+    metrics:
+      forks_used: '>= 0'
+      fork_calls_uncovered: == 0
+      fork_tests_failed: == 0
+      fork_cases_lint: == 0
+  role: optests
+  paths:
+  - ttnn/ttnn/bringup
+  device: true
+- id: Z.1
+  title: 'Settings audit: every switch of the model and its forks in tt/settings.py, behaviour unchanged'
+  step: settings
+  deps:
+  - O.1
+  gate:
+    cmd: python -m models.demos.common.bringup.testing.settings_lint && BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all
+      --no-precompile models/demos/common/bringup/tests/test_ladder.py && python -m models.demos.common.bringup.testing.serving
+      --run all
+    metrics:
+      settings_violations: == 0
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+  device: true
+  role: settings
