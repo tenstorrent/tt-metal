@@ -36,7 +36,7 @@ void GroupAttnMatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& ashape = input_tensor_a.padded_shape();
     const auto& bshape = input_tensor_b.padded_shape();
     TT_FATAL((ashape[0] == 1), "Input q_len must be 1!");
-    TT_FATAL((ashape[1] % bshape[1] == 0), "Number of q_heads must be divisible by kv_heads!");
+    TT_FATAL(bshape[1] > 0 && ashape[1] % bshape[1] == 0, "Number of q_heads must be divisible by kv_heads!");
     TT_FATAL((ashape[2] == bshape[0]), "Num of users must match!");
     TT_FATAL((bshape[0] == 32), "Only batch 32 is supported for group attention matmul!");
 
