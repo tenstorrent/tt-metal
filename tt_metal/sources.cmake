@@ -65,6 +65,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
+    api/tt-metalium/experimental/operation_timeout.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
@@ -96,6 +97,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/per_core_allocation/allocator_mode.hpp
     api/tt-metalium/experimental/per_core_allocation/allocator_state.hpp
     api/tt-metalium/experimental/per_core_allocation/buffer.hpp
+    api/tt-metalium/experimental/per_core_allocation/device_memory_span.hpp
     api/tt-metalium/experimental/per_core_allocation/memory_config.hpp
     api/tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp
     api/tt-metalium/experimental/range_lockstep_allocation/buffer.hpp
@@ -225,7 +227,6 @@ set(TT_METAL_SOURCES
 set(JITAPI_FILES
     api/tt-metalium/buffer_types.hpp
     api/tt-metalium/circular_buffer_constants.h
-    api/tt-metalium/constants.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     core_descriptors/blackhole_140_arch.yaml

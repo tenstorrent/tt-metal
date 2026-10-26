@@ -24,6 +24,8 @@
     pytest --timeout 60 models/tt_transformers/tests/test_decode_output_rows.py
     pytest --timeout 60 models/tt_transformers/tests/test_generator_logprobs_single_device.py
     pytest --timeout 60 models/tt_transformers/tests/test_batched_prefill_slots.py
+    pytest --timeout 300 models/tt_transformers/tests/test_batched_prefill_extract.py
+    pytest --timeout 60 models/tt_transformers/tests/test_accuracy_precision_family.py
     pytest --timeout 300 models/tt_transformers/tests/test_load_state_dict_layers.py
     pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
@@ -740,6 +742,7 @@
     pytest --timeout 60 models/tt_transformers/tests/test_distributed_norm_utils.py
     pytest --timeout 60 models/tt_transformers/tests/test_model_config_utils.py
     pytest --timeout 60 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_model_config.py
+    pytest --timeout 60 models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_ccl_prefill_reduce_scatter.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_mlp_prefill.py
     pytest --timeout 900 models/demos/llama3_70b_galaxy/tests/unit_tests/test_qwen_attention.py
@@ -778,7 +781,7 @@
     bh_galaxy:
       timeout: 5
       tier: 1
-  owner_id: U089NPHL0GN # Diego Gomez
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: unit
 
@@ -1216,7 +1219,9 @@
   model: dit-encoders
   skus:
     wh_llmbox:
-      timeout: 45 # 35m02s measured on run 33021627869, +~28% margin
+      # 37m26s of pytest on run 39317745110 (10-19), plus ~11.5 min of tests added by #57208 (FIBO-vlm,
+      # smollm3, vision injection; timed on job 118869109132), so ~49 min. +~22% margin.
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1752,7 +1757,7 @@
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    for d in /mnt/models/vbench /mnt/MLPerf/vbench; do
+    for d in /mnt/weka/model-weights/video/vbench /mnt/models/vbench /mnt/MLPerf/vbench; do
       if [ -d "$d" ]; then export VBENCH_CACHE_DIR="$d" TORCH_HOME="$d/torch_hub"; break; fi
     done
     [ -n "${VBENCH_CACHE_DIR:-}" ] || echo "WARNING: no vbench cache found; quality checks may download"
@@ -1975,7 +1980,7 @@
   cmd: |
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
-    pytest --tb=short --ignore=models/common/tests/modules models/common/tests
+    pytest --tb=short --ignore=models/common/tests/moe models/common/tests
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -1992,13 +1997,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
-    pytest models/common/tests/modules/mlp/test_mlp_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/mlp/test_mlp_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.mlp.mlp_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2015,13 +2017,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
-    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/rmsnorm/test_rmsnorm_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.rmsnorm.rmsnorm_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2038,13 +2037,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
-    pytest models/common/tests/modules/rope/test_rope_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/rope/test_rope_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.rope.rope_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2061,13 +2057,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
-    pytest models/common/tests/modules/lm_head/test_lm_head_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/lm_head/test_lm_head_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.lm_head.lm_head_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2083,13 +2076,10 @@
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
-    pytest models/common/tests/modules/attention/test_attention_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/attention/test_attention_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.attention.attention_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2106,13 +2096,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
-    pytest models/common/tests/modules/embedding/test_embedding_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/embedding/test_embedding_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.embedding.embedding_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2128,25 +2115,18 @@
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     # Stop at the first failed command: the devices are not reset between commands (#57706).
-    pytest models/common/tests/modules/sampling/test_penalties_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/sampling/test_penalties_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.sampling.penalties_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || exit $?
-    pytest models/common/tests/modules/sampling/test_params.py \
+      --durations=10 || exit $?
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/sampling/test_params.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --deselect "models/common/tests/modules/sampling/test_params.py::test_legacy_device_sampling_capabilities_declare_the_exact_limit[models/tt_transformers/tt/generator_vllm.py]" || exit $?
-    pytest models/common/tests/modules/sampling/test_sampling_1d.py \
+      --durations=10 || exit $?
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/sampling/test_sampling_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.sampling.sampling_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || exit $?
+      --durations=10 || exit $?
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2162,13 +2142,10 @@
     export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/rmsnorm/test_rmsnorm_2d.py \
       -m "not slow" \
       --tb=short \
-      --durations-min=3.0 \
-      --cov=models.common.modules.rmsnorm.rmsnorm_2d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations-min=3.0
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2184,13 +2161,10 @@
     export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    pytest models/common/tests/modules/mlp/test_mlp_2d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/mlp/test_mlp_2d.py \
       -m "not slow" \
       --tb=short \
-      --durations-min=3.0 \
-      --cov=models.common.modules.mlp.mlp_2d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations-min=3.0
   model: tt-transformers-common
   model_family: TTTv2
   skus:
