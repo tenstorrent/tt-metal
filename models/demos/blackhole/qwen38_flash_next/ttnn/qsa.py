@@ -1116,8 +1116,6 @@ def qsa_chunk_constant_rows(allocated_compressed_blocks: int, rows: int = CHUNK_
             "arange32_lanes": torch.arange(rows, dtype=torch.int64).reshape(1, 1, tiles, CHUNK_ROWS),
             "block_start_lanes": block_start_lanes.reshape(1, 1, block_tiles, CHUNK_ROWS),
             "row_index_col": row_index,
-            # the block-shared attention's query positions P + j come from this row (one 8 KB page at 2048 rows)
-            "row_index_row": torch.arange(rows, dtype=torch.int64).reshape(1, 1, 1, rows),
             "arange_blocks_row": torch.arange(blocks, dtype=torch.int64).reshape(1, 1, 1, blocks),
             "page_offsets": torch.arange(block_tiles, dtype=torch.int64).reshape(1, 1, 1, block_tiles),
             "row_index_slots": row_index.expand(1, 1, rows, SPARSE_INDEX_CAPACITY).contiguous(),
@@ -1297,9 +1295,6 @@ class Qwen38TTNNQSAChunkConstants:
     arange_blocks_row: Any = None
     row_index_col: Any = None
     page_offsets: Any = None
-    # The slab's row index as a row (``[1,1,1,rows]`` ROW_MAJOR): the block-shared attention kernel
-    # (sparse_sdpa_tiled) reads the query positions P + j from it; None for the chunk forms.
-    row_index_row: Any = None
     # The slab's hoist decision for its QSA block masks, taken once here by slab_hoisted_mask_admission; None for
     # the chunk forms.  derive_qsa_chunk_inputs hoists the masks when it says so and leaves them to the layers
     # otherwise.
@@ -1374,7 +1369,6 @@ class Qwen38TTNNQSAChunkConstants:
                 arange_blocks_row=upload_uint32("arange_blocks_row", ttnn.TILE_LAYOUT),
                 row_index_col=upload_uint32("row_index_col"),
                 page_offsets=upload_uint32("page_offsets"),
-                row_index_row=upload_uint32("row_index_row"),
                 hoist_masks=hoist_masks,
             )
         except BaseException:
@@ -1401,7 +1395,6 @@ class Qwen38TTNNQSAChunkConstants:
                     self.arange_blocks_row,
                     self.row_index_col,
                     self.page_offsets,
-                    self.row_index_row,
                 )
                 if tensor is not None
             )
@@ -1432,9 +1425,6 @@ class Qwen38TTNNQSAChunkInputs:
     # The slab when its hoist is admitted: the causal block mask of every SLAB_SCORE_BLOCK_ROWS-row score block, BF16
     # ROW_MAJOR ``[1,1,512,blocks]``, derived once from ``complete_blocks_col`` and read by every QSA layer.
     block_masks: tuple[Any, ...] = ()
-    # The slab: the query positions P + j as a UINT32 ROW_MAJOR row ``[1,1,1,rows]`` (the block-shared attention
-    # kernel's positions input; derived beside ``complete_blocks_col``).
-    q_positions_row: Any = None
 
     def deallocate(self) -> None:
         _deallocate(
@@ -1446,7 +1436,6 @@ class Qwen38TTNNQSAChunkInputs:
             self.compressed_tile_i32,
             self.complete_blocks_col,
             *self.block_masks,
-            self.q_positions_row,
         )
 
 
@@ -1468,10 +1457,7 @@ def _derive_slab_tile_inputs(position_scalar, chunk: Qwen38TTNNQSAChunkConstants
     complete_rows_rm = ttnn.bitwise_right_shift(context_rows_plus, 2, memory_config=dram)
     complete_blocks_col = ttnn.to_layout(complete_rows_rm, ttnn.TILE_LAYOUT, memory_config=dram)
     _deallocate(context_rows, context_rows_plus, complete_rows_rm)
-    # The query positions P + j as one row: the block-shared attention kernel's positions input (the same add on
-    # the row-shaped index; the same scalar, so the captured slab graph stays position-generic).
-    q_positions_row = ttnn.add(chunk.row_index_row, position_scalar, memory_config=dram)
-    return compressed_tile_i32, complete_blocks_col, q_positions_row
+    return compressed_tile_i32, complete_blocks_col
 
 
 def slab_block_mask(complete_blocks_col, arange_blocks_row, start: int, value: float):
@@ -1543,11 +1529,10 @@ def derive_qsa_chunk_inputs(
     block_indices_i32 = []
     compressed_tile_i32 = None
     complete_blocks_col = None
-    q_positions_row = None
     slab = is_slab_rows(template_rows)
     block_masks: tuple[Any, ...] = ()
     if slab:
-        compressed_tile_i32, complete_blocks_col, q_positions_row = _derive_slab_tile_inputs(position_scalar, chunk)
+        compressed_tile_i32, complete_blocks_col = _derive_slab_tile_inputs(position_scalar, chunk)
         admission = chunk.hoist_masks
         if admission is not None and admission.hoist:
             # The masks depend on P and the row index only, so they are derived once per slab (bitwise the per-layer
@@ -1639,7 +1624,6 @@ def derive_qsa_chunk_inputs(
         compressed_tile_i32=compressed_tile_i32,
         complete_blocks_col=complete_blocks_col,
         block_masks=block_masks,
-        q_positions_row=q_positions_row,
     )
     for name, tensor, shape, dtype, layout in (
         ("kv_block_start", kv_block_start, (1, 1, 1, 1), u32, ttnn.ROW_MAJOR_LAYOUT),
@@ -1654,10 +1638,7 @@ def derive_qsa_chunk_inputs(
                 ),
             )
             if indexer_neg_mask is not None
-            else (
-                ("complete_blocks_col", complete_blocks_col, (1, 1, template_rows, 1), u32, ttnn.TILE_LAYOUT),
-                ("q_positions_row", q_positions_row, (1, 1, 1, template_rows), u32, ttnn.ROW_MAJOR_LAYOUT),
-            )
+            else (("complete_blocks_col", complete_blocks_col, (1, 1, template_rows, 1), u32, ttnn.TILE_LAYOUT),)
         ),
         *(
             (f"block_masks[{i}]", mask, (1, 1, SLAB_SCORE_BLOCK_ROWS, blocks), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
@@ -1725,7 +1706,6 @@ def emulate_qsa_chunk_inputs(
         inputs["complete_blocks_col"] = (
             (torch.arange(rows, dtype=torch.int64) + position + 1) // COMPRESS_RATIO
         ).reshape(1, 1, rows, 1)
-        inputs["q_positions_row"] = (torch.arange(rows, dtype=torch.int64) + position).reshape(1, 1, 1, rows)
     elif long:
         inputs["compressed_tile_i32"] = torch.tensor([[position // LONG_CHUNK_ROWS]], dtype=torch.int32)
     return inputs
@@ -3194,11 +3174,6 @@ class Qwen38TTNNQSA:
     # its admission predicate, bound with the handle (the fused module is a local import of __init__)
     _post_attention_rows_admits = None
     _rows_fused = None  # ttnn/fused/qsa_rows: the verify-form glue on the 32-row tile (QWEN38_FUSED=qsa_rows)
-    # QWEN38_FUSED=sparse_sdpa_tiled: the slab's attention as the block-shared kernel (ttnn/fused/sparse_sdpa_tiled)
-    # in place of the block-id expansion + zero half + head pad + sparse_sdpa + slice; tolerance class against the
-    # chain (docs/PREFILL.md), resolved at construction and kept through trace capture; the chunk forms never see it.
-    _slab_attention_fused = None
-    _slab_attention_base_config = None
     # the lanes' score-row windows: the chain here, ttnn/fused/qsa_block.lane_score_rows_of with qsa_score_merge
     _lane_score_rows_of = staticmethod(_lane_score_rows_of_composed)
     # The prefill slab's dense linears (ttnn/prefill_dense): the query-gate / K / V / output projections; the index
@@ -3382,10 +3357,6 @@ class Qwen38TTNNQSA:
             if fused_kernels.enabled(fused_kernels.qsa_rows.PA_NAME):
                 # program 5: the post-attention glue of the tile as one 48-core program
                 self._post_attention_rows = fused_kernels.kernel(fused_kernels.qsa_rows.PA_NAME).fused
-        if fused_kernels.enabled("sparse_sdpa_tiled"):
-            self._slab_attention_fused = fused_kernels.kernel("sparse_sdpa_tiled").fused
-            # the served HiFi2 compute config, kept through trace capture
-            self._slab_attention_base_config = fused_kernels.sparse_sdpa_tiled.HIFI2
         # The served path's one linear for the five projections (_project_merged): both fused tails read their column
         # windows of its shard, so it needs both on and the merged weight resident (a container built without it, the
         # dev microtests' random weights, runs the separate linears).  The lanes run the separate linears.
@@ -5365,8 +5336,6 @@ class Qwen38TTNNQSA:
             raise ValueError(f"the {rows}-row QSA chunk inputs carry no compressed tile index")
         if slab != (chunk.indexer_neg_mask is None) or slab != (chunk.complete_blocks_col is not None):
             raise ValueError("the slab's QSA chunk inputs carry the complete-block column, the chunks' the block mask")
-        if slab != (chunk.q_positions_row is not None):
-            raise ValueError("the slab's QSA chunk inputs carry the query positions row; the chunks' do not")
         if chunk.block_masks and (not slab or len(chunk.block_masks) != rows // SLAB_SCORE_BLOCK_ROWS):
             raise ValueError(
                 f"hoisted QSA block masks are a slab form, one per {SLAB_SCORE_BLOCK_ROWS}-row score block; "
@@ -5392,10 +5361,7 @@ class Qwen38TTNNQSA:
                 else ()
             ),
             *(
-                (
-                    ("complete_blocks_col", chunk.complete_blocks_col, (1, 1, rows, 1), ttnn.uint32, ttnn.TILE_LAYOUT),
-                    ("q_positions_row", chunk.q_positions_row, (1, 1, 1, rows), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
-                )
+                (("complete_blocks_col", chunk.complete_blocks_col, (1, 1, rows, 1), ttnn.uint32, ttnn.TILE_LAYOUT),)
                 if slab
                 else (
                     (
@@ -5709,8 +5675,6 @@ class Qwen38TTNNQSA:
         state: Qwen38TTNNQSAGenericState,
         chunk: Qwen38TTNNQSAChunkInputs,
         constants: Qwen38TTNNQSAChunkConstants,
-        *,
-        expand: bool = True,
     ):
         """The slab's block selection in ``SLAB_SCORE_BLOCK_ROWS``-row blocks: per block the query tiles scored
         (Sq = 32 calls), the score all-reduce, the causal block mask from the complete-block column by a broadcast
@@ -5778,11 +5742,6 @@ class Qwen38TTNNQSA:
             raise RuntimeError(
                 f"topk_large_indices must return UINT32 ROW_MAJOR block IDs, got {tensor_metadata(block_ids)}"
             )
-        if not expand:
-            # The block-shared attention kernel takes the block ids themselves (its reader applies the positional
-            # rule from the query positions); no expansion.
-            self.mesh_contract.validate_tensor(block_ids, placement=TensorPlacement.REPLICATED)
-            return block_ids
         # The expansion to token indices: the chunk forms' ops on the slab's row templates.
         starts = ttnn.bitwise_left_shift(block_ids, 2, memory_config=dram)
         _deallocate(block_ids)
@@ -5960,85 +5919,6 @@ class Qwen38TTNNQSA:
         if _tensor_key(result) != _tensor_key(state.packed_kv_cache):
             raise RuntimeError("row-major QSA chunk KV update was not in place")
         _deallocate(slab_row_major)
-
-    def _slab_attention_config(self, rows: int, state):
-        """The block-shared kernel's launch parameters for ``rows`` on this grid: 16 queries per tile when the tiles
-        fit the compute grid one per core (the 4x p150 line: 128 tiles on 130 cores), else 32 (a smaller grid would
-        put two 16-query tiles on some cores and double the layer time)."""
-
-        from models.demos.blackhole.qwen38_flash_next.ttnn.fused import sparse_sdpa_tiled
-
-        grid = state.packed_kv_cache.device().compute_with_storage_grid_size()
-        base = self._slab_attention_base_config or sparse_sdpa_tiled.DEFAULT
-        return sparse_sdpa_tiled.config_for_grid(rows, grid.x * grid.y, base)
-
-    def _slab_attention_admits(self, rows: int, state) -> bool:
-        """Whether the block-shared kernel serves this slab (its geometry contract on the shapes; the chain otherwise)."""
-
-        from models.demos.blackhole.qwen38_flash_next.ttnn.fused import sparse_sdpa_tiled
-
-        if self._slab_attention_fused is None or not is_slab_rows(rows):
-            return False
-        cache = state.packed_kv_cache
-        return sparse_sdpa_tiled.admits_shapes(
-            QUERY_HEADS_PER_DEVICE,
-            rows,
-            int(cache.shape[2]),
-            int(cache.shape[3]),
-            HEAD_DIM,
-            BLOCK_TOPK,
-            self._slab_attention_config(rows, state),
-        )
-
-    def _block_shared_attention_rows(self, query, gate, block_ids, positions_row, state, constants):
-        """The slab's attention through ``sparse_sdpa_tiled``: the local heads' query rows untilized, the kernel over
-        the block ids and the query positions, the result tilized for the gate; then the chain's tail (the sigmoid
-        gate, the head fold)."""
-
-        rows = constants.rows
-        dram = ttnn.DRAM_MEMORY_CONFIG
-        query_rows = ttnn.to_layout(query, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
-        _deallocate(query)
-        _retag_tensor(query_rows, reference=state.packed_kv_cache, shard_dim=1)
-        _require_shape(query_rows, (1, QUERY_HEADS_PER_DEVICE, rows, HEAD_DIM), "block-shared QSA query rows")
-        attention = self._slab_attention_fused(
-            query_rows,
-            state.packed_kv_cache,
-            block_ids,
-            positions_row,
-            scale=HEAD_DIM**-0.5,
-            config=self._slab_attention_config(rows, state),
-        )
-        _deallocate(query_rows)
-        _retag_tensor(attention, reference=gate, shard_dim=1)
-        _require_shape(attention, (1, QUERY_HEADS_PER_DEVICE, rows, HEAD_DIM), "block-shared QSA attention rows")
-        local_tiled = ttnn.to_layout(attention, ttnn.TILE_LAYOUT, memory_config=dram)
-        _deallocate(attention)
-        _retag_tensor(local_tiled, reference=gate, shard_dim=1)
-        return self._gate_and_fold_attention_rows(local_tiled, gate, state, constants)
-
-    def _gate_and_fold_attention_rows(self, local_tiled, gate, state, constants: Qwen38TTNNQSAChunkConstants):
-        """The chain's tail after the attention (the sigmoid gate, the head fold) for the block-shared path; the
-        chain's own method keeps the same ops inline (its op sequence is pinned)."""
-
-        rows = constants.rows
-        activated_gate = ttnn.sigmoid(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        gated = ttnn.mul(local_tiled, activated_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        _deallocate(local_tiled, activated_gate, gate)
-        _require_shape(gated, (1, QUERY_HEADS_PER_DEVICE, rows, HEAD_DIM), "gated QSA attention head rows")
-        # Head-major -> one [1,1,rows,1536] row set: six whole-tile head slices concatenated on the last dim
-        # (the 1-row path's flatten is a view only at S = 1).
-        heads = [
-            ttnn.slice(gated, (0, head, 0, 0), (1, head + 1, rows, HEAD_DIM), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            for head in range(QUERY_HEADS_PER_DEVICE)
-        ]
-        _deallocate(gated)
-        local_flat = ttnn.concat(heads, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        _deallocate(*heads)
-        _retag_tensor(local_flat, reference=state.packed_kv_cache, shard_dim=3)
-        self.mesh_contract.validate_tensor(local_flat, placement=TensorPlacement.HEAD_SHARDED, shard_dim=3)
-        _require_shape(local_flat, (1, 1, rows, LOCAL_QUERY_WIDTH), "flat QSA attention rows")
-        return local_flat
 
     def _sparse_value_attention_rows(
         self,
@@ -6249,10 +6129,8 @@ class Qwen38TTNNQSA:
         self._write_compressed_index_chunk(
             state, chunk_state, raw_key, block_start_cos, block_start_sin, chunk, constants
         )
-        block_shared = self._slab_attention_admits(rows, state)
         if is_slab_rows(rows):
-            # With the block-shared kernel the selection ends at the block ids (no expansion to token indices).
-            sparse_indices = self._sparse_indices_slab(index_query, state, chunk, constants, expand=not block_shared)
+            sparse_indices = self._sparse_indices_slab(index_query, state, chunk, constants)
             _deallocate(index_query)
         else:
             masked_scores = self._score_blocks_chunk(index_query, state, chunk)
@@ -6263,12 +6141,7 @@ class Qwen38TTNNQSA:
         if hidden_tiles is not None:
             _deallocate(*hidden_tiles)
         self._write_packed_kv_chunk(state, chunk_state, key, value, chunk)
-        if block_shared:
-            local_attention = self._block_shared_attention_rows(
-                query, gate, sparse_indices, chunk.q_positions_row, state, constants
-            )
-        else:
-            local_attention = self._sparse_value_attention_rows(query, gate, sparse_indices, state, constants)
+        local_attention = self._sparse_value_attention_rows(query, gate, sparse_indices, state, constants)
         _deallocate(sparse_indices)
         output = self._project_output_rows(local_attention, full_hidden, constants)
         _deallocate(full_hidden)

@@ -48,7 +48,6 @@ from . import (
     router_tail,
     sampler_tail,
     shared_expert,
-    sparse_sdpa_tiled,
 )
 from . import gr_fold  # the line transports gr_recip_last runs on
 from . import gr_recip_last  # after gr_fold: it composes gr_fold's transports over gr_read's programs
@@ -93,7 +92,6 @@ __all__ = [
     "router_tail",
     "sampler_tail",
     "shared_expert",
-    "sparse_sdpa_tiled",
     "AdmittedStep",
     "resolve_admitted",
 ]

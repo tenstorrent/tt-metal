@@ -364,9 +364,6 @@ def test_qsa_slab_constants_pool_every_block_and_carry_no_row_templates() -> Non
     assert host["page_offsets"].reshape(-1).tolist() == list(range(tiles))
     assert tuple(host["arange_blocks_row"].shape) == (1, 1, 1, BLOCKS)
     assert host["row_index_col"].reshape(-1).tolist() == list(range(SLAB))
-    assert tuple(host["row_index_row"].shape) == (1, 1, 1, SLAB) and host["row_index_row"].reshape(-1).tolist() == list(
-        range(SLAB)
-    )
     assert tuple(host["row_keep_bits" if "row_keep_bits" in host else "row_index_slots"].shape) == (1, 1, SLAB, 2080)
     # The chunk forms are as before.
     short = qsa_module.qsa_chunk_constant_rows(BLOCKS, CHUNK_ROWS)
@@ -387,7 +384,6 @@ def test_qsa_slab_emulation_is_the_one_row_rule_per_row(position: int) -> None:
         assert int(complete[row]) == (position + row + 1) // 4 == visible
         assert torch.equal(inputs["row_keep_bits"][0, 0, row], one["row_keep_bits"].reshape(-1))
         assert torch.equal(inputs["row_fill"][0, 0, row], one["row_fill"].reshape(-1))
-    assert inputs["q_positions_row"].tolist() == [[[list(range(position, position + SLAB))]]]
 
 
 def _qsa_fake_ttnn(monkeypatch, blocks: int):
@@ -456,12 +452,10 @@ def _qsa_fake_ttnn(monkeypatch, blocks: int):
     return SimpleNamespace(freed=freed, parts=parts, live=live)
 
 
-@pytest.mark.parametrize("expand", [False, True])
 @pytest.mark.parametrize("rows", [512, 1024, 2048])
-def test_qsa_slab_selection_never_frees_its_block_ids_before_use(monkeypatch, rows: int, expand: bool) -> None:
-    """The slab's block ids stay live until the caller frees them. A 512-row slab is one 512-row score block, so its
-    block ids are its one top-k part (ttnn.concat of one tensor returns that tensor) and that part is not freed;
-    larger slabs concatenate their parts and free each one once. Nothing the method did not create is freed."""
+def test_qsa_slab_selection_never_frees_its_block_ids_before_use(monkeypatch, rows: int) -> None:
+    """Each top-k block-id part is freed exactly once, after the expansion reads it (a 512-row slab's one part is
+    its block ids: ttnn.concat of one tensor returns that tensor). Nothing the method did not create is freed."""
     blocks, block_rows = 64, qsa_module.SLAB_SCORE_BLOCK_ROWS
     fake = _qsa_fake_ttnn(monkeypatch, blocks)
     owner = SimpleNamespace(
@@ -491,19 +485,15 @@ def test_qsa_slab_selection_never_frees_its_block_ids_before_use(monkeypatch, ro
         SimpleNamespace(compressed_index_cache=inputs["cache"]),
         SimpleNamespace(block_masks=masks, row_keep_bits=inputs["keep"], row_fill=inputs["fill"]),
         SimpleNamespace(rows=rows, block_offsets_rows=inputs["offsets"], sentinel_pad_rows=inputs["pad"]),
-        expand=expand,
     )
     fake.live(result)
-    assert result.shape == (1, 1, rows, capacity if expand else qsa_module.BLOCK_TOPK), result.shape
+    assert result.shape == (1, 1, rows, capacity), result.shape
     assert len(fake.parts) == rows // block_rows, [part.name for part in fake.parts]
     for tensor in (*inputs.values(), *masks):
         assert all(tensor is not gone for gone in fake.freed), tensor.name
-    one_block = len(fake.parts) == 1
-    if not expand:
-        assert (result is fake.parts[0]) == one_block, (result.name, one_block)
     for part in fake.parts:
         times = sum(part is gone for gone in fake.freed)
-        assert times == (0 if one_block and not expand else 1), (part.name, times)
+        assert times == 1, (part.name, times)
 
 
 @pytest.mark.parametrize("rows", [512, 1024])

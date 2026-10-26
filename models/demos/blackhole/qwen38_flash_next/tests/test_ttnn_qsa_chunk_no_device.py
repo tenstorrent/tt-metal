@@ -141,21 +141,16 @@ def test_chunk_constants_and_inputs_declare_the_device_fields() -> None:
         "arange_blocks_row",
         "row_index_col",
         "page_offsets",
-        # The slab's row index as a row: the block-shared attention kernel's positions (None for the chunk forms).
-        "row_index_row",
         # The slab's hoist decision for its block masks (None for the chunk forms).
         "hoist_masks",
     )
     # compressed_tile_i32: the 128-row chunk's / the slab's page table (None for the 32-row forms);
     # complete_blocks_col: the slab's mask column (None for the chunk forms); block_masks: the slab's hoisted
     # block masks when the hoist is admitted (empty otherwise).
-    # q_positions_row: the slab's query positions P + j as a row (the block-shared attention kernel's input; None
-    # for the chunk forms).
     assert tuple(Qwen38TTNNQSAChunkInputs.__dataclass_fields__) == ("rows",) + CHUNK_INPUT_FIELDS + (
         "compressed_tile_i32",
         "complete_blocks_col",
         "block_masks",
-        "q_positions_row",
     )
     assert CHUNK_BLOCKS == 8 and CHUNK_ROWS == 32 and CHUNK_ROWS % COMPRESS_RATIO == 0
 

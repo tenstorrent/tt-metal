@@ -1098,13 +1098,7 @@ def test_qsa_verify_methods_are_the_chunk_ops_plus_two_block_writes_without_host
         "_sparse_value_attention",
         "_project_output",
     ]
-    # The slab's block-shared attention branch (QWEN38_FUSED=sparse_sdpa_tiled: its admission on the shapes and
-    # the kernel call) is a slab-only stage beside the chain's attention; the verify body has no slab form.
-    chunk = [
-        c.removeprefix("self.")
-        for c in _calls(functions["forward_chunk_generic"])
-        if c.startswith("self._") and c not in ("self._slab_attention_admits", "self._block_shared_attention_rows")
-    ]
+    chunk = [c.removeprefix("self.") for c in _calls(functions["forward_chunk_generic"]) if c.startswith("self._")]
     assert chunk[-4:] == [
         "_main_projection_rows",
         "_write_packed_kv_chunk",

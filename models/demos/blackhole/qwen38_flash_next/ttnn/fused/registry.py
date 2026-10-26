@@ -58,7 +58,6 @@ DEFAULT_ON: frozenset[str] = frozenset(
         "candidate_row",
         "shared_expert",
         "moe_dense",
-        "sparse_sdpa_tiled",
     }
 )
 
