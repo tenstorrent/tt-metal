@@ -1,0 +1,1169 @@
+{
+ "precision": "accuracy",
+ "results": [
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 1.5079108998179436,
+   "pcc_vs_auto": 1.000000000000963
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,10,4,4,1",
+   "ms": 1.5105658676475286,
+   "pcc_vs_auto": 1.000000000000963
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,5,4,4,1",
+   "ms": 1.3908802065998316,
+   "pcc_vs_auto": 0.9999999999966873
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,4,4,4,1",
+   "ms": 1.3887753244489431,
+   "pcc_vs_auto": 0.9999999999966873
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,10,5,4,1",
+   "ms": 1.5145780052989721,
+   "pcc_vs_auto": 1.000000000000963
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,5,4,1",
+   "ms": 1.5133211389183998,
+   "pcc_vs_auto": 1.000000000000963
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:8,10,5,2,1",
+   "ms": 1.6805494204163551,
+   "pcc_vs_auto": 1.000000000000963
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 1.6656496096402407,
+   "pcc_vs_auto": 1.000000000000963
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,10,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:12,10,4,4,1",
+   "ms": 1.5905165113508701,
+   "pcc_vs_auto": 1.000000000000963
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:20,10,4,4,1",
+   "ms": 1.4425630681216717,
+   "pcc_vs_auto": 1.000000000000963
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:24,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,20,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,2,4,1",
+   "ms": 1.7067516222596169,
+   "pcc_vs_auto": 0.999999999987022
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,10,10,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 0.38046110421419144,
+   "pcc_vs_auto": 1.000000000001802
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,10,4,4,1",
+   "ms": 0.38077509962022305,
+   "pcc_vs_auto": 1.000000000001802
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,5,4,4,1",
+   "ms": 0.368614261969924,
+   "pcc_vs_auto": 0.999999999999945
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,4,4,4,1",
+   "ms": 0.36867326125502586,
+   "pcc_vs_auto": 0.999999999999945
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,10,5,4,1",
+   "ms": 0.3800801932811737,
+   "pcc_vs_auto": 1.000000000001802
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,5,4,1",
+   "ms": 0.3805102314800024,
+   "pcc_vs_auto": 1.000000000001802
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:8,10,5,2,1",
+   "ms": 0.42707473039627075,
+   "pcc_vs_auto": 1.000000000001802
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 0.4336167126893997,
+   "pcc_vs_auto": 1.000000000001802
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,10,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:12,10,4,4,1",
+   "ms": 0.39892210625112057,
+   "pcc_vs_auto": 1.000000000001802
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:20,10,4,4,1",
+   "ms": 0.4007060080766678,
+   "pcc_vs_auto": 1.000000000001802
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:24,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,20,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,2,4,1",
+   "ms": 0.46253036707639694,
+   "pcc_vs_auto": 0.9999999999849476
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,10,10,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 1.3775005005300045,
+   "pcc_vs_auto": 0.9999999999981328
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,4,4,1",
+   "ms": 1.2825536075979471,
+   "pcc_vs_auto": 0.9999999999669971
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,5,4,4,1",
+   "ms": 1.3776017352938652,
+   "pcc_vs_auto": 0.9999999999621545
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,4,4,1",
+   "ms": 1.303011504933238,
+   "pcc_vs_auto": 0.9999999999637389
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,5,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,5,4,1",
+   "ms": 1.3661849778145552,
+   "pcc_vs_auto": 0.9999999999981328
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,10,5,2,1",
+   "ms": 1.4574571046978235,
+   "pcc_vs_auto": 0.9999999999669971
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 1.4982028864324093,
+   "pcc_vs_auto": 0.9999999999981328
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,10,4,4,1",
+   "ms": 1.3473672792315483,
+   "pcc_vs_auto": 0.9999999999669971
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:20,10,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:24,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,20,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,2,4,1",
+   "ms": 1.5670155175030231,
+   "pcc_vs_auto": 0.9999999999799953
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,10,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 0.33649690449237823,
+   "pcc_vs_auto": 0.9999999999994914
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,4,4,1",
+   "ms": 0.3396567888557911,
+   "pcc_vs_auto": 0.9999999999663042
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,5,4,4,1",
+   "ms": 0.35034967586398125,
+   "pcc_vs_auto": 0.9999999999769812
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,4,4,1",
+   "ms": 0.3333339001983404,
+   "pcc_vs_auto": 0.9999999999786852
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,5,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,5,4,1",
+   "ms": 0.33775586634874344,
+   "pcc_vs_auto": 0.9999999999994914
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,10,5,2,1",
+   "ms": 0.38562146946787834,
+   "pcc_vs_auto": 0.9999999999663042
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 0.38833748549222946,
+   "pcc_vs_auto": 0.9999999999994914
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,10,4,4,1",
+   "ms": 0.34892489202320576,
+   "pcc_vs_auto": 0.9999999999663042
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:20,10,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:24,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,20,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,2,4,1",
+   "ms": 0.417453283444047,
+   "pcc_vs_auto": 0.9999999999659317
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,10,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 1.3112796004861593,
+   "pcc_vs_auto": 0.9999999999071162
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,4,4,1",
+   "ms": 1.3028816785663366,
+   "pcc_vs_auto": 0.9999999999063035
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,5,4,4,1",
+   "ms": 1.4582033269107342,
+   "pcc_vs_auto": 0.9999999998241859
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,4,4,1",
+   "ms": 1.3223045971244574,
+   "pcc_vs_auto": 0.9999999998914584
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,5,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,5,4,1",
+   "ms": 1.313515705987811,
+   "pcc_vs_auto": 0.9999999999071162
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,10,5,2,1",
+   "ms": 1.4841383788734674,
+   "pcc_vs_auto": 0.9999999999063035
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 1.420029904693365,
+   "pcc_vs_auto": 0.9999999999071162
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,10,4,4,1",
+   "ms": 1.3957662042230368,
+   "pcc_vs_auto": 0.9999999999063035
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:20,10,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:24,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,20,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,2,4,1",
+   "ms": 1.6073484905064106,
+   "pcc_vs_auto": 0.9999999998268614
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,10,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 0.3581599798053503,
+   "pcc_vs_auto": 1.0000000000184655
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,4,4,1",
+   "ms": 0.3516541328281164,
+   "pcc_vs_auto": 0.9999999999937944
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,5,4,4,1",
+   "ms": 0.36425599828362465,
+   "pcc_vs_auto": 0.9999999999951277
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,4,4,1",
+   "ms": 0.3393832128494978,
+   "pcc_vs_auto": 1.0000000000035545
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,5,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,5,4,1",
+   "ms": 0.3645949997007847,
+   "pcc_vs_auto": 1.0000000000184655
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,10,5,2,1",
+   "ms": 0.397667707875371,
+   "pcc_vs_auto": 0.9999999999937944
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 0.39427680894732475,
+   "pcc_vs_auto": 1.0000000000184655
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,10,4,4,1",
+   "ms": 0.35861809737980366,
+   "pcc_vs_auto": 0.9999999999937944
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:20,10,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:24,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,20,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,2,4,1",
+   "ms": 0.42650559917092323,
+   "pcc_vs_auto": 0.9999999999740763
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,10,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 1.365217100828886,
+   "pcc_vs_auto": 0.9999999999995413
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,4,4,1",
+   "ms": 1.285657798871398,
+   "pcc_vs_auto": 0.9999999999993715
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,5,4,4,1",
+   "ms": 1.3720621820539236,
+   "pcc_vs_auto": 0.9999999999973755
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,4,4,1",
+   "ms": 1.3036496937274933,
+   "pcc_vs_auto": 0.999999999998601
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,5,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,5,4,1",
+   "ms": 1.3730351813137531,
+   "pcc_vs_auto": 0.9999999999995413
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,10,5,2,1",
+   "ms": 1.4606765005737543,
+   "pcc_vs_auto": 0.9999999999993715
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 1.4973962679505348,
+   "pcc_vs_auto": 0.9999999999995413
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,10,4,4,1",
+   "ms": 1.353128394111991,
+   "pcc_vs_auto": 0.9999999999993715
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:20,10,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:24,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,20,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,2,4,1",
+   "ms": 1.5711186919361353,
+   "pcc_vs_auto": 0.9999999999980747
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,10,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 0.33532939851284027,
+   "pcc_vs_auto": 0.999999999999632
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,4,4,1",
+   "ms": 0.3389263991266489,
+   "pcc_vs_auto": 0.9999999999963141
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,5,4,4,1",
+   "ms": 0.3496313001960516,
+   "pcc_vs_auto": 0.9999999999958379
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,4,4,1",
+   "ms": 0.33178539015352726,
+   "pcc_vs_auto": 0.9999999999846979
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,5,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,5,4,1",
+   "ms": 0.3368773963302374,
+   "pcc_vs_auto": 0.999999999999632
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,10,5,2,1",
+   "ms": 0.3847530111670494,
+   "pcc_vs_auto": 0.9999999999963141
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 0.3891230095177889,
+   "pcc_vs_auto": 0.999999999999632
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,10,4,4,1",
+   "ms": 0.3466743044555187,
+   "pcc_vs_auto": 0.9999999999963141
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:20,10,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:24,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,20,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,2,4,1",
+   "ms": 0.41769370436668396,
+   "pcc_vs_auto": 0.9999999999934508
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,10,10,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  }
+ ]
+}

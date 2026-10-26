@@ -161,18 +161,21 @@ def upload_vector(device, v: torch.Tensor):
 # R1-4 (``doc/optimize/iter_00/r1_4/matmul_sweep.json``): the fastest config per weight kind, at M = 65536 and 16384.
 # R2-3 (``doc/optimize/iter_01/r2_3/qkv_sweep.json``): QKV re-tuned, bf16 4.72 vs 5.07 ms, bf8 3.95 vs 4.18 ms.
 MATMUL_MINIMAL_QKV = ("mm", (16, 4, 8, 4, 1))  # QKV (N = 4608), bf16 and bf8 weights
-MATMUL_MINIMAL = ("mm", (16, 8, 4, 4, 1))  # every other per-token linear (K, N <= 1536)
+# R3-3 (``doc/optimize/iter_02/r3_3/matmul_sweep.json``): K block re-tuned at M = 65536, wo (K = 1536) 1.51 -> 1.39 ms,
+# w_ov / ff1 (K = 1280) 1.37 -> 1.28 ms; part of the R3-2 bundle (alone ~1.2 %).
+MATMUL_MINIMAL_K1536 = ("mm", (16, 4, 4, 4, 1))  # wo
+MATMUL_MINIMAL = ("mm", (16, 10, 4, 4, 1))  # every other per-token linear (K, N <= 1280)
 
 
 def _matmul_choice(weight, k_tiles: int, n_tiles: int):
     if n_tiles > 48:
         return MATMUL_MINIMAL_QKV
+    if k_tiles == 48:
+        return MATMUL_MINIMAL_K1536
     return MATMUL_MINIMAL
 
 
-def linear(
-    x, weight, precision: TtPrecision, *, bias=None, activation=None, compute_kernel_config=None, tuned=True
-):
+def linear(x, weight, precision: TtPrecision, *, bias=None, activation=None, compute_kernel_config=None, tuned=True):
     """``x @ weight``; per-token linears with M >= 512 rows take the R1-4 program config (``tuned``)."""
     import ttnn
 

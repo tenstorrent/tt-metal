@@ -9,9 +9,10 @@ and layer 0. Signposts (``tt-perf-report --start-signpost/--end-signpost``):
     MODEL_START / MODEL_END     the whole reduced forward
     embed_start / embed_end     tokenizer
     layer_start / layer_end     one MixingTransformer layer
+    cut_start / cut_end         the last layer with the read-out cut (R1-5), when the model runs it
     head_start / head_end       read-out slice and output head
 
-The full-model device time is estimated as embed + 20 x layer + head; ``layer_counts.json`` (written to
+The full-model device time is estimated as embed + 19 x layer + cut + head (R3-4; 20 x layer without the cut); ``layer_counts.json`` (written to
 ``$MODEL_PROFILE_OUT``) carries the counts. Run under ``python -m tracy -r -p -m pytest`` (``perf_iteration.sh``).
 
     MODEL_PROFILE_SHAPE      paper (default) | long_context | multivariate
@@ -20,6 +21,7 @@ The full-model device time is estimated as embed + 20 x layer + head; ``layer_co
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -59,8 +61,15 @@ def test_profile_forward(device):
         mark("layer_start")
         x = tt.layer(0, x, inputs)
         mark("layer_end")
+        head_inputs = inputs
+        if tt.cut_last_layer:
+            mark("cut_start")
+            x = tt.layer(0, x, inputs, cut=True)
+            mark("cut_end")
+            head_inputs = dataclasses.replace(inputs, padded_seq=inputs.readout_count, readout_start=0)
+        tt._drop_pending_norm()
         mark("head_start")
-        out = tt.head(x, inputs)
+        out = tt.head(x, head_inputs)
         ttnn.deallocate(x)
         mark("head_end")
         return out
@@ -88,8 +97,12 @@ def test_profile_forward(device):
         "tokens": prepared.num_patches,
         "padded_seq": inputs.padded_seq,
         "window": ["MODEL_START", "MODEL_END"],
-        "sections": ["embed", "layer", "head"],
-        "counts": {"embed": 1, "layer": NUM_LAYERS, "head": 1},
+        "sections": ["embed", "layer", "cut", "head"] if tt.cut_last_layer else ["embed", "layer", "head"],
+        "counts": (
+            {"embed": 1, "layer": NUM_LAYERS - 1, "cut": 1, "head": 1}
+            if tt.cut_last_layer
+            else {"embed": 1, "layer": NUM_LAYERS, "head": 1}
+        ),
     }
     print(f"\n[PROFILE] {json.dumps(meta)}")
     out_dir = os.environ.get("MODEL_PROFILE_OUT")

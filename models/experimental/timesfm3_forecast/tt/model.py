@@ -110,6 +110,10 @@ class TtInputs:
     # Last-layer cut (R1-5): the masks of the read-out query slots only
     readout_seq_mask: object = None  # (R, 1, F, S) additive: causal and leading padding
     readout_var_mask: object = None  # (F * B, 1, Vp, Vp), or None as ``var_mask``
+    # R3-1: ``var_mask`` folded into the packed path's block-diagonal mask, (S * R / 32, 1, 32, 32); None when
+    # there is no ``var_mask`` or the variates do not pack
+    packed_var_mask: object = None
+    readout_packed_var_mask: object = None
 
     def tensors(self):
         return [
@@ -122,6 +126,8 @@ class TtInputs:
                 self.var_mask,
                 self.readout_seq_mask,
                 self.readout_var_mask,
+                self.packed_var_mask,
+                self.readout_packed_var_mask,
             )
             if t is not None
         ]
@@ -150,6 +156,18 @@ def var_mask_tensor(num_front_masked: torch.Tensor, variates: int, padded_seq: i
     return torch.where(key_valid, 0.0, MASK_FILL)[:, None, None, :].expand(-1, 1, vp, -1).contiguous()
 
 
+def packed_var_mask_tensor(num_front_masked: torch.Tensor, variates: int, slots: torch.Tensor) -> torch.Tensor:
+    """R3-1: (len(slots) * R / 32, 1, 32, 32) additive block-diagonal mask over slot-major (s, row) packed rows:
+    query row reads key row when both are the same item at the same slot and the key's slot is not padding."""
+    rows = num_front_masked.shape[0]
+    key_valid = (slots[:, None] >= num_front_masked[None, :]).reshape(-1, TILE)  # (tiles, 32)
+    group = torch.arange(TILE) // variates
+    same = group[:, None] == group[None, :]
+    allowed = same[None] & key_valid[:, None, :]
+    assert (rows * len(slots)) % TILE == 0
+    return torch.where(allowed, 0.0, MASK_FILL)[:, None]
+
+
 def needs_var_mask(num_front_masked: torch.Tensor, variates: int) -> bool:
     """A variate-attention mask matters only when the variates of an item differ in leading padding. With
     shared padding (every forecaster batch: one time mask per item) a patch has all keys valid or none, and a
@@ -168,6 +186,7 @@ class TtTimesFM3:
         # under the 2 % bar: candidates.md); ``test_last_layer_cut`` covers the path.
         self.cut_last_layer = True
         self.pack_variates = True  # R2-2
+        self.fuse_rope_norm = True  # R3-2
         self._mask_cache = {}
         self.fuse_post_norm = True  # R2-4
         self._pending_norm = None
@@ -213,6 +232,14 @@ class TtTimesFM3:
         start, count = prepared.readout_start, prepared.num_forecast_patches
         var_mask = var_mask_tensor(nfm, prepared.variates, s) if needs_var_mask(nfm, prepared.variates) else None
         items = rows // prepared.variates
+        v = prepared.variates
+        pack = self.pack_variates and var_mask is not None and TILE % v == 0
+
+        def packed(slots):
+            if not pack or (rows * len(slots)) % TILE:
+                return None
+            return upload(self.device, packed_var_mask_tensor(nfm, v, slots))
+
         return TtInputs(
             tokens=upload(self.device, tokens),
             cos=upload(self.device, cos.reshape(1, 1, s, HEAD_DIM_PAD)),
@@ -231,6 +258,8 @@ class TtTimesFM3:
                 if var_mask is None
                 else upload(self.device, var_mask[start * items : (start + count) * items].contiguous())
             ),
+            packed_var_mask=packed(torch.arange(s)),
+            readout_packed_var_mask=packed(torch.arange(start, start + count)),
         )
 
     @staticmethod
@@ -339,6 +368,16 @@ class TtTimesFM3:
             to_rows(qkv, r, s), num_heads=NUM_HEADS, transpose_key=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(qkv)
+        if self.fuse_rope_norm:
+            # R3-2: RoPE and the QK norm in one pass over q and k (iter_02/r3_2: 4.94 -> 2.11 ms per layer).
+            from models.experimental.timesfm3_forecast.tt.ops.rope_qk_norm.op import rope_qk_norm
+
+            qn, kn = rope_qk_norm(
+                q, k, inputs.cos, inputs.sin, self.rope_trans, w["q_gain"], w["k_gain"], epsilon=QK_EPS
+            )
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+            return self._seq_attention_rest(qn, kn, v, x, w, inputs, cut)
         # R2-1: RoPE on a free (R * 8, 2, S, 96) leading-dim view (iter_00/r1_6: 2.56 vs 3.78 ms/call, bitwise equal).
         g = ROPE_VIEW_GROUPS
         rope = lambda t: ttnn.reshape(  # noqa: E731
@@ -357,6 +396,13 @@ class TtTimesFM3:
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         q, k = self._qk_norm(qr, kr, w)
+        return self._seq_attention_rest(q, k, v, x, w, inputs, cut)
+
+    def _seq_attention_rest(self, q, k, v, x, w, inputs: TtInputs, cut: bool):
+        """SDPA, wo and the post-norm of the time attention from normed, rotated q and k."""
+        import ttnn
+
+        p, r, s = self.precision, inputs.rows, inputs.padded_seq
         if not cut:
             merged = self._sdpa(q, k, v, inputs.seq_mask, causal=True)
             o = linear(to_flat(merged), w["wo"], p)
@@ -388,8 +434,11 @@ class TtTimesFM3:
             ttnn.deallocate(xn)
             return self._post(o, w["post"], h1)
         r, s, v = inputs.rows, inputs.padded_seq, inputs.variates
-        if self.pack_variates and inputs.var_mask is None and TILE % v == 0 and (r * s) % TILE == 0:
-            return self._var_attention_packed(w, xn, h1, inputs)
+        if self.pack_variates and TILE % v == 0 and (r * s) % TILE == 0:
+            if inputs.var_mask is None:
+                return self._var_attention_packed(w, xn, h1, inputs, self._block_mask(v, s * r // TILE))
+            if inputs.packed_var_mask is not None:
+                return self._var_attention_packed(w, xn, h1, inputs, inputs.packed_var_mask)
         qkv = linear(xn, w["wqkv"], p)
         ttnn.deallocate(xn)
         slot_major = ttnn.permute(to_rows(qkv, r, s), (1, 0, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -421,7 +470,7 @@ class TtTimesFM3:
         ttnn.deallocate(row_major)
         return self._post(o, w["post"], h1)
 
-    def _var_attention_packed(self, w, xn, h1, inputs: TtInputs):
+    def _var_attention_packed(self, w, xn, h1, inputs: TtInputs, mask):
         """R2-2: 32 / V items per 32-row tile, block-diagonal mask. The permute runs on the 1280-wide xn and o
         instead of the 4608-wide qkv and the 1536-wide context; consumes ``xn``, borrows ``h1``."""
         import ttnn
@@ -440,7 +489,7 @@ class TtTimesFM3:
         )
         ttnn.deallocate(qkv)
         q, k = self._qk_norm(q, k, w)
-        merged = self._sdpa(q, k, val, self._block_mask(v, tiles), causal=False)  # (tiles, 32, 1536)
+        merged = self._sdpa(q, k, val, mask, causal=False)  # (tiles, 32, 1536)
         o = linear(to_flat(merged), w["wo"], p)  # slot-major (S * R, D)
         ttnn.deallocate(merged)
         o_rows = ttnn.permute(ttnn.reshape(o, (s, r, o.shape[-1])), (1, 0, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -477,7 +526,11 @@ class TtTimesFM3:
         h1 = self.seq_attention(i, x, inputs, cut=cut)
         if cut:
             inputs = dataclasses.replace(
-                inputs, padded_seq=inputs.readout_count, var_mask=inputs.readout_var_mask, readout_start=0
+                inputs,
+                padded_seq=inputs.readout_count,
+                var_mask=inputs.readout_var_mask,
+                packed_var_mask=inputs.readout_packed_var_mask,
+                readout_start=0,
             )
         ttnn.deallocate(x)
         h2 = self.var_attention(i, h1, inputs)

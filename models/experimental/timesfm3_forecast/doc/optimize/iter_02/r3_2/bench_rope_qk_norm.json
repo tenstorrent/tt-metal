@@ -1,0 +1,38 @@
+{
+ "chain@1024x64": {
+  "ms_per_call": 4.940324858762324,
+  "pcc_ref_q": 1.0,
+  "max_diff_ref_q": 0.09330558776855469,
+  "pcc_ref_k": 1.0,
+  "max_diff_ref_k": 0.07906436920166016
+ },
+ "fused@1024x64": {
+  "ms_per_call": 2.1077720215544105,
+  "pcc_ref_q": 1.0,
+  "max_diff_ref_q": 0.07246971130371094,
+  "pcc_chain_q": 1.0,
+  "max_diff_chain_q": 0.0625,
+  "pcc_ref_k": 1.0,
+  "max_diff_ref_k": 0.055029869079589844,
+  "pcc_chain_k": 1.0,
+  "max_diff_chain_k": 0.0625
+ },
+ "chain@37x96": {
+  "ms_per_call": 0.3343474119901657,
+  "pcc_ref_q": 0.9999370574951172,
+  "max_diff_ref_q": 0.08035039901733398,
+  "pcc_ref_k": 0.9999836087226868,
+  "max_diff_ref_k": 0.06544923782348633
+ },
+ "fused@37x96": {
+  "ms_per_call": 1.169654750265181,
+  "pcc_ref_q": 0.9999420642852783,
+  "max_diff_ref_q": 0.05659294128417969,
+  "pcc_chain_q": 0.9999530911445618,
+  "max_diff_chain_q": 0.0625,
+  "pcc_ref_k": 0.9999867677688599,
+  "max_diff_ref_k": 0.05698537826538086,
+  "pcc_chain_k": 0.9999829530715942,
+  "max_diff_chain_k": 0.0625
+ }
+}

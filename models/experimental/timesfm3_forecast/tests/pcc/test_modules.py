@@ -255,6 +255,89 @@ def test_var_attention_packed_mask_control(device):
     assert diff > 1.0
 
 
+@pytest.mark.parametrize("variates", [2, 8])
+@pytest.mark.parametrize("control", [False, True])
+def test_var_attention_packed_padded(device, variates, control):
+    """R3-1: per-variate leading padding (a variate mask) on the packed path, against the unpacked path. The
+    positive control drops the key padding from the packed mask (block-diagonal only) and must differ clearly."""
+    import ttnn
+
+    tt = _model(device)
+    items, n = 64 // variates, 40
+    nfm = (torch.arange(items * variates) * 7) % 23  # every item's variates differ in padding
+    inputs = _inputs(tt, nfm, variates, n)
+    assert inputs.var_mask is not None and inputs.packed_var_mask is not None
+    h1 = torch.randn(items * variates, n, 1280, generator=torch.Generator().manual_seed(5)) * 4.0
+    outs, saved = [], tt.pack_variates
+    packed_mask = inputs.packed_var_mask
+    if control:
+        inputs.packed_var_mask = tt._block_mask(variates, inputs.padded_seq * items * variates // 32)
+    try:
+        for packed in (False, True):
+            tt.pack_variates = packed
+            x = _upload_rows(tt, h1, inputs)
+            out = tt.var_attention(0, x, inputs)
+            outs.append(tt.rows_to_torch(out, inputs))
+            for t in (x, out):
+                ttnn.deallocate(t)
+    finally:
+        tt.pack_variates = saved
+        inputs.packed_var_mask = packed_mask
+        tt.deallocate_inputs(inputs)
+    # A query whose own slot is padding is never read by a valid token; with all keys masked it is undefined.
+    valid = (torch.arange(n)[None, :] >= nfm[:, None])[..., None].expand(-1, -1, 1280)
+    diff = (outs[0][valid] - outs[1][valid]).abs().max().item()
+    print(f"[packed padded] V={variates} control={control}: max |diff| {diff:.4f}")
+    if control:
+        assert diff > 1.0
+    else:
+        check_pcc(f"packed vs unpacked, padded V={variates}", outs[0], outs[1], 0.9999, where=valid)
+        assert diff < 0.25
+
+
+@pytest.mark.parametrize("rows, seq", [(4, 64), (3, 96)])
+@pytest.mark.parametrize("control", [False, True])
+def test_rope_qk_norm(device, rows, seq, control):
+    """R3-2: the fused RoPE + QK-norm op alone against an fp32 torch reference, on real layer-0 gains, at
+    realistic scale, with an uneven core split (3 x 16 x 3 x 2 units). The control swaps cos and sin, which
+    must fail the same check."""
+    import ttnn
+
+    from models.experimental.timesfm3_forecast.common.decomposition import HEAD_DIM, HEAD_DIM_PAD, rope_tables
+    from models.experimental.timesfm3_forecast.tt.common import upload
+    from models.experimental.timesfm3_forecast.tt.model import NUM_HEADS, QK_EPS
+    from models.experimental.timesfm3_forecast.tt.ops.rope_qk_norm.op import rope_qk_norm
+
+    tt = _model(device)
+    w = tt.layers[0]["seq"]
+    gen = torch.Generator().manual_seed(11)
+    cos, sin = rope_tables(seq, torch.float32)
+    xs = []
+    for scale in (3.0, 6.0):
+        x = torch.randn(rows, NUM_HEADS, seq, HEAD_DIM_PAD, generator=gen) * scale
+        x[..., HEAD_DIM:] = 0
+        xs.append(x.bfloat16().float())
+    gains = [ttnn.to_torch(w[n]).float()[:1] for n in ("q_gain", "k_gain")]
+    dev_cs = [upload(device, t.reshape(1, 1, seq, HEAD_DIM_PAD)) for t in ((sin, cos) if control else (cos, sin))]
+    q, k = (upload(device, x) for x in xs)
+    outs = rope_qk_norm(q, k, *dev_cs, tt.rope_trans, w["q_gain"], w["k_gain"], epsilon=QK_EPS)
+    got = [ttnn.to_torch(t).float() for t in outs]
+    for t in (q, k, *dev_cs, *outs):
+        ttnn.deallocate(t)
+    ok = True
+    for name, x, gain, out in zip("qk", xs, gains, got):
+        rot = torch.zeros_like(x)
+        rot[..., 0::2], rot[..., 1::2] = -x[..., 1::2], x[..., 0::2]
+        y = x * cos + rot * sin
+        ref = y * torch.rsqrt(y.pow(2).mean(-1, keepdim=True) + QK_EPS) * gain
+        diff = (out - ref).abs().max().item()
+        print(f"[rope_qk_norm] {name} R={rows} S={seq} control={control}: max |diff| {diff:.4f}")
+        pcc = torch.corrcoef(torch.stack([out.flatten(), ref.flatten()]))[0, 1].item()
+        print(f"[rope_qk_norm] {name}: pcc {pcc:.6f}, max |ref| {ref.abs().max().item():.2f}")
+        ok &= diff < 0.02 * ref.abs().max().item() and pcc >= 0.99999
+    assert ok != control
+
+
 @pytest.mark.parametrize("rows", [16384, 65536 + 32 * 3])
 def test_post_add_norm(device, rows):
     """R2-4: the fused post-norm + residual + pre-norm kernel against the 3-op chain it replaces (the op output
