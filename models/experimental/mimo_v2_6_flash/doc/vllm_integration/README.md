@@ -162,9 +162,14 @@ global KV head once per pair by splitting every block instead of the users:
   request (8,192 global and 5 x 69 sliding-window blocks with a 2048-token step budget and two steps in flight).
 - **Decode.** Every chip runs its KV group's 16 Q heads over its own keys for every decode user (no owner mask), with
   `paged_flash_multi_latent_attention_decode(..., return_lse=True)`: the normalized partial output o and its LSE
-  (`m + log l`). The pair exchanges LSEs (an `all_gather` of the LSE over the lane's row, then a tensor-args slice at
-  the partner's index), and each chip scales its partial by `alpha = 1 / (1 + exp(clamp(lse_p - lse, -80, 80)))`; the
-  row reduction after `wo_decode` then sums `W (alpha_A o_A + alpha_B o_B)`, which is full attention. A user with no
+  (`m + log l`). `PairSplit.merge_heads` then runs one launch: each chip's exchange core sends its 16 x B LSEs to the
+  pair partner over the fabric (one hop, `kernels/attn/pair_lse_send.cpp`, a fused scatter write and semaphore
+  increment into one of two receive slots), and 64 merge cores (`kernels/attn/pair_merge_heads.cpp`) wait for the
+  partner's packet, compute `alpha = 1 / (1 + exp(clamp(lse_p - lse, -80, 80)))` in fixed point (~1e-8) and write
+  `alpha * o` with the heads concatenated (in place of ConcatHeads), each bf16 product rounded once. The receive slot
+  and the expected arrival come from per-core call counts in persistent global semaphores that every launch advances
+  on every chip. The row reduction after `wo_decode` then sums `W (alpha_A o_A + alpha_B o_B)`, which is full
+  attention (prefill keeps the ttnn-op `PairSplit.merge`: an `all_gather` of the LSE and eltwise ops). A user with no
   key on a chip has o = 0 and LSE -1e30, so the other chip carries it. The per-chip write positions (-1 where the chip
   does not keep the token) and SDPA positions (the last local index at or before the user's position) are derived
   inside the trace from the step's global positions, which advance with `plus_one`, by one one-core program
@@ -214,8 +219,12 @@ sampling, no speculation; the same build with `MIMO_KV_PAIR_SPLIT=0` as the base
 | APC check (16K document, 16 questions) | 48/48 correct, warm == cold 32/32 | the same |
 | plugin HTTP suite (tests/tt) | 76 passed, 2 failed | 74 passed, 4 failed |
 
-The merge costs about 0.5 ms per decode step at short context (9 global layers x the LSE all_gather and ~7 small
-ops); at long context the step reads the same KV bytes as before, since decode already split the users. Both HTTP
+The table's split column ran the first merge (the LSE all_gather and seven ttnn ops, 41.1 us per global layer, about
+0.5 ms per step). The fused merge (`tests/perf/kagent_pair_merge_bench.py`: 8.4-8.6 us per call at 4 users, found with
+tt-kernel-agent) brings the split back to the baseline's speed: c=16 128 / 128 955.6 tok/s, TPOT 14.50 ms, median ITL
+12.99 ms; c=1 TPOT 9.33 ms, median ITL 9.25 ms; c=16 32K / 256 median ITL 13.84 ms; APC check exact (48/48, warm ==
+cold 32/32); HTTP suite 76 passed, the same 2 seed tests failed. At long context the step reads the same KV bytes as
+before, since decode already split the users. Both HTTP
 runs fail the same two seed-reproducibility tests (`test_seeding`, `test_same_seeds_reproduce_across_batches`); the
 baseline also fails `test_specific_seed_reproducible[42]` and `test_mixed_params_batch`. Greedy over 16 prompts of 63
 to 60K tokens (64 tokens each): split and baseline agree on 3 of 16 served alone (c=1), and the continuations stay
@@ -635,8 +644,7 @@ with one mechanism, for 1 and 3 MTP layers:
 ## Not done
 
 - The KV pair split: a 4 x 1M per lane run (16 prompts of 1M tokens; a 1M prefill takes about an hour per lane), an
-  accuracy eval with the split on (only greedy agreement and the APC check so far), and a fused merge kernel in place
-  of the LSE all_gather and the small ops (about 0.5 ms per decode step).
+  accuracy eval with the split on (only greedy agreement and the APC check so far).
 - Slot parity of chunked prefill with `MIMO_KV_PAIR_SPLIT=0` (above).
 - Device sampling beyond greedy (top-k / top-p / temperature, penalties, logprobs run on the host, synchronously).
 - A 1M-token prompt, and the 1M server with the compact device RoPE tables (not yet run on hardware).
