@@ -218,6 +218,21 @@ def test_prep_rejects_gates_of_different_length(device, expect_error):
         )
 
 
+def test_prep_rejects_zero_chunk_size(device, expect_error):
+    """The prep launcher derives the chunk count by dividing by chunk_size before the prim validates it."""
+    q, k, v, g, beta, _ = _make_inputs(4, 1, seed=20261026, scale=KDIM**-0.5)
+    with expect_error(RuntimeError, "chunk_size must be 32 or 64"):
+        _t.chunk_gdn_prep(
+            _dev(device, q, ttnn.bfloat16),
+            _dev(device, k, ttnn.bfloat16),
+            _dev(device, v, ttnn.bfloat16),
+            _dev(device, _gate(g), ttnn.float32),
+            _dev(device, _gate(beta), ttnn.float32),
+            *_const_tiles(device),
+            chunk_size=0,
+        )
+
+
 # ---------------------------------------------------------------------------
 # (2) scan prim vs torch, with torch-built (exact fp32) intermediates
 # ---------------------------------------------------------------------------

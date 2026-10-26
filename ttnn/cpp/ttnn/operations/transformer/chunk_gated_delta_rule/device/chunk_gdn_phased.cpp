@@ -68,6 +68,7 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
             qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
+    validate_gdn_chunk_size(attrs.chunk_size);
     check_gdn_gate(in.g, "g", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
     check_gdn_gate(in.beta, "beta", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
     // The factory reads both gates with g's T: a beta of the same chunk count but fewer tokens reads past its end.
@@ -80,7 +81,6 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
     check(in.tril_c, "tril_c", DataType::FLOAT32);
     check(in.ones_c, "ones_c", DataType::FLOAT32);
     check(in.masks_c, "masks_c", DataType::FLOAT32);
-    validate_gdn_chunk_size(attrs.chunk_size);
     TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
     TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
     validate_gdn_tinv(attrs.tinv, attrs.chunk_size, in.q);
@@ -146,6 +146,10 @@ std::vector<Tensor> chunk_gdn_prep(
     if (HV == 0) {
         HV = g.logical_shape()[2];
     }
+    // The dims below are derived by dividing by these before the prim's validate runs.
+    validate_gdn_chunk_size(chunk_size);
+    TT_FATAL(!qk_flat || Hk > 0, "qk_flat requires Hk > 0");
+    TT_FATAL(!v_flat || HV > 0, "v_flat requires HV > 0");
     const uint32_t BH = qk_flat ? (q_shape[0] * HV) : q_shape[0];
     const uint32_t num_chunks = qk_flat ? (q_shape[1] / chunk_size) : q_shape[1];
     const uint32_t key_dim = qk_flat ? (q_shape[2] / Hk) : q_shape[3];

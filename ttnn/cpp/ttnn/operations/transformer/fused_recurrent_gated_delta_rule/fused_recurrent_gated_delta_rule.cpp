@@ -78,7 +78,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const uint32_t K = qs[3];
     const uint32_t HV = vs[2];
     const uint32_t V = vs[3];
-    TT_FATAL(HV % H == 0, "HV ({}) must be divisible by H ({})", HV, H);
+    TT_FATAL(H > 0 && HV % H == 0, "HV ({}) must be divisible by H ({}) and H must be greater than 0", HV, H);
     const uint32_t G = HV / H;
     const uint32_t BH = B * HV;
 
