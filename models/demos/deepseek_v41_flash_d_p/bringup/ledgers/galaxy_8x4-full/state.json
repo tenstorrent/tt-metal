@@ -76,6 +76,39 @@
    "G.s10240": "PASS"
   }
  },
+ "G.s56320": {
+  "attempts": 0,
+  "duration_s": 26.4,
+  "history": [
+   {
+    "s": 26.4,
+    "status": "PASS",
+    "t": "2026-10-26T10:43:54"
+   }
+  ],
+  "last_run": "2026-10-26T10:43:54",
+  "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/G.s56320.log",
+  "metrics": {
+   "drift_layers_above_res": 40,
+   "drift_metrics": 208,
+   "golden_chunks": 11,
+   "golden_hash_ok": 1,
+   "golden_layers": 40
+  },
+  "rc": 0,
+  "reason": [],
+  "stamp": {
+   "reused": [],
+   "units": {
+    "G.s56320": "20e30a9747dbb404"
+   }
+  },
+  "started": "2026-10-26T10:43:28",
+  "status": "PASS",
+  "units": {
+   "G.s56320": "PASS"
+  }
+ },
  "_run": {
   "branch": "dnijemcevic/model_bringup",
   "created": "2026-10-26T10:41:59",
