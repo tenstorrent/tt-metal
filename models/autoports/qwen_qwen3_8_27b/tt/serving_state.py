@@ -17,13 +17,31 @@ _KERNEL = str(Path(__file__).with_name('kernels') / 'serving_state_copy.cpp')
 
 
 class ServingStatePool:
-    def __init__(self, model, active_states, num_blocks_by_layer):
+    def __init__(self, model, active_states, num_blocks_by_layer, sharing_groups=None):
         self.mesh = model.mesh
         self.active = {}
         self.pools = {}
         self.num_blocks = {}
         self.prepared = False
         self.counters = dict(saves=0, restores=0, metadata_uploads=0)
+        self.sharing_groups = tuple(tuple(group) for group in (sharing_groups or ()))
+        self.pool_owners = {}
+        self.shared_ordinal = {}
+        self.layer_group = {}
+        if self.sharing_groups:
+            sizes = {len(group) for group in self.sharing_groups}
+            flattened = [i for group in self.sharing_groups for i in group]
+            expected = {i for i, layer in zip(model.layer_indices, model.layers)
+                        if layer.layer_type == 'linear_attention'}
+            if len(sizes) != 1 or 0 in sizes or len(flattened) != len(set(flattened)) or set(flattened) != expected:
+                raise ValueError('Sharing groups must partition recurrent layers into equal nonempty groups')
+            if len({num_blocks_by_layer[i] for i in flattened}) != 1:
+                raise ValueError('Shared snapshot pools require one global block count')
+            for group_index, group in enumerate(self.sharing_groups):
+                for ordinal, i in enumerate(group):
+                    self.shared_ordinal[i] = ordinal
+                    self.layer_group[i] = group_index
+        unique_pools = {}
         if len(active_states) != len(model.layer_indices):
             raise ValueError('State list must follow selected model layer order')
         for original_idx, layer, active in zip(model.layer_indices, model.layers, active_states):
@@ -43,7 +61,10 @@ class ServingStatePool:
             def pool_tensor(source):
                 return ttnn.zeros([count,*tuple(source.shape)[1:]],dtype=source.dtype,
                     layout=source.layout,device=self.mesh,memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            self.pools[original_idx] = LinearState(pool_tensor(active.conv),pool_tensor(active.recurrent))
+            pool_key = self.shared_ordinal.get(original_idx, original_idx)
+            if pool_key not in unique_pools:
+                unique_pools[pool_key] = LinearState(pool_tensor(active.conv),pool_tensor(active.recurrent))
+            self.pools[original_idx] = unique_pools[pool_key]
         if not self.active:
             raise ValueError('A recurrent state pool needs at least one linear layer')
         self.layer_indices = tuple(self.active)
@@ -52,8 +73,10 @@ class ServingStatePool:
         self.ids = ttnn.from_torch(self.host_ids,dtype=ttnn.uint32,layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh,memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh))
+        self.unique_pool_count = len(unique_pools)
         self.allocated_bytes_per_device = sum(
-            self.num_blocks[i] * (3*2560*2 + 12*128*128*4) for i in self.layer_indices)
+            int(pool.conv.shape[0]) * (3*2560*2 + 12*128*128*4)
+            for pool in unique_pools.values())
 
     def _copy_tensor(self, source, destination, layer_row):
         if source.buffer_address() == destination.buffer_address():
@@ -98,6 +121,20 @@ class ServingStatePool:
         ids = {i:operator.index(block_ids[i]) for i in self.layer_indices}
         if any(not 0 <= block < self.num_blocks[i] for i,block in ids.items()):
             raise ValueError('Snapshot block ID is outside the scheduler pool')
+        if self.sharing_groups:
+            owners = {}
+            for group_index, group in enumerate(self.sharing_groups):
+                group_ids = {ids[i] for i in group}
+                if len(group_ids) != 1:
+                    raise ValueError('All layers in a recurrent group must use the same block ID')
+                block = group_ids.pop()
+                if block == 0 or block in owners:
+                    raise ValueError('Live shared snapshots require distinct non-null IDs across groups')
+                owners[block] = group_index
+            if restore and any(self.pool_owners.get(block) != group for block, group in owners.items()):
+                raise ValueError('Shared snapshot restore has stale or unknown group ownership')
+            if not restore:
+                self.pool_owners.update(owners)
         for row,i in enumerate(self.layer_indices):
             self.host_ids[row,0] = ids[i] if restore else slot
             self.host_ids[row,1] = slot if restore else ids[i]
@@ -118,9 +155,20 @@ class ServingStatePool:
         """
         if self.prepared:
             return
-        blocks={i:0 for i in self.layer_indices}
-        self._transfer(0,blocks,False)
-        self._transfer(0,blocks,True)
+        if self.sharing_groups:
+            # Null row is only scratch here. Restore each layer before a later
+            # group overwrites its aliased row; nonzero layer-distinct states
+            # must survive warmup exactly. All commands use the same CQ.
+            for row,i in enumerate(self.layer_indices):
+                source,destination=self.active[i],self.pools[i]
+                self._copy_tensor(source.conv,destination.conv,row)
+                self._copy_tensor(source.recurrent,destination.recurrent,row)
+                self._copy_tensor(destination.conv,source.conv,row)
+                self._copy_tensor(destination.recurrent,source.recurrent,row)
+        else:
+            blocks={i:0 for i in self.layer_indices}
+            self._transfer(0,blocks,False)
+            self._transfer(0,blocks,True)
         self.prepared=True
 
     def save(self, slot, block_ids):

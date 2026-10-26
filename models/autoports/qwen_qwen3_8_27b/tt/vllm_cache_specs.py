@@ -23,6 +23,15 @@ RECURRENT_GROUPS = 3
 ATTENTION_BYTES_PER_TOKEN = ATTENTION_LAYERS * 2 * 8 * 1088 // 32
 
 
+def shared_recurrent_snapshots():
+    value = os.environ.get('QWEN38_SHARED_RECURRENT_SNAPSHOTS', '0')
+    if value not in ('0', '1'):
+        raise ValueError('QWEN38_SHARED_RECURRENT_SNAPSHOTS must be0 or1')
+    if value == '1' and physical_cache_budget() is None:
+        raise ValueError('Shared snapshots require an explicit physical cache byte budget')
+    return value == '1'
+
+
 def selected_block_size():
     block = int(os.environ.get('QWEN38_CACHE_BLOCK_SIZE', BLOCK_SIZE))
     if block not in (256, 512, 1024, 2048, 4096):
@@ -44,7 +53,8 @@ def physical_cache_budget():
 
 def physical_bytes_per_block(block):
     """Selected BFP8 attention plus BF16/FP32 snapshots; excludes active state/scratch."""
-    return block * ATTENTION_BYTES_PER_TOKEN + RECURRENT_LAYERS * STATE_BYTES_PER_LAYER
+    pools = RECURRENT_LAYERS // RECURRENT_GROUPS if shared_recurrent_snapshots() else RECURRENT_LAYERS
+    return block * ATTENTION_BYTES_PER_TOKEN + pools * STATE_BYTES_PER_LAYER
 
 
 def bounded_token_budget(max_model_len, max_num_seqs):
@@ -79,6 +89,9 @@ def get_kv_cache_spec(vllm_config):
     config = vllm_config.model_config.hf_config.text_config
     cache = vllm_config.cache_config
     block = selected_block_size()
+    if shared_recurrent_snapshots() and (getattr(vllm_config, 'kv_transfer_config', None)
+            or getattr(vllm_config, 'speculative_config', None)):
+        raise ValueError('Shared snapshots support only local non-speculative cache ownership')
     if cache.block_size != block:
         raise ValueError(f'Hybrid Qwen CLI block_size must match QWEN38_CACHE_BLOCK_SIZE={block}')
     if cache.mamba_cache_mode != 'align':

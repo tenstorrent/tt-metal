@@ -80,7 +80,8 @@ class Qwen38ForCausalLM:
     def allocate_hybrid_kv_cache(self, config):
         from .serving_state import ServingStatePool
         from .vllm_cache_specs import (selected_block_size, physical_cache_budget,
-            physical_bytes_per_block, validate_budget_geometry, bounded_token_budget, MambaSpec)
+            physical_bytes_per_block, validate_budget_geometry, bounded_token_budget, MambaSpec,
+            shared_recurrent_snapshots)
         block_sizes={group.kv_cache_spec.block_size for group in config.kv_cache_groups}
         if block_sizes != {selected_block_size()}:
             raise ValueError('Allocated cache groups must agree with selected checkpoint block size')
@@ -115,13 +116,18 @@ class Qwen38ForCausalLM:
         self.state_pool=ServingStatePool(self.model,states,
             num_blocks_by_layer={index:config.num_blocks
                 for index,layer in zip(self.model.layer_indices,self.model.layers)
-                if layer.layer_type=='linear_attention'})
+                if layer.layer_type=='linear_attention'},
+            sharing_groups=[sorted(int(name.split('layers.')[1].split('.')[0])
+                for name in group.layer_names) for group in config.kv_cache_groups
+                if isinstance(group.kv_cache_spec,MambaSpec)] if shared_recurrent_snapshots() else None)
         memory=ttnn.get_memory_view(self.mesh,ttnn.BufferType.DRAM)
         self.allocation_evidence=dict(
             scheduler_blocks=config.num_blocks,scheduler_block_size=self.scheduler_block_size,
             physical_cache_budget_bytes_per_device=budget,
             group_count=len(config.kv_cache_groups),
             recurrent_snapshot_bytes_per_device=self.state_pool.allocated_bytes_per_device,
+            recurrent_unique_snapshot_pools=self.state_pool.unique_pool_count,
+            shared_recurrent_snapshots=shared_recurrent_snapshots(),
             attention_bytes_per_device=sum(2*int(state.key.shape[0])*8*1088
                 for state in states if hasattr(state,'key')),
             active_recurrent_bytes_per_device=len(self.state_pool.pools)*self.batch_size*801792,
