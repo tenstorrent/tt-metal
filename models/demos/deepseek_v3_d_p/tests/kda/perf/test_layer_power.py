@@ -1,0 +1,83 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Sustained traced wall of the Galaxy KDA layer next to each chip's clock and power (a measurement tool, not a gate).
+
+Back-to-back replays push every chip past its power limit, and the firmware then lowers its AI clock. How far depends
+on the energy one call takes, so the sustained wall measures energy per call as much as time. This replays the traced
+layer for KDA_POWER_SECONDS in blocks of KDA_POWER_BLOCK calls while a thread reads each chip's AI clock, power and
+temperature from the kernel driver's sysfs and hwmon files. It reports the steady-state ms per call (second half of
+the run) with the mean and minimum AI clock and the mean power over the same window, plus the wall of single calls
+after an idle pause. Results go to stdout as a KDA_POWER= line and to KDA_POWER_OUT as JSON.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import statistics
+import time
+from pathlib import Path
+
+import pytest
+
+import ttnn
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.perf.profiler_utils import sustained_run
+from models.demos.deepseek_v3_d_p.tests.kda.perf.telemetry import Telemetry
+from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import (
+    _GALAXY_ACTUAL_START,
+    _L1_SMALL_SIZE,
+    _capture_layer_trace,
+    _release_layer_trace,
+)
+from models.demos.deepseek_v3_d_p.tests.kda.utils import make_kimi_k3_device_case, make_synthetic_kimi_k3_test_case
+from models.demos.deepseek_v3_d_p.tt.kda.config import kda_worker_l1_size
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
+
+_SECONDS = float(os.environ.get("KDA_POWER_SECONDS", "4"))
+_BLOCK = int(os.environ.get("KDA_POWER_BLOCK", "10"))
+_SINGLES = 10
+_IDLE_S = 0.5
+_OUT = Path(os.environ.get("KDA_POWER_OUT", "generated/kda_power.json"))
+
+
+@pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE, worker_l1_size=kda_worker_l1_size),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4-torus-xy",
+        ),
+    ],
+    indirect=True,
+)
+def test_layer_power(mesh_device: ttnn.MeshDevice, device_params: dict) -> None:
+    """Report the sustained wall per call with the clock and power it ran at."""
+    telemetry = Telemetry()
+    if not telemetry.available:
+        pytest.skip("no Blackhole sysfs telemetry on this host")
+    case = make_synthetic_kimi_k3_test_case(sequence=PREFILL_CHUNK_TOKENS)
+    layer, hidden = make_kimi_k3_device_case(mesh_device, case, tensor_parallel_axis=1, cache_weights=False)
+    actual_start, actual_end = _GALAXY_ACTUAL_START, _GALAXY_ACTUAL_START + PREFILL_CHUNK_TOKENS
+    trace = _capture_layer_trace(mesh_device, layer, hidden, actual_start, actual_end)
+    telemetry.start()
+    try:
+        singles_ms = []
+        for _ in range(_SINGLES):
+            time.sleep(_IDLE_S)
+            start = time.perf_counter()
+            ttnn.execute_trace(mesh_device, trace.trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            singles_ms.append((time.perf_counter() - start) * 1e3)
+        result = {"single_call_ms": statistics.median(singles_ms)}
+        result.update(sustained_run(mesh_device, trace.trace_id, telemetry, _SECONDS, _BLOCK, _IDLE_S))
+    finally:
+        telemetry.stop()
+        _release_layer_trace(mesh_device, trace)
+
+    print("KDA_POWER=" + json.dumps({key: value for key, value in result.items() if key != "ms_per_call_by_block"}))
+    _OUT.parent.mkdir(parents=True, exist_ok=True)
+    _OUT.write_text(json.dumps(result))
