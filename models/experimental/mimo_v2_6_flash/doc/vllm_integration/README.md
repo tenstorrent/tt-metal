@@ -202,6 +202,27 @@ global layer's prefill chunks and decode steps with the split on vs off (positio
 over 4 table rows, and verifies writing K / V slot by slot at 62..65 and 126..129: 0.99999 / 0.99998); the split cache
 holds the unsplit one's K / V at each local index (PCC 1.0).
 
+Served (vLLM, DP=4 lanes x `--max-num-seqs 4`, `--max-model-len 1048576`, `MIMO_KV_GB_PER_CHIP=6.7`, greedy device
+sampling, no speculation; the same build with `MIMO_KV_PAIR_SPLIT=0` as the baseline):
+
+| | split | `MIMO_KV_PAIR_SPLIT=0` |
+|---|---|---|
+| KV pool per lane (vLLM) | 4,202,656 tokens, 4.01x a 1M request | 2,149,317 tokens, 2.05x |
+| c=16, 128 in / 128 out | 912 tok/s, TPOT 15.16 ms, median ITL 13.51 ms | 967 tok/s, 14.29 ms, 12.97 ms |
+| c=1, 128 / 128 | TPOT 9.76 ms, median ITL 9.69 ms | 9.32 ms, 9.22 ms |
+| c=16, 32K in / 256 out | median TTFT 43.9 s, median ITL 14.41 ms | 43.9 s, 14.01 ms |
+| APC check (16K document, 16 questions) | 48/48 correct, warm == cold 32/32 | the same |
+| plugin HTTP suite (tests/tt) | 76 passed, 2 failed | 74 passed, 4 failed |
+
+The merge costs about 0.5 ms per decode step at short context (9 global layers x the LSE all_gather and ~7 small
+ops); at long context the step reads the same KV bytes as before, since decode already split the users. Both HTTP
+runs fail the same two seed-reproducibility tests (`test_seeding`, `test_same_seeds_reproduce_across_batches`); the
+baseline also fails `test_specific_seed_reproducible[42]` and `test_mixed_params_batch`. Greedy over 16 prompts of 63
+to 60K tokens (64 tokens each): split and baseline agree on 3 of 16 served alone (c=1), and the continuations stay
+coherent; for scale, each mode agrees with itself on 6 of 16 between two c=16 runs and on 8 of 16 between c=1 and
+c=16, so these prompts flip on rounding near-ties, and the split changes the attention's rounding in every global
+layer.
+
 ## Device RoPE tables
 
 Decode, the verify and the MTP draft read their RoPE cos / sin as rows of device tables at their own position inputs
@@ -613,9 +634,9 @@ with one mechanism, for 1 and 3 MTP layers:
 
 ## Not done
 
-- The KV pair split end to end: its layer tests pass on one Galaxy row (`tests/test_kv_pair_split_tp8.py`), but the
-  full model under vLLM, its decode cost (the LSE exchange and the merge, ~8 small ops per global layer) and a 4 x 1M
-  run are not yet measured.
+- The KV pair split: a 4 x 1M per lane run (16 prompts of 1M tokens; a 1M prefill takes about an hour per lane), an
+  accuracy eval with the split on (only greedy agreement and the APC check so far), and a fused merge kernel in place
+  of the LSE all_gather and the small ops (about 0.5 ms per decode step).
 - Slot parity of chunked prefill with `MIMO_KV_PAIR_SPLIT=0` (above).
 - Device sampling beyond greedy (top-k / top-p / temperature, penalties, logprobs run on the host, synchronously).
 - A 1M-token prompt, and the 1M server with the compact device RoPE tables (not yet run on hardware).
