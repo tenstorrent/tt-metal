@@ -2434,7 +2434,7 @@ def test_eltwise_binary_sfpu_bcast_col_nonfinite_ignored_columns(
     """Inf / NaN in the ignored columns leaves the output finite; a kernel that zeroes the discarded
     lanes with a multiply turns the whole row NaN (Inf * 0) through the rotate-add broadcast.
     """
-    _skip_fp32_no_dest_acc(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     _run_sfpu_binary_bcast(
         formats,
