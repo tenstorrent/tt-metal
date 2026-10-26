@@ -101,3 +101,17 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
   (test_e2e_runtime::test_no_runner_contract_test_takes_a_fixed_threshold flags xing40_a4b_d_p's frozen
   server_rules.py:393 fixed PCC, a different model's frozen test; not for this run). test_fork_cases::test_a_volatile_cache_key
   crashed (SIGBUS importing ttnn while FIX.2 rebuilt it); rerun alone after FIX.2. Fixes ready to land at the FIX.2 boundary.
+- 16:39 FIX.2 PASS 677bc394faf. Review: real root cause, accepted. se_dyn leader core compared my_x/my_y (translated NoC
+  coordinate on Blackhole) with reader 0's physical NoC0 coordinate: on Galaxy chips (physical column 1 harvested) no
+  core matched, every core polled the semaphore forever (SE_DYN_PULL plans only). Now logical coordinates
+  (get_absolute_logical_x/y). flat_expert.py test builder generalised from the 11x10 assert to E-shifted layouts (12x10).
+  W.1 re-ran on the final code (agent check) and passed. KNOWLEDGE CONTRADICTED DS41-119 (mesh runs hung too, on the
+  dyn-pull path) and DS41-63 (fork perf bands fail on a Galaxy chip: QuietBox baselines): agent's corrections, expected.
+  SEED-BOX RE-VERIFY list += FIX.2 (dyn-pull leader change runs on the 2x2 p150s too).
+- 16:39:31 killed the orchestrator at FIX.3 attempt 1 start (<1 min of agent work) to land F190-F192 (kill + resume).
+  Moved F191/F192 code out of core/gate.py and testing/cards.py (both measured: stamps.py would have voided every
+  passed unit) into orchestrator.py / __main__.py (stamp-skipped). Selftests 595 passed, 1 failure from before these
+  fixes (xing40 frozen contract test). Commit ff690328e21.
+- 16:58 FIX.1 before-number (OV-6): perf_shared_expert.py test_shared_flat L00 time, with the pre-FIX.1 padded
+  shared_expert.py (9582c9d) loaded by a scratch pytest plugin, on the current build (It 40 plans unchanged by FIX.1).
+  Log /scratch/dnijemcevic/fix1_before.log. FIX.3 resumes after it.
