@@ -370,11 +370,20 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const bool has_vend = tensor_args.has_valid_end_metadata();
     interleaved_accessor_args(has_vend ? *tensor_args.valid_end_tensor : input).append_to(reader_compile_args);
 
+    // The reader streams the input rows from DRAM, the heavy traffic; the writer emits k indices per row and
+    // the row-split survivor hand-off, so it takes whichever NoC the reader leaves free.
+    const auto reader_noc = operation_attributes.dram_read_noc;
+    const auto writer_noc =
+        reader_noc == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/reader.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_args, {}, {{"row_split", row_split}}));
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = reader_noc,
+            .compile_args = reader_compile_args,
+            .named_compile_args = {{"row_split", row_split}}});
 
     const auto body_mode = compute_body_mode(k, input.logical_shape()[-1]);
     const bool rows_are_multi_chunk = multi_chunk_rows(k, input.logical_shape()[-1]);
@@ -439,7 +448,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         program,
         "ttnn/cpp/ttnn/operations/experimental/topk_large_indices/device/kernels/writer.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_args, {}, {{"row_split", row_split}}));
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = writer_noc,
+            .compile_args = writer_compile_args,
+            .named_compile_args = {{"row_split", row_split}}});
 
     TopkLargeIndicesSharedVariables shared{
         .reader_kernel_id = reader_kernel,

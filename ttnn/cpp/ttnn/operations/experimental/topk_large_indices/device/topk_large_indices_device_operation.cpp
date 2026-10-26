@@ -188,6 +188,8 @@ ttsl::hash::hash_t TopkLargeIndicesDeviceOperation::compute_program_hash(
         attrs.valid_length_offset,
         attrs.k,
         attrs.resolved_worker_core_grid,
+        // Picks the reader's and writer's NoCs, so it changes the kernel binaries.
+        static_cast<uint32_t>(attrs.dram_read_noc),
         input.dtype(),
         input.layout(),
         input.memory_config().memory_layout(),
@@ -230,7 +232,8 @@ TopkLargeIndicesDeviceOperation::invoke(
     uint32_t valid_length_offset,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    const std::optional<Tensor>& valid_end_tensor) {
+    const std::optional<Tensor>& valid_end_tensor,
+    std::optional<tt::tt_metal::NOC> dram_read_noc) {
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "topk_large_indices input must be on device");
     auto* device = input_tensor.device();
     TT_FATAL(device != nullptr, "topk_large_indices input must have a device");
@@ -256,6 +259,8 @@ TopkLargeIndicesDeviceOperation::invoke(
     }
     const auto resolved_worker_core_grid = sub_core_grid.value_or(selected_subdevice_cores);
     TT_FATAL(resolved_worker_core_grid.num_cores() > 0, "topk_large_indices requires at least one TENSIX worker core");
+    const auto resolved_dram_read_noc =
+        dram_read_noc.value_or(tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch()));
 
     return {
         operation_attributes_t{
@@ -265,7 +270,8 @@ TopkLargeIndicesDeviceOperation::invoke(
             .subdevice_manager_id = subdevice_manager_id,
             .resolved_worker_core_grid = resolved_worker_core_grid,
             .valid_length = valid_length,
-            .valid_length_offset = valid_length_offset},
+            .valid_length_offset = valid_length_offset,
+            .dram_read_noc = resolved_dram_read_noc},
         tensor_args_t{
             .input_tensor = input_tensor,
             .valid_length_tensor = valid_length_tensor,
@@ -284,7 +290,8 @@ Tensor topk_large_indices(
     uint32_t valid_length_offset,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    const std::optional<Tensor>& valid_end_tensor) {
+    const std::optional<Tensor>& valid_end_tensor,
+    std::optional<tt::tt_metal::NOC> dram_read_noc) {
     auto [operation_attributes, tensor_args] =
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
             input_tensor,
@@ -294,7 +301,8 @@ Tensor topk_large_indices(
             valid_length_offset,
             subdevice_id,
             sub_core_grid,
-            valid_end_tensor);
+            valid_end_tensor,
+            dram_read_noc);
     return ttnn::device_operation::launch<
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
         operation_attributes, tensor_args);

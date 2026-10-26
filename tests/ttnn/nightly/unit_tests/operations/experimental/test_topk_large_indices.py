@@ -986,6 +986,51 @@ def test_topk_large_indices_program_cache_separates_resolved_core_grids(device):
         device.disable_and_clear_program_cache()
 
 
+@pytest.mark.parametrize("dram_read_noc", [None, ttnn.NOC.NOC_0, ttnn.NOC.NOC_1], ids=["default", "noc0", "noc1"])
+@pytest.mark.parametrize(
+    "k, num_rows, n",
+    [
+        (512, 32, 1024),
+        (2048, 4, 16384),
+        # More rows than one whole round of cores: the leftover rows are split across core pairs, so the
+        # writer's survivor hand-off runs on whichever NoC the reader leaves free.
+        (2048, 160, 8192),
+    ],
+    ids=["short_rows", "multi_chunk_k2048", "row_split"],
+)
+def test_topk_large_indices_dram_read_noc_matches_torch(device, dram_read_noc, k, num_rows, n):
+    base_row = _make_large_index_input(num_rows=1, n=n, k=k)[0]
+    torch_input = torch.stack([torch.roll(base_row, shifts=row * 7) for row in range(num_rows)])
+    tt_output = ttnn.experimental.topk_large_indices(_to_device(torch_input, device), k=k, dram_read_noc=dram_read_noc)
+    _assert_topk_matches_torch(torch_input, tt_output, k)
+
+
+def test_topk_large_indices_program_cache_separates_dram_read_noc(device):
+    torch_input = _make_large_index_input(num_rows=64, n=1024, k=512)
+    tt_input = _to_device(torch_input, device)
+
+    device.enable_program_cache()
+    device.clear_program_cache()
+    try:
+        default_output = ttnn.experimental.topk_large_indices(tt_input, k=512)
+        ttnn.synchronize_device(device)
+        entries_after_default = device.num_program_cache_entries()
+
+        # NOC_0 is Blackhole's preferred DRAM-read NoC, so naming it explicitly resolves to the default program.
+        noc0_output = ttnn.experimental.topk_large_indices(tt_input, k=512, dram_read_noc=ttnn.NOC.NOC_0)
+        ttnn.synchronize_device(device)
+        assert device.num_program_cache_entries() == entries_after_default
+
+        noc1_output = ttnn.experimental.topk_large_indices(tt_input, k=512, dram_read_noc=ttnn.NOC.NOC_1)
+        ttnn.synchronize_device(device)
+        assert device.num_program_cache_entries() > entries_after_default
+
+        for output in (default_output, noc0_output, noc1_output):
+            _assert_topk_matches_torch(torch_input, output, 512)
+    finally:
+        device.disable_and_clear_program_cache()
+
+
 def test_topk_large_indices_restricted_grid_cache_hit_rebinds_shape_and_valid_length(device):
     grid = device.compute_with_storage_grid_size()
     if grid.x < 8 or grid.y < 10:
