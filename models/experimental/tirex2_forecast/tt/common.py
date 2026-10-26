@@ -33,7 +33,9 @@ class Precision:
     ``w_in``, the sLSTM input projection that feeds the exponential gates, at HiFi4; the G1 sweep measured HiFi4
     on every dense role at +0.4 % device time for active-row PCC 0.959 -> 0.995 and a worst median error of
     0.165 -> 0.118 of the scale: ``doc/optimize/iter_00/precision_sweep.md``.)
-    ``performance``: bfp8 weights, LoFi, bf16 activations.
+    ``performance``: bfp8 weights, bf16 activations; ``w_in`` bf16 at HiFi4, embed / mLSTM / head at HiFi2, FFN
+    and variate at LoFi (R1-0 sweep, ``doc/optimize/iter_01/r1_0/precision_sweep.md``: LoFi everywhere narrowed the
+    band, spread_ratio p01 0.867; this policy 0.938 for +0.4 % device time).
     In every policy:
     - the recurrent states (mLSTM C, n, m; sLSTM c, n, m) and the exponential gating are fp32;
     - the sLSTM recurrent matmul ``y @ R`` runs at HiFi4 with ``R`` in bf16 (documented exception) and fp32
@@ -44,7 +46,7 @@ class Precision:
       ``packer_l1_acc=True``. ``fp32_acc=False`` turns fp32 dest accumulation off for the dense roles only (for
       the measured comparison).
 
-    ``hifi4_roles`` forces HiFi4 on dense roles; ``bf16_roles`` keeps a role's weights bf16 under bfp8.
+    ``hifi4_roles`` forces HiFi4 on dense roles; ``hifi2_roles`` lifts LoFi roles to HiFi2; ``bf16_roles`` keeps a role's weights bf16 under bfp8.
     """
 
     name: str = "accuracy"
@@ -52,6 +54,7 @@ class Precision:
     lofi: bool = False
     hifi4_roles: frozenset = frozenset(ROLES)
     bf16_roles: frozenset = frozenset()
+    hifi2_roles: frozenset = frozenset()
     fp32_acc: bool = True
     y_fp32: bool = False
 
@@ -61,7 +64,19 @@ class Precision:
 
     @classmethod
     def performance(cls) -> "Precision":
-        return cls(name="performance", bfp8_weights=True, lofi=True, hifi4_roles=frozenset())
+        return cls(
+            name="performance",
+            bfp8_weights=True,
+            lofi=True,
+            hifi4_roles=frozenset({"w_in"}),
+            bf16_roles=frozenset({"w_in"}),
+            hifi2_roles=frozenset({"embed", "mlstm", "head"}),
+        )
+
+    @classmethod
+    def performance_r0(cls) -> "Precision":
+        """The round-0 performance policy (LoFi everywhere, bfp8 weights), kept for comparisons."""
+        return cls(name="performance_r0", bfp8_weights=True, lofi=True, hifi4_roles=frozenset())
 
     @classmethod
     def accuracy_r0(cls) -> "Precision":
@@ -71,15 +86,23 @@ class Precision:
     @classmethod
     def by_name(cls, name: str) -> "Precision":
         """``accuracy`` / ``performance``, optionally with variant suffixes joined by ``+``:
-        ``hifi4=<role,..|all>``, ``bf16=<role,..|all>``, ``y32``, ``acc16`` (no fp32 dest accumulation)."""
+        ``hifi4=<role,..|all>``, ``hifi2=<role,..|all>`` (HiFi2 instead of LoFi), ``bf16=<role,..|all>``, ``y32``, ``acc16`` (no fp32 dest accumulation).
+        """
         base, *mods = name.split("+")
-        p = {"accuracy": cls.accuracy, "accuracy_r0": cls.accuracy_r0, "performance": cls.performance}[base]()
+        p = {
+            "accuracy": cls.accuracy,
+            "accuracy_r0": cls.accuracy_r0,
+            "performance": cls.performance,
+            "performance_r0": cls.performance_r0,
+        }[base]()
         kw = {}
         for m in mods:
             key, _, val = m.partition("=")
             roles = frozenset(ROLES) if val == "all" else frozenset(r for r in val.split(",") if r)
             if key == "hifi4":
                 kw["hifi4_roles"] = p.hifi4_roles | roles
+            elif key == "hifi2":
+                kw["hifi2_roles"] = p.hifi2_roles | roles
             elif key == "bf16":
                 kw["bf16_roles"] = p.bf16_roles | roles
             elif key == "y32":
@@ -102,7 +125,8 @@ class Precision:
         if role in self.hifi4_roles:
             fidelity = ttnn.MathFidelity.HiFi4
         else:
-            fidelity = ttnn.MathFidelity.LoFi if self.lofi else ttnn.MathFidelity.HiFi2
+            lofi = self.lofi and role not in self.hifi2_roles
+            fidelity = ttnn.MathFidelity.LoFi if lofi else ttnn.MathFidelity.HiFi2
         return kernel_config(fidelity, fp32_acc=self.fp32_acc)
 
     def gate_config(self):

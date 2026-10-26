@@ -21,6 +21,10 @@ All head metrics use the head output at the read-out tokens in normalized space,
     active_rows, excluded_rows
     spread_ratio_p01, spread_ratio_p99
                     per active row, |h - mean_q h| / |h_ref - mean_q h_ref| (band amplitude ratio; PLAN v1.3)
+    spread_ratio_p50
+                    the median ratio: a uniform band scaling (0.88x, 1.12x) moves it, row noise does not
+    spread_ratio_min, spread_ratio_max
+                    the extremes of that ratio (floor-only, no drift; D3 condition 1b)
     pcc_final       PCC of the single-pass [targets, 9, H] forecast after inverse scaling and band calibration
     pcc_final_spread  PCC of that forecast minus its mean over the quantile axis (data space)
     median_err      worst |median error| / scale over target rows
@@ -102,6 +106,9 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
         "excluded_rows": int((~act).sum()),
         "spread_ratio_p01": float(torch.quantile(ratio, 0.01)),
         "spread_ratio_p99": float(torch.quantile(ratio, 0.99)),
+        "spread_ratio_p50": float(torch.quantile(ratio, 0.5)),
+        "spread_ratio_min": float(ratio.min()),
+        "spread_ratio_max": float(ratio.max()),
         "pcc_row_min_var": float(rows[~flat].min()) if bool((~flat).any()) else 1.0,
         "flat_rows": int(flat.sum()),
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,

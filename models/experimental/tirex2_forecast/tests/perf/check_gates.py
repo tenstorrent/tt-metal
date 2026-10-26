@@ -11,7 +11,7 @@ drift tolerance per metric. Floors and tolerances change only through a decision
 only reads them. Exit status 1 when any floor or drift check fails; every check is printed.
 
 Direction of each metric: higher is better except ``median_err``, ``flat_max_err`` (upper bounds) and
-``spread_ratio_p99`` (an upper bound near 1). Drift is ``candidate >= baseline - tol`` for higher-is-better
+``spread_ratio_p99`` / ``spread_ratio_max`` (upper bounds near 1). A floor given as ``[lo, hi]`` is a range. Drift is ``candidate >= baseline - tol`` for higher-is-better
 metrics; ``candidate <= baseline + tol`` (absolute) or ``<= baseline x (1 + rel)`` for the others.
 """
 
@@ -22,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 
-LOWER_IS_BETTER = {"median_err", "flat_max_err", "spread_ratio_p99"}
+LOWER_IS_BETTER = {"median_err", "flat_max_err", "spread_ratio_p99", "spread_ratio_max"}
 DEFAULT_GATES = Path(__file__).resolve().parents[2] / "doc" / "optimize" / "gates.json"
 
 
@@ -30,6 +30,13 @@ def _floors(gates: dict, name: str, precision: str) -> dict:
     out = dict(gates["floors"].get(f"*/{precision}", {}))
     out.update(gates["floors"].get(f"{name}/{precision}", {}))
     return out
+
+
+def passes(metric: str, v: float, floor) -> bool:
+    """``floor`` is a bound in the metric's direction, or a ``[lo, hi]`` range."""
+    if isinstance(floor, list):
+        return floor[0] <= v <= floor[1]
+    return v <= floor if metric in LOWER_IS_BETTER else v >= floor
 
 
 def check(cand: list[dict], base: list[dict] | None, gates: dict) -> list[str]:
@@ -42,8 +49,9 @@ def check(cand: list[dict], base: list[dict] | None, gates: dict) -> list[str]:
             if v is None:
                 failures.append(f"{key} {metric}: missing")
                 continue
-            ok = v <= floor if metric in LOWER_IS_BETTER else v >= floor
-            print(f"{'ok  ' if ok else 'FAIL'} floor {key[0]}/{key[1]} {metric} {v:.6g} {'<=' if metric in LOWER_IS_BETTER else '>='} {floor}")
+            ok = passes(metric, v, floor)
+            rel = "in" if isinstance(floor, list) else "<=" if metric in LOWER_IS_BETTER else ">="
+            print(f"{'ok  ' if ok else 'FAIL'} floor {key[0]}/{key[1]} {metric} {v:.6g} {rel} {floor}")
             if not ok:
                 failures.append(f"{key} {metric} {v} vs floor {floor}")
         b = base_by.get(key)
@@ -61,7 +69,9 @@ def check(cand: list[dict], base: list[dict] | None, gates: dict) -> list[str]:
                 limit = bv - tol["abs"]
                 ok = v >= limit
                 rel = ">="
-            print(f"{'ok  ' if ok else 'FAIL'} drift {key[0]}/{key[1]} {metric} {v:.6g} {rel} {limit:.6g} (baseline {bv:.6g})")
+            print(
+                f"{'ok  ' if ok else 'FAIL'} drift {key[0]}/{key[1]} {metric} {v:.6g} {rel} {limit:.6g} (baseline {bv:.6g})"
+            )
             if not ok:
                 failures.append(f"{key} {metric} drift {v} vs {limit}")
     return failures

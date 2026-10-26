@@ -1,5 +1,5 @@
 {
-  "_doc": "Proposed at the G1 re-raise (2026-10-26); binding only once DECISIONS.md sets them. Floors per <shape>/<precision>; drift per metric (D1 item 6 defaults).",
+  "_doc": "Accuracy floors set by D3 (2026-10-26). Performance floors and the spread_ratio_min/max/p50 floors are proposed at G1b (R1-0), binding once DECISIONS.md sets them. Range floors are [lo, hi].",
   "floors": {
     "*/accuracy": {
       "pcc_normalized": 0.998,
@@ -10,18 +10,32 @@
       "spread_ratio_p99": 1.08,
       "pcc_final": 0.99,
       "pcc_final_spread": 0.999,
-      "median_err": 0.15
+      "median_err": 0.15,
+      "flat_max_err": 0.05,
+      "spread_ratio_min": 0.85,
+      "spread_ratio_max": 1.15,
+      "spread_ratio_p50": [
+        0.98,
+        1.02
+      ]
     },
     "*/performance": {
       "pcc_normalized": 0.998,
       "pcc_spread": 0.998,
-      "pcc_row_p01_active": 0.95,
-      "pcc_row_min_active": 0.8,
-      "spread_ratio_p01": 0.83,
-      "spread_ratio_p99": 1.3,
+      "pcc_row_p01_active": 0.98,
+      "pcc_row_min_active": 0.93,
+      "spread_ratio_p01": 0.92,
+      "spread_ratio_p99": 1.25,
+      "spread_ratio_min": 0.75,
+      "spread_ratio_max": 1.6,
+      "spread_ratio_p50": [
+        0.97,
+        1.04
+      ],
       "pcc_final": 0.99,
-      "pcc_final_spread": 0.998,
-      "median_err": 0.5
+      "pcc_final_spread": 0.999,
+      "median_err": 0.3,
+      "flat_max_err": 0.1
     },
     "multivariate/accuracy": {
       "median_err": 0.18
