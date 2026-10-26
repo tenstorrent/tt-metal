@@ -120,8 +120,10 @@ def matmul_pack_form(
     small = in0_tile_r_dim < 32 or in1_tile_c_dim < 32
     if rt_dim * ct_dim < 2 or (math_fidelity == MathFidelity.LoFi and kt_dim > 1 and dest_sync != DestSync.Full):
         return 0
+    # half sync at HiFi2: one K tile of small tiles, or with a Float32 output, leaves the per-tile pack on the critical path
+    half_block = kt_dim == 1 and math_fidelity == MathFidelity.HiFi2 and (small or formats.output_format == DataFormat.Float32)
     if dest_sync == DestSync.Half and (
-        math_fidelity != MathFidelity.LoFi
+        (math_fidelity != MathFidelity.LoFi and not half_block)
         or throttle >= 4
         or (small and formats.output_format == DataFormat.Float32)
         # Float32 operands bound a full fp32 section on the unpacker, the denser DEST reads of the block pack only slow the math (three tiles
