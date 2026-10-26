@@ -288,7 +288,8 @@ while IFS= read -r FILE; do
         .github/workflows/clang-tidy-reusable.yaml|\
         .github/workflows/pr-gate.yaml|\
         .github/workflows/build-docker-artifact.yaml|\
-        .github/workflows/resolve-docker-pull-refs.yaml)
+        .github/workflows/resolve-docker-pull-refs.yaml|\
+        cmake/clang-tidy-export-fixes-wrapper.sh)
             CLANG_TIDY_KEY_WORKFLOW_CHANGED=true
             ;;
     esac

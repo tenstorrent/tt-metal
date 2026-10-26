@@ -513,8 +513,9 @@ jobs:
   # below so it can't affect PR Gate Status. PR-gate only, never merge_group.
   code-analysis-shadow-clang-tidy-23:
     needs: [build-docker-images, find-changed-files]
-    # TEMP(clang-tidy-23 shadow): draft bypass, see code-analysis above.
-    # workflow_dispatch added for on-demand cache-warming re-runs.
+    # No draft check needed: workflow_dispatch isn't gated by
+    # pull_request.draft in the first place, so a manual dispatch already
+    # runs the upstream jobs on a draft PR without any bypass here.
     if: >-
       ${{
         needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
