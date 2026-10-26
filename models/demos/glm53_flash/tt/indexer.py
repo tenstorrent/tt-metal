@@ -609,6 +609,7 @@ class TtDSAIndexer(LightweightModule):
         q_rows_form: bool = False,
         row_starts: tuple[int, ...] | None = None,
         pos_floor: int = 0,
+        pools_view: tuple[ttnn.Tensor, int] | None = None,
     ) -> ttnn.Tensor:
         """The score + top-k half of ``select`` for a prefill sub-block: the ranked pool ids [1,1,T,512] uint32
         ROW_MAJOR of the T queries (descending score, each row over its own causal prefix), BEFORE the token
@@ -628,7 +629,27 @@ class TtDSAIndexer(LightweightModule):
             num_pools_valid=num_pools_valid,
             q_rows_form=q_rows_form,
             row_starts=row_starts,
+            pools_view=pools_view,
         )
+
+    def pools_view(self, cache: "TtIndexCache", slot: int, end: int, rows: int) -> tuple[ttnn.Tensor, int] | None:
+        """G53F-0198 (``GLM53_INDEXER_POOL_BUCKET`` = a pool count, 0 = off; read per call): a copy of ``user``'s first
+        W pooled keys (``slot`` = the scorer's batch index, ``select_pools``' user argument), W = the chunk's scored
+        width rounded up to a bucket, for the prefill scorer of one chunk.
+        ``indexer_score_dsa`` deals its k-bands over the k tensor's ALLOCATED width in contiguous per-column chunks
+        and skips the bands past ``kv_len``, so with the 1M allocation a 256k-deep chunk keeps ~1/4 of the grid
+        columns busy; a W-wide k keeps every column busy. The scores of the valid columns are the same per-column
+        arithmetic (bit-identical). ``rows``: the scored rows per sub-block (bounds the superset margin). None when
+        off, or when W reaches the allocation. Take it after the chunk's pool writes; the caller deallocates it."""
+        bucket = int(os.environ.get("GLM53_INDEXER_POOL_BUCKET", "0"))
+        if bucket <= 0:
+            return None
+        need = self._kv_len(cache, end // self.P, (self._extra_rows() + 1) * rows)
+        width = -(-need // bucket) * bucket
+        if width >= cache.pools_per_user:
+            return None
+        view = ttnn.slice(cache.pools_batched(), [slot, 0, 0, 0], [slot + 1, 1, width, cache.D])  # [1,1,W,D]
+        return view, width
 
     def expand_pools(
         self, top_p: ttnn.Tensor, *, query_start: int, row_starts: tuple[int, ...] | None = None, pos_floor: int = 0
@@ -657,9 +678,11 @@ class TtDSAIndexer(LightweightModule):
         row: int | None = None,
         q_rows_form: bool = False,
         row_starts: tuple[int, ...] | None = None,
+        pools_view: tuple[ttnn.Tensor, int] | None = None,
     ) -> ttnn.Tensor:
         """Scores + top-512 pools of the T queries: [1,1,T,512] uint32 ROW_MAJOR ranked pool ids ([1,1,1,512] with
-        ``row``). The score block is released here."""
+        ``row``). The score block is released here. ``pools_view`` (``pools_view``): score against that W-wide copy
+        of the user's pools instead of the whole allocation (same scores on the valid columns)."""
         # Multi-row meshes with the shared scorer: the op treats the mesh rows as sequence-parallel ranks
         # (``seq_shard_axes=[0]``: row r scores with chunk start + r*Sq; the queries are REPLICATED over the
         # tensor-parallel columns). The v1 prefill replicates the prompt over the rows too, so row r >= 1 scores
@@ -691,17 +714,18 @@ class TtDSAIndexer(LightweightModule):
                 raise NotImplementedError(
                     "per-row decode selection on a multi-row mesh (the traced decode selects on device)"
                 )
+            use_view = pools_view is not None and row is None and kv_len <= pools_view[1]
             scores = ttnn.experimental.indexer_score_dsa(
                 q,
-                cache.pools_batched(),
+                pools_view[0] if use_view else cache.pools_batched(),
                 w,
                 chunk_start_idx=op_start,
                 key_compression_ratio=self.P,
                 program_config=self.score_cfg,
-                cache_batch_idx=user,
+                cache_batch_idx=0 if use_view else user,
                 kv_len=kv_len,
                 seq_shard_axes=[0],
-            )  # [1,1,T,pools_per_user] bf16, -inf where not visible
+            )  # [1,1,T,pools_per_user] (or the view's W) bf16, -inf where not visible
             self._mark("index_score")
             # The op scores the allocated width (pools_per_user, the KV pool size: 262 176 at 1 M positions); only
             # the first kv_len columns can be selected, so the expansion + top-k work on that prefix and scale with

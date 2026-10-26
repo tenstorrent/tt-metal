@@ -1340,6 +1340,8 @@ class TtDSA(LightweightModule):
         self._mark("index_queries")
         slot = cache.index.prefill_slot(user)
         n_pools_valid = end // idx.P
+        # G53F-0198: the chunk's pools as a bucket-wide copy for the scorer (GLM53_INDEXER_POOL_BUCKET; None = off)
+        pv = idx.pools_view(cache.index, slot, end, qb)
         o_parts = []
         for a0, a1, subs in sparse_block_plan(r0, r1, qb, ab):
             pools = []
@@ -1374,6 +1376,7 @@ class TtDSA(LightweightModule):
                         q_rows_form=rows_form,
                         row_starts=row_starts,
                         pos_floor=pos_floor,
+                        pools_view=pv,
                     )
                 )  # [1,1,q1-q0,512] ranked pool ids
                 if q_b is not q_i:
@@ -1403,6 +1406,8 @@ class TtDSA(LightweightModule):
             self._mark("sparse_out")
         ttnn.deallocate(q_i)
         ttnn.deallocate(w_i)
+        if pv is not None:
+            ttnn.deallocate(pv[0])
         if len(o_parts) == 1:
             return o_parts[0]
         o_sparse = ttnn.concat(o_parts, dim=-2)  # [1,1,n,H*Dv]
