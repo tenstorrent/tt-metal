@@ -6,7 +6,8 @@ Builds the seed server's model (the same env: ``seed_server42.sh`` long geometry
 passes of ``prefill_chunked`` over the first ``PROF_N`` ids of ``PROF_IDS``. A pass is ``<chunk>:<instr>[:<n>[:<regions_t>]]``
 (``n``: this pass uses only the first n ids; ``regions_t``: the MoE regions sub-chunk for this pass; then optionally
 ``:<rank>`` (cumsum | mm), ``:<buf>`` (full | fit, the region buffer rows, G53F-0183) and ``:<gather>`` (embedding |
-row, the regions path's row gathers, G53F-0186)):
+row, the regions path's row gathers, G53F-0186), then ``:<mhc>``, ``:<combine>``, ``:<untilize>``, ``:<scatter>`` and the DSA sparse
+prefill's ``:<ablock>`` / ``:<qblock>`` rows):
 ``instr=1`` wraps every layer call, its attention core, its FFN core (MoE: router / experts / shared) with
 device synchronizations and installs the DSA ``StageTimer`` (the sync points change the overlap, so the
 instrumented total is an upper bound); ``instr=0`` times only whole chunks (the real cost). Rows go to
@@ -163,6 +164,12 @@ def test_prefill_profile(mesh_device):
             moe_mod.REGIONS_UNTILIZE = spec[9]
         if len(spec) > 10 and spec[10]:  # region buffer fill (embedding | custom, G53F-0193)
             moe_mod.REGIONS_SCATTER = spec[10]
+        if (
+            len(spec) > 11 and spec[11]
+        ):  # DSA sparse prefill attention block rows (tt/dsa.py prefill_blocks, read per call)
+            os.environ["GLM53_PREFILL_ABLOCK"] = spec[11]
+        if len(spec) > 12 and spec[12]:  # DSA sparse prefill score sub-block rows
+            os.environ["GLM53_PREFILL_QBLOCK"] = spec[12]
         if len(spec) > 7 and spec[7]:  # prefill mHC rows (wrap | fast | trace, G53F-0187 / 0188; tt/mhc.py)
             from models.demos.glm53_flash.tt import mhc as mhc_mod
 
@@ -234,6 +241,7 @@ def test_prefill_profile(mesh_device):
             regions=dict(moe_mod.REGIONS_STATS),  # what the regions calls ran (buffer rows, combine path)
             untilize=moe_mod.REGIONS_UNTILIZE,
             scatter=moe_mod.REGIONS_SCATTER,
+            dsa_blocks=__import__("models.demos.glm53_flash.tt.dsa", fromlist=["x"]).prefill_blocks(),
         )
         moe_mod.REGIONS_STATS.clear()
         if instr:
