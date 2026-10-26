@@ -37,6 +37,8 @@ import socket
 import sys
 from pathlib import Path
 
+from loguru import logger
+
 TOPO = Path("models/demos/common/prefill/runners/topology_configuration")
 DEFAULT_TEMPLATE = TOPO / "pipeline_prefill_request_intragalaxy_4rank_8x1_torus_y.yaml"
 # --profile has its OWN template, and therefore its own output name. Sharing the plain template
@@ -130,9 +132,9 @@ def main():
     full, subs = probe_submeshes(shape, count)
     if args.layout == "4x4":
         subs[1] = mirror_rows(subs[1], shape)
-    print("full 8x4 device ids (row-major):", full)
+    logger.info(f"full 8x4 device ids (row-major): {full}")
     for i, s in enumerate(subs):
-        print(f"  rank{i}: {','.join(map(str, s))}")
+        logger.info(f"  rank{i}: {','.join(map(str, s))}")
 
     text = fill_rank_bindings(tpl.read_text(), subs, tpl, profile_root=args.profile_root if args.profile else None)
 
@@ -141,7 +143,7 @@ def main():
         f"# The [{shape[0]},{shape[1]}] submesh -> device map is per-galaxy; regenerate on every new machine.\n"
     )
     out.write_text(banner + text)
-    print(f"\nwrote {out} ({len(subs)} rank bindings)")
+    logger.info(f"wrote {out} ({len(subs)} rank bindings)")
 
 
 if __name__ == "__main__":

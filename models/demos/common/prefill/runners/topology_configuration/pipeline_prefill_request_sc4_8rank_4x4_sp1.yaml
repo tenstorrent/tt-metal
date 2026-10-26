@@ -1,14 +1,15 @@
 # 8-stage SC4 pipeline prefill at stage shape [4,4] with SP on mesh axis 1: two ranks per galaxy,
 # rank 2k on host k's top tray half (rows 0-3) and rank 2k+1 on its bottom half (rows 4-7), chained
-# top(H) -> bottom(H) -> top(H+1) along the host ring c07u08 -> c07u02 -> c08u02 -> c08u08.
+# top(H) -> bottom(H) -> top(H+1) along the hosts' cabling ring h0 -> h1 -> h2 -> h3.
 #
 # The rank binding has no host field: placement comes from mpirun, two slots per host in ring order
-# (`--host c07u08:2,c07u02:2,c08u02:2,c08u08:2 --map-by slot`), which assemble_pipeline_binding.py
-# prints. TT_VISIBLE_DEVICES is per galaxy and a wrong map does not error, so fill this from each
-# host's own probe:
+# (`--host h0:2,h1:2,h2:2,h3:2 --map-by slot`), which assemble_pipeline_binding.py prints. Under a
+# Slurm allocation use a rankfile instead (rank 2k and 2k+1 on host k): --map-by slot there alternates
+# ranks across the nodes. TT_VISIBLE_DEVICES is per galaxy and a wrong map does not error, so fill this
+# from each host's own probe:
 #   on every host:   python models/demos/deepseek_v3_d_p/utils/gen_pipeline_binding.py --layout 4x4 --out <host>.yaml
 #   then, anywhere:  python models/demos/deepseek_v3_d_p/utils/assemble_pipeline_binding.py assemble \
-#                      --probe c07u08.yaml --probe c07u02.yaml --probe c08u02.yaml --probe c08u08.yaml --out <yaml>
+#                      --probe h0.yaml --probe h1.yaml --probe h2.yaml --probe h3.yaml --out <yaml>
 # The `predict` subcommand fills it from the cabling descriptors instead, for a mock run or to check
 # the probes against.
 

@@ -104,8 +104,8 @@ def placements():
 
 def stage_4x4_placements(**extra_device_params):
     """One 4x4 prefill stage, a single Galaxy tray half: SP=4 on the axis-1 ring, TP=4 on the
-    axis-0 line, so the op's TP collective runs on a line. It skips unless exactly one half is
-    visible (see run_4x4_stage_tests.sh)."""
+    axis-0 line, so the op's TP collective runs on a line. It runs only on a Galaxy narrowed to one
+    tray half (see run_4x4_stage_tests.sh) and skips on the unnarrowed 8x4 mesh."""
     return [
         pytest.param(
             (4, 4),
