@@ -177,7 +177,7 @@ class GLM53MeshModel:
         return streams, logits, ids
 
     # ------------------------------------------------------------------ prefill (TTFT)
-    def prefill(self, prompt_ids: torch.Tensor, user: int = 0, start: int = 0):
+    def prefill(self, prompt_ids: torch.Tensor, user: int = 0, start: int = 0, pad_to: int | None = None):
         """One prompt (or one chunk of it: ``start`` > 0 continues the user's prompt, the
         ``FunctionalDecoder`` chunked-prefill contract) through every layer (sequence-parallel over the
         rows on a multi-row mesh) and the head on its last token. Returns ``(streams_local, logits_last
@@ -187,6 +187,8 @@ class GLM53MeshModel:
         S = int(prompt_ids.numel())
         unit = 32 * self.mesh.rows
         T_pad = -(-S // unit) * unit
+        if pad_to:  # tt-blaze G53F-0221: a coarser padded length (the tail bucket of prefill_chunked)
+            T_pad = max(T_pad, -(-int(pad_to) // unit) * unit)
         host = self.embedding.tokens_to_host(prompt_ids, pad_to=T_pad)  # [1,1,1,T_pad]
         if self.mesh.rows > 1:
             ids_dev = self.mesh.upload(host, ttnn.uint32, rows=3, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -219,6 +221,10 @@ class GLM53MeshModel:
         S = int(prompt_ids.numel())
         unit = 32 * self.mesh.rows
         chunk = max(unit, (chunk // unit) * unit)
+        # tt-blaze G53F-0221: GLM53_PREFILL_TAIL_BUCKET=b (tokens, read per call; 0 = off) pads the LAST chunk of a
+        # multi-chunk prompt up to a multiple of b (at most one chunk), so a server sees chunk / b last-chunk shapes
+        # instead of chunk / unit: every new tail length compiles a full set of programs (~20 s, G53F-0205 / 0216).
+        bucket = int(os.environ.get("GLM53_PREFILL_TAIL_BUCKET", "0") or 0)
         out = None
         for s0 in range(0, S, chunk):
             e = min(S, s0 + chunk)
@@ -226,8 +232,11 @@ class GLM53MeshModel:
                 ttnn.deallocate(out[0])
                 if out[1] is not None:
                     ttnn.deallocate(out[1])
+            pad_to = None
+            if bucket and s0 > 0 and e - s0 < chunk:
+                pad_to = min(chunk, -(-(e - s0) // bucket) * bucket)
             t0 = time.perf_counter()
-            out = self.prefill(prompt_ids[s0:e], user=user, start=s0)
+            out = self.prefill(prompt_ids[s0:e], user=user, start=s0, pad_to=pad_to)
             # host time to enqueue the chunk (tt-blaze G53F-0202): ~ the wall when the host binds, below it when
             # the device does (the command queue absorbs the difference)
             self.last_enqueue_s = time.perf_counter() - t0
