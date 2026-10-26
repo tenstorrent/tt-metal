@@ -1,5 +1,5 @@
 {
-  "_doc": "Floors set by D3 (accuracy) and D4 (performance; min/max/p50 both precisions), 2026-10-26. min/max and pcc_row_min_active are floor-only (no drift); p50 has a two-sided drift of 0.01. Range floors are [lo, hi]. Performance is a non-ship class (D4).",
+  "_doc": "Floors set by D3 (accuracy) and D4 (performance; min/max/p50 both precisions), 2026-10-26. min/max and pcc_row_min_active are floor-only (no drift); p50 has a two-sided drift of 0.01. Range floors are [lo, hi]. Performance is a non-ship class (D4). D6: inactive_max_err floors per shape (accuracy drift rel 0.5 vs iter_01/r1_2f/variance/base.json, performance floor-only); performance spread_ratio_p99 drift abs 0.04 on every shape (fixed round-0 record).",
   "floors": {
     "*/accuracy": {
       "pcc_normalized": 0.998,
@@ -38,7 +38,23 @@
       "flat_max_err": 0.1
     },
     "multivariate/accuracy": {
-      "median_err": 0.18
+      "median_err": 0.18,
+      "inactive_max_err": 0.06
+    },
+    "paper/accuracy": {
+      "inactive_max_err": 0.05
+    },
+    "paper/performance": {
+      "inactive_max_err": 0.2
+    },
+    "long_context/accuracy": {
+      "inactive_max_err": 0.05
+    },
+    "long_context/performance": {
+      "inactive_max_err": 0.1
+    },
+    "multivariate/performance": {
+      "inactive_max_err": 0.15
     }
   },
   "drift": {
@@ -72,6 +88,19 @@
     "spread_ratio_p50": {
       "abs": 0.01,
       "two_sided": true
+    }
+  },
+  "drift_by": {
+    "*/accuracy": {
+      "inactive_max_err": {
+        "rel": 0.5,
+        "ref": "iter_01/r1_2f/variance/base.json"
+      }
+    },
+    "*/performance": {
+      "spread_ratio_p99": {
+        "abs": 0.04
+      }
     }
   }
 }

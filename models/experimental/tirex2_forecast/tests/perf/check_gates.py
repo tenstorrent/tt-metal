@@ -10,10 +10,16 @@
 drift tolerance per metric. Floors and tolerances change only through a decision (PLAN section 9): this script
 only reads them. Exit status 1 when any floor or drift check fails; every check is printed.
 
-Direction of each metric: higher is better except ``median_err``, ``flat_max_err`` (upper bounds) and
+Direction of each metric: higher is better except ``median_err``, ``flat_max_err``, ``inactive_max_err``,
+``abs_err_max`` (upper bounds) and
 ``spread_ratio_p99`` / ``spread_ratio_max`` (upper bounds near 1). A floor given as ``[lo, hi]`` is a range; a drift with
 ``two_sided`` is ``|candidate - baseline| <= abs``. Drift is ``candidate >= baseline - tol`` for higher-is-better
 metrics; ``candidate <= baseline + tol`` (absolute) or ``<= baseline x (1 + rel)`` for the others.
+
+``drift_by`` overrides ``drift`` per ``<shape>/<precision>`` (or ``*/<precision>``); ``null`` removes a metric. A
+tolerance with ``ref`` (a path relative to gates.json) checks that metric against that record instead of the
+baseline (D6). A drift metric missing from either record is a FAIL (v1.17). A candidate record must carry
+``git_head`` and an empty ``git_dirty`` (v1.16); ``--allow-unstamped`` admits records written before that.
 """
 
 from __future__ import annotations
@@ -23,16 +29,47 @@ import json
 import sys
 from pathlib import Path
 
-LOWER_IS_BETTER = {"median_err", "flat_max_err", "spread_ratio_p99", "spread_ratio_max"}
+LOWER_IS_BETTER = {
+    "median_err",
+    "flat_max_err",
+    "inactive_max_err",
+    "abs_err_max",
+    "spread_ratio_p99",
+    "spread_ratio_max",
+}
 DEFAULT_GATES = Path(__file__).resolve().parents[2] / "doc" / "optimize" / "gates.json"
 # D5: drift is always against this fixed round-0 record (both precisions, all shapes); a b2b base is timing only
 DEFAULT_BASELINE = DEFAULT_GATES.parent / "iter_01" / "r1_1" / "b2b_base.json"
+
+
+def git_stamp() -> dict:
+    """v1.16: HEAD and the porcelain status of the model's tt/ and tests/, tracked files only (the kernel session keeps
+    an untracked tests/perf/test_slstm_step_bench.py here)."""
+    import subprocess
+
+    model = Path(__file__).resolve().parents[2]
+    git = lambda *a: subprocess.run(["git", *a], cwd=model, capture_output=True, text=True, check=True).stdout.strip()
+    return {
+        "git_head": git("rev-parse", "HEAD"),
+        "git_dirty": git("status", "--porcelain", "-uno", "--", "tt", "tests"),
+    }
 
 
 def _floors(gates: dict, name: str, precision: str) -> dict:
     out = dict(gates["floors"].get(f"*/{precision}", {}))
     out.update(gates["floors"].get(f"{name}/{precision}", {}))
     return out
+
+
+def _drift(gates: dict, name: str, precision: str) -> dict:
+    out = dict(gates["drift"])
+    for key in (f"*/{precision}", f"{name}/{precision}"):
+        out.update(gates.get("drift_by", {}).get(key, {}))
+    return {k: v for k, v in out.items() if v is not None}
+
+
+def _by_key(records: list[dict]) -> dict:
+    return {(r["name"], r["precision"]): r for r in records}
 
 
 def passes(metric: str, v: float, floor) -> bool:
@@ -42,11 +79,19 @@ def passes(metric: str, v: float, floor) -> bool:
     return v <= floor if metric in LOWER_IS_BETTER else v >= floor
 
 
-def check(cand: list[dict], base: list[dict] | None, gates: dict) -> list[str]:
+def check(
+    cand: list[dict], base: list[dict] | None, gates: dict, gates_dir: Path | None = None, allow_unstamped=False
+) -> list[str]:
     failures = []
-    base_by = {(r["name"], r["precision"]): r for r in (base or [])}
+    base_by = _by_key(base or [])
+    refs = {}
     for r in cand:
         key = (r["name"], r["precision"])
+        if "git_head" not in r and not allow_unstamped:
+            failures.append(f"{key}: no git_head / git_dirty stamp")
+        if r.get("git_dirty"):
+            print(f"FAIL tree {key[0]}/{key[1]} dirty at {r.get('git_head')}: {r['git_dirty']!r}")
+            failures.append(f"{key}: dirty tree")
         for metric, floor in _floors(gates, *key).items():
             v = r.get(metric)
             if v is None:
@@ -57,11 +102,22 @@ def check(cand: list[dict], base: list[dict] | None, gates: dict) -> list[str]:
             print(f"{'ok  ' if ok else 'FAIL'} floor {key[0]}/{key[1]} {metric} {v:.6g} {rel} {floor}")
             if not ok:
                 failures.append(f"{key} {metric} {v} vs floor {floor}")
-        b = base_by.get(key)
-        if b is None:
-            continue
-        for metric, tol in gates["drift"].items():
-            if metric not in r or metric not in b:
+        for metric, tol in _drift(gates, *key).items():
+            if "ref" in tol:
+                path = (gates_dir or DEFAULT_GATES.parent) / tol["ref"]
+                if path not in refs:
+                    refs[path] = _by_key(json.loads(path.read_text()))
+                b = refs[path].get(key)
+            else:
+                b = base_by.get(key)
+            if b is None or metric not in r or metric not in b:
+                where = (
+                    "no baseline record"
+                    if b is None
+                    else "missing from " + ("candidate" if metric not in r else "baseline")
+                )
+                print(f"FAIL drift {key[0]}/{key[1]} {metric}: {where}")
+                failures.append(f"{key} {metric} drift: {where}")
                 continue
             v, bv = r[metric], b[metric]
             if tol.get("two_sided"):
@@ -93,11 +149,12 @@ def main():
     ap.add_argument("candidate", type=Path)
     ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     ap.add_argument("--gates", type=Path, default=DEFAULT_GATES)
+    ap.add_argument("--allow-unstamped", action="store_true", help="admit records without git_head (pre-v1.16)")
     args = ap.parse_args()
     gates = json.loads(args.gates.read_text())
     cand = json.loads(args.candidate.read_text())
     base = json.loads(args.baseline.read_text()) if args.baseline else None
-    failures = check(cand, base, gates)
+    failures = check(cand, base, gates, args.gates.parent, args.allow_unstamped)
     print(f"{len(failures)} failure(s)" + (": " + "; ".join(failures) if failures else ""))
     sys.exit(1 if failures else 0)
 

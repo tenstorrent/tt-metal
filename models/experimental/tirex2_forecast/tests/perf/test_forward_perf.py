@@ -78,6 +78,9 @@ def _record(entry: dict) -> None:
     path = os.environ.get("MODEL_PERF_JSON")
     if not path:
         return
+    from models.experimental.tirex2_forecast.tests.perf.check_gates import git_stamp
+
+    entry.update(git_stamp())
     out = Path(path)
     records = json.loads(out.read_text()) if out.is_file() else []
     records.append(entry)

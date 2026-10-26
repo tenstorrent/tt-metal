@@ -42,12 +42,16 @@ def applicable(f: dict, n_active: int, name: str = "") -> dict:
     return out
 
 
-def floors(precision: str, single: bool = False) -> dict:
+# D6: the suite cases that take a bench shape's per-shape floors (inactive_max_err)
+SUITE_SHAPE = {"paper64": "paper", "long_context": "long_context", "multivar4": "multivariate"}
+
+
+def floors(precision: str, single: bool = False, name: str = "") -> dict:
     import json
 
     from models.experimental.tirex2_forecast.tests.perf.check_gates import DEFAULT_GATES, _floors
 
-    f = _floors(json.loads(DEFAULT_GATES.read_text()), "suite", precision)
+    f = _floors(json.loads(DEFAULT_GATES.read_text()), SUITE_SHAPE.get(name.split("[")[0], "suite"), precision)
     if single:
         f.update(SINGLE_SERIES)
     return f
@@ -92,7 +96,7 @@ def check_forecast(
     from models.experimental.tirex2_forecast.tests.perf.check_gates import passes
 
     m = M.gate_metrics(head, g_head, q, g_q, scale[target_mask])
-    f = applicable(floors(precision, single), m["active_rows"], name)
+    f = applicable(floors(precision, single, name), m["active_rows"], name)
     print(f"[PCC] {name}: {M.fmt(m)}")
     print(f"[PCC] {name}: floors (gates.json {precision}{', single series' if single else ''}): {f}")
     if loc is not None:
