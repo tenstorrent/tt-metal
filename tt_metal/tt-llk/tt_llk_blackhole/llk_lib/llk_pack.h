@@ -640,25 +640,21 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
  * @param tile_stride: Bytes from one L1 tile to the next, a multiple of 16 below 64 KB.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en>
-inline void _llk_pack_block_closed_(
-    const std::uint32_t start_tile_index,
-    const std::uint32_t address,
-    const std::uint32_t num_tiles,
-    const std::uint32_t tile_stride,
-    const std::uint32_t num_faces = TILE_NUM_FACES)
+/**
+ * The destination words of _llk_pack_block_closed_, issued ahead of the math wait of a full-sync block.
+ */
+inline void _llk_pack_block_closed_pre_(const std::uint32_t start_tile_index, const std::uint32_t address)
 {
-    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(
-        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-        "The block exceeds the destination register sync region");
-    LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
-
     set_dst_write_addr(start_tile_index);
 
     program_packer_destination(address);
+}
 
+/**
+ * The pack of _llk_pack_block_closed_ once its destination words are set.
+ */
+inline void _llk_pack_block_closed_run_(const std::uint32_t num_tiles, const std::uint32_t tile_stride, const std::uint32_t num_faces)
+{
     // The output address adds the packer W counter of channel 1 times this stride; no other pack program moves it.
     // Rewriting an unchanged stride cost the call up to 8 cycles.
     if (tile_stride != pack_ch1_w_stride)
@@ -674,6 +670,25 @@ inline void _llk_pack_block_closed_(
     }
 
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}
+
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_closed_(
+    const std::uint32_t start_tile_index,
+    const std::uint32_t address,
+    const std::uint32_t num_tiles,
+    const std::uint32_t tile_stride,
+    const std::uint32_t num_faces = TILE_NUM_FACES)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+    LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
+
+    _llk_pack_block_closed_pre_(start_tile_index, address);
+    _llk_pack_block_closed_run_(num_tiles, tile_stride, num_faces);
 }
 
 template <bool zero_output, std::uint32_t addr_mod, std::uint32_t last>

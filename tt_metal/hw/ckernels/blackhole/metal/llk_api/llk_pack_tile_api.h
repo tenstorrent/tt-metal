@@ -236,3 +236,37 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         }
     }
 }
+
+// Whether llk_pack_block takes the closed form, whose destination words llk_pack_block_prepare can issue early.
+inline bool llk_pack_block_is_closed_form(std::uint32_t output, std::uint32_t ntiles) {
+    const std::uint8_t output_id = get_output_id(output);
+    return ntiles > 1 && !llk_pack_block_is_contiguous(output_id) && llk_pack_block_is_closable(output_id);
+}
+
+// Full sync only: issues the closed block pack's destination words before the math wait of the block.
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_block_prepare(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
+    if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
+        if (llk_pack_block_is_closed_form(output, ntiles)) {
+            const std::uint8_t output_id = get_output_id(output);
+            _llk_pack_block_closed_pre_(
+                start_tile_index,
+                get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1);
+        }
+    }
+}
+
+// llk_pack_block after llk_pack_block_prepare of the same block, with no pack in between.
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_block_prepared(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
+    if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
+        if (llk_pack_block_is_closed_form(output, ntiles)) {
+            const std::uint8_t output_id = get_output_id(output);
+            const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
+            get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
+            _llk_pack_block_closed_run_(ntiles, page_size << 4, get_output_num_faces(output_id));
+            return;
+        }
+    }
+    llk_pack_block<is_fp32_dest_acc_en>(start_tile_index, output, ntiles);
+}

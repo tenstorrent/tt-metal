@@ -228,6 +228,9 @@ void kernel_main() {
                         activation_param1,
                         activation_param2>(out_subblock_num_tiles);
 #else
+                    if constexpr (!untilize_out) {
+                        pack_block_prepare(0, mm_out_dfb_id, out_subblock_num_tiles);
+                    }
                     tile_regs_wait();
 #endif
 
@@ -243,7 +246,7 @@ void kernel_main() {
                     if constexpr (untilize_out) {
                         pack_untilize_dest<out_subblock_num_tiles>(mm_out_dfb_id);
                     } else {
-                        pack_block(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
+                        pack_block_prepared(start_dst_index, mm_out_dfb_id, out_subblock_num_tiles);
                     }
 
                     tile_regs_release();
@@ -256,6 +259,7 @@ void kernel_main() {
                     tile_regs_commit_matmul();
                     // Move partial result to interm buffer
                     mm_partials_dfb.reserve_back(out_subblock_num_tiles);
+                    pack_block_prepare(0, mm_partials_dfb_id, out_subblock_num_tiles);
                     tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -267,7 +271,7 @@ void kernel_main() {
 #endif
 
                     const uint32_t start_dst_index = 0;
-                    pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+                    pack_block_prepared(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
 
                     tile_regs_release();
                     mm_partials_dfb.push_back(out_subblock_num_tiles);
