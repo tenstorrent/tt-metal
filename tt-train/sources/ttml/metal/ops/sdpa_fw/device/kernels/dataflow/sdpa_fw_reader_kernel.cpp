@@ -42,9 +42,7 @@ void kernel_main() {
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
-#ifdef HAS_GATE
-    constexpr auto gate_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
-#endif
+    [[maybe_unused]] constexpr auto gate_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
 
     const uint32_t tile_bytes = get_tile_size(cb_query);
 
