@@ -157,6 +157,11 @@ class MoEOptions:
     # combine's rows tilized, + the shared expert's owner rows, the TP all-to-all into the output); "ops" its ops;
     # "auto": fused where it is built
     tail: Literal["auto", "fused", "ops"] = "auto"
+    # the residual at the block's boundary: "sp_tp" main's layout [S/SP, H/TP] a chip; "owners" each chip's own tokens
+    # at full width [S/N, H] (row-major chip order - the owners' rows: a model whose residual is split by tokens over
+    # every chip, GLM-5.3-Flash's). The ops head gathers rows instead of width; the fused head (it reads the width
+    # split) takes x through a TP all-to-all. The tail is the shared expert's add (its output is the owners' rows)
+    residual: Literal["sp_tp", "owners"] = "sp_tp"
 
 
 @dataclass(frozen=True)
@@ -264,7 +269,7 @@ def split_gate_up(gate_up: torch.Tensor, unit: int = GATE_UP_UNIT) -> tuple[torc
 @dataclass
 class MoEWeights:
     router: dict  # {"weight": [E, H], "bias": [E]}
-    routed: list[dict]  # E dicts by global expert id: {"gate_up": [2 I, Hr], "down": [Hr, I]}
+    routed: list[dict] | None  # E dicts by global expert id: {"gate_up": [2 I, Hr], "down": [Hr, I]}
     shared: dict | None  # {"gate_up": [2 Is, H], "down": [H, Is]}
     latent: dict | None  # {"down": [Hr, H], "up": [H, Hr], "norm": [Hr]}
 
@@ -274,8 +279,9 @@ class MoEWeights:
         F = model.router.fold
         assert self.router["weight"].shape == (E * F, H), f"router weight {tuple(self.router['weight'].shape)}"
         assert self.router["bias"].shape == (E * F,)
-        assert len(self.routed) == E, f"{len(self.routed)} routed experts, the model has {E}"
-        for e, w in enumerate(self.routed):
+        # (None: the routed experts come laid out already - MoELayer.build's routed_op)
+        assert self.routed is None or len(self.routed) == E, f"{len(self.routed)} routed experts, the model has {E}"
+        for e, w in enumerate(self.routed or ()):
             assert w["gate_up"].shape == (2 * I, Hr), f"expert {e} gate_up {tuple(w['gate_up'].shape)}"
             assert w["down"].shape == (Hr, I), f"expert {e} down {tuple(w['down'].shape)}"
         assert (self.shared is None) == (model.shared_expert_hidden_dim is None)
@@ -291,11 +297,65 @@ class MoEWeights:
 
     def _tensors(self):
         yield from self.router.values()
-        for w in self.routed:
+        for w in self.routed or ():
             yield from w.values()
         for d in (self.shared, self.latent):
             if d is not None:
                 yield from d.values()
+
+
+class MoELayer:
+    """One layer of a model whose MoE layers share one MoEBlock (its programs, arena and exchange): each call passes its
+    layer (MoEBlock.forward(x, layer=...)). Holds the routed experts (laid out at build) and its other weights' host
+    source: the ops head's router / shared expert are uploaded at their first use, the fused head lays its own out
+    (its engine's layout) at the layer's first call through it."""
+
+    def __init__(
+        self, mesh, g: Geometry, model: MoEModel, host, experts: "RoutedExperts", dtypes: MoEDtypes, parent=None
+    ):
+        self.mesh, self.g, self.model, self.dtypes = mesh, g, model, dtypes
+        self.host = host  # () -> MoEWeights (router, shared, latent; routed may be None)
+        self.experts = experts
+        self.parent = parent  # (the layer at another chunk this one shares its weights with)
+        self._ops = None
+        self.heads = {}  # id(FusedHead) -> that head's layout of this layer's weights
+
+    @staticmethod
+    def build(mesh, g: Geometry, model: MoEModel, weights, dtypes: MoEDtypes = MoEDtypes(), routed_op=None, drisc=True):
+        """weights: MoEWeights, or a callable returning them (read when a head lays them out). routed_op: the layer's
+        FlatRoutedExpert, laid out by the caller (its weight cache) with RoutedExperts.layout_of(g, model, drisc) -
+        weights.routed is then None."""
+        host = weights if callable(weights) else (lambda: weights)
+        routed = None
+        if routed_op is None:
+            w = host()
+            w.check(model)
+            assert w.routed is not None, "routed experts: host weights or a laid-out op"
+            routed = w.routed
+        experts = RoutedExperts(mesh, g, model, routed, dtypes, drisc=drisc, op=routed_op)
+        return MoELayer(mesh, g, model, host, experts, dtypes)
+
+    def ops(self):
+        """(Router, SharedExpert | None): the ops head's, uploaded at the first use (at another chunk: the parent's)."""
+        if self._ops is None:
+            if self.parent is not None:
+                r, sh = self.parent.ops()
+                self._ops = (r.at(self.mesh, self.g, self.model), sh)
+            else:
+                w = self.host()
+                w.check(self.model)
+                sh = None
+                if self.model.shared_expert_hidden_dim:
+                    sh = SharedExpert(self.mesh, self.g, self.model, w.shared, self.dtypes)
+                self._ops = (Router(self.mesh, self.g, self.model, w.router, self.dtypes), sh)
+        return self._ops
+
+    def at(self, mesh, g: Geometry, model: MoEModel, drisc=True):
+        """This layer at another chunk (geometry): its weights shared - the router's top-k and the flat experts' plan
+        made for the chunk (FlatRoutedExpert.replanned: the same weight packing)."""
+        op = self.experts.op.replanned(RoutedExperts.cap_of(g), RoutedExperts.layout_of(g, model, drisc))
+        experts = RoutedExperts(mesh, g, model, None, self.dtypes, drisc=drisc, op=op)
+        return MoELayer(mesh, g, model, self.host, experts, self.dtypes, parent=self)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -313,7 +373,7 @@ class MoEBlock(LightweightModule):
         mesh_device,  # SP = mesh rows, TP = mesh columns
         model: MoEModel,
         chunk_tokens: int,  # the global chunk, all chips together
-        weights: MoEWeights | None,  # None: load everything from the cache
+        weights: MoEWeights | MoELayer | None,  # None: load everything from the cache; MoELayer: a model's layer
         cache: WeightCache,
         num_links: int = 2,  # links per direction on every axis; ring or line per axis comes from the open fabric
         dtypes: MoEDtypes = MoEDtypes(),
@@ -332,10 +392,26 @@ class MoEBlock(LightweightModule):
         g = self.geometry
         assert model.emb_dim % (g.tp * TILE) == 0, f"H {model.emb_dim} doesn't split into whole tiles over TP {g.tp}"
         assert g.tokens_per_chip % TILE == 0, "every chip owns whole tiles of tokens"
+        # (the combine hands a y row to its owner as one packet: the row in bf16 + a 32 B trailer; a smaller fabric
+        # payload hangs the exchange instead of failing)
+        need, have = 2 * model.routed_width + 32, int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        assert have >= need, (
+            f"fabric packet payload {have} B: the MoE block's combine needs >= {need} B (a {model.routed_width}-wide "
+            f"bf16 row + its trailer); open the fabric with a larger payload"
+        )
         if weights is None:
             assert cache.path is not None, "no weights and no cache to load them from"
             raise NotImplementedError("MoEBlock: loading from the weight cache is not built yet; pass weights")
-        weights.check(model)
+        layer = weights if isinstance(weights, MoELayer) else None
+        self.layer = layer  # (the layer the block was built with: the last used)
+        if layer is None:
+            weights.check(model)
+        else:
+            weights = layer.host()  # (the heads lay out the router / shared expert from the host weights)
+        owners = options.residual == "owners"
+        assert (
+            not owners or model.latent_dim is None
+        ), "owners residual: no latent (its up projection lands the width split)"
         # bring-up limits (each lifted by the piece that needs it)
         assert options.shared_expert == "tp_split", "bring-up: the shared expert TP-split, reduce-scattered in the head"
         assert not sequence_zigzag, "bring-up: natural sequence order"
@@ -347,14 +423,21 @@ class MoEBlock(LightweightModule):
         ), "experts_during_dispatch: the fused head (its dispatch prep hands the exchange the dispatch buffer)"
         self.fused = None
         self.router = self.shared = None
-        if self.head_mode == "ops":
+        if layer is not None:
+            if self.head_mode == "ops":
+                self.router, self.shared = layer.ops()
+        elif self.head_mode == "ops":
             self.router = Router(mesh_device, g, model, weights.router, dtypes)
             if model.shared_expert_hidden_dim is not None:
                 self.shared = SharedExpert(mesh_device, g, model, weights.shared, dtypes)
         self.latent = None
         if model.latent_dim is not None:  # (the fused head does the latent down: only the up is used then)
+            assert layer is None, "a latent model's MoELayer: not built yet"
             self.latent = LatentProjections(mesh_device, g, model, weights.latent, dtypes)
-        self.experts = RoutedExperts(mesh_device, g, model, weights.routed, dtypes, drisc=options.experts_drisc)
+        if layer is not None:
+            self.experts = layer.experts
+        else:
+            self.experts = RoutedExperts(mesh_device, g, model, weights.routed, dtypes, drisc=options.experts_drisc)
         # (the fused head's planner and the exchange's combine agree on the accumulator count: planned here from the
         # cells the experts' plan leaves free and the combine's ports - the ports-apart mode)
         acc = None
@@ -377,7 +460,7 @@ class MoEBlock(LightweightModule):
         # head keeps after placing its arena, and after placing it again (the head frees them then) - nothing kept
         # stranded below the arena, where the other programs' circular buffers go; the head built and run once, its
         # arena settled (free L1 right above it filled) and freed.
-        tfits = FusedTail.fits(g, model, self.head_mode)
+        tfits = FusedTail.fits(g, model, self.head_mode) if not owners else "the owners residual (the tail is an add)"
         assert options.tail != "fused" or tfits is True, f"the fused tail: {tfits}"
         self.tail = None
         if options.tail == "fused" or (options.tail == "auto" and tfits is True):
@@ -429,6 +512,9 @@ class MoEBlock(LightweightModule):
         self.exchange.build()
         if self.fused is not None:
             self.fused.attach(self.exchange)
+            if layer is not None:  # (the layer's weights as this head laid them out)
+                layer.heads[id(self.fused)] = (self.fused.w, self.fused.head.rw)
+                self.fused.head.use_layer(id(layer), self.fused.head.rw)
         from loguru import logger
 
         # (the resolved plan in one line: what was picked and why - the generality map reads it)
@@ -442,25 +528,56 @@ class MoEBlock(LightweightModule):
             f"{self.summary}; flat layout {self.experts.layout_fields}; dtypes {dtypes}; options {options}"
         )
         if self.fused is not None:  # (the fused tail frees nothing of the head's: its outputs are reused each forward)
-            self.fused.head.persist = self.tail is not None
+            self.fused.head.persist = self.tail is not None or owners
 
     def _mark(self, name):
         if self.stage_hook is not None:
             self.stage_hook(name)
 
-    def forward(self, x: ttnn.Tensor, chunk: ChunkSpan | None = None) -> ttnn.Tensor:
-        """x: [1, 1, S/SP, H/TP] TILE, the residual as attention leaves it. Returns the same layout.
-        chunk: which rows are real; None = all of them."""
+    def _x_shape(self):
         g, H = self.geometry, self.model.emb_dim
-        assert tuple(x.shape) == (1, 1, g.tokens_per_row, H // g.tp), (
-            f"x {tuple(x.shape)}, expected (1, 1, {g.tokens_per_row}, {H // g.tp}) on each chip "
-            f"(chunk {g.chunk_tokens} over SP {g.sp}, H {H} over TP {g.tp})"
+        if self.options.residual == "owners":
+            return (1, 1, g.tokens_per_chip, H)
+        return (1, 1, g.tokens_per_row, H // g.tp)
+
+    def use(self, layer: MoELayer):
+        """Run the following forwards with this layer's weights (programs, arena and exchange shared; the fused head:
+        the layer's weights in its layout - laid out at the layer's first call - and the layer's own programs)."""
+        if layer is self.layer:
+            return
+        if self.fused is not None:
+            lw = layer.heads.get(id(self.fused))
+            if lw is None:
+                lw = layer.heads[id(self.fused)] = self.fused.layer_weights(layer.host())
+            self.fused.w = lw[0]
+            self.fused.head.use_layer(id(layer), lw[1])
+        else:
+            self.router, self.shared = layer.ops()
+        self.experts = self.exchange.experts = layer.experts
+        self.layer = layer
+
+    def forward(self, x: ttnn.Tensor, chunk: ChunkSpan | None = None, layer: MoELayer | None = None) -> ttnn.Tensor:
+        """x: [1, 1, S/SP, H/TP] TILE, the residual as attention leaves it (MoEOptions.residual "owners": [1, 1, S/N, H],
+        the chip's own tokens). Returns the same layout. chunk: which rows are real; None = all of them. layer: this
+        call's weights (MoELayer; None: the last used)."""
+        g, H = self.geometry, self.model.emb_dim
+        assert tuple(x.shape) == self._x_shape(), (
+            f"x {tuple(x.shape)}, expected {self._x_shape()} on each chip "
+            f"(chunk {g.chunk_tokens}, mesh {g.sp}x{g.tp}, H {H}, residual {self.options.residual})"
         )
         assert x.layout == ttnn.TILE_LAYOUT
         if chunk is not None:
             raise NotImplementedError("MoEBlock: padded chunks (ChunkSpan) are not built yet")
+        if layer is not None:
+            self.use(layer)
         if self.fused is not None:
-            se, out = self.fused(x)
+            if self.options.residual == "owners":  # (the fused head reads the width split [S/SP, H/TP])
+                xs = self._tp_a2a(x, cat_dim=2, split_dim=3)
+                self._mark("x_a2a")
+                se, out = self.fused(xs)
+                ttnn.deallocate(xs)
+            else:
+                se, out = self.fused(x)
             self._mark("head")
             if self.keep_taps == "device":
                 self._taps = dict(rows_dev=out.pop("rows"))
@@ -486,7 +603,8 @@ class MoEBlock(LightweightModule):
         elif self.keep_taps:  # (host copies: the exchange consumes the routing rows)
             self._taps = dict(rows=[ttnn.to_torch(t) for t in ttnn.get_device_tensors(rows)])
         y_own = self.exchange(own, rows, hook=self.stage_hook, tilize=self.tail is None)  # owners' sums [S/N, Hr]
-        ttnn.deallocate(own)
+        if own is not x:  # (the owners residual: x is the owners' rows)
+            ttnn.deallocate(own)
         if rows.is_allocated():
             ttnn.deallocate(rows)
         if self.tail is not None:
@@ -501,9 +619,12 @@ class MoEBlock(LightweightModule):
         without the fused head's accumulators, the ops warm-up."""
         g, m, mesh = self.geometry, self.model, self.mesh_device
         self.head_mode = "ops"
-        self.router = Router(mesh, g, m, weights.router, dtypes)
-        if m.shared_expert_hidden_dim is not None:
-            self.shared = SharedExpert(mesh, g, m, weights.shared, dtypes)
+        if self.layer is not None:
+            self.router, self.shared = self.layer.ops()
+        else:
+            self.router = Router(mesh, g, m, weights.router, dtypes)
+            if m.shared_expert_hidden_dim is not None:
+                self.shared = SharedExpert(mesh, g, m, weights.shared, dtypes)
         self.exchange = TokenExchange(mesh, g, m, self.experts, dispatch_in_program=options.experts_during_dispatch)
         self._warm_up()
 
@@ -529,9 +650,10 @@ class MoEBlock(LightweightModule):
         z = lambda shape: ttnn.from_torch(  # noqa: E731
             torch.zeros(shape), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=rep
         )
-        x0 = z((1, 1, g.tokens_per_row, m.emb_dim // g.tp))
+        x0 = z(self._x_shape())
         rows, own, se = self._head(x0, mark=False)
-        ttnn.deallocate(own)
+        if own is not x0:
+            ttnn.deallocate(own)
         ttnn.deallocate(rows)
         ttnn.deallocate(x0)
         if self.tail is not None:  # (the fused tail on the combine's row-major layout)
@@ -594,6 +716,8 @@ class MoEBlock(LightweightModule):
     def _head(self, x, mark=True):
         """-> (the joint routing rows, the owners' rows [1, 1, S/N, Hr], the shared expert's [S/SP, H/TP] or None)."""
         mark = self._mark if mark else (lambda _: None)
+        if self.options.residual == "owners":
+            return self._head_owners(x, mark)
         # ---- head ----
         partial = self.router.logits(x)  # [S/SP, E] fp32 partial over H
         mark("router")
@@ -629,11 +753,46 @@ class MoEBlock(LightweightModule):
         ttnn.deallocate(x_full)
         return rows, own, se
 
+    def _head_owners(self, x, mark):
+        """The owners residual: x [S/N, H] -> the mesh row's rows gathered over TP [S/SP, H]; the router's partial logits
+        on this chip's H/TP columns of them (its weight split as in the width layout), reduce-scattered back to the
+        owners; the shared expert on the gathered rows, reduce-scattered to the owners; the owners' rows are x."""
+        x_full = self._tp_ag_rows(x)  # [S/SP, H]
+        mark("x_ag")
+        x_tp = ttnn.mesh_partition(x_full, dim=3, cluster_axis=1)  # [S/SP, H/TP]
+        partial = self.router.logits(x_tp)
+        ttnn.deallocate(x_tp)
+        mark("router")
+        logits = ttnn.reduce_scatter(partial, dim=2, cluster_axis=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(partial)
+        mark("logits_rs")
+        rows = self.router.top_k(logits)
+        ttnn.deallocate(logits)
+        mark("topk")
+        se = None
+        if self.shared is not None:
+            se_part = self.shared(x_full)
+            mark("shared")
+            se = self._tp_rs_rows(se_part)  # [S/N, H]
+            ttnn.deallocate(se_part)
+            mark("shared_rs")
+        ttnn.deallocate(x_full)
+        return rows, x, se
+
     def _tail(self, y_own, se, mark=True):
-        """owners' sums [S/N, Hr] (+ the shared expert's output) -> [1, 1, S/SP, H/TP]."""
+        """owners' sums [S/N, Hr] (+ the shared expert's output) -> [1, 1, S/SP, H/TP] (owners residual: [S/N, H])."""
         mark = self._mark if mark else (lambda _: None)
         g = self.geometry
         y_own = ttnn.reshape(y_own, [1, 1, g.tokens_per_chip, self.model.routed_width])
+        if self.options.residual == "owners":
+            if se is None:
+                return y_own
+            y = ttnn.add(y_own, se)
+            ttnn.deallocate(y_own)
+            if not (self.fused is not None and getattr(self.fused.head, "persist", False)):  # (the head's, reused)
+                ttnn.deallocate(se)
+            mark("add")
+            return y
         if self.latent is not None:
             y_row = self._tp_ag_rows(y_own)  # [S/SP, Hr]
             ttnn.deallocate(y_own)
@@ -697,12 +856,12 @@ class MoEBlock(LightweightModule):
     def input_buffer(self) -> ttnn.Tensor:
         """A persistent x [1, 1, S/SP, H/TP] TILE: forward(input_buffer()) reads it in place (the fused head's own x -
         no copy). A traced forward is captured on it; each replay's x is written into it first."""
-        if self.fused is not None:
+        if self.fused is not None and self.options.residual != "owners":
             return self.fused.x
         if getattr(self, "_x_in", None) is None:
             g = self.geometry
             self._x_in = ttnn.allocate_tensor_on_device(
-                ttnn.Shape([1, 1, g.tokens_per_row, self.model.emb_dim // g.tp]),
+                ttnn.Shape(list(self._x_shape())),
                 ttnn.bfloat16,
                 ttnn.TILE_LAYOUT,
                 self.mesh_device,
@@ -871,7 +1030,9 @@ class FusedHead:
             return f"{g.tokens_per_row} rows a mesh row: no engine layout (row chunks of whole owner blocks)"
         if act.kind == "situ" and (act.beta, act.linear_beta) != (4.0, 25.0):
             return "situ: only Kimi's (beta 4, linear beta 25)"
-        if act.kind not in ("silu", "situ"):
+        if act.kind == "clamped_silu" and act.limit != 10.0:
+            return "clamped silu: only limit 10 (the engine's compile-time limit)"
+        if act.kind not in ("silu", "situ", "clamped_silu"):
             return f"shared activation {act.kind}"
         rc = model.router
         if rc.score_func != "sigmoid" or not rc.normalize_topk or rc.expert_groups != 1:
@@ -898,8 +1059,6 @@ class FusedHead:
         logits_first=None,
         router_split=False,
     ):
-        from ttnn.bringup.combine_rf.lin2d import glu_weight
-
         from models.demos.moe_block.tt.fused_head import HeadSE3, RouterSpec, RoutingSpec
 
         self.g, self.model = g, model
@@ -943,17 +1102,7 @@ class FusedHead:
             routing=RoutingSpec(A=accumulators, torus=(g.tp_wraps, g.sp_wraps)),
             l1_hole=l1_hole,
         )
-        # the shared expert TP-split: chip column c holds I_s slice c (gate / up columns, down rows)
-        gate, up = split_gate_up(w.shared["gate_up"].float())
-        Ic = Is // g.tp
-        gu, wd = [], []
-        for d in range(N):
-            c = d % g.tp
-            sl = slice(c * Ic, (c + 1) * Ic)
-            gu.append(glu_weight(gate[sl].T.contiguous(), up[sl].T.contiguous()))
-            wd.append(w.shared["down"].float()[:, sl].T.contiguous())
-        wl = [w.latent["down"].float()] * N if latent else None
-        self.w = self.head.upload(gu, wd, w_latent=wl)
+        self.w, rw = self.layer_weights(w)
         # (the programs bake x's address: one x buffer - a new x tensor each call rebuilt every chip's program, ~175 ms of
         # host; patching its address into the cached programs' args instead costs ~3 ms a call)
         self.x = ttnn.allocate_tensor_on_device(
@@ -963,7 +1112,26 @@ class FusedHead:
             mesh,
             ttnn.DRAM_MEMORY_CONFIG,
         )
-        self.head.upload_router(w.router["weight"].float(), w.router["bias"].float())
+        self.head.rw = rw
+
+    def layer_weights(self, w: MoEWeights):
+        """A layer's shared expert (and latent down) and router laid out for this head: (engine weights, router
+        weights). The shared expert TP-split: chip column c holds I_s slice c (gate / up columns, down rows)."""
+        from ttnn.bringup.combine_rf.lin2d import glu_weight
+
+        g, model = self.g, self.model
+        Is, N = model.shared_expert_hidden_dim, g.chips
+        gate, up = split_gate_up(w.shared["gate_up"].float())
+        Ic = Is // g.tp
+        gu, wd = [], []
+        for d in range(N):
+            c = d % g.tp
+            sl = slice(c * Ic, (c + 1) * Ic)
+            gu.append(glu_weight(gate[sl].T.contiguous(), up[sl].T.contiguous()))
+            wd.append(w.shared["down"].float()[:, sl].T.contiguous())
+        wl = [w.latent["down"].float()] * N if model.latent_dim else None
+        w_dev = self.head.upload(gu, wd, w_latent=wl)
+        return w_dev, self.head.router.upload(w.router["weight"].float(), w.router["bias"].float())
 
     def describe(self):
         """The resolved head: engine layout, chunks, the router's placement."""
@@ -1080,6 +1248,26 @@ class Router:
         self.rtopk = router_topk_prepare(
             mesh, S=self.S, E=E, K=model.top_k, route_scale=r.route_scale, bias_mode=True, fold=r.fold
         )
+
+    def at(self, mesh, g: Geometry, model: MoEModel):
+        """This router at another chunk: its weights shared, its top-k prepared for the chunk's owned rows."""
+        import copy
+
+        from ttnn.bringup.combine_rf.router_topk import router_topk_prepare
+
+        r = model.router
+        out = copy.copy(self)
+        out.S = g.tokens_per_chip
+        out.rtopk = router_topk_prepare(
+            mesh,
+            S=out.S,
+            E=model.num_experts * r.fold,
+            K=model.top_k,
+            route_scale=r.route_scale,
+            bias_mode=True,
+            fold=r.fold,
+        )
+        return out
 
     def logits(self, x):
         """[1, 1, S/SP, H/TP] -> partial logits [1, 1, S/SP, E] fp32."""
@@ -1201,20 +1389,38 @@ class RoutedExperts:
     chip e // experts_per_chip, row-major chip order), laid out by the close-out plan (pure DRISC, even splits,
     rows_hint = chunk x top_k / experts). Experts that are the same host tensors on every chip are packed once."""
 
-    def __init__(self, mesh, g: Geometry, model: MoEModel, routed: list, dtypes: MoEDtypes, drisc=True):
+    @staticmethod
+    def gids_of(g: Geometry):
+        EPC = g.experts_per_chip
+        return [list(range(c * EPC, (c + 1) * EPC)) for c in range(g.chips)]
+
+    @staticmethod
+    def cap_of(
+        g: Geometry,
+    ):  # (an expert sees each token at most once; the flat op is built for >= 256 tokens an expert)
+        return max(g.chunk_tokens, 256)
+
+    @staticmethod
+    def layout_of(g: Geometry, model: MoEModel, drisc=True):
+        # (one x helper: a second one costs ~104 KB of every core's arena, which the exchange's combine needs at the
+        # LoudBox's per-chip load - flat_layouts.GLM_FLASH)
+        lay = dict(rows_hint=round(g.chunk_tokens * model.top_k / model.num_experts), x_helpers=1)
+        if not drisc:  # (MoEOptions.experts_drisc off: Tensix weight readers)
+            lay.update(drisc=False, drisc_in_overlap=False)
+        return lay
+
+    def __init__(self, mesh, g: Geometry, model: MoEModel, routed: list | None, dtypes: MoEDtypes, drisc=True, op=None):
+        """op: a FlatRoutedExpert the caller laid out (gids_of, cap_of, layout_of; its weight cache); routed None."""
         from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
 
         assert dtypes.routed_weights == ttnn.bfloat4_b, "bring-up: bfp4 routed weights"
-        N, EPC = g.chips, g.experts_per_chip
-        self.gids = [list(range(c * EPC, (c + 1) * EPC)) for c in range(N)]
-        # (an expert sees each token at most once; the flat op is built for >= 256 tokens an expert: small chunks pad)
-        self.cap = max(g.chunk_tokens, 256)
-        # (one x helper: a second one costs ~104 KB of every core's arena, which the exchange's combine needs at the
-        # LoudBox's per-chip load - flat_layouts.GLM_FLASH)
-        self.layout_fields = dict(rows_hint=round(g.chunk_tokens * model.top_k / model.num_experts), x_helpers=1)
-        if not drisc:  # (MoEOptions.experts_drisc off: Tensix weight readers)
-            self.layout_fields.update(drisc=False, drisc_in_overlap=False)
+        self.gids = self.gids_of(g)
+        self.cap = self.cap_of(g)
+        self.layout_fields = self.layout_of(g, model, drisc)
         self.act = _FLAT_ACT[model.routed_expert_activation.kind]
+        if op is not None:
+            self.op = op
+            return
         conv = {}
 
         def flat_w(d):  # contract {"gate_up" [2I, Hr], "down" [Hr, I]} -> (Wg [Hr, I], Wu [Hr, I], Wd [I, Hr])
@@ -1327,15 +1533,15 @@ GLM_53 = MoEModel(
     shared_expert_hidden_dim=2048,
     shared_expert_activation=ExpertActivation("silu"),
 )
-GLM_53_FLASH = MoEModel(
+GLM_53_FLASH = MoEModel(  # (swiglu_limit 10: silu(min(gate, 10)) x clamp(up, +-10), routed and shared)
     num_experts=288,
     top_k=8,
     emb_dim=4096,
     routed_expert_hidden_dim=2048,
-    routed_expert_activation=ExpertActivation("silu"),
+    routed_expert_activation=ExpertActivation("clamped_silu", limit=10.0),
     router=RouterConfig(route_scale=2.5),
     shared_expert_hidden_dim=2048,
-    shared_expert_activation=ExpertActivation("silu"),
+    shared_expert_activation=ExpertActivation("clamped_silu", limit=10.0),
 )
 MINIMAX_M3 = MoEModel(
     num_experts=128,

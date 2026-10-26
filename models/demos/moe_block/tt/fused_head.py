@@ -182,7 +182,7 @@ class HeadSE3:
             if GY is not None
             else head_layouts(rows, G, grid_y=grid_y, GX=GX, num_links=num_links, router=router is not None)
         )
-        assert layouts, f"HeadSE3: no engine layout for {rows} rows over TP {G}"
+        assert layouts or planned, f"HeadSE3: no engine layout for {rows} rows over TP {G}"
         kbs = [KB] if KB else sorted((d for d in range(1, 17) if klt % d == 0 and (klt // d) % 2 == 0), reverse=True)
         last_err = None
         self._GX, self._dims = GX, dict(H=H, I=I, G=G, rows=rows)
@@ -337,11 +337,14 @@ class HeadSE3:
             cores = sorted({(c.x, c.y) for ch in self.xg.chips.values() for c in ch["ports"].values()})
             crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*c), ttnn.CoreCoord(*c)) for c in cores])
             # (SE / latent hand-offs, the router cores', the routing's forwards and their landed count, then the logits
-            # ports' sub-block words: 16 B a (unit, core), 16 a port)
+            # ports' sub-block words: 16 B a (unit, core) - a port's units (the owners it sends to) x its link's router
+            # cores, at least 16)
             self.lw_off = (2 * GX * GY * 4 + 4 * 8 + 4 * 16 + 4 + 3) // 4 * 4
+            nrc = rows // 32 // G * (2 if router is not None and router.split else 1)
+            self.port_words = max(16, (G - 1) * -(-nrc // num_links))
             # (then, with chunks, the RS zone credits: a port's zone-free word (its chip's cores) and zone-credit word
             # (its peer's port))
-            self.zw_off = self.lw_off + 4 * 16
+            self.zw_off = self.lw_off + 4 * self.port_words
             words = self.zw_off + (8 if self.eng.NCH > 1 else 0)
             self.mbox = ttnn.from_torch(
                 torch.zeros(len(cores), words, dtype=torch.int32),
@@ -399,6 +402,7 @@ class HeadSE3:
                 split=router.split,
                 arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
                 words=int(self.mbox.buffer_address()) + 4 * self.lw_off,
+                port_words=self.port_words,
             )
             if self.router.on_engine and self.router_w_gate(router, latent):
                 self.router.gate = self.eng.gate_target()
@@ -552,6 +556,17 @@ class HeadSE3:
 
     def upload_router(self, w_router, bias):
         self.rw = self.router.upload(w_router, bias)
+
+    def use_layer(self, key, rw):
+        """Run with this layer's weights: its router weights and its own programs (their args hold its weights'
+        addresses - the prepared dispatch patches only per-call tensors), kept per layer. The first layer adopts the
+        programs built so far."""
+        if getattr(self, "_layer", None) is None:
+            self.states, self._layer = {key: self.state}, key
+        elif key != self._layer:
+            self.state = self.states.setdefault(key, dict(key=None, arena=None))
+            self._layer = key
+        self.rw = rw
 
     def _rebind(self):
         """The cached programs' arena-backed CBs (the engine's, the router cores') onto the arena tensor taken again at

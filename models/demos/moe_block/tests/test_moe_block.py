@@ -193,12 +193,17 @@ def test_moe_block(mesh_device, device_params, model, chunk):
         head=os.environ.get("MOE_HEAD", "auto"),
         tail=os.environ.get("MOE_TAIL", "auto"),
         experts_during_dispatch=bool(int(os.environ.get("MOE_EDD", "0"))),
+        residual=os.environ.get("MOE_RESIDUAL", "sp_tp"),  # (owners: each chip's own tokens at full width)
     )
     block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0), options=opts)
     logger.info(f"MoEBlock {model}: built in {time.perf_counter() - t0:.1f} s")
     g = block.geometry
-    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3))
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(2, 3))
+    if opts.residual == "owners":  # (chip d = r C + c holds tokens [d T/N, (d + 1) T/N) at full width)
+        mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+        composer = ttnn.ConcatMeshToTensor(mesh_device, dim=2)
+    else:
+        mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3))
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(2, 3))
     # (every call its own x - and so its own routing: stale data from the previous call cannot pass the checks)
     NX = 3 + 2 * ITERS
     xs = [torch.randn(T, H, generator=torch.Generator().manual_seed(1000 + k)).to(torch.bfloat16) for k in range(NX)]
@@ -298,7 +303,8 @@ _TRACE_PARAMS = [
         id=f"{name}-{chunk}",
     )
     for name, m in MODELS.items()
-    for chunk in ((640,) if R == 1 else (1280, 2048))  # (1x4: a Galaxy chip's 640 rows a mesh row)
+    # (1x4: a Galaxy chip's 640 rows a mesh row; 5120: GLM-5.3-Flash's LoudBox chunk)
+    for chunk in ((640,) if R == 1 else (1280, 2048, 5120))
 ] + [
     pytest.param(  # (the Galaxy: 8 x 4, both axes rings; chunk 5120 = 640 rows a mesh row; MOE_EXPERTS=896 for K3's)
         (8, 4),
@@ -340,11 +346,17 @@ def test_moe_block_traced(mesh_device, device_params, model, chunk, timing):
         tail=os.environ.get("MOE_TAIL", "auto"),
         router=os.environ.get("MOE_ROUTER", "auto"),  # (test-only: the fused head's router placement)
         experts_drisc=os.environ.get("MOE_EXPERTS_DRISC", "1") != "0",  # (test-only: A/B)
+        experts_during_dispatch=bool(int(os.environ.get("MOE_EDD", "0"))),
+        residual=os.environ.get("MOE_RESIDUAL", "sp_tp"),  # (owners: each chip's own tokens at full width)
     )
     block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0), options=opts)
     g = block.geometry
-    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
+    if opts.residual == "owners":
+        mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+        composer = ttnn.ConcatMeshToTensor(mesh_device, dim=2)
+    else:
+        mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3))
     NX = 16
     xs = [torch.randn(T, H, generator=torch.Generator().manual_seed(2000 + k)).to(torch.bfloat16) for k in range(NX)]
     hx = [

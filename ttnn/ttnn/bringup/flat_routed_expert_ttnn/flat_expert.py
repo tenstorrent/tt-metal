@@ -1871,6 +1871,20 @@ class FlatExpert:
         logger.info(f"KERNELS {len(program.kernels)} total rt words {tot_rt}, cbs {len(program.cbs)}")
 
 
+def _weight_packing(lay):
+    """What decides where a weight tile goes (flat_weight_regions, _bank_sharded): the weight cache's key, and what two
+    plans must share to share one weight set. The capacity, sub-block size, h buffers or x / h formats' L1 choices
+    change the plan, not the packing (dw_rot only when on: existing caches keep their keys)."""
+    layout = {k: lay[k] for k in WEIGHT_LAYOUT_KEYS if k in lay and (k != "dw_rot" or lay[k])}
+    if lay.get("rgs"):  # (uneven split only: even plans keep their keys)
+        layout["rgs"] = tuple(lay["rgs"])
+    if lay.get("hg"):
+        layout["hg"] = True
+    if lay.get("nu"):
+        layout["nu"] = lay["nu"]
+    return sorted(layout.items())
+
+
 class FlatRoutedExpert:
     """The C++ op ``ttnn.bringup.flat_routed_expert`` (the model path of FlatExpert: dynamic
     counts, row-major x): the plan comes from C++, the weights are laid out by flat_weight_regions from it, and the
@@ -1903,6 +1917,7 @@ class FlatRoutedExpert:
         or a FlatLayoutOptions; None: the plan's defaults) - every call of this op uses it."""
         E, n_dev = len(gids[0]), len(gids)
         self.device, self.H, self.I, self.m, self.act, self.pin = device, H, I, m, ACTS[act], pin
+        self._n_global, self._wdtype = n_global, wdtype  # (replanned)
         self.x_bf16, self.h_bf16 = x_bf16, h_bf16  # x / h tile formats (else bfp8): part of the plan
         self.layout = flat_layout(layout)
         self.plan = ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
@@ -1924,17 +1939,7 @@ class FlatRoutedExpert:
         names = ("w_gu", "w_d", "w_rd") if lay["rdown"] else ("w_gu", "w_d")
         files = dict.fromkeys(names)
         if cache_prefix is not None:
-            # keyed on what decides the packing (flat_weight_regions, _bank_sharded) only: the capacity, sub-block
-            # size, h buffers or x / h formats' L1 choices change the plan, not where a weight tile goes
-            # (dw_rot only when on: existing caches keep their keys)
-            layout = {k: lay[k] for k in WEIGHT_LAYOUT_KEYS if k in lay and (k != "dw_rot" or lay[k])}
-            if lay.get("rgs"):  # (uneven split only: even plans keep their keys)
-                layout["rgs"] = tuple(lay["rgs"])
-            if lay.get("hg"):
-                layout["hg"] = True
-            if lay.get("nu"):
-                layout["nu"] = lay["nu"]
-            key = hashlib.sha1(repr((sorted(layout.items()), gids, n_dev)).encode()).hexdigest()[:12]
+            key = hashlib.sha1(repr((_weight_packing(lay), gids, n_dev)).encode()).hexdigest()[:12]
             files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
             _adopt_legacy(cache_prefix, wdtype, files)
         if isinstance(weights, str):
@@ -1988,6 +1993,36 @@ class FlatRoutedExpert:
                 ttnn.ShardSpec(crs_rects(coords), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
             ),
         )
+
+    def replanned(self, m, layout=None):
+        """This op at another per-expert capacity m (another chunk) on the same device weights: a plan of its own, the
+        weights, expert ids and done words shared. The two plans must pack the weights the same way (asserted)."""
+        import copy
+
+        lay = flat_layout(layout if layout is not None else self.layout)
+        E = int(self.gidx.shape[-1])
+        plan = ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
+            self.device,
+            self.H,
+            self.I,
+            E,
+            self._n_global,
+            m,
+            weights_bf8=self._wdtype == "bf8",
+            pin=self.pin,
+            x_bf16=self.x_bf16,
+            h_bf16=self.h_bf16,
+            layout=lay,
+        )
+        assert _weight_packing(dict(plan)) == _weight_packing(
+            dict(self.plan)
+        ), f"flat expert at m {m}: another weight packing than at m {self.m} - cannot share the weights"
+        assert list(dict(plan)["coords"]) == list(
+            dict(self.plan)["coords"]
+        ), f"flat expert at m {m}: other down coordinators than at m {self.m} - cannot share the done words"
+        out = copy.copy(self)
+        out.m, out.layout, out.plan = m, lay, plan
+        return out
 
     def __call__(
         self,

@@ -780,6 +780,7 @@ class RouterStream:
         prio_first,
         arena,
         words,
+        port_words=16,
         fidelity=ttnn.MathFidelity.HiFi3,
         on_engine=False,
         ordered=False,
@@ -854,6 +855,7 @@ class RouterStream:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         self.pbase, self.words = self.base, words
+        self.port_words = port_words  # (the words a port has: its units x its link's router cores)
         # (arrivals / the engine's own-block tiles / the engine cores' "partials written", router core 0: the W gate)
         self.sems = [ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(3)]
         self.arr = [int(ttnn.get_global_semaphore_address(s)) for s in self.sems]
@@ -958,7 +960,7 @@ class RouterStream:
             out += [int(n.chip_id) | (p if p < b else p - 1) << 16, int(n.mesh_id)]
         out += [len(js)] + [virt(self.cores[j]).x | virt(self.cores[j]).y << 8 for j in js]
         rpl = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // 4096)
-        assert len(bs) * len(js) <= 16, "the port's sub-block words: 16 a port"
+        assert len(bs) * len(js) <= self.port_words, f"the port's sub-block words: {self.port_words} a port"
         need = self.ETL if self.on_engine else 1  # (engine tiles straight in, or one hand-off of the sub-block)
         sf = int(self.sfree_words.buffer_address()) + 64 * ("fwd", "bwd").index(d)  # (a direction's units: 4 words)
         return out + [

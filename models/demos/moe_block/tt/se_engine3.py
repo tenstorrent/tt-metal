@@ -790,6 +790,8 @@ _COMPUTE = r"""
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #if SE_GLU == 2
 #include "ckernel_sfpu_situ_glu.h"
+#elif SE_GLU == 3
+#include "ckernel_sfpu_clamped_silu_glu.h"
 #endif
 #endif
 constexpr uint32_t MT = get_compile_time_arg_val(0), KB = get_compile_time_arg_val(1), NSG = get_compile_time_arg_val(2);
@@ -859,6 +861,8 @@ void kernel_main() {
 #if defined(SE_GLU)
 #if SE_GLU == 2
     PACK((SFPU_BINARY_INIT_FN_NO_ARGS(situ_glu, sfpu::situ_glu_init)));
+#elif SE_GLU == 3
+    PACK((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::clamped_silu_glu_init)));
 #else
     silu_tile_init_pack();
     PACK((SFPU_BINARY_INIT_FN(unused, sfpu::sfpu_binary_init, (APPROX, ckernel::BinaryOp::MUL))));
@@ -948,6 +952,9 @@ void kernel_main() {
 #if SE_GLU == 2
                 for (uint32_t t = 0; t < MT * pw; t += 2)
                     PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi), t, t + 1, t, VectorMode::RC)));
+#elif SE_GLU == 3  // (silu(min(gate, 10)) x clamp(up, +-10): GLM-5.3's swiglu_limit, DeepSeek V4's)
+                for (uint32_t t = 0; t < MT * pw; t += 2)
+                    PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamped_silu_glu, (DST_ACCUM_MODE, 8, sfpu::ClampedSiluGluConfigDsV4), t, t + 1, t, VectorMode::RC)));
 #else
                 for (uint32_t t = 0; t < MT * pw; t += 2) silu_tile_pack(t);
                 for (uint32_t t = 0; t < MT * pw; t += 2)
@@ -1216,7 +1223,7 @@ def _subsets(nf, GX):
 
 class SeEngine3:
     """The shared expert a chip, row-chunk-major, weights resident: x [rows, H] (the gathered x) -> y [rows, H] (this
-    chip's partial over its I slice). glu "silu" / "situ"."""
+    chip's partial over its I slice). glu "silu" / "situ" / "clamped_silu" (limit 10)."""
 
     def __init__(
         self,
@@ -1869,7 +1876,7 @@ class SeEngine3:
                 config=dm("RISCV_1", ttnn.NOC.NOC_1),
             ),
         ]
-        glu_code = {"silu": 1, "situ": 2}[self.glu]
+        glu_code = {"silu": 1, "situ": 2, "clamped_silu": 3}[self.glu]
         for (wg, wd), cols in self.groups.items():
             crs = ttnn.CoreRangeSet(
                 [ttnn.CoreRange(ttnn.CoreCoord(cx0 + c, 0), ttnn.CoreCoord(cx0 + c, GY - 1)) for c in cols]

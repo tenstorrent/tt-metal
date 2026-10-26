@@ -456,6 +456,11 @@ def _shape_of(args, kwargs) -> str:
     return " · ".join(out)
 
 
+class _PlainOp:
+    def __init__(self, name, fn):
+        self.python_fully_qualified_name, self.fn = name, fn
+
+
 def _patch_ops() -> None:
     import ttnn.decorators as D
 
@@ -465,12 +470,16 @@ def _patch_ops() -> None:
 
     def call(self, *args, **kwargs):
         p = _P
+        if isinstance(self, _PlainOp):  # (a plain function measured as an op: ttnn.bringup.run_prepared)
+            run = self.fn
+        else:
+            run = lambda *a, **k: orig(self, *a, **k)  # noqa: E731
         if p["mesh"] is None or p.get("draining"):
-            return orig(self, *args, **kwargs)
+            return run(*args, **kwargs)
         if p["depth"]:  # an op called from inside another op: charged to the outer one
             p["depth"] += 1
             try:
-                return orig(self, *args, **kwargs)
+                return run(*args, **kwargs)
             finally:
                 p["depth"] -= 1
         name = self.python_fully_qualified_name
@@ -481,7 +490,7 @@ def _patch_ops() -> None:
             p["depth"] = 1
             i0 = ttnn._ttnn.get_device_operation_id()
             try:
-                out = orig(self, *args, **kwargs)
+                out = run(*args, **kwargs)
             finally:
                 p["depth"] = 0
             i1 = ttnn._ttnn.get_device_operation_id()
@@ -502,7 +511,7 @@ def _patch_ops() -> None:
             p["depth"] = 1
             t0 = time.perf_counter_ns()
             try:
-                out = orig(self, *args, **kwargs)
+                out = run(*args, **kwargs)
             finally:
                 p["depth"] = 0
             p["seq"].append(
@@ -519,7 +528,7 @@ def _patch_ops() -> None:
         _book_op("(other)", "", per_dev, n)
         p["depth"] = 1
         try:
-            out = orig(self, *args, **kwargs)
+            out = run(*args, **kwargs)
         finally:
             p["depth"] = 0
         per_dev, n = _drain()
@@ -542,6 +551,14 @@ def _patch_ops() -> None:
 
     D.FastOperation._bringup_orig_call = orig
     D.FastOperation.__call__ = call
+    # prepared programs (ttnn.bringup.prepared_program) launch through a plain nanobind function: measured as an op
+    import ttnn
+
+    rp = getattr(getattr(ttnn, "bringup", None), "run_prepared", None)
+    if rp is not None and getattr(ttnn.bringup, "_bringup_orig_run_prepared", None) is None:
+        shim = _PlainOp("ttnn.bringup.run_prepared", rp)
+        ttnn.bringup._bringup_orig_run_prepared = rp
+        ttnn.bringup.run_prepared = lambda *a, **k: call(shim, *a, **k)
 
 
 def _unpatch_ops() -> None:
@@ -553,6 +570,12 @@ def _unpatch_ops() -> None:
     if orig is not None:
         D.FastOperation.__call__ = orig
         D.FastOperation._bringup_orig_call = None
+    import ttnn
+
+    rp = getattr(getattr(ttnn, "bringup", None), "_bringup_orig_run_prepared", None)
+    if rp is not None:
+        ttnn.bringup.run_prepared = rp
+        ttnn.bringup._bringup_orig_run_prepared = None
 
 
 def phase_of(section: str) -> str:
