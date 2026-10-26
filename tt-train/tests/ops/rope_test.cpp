@@ -4,12 +4,14 @@
 #include <gtest/gtest.h>
 
 #include "autograd/tensor.hpp"
+#include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "modules/rotary_embedding.hpp"
 #include "ops/losses.hpp"
+#include "ops/rope_op.hpp"
 
 namespace ttml::modules::tests {
 
@@ -525,6 +527,56 @@ TEST_F(RoPETest, BackwardTest) {
 
     auto actual_grad = core::to_xtensor(xq_autograd_tensor->get_grad());
     EXPECT_TRUE(xt::allclose(actual_grad, expected_grad, 2e-1, 2e-1));
+}
+
+TEST_F(RoPETest, PerRowPositionIdsMatchScalarRoPE) {
+    constexpr uint32_t batch = 2U;
+    constexpr uint32_t seq_len = 5U;
+    constexpr uint32_t head_dim = 64U;
+    const std::vector<uint32_t> starts = {3U, 17U};
+    auto* device = &autograd::ctx().get_device();
+    auto params = ops::build_rope_params(/*sequence_length=*/64U, head_dim);
+
+    std::vector<uint32_t> ids_data;
+    for (uint32_t start : starts) {
+        for (uint32_t j = 0; j < seq_len; ++j) {
+            ids_data.push_back(start + j);
+        }
+    }
+    auto ids = autograd::create_tensor(core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        ids_data, ttnn::Shape({batch, seq_len}), device, ttnn::Layout::ROW_MAJOR));
+
+    auto random_input = [](uint32_t num_heads) {
+        xt::xarray<float> data = xt::empty<float>({batch, num_heads, seq_len, head_dim});
+        core::parallel_generate<float>(
+            data, []() { return std::normal_distribution<float>(0.0F, 1.0F); }, autograd::ctx().get_generator()());
+        return data;
+    };
+    auto rope_and_grad = [device](const xt::xarray<float>& x, const xt::xarray<float>& dout, auto rope_fn) {
+        auto input = autograd::create_tensor(core::from_xtensor(x, device), /*requires_grad=*/true);
+        auto out = rope_fn(input);
+        out->set_grad(core::from_xtensor(dout, device));
+        out->backward();
+        auto result = std::pair{core::to_xtensor(out->get_value()), core::to_xtensor(input->get_grad())};
+        autograd::ctx().reset_graph();
+        return result;
+    };
+
+    for (uint32_t num_heads : {4U, 2U}) {
+        const auto x = random_input(num_heads);
+        const auto dout = random_input(num_heads);
+        const auto [out, grad] =
+            rope_and_grad(x, dout, [&](const autograd::TensorPtr& in) { return ops::rope(in, params, ids); });
+
+        for (uint32_t b = 0; b < batch; ++b) {
+            const xt::xarray<float> x_b = xt::view(x, xt::range(b, b + 1));
+            const xt::xarray<float> dout_b = xt::view(dout, xt::range(b, b + 1));
+            const auto [ref_out, ref_grad] = rope_and_grad(
+                x_b, dout_b, [&](const autograd::TensorPtr& in) { return ops::rope(in, params, starts[b]); });
+            EXPECT_TRUE(xt::view(out, xt::range(b, b + 1)) == ref_out);
+            EXPECT_TRUE(xt::view(grad, xt::range(b, b + 1)) == ref_grad);
+        }
+    }
 }
 
 }  // namespace ttml::modules::tests
