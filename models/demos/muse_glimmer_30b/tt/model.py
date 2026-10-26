@@ -119,15 +119,17 @@ class MuseGlimmerModel:
     def supports_device_sampling(self) -> bool:
         return self.sampling is not None
 
-    def sample_on_device(self, logits_tt, sampling_params=None):
+    def sample_on_device(self, logits_tt, sampling_params=None, refresh_seeds=True):
         """Eager (untraced) on-device sampling of sharded logits -> token tensor (per-device replicated).
 
         sampling_params: SamplingParams; if given, parameters are (re)loaded on the device first
         (do this once per generate(), not every step -- pass None on later steps).
+        refresh_seeds=False is used inside a trace capture.
         """
         if sampling_params is not None:
             self.sampling.reset_sampling_params(sampling_params)
-        self.sampling.seed_manager.get_new_values()
+        if refresh_seeds:
+            self.sampling.seed_manager.get_new_values()
         out = self.sampling.sample(logits=logits_tt, enable_trace=False)
         return out[0] if isinstance(out, tuple) else out
 
@@ -297,3 +299,13 @@ class MuseGlimmerModel:
         logits = self.head(x)
         ttnn.deallocate(x)
         return logits
+
+    def decode_and_sample(self, tokens_tt, current_pos_tt, rope_idx_tt, page_table_tt):
+        """One step on device: decode, sample, write the token into tokens_tt, advance positions. Traceable (no host I/O)."""
+        logits = self.decode_forward(tokens_tt, current_pos_tt, rope_idx_tt, page_table_tt)
+        tok = self.sample_on_device(logits, refresh_seeds=False)
+        ttnn.deallocate(logits)
+        ttnn.copy(ttnn.reshape(tok, tokens_tt.shape), tokens_tt)
+        ttnn.plus_one(current_pos_tt, skip_negative_entries=True)
+        ttnn.plus_one(rope_idx_tt)
+        return tok
