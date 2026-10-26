@@ -102,15 +102,15 @@ class UnarySfpu(Sfpu):
         if self.operation == MathOperation.Dropout:
             return (
                 f"test_utils::call_dropout_quasar<"
-                f"{dest_sync}, {en_32bit_dest}, {approx_mode}, {quasar_iterations}, {dst_tile_shape}"
+                f"{dest_sync}, {en_32bit_dest}, {approx_mode}, {quasar_iterations}, {dst_tile_shape}, {vector_mode}"
                 f">({block.tile_id_dest}, {self.dropout_probability_operand:#x} /* probability */, "
-                f"{self.dropout_scale_bits:#x} /* scale */, {vector_mode});\n"
+                f"{self.dropout_scale_bits:#x} /* scale */);\n"
             )
         return (
             f"test_utils::call_unary_sfpu_operation_quasar<"
             f"{op}, {dest_sync}, {en_32bit_dest}, {approx_mode}, {quasar_iterations}"
-            f", DataFormat::Float32, DataFormat::Float16_b, {dst_tile_shape}"
-            f">({block.tile_id_dest}, {sfpu_format}, true, {self.fill_const_value}, 0 /* idx_addr */, {vector_mode});\n"
+            f", DataFormat::Float32, DataFormat::Float16_b, {dst_tile_shape}, {vector_mode}"
+            f">({block.tile_id_dest}, {sfpu_format}, true, {self.fill_const_value});\n"
         )
 
     def __str__(self) -> str:

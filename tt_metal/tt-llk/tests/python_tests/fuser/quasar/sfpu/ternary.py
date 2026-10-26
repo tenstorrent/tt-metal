@@ -30,10 +30,10 @@ class TernarySfpu(BaseTernarySfpu):
             f"{config.dest_acc.cpp_enum_value} /*is_fp32_dest_acc_en*/, "
             f"{self.approx_mode.cpp_enum_value} /*APPROX*/, "
             f"{self.iterations} /*ITERATIONS*/, "
-            f"{dst_tile_shape} /*TILE_SHAPE*/>("
+            f"{dst_tile_shape} /*TILE_SHAPE*/, "
+            f"{vector_mode} /*vector_mode*/>("
             f"{block.dest_src0} /*src0_tile*/, "
             f"{block.dest_src1} /*src1_tile*/, "
             f"{block.dest_src2} /*src2_tile*/, "
-            f"{block.tile_id_dest} /*dst_tile*/, "
-            f"{vector_mode} /*vector_mode*/);\n"
+            f"{block.tile_id_dest} /*dst_tile*/);\n"
         )

@@ -195,7 +195,7 @@ void init_dropout_quasar(std::uint32_t seed)
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param probability Drop probability as p * INT_MAX.
  * @param scale_bits fp32 bit pattern of the scale applied to kept data.
- * @param vector_mode Faces to process.
+ * @tparam vector_mode Faces to process.
  * @note Must be preceded by @ref init_dropout_quasar.
  */
 template <
@@ -203,8 +203,9 @@ template <
     bool is_fp32_dest_acc_en,
     bool APPROX                             = false,
     int ITERATIONS                          = SFPU_ITERATIONS,
-    ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32>
-void call_dropout_quasar(std::uint32_t dst_index, std::uint32_t probability, std::uint32_t scale_bits, VectorMode vector_mode = VectorMode::RC)
+    ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32,
+    VectorMode vector_mode                  = VectorMode::RC>
+void call_dropout_quasar(std::uint32_t dst_index, std::uint32_t probability, std::uint32_t scale_bits)
 {
     SFPU_UNARY_CALL_TINY_TILE(
         DST_SYNC, is_fp32_dest_acc_en, TILE_SHAPE, calculate_dropout, (APPROX, ITERATIONS), dst_index, vector_mode, probability, scale_bits);
@@ -565,7 +566,7 @@ void init_unary_sfpu_operation_quasar()
  * @tparam TILE_SHAPE Dest footprint used to locate the tile.
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format selecting the sfpmem mode / result encoding.
- * @param vector_mode Faces to process.
+ * @tparam vector_mode Faces to process.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -573,8 +574,9 @@ template <
     DstSync DST_SYNC,
     bool is_fp32_dest_acc_en,
     int ITERATIONS                          = SFPU_ITERATIONS,
-    ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32>
-void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format, VectorMode vector_mode = VectorMode::RC)
+    ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32,
+    VectorMode vector_mode                  = VectorMode::RC>
+void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format)
 {
     static_assert(is_zero_comp_op(OPERATION), "call_zero_comp_operation_quasar: OPERATION must be a comparison-to-zero SfpuType");
 
@@ -633,15 +635,16 @@ void call_zero_comp_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_fo
  * @tparam TILE_SHAPE Dest footprint used to locate the tile.
  * @param dst_index Destination tile index operated on (already offset by DST_INDEX).
  * @param sfpu_format SFPU math format selecting the sfpmem mode / result encoding.
- * @param vector_mode Faces to process.
+ * @tparam vector_mode Faces to process.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for signbit.
  */
 template <
     DstSync DST_SYNC,
     bool is_fp32_dest_acc_en,
     int ITERATIONS                          = SFPU_ITERATIONS,
-    ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32>
-void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format, VectorMode vector_mode = VectorMode::RC)
+    ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32,
+    VectorMode vector_mode                  = VectorMode::RC>
+void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_format)
 {
     // A sign-bit test is exact, so signbit has no approximate path.
     constexpr bool approx_mode = false;
@@ -703,7 +706,7 @@ void call_signbit_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_form
  *        and ema read it. Defaults to true so each tile is independent.
  * @param fill_const_value Constant written by fill; other operations ignore it.
  * @param idx_addr reshuffle_rows only: L1 address of the row mask minus its 16-byte header.
- * @param vector_mode Which faces of the tile to process. Reductions over the whole tile walk it their own way.
+ * @tparam vector_mode Which faces of the tile to process. Reductions over the whole tile walk it their own way.
  * @note Must be preceded by @ref init_unary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -714,14 +717,14 @@ template <
     int ITERATIONS                          = SFPU_ITERATIONS,
     DataFormat TYPECAST_IN_FORMAT           = DataFormat::Float32,
     DataFormat TYPECAST_OUT_FORMAT          = DataFormat::Float16_b,
-    ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32>
+    ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32,
+    VectorMode vector_mode                  = VectorMode::RC>
 void call_unary_sfpu_operation_quasar(
     std::uint32_t dst_index,
     DataFormat sfpu_format                        = DataFormat::Float32,
     [[maybe_unused]] const bool first             = true,
     [[maybe_unused]] const float fill_const_value = 5.0f,
-    [[maybe_unused]] const std::uint32_t idx_addr = 0,
-    [[maybe_unused]] VectorMode vector_mode       = VectorMode::RC)
+    [[maybe_unused]] const std::uint32_t idx_addr = 0)
 {
     static_assert(
         TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32 ||
@@ -952,11 +955,11 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (is_zero_comp_op(OPERATION))
     {
-        call_zero_comp_operation_quasar<OPERATION, DST_SYNC, is_fp32_dest_acc_en, ITERATIONS, TILE_SHAPE>(dst_index, sfpu_format, vector_mode);
+        call_zero_comp_operation_quasar<OPERATION, DST_SYNC, is_fp32_dest_acc_en, ITERATIONS, TILE_SHAPE, vector_mode>(dst_index, sfpu_format);
     }
     else if constexpr (OPERATION == SfpuType::signbit)
     {
-        call_signbit_operation_quasar<DST_SYNC, is_fp32_dest_acc_en, ITERATIONS, TILE_SHAPE>(dst_index, sfpu_format, vector_mode);
+        call_signbit_operation_quasar<DST_SYNC, is_fp32_dest_acc_en, ITERATIONS, TILE_SHAPE, vector_mode>(dst_index, sfpu_format);
     }
     else if constexpr (OPERATION == SfpuType::typecast)
     {
@@ -993,7 +996,7 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::dropout)
     {
-        call_dropout_quasar<DST_SYNC, is_fp32_dest_acc_en, APPROX, ITERATIONS, TILE_SHAPE>(dst_index, kDropoutProbability, kDropoutScaleBits, vector_mode);
+        call_dropout_quasar<DST_SYNC, is_fp32_dest_acc_en, APPROX, ITERATIONS, TILE_SHAPE, vector_mode>(dst_index, kDropoutProbability, kDropoutScaleBits);
     }
     else if constexpr (OPERATION == SfpuType::reshuffle_rows)
     {
@@ -1678,7 +1681,7 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
  * @param math_format Dest encoding. Int32 vs float path for MUL and max/min; COPY_DEST
  *        forwards it as the `copy_dest_value` template argument so the sfpmem mode
  *        matches Dest (Float16 / Float16_b / Int32 / UInt16 / …, not a Float32 placeholder).
- * @param vector_mode Which faces of the tile to process. Only the ops that support tiny tiles use it.
+ * @tparam vector_mode Which faces of the tile to process. Only the ops that support tiny tiles use it.
  * @note Must be preceded by @ref init_binary_sfpu_operation_quasar for the same op.
  */
 template <
@@ -1690,9 +1693,9 @@ template <
     bool SIGN_MAGNITUDE_FORMAT                 = false,
     bool APPROXIMATION_MODE                    = false,
     ckernel::BroadcastType BCAST_TYPE          = ckernel::BroadcastType::NONE,
-    ckernel::trisc::DstTileShape TILE_SHAPE    = ckernel::trisc::DstTileShape::Tile32x32>
-void call_binary_sfpu_operation_quasar(
-    std::uint32_t src0_tile, std::uint32_t src1_tile, std::uint32_t dst_tile, [[maybe_unused]] DataFormat math_format, VectorMode vector_mode = VectorMode::RC)
+    ckernel::trisc::DstTileShape TILE_SHAPE    = ckernel::trisc::DstTileShape::Tile32x32,
+    VectorMode vector_mode                     = VectorMode::RC>
+void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t src1_tile, std::uint32_t dst_tile, [[maybe_unused]] DataFormat math_format)
 {
     static_assert(
         TILE_SHAPE == ckernel::trisc::DstTileShape::Tile32x32 || OP == BinaryOp::ADD || OP == BinaryOp::SUB || OP == BinaryOp::MUL || OP == BinaryOp::DIV ||
@@ -2332,7 +2335,7 @@ void init_ternary_sfpu_operation_quasar()
  * @param src1_tile Second operand tile index; the true value for where.
  * @param src2_tile Third operand tile index; the false value for where.
  * @param dst_tile Result tile index, which may alias an input.
- * @param vector_mode Faces to process; defaults to the whole tile.
+ * @tparam vector_mode Faces to process; defaults to the whole tile.
  * @note Call @ref init_ternary_sfpu_operation_quasar for the same op before this function.
  */
 template <
@@ -2341,13 +2344,10 @@ template <
     bool is_fp32_dest_acc_en,
     bool APPROX                             = false,
     int ITERATIONS                          = SFPU_ITERATIONS,
-    ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32>
+    ckernel::trisc::DstTileShape TILE_SHAPE = ckernel::trisc::DstTileShape::Tile32x32,
+    VectorMode vector_mode                  = VectorMode::RC>
 void call_ternary_sfpu_operation_quasar(
-    const std::uint32_t src0_tile,
-    const std::uint32_t src1_tile,
-    const std::uint32_t src2_tile,
-    const std::uint32_t dst_tile,
-    VectorMode vector_mode = VectorMode::RC)
+    const std::uint32_t src0_tile, const std::uint32_t src1_tile, const std::uint32_t src2_tile, const std::uint32_t dst_tile)
 {
     if constexpr (OPERATION == SfpuType::where)
     {

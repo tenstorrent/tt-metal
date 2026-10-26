@@ -56,6 +56,7 @@ from fuser.validator import (
     forced_unpackers,
     require_dest_tiles,
     require_src_a_tiles,
+    require_src_b_tiles,
 )
 from helpers.llk_params import (
     MathOperation,
@@ -186,7 +187,11 @@ FPU_MAP = {
     ),
     "MatmulNoMop": (
         lambda s: MatmulNoMopFpu(),
-        _matmul_checks,
+        [
+            *_matmul_checks,
+            require_src_a_tiles((32, 32)),
+            require_src_b_tiles((32, 32)),
+        ],
     ),
     "Reduce": (
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),

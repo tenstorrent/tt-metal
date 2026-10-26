@@ -802,6 +802,9 @@ class OperationSchemaBase(BaseModel):
     def _arch_kwargs(self) -> dict:
         return {}
 
+    def _validate_sfpu_tile_shape(self, tile_shape, schemas):
+        pass
+
     def _resolve_output_tile_shape(self, operands) -> TileShape:
         """Resolve the output/dest tile shape for this operation.
 
@@ -857,6 +860,7 @@ class OperationSchemaBase(BaseModel):
     def to_l1_operation(self, operands, dest_acc=False):
         tile_shape = self._resolve_output_tile_shape(operands)
         all_schemas = list(self.math) + list(self.pack)
+        self._validate_sfpu_tile_shape(tile_shape, all_schemas)
         if any(isinstance(s, TopKSfpuMathSchema) for s in all_schemas):
             if dest_acc:
                 raise ValueError("TopKSfpu requires dest_acc: false")

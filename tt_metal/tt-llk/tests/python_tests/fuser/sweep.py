@@ -172,6 +172,43 @@ def _iter_axes(definition: dict, parameters: SweepRegistry) -> Iterator[_SweepAx
             )
 
 
+def _compatible_tile_shapes(definition: dict, shapes: dict) -> bool:
+    """Prune geometry mismatches before copying or constructing a fuser config."""
+    for operation in definition.get("operations", []):
+        outputs = [
+            shapes.get(p["output"]) for p in operation.get("pack", []) if "output" in p
+        ]
+        for node in operation.get("math", []):
+            if node.get("in0") is None:
+                continue
+            src_a = shapes.get(node["in0"])
+            src_b = shapes.get(node.get("in1") or node["in0"])
+            if src_a is None or src_b is None:
+                return True  # Let schema validation report undeclared operands.
+            if node.get("operation") in ("Matmul", "MatmulNoMop"):
+                if src_a[1] != src_b[0]:
+                    return False
+                outputs.append((src_a[0], src_b[1]))
+            else:
+                if src_a != src_b:
+                    return False
+                outputs.append(src_a)
+        if None in outputs:
+            return True
+        if outputs and any(shape != outputs[0] for shape in outputs[1:]):
+            return False
+    return True
+
+
+def _tile_shape_suffix(shapes: dict) -> list[str]:
+    if not shapes or all(shape == (32, 32) for shape in shapes.values()):
+        return []
+    if len(set(shapes.values())) == 1:
+        rows, cols = next(iter(shapes.values()))
+        return [f"tiles_{rows}x{cols}"]
+    return [f"{name}_{rows}x{cols}" for name, (rows, cols) in shapes.items()]
+
+
 def expand_fuser_configs(
     test_name: str,
     definition: dict,
@@ -181,16 +218,52 @@ def expand_fuser_configs(
     if parameters is None:
         parameters = SWEEP_PARAMETERS
     axes = list(_iter_axes(definition, parameters))
-    for choices in product(*(axis.choices for axis in axes)):
+    shape_axes = [
+        axis
+        for axis in axes
+        if axis.path[0] == "operands" and axis.path[-1] == "tile_dims"
+    ]
+    other_axes = [axis for axis in axes if axis not in shape_axes]
+    for shape_choices in product(*(axis.choices for axis in shape_axes)):
+        selected = {
+            definition["operands"][axis.path[1]]["name"]: shape
+            for axis, shape in zip(shape_axes, shape_choices)
+        }
+        shapes = {
+            operand["name"]: tuple(operand.get("tile_dims") or (32, 32))
+            for operand in definition.get("operands", [])
+            if operand["name"] not in selected
+        }
+        shapes.update(selected)
+        if shape_axes and not _compatible_tile_shapes(definition, shapes):
+            continue
+        yield from _expand_axes(
+            test_name,
+            definition,
+            shape_axes,
+            shape_choices,
+            other_axes,
+            _tile_shape_suffix(selected),
+        )
+
+
+def _expand_axes(
+    test_name, definition, shape_axes, shape_choices, other_axes, shape_suffix
+):
+    for choices in product(*(axis.choices for axis in other_axes)):
         config_dict = deepcopy(definition)
-        suffix = []
-        for axis, value in zip(axes, choices):
+        suffix = list(shape_suffix)
+        for axis, value in zip(shape_axes + other_axes, shape_choices + choices):
             node = config_dict
             for key in axis.path[:-1]:
                 node = node[key]
             node[axis.path[-1]] = value
+            if axis in shape_axes:
+                continue
             value_id = "x".join(map(str, value)) if isinstance(value, tuple) else value
-            suffix.append(f"{axis.label}_{value_id}")
+            # The original datacopy/SFPU cases used unpack_to_dest: true.
+            if axis.path[-1] != "unpack_to_dest" or value is not True:
+                suffix.append(f"{axis.label}_{value_id}")
         case_name = "__".join([test_name, *suffix])
         yield case_name, config_dict
 
@@ -208,11 +281,12 @@ def validated_fuser_configs(
 
     valid_count = 0
     rejected_count = 0
+    has_sweep = any(_iter_axes(definition, SWEEP_PARAMETERS))
     for case_name, config_dict in expand_fuser_configs(test_name, definition):
         try:
             config = FuserConfigSchema.load(case_name, config_dict)
         except ValueError as error:
-            if case_name == test_name:
+            if not has_sweep:
                 raise
             rejected_count += 1
             logger.debug(f"Excluding invalid fuser sweep case {case_name}: {error}")
