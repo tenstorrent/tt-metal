@@ -241,11 +241,18 @@ inline void _llk_math_set_dvalid_()
  * @tparam DST: Destination synchronization mode, values = <SyncFull/SyncHalf>
  * @tparam EN_32BIT_DEST: True if the math destination register is set to 32-bit mode, values = <true/false>
  * @param bank: bank to zero in SyncHalf, @ref math::clear_dest_bank_id when @ref _llk_math_set_dvalid_ ends the sections
- * @note Call after the dest handshake admits the FPU and before the first accumulating call of the section.
+ * @note Call after math format/operation init and the FPU's dest take, before the first accumulating call of the section.
+ *       Arrange for unpack to supply the current SrcA bank independently of this call; the admission copy waits for it without releasing it.
+ *       Use only at section start: this resets the ABD_F counters.
  */
 template <DstSync DST, bool EN_32BIT_DEST>
 inline void _llk_math_dest_clear_(const std::uint32_t bank)
 {
+    // ZEROACC executes at issue, so the FPU's dest dvalid wait does not gate it. The row copy is a gated FPU dest write,
+    // and waiting for it to finish keeps ZEROACC behind the FPU's admission and behind the copy, which ZEROACC then clears.
+    TTI_MOVA2D(p_mov::DEST_NORM, 0 /*src*/, ADDR_MOD_0, p_mov_src_to_dest::MOV_1_ROW, 0 /*dst*/);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::MATH);
+    _reset_counters_<p_setrwc::SET_ABD_F>();
     if constexpr (DST == DstSync::SyncFull)
     {
         TTI_ZEROACC(p_zeroacc::CLR_ALL, EN_32BIT_DEST, 0, ADDR_MOD_0, 0);

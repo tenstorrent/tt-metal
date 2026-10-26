@@ -26,7 +26,7 @@ struct State
     bool gated                = false; // this thread's unit has a wait word, false at boot and after a leave
     std::uint8_t members      = 0;
     std::uint8_t turned       = 0;          // tracked units with a turn in the current bank use
-    std::uint8_t ordered[2]   = {0xF, 0xF}; // per bank, tracked units with a turn in its last use (boot orders everyone)
+    std::uint8_t last_turned  = 0xF;        // tracked units with a turn in the previous bank use (boot orders everyone)
     std::uint8_t use          = 0;          // bank of the current use in SyncHalf
     std::uint8_t bank         = 0;          // bank of this thread's unit
 };
@@ -107,14 +107,17 @@ inline void pass_from_holder()
 template <dest_dvalid_client NEXT, DstSync DST>
 inline bool end_use()
 {
-    constexpr bool KNOWN     = NEXT == THIS_UNIT || THIS_UNIT == dest_dvalid_client::PACK;
-    const std::uint32_t bank = state.use;
-    const std::uint32_t next = bank ^ 1;
-    const bool granted       = KNOWN && !(state.ordered[next] & dest_dvalid::bit_of(NEXT));
+    constexpr bool KNOWN            = NEXT == THIS_UNIT || THIS_UNIT == dest_dvalid_client::PACK;
+    constexpr std::uint8_t NEXT_BIT = dest_dvalid::bit_of(NEXT);
     if constexpr (THIS_UNIT == dest_dvalid_client::PACK)
     {
         _llk_dest_dvalid_end_use_();
         state.bank ^= 1;
+    }
+    // Bank uses alternate, so the last use of the bank NEXT opens is the previous use.
+    const bool granted = KNOWN && !(state.last_turned & NEXT_BIT);
+    if constexpr (THIS_UNIT == dest_dvalid_client::PACK)
+    {
         if (granted)
         {
             // PACK is now on the bank NEXT opens and has nothing in flight, so this pulse sets NEXT's bit at once.
@@ -122,10 +125,11 @@ inline bool end_use()
             _llk_dest_dvalid_pulse_<dest_dvalid_client::PACK>();
         }
     }
-    state.ordered[bank] = state.turned;
-    state.turned        = 0;
-    state.holder        = NONE;
-    state.use           = next;
+    // The grant lands after this bank's release and before its next use, so NEXT may open that use on an empty check.
+    state.last_turned = state.turned | (granted ? NEXT_BIT : 0);
+    state.turned      = 0;
+    state.holder      = NONE;
+    state.use ^= 1;
     return granted;
 }
 

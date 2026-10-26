@@ -263,8 +263,9 @@ def packed_tiles(tensor, packed):
 @parametrize(
     schedule=list(SCHEDULES.keys()),
     dest_sync=[DestSync.Half, DestSync.Full],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
-def test_dest_sync_chain_quasar(schedule, dest_sync):
+def test_dest_sync_chain_quasar(schedule, dest_sync, dest_acc):
     sections = SCHEDULES[schedule]
     check_schedule(sections)
     tile_cnt = len(sections)
@@ -273,7 +274,9 @@ def test_dest_sync_chain_quasar(schedule, dest_sync):
     torch.manual_seed(42)
     src_a = (torch.rand(tile_cnt * TILE_ELEMENTS) * 2 - 1).to(torch.bfloat16)
     src_b = torch.zeros(TILE_ELEMENTS, dtype=torch.bfloat16)
-    golden_tensor, packed = golden(src_a, sections)
+    golden_src = src_a.float() if dest_acc == DestAccumulation.Yes else src_a
+    golden_tensor, packed = golden(golden_src, sections)
+    golden_tensor = golden_tensor.to(format_dict[formats.output_format])
 
     configuration = TestConfig(
         "sources/quasar/dest_sync_chain_quasar_test.cpp",
@@ -301,7 +304,7 @@ def test_dest_sync_chain_quasar(schedule, dest_sync):
             tile_count_res=tile_cnt,
             num_faces=MAX_NUM_FACES,
         ),
-        dest_acc=DestAccumulation.No,
+        dest_acc=dest_acc,
     )
 
     res_from_L1 = configuration.run().result
