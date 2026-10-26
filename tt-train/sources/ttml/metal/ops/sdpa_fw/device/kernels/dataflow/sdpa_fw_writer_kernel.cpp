@@ -8,13 +8,13 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/sdpa_fw_work_list.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t intermediates_addr = get_arg_val<uint32_t>(runtime_args_counter++);
-    // Then the core's work items (Q chunks): num_runs, (first_item, num_items) per run.
-    const uint32_t num_runs = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t work_list_arg_idx = runtime_args_counter;  // then the work list
 
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
@@ -95,11 +95,5 @@ void kernel_main() {
 #endif
     };
 
-    for (uint32_t run = 0; run < num_runs; ++run) {
-        const uint32_t first_item = get_arg_val<uint32_t>(runtime_args_counter++);
-        const uint32_t num_items = get_arg_val<uint32_t>(runtime_args_counter++);
-        for (uint32_t item = first_item; item < first_item + num_items; ++item) {
-            write_q_chunk(item);
-        }
-    }
+    for_each_work_item(work_list_arg_idx, write_q_chunk);
 }

@@ -9,6 +9,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/sdpa_fw_work_list.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -17,8 +18,7 @@ void kernel_main() {
     uint32_t value_address = get_arg_val<uint32_t>(runtime_args_counter++);  // value buffer address
     uint32_t mask_address = get_arg_val<uint32_t>(runtime_args_counter++);   // mask buffer address
     uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);   // gate buffer address
-    // Then the core's work items (Q chunks): num_runs, (first_item, num_items) per run.
-    const uint32_t num_runs = get_arg_val<uint32_t>(runtime_args_counter++);
+    const uint32_t work_list_arg_idx = runtime_args_counter;                 // then the work list
 
     constexpr uint32_t cb_query = tt::CBIndex::c_0;
     constexpr uint32_t cb_key = tt::CBIndex::c_1;
@@ -118,11 +118,5 @@ void kernel_main() {
 #endif
     };
 
-    for (uint32_t run = 0; run < num_runs; ++run) {
-        const uint32_t first_item = get_arg_val<uint32_t>(runtime_args_counter++);
-        const uint32_t num_items = get_arg_val<uint32_t>(runtime_args_counter++);
-        for (uint32_t item = first_item; item < first_item + num_items; ++item) {
-            read_q_chunk(item);
-        }
-    }
+    for_each_work_item(work_list_arg_idx, read_q_chunk);
 }
