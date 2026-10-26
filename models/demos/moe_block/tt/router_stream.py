@@ -29,7 +29,7 @@ PART = 13  # (split: the partner's best K, half 0)
 _NCRISC = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 using namespace dataflow_kernel_lib;
 constexpr uint32_t KT = get_compile_time_arg_val(0), ET = get_compile_time_arg_val(1), G = get_compile_time_arg_val(2);
@@ -194,7 +194,7 @@ _COMPUTE = r"""
 #include "api/compute/topk.h"
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_binary_sfpu.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 constexpr uint32_t KT = get_compile_time_arg_val(0), ET = get_compile_time_arg_val(1), G = get_compile_time_arg_val(2);
 constexpr uint32_t KBR = get_compile_time_arg_val(3), K = get_compile_time_arg_val(4);
 constexpr uint32_t XR = 0, WR = 1, HOLD = 2, ARRF = 3, ARRB = 4, BIAS = 5, SC = 6, FINC = 7, PSYNC = 8;
@@ -561,7 +561,7 @@ _BRISC = (
     r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 constexpr uint32_t ET = get_compile_time_arg_val(1), K = get_compile_time_arg_val(4);
 constexpr auto o_args = TensorAccessorArgs<5>();
 constexpr uint32_t HOLD = 2, BIAS = 5, FINC = 7, BEST = 9;

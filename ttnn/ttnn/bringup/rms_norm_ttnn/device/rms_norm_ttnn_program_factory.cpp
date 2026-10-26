@@ -38,7 +38,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "../../common/mcast_v1/host/mcast_host.hpp"
 #include "mcast_wire.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -46,7 +46,7 @@ namespace ttnn::operations::bringup::rms_norm_ttnn {
 
 namespace {
 
-namespace kh = ttnn::kernel_lib::host;
+namespace kh = ttnn::bringup::mcast_v1::host;
 using tt::tt_metal::BufferType;
 using tt::tt_metal::CBDescriptor;
 using tt::tt_metal::CBFormatDescriptor;
@@ -1918,7 +1918,7 @@ ProgramDescriptor create_program_descriptor(
             cfg.noc = reader_noc(plan);
             cfg.handshake = handshake;
             cfg.data_ready =
-                handshake ? dataflow_kernel_lib::DataReadySignal::Flag : dataflow_kernel_lib::DataReadySignal::Counter;
+                handshake ? dataflow_kernel_lib_mcast_v1::DataReadySignal::Flag : dataflow_kernel_lib_mcast_v1::DataReadySignal::Counter;
             cfg.base_sem_id = base_sem;
             const kh::Mcast1DFixedSenderConfig sender_cfg{
                 .starting_sender_index = PC_MCAST_SENDER_INDEX,

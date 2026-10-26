@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string_view>
 #include "moe_grouped_topk_device_operation.hpp"
 
 #include <bit>
@@ -287,9 +288,22 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
             unpack_to_dest_mode[static_cast<uint32_t>(cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
-    compute_named_compile_time_args["precise"] = static_cast<uint32_t>(precise);
-    compute_named_compile_time_args["packed_epsilon"] = std::bit_cast<uint32_t>(operation_attributes.epsilon);
-    compute_named_compile_time_args["packed_route_scale"] = std::bit_cast<uint32_t>(operation_attributes.route_scale);
+    // (named compile-time args are a list of pairs: set an existing name, else append it)
+    const auto set_named = [](KernelDescriptor::NamedCompileTimeArgs& args, std::string_view name, uint32_t value) {
+        for (auto& [key, v] : args) {
+            if (key == name) {
+                v = value;
+                return;
+            }
+        }
+        args.emplace_back(std::string(name), value);
+    };
+    set_named(compute_named_compile_time_args, "precise", static_cast<uint32_t>(precise));
+    set_named(compute_named_compile_time_args, "packed_epsilon", std::bit_cast<uint32_t>(operation_attributes.epsilon));
+    set_named(
+        compute_named_compile_time_args,
+        "packed_route_scale",
+        std::bit_cast<uint32_t>(operation_attributes.route_scale));
     const auto default_unpack = [&](tt::CBIndex cb) {
         return unpack_to_dest_mode[static_cast<uint32_t>(cb)] == tt::tt_metal::UnpackToDestMode::Default;
     };

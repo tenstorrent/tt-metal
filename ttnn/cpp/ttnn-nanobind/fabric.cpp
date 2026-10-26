@@ -15,6 +15,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <internal/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
@@ -394,14 +395,17 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "get_neighbor_eth_directions",
-        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device,
+           const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
            const tt::tt_fabric::FabricNodeId& dst_fabric_node_id) -> std::vector<int> {
             std::vector<int> out;
-            for (auto dir : tt::tt_fabric::get_neighbor_eth_directions(src_fabric_node_id, dst_fabric_node_id)) {
+            for (auto dir :
+                 tt::tt_fabric::get_neighbor_eth_directions(mesh_device, src_fabric_node_id, dst_fabric_node_id)) {
                 out.push_back(static_cast<int>(dir));
             }
             return out;
         },
+        nb::arg("mesh_device"),
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_fabric_node_id"),
         R"(

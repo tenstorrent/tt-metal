@@ -157,7 +157,7 @@ _SENDER_SOURCE = (
     r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -773,7 +773,7 @@ def _plan(
                     continue
                 # a 2D fabric forwards toward any chip, so forwarding links alone do not make a hop direct: on a mesh
                 # axis without wrap cables a ring's closing hop would be routed through the line and deadlock
-                if not ttnn.get_neighbor_eth_directions(node(coord), node(peer)):
+                if not ttnn.get_neighbor_eth_directions(mesh_device, node(coord), node(peer)):
                     raise ValueError(
                         f"fabric_all_gather: {coord} -> {peer} is not a direct link "
                         f"(topology={topology}, fabric={ttnn.get_fabric_config()})"

@@ -372,7 +372,7 @@ def state_layout_pig(N, A):
 _RF_SENDER = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 using namespace tt::tt_fabric;

@@ -122,7 +122,7 @@
 // emitted, `if constexpr`-ed off -- and measured a 4-5% regression on plans that never
 // engage (focus 5363 -> 5577, BLOCK 22881 -> 23975).  `check_off_identity.py` in this
 // directory re-derives the shipped text from this file and diffs it against k_base.
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "../../common/mcast_v1/kernel/mcast_args.hpp"
 #endif
 
 namespace {
@@ -579,7 +579,7 @@ void kernel_main() {
     // RT 13.. = the multicast wire.  The role word sits FIRST so `McastArgs`'
     // runtime-arg count -- which is 4, or 4 + 2*PC_N when the senders rotate --
     // does not have to be known to find it.
-    constexpr auto pc_args = dataflow_kernel_lib::McastArgs<PC_CT + 1, 13>();
+    constexpr auto pc_args = dataflow_kernel_lib_mcast_v1::McastArgs<PC_CT + 1, 13>();
     // D40 requires the PER-CHANNEL operand to be TILE -- the reader stages it into
     // `cb_gamma_tiles` / `cb_bias_tiles` itself, which is the block the broadcast moves.
     // A ROW_MAJOR one is tilized by the COMPUTE kernel out of a stick ring, so there is

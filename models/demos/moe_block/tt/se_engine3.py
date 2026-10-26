@@ -79,7 +79,7 @@ _BRISC = r"""
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 using namespace dataflow_kernel_lib;
 constexpr uint32_t GX = get_compile_time_arg_val(0), MT = get_compile_time_arg_val(1), KB = get_compile_time_arg_val(2);
 constexpr uint32_t NSG = get_compile_time_arg_val(3), NPG = get_compile_time_arg_val(4), NCH = get_compile_time_arg_val(5);
@@ -276,7 +276,7 @@ void kernel_main() {
 _NCRISC = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 constexpr uint32_t GY = get_compile_time_arg_val(0), MT = get_compile_time_arg_val(1), KB = get_compile_time_arg_val(2);
 constexpr uint32_t NSG = get_compile_time_arg_val(3), NPG = get_compile_time_arg_val(4), NCH = get_compile_time_arg_val(5);
 constexpr uint32_t KBD = get_compile_time_arg_val(6), NSD = get_compile_time_arg_val(7), NPD = get_compile_time_arg_val(8);
@@ -784,7 +784,7 @@ _COMPUTE = r"""
 #ifdef SE_PREP
 #include "api/compute/pack_untilize.h"
 #endif
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #if defined(SE_GLU) && defined(TRISC_PACK)
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"

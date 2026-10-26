@@ -65,15 +65,15 @@ tt::DataFormat w_format(bool bf8) { return bf8 ? tt::DataFormat::Bfp8_b : tt::Da
 
 // the expert matmuls' fidelity: the config's (default LoFi); MIMO_FL_FIDELITY=LoFi / HiFi2 / HiFi3 / HiFi4 overrides
 // it for every flat expert (probes)
-MathFidelity expert_fidelity(uint32_t cfg_fidelity) {
+tt::tt_metal::MathFidelity expert_fidelity(uint32_t cfg_fidelity) {
     const FlatProbes pr = FlatProbes::from_env();
     const char* f = cstr(pr.fidelity);
     if (f == nullptr) {
-        return static_cast<MathFidelity>(cfg_fidelity);
+        return static_cast<tt::tt_metal::MathFidelity>(cfg_fidelity);
     }
     const std::string v(f);
-    return v == "HiFi2" ? MathFidelity::HiFi2
-                        : (v == "HiFi3" ? MathFidelity::HiFi3 : (v == "HiFi4" ? MathFidelity::HiFi4 : MathFidelity::LoFi));
+    return v == "HiFi2" ? tt::tt_metal::MathFidelity::HiFi2
+                        : (v == "HiFi3" ? tt::tt_metal::MathFidelity::HiFi3 : (v == "HiFi4" ? tt::tt_metal::MathFidelity::HiFi4 : tt::tt_metal::MathFidelity::LoFi));
 }
 }  // namespace factory_detail
 using namespace factory_detail;

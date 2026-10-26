@@ -19,7 +19,7 @@
 //
 // Dataflow kernels get the profiler transitively via dataflow_api.h; compute kernels need this include.
 
-#include <tools/profiler/kernel_profiler.hpp>
+#include <api/debug/kernel_profiler.hpp>
 
 #ifndef MaybeDeviceZoneScope
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)

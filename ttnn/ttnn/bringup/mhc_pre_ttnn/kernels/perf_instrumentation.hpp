@@ -32,7 +32,7 @@
 //     per EXECUTION: zones inside per-tile loops exhaust the budget and the remainder of the
 //     kernel silently vanishes from the profile.
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #if defined(PROFILE_KERNEL) && defined(KERNEL_PERF_ZONES)
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)

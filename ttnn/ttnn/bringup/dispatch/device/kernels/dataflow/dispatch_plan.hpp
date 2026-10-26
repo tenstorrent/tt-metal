@@ -6,7 +6,13 @@
 
 #include <cstdint>
 
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"  // NOC_SPARSE_MCAST_WRITE_MAX_DESTS
+#if defined(KERNEL_BUILD)
+#include "hostdev/fabric_edm_packet_header.hpp"  // NOC_SPARSE_MCAST_WRITE_MAX_DESTS
+static_assert(NOC_SPARSE_MCAST_WRITE_MAX_DESTS == 4, "dispatch_plan.hpp: the host's copy below must match");
+#elif !defined(NOC_SPARSE_MCAST_WRITE_MAX_DESTS)
+// (hostdev/ is not on the host include path: hostdev/fabric_edm_packet_header.hpp's value, checked above)
+#define NOC_SPARSE_MCAST_WRITE_MAX_DESTS 4
+#endif
 
 // L1 record layouts shared across the dispatch kernels and the host program factory: the per-batch
 // route plan (worker reader -> worker writer) below, and the grouped route_info slot (worker writer

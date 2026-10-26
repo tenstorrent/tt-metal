@@ -9,7 +9,7 @@
 // #57547 replaced the old helpers' compile_time_args() / runtime_args(core) / owned_semaphores() queries with
 // attach(descriptor, prefix, kernels), which appends the family's argument blocks to a kernel's CURRENT argument
 // lists. This program factory places the wire in the MIDDLE of its argument lists (fixed CT / RT bases that the
-// kernels decode with dataflow_kernel_lib::McastArgs<CT, RT>, which is still positional), so it attaches the family
+// kernels decode with dataflow_kernel_lib_mcast_v1::McastArgs<CT, RT>, which is still positional), so it attaches the family
 // to a scratch data-movement kernel with empty argument lists and reads the blocks back. The blocks are exactly what
 // attach() would have appended; nothing is re-encoded here. The old helpers' per-kernel pre_handshake override has no
 // equivalent in the new API, so compile_time_args(pre_handshake) clears or sets the wire's PRE_HANDSHAKE flag the way
@@ -26,7 +26,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "../../common/mcast_v1/host/mcast_host.hpp"
 
 namespace ttnn::operations::bringup::mhc_pre_ttnn::mcast_wire {
 
@@ -36,7 +36,7 @@ struct McastWire {
     std::vector<tt::tt_metal::SemaphoreDescriptor> semaphores;  // the family's own (none when it adopts ids)
 
     std::vector<uint32_t> compile_time_args(std::optional<bool> pre_handshake = std::nullopt) const {
-        namespace w = dataflow_kernel_lib::mcast_wire;
+        namespace w = dataflow_kernel_lib_mcast_v1::mcast_wire;
         auto out = ct;
         if (pre_handshake.has_value() && out.size() > w::FLAGS && out[w::TAG] == w::FAMILY) {
             out[w::FLAGS] = *pre_handshake ? (out[w::FLAGS] | w::PRE_HANDSHAKE) : (out[w::FLAGS] & ~w::PRE_HANDSHAKE);
@@ -52,7 +52,7 @@ struct McastWire {
 
     // Whether `core` holds a sender role (any phase) in this family.
     bool is_sender(const tt::tt_metal::CoreCoord& core) const {
-        namespace w = dataflow_kernel_lib::mcast_wire;
+        namespace w = dataflow_kernel_lib_mcast_v1::mcast_wire;
         const auto& args = runtime_args(core);
         const uint32_t at =
             w::roles_offset(ct[w::ROTATING_SPAN], ct[w::RECTANGLE_CAPACITY], w::transfer_mode(ct[w::FLAGS])) + w::ROLES;
@@ -89,7 +89,7 @@ McastWire extract(
 
 inline std::vector<uint32_t> absent_compile_time_args() {
     std::vector<uint32_t> ct;
-    ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(ct);
+    ttnn::bringup::mcast_v1::host::append_absent_mcast_compile_time_args_to(ct);
     return ct;
 }
 

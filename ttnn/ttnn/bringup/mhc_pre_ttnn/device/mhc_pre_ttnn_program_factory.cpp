@@ -20,7 +20,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
+#include "../../common/mcast_v1/host/mcast_host.hpp"
 #include "mcast_wire.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -28,7 +28,7 @@ namespace ttnn::operations::bringup::mhc_pre_ttnn {
 
 namespace {
 
-namespace kh = ttnn::kernel_lib::host;
+namespace kh = ttnn::bringup::mcast_v1::host;
 using tt::tt_metal::CBDescriptor;
 using tt::tt_metal::CBFormatDescriptor;
 using tt::tt_metal::ComputeConfigDescriptor;
@@ -91,14 +91,14 @@ constexpr uint32_t X_STREAM_INFLIGHT = 2;
 constexpr int64_t Y_DEPTH = 2;
 constexpr int64_t Y_CHUNK_TILES_CAP = 8;
 constexpr uint32_t W_CHUNK_TILES = 8;
-constexpr MathFidelity W_LO_FIDELITY = MathFidelity::LoFi;
+constexpr tt::tt_metal::MathFidelity W_LO_FIDELITY = tt::tt_metal::MathFidelity::LoFi;
 constexpr uint32_t X_CHUNK_K_TILES = 8;
 constexpr int64_t X_PIECE_DEPTH = 2;
 constexpr uint32_t X_GRID_BITS = 4;
 constexpr uint32_t W_GRID_BITS = 6;
 constexpr uint32_t PRODUCT_ORDER_MAX = 2;
 constexpr uint32_t PRODUCT_LO_ORDER = 2;
-constexpr MathFidelity X_LO_FIDELITY = MathFidelity::HiFi3;
+constexpr tt::tt_metal::MathFidelity X_LO_FIDELITY = tt::tt_metal::MathFidelity::HiFi3;
 constexpr int64_t DEST_TILES_FP32 = 4;
 constexpr int64_t L1_SAFETY_MARGIN = 96 * 1024;
 constexpr int64_t BLOCK_TOKEN_TILES_CAP = 1;
@@ -561,7 +561,7 @@ ProgramDescriptor create_program_descriptor(
             kh::McastConfig w_cfg;
             w_cfg.noc = other_noc(rnoc);
             w_cfg.handshake = false;
-            w_cfg.data_ready = dataflow_kernel_lib::DataReadySignal::Counter;
+            w_cfg.data_ready = dataflow_kernel_lib_mcast_v1::DataReadySignal::Counter;
             w_cfg.sem_ids = std::vector<uint32_t>{SEM_W_READY};
             w_mcast.emplace(
                 static_cast<uint32_t>(rnoc),
@@ -840,7 +840,7 @@ ProgramDescriptor create_program_descriptor(
     compute_cfg.math_fidelity = params.compute_config.math_fidelity;
     compute_cfg.fp32_dest_acc_en = true;
     compute_cfg.math_approx_mode = params.compute_config.math_approx_mode;
-    compute_cfg.unpack_to_dest_mode.assign(NUM_CB_SLOTS, UnpackToDestMode::Default);
+    compute_cfg.unpack_to_dest_mode.assign(NUM_CB_SLOTS, tt::tt_metal::UnpackToDestMode::Default);
     std::vector<uint8_t> fp32_cbs(std::begin(UNPACK_TO_DEST_FP32_CBS), std::end(UNPACK_TO_DEST_FP32_CBS));
     if (w_pieces(w.dtype()) > 1) {
         fp32_cbs.push_back(CB_WEIGHT);
@@ -850,7 +850,7 @@ ProgramDescriptor create_program_descriptor(
     }
     fp32_cbs.push_back(CB_MIX_RUN);
     for (uint8_t idx : fp32_cbs) {
-        compute_cfg.unpack_to_dest_mode[idx] = UnpackToDestMode::UnpackToDestFp32;
+        compute_cfg.unpack_to_dest_mode[idx] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     KernelDescriptor compute;
     compute.kernel_source = std::string(KERNEL_DIR) + "mhc_pre_compute.cpp";

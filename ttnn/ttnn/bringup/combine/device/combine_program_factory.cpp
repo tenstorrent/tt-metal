@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/math.hpp>
 #include "combine_device_operation.hpp"
 #include <algorithm>
 #include <array>

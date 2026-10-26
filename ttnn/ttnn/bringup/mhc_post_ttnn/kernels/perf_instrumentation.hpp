@@ -24,7 +24,7 @@
 
 #pragma once
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #ifndef MaybeDeviceZoneScope
 #define MaybeDeviceZoneScope(name) DeviceZoneScopedN(name)

@@ -7,6 +7,10 @@ set(TTNN_OP_BRINGUP_RMS_NORM_TTNN_SRCS
     device/rms_norm_ttnn_device_operation.cpp
     device/rms_norm_ttnn_program_factory.cpp
     rms_norm_ttnn.cpp
+    # (the vendored pre-port multicast helpers, ../common/mcast_v1: this op and mhc_pre_ttnn)
+    ../common/mcast_v1/host/mcast_host.cpp
+    ../common/mcast_v1/host/mcast_descriptor.cpp
+    ../common/mcast_v1/host/mcast_resources.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from

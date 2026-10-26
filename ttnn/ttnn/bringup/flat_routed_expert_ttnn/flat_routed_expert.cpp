@@ -245,7 +245,9 @@ ttnn::Tensor flat_combine_overlap(
                     used.insert({u.logical.x, u.logical.y});
                 }
             }
-            used.insert({dp.collector->logical.x, dp.collector->logical.y});
+            if (dp.collector.has_value()) {
+                used.insert({dp.collector->x, dp.collector->y});
+            }
         }
         std::string str;
         for (const auto& [x, y] : used) {

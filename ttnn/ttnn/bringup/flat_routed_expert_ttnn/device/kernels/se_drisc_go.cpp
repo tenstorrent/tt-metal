@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "se_drisc_post.hpp"
 #ifdef SE_ZONES
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #endif
 
 void kernel_main() {

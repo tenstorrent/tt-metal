@@ -49,7 +49,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "../../common/mcast_v1/kernel/mcast_args.hpp"
 #include "perf_instrumentation.hpp"
 #include "mhc_pre_layout.hpp"
 
@@ -68,6 +68,7 @@
 // Ablation (perf tournaments only): MHC_ABLATE_YWRITE skips the y DRAM writes (pops unchanged).
 
 using namespace dataflow_kernel_lib;
+using namespace dataflow_kernel_lib_mcast_v1;  // (the vendored multicast helpers)
 
 constexpr uint32_t MCAST_CT_BASE = 22;
 constexpr uint32_t MCAST_RT_BASE = 18;
@@ -82,10 +83,10 @@ constexpr uint32_t W_ROLE_SPREAD = 1;
 template <uint32_t W_RT, typename M>
 FORCE_INLINE void send_w_share(const M& w_mc, const Noc& noc, uint32_t addr, uint32_t size) {
     if constexpr (M::active) {
-        using namespace dataflow_kernel_lib::mcast_wire;
+        using namespace dataflow_kernel_lib_mcast_v1::mcast_wire;
         constexpr uint32_t W_RECT = W_RT + rectangles_offset(M::rotating_span);
         static_assert(M::rectangle_capacity == 1, "mhc_pre: a W column is one rectangle");
-        const dataflow_kernel_lib::SenderRuntimeArguments args(
+        const dataflow_kernel_lib_mcast_v1::SenderRuntimeArguments args(
             {get_arg_val<uint32_t>(W_RECT + SX),
              get_arg_val<uint32_t>(W_RECT + SY),
              get_arg_val<uint32_t>(W_RECT + EX),
@@ -93,13 +94,13 @@ FORCE_INLINE void send_w_share(const M& w_mc, const Noc& noc, uint32_t addr, uin
             get_arg_val<uint32_t>(W_RECT + REMOTE),
             get_arg_val<uint32_t>(W_RECT + LOOPBACK),
             0,
-            static_cast<dataflow_kernel_lib::SenderMcastMode>(get_arg_val<uint32_t>(W_RECT + RECT_SENDER_MCAST_MODE)));
-        dataflow_kernel_lib::SenderPipe<
+            static_cast<dataflow_kernel_lib_mcast_v1::SenderMcastMode>(get_arg_val<uint32_t>(W_RECT + RECT_SENDER_MCAST_MODE)));
+        dataflow_kernel_lib_mcast_v1::SenderPipe<
             noc_index,
             M::data_ready,
             /*PRE_HANDSHAKE=*/false,
-            dataflow_kernel_lib::UNUSED_SEM_ID,
-            dataflow_kernel_lib::DataReadySignal::Counter,
+            dataflow_kernel_lib_mcast_v1::UNUSED_SEM_ID,
+            dataflow_kernel_lib_mcast_v1::DataReadySignal::Counter,
             /*ROTATING_SENDER=*/false>
             sender(noc, args);
         sender.send(addr, addr, size);

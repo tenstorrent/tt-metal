@@ -67,7 +67,7 @@ FORCE_INLINE uint32_t step_t(uint32_t s, uint32_t p) { return s * PAIRS + p; }
 """
 
 _BRISC = (
-    '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n#include "tools/profiler/kernel_profiler.hpp"\n'
+    '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n#include "api/debug/kernel_profiler.hpp"\n'
     + _CT
     + r"""
 constexpr auto z_args = TensorAccessorArgs<11>();  // (the combine's output: this chip's owned rows, row-major)
@@ -164,7 +164,7 @@ void kernel_main() {
 )
 
 _NCRISC = (
-    '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n#include "tools/profiler/kernel_profiler.hpp"\n'
+    '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n#include "api/debug/kernel_profiler.hpp"\n'
     + _CT
     + r"""
 constexpr auto o_args = TensorAccessorArgs<11>();
@@ -306,7 +306,7 @@ _COMPUTE = r"""
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/tilize.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #ifdef TRISC_MATH
 #include "llk_math_matmul_api.h"
 #endif
@@ -504,7 +504,7 @@ FORCE_INLINE void walk(uint32_t part, uint32_t pos, uint32_t ak, F&& f) {
 """
 
 _PORT_READER = (
-    '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n#include "tools/profiler/kernel_profiler.hpp"\n'
+    '#include <cstdint>\n#include "api/dataflow/dataflow_api.h"\n#include "api/debug/kernel_profiler.hpp"\n'
     + _PORT_CT
     + r"""
 // NoC0: my units' shares from this chip's owners (once landed / tilized there), into the CB
@@ -600,7 +600,7 @@ _PORT_SENDER = (
     r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"

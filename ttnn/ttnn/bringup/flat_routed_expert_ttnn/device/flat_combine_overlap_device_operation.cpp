@@ -60,9 +60,15 @@ FlatCombineOverlapFactory::cached_mesh_workload_t FlatCombineOverlapFactory::cre
         .routed_expert_writers = p.writers,
         .routed_expert_cores = p.flat_cores,
         .routed_expert_go_addr = static_cast<uint32_t>(p.expert_go->address()),
-        .routed_expert_extra_cores = p.extra_cores,
-        .routed_expert_schedule_defines = schedule_defines,
     };
+    // (main's combine_fabric2d (#58093) has no go-unicast to routed-expert cores outside one rectangle and no
+    // schedule-ordered readers: this branch's extensions of it went with the llk_helper_library merge)
+    TT_FATAL(
+        p.extra_cores.empty() && schedule_defines.empty(),
+        "flat_combine_overlap: main's combine_fabric2d takes one rectangle of routed-expert cores and the static "
+        "schedule ({} cores outside it, {} schedule defines)",
+        p.extra_cores.size(),
+        schedule_defines.size());
     const cmb::CombineFabric2dInputs ci{
         .dispatched_buffer = t.y,
         .dispatched_metadata = t.dispatched_metadata,
@@ -108,10 +114,11 @@ FlatCombineOverlapFactory::cached_mesh_workload_t FlatCombineOverlapFactory::cre
         auto flat = FlatRoutedExpertProgramFactory::create(p.flat, fi, y);
         flat.program.append(prog.descriptor);
         const auto& c = collectors.at(coord);
+        const auto collector_virtual = p.device->worker_core_from_logical_core(c.logical);
         for (const auto& [k, core] : flat.shared_variables.cmb_writers) {
             auto& a = GetRuntimeArgs(flat.program, k, core);
-            a[p.flat.cmb_rt + 0] = static_cast<uint32_t>(c.worker_virtual.x);
-            a[p.flat.cmb_rt + 1] = static_cast<uint32_t>(c.worker_virtual.y);
+            a[p.flat.cmb_rt + 0] = static_cast<uint32_t>(collector_virtual.x);
+            a[p.flat.cmb_rt + 1] = static_cast<uint32_t>(collector_virtual.y);
             a[p.flat.cmb_rt + 2] = c.counts_addr;
             a[p.flat.cmb_rt + 3] = static_cast<uint32_t>(p.expert_go->address());
         }

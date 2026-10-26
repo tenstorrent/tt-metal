@@ -7,7 +7,7 @@
 #include <cstdint>
 #include "api/compute/tilize.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t w = get_compile_time_arg_val(0);

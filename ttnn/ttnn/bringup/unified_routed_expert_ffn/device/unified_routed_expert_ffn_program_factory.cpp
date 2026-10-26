@@ -1091,7 +1091,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // Every variant runs LoFi, except GeluTanh (Gemma-4 bring-up) and the opt-in high_precision
     // path, which take the caller's math_fidelity: LoFi truncates the bf16 weight mantissa and biases the expert
     // outputs toward zero (per-token norms up to 7% low on Gemma-4). Other variants stay byte-identical.
-    MathFidelity compute_fidelity = MathFidelity::LoFi;
+    tt::tt_metal::MathFidelity compute_fidelity = tt::tt_metal::MathFidelity::LoFi;
     if (honour_compute_config && op.compute_kernel_config.has_value()) {
         compute_fidelity = ttnn::get_math_fidelity(op.compute_kernel_config);
     }

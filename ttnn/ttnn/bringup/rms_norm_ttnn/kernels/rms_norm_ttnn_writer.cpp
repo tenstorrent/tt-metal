@@ -107,7 +107,7 @@
 // still the all-stubbed build.  A define is part of the key.  See
 // `_kernel_defines()` in the program descriptor for the one source of truth.
 #include "perf_instrumentation.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
+#include "../../common/mcast_v1/kernel/mcast_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
 
 namespace {
@@ -244,7 +244,7 @@ void kernel_main() {
     static_assert(!HAS_WPAD || NUM_W_CHUNKS > 1, "rms_norm_ttnn: a one-chunk width is never padded");
     static_assert(!HAS_WPAD || BAND == 0, "rms_norm_ttnn: the BAND scheme's width is shard-derived, never chunked");
     static_assert(!HAS_WPAD || COMBINE == 0, "rms_norm_ttnn: a width-split core takes its slice in one chunk");
-    constexpr auto mc = dataflow_kernel_lib::McastArgs</*CT=*/18, /*RT=*/12>();
+    constexpr auto mc = dataflow_kernel_lib_mcast_v1::McastArgs</*CT=*/18, /*RT=*/12>();
     constexpr auto out_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
     constexpr bool RM = (IS_TILE == 0);
