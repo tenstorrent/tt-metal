@@ -97,6 +97,17 @@ struct StructLayout<RouterStateManager> {
 };
 static_assert(check_struct_layout<RouterStateManager>());
 
+// The 2D routing table, which decode applies to routing_l1_info_t's union bytes in a 2D run. Each region's live part is
+// sized by the mesh shape (routing_l1_info_t's mesh_y_size and mesh_x_size), so decode reads the regions by rule.
+template <>
+struct StructLayout<route_table_2d_t> {
+    static constexpr std::array members = {
+        LAYOUT_BYTES(route_table_2d_t, action_vectors),
+        LAYOUT_BYTES(route_table_2d_t, mcast_trees),
+    };
+};
+static_assert(check_struct_layout<route_table_2d_t>());
+
 template <>
 struct StructLayout<routing_l1_info_t> {
     static constexpr std::array members = {
@@ -437,6 +448,7 @@ using DescribedStructs = std::tuple<
     SenderChannelProducerCursor,
     erisc::datamover::handshake::handshake_info_t,
     RouterStateManager,
+    route_table_2d_t,
     routing_l1_info_t,
     RiscTimestampV2,
     BandwidthTelemetry,
