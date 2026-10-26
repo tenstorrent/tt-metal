@@ -21,6 +21,7 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import TILE_COUNT, ZERO_PAD_ROWS
+from helpers.utils import result_tensor
 
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
@@ -96,7 +97,7 @@ def _run(
     )
 
     res_from_L1 = configuration.run().result
-    res = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res = result_tensor(res_from_L1, formats.output_format)
     return res.to(torch.float32), golden
 
 

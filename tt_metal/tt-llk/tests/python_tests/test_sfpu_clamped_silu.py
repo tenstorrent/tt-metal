@@ -33,7 +33,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CLAMPED_SILU_PARAMS, TILE_COUNT
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # Same format in and out, as these are activations applied in place on Pack.
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True)
@@ -148,7 +148,7 @@ def _run(formats, dest_acc, op, scalars, input_range):
     )
 
     res_from_L1 = configuration.run().result
-    res = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res = result_tensor(res_from_L1, formats.output_format)
     return res.to(torch.float32), golden, src_A.to(torch.float32)
 
 

@@ -40,7 +40,7 @@ from helpers.test_variant_parameters import (
     fp32_bits,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # EMA smoothing factor chosen for the functional test (ttnn.ema has no default alpha;
 # it is a required argument). beta is derived as 1 - alpha.
@@ -159,7 +159,7 @@ def _run_ema_on_device(
     )
     res_from_L1 = configuration.run().result
 
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
     return res_tensor, golden_input
 

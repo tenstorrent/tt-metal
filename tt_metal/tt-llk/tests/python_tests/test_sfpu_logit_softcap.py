@@ -22,7 +22,7 @@ from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.constraints import dest_acc_modes_forcing_32bit_input
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM, truncate_to_bfloat16
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -33,7 +33,7 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
     fp32_bits,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
@@ -125,7 +125,7 @@ def test_sfpu_logit_softcap(formats, dest_acc, input_range, cap):
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     # Every lane lands on the same value, either because the whole range sits
     # on one saturated side (y = sgn(x) * cap) or because x is 0 (y = 0).

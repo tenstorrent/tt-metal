@@ -330,7 +330,7 @@ def test_eltwise_bcast_col_custom(
         configuration.prepare()
         canonical.prepare()
     res_from_L1 = configuration.run().result
-    res_tilized = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tilized = result_tensor(res_from_L1, formats.output_format)
 
     res_from_L1 = untilize_block(
         res_from_L1,
