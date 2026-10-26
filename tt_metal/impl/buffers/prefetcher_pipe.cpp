@@ -190,9 +190,10 @@ void PrefetcherPipeSpaceImpl::prepare_for_relocation() const {
         device_->id());
     // A launch still in flight may be using the L1 this reservation takes, and the config pages
     // are written from the host rather than through a command queue, so nothing orders them after
-    // that launch.
+    // that launch. Wait on every sub-device: Finish without ids waits only on the stall group,
+    // and the affected Program may run outside it.
     for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
-        distributed::Finish(device_->mesh_command_queue(cq_id));
+        distributed::Finish(device_->mesh_command_queue(cq_id), device_->get_sub_device_ids());
     }
 }
 

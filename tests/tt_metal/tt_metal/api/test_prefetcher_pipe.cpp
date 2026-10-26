@@ -110,6 +110,10 @@ constexpr const char* cb_fill_kernel_path =
     "tests/tt_metal/tt_metal/test_kernels/dataflow/cb_fill_report_write_ptr.cpp";
 constexpr const char* scratchpad_kernel_path =
     "tests/tt_metal/tt_metal/test_kernels/dataflow/scratchpad_write_pattern.cpp";
+constexpr const char* dfb_fill_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_fill_pattern.cpp";
+// Pops one entry of DFB `in`.
+constexpr const char* dfb_drain_kernel_path =
+    "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_dfb_consumer.cpp";
 
 // The one PrefetcherPipeParameter of a single-pipe Program.
 const m2::PrefetcherPipeParamName pipe_param{"pipe"};
@@ -1205,7 +1209,8 @@ struct CbFillProgram {
     KernelHandle kernel = 0;
 };
 
-CbFillProgram make_cb_fill_program(const CoreRangeSet& cores, uint32_t report_addr, uint32_t pattern) {
+CbFillProgram make_cb_fill_program(
+    const CoreRangeSet& cores, uint32_t report_addr, uint32_t pattern, uint32_t delay_cycles = 0) {
     CbFillProgram p{.program = CreateProgram()};
     const CircularBufferConfig cb_config =
         CircularBufferConfig(CbFillProgram::cb_size, {{CbFillProgram::cb_index, tt::DataFormat::Float16_b}})
@@ -1219,7 +1224,7 @@ CbFillProgram make_cb_fill_program(const CoreRangeSet& cores, uint32_t report_ad
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = {CbFillProgram::cb_index, CbFillProgram::num_pages, CbFillProgram::page_size}});
-    SetRuntimeArgs(p.program, p.kernel, cores, {report_addr, pattern});
+    SetRuntimeArgs(p.program, p.kernel, cores, {report_addr, pattern, delay_cycles});
     return p;
 }
 
@@ -1312,7 +1317,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_RelocatesCachedProgramCircular
         slow_dispatch::WriteToL1(device, core, space.buffer_address(), ring_marker);
     }
 
-    SetRuntimeArgs(placed, cb_fill.kernel, program_cores, {report_addr, second_pattern});
+    SetRuntimeArgs(placed, cb_fill.kernel, program_cores, {report_addr, second_pattern, /*delay_cycles=*/0});
     const uint32_t second_cb_address = run_and_check(second_pattern);
     EXPECT_GE(second_cb_address, device.allocator_impl()->persistent_l1().high_water_mark(program_cores));
     for (const CoreCoord& core : corerange_to_cores(program_cores)) {
@@ -1385,6 +1390,88 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_RelocatesCachedProgramScratchp
     slow_dispatch::WriteToL1(device, node, space.buffer_address(), ring_marker);
 
     EXPECT_GE(run_and_check(), device.allocator_impl()->persistent_l1().high_water_mark(CoreRangeSet(node)));
+    EXPECT_EQ(read_l1_words(device, node, space.buffer_address(), ring_size), ring_marker);
+}
+
+// Metal 2.0 DFBs stack on the same region as CBs and reach the device through the DFB config the
+// cached dispatch commands carry, so relocation must refresh that config.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_RelocatesCachedProgramDataflowBuffer) {
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    distributed::MeshDevice& device = *mesh_device;
+    const CoreCoord node(0, 0);
+    const CoreCoord receiver(1, 0);
+    const std::string dfb_name = "filled";
+    constexpr uint32_t entry_size = 1024;
+    constexpr uint32_t num_entries = 2;
+    // Larger than the DFB, so the ring covers all of the L1 the DFB starts in.
+    constexpr uint32_t ring_size = 4 * entry_size * num_entries;
+    constexpr uint32_t first_pattern = 0x30000000;
+    constexpr uint32_t second_pattern = 0x40000000;
+
+    m2::KernelSpec producer = make_dm_kernel("producer", dfb_fill_kernel_path);
+    producer.runtime_arg_schema.runtime_arg_names = {"pattern"};
+    producer.dfb_bindings.push_back(m2::ProducerOf(m2::DFBSpecName{dfb_name}, "out"));
+    m2::KernelSpec consumer = make_dm_kernel("consumer", dfb_drain_kernel_path);
+    consumer.dfb_bindings.push_back(m2::ConsumerOf(m2::DFBSpecName{dfb_name}, "in"));
+    if (!is_quasar()) {
+        // make_dm_kernel puts every Gen1 DM kernel on RISCV_0, which the producer already holds.
+        consumer.hw_config = m2::DataMovementHardwareConfig{
+            .config_1xx =
+                m2::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::NOC_1,
+                },
+        };
+    }
+    m2::ProgramSpec spec{
+        .name = "relocated_dfb",
+        .kernels = {producer, consumer},
+        .dataflow_buffers = {m2::DataflowBufferSpec{
+            .unique_id = m2::DFBSpecName{dfb_name}, .entry_size = entry_size, .num_entries = num_entries}},
+        .work_units = {work_unit("dfb_wu", {"producer", "consumer"}, node)},
+    };
+    const auto set_pattern = [&](Program& program, uint32_t pattern) {
+        m2::ProgramRunArgs args;
+        args.kernel_run_args = {m2::ProgramRunArgs::KernelRunArgs{
+            .kernel = m2::KernelSpecName{"producer"},
+            .runtime_arg_values = m2::MakeRuntimeArgsForSingleNode(node, {{"pattern", pattern}}),
+        }};
+        m2::SetProgramRunArgs(program, args);
+    };
+    Program program = m2::MakeProgramFromSpec(device, spec);
+    set_pattern(program, first_pattern);
+
+    const auto device_range = persistent_unit_mesh_device_range();
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range, std::move(program));
+    Program& placed = workload.get_programs().at(device_range);
+    const auto dfb = placed.impl().get_dataflow_buffer(placed.impl().get_dfb_handle(dfb_name));
+
+    // Runs the cached workload and checks the entry landed at the DFB address the host placed.
+    // Returns that address.
+    const auto run_and_check = [&](uint32_t pattern) {
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+        distributed::Finish(mesh_device->mesh_command_queue());
+        const uint32_t dfb_address = dfb->uniform_alloc_addr();
+        EXPECT_EQ(
+            read_l1_words(device, node, dfb_address, entry_size),
+            counting_words(pattern, entry_size / sizeof(uint32_t)));
+        return dfb_address;
+    };
+    const uint32_t first_dfb_address = run_and_check(first_pattern);
+
+    auto space = m2::CreatePrefetcherPipeSpace(device, one_pipe_space_config(node, CoreRangeSet(receiver), ring_size));
+    ASSERT_LT(space.buffer_address(), first_dfb_address + entry_size * num_entries);
+    ASSERT_GT(space.buffer_address() + ring_size, first_dfb_address);
+    std::vector<uint32_t> ring_marker = counting_words(0xA0000000, ring_size / sizeof(uint32_t));
+    slow_dispatch::WriteToL1(device, node, space.buffer_address(), ring_marker);
+
+    set_pattern(placed, second_pattern);
+    EXPECT_GE(
+        run_and_check(second_pattern), device.allocator_impl()->persistent_l1().high_water_mark(CoreRangeSet(node)));
     EXPECT_EQ(read_l1_words(device, node, space.buffer_address(), ring_size), ring_marker);
 }
 
@@ -1469,6 +1556,54 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_SubDeviceSlabStillRejects) {
     device.remove_sub_device_manager(manager);
     auto space = m2::CreatePrefetcherPipeSpace(device, config);
     EXPECT_FALSE(arena.would_relocate(program_cores));
+}
+
+// Finish without sub-device ids waits only on the stall group. A space that moves a Program still
+// running on a sub-device outside that group must wait for it before taking the Program's L1.
+TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_WaitsForProgramOutsideStallGroup) {
+    if (!is_fast_dispatch()) {
+        GTEST_SKIP() << "Sub device managers are unsupported with slow dispatch";
+    }
+    if (const auto reason = insufficient_worker_grid_reason(2); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    if (is_quasar()) {
+        GTEST_SKIP() << "Legacy circular buffers are not used on Quasar";
+    }
+    auto mesh_device = devices_[0];
+    distributed::MeshDevice& device = *mesh_device;
+    const CoreCoord sender(0, 0);
+    const CoreCoord receiver(1, 0);
+    const CoreRangeSet program_cores{CoreRange(sender)};
+    // Hundreds of milliseconds at any AICLK: still running when the space is created unless the
+    // space waits for it.
+    constexpr uint32_t delay_cycles = 200'000'000;
+    const auto report_buffer = make_report_buffer(device, program_cores);
+    const auto report_addr = static_cast<uint32_t>(report_buffer->address());
+
+    // Sub-device 0 is the stall group; the Program runs on sub-device 1. No local L1 slab, so
+    // nothing seals these cores against the space.
+    SubDevice stalled(std::array{CoreRangeSet(CoreRange(receiver))});
+    SubDevice running(std::array{program_cores});
+    const auto manager = device.create_sub_device_manager({stalled, running}, /*local_l1_size=*/0);
+    device.load_sub_device_manager(manager);
+    device.set_sub_device_stall_group({{SubDeviceId{0}}});
+
+    CbFillProgram cb_fill = make_cb_fill_program(program_cores, report_addr, /*pattern=*/0, delay_cycles);
+    write_l1_word(device, sender, report_addr, 0);
+    distributed::MeshWorkload workload;
+    workload.add_program(persistent_unit_mesh_device_range(), std::move(cb_fill.program));
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
+
+    auto space = m2::CreatePrefetcherPipeSpace(
+        device, one_pipe_space_config(sender, CoreRangeSet(receiver), CbFillProgram::covering_ring_size));
+    // The launch had already reported its CB address when the space took that L1.
+    EXPECT_NE(read_l1_word(device, sender, report_addr), 0u);
+
+    device.reset_sub_device_stall_group();
+    distributed::Finish(mesh_device->mesh_command_queue());
+    device.clear_loaded_sub_device_manager();
+    device.remove_sub_device_manager(manager);
 }
 
 // ============================================================================
