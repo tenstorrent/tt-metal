@@ -3,10 +3,7 @@
 
 import pytest
 
-from models.demos.common.prefill.runners.kv_bank_alignment import (
-    bank_aligned_seq_len_quantum,
-    check_kv_bank_aligned,
-)
+from models.demos.common.prefill.runners.kv_bank_alignment import bank_aligned_seq_len_quantum, check_kv_bank_aligned
 
 
 @pytest.mark.parametrize(
