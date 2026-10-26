@@ -866,6 +866,17 @@ class TTSampling(LightweightModule):
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         k, temp = self._normalize_device_params(k, temp)
+        if log_probs_enable_temperature is None:
+            enable_temperature = torch.zeros_like(temp, dtype=torch.bool)
+        else:
+            enable_temperature = torch.as_tensor(log_probs_enable_temperature, dtype=torch.bool)
+            if enable_temperature.shape != temp.shape:
+                raise ValueError(
+                    f"log_probs_enable_temperature has shape {tuple(enable_temperature.shape)}, "
+                    f"expected {tuple(temp.shape)}"
+                )
+        if enable_temperature.any() and self.log_probs_calculator._use_topk_logprobs:
+            raise ValueError("log_probs_enable_temperature is not supported with top-k log-probs (use_topk_logprobs)")
         # Top-k reporting needs the candidate pipeline, even for greedy tokens.
         # Resolve reporting before choosing the path so its parameters update too.
         self.log_probs_calculator.set_log_probs_mode(
@@ -922,13 +933,7 @@ class TTSampling(LightweightModule):
             )
             ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
 
-            enable_temperature = torch.as_tensor(
-                log_probs_enable_temperature if log_probs_enable_temperature is not None else False, dtype=torch.bool
-            )
-            if enable_temperature.any() and self.log_probs_calculator._use_topk_logprobs:
-                raise ValueError(
-                    "log_probs_enable_temperature is not supported with top-k log-probs (use_topk_logprobs)"
-                )
+            # bf16 like temp_tensor (1/0.7 -> 1.4296875); log-probs differ from the trainer's fp32 1/T by ~1e-3.
             scale_logprobs = torch.where(enable_temperature, temp, torch.ones_like(temp))
             self._scale_logprobs_new = ttnn.from_torch(
                 scale_logprobs.reshape(1, 1, -1, 1).to(torch.bfloat16),
