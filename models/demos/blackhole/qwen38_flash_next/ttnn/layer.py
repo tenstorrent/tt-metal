@@ -1257,14 +1257,20 @@ class Qwen38TTNNDecoderLayer:
     def admit_slab_call(self, rows: int) -> bool:
         """Whether moe_compute takes a slab's rows in one call (``Qwen38TTNNMoE.admit_slab_call``), asked of a
         one-call slab MoE instance over this layer's weights and experts, before any slab state exists; the probe
-        instance and its combine buffer are released before the answer returns."""
+        instance and its combine buffer are released before the answer returns. A failed release raises
+        ``Qwen38TTNNLayerCleanupError`` naming the answer, or carrying the admission's own error as ``primary``."""
 
         probe = self._chunk_moe(rows, local_combine_output=None, routed_tokens_per_call=None)  # owns its buffer
+        release = [("slab admission probe MoE buffers", probe.release_owned_buffers)]
         try:
             with self.expert_streamer.layer(self.layer_index, namespace=self.namespace.value) as packed_experts:
-                return probe.admit_slab_call(*packed_experts)
-        finally:
-            probe.release_owned_buffers()
+                admitted = probe.admit_slab_call(*packed_experts)
+        except BaseException as error:
+            _run_cleanup_actions(f"layer {self.layer_index} slab call admission", release, primary=error)
+            raise
+        answer = "takes" if admitted else "refuses"
+        _run_cleanup_actions(f"layer {self.layer_index} slab call admission (moe_compute {answer} the call)", release)
+        return admitted
 
     def _release_chunk_attention_state(self, attention_state) -> None:
         if isinstance(self.attention, Qwen38TTNNGDN):

@@ -1132,6 +1132,40 @@ def test_slab_chunk_state_routes_in_the_form_moe_compute_takes(monkeypatch, take
     ], admitted
 
 
+@pytest.mark.parametrize("admission", ["takes", "refuses", "raises"])
+def test_a_failed_probe_release_keeps_the_admission_answer_or_error(admission: str) -> None:
+    """The probe's release runs after the admission either way; when it fails, the cleanup error names the answer, or
+    carries the admission's own error as its primary (never the release failure alone)."""
+    admission_error = RuntimeError("the admission's own error")
+    released = []
+
+    def admit(packed_w0_w1, packed_w2):
+        if admission == "raises":
+            raise admission_error
+        return admission == "takes"
+
+    def release():
+        released.append("probe")
+        raise RuntimeError("cannot free the probe's combine buffer")
+
+    probe = SimpleNamespace(admit_slab_call=admit, release_owned_buffers=release)
+    layer = SimpleNamespace(
+        layer_index=0,
+        namespace=SimpleNamespace(value="backbone"),
+        expert_streamer=SimpleNamespace(layer=lambda index, *, namespace: contextlib.nullcontext(("w0_w1", "w2"))),
+        _chunk_moe=lambda rows, *, local_combine_output, routed_tokens_per_call: probe,
+    )
+    with pytest.raises(layer_module.Qwen38TTNNLayerCleanupError) as caught:  # allow-pytest.raises: reads .primary
+        layer_module.Qwen38TTNNDecoderLayer.admit_slab_call(layer, SLAB)
+    cleanup = caught.value
+    assert released == ["probe"], released
+    assert "cannot free the probe's combine buffer" in str(cleanup), str(cleanup)
+    if admission == "raises":
+        assert cleanup.primary is admission_error and cleanup.__cause__ is admission_error, cleanup.primary
+    else:
+        assert cleanup.primary is None and f"moe_compute {admission} the call" in str(cleanup), str(cleanup)
+
+
 def test_a_slab_record_replays_only_on_a_server_with_a_prefill_slab() -> None:
     """A server without --prefill-slab skips the slab acceptance record by name; one with a slab replays them all."""
 
