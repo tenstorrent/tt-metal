@@ -1,0 +1,91 @@
+{
+ "used": [
+  {
+   "id": "DS41-76",
+   "how": "kept the DOWN_K (256) padding of the shared expert part and added the one-subgrid minimum on top (tt/shared_expert.py ipad, DS41-115)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-63",
+   "how": "showed the flat op's 2/3-subgrid (TP2/TP4-like) plans are not a working path, so the TP 4 shared expert pads into the one-subgrid plan instead",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-54",
+   "how": "the ratio-2 compressed writes stay on update_padded_kv_cache's metadata path in page rows; the fork only relaxes its row-major validation (DS41-116)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-76",
+   "evidence": "its Fix says 4x4 576 -> 768; on 8x4 768 (24 tile columns) hits TT_FATAL flat_routed_expert_plan.cpp:433 'no gate/up split for 24 tile columns' (runs/galaxy_8x4-full/run1/logs/W.1.log); TP 4 now pads to 1280 (DS41-115)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the flat routed expert's subgrid plans (It <= 32) do not fit H 5120; a TP 4 shared expert lands there",
+  "stock update_padded_kv_cache validates TP-dedup stripes and cache depth in 32-row units even on its row-granular ROW_MAJOR path",
+  "per-chip-row work units sized at the seed (indexer Q_CHUNK 64) must divide the Galaxy's 160 rows a chip",
+  "a fabric worker must not open two connections to the same router channel (column-end chips have one direction on > 2 rows)",
+  "models/demos/deepseek_v3_d_p/tests/conftest.py does not import on this tree (xing40 settings pass the removed max_precision), so forks of deepseek_prefill ops cannot run their source tests"
+ ],
+ "overseer": [
+  {
+   "id": "OV-1",
+   "answer": "done",
+   "evidence": "every per-chip row count derives from mesh.shape and the chunk; at 160 rows a chip the gate exposed and fixed the indexer score's q chunk (DS41-117) and the served-record writes at 80 compressed rows (DS41-116, fork test 8x4); sparse_sdpa, the ring indexer and the 4-column TP paths (hidden 1280, all_to_all over 4 columns, the shared expert DS41-115, the column barrier DS41-118) run in gate W.1 PASS: err_layer L00..L24 all within limits (tightest L24 0.0312 vs 0.0336), host_transfers_per_layer 0"
+  }
+ ],
+ "cited_only": [
+  "DS41-115",
+  "DS41-116",
+  "DS41-117",
+  "DS41-118"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "W.1",
+  "role": "port",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-26T13:23:39",
+  "head": "e3b3caa5c75",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/W.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/W.1.port.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/supervision.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/bringup_nanobind.cpp",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/CHANGELOG.md",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/CMakeLists.txt",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/README.md",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/device/kernels/dataflow/cache_dataflow_helpers.hpp",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/device/kernels/dataflow/reader_update_padded_kv_cache.cpp",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/device/kernels/dataflow/writer_update_padded_kv_cache.cpp",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/device/update_padded_kv_cache_device_operation.cpp",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/device/update_padded_kv_cache_device_operation.hpp",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/sources.cmake",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/tests/__init__.py",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/tests/source.yaml",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/tests/source_baseline.json",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/tests/unit/__init__.py",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/tests/unit/test_row_stripes.py",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/update_padded_kv_cache.cpp",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/update_padded_kv_cache.hpp",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/update_padded_kv_cache_nanobind.cpp",
+   "ttnn/ttnn/bringup/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
+  ]
+ }
+}

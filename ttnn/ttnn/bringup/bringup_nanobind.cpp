@@ -10,6 +10,9 @@
 namespace nb = nanobind;
 
 // BEGIN FORKED OPS (fork_op.py)
+namespace ttnn::operations::bringup::detail {
+void bind_update_padded_kv_cache(nb::module_& mod);
+}
 namespace ttnn::operations::bringup::moe_grouped_topk::detail {
 void bind_moe_grouped_topk(nb::module_& mod);
 }
@@ -58,6 +61,7 @@ namespace ttnn::bringup {
 
 void py_module(nb::module_& mod) {
     // BEGIN FORKED OPS (fork_op.py)
+    ::ttnn::operations::bringup::detail::bind_update_padded_kv_cache(mod);
     ::ttnn::operations::bringup::moe_grouped_topk::detail::bind_moe_grouped_topk(mod);
     ::ttnn::operations::bringup::prepare_chunk_recurrence::detail::bind_prepare_chunk_recurrence(mod);
     ::ttnn::operations::bringup::fabric_all_gather::detail::bind_experimental_fabric_all_gather_operation(mod);
