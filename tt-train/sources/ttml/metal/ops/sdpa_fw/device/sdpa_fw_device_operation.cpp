@@ -6,6 +6,7 @@
 
 #include "metal/common/tensor_validation.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
+#include "sdpa_fw_config.hpp"
 #include "sdpa_fw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -205,6 +206,26 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
             interm_shape,
             qHt);
     }
+
+    // Program config: knob checks and the L1 budget of a fully specified config. The unset knobs are picked
+    // by the program factory on a cache miss (this validator also runs on cache hits).
+    auto* device = query.device();
+    const uint64_t l1_budget_bytes =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const auto [pB, pNH, pS, pE] = query.padded_shape().to_array_4D();
+    check_chunks(
+        args.program_config,
+        SDPAForwardShape{
+            .batch = pB,
+            .q_heads = pNH,
+            .kv_heads = kHt,
+            .St = pS / tt::constants::TILE_HEIGHT,
+            .qWt = pE / tt::constants::TILE_WIDTH,
+            .vWt = value.padded_shape()[-1] / tt::constants::TILE_WIDTH,
+            .mask_type = args.mask_type,
+            .has_gate = args.has_gate,
+            .return_intermediates = args.return_intermediates},
+        l1_budget_bytes);
 }
 
 spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
