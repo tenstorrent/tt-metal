@@ -17,7 +17,6 @@
     X(uint32_t, slice_size)    \
     X(uint32_t, iterations)    \
     X(uint32_t, timeout_ms)    \
-    X(uint32_t, seed)          \
     X(uint32_t, packet_size)   \
     X(uint32_t, burst)         \
     X(uint32_t, vc)
@@ -103,7 +102,8 @@ static void fill_pattern(
 void kernel_main() {
     ARG_INIT(ARGS);
 
-    const uint32_t num_dests = get_arg_val<uint32_t>(0);
+    const uint32_t seed = get_arg_val<uint32_t>(0);
+    const uint32_t num_dests = get_arg_val<uint32_t>(1);
     const uint32_t words = slice_size / sizeof(uint32_t);
     const uint64_t timeout_cycles = (uint64_t)timeout_ms * CYCLES_PER_MS;
 
@@ -130,9 +130,9 @@ void kernel_main() {
     for (uint32_t iter = 0; iter < iterations; iter++) {
         for (uint32_t pattern = 0; pattern < NOC_PATTERN_COUNT; pattern++) {
             for (uint32_t d = 0; d < num_dests; d++) {
-                const uint32_t x = get_arg_val<uint32_t>(1 + d * 3);
-                const uint32_t y = get_arg_val<uint32_t>(2 + d * 3);
-                const uint32_t dst_addr = get_arg_val<uint32_t>(3 + d * 3);
+                const uint32_t x = get_arg_val<uint32_t>(2 + d * 3);
+                const uint32_t y = get_arg_val<uint32_t>(3 + d * 3);
+                const uint32_t dst_addr = get_arg_val<uint32_t>(4 + d * 3);
                 volatile uint32_t* r = results + d * NOC_RESULT_WORDS;
 
                 progress[NOC_PROGRESS_DEST] = d;

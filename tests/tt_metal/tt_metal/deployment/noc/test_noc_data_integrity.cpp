@@ -409,6 +409,7 @@ static vector<failure> run_phase(
         const source* src;
         core_layout layout;
         vector<uint32_t> compile_args;
+        uint32_t seed;
         vector<const dest*> dests;
         vector<uint32_t> addrs;
         vector<CoreCoord> xys;
@@ -442,11 +443,11 @@ static vector<failure> run_phase(
                         p.slice_size,
                         p.iterations,
                         p.timeout_ms,
-                        0x9E3779B9u ^ (s.device->id() << 24) ^ (s.slot << 8) ^ noc,
                         p.packet_size,
                         p.burst,
                         p.vc,
                     },
+                .seed = 0x9E3779B9u ^ (s.device->id() << 24) ^ (s.slot << 8) ^ noc,
             };
             const auto& soc_d = MetalContext::instance().get_cluster().get_soc_desc(s.device->id());
             for (const auto& d : dests_per_chip.at(s.device->id())) {
@@ -486,7 +487,7 @@ static vector<failure> run_phase(
             const size_t last = min(first + MAX_DESTS, pl.dests.size());
 
             launched run{.src = &s, .layout = pl.layout};
-            vector<uint32_t> rt_args = {static_cast<uint32_t>(last - first)};
+            vector<uint32_t> rt_args = {pl.seed, static_cast<uint32_t>(last - first)};
             for (size_t i = first; i < last; i++) {
                 rt_args.insert(
                     rt_args.end(),
@@ -528,6 +529,14 @@ static vector<failure> run_phase(
             runs.push_back(std::move(run));
         }
 
+        log_info(
+            tt::LogTest,
+            "  noc {} batch {}/{}: compiling and launching {} kernels on {} chips",
+            noc,
+            batch + 1,
+            num_batches,
+            runs.size(),
+            programs.size());
         map<shared_ptr<distributed::MeshDevice>, shared_ptr<distributed::MeshWorkload>> workloads;
         for (auto& [mesh, program] : programs) {
             program->impl().compile(mesh.get());
@@ -537,6 +546,7 @@ static vector<failure> run_phase(
         for (auto& [mesh, workload] : workloads) {
             fixture->RunProgram(mesh, *workload, true);
         }
+        log_info(tt::LogTest, "  noc {} batch {}/{}: running", noc, batch + 1, num_batches);
 
         wait_for_sources(runs, noc, p);
 
