@@ -1055,6 +1055,26 @@ norm at T=1, both untested) and the second `tt-smi -r` of the day FAILED (warm_r
 "Query mappings failed on device 0: No such device") -> host recovery needed; queue preserved (30 entries, T=1 mHC A/B
 first), restart recipe in the memory note.
 
+### 2026-10-26 night: after the reboot, the stream-expert flip, the roofline program
+
+Post-reboot (user host reboot ~19:45): 32 PCI devices, (8,4) probe 6.4 s; every device stage runs from a frozen snapshot
+(wt_frozen..wt_frozen6). mhc A/B at T = 1, 2, 4, 32: 4/4 (the batch-1 hang was the live-tree compile). Measured on the 8x4
+at 4 users/row, 45 layers, 128-token prompt (one run each, first token == HF): default (sharded norm + prefill-scope single
+norm) 79.59 ms / TTFT 270 ms (prefill bit-identical to the 10-22 reference); + GLM53_STREAM_EXPERTS=1: 69.1 ms = 14.5
+tok/s/u, 463 agg / TTFT 135 ms; logits gate with the stream op PCC 0.9946, top-1 93.0 %, top-5 93.1 %; 64 K needle 32/32,
+decode 92.1 -> 80.3 ms, BUT prefill 25.4 -> 139 s (the stream flag forced the blocks prefill path) -> fixed (regions keeps
+its lists from a transient block-layout load) and the stream op is now the DEFAULT for decode-shaped rows (unset = not
+GLM53_DENSE_EXPERTS). README 32-user row booked: 135 ms / 14.5 / 463. Roofline (`roofline.md`, `tt/roofline.py`): current
+graph floor 32.3 ms at 32 users (31 tok/s/u) vs 69.1 now; plain after the ranked actions ~35 ms (28.5); spec-decode mode:
+the v1 loop is break-even at K=3 (commit blends 23.4 ms) -> SP1 gated commit committed (1.31x at K=3, 1.63x at K=1
+modelled), SP2 fused T=K+1 kernel in progress (C ~3.4 ms). Agents committed (knobs off unless stated): KDA v2
+(GLM53_KDA_DECODE_V2), mHC fused Sinkhorn / splits / K-sum (GLM53_MHC_PRE_SINKHORN=fused, GLM53_MHC_{PRE,POST}_SPLIT=extras,
+GLM53_MHC_KSUM=fast), MoE C10/C11/C12 + weight-read plan + EP placement, hybrid glue H1/H2 (GLM53_HYBRID_GATHER=compact,
+GLM53_HYBRID_COMBINE=allreduce), B8a (GLM53_POOL_GATHER=dense_skip), C2 experiment; E1 expert-op fixed cost + dispatch form
+for 32 users/row in progress. Device queue (43 stages, frozen snapshots): defaults-only 64 K / 32-user / batch-1 runs first
+(README rows), then B32, B5 diagnostics, re-runs, spec blend/gated, pre-block gates, all-knobs gates, KDA / mHC / MoE /
+glue A/Bs with their logits gates.
+
 ## 2026-10-22 device-free deliveries (machine in use elsewhere; nothing run on chips)
 
 | track | delivered | default | device validation (`_logs/mesh/sched_validate_devicefree_work.sh`, starts only on `touch GO_VALIDATE`) |
