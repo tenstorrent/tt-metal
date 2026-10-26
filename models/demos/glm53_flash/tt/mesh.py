@@ -322,6 +322,15 @@ class GLMMesh:
 
     def _reduce_scatter_async(self, x, dim, axis, memory_config):
         ccl = self.ccl
+        # tt-blaze G53F-0218: GLM53_CCL_RS_TOPOLOGY=ring (read per call) reduce-scatters over the physical ring of a 2D
+        # torus axis: [16384, 4096] bf16 4.311 -> 2.069 ms (G53F-0200), but the partials are summed in another order
+        # (NOT bitwise: opt-in behind an accuracy gate); only >= GLM53_CCL_RS_RING_MIN bytes per chip (default 8 MiB)
+        topo = self._async_topology()
+        if self.topology is None and os.environ.get("GLM53_CCL_RS_TOPOLOGY", "") == "ring":
+            per = {ttnn.bfloat16: 2, ttnn.float32: 4, ttnn.uint32: 4, ttnn.int32: 4}.get(x.dtype, 1)
+            nbytes = math.prod(int(d) for d in x.shape) * per
+            if nbytes >= int(os.environ.get("GLM53_CCL_RS_RING_MIN", str(8 << 20))):
+                topo = ttnn.Topology.Ring
         return ttnn.experimental.reduce_scatter_minimal_async(
             x,
             persistent_output_buffers=None,
@@ -331,7 +340,7 @@ class GLMMesh:
             cluster_axis=axis,
             memory_config=memory_config,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self._async_topology(),
+            topology=topo,
             **self._ccl_knobs("RS", ccl.get_num_links(axis)),
         )
 

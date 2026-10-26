@@ -251,9 +251,30 @@ def test_prefill_vs_blaze_golden(mesh_device):
 
     # tt-blaze G53F-0187: GLM53F_PREFILL_MHC_MODES="wrap,fast" grades every job under each prefill mHC path in one process
     modes = [m for m in os.environ.get("GLM53F_PREFILL_MHC_MODES", "").split(",") if m] or [None]
+    # tt-blaze G53F-0218: GLM53F_PREFILL_ENV_MODES="NAME=V|NAME=V;NAME=V;..." grades every job under each env set (knobs
+    # read per call, e.g. GLM53_CCL_RS_TOPOLOGY=ring); an empty value unsets the knob. Tags get "_env<i>".
+    env_modes = [m for m in os.environ.get("GLM53F_PREFILL_ENV_MODES", "").split(";") if m.strip()]
+    if env_modes:
+        assert modes == [None], "GLM53F_PREFILL_ENV_MODES and GLM53F_PREFILL_MHC_MODES are exclusive"
+        modes = [f"env{i}" for i in range(len(env_modes))]
     runs = [(job, m) for m in modes for job in JOBS]
+    env_prev: dict = {}
     for job, mode in runs:
-        if mode is not None:
+        if mode is not None and mode.startswith("env"):
+            for k_, old_ in env_prev.items():
+                os.environ.pop(k_, None) if old_ is None else os.environ.__setitem__(k_, old_)
+            env_prev = {}
+            for kv in env_modes[int(mode[3:])].split("|"):
+                k_, _, v_ = kv.strip().partition("=")
+                if not k_:
+                    continue
+                env_prev.setdefault(k_, os.environ.get(k_))
+                if v_:
+                    os.environ[k_] = v_
+                else:
+                    os.environ.pop(k_, None)
+            logger.info(f"[g53f-prefill] ===== env mode {mode}: {env_modes[int(mode[3:])]!r}")
+        elif mode is not None:
             if mode == "wrap":  # the composite needs the TtMHCSplit build (G53F-0188 default: fast only)
                 assert mhc_mod.MHC_PREFILL_IMPL == "wrap", "mhc mode wrap needs GLM53_MHC_PREFILL_IMPL=wrap"
             mhc_mod.MHC_PREFILL_RUNTIME = "" if mode == "wrap" else mode
@@ -378,6 +399,8 @@ def test_prefill_vs_blaze_golden(mesh_device):
             logger.info(f"[g53f-prefill] {job} seed at S'={n}: next {nxt} golden {toks[n]} ({wall:.2f} s)")
         tag = job if mode is None else f"{job}_{mode}"
         rep["mhc_mode"] = mode
+        if mode is not None and mode.startswith("env"):
+            rep["env_mode"] = env_modes[int(mode[3:])]
         summary[tag] = rep
         OUT.mkdir(parents=True, exist_ok=True)
         (OUT / f"report_{tag}.json").write_text(json.dumps(rep, indent=1))

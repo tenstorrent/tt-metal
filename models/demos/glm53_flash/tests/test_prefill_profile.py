@@ -11,7 +11,10 @@ prefill's ``:<ablock>`` / ``:<qblock>`` rows, then ``:<route>``, ``:<hmix>`` and
 ``instr=1`` wraps every layer call, its attention core, its FFN core (MoE: router / experts / shared) with
 device synchronizations and installs the DSA ``StageTimer`` (the sync points change the overlap, so the
 instrumented total is an upper bound); ``instr=3`` adds op-level wraps (the regions MoE's model-local ops, its expert
-kernel and the common ttnn ops, keys ``op.*``, G53F-0212); ``instr=0`` times only whole chunks (the real cost). Rows go to
+kernel and the common ttnn ops, keys ``op.*``, G53F-0212); ``instr=4`` reads the DEVICE profiler after every decoder layer
+(no timers; needs ``TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1``):
+one ``devprof`` row per layer-chunk with every program's device kernel time, names joined offline from the
+post-process's ``cpp_device_perf_report.csv`` (G53F-0217); ``instr=0`` times only whole chunks (the real cost). Rows go to
 ``PROF_OUT`` (jsonl): one per chunk with every component's seconds, plus a summary per pass.
 
     PROF_IDS=.../needle_260000_d10.ids PROF_RUNS=16384:1,16384:0 PROF_OUT=prof.jsonl \
@@ -159,6 +162,85 @@ def _set_dsa_timer(model, prof: Prof, on: bool):
             dec.layer.attn.set_stage_timer(prof.dsa_timer if on else None)
 
 
+class DevProf:
+    """tt-blaze G53F-0217: device-kernel time of every program, read back after each decoder layer (``instr=4``).
+
+    ``ttnn.ReadDeviceProfiler`` synchronizes and drains the device profiler buffers (<= 1000 programs per read, so one
+    layer at a time); ``ttnn.get_latest_programs_perf_data`` returns, per chip, each program's analyses. A row holds,
+    per program (runtime id): the max over chips of DEVICE KERNEL and DEVICE FW duration (ns) and the lowest chip's FW
+    start / end timestamps (the layer's span and its gaps between programs). Off (``on`` False) = pass-through.
+    """
+
+    KERNEL = "DEVICE KERNEL DURATION [ns]"
+    FW = "DEVICE FW DURATION [ns]"
+
+    def __init__(self, device, f):
+        self.device, self.f = device, f
+        self.on = False
+        self.run = -1
+        self.chunk = 0
+
+    def flush(self):
+        ttnn.synchronize_device(self.device)
+        try:  # the build's programs overflowed the buffers long ago: a failed drain is not a result
+            ttnn.ReadDeviceProfiler(self.device)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning(f"[prof] devprof flush failed: {ex!r}")
+
+    def read(self, tag: str):
+        try:
+            ttnn.ReadDeviceProfiler(self.device)
+            data = ttnn.get_latest_programs_perf_data()
+        except Exception as ex:  # noqa: BLE001 -- one lost layer-chunk, not the process
+            self.f.write(
+                json.dumps(dict(kind="devprof_fail", run=self.run, chunk=self.chunk, tag=tag, error=repr(ex)[:300]))
+                + "\n"
+            )
+            self.f.flush()
+            return
+        progs: dict[int, list] = {}
+        chip0 = min(data) if data else None
+        for chip, plist in data.items():
+            for pr in plist:
+                res = pr.program_analyses_results
+                k, fw = res.get(self.KERNEL), res.get(self.FW)
+                if k is None and fw is None:
+                    continue
+                e = progs.setdefault(int(pr.program_execution_uid.runtime_id), [0, 0, None, None, 0])
+                if k is not None:
+                    e[0] = max(e[0], int(k.duration))
+                if fw is not None:
+                    e[1] = max(e[1], int(fw.duration))
+                    if chip == chip0:
+                        e[2], e[3] = int(fw.start_timestamp), int(fw.end_timestamp)
+                e[4] += 1
+        row = dict(
+            kind="devprof",
+            run=self.run,
+            chunk=self.chunk,
+            tag=tag,
+            chips=len(data),
+            progs=[[rid, *v] for rid, v in sorted(progs.items())],
+        )
+        self.f.write(json.dumps(row) + "\n")
+        self.f.flush()
+
+
+def _devprof_install(model, dp: DevProf):
+    for k, dec in enumerate(model.layers):
+        kind = "dsa" if dec.cache is not None else "kda"
+        ffn = "moe" if dec.layer.is_moe else "dense"
+        fn = dec.prefill_forward
+
+        def after(*a, _fn=fn, _tag=f"L{k}.{kind}.{ffn}", **kk):
+            r = _fn(*a, **kk)
+            if dp.on:
+                dp.read(_tag)
+            return r
+
+        object.__setattr__(dec, "prefill_forward", after)
+
+
 @pytest.mark.timeout(86400)
 @pytest.mark.parametrize(
     "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
@@ -186,6 +268,9 @@ def test_prefill_profile(mesh_device):
     _instrument(model, prof)
     run_env_prev: dict = {}
     f = open(OUT, "a")
+    dp = DevProf(mesh_device, f) if any(len(r) > 1 and r[1] == "4" for r in RUNS) else None
+    if dp is not None:  # outermost wrap: reads after the layer's own timers (instr 4 runs no timers anyway)
+        _devprof_install(model, dp)
     full = prompt
     for p, spec in enumerate(RUNS):
         chunk, instr, marks = int(spec[0]), spec[1] in ("1", "2", "3"), spec[1] == "1"
@@ -238,6 +323,10 @@ def test_prefill_profile(mesh_device):
         prof.on = instr
         _set_dsa_timer(model, prof, marks)
         rows = []
+        if dp is not None:
+            dp.on, dp.run, dp.chunk = spec[1] == "4", p, 0
+            if dp.on:
+                dp.flush()  # drop what the build / earlier runs left in the buffers
 
         def on_chunk(s0, e, secs, _rows=rows):
             row = dict(
@@ -253,6 +342,9 @@ def test_prefill_profile(mesh_device):
             )
             if instr:
                 row["parts"] = {k: round(v, 4) for k, v in prof.take().items()}
+            if dp is not None and dp.on:  # the chunk's programs after the last layer (head on the last chunk)
+                dp.read("tail")
+                dp.chunk += 1
             _rows.append(row)
             f.write(json.dumps(row) + "\n")
             f.flush()
