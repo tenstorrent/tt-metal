@@ -19,6 +19,7 @@ from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineCon
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
 from models.tt_dit.utils import vbench_bundle
+from models.tt_dit.utils.vbench_bundle import GatePrompt
 from models.tt_dit.utils.video import export_to_video
 
 from ....utils.test import (
@@ -42,43 +43,43 @@ VBENCH_GATE = {
     # Prompts whose content is motion, so every seed should clear dynamic_degree. A cyberpunk-alley
     # prompt was dropped: Wan rendered it near-static (dynamic_degree 1 of 4 seeds, 2026-10-23).
     "t2v": [
-        {
-            "text": "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
+        GatePrompt(
+            text="Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
             # Per seed: subject 0.930-0.953, background 0.940-0.975, motion 0.954-0.983, imaging 0.583-0.640.
-            "thresholds": {
+            thresholds={
                 "subject_consistency": 0.88,
                 "background_consistency": 0.90,
                 "motion_smoothness": 0.93,
                 "dynamic_degree": 0.75,
                 "imaging_quality": 0.55,
             },
-        },
-        {
-            "text": "A golden retriever sprints across a beach chasing a frisbee, sand spraying behind it.",
+        ),
+        GatePrompt(
+            text="A golden retriever sprints across a beach chasing a frisbee, sand spraying behind it.",
             # Per seed: subject 0.904-0.941, background 0.950-0.971, motion 0.962-0.982, imaging 0.613-0.737.
-            "thresholds": {
+            thresholds={
                 "subject_consistency": 0.86,
                 "background_consistency": 0.90,
                 "motion_smoothness": 0.93,
                 "dynamic_degree": 0.75,
                 "imaging_quality": 0.58,
             },
-        },
+        ),
     ],
     # Prompts that animate the fractal conditioning image itself; the T2V prompts ask for content the
     # image doesn't contain and pulled subject consistency to ~0.62. dynamic_degree and imaging_quality
     # are meaningless on a fractal, so only intra-video consistency is gated (see test_pipeline_wan.py).
     "i2v": [
-        {
-            "text": "A slow, smooth camera push into a glowing fractal pattern, its intricate spiral edges and colors drifting gently.",
+        GatePrompt(
+            text="A slow, smooth camera push into a glowing fractal pattern, its intricate spiral edges and colors drifting gently.",
             # Per seed: subject 0.910-0.956, background 0.957-0.982.
-            "thresholds": {"subject_consistency": 0.86, "background_consistency": 0.92},
-        },
-        {
-            "text": "The colorful fractal pattern slowly rotates and ripples like liquid, its fine detail shimmering as the light shifts.",
+            thresholds={"subject_consistency": 0.86, "background_consistency": 0.92},
+        ),
+        GatePrompt(
+            text="The colorful fractal pattern slowly rotates and ripples like liquid, its fine detail shimmering as the light shifts.",
             # Per seed: subject 0.942-0.968, background 0.970-0.985.
-            "thresholds": {"subject_consistency": 0.89, "background_consistency": 0.93},
-        },
+            thresholds={"subject_consistency": 0.89, "background_consistency": 0.93},
+        ),
     ],
 }
 
@@ -294,12 +295,12 @@ def test_pipeline_performance(
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
         # Check output
 
-    # Gate clips are timed too: each prompt's mean over its seeds must also fall within that prompt's
-    # timing limits (for now the same limits as the timed run).
+    # Gate clips are timed too: each prompt's mean over its seeds must also fall within the timed
+    # run's limits.
     gate_prompts = []
     gate_timings = []
     if run_vbench:
-        gate_prompts = [{**prompt, "timing": limits} for prompt in VBENCH_GATE[model_type]]
+        gate_prompts = VBENCH_GATE[model_type]
         gate_profiler = BenchmarkProfiler()
         if is_global_rank_zero():
             vbench_bundle.create_bundle(vbench_dir)
@@ -310,7 +311,7 @@ def test_pipeline_performance(
                 with gate_profiler("run", iteration=iteration):
                     with torch.no_grad():
                         clip = pipeline(
-                            prompts=[gate_prompt["text"]],
+                            prompts=[gate_prompt.text],
                             image_prompt=image_prompt,
                             num_inference_steps=num_inference_steps,
                             on_event=profiler_event_callback(gate_profiler, iteration),
@@ -334,11 +335,7 @@ def test_pipeline_performance(
                 }
             )
         if is_global_rank_zero():
-            vbench_bundle.write_manifest(
-                vbench_dir,
-                prompts=[{"text": p["text"], "thresholds": p["thresholds"]} for p in gate_prompts],
-                seeds=VBENCH_SEEDS,
-            )
+            vbench_bundle.write_manifest(vbench_dir, prompts=gate_prompts, seeds=VBENCH_SEEDS)
 
     pipeline.release_traces()
 
@@ -468,8 +465,8 @@ def test_pipeline_performance(
         )
 
     assert_msgs = check_timings(measurements, limits, "timed run")
-    for index, (gate_prompt, timing) in enumerate(zip(gate_prompts, gate_timings)):
-        assert_msgs += check_timings(timing, gate_prompt["timing"], f"VBench prompt {index} mean")
+    for index, timing in enumerate(gate_timings):
+        assert_msgs += check_timings(timing, limits, f"VBench prompt {index} mean")
 
     assert not assert_msgs, "\n".join(assert_msgs)
 

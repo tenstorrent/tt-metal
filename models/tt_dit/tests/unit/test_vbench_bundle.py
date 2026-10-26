@@ -8,11 +8,12 @@ import pytest
 
 from models.tt_dit.utils import vbench_bundle
 from models.tt_dit.utils.vbench import assert_scores
+from models.tt_dit.utils.vbench_bundle import GatePrompt
 
 SEEDS = [42, 43, 44, 45]
 PROMPTS = [
-    {"text": "cats", "thresholds": {"imaging_quality": 0.6, "dynamic_degree": 0.75}},
-    {"text": "alley", "thresholds": {"subject_consistency": 0.8}},
+    GatePrompt("cats", {"imaging_quality": 0.6, "dynamic_degree": 0.75}),
+    GatePrompt("alley", {"subject_consistency": 0.8}),
 ]
 
 
@@ -51,7 +52,9 @@ def test_one_bad_prompt_fails_the_gate(bundle, failure, expect_error):
         vbench_bundle.aggregate(vbench_bundle.read_manifest(bundle), scores)
 
 
-@pytest.mark.parametrize("failure", ["missing_clip", "duplicate_seed", "foreign_scorer", "no_thresholds"])
+@pytest.mark.parametrize(
+    "failure", ["missing_clip", "duplicate_seed", "foreign_scorer", "no_thresholds", "unknown_field", "missing_field"]
+)
 def test_incomplete_or_bad_gate_is_rejected(bundle, failure, expect_error):
     manifest = json.loads((bundle / "manifest.json").read_text())
     if failure == "missing_clip":
@@ -60,8 +63,12 @@ def test_incomplete_or_bad_gate_is_rejected(bundle, failure, expect_error):
         manifest["seeds"] = [42, 42]
     elif failure == "foreign_scorer":
         manifest["scorer"] = "os:system"
-    else:
+    elif failure == "no_thresholds":
         manifest["prompts"][0]["thresholds"] = {}
+    elif failure == "unknown_field":
+        manifest["prompts"][0]["weight"] = 2
+    else:
+        del manifest["seeds"]
     (bundle / "manifest.json").write_text(json.dumps(manifest))
     with expect_error(ValueError, "VBench"):
         vbench_bundle.read_manifest(bundle)
@@ -100,7 +107,7 @@ def test_evaluate_scores_every_clip_with_the_manifest_scorer(bundle, monkeypatch
     scores = passing_scores()
 
     def score(path, *, prompt, dimensions, **kwargs):
-        index = next(i for i, p in enumerate(PROMPTS) if p["text"] == prompt)
+        index = next(i for i, p in enumerate(PROMPTS) if p.text == prompt)
         seed = int(path.rsplit("_s", 1)[1].removesuffix(".mp4"))
         calls.append((index, seed, dimensions))
         return scores[(index, seed)]
@@ -109,12 +116,12 @@ def test_evaluate_scores_every_clip_with_the_manifest_scorer(bundle, monkeypatch
     monkeypatch.setattr(vbench_bundle, "load_scorer", lambda name: score)
     vbench_bundle.evaluate(bundle)
     assert sorted((i, s) for i, s, _ in calls) == sorted(scores)
-    assert all(dimensions == list(PROMPTS[i]["thresholds"]) for i, _, dimensions in calls)
+    assert all(dimensions == list(PROMPTS[i].thresholds) for i, _, dimensions in calls)
 
 
 def test_shared_models_are_fetched_once_before_the_workers_start(tmp_path, monkeypatch):
     bundle = vbench_bundle.create_bundle(tmp_path / "vbench")
-    prompts = [{"text": "cats", "thresholds": {"background_consistency": 0.8}}]
+    prompts = [GatePrompt("cats", {"background_consistency": 0.8})]
     vbench_bundle.clip_path(bundle, 0, 42).touch()
     vbench_bundle.write_manifest(bundle, prompts=prompts, seeds=[42])
     events = []
