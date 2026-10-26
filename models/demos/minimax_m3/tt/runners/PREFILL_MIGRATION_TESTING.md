@@ -132,8 +132,9 @@ often as you like, then stop it with Ctrl-C, or set `PREFILL_SEND_SHUTDOWN: "1"`
 
 ### Gate 1P — packed forwards
 
-Gate 1 with `PREFILL_CHUNK_SIZE=1024` and `PREFILL_FORWARD_TOKENS_BUDGET=4096`: each forward carries 4 chunks
-and mixes both slots (`TtPrefillRuntime.prefill_forward`). The budget must match on both sides.
+Gate 1 with `PREFILL_CHUNK_SIZE=1024` and `PREFILL_FORWARD_TOKENS_BUDGET=4096`: each forward carries up to 4
+chunks (`TtPrefillRuntime.prefill_forward`), and the last one carries both slots. The budget must match on both
+sides. Layer acks go through the host callback (`PREFILL_LAYER_ACK_D2H=0`): a D2H ack record names one chunk.
 
 ```bash
 # ---- Terminal 1 — runner ----

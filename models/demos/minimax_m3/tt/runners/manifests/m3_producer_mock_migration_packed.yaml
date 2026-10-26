@@ -1,5 +1,5 @@
 # MiniMax-M3 — Gate 1 with packed forwards: push 2 slots x 10 chunks of 1024 tokens, 4 chunks per forward
-# (forwards mix both slots), then read the KV back device-lessly and PCC it against the golden trace.
+# (the last forward carries both slots), then read the KV back device-lessly and PCC it against the golden.
 #
 # Pairs with m3_binding_mock_migration_packed_1rank.yaml (PREFILL_ENABLE_MIGRATION=0). No migration endpoint.
 #
