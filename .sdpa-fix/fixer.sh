@@ -247,18 +247,20 @@ refresh_decisions() {
   [[ -n "$cur" && "$FIX_SLACK" == "1" && -n "$SLACK_BOT_TOKEN" ]] || return 0
   while IFS= read -r row; do
     [[ -z "$row" ]] && continue
-    sig=$(jq -r .sig <<<"$row"); old=$(jq -r '.r.slack_ts // ""' <<<"$row")
+    sig=$(jq -r .sig <<<"$row"); sigs_all=$(jq -r '.sigs | join(" ")' <<<"$row"); old=$(jq -r '.r.slack_ts // ""' <<<"$row")
     if [[ -n "$old" ]]; then
       jq -nc --arg ch "$SLACK_CHANNEL_ID" --arg ts "$old" '{channel:$ch, ts:$ts}' \
         | curl -sS -X POST -H "Authorization: Bearer $SLACK_BOT_TOKEN" -H 'Content-Type: application/json; charset=utf-8' \
                --data @- https://slack.com/api/chat.delete >/dev/null || true
     fi
     log "  moving open decision for $sig under the current digest"
-    slack_decision "$sig" "❓ *autofix — needs your decision*: \`$(jq -r '.r.test | sub(".*::"; "")' <<<"$row")\` ($(jq -r .r.workflow <<<"$row"))
+    slack_decision "$sigs_all" "❓ *autofix — needs your decision*: $(jq -r '.tests | map("`\(.)`") | join(", ")' <<<"$row") ($(jq -r .r.workflow <<<"$row"))
 $(jq -r .r.decision.question <<<"$row")" "$(jq -c .r.decision <<<"$row")"
-  done < <(jq -c --arg cur "$cur" '.sigs | to_entries[]
+  done < <(jq -c --arg cur "$cur" '[.sigs | to_entries[]
              | select(.value.state == "awaiting_decision" and .value.decision_choice == null
-                      and (.value.decision_thread // "") != $cur) | {sig: .key, r: .value}' "$FIX_HOME/ledger.json")
+                      and (.value.decision_thread // "") != $cur)]
+             | group_by(.value.decision.proposal // .key)[]
+             | {sig: .[0].key, sigs: map(.key), tests: map(.value.test | sub(".*::"; "")), r: .[0].value}' "$FIX_HOME/ledger.json")
 }
 
 apply_decisions() {
@@ -277,7 +279,11 @@ apply_decisions() {
     label=$(jq -r --arg k "$key" '.r.decision.options[] | select(.key == $k) | .label' <<<"$row")
     case "$kind" in
       patch)
-        $FIXLIB mark --state decided "$sig"
+        # The poll covered every signature of its group: decide them together.
+        mapfile -t sibs < <(jq -r --arg s "$sig" --arg p "$(jq -r '.r.decision.proposal // ""' <<<"$row")" \
+          '.sigs | to_entries[] | select(.key != $s and .value.state == "awaiting_decision" and $p != ""
+                                         and (.value.decision.proposal // "") == $p) | .key' "$FIX_HOME/ledger.json")
+        $FIXLIB mark --state decided --extra "$(jq -c '{decision_choice: .r.decision_choice}' <<<"$row")" "$sig" "${sibs[@]}"
         log "  decision for $short: $key ($label) by $by — fix stage implements it now"
         slack_sig "🛠 preparing the autofix draft PR for \`$short\` ($wf)…" "$sig" ;;
       *) log "  WARN: unknown decision $key for $sig" ;;
@@ -964,6 +970,22 @@ $(jq -r '.choice.key as $k | .decision.options[] | select(.key == $k) | "The hum
 Original question: $(jq -r .decision.question <<<"$choice")"
   fi
 
+  # The human approved a saved proposal: apply that exact patch, no agent run.
+  from_proposal=""
+  if [[ -n "$choice" && "$(jq -r '.decision.apply_proposal // false' <<<"$choice")" == "true" \
+        && "$(jq -r .choice.key <<<"$choice")" == "A" ]]; then
+    src=$(jq -r '.decision.proposal // ""' <<<"$choice")
+    if [[ -s "$src/patch.diff" && -s "$src/verdict.json" ]] && git -C "$FIX_WORKTREE" apply --index "$src/patch.diff" 2>>"$AGENT_ERR"; then
+      from_proposal="$src"
+    else
+      log "  approved proposal $src no longer applies to origin/main — re-running the agent"
+    fi
+  fi
+  if [[ -n "$from_proposal" ]]; then
+  log "  applying the approved proposal $from_proposal (no agent run)"
+  cp "$from_proposal/verdict.json" "$pdir/verdict.json"
+  attempts=$((attempts + 1))
+  else
   log "  running fix agent ($FIX_MODEL) in $FIX_WORKTREE"
   set +e
   out=$(cd "$FIX_WORKTREE" && timeout "$FIX_TIMEOUT_SEC" claude --model "$FIX_MODEL" -p \
@@ -986,6 +1008,7 @@ Original question: $(jq -r .decision.question <<<"$choice")"
     continue
   fi
   jq '.structured_output' <<<"$out" > "$pdir/verdict.json"
+  fi
   git -C "$FIX_WORKTREE" add -A
   git -C "$FIX_WORKTREE" diff --cached HEAD > "$pdir/patch.diff"
   v_fixed=$(jq -r .fixed "$pdir/verdict.json")
@@ -1080,13 +1103,18 @@ $(jq -r .question <<<"$dec")" "$dec"
   conf=$(jq -r .confidence "$pdir/verdict.json"); appr=$(jq -r .approach "$pdir/verdict.json")
 
   if [[ "$FIX_MODE" != "live" && -z "$choice" && -z "$existing_pr" ]]; then
-    $FIXLIB mark --state proposed_dryrun --attempt --count-daily \
-      --extra "$(jq -nc --arg p "$pdir" --arg t "$title" '{proposal:$p, verdict_title:$t}')" "${sigs[@]}"
-    log "  DRY RUN — proposal written to $pdir"
-    slack_sig "🛠 *autofix dry-run proposal — take a look*: $title
-• failing: \`$first_test\` ($workflow, streak $(jq -r '[.[].streak] | max' <<<"$recs"))
-• $appr, confidence $conf, $(jq -r '.added + .deleted' <<<"$guard") lines in $files
-• proposal: \`$pdir\`" "${sigs[@]}"
+    # Dry run opens nothing by itself: the proposal becomes a one-click poll.
+    # "Open draft PR" applies this exact patch (no new agent run), live.
+    dec=$(jq -nc --arg p "$pdir" --arg s "$appr, confidence $conf, $(jq -r '.added + .deleted' <<<"$guard") lines in $files. $(jq -r '.fix // ""' "$pdir/verdict.json" | head -c 400)" \
+            '{needed: true, question: "Open this fix as a draft PR?", recommended: "A", proposal: $p, apply_proposal: true,
+              options: [{key: "A", kind: "patch", label: "Open draft PR", summary: $s}]}')
+    $FIXLIB mark --state awaiting_decision --attempt --count-daily \
+      --extra "$(jq -nc --arg p "$pdir" --arg t "$title" --argjson d "$dec" '{proposal:$p, verdict_title:$t, decision:$d}')" "${sigs[@]}"
+    log "  DRY RUN — proposal written to $pdir, offered as a one-click PR"
+    slack_decision "${sigs[*]}" "🛠 *autofix proposal — click to open the PR*: $title
+• failing: $(jq -r '[.[].test | sub(".*::"; "") | "`\(.)`"] | join(", ")' <<<"$recs") ($workflow)
+• why: $(jq -r '.why // ""' "$pdir/verdict.json" | head -c 400)
+• diff: \`$pdir/patch.diff\`" "$dec"
     git -C "$FIX_WORKTREE" reset -q --hard && git -C "$FIX_WORKTREE" clean -fdq
     continue
   fi

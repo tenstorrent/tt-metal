@@ -35,6 +35,7 @@ and in the global `~/.claude/CLAUDE.md`).
 ## Validating and babysitting PRs (code, enforced; listed so agents know)
 
 - [ops,fix] Judge a targeted CI run job by job: the fix's own jobs must pass, and failures that also fail on main in the last 24 h are pre-existing. Never use the run's overall conclusion. (#59658: run "failure" with 9 failures, all pre-existing.)
+- [ops] Anything the bot wants a human to act on comes with a button that does it. A dry-run proposal is a one-click "Open draft PR" poll, never a "take a look" message pointing at a local path. (The K3 qkv-conv re-baseline proposal had no way to become a PR from Slack.)
 - [ops] Validation must be on the head that would merge. When the PR head moves, cancel stale targeted runs and re-dispatch.
 - [ops] The bot's own `autofix/*` commit statuses are not PR checks; never "repair" them.
 - [ops] Every workflow has its own dispatch inputs (sanity-tests-debug.yaml ≠ sanity-tests.yaml). Map them per workflow, and treat a rejected dispatch as "run by hand", not a crash.

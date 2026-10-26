@@ -26,8 +26,20 @@ LEDGER = os.path.join(HOME, "ledger.json")
 # in live mode so a dry-run proposal graduates to a real PR exactly once.
 ATTEMPTABLE = {"tracking"}
 # States that end when main goes green for the signature.
-OPEN_STATES = {"tracking", "proposed_dryrun", "no_fix", "fix_pending", "pr_open", "ci_passed", "ci_failed",
-               "awaiting_decision", "decided", "revise", "ready_to_merge", "repair"}
+OPEN_STATES = {
+    "tracking",
+    "proposed_dryrun",
+    "no_fix",
+    "fix_pending",
+    "pr_open",
+    "ci_passed",
+    "ci_failed",
+    "awaiting_decision",
+    "decided",
+    "revise",
+    "ready_to_merge",
+    "repair",
+}
 # States the fix scan looks at: still failing, and no PR of ours on it.
 SCAN_STATES = {"tracking", "no_fix", "proposed_dryrun", "fix_pending", "awaiting_decision"}
 # States a re-appearing failure re-opens (a fresh regression after a fix).
@@ -90,12 +102,19 @@ def signature(workflow, job, test):
 def _contains(run_sha, reason):
     """True when run_sha already contains the commit named in reason."""
     import subprocess
+
     m = re.search(r"\b[0-9a-f]{7,40}\b", reason or "")
     repo = os.environ.get("TT_METAL_DIR")
     if not m or not repo or not run_sha:
         return False
-    return subprocess.call(["git", "-C", repo, "merge-base", "--is-ancestor", m.group(0), run_sha],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+    return (
+        subprocess.call(
+            ["git", "-C", repo, "merge-base", "--is-ancestor", m.group(0), run_sha],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        == 0
+    )
 
 
 # ------------------------------------------------------------ triage update
@@ -127,15 +146,29 @@ def cmd_update(a):
             r = sigs.get(sig)
             if r is None:
                 r = sigs[sig] = {
-                    "workflow": a.workflow, "job": norm_job(f["job"]), "test": f["test"],
-                    "state": "tracking", "streak": 0, "runs": [], "attempts": [],
-                    "first_seen": run, "created": now_iso(),
+                    "workflow": a.workflow,
+                    "job": norm_job(f["job"]),
+                    "test": f["test"],
+                    "state": "tracking",
+                    "streak": 0,
+                    "runs": [],
+                    "attempts": [],
+                    "first_seen": run,
+                    "created": now_iso(),
                 }
             if r["state"] in FIX_PENDING and _contains(a.sha, r.get("fix_sha") or r.get("reason", "")):
                 # The run already includes the fix and still fails: that fix
                 # did not cover it. Back in the queue.
-                events.append({"type": "still_failing", "sig": sig, "test": r["test"], "pr": r.get("pr"),
-                               "fix_sha": r.get("fix_sha", ""), "run": run})
+                events.append(
+                    {
+                        "type": "still_failing",
+                        "sig": sig,
+                        "test": r["test"],
+                        "pr": r.get("pr"),
+                        "fix_sha": r.get("fix_sha", ""),
+                        "run": run,
+                    }
+                )
                 r["state"] = "tracking"
                 r["streak"] = 0
             if r["state"] in REOPENABLE:
@@ -148,8 +181,7 @@ def cmd_update(a):
                 r["runs"] = (r.get("runs", []) + [run["number"]])[-20:]
             r["last_seen"] = run
             r["sku_jobs"] = sorted(set(r.get("sku_jobs", []) + [f["job"]]))
-            for k in ("kind", "owner", "error_key", "summary", "culprit_sha",
-                      "culprit_evidence", "fixable", "group"):
+            for k in ("kind", "owner", "error_key", "summary", "culprit_sha", "culprit_evidence", "fixable", "group"):
                 r[k] = f.get(k)
             r["updated"] = now_iso()
 
@@ -166,14 +198,30 @@ def cmd_update(a):
                     r["state"] = "verified"
                     r["verified"] = {"run": run, "at": now_iso()}
                     r["updated"] = now_iso()
-                    events.append({"type": "verified", "sig": sig, "test": r["test"], "pr": r.get("pr"),
-                                   "fix_sha": r.get("fix_sha", ""), "run": run})
+                    events.append(
+                        {
+                            "type": "verified",
+                            "sig": sig,
+                            "test": r["test"],
+                            "pr": r.get("pr"),
+                            "fix_sha": r.get("fix_sha", ""),
+                            "run": run,
+                        }
+                    )
                 # green but the fix is not in this run yet: keep waiting
             elif concl == "success":
                 r["streak"] = 0
                 if r["state"] in OPEN_STATES:
-                    newly_green.append({"sig": sig, "state": r["state"], "pr": r.get("pr"),
-                                        "test": r["test"], "job": r["job"], "run": run})
+                    newly_green.append(
+                        {
+                            "sig": sig,
+                            "state": r["state"],
+                            "pr": r.get("pr"),
+                            "test": r["test"],
+                            "job": r["job"],
+                            "run": run,
+                        }
+                    )
                     r["state"] = "resolved_on_main"
                     r["resolved"] = {"run": run, "at": now_iso(), "prev_state": newly_green[-1]["state"]}
                     r["updated"] = now_iso()
@@ -185,8 +233,12 @@ def cmd_update(a):
         t = d["triaged"].get(a.workflow) or {}
         ids = t.get("jobs", []) if t.get("run_id") == a.run_id else []
         new_ids = [x for x in (a.job_ids.split(",") if a.job_ids else []) if x]
-        d["triaged"][a.workflow] = {"run_id": a.run_id, "number": run["number"], "at": now_iso(),
-                                   "jobs": sorted(set(ids + new_ids))}
+        d["triaged"][a.workflow] = {
+            "run_id": a.run_id,
+            "number": run["number"],
+            "at": now_iso(),
+            "jobs": sorted(set(ids + new_ids)),
+        }
         jr = d.setdefault("job_runs", {}).setdefault(a.workflow, {})
         for n in job_concl:
             if job_concl[n] in ("success", "failure"):
@@ -223,15 +275,50 @@ def cmd_eligible(a):
         # signature: these go first and bypass kind / streak / daily cap.
         forced = []
         for sig, r in d["sigs"].items():
-            if (r["state"] == "decided" and r.get("decision_choice")) or \
-               (r["state"] == "revise" and r.get("decision_note")) or \
-               (r["state"] == "repair" and r.get("repair")) or \
-               (a.only_sig and sig == a.only_sig and r["state"] in ("tracking", "no_fix", "proposed_dryrun", "decided")):
-                forced.append({"workflow": r["workflow"], "group": r.get("group") or sig, "sigs": [sig],
-                               "prio": [-1, 0], "forced": True})
+            if (
+                (r["state"] == "decided" and r.get("decision_choice"))
+                or (r["state"] == "revise" and r.get("decision_note"))
+                or (r["state"] == "repair" and r.get("repair"))
+                or (
+                    a.only_sig
+                    and sig == a.only_sig
+                    and r["state"] in ("tracking", "no_fix", "proposed_dryrun", "decided")
+                )
+            ):
+                # Signatures decided together (one poll for a group) stay one PR.
+                same = next(
+                    (
+                        g
+                        for g in forced
+                        if r["state"] == "decided"
+                        and g.get("decided")
+                        and g["workflow"] == r["workflow"]
+                        and g["group"] == (r.get("group") or sig)
+                    ),
+                    None,
+                )
+                if same:
+                    same["sigs"].append(sig)
+                    continue
+                forced.append(
+                    {
+                        "workflow": r["workflow"],
+                        "group": r.get("group") or sig,
+                        "sigs": [sig],
+                        "prio": [-1, 0],
+                        "forced": True,
+                        "decided": r["state"] == "decided",
+                    }
+                )
         if a.only_sig:
-            json.dump({"groups": [g for g in forced if a.only_sig in g["sigs"]], "daily_used": used,
-                       "daily_room": max(0, a.max_per_day - used)}, sys.stdout)
+            json.dump(
+                {
+                    "groups": [g for g in forced if a.only_sig in g["sigs"]],
+                    "daily_used": used,
+                    "daily_room": max(0, a.max_per_day - used),
+                },
+                sys.stdout,
+            )
             return
         groups = {}
         for sig, r in d["sigs"].items():
@@ -253,11 +340,17 @@ def cmd_eligible(a):
         out = []
         for (wf, grp), sl in groups.items():
             recs = [d["sigs"][s] for s in sl]
-            out.append({
-                "workflow": wf, "group": grp, "sigs": sorted(sl),
-                "prio": (0 if any(r["kind"] == "code_regression" for r in recs) else 1,
-                         -max(r.get("streak", 0) for r in recs)),
-            })
+            out.append(
+                {
+                    "workflow": wf,
+                    "group": grp,
+                    "sigs": sorted(sl),
+                    "prio": (
+                        0 if any(r["kind"] == "code_regression" for r in recs) else 1,
+                        -max(r.get("streak", 0) for r in recs),
+                    ),
+                }
+            )
         out.sort(key=lambda g: g["prio"])
         room = max(0, a.max_per_day - used)
         fsigs = set(x for g in forced for x in g["sigs"])
@@ -282,9 +375,25 @@ def cmd_mark(a):
             if a.attempt:
                 r.setdefault("attempts", []).append(dict(extra, at=now_iso(), state=a.state))
             for k, v in extra.items():
-                if k in ("pr", "proposal", "dispatched", "verdict_title", "reason", "fix_sha", "slack_ts", "fix_pr", "fix_author",
-                         "decision", "decision_choice", "decision_thread", "decision_note",
-                         "decision_history", "gate_note", "repair", "repair_tries"):
+                if k in (
+                    "pr",
+                    "proposal",
+                    "dispatched",
+                    "verdict_title",
+                    "reason",
+                    "fix_sha",
+                    "slack_ts",
+                    "fix_pr",
+                    "fix_author",
+                    "decision",
+                    "decision_choice",
+                    "decision_thread",
+                    "decision_note",
+                    "decision_history",
+                    "gate_note",
+                    "repair",
+                    "repair_tries",
+                ):
                     r[k] = v
                 elif k == "checked":
                     r.setdefault("checked", {}).update(v)
@@ -304,6 +413,7 @@ def _scan_paths(r, repo):
     plus files named in the test label / summary (basenames resolved with
     git ls-files)."""
     import subprocess
+
     paths, cands = [], []
     t = r.get("test", "")
     if "::" in t and "/" in t.split("::")[0]:
@@ -355,17 +465,30 @@ def cmd_scan_list(a):
                 b = os.path.basename(pth)
                 if b not in terms and len(b) > 8 and b not in GENERIC:
                     terms.append(b)
-            out.append({"sig": sig, "workflow": r["workflow"], "job": r["job"], "test": r["test"],
-                        "state": r["state"], "summary": r.get("summary") or r.get("error_key") or "",
-                        "first_sha": (r.get("first_seen") or {}).get("sha", ""),
-                        "first_at": r.get("created", ""), "paths": paths, "terms": terms[:3],
-                        "fix_pr": r.get("fix_pr"), "checked": r.get("checked", {}),
-                        "last_run": (r.get("last_seen") or {}).get("id", ""), "jobs": r.get("sku_jobs", [])})
+            out.append(
+                {
+                    "sig": sig,
+                    "workflow": r["workflow"],
+                    "job": r["job"],
+                    "test": r["test"],
+                    "state": r["state"],
+                    "summary": r.get("summary") or r.get("error_key") or "",
+                    "first_sha": (r.get("first_seen") or {}).get("sha", ""),
+                    "first_at": r.get("created", ""),
+                    "paths": paths,
+                    "terms": terms[:3],
+                    "fix_pr": r.get("fix_pr"),
+                    "checked": r.get("checked", {}),
+                    "last_run": (r.get("last_seen") or {}).get("id", ""),
+                    "jobs": r.get("sku_jobs", []),
+                }
+            )
         json.dump(out, sys.stdout)
 
 
 def _gh_json(args):
     import subprocess
+
     out = subprocess.run(["gh", "api"] + args, capture_output=True, text=True, check=False).stdout
     try:
         return json.loads(out)
@@ -377,6 +500,7 @@ def _workflows_for_yaml(repo, yaml_base):
     """Scheduled workflows that (directly or via one reusable workflow) run
     jobs from tests/pipeline_reorg/<yaml_base>."""
     import glob
+
     wdir = os.path.join(repo, ".github", "workflows")
     texts = {}
     for f in glob.glob(os.path.join(wdir, "*.y*ml")):
@@ -399,22 +523,44 @@ def cmd_runtime_stats(a):
     import datetime as dt
     import statistics
     import yaml as y
+
     repo = os.environ.get("TT_METAL_DIR", ".")
     rows = y.safe_load(open(os.path.join(repo, "tests", "pipeline_reorg", a.yaml)))
-    groups = {r["name"]: (r.get("skus") or {}).get(a.sku, {}).get("timeout")
-              for r in rows if isinstance(r, dict) and a.sku in (r.get("skus") or {})}
+    groups = {
+        r["name"]: (r.get("skus") or {}).get(a.sku, {}).get("timeout")
+        for r in rows
+        if isinstance(r, dict) and a.sku in (r.get("skus") or {})
+    }
     owners = {r["name"]: r.get("owner_id", "") for r in rows if isinstance(r, dict) and r.get("name") in groups}
     since = (dt.datetime.utcnow() - dt.timedelta(days=a.days)).strftime("%Y-%m-%d")
     durs = {g: [] for g in groups}
     wfs = a.workflows.split(",") if a.workflows else _workflows_for_yaml(repo, a.yaml)
     for wf in wfs:
-        runs = _gh_json(["repos/%s/actions/workflows/%s/runs?branch=main&status=completed&per_page=%d&created=>%s"
-                         % (a.repo_slug, wf, a.runs, since)]) or {}
-        for run in (runs.get("workflow_runs") or [])[:a.runs]:
+        runs = (
+            _gh_json(
+                [
+                    "repos/%s/actions/workflows/%s/runs?branch=main&status=completed&per_page=%d&created=>%s"
+                    % (a.repo_slug, wf, a.runs, since)
+                ]
+            )
+            or {}
+        )
+        for run in (runs.get("workflow_runs") or [])[: a.runs]:
             import subprocess
-            raw = subprocess.run(["gh", "api", "--paginate", "repos/%s/actions/runs/%s/jobs?per_page=100" % (a.repo_slug, run["id"]),
-                                  "--jq", ".jobs[] | {name, started_at, completed_at, conclusion} | tojson"],
-                                 capture_output=True, text=True, check=False).stdout
+
+            raw = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    "--paginate",
+                    "repos/%s/actions/runs/%s/jobs?per_page=100" % (a.repo_slug, run["id"]),
+                    "--jq",
+                    ".jobs[] | {name, started_at, completed_at, conclusion} | tojson",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
             jobs = [json.loads(l) for l in raw.splitlines() if l.strip()]
             for j in jobs:
                 if j.get("conclusion") != "success" or not j.get("completed_at"):
@@ -427,10 +573,17 @@ def cmd_runtime_stats(a):
     out = []
     for g, t in groups.items():
         d = sorted(durs[g])
-        out.append({"group": g, "timeout": t, "n": len(d), "owner": owners.get(g, ""),
-                    "max_min": round(d[-1], 1) if d else None,
-                    "p90_min": round(d[int(0.9 * (len(d) - 1))], 1) if d else None,
-                    "slack_min": (t - round(d[-1])) if (d and t) else None})
+        out.append(
+            {
+                "group": g,
+                "timeout": t,
+                "n": len(d),
+                "owner": owners.get(g, ""),
+                "max_min": round(d[-1], 1) if d else None,
+                "p90_min": round(d[int(0.9 * (len(d) - 1))], 1) if d else None,
+                "slack_min": (t - round(d[-1])) if (d and t) else None,
+            }
+        )
     out.sort(key=lambda r: -(r["slack_min"] or -999))
     json.dump({"yaml": a.yaml, "sku": a.sku, "workflows": wfs, "days": a.days, "groups": out}, sys.stdout)
 
@@ -443,9 +596,20 @@ def _jobkey(name):
 
 def _run_jobs(slug, rid):
     import subprocess
-    raw = subprocess.run(["gh", "api", "--paginate", "repos/%s/actions/runs/%s/jobs?per_page=100" % (slug, rid),
-                          "--jq", ".jobs[] | {name, conclusion, status} | tojson"],
-                         capture_output=True, text=True, check=False).stdout
+
+    raw = subprocess.run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            "repos/%s/actions/runs/%s/jobs?per_page=100" % (slug, rid),
+            "--jq",
+            ".jobs[] | {name, conclusion, status} | tojson",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
     out = []
     for l in raw.splitlines():
         try:
@@ -461,6 +625,7 @@ def cmd_classify_run(a):
     on main in the last <hours> (same group + SKU, any lane, in the baseline
     workflows) is pre-existing and does not block; the rest are new."""
     import datetime as dt
+
     relevant = set(_jobkey(x) for x in json.loads(a.relevant))
     jobs = _run_jobs(a.repo_slug, a.run_id)
     concl = {}
@@ -471,8 +636,15 @@ def cmd_classify_run(a):
     since = (dt.datetime.utcnow() - dt.timedelta(hours=a.hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
     main_failed = set()
     for wf in [w for w in a.baseline.split(",") if w]:
-        runs = _gh_json(["repos/%s/actions/workflows/%s/runs?branch=main&per_page=30&created=>%s"
-                         % (a.repo_slug, wf, since[:10])]) or {}
+        runs = (
+            _gh_json(
+                [
+                    "repos/%s/actions/workflows/%s/runs?branch=main&per_page=30&created=>%s"
+                    % (a.repo_slug, wf, since[:10])
+                ]
+            )
+            or {}
+        )
         for run in runs.get("workflow_runs") or []:
             if run.get("created_at", "") < since:
                 continue
@@ -484,20 +656,37 @@ def cmd_classify_run(a):
     rel_failed = sorted(k for k in relevant if concl.get(k) not in (None, "success"))
     pre = sorted(k for k in failed if k not in relevant and k in main_failed)
     new = sorted(k for k in failed if k not in relevant and k not in main_failed)
-    json.dump({"relevant_ok": not rel_failed and not rel_missing, "relevant": sorted(relevant),
-               "relevant_failed": rel_failed, "relevant_missing": rel_missing,
-               "new_failures": new, "preexisting": pre,
-               "passed": (not rel_failed and not rel_missing and not new)}, sys.stdout)
+    json.dump(
+        {
+            "relevant_ok": not rel_failed and not rel_missing,
+            "relevant": sorted(relevant),
+            "relevant_failed": rel_failed,
+            "relevant_missing": rel_missing,
+            "new_failures": new,
+            "preexisting": pre,
+            "passed": (not rel_failed and not rel_missing and not new),
+        },
+        sys.stdout,
+    )
 
 
 def cmd_list(a):
     with Ledger() as d:
         rows = []
         for s, r in sorted(d["sigs"].items(), key=lambda kv: kv[1].get("updated", "")):
-            rows.append("%s  %-16s streak=%-2s %-15s %-8s %s :: %s%s" % (
-                s, r["state"], r.get("streak", 0), r.get("kind"), r.get("owner"),
-                r["workflow"].replace(".yaml", ""), r["test"][-90:],
-                ("  -> " + r["pr"]["url"]) if r.get("pr") else ""))
+            rows.append(
+                "%s  %-16s streak=%-2s %-15s %-8s %s :: %s%s"
+                % (
+                    s,
+                    r["state"],
+                    r.get("streak", 0),
+                    r.get("kind"),
+                    r.get("owner"),
+                    r["workflow"].replace(".yaml", ""),
+                    r["test"][-90:],
+                    ("  -> " + r["pr"]["url"]) if r.get("pr") else "",
+                )
+            )
         print("\n".join(rows) if rows else "(ledger empty)")
 
 
@@ -532,10 +721,21 @@ def _bh_e2e(job, repo):
 
 
 def _sanity(job, repo):
-    inputs = {k: "false" for k in (
-        "run-sim", "run-t3000-sanity-tests", "run-fabric-sanity-tests", "run-ops-sanity-tests",
-        "run-umd-sanity-tests", "run-ttsim-sanity-tests", "run-models-sanity-tests",
-        "run-ttnn-sanity-tests", "run-blackhole-multi-card-sanity-tests", "build-inplace-wheel")}
+    inputs = {
+        k: "false"
+        for k in (
+            "run-sim",
+            "run-t3000-sanity-tests",
+            "run-fabric-sanity-tests",
+            "run-ops-sanity-tests",
+            "run-umd-sanity-tests",
+            "run-ttsim-sanity-tests",
+            "run-models-sanity-tests",
+            "run-ttnn-sanity-tests",
+            "run-blackhole-multi-card-sanity-tests",
+            "build-inplace-wheel",
+        )
+    }
     sku = (re.search(r"\[([a-z0-9_]+)\]\s*$", job) or [None, ""])[1]
     if "QB2 only" in job or sku == "bh_quietbox_2":
         inputs["run-blackhole-multi-card-sanity-tests"] = "true"
@@ -563,9 +763,11 @@ def _sanity_debug(job, repo):
 
 
 def _l2(job, repo):
-    return {"run_wormhole": "true" if "wormhole" in job or "wh_" in job else "false",
-            "run_blackhole": "true" if "blackhole" in job or "bh_" in job else "false",
-            "run_triage_tests": "false"}
+    return {
+        "run_wormhole": "true" if "wormhole" in job or "wh_" in job else "false",
+        "run_blackhole": "true" if "blackhole" in job or "bh_" in job else "false",
+        "run_triage_tests": "false",
+    }
 
 
 def _t3k(job, repo):
@@ -609,7 +811,9 @@ def cmd_dispatch(a):
 SKIP_RE = re.compile(r"pytest\.mark\.(skip|xfail)|pytest\.skip\(|pytest\.xfail\(|@skip_for_|\bskipif\b")
 # Comment lines that log history (dates, run/job ids, "re-centred …"): git and
 # the PR keep that, the code keeps only the durable rule.
-HISTORY_RE = re.compile(r"^\s*(#|//|\*).*(\b20\d\d-\d\d-\d\d\b|\b(run|job)s? \d{8,}|re-?cent(e|r)?red|re-?baselined)", re.I)
+HISTORY_RE = re.compile(
+    r"^\s*(#|//|\*).*(\b20\d\d-\d\d-\d\d\b|\b(run|job)s? \d{8,}|re-?cent(e|r)?red|re-?baselined)", re.I
+)
 THRESH_WORDS = re.compile(r"pcc|atol|rtol|toleran|threshold|band|margin|expected|_ns\b|lower|upper|perf|bound", re.I)
 NUM = re.compile(r"\d+(\.\d+)?(e-?\d+)?")
 
@@ -657,18 +861,28 @@ def cmd_guard(a):
         reasons.append("deletes a file")
     threshold_detected = bool(thresh_hits)
     if threshold_detected and not v.get("threshold_change"):
-        reasons.append("diff looks like a threshold change but verdict.threshold_change=false: "
-                       + "; ".join(thresh_hits[:3]))
-    json.dump({"ok": not reasons, "reasons": reasons, "files": files,
-               "added": added, "deleted": deleted,
-               "threshold_detected": threshold_detected, "threshold_hits": thresh_hits[:5]},
-              sys.stdout)
+        reasons.append(
+            "diff looks like a threshold change but verdict.threshold_change=false: " + "; ".join(thresh_hits[:3])
+        )
+    json.dump(
+        {
+            "ok": not reasons,
+            "reasons": reasons,
+            "files": files,
+            "added": added,
+            "deleted": deleted,
+            "threshold_detected": threshold_detected,
+            "threshold_hits": thresh_hits[:5],
+        },
+        sys.stdout,
+    )
 
 
 # --------------------------------------------------------------- PR render
 def _shield(text):
     """Escape one shields.io static-badge field (dash/underscore doubled)."""
     from urllib.parse import quote
+
     return quote(text.replace("-", "--").replace("_", "__"), safe="")
 
 
@@ -687,16 +901,18 @@ def cmd_render(a):
     v, recs, repo = m["verdict"], m["records"], m["repo"]
     gh = "https://github.com/" + repo
     from urllib.parse import quote
-    L = ["> [!WARNING]",
-         "> Automated fix, not run on hardware. Needs human review before merge."]
+
+    L = ["> [!WARNING]", "> Automated fix, not run on hardware. Needs human review before merge."]
     if v.get("threshold_change"):
         L.append("> This PR changes a test threshold.")
     L += ["", "### Regression"]
     ls = recs[0].get("last_seen") or {}
     pipe = m.get("pipeline") or recs[0]["workflow"].replace(".yaml", "")
     label = "%s #%s" % (pipe, ls.get("number", "?"))
-    L.append("[![%s](https://img.shields.io/badge/%s-failed-d73a49?logo=githubactions&logoColor=white)](%s)"
-             % (label, _shield(label), ls.get("url", "")))
+    L.append(
+        "[![%s](https://img.shields.io/badge/%s-failed-d73a49?logo=githubactions&logoColor=white)](%s)"
+        % (label, _shield(label), ls.get("url", ""))
+    )
     L.append("")
     tests = sorted(set(_short_test(r["test"]) for r in recs))
     reg = v.get("regression") or "; ".join(sorted(set(r.get("summary") or r.get("error_key") or "" for r in recs)))
@@ -714,7 +930,9 @@ def cmd_render(a):
             continue
         badge = "%s/actions/workflows/%s/badge.svg?branch=%s&event=workflow_dispatch" % (gh, wf, quote(branch, safe=""))
         target = p.get("run_url") or "%s/actions/workflows/%s?query=branch%%3A%s" % (gh, wf, quote(branch, safe=""))
-        L.append("[![%s](%s)](%s) `%s` on this branch" % (wf.replace(".yaml", ""), badge, target, _fmt_inputs(p["inputs"])))
+        L.append(
+            "[![%s](%s)](%s) `%s` on this branch" % (wf.replace(".yaml", ""), badge, target, _fmt_inputs(p["inputs"]))
+        )
     L += ["", "### Review"]
     for item in v.get("reviewer_focus") or []:
         L.append("- [ ] " + item)
@@ -740,14 +958,16 @@ def main():
     for k in ("workflow", "run_id", "run_number", "sha", "url", "triage", "jobs"):
         u.add_argument("--" + k.replace("_", "-"), dest=k, required=True)
     u.add_argument("--job-ids", default="", help="comma-separated ids of the jobs this update covers")
-    t = sp.add_parser("triaged"); t.add_argument("--workflow", required=True)
+    t = sp.add_parser("triaged")
+    t.add_argument("--workflow", required=True)
     t.add_argument("--run-id", default="")
     e = sp.add_parser("eligible")
     e.add_argument("--mode", required=True)
     e.add_argument("--min-streak", type=int, required=True)
     e.add_argument("--max-per-day", type=int, required=True)
     e.add_argument("--only-sig", default="")
-    g = sp.add_parser("get"); g.add_argument("sigs", nargs="+")
+    g = sp.add_parser("get")
+    g.add_argument("sigs", nargs="+")
     mk = sp.add_parser("mark")
     mk.add_argument("--state", required=True)
     mk.add_argument("--extra", default="")
@@ -757,13 +977,18 @@ def main():
     sp.add_parser("list")
     sp.add_parser("scan-list")
     cr = sp.add_parser("classify-run")
-    cr.add_argument("--run-id", required=True); cr.add_argument("--relevant", required=True)
-    cr.add_argument("--baseline", required=True); cr.add_argument("--hours", type=int, default=24)
+    cr.add_argument("--run-id", required=True)
+    cr.add_argument("--relevant", required=True)
+    cr.add_argument("--baseline", required=True)
+    cr.add_argument("--hours", type=int, default=24)
     cr.add_argument("--repo-slug", default="tenstorrent/tt-metal")
     rs = sp.add_parser("runtime-stats")
-    rs.add_argument("--yaml", required=True); rs.add_argument("--sku", required=True)
-    rs.add_argument("--workflows", default=""); rs.add_argument("--days", type=int, default=7)
-    rs.add_argument("--runs", type=int, default=10); rs.add_argument("--repo-slug", default="tenstorrent/tt-metal")
+    rs.add_argument("--yaml", required=True)
+    rs.add_argument("--sku", required=True)
+    rs.add_argument("--workflows", default="")
+    rs.add_argument("--days", type=int, default=7)
+    rs.add_argument("--runs", type=int, default=10)
+    rs.add_argument("--repo-slug", default="tenstorrent/tt-metal")
     dp = sp.add_parser("dispatch")
     dp.add_argument("--workflow", required=True)
     dp.add_argument("--jobs", required=True, help="JSON list of full GH job names")
@@ -772,12 +997,23 @@ def main():
     gu.add_argument("--verdict", required=True)
     gu.add_argument("--diff", required=True)
     gu.add_argument("--max-lines", type=int, required=True)
-    rd = sp.add_parser("render"); rd.add_argument("--meta", required=True)
+    rd = sp.add_parser("render")
+    rd.add_argument("--meta", required=True)
     a = p.parse_args()
-    {"update": cmd_update, "triaged": cmd_triaged, "eligible": cmd_eligible, "get": cmd_get,
-     "mark": cmd_mark, "list": cmd_list, "dispatch": cmd_dispatch, "guard": cmd_guard,
-     "render": cmd_render, "scan-list": cmd_scan_list, "runtime-stats": cmd_runtime_stats,
-     "classify-run": cmd_classify_run}[a.cmd](a)
+    {
+        "update": cmd_update,
+        "triaged": cmd_triaged,
+        "eligible": cmd_eligible,
+        "get": cmd_get,
+        "mark": cmd_mark,
+        "list": cmd_list,
+        "dispatch": cmd_dispatch,
+        "guard": cmd_guard,
+        "render": cmd_render,
+        "scan-list": cmd_scan_list,
+        "runtime-stats": cmd_runtime_stats,
+        "classify-run": cmd_classify_run,
+    }[a.cmd](a)
 
 
 if __name__ == "__main__":

@@ -72,7 +72,11 @@ walkthrough of the whole flow.
      - adds skip/xfail;
      - changes a threshold without saying so.
    - **dryrun:** writes `proposals/<date>-<sig8>/` (patch, PR title and body,
-     dispatch plan, verdict, guard) and posts "would open" to Slack.
+     dispatch plan, verdict, guard) and posts it as a one-click poll in the
+     digest thread: **Open draft PR** / ✍️ Other… / Reject. "Open draft PR"
+     applies that exact saved patch (no new agent run) and opens the live
+     draft PR with targeted CI; if the patch no longer applies to main, the
+     agent re-runs. One poll covers every test of the group.
    - **live:** creates branch `skrstic/autofix/<sig8>-<slug>`, commits,
      pushes, then runs `gh pr create --draft` with labels
      `made-by-ai,automated`, a title prefix of
