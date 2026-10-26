@@ -192,8 +192,8 @@ Shared tt_dit pieces used as they are: `blocks/transformer_block_opt.py` (the du
 8. Decode: `Flux2KleinVaeDecode.decode` (`vae_flux2_klein.py`) all-gathers the state over SP, slices the image rows,
    re-partitions them over the VAE's H axis, applies the inverse BatchNorm and unpatchify and runs
    `Flux2VaeDecoder`; its trace is captured before the DiT trace of the same layout.
-9. Host image: `image_to_uint8_on_device` does `(x / 2 + 0.5).clamp(0, 1) * 255` rounded to uint8 on the device and
-   one replica is read; `Flux2KleinResult` carries the PIL image, the seed, the timings and optionally the final
+9. Host image: `image_to_uint8_on_device` does `(x / 2 + 0.5).clamp(0, 1) * 255` on the device (the sum rounded to
+   bf16 as the reference's `denormalize` does, then `round` and a uint8 typecast) and one replica is read; `Flux2KleinResult` carries the PIL image, the seed, the timings and optionally the final
    tokens and the text rows.
 
 ### The layout object
@@ -254,10 +254,10 @@ The port's rule is bf16 operands with fp32 accumulation everywhere and no bfp8 /
 | `HF_HUB_CACHE`, `HF_HOME` | `weights_flux2_klein.py` | the Hugging Face cache searched next |
 | `TT_DIT_ALLOW_HF_DOWNLOAD=1` | `weights_flux2_klein.py` | allow a missing snapshot to be downloaded |
 | `TT_DIT_CACHE_DIR` | `utils/cache.py` | the converted-weight cache root |
-| `FLUX2_KLEIN_SDPA_EXP_APPROX` (`1` / `0`) | `pipeline_flux2_klein.py` | ring SDPA exp: approximate (default) or precise; the `sdpa_exp_approx=` keyword wins |
+| `FLUX2_KLEIN_SDPA_EXP_APPROX` (`1` / `0`) | `pipeline_flux2_klein.py` | ring SDPA exp: approximate (default) or precise; the environment wins over the `sdpa_exp_approx=` keyword |
 | `FLUX2_KLEIN_DIT_FIDELITY` (`hifi4` / `hifi2` / `default`) | `pipeline_flux2_klein.py` | matmul fidelity of every DiT linear; the environment wins over `dit_math_fidelity=` |
-| `FLUX2_KLEIN_TEXT_ENCODER_FIDELITY` (`default` / `hifi4` / ...) | `pipeline_flux2_klein.py` | Qwen3 linear fidelity (default HiFi2); the `text_encoder_math_fidelity=` keyword wins |
-| `FLUX2_KLEIN_TEXT_ENCODER_FSDP` (`1` / `0`) | `pipeline_flux2_klein.py` | text encoder weights sharded over the non-TP axis (default) or replicated there |
+| `FLUX2_KLEIN_TEXT_ENCODER_FIDELITY` (`default` / `hifi4` / ...) | `pipeline_flux2_klein.py` | Qwen3 linear fidelity (default HiFi2); the environment wins over the `text_encoder_math_fidelity=` keyword |
+| `FLUX2_KLEIN_TEXT_ENCODER_FSDP` (`1` / `0`) | `pipeline_flux2_klein.py` | text encoder weights sharded over the non-TP axis (default) or replicated there; the environment wins over `text_encoder_fsdp=` |
 | `FLUX2_KLEIN_RECORD_MEMORY` (`1` / `0`) | `pipeline_flux2_klein.py` | append the mesh memory view to every per-request log line (default off) |
 | `FLUX2_KLEIN_VAE_SLICE_MODE` (`auto` / `aligned` / `explicit`) | `vae_flux2_klein.py` | how the VAE conv slice tables are chosen |
 | `FLUX2_KLEIN_VAE_CONFIG_TENSORS_DRAM` (`1` / `0`) | `vae_flux2_klein.py` | keep the conv halo config tensors in DRAM (default) or L1_SMALL |
