@@ -6,7 +6,9 @@
 #include "api/compute/pack_untilize.h"
 #include "api/compute/experimental/fast_untilize.h"
 #include "api/compute/cb_api.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 
 // This is the go-to helper for all untilize usage in compute kernels.
 // Prefer this over raw pack_untilize_init/pack_untilize_block/pack_untilize_uninit calls.
@@ -104,6 +106,7 @@ ALWI void untilize_uninit();
  *
  * ── Runtime Parameters ──────────────────────────────────────────────────────
  *
+ *   in_dfb / out_dfb  — The kernel's DataflowBuffers for input_dfb / output_dfb, by reference.
  *   num_blocks          — Number of tile-rows to process (height in tiles).
  *
  * NOTE: Asymmetric DFB page support (total_input_pages) exists only in the tilize helper.
@@ -115,31 +118,35 @@ ALWI void untilize_uninit();
  *
  *   // Hardware init — only if no other init or compute_kernel_hw_startup was called before
  *   compute_kernel_hw_startup(dfb_in, dfb_out);
+ *   // Construct each DataflowBuffer once, at kernel scope, and pass it by reference. The helper never
+ *   // constructs its own: on Quasar a DataflowBuffer drains when it goes out of scope.
+ *   DataflowBuffer in(dfb_in), out(dfb_out);
  *
  *   // 1. Basic untilize (most common)
- *   compute_kernel_lib::untilize<4, dfb_in, dfb_out>(num_blocks);
+ *   compute_kernel_lib::untilize<4, dfb_in, dfb_out>(in, out, num_blocks);
  *
  *   // 2. Wait-upfront (e.g., GroupNorm pattern)
  *   using namespace compute_kernel_lib::untilize_config;
  *   compute_kernel_lib::untilize<10, dfb_in, dfb_out,
  *            InitUninitMode::InitAndUninit,
- *            WaitMode::WaitUpfront>(num_rows);
+ *            WaitMode::WaitUpfront>(in, out, num_rows);
  *
  *   // 3. Register reconfiguration (switching data formats mid-kernel)
  *   compute_kernel_lib::untilize<4, dfb_in, dfb_out,
  *            untilize_config::InitUninitMode::InitAndUninit,
  *            untilize_config::WaitMode::WaitBlock,
- *            untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(num_blocks);
+ *            untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(in, out, num_blocks);
  *
  *   // 4. Caller-managed synchronization (data already in DFB)
  *   compute_kernel_lib::untilize<4, dfb_in, dfb_out,
  *            untilize_config::InitUninitMode::InitAndUninit,
- *            untilize_config::WaitMode::NoWait>(num_blocks);
+ *            untilize_config::WaitMode::NoWait>(in, out, num_blocks);
  *
  *   // 5. Multiple back-to-back untilize calls — skip redundant init/uninit between them
- *   compute_kernel_lib::untilize<w, dfb_in, dfb_out, untilize_config::InitUninitMode::InitOnly>(blocks);   // first
- *   compute_kernel_lib::untilize<w, dfb_in, dfb_out, untilize_config::InitUninitMode::Neither>(blocks);    // middle
- *   compute_kernel_lib::untilize<w, dfb_in, dfb_out, untilize_config::InitUninitMode::UninitOnly>(blocks); // last
+ *   compute_kernel_lib::untilize<w, dfb_in, dfb_out, untilize_config::InitUninitMode::InitOnly>(in, out, blocks);   //
+ * first compute_kernel_lib::untilize<w, dfb_in, dfb_out, untilize_config::InitUninitMode::Neither>(in, out, blocks); //
+ * middle compute_kernel_lib::untilize<w, dfb_in, dfb_out, untilize_config::InitUninitMode::UninitOnly>(in, out,
+ * blocks); // last
  *
  */
 template <
@@ -150,8 +157,27 @@ template <
     untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
     untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure,
+    typename InDFB,
+    typename OutDFB>
+ALWI void untilize(InDFB& in_dfb, OutDFB& out_dfb, uint32_t num_blocks);
+
+// The id-only form: builds the DataflowBuffers from the ids and runs the form above. See id_only_helpers.hpp.
+template <
+    uint32_t block_width_tiles,
+    uint32_t input_dfb,
+    uint32_t output_dfb,
+    untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
+    untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
+    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
+        untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
     untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure>
-ALWI void untilize(uint32_t num_blocks);
+KERNEL_LIB_ID_ONLY_HELPER ALWI void untilize(uint32_t num_blocks) {
+    DataflowBuffer in_dfb(input_dfb);
+    DataflowBuffer out_dfb(output_dfb);
+    untilize<block_width_tiles, input_dfb, output_dfb, init_uninit_mode, wait_mode, reconfig_mode, remap_mode>(
+        in_dfb, out_dfb, num_blocks);
+}
 
 }  // namespace compute_kernel_lib
 

@@ -752,6 +752,29 @@ def test_logaddexp2_infinities(device, a, b, torch_dtype, ttnn_dtype):
     assert got == want, f"logaddexp2({a}, {b}) returned {got}; the exact result is {want}"
 
 
+@pytest.mark.parametrize("swap", [False, True])
+@pytest.mark.parametrize("max_value", [0.0, 5.0])
+def test_logaddexp2_large_gap_ulp_fp32(device, max_value, swap):
+    # With max(a, b) = 0 the result is log2(1 + 2**-gap), which for large gaps is ~2**-gap * log2(e)
+    # and carries none of max's magnitude, so any error in 2**-gap shows up directly in the ULP.
+    # Computing 2**-gap as exp(-gap * ln 2) rounds the argument and the error grows with the
+    # gap: up to 69 ULP near gap 121, and gap 126 flushed to 0 (issue #60010).
+    # A non-zero max and the swapped operand order check the |a - b| path is order-independent.
+    gap = torch.linspace(0, 125.99, 32 * 1024, dtype=torch.float32)
+    gap = torch.cat([gap, torch.tensor([10.3, 24.53, 56.52905, 92.53289, 101.534325, 121.536606, 126.0] + [0.0] * 25)])
+    x_torch = torch.full_like(gap, max_value).reshape(1, 1, -1, 32)
+    y_torch = (max_value - gap).reshape(1, 1, -1, 32)
+    if swap:
+        x_torch, y_torch = y_torch, x_torch
+    z_torch = torch.logaddexp2(x_torch.double(), y_torch.double()).float()
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.logaddexp2(x_tt, y_tt))
+
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=2)
+
+
 # ---------------------------------------------------------------------------------------------
 # logaddexp / logaddexp2: IEEE special values, the scalar and in-place APIs, and broadcasting.
 #
