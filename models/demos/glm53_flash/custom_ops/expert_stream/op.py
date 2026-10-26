@@ -71,8 +71,12 @@ MAX_PICKS = 8  # routed experts per token (top-8): bounds the passes and the gat
 TABLE_WIDTH = 64  # uint16 entries per pass-table row: [n_rows, e, t_0 .. t_31, pad]
 
 
-def _packet_bytes(tiles: int, tile_bytes: int = BFP8_TILE_BYTES) -> int:
-    """The largest NOC packet (a divisor of `tiles` weight tiles) that fits the max burst."""
+def _packet_bytes(tiles: int, tile_bytes: int = BFP8_TILE_BYTES, packet_tiles: int | None = None) -> int:
+    """The largest NOC packet (a divisor of `tiles` weight tiles) that fits the max burst, or ``packet_tiles``
+    tiles (a divisor of ``tiles`` within the burst) when given (the ``GLM53_STREAM_PACKET_TILES`` knob)."""
+    if packet_tiles is not None:
+        assert tiles % packet_tiles == 0 and packet_tiles * tile_bytes <= MAX_PACKET_BYTES, (tiles, packet_tiles)
+        return packet_tiles * tile_bytes
     return max(d for d in range(1, tiles + 1) if tiles % d == 0 and d * tile_bytes <= MAX_PACKET_BYTES) * tile_bytes
 
 
@@ -585,11 +589,26 @@ class ExpertGateUpDispatch(_BankStreamOp):
         w_dtype=ttnn.bfloat8_b,
         units: bool = False,
         ep_rm: bool = False,
+        unit_pairs: int = 1,
+        prefetch_pairs: int = 1,
+        packet_tiles: int | None = None,
+        gather_rotate: bool = False,
     ):
         super().__init__(device, groups)
         assert T % TILE == 0 and T <= 256, T  # counts are exact BF16 integers up to 256
         assert groups <= 32, groups
         self.E, self.K, self.I, self.T = E, K, I, T
+        # decode ledger item (d) knobs (custom_ops/expert_stream/plan.py; the defaults are today's program):
+        # unit_pairs = pairs per work unit of the units kernels (ppb / unit_pairs cores per bank per expert),
+        # prefetch_pairs = pairs in flight ahead of the compute (the weight ring has prefetch_pairs + 1 slots),
+        # packet_tiles = weight tiles per NOC packet (None = the largest divisor of K/32 within 16 KB),
+        # gather_rotate = rotate every core's row-gather / activation-read start (H1, the L1 convoy)
+        self.unit_pairs, self.prefetch_pairs, self.gather_rotate = (
+            int(unit_pairs),
+            int(prefetch_pairs),
+            bool(gather_rotate),
+        )
+        assert self.prefetch_pairs >= 1, prefetch_pairs
         self.ep, self.picks = ep, picks  # EP: routing = top-k index / weight tiles + the chip's expert base
         # ep_rm (the mesh path): the ids as the dispatch metadata rows [t_valid, K] UINT16 and the weights as the
         # K-wide BF16 tail of every token row ([x | w] ROW_MAJOR, both in L1); t_valid <= T rows are scanned
@@ -609,7 +628,10 @@ class ExpertGateUpDispatch(_BankStreamOp):
         self.w_dtype, self.w_tile = w_dtype, WEIGHT_TILE_BYTES[w_dtype]  # bfp8 or bfp4 gate|up weights
         self.col_bytes = self.kt * self.w_tile
         self.expert_stride = 2 * self.ppb * self.col_bytes
-        self.page_bytes = _packet_bytes(self.kt, self.w_tile)
+        self.page_bytes = _packet_bytes(self.kt, self.w_tile, packet_tiles)
+        assert (
+            self.ppb % self.unit_pairs == 0
+        ), f"{self.unit_pairs} pairs per unit do not divide {self.ppb} pairs per bank"
         self.row_bytes = K * 2
         self.P = max_passes(T, E)
 
@@ -626,7 +648,7 @@ class ExpertGateUpDispatch(_BankStreamOp):
         cbs = [
             self._cb(cb_xrm, ttnn.bfloat16, BF16_TILE_BYTES, self.kt),  # 32 row-major rows of K: kt tile-sized pages
             self._cb(cb_x, ttnn.bfloat16, BF16_TILE_BYTES, self.kt),
-            self._cb(cb_w, self.w_dtype, self.w_tile, 4 * self.kt),  # two (gate, up) pair slots
+            self._cb(cb_w, self.w_dtype, self.w_tile, 2 * self.kt * (self.prefetch_pairs + 1)),  # (gate, up) pair slots
             self._cb(cb_r, ttnn.bfloat16, BF16_TILE_BYTES, r_tiles),
             self._cb(cb_c0, ttnn.bfloat16, BF16_TILE_BYTES, c_tiles),
             self._cb(cb_c1, ttnn.bfloat16, BF16_TILE_BYTES, c_tiles),
@@ -670,6 +692,8 @@ class ExpertGateUpDispatch(_BankStreamOp):
             ep_mode,
             self.T,
             self.picks,
+            self.prefetch_pairs + 1,  # 12: weight ring slots
+            self.unit_pairs,  # 13: pairs per unit (units kernels)
         ]
         reader_ct += ttnn.TensorAccessorArgs(counts).get_compile_time_args()
         reader_ct += ttnn.TensorAccessorArgs(base if self.ep else counts).get_compile_time_args()  # unused if not EP
@@ -690,10 +714,12 @@ class ExpertGateUpDispatch(_BankStreamOp):
             self.ppb,
             ep_mode,
             self.picks,
+            int(self.gather_rotate),  # 16
+            self.unit_pairs,  # 17 (units kernels)
         ]
         for t in (x_rm, routing, counts, act, table, base if self.ep else counts):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        compute_ct = [cb_xrm, cb_x, cb_w, cb_d, cb_h, cb_out, self.kt, self.ppb]
+        compute_ct = [cb_xrm, cb_x, cb_w, cb_d, cb_h, cb_out, self.kt, self.ppb if not self.units else self.unit_pairs]
         program = self._program(
             "gate_up_dispatch_units" if self.units else "gate_up_dispatch",
             cbs,
@@ -724,11 +750,13 @@ class ExpertDownDispatch(_BankStreamOp):
         ep: bool = False,
         picks: int = MAX_PICKS,
         ep_rm: bool = False,
+        gather_rotate: bool = False,
     ):
         super().__init__(device, readers)
         assert T % TILE == 0 and T <= 256, T
         self.E, self.I, self.H, self.T = E, I, H, T
         self.ep, self.picks, self.ep_rm = ep, picks, ep_rm
+        self.gather_rotate = bool(gather_rotate)  # rotate the per-pass activation reads per core (H1)
         self.seg_tiles = I // TILE
         self.C = H // TILE // self.banks
         assert self.C % readers == 0, (self.C, readers)
@@ -843,6 +871,7 @@ class ExpertDownDispatch(_BankStreamOp):
             self.picks,
             out_tpr,  # 18: tokens per output tile row
             rt_out,  # 19: output tile rows (the compute's phase-2 count below must agree)
+            int(self.gather_rotate),  # 20
         ]
         for t in (counts, table, act, out, base if self.ep else counts):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -879,11 +908,30 @@ class ExpertDispatch:
         w13_dtype=ttnn.bfloat8_b,
         units: bool = False,
         ep_rm: bool = False,
+        unit_pairs: int = 1,
+        prefetch_pairs: int = 1,
+        packet_tiles: int | None = None,
+        gather_rotate: bool = False,
     ):
         self.gate_up = ExpertGateUpDispatch(
-            device, E, K, I, T, groups, ep=ep, w_dtype=w13_dtype, units=units, ep_rm=ep_rm
+            device,
+            E,
+            K,
+            I,
+            T,
+            groups,
+            ep=ep,
+            w_dtype=w13_dtype,
+            units=units,
+            ep_rm=ep_rm,
+            unit_pairs=unit_pairs,
+            prefetch_pairs=prefetch_pairs,
+            packet_tiles=packet_tiles,
+            gather_rotate=gather_rotate,
         )
-        self.down = ExpertDownDispatch(device, E, I, H, T, down_readers, ep=ep, ep_rm=ep_rm)
+        self.down = ExpertDownDispatch(
+            device, E, I, H, T, down_readers, ep=ep, ep_rm=ep_rm, gather_rotate=gather_rotate
+        )
         self.E, self.K, self.I, self.H, self.T, self.ep, self.ep_rm = E, K, I, H, T, ep, ep_rm
         self.P = self.gate_up.P
 

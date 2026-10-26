@@ -116,10 +116,29 @@ segment per core and lose. The target at M = 32 (<= 400 us) is met; the M = 256 
 per-expert dispatch form (gather the rows routed to each expert on device, stream each active expert once, fp32
 row partials in L1): the design is in section 9 of the sweep doc, expected 0.6-0.8 ms per layer per chip.
 
+## Streaming knobs (decode ledger item (d), 2026-10-26; `plan.py`)
+
+`GLM53_EXPERT_PLAN=legacy` (default: today's program) | `explicit` (the knobs below over the legacy values) |
+`roofline` (`plan.plan_expert_stream` for `GLM53_EXPERT_PLAN_GRID` (13x10), `GLM53_EXPERT_PLAN_ACTIVE` (expected
+active experts), `GLM53_EXPERT_PLAN_T`, the formats, with the explicit knobs on top). Knobs -> `ExpertDispatch`
+kwargs: `GLM53_STREAM_GROUPS` (cores per bank), `GLM53_STREAM_UNITS` (pair-unit LPT), `GLM53_STREAM_UNIT_PAIRS`
+(`unit_pairs`: pairs per unit of the units kernels = `ppb / unit_pairs` cores per bank per expert; 1 = today's
+units, 8 = one unit per expert at I = 2048), `GLM53_STREAM_PREFETCH` (`prefetch_pairs`: pairs in flight ahead of
+the compute, ring = prefetch + 1 pair slots; bfp8 pairs at K = 4096 allow 1, bfp4 2-3), `GLM53_STREAM_PACKET_TILES`
+(weight tiles per NOC packet), `GLM53_DISPATCH_DOWN_READERS`, `GLM53_STREAM_GATHER_ROTATE` (`gather_rotate`: every
+gate|up core starts its row gather, and every down core its activation read, at a different row / tile: the H1
+"convoy" hypothesis of the 2x slower units mode at few experts, `plan.fit_gather_convoy`). Kernel compile-time args:
+readers 12 = ring slots, 13 = pairs per unit; gate|up writers 16 = rotate, 17 = pairs per unit; down writer 20 =
+rotate; units compute 7 = pairs per unit (`dispatch_common.hpp::for_each_unit_chunk`, `rotated_row`). None of them
+changes a result (reordered reads, a different work split): `tests/test_moe_roofline_mesh.py::test_stream_knobs_chip0`
+asserts bit identity per variant and logs the us table that calibrates `plan.py`.
+
 ## Knobs
 
-`GLM53_MOE_LAYOUT=ep` (the EP32 expert path, `TtEPExperts`), `GLM53_EXPERT_W13_DTYPE=bfp4` (tests: the gate|up
-bfp4 knob), `GLM53_STREAM_DISPATCH` (1: 32 < T <= 256 gathered tokens go through the dispatch ops, 0: 32-token blocks),
+`GLM53_MOE_LAYOUT=ep` (the EP32 expert path, `TtEPExperts`), `GLM53_EXPERT_W13_DTYPE=bfp4` (C12: the routed gate|up
+format over the model's, applied in `TtMoE` and in `TtMoE.expert_cache_complete`; the tensorbin names carry the
+dtype), `GLM53_EP_PLACEMENT=<placement.json>` (item (e): the expert -> chip placement from `plan.plan_ep_placement`,
+the router's id table, cache tag `_p<hash>`), `GLM53_STREAM_DISPATCH` (1: 32 < T <= 256 gathered tokens go through the dispatch ops, 0: 32-token blocks),
 `GLM53_DISPATCH_DOWN_READERS` (8). `GLM53_STREAM_EXPERTS=1` selects the stream block in `tt/moe.py` (`TtRoutedExperts(stream=True)`, weight cache tag
 `_stream`: the bank-major layouts are built once from the per-chip slices and uploaded width-sharded over the DRAM
 banks through `upload_cached(..., rows=0, cols=1, memory_config=stream_memory_config(rows))`); `GLM53_STREAM_GROUPS`

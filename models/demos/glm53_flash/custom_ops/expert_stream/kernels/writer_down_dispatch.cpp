@@ -25,6 +25,7 @@
 //
 // runtime args: [counts_addr (EP: idx_addr), table_addr, act_addr, out_addr, col0, (EP) base_addr, (EP = 2) t_valid,
 //                idx_page]
+// compile-time 20: GATHER_ROTATE (1 = rotate the phase-1 activation tile reads per core: dispatch_common.hpp).
 
 #include <stdint.h>
 
@@ -61,7 +62,8 @@ void kernel_main() {
     constexpr uint32_t OUT_TPR = get_compile_time_arg_val(18);  // tokens per output tile row (32 = plain layout)
     constexpr uint32_t RT_OUT = get_compile_time_arg_val(19);   // output tile rows written (T / 32 when plain)
     static_assert(OUT_TPR >= 1 && OUT_TPR <= 32, "a tile row holds at most 32 tokens");
-    constexpr auto counts_args = TensorAccessorArgs<20>();  // EP: the index tiles
+    constexpr uint32_t GATHER_ROTATE = get_compile_time_arg_val(20);  // 1: rotate the per-pass activation reads
+    constexpr auto counts_args = TensorAccessorArgs<21>();            // EP: the index tiles
     constexpr auto table_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
     constexpr auto act_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<act_args.next_compile_time_args_offset()>();
@@ -151,12 +153,15 @@ void kernel_main() {
     cb_push_back(cb_m, 1);
     // batches of a_batch passes (one read barrier each), two batches of slots: one batch lands while the compute
     // works on the other
-    constexpr uint32_t a_batch = 1;  // one pass per read barrier (batches of 3 were slower end to end)
+    constexpr uint32_t a_batch = 1;           // one pass per read barrier (batches of 3 were slower end to end)
+    const uint32_t gather_rot = col0 / cols;  // unique per core (bank * readers + reader)
     for (uint32_t k = 0; k < n_pass; k += a_batch) {
         const uint32_t nb = (n_pass - k) < a_batch ? (n_pass - k) : a_batch;
         cb_reserve_back(cb_a, nb * seg_tiles);
         const uint32_t a_l1 = get_write_ptr(cb_a);
-        for (uint32_t s = 0; s < nb * seg_tiles; ++s) {
+        for (uint32_t ss = 0; ss < nb * seg_tiles; ++ss) {
+            // every down core reads the same pass tiles: under GATHER_ROTATE each starts at a different tile
+            const uint32_t s = GATHER_ROTATE ? rotated_row(ss, nb * seg_tiles, gather_rot) : ss;
             noc_async_read(s_act.get_noc_addr(k * seg_tiles + s), a_l1 + s * tile_page, tile_page);
         }
         noc_async_read_barrier();
@@ -248,4 +253,5 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_out, cols);
     }
+    noc_async_full_barrier();  // exit contract: every NOC read / write / atomic acknowledged before the next kernel
 }

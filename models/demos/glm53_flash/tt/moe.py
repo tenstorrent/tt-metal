@@ -54,6 +54,13 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (
     gate_up_stream_layout,
     stream_memory_config,
 )
+from models.demos.glm53_flash.custom_ops.expert_stream.plan import (
+    contiguous_placement,
+    load_placement,
+    placement_hash,
+    placement_perm,
+    plan_from_env,
+)
 from models.demos.glm53_flash.custom_ops.router_topk.op import RouterTopk
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
@@ -75,6 +82,62 @@ TILE = 32
 # the position of every (token, pick) -> ttnn.embedding gathers the token rows into the regions, the kernel runs, a
 # second ttnn.embedding gathers every pick's output row back, post_combine_reduce applies the routing weights
 PREFILL_EXPERTS = os.environ.get("GLM53_PREFILL_EXPERTS", "blocks")
+
+# Decode ledger C12 (2026-10-26): ``GLM53_EXPERT_W13_DTYPE`` overrides the routed gate|up expert format the model
+# passes in (bfp8 by default; ``bfp4`` halves the dominant weight-read term: 17.8 -> 9.4 MB per full-width expert,
+# 2.23 -> 1.18 MB per hybrid slice). The down format stays the model's (``expert_down_dtype``). Applied in BOTH
+# ``TtMoE.__init__`` and ``TtMoE.expert_cache_complete`` so a warm bfp8 cache is never mistaken for a bfp4 one: the
+# tensorbin names carry the dtype (``experts_w13_BFLOAT4_B_*``), a missing bfp4 file makes the model load the host
+# tensors (the cache is then written from them), and ``_nonzero`` refuses to dump a dataless placeholder.
+W13_DTYPE_ENV = "GLM53_EXPERT_W13_DTYPE"
+# The on-disk layout tag of the routed-expert tensorbins. Empty = the names in use since Phase 2 (the warm caches
+# under _cache/mesh/layer*/ stay valid). Bump it ("_v2", ...) whenever a tensorbin's content layout changes under an
+# unchanged name (a new bank order, a new placement scheme, ...): the trap of 2026-10-16 (a renamed cache under a
+# marker that certified only the old name set served dataless placeholders as zeros) does not apply here because
+# ``cache_complete`` checks the exact file set, but a silent re-layout under the old names would.
+EXPERT_CACHE_LAYOUT = ""
+
+
+def routed_w13_dtype(default):
+    """The routed gate|up expert format after the ``GLM53_EXPERT_W13_DTYPE`` override (unset = ``default``)."""
+    name = os.environ.get(W13_DTYPE_ENV, "")
+    if not name:
+        return default
+    table = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b, "bf16": ttnn.bfloat16}
+    assert name in table, f"{W13_DTYPE_ENV}={name!r}: bfp8 | bfp4 | bf16"
+    return table[name]
+
+
+def _nonzero(t: torch.Tensor, what: str) -> torch.Tensor:
+    """The warm-cache guard: a host expert tensor about to be converted and dumped must carry data (a
+    ``torch.empty`` placeholder handed in by a loader that believed the cache complete is refused here, before it
+    becomes a tensorbin of zeros that every later warm start would serve)."""
+    if t.numel() == 0 or not torch.isfinite(t.float().abs().max()) or float(t.float().abs().max()) == 0.0:
+        raise RuntimeError(f"routed experts: {what} is all zeros / empty: refusing to convert or cache a placeholder")
+    return t
+
+
+def ep_placement_from_env(E: int, D: int) -> tuple[list[list[int]], str]:
+    """``GLM53_EP_PLACEMENT``: unset / ``contiguous`` -> chip d owns experts [d E/D, (d+1) E/D) (today); a path ->
+    the JSON placement file written by ``custom_ops/expert_stream/plan.py`` (``save_placement``: per-chip expert
+    lists, one slot per expert, the hottest experts spread one per chip). Returns (chips, cache tag)."""
+    spec = os.environ.get("GLM53_EP_PLACEMENT", "contiguous")
+    if spec in ("", "contiguous"):
+        return contiguous_placement(E, D), ""
+    chips = load_placement(spec)
+    assert len(chips) == D, f"placement {spec}: {len(chips)} chips for a mesh of {D}"
+    E_local = E // D
+    assert all(len(c) == E_local for c in chips), "placement with replication / ragged slots is not wired yet"
+    assert sorted(e for c in chips for e in c) == list(range(E)), "placement must list every expert exactly once"
+    return chips, "_p" + placement_hash(chips)
+
+
+def ep_placement_tag_from_env(D: int) -> str:
+    """The cache-name tag of the ``GLM53_EP_PLACEMENT`` in force ("" = contiguous) for a mesh of ``D`` chips."""
+    spec = os.environ.get("GLM53_EP_PLACEMENT", "contiguous")
+    if D == 1 or spec in ("", "contiguous"):
+        return ""
+    return "_p" + placement_hash(load_placement(spec))
 
 
 def prefill_experts_mode() -> str:
@@ -270,6 +333,20 @@ class TtRouter(LightweightModule):
         if self.fused:
             logger.info("TtRouter: fused decode router (custom_ops/router_topk, GLM53_ROUTER_FUSED=1)")
         self._const: dict[tuple, ttnn.Tensor] = {}
+        # the EP placement table (``set_perm``): global expert id -> slot id, applied by the fused op to the ids it
+        # writes (C10 / item (e)); None = the identity (today)
+        self.perm: ttnn.Tensor | None = None
+        self.H = cfg.hidden_size
+
+    def set_perm(self, perm: list[int] | None):
+        """Install the EP placement's global -> slot map ([E] ints) as the fused op's uint16 table (DRAM page)."""
+        if perm is None:
+            self.perm = None
+            return
+        assert len(perm) == self.E and sorted(perm) == list(range(self.E)), "perm must be a permutation of the ids"
+        self.perm = self.mesh.upload(
+            torch.tensor(perm, dtype=torch.int32).reshape(1, 1, 1, self.E), ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
 
     def _scores(self, x: ttnn.Tensor, T: int) -> ttnn.Tensor:
         """The fp32 sigmoid scores [1,1,T,E] of x (sigmoid fused into the gate matmul for decode shapes)."""
@@ -280,16 +357,29 @@ class TtRouter(LightweightModule):
         ttnn.deallocate(logits)
         return scores
 
-    def _forward_fused(self, x: ttnn.Tensor, T: int, dense_only: bool = False, ep_rows: bool = False):
+    def _forward_fused(self, x: ttnn.Tensor, T: int, dense_only: bool = False, ep_mode: str | None = None):
         """The fused path: gate matmul (sigmoid fused) + ONE ``RouterTopk`` program writing exactly the tensors
-        ``_forward_topk`` returns for the mode (outputs allocated per call: inside the trace under capture)."""
+        ``_forward_topk`` returns for the mode (outputs allocated per call: inside the trace under capture).
+        ``ep_mode``: ``rows`` (bf16 w tile + uint32 id tile: today's EP mesh inputs), ``rm`` (C10: the [x | w]
+        row-major pages + uint16 id rows ``all_to_all_dispatch`` takes, no glue ops), ``tiles`` (the single-chip EP
+        op's bf16 w tile + bf16 id tile with IDX_PAD)."""
         if self.fused_op is None:
             self.fused_op = RouterTopk(self.device, E=self.E, k=self.k, scale=self.cfg.routed_scaling_factor)
         op = self.fused_op
         scores = self._scores(x, T)
-        if ep_rows:  # bf16 weights + uint32 ids, no dense matrix
+        if ep_mode == "rm":  # C10: the dispatch's inputs straight from the op (x untilized by its reader kernel)
+            xw, idx = op.allocate_xw(T, self.H), op.allocate_idx_rows(T)
+            op(scores, self.bias, T, idx=idx, x=x, xw=xw, perm=self.perm)
+            ttnn.deallocate(scores)
+            return xw, idx, None
+        if ep_mode == "tiles":  # the single-chip EP op's index / weight tiles (no typecasts / concats)
+            w16, it = op.allocate_w(T, ttnn.bfloat16), op.allocate_idx_tiles(T)
+            op(scores, self.bias, T, w=w16, idx=it, perm=self.perm)
+            ttnn.deallocate(scores)
+            return w16, it, None
+        if ep_mode == "rows":  # bf16 weights + uint32 ids, no dense matrix
             w16, idx = op.allocate_w(T, ttnn.bfloat16), op.allocate_idx(T, ttnn.uint32)
-            op(scores, self.bias, T, w=w16, idx=idx)
+            op(scores, self.bias, T, w=w16, idx=idx, perm=self.perm)
             ttnn.deallocate(scores)
             return w16, idx, None
         dense = op.allocate_dense(T)
@@ -346,12 +436,20 @@ class TtRouter(LightweightModule):
         return self._const[key]
 
     def forward(
-        self, x: ttnn.Tensor, *, dense_only: bool = False, ep_rows: bool = False, prefill: bool = False
+        self,
+        x: ttnn.Tensor,
+        *,
+        dense_only: bool = False,
+        ep_rows: bool = False,
+        prefill: bool = False,
+        ep_mode: str | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """x [1,1,T,H] bf16 -> (weights [1,1,T,8] fp32, indices [1,1,T,8] fp32 (integral), dense [1,1,T,E] fp32).
         ``dense_only`` (the MoE forward): weights / indices come back as ``None`` (their host-side casts are skipped).
         ``ep_rows`` (the EP mesh path, ``topk`` tie-break only): (weights [1,1,T,8] bf16, indices [1,1,T,8] uint32,
-        None): the exact ids for the all_to_all dispatch, no dense matrix.
+        None): the exact ids for the all_to_all dispatch, no dense matrix. ``ep_mode`` = ``rows`` (the same) |
+        ``rm`` | ``tiles`` (``_forward_fused``): the fused-op-only layouts; off the fused path (prefill slabs, the
+        composite router) they fall back to ``rows``, which every EP consumer accepts (``TtEPExperts.forward``).
 
         Exact fp32 selection (HF noaux_tc, n_group=1): ``choice = sigmoid(logits) + bias``, top-8 by
         iterative masked argmax, weights = unbiased scores at the selected experts, renormalized and
@@ -359,11 +457,15 @@ class TtRouter(LightweightModule):
         biased scores), which swaps the 8th expert on ~20% of real tokens; the composite is exact.
         """
         T = x.shape[-2]
+        if ep_mode is None and ep_rows:
+            ep_mode = "rows"
+        ep_rows = ep_mode is not None
         # the fused op is validated against the composite on decode shapes only; a prefill slab of <= 32 rows (a
         # <= 256-token prompt sequence-parallel over 8 rows) keeps the composite: with the fused op the 128-token
         # first token on the 8x4 stopped matching the HF head (2026-10-21, doc/mesh/README.md)
         if self.fused and not prefill and T <= TILE and self.tie_break == "topk":
-            return self._forward_fused(x, T, dense_only=dense_only, ep_rows=ep_rows)
+            return self._forward_fused(x, T, dense_only=dense_only, ep_mode=ep_mode)
+        assert self.perm is None or not ep_rows, "an EP placement needs the fused router on the decode path"
         if self.fused_sigmoid and T <= TILE and self.tie_break == "topk":
             scores = self.lin_gate_sig(x, dtype=ttnn.float32, compute_kernel_config=self.fp32)  # sigmoid fused
         else:
@@ -420,6 +522,7 @@ class TtRoutedExperts(LightweightModule):
     ) -> dict[str, Path]:
         """Tensorbin paths of the routed-expert device tensors for this placement / format / layout."""
         tag = f"mesh{mesh.rows}x{mesh.cols}" + ("_dense" if dense else "") + ("_stream" if stream else "")
+        tag += EXPERT_CACHE_LAYOUT
         cache_dir = Path(cache_dir)
         files = {
             "w13": cache_dir / f"experts_w13_{expert_dtype.name}_{tag}.tensorbin",
@@ -511,10 +614,10 @@ class TtRoutedExperts(LightweightModule):
             gate = gate_up[:, :I, :].transpose(1, 2)  # [E, H, I]
             up = gate_up[:, I:, :].transpose(1, 2)
             # [1,E,H,2I] in tpr blocks of [gate_r | up_r] so a row split of the last dim keeps the pairs
-            return interleave_blocks([gate, up], tpr, dim=-1).reshape(1, E, H, 2 * I)
+            return _nonzero(interleave_blocks([gate, up], tpr, dim=-1).reshape(1, E, H, 2 * I), "w13")
 
         def make_w2() -> torch.Tensor:
-            return down.transpose(1, 2).contiguous().reshape(1, E, I, H)  # [1,E,I,H]
+            return _nonzero(down.transpose(1, 2).contiguous().reshape(1, E, I, H), "w2")  # [1,E,I,H]
 
         def per_chip_dense(t):  # [E, H, I] -> [1, cols, H, rows * E_loc * I_loc]: a column split of dim 1 and a row
             # split of dim 3 hand chip (r, c) [H, (e in c, i in slice r)]
@@ -526,15 +629,15 @@ class TtRoutedExperts(LightweightModule):
             )
 
         def make_w13_gate_dense() -> torch.Tensor:
-            return per_chip_dense(gate_up[:, :I, :].transpose(1, 2))
+            return _nonzero(per_chip_dense(gate_up[:, :I, :].transpose(1, 2)), "w13 gate (dense)")
 
         def make_w13_up_dense() -> torch.Tensor:
-            return per_chip_dense(gate_up[:, I:, :].transpose(1, 2))
+            return _nonzero(per_chip_dense(gate_up[:, I:, :].transpose(1, 2)), "w13 up (dense)")
 
         def make_w2_dense() -> torch.Tensor:
             # [1, cols, rows * (E_loc * I_loc), H]: chip (r, c) gets rows (e in c, i in slice r) of every W2
             w2 = down.transpose(1, 2).reshape(ep, E_loc, tpr, I_loc, H).permute(0, 2, 1, 3, 4)
-            return w2.reshape(1, ep, tpr * E_loc * I_loc, H).contiguous()
+            return _nonzero(w2.reshape(1, ep, tpr * E_loc * I_loc, H).contiguous(), "w2 (dense)")
 
         def chip_slices(r: int, c: int):
             """Chip (r, c)'s gate|up [E_loc, H, 2 I_loc] ([gate_r | up_r] columns) and down [E_loc, I_loc, H]."""
@@ -546,14 +649,20 @@ class TtRoutedExperts(LightweightModule):
             return w13c, w2c
 
         def make_w13_stream() -> torch.Tensor:  # [rows_m, cols_m, rows13, 256]: a (0, 1) mesh split
-            return torch.stack(
-                [torch.stack([gate_up_stream_layout(chip_slices(r, c)[0]) for c in range(ep)]) for r in range(tpr)]
-            ).contiguous()
+            return _nonzero(
+                torch.stack(
+                    [torch.stack([gate_up_stream_layout(chip_slices(r, c)[0]) for c in range(ep)]) for r in range(tpr)]
+                ).contiguous(),
+                "w13 (stream)",
+            )
 
         def make_w2_stream() -> torch.Tensor:
-            return torch.stack(
-                [torch.stack([down_stream_layout(chip_slices(r, c)[1]) for c in range(ep)]) for r in range(tpr)]
-            ).contiguous()
+            return _nonzero(
+                torch.stack(
+                    [torch.stack([down_stream_layout(chip_slices(r, c)[1]) for c in range(ep)]) for r in range(tpr)]
+                ).contiguous(),
+                "w2 (stream)",
+            )
 
         if stream:
             rows13 = E_loc * 2 * (I_loc // TILE // 8) * (H // TILE) * TILE  # ppb column pairs per bank
@@ -592,6 +701,7 @@ class TtRoutedExperts(LightweightModule):
                 down_readers=int(os.environ["GLM53_STREAM_DOWN_READERS"])
                 if os.environ.get("GLM53_STREAM_DOWN_READERS")
                 else None,  # auto: 2 at I_loc = 256, 4 at 1024, 8 at 2048
+                w13_dtype=expert_dtype,
             )
         elif dense:
             shape13 = (1, ep, H, tpr * E_loc * I_loc)
@@ -765,19 +875,20 @@ class TtRoutedExperts(LightweightModule):
         return out
 
     def _dispatch_op(self, T: int):
-        """The dispatch ops for T gathered tokens (one program per T, cached)."""
+        """The dispatch ops for T gathered tokens (one program per T, cached). ``GLM53_EXPERT_PLAN`` (item (d),
+        ``custom_ops/expert_stream/plan.py``) adds the streaming knobs on top of today's defaults."""
         if T not in self.dispatch_ops:
             E_loc, K, I_loc, H = self.dispatch_shapes
-            self.dispatch_ops[T] = ExpertDispatch(
-                self.device,
-                E_loc,
-                K,
-                I_loc,
-                H,
-                T,
+            kw = dict(
                 groups=int(os.environ.get("GLM53_STREAM_GROUPS", "12")),
                 down_readers=int(os.environ.get("GLM53_DISPATCH_DOWN_READERS", "8")),
+                w13_dtype=self.expert_dtype,
             )
+            plan = plan_from_env(os.environ, E_loc, I_loc)
+            if plan is not None:
+                kw.update(plan.op_kwargs())
+                logger.info(f"hybrid dispatch op T={T}: expert plan {plan.op_kwargs()}")
+            self.dispatch_ops[T] = ExpertDispatch(self.device, E_loc, K, I_loc, H, T, **kw)
         return self.dispatch_ops[T]
 
     def _block_dispatch(self, x: ttnn.Tensor, dense_w: ttnn.Tensor) -> ttnn.Tensor:
@@ -1258,8 +1369,14 @@ class TtEPExperts(LightweightModule):
     hop packets and the Blackhole CI covers these ops under FABRIC_1D only)."""
 
     @staticmethod
-    def cache_files(cache_dir: Path | str, mesh: GLMMesh, expert_dtype, expert_down_dtype) -> dict[str, Path]:
-        tag = f"mesh{mesh.rows}x{mesh.cols}_ep"
+    def cache_files(
+        cache_dir: Path | str, mesh: GLMMesh, expert_dtype, expert_down_dtype, placement_tag: str | None = None
+    ) -> dict[str, Path]:
+        """Tensorbin names: the format, the mesh, ``_ep``, the placement tag (``_p<hash>`` for a non-contiguous
+        ``GLM53_EP_PLACEMENT``; read from the env when not given) and the layout tag."""
+        if placement_tag is None:
+            placement_tag = ep_placement_tag_from_env(mesh.rows * mesh.cols)
+        tag = f"mesh{mesh.rows}x{mesh.cols}_ep" + placement_tag + EXPERT_CACHE_LAYOUT
         cache_dir = Path(cache_dir)
         return {
             "w13": cache_dir / f"experts_w13_{expert_dtype.name}_{tag}.tensorbin",
@@ -1267,10 +1384,13 @@ class TtEPExperts(LightweightModule):
         }
 
     @classmethod
-    def cache_complete(cls, cache_dir, mesh: GLMMesh, expert_dtype, expert_down_dtype) -> bool:
+    def cache_complete(cls, cache_dir, mesh: GLMMesh, expert_dtype, expert_down_dtype, placement_tag=None) -> bool:
         if cache_dir is None:
             return False
-        return all(f.is_file() for f in cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype).values())
+        return all(
+            f.is_file()
+            for f in cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype, placement_tag).values()
+        )
 
     def __init__(
         self,
@@ -1296,31 +1416,50 @@ class TtEPExperts(LightweightModule):
         assert self.E % self.D == 0, (self.E, self.D)
         self.E_local = self.E // self.D
         E_local, H, I = self.E_local, self.H, self.I
+        # item (e): the expert -> chip placement (``GLM53_EP_PLACEMENT``; contiguous = today). Chip d streams the
+        # experts ``self.placement[d]``; the kernels, the dispatch mapping and the ids the router emits all work in
+        # the permuted "slot" space where chip d's experts are ``[d E_local, (d+1) E_local)`` (``self.perm``:
+        # global id -> slot id, installed on the router by ``TtMoE``). On one chip the placement is the identity.
+        self.placement, self.placement_tag = (
+            ep_placement_from_env(self.E, self.D) if self.D > 1 else (contiguous_placement(self.E, 1), "")
+        )
+        self.perm = [slots[0] for slots in placement_perm(self.placement, self.E, E_local)]
+        self.perm_is_identity = self.perm == list(range(self.E))
+        if not self.perm_is_identity:
+            logger.info(f"TtEPExperts: expert placement {self.placement_tag} (GLM53_EP_PLACEMENT)")
         files = (
-            self.cache_files(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype)
+            self.cache_files(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype, self.placement_tag)
             if weight_cache_path is not None
             else {"w13": None, "w2": None}
         )
         if gate_up is None or down is None:
-            if not self.cache_complete(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype):
+            if not self.cache_complete(
+                weight_cache_path, self.mesh, expert_dtype, expert_down_dtype, self.placement_tag
+            ):
                 raise ValueError("EP experts without host tensors need a complete weight cache")
 
         def chip_experts(r: int, c: int):
             d = r * C + c
-            es = slice(d * E_local, (d + 1) * E_local)
+            es = torch.tensor(self.placement[d], dtype=torch.long)  # the chip's slots, in slot order
             g = gate_up[es, :I, :].transpose(1, 2)  # [E_local, H, I]
             u = gate_up[es, I:, :].transpose(1, 2)
             return torch.cat([g, u], dim=-1).float(), down[es].transpose(1, 2).float()  # [E_local, I, H]
 
         def make_w13() -> torch.Tensor:  # [R, C, rows13, 256]
-            return torch.stack(
-                [torch.stack([gate_up_stream_layout(chip_experts(r, c)[0]) for c in range(C)]) for r in range(R)]
-            ).contiguous()
+            return _nonzero(
+                torch.stack(
+                    [torch.stack([gate_up_stream_layout(chip_experts(r, c)[0]) for c in range(C)]) for r in range(R)]
+                ).contiguous(),
+                "w13 (ep)",
+            )
 
         def make_w2() -> torch.Tensor:
-            return torch.stack(
-                [torch.stack([down_stream_layout(chip_experts(r, c)[1]) for c in range(C)]) for r in range(R)]
-            ).contiguous()
+            return _nonzero(
+                torch.stack(
+                    [torch.stack([down_stream_layout(chip_experts(r, c)[1]) for c in range(C)]) for r in range(R)]
+                ).contiguous(),
+                "w2 (ep)",
+            )
 
         rows13 = E_local * 2 * (I // TILE // 8) * (H // TILE) * TILE
         rows2 = E_local * (H // TILE // 8) * (I // TILE) * TILE
@@ -1407,7 +1546,19 @@ class TtEPExperts(LightweightModule):
             )
 
     def _op(self, T: int, rm: bool = False) -> ExpertDispatch:
+        """The EP dispatch ops for T rows. ``GLM53_EXPERT_PLAN`` (item (d), ``custom_ops/expert_stream/plan.py``:
+        ``legacy`` default | ``explicit`` | ``roofline``) sets the streaming knobs (groups, pair units and pairs per
+        unit, prefetch depth, packet size, down readers, gather rotation) on top of today's values."""
         if (T, rm) not in self.ops:
+            kw = dict(
+                groups=int(os.environ.get("GLM53_STREAM_GROUPS", "12")),
+                down_readers=int(os.environ.get("GLM53_DISPATCH_DOWN_READERS", "8")),
+                units=not rm and os.environ.get("GLM53_STREAM_UNITS", "0") == "1",  # pair units (36-expert chips)
+            )
+            plan = plan_from_env(os.environ, self.E_local, self.I)
+            if plan is not None:
+                kw.update(plan.op_kwargs())
+                logger.info(f"EP dispatch op T={T} rm={rm}: expert plan {plan.op_kwargs()}")
             self.ops[(T, rm)] = ExpertDispatch(
                 self.device,
                 self.E_local,
@@ -1415,12 +1566,10 @@ class TtEPExperts(LightweightModule):
                 self.I,
                 self.H,
                 T,
-                groups=int(os.environ.get("GLM53_STREAM_GROUPS", "12")),
-                down_readers=int(os.environ.get("GLM53_DISPATCH_DOWN_READERS", "8")),
                 ep=True,
                 w13_dtype=self.expert_dtype,
-                units=not rm and os.environ.get("GLM53_STREAM_UNITS", "0") == "1",  # pair units (36-expert chips)
                 ep_rm=rm,
+                **kw,
             )
         return self.ops[(T, rm)]
 
@@ -1450,21 +1599,39 @@ class TtEPExperts(LightweightModule):
         Mesh: w [1,1,T,K] bf16, idx [1,1,T,K] uint32 (``TtRouter.forward(ep_rows=True)``)."""
         T = x.shape[-2]
         if self.D == 1 and not self.force_a2a:
-            it, wt = self._index_tiles(idx, w)
+            if idx.dtype == ttnn.bfloat16 and idx.layout == ttnn.TILE_LAYOUT and idx.shape[-1] == TILE:
+                # the router's ``tiles`` mode: the op's [T, 32] index tiles (IDX_PAD beyond K) and bf16 weights
+                assert w.dtype == ttnn.bfloat16, w.dtype
+                it, wt = idx, w
+                own = ()
+            else:
+                it, wt = self._index_tiles(idx, w)
+                own = (it, wt)
             x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
             op = self._op(T)
             act, table, out = op.alloc(self.device, act_l1=self.act_l1)
             op.forward(x_rm, wt, it, self.w13, self.w2, act, table, out, base=self.base)
-            for t in (x_rm, it, wt, act, table):
+            for t in (x_rm, act, table) + own:
                 ttnn.deallocate(t)
             return out
         # ---- mesh: three stages (timed separately by tests/test_a2a_perf.py::test_moe_decode_components)
-        tok, meta = self.dispatch_rows(x, w, idx)
+        if w.layout == ttnn.ROW_MAJOR_LAYOUT:  # C10: the router wrote the dispatch's [x | w] and id pages itself
+            tok, meta = self.dispatch_prepared(w, idx)
+        else:
+            tok, meta = self.dispatch_rows(x, w, idx)
         out = self.run_experts(tok, meta)
         y = self.combine_rows(out, meta, T)
         for t in (tok, meta, out):
             ttnn.deallocate(t)
         return y
+
+    def dispatch_prepared(self, xw: ttnn.Tensor, idx_rm: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Stage 1 with the router's row-major outputs (``TtRouter.forward(ep_mode="rm")``: xw [T,1,1,H+K] bf16
+        ROW_MAJOR L1 = [x | w] per token, idx_rm [T,1,1,K] uint16 ROW_MAJOR L1): ONE ``all_to_all_dispatch``
+        (the five layout ops of ``dispatch_rows`` are gone: decode ledger C10)."""
+        assert xw.layout == ttnn.ROW_MAJOR_LAYOUT and idx_rm.dtype == ttnn.uint16, (xw.layout, idx_rm.dtype)
+        assert xw.shape[-1] == self.H + idx_rm.shape[-1], (xw.shape, idx_rm.shape)
+        return ttnn.all_to_all_dispatch(xw, idx_rm, self.mapping, **self.a2a_kwargs)
 
     def dispatch_rows(self, x: ttnn.Tensor, w: ttnn.Tensor, idx: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Stage 1 (6 device ops + the dispatch): the [x | w] rows (the bf16 routing weights as a K-wide tail of
@@ -1611,6 +1778,13 @@ class TtMoE(LightweightModule):
         assert layout in ("hybrid", "ep"), layout
         self.layout = layout
         self.mesh = mesh if mesh is not None else single_chip(device)
+        expert_dtype = routed_w13_dtype(expert_dtype)  # C12: GLM53_EXPERT_W13_DTYPE (bfp4) over the model's format
+        # C10: GLM53_ROUTER_EP_ROWS=1 -> the fused router writes the all_to_all_dispatch inputs itself (the [x | w]
+        # rows and the uint16 id rows) instead of the five layout ops in TtEPExperts.dispatch_rows; GLM53_ROUTER_EP_TILES=1
+        # -> on one chip (D = 1) it writes the EP op's bf16 index / weight tiles (no typecasts / concats). Both
+        # default off (today's path).
+        self.router_ep_rows = os.environ.get("GLM53_ROUTER_EP_ROWS", "0") == "1"
+        self.router_ep_tiles = os.environ.get("GLM53_ROUTER_EP_TILES", "0") == "1"
         E, I, H = cfg.n_routed_experts, cfg.moe_intermediate_size, cfg.hidden_size
         if "experts.gate_up_proj" in mlp_state_dict:
             gate_up, down = mlp_state_dict["experts.gate_up_proj"], mlp_state_dict["experts.down_proj"]
@@ -1666,6 +1840,11 @@ class TtMoE(LightweightModule):
             weight_dtype=weight_dtype,
             mesh=self.mesh,
         )
+        if layout == "ep" and not self.experts.perm_is_identity:
+            assert (
+                self.router.fused
+            ), "an EP placement (GLM53_EP_PLACEMENT) needs the fused router (GLM53_ROUTER_FUSED=1)"
+            self.router.set_perm(self.experts.perm)
 
     @staticmethod
     def expert_cache_complete(
@@ -1676,6 +1855,10 @@ class TtMoE(LightweightModule):
         dense_experts=None,
         stream_experts=None,
     ):
+        """Whether the routed-expert tensorbins of this configuration exist (the model then skips the host
+        tensors). Applies the same ``GLM53_EXPERT_W13_DTYPE`` override as ``__init__`` so a warm bfp8 cache never
+        passes for the bfp4 one (whose files carry the other dtype name)."""
+        expert_dtype = routed_w13_dtype(expert_dtype)
         if dense_experts is None:
             dense_experts = os.environ.get("GLM53_DENSE_EXPERTS", "0") == "1"
         if stream_experts is None:
@@ -1690,10 +1873,17 @@ class TtMoE(LightweightModule):
         """x [1,1,T,H] bf16 (T multiple of 32; replicated over the TP columns) -> [1,1,T,H] replicated.
         ``prefill``: the rows are a prompt slab (the router keeps its composite path, see ``TtRouter.forward``)."""
         if self.layout == "ep" and self.experts.D > 1:
-            w16, idx, _ = self.router(x, ep_rows=True, prefill=prefill)
+            # rm: the router's [x | w] pages + id rows go straight into all_to_all_dispatch (C10); off the fused
+            # path (prefill slabs) the router falls back to the tile outputs, which TtEPExperts.forward also takes
+            w16, idx, _ = self.router(x, ep_mode="rm" if self.router_ep_rows else "rows", prefill=prefill)
             routed = self.experts(x, w16, idx)
             ttnn.deallocate(w16)
             ttnn.deallocate(idx)
+        elif self.layout == "ep" and self.router_ep_tiles and self.router.fused and not prefill and x.shape[-2] <= TILE:
+            w16, it, _ = self.router(x, ep_mode="tiles")  # the EP op's bf16 index / weight tiles
+            routed = self.experts(x, w16, it)
+            ttnn.deallocate(w16)
+            ttnn.deallocate(it)
         elif self.layout == "ep":
             w, idx, dense = self.router(x, prefill=prefill)
             routed = self.experts(x, w, idx)

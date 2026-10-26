@@ -9,6 +9,8 @@
 // few active experts still use every core.
 //
 // runtime args: [w_addr, counts_addr (EP: idx_addr), bank_id, vc, group, (EP) base_addr]
+// compile-time 12: pair slots of the weight ring (prefetch + 1), 13: U = pairs per work unit (1 = today's units;
+// PPB / U cores per bank per expert: custom_ops/expert_stream/plan.py).
 
 #include <stdint.h>
 
@@ -34,7 +36,9 @@ void kernel_main() {
     constexpr uint32_t EP = get_compile_time_arg_val(9);   // 1: counts from the top-k index list + expert base
     constexpr uint32_t T = get_compile_time_arg_val(10);
     constexpr uint32_t K = get_compile_time_arg_val(11);
-    constexpr auto counts_args = TensorAccessorArgs<12>();  // EP: the index tiles
+    constexpr uint32_t num_buffers = get_compile_time_arg_val(12);  // pair slots in the weight ring (prefetch + 1)
+    constexpr uint32_t U = get_compile_time_arg_val(13);            // pairs per work unit (1 = one pair per unit)
+    constexpr auto counts_args = TensorAccessorArgs<14>();          // EP: the index tiles
     constexpr auto base_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t E_TILES = (E + 31) / 32;
@@ -74,8 +78,8 @@ void kernel_main() {
     // never straddles the CB end, unlike single-column slots).
     constexpr uint32_t pair_bytes = 2 * col_bytes;
     constexpr uint32_t pages_per_pair = pair_bytes / page_bytes;
-    constexpr uint32_t num_buffers = 2;
-    constexpr uint32_t extra_in_flight = 1;
+    static_assert(num_buffers >= 2, "at least one pair ahead of the compute");
+    constexpr uint32_t extra_in_flight = num_buffers - 1;
     cb_reserve_back(cb_w, 2 * kt * (extra_in_flight + 1));
     uint32_t l1_write = get_write_ptr(cb_w);
     const uint32_t cb_base = l1_write;
@@ -86,29 +90,34 @@ void kernel_main() {
     uint32_t pushed = 0;
     uint32_t issued = 0;
 
-    // this core's work units (expert, pair): each pair is streamed once and stays resident in the compute over
-    // the expert's passes
-    for_each_unit<E, ppb, 32>(passes, groups, group, [&](uint32_t e, uint32_t q) {
-        uint32_t src = e * expert_stride + q * pair_bytes;
-        noc_async_read_set_trid(trid);
-        for (uint32_t p = 0; p < pages_per_pair; ++p) {
-            noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
-            src += page_bytes;
-            l1_write += page_bytes;
-        }
-        ++issued;
-        if (free_blocks == num_buffers - extra_in_flight) {
-            noc_async_read_barrier_with_trid(trid_to_wait);
-            cb_push_back(cb_w, 2 * kt);
-            ++pushed;
-            trid_to_wait = trid_to_wait == num_buffers ? 1 : trid_to_wait + 1;
-            cb_reserve_back(cb_w, 2 * kt * (extra_in_flight + 1));
-        } else {
-            free_blocks -= 1;
-        }
-        trid = trid == num_buffers ? 1 : trid + 1;
-        if (l1_write >= cb_end) {
-            l1_write = cb_base;
+    // this core's work units (expert, chunk of U pairs): with U = 1 each pair is streamed once and stays resident
+    // in the compute over the expert's passes; with U > 1 the chunk's pairs cycle through the ring, once per pass
+    for_each_unit_chunk<E, ppb, U, 32>(passes, groups, group, [&](uint32_t e, uint32_t c) {
+        const uint32_t reps = U == 1 ? 1 : passes[e];
+        for (uint32_t rep = 0; rep < reps; ++rep) {
+            for (uint32_t q = c * U; q < (c + 1) * U; ++q) {
+                uint32_t src = e * expert_stride + q * pair_bytes;
+                noc_async_read_set_trid(trid);
+                for (uint32_t p = 0; p < pages_per_pair; ++p) {
+                    noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
+                    src += page_bytes;
+                    l1_write += page_bytes;
+                }
+                ++issued;
+                if (free_blocks == num_buffers - extra_in_flight) {
+                    noc_async_read_barrier_with_trid(trid_to_wait);
+                    cb_push_back(cb_w, 2 * kt);
+                    ++pushed;
+                    trid_to_wait = trid_to_wait == num_buffers ? 1 : trid_to_wait + 1;
+                    cb_reserve_back(cb_w, 2 * kt * (extra_in_flight + 1));
+                } else {
+                    free_blocks -= 1;
+                }
+                trid = trid == num_buffers ? 1 : trid + 1;
+                if (l1_write >= cb_end) {
+                    l1_write = cb_base;
+                }
+            }
         }
     });
     while (pushed < issued) {
@@ -117,4 +126,5 @@ void kernel_main() {
         ++pushed;
         trid_to_wait = trid_to_wait == num_buffers ? 1 : trid_to_wait + 1;
     }
+    noc_async_full_barrier();  // exit contract: every NOC read / write / atomic acknowledged before the next kernel
 }

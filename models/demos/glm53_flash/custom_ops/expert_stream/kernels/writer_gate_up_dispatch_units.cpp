@@ -16,6 +16,8 @@
 //
 // runtime args: [x_addr, routing_addr (EP: weights), counts_addr (EP: idx), act_addr, table_addr, bank_id, group,
 //                (EP) base_addr]
+// compile-time 16: GATHER_ROTATE (rotated row-gather start per core), 17: U = pairs per work unit (1 = one pair
+// per unit, today's units; U = PPB = one unit per expert).
 
 #include <stdint.h>
 
@@ -49,7 +51,9 @@ void kernel_main() {
     constexpr uint32_t ppb = get_compile_time_arg_val(13);  // column pairs per bank = output tiles per pass
     constexpr uint32_t EP = get_compile_time_arg_val(14);   // 1: routing from the top-k index list + weights + base
     constexpr uint32_t K = get_compile_time_arg_val(15);
-    constexpr auto x_args = TensorAccessorArgs<16>();
+    constexpr uint32_t GATHER_ROTATE = get_compile_time_arg_val(16);  // 1: per-core rotated row-gather order (H1)
+    constexpr uint32_t U = get_compile_time_arg_val(17);              // pairs per work unit
+    constexpr auto x_args = TensorAccessorArgs<18>();
     constexpr auto routing_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();       // EP: weights
     constexpr auto counts_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();  // EP: idx
     constexpr auto act_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
@@ -100,8 +104,9 @@ void kernel_main() {
     uint16_t rows[T];
     uint16_t wbits[T];
     bool first_pass = true;
-    // this core's work units (expert e, column pair q): the pair's output tile of every pass of e
-    for_each_unit<E, ppb, 32>(passes, groups, group, [&](uint32_t e, uint32_t q) {
+    const uint32_t gather_rot = bank_id * groups + group;  // unique per core
+    // this core's work units (expert e, chunk c of U column pairs): the chunk's output tiles of every pass of e
+    for_each_unit_chunk<E, ppb, U, 32>(passes, groups, group, [&](uint32_t e, uint32_t c) {
         // the tokens routed to e, ascending, and their routing weights
         uint32_t nr = 0;
         if constexpr (EP) {
@@ -123,7 +128,7 @@ void kernel_main() {
             const uint32_t i0 = p * 32;
             const uint32_t nr_p = (nr - i0) < 32 ? (nr - i0) : 32;
             const uint32_t k = base[e] + p;
-            if (bank_id == 0 && q == 0) {  // the pass table row (once per pass)
+            if (bank_id == 0 && c == 0) {  // the pass table row (once per pass)
                 cb_reserve_back(cb_t, 1);
                 const uint32_t t_l1 = get_write_ptr(cb_t);
                 volatile tt_l1_ptr uint16_t* tab = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(t_l1);
@@ -138,7 +143,8 @@ void kernel_main() {
             // the pass's rows of x -> the row-major block (row j at j * row_bytes)
             cb_reserve_back(cb_xrm, kt);
             const uint32_t xrm = get_write_ptr(cb_xrm);
-            for (uint32_t j = 0; j < nr_p; ++j) {
+            for (uint32_t jj = 0; jj < nr_p; ++jj) {
+                const uint32_t j = GATHER_ROTATE ? rotated_row(jj, nr_p, gather_rot) : jj;
                 noc_async_read(s_x.get_noc_addr(rows[i0 + j]), xrm + j * row_bytes, row_bytes);
             }
             if (first_pass) {
@@ -162,13 +168,16 @@ void kernel_main() {
             cb_push_back(cb_xrm, kt);
             cb_push_back(cb_d, 1);
 
-            cb_wait_front(cb_out, 1);
-            noc_async_write(get_read_ptr(cb_out), s_act.get_noc_addr(k * i_tiles + bank_id * ppb + q), tile_page);
-            noc_async_write_barrier();
-            cb_pop_front(cb_out, 1);
+            for (uint32_t q = c * U; q < (c + 1) * U; ++q) {
+                cb_wait_front(cb_out, 1);
+                noc_async_write(get_read_ptr(cb_out), s_act.get_noc_addr(k * i_tiles + bank_id * ppb + q), tile_page);
+                noc_async_write_barrier();
+                cb_pop_front(cb_out, 1);
+            }
         }
     });
     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, 0);
     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, 0);
     ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, 0);
+    noc_async_full_barrier();  // exit contract: every NOC read / write / atomic acknowledged before the next kernel
 }

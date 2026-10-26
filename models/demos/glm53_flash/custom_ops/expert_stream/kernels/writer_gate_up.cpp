@@ -99,4 +99,5 @@ void kernel_main() {
             cb_pop_front(cb_out, 1);
         }
     }
+    noc_async_full_barrier();  // exit contract: every NOC read / write / atomic acknowledged before the next kernel
 }

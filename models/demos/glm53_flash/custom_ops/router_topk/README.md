@@ -20,6 +20,24 @@ rows-4-5 block decode profile) with one 32-core program.
 | `w` | `[1,1,T,K]` (padded `[32,32]`) | fp32 or bf16 TILE interleaved, pre-allocated | optional: normalized weights, descending choice order |
 | `idx` | `[1,1,T,K]` (padded `[32,32]`) | uint32 or fp32 (integral) TILE interleaved, pre-allocated | optional: expert ids in the same order |
 
+EP layouts (decode ledger C10, 2026-10-26; `tests/test_moe_roofline_host.py`, `tests/test_moe_roofline_mesh.py`):
+
+| tensor | shape | dtype / layout / memory | role |
+|---|---|---|---|
+| `x` (input) | `[1,1,T,H]` | bf16 TILE interleaved | the MoE input, untilized per token row by the reader kernel (NCRISC) |
+| `xw` | `[T,1,1,H+K]` | bf16 ROW_MAJOR L1, pre-allocated (`allocate_xw`) | token row t = `[x[t] \| w[t] (bf16)]`: the `all_to_all_dispatch` input, no untilize / concat ops |
+| `idx` (rows) | `[T,1,1,K]` | uint16 ROW_MAJOR L1 (`allocate_idx_rows`) | the dispatch metadata ids, no typecast / untilize ops |
+| `idx` (tiles) | `[1,1,T,32]` | bf16 TILE (`allocate_idx_tiles`) | the single-chip EP op's index tiles: ids as bf16 integers, `IDX_PAD` (4096) beyond K |
+| `perm` (input) | `[1,1,1,E]` | uint16 ROW_MAJOR | the EP placement's global -> slot table (`custom_ops/expert_stream/plan.py`), applied to the ids of every idx layout; the dense row keeps the global columns |
+
+Writer compile-time args 10-15: `X_MODE`, `PERM_MODE`, `CB_XROW`, `H/32`, the xw page bytes (`2 (H + K)` aligned to
+16), the bf16 bits of `IDX_PAD`; accessors `(scores, bias, dense, w, idx, xw, perm)` from 16; common runtime args
+`[scores, bias, dense, w, idx, T, xw, perm]`. Reader (`kernels/reader_router_topk.cpp`, X_MODE only): 2 x H/32 reads
+of 64 B (the face-row pair holding the row, 64 B aligned both sides), the row's halves copied into the contiguous
+`2 H`-byte row of `CB_XROW`, the K-wide tail zeroed; the writer fills the tail with the bf16 weights and sends the
+page. Rows `>= T` write nothing into the row-major pages (they have exactly T pages). Wiring:
+`TtRouter.forward(ep_mode="rm" | "tiles")`, knobs `GLM53_ROUTER_EP_ROWS=1` / `GLM53_ROUTER_EP_TILES=1` in `TtMoE`.
+
 `E % 32 == 0` (288), `K <= 16` (8), `T` is a common runtime arg: rows `T..31` (padded token rows) get zeros in
 every output (the composite gives them the bias top-8 with real weights; the expert paths ignore / skip zero
 rows). At least one output. Padding columns of `w` / `idx` (`K..31`) are written as zeros. `allocate_dense` /
