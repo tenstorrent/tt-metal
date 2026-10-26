@@ -74,7 +74,11 @@ MHC_PREFILL_IMPL = os.environ.get("GLM53_MHC_PREFILL_IMPL", "wrap" if MHC_IMPL =
 # rms_norm (program config pc_norm), sharded_to_interleaved back (4 ops, 32 cores); "sharded_cast" = the same
 # with the fp32 -> bf16 cast folded into the reshard (3 ops; A/B of the reshard kernel's rounding); "single" =
 # the composite's typecast + interleaved rms_norm (2 ops, ONE core at T <= 32: 46 us per wrap, the pre-A3 path)
-MHC_NORM = os.environ.get("GLM53_MHC_NORM", "single")  # sharded = the 32-core norm (A3), default after its device A/B
+MHC_NORM = os.environ.get(
+    "GLM53_MHC_NORM", "sharded"
+)  # the 32-core norm (A3); single = the pre-A3 one-core norm. Default
+# since 2026-10-26: chip-0 A/B PCC 0.999998 vs single (traced wrap 246 -> 210 us), block decoder + e2e, 8x4 e2e 80.6 ms at
+# 32 users, logits gate 0.9948 / top-1 95.3 %, 64 K needle 32/32
 assert MHC_NORM in ("sharded", "sharded_cast", "single"), MHC_NORM
 # A4 (decode ledger): the parametrization (pre / post / Sinkhorn comb). "kernel" = the fused mhc_split_sinkhorn op
 # (one program per token tile: all T <= 32 users' 4x4 matrices sit in ONE tile and every normalisation is one
