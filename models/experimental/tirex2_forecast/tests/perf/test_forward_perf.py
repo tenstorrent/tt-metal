@@ -128,7 +128,6 @@ def test_forward_perf(device, shape, precision):
         torch.save({"head": head, "q": q}, Path(dump) / f"{shape}-{precision}.pt")
     metrics = M.gate_metrics(head, g["head_out"], q, g["q_one"], prep.scale[prep.target_mask])
     collapsed = M.collapsed_metrics(g["head_out"], g["q_one"], prep.loc, prep.scale, horizon, prep.target_mask)
-    pcc_norm, pcc_final = metrics["pcc_normalized"], metrics["pcc_final"]
     traced.release()
     tt.release()
 
@@ -169,9 +168,9 @@ def test_forward_perf(device, shape, precision):
             "traced": True,
         }
     )
-    # Decided floors (D1): the target paper/accuracy at 0.998; the other floors come from doc/optimize/gates.json
-    # once set (tests/perf/check_gates.py checks every metric and the drift against a baseline).
-    floor_norm, floor_final = (0.995, 0.99) if precision == "accuracy" else (0.99, 0.98)
-    if (shape, precision) == ("paper", "accuracy"):
-        floor_norm = 0.998
-    assert pcc_norm >= floor_norm and pcc_final >= floor_final
+    # every gates.json floor for this shape and precision (D3 condition 3, D4); a missing metric is a miss
+    from models.experimental.tirex2_forecast.tests.perf.check_gates import DEFAULT_GATES, _floors, passes
+
+    floors = _floors(json.loads(DEFAULT_GATES.read_text()), shape, precision)
+    failed = {k: (metrics.get(k), f) for k, f in floors.items() if k not in metrics or not passes(k, metrics[k], f)}
+    assert not failed, f"{shape}/{precision}: floors failed {failed}"

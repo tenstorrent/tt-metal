@@ -15,6 +15,9 @@ All head metrics use the head output at the read-out tokens in normalized space,
                     row (e.g. an intermittent series forecast as a constant band, std ~0.003) has a per-row PCC
                     set by rounding noise, so it is checked by ``flat_max_err`` instead
     flat_max_err    worst absolute error (normalized units) over the flat rows (0 when there are none)
+    inactive_max_err
+                    worst absolute error (normalized units) over the inactive rows (the golden-defined complement
+                    of the active set; D4 condition b: ``flat_max_err`` misses inactive rows that are not flat)
     pcc_row_p01_active, pcc_row_min_active
                     per-row PCC over the active rows only: rows whose golden head std is >= ACTIVE_FRAC of the
                     golden's global std (PLAN section 9 v1.2); the active set depends on the golden only
@@ -112,6 +115,7 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
         "pcc_row_min_var": float(rows[~flat].min()) if bool((~flat).any()) else 1.0,
         "flat_rows": int(flat.sum()),
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
+        "inactive_max_err": float(err[~act].max()) if bool((~act).any()) else 0.0,
         "pcc_final": pearson(g_q, q),
         "pcc_final_spread": pearson(q_spread(g_q), q_spread(q)),
         "median_err": float(med_err.max()),

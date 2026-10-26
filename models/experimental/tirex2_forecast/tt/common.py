@@ -131,7 +131,8 @@ class Precision:
 
     def gate_config(self):
         """The sLSTM input projection ``W_in`` (role ``w_in``): HiFi4 in ``accuracy`` (at HiFi2 it was the largest
-        single error source: worst paper-row median error 0.20 -> 0.05 of the scale), LoFi in ``performance``."""
+        single error source: worst paper-row median error 0.20 -> 0.05 of the scale), and HiFi4 with bf16 weights in
+        ``performance`` too (R1-0, D4)."""
         return self.matmul_config("w_in")
 
 

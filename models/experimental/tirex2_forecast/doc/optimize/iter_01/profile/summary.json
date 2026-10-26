@@ -1,0 +1,380 @@
+{
+  "shape": "paper",
+  "precision": "accuracy",
+  "window": [
+    "MODEL_START",
+    "MODEL_END"
+  ],
+  "reduced_window": {
+    "device_us": 176778.0160000001,
+    "op_to_op_gap_us": 1074026.8410000002,
+    "ops": 771
+  },
+  "sections": {
+    "embed": {
+      "device_us": 14878.045,
+      "op_to_op_gap_us": 2.189,
+      "ops": 5
+    },
+    "layer_mlstm": {
+      "device_us": 73313.37600000002,
+      "op_to_op_gap_us": 49.05700000000002,
+      "ops": 91
+    },
+    "slstm_pre": {
+      "device_us": 24489.165,
+      "op_to_op_gap_us": 1.6789999999999998,
+      "ops": 4
+    },
+    "slstm_first": {
+      "device_us": 554.7770000000002,
+      "op_to_op_gap_us": 3534.4500000000003,
+      "ops": 28
+    },
+    "slstm_steps": {
+      "device_us": 12575.847,
+      "op_to_op_gap_us": 752640.4960000004,
+      "ops": 621
+    },
+    "slstm_post": {
+      "device_us": 34355.212,
+      "op_to_op_gap_us": 7.718,
+      "ops": 15
+    },
+    "head": {
+      "device_us": 16611.594,
+      "op_to_op_gap_us": 3.362,
+      "ops": 7
+    }
+  },
+  "counts": {
+    "embed": 1,
+    "layer_mlstm": 6,
+    "slstm_pre": 6,
+    "slstm_first": 6,
+    "slstm_steps": 24,
+    "slstm_post": 6,
+    "head": 1
+  },
+  "full_model_estimate": {
+    "device_ms": 1129.585147,
+    "ops": 15744
+  },
+  "measured": null,
+  "category_percent": {
+    "Compute": 78.42999999999999,
+    "TM": 16.84,
+    "Other": 4.74
+  },
+  "matmul_weighted_flops_percent": 19.87,
+  "stacked": [
+    {
+      "op": "MatmulDeviceOperation (in0:dram_interleaved)",
+      "percent": 40.54,
+      "device_us": 71662.84,
+      "count": 47,
+      "category": "Compute"
+    },
+    {
+      "op": "BinaryNgDeviceOperation (in0:dram_interleaved)",
+      "percent": 25.69,
+      "device_us": 45416.44,
+      "count": 330,
+      "category": "Compute"
+    },
+    {
+      "op": "UnaryDeviceOperation (in0:dram_interleaved)",
+      "percent": 8.35,
+      "device_us": 14764.49,
+      "count": 207,
+      "category": "Compute"
+    },
+    {
+      "op": "PermuteDeviceOperation (in0:dram_interleaved)",
+      "percent": 6.33,
+      "device_us": 11197.16,
+      "count": 4,
+      "category": "TM"
+    },
+    {
+      "op": "MinimalMatmulDeviceOperation (in0:dram_interleaved)",
+      "percent": 4.74,
+      "device_us": 8377.81,
+      "count": 2,
+      "category": "Other"
+    },
+    {
+      "op": "SliceDeviceOperation (in0:dram_interleaved)",
+      "percent": 4.1,
+      "device_us": 7249.45,
+      "count": 130,
+      "category": "TM"
+    },
+    {
+      "op": "LayerNormDeviceOperation (in0:dram_interleaved)",
+      "percent": 2.72,
+      "device_us": 4803.05,
+      "count": 6,
+      "category": "Compute"
+    },
+    {
+      "op": "ConcatDeviceOperation (in0:dram_interleaved)",
+      "percent": 1.95,
+      "device_us": 3453.52,
+      "count": 5,
+      "category": "TM"
+    },
+    {
+      "op": "NlpCreateHeadsDeviceOperation (in0:dram_interleaved)",
+      "percent": 1.07,
+      "device_us": 1885.2,
+      "count": 1,
+      "category": "TM"
+    },
+    {
+      "op": "ReduceDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.88,
+      "device_us": 1549.46,
+      "count": 4,
+      "category": "Compute"
+    },
+    {
+      "op": "TilizeWithValPaddingDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.78,
+      "device_us": 1371.48,
+      "count": 2,
+      "category": "TM"
+    },
+    {
+      "op": "UntilizeWithUnpaddingDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.74,
+      "device_us": 1306.08,
+      "count": 1,
+      "category": "TM"
+    },
+    {
+      "op": "NLPConcatHeadsDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.73,
+      "device_us": 1283.52,
+      "count": 1,
+      "category": "TM"
+    },
+    {
+      "op": "TransposeDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.57,
+      "device_us": 1015.46,
+      "count": 3,
+      "category": "TM"
+    },
+    {
+      "op": "AccumulationDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.25,
+      "device_us": 440.89,
+      "count": 1,
+      "category": "Compute"
+    },
+    {
+      "op": "UntilizeDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.25,
+      "device_us": 438.31,
+      "count": 1,
+      "category": "TM"
+    },
+    {
+      "op": "FillPadDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.19,
+      "device_us": 333.27,
+      "count": 1,
+      "category": "TM"
+    },
+    {
+      "op": "TypecastDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.13,
+      "device_us": 229.57,
+      "count": 25,
+      "category": "TM"
+    }
+  ],
+  "slowest_ops": [
+    {
+      "id": "877",
+      "op": "MatmulDeviceOperation 131072 x 512 x 2048",
+      "device_us": 10627.143,
+      "bound": "SLOW",
+      "cores": "108",
+      "dram_percent": 22.239203895157896,
+      "flops_percent": 17.324704272763526,
+      "fidelity": "HiFi4 BF16 x BF16 => FP32",
+      "in0_block_w": "2",
+      "subblock": "1x4"
+    },
+    {
+      "id": "1552",
+      "op": "MatmulDeviceOperation 131072 x 512 x 2048",
+      "device_us": 7579.582,
+      "bound": "SLOW",
+      "cores": "108",
+      "dram_percent": 17.346814111912767,
+      "flops_percent": 24.29053604003083,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x4"
+    },
+    {
+      "id": "878",
+      "op": "BinaryNgDeviceOperation",
+      "device_us": 7079.654,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "FP32, FP32 => FP32",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "777",
+      "op": "MatmulDeviceOperation 131072 x 2048 x 512",
+      "device_us": 6623.127,
+      "bound": "SLOW",
+      "cores": "108",
+      "dram_percent": 19.851891712177647,
+      "flops_percent": 27.798366200643443,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x4"
+    },
+    {
+      "id": "876",
+      "op": "PermuteDeviceOperation",
+      "device_us": 6109.547,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "783",
+      "op": "MatmulDeviceOperation 131072 x 512 x 1536",
+      "device_us": 5623.099,
+      "bound": "SLOW",
+      "cores": "108",
+      "dram_percent": 18.702284985556894,
+      "flops_percent": 24.556580331330952,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x4"
+    },
+    {
+      "id": "1535",
+      "op": "MatmulDeviceOperation b={128} x 1024 x 512 x 512",
+      "device_us": 4681.681,
+      "bound": "SLOW",
+      "cores": "64",
+      "dram_percent": 22.441170169432734,
+      "flops_percent": 16.59068533210535,
+      "fidelity": "HiFi4 FP32 x FP32 => FP32",
+      "in0_block_w": "1",
+      "subblock": "2x2"
+    },
+    {
+      "id": "1538",
+      "op": "MatmulDeviceOperation b={128} x 1024 x 512 x 512",
+      "device_us": 4681.418,
+      "bound": "SLOW",
+      "cores": "64",
+      "dram_percent": 22.442430904482354,
+      "flops_percent": 16.591617389495294,
+      "fidelity": "HiFi4 FP32 x FP32 => FP32",
+      "in0_block_w": "1",
+      "subblock": "2x2"
+    },
+    {
+      "id": "870",
+      "op": "MinimalMatmulDeviceOperation 131072 x 512 x 2816",
+      "device_us": 4188.941,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 23.601955721028297,
+      "flops_percent": 59.335127457786626,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "1546",
+      "op": "MinimalMatmulDeviceOperation 131072 x 512 x 2816",
+      "device_us": 4188.873,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 23.602338862982954,
+      "flops_percent": 59.33609067358885,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "1547",
+      "op": "MatmulDeviceOperation 131072 x 1408 x 512",
+      "device_us": 3922.04,
+      "bound": "SLOW",
+      "cores": "108",
+      "dram_percent": 25.136306615944765,
+      "flops_percent": 32.27327499102921,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x4"
+    },
+    {
+      "id": "871",
+      "op": "MatmulDeviceOperation 131072 x 1408 x 512",
+      "device_us": 3920.661,
+      "bound": "SLOW",
+      "cores": "108",
+      "dram_percent": 25.145147718713755,
+      "flops_percent": 32.28462635402963,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x4"
+    },
+    {
+      "id": "775",
+      "op": "MatmulDeviceOperation 131072 x 64 x 2048",
+      "device_us": 3515.46,
+      "bound": "SLOW",
+      "cores": "108",
+      "dram_percent": 30.774237226422713,
+      "flops_percent": 6.5465155960873185,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x4"
+    },
+    {
+      "id": "1554",
+      "op": "MatmulDeviceOperation 131072 x 2048 x 288",
+      "device_us": 3492.859,
+      "bound": "SLOW",
+      "cores": "108",
+      "dram_percent": 34.308169897496576,
+      "flops_percent": 29.64994055826332,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "1x3"
+    },
+    {
+      "id": "1543",
+      "op": "PermuteDeviceOperation",
+      "device_us": 3397.013,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    }
+  ]
+}

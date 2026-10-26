@@ -11,7 +11,8 @@ drift tolerance per metric. Floors and tolerances change only through a decision
 only reads them. Exit status 1 when any floor or drift check fails; every check is printed.
 
 Direction of each metric: higher is better except ``median_err``, ``flat_max_err`` (upper bounds) and
-``spread_ratio_p99`` / ``spread_ratio_max`` (upper bounds near 1). A floor given as ``[lo, hi]`` is a range. Drift is ``candidate >= baseline - tol`` for higher-is-better
+``spread_ratio_p99`` / ``spread_ratio_max`` (upper bounds near 1). A floor given as ``[lo, hi]`` is a range; a drift with
+``two_sided`` is ``|candidate - baseline| <= abs``. Drift is ``candidate >= baseline - tol`` for higher-is-better
 metrics; ``candidate <= baseline + tol`` (absolute) or ``<= baseline x (1 + rel)`` for the others.
 """
 
@@ -24,6 +25,8 @@ from pathlib import Path
 
 LOWER_IS_BETTER = {"median_err", "flat_max_err", "spread_ratio_p99", "spread_ratio_max"}
 DEFAULT_GATES = Path(__file__).resolve().parents[2] / "doc" / "optimize" / "gates.json"
+# D5: drift is always against this fixed round-0 record (both precisions, all shapes); a b2b base is timing only
+DEFAULT_BASELINE = DEFAULT_GATES.parent / "iter_01" / "r1_1" / "b2b_base.json"
 
 
 def _floors(gates: dict, name: str, precision: str) -> dict:
@@ -61,6 +64,14 @@ def check(cand: list[dict], base: list[dict] | None, gates: dict) -> list[str]:
             if metric not in r or metric not in b:
                 continue
             v, bv = r[metric], b[metric]
+            if tol.get("two_sided"):
+                ok = abs(v - bv) <= tol["abs"]
+                print(
+                    f"{'ok  ' if ok else 'FAIL'} drift {key[0]}/{key[1]} {metric} {v:.6g} within {tol['abs']} of {bv:.6g}"
+                )
+                if not ok:
+                    failures.append(f"{key} {metric} drift {v} vs {bv} +- {tol['abs']}")
+                continue
             if metric in LOWER_IS_BETTER:
                 limit = bv * (1 + tol["rel"]) if "rel" in tol else bv + tol["abs"]
                 ok = v <= limit
@@ -80,7 +91,7 @@ def check(cand: list[dict], base: list[dict] | None, gates: dict) -> list[str]:
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("candidate", type=Path)
-    ap.add_argument("--baseline", type=Path)
+    ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     ap.add_argument("--gates", type=Path, default=DEFAULT_GATES)
     args = ap.parse_args()
     gates = json.loads(args.gates.read_text())

@@ -1,5 +1,5 @@
 {
-  "_doc": "Accuracy floors set by D3 (2026-10-26). Performance floors and the spread_ratio_min/max/p50 floors are proposed at G1b (R1-0), binding once DECISIONS.md sets them. Range floors are [lo, hi].",
+  "_doc": "Floors set by D3 (accuracy) and D4 (performance; min/max/p50 both precisions), 2026-10-26. min/max and pcc_row_min_active are floor-only (no drift); p50 has a two-sided drift of 0.01. Range floors are [lo, hi]. Performance is a non-ship class (D4).",
   "floors": {
     "*/accuracy": {
       "pcc_normalized": 0.998,
@@ -12,8 +12,8 @@
       "pcc_final_spread": 0.999,
       "median_err": 0.15,
       "flat_max_err": 0.05,
-      "spread_ratio_min": 0.85,
-      "spread_ratio_max": 1.15,
+      "spread_ratio_min": 0.7,
+      "spread_ratio_max": 1.43,
       "spread_ratio_p50": [
         0.98,
         1.02
@@ -21,19 +21,19 @@
     },
     "*/performance": {
       "pcc_normalized": 0.998,
-      "pcc_spread": 0.998,
+      "pcc_spread": 0.997,
       "pcc_row_p01_active": 0.98,
       "pcc_row_min_active": 0.93,
-      "spread_ratio_p01": 0.92,
+      "spread_ratio_p01": 0.9,
       "spread_ratio_p99": 1.25,
-      "spread_ratio_min": 0.75,
-      "spread_ratio_max": 1.6,
+      "spread_ratio_min": 0.6,
+      "spread_ratio_max": 1.67,
       "spread_ratio_p50": [
-        0.97,
+        0.96,
         1.04
       ],
       "pcc_final": 0.99,
-      "pcc_final_spread": 0.999,
+      "pcc_final_spread": 0.998,
       "median_err": 0.3,
       "flat_max_err": 0.1
     },
@@ -57,9 +57,6 @@
     "pcc_row_p01_active": {
       "abs": 0.01
     },
-    "pcc_row_min_active": {
-      "abs": 0.01
-    },
     "spread_ratio_p01": {
       "abs": 0.02
     },
@@ -71,6 +68,10 @@
     },
     "median_err": {
       "rel": 0.1
+    },
+    "spread_ratio_p50": {
+      "abs": 0.01,
+      "two_sided": true
     }
   }
 }

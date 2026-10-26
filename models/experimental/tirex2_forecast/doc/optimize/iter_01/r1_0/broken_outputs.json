@@ -33,6 +33,7 @@
    "pcc_row_min_var": 0.01178794502730394,
    "flat_rows": 46,
    "flat_max_err": 0.23482373356819153,
+   "inactive_max_err": 0.46929286420345306,
    "pcc_final": 0.9915877438585903,
    "pcc_final_spread": 6.436724339583327e-09,
    "median_err": 0.9975309371948242
@@ -72,6 +73,7 @@
    "pcc_row_min_var": 0.01178794502730394,
    "flat_rows": 46,
    "flat_max_err": 0.23482373356819153,
+   "inactive_max_err": 0.46929286420345306,
    "pcc_final": 0.9915877438585903,
    "pcc_final_spread": 6.436724339583327e-09,
    "median_err": 0.9975309371948242
@@ -102,6 +104,7 @@
    "pcc_row_min_var": 0.07931765382111926,
    "flat_rows": 46,
    "flat_max_err": 0.23482373356819153,
+   "inactive_max_err": 0.46929286420345306,
    "pcc_final": 0.9999993258421914,
    "pcc_final_spread": 0.9999597652633002,
    "median_err": 0.08471740782260895
@@ -132,6 +135,7 @@
    "pcc_row_min_var": 0.07931765382111926,
    "flat_rows": 46,
    "flat_max_err": 0.23482373356819153,
+   "inactive_max_err": 0.46929286420345306,
    "pcc_final": 0.9999993258421914,
    "pcc_final_spread": 0.9999597652633002,
    "median_err": 0.08471740782260895
@@ -167,6 +171,7 @@
    "pcc_row_min_var": 0.8918734354440767,
    "flat_rows": 46,
    "flat_max_err": 0.0,
+   "inactive_max_err": 0.0,
    "pcc_final": 0.9999878425084485,
    "pcc_final_spread": 0.999274273072519,
    "median_err": 0.6982717514038086
@@ -202,6 +207,7 @@
    "pcc_row_min_var": 0.8918734354440767,
    "flat_rows": 46,
    "flat_max_err": 0.0,
+   "inactive_max_err": 0.0,
    "pcc_final": 0.9999878425084485,
    "pcc_final_spread": 0.999274273072519,
    "median_err": 0.6982717514038086
@@ -233,6 +239,7 @@
    "pcc_row_min_var": 0.997960799966311,
    "flat_rows": 46,
    "flat_max_err": 0.028178855776786804,
+   "inactive_max_err": 0.05631512403488159,
    "pcc_final": 0.9998809376198259,
    "pcc_final_spread": 0.9999999999996944,
    "median_err": 0.1197039932012558
@@ -264,6 +271,7 @@
    "pcc_row_min_var": 0.997960799966311,
    "flat_rows": 46,
    "flat_max_err": 0.028178855776786804,
+   "inactive_max_err": 0.05631512403488159,
    "pcc_final": 0.9998809376198259,
    "pcc_final_spread": 0.9999999999996944,
    "median_err": 0.1197039932012558
@@ -295,6 +303,7 @@
    "pcc_row_min_var": 0.9983967346327491,
    "flat_rows": 46,
    "flat_max_err": 0.02817884087562561,
+   "inactive_max_err": 0.05631512403488159,
    "pcc_final": 0.9998818913008848,
    "pcc_final_spread": 0.9999999999997689,
    "median_err": 0.11970357596874237
@@ -325,6 +334,7 @@
    "pcc_row_min_var": 0.9983967346327491,
    "flat_rows": 46,
    "flat_max_err": 0.02817884087562561,
+   "inactive_max_err": 0.05631512403488159,
    "pcc_final": 0.9998818913008848,
    "pcc_final_spread": 0.9999999999997689,
    "median_err": 0.11970357596874237
@@ -364,6 +374,7 @@
    "pcc_row_min_var": 0.028987415101802614,
    "flat_rows": 2,
    "flat_max_err": 0.11164428293704987,
+   "inactive_max_err": 0.11164428293704987,
    "pcc_final": 0.9865542472000942,
    "pcc_final_spread": 3.1103670303235195e-09,
    "median_err": 0.13743260502815247
@@ -403,6 +414,7 @@
    "pcc_row_min_var": 0.028987415101802614,
    "flat_rows": 2,
    "flat_max_err": 0.11164428293704987,
+   "inactive_max_err": 0.11164428293704987,
    "pcc_final": 0.9865542472000942,
    "pcc_final_spread": 3.1103670303235195e-09,
    "median_err": 0.13743260502815247
@@ -433,6 +445,7 @@
    "pcc_row_min_var": 0.9999999999999988,
    "flat_rows": 2,
    "flat_max_err": 0.11164428293704987,
+   "inactive_max_err": 0.11164428293704987,
    "pcc_final": 0.9999997915118874,
    "pcc_final_spread": 0.9999921997800711,
    "median_err": 0.014569899067282677
@@ -463,6 +476,7 @@
    "pcc_row_min_var": 0.9999999999999988,
    "flat_rows": 2,
    "flat_max_err": 0.11164428293704987,
+   "inactive_max_err": 0.11164428293704987,
    "pcc_final": 0.9999997915118874,
    "pcc_final_spread": 0.9999921997800711,
    "median_err": 0.014569899067282677
@@ -499,6 +513,7 @@
    "pcc_row_min_var": 0.9036049680111031,
    "flat_rows": 2,
    "flat_max_err": 0.0,
+   "inactive_max_err": 0.0,
    "pcc_final": 0.999917479301266,
    "pcc_final_spread": 0.9969093785457084,
    "median_err": 0.0416317842900753
@@ -535,6 +550,7 @@
    "pcc_row_min_var": 0.9036049680111031,
    "flat_rows": 2,
    "flat_max_err": 0.0,
+   "inactive_max_err": 0.0,
    "pcc_final": 0.999917479301266,
    "pcc_final_spread": 0.9969093785457084,
    "median_err": 0.0416317842900753
@@ -566,6 +582,7 @@
    "pcc_row_min_var": 0.9979619411069708,
    "flat_rows": 2,
    "flat_max_err": 0.01339731365442276,
+   "inactive_max_err": 0.01339731365442276,
    "pcc_final": 0.9998116228248836,
    "pcc_final_spread": 0.9999999999998083,
    "median_err": 0.01649206504225731
@@ -597,6 +614,7 @@
    "pcc_row_min_var": 0.9979619411069708,
    "flat_rows": 2,
    "flat_max_err": 0.01339731365442276,
+   "inactive_max_err": 0.01339731365442276,
    "pcc_final": 0.9998116228248836,
    "pcc_final_spread": 0.9999999999998083,
    "median_err": 0.01649206504225731
@@ -628,6 +646,7 @@
    "pcc_row_min_var": 0.9983987977995373,
    "flat_rows": 2,
    "flat_max_err": 0.013397321105003357,
+   "inactive_max_err": 0.013397321105003357,
    "pcc_final": 0.9998140103464829,
    "pcc_final_spread": 0.9999999999998456,
    "median_err": 0.016491860151290894
@@ -658,6 +677,7 @@
    "pcc_row_min_var": 0.9983987977995373,
    "flat_rows": 2,
    "flat_max_err": 0.013397321105003357,
+   "inactive_max_err": 0.013397321105003357,
    "pcc_final": 0.9998140103464829,
    "pcc_final_spread": 0.9999999999998456,
    "median_err": 0.016491860151290894
@@ -697,6 +717,7 @@
    "pcc_row_min_var": 0.008918370482171686,
    "flat_rows": 51,
    "flat_max_err": 0.283568874001503,
+   "inactive_max_err": 0.34861432015895844,
    "pcc_final": 0.9939213565399074,
    "pcc_final_spread": -6.791914806732583e-08,
    "median_err": 0.33213046193122864
@@ -736,6 +757,7 @@
    "pcc_row_min_var": 0.008918370482171686,
    "flat_rows": 51,
    "flat_max_err": 0.283568874001503,
+   "inactive_max_err": 0.34861432015895844,
    "pcc_final": 0.9939213565399074,
    "pcc_final_spread": -6.791914806732583e-08,
    "median_err": 0.33213046193122864
@@ -767,6 +789,7 @@
    "pcc_row_min_var": 0.033530418450926844,
    "flat_rows": 51,
    "flat_max_err": 0.283568874001503,
+   "inactive_max_err": 0.34861432015895844,
    "pcc_final": 0.9999716532657971,
    "pcc_final_spread": 0.9976585246086339,
    "median_err": 0.02292306162416935
@@ -798,6 +821,7 @@
    "pcc_row_min_var": 0.033530418450926844,
    "flat_rows": 51,
    "flat_max_err": 0.283568874001503,
+   "inactive_max_err": 0.34861432015895844,
    "pcc_final": 0.9999716532657971,
    "pcc_final_spread": 0.9976585246086339,
    "median_err": 0.02292306162416935
@@ -832,6 +856,7 @@
    "pcc_row_min_var": 0.8468393989245934,
    "flat_rows": 51,
    "flat_max_err": 0.0,
+   "inactive_max_err": 0.0,
    "pcc_final": 0.9999975605217795,
    "pcc_final_spread": 0.9997987231692325,
    "median_err": 0.03323739022016525
@@ -866,6 +891,7 @@
    "pcc_row_min_var": 0.8468393989245934,
    "flat_rows": 51,
    "flat_max_err": 0.0,
+   "inactive_max_err": 0.0,
    "pcc_final": 0.9999975605217795,
    "pcc_final_spread": 0.9997987231692325,
    "median_err": 0.03323739022016525
@@ -897,6 +923,7 @@
    "pcc_row_min_var": 0.9979608015171207,
    "flat_rows": 51,
    "flat_max_err": 0.034028276801109314,
+   "inactive_max_err": 0.04183371365070343,
    "pcc_final": 0.9999135483802387,
    "pcc_final_spread": 0.9999999999996007,
    "median_err": 0.039855651557445526
@@ -928,6 +955,7 @@
    "pcc_row_min_var": 0.9979608015171207,
    "flat_rows": 51,
    "flat_max_err": 0.034028276801109314,
+   "inactive_max_err": 0.04183371365070343,
    "pcc_final": 0.9999135483802387,
    "pcc_final_spread": 0.9999999999996007,
    "median_err": 0.039855651557445526
@@ -959,6 +987,7 @@
    "pcc_row_min_var": 0.9983967261910431,
    "flat_rows": 51,
    "flat_max_err": 0.034028246998786926,
+   "inactive_max_err": 0.04183374345302582,
    "pcc_final": 0.9999140490635086,
    "pcc_final_spread": 0.9999999999996595,
    "median_err": 0.039855651557445526
@@ -989,6 +1018,7 @@
    "pcc_row_min_var": 0.9983967261910431,
    "flat_rows": 51,
    "flat_max_err": 0.034028246998786926,
+   "inactive_max_err": 0.04183374345302582,
    "pcc_final": 0.9999140490635086,
    "pcc_final_spread": 0.9999999999996595,
    "median_err": 0.039855651557445526

@@ -23,11 +23,34 @@ from models.experimental.tirex2_forecast.tests.pcc.helpers import host_weights, 
 
 pytestmark = pytest.mark.skipif(not have_goldens(), reason="goldens not generated")
 
-FLOORS = {"accuracy": (0.995, 0.99), "performance": (0.99, 0.98)}
-# Worst |median error| / scale. CONTRACT section 3 asks for 1e-2; bf16 weight rounding alone already gives
-# 1.7e-2 on model16 in a CPU simulation (fp32 compute), so these are provisional bounds pending G1.
-CONTRACT_MEDIAN = 1e-2
-MEDIAN_BOUND = {"accuracy": 0.1, "performance": 0.25}
+# Floors: doc/optimize/gates.json (D3 accuracy, D4 performance), read through check_gates; the suite has no
+# constants of its own (D4 condition a). Single-series cases keep pcc_normalized >= 0.9975 and pcc_final >= 0.98
+# (D3).
+SINGLE_SERIES = {"pcc_normalized": 0.9975, "pcc_final": 0.98}
+# D5: population band metrics need enough active rows. p50 applies at n_active >= 8, p01 / p99 at >= 100; below
+# that the floor-only min / max and the PCC metrics carry the case (suite only, the bench gates everything).
+MIN_ACTIVE = {"spread_ratio_p50": 8, "spread_ratio_p01": 100, "spread_ratio_p99": 100}
+
+
+def applicable(f: dict, n_active: int, name: str = "") -> dict:
+    out = {}
+    for k, v in f.items():
+        if n_active < MIN_ACTIVE.get(k, 0):
+            print(f"[PCC] {name}: {k} not applicable (n_active={n_active} < {MIN_ACTIVE[k]})")
+        else:
+            out[k] = v
+    return out
+
+
+def floors(precision: str, single: bool = False) -> dict:
+    import json
+
+    from models.experimental.tirex2_forecast.tests.perf.check_gates import DEFAULT_GATES, _floors
+
+    f = _floors(json.loads(DEFAULT_GATES.read_text()), "suite", precision)
+    if single:
+        f.update(SINGLE_SERIES)
+    return f
 
 
 def model(device, precision="accuracy", variate=True, pad_skip=True):
@@ -61,40 +84,23 @@ def run(tt, context, horizon, group_ids=None, target_mask=None):
     return head, q
 
 
-# Floors. Decided (D1): pcc_normalized >= 0.998 on the bench target (tests/perf), >= 0.9975 on single-series suite
-# cases; pcc_final >= 0.99 / 0.98. Proposed at G1 (not yet decided; values unchanged since they were first
-# asserted, except that the row floor moved from pcc_row_min (job 492, failed on flat intermittent rows) to the
-# active-row metric): pcc_spread, pcc_row_min_active, flat_max_err, the median bound.
-SINGLE_SERIES_FLOOR = 0.9975
-SPREAD_FLOOR = {"accuracy": 0.998, "performance": 0.995}
-ROW_MIN_FLOOR = {"accuracy": 0.98, "performance": 0.95}  # pcc_row_min_active (suite shapes)
-FLAT_ERR_BOUND = {"accuracy": 0.05, "performance": 0.15}  # normalized units, rows with a flat band
-
-
 def check_forecast(
     name, head, q, g_head, g_q, scale, target_mask, precision="accuracy", loc=None, horizon=64, single=False
 ):
     from models.experimental.tirex2_forecast.tests.pcc import metrics as M
 
-    f_norm, f_final = FLOORS[precision]
-    if single:
-        f_norm = SINGLE_SERIES_FLOOR
+    from models.experimental.tirex2_forecast.tests.perf.check_gates import passes
+
     m = M.gate_metrics(head, g_head, q, g_q, scale[target_mask])
+    f = applicable(floors(precision, single), m["active_rows"], name)
     print(f"[PCC] {name}: {M.fmt(m)}")
-    print(
-        f"[PCC] {name}: floors normalized {f_norm}, final {f_final}, spread {SPREAD_FLOOR[precision]}, "
-        f"row_min_active {ROW_MIN_FLOOR[precision]}, flat_max_err {FLAT_ERR_BOUND[precision]}, "
-        f"median (contract {CONTRACT_MEDIAN}, provisional {MEDIAN_BOUND[precision]})"
-    )
+    print(f"[PCC] {name}: floors (gates.json {precision}{', single series' if single else ''}): {f}")
     if loc is not None:
         c = M.collapsed_metrics(g_head, g_q, loc, scale, horizon, target_mask)
         print(f"[PCC] {name}.collapsed: {M.fmt(c)}")
-        assert c["pcc_spread"] < SPREAD_FLOOR[precision] and c["pcc_row_min_active"] < ROW_MIN_FLOOR[precision]
-        assert c["pcc_final_spread"] < 0.5 and c["spread_ratio_p99"] < 0.5
-    assert m["pcc_normalized"] >= f_norm and m["pcc_final"] >= f_final
-    assert m["pcc_spread"] >= SPREAD_FLOOR[precision] and m["pcc_row_min_active"] >= ROW_MIN_FLOOR[precision]
-    assert m["flat_max_err"] <= FLAT_ERR_BOUND[precision]
-    assert m["median_err"] <= MEDIAN_BOUND[precision]
+        assert [k for k, v in f.items() if not passes(k, c[k], v)], "the collapsed output passes every floor"
+    failed = {k: (m[k], v) for k, v in f.items() if not passes(k, m[k], v)}
+    assert not failed, f"{name}: floors failed {failed}"
     return m
 
 
@@ -209,7 +215,7 @@ def test_sign_flip_16(device):
     p = report("model16.q_full", g["q_full"], q, 0.99)
     med_err = float(((q[:, 4] - g["q_full"][:, 4]).abs().amax(-1) / g["scale"].reshape(-1)).max())
     print(f"[PCC] model16.q_full.median: worst |err| / scale {med_err:.3e}")
-    assert p >= 0.99 and med_err <= MEDIAN_BOUND["accuracy"]
+    assert p >= 0.99 and med_err <= floors("accuracy")["median_err"]
 
 
 def test_ragged_groups(device):
