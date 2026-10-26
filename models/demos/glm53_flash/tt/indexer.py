@@ -312,6 +312,11 @@ class TtIndexCache:
         )
 
 
+def _no_crop() -> bool:
+    """G53F-0199: hand the bounded top-k the uncropped score rows (``GLM53_INDEXER_NO_CROP=1``; read per call)."""
+    return os.environ.get("GLM53_INDEXER_NO_CROP", "0") == "1"
+
+
 class TtDSAIndexer(LightweightModule):
     def __init__(self, device, cfg: GLM53FlashConfig, idx_state_dict: dict[str, torch.Tensor], mesh=None):
         """``idx_state_dict``: raw tensors of ``self_attn.indexer.`` (prefix stripped). ``mesh`` (``tt/mesh.py``
@@ -737,10 +742,12 @@ class TtDSAIndexer(LightweightModule):
             # TT_FATALs (input must be TILE) -- the 10-22 device-free rewrite (71a89dbb439) broke every prefill row past
             # 2050 (tt-blaze G53F-0084). Crop a row-major score with a plain slice; keep the one-pass crop for TILE.
             if scores.layout == ttnn.ROW_MAJOR_LAYOUT:
-                if kv_len < scores.shape[-1]:
+                if kv_len < scores.shape[-1] and not (bounded and _no_crop()):
                     scores_rm = ttnn.slice(scores, [0, 0, 0, 0], [1, 1, T, kv_len])
                     ttnn.deallocate(scores)
                 else:
+                    # G53F-0199 (GLM53_INDEXER_NO_CROP=1): the bounded top-k reads each row only up to its own bound
+                    # (<= kv_len), so it can take the score rows at their allocated pitch -- no [T, kv_len] copy
                     scores_rm = scores
             else:
                 if kv_len < scores.shape[-1]:
@@ -859,7 +866,8 @@ class TtDSAIndexer(LightweightModule):
             "topk_bounds", positions, T, lambda p: ((p + 1) // self.P).clamp(k, kv_len), kv_len
         )  # [T, 1] per chip
         out = ttnn.zeros((T, 1, 1, k), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
-        self._topk_rows(ttnn.reshape(scores_rm, [T, 1, 1, kv_len]), valid, out)
+        # the rows' pitch: kv_len after the crop, the scored width without it (G53F-0199; the bounds stay <= kv_len)
+        self._topk_rows(ttnn.reshape(scores_rm, [T, 1, 1, scores_rm.shape[-1]]), valid, out)
         return ttnn.reshape(out, [1, 1, T, k])
 
     def _bounds_const(self, name: str, positions: torch.Tensor, T: int, bound, limit: int) -> ttnn.Tensor:
