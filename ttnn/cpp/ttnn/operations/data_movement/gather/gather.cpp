@@ -391,7 +391,7 @@ Tensor gather_dispatch(
     auto native_output_tensor = optional_output_tensor_value;
     std::optional<tt::tt_metal::MemoryConfig> rerouted_output_memory_config;
     if (!use_codegen && padded_input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
-        auto interleaved_like = [](const tt::tt_metal::MemoryConfig& mc) {
+        auto interleaved_same_buffer_type = [](const tt::tt_metal::MemoryConfig& mc) {
             return tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, mc.buffer_type());
         };
         const bool output_is_sharded = optional_output_tensor_value.has_value()
@@ -412,17 +412,17 @@ Tensor gather_dispatch(
             }
             if (has_subaligned_shard_row(output_spec.memory_config(), output_elem_size)) {
                 rerouted_output_memory_config = output_spec.memory_config();
-                native_memory_config = interleaved_like(output_spec.memory_config());
+                native_memory_config = interleaved_same_buffer_type(output_spec.memory_config());
                 native_output_tensor = std::nullopt;
             }
         }
         if (has_subaligned_shard_row(padded_input_tensor.memory_config(), padded_input_tensor.element_size())) {
-            padded_input_tensor =
-                ttnn::to_memory_config(padded_input_tensor, interleaved_like(padded_input_tensor.memory_config()));
+            padded_input_tensor = ttnn::to_memory_config(
+                padded_input_tensor, interleaved_same_buffer_type(padded_input_tensor.memory_config()));
         }
         if (has_subaligned_shard_row(padded_index_tensor.memory_config(), padded_index_tensor.element_size())) {
-            padded_index_tensor =
-                ttnn::to_memory_config(padded_index_tensor, interleaved_like(padded_index_tensor.memory_config()));
+            padded_index_tensor = ttnn::to_memory_config(
+                padded_index_tensor, interleaved_same_buffer_type(padded_index_tensor.memory_config()));
         }
     }
 

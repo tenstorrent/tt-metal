@@ -909,7 +909,7 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& t, uint32_t row_bytes) {
 }
 
 bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size) {
-    if (!memory_config.is_sharded() || !memory_config.shard_spec().has_value()) {
+    if (!memory_config.shard_spec().has_value()) {
         return false;
     }
     const auto layout = memory_config.memory_layout();
