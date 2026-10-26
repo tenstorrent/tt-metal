@@ -1,17 +1,25 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""1M-token prompts on the Galaxy rows, standalone model (#61419).
+"""1M-token prompts on the Galaxy rows, standalone model (#61419). Results: doc/tp8_dp4_plan.md, "1M prefill on all 4
+rows".
 
 ``--mode capacity``: build at ``--context`` + DECODE_ROOM for ``--users`` users per row and log DRAM per chip after
-the weights and with the KV caches. Then run the last ``--chunk`` of a ``--context`` prompt in slot 0 of every row
-(the earlier chunks only take their SWA blocks, the cache keeps zeros, as profile_prefill.py ``--fill skip``), twice,
-and one decode step of every user, logging DRAM and the chunk time: the tightest point of a prefill and of decode.
+the weights and with the KV caches. Then run the last ``--chunk`` of a ``--context`` prompt in slot 0 of ``--rows``
+rows twice (the earlier chunks only take their SWA blocks and the cache keeps zeros, as profile_prefill.py
+``--fill skip``), and one decode step of every user, logging DRAM and the times: the tightest point of a prefill and
+of decode.
 
-``--mode passkey``: one passkey prompt of ``--context`` tokens per row in slot 0 of ``--rows`` rows (key at a different
-depth on each row). The rows' chunks are enqueued round-robin, chunk by chunk, so every row has work in flight
-(``prefill_enqueue`` of a whole prompt blocks once the row's command queue is full). Logs each row's TTFT, then
-greedy-decodes ``--decode`` tokens from that cache and checks the key is in the text.
+``--mode passkey``: one passkey prompt of ``--context`` tokens in each of the ``--users`` slots of ``--rows`` rows, each
+with its own key and depth (``depth``). The slots of a row run one after the other. The rows' chunks are enqueued
+round-robin, chunk by chunk, so every row has work in flight: ``prefill_enqueue`` of a whole prompt blocks once the
+row's command queue is full. Logs each user's TTFT from the start of the run (the first chunk's compile included),
+then greedy-decodes ``--decode`` tokens of every user from that cache (untraced) and checks each key is in the text.
+
+``--replicate-global-kv`` keeps the global layers' K / V on both chips of a pair, as vLLM's caches do.
+
+    python models/experimental/mimo_v2_6_flash/tests/perf/long_1m.py --mode passkey --rows 4 --users 2 \\
+        --replicate-global-kv
 
 Every line to grep starts with ``MIMO_1M``.
 """
@@ -32,8 +40,9 @@ from models.experimental.mimo_v2_6_flash.tests.test_model_long_tp8_dp4 import dr
 from models.experimental.mimo_v2_6_flash.tt.generator import MiMoGalaxyGenerator
 from models.experimental.mimo_v2_6_flash.tt.model import TtMiMoModel, prefill_padded_len
 
-DECODE_ROOM = 512
-DEPTHS = (0.10, 0.35, 0.65, 0.90)
+DECODE_ROOM = 512  # positions after the prompt, for decode
+DEPTHS = (0.10, 0.35, 0.65, 0.90)  # where the pass keys sit (``depth``)
+KEY_SEED = 61419
 
 
 def say(msg):
@@ -99,22 +108,25 @@ def capacity(gen, cfg, args):
         say(f"row {r} DRAM per chip after decode: {dram_gb(model.mesh_device)[0]:.2f} GB")
 
 
-def depth(r, slot):
-    """Slot 0 of row r at DEPTHS[r], slot 1 at DEPTHS[3 - r], further slots shifted round."""
-    return DEPTHS[(r if slot % 2 == 0 else 3 - r) + slot // 2 & 3]
+def depth(row, slot):
+    """Where the key of ``slot`` on ``row`` sits: slot 0 at DEPTHS[row], slot 1 at DEPTHS[3 - row], so 4 rows of 2 users
+    cover every depth twice; later slots shift round."""
+    first = row if slot % 2 == 0 else len(DEPTHS) - 1 - row
+    return DEPTHS[(first + slot // 2) % len(DEPTHS)]
 
 
 def passkey(gen, cfg, args):
     tok = AutoTokenizer.from_pretrained(common.MODEL_PATH)
     models = gen.models[: args.rows]
     slots = range(args.users)
-    keys = [int(k) for k in torch.randint(10000, 100000, (16,), generator=torch.Generator().manual_seed(61419))]
-    key = {(r, s): keys[s * 4 + r] for r in range(len(models)) for s in slots}  # slot 0 keeps the 1-user keys
+    # 4 users on each of 4 rows at most, slot-major: a user's key does not depend on the rows or users run.
+    assert args.users <= 4
+    draws = torch.randint(10000, 100000, (16,), generator=torch.Generator().manual_seed(KEY_SEED))
+    key = {(r, s): int(draws[s * 4 + r]) for r in range(len(models)) for s in slots}
     t0 = time.time()
     prompts = {(r, s): passkey_prompt(tok, args.context, depth(r, s), key[(r, s)]) for (r, s) in key}
     say(f"{len(prompts)} passkey prompts of {args.context} tokens built in {time.time() - t0:.0f} s")
 
-    # The users of a row run one after the other; the rows' chunks are enqueued round-robin.
     n, chunk = args.context, args.chunk
     t0 = time.time()
     first, ttft = {}, {}
@@ -172,7 +184,9 @@ def main():
     parser.add_argument("--chunk", type=int, default=4096)
     parser.add_argument("--users", type=int, default=1, help="users per row the caches are sized for")
     parser.add_argument("--rows", type=int, default=1, help="rows that run (all 4 are built)")
-    parser.add_argument("--replicate-global-kv", action="store_true")
+    parser.add_argument(
+        "--replicate-global-kv", action="store_true", help="both chips of a global layer's pair keep the K / V (vLLM)"
+    )
     parser.add_argument("--decode", type=int, default=12, help="passkey: greedy tokens")
     args = parser.parse_args()
     assert args.context % args.chunk == 0
