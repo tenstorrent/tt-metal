@@ -890,6 +890,50 @@ def _install_block_signposts():
     return []
 
 
+# HOW MANY ORDINARY OPS THE PRINTED SEQUENCE CARRIES. The capture itself is unbounded -- a
+# five-stage pipeline reached 1,133,392 entries -- so the line has to be cut somewhere or the
+# reader is handed ~59 MB of JSON through a pipe. This is the cut that was always here.
+_SEQ_PRINT_OPS = 50000
+
+
+def _control_prefixes() -> tuple:
+    """Every token the readers treat as structure rather than work, from the one definition of each.
+
+    Spelled from the constants that emit them, so a renamed marker renames this with it; the caller
+    mark lives in the module that writes it."""
+    try:
+        from agent.caller_stacks import MARK as _caller
+    except Exception:  # noqa: BLE001 -- no caller marks is simply three prefixes instead of four
+        _caller = None
+    return tuple(p for p in (_SIGNPOST_PREFIX, _SIGNPOST_END_PREFIX, _STAGE_PREFIX, _caller) if p)
+
+
+def _printable_seq(seq, cap: int = _SEQ_PRINT_OPS) -> list:
+    """The head of `seq`, PLUS every control token that falls past it, in original order.
+
+    THE CUT MUST NOT EAT THE STRUCTURE. A head slice keeps the first ops and drops every marker
+    emitted later -- and the markers are the only record of which block ran inside which stage.
+    They are a rounding error in size: of those 1,133,392 entries, 691 were markers, 0.06%.
+
+    Qwen-Image-Edit 2026-10-25: four stages ran ahead of the transformer and exhausted the slice
+    before it reached them, so all 60 of its block signposts fell past the cut. The walk had found
+    the stack and the blocks had announced themselves; the sequence simply did not carry it.
+    full_blocks read 0, which run.py reports as "the built model exposes NO discoverable block
+    stacks" -- the depth knob was declared unusable, the profile ran all 60 blocks, and the run
+    died after 10.6 h having overflowed the device profiler's buffer. One head slice, two nights.
+
+    Deletion only, never reordering, so the surviving tokens keep the order they ran in: everything
+    before the cut holds its place and the later markers follow, which is where they were. The head
+    is the same slice as before, so _work_signal -- which ignores control tokens -- is unchanged.
+    """
+    head = list((seq or [])[:cap])
+    prefixes = _control_prefixes()
+    if not prefixes:
+        return head
+    tail = [t for t in (seq or [])[cap:] if isinstance(t, str) and t.startswith(prefixes)]
+    return head + tail
+
+
 def main(node: str, case: str | None = None) -> None:
     _install()
     _install_block_signposts()
@@ -911,7 +955,7 @@ def main(node: str, case: str | None = None) -> None:
         pass
     print("PERF_OP_SIGS=" + json.dumps(sorted(_SIGS)), flush=True)
     print("PERF_OP_SIG_COUNTS=" + json.dumps(Counter(_SEQ)), flush=True)
-    print("PERF_OP_SIG_SEQUENCE=" + json.dumps(_SEQ[:50000]), flush=True)
+    print("PERF_OP_SIG_SEQUENCE=" + json.dumps(_printable_seq(_SEQ)), flush=True)
 
 
 if __name__ == "__main__":
