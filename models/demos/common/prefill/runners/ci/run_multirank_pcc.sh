@@ -119,6 +119,11 @@ case "${MODEL}" in
     ;;
 esac
 
+# Relay mode for the D2D streams (prefill_runner.py PREFILL_D2D_RELAY). tt-run forwards only
+# RUNNER_ENV, so pass it explicitly, or ranks would disagree on the stream layout.
+[ -n "${PREFILL_D2D_RELAY:-}" ] && RUNNER_ENV+=" export PREFILL_D2D_RELAY=${PREFILL_D2D_RELAY};"
+# Same for the VC0-only fabric switch: both sides of a cable must build the same router shape.
+[ -n "${TT_METAL_FABRIC_INTERMESH_VC0:-}" ] && RUNNER_ENV+=" export TT_METAL_FABRIC_INTERMESH_VC0=${TT_METAL_FABRIC_INTERMESH_VC0};"
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.
 if [ "${PP_RANKS}" -eq 0 ]; then
   [ -f "${MGD}" ] || { echo "no mesh-graph descriptor for ${CONFIG} at ${MGD}" >&2; exit 2; }
@@ -200,7 +205,7 @@ cleanup() {
     echo "$(basename "$f"): $(cat "$f")"
   done
   mkdir -p "${EVIDENCE_DIR}"
-  for path in "${PCC_DIR}" "${RANKLOGS}" "${BINDING:-}"; do
+  for path in "${PCC_DIR}" "${RANKLOGS}" "${TIMING_DIR}" "${BINDING:-}"; do
     [ -n "${path}" ] && [ -e "${path}" ] && cp -r "${path}" "${EVIDENCE_DIR}/" || true
   done
   if [ -d "${RANKLOGS}" ]; then
@@ -338,7 +343,7 @@ set +e
     export PREFILL_PRODUCER_CHECK_PCC=1; \
     export PREFILL_SEND_SHUTDOWN=1; \
     export PREFILL_STANDALONE_CHUNKED_PCC=${PCC_THRESHOLD}; \
-    export PREFILL_H2D_CONNECT_TIMEOUT=120; \
+    export PREFILL_H2D_CONNECT_TIMEOUT=${PREFILL_H2D_CONNECT_TIMEOUT:-120}; \
     ${NUM_LAYERS_ENV} \
     ${PRODUCER_ENV} \
     export LOGURU_LEVEL=INFO; \
