@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cstdint>
+#include <tt-metalium/allocator.hpp>
 #include <type_traits>
 
 #include "metal/ttnn_all_includes.hpp"

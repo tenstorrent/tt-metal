@@ -63,10 +63,7 @@ inline std::vector<QkvCausalConv1dSiluBackwardDataflowBuffer> qkv_conv_bw_datafl
 
 // L1 per core: every dataflow buffer and the reader's and the writer's strip scratch.
 inline uint64_t qkv_conv_bw_l1_bytes(
-    uint32_t channel_tiles_per_block,
-    tt::DataFormat input_format,
-    uint64_t bytes_per_element,
-    bool compute_tap_grads = true) {
+    uint32_t channel_tiles_per_block, tt::DataFormat input_format, bool compute_tap_grads = true) {
     uint64_t bytes = 0;
     for (const auto& buffer : qkv_conv_bw_dataflow_buffers(channel_tiles_per_block, input_format, compute_tap_grads)) {
         bytes += static_cast<uint64_t>(buffer.tiles) * tt::tile_size(buffer.format);

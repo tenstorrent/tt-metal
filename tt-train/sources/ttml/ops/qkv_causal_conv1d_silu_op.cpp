@@ -65,7 +65,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
         channels);
     // The backward gets the caller's value: 0 lets it pick its own chunk together with the row split.
     const uint32_t forward_chunk_size =
-        channel_chunk_size != 0 ? channel_chunk_size : metal::qkv_causal_conv1d_silu_chunk_size(channels, *device);
+        channel_chunk_size != 0 ? channel_chunk_size : metal::qkv_causal_conv1d_silu_chunk_size;
     const ttnn::experimental::kda::QkvCausalConv1dSiluProgramConfig program_config{forward_chunk_size};
     auto history_rm = ttnn::to_layout(rank3(history), ttnn::Layout::ROW_MAJOR);
     // The forward's actual_start is a constant zero, uploaded once per device so forwards do no host writes.

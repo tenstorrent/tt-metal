@@ -12,8 +12,9 @@
 
 namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device {
 
-// Outputs: grad_input [1,T,Q+K+V] TILE bf16 and grad_tap_partial [4,splits*32,Q+K+V] TILE fp32 (host sums the
-// rows, then casts to bf16). Rows of one tap stack per split so one row reduction finishes the sum.
+// Outputs: grad_input [1,T,Q+K+V] TILE bf16 and, with compute_tap_grads, grad_tap_partial [4,splits*32,Q+K+V]
+// TILE fp32 (host sums the rows, then casts to bf16). Rows of one tap stack per split so one row reduction
+// finishes the sum.
 struct QkvCausalConv1dSiluBackwardOperation {
     using operation_attributes_t = QkvCausalConv1dSiluBackwardParams;
     using tensor_args_t = QkvCausalConv1dSiluBackwardInputs;

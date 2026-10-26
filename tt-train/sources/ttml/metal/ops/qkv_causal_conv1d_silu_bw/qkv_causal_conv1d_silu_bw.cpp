@@ -25,12 +25,12 @@ constexpr uint32_t max_chunk = 256;
 bool chunk_fits_l1(uint32_t chunk, uint64_t l1_bytes, bool compute_tap_grads) {
     constexpr auto bf16 = tt::DataFormat::Float16_b;
     return ops::qkv_causal_conv1d_silu_bw::device::qkv_conv_bw_l1_bytes(
-               chunk / tt::constants::TILE_WIDTH, bf16, sizeof(uint16_t), compute_tap_grads) <= l1_bytes;
+               chunk / tt::constants::TILE_WIDTH, bf16, compute_tap_grads) <= l1_bytes;
 }
 
 // Tile-aligned divisors of channels that fit l1_bytes, from the widest down to min_chunk.
 std::vector<uint32_t> candidate_chunks(
-    uint32_t channels, uint64_t l1_bytes, uint32_t min_chunk, bool compute_tap_grads = true) {
+    uint32_t channels, uint64_t l1_bytes, uint32_t min_chunk, bool compute_tap_grads) {
     std::vector<uint32_t> chunks;
     for (uint32_t chunk = std::min(channels, max_chunk); chunk >= min_chunk; chunk -= tt::constants::TILE_WIDTH) {
         if (channels % chunk == 0 && chunk_fits_l1(chunk, l1_bytes, compute_tap_grads)) {
@@ -41,10 +41,6 @@ std::vector<uint32_t> candidate_chunks(
 }
 
 }  // namespace
-
-uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t, const ttnn::distributed::MeshDevice&) {
-    return tt::constants::TILE_WIDTH;
-}
 
 bool qkv_causal_conv1d_silu_bw_chunk_fits(
     uint32_t channels,

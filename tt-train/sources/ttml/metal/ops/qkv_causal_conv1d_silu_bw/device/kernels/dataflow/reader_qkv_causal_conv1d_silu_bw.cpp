@@ -8,6 +8,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "internal/local_mem/address_access.h"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/qkv_causal_conv1d_silu_bw/device/hostdevcommon/qkv_causal_conv1d_silu_bw_layout.hpp"
 
 using namespace qkv_conv_bw;
@@ -57,13 +58,16 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     constexpr uint32_t tap_bytes = 2 * face_bytes;
 
     DataflowBuffer ones(dfb::ones);
-    // A tile of 1.0, needed because the FPU has no add-constant: stage B computes 1 + preact * (1 - s) with it.
-    // 0x3F80 is 1.0 in bf16; two per 32-bit store. Every number is the same, so the tile layout does not matter.
-    constexpr uint32_t two_bf16_ones = 0x3F803F80;
+    // A tile of 1.0, needed because the FPU has no add-constant: silu' computes 1 + preact * (1 - s) with it. Two
+    // bf16 ones per 32-bit store; every number is the same, so the tile layout does not matter.
+    constexpr uint32_t two_bf16_ones = (uint32_t{BF16_ONE_BITS} << 16) | BF16_ONE_BITS;
     ones.reserve_back(1);
-    auto* ones_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ones.get_write_ptr());
-    for (uint32_t i = 0; i < tile_bytes / sizeof(uint32_t); ++i) {
-        ones_ptr[i] = two_bf16_ones;
+    {
+        const auto lock = ones.scoped_write_lock(1);
+        const auto ones_words = lock.get_ptr<uint32_t>();
+        for (uint32_t i = 0; i < tile_bytes / sizeof(uint32_t); ++i) {
+            ones_words[i] = two_bf16_ones;
+        }
     }
     ones.push_back(1);
 

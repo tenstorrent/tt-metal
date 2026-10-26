@@ -16,9 +16,8 @@ namespace ttml::metal {
 //   T=1024 Q=K=512 V=1536: chunk 32 -> 0.041, 64 -> 0.045, 128 -> 0.054, 256 -> 0.065
 //   T=4096 Q=K=V=2048:     chunk 32 -> 0.308, 64 -> 0.324, 128 -> 0.402, 256 -> 0.428
 //   T=4096 Q=K=V=4096:     chunk 32 -> 0.596, 64 -> 0.628, 128 -> 0.766, 256 -> 0.837
-// The backward picks its own chunk (qkv_causal_conv1d_silu_bw_work_split); the arguments stay so a device- or
-// width-dependent choice can return without touching the callers.
-uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t channels, const ttnn::distributed::MeshDevice& device);
+// The backward picks its own chunk (qkv_causal_conv1d_silu_bw_work_split).
+constexpr uint32_t qkv_causal_conv1d_silu_chunk_size = 32;
 
 // True when a caller-fixed channel_chunk_size is a tile-aligned divisor of channels whose backward L1 budget fits the
 // device. The forward checks its own budget, which is smaller; the autograd op uses this to reject at forward time a

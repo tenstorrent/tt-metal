@@ -104,10 +104,7 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
 
     const uint64_t l1_bytes = available_l1_bytes(*in.input.device());
     const uint64_t required_l1_bytes = qkv_conv_bw_l1_bytes(
-        attrs.channel_chunk_size / tw,
-        datatype_to_dataformat_converter(in.input.dtype()),
-        in.input.element_size(),
-        attrs.compute_tap_grads);
+        attrs.channel_chunk_size / tw, datatype_to_dataformat_converter(in.input.dtype()), attrs.compute_tap_grads);
     TT_FATAL(
         required_l1_bytes <= l1_bytes,
         "{}: channel_chunk_size = {} needs {} bytes of L1 per core, only {} are available",
