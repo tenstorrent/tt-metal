@@ -79,6 +79,98 @@ constexpr uint32_t cb_cur_mm_out = tt::CBIndex::c_14;    // used for holding cur
 constexpr uint32_t cb_output = tt::CBIndex::c_15;
 constexpr uint32_t cb_gate = tt::CBIndex::c_16;
 
+// Finalize a chunk from its running state: out = (O / sum) [* sigmoid(gate)], and lse for the backward
+// pass. Consumes (pops) the three state CBs and the gate.
+FORCE_INLINE void finalize_chunk(uint32_t cb_mm_out, uint32_t cb_max, uint32_t cb_sum_exp) {
+    cb_wait_front(cb_mm_out, out_tiles);
+    cb_wait_front(cb_max, Sq_chunk_t);
+    cb_wait_front(cb_sum_exp, Sq_chunk_t);
+    cb_wait_front(cb_matmul_reduce, onetile);
+
+    // The row sum so far is per 32-column tile column; reduce it to one value per row (in place).
+    cb_pop_front(cb_sum_exp, Sq_chunk_t);
+    cb_reserve_back(cb_sum_exp, Sq_chunk_t);
+    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+        row_reduce_tile_inplace<cb_reduction_scaler, cb_matmul_reduce>(cb_sum_exp, r);
+    }
+    cb_push_back(cb_sum_exp, Sq_chunk_t);
+    cb_wait_front(cb_sum_exp, Sq_chunk_t);
+
+#ifdef RETURN_INTERMEDIATES
+    // lse = scale*max + log(sum_exp)
+    cb_reserve_back(cb_intermediates, Sq_chunk_t);
+    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+        compute_and_pack_lse(
+            cb_sum_exp, cb_max, cb_intermediates, cb_matmul_reduce, scaler_bits, r);
+    }
+    cb_push_back(cb_intermediates, Sq_chunk_t);
+#endif
+
+    // 1/sum_exp for normalization
+    cb_pop_front(cb_sum_exp, Sq_chunk_t);
+    cb_reserve_back(cb_sum_exp, Sq_chunk_t);
+    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+        recip_tile_inplace(cb_sum_exp, r);
+    }
+    cb_push_back(cb_sum_exp, Sq_chunk_t);
+    cb_wait_front(cb_sum_exp, Sq_chunk_t);
+
+    cb_reserve_back(cb_output, out_tiles);
+#ifdef HAS_GATE
+    cb_wait_front(cb_gate, out_tiles);
+#endif
+    pack_reconfig_data_format(cb_output);
+    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+        for (uint32_t tile_idx = 0; tile_idx < vWt; tile_idx += block_size) {
+            tile_regs_acquire();
+
+            // Load mm_out tiles via UnpackToDestFp32 (full FP32 in DST)
+            reconfig_data_format(cb_mm_out, cb_mm_out);
+            copy_init(cb_mm_out);
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                copy_tile(cb_mm_out, r * vWt + tile_idx + block_idx, block_idx);
+            }
+
+            // Load this row's 1/sum_exp with column broadcast to DST[block_size]
+            init_unary_bcast_col(cb_sum_exp);
+            unary_bcast<BroadcastType::COL>(cb_sum_exp, r, block_size);
+
+            // SFPU multiply: DST[i] = mm_out[i] * (1/sum_exp)
+            mul_binary_tile_init();
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                mul_binary_tile(block_idx, block_size, block_idx);
+            }
+
+#ifdef HAS_GATE
+            reconfig_data_format(cb_gate, cb_gate);
+            copy_init(cb_gate);
+            sigmoid_tile_init();
+            mul_binary_tile_init();
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                copy_tile(cb_gate, r * vWt + tile_idx + block_idx, block_size);
+                sigmoid_tile(block_size);
+                mul_binary_tile(block_idx, block_size, block_idx);
+            }
+#endif
+
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                pack_tile(block_idx, cb_output);
+            }
+            tile_regs_release();
+        }
+    }
+    cb_push_back(cb_output, out_tiles);
+
+    cb_pop_front(cb_max, Sq_chunk_t);
+    cb_pop_front(cb_sum_exp, Sq_chunk_t);
+    cb_pop_front(cb_mm_out, out_tiles);
+#ifdef HAS_GATE
+    cb_pop_front(cb_gate, out_tiles);
+#endif
+}
+
 // Layouts used below. Score CB (cb_attention_weights): the Sq_chunk_t x Sk_chunk_t score tiles of one
 // step, row-major: row r, K tile n sits at r * Sk_chunk_t + n. Per-row state CBs (max, sum,
 // exp_max_diff): row r sits in slot r. Output accumulators: row r starts at r * vWt.
@@ -296,95 +388,8 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
         std::swap(alias_cb_prev_mm_out, alias_cb_cur_mm_out);
     }
 
-    // ====== Finalize the chunk's rows: O / sum, and lse for the backward pass ======
-    cb_wait_front(alias_cb_prev_mm_out, out_tiles);
-    cb_wait_front(alias_cb_prev_max, Sq_chunk_t);
-    cb_wait_front(alias_cb_prev_sum_exp, Sq_chunk_t);
-    cb_wait_front(cb_matmul_reduce, onetile);
-
-    // The row sum so far is per 32-column tile column; reduce it to one value per row (in place).
-    cb_pop_front(alias_cb_prev_sum_exp, Sq_chunk_t);
-    cb_reserve_back(alias_cb_prev_sum_exp, Sq_chunk_t);
-    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-        row_reduce_tile_inplace<cb_reduction_scaler, cb_matmul_reduce>(alias_cb_prev_sum_exp, r);
-    }
-    cb_push_back(alias_cb_prev_sum_exp, Sq_chunk_t);
-    cb_wait_front(alias_cb_prev_sum_exp, Sq_chunk_t);
-
-#ifdef RETURN_INTERMEDIATES
-    // lse = scale*max + log(sum_exp)
-    cb_reserve_back(cb_intermediates, Sq_chunk_t);
-    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-        compute_and_pack_lse(
-            alias_cb_prev_sum_exp, alias_cb_prev_max, cb_intermediates, cb_matmul_reduce, scaler_bits, r);
-    }
-    cb_push_back(cb_intermediates, Sq_chunk_t);
-#endif
-
-    // 1/sum_exp for normalization
-    cb_pop_front(alias_cb_prev_sum_exp, Sq_chunk_t);
-    cb_reserve_back(alias_cb_prev_sum_exp, Sq_chunk_t);
-    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-        recip_tile_inplace(alias_cb_prev_sum_exp, r);
-    }
-    cb_push_back(alias_cb_prev_sum_exp, Sq_chunk_t);
-    cb_wait_front(alias_cb_prev_sum_exp, Sq_chunk_t);
-
-    cb_reserve_back(cb_output, out_tiles);
-#ifdef HAS_GATE
-    cb_wait_front(cb_gate, out_tiles);
-#endif
-    pack_reconfig_data_format(cb_output);
-    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-        for (uint32_t tile_idx = 0; tile_idx < vWt; tile_idx += block_size) {
-            tile_regs_acquire();
-
-            // Load mm_out tiles via UnpackToDestFp32 (full FP32 in DST)
-            reconfig_data_format(alias_cb_prev_mm_out, alias_cb_prev_mm_out);
-            copy_init(alias_cb_prev_mm_out);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                copy_tile(alias_cb_prev_mm_out, r * vWt + tile_idx + block_idx, block_idx);
-            }
-
-            // Load this row's 1/sum_exp with column broadcast to DST[block_size]
-            init_unary_bcast_col(alias_cb_prev_sum_exp);
-            unary_bcast<BroadcastType::COL>(alias_cb_prev_sum_exp, r, block_size);
-
-            // SFPU multiply: DST[i] = mm_out[i] * (1/sum_exp)
-            mul_binary_tile_init();
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                mul_binary_tile(block_idx, block_size, block_idx);
-            }
-
-#ifdef HAS_GATE
-            reconfig_data_format(cb_gate, cb_gate);
-            copy_init(cb_gate);
-            sigmoid_tile_init();
-            mul_binary_tile_init();
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                copy_tile(cb_gate, r * vWt + tile_idx + block_idx, block_size);
-                sigmoid_tile(block_size);
-                mul_binary_tile(block_idx, block_size, block_idx);
-            }
-#endif
-
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                pack_tile(block_idx, cb_output);
-            }
-            tile_regs_release();
-        }
-    }
-    cb_push_back(cb_output, out_tiles);
-
-    cb_pop_front(alias_cb_prev_max, Sq_chunk_t);
-    cb_pop_front(alias_cb_prev_sum_exp, Sq_chunk_t);
-    cb_pop_front(alias_cb_prev_mm_out, out_tiles);
+    finalize_chunk(alias_cb_prev_mm_out, alias_cb_prev_max, alias_cb_prev_sum_exp);
     cb_pop_front(cb_query, q_tiles);
-#ifdef HAS_GATE
-    cb_pop_front(cb_gate, out_tiles);
-#endif
 }
 
 void kernel_main() {
