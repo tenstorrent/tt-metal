@@ -7,7 +7,9 @@
 #include <type_traits>
 
 #include "api/compute/reduce.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 /**
  * @file reduce_helpers_compute.hpp
  * @brief Single unified reduce function with automatic dispatch
@@ -38,18 +40,21 @@
  *   #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
  *
  *   compute_kernel_hw_startup(dfb_in, dfb_scaler, dfb_out);
+ *   // Construct each DataflowBuffer once, at kernel scope, and pass it by reference. reduce() never
+ *   // constructs its own: on Quasar a DataflowBuffer drains when it goes out of scope.
+ *   DataflowBuffer in(dfb_in), scaler(dfb_scaler), out(dfb_out);
  *
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
  *   compute_kernel_lib::reduce<SUM, REDUCE_COL, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
  *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * See reduce() function documentation for advanced usage examples including:
  * - Different input policies (BulkWaitBulkPop, NoWaitNoPop, WaitUpfrontNoPop)
@@ -153,13 +158,19 @@ struct ReduceInputBlockShape {
 /**
  * @brief Configuration for accumulation-style reductions
  *
- * Holds the static configuration for accumulation (CB and DST index).
+ * Holds the static configuration for accumulation (accumulator DFB and DST index).
  * Does not hold iteration state - that's provided via Accumulate wrapper.
+ *
+ * Pass the kernel's own accumulator DataflowBuffer: on Quasar a DataflowBuffer drains when it goes
+ * out of scope, so reduce() must not construct its own. The buffer must outlive every reduce() call
+ * that uses this config. A config built from a DFB id alone leaves accumulator unset; only the id-only
+ * reduce() accepts it, and that form builds the accumulator DataflowBuffer itself.
  */
 struct AccumulationConfig {
     // CB holding the running output-tile stream across reduce() iterations; see Accumulate below.
     uint32_t cb_accumulator = 0;
     uint32_t dst_index = 0;  // DST register for accumulation (default: 0)
+    DataflowBufferAnyPattern* accumulator = nullptr;  // the kernel's accumulator buffer
 
     static constexpr AccumulationConfig with_cb(uint32_t cb, uint32_t dst = 0) { return {cb, dst}; }
 };
@@ -182,12 +193,10 @@ struct AccumulationConfig {
  *   copy_init asserts against on Quasar.
  *
  * Usage:
- *   const auto cfg = AccumulationConfig::with_cb(cb_accum);
- *   for (uint32_t i = 0; i < num_blocks; ++i) {
- *       reduce<SUM, REDUCE_ROW>(..., Accumulate(cfg, i));
- *   }
+ *   DataflowBuffer accum(cb_accum);  // once, at kernel scope
+ *   reduce<SUM, REDUCE_ROW>(..., Accumulate(accum, iteration));
  *
- * Or with factory method:
+ * Or, with the id-only reduce() only:
  *   reduce<SUM, REDUCE_ROW>(..., Accumulate::at(cb_accum, iteration));
  */
 struct Accumulate {
@@ -196,9 +205,11 @@ struct Accumulate {
 
     explicit constexpr Accumulate(AccumulationConfig cfg, uint32_t iter = 0) : config(cfg), iteration(iter) {}
     explicit constexpr Accumulate(uint32_t cb, uint32_t iter = 0) : config{cb, 0}, iteration(iter) {}
+    explicit Accumulate(DataflowBufferAnyPattern& dfb, uint32_t iter = 0, uint32_t dst = 0) :
+        config{dfb.get_id(), dst, &dfb}, iteration(iter) {}
 
     // Factory for concise call sites
-    static constexpr Accumulate at(uint32_t cb, uint32_t iter, uint32_t dst = 0) {
+    KERNEL_LIB_ID_ONLY_HELPER static constexpr Accumulate at(uint32_t cb, uint32_t iter, uint32_t dst = 0) {
         return Accumulate(AccumulationConfig{cb, dst}, iter);
     }
 
@@ -310,6 +321,10 @@ struct NoOp {
  * @tparam fp32_mode Float32 precision mode (default: Fast). Accurate routes Float32 through the
  *                   SFPU at full fp32; see ReduceFp32Mode.
  *
+ * @param input_dfb, scaler_dfb, output_dfb The kernel's DataflowBuffers for input_dfb_id / scaler_dfb_id /
+ *        output_dfb_id. Construct each once at kernel scope and pass it by reference: on Quasar a
+ *        DataflowBuffer drains when it goes out of scope, so helper-owned buffers would block at the
+ *        end of every call (e.g. on the scaler tile, which stays resident across calls).
  * @param input_block_shape Tile grid dimensions (rows x cols x batches)
  *              Use ReduceInputBlockShape::of(r, c, b), ::row(c), ::col(r), or ::single()
  * @param input_memory_layout Tile memory layout specification for NoWaitNoPop/WaitUpfrontNoPop policies (default:
@@ -321,29 +336,29 @@ struct NoOp {
  * @example
  *   // Reduce entire HxW grid to single tile (REDUCE_SCALAR)
  *   compute_kernel_lib::reduce<SUM, REDUCE_SCALAR, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * @example
  *   // Reduce each row (W dimension) - output has Ht tiles per batch
  *   compute_kernel_lib::reduce<SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * @example
  *   // Reduce each column (H dimension) - output has Wt tiles per batch
  *   compute_kernel_lib::reduce<SUM, REDUCE_COL, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * @example
  *   // Reduce type and dimension specified with explicit namespace
  *   compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::single());
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::single());
  *
  * @example
  *   // NoWaitNoPop policy: caller manages wait/pop externally
  *   // Use cases: (1) custom stride between rows, (2) sharded DFB mapped to tensor with data reuse
  *   compute_kernel_lib::reduce<
  *       SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC),
  *       compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(input_stride));
  *
  * @example
@@ -352,7 +367,7 @@ struct NoOp {
  *   compute_kernel_lib::reduce<
  *       MAX, REDUCE_ROW, dfb_values, dfb_scaler, dfb_max,
  *       compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt));
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt));
  *   // dfb_values tiles still available for sub_exp_block_bcast_cols_inplace()
  *
  * @example
@@ -360,13 +375,13 @@ struct NoOp {
  *   // Library waits for all Wt tiles per row, processes them with indexed access, then pops all Wt tiles
  *   compute_kernel_lib::reduce<
  *       SUM, REDUCE_ROW, dfb_in, dfb_scaler, dfb_out, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt, NC));
  *
  * @example
  *   // Post-reduce operation: softmax pattern with recip_tile after SUM reduce
  *   compute_kernel_lib::reduce<
  *       SUM, REDUCE_ROW, dfb_exps, dfb_scaler, dfb_out, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
- *       compute_kernel_lib::ReduceInputBlockShape::row(Wt),
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::row(Wt),
  *       compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
  *       NoAccumulation{},
  *       [](uint32_t dst_idx) {
@@ -378,7 +393,7 @@ struct NoOp {
  *   // REDUCE_COL with post_reduce_op: apply recip_tile to each column result
  *   // dst_idx indicates which DEST register contains the column result (0 to current_chunk-1)
  *   compute_kernel_lib::reduce<SUM, REDUCE_COL, dfb_in, dfb_scaler, dfb_out>(
- *       compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt),
+ *       in, scaler, out, compute_kernel_lib::ReduceInputBlockShape::of(Ht, Wt),
  *       compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
  *       NoAccumulation{},
  *       [](uint32_t dst_idx) {
@@ -396,12 +411,71 @@ template <
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
     ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
     typename AccumulateT = NoAccumulation,
-    typename PostReduceOp = NoOp>
+    typename PostReduceOp = NoOp,
+    typename InputDFB,
+    typename ScalerDFB,
+    typename OutputDFB>
 ALWI void reduce(
+    InputDFB& input_dfb,
+    ScalerDFB& scaler_dfb,
+    OutputDFB& output_dfb,
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},
     PostReduceOp post_reduce_op = PostReduceOp{});
+
+// The id-only form: builds the DataflowBuffers from the ids and runs the form above. See id_only_helpers.hpp.
+template <
+    PoolType reduce_type,
+    ReduceDim reduce_dim,
+    uint32_t input_dfb_id,
+    uint32_t scaler_dfb_id,
+    uint32_t output_dfb_id,
+    ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
+    ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
+    typename AccumulateT = NoAccumulation,
+    typename PostReduceOp = NoOp>
+KERNEL_LIB_ID_ONLY_HELPER ALWI void reduce(
+    ReduceInputBlockShape input_block_shape,
+    ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
+    AccumulateT accumulate = AccumulateT{},
+    PostReduceOp post_reduce_op = PostReduceOp{}) {
+    DataflowBuffer input_dfb(input_dfb_id);
+    DataflowBuffer scaler_dfb(scaler_dfb_id);
+    DataflowBuffer output_dfb(output_dfb_id);
+    if constexpr (is_accumulate_v<AccumulateT>) {
+        if (accumulate.config.accumulator == nullptr) {
+            DataflowBuffer accum_dfb(accumulate.config.cb_accumulator);
+            accumulate.config.accumulator = &accum_dfb;
+            reduce<
+                reduce_type,
+                reduce_dim,
+                input_dfb_id,
+                scaler_dfb_id,
+                output_dfb_id,
+                input_policy,
+                reconfig_mode,
+                fp32_mode,
+                AccumulateT,
+                PostReduceOp>(
+                input_dfb, scaler_dfb, output_dfb, input_block_shape, input_memory_layout, accumulate, post_reduce_op);
+            return;
+        }
+    }
+    reduce<
+        reduce_type,
+        reduce_dim,
+        input_dfb_id,
+        scaler_dfb_id,
+        output_dfb_id,
+        input_policy,
+        reconfig_mode,
+        fp32_mode,
+        AccumulateT,
+        PostReduceOp>(
+        input_dfb, scaler_dfb, output_dfb, input_block_shape, input_memory_layout, accumulate, post_reduce_op);
+}
 
 }  // namespace compute_kernel_lib
 

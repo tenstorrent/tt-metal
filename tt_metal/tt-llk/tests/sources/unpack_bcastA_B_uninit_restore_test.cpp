@@ -6,7 +6,7 @@
 //
 // PR #45127 changed `_llk_unpack_bcastA_B_uninit_` so its SrcA Y-stride restore
 // went from a hardcoded `FACE_R_DIM*2` (=32) to `canonical_unpA_y_stride(dst_format)`
-// (=16 for bf16), and it added the matching Y-stride (re)write to
+// (FACE_R_DIM x the dst datum size), and it added the matching Y-stride (re)write to
 // `_llk_unpack_reconfig_data_format_srca_impl_` (the FACE_ROW_MAJOR branch).
 // NO existing C++ test calls `_llk_unpack_bcastA_B_uninit_` at all, and the matmul
 // tilize test only ever calls the reconfig with `p_dim_stride_target::IGNORE`, so
@@ -21,9 +21,10 @@
 //   Run 1: a plain `_llk_unpack_A_` datacopy of the ORIGINAL operand-A tile
 //          (`buffer_A[0]`), with NO other state reset in between.
 //
-// If the restore leaves the SrcA Y-stride at the bcast-specific value (32) instead
-// of the canonical baseline (16 for bf16), the run-1 datacopy reads SrcA with the
-// wrong row stride and the result diverges from `DataCopyGolden(src_A)`.
+// If the restore writes a wrong SrcA Y-stride, the run-1 datacopy reads SrcA with the
+// wrong row stride and the result diverges from `DataCopyGolden(src_A)`. For a 16-bit
+// dst such as bf16 the canonical Y-stride is 32, the same value the bcast init writes,
+// so this cannot catch a missing restore; see the Python test's docstring.
 
 #include <algorithm>
 #include <cstdint>

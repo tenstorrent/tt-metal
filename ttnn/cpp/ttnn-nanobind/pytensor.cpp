@@ -5,6 +5,7 @@
 #include "pytensor.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,7 @@
 #include <utility>
 #include <variant>
 #include <vector>
+#include <unordered_set>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
@@ -23,10 +25,12 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/unordered_map.h>
 
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-nanobind/bfloat_dtype_traits.hpp"
@@ -56,6 +60,7 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
@@ -68,6 +73,10 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::tensor {
+using tt::tt_metal::experimental::per_core_allocation::NodeLocalSpan;
+using tt::tt_metal::experimental::per_core_allocation::PerNodeDeviceLocalMemorySpan;
+using tt::tt_metal::experimental::per_core_allocation::PerNodeMeshDeviceMemorySpan;
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 namespace {
 
@@ -467,6 +476,40 @@ void pytensor_module_types(nb::module_& mod) {
 }
 
 void pytensor_module(nb::module_& mod) {
+    nb::class_<NodeLocalSpan>(mod, "NodeLocalSpan", "A contiguous span of caller-owned SRAM on one core.")
+        .def(nb::init<DeviceAddr, uint64_t>(), nb::arg("address"), nb::arg("size"))
+        .def_rw("address", &NodeLocalSpan::address)
+        .def_rw("size", &NodeLocalSpan::size);
+    nb::class_<PerNodeDeviceLocalMemorySpan>(mod, "PerNodeDeviceLocalMemorySpan")
+        .def(nb::init<std::unordered_map<CoreCoord, NodeLocalSpan>>(), nb::arg("per_node_spans"))
+        .def_rw("per_node_spans", &PerNodeDeviceLocalMemorySpan::per_node_spans);
+    nb::class_<PerNodeMeshDeviceMemorySpan>(mod, "PerNodeMeshDeviceMemorySpan")
+        .def(
+            nb::init<std::unordered_map<distributed::MeshCoordinate, PerNodeDeviceLocalMemorySpan>>(),
+            nb::arg("per_device_spans"))
+        .def_rw("per_device_spans", &PerNodeMeshDeviceMemorySpan::per_device_spans);
+    mod.def(
+        "experimental_create_sram_tensor_view",
+        [](distributed::MeshDevice& mesh, const TensorSpec& spec, const PerNodeMeshDeviceMemorySpan& memory) {
+            auto buffer = tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(mesh, spec, memory);
+            std::vector<distributed::MeshCoordinate> coords;
+            coords.reserve(memory.per_device_spans.size());
+            for (const auto& [coord, local] : memory.per_device_spans) {
+                coords.push_back(coord);
+            }
+            std::sort(coords.begin(), coords.end());
+            TensorTopology topology(
+                distributed::MeshShape(coords.size()), {distributed::MeshMapperConfig::Replicate{}}, coords);
+            return Tensor(DeviceStorage(
+                mesh_tensor_from_buffer_with_topology(std::move(buffer), spec, std::move(topology)), coords));
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("tensor_spec"),
+        nb::arg("memory"),
+        nb::keep_alive<0, 1>(),
+        "Create a non-owning SRAM tensor view. Metal validates coverage, alignment, SRAM bounds and padded "
+        "tensor footprints within the supplied spans; the caller guarantees those spans are backed and retains "
+        "storage.");
     mod.def(
         "decorate_external_operation",
         [](const nb::callable& function, const std::optional<std::string>& function_name) -> nb::object {
@@ -1751,6 +1794,33 @@ void pytensor_module(nb::module_& mod) {
             [](const Tensor& self) { return self.tensor_id; },
             [](Tensor& self, std::size_t tensor_id) { self.tensor_id = tensor_id; });
 
+    mod.def(
+        "experimental_allocate_single_device_tensor",
+        [](distributed::MeshDevice& mesh, const distributed::MeshCoordinate& coord, const TensorSpec& spec) {
+            // Reserve storage on the selected parent-mesh device without uploading any bytes.
+            TT_FATAL(spec.memory_config().buffer_type() == BufferType::L1, "Extent acquisition requires SRAM");
+            const auto sharding_args = spec.compute_buffer_sharding_args();
+            TT_FATAL(
+                experimental::per_core_allocation::is_per_core_allocation(sharding_args),
+                "Extent acquisition requires per-core allocation");
+            auto buffer = experimental::per_core_allocation::create_on_single_device(
+                tt::tt_metal::distributed::ReplicatedBufferConfig{.size = spec.compute_packed_buffer_size_bytes()},
+                tt::tt_metal::distributed::DeviceLocalBufferConfig{
+                    .page_size = spec.compute_page_size_bytes(),
+                    .buffer_type = spec.memory_config().buffer_type(),
+                    .sharding_args = sharding_args},
+                &mesh,
+                coord);
+            TensorTopology topology(
+                distributed::MeshShape(1, 1), {distributed::MeshMapperConfig::Replicate{}}, {coord});
+            return Tensor(DeviceStorage(
+                mesh_tensor_from_buffer_with_topology(std::move(*buffer), spec, std::move(topology)), {coord}));
+        },
+        nb::arg("mesh_device").noconvert(),
+        nb::arg("coord"),
+        nb::arg("tensor_spec"),
+        nb::keep_alive<0, 1>(),
+        "Allocate per-core SRAM on one device without initializing or uploading any bytes.");
     mod.def(
         "experimental_to_single_device",
         [](const Tensor& host_tensor,
