@@ -1938,6 +1938,10 @@ class Orchestrator:
             # F87: a task resumed after a stop (a fix job included) gates first: its work may be done meanwhile
             hist = self.led.state().get(tid, {}).get("history") or []
             resumed = bool(hist) and hist[-1].get("status") == "RESUMED"
+            # F193: a task without a precheck (a fix job: its gate passes before the change it asks for) gates first
+            # only when resumed after a STOP; one whose agent was cut off (RUNNING) starts its agent again: a pass of
+            # tests that passed before says nothing (DeepSeek-V4.1 FIX.3 passed with no agent after a kill + resume)
+            resumed = resumed and (task.get("precheck", True) or hist[-1].get("from") == "STOPPED")
             owned = self.overseer_owned(tid)  # F169: a failure the overseer fixed: the delta runs, never an agent
             pre = self.gate(tid) if owned or (existing and (task.get("precheck", True) or resumed)) else None
             if owned and pre.verdict != "PASS":
