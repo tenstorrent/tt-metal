@@ -3,6 +3,8 @@
 
 """Gemma4 context-parallel prefill attention with local and packed global ring caches."""
 
+import functools
+
 import ttnn
 
 from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
@@ -20,13 +22,26 @@ from .operations import (
 )
 from .ring_prefill import (
     global_ring_prefill_attention,
+    global_ring_program_config,
     sliding_ring_prefill_attention,
+    sliding_ring_program_config,
     write_chunk_to_global_ring_cache,
     write_chunk_to_sliding_ring_cache,
 )
 
 # One buffer pair for each of the five sliding layers between global layers.
 NUM_SWA_HALO_BUFFER_PAIRS = 5
+
+
+@functools.cache
+def _sdpa_compute_config(arch):
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
 
 
 class Gemma4AttentionConfig:
@@ -119,6 +134,10 @@ class Gemma4Attention:
                     num_users=max_batch_size,
                 )
             self.ring_max_seq_len = max_seq_len
+
+        # Ring SDPA program configs by Q slab length: they depend only on shapes, which every chunk of a prefill
+        # shares, so the eager forward builds each once.
+        self._sdpa_program_configs = {}
 
     def __call__(
         self,
@@ -248,15 +267,20 @@ class Gemma4Attention:
                 prefill_metadata=prefill_metadata,
             )
 
-        sdpa_compute_config = ttnn.init_device_compute_kernel_config(
-            tt_q.device().arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
-        )
+        sdpa_compute_config = _sdpa_compute_config(tt_q.device().arch())
         num_local_kv_heads_ring = tt_v.shape[1]
         ring_logical_n = self.ring_max_seq_len
+        sdpa_program_config = self._sdpa_program_configs.get(tt_q.shape[-2])
+        if sdpa_program_config is None:
+            if is_global:
+                sdpa_program_config = global_ring_program_config(
+                    packed_q, self.ring_kv_cache.kv, self.mesh_config, self.ccl_manager, num_local_kv_heads_ring
+                )
+            else:
+                sdpa_program_config = sliding_ring_program_config(
+                    tt_q, self.mesh_config, self.ccl_manager, self.config.head_dim
+                )
+            self._sdpa_program_configs[tt_q.shape[-2]] = sdpa_program_config
         if is_global:
             tt_sdpa = global_ring_prefill_attention(
                 packed_q,
@@ -270,6 +294,7 @@ class Gemma4Attention:
                 kv_actual_global=chunk_offset,
                 scale=1.0,
                 compute_kernel_config=sdpa_compute_config,
+                program_config=sdpa_program_config,
                 layer_idx=self.ring_layer_idx,
                 num_layers=self.ring_num_layers,
             )
@@ -291,6 +316,7 @@ class Gemma4Attention:
                 sliding_window_size=sliding_window_size,
                 scale=1.0,
                 compute_kernel_config=sdpa_compute_config,
+                program_config=sdpa_program_config,
                 layer_idx=self.ring_layer_idx,
                 num_layers=self.ring_num_layers,
             )

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import os
 
 from loguru import logger
@@ -14,21 +15,27 @@ def _default_num_links_impl():
     return 2 if is_blackhole() else 1
 
 
+# The GEMMA4_CCL_* settings below are read once per process: every collective consults them, and the eager forward
+# runs hundreds of collectives.
+@functools.cache
 def ccl_chunks_per_sync() -> int:
     """Async RS/AG ``chunks_per_sync`` (fabric packet grouping). Default 10."""
     return max(1, int(os.environ.get("GEMMA4_CCL_CHUNKS_PER_SYNC", "10")))
 
 
+@functools.cache
 def ccl_num_workers_per_link() -> int:
     """Async RS/AG workers per link. Default 2."""
     return max(1, int(os.environ.get("GEMMA4_CCL_NUM_WORKERS", "2")))
 
 
+@functools.cache
 def ccl_num_buffers_per_channel() -> int:
     """Async RS/AG ``num_buffers_per_channel``. Default 2."""
     return max(1, int(os.environ.get("GEMMA4_CCL_NUM_BUFFERS", "2")))
 
 
+@functools.cache
 def ccl_persistent_buffers_enabled() -> bool:
     """Reuse DRAM destination buffers across RS/AG calls (Phase P1).
 
@@ -44,6 +51,7 @@ def default_ccl_topology():
     return ttnn.Topology.Linear if override in ("linear", "line", "l") else ttnn.Topology.Ring
 
 
+@functools.cache
 def ccl_async_enabled() -> bool:
     """True when prefill/decode allreduce should use async RS+AG.
 
@@ -128,7 +136,8 @@ class CCLManager:
         overwrites valid entries and masks invalid ones, so the scratch buffer needs
         no re-zeroing.
         """
-        cache_key = (key, n_kv_local, seq, head_dim, str(dtype), str(memory_config))
+        # dtype and memory configs hash by value; str() of either costs more than the lookup itself.
+        cache_key = (key, n_kv_local, seq, head_dim, dtype, memory_config)
         if cache_key not in self._ring_gather_buffers:
             self._ring_gather_buffers[cache_key] = ttnn.zeros(
                 [1, n_kv_local, seq, head_dim],

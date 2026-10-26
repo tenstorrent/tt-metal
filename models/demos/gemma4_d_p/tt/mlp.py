@@ -44,6 +44,9 @@ class MLP:
 
         dtype_suffix = f"_{dtype_to_str(dtype)}"
 
+        # _matmul_configs results by projection geometry: every chunk of a prefill has the same shapes.
+        self._configs = {}
+
         # Match math fidelity to the weight's mantissa width. Fidelity is the number of passes
         # the matrix unit makes over the operand mantissas, so it — not the storage format — is
         # what sets math time: a narrower dtype moves fewer bytes but issues the same MACs. At
@@ -103,6 +106,22 @@ class MLP:
         With this blocking, accumulating in bf16 drifts long-context KV accuracy in the deep layers, so
         the explicit path accumulates in fp32. packer_l1_acc accumulates the K-block partials in L1.
         """
+        padded = hidden_states.padded_shape
+        key = (
+            padded[-2],
+            padded[-1],
+            hidden_states.memory_config().shard_spec.shape[1] if hidden_states.is_sharded() else None,
+            weight.padded_shape[-1],
+            fused_activation is not None,
+            per_core_n,
+        )
+        configs = self._configs.get(key)
+        if configs is None:
+            configs = self._build_matmul_configs(hidden_states, weight, fused_activation, per_core_n)
+            self._configs[key] = configs
+        return configs
+
+    def _build_matmul_configs(self, hidden_states, weight, fused_activation, per_core_n):
         grid = self.mesh_device.compute_with_storage_grid_size()
         n_tiles = weight.padded_shape[-1] // ttnn.TILE_SIZE
         grid_x = max(x for x in range(1, grid.x + 1) if n_tiles % x == 0)
