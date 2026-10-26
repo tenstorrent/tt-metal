@@ -275,6 +275,11 @@ class TestConfig:
     )
     # counters.h LAUNCH_TOKEN_SHIFT: the launch word's token sits above the zone bits (the sync word's above its flag).
     _LAUNCH_TOKEN_SHIFT: ClassVar[int] = 8
+    # counters.h LAUNCH_WORD_*: the Wormhole/Blackhole launch word is STREAM_SCRATCH_1 of overlay stream 0.
+    _LAUNCH_WORD_OVERLAY_BASE: ClassVar[int] = 0xFFB40000
+    _LAUNCH_WORD_SCRATCH_INDEX_WORMHOLE: ClassVar[int] = 249
+    _LAUNCH_WORD_SCRATCH_INDEX_BLACKHOLE: ClassVar[int] = 37
+    _STREAM_REG_BYTES: ClassVar[int] = 4
 
     # Device print buffer. It sits above loaders, and under RUNTIME_ARGS_START.
     # Coverage builds extend TRISC sections past this address; device print
@@ -408,11 +413,12 @@ class TestConfig:
             return None
         match TestConfig.CHIP_ARCH:
             case ChipArchitecture.WORMHOLE:
-                return 0xFFB40000 + 249 * 4  # STREAM_SCRATCH_1 of overlay stream 0
+                index = TestConfig._LAUNCH_WORD_SCRATCH_INDEX_WORMHOLE
             case ChipArchitecture.BLACKHOLE:
-                return 0xFFB40000 + 37 * 4
+                index = TestConfig._LAUNCH_WORD_SCRATCH_INDEX_BLACKHOLE
             case _:
                 return TestConfig._PERF_COUNTERS_QUASAR_COUNTED_ZONES
+        return TestConfig._LAUNCH_WORD_OVERLAY_BASE + index * TestConfig._STREAM_REG_BYTES
 
     @staticmethod
     def resolve_artefacts_path() -> Path:
