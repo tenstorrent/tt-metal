@@ -203,6 +203,7 @@ def test_chunk_probe(mesh_device):
                     s_pad_max=WMAX if MODE == "single" else None,
                     want_logits=False,
                     final={b: False for b in USERS} if os.environ.get("PROBE_FINAL") == "1" else None,
+                    **({"totals": {b: E for b in USERS}} if os.environ.get("PROBE_TOTALS") == "1" else {}),
                 )
                 st_ = c_
                 calls_t.append(dict(m.timing))
@@ -217,6 +218,7 @@ def test_chunk_probe(mesh_device):
                 s_pad_max=WMAX if MODE == "single" else None,
                 want_logits=(bool(os.environ.get("PROBE_SAVE")) or SAME) and os.environ.get("PROBE_NOLOGITS") != "1",
                 final={b: True for b in USERS} if os.environ.get("PROBE_FINAL") == "1" else None,
+                **({"totals": {b: E for b in USERS}} if os.environ.get("PROBE_TOTALS") == "1" else {}),
             )
             wall = time.perf_counter() - t0
             calls_t.append(dict(m.timing))

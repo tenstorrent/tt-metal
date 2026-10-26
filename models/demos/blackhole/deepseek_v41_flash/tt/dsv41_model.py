@@ -84,6 +84,16 @@ def _return_lag():
     return int(os.environ.get("DSV41_PF_RETURN_LAG", "1"))
 
 
+_PREP_POOL = [None]
+
+
+def _prep_pool():
+    """thread pool of the window builds (``DSV41_PF_BUILD_AHEAD`` windows gathered concurrently)"""
+    if _PREP_POOL[0] is None:
+        _PREP_POOL[0] = ThreadPoolExecutor(max(2, int(os.environ.get("DSV41_PF_BUILD_AHEAD", "2")) + 1))
+    return _PREP_POOL[0]
+
+
 class _UpOnly:
     """marker: the recorded upload ops of the token half of a window (``Model._one`` lookahead); the position half is recorded when the window starts"""
 
@@ -1701,7 +1711,7 @@ class Model:
                     win_keys = list(range(min(it[2] for it in wave), max(e for _, _, _, e in wave), C))
                     s0_of = lambda it, k: k  # noqa: E731
 
-                def _build(k, wave=wave):
+                def _build(k, wave=wave, aprep=False):
                     """host inputs of the window ``k`` (an absolute chunk start; per-row: the round) (tokens, Engram hashes, Engram rows gathered / dequantised): None when no user of the wave is active in it. Pure host work: DSV41_PF_OVERLAP=1 (default) runs it for the NEXT window while the device replays the current one."""
                     th_h = 0.0
                     part = [it for it in wave if (s0_of(it, k) < it[3] if per_row else it[2] <= k < it[3])]
@@ -1766,7 +1776,12 @@ class Model:
                             token_mask=None if vw is None else ~vw[0][idx],
                         )
                     th_h = time.perf_counter() - th0
-                    prepped = pm.prep_inputs(tok, hs, active.nonzero().reshape(-1), vis=vw)
+                    if (
+                        aprep and vw is None
+                    ):  # the Engram row gather + dequant (the bulk of the host work of a window) runs in a pool thread: several windows ahead are gathered concurrently
+                        prepped = _prep_pool().submit(pm.prep_inputs, tok, hs, active.nonzero().reshape(-1), None)
+                    else:
+                        prepped = pm.prep_inputs(tok, hs, active.nonzero().reshape(-1), vis=vw)
                     return part, active, lens, tok, slot_b, vw, hs, prepped, th_h, s0v
 
                 def _bookkeep(part, k):
@@ -1877,6 +1892,16 @@ class Model:
                     pm.timing["lookahead_build"] = pm.timing.get("lookahead_build", 0.0) + time.perf_counter() - t_l0
 
                 ahead = {}
+                launched = (
+                    {}
+                )  # windows whose hash is done and whose row gather runs in the pool (DSV41_PF_BUILD_AHEAD > 1), by window key
+                build_ahead = int(os.environ.get("DSV41_PF_BUILD_AHEAD", "2"))
+
+                def _resolve(nbw):
+                    if nbw is not None and hasattr(nbw[7], "result"):
+                        nbw = nbw[:7] + (nbw[7].result(),) + nbw[8:]
+                    return nbw
+
                 if (
                     pm.__dict__.get("build_prof") is not None
                 ):  # (DSV41_PF_PROFILE_BUILD diagnostics: the host work of every window build is profiled)
@@ -1892,6 +1917,8 @@ class Model:
                 for k_s0, k in enumerate(win_keys):
                     if k in ahead:
                         bw = ahead.pop(k)
+                    elif k in launched:
+                        bw = _resolve(launched.pop(k))
                     else:  # a window nothing built during the previous replay (the first of a call): its host work is not hidden
                         t_b0 = time.perf_counter()
                         bw = _build(k)
@@ -1941,8 +1968,12 @@ class Model:
                                 pm.dyn.enqueue_prebuilt(pm._win_count)
                             if lookahead:
                                 _look_build()
+                        if build_ahead > 1:  # hash (serial, in window order) + start the gathers of the next windows
+                            for kn in win_keys[k_s0 + 1 : k_s0 + 1 + build_ahead]:
+                                if kn not in launched and kn not in ahead:
+                                    launched[kn] = _build(kn, aprep=True)
                         for kn in win_keys[k_s0 + 1 :]:
-                            nbw = _build(kn)
+                            nbw = _resolve(launched.pop(kn)) if kn in launched else _build(kn)
                             if nbw is None:
                                 ahead[kn] = None
                                 continue
