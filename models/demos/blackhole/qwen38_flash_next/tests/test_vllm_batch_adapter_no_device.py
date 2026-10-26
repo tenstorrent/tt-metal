@@ -42,6 +42,14 @@ BLOCK = 64
 TABLE_WIDTH = 512  # ceil(32768 / 64): the lane table's width at block size 64
 
 
+@pytest.fixture(autouse=True)
+def _single_path_prefill(monkeypatch):
+    """The fake decoder has no pack surface: these tests drive the single-path prefill and the lane budget without the
+    pack (on by default with 8 lanes; its rig is in test_pack_plan_no_device)."""
+
+    monkeypatch.setenv("QWEN38_PREFILL_PACK", "0")
+
+
 class FakeLanePosition:
     def __init__(self, lanes: int) -> None:
         self.positions = [0] * lanes

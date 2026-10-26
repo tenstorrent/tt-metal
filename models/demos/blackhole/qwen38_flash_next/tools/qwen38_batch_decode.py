@@ -23,7 +23,8 @@ the pages are non-contiguous and interleaved across lanes.  Admission writes the
 into the lane's pages (``model.admit_lane_kv_paged``) and moves the other families through the host pager (the pager
 layouts exclude the KV family).
 
-Multi-user pack (P3d-3, ``QWEN38_PREFILL_PACK=1``, default off; ``QWEN38_PACK_BUCKETS`` default ``256,512,1024`` rows per
+Multi-user pack (P3d-3; the decoder's ``pack`` argument, else ``QWEN38_PREFILL_PACK=1``: off here by default, the vLLM
+batch adapter turns it on with at least 8 lanes, P3e; ``QWEN38_PACK_BUCKETS`` default ``256,512,1024`` rows per
 user with at most 8 lanes, ``128,256,512,1024`` with more, P3d-4): ``prepare`` also allocates the pack state (``ttnn/pack.py``), runs one eager pack per bucket and builds and warms the
 landing (``ttnn/pack_landing.py``) inside the chain's warm hook, before any capture; ``capture`` captures one pack trace per
 bucket after the lane trace; ``admit_pack(lanes, prompts, rows_per_user)`` prefills the prompts as ONE pack, lands each user
@@ -61,6 +62,10 @@ WARM_TOKEN_ID = 1000  # any in-vocabulary id: the warm passes write garbage into
 
 
 PREFILL_PACK_VARIABLE = "QWEN38_PREFILL_PACK"
+# P3e (2026-10-26): with the knob unset the vLLM batch adapter packs with at least this many lanes.  GPQA-Diamond
+# through the server at B=32, every eligible row packed against the pack off: 85.4 % against 83.8 %, paired difference
+# +1.5 [-2.0, +5.1] points.
+PACK_DEFAULT_MIN_LANES = 8
 PACK_BUCKETS_VARIABLE = "QWEN38_PACK_BUCKETS"
 PACK_MIB = 1 << 20
 # DRAM per device of the pack (P3d-2 / P3d-3 measurements, 2026-10-26): the persistent state is 187.6 MiB plus 226.5 MiB per
@@ -75,10 +80,14 @@ PACK_TRACE_BYTES = {128: 74 * PACK_MIB, 256: 63 * PACK_MIB, 512: 62 * PACK_MIB, 
 PACK_TAIL_ROW_BYTES = 128 * 2  # one compressed index row: INDEX_HEAD_DIM bf16
 
 
-def prefill_pack_enabled(environ=None) -> bool:
-    """``QWEN38_PREFILL_PACK`` ("0" default = off, "1" = on); anything else is refused."""
+def prefill_pack_enabled(environ=None, lanes: int | None = None) -> bool:
+    """``QWEN38_PREFILL_PACK``: "1" = on, "0" = off, anything else is refused.  Unset: on with at least
+    ``PACK_DEFAULT_MIN_LANES`` ``lanes`` (the vLLM batch adapter passes its lane count), off without ``lanes`` (the P1
+    drivers and text_demo)."""
 
-    value = (os.environ if environ is None else environ).get(PREFILL_PACK_VARIABLE, "0")
+    value = (os.environ if environ is None else environ).get(PREFILL_PACK_VARIABLE)
+    if value is None:
+        return lanes is not None and lanes >= PACK_DEFAULT_MIN_LANES
     if value not in ("0", "1"):
         raise ValueError(f"{PREFILL_PACK_VARIABLE} must be 0 or 1, got {value!r}")
     return value == "1"
@@ -199,6 +208,7 @@ class Qwen38PlainLaneDecoder:
         decode_steps: int = 32,
         seed: int = 0,
         indexer_form: str | None = None,
+        pack: bool | None = None,
     ) -> None:
         self.lanes = lanes
         # QSA lane indexer form, "wide" or "per_lane"; the argument beats QWEN38_LANE_INDEXER_FORM (default "wide")
@@ -225,8 +235,9 @@ class Qwen38PlainLaneDecoder:
         # P2a (vLLM adapter): compile the full-vocabulary gather of the lane logits in ``prepare`` (eager, misses allowed)
         # so ``read_full_logits`` runs under the closed miss guard; off for the P1 drivers (they read greedy ids only).
         self.warm_logits_gather = False
-        # P3d-3: the multi-user packed prefill (QWEN38_PREFILL_PACK=1; default off: serving is unchanged)
-        self.pack_enabled = prefill_pack_enabled()
+        # P3d-3: the multi-user packed prefill; the argument beats QWEN38_PREFILL_PACK (unset: off, the P1 drivers; the
+        # vLLM adapter passes its own default, on with at least PACK_DEFAULT_MIN_LANES lanes)
+        self.pack_enabled = prefill_pack_enabled() if pack is None else pack
         self.pack_buckets: tuple[int, ...] = pack_buckets_from_env(lanes=lanes) if self.pack_enabled else ()
         if self.pack_enabled:
             pack_plan.pack_force_enabled()  # QWEN38_PACK_FORCE is read per prefill call: refuse a bad value at start

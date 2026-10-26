@@ -209,7 +209,7 @@ def test_the_pool_cap_counts_the_pack_with_the_context(monkeypatch):
     monkeypatch.delenv("QWEN38_PACK_BUCKETS", raising=False)
     for max_len, seqs in ((32704, 8), (65472, 8), (32704, 32)):
         context = vllm.resident_allocated_context(max_len)
-        monkeypatch.delenv("QWEN38_PREFILL_PACK", raising=False)
+        monkeypatch.setenv("QWEN38_PREFILL_PACK", "0")
         off = vllm.batch_pool_token_cap(max_len, seqs)
         monkeypatch.setenv("QWEN38_PREFILL_PACK", "1")
         on = vllm.batch_pool_token_cap(max_len, seqs)
@@ -374,8 +374,25 @@ def test_force_packs_a_single_row(pack_rig, monkeypatch):
     assert len(rig.decoder.packs) == 1 and rig.decoder.packs[0][1] == [100] and out.shape == (1, 1)
 
 
-def test_the_knob_off_path_never_plans(monkeypatch):
+def test_the_default_packs_with_eight_lanes(pack_rig, monkeypatch):
+    monkeypatch.delenv("QWEN38_PREFILL_PACK", raising=False)  # P3e: unset is on with at least 8 lanes
+    rig = pack_rig
+    blocks = [[1 + i * 30, 2 + i * 30] for i in range(4)]
+    rig.prefill([_prompt(100, 10 + 10 * i) for i in range(4)], [0, 1, 2, 3], blocks, greedy_batch_sampling_params(4))
+    assert len(rig.decoder.packs) == 1 and rig.decoder.packs[0][1] == [100] * 4  # 4 users of 100 tokens: one pack
+
+
+def test_the_default_never_plans_with_fewer_than_eight_lanes(monkeypatch):
     monkeypatch.delenv("QWEN38_PREFILL_PACK", raising=False)
+    rig = Rig(monkeypatch, lanes=4)
+    monkeypatch.setattr(
+        adapter.vllm_module, "plan_prefill_groups", lambda *a, **k: pytest.fail("the planner ran with 4 lanes")
+    )
+    rig.prefill([_prompt(40, 10), _prompt(70, 20)], [0, 1], [[5], [9, 3]], greedy_batch_sampling_params(2))
+
+
+def test_the_knob_off_path_never_plans(monkeypatch):
+    monkeypatch.setenv("QWEN38_PREFILL_PACK", "0")
     rig = Rig(monkeypatch)
     monkeypatch.setattr(
         adapter.vllm_module, "plan_prefill_groups", lambda *a, **k: pytest.fail("the planner ran with the knob off")

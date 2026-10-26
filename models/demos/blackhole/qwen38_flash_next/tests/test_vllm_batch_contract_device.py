@@ -28,6 +28,9 @@ reference token is the pack's top-2 and the top-1 / top-2 logit margin is under 
 single path, not bitwise); its later tokens may diverge (reported).  Every other row keeps the exact-prefix gate.  Ids
 ``ref_pack32`` (B=1 references of the B=32 scenario into ``p3d4-pack32-refs.json``; knob off) and ``contract_b32_pack`` (B=32, 24 short
 prompts and two long ones arrive in ONE prefill call, so S=128 packs of 16 and 8 users run and lanes 16..31 decode; pack on).
+P3e: the pack is on by default with 8 or more lanes, so the batch ids run with it unless ``QWEN38_PREFILL_PACK=0`` (the gate
+follows ``model.decoder.pack_enabled``); ``m1_*`` counts the pack's DRAM in ``lane_states_bytes`` when it is on (``pack_enabled``
+in the report; run them with ``QWEN38_PREFILL_PACK=0`` to measure the lane states alone).
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/tests/test_vllm_batch_contract_device.py -v -s -k ref_b1
 Env:  QWEN38_HARDWARE_PROFILE=tt-quietbox-2, TT_METAL_TRACE_ALLOC_TRACKING=1, MODEL_WEIGHTS_DIR, QWEN38_CACHE_ROOT,
@@ -656,6 +659,7 @@ def measure_dram(mesh_device, checkpoint: Path, lanes: int, block_size: int, tmp
             "context": model.allocated_context,
             "block_size": block_size,
             "num_blocks": num_blocks,
+            "pack_enabled": model.decoder.pack_enabled,
             "pool_bytes_per_device": num_blocks * block_size * 12 * 512 * 2,
             "chain_only": model.dram["chain_only"],
             "after_capture": model.dram["after_capture"],

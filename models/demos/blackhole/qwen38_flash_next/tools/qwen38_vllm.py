@@ -404,7 +404,7 @@ def batch_pool_token_cap(max_model_len: int, max_num_seqs: int) -> int:
     extra = context - 32768
     free = DRAM_CHAIN_FREE_32K - extra * CONTEXT_BYTES_PER_TOKEN
     lanes = LANE_FIXED_BASE_32K + max_num_seqs * (LANE_FIXED_PER_LANE_32K + extra * CONTEXT_BYTES_PER_TOKEN_PER_LANE)
-    if prefill_pack_enabled():  # QWEN38_PREFILL_PACK=1: the pack's persistent state and bucket traces take DRAM too
+    if prefill_pack_enabled(lanes=max_num_seqs):  # the pack's persistent state and bucket traces take DRAM too
         lanes += pack_dram_bytes(pack_buckets_from_env(lanes=max_num_seqs), context)
     return max(0, (free - lanes - POOL_MARGIN_BYTES) // KV_BYTES_PER_TOKEN)
 
@@ -504,7 +504,7 @@ class Qwen38ForCausalLM:
         self.lane_of_slot: list[int] = list(range(batch_lanes))  # slot -> lane (the lane holding that slot's state)
         self.lane_slots: list[Qwen38VLLMSlot] = [Qwen38VLLMSlot() for _ in range(batch_lanes)]  # per-lane policy/RNG
         self.batch_failed = False
-        self.last_prefill_groups: list = []  # the groups of the last packed-mode prefill call (QWEN38_PREFILL_PACK=1)
+        self.last_prefill_groups: list = []  # the groups of the last packed-mode prefill call (pack on)
         self._pending_note: dict[int, int] | None = None  # the moves decode_forward applied, not yet noted
         self.decode_calls = 0  # batch mode: decode calls so far (the periodic log line)
         self.decode_stats: deque[dict[str, float]] = deque(maxlen=4096)  # per decode call: total/step/gather seconds
@@ -1023,7 +1023,12 @@ class Qwen38ForCausalLM:
             num_pages=num_blocks,
             max_blocks=batch_max_blocks(self.allocated_context, block_size),
         ).validate(self.allocated_context)
-        decoder = Qwen38PlainLaneDecoder(self.lanes, paging=paging, indexer_form=BATCH_LANE_INDEXER_FORM)
+        decoder = Qwen38PlainLaneDecoder(
+            self.lanes,
+            paging=paging,
+            indexer_form=BATCH_LANE_INDEXER_FORM,
+            pack=prefill_pack_enabled(lanes=self.lanes),  # on with >= 8 lanes (P3e); QWEN38_PREFILL_PACK wins
+        )
         decoder.warm_logits_gather = True  # host-sampled rows and host logits read the lane logits under the miss guard
         self.decoder, self.block_size, self.num_blocks = decoder, block_size, num_blocks
         logger.info(
@@ -1066,7 +1071,7 @@ class Qwen38ForCausalLM:
         lanes = LANE_FIXED_BASE_32K + self.lanes * (
             LANE_FIXED_PER_LANE_32K + (self.allocated_context - 32768) * CONTEXT_BYTES_PER_TOKEN_PER_LANE
         )
-        if prefill_pack_enabled():  # the pack's persistent state and bucket traces (QWEN38_PREFILL_PACK=1)
+        if prefill_pack_enabled(lanes=self.lanes):  # the pack's persistent state and bucket traces
             lanes += pack_dram_bytes(pack_buckets_from_env(lanes=self.lanes), self.allocated_context)
         logger.info(
             f"batch pool admission: free {free / 2**30:.2f} GiB per device, pool {pool / 2**30:.2f} GiB, lane states "
@@ -1169,7 +1174,7 @@ class Qwen38ForCausalLM:
                 None if sampling_params is None else Qwen38HostSamplingPolicy.from_contract(sampling_params, i)
             )
         self._require_serviceable(enable_trace, recovering=True)
-        if prefill_pack_enabled():
+        if prefill_pack_enabled(lanes=self.lanes):
             return self._prefill_batch_grouped(prompts, pages, policies, slots), torch.zeros(rows, dtype=torch.long)
         outputs: list[torch.Tensor] = []
         for i in range(rows):
@@ -1219,8 +1224,8 @@ class Qwen38ForCausalLM:
         policies: list[Qwen38HostSamplingPolicy | None],
         slots: list[int],
     ) -> torch.Tensor:
-        """``QWEN38_PREFILL_PACK=1`` (P3d-4): plan the rows into packs and single-path rows
-        (:func:`qwen38_pack_plan.plan_prefill_groups`; ``QWEN38_PACK_FORCE=1`` packs every row that fits a bucket), run the
+        """Pack on (P3d-4; the default with at least 8 lanes, ``QWEN38_PREFILL_PACK`` overrides): plan the rows into
+        packs and single-path rows (:func:`qwen38_pack_plan.plan_prefill_groups`; ``QWEN38_PACK_FORCE=1`` packs every row that fits a bucket), run the
         groups in plan order and return the outputs in row order.  A packed row lands in its lane from the pack
         (``admit_pack``, the vLLM blocks as its pages) and takes its first token from the pack's fp32 logits: a plain greedy
         row is the host argmax (torch.argmax returns the lowest id among equal maxima, the device greedy's tie rule), any other row the

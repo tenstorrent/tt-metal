@@ -196,16 +196,18 @@ are tolerance class: the pack's per-layer K/V, compressed and GDN-state errors e
 (relative Frobenius error 0.006 at the first QSA layer to 0.15 at the last), top-1 agrees on 16 of 22 prompts and on 11 of 11
 with a top-2 margin of 0.5 or more; the six flips have margins of 0.0-0.375.
 
-### Packs in serving (P3d-3 landing, P3d-4 grouping; `QWEN38_PREFILL_PACK`, default off)
+### Packs in serving (P3d-3 landing, P3d-4 grouping, P3e default; `QWEN38_PREFILL_PACK`)
 
-With `QWEN38_PREFILL_PACK=1` the vLLM batch adapter (`tools/qwen38_vllm.py`, `_prefill_batch`) prefills some rows of a
+With the pack on the vLLM batch adapter (`tools/qwen38_vllm.py`, `_prefill_batch`) prefills some rows of a
 prefill call as packs and lands each packed user straight into its decode lane (`ttnn/pack_landing.py`,
-`Qwen38PlainLaneDecoder.admit_pack`; the vLLM block ids are the lane's pages).  With the knob unset the adapter's prefill is the
-single path of before, row by row (the code path is unchanged).
+`Qwen38PlainLaneDecoder.admit_pack`; the vLLM block ids are the lane's pages).  The pack is on by default with 8 or more lanes
+(`PACK_DEFAULT_MIN_LANES`, since P3e, 2026-10-26) and off with fewer; `QWEN38_PREFILL_PACK` overrides.  With the pack off the adapter's
+prefill is the single path of before, row by row (the code path is unchanged).  The lane decoder alone (`text_demo`, the P1 tests)
+keeps the pack off unless the knob is `1` or its `pack` argument is true.
 
 | variable | default | meaning |
 |---|---|---|
-| `QWEN38_PREFILL_PACK` | `0` | `1` builds the pack state, the bucket traces and the landing at start (before the chain captures) and plans every prefill call; any other value is refused |
+| `QWEN38_PREFILL_PACK` | unset: on with 8 or more lanes, else off | `1` builds the pack state, the bucket traces and the landing at start (before the chain captures) and plans every prefill call; `0` keeps the single path; any other value is refused |
 | `QWEN38_PACK_BUCKETS` | lanes <= 8: `256,512,1024`; more lanes: `128,256,512,1024` | rows per user of the enabled buckets.  With 8 lanes or fewer `S = 128` (16 users) could never fill above half, and dropping it saves its second GDN launch (226.5 MiB) and its 74 MiB trace.  An explicit value wins |
 | `QWEN38_PACK_FORCE` | `0` | `1` packs every row of at most the largest bucket, even alone (tests and accuracy runs; the planner's cost rule is off) |
 
@@ -246,6 +248,15 @@ json 96/96, first divergence against the CPU records chat 39 -> 23, math 61 -> 5
 record unchanged (code 32, fact 15, list 46, prose 13, sky 19, story 6, summary 1, document 12 is a single-path record).  The contract
 test with packs: every first token equals the B = 1 reference (no miss), later tokens diverge on 6 of 8 packed rows (forced run) and 14 of 25 (B = 32 run), first
 divergence at token 7-31, the pass key is found in every request.
+
+Accuracy (P3e, 2026-10-26; the reason for the default): GPQA-Diamond (198 questions, one sample each) through the vLLM server at
+B = 32, block 64, `--max-model-len 32704`, max 29800 new tokens, concurrency 32, thinking on, the card's sampling (temperature 1.0,
+top-p 0.95, top-k 20), each question seeded by its id in both runs.  Pack off: 83.8 % (166), 95 % CI [78.3, 88.9], 33 answers cut at
+the length limit.  Every eligible request packed (`QWEN38_PACK_FORCE=1`; 173 packs held 202 requests, the one prompt over 1024 tokens
+ran single): 85.4 % (169), [80.3, 89.9], 25 cut.  Paired difference +1.5 points, 95 % CI [-2.0, +5.1] (5 questions right only
+without the pack, 8 right only with it); on the 161 questions that neither run cut, -1.2 points, [-3.1, 0.0] (2 and 0).  No
+measurable difference.  The model card's 91.7 is outside both intervals; the cut answers and the answers without a final choice
+account for most of the gap.
 
 Mixed order: a pack overwrites the chain's dense KV rows 0..2047 and the PLE history; the next single-path prefill resets both.
 Measured (4 packs of S = 128 / 256 / 512 / 1024 against single prompts of 40 / 130 / 700 / 1500 tokens, all four devices): a single
