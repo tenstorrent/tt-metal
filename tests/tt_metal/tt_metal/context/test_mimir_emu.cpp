@@ -17,10 +17,13 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/device/device_manager.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
 #include "dev_mem_map.h"
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "mimir_contract.hpp"
@@ -31,6 +34,38 @@ namespace tt::tt_metal {
 namespace {
 
 using namespace mimir_contract;
+
+// Same open as the Wormhole/Blackhole DRISC tests: one MeshDevice over chip 0. Host reads and writes
+// use the physical device, because a MeshDevice id is a mesh id. Run with TT_METAL_SLOW_DISPATCH_MODE=1
+// so the mesh command queue takes the slow-dispatch path.
+std::shared_ptr<distributed::MeshDevice> open_unit_mesh() { return distributed::MeshDevice::create_unit_mesh(0); }
+
+IDevice* physical_device(distributed::MeshDevice& mesh) {
+    return mesh.get_device(distributed::MeshCoordinate::zero_coordinate(mesh.shape().dims()));
+}
+
+void LaunchProgram(distributed::MeshDevice& mesh, Program& program) {
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange(mesh.shape()), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh.mesh_command_queue(), workload, /*blocking=*/true);
+}
+
+// Host-only checks on a package with no Tensix cores. A unit mesh always builds an allocator and
+// firmware; these cases only need a management device.
+IDevice* CreateDeviceMinimal(ChipId device_id) {
+    auto& ctx = MetalContext::instance();
+    ctx.initialize(
+        ctx.resolve_dispatch_core_config(), /*num_hw_cqs=*/1, {}, DEFAULT_WORKER_L1_SIZE, /*minimal=*/true);
+    return new Device(
+        &ctx.get_env(),
+        &ctx,
+        device_id,
+        /*num_hw_cqs=*/1,
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        {},
+        /*minimal=*/true);
+}
 
 static_assert(MEM_L1_UNCACHED_BASE == MEM_L1_SIZE);
 
@@ -62,11 +97,11 @@ TEST_P(CceSramRoundTripThroughMinimalDevice, RoundTrip) {
 TEST(MimirEmu, RuntimeFirmwareInitializesThroughPublicDeviceApi) {
     skip_unless_programmable_dram_package();
 
-    IDevice* device = nullptr;
-    ASSERT_NO_THROW(device = CreateDevice(0));
+    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    ASSERT_NO_THROW(mesh_device = open_unit_mesh());
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 class HartZeroRunsDramKernel : public ::testing::TestWithParam<uint32_t> {};
@@ -74,14 +109,14 @@ class HartZeroRunsDramKernel : public ::testing::TestWithParam<uint32_t> {};
 TEST_P(HartZeroRunsDramKernel, WritesMagic) {
     skip_unless_programmable_dram_package();
 
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const uint32_t cce_index = GetParam();
     const uint32_t num_cces = num_cces_on(device);
     if (cce_index >= num_cces) {
-        EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
     }
 
@@ -99,12 +134,11 @@ TEST_P(HartZeroRunsDramKernel, WritesMagic) {
         logical_dram_core,
         DramConfig{.noc = NOC::NOC_0, .compile_args = {result_dev_addr, magic}});
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    LaunchProgram(*mesh_device, program);
 
     uint32_t result = 0;
     read_cce_sram(device, logical_dram_core, result_noc_addr, &result, sizeof(result));
     EXPECT_EQ(result, magic);
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 class AllHartsRunDramKernel : public ::testing::TestWithParam<uint32_t> {};
@@ -112,14 +146,14 @@ class AllHartsRunDramKernel : public ::testing::TestWithParam<uint32_t> {};
 TEST_P(AllHartsRunDramKernel, WritesMagic) {
     skip_unless_programmable_dram_package();
 
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const uint32_t cce_index = GetParam();
     const uint32_t num_cces = num_cces_on(device);
     if (cce_index >= num_cces) {
-        EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
     }
 
@@ -146,12 +180,11 @@ TEST_P(AllHartsRunDramKernel, WritesMagic) {
                 .compile_args = {result_dev_base + hart * static_cast<uint32_t>(sizeof(uint32_t)), expected[hart]}});
     }
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    LaunchProgram(*mesh_device, program);
 
     std::vector<uint32_t> result(num_harts, 0);
     read_cce_sram(device, logical_dram_core, result_noc_base, result.data(), result.size() * sizeof(uint32_t));
     EXPECT_EQ(result, expected);
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 class CopiesGddrWithCompileTimeArgs : public ::testing::TestWithParam<CcePartition> {};
@@ -165,7 +198,8 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << " partition " << param.partition
                      << (cross ? " as a remote partition." : " as a local partition.");
     }
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
@@ -214,7 +248,7 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
                     target.slot_base,
                     mimir_index_for_cce(cce_index)}});
 
-        detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+        LaunchProgram(*mesh_device, program);
 
         std::vector<uint32_t> staged(cleared.size(), 0);
         read_cce_sram(device, logical_dram_core, staging_noc_addr, staged.data(), transfer_size);
@@ -228,7 +262,6 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
                 << "mimir " << target.mimir_index << " location " << target.location << " slot " << slot;
         }
     }
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 class CopiesGddrThroughAllocatedBuffer : public ::testing::TestWithParam<CcePartition> {};
@@ -242,7 +275,8 @@ TEST_P(CopiesGddrThroughAllocatedBuffer, RoundTrip) {
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << " partition " << param.partition
                      << (cross ? " as a remote partition." : " as a local partition.");
     }
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
@@ -290,7 +324,7 @@ TEST_P(CopiesGddrThroughAllocatedBuffer, RoundTrip) {
                     target.slot_base,
                     mimir_index_for_cce(cce_index)}});
 
-        detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+        LaunchProgram(*mesh_device, program);
 
         for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
             std::vector<uint32_t> output;
@@ -300,7 +334,6 @@ TEST_P(CopiesGddrThroughAllocatedBuffer, RoundTrip) {
                 << "mimir " << target.mimir_index << " location " << target.location << " slot " << slot;
         }
     }
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 class CopiesAllocatedBufferWithRuntimeArgs : public ::testing::TestWithParam<CcePartition> {};
@@ -314,7 +347,8 @@ TEST_P(CopiesAllocatedBufferWithRuntimeArgs, RoundTrip) {
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << " partition " << param.partition
                      << (cross ? " as a remote partition." : " as a local partition.");
     }
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
@@ -364,7 +398,7 @@ TEST_P(CopiesAllocatedBufferWithRuntimeArgs, RoundTrip) {
              target.slot_base,
              mimir_index_for_cce(cce_index)});
 
-        detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+        LaunchProgram(*mesh_device, program);
 
         for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
             std::vector<uint32_t> output;
@@ -374,20 +408,19 @@ TEST_P(CopiesAllocatedBufferWithRuntimeArgs, RoundTrip) {
                 << "mimir " << target.mimir_index << " location " << target.location << " slot " << slot;
         }
     }
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 class AllocatedDramBufferHostLoopback : public ::testing::TestWithParam<uint32_t> {};
 
 TEST_P(AllocatedDramBufferHostLoopback, RoundTrip) {
     skip_unless_programmable_dram_package();
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const uint32_t dram_partition = GetParam();
     if (dram_partition >= device->num_dram_channels()) {
-        EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Configured descriptor does not expose partition " << dram_partition << ".";
     }
     GddrBackingScope gddr_backing;
@@ -395,7 +428,10 @@ TEST_P(AllocatedDramBufferHostLoopback, RoundTrip) {
     const auto& hal = MetalContext::instance().hal();
     const uint32_t page_size = hal.get_alignment(HalMemType::DRAM);
     const uint32_t buffer_size = page_size * device->num_dram_channels();
-    auto buffer = CreateBuffer(BufferConfig{device, buffer_size, page_size, BufferType::DRAM});
+    auto buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = buffer_size},
+        {.page_size = page_size, .buffer_type = BufferType::DRAM},
+        mesh_device.get());
     ASSERT_NE(buffer, nullptr);
     for (uint32_t partition = 0; partition < device->num_dram_channels(); ++partition) {
         gddr_backing.tracker.note(partition, buffer->address(), page_size);
@@ -408,10 +444,10 @@ TEST_P(AllocatedDramBufferHostLoopback, RoundTrip) {
             input[partition * words_per_page + i] = 0xA1100000u | (partition << 8) | static_cast<uint32_t>(i);
         }
     }
-    detail::WriteToBuffer(*buffer, input);
+    slow_dispatch::WriteToBuffer(*buffer, input);
 
     std::vector<uint32_t> output;
-    detail::ReadFromBuffer(*buffer, output);
+    slow_dispatch::ReadFromBuffer(*buffer, output);
     EXPECT_EQ(output, input);
 
     const auto expected_begin = input.begin() + dram_partition * words_per_page;
@@ -421,21 +457,20 @@ TEST_P(AllocatedDramBufferHostLoopback, RoundTrip) {
     EXPECT_EQ(channel_page, expected);
 
     buffer.reset();
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 class CopiesEveryMimirBlock : public ::testing::TestWithParam<uint32_t> {};
 
 TEST_P(CopiesEveryMimirBlock, RoundTrip) {
     skip_unless_programmable_dram_package();
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const uint32_t cce_index = GetParam();
     const uint32_t num_mimirs = num_mimirs_on(device);
     if (cce_index >= num_cces_on(device) || num_mimirs == 0) {
-        EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << ".";
     }
     GddrBackingScope gddr_backing;
@@ -474,14 +509,13 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
          static_cast<uint32_t>(cleared.size()),
          mimir_index_for_cce(cce_index)});
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    LaunchProgram(*mesh_device, program);
 
     for (uint32_t mimir_index = 0; mimir_index < num_mimirs; ++mimir_index) {
         std::vector<uint32_t> output;
         read_mimir_gddr(device, mimir_index, dst_dram_offset, transfer_size, output);
         EXPECT_EQ(output, inputs[mimir_index]) << "mimir " << mimir_index;
     }
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 class CopiesAllocatedBufferLargerThanAlignment : public ::testing::TestWithParam<CcePartition> {};
@@ -495,7 +529,8 @@ TEST_P(CopiesAllocatedBufferLargerThanAlignment, RoundTrip) {
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << " partition " << param.partition
                      << (cross ? " as a remote partition." : " as a local partition.");
     }
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
@@ -547,7 +582,7 @@ TEST_P(CopiesAllocatedBufferLargerThanAlignment, RoundTrip) {
              target.slot_base,
              mimir_index_for_cce(cce_index)});
 
-        detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+        LaunchProgram(*mesh_device, program);
 
         for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
             std::vector<uint32_t> output;
@@ -557,12 +592,12 @@ TEST_P(CopiesAllocatedBufferLargerThanAlignment, RoundTrip) {
                 << "mimir " << target.mimir_index << " location " << target.location << " slot " << slot;
         }
     }
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
     skip_unless_programmable_dram_package();
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const uint32_t num_cces = num_cces_on(device);
@@ -613,7 +648,7 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
              local.mimir_index});
     }
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    LaunchProgram(*mesh_device, program);
 
     for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
         std::vector<uint32_t> output;
@@ -621,7 +656,6 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
         read_gddr_view(device, local_dram_view_for_cce(soc_desc, cce_index), cce_dst, transfer_size, output);
         EXPECT_EQ(output, inputs[cce_index]) << "cce " << cce_index;
     }
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 class WritesCrossMimirCceSram : public ::testing::TestWithParam<uint32_t> {};
@@ -629,14 +663,14 @@ class WritesCrossMimirCceSram : public ::testing::TestWithParam<uint32_t> {};
 TEST_P(WritesCrossMimirCceSram, WritesMagic) {
     skip_unless_programmable_dram_package();
 
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const uint32_t src_cce = GetParam();
     const uint32_t num_cces = num_cces_on(device);
     if (src_cce >= num_cces || num_mimirs_on(device) < 2) {
-        EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Configured descriptor does not expose a remote Mimir CCE.";
     }
 
@@ -648,7 +682,6 @@ TEST_P(WritesCrossMimirCceSram, WritesMagic) {
         }
     }
     if (dest_cces.size() < 2) {
-        EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Remote Mimir does not expose two CCEs.";
     }
 
@@ -672,7 +705,7 @@ TEST_P(WritesCrossMimirCceSram, WritesMagic) {
         DramConfig{.noc = NOC::NOC_0});
     SetRuntimeArgs(program, kernel, logical_src, {dest_cces[0], dest_cces[1], sram_offset, magic_base});
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    LaunchProgram(*mesh_device, program);
 
     for (uint32_t dest_cce : dest_cces) {
         uint32_t result = 0;
@@ -680,14 +713,14 @@ TEST_P(WritesCrossMimirCceSram, WritesMagic) {
         read_cce_sram(device, dest_core, noc_addr, &result, sizeof(result));
         EXPECT_EQ(result, magic_base | dest_cce) << "src cce " << src_cce << " dest cce " << dest_cce;
     }
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 class PrefetchesLocalGddrToRemoteCceSram : public ::testing::TestWithParam<uint32_t> {};
 
 TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
     skip_unless_programmable_dram_package();
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
@@ -695,7 +728,6 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
     const uint32_t num_cces = num_cces_on(device);
     const uint32_t local_mimir = mimir_index_for_cce(src_cce);
     if (src_cce >= num_cces || num_mimirs_on(device) < 2) {
-        EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Configured descriptor does not expose a remote Mimir CCE.";
     }
 
@@ -706,7 +738,6 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
         }
     }
     if (dest_cces.size() < 2) {
-        EXPECT_TRUE(CloseDevice(device));
         GTEST_SKIP() << "Remote Mimir does not expose two CCEs.";
     }
 
@@ -757,7 +788,7 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
          local_base_slots,
          static_cast<uint32_t>(kGddrSlotStride)});
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    LaunchProgram(*mesh_device, program);
 
     for (uint32_t dest_cce : dest_cces) {
         std::vector<uint32_t> output(num_words, 0);
@@ -765,7 +796,6 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
         read_cce_sram(device, dest_core, noc_addr, output.data(), transfer_size);
         EXPECT_EQ(output, input) << "src cce " << src_cce << " dest cce " << dest_cce;
     }
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 class AllHartsWriteAllocatedBuffer : public ::testing::TestWithParam<CcePartition> {};
@@ -779,7 +809,8 @@ TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
         GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << " partition " << param.partition
                      << (cross ? " as a remote partition." : " as a local partition.");
     }
-    IDevice* device = CreateDevice(0);
+    auto mesh_device = open_unit_mesh();
+    IDevice* device = physical_device(*mesh_device);
     ASSERT_NE(device, nullptr);
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
@@ -825,7 +856,7 @@ TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
                         mimir_index_for_cce(cce_index)}});
         }
 
-        detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+        LaunchProgram(*mesh_device, program);
 
         for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
             std::vector<uint32_t> output;
@@ -839,7 +870,6 @@ TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
                                         << slot;
         }
     }
-    EXPECT_TRUE(CloseDevice(device));
 }
 
 INSTANTIATE_TEST_SUITE_P(

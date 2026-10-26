@@ -7,7 +7,7 @@
 #include "internal/firmware_common.h"
 #include "internal/hw_thread.h"
 #include "hostdev/dev_msgs.h"
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #include "api/kernel_thread_globals.h"

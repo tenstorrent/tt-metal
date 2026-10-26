@@ -143,11 +143,11 @@ extern "C" uint32_t _start1() {
 
     mailboxes->launch_msg_rd_ptr = 0;
     wait_subordinates();
-    mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+    mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
 
     while (1) {
         WAYPOINT("GW");
-        while (mailboxes->go_messages[0].signal != RUN_MSG_GO) {
+        while (mailboxes->go_messages[0].slot[0].signal != RUN_MSG_GO) {
         }
         WAYPOINT("GD");
 
@@ -170,7 +170,7 @@ extern "C" uint32_t _start1() {
         DEVICE_PRINT_KERNEL_FINISHED();
 
         wait_subordinates();
-        mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+        mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
         if (launch_msg->kernel_config.mode == DISPATCH_MODE_DEV) {
             launch_msg->kernel_config.enables = 0;
             mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
