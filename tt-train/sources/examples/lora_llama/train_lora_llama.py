@@ -12,7 +12,7 @@ import numpy as np
 import ttnn
 import ttml
 
-from ttml.common.config import load_config
+from ttml.common.config import TransformerConfig, load_config
 from ttml.common.data import (
     CharTokenizer,
     load_shakespeare_text,
@@ -23,11 +23,9 @@ from ttml.common.utils import (
     summary,
     get_loss_over_devices,
 )
-from ttml.models import RunnerType, WeightTyingType
 from ttml.models.llama import (
     Llama,
     LlamaConfig,
-    LlamaRopeScalingConfig,
     load_from_safetensors,
 )
 from ttml.modules import LoraConfig, LoraModel
@@ -48,47 +46,6 @@ LORA_TARGET_MODULES = ["q_linear", "kv_linear", "out_linear"]
 LORA_IS_BIAS_TRAINABLE = False
 LORA_TRAINABLE_MODULES: list[str] = []
 LORA_DROPOUT = 0.05
-
-
-def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = False) -> LlamaConfig:
-    """Build a LlamaConfig from a model YAML (transformer_config section)."""
-    tc = yaml_config.get("transformer_config", {})
-
-    rope_scaling = LlamaRopeScalingConfig()
-    if "rope_scaling" in tc:
-        rs = tc["rope_scaling"]
-        rope_scaling = LlamaRopeScalingConfig(
-            scaling_factor=rs.get("scaling_factor", rope_scaling.scaling_factor),
-            high_freq_factor=rs.get("high_freq_factor", rope_scaling.high_freq_factor),
-            low_freq_factor=rs.get("low_freq_factor", rope_scaling.low_freq_factor),
-            original_context_length=rs.get("original_context_length", rope_scaling.original_context_length),
-        )
-
-    runner_type = RunnerType.Default
-    if "runner_type" in tc:
-        runner_type = RunnerType.from_string(tc["runner_type"])
-
-    weight_tying = WeightTyingType.Disabled
-    if "weight_tying" in tc:
-        weight_tying = WeightTyingType.from_string(tc["weight_tying"])
-
-    return LlamaConfig(
-        hidden_size=tc.get("embedding_dim", 384),
-        # Read the MLP intermediate size from the yaml.
-        intermediate_size=tc.get("intermediate_dim", None),
-        num_hidden_layers=tc.get("num_blocks", 6),
-        num_attention_heads=tc.get("num_heads", 6),
-        num_key_value_heads=tc.get("num_groups", 3),
-        vocab_size=vocab_size,
-        max_position_embeddings=tc.get("max_sequence_length", 256),
-        rope_theta=tc.get("theta", 10000.0),
-        attention_dropout=tc.get("dropout_prob", 0.0),
-        mlp_dropout=tc.get("dropout_prob", 0.0),
-        runner_type=runner_type,
-        weight_tying=weight_tying,
-        rope_scaling=rope_scaling,
-        use_tp=use_tp,
-    )
 
 
 def save_lora_checkpoint(model: LoraModel, path: str, step: int) -> None:
@@ -282,7 +239,7 @@ def main():
         tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
         print(f"Loading model config from: {args.model_config}")
         yaml_config = load_config(args.model_config, tt_train_root)
-        llama_cfg = llama_config_from_yaml(yaml_config, vocab_size, use_tp=use_tp)
+        llama_cfg = LlamaConfig.from_transformer_config(TransformerConfig(yaml_config), vocab_size, use_tp=use_tp)
     else:
         llama_cfg = LlamaConfig(
             hidden_size=384,
