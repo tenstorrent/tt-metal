@@ -1,0 +1,22 @@
+{
+  "test": "forward",
+  "shape": "multivariate",
+  "precision": "accuracy",
+  "rows": 1024,
+  "tokens": 66,
+  "padded_seq": 64,
+  "window": [
+    "MODEL_START",
+    "MODEL_END"
+  ],
+  "sections": [
+    "embed",
+    "layer",
+    "head"
+  ],
+  "counts": {
+    "embed": 1,
+    "layer": 20,
+    "head": 1
+  }
+}
