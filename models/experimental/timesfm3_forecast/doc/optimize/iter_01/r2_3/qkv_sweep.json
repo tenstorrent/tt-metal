@@ -1,0 +1,335 @@
+{
+ "precision": "accuracy",
+ "results": [
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "auto",
+   "ms": 19.05687991529703,
+   "pcc_vs_auto": 1.00000000012503
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=2,out_block_h=5,out_block_w=14,per_core_M=205,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 5.067204777151346,
+   "pcc_vs_auto": 1.0000000000977596
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:6",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=2,out_block_h=5,out_block_w=14,per_core_M=205,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 5.069494619965553,
+   "pcc_vs_auto": 1.0000000000977596
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:4",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=10,out_subblock_h=2,out_subblock_w=2,out_block_h=2,out_block_w=14,per_core_M=206,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 6.483886297792196,
+   "pcc_vs_auto": 1.0000000000977596
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:10x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=3,out_block_h=5,out_block_w=15,per_core_M=205,per_core_N=15,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 5.3204534109681845,
+   "pcc_vs_auto": 1.0000000000977596
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,8,2,2",
+   "ms": 5.91347049921751,
+   "pcc_vs_auto": 1.0000000000975902
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,8,2,2",
+   "ms": 5.641476809978485,
+   "pcc_vs_auto": 1.000000000098939
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,12,2,2",
+   "ms": 5.86460349150002,
+   "pcc_vs_auto": 1.0000000001047193
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,16,2,2",
+   "ms": 5.890656402334571,
+   "pcc_vs_auto": 1.0000000001054894
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:12,4,8,2,2",
+   "ms": 5.097284028306603,
+   "pcc_vs_auto": 1.000000000098939
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,8,4,1",
+   "ms": 4.724170500412583,
+   "pcc_vs_auto": 1.000000000098939
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,4,4,1",
+   "ms": 5.054301209747791,
+   "pcc_vs_auto": 1.0000000000988643
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,2,16,2,2",
+   "ms": 5.776943219825625,
+   "pcc_vs_auto": 1.0000000001132197
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,12,2,2",
+   "ms": 5.362967308610678,
+   "pcc_vs_auto": 1.0000000000929263
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:12,8,8,2,2",
+   "ms": 5.379596073180437,
+   "pcc_vs_auto": 1.0000000000975902
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,6,2,2",
+   "ms": 5.544043332338333,
+   "pcc_vs_auto": 1.000000000094413
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:4,8,16,1,4",
+   "ms": 7.034595729783177,
+   "pcc_vs_auto": 1.00000000008915
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,24,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "auto",
+   "ms": 19.124370766803622,
+   "pcc_vs_auto": 1.0000000001490674
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=2,out_block_h=5,out_block_w=14,per_core_M=205,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 4.979329602792859,
+   "pcc_vs_auto": 1.0000000001471023
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:6",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=2,out_block_h=5,out_block_w=14,per_core_M=205,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 4.981366498395801,
+   "pcc_vs_auto": 1.0000000001471023
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:4",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=10,out_subblock_h=2,out_subblock_w=2,out_block_h=2,out_block_w=14,per_core_M=206,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 5.7261004112660885,
+   "pcc_vs_auto": 1.0000000001471023
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:10x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=3,out_block_h=5,out_block_w=15,per_core_M=205,per_core_N=15,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 5.242501199245453,
+   "pcc_vs_auto": 1.0000000001471023
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,8,2,2",
+   "ms": 4.177838284522295,
+   "pcc_vs_auto": 1.0000000001422675
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,8,2,2",
+   "ms": 4.295177012681961,
+   "pcc_vs_auto": 1.0000000001392442
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,12,2,2",
+   "ms": 4.902764782309532,
+   "pcc_vs_auto": 1.000000000139897
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,16,2,2",
+   "ms": 4.863443411886692,
+   "pcc_vs_auto": 1.0000000001447802
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:12,4,8,2,2",
+   "ms": 3.962902911007404,
+   "pcc_vs_auto": 1.0000000001392442
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,8,4,1",
+   "ms": 3.945503616705537,
+   "pcc_vs_auto": 1.0000000001392442
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,4,4,1",
+   "ms": 4.626196902245283,
+   "pcc_vs_auto": 1.0000000001386922
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,2,16,2,2",
+   "ms": 4.400211991742253,
+   "pcc_vs_auto": 1.0000000001486693
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,12,2,2",
+   "ms": 4.562979098409414,
+   "pcc_vs_auto": 1.0000000001385567
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:12,8,8,2,2",
+   "ms": 3.9925724267959595,
+   "pcc_vs_auto": 1.0000000001422675
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,6,2,2",
+   "ms": 4.224634077399969,
+   "pcc_vs_auto": 1.000000000143096
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:4,8,16,1,4",
+   "ms": 5.764350900426507,
+   "pcc_vs_auto": 1.000000000143678
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,24,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  }
+ ]
+}

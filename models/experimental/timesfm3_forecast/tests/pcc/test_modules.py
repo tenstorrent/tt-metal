@@ -253,3 +253,34 @@ def test_var_attention_packed_mask_control(device):
     diff = (outs[0] - outs[1]).abs().max().item()
     print(f"[control] packed without mask: max |diff| {diff:.4f}")
     assert diff > 1.0
+
+
+@pytest.mark.parametrize("rows", [16384, 65536 + 32 * 3])
+def test_post_add_norm(device, rows):
+    """R2-4: the fused post-norm + residual + pre-norm kernel against the 3-op chain it replaces (the op output
+    alone), on real layer-0 post gains, at the fused threshold and at a row count that splits unevenly."""
+    import ttnn
+
+    from models.experimental.timesfm3_forecast.tt.common import rms_norm, upload
+    from models.experimental.timesfm3_forecast.tt.model import EPS
+    from models.experimental.timesfm3_forecast.tt.ops.post_add_norm.op import post_add_norm
+
+    tt = _model(device)
+    gain = tt.layers[0]["seq"]["post"]
+    gen = torch.Generator().manual_seed(11)
+    o = upload(tt.device, torch.randn(1, 1, rows, 1280, generator=gen) * 3)
+    r = upload(tt.device, torch.randn(1, 1, rows, 1280, generator=gen) * 20)
+    y = rms_norm(o, EPS, tt.precision, gain)
+    h_ref = ttnn.add(r, y, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    xn_ref = rms_norm(h_ref, EPS, tt.precision)
+    h, xn = post_add_norm(o, r, gain, epsilon=EPS)
+    got = [ttnn.to_torch(t).float() for t in (h, xn)]
+    ref = [ttnn.to_torch(t).float() for t in (h_ref, xn_ref)]
+    scale = ttnn.to_torch(r).float().abs() + ttnn.to_torch(y).float().abs()
+    for t in (o, r, y, h_ref, xn_ref, h, xn):
+        ttnn.deallocate(t)
+    for name, a, b in zip(("h", "xn"), ref, got):
+        check_pcc(f"post_add_norm {name} @ {rows}", a, b, 0.99999)
+    # h: within one bf16 rounding of its operands (|res| + |y|; h itself can cancel to ~0); xn: a few ulp.
+    assert ((got[0] - ref[0]).abs() <= scale * 2**-7 + 1e-3).all()
+    assert (got[1] - ref[1]).abs().max() <= 0.0625

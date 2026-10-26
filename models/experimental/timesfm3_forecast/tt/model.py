@@ -60,6 +60,9 @@ MASK_FILL = -1e9  # finite: a fully masked query row (leading padding) gets unif
 _MAX_SDPA_CHUNK = 256
 
 
+# R2-4 (iter_01/r2_4/micro.json): the fused kernel wins at 65536 rows (1.70 vs 2.76 ms) and loses at 2048-3008
+# (one tile row per core); below this the 3-op chain runs.
+FUSED_NORM_MIN_ROWS = 16384
 ROPE_VIEW_GROUPS = 8  # heads per RoPE call: 16 / 8 = 2
 
 
@@ -166,6 +169,8 @@ class TtTimesFM3:
         self.cut_last_layer = True
         self.pack_variates = True  # R2-2
         self._mask_cache = {}
+        self.fuse_post_norm = True  # R2-4
+        self._pending_norm = None
         p = self.precision
         up = lambda t, role: upload_linear(device, t, p.weight_dtype(role))  # noqa: E731
         self.tok_hidden, self.tok_out, self.tok_res = (
@@ -287,17 +292,37 @@ class TtTimesFM3:
         return qn, kn
 
     def _post(self, o, w_post, residual):
-        """``residual + RMSNorm(o) * gain``; consumes ``o``, borrows ``residual``."""
+        """``residual + RMSNorm(o) * gain``; consumes ``o``, borrows ``residual``. At M >= FUSED_NORM_MIN_ROWS
+        (R2-4) one kernel also writes the next sublayer's pre-norm, which ``_pre`` picks up for this output."""
         import ttnn
 
+        from models.experimental.timesfm3_forecast.tt.ops.post_add_norm.op import post_add_norm
+
+        self._drop_pending_norm()
+        if self.fuse_post_norm and o.padded_shape[-2] >= FUSED_NORM_MIN_ROWS and len(o.padded_shape) == 4:
+            h, xn = post_add_norm(o, residual, w_post, epsilon=EPS)
+            ttnn.deallocate(o)
+            self._pending_norm = (h, xn)
+            return h
         y = rms_norm(o, EPS, self.precision, w_post)
         ttnn.deallocate(o)
         out = ttnn.add(residual, y, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(y)
         return out
 
+    def _drop_pending_norm(self):
+        import ttnn
+
+        if self._pending_norm is not None:
+            ttnn.deallocate(self._pending_norm[1])
+            self._pending_norm = None
+
     def _pre(self, x):
         """Gain-free pre-norm of the residual stream (the gain is folded into the next projection)."""
+        if self._pending_norm is not None and self._pending_norm[0] is x:
+            xn = self._pending_norm[1]
+            self._pending_norm = None
+            return xn
         return rms_norm(x, EPS, self.precision)
 
     def seq_attention(self, i: int, x, inputs: TtInputs, cut: bool = False):
@@ -494,6 +519,7 @@ class TtTimesFM3:
                 capture[f"layer{i}"] = self.rows_to_torch(x, inputs)
         if cut:
             inputs = dataclasses.replace(inputs, padded_seq=inputs.readout_count, readout_start=0)
+        self._drop_pending_norm()
         out = self.head(x, inputs)
         ttnn.deallocate(x)
         return out

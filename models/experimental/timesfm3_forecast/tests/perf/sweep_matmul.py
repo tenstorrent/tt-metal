@@ -116,6 +116,7 @@ def main():
     ap.add_argument("--roles", default=",".join(CONFIGS))
     ap.add_argument("--rows", default="65536,16384")
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--configs", help="';'-separated specs that replace every role's default list")
     args = ap.parse_args()
     kernel = TtPrecision.accuracy().matmul_config()
     device = ttnn.open_device(device_id=0)
@@ -131,7 +132,7 @@ def main():
                 x_dev = upload(device, x)
                 m_tiles, k_tiles, n_tiles = rows // 32, -(-k_in // 32), n_out // 32
                 base = None
-                for spec in CONFIGS[role].split(";"):
+                for spec in (args.configs or CONFIGS[role]).split(";"):
                     record = {"role": role, "rows": rows, "k": k_in, "n": n_out, "config": spec}
                     try:
                         fn = make_fn(ttnn, pc, spec, x_dev, w_dev, act, kernel, grid, m_tiles, k_tiles, n_tiles, record)

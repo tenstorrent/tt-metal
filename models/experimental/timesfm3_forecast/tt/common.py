@@ -159,16 +159,14 @@ def upload_vector(device, v: torch.Tensor):
 
 
 # R1-4 (``doc/optimize/iter_00/r1_4/matmul_sweep.json``): the fastest config per weight kind, at M = 65536 and 16384.
-MATMUL_2D_QKV = ("2d", 8)  # bf16 QKV (N = 4608): 2D multicast on 11 x 10, out block cap 8
-MATMUL_MINIMAL_QKV_BF8 = ("mm", (8, 8, 8, 2, 2))
+# R2-3 (``doc/optimize/iter_01/r2_3/qkv_sweep.json``): QKV re-tuned, bf16 4.72 vs 5.07 ms, bf8 3.95 vs 4.18 ms.
+MATMUL_MINIMAL_QKV = ("mm", (16, 4, 8, 4, 1))  # QKV (N = 4608), bf16 and bf8 weights
 MATMUL_MINIMAL = ("mm", (16, 8, 4, 4, 1))  # every other per-token linear (K, N <= 1536)
 
 
 def _matmul_choice(weight, k_tiles: int, n_tiles: int):
-    import ttnn
-
     if n_tiles > 48:
-        return MATMUL_MINIMAL_QKV_BF8 if weight.dtype == ttnn.bfloat8_b else MATMUL_2D_QKV
+        return MATMUL_MINIMAL_QKV
     return MATMUL_MINIMAL
 
 
