@@ -887,12 +887,12 @@
   sp_config: sc1
 
 
-- name: "(DeepSeek-V4) transformer accuracy 5k + transformer chunked accuracy 10k@5k + transformer pipeline-split accuracy 5k + transformer chunked accuracy 55k@5k vs vLLM golden"
+- name: "(DeepSeek-V4) transformer accuracy 5k + transformer chunked accuracy 10k@5k, two users interleaved + transformer pipeline-split accuracy 5k + transformer chunked accuracy 55k@5k vs vLLM golden"
   fabric_profile: torus_xy
   cmd: |
     titles=(
       "(DeepSeek-V4) transformer accuracy 5k"
-      "(DeepSeek-V4) transformer chunked accuracy 10k@5k"
+      "(DeepSeek-V4) transformer chunked accuracy 10k@5k, two users interleaved"
       "(DeepSeek-V4) transformer pipeline-split accuracy 5k"
       "(DeepSeek-V4) transformer chunked accuracy 55k@5k vs vLLM golden"
     )
@@ -933,9 +933,9 @@
 
     section_start 2
     (
-      timeout -k 2m 34m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 45m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_chunked.py -k "torus-xy-8x4" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_chunked.py -k "torus-xy-8x4 and users2" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
@@ -965,8 +965,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (37+34+27+30 = 128).
-      timeout: 128
+      # Sum of the section timeouts (37+45+27+30 = 139).
+      timeout: 139
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic

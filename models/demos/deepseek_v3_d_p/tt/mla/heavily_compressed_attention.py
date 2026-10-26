@@ -41,6 +41,11 @@ class TtHCAState:
         self.entry_count = 0
         self.kv_actual = 0
 
+    def release(self) -> None:
+        """Free this state's tensors."""
+        for tensor in (self.compressed_kv, self.sliding_carry, self.tail):
+            ttnn.deallocate(tensor)
+
 
 class TtHCA(TtV4AttentionBase):
     """HCA block: query/kv stems + compressor + attention core + grouped output projection.
@@ -49,9 +54,11 @@ class TtHCA(TtV4AttentionBase):
 
     def __init__(self, device, **kwargs):
         super().__init__(device, **kwargs)
-        # Everything below comes from alloc_state, which every caller has to run before forward.
+        # Everything below comes from build_tables, which every caller has to run (directly or through
+        # alloc_state) before forward.
         self._shift_cache = {}
         self._take_cache = {}
+        self._state_dims = None  # (max_seq_len, compressed capacity) the tables were built for
 
     @property
     def chunk_align(self) -> int:
@@ -70,6 +77,12 @@ class TtHCA(TtV4AttentionBase):
         Every host tensor this layer will ever need is built here, which is what leaves forward with none.
         So the caller has to own the state: a prefill of one chunk allocates the same way a long one
         does."""
+        self.build_tables(max_seq_len, chunk_tokens=chunk_tokens)
+        return self.new_state(batch)
+
+    def build_tables(self, max_seq_len: int, chunk_tokens: int | None = None) -> None:
+        """The half of ``alloc_state`` every user shares: masks, one-hots and rope tables. Run once;
+        ``new_state`` then allocates each user's state over them."""
         entries = -(-int(max_seq_len) // self.compressor.compress_rate)
         capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE  # cache writes land on tile boundaries
         # A write always rewrites whole tiles, so the last one can reach past the entries themselves.
@@ -94,6 +107,12 @@ class TtHCA(TtV4AttentionBase):
         # builds its own, with a row per ENTRY.
         self._slab_rope = self.ops.build_rope_table(rope_table_tokens(max_seq_len, chunk), 1)
         self._slab_index = self.ops.rope_index_base(chunk // self.sp_factor)
+        self._state_dims = (int(max_seq_len), capacity)
+
+    def new_state(self, batch: int = 1) -> TtHCAState:
+        """A fresh, zeroed state at position 0, over the tables ``build_tables`` made."""
+        assert self._state_dims is not None, "call build_tables before new_state"
+        max_seq_len, capacity = self._state_dims
         return TtHCAState(
             compressed_kv=self.ops.from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
             sliding_carry=self.ops.from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
@@ -167,7 +186,7 @@ class TtHCA(TtV4AttentionBase):
         state.tail = ttnn.matmul(take, merged, memory_config=self.memory_config)
 
     def _build_tail_tile_matrices(self, width):
-        """Every one-hot pair the write can need, for one slab width. Called from alloc_state and never
+        """Every one-hot pair the write can need, for one slab width. Called from build_tables and never
         from forward, because a pair costs ~0.9 ms of host time to build. The whole set is 768 KB a chip."""
         tile, buf = ttnn.TILE_SIZE, _cache_write_rows(width)
         for r_e in range(tile):
@@ -188,12 +207,12 @@ class TtHCA(TtV4AttentionBase):
             self._take_cache[s] = self.ops.from_torch(take)
 
     def _tail_tile_matrices(self, r_e, width, n_new):
-        """Lookup only. A miss means alloc_state was given a different chunk width, and building one here
+        """Lookup only. A miss means build_tables was given a different chunk width, and building one here
         would put host work back into forward."""
         shift = self._shift_cache.get((r_e, width))
         take = self._take_cache.get(r_e + n_new)
         assert shift is not None and take is not None, (
-            f"no tail-tile one-hot for (r_e={r_e}, width={width}, n_new={n_new}); alloc_state built widths "
+            f"no tail-tile one-hot for (r_e={r_e}, width={width}, n_new={n_new}); build_tables built widths "
             f"{sorted({w for _, w in self._shift_cache})} -- pass chunk_tokens matching the slab width"
         )
         return shift, take
@@ -208,8 +227,8 @@ class TtHCA(TtV4AttentionBase):
         """One chunk: [B, 1, S_pad/sp, hidden/tp] in and out; the caller keeps the first S_real rows.
 
         ``seq_len_actual`` is the chunk's real pre-pad length. Where the chunk sits in the sequence comes
-        from ``state``, which ``alloc_state`` builds and this advances in place -- a prefill of one chunk
-        passes a state too, so there is no second path through here."""
+        from ``state``, which ``new_state`` (or ``alloc_state``) builds and this advances in place -- a prefill
+        of one chunk passes a state too, so there is no second path through here."""
         batch = hidden_states.shape[0]
         seq_pad_global = hidden_states.shape[2] * self.sp_factor
         compress_rate = self.compressor.compress_rate

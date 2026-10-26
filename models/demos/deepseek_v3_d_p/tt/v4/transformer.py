@@ -6,8 +6,8 @@
 blocks, then the head that collapses the streams and the final norm.
 
 Not a ``TtPrefillTransformer``: that stack is MLA with a caller-owned KV cache, where every V4 attention
-owns its own state (``TtV4Block.attn_state``) and advances it per chunk. There is no LM head; the
-output on the last rank is ``norm(hc_head(h))``, ``DeepseekV4Model``'s ``last_hidden_state``.
+owns its own state, one per user slot (``TtV4Block.attn_states``), and advances it per chunk. There is no
+LM head; the output on the last rank is ``norm(hc_head(h))``, ``DeepseekV4Model``'s ``last_hidden_state``.
 
 Activations between layers, and across a pipeline boundary, are the packed residual streams
 ``[1, 1, S/sp, hc_mult * hidden/tp]`` fp32 (see ``TtV4Block``).
@@ -88,6 +88,11 @@ class TtV4Transformer(LightweightModule):
 
         ``gate_fallback_mode`` applies to the top-k MoE layers. Hash layers route by token id and always
         take the hash gate, ``HASH_DEVICE`` unless a hash mode is passed.
+
+        ``slot_num`` is how many requests can be mid-prefill at once; ``forward`` picks one with
+        ``cache_user_id``. Every slot holds a full ``max_seq_len`` attention state in every layer, so
+        DRAM grows linearly with it: at 55k on 8x4, about 20 MiB per CSA layer and 0.7 MiB per HCA layer,
+        per slot, per chip.
         """
         super().__init__()
         if mtp_predictor is not None:
@@ -100,9 +105,8 @@ class TtV4Transformer(LightweightModule):
             raise ValueError("DeepSeek-V4 attention owns its state and has no KV cache to shard over TP")
         if kv_only_last_layer:
             raise ValueError("DeepSeek-V4 has no KV-only layer: the attention state is the whole sublayer's output")
-        # Each attention state is one user's (every V4 attention asserts batch 1).
-        if slot_num != 1:
-            raise ValueError(f"DeepSeek-V4 attention state is single-user; got slot_num={slot_num}")
+        if slot_num < 1:
+            raise ValueError(f"slot_num must be positive, got {slot_num}")
         if padding_side != "right":
             raise ValueError(f"V4 attention is right-padded by construction, got {padding_side!r}")
 
@@ -116,7 +120,9 @@ class TtV4Transformer(LightweightModule):
         self.is_last_rank = is_last_rank
         self.sp_axis = sp_axis
         self.hc_mult = config.hc_mult
-        self.position = 0
+        self.slot_num = slot_num
+        # Where each user slot's attention state is, in tokens; None once a chunk failed mid-stack.
+        self.positions = [0] * slot_num
 
         layer_ids = range(first_layer_idx, first_layer_idx + num_layers)
         assert (
@@ -163,6 +169,7 @@ class TtV4Transformer(LightweightModule):
                     gate_fallback_mode=layer_gate,
                     weight_cache_path=weight_cache_path,
                     is_balanced=is_balanced,
+                    slot_num=slot_num,
                     **block_kwargs,
                 )
             )
@@ -197,11 +204,20 @@ class TtV4Transformer(LightweightModule):
             f"first_rank={is_first_rank}, last_rank={is_last_rank}"
         )
 
-    def reset_streams(self) -> None:
-        """Start a new request: every layer's attention state goes back to empty at position 0."""
+    def reset_streams(self, slot: int = 0) -> None:
+        """Start a new request in user slot ``slot``: its attention state goes back to empty at position 0
+        in every layer. Other slots keep their place, since their users may be mid-prefill."""
+        self._check_slot(slot)
+        # A layer that raises leaves the layers before it reset; no position is right until a reset.
+        self.positions[slot] = None
         for layer in self.layers:
-            layer.reset_state()
-        self.position = 0
+            layer.reset_state(slot)
+        self.positions[slot] = 0
+
+    def _check_slot(self, slot: int) -> int:
+        if not 0 <= slot < self.slot_num:
+            raise ValueError(f"user slot {slot} is outside the model's {self.slot_num} slots")
+        return slot
 
     def release_sub_device_managers(self):
         """Remove the MoE overlap sub-device managers before the mesh device closes. Idempotent."""
@@ -251,8 +267,8 @@ class TtV4Transformer(LightweightModule):
         ``token_ids`` is the SP-sharded id tensor on the first rank and the packed residual streams on
         any other. ``input_ids`` are the chunk's host ids in sequence order; a first rank reads them back
         from ``token_ids`` when a hash layer needs them, a later rank holding a hash layer must be given
-        them. ``actual_start``, when given, must be where the attention state already is: the state
-        advances itself and cannot seek.
+        them. ``cache_user_id`` is the user slot the chunk belongs to. ``actual_start``, when given, must
+        be where that slot's attention state already is: the state advances itself and cannot seek.
 
         ``layer_tap(global_layer_idx, h)`` sees each layer's output streams; ``on_layer_complete`` is
         called with the global layer index once that layer's attention state has advanced.
@@ -276,17 +292,17 @@ class TtV4Transformer(LightweightModule):
             raise NotImplementedError("DeepSeek-V4 has no traced path: the attention state advances on host counters")
         if d2h_service is not None or on_layer_hidden is not None or return_intermediates:
             raise NotImplementedError("DeepSeek-V4 supports host layer acks (on_layer_complete) only")
-        if cache_user_id not in (None, 0):
-            raise ValueError(f"DeepSeek-V4 attention state is single-user; got cache_user_id={cache_user_id}")
-        if self.position is None:
+        slot = self._check_slot(0 if cache_user_id is None else cache_user_id)
+        position = self.positions[slot]
+        if position is None:
             raise RuntimeError(
-                "a previous chunk failed mid-stack and left the layers' attention state at mixed positions; "
-                "call reset_streams() to start a new request"
+                f"a previous chunk failed mid-stack and left slot {slot}'s attention state at mixed positions; "
+                f"call reset_streams({slot}) to start a new request"
             )
-        if actual_start is not None and actual_start != self.position:
+        if actual_start is not None and actual_start != position:
             raise ValueError(
-                f"chunk starts at {actual_start}, but the attention state is at {self.position}; "
-                f"call reset_streams() to start a new request"
+                f"chunk starts at {actual_start}, but slot {slot}'s attention state is at {position}; "
+                f"call reset_streams({slot}) to start a new request"
             )
 
         if self.is_first_rank:
@@ -308,10 +324,10 @@ class TtV4Transformer(LightweightModule):
         chunk_tokens = h.shape[-2] * self.mesh_device.shape[self.sp_axis]
         actual_isl = chunk_tokens if actual_isl is None else actual_isl
         # A layer that raises leaves the layers before it advanced; no position is right until a reset.
-        start, self.position = self.position, None
+        self.positions[slot] = None
         for local_idx, layer in enumerate(self.layers):
             layer_idx = self.first_layer_idx + local_idx
-            out = layer(h, actual_isl=actual_isl, input_ids=input_ids)
+            out = layer(h, actual_isl=actual_isl, input_ids=input_ids, cache_user_id=slot)
             if owns_input:
                 ttnn.deallocate(h)
             h, owns_input = out, True
@@ -319,7 +335,7 @@ class TtV4Transformer(LightweightModule):
                 on_layer_complete(layer_idx)
             if layer_tap is not None:
                 layer_tap(layer_idx, h)
-        self.position = start + actual_isl
+        self.positions[slot] = position + actual_isl
 
         if not self.is_last_rank:
             return h
