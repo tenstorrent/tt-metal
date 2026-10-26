@@ -288,9 +288,9 @@ ProgramDescriptor MorehSgdOperation::MorehSgdProgramFactory::create_descriptor(
         tile_offset += num_tiles_per_core;
     }
 
-    TT_ASSERT(desc.kernels.size() == READER_KERNEL_IDX, "override_runtime_arguments() expects the reader here");
+    TT_FATAL(desc.kernels.size() == READER_KERNEL_IDX, "override_runtime_arguments() expects the reader here");
     desc.kernels.push_back(std::move(reader_desc));
-    TT_ASSERT(desc.kernels.size() == WRITER_KERNEL_IDX, "override_runtime_arguments() expects the writer here");
+    TT_FATAL(desc.kernels.size() == WRITER_KERNEL_IDX, "override_runtime_arguments() expects the writer here");
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc_1));
     if (has_core_group_2) {
