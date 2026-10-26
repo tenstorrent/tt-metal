@@ -101,10 +101,12 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: DFB accessor names -> device-slot binding. Normal DFBs may carry LLK metadata; relays do not.
-// prefetcher_pipe_id is 0xFF (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for
-// PrefetcherPipe relays, where it names the persistent slot baked into the token so
-// the TRISC constructor can O(1)-align the borrowed iface to the durable checkpoint.
+// Metal 2.0: DFB accessor names -> device-slot binding (optionally typed as relay).
+// Normal DFBs may carry LLK metadata; relays do not. prefetcher_pipe_id is 0xFF
+// (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for PrefetcherPipe relays, where it names
+// the persistent slot baked into the token so the TRISC constructor can O(1)-align the borrowed
+// iface to the durable checkpoint. pap / cap are both sides' access patterns (dfb::AccessPattern
+// numbering) so DFBBindingToken<Pap, Cap> can specialize the device DataflowBuffer at compile time.
 struct DataflowBufferBindingHandle {
     uint16_t logical_dfb_id = 0;
     bool is_relay = false;
@@ -118,6 +120,8 @@ struct DataflowBufferBindingHandle {
     std::string borrowed_tensor_parameter_name;
     bool produces = false;
     bool consumes = false;
+    uint8_t pap = 0;
+    uint8_t cap = 0;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 
@@ -267,6 +271,8 @@ public:
 
     // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core);
+    // User-arg count. Ignores the watcher count word and dispatch-view padding.
+    std::size_t logical_runtime_arg_count(const CoreCoord& logical_core) const;
     RuntimeArgsData& runtime_args_data(const CoreCoord& logical_core);
     std::vector<std::vector<std::vector<uint32_t>>>& runtime_args();
     std::vector<std::vector<RuntimeArgsData>>& runtime_args_data();
@@ -274,6 +280,7 @@ public:
 
     // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& common_runtime_args();
+    std::size_t logical_common_runtime_arg_count() const;
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
@@ -296,7 +303,9 @@ public:
                                                      uint16_t logical_dfb_id,
                                                      bool is_relay,
                                                      uint8_t prefetcher_pipe_id,
-                                                     const std::optional<LLKMetadata>&)>&) const override;
+                                                     const std::optional<LLKMetadata>&,
+                                                     uint8_t pap,
+                                                     uint8_t cap)>&) const override;
     void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
@@ -349,8 +358,8 @@ public:
 
     void validate_runtime_args_size(
         size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
-    void set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args);
-    void set_common_runtime_args(stl::Span<const uint32_t> runtime_args);
+    void set_runtime_args(const CoreCoord& logical_core, ttsl::Span<const uint32_t> runtime_args);
+    void set_common_runtime_args(ttsl::Span<const uint32_t> runtime_args);
 
     int get_watcher_kernel_id() const { return watcher_kernel_id_; }
 

@@ -50,8 +50,8 @@ void kernel_main() {
         noc.async_write_barrier();
     };
 
-    const auto& global_reduce_sender = [&](DataflowBuffer& dfb_ex_obj,
-                                           DataflowBuffer& dfb_ex_global_obj_inner) __attribute__((always_inline)) {
+    const auto& global_reduce_sender = [&](auto& dfb_ex_obj,
+                                           auto& dfb_ex_global_obj_inner) __attribute__((always_inline)) {
         const uint32_t l1_read_addr_ex_global = dfb_ex_global_obj_inner.get_read_ptr();
         noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
             dfb_ex_obj,

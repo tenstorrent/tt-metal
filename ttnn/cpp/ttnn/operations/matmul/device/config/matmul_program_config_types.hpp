@@ -77,7 +77,16 @@ struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
     std::size_t per_core_M{};
     std::size_t per_core_N{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
+    // Cores per DRAM bank. 1: the single-reader program. 2 or 3 (Blackhole only): the single-reader
+    // program with that many readers per bank (shard width divisible by N), unless
+    // use_multicore_pipeline selects the multi-core pipeline.
     std::size_t num_workers_per_dram_bank = 1;
+    // Explicit opt-in to the multi-core pipeline. false (the default) keeps the behaviour above for
+    // every value of num_workers_per_dram_bank. true: when num_workers_per_dram_bank >= 2 and the call
+    // qualifies (dram_sharded_helpers::use_dram_sharded_multicore), num_workers_per_dram_bank cores per
+    // bank run the multi-core pipeline; a call that does not qualify keeps the behaviour above and its
+    // validation (num_workers_per_dram_bank > 1 is then Blackhole only).
+    bool use_multicore_pipeline = false;
 };
 
 struct MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig {

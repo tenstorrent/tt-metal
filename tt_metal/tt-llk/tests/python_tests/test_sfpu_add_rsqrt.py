@@ -38,9 +38,9 @@ neither is a value passed_test can meaningfully bound.
 
 import struct
 
-import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import round_to_dest_width
 from helpers.llk_params import (
@@ -123,11 +123,6 @@ _RTOL = {
 
 def _bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
-
-
-def _skip_unsupported(formats, dest_acc):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
 
 
 def _build_add_rsqrt(
@@ -236,7 +231,7 @@ def _run_add_rsqrt(
 )
 def test_sfpu_add_rsqrt(formats, dest_acc, addend, approx, typed_bf16_store):
     """rsqrt(x + addend) over a strictly positive domain."""
-    _skip_unsupported(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     device, seen = _run_add_rsqrt(
         formats, dest_acc, addend, approx=approx, typed_bf16_store=typed_bf16_store
@@ -280,7 +275,7 @@ def test_sfpu_add_rsqrt_input_scale(formats, dest_acc, input_scale, approx):
     that separates an fp32 scale from a bf16 one: rounding 1/7168 to bf16 moves the result
     by about 1e-3 relative, three orders over that cell's rtol.
     """
-    _skip_unsupported(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     addend = 1e-6
 
     device, seen = _run_add_rsqrt(
@@ -348,7 +343,7 @@ def test_sfpu_add_rsqrt_fast_approx_negative_guard(formats, dest_acc, approx):
     defect. Comparing the two builds pins the same intent without depending on a value
     the implementation does not define.
     """
-    _skip_unsupported(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     # Strictly negative even after the addend is applied. Both builds seed the same, so
     # the two runs see identical stimuli and can be compared lane by lane.
@@ -402,7 +397,7 @@ def test_sfpu_add_rsqrt_zero_argument(formats, dest_acc, approx):
     than an undefined-domain hole -- worth pinning, since the default positive sweep
     never reaches it and RMSNorm with eps=0 on an all-zero row does.
     """
-    _skip_unsupported(formats, dest_acc)
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     device, _ = _run_add_rsqrt(
         formats,

@@ -316,9 +316,18 @@ void Kernel::process_dataflow_buffer_binding_handles(const std::function<void(
                                                          uint16_t logical_dfb_id,
                                                          bool is_relay,
                                                          uint8_t prefetcher_pipe_id,
-                                                         const std::optional<LLKMetadata>&)>& callback) const {
+                                                         const std::optional<LLKMetadata>&,
+                                                         uint8_t pap,
+                                                         uint8_t cap)>& callback) const {
     for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
-        callback(accessor_name, handle.logical_dfb_id, handle.is_relay, handle.prefetcher_pipe_id, handle.llk_metadata);
+        callback(
+            accessor_name,
+            handle.logical_dfb_id,
+            handle.is_relay,
+            handle.prefetcher_pipe_id,
+            handle.llk_metadata,
+            handle.pap,
+            handle.cap);
     }
 }
 
@@ -698,6 +707,8 @@ uint64_t Kernel::compute_hash() const {
         if (!it->second.is_relay) {
             hash_llk_metadata(it->second.llk_metadata);
         }
+        hasher.update(static_cast<uint64_t>(it->second.pap));
+        hasher.update(static_cast<uint64_t>(it->second.cap));
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
@@ -809,6 +820,21 @@ uint64_t Kernel::compute_hash() const {
     return hasher.digest();
 }
 
+std::size_t Kernel::logical_runtime_arg_count(const CoreCoord& logical_core) const {
+    TT_FATAL(
+        logical_core.x < this->core_to_runtime_args_.size() &&
+            logical_core.y < this->core_to_runtime_args_[logical_core.x].size(),
+        "Cannot get runtime args for kernel {} that is not placed on core {}",
+        this->name(),
+        logical_core.str());
+    const auto& stored = this->core_to_runtime_args_[logical_core.x][logical_core.y];
+    // Absent storage and a watcher count word with no user args are both a logical zero.
+    if (stored.size() <= this->watcher_count_word_offset_) {
+        return 0;
+    }
+    return stored.size() - this->watcher_count_word_offset_;
+}
+
 std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL(
@@ -836,6 +862,13 @@ std::vector<std::vector<std::vector<uint32_t>>>& Kernel::runtime_args() { return
 std::vector<std::vector<RuntimeArgsData>>& Kernel::runtime_args_data() { return this->core_to_runtime_args_data_; }
 
 std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runtime_args_; }
+
+std::size_t Kernel::logical_common_runtime_arg_count() const {
+    if (this->common_runtime_args_.size() <= this->watcher_count_word_offset_) {
+        return 0;
+    }
+    return this->common_runtime_args_.size() - this->watcher_count_word_offset_;
+}
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
@@ -896,7 +929,7 @@ void Kernel::validate_runtime_args_size(
     }
 }
 
-void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args) {
+void Kernel::set_runtime_args(const CoreCoord& logical_core, ttsl::Span<const uint32_t> runtime_args) {
     // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not
     // placed on.
     //                  Should this check only be enabled in debug mode?
@@ -956,7 +989,7 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
     }
 }
 
-void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_args) {
+void Kernel::set_common_runtime_args(ttsl::Span<const uint32_t> common_runtime_args) {
     auto& set_rt_args = this->common_runtime_args_;
     TT_FATAL(
         set_rt_args.empty(),

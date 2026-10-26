@@ -17,7 +17,7 @@
 #ifdef UNTILIZE_OUT
 #include "api/compute/pack_untilize.h"
 #endif
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/normalization/kernel_util/compute/numeric.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
@@ -107,7 +107,7 @@ void kernel_main() {
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_in(dfb_in_id);
 #if defined RMSNORM and not defined FUSE_PRE_ADD
-    DataflowBuffer& dfb_xmm = dfb_in;
+    auto& dfb_xmm = dfb_in;
 #else
     DataflowBuffer dfb_xmm(dfb_xmm_id);
 #endif
@@ -119,11 +119,27 @@ void kernel_main() {
 #ifndef RMSNORM
     DataflowBuffer dfb_ex(dfb_ex_id);
 #endif
+#ifdef FUSE_PRE_ADD
+    DataflowBuffer dfb_inb(dfb_inb_id);
+#endif
+#ifdef FUSE_GAMMA
+    DataflowBuffer dfb_gamma(dfb_gamma_id);
+#endif
+#ifdef FUSE_BETA
+    DataflowBuffer dfb_beta(dfb_beta_id);
+#endif
+#if defined(FUSE_GAMMA) || defined(FUSE_BETA)
+    DataflowBuffer dfb_fusion(dfb_fusion_id);
+#endif
 
 #ifdef TILIZE_IN
     // Row-major input staging; the tilize step below turns it into tiles in dfb_in.
     constexpr auto dfb_in_rm_id = dfb::in_rm;
     DataflowBuffer dfb_in_rm(dfb_in_rm_id);
+#endif
+#ifdef UNTILIZE_OUT
+    constexpr auto dfb_out_rm_id = dfb::out_rm;
+    DataflowBuffer dfb_out_rm(dfb_out_rm_id);
 #endif
 
     constexpr int onetile = 1;
@@ -145,6 +161,8 @@ void kernel_main() {
 
 #ifndef RMSNORM
     DataflowBuffer dfb_x(dfb_x_id);
+#elif defined(FUSE_PRE_ADD)
+    auto& dfb_x = dfb_xmm;
 #endif
 
 #ifdef TILIZE_IN
@@ -163,8 +181,10 @@ void kernel_main() {
     // when there is gamma or beta to fold in, otherwise the output buffer directly.
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
     constexpr auto dfb_im_or_out_id = dfb_fusion_id;
+    auto& dfb_im_or_out = dfb_fusion;
 #else
     constexpr auto dfb_im_or_out_id = dfb_out_id;
+    auto& dfb_im_or_out = dfb_out;
 #endif
 
     // Intermediate buffers need to be reserved/pushed/popped
@@ -176,15 +196,6 @@ void kernel_main() {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
         tilize_all_blocks_to_dfb<block_size>(dfb_in_rm, dfb_in, Wt);
-        // Re-init binary ops after tilize hardware reconfiguration.
-        // TODO(#52395): replace this mid-kernel re-init with a targeted DST re-arm.
-#ifdef FUSE_PRE_ADD
-        compute_kernel_hw_startup(dfb_in_id, dfb_inb_id, dfb_x_id);
-#elif defined(RMSNORM)
-        compute_kernel_hw_startup(dfb_xmm_id, dfb_xmm_id, dfb_xmm2_id);
-#else
-        compute_kernel_hw_startup(dfb_x_id, dfb_scaler_id, dfb_ex_id);
-#endif
 #endif
 /*
  * X + Y
@@ -204,7 +215,8 @@ void kernel_main() {
                 dfb_in_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
             ckl::input(
                 dfb_inb_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
-            ckl::output(dfb_x_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(row_shape);
+            ckl::output(dfb_x_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(
+            row_shape, dfb_in, dfb_inb, dfb_x);
         // by the end of this loop we should end up with Wt tiles in dfb_x_id
 #ifndef RMSNORM
         reconfig_data_format(dfb_in_id, dfb_x_id, dfb_inb_id, dfb_scaler_id);
@@ -231,6 +243,10 @@ void kernel_main() {
                 dfb_x, dfb_scaler, dfb_ex, W, Wt, block_size, tile_width);
 
         // x - E[x]; the mean stays resident for the whole row.
+#ifdef ARCH_QUASAR
+        // Quasar: row_wise_mean left the packer on dfb_ex; reconfig alone does not retarget it (see above).
+        pack_init(dfb_xmm_id);
+#endif
         ckl::sub<
             ckl::input(
                 dfb_x_id, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::InputTileMapping::Block),
@@ -239,7 +255,7 @@ void kernel_main() {
                 dfb_xmm_id,
                 ckl::ReservePolicy::PerBlockSize,
                 ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>(row_shape);
+                ckl::DataFormatReconfig::Disabled)>(row_shape, dfb_x, dfb_ex, dfb_xmm);
         dfb_ex.pop_front(1);
 
 #ifndef FUSE_PRE_ADD
@@ -249,6 +265,9 @@ void kernel_main() {
 
         // Preserve dfb_xmm_id for the normalization pass; the variance path consumes only its square.
         // compute temp = xmm*xmm = (x-E[x])^2
+#if defined(ARCH_QUASAR) && (!defined(RMSNORM) || defined(FUSE_PRE_ADD))
+        pack_init(dfb_xmm2_id);  // Quasar: retarget the packer after producing dfb_xmm.
+#endif
         ckl::square<
             ckl::input(
                 dfb_xmm_id,
@@ -260,7 +279,7 @@ void kernel_main() {
                 dfb_xmm2_id,
                 ckl::ReservePolicy::PerBlockSize,
                 ckl::PushPolicy::PerBlockSize,
-                ckl::DataFormatReconfig::Disabled)>(row_shape);
+                ckl::DataFormatReconfig::Disabled)>(row_shape, dfb_xmm, dfb_xmm2);
 #if defined RMSNORM and not defined FUSE_PRE_ADD
         reconfig_data_format(dfb_xmm_id, dfb_xmm2_id, dfb_xmm_id, dfb_scaler_id);
 #endif
@@ -279,9 +298,9 @@ void kernel_main() {
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Add,
                 ckl::input(dfb_ex2_id),
-                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+                ckl::input(dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{dfb_ex2, dfb_eps},
             ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
-            ckl::PackTile<ckl::output(dfb_ex2pe_id)>{});
+            ckl::PackTile<ckl::output(dfb_ex2pe_id)>{dfb_ex2pe});
 
         // Gamma and beta each contain one row and remain resident across all NCHt rows; tile
         // offsets select the current width block. TODO: wait on gamma/beta only on the first NCHt row.
@@ -304,7 +323,7 @@ void kernel_main() {
                         ckl::DataFormatReconfig::Enabled,
                         ckl::TileAddressing::Offset),
                     ckl::input(dfb_ex2pe_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
-                    block.start(), 0u},
+                    dfb_xmm, dfb_ex2pe, block.start(), 0u},
                 // Activation must be applied last. If do_gamma != 0 or do_beta != 0 then
                 // activation will be applied after the gamma/beta multiplication/addition.
                 // Otherwise, we can apply the activation here.
@@ -312,7 +331,7 @@ void kernel_main() {
                 // pack either to intermediate (dfb_fusion or dfb_out)
                 // if no gamma/beta are provided, this will be passed on to the writer
                 ckl::PackTile<ckl::output(
-                    dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                    dfb_im_or_out_id, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{dfb_im_or_out});
 
 #if defined RMSNORM and not defined FUSE_PRE_ADD
 #if defined(FUSE_GAMMA) || defined(FUSE_BETA)
@@ -320,7 +339,8 @@ void kernel_main() {
 #endif
 #endif
 #ifdef FUSE_GAMMA
-            constexpr uint32_t dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
+            constexpr auto dfb_outg_id = do_beta ? dfb_fusion_id : dfb_out_id;
+            auto& dfb_outg = do_beta ? dfb_fusion : dfb_out;
             if constexpr (!do_beta) {
                 pack_reconfig_data_format(dfb_out_id);
 #ifdef ARCH_QUASAR
@@ -345,7 +365,7 @@ void kernel_main() {
                         ckl::PopPolicy::None,
                         ckl::InputTileMapping::Block,
                         ckl::DataFormatReconfig::Disabled,
-                        ckl::TileAddressing::Offset)>{0u, block.start()},
+                        ckl::TileAddressing::Offset)>{dfb_fusion, dfb_gamma, 0u, block.start()},
                 // Activation must be applied last. If do_beta != 0 then
                 // activation will be applied after the beta addition.
                 // Otherwise, we can apply the activation here.
@@ -355,7 +375,7 @@ void kernel_main() {
                     dfb_outg_id,
                     ckl::ReservePolicy::PerBlockSize,
                     ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>{});
+                    ckl::DataFormatReconfig::Disabled)>{dfb_outg});
 #endif
 #ifdef FUSE_BETA
             pack_reconfig_data_format(dfb_out_id);
@@ -384,21 +404,19 @@ void kernel_main() {
                         ckl::PopPolicy::None,
                         ckl::InputTileMapping::Block,
                         ckl::DataFormatReconfig::Disabled,
-                        ckl::TileAddressing::Offset)>{0u, block.start()},
+                        ckl::TileAddressing::Offset)>{dfb_fusion, dfb_beta, 0u, block.start()},
                 ckl::Optional<fused_activation_enabled, FusedActivation>{},
                 ckl::PackTile<ckl::output(
                     dfb_out_id,
                     ckl::ReservePolicy::PerBlockSize,
                     ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>{});
-#endif
+                    ckl::DataFormatReconfig::Disabled)>{dfb_out});
+#endif  // FUSE_BETA
         }
         dfb_ex2pe.pop_front(1);
         dfb_xmm.pop_front(total_buffer_size);
 
 #ifdef UNTILIZE_OUT
-        constexpr auto dfb_out_rm_id = dfb::out_rm;
-        DataflowBuffer dfb_out_rm(dfb_out_rm_id);
         untilize_all_blocks_from_dfb<block_size>(dfb_out, dfb_out_rm, Wt);
 #endif
     }  // NCHt loop
@@ -417,4 +435,23 @@ void kernel_main() {
         "width or dfb_scaler push/pop counts diverge (issue #48487)");
     constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
     dfb_scaler.pop_front(num_scaler_tiles);
+
+    // The epsilon tile is waited once up front and reused for the whole kernel, so it is popped
+    // once here rather than per block.
+    dfb_eps.pop_front(1);
+
+    // Gamma and beta are each one row of Wt tiles pushed once by the reader and read by tile offset
+    // on every block of every NCHt row. Their chain inputs wait Upfront with PopPolicy::None, so the
+    // chain waits block.start() + block.size() tiles and never pops. Pop them once here rather than
+    // per block. The reader pushes a full block_size for every block, including the last partial
+    // one, so pop that padded total rather than Wt. The reader pushes them only on its first row, so a
+    // core with no rows has nothing to pop.
+    if (NCHt > 0) {
+#ifdef FUSE_GAMMA
+        dfb_gamma.pop_front(total_buffer_size);
+#endif
+#ifdef FUSE_BETA
+        dfb_beta.pop_front(total_buffer_size);
+#endif
+    }
 }

@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_unary/addcmul.h"
 #include "api/compute/eltwise_unary/addcdiv.h"
@@ -38,11 +39,14 @@ void kernel_main() {
         copy_init(dfb_in0.get_id());
         copy_tile(dfb_in0.get_id(), 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
 
+        reconfig_data_format_srca(dfb_in0.get_id(), dfb_in1.get_id());
         copy_init(dfb_in1.get_id());
         copy_tile(dfb_in1.get_id(), 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
 
+        reconfig_data_format_srca(dfb_in1.get_id(), dfb_in2.get_id());
         copy_init(dfb_in2.get_id());
         copy_tile(dfb_in2.get_id(), 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
+        reconfig_data_format_srca(dfb_in2.get_id(), dfb_in0.get_id());
 
         TERNARY_SFPU_OP_INIT();
         TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);

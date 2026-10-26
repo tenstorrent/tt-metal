@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
+from tt_py_test_utils_common.utility_functions import tt2torch_tensor, torch2tt_tensor
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc

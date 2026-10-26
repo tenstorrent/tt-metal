@@ -5,7 +5,8 @@
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
 - name: triage
-  cmd: pytest -v -s ./tools/tests/triage/ --ignore=./tools/tests/triage/test_hang_report.py
+  # Reset env lives in cmd: verify-changed-tests runs cmd without triage-tests-impl's env.
+  cmd: TT_METAL_RESET_DEVICE_AFTER_HANG=1 pytest -v -s ./tools/tests/triage/ --ignore=./tools/tests/triage/test_hang_report.py
   skus:
     wh_n150_civ2:
       timeout: 11

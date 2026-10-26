@@ -20,7 +20,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
     bytes_per_tile as _bytes_per_tile,

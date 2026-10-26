@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include "distributed/mesh_device_impl.hpp"
 
 /*
  * DISPATCHER MICROBENCHMARK SUITE (Fast Dispatch + Slow Dispatch)
@@ -179,7 +180,7 @@ HostMemDeviceCommand build_dispatch_terminate(MetalContext& metal_ctx, bool incl
     }
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
     HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
-    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
+    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
     cmd.add_dispatch_terminate();
     if (dispatch_sub_enabled) {
         cmd.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
@@ -206,7 +207,7 @@ HostMemDeviceCommand build_dispatch_prefetch_stall(MetalContext& metal_ctx) {
     HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     cmd.add_dispatch_wait_with_prefetch_stall(
-        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0, 0);
+        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0);
 
     return cmd;
 }
@@ -492,13 +493,13 @@ protected:
         use_exec_buf_ = params.use_exec_buf;
 
         // On the Quasar simulator the command queue is the HAL-reserved DRAM-backed CQ, which lives below dram_base_;
-        // the exec buffer and bank data sit in the unreserved window [dram_base_, physical DRAM size).
-        // Skip only if the exec_buf base alone already overruns physical DRAM (the banked exec_buf top is checked
-        // precisely in build_and_write_exec_buf_to_dram, once num_pages is known).
+        // the exec buffer and bank data sit in [dram_base_, 64 MiB), the size of an emulator DRAM channel. Higher
+        // offsets wrap onto the low 64 MiB. Skip only if the exec_buf base alone already passes 64 MiB (the banked
+        // exec_buf top is checked precisely in build_and_write_exec_buf_to_dram, once num_pages is known).
         if (Common::is_quasar_sim() && compute_exec_buf_base_addr() >= Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE) {
-            GTEST_SKIP() << "exec_buf base " << compute_exec_buf_base_addr()
-                         << " overruns Quasar simulator physical DRAM size "
-                         << Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE;
+            GTEST_SKIP() << "exec_buf base " << compute_exec_buf_base_addr() << " overruns the Quasar emulator's "
+                         << Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE
+                         << "-byte (64 MiB) DRAM channel; higher offsets wrap";
         }
     }
 
@@ -696,7 +697,7 @@ public:
         DeviceCommandCalculator wait_calc(metal_ctx);
         wait_calc.add_dispatch_wait();
         HostMemDeviceCommand wait_cmd(metal_ctx, wait_calc.write_offset_bytes());
-        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
+        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
         const uint8_t* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
         exec_buf_data.insert(exec_buf_data.end(), wptr, wptr + wait_cmd.size_bytes());
 
@@ -720,7 +721,7 @@ public:
             const uint32_t exec_buf_top = exec_buf_base_addr + exec_buf_rows * page_size;
             TT_FATAL(
                 exec_buf_top <= Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE,
-                "exec_buf top {:#x} overruns Quasar simulator physical DRAM size {:#x}",
+                "exec_buf top {:#x} overruns the Quasar emulator's 64 MiB DRAM channel ({:#x}); higher offsets wrap",
                 exec_buf_top,
                 Common::QUASAR_SIMULATION_PHYSICAL_DRAM_SIZE);
         }
@@ -1294,7 +1295,7 @@ public:
     void run_host_test() {
         const uint32_t num_iterations = get_num_iterations();
 
-        // Scale down data size on the Quasar simulator to avoid exceeding the 64 MB DRAM window.
+        // Scale down data size on the Quasar simulator: the emulator has 64 MiB of DRAM per channel.
         const uint32_t max_data_size = Common::is_quasar_sim() ? QUASAR_SIMULATION_DEVICE_DATA_SIZE : DEVICE_DATA_SIZE;
         const uint32_t max_data_size_words = max_data_size / sizeof(uint32_t);
 
@@ -2064,7 +2065,7 @@ protected:
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
         // Identify the MMIO device in the mesh
-        for (auto* dev : mesh_device_->get_devices()) {
+        for (auto* dev : mesh_device_->impl().get_devices()) {
             if (cluster.get_associated_mmio_device(dev->id()) == dev->id()) {
                 mmio_device_ = dev;
                 break;
@@ -2076,7 +2077,7 @@ protected:
         }
 
         // Next, identify a remote device associated with the MMIO device
-        for (auto* dev : mesh_device_->get_devices()) {
+        for (auto* dev : mesh_device_->impl().get_devices()) {
             if (dev != mmio_device_ && (cluster.get_associated_mmio_device(dev->id()) == mmio_device_->id())) {
                 remote_device_ = dev;
                 break;
@@ -2700,7 +2701,7 @@ public:
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
         this->mesh_device_ = tt_metal::distributed::MeshDevice::create_unit_mesh(0);
-        this->device_ = this->mesh_device_->get_devices()[0];
+        this->device_ = this->mesh_device_->impl().get_devices()[0];
         if (detail::sd_cq_kernel_tests_should_skip(*this->mesh_device_)) {
             GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
         }
@@ -2785,7 +2786,8 @@ public:
             memmap.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY, cq_id);
 
         // Queue backing. WH/BH and Quasar with TT_METAL_DRAM_BACKED_CQ=0 stage commands in the mapped
-        // host region. DRAM-backed Quasar uses the fixed physical-DRAM queue window instead.
+        // host region. DRAM-backed Quasar stages them at fixed addresses in the top 16 MiB of the emulator's
+        // 64 MiB DRAM channel instead.
         uint32_t dev_hugepage_base = 0;
         void* host_hugepage_base = nullptr;
         if (!Common::is_quasar_cq_dram_backed()) {
@@ -4044,7 +4046,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     }
 
     HostMemDeviceCommand barrier_cmd(metal_ctx, barrier_calc.write_offset_bytes());
-    barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U, 0);
+    barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U);
     dc.add_data(barrier_cmd.data(), barrier_cmd.size_bytes(), barrier_cmd.size_bytes());
     entry_sizes.push_back(barrier_cmd.size_bytes());
 

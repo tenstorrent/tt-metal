@@ -24,7 +24,7 @@ def read_slot_samples(runtime, kv_cache, slot):
     for row, column in ((0, 0), (0, 3), (7, 0), (7, 3)):
         fabric_node = runtime.mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, column))
         device_id = ttnn.cluster.get_chip_unique_id_from_fabric_node_id(
-            int(fabric_node.mesh_id), int(fabric_node.chip_id)
+            runtime.mesh_device, int(fabric_node.mesh_id), int(fabric_node.chip_id)
         )
         for layer_idx, cache in enumerate(kv_cache.layers):
             tensors = (cache.kv,) if hasattr(cache, "kv") else (cache.k, cache.v)
@@ -109,20 +109,45 @@ def test_prefill_service_six_slots(monkeypatch, tmp_path):
                 snapshots[request["slot_id"]] = read_slot_samples(runtime, kv_cache, request["slot_id"])
 
     def checked_loop(runtime, kv_cache, *args, **kwargs):
-        channel = ttnn.InterProcessCounterChannel.connect(
-            f"/tt_prefill_layer_acks_{os.environ['PREFILL_H2D_SERVICE_ID']}", connect_timeout_ms=30000
+        import threading
+
+        from ttnn._experimental.layer_completion import LayerCompletionQueue
+
+        ring = LayerCompletionQueue.connect(
+            f"/tt_prefill_layer_completions_{os.environ['PREFILL_H2D_SERVICE_ID']}", connect_timeout_ms=30000
         )
 
-        def check_ack_count(expected):
-            deadline = time.monotonic() + 30
-            count = 0
-            while count < expected and time.monotonic() < deadline:
-                count += channel.try_consume_all()
-                time.sleep(0.01)
-            assert count == expected
+        def run_draining(expected_layers, **loop_kwargs):
+            # The ring holds 1024 messages and the device acks one layer per record, so the consumer must
+            # drain while the loop runs; a full ring stalls the ack op and the device.
+            layers = 0
+            stop = threading.Event()
 
-        original_loop(runtime, kv_cache, *args, **kwargs)
-        check_ack_count(192 * 60)
+            def drain():
+                nonlocal layers
+                while True:
+                    msg = ring.try_pop()
+                    if msg is None:
+                        if stop.is_set():
+                            return
+                        time.sleep(0.001)
+                        continue
+                    assert msg[4] == msg[3] + 1, msg
+                    layers += 1
+
+            drainer = threading.Thread(target=drain, daemon=True)
+            drainer.start()
+            try:
+                original_loop(runtime, kv_cache, *args, **{**kwargs, **loop_kwargs})
+                deadline = time.monotonic() + 30
+                while layers < expected_layers and time.monotonic() < deadline:
+                    time.sleep(0.01)
+            finally:
+                stop.set()
+                drainer.join(60)
+            assert layers == expected_layers, (layers, expected_layers)
+
+        run_draining(192 * 60)
         assert runtime.slot_ends == [262144] * 6
         assert set(snapshots) == set(range(6))
         for slot, expected in snapshots.items():
@@ -131,8 +156,9 @@ def test_prefill_service_six_slots(monkeypatch, tmp_path):
         for slot in range(1, 6):
             assert snapshots[slot] != snapshots[0], f"Slot {slot} contains slot 0's prompt"
         with producer_process(tmp_path / "producer_reuse.log", reuse_manifest):
-            original_loop(runtime, kv_cache, *args, **kwargs)
-        check_ack_count(12 * 60)
+            # The trace is captured and the ack service running: the second loop must not re-arm the
+            # runner's first-chunk capture hook, which drains warm-up acks the service already owns.
+            run_draining(12 * 60, before_first_chunk=None)
         assert runtime.slot_ends == [8193] * 6
 
     monkeypatch.setattr(Gemma4PrefillRuntime, "prefill_chunk", checked_prefill)

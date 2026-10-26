@@ -103,7 +103,6 @@ jobs:
         ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
-        TT_METAL_RESET_DEVICE_AFTER_HANG: "1"
       volumes:
         # The image owns /work, so no bind mount: one would mask the payload. A
         # single-path entry is an anonymous volume on an unused path.

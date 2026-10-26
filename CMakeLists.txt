@@ -39,6 +39,8 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 GenerateVersionHeader()
 AddVersionHeaderTarget()
 
+include(project_options)
+
 # Augment CMake's built-in per-config flags rather than replacing them wholesale.
 # Using set(CMAKE_CXX_FLAGS_<CONFIG> ...) overwrites the variable entirely, silently
 # discarding toolchain-file settings and CMake defaults.  add_compile_options() with
@@ -53,6 +55,7 @@ add_compile_options(
     "$<$<CONFIG:Debug,RelWithDebInfo>:-ggnu-pubnames>"
     # Keep frame pointers for profiling and stack unwinding in non-Release builds
     "$<$<CONFIG:Debug,RelWithDebInfo>:-fno-omit-frame-pointer>"
+    "$<$<BOOL:${ENABLE_TRACY}>:-fno-omit-frame-pointer>"
     # Non-standard DEBUG macro (CMake convention is absence of NDEBUG, but this preserves
     # existing behaviour for code that gates on #ifdef DEBUG).
     # Restricted to CXX: the original set(CMAKE_CXX_FLAGS_DEBUG …) never applied to C, and
@@ -81,7 +84,6 @@ else()
     message(STATUS "CMAKE_TOOLCHAIN_FILE is not set.")
 endif()
 
-include(project_options)
 include(unity)
 include(clang-tidy)
 

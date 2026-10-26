@@ -44,10 +44,27 @@ def expand_fuser_selector(selector):
     ]
 
 
+def expand_perf_selector(selector):
+    from helpers.llk_params import PERF_RUN_TYPES_QUASAR
+
+    filename, separator, test = selector.partition("::test_fuser[")
+    if (
+        not separator
+        or Path(filename).name not in {"perf_fused.py", "perf_fused_quasar.py"}
+        or not test.endswith("]")
+    ):
+        return [selector]
+    suffixes = [f"-{run_type.name}]" for run_type in PERF_RUN_TYPES_QUASAR[0]]
+    if any(test.endswith(suffix) for suffix in suffixes):
+        return [selector]
+    return [f"{filename}::test_fuser[{test[:-1]}{suffix}" for suffix in suffixes]
+
+
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config):
     config.args[:] = [
         expanded
         for selector in config.args
-        for expanded in expand_fuser_selector(selector)
+        for case in expand_fuser_selector(selector)
+        for expanded in expand_perf_selector(case)
     ]

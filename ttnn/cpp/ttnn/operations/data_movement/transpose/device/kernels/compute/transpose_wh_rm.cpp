@@ -23,8 +23,9 @@ template <
     uint32_t row_size,
     uint32_t pack_num_pages_last_col,
     uint32_t pack_num_pages_last_row_col,
-    uint32_t dfb_out>
-ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, DataflowBuffer& dfb_out_buf) {
+    uint32_t dfb_out,
+    typename DFB>
+ALWI void transpose_with_pack_untilize_narrow_row(uint32_t cb_tilize, DFB& dfb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_init(cb_tilize);
@@ -69,8 +70,8 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
     return 1;
 }
 
-template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t dfb_out>
-ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& dfb_out_buf) {
+template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t dfb_out, typename DFB>
+ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DFB& dfb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_init(cb_tilize);

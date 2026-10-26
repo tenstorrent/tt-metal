@@ -13,6 +13,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include <algorithm>
 #include <vector>

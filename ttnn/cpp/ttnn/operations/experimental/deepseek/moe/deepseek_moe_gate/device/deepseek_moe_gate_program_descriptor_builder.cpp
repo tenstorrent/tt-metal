@@ -132,7 +132,7 @@ tt::tt_metal::ProgramDescriptor build_moe_gate_program_descriptor(
     };
 
     tt::tt_metal::ComputeConfigDescriptor compute_config{};
-    compute_config.math_fidelity = MathFidelity::HiFi4;
+    compute_config.math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 
     KernelDescriptor reader{
         .kernel_source = std::string(kDeepseekMoeGateKernelPath),

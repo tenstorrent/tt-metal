@@ -20,7 +20,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "fabric_fixture.hpp"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
@@ -269,8 +269,9 @@ void create_mux_kernel(
     tt::tt_metal::Program& program_handle) {
     const auto src_device_id = device->get_device_ids()[0];
     const auto dst_device_id = dest_device->get_device_ids()[0];
-    const auto src_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device_id);
-    const auto dst_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_device_id);
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto src_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device_id);
+    const auto dst_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_device_id);
     const auto& available_links = get_forwarding_link_indices(src_node_id, dst_node_id);
     TT_FATAL(
         !available_links.empty(),
@@ -358,7 +359,6 @@ void create_worker_kernel(
         const auto dst_device_id = worker_test_config.dest_device->get_device_ids()[0];
         const auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device_id);
         const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_device_id);
-        const auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
         const auto forwarding_direction =
             control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
 
@@ -380,7 +380,6 @@ void create_worker_kernel(
         worker_rt_args.push_back(src_fabric_node_id.chip_id);
         worker_rt_args.push_back(dst_fabric_node_id.chip_id);
         worker_rt_args.push_back(*dst_fabric_node_id.mesh_id);
-        worker_rt_args.push_back(mesh_shape[1]);
     }
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {

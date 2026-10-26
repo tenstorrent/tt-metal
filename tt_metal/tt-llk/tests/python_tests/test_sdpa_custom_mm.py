@@ -122,7 +122,8 @@ def _skip_on_simulator(request):
 class _SdpaCustomMMStimuli(StimuliConfig):
     """Writes the two pre-packed operand buffers exactly as the LLK expects.
 
-    buffer_A = in1 (SrcA, rhs): the [K, N] matrix as kt*ct standard [32,32] Float16_b tiles.
+    buffer_A = in1 (SrcA, rhs): [K, N] as standard [32,32] Float16_b tiles,
+               optionally with poisoned leading tiles and inter-row padding.
     buffer_B = in0 (SrcB, lhs): the [M, K] matrix packed face-by-face -- 2*kt faces of
                M x FACE_C_DIM, contiguous (identical layout to compressed_utils' packed_a).
     """
@@ -133,7 +134,7 @@ class _SdpaCustomMMStimuli(StimuliConfig):
                 1, dtype=torch.float32
             ),  # placeholder (raw bytes below)
             stimuli_A_format=DataFormat.Float16_b,
-            tile_count_A=kt * ct + (mask is not None),
+            tile_count_A=len(packed_in1) // 2048 + (mask is not None),
             buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_B_format=DataFormat.Float16_b,
             tile_count_B=kt,
@@ -160,15 +161,17 @@ def _pack_in0(torch_a, kt):
     return out
 
 
-def _pack_in1(torch_b, kt, ct, read_transposed=False):
-    """in1 [K, N] -> kt*ct standard [32,32] Float16_b tiles (face-major).
+def _pack_in1(
+    torch_b, kt, ct, read_transposed=False, row_stride=None, input_tile_offset=0
+):
+    """Pack in1 [K, N] as face-major Float16_b tiles with optional poison padding.
 
     Tile ordering must match the order the unpack LLK walks SrcA from L1
-    (llk_unpack_AB_custom_mm.h ``_llk_unpack_AB_custom_mm_``):
+    (llk_unpack_AB_sdpa_custom_mm.h ``_llk_unpack_AB_sdpa_custom_mm_``):
       * read_transposed=False: contiguous read (block_increment == inner_increment ==
         tile_size), i.e. the walk reads tile linear-index ``k*ct + c`` -> pack K-MAJOR.
-      * read_transposed=True: block_increment = kt*tile_size, inner_increment =
-        -(((ct-1)*kt)-1)*tile_size, so the walk reads tile linear-index ``c*kt + k``
+      * read_transposed=True: block_increment = row_stride*tile_size, inner_increment =
+        -(((ct-1)*row_stride)-1)*tile_size, so the walk reads ``c*row_stride + k``
         -> pack C-MAJOR (outer c, inner k) so the transposed read reconstructs the exact
         same [K,N] matrix and the golden stays A@B. (The buffer, not the golden, absorbs
         the transpose; read_transposed is a SrcA L1 access-pattern axis, not a math change.)
@@ -186,11 +189,18 @@ def _pack_in1(torch_b, kt, ct, read_transposed=False):
             )
             tiles[(k, c)] = pack_bfp16(faces)
 
-    out = b""
+    # Finite nonzero poison makes using kt instead of the physical row stride, or
+    # dropping tile_index_a, numerically visible without relying on NaN propagation.
+    poison_tile = pack_bfp16(torch.full((32, 32), 16.0, dtype=torch.bfloat16))
+    out = poison_tile * input_tile_offset
     if read_transposed:
-        for c in range(ct):  # buffer linear index = c*kt + k
+        row_stride = row_stride or kt
+        assert row_stride >= kt
+        # Buffer linear index = input_tile_offset + c*row_stride + k.
+        for c in range(ct):
             for k in range(kt):
                 out += tiles[(k, c)]
+            out += poison_tile * (row_stride - kt)
     else:
         for k in range(kt):  # buffer linear index = k*ct + c
             for c in range(ct):
@@ -198,7 +208,22 @@ def _pack_in1(torch_b, kt, ct, read_transposed=False):
     return out
 
 
-def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
+def _run(
+    M,
+    K,
+    N,
+    signal_granularity,
+    read_transposed,
+    mm_transpose,
+    row_stride=None,
+    input_tile_offset=0,
+    preserve_zero_flag=False,
+    operands=None,
+):
+    """Run sdpa_custom_mm and check it against the golden; return the (M, N) result.
+
+    ``operands`` optionally supplies ``(A, B)`` instead of the seeded random operands.
+    """
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM
     assert M in {1, 2, 4, 8}, "in0 row count M must be in {1,2,4,8}"
     assert kt >= 2 and kt % 2 == 0, "kt_dim must be an even number >= 2"
@@ -207,9 +232,12 @@ def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
         ct % signal_granularity == 0
     ), "ct_dim must be divisible by signal_granularity"
 
-    torch.manual_seed(0)
-    torch_a = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_b = torch.randn((K, N), dtype=torch.bfloat16)
+    if operands is None:
+        torch.manual_seed(0)
+        torch_a = torch.randn((M, K), dtype=torch.bfloat16)
+        torch_b = torch.randn((K, N), dtype=torch.bfloat16)
+    else:
+        torch_a, torch_b = operands
 
     # Golden: LoFi tiled matmul A@B, row-major (tilize handled device-side). Instantiate
     # MatmulGolden directly (not via get_golden_generator) so the compile-producer's dummy
@@ -238,6 +266,9 @@ def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
                 signal_granularity=signal_granularity,
                 read_transposed=read_transposed,
                 mm_transpose=mm_transpose,
+                sdpa_row_stride=row_stride,
+                sdpa_input_tile_offset=input_tile_offset,
+                preserve_src_zero_flag=preserve_zero_flag,
             ),
         ],
         runtimes=[
@@ -249,7 +280,7 @@ def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
         variant_stimuli=_SdpaCustomMMStimuli(
             kt,
             ct,
-            _pack_in1(torch_b, kt, ct, read_transposed=read_transposed),
+            _pack_in1(torch_b, kt, ct, read_transposed, row_stride, input_tile_offset),
             _pack_in0(torch_a, kt),
         ),
         dest_acc=DestAccumulation.No,
@@ -285,6 +316,7 @@ def _run(M, K, N, signal_granularity, read_transposed, mm_transpose):
         custom_atol=acc_atol,
         print_pcc=True,
     ), f"sdpa_custom_mm failed for (M={M}, K={K}, N={N}, sg={signal_granularity}, read_transposed={read_transposed})"
+    return res_tensor
 
 
 # Shapes: kt = K/32 (even, >=2), ct = N/32 (1..16), M in {1,2,4,8}. Kept small so the sweep
@@ -368,16 +400,57 @@ class SDPA_MASK_REENTRY(TemplateParameter):
 
 
 @parametrize(
+    shape=[(1, 64, 96), (8, 128, 128)],
+    stride_mode=["implicit", "zero", "tight", "padded"],
+    read_transposed=lambda stride_mode: (
+        [False, True] if stride_mode == "padded" else [True]
+    ),
+    input_tile_offset=lambda stride_mode: ([0, 1] if stride_mode == "padded" else [0]),
+)
+def test_sdpa_custom_mm_row_stride(
+    request, shape, stride_mode, read_transposed, input_tile_offset
+):
+    """Contract only K tiles while stepping over poisoned merged-K/V row padding.
+
+    Omitted, zero, and explicit kt strides retain tight packing. A stride argument
+    must not change contiguous reads. Leading poison also checks tile-index addressing.
+    """
+    _skip_on_simulator(request)
+    M, K, N = shape
+    kt = K // DEFAULT_TILE_R_DIM
+    row_stride = {"implicit": None, "zero": 0, "tight": kt, "padded": kt + 2}[
+        stride_mode
+    ]
+    _run(
+        M,
+        K,
+        N,
+        signal_granularity=1,
+        read_transposed=read_transposed,
+        mm_transpose=False,
+        row_stride=row_stride,
+        input_tile_offset=input_tile_offset,
+    )
+
+
+@parametrize(
     M=[1, 8],
     ct=[1, 3, 8],
     # The ct==1 fast path requires contiguous reads, as in the existing
     # test_sdpa_custom_mm_read_transposed contract above.
     read_transposed=lambda ct: [False, True] if ct > 1 else [False],
+    padded_stride=lambda read_transposed: (
+        [False, True] if read_transposed else [False]
+    ),
 )
-def test_sdpa_custom_mm_mask_extent_restore(request, M, ct, read_transposed):
+def test_sdpa_custom_mm_mask_extent_restore(
+    request, M, ct, read_transposed, padded_stride
+):
     """Mask every output face, then reuse the restored SrcB geometry on the next matmul."""
     _skip_on_simulator(request)
     kt, K, N = 2, 64, ct * 32
+    row_stride = kt + 2 if padded_stride else None
+    input_tile_offset = 1 if padded_stride else 0
     generator = torch.Generator().manual_seed(73)
     lhs = (torch.randint(-2, 3, (M, K), generator=generator).float() / 4).to(
         torch.bfloat16
@@ -394,7 +467,10 @@ def test_sdpa_custom_mm_mask_extent_restore(request, M, ct, read_transposed):
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
             SDPA_CUSTOM_MM_FLAGS(
-                signal_granularity=ct, read_transposed=read_transposed
+                signal_granularity=ct,
+                read_transposed=read_transposed,
+                sdpa_row_stride=row_stride,
+                sdpa_input_tile_offset=input_tile_offset,
             ),
             SDPA_MASK_REENTRY(),
         ],
@@ -405,7 +481,7 @@ def test_sdpa_custom_mm_mask_extent_restore(request, M, ct, read_transposed):
         variant_stimuli=_SdpaCustomMMStimuli(
             kt,
             ct,
-            _pack_in1(rhs, kt, ct, read_transposed),
+            _pack_in1(rhs, kt, ct, read_transposed, row_stride, input_tile_offset),
             _pack_in0(lhs, kt),
             mask=mask,
         ),
@@ -423,3 +499,48 @@ def test_sdpa_custom_mm_mask_extent_restore(request, M, ct, read_transposed):
     assert torch.equal(
         result, golden
     ), "Mask extent or SrcB geometry restoration changed the matmul"
+
+
+# Smallest positive bf16 denormal, 2^-133; bf16 denormals are its multiples 1..127 (7 mantissa bits).
+BF16_DENORMAL_MIN = 2.0**-133
+BF16_DENORMAL_MANTISSAS = 1 << 7
+# B is scaled up so a kept denormal gives a visibly nonzero product; the normal rows of A are scaled down
+# by the same amount so their products stay O(1).
+OPERAND_SCALE = 2.0**100
+
+
+@pytest.mark.parametrize("N", [32, 64])
+def test_sdpa_custom_mm_flushes_denormal_srcb_after_keep_flag(request, N):
+    """The init must restore the Src zero flag a preceding datacopy left at keep.
+
+    Rows 0-3 of A (SrcB) are bf16 denormals, which a bf16 MVMUL flushes to zero; scaled by B they give nonzero
+    products if kept, so those rows must come out exactly 0. The golden cannot tell flushed rows from kept
+    ones at its tolerance, so only the exact-zero check guards them. Rows 4-7 are normal and check the rest
+    of the product.
+    """
+    _skip_on_simulator(request)
+    M, K = 8, 64
+    denormal_rows = 4
+
+    torch.manual_seed(0)
+    torch_a = torch.randn((M, K), dtype=torch.float32) / OPERAND_SCALE
+    torch_a[:denormal_rows] = (
+        BF16_DENORMAL_MIN
+        * torch.randint(1, BF16_DENORMAL_MANTISSAS, (denormal_rows, K)).float()
+    )
+    torch_b = torch.randn((K, N), dtype=torch.float32) * OPERAND_SCALE
+
+    res = _run(
+        M,
+        K,
+        N,
+        signal_granularity=1,
+        read_transposed=False,
+        mm_transpose=False,
+        preserve_zero_flag=True,
+        operands=(torch_a.to(torch.bfloat16), torch_b.to(torch.bfloat16)),
+    )
+    kept = res[:denormal_rows].float()
+    assert (
+        torch.count_nonzero(kept) == 0
+    ), f"denormal SrcB rows were not flushed: max |value| {kept.abs().max().item():.3e}"

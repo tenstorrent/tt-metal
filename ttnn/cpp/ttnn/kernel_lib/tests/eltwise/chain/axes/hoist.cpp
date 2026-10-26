@@ -21,22 +21,31 @@ void kernel_main() {
     constexpr uint32_t mode = get_compile_time_arg_val(1);
     static_assert(mode < 3);
 
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+
     using namespace compute_kernel_lib;
     compute_kernel_hw_startup(cb_in, cb_out);
 
     if constexpr (mode == 0) {
-        eltwise_chain(IterationShape::tiles(n), CopyTile<input(cb_in)>{}, Exp<>{}, PackTile<output(cb_out)>{});
+        eltwise_chain(
+            IterationShape::tiles(n), CopyTile<input(cb_in)>{cb_in_obj}, Exp<>{}, PackTile<output(cb_out)>{cb_out_obj});
     } else if constexpr (mode == 1) {
         for (uint32_t i = 0; i < n; ++i) {
-            eltwise_chain(IterationShape::one_tile(), CopyTile<input(cb_in)>{}, Exp<>{}, PackTile<output(cb_out)>{});
+            eltwise_chain(
+                IterationShape::one_tile(),
+                CopyTile<input(cb_in)>{cb_in_obj},
+                Exp<>{},
+                PackTile<output(cb_out)>{cb_out_obj});
         }
     } else {
         copy_init(cb_in);
         exp_tile_init();
         eltwise_chain<InitReconfigOwner::Caller>(
             IterationShape::tiles(n),
-            CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{},
+            CopyTile<input(cb_in, WaitPolicy::PerTile, PopPolicy::PerTile, DataFormatReconfig::Disabled)>{cb_in_obj},
             Exp<>{},
-            PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{});
+            PackTile<output(cb_out, ReservePolicy::PerTile, PushPolicy::PerTile, DataFormatReconfig::Disabled)>{
+                cb_out_obj});
     }
 }

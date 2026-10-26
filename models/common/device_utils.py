@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device topology naming helpers shared by TTTv2 modules."""
+"""Device topology naming helpers used by models.common.tt_ccl."""
 
 from __future__ import annotations
 

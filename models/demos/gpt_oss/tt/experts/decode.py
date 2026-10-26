@@ -194,3 +194,184 @@ def decode_forward(
     )
 
     return next_states
+
+
+class DenseDecodePlan:
+    """Memory and program configs of decode_forward_dense for one (device grid, shapes) combination."""
+
+    def __init__(self, mesh_device, hidden, intermediate_local, num_experts, tokens):
+        from ..fused_decode.config import DENSE_MOE_CORES, DENSE_MOE_ELTWISE_CORES, DENSE_MOE_WORKERS_PER_BANK
+
+        tile = ttnn.TILE_SIZE
+        self.tokens = tokens
+        grid = mesh_device.compute_with_storage_grid_size()
+        cores = DENSE_MOE_CORES
+        n_act = num_experts * intermediate_local
+        assert hidden % (tile * cores) == 0 and n_act % (tile * cores) == 0, (hidden, n_act, cores)
+        core_set = ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True)
+
+        def width_sharded(cols, cores_used=core_set):
+            return ttnn.create_sharded_memory_config(
+                (tokens, cols),
+                cores_used,
+                ttnn.ShardStrategy.WIDTH,
+                ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+        def dram_sharded(k_tiles_per_core, per_core_n):
+            return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=max(d for d in range(1, min(k_tiles_per_core, 16) + 1) if k_tiles_per_core % d == 0),
+                per_core_M=tokens // tile,
+                per_core_N=per_core_n,
+                fused_activation=None,
+                num_workers_per_dram_bank=DENSE_MOE_WORKERS_PER_BANK,
+            )
+
+        def mcast_1d(per_core_n, n_cores=cores):
+            # [tokens, num_experts] routing weights times a [num_experts, n] constant, written straight into the
+            # width-sharded layout of the tensor it scales / is added to.
+            return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, -(-n_cores // grid.x)),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=per_core_n,
+                per_core_M=tokens // tile,
+                per_core_N=per_core_n,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+
+        self.input_memory_config = width_sharded(hidden // cores)
+        self.act_memory_config = width_sharded(n_act // cores)
+        self.out_memory_config = width_sharded(hidden // cores)
+        self.gate_up_program_config = dram_sharded(hidden // tile // cores, n_act // tile // cores)
+        self.down_program_config = dram_sharded(n_act // tile // cores, hidden // tile // cores)
+        ew = DENSE_MOE_ELTWISE_CORES
+        assert n_act % (tile * ew) == 0, (n_act, ew)
+        self.eltwise_memory_config = width_sharded(n_act // ew, ttnn.num_cores_to_corerangeset(ew, grid, row_wise=True))
+        self.expand_program_config = mcast_1d(n_act // tile // ew, ew)
+        self.down_bias_program_config = mcast_1d(hidden // tile // cores)
+        # LoFi like the sparse matmuls it replaces (BFP8 activations x BFP4 weights).
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+
+def decode_forward_dense(hidden_states, routing_weights, weights, plan: DenseDecodePlan, config: ExpertConfig):
+    """Decode MoE for one 32-token tile per device over every expert (gpt-oss-20b batch 32, TP over the intermediate
+    dimension, no expert parallelism).
+
+    hidden_states: [1, 1, 32, hidden] (the post-attention norm output), replicated over TP.
+    routing_weights: [32, num_experts] router output (softmax over each token's top-k, zeros elsewhere).
+    weights: DenseDecodeExpertWeights (every expert's TP shard side by side).
+
+    gate = x @ gate_all + b, up = x @ up_all + b ([32, E * I_local], width-sharded); the gpt-oss SwiGLU as one
+    multiply; each expert's columns scaled by the token's routing weight; then one down matmul over all experts, whose
+    K dimension sums the weighted experts: sum_e w[t, e] (act_e[t] @ down_e) = (w * act)[t] @ down_all. The down bias
+    term sum_e w[t, e] b_e is routing_weights @ down_bias. Returns this device's partial sum [1, 1, 32, hidden]
+    (DRAM interleaved, BF8, as the prefill path hands it over: ttnn.all_reduce misreads some L1 BF8 buffers, #41640)
+    for the TP all-reduce.
+    """
+    UWP, U = ttnn.UnaryWithParam, ttnn.UnaryOpType
+    limit, alpha = config.swiglu_limit, config.alpha
+    ck = plan.compute_kernel_config
+    x = ttnn.to_memory_config(hidden_states, plan.input_memory_config, dtype=ttnn.bfloat8_b)
+    gate = ttnn.matmul(
+        x,
+        weights.gate,
+        program_config=plan.gate_up_program_config,
+        memory_config=plan.act_memory_config,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=ck,
+    )
+    up = ttnn.matmul(
+        x,
+        weights.up,
+        program_config=plan.gate_up_program_config,
+        memory_config=plan.act_memory_config,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=ck,
+    )
+    x.deallocate(True)
+    # The elementwise steps run on twice the matmul's cores (plan.eltwise_memory_config).
+    ew = plan.eltwise_memory_config
+    gate_ew = ttnn.to_memory_config(gate, ew)
+    gate.deallocate(True)
+    up_ew = ttnn.to_memory_config(up, ew)
+    up.deallocate(True)
+    gate = ttnn.add(gate_ew, weights.gate_bias, memory_config=ew, output_tensor=gate_ew)
+    up = ttnn.add(up_ew, weights.up_bias, memory_config=ew, output_tensor=up_ew)
+    w = ttnn.to_memory_config(routing_weights, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+    w = ttnn.reshape(w, (1, 1, w.shape[-2], w.shape[-1]))
+    w_cols = ttnn.matmul(
+        w,
+        weights.expand,
+        program_config=plan.expand_program_config,
+        memory_config=ew,
+        dtype=ttnn.bfloat16,
+    )
+    # (clamp(up, -l, l) + 1) * g * sigmoid(alpha * g), g = clamp(gate, max=l); g * sigmoid(alpha g) = silu(alpha g) / alpha.
+    act = ttnn.multiply(
+        up,
+        gate,
+        input_tensor_a_activations=[UWP(U.CLAMP_TSS, -limit, limit), UWP(U.ADD_UNARY_SFPU, 1.0)],
+        input_tensor_b_activations=[
+            UWP(U.CLAMP_TSS, -3.0e38, limit),
+            UWP(U.MUL_UNARY_SFPU, alpha),
+            UWP(U.SILU),
+            UWP(U.MUL_UNARY_SFPU, 1.0 / alpha),
+        ],
+        memory_config=ew,
+    )
+    gate.deallocate(True)
+    up.deallocate(True)
+    act = ttnn.multiply(act, w_cols, memory_config=ew, output_tensor=act)
+    w_cols.deallocate(True)
+    act_ew = act
+    act = ttnn.to_memory_config(act_ew, plan.act_memory_config)
+    act_ew.deallocate(True)
+    down = ttnn.matmul(
+        act,
+        weights.down,
+        program_config=plan.down_program_config,
+        memory_config=plan.out_memory_config,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=ck,
+    )
+    act.deallocate(True)
+    bias = ttnn.matmul(
+        w,
+        weights.down_bias,
+        program_config=plan.down_bias_program_config,
+        memory_config=plan.out_memory_config,
+        dtype=ttnn.bfloat16,
+    )
+    w.deallocate(True)
+    down = ttnn.add(down, bias, memory_config=plan.out_memory_config, output_tensor=down)
+    bias.deallocate(True)
+    out = ttnn.to_memory_config(down, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
+    down.deallocate(True)
+    return out
+
+
+def decode_forward_stream(hidden_states, expert_indices, expert_weights, weights, stream, send=None):
+    """Decode MoE for one token over its top-k experts with the DRAM-streaming ops of fused_decode/stream.py.
+
+    hidden_states: the flat BF16 norm output of the layer boundary (fused_decode/boundary.py, one token).
+    expert_indices / expert_weights: the streamed router's [1, 32] UINT16 ids / BF16 softmax weights buffers (top-k
+    in the first k entries; shared, not deallocated here).
+    gate|up + bias + SwiGLU + routing-weight scaling run in one op into the shared [k, I_pad] activation; the down
+    projection + bias + sum over the routed experts run in a second op, straight into this device's flat partial sum.
+    Returns that partial sum (the layer's next boundary all-reduces it and adds it to the residual); send: fuse the
+    boundary's fabric send into the down op (ccl.CCLManager.decode_boundary_send).
+    """
+    act = stream["gate_up"](hidden_states, expert_indices, expert_weights, weights.gate_up_stream, stream["act"])
+    return stream["down"](act, expert_indices, expert_weights, weights.down_stream, stream["partial"], send=send)

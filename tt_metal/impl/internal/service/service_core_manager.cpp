@@ -18,6 +18,8 @@
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 #include <llrt/hal.hpp>
 #include "llrt/llrt.hpp"
@@ -285,6 +287,9 @@ void ServiceCoreManager::wait_done(IDevice* device, CoreCoord core) const { pimp
 ServiceCoreManagerImpl& ServiceCoreManager::impl() { return *pimpl_; }
 const ServiceCoreManagerImpl& ServiceCoreManager::impl() const { return *pimpl_; }
 
-ServiceCoreManager& service_core_manager() { return MetalContext::instance().get_service_core_manager(); }
+// Returns the ServiceCoreManager of the MetalContext that owns `mesh_device`.
+ServiceCoreManager& service_core_manager(distributed::MeshDevice& mesh_device) {
+    return mesh_device.impl().metal_context().get_service_core_manager();
+}
 
 }  // namespace tt::tt_metal::internal

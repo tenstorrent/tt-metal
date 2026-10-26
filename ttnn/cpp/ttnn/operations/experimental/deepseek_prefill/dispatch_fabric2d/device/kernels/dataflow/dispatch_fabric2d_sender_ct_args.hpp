@@ -30,6 +30,9 @@ struct SenderCtArgs {
         kDownstreamNocX,
         kDownstreamNocY,
         kFwdSemAddr,
+        kCreditNocX,
+        kCreditNocY,
+        kLaunchCreditAddr,
         kCount,
     };
 
@@ -48,14 +51,19 @@ struct SenderCtArgs {
     uint32_t downstream_noc_x;  // the downstream stream core
     uint32_t downstream_noc_y;
     uint32_t fwd_sem_addr;
+    uint32_t credit_noc_x;  // the downstream chip's stream core that sends back to this chip
+    uint32_t credit_noc_y;
+    uint32_t launch_credit_addr;
 
 #ifndef KERNEL_BUILD
     // `downstream` is the core serving this stream on the next chip; the sender signals its arrived-page
-    // counter, so placement must be decided on every chip before any kernel is built.
+    // counter. `returning` is the core on that chip whose sender writes back to this chip; the sender grants
+    // it the launch credit. So placement must be decided on every chip before any kernel is built.
     SenderCtArgs(
         uint32_t token_bytes,
         const op::StreamPlacement& self,
         const op::StreamPlacement& downstream,
+        const op::StreamPlacement& returning,
         const op::L1Layout& l1,
         const op::KernelPlan& plan) :
         queue_depth(QUEUE_DEPTH),
@@ -72,7 +80,10 @@ struct SenderCtArgs {
         freed_addr(plan.queue_freed_addr),
         downstream_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         downstream_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
-        fwd_sem_addr(plan.fwd_arrived_addr) {}
+        fwd_sem_addr(plan.fwd_arrived_addr),
+        credit_noc_x(static_cast<uint32_t>(returning.worker_virtual.x)),
+        credit_noc_y(static_cast<uint32_t>(returning.worker_virtual.y)),
+        launch_credit_addr(plan.launch_credit_addr) {}
 
     std::vector<uint32_t> to_ct_word_arr() const {
         constexpr uint32_t kUnset = 0xDEADBEEFu;
@@ -92,6 +103,9 @@ struct SenderCtArgs {
         w[kDownstreamNocX] = downstream_noc_x;
         w[kDownstreamNocY] = downstream_noc_y;
         w[kFwdSemAddr] = fwd_sem_addr;
+        w[kCreditNocX] = credit_noc_x;
+        w[kCreditNocY] = credit_noc_y;
+        w[kLaunchCreditAddr] = launch_credit_addr;
         for (uint32_t i = 0; i < kCount; i++) {
             TT_FATAL(w[i] != kUnset, "dispatch_fabric2d: sender compile-time arg {} was never assigned", i);
         }
@@ -113,7 +127,10 @@ struct SenderCtArgs {
         freed_addr(get_compile_time_arg_val(kFreedAddr)),
         downstream_noc_x(get_compile_time_arg_val(kDownstreamNocX)),
         downstream_noc_y(get_compile_time_arg_val(kDownstreamNocY)),
-        fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)) {}
+        fwd_sem_addr(get_compile_time_arg_val(kFwdSemAddr)),
+        credit_noc_x(get_compile_time_arg_val(kCreditNocX)),
+        credit_noc_y(get_compile_time_arg_val(kCreditNocY)),
+        launch_credit_addr(get_compile_time_arg_val(kLaunchCreditAddr)) {}
 #endif
 
     constexpr uint32_t entry_stride() const { return token_size_bytes + forwarding_metadata_size; }

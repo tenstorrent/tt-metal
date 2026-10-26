@@ -125,7 +125,7 @@ uint32_t get_in0_block_w(
 CoreCoord get_core_range(
     uint32_t num_blocks_rows, uint32_t num_blocks_cols, uint32_t max_num_rows, uint32_t max_num_cols);
 
-std::tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch);
+std::tuple<tt::tt_metal::MathFidelity, bool> get_compute_params(tt::ARCH arch);
 
 std::tuple<uint32_t, uint32_t> get_out_subblock_params(uint32_t per_core_Mt, uint32_t per_core_Nt, uint32_t choice);
 
@@ -164,7 +164,7 @@ void prepare_inputs(
 tt_metal::Program create_program_single_core(
     tt_metal::distributed::MeshDevice* device,
     tt::DataFormat cb_data_format,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     uint32_t single_tile_size,
     CoreCoord core_range,
@@ -184,7 +184,7 @@ tt_metal::Program create_program_single_core(
 tt_metal::Program create_program(
     tt_metal::distributed::MeshDevice* device,
     tt::DataFormat cb_data_format,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     uint32_t single_tile_size,
     CoreCoord core_range,
@@ -484,7 +484,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         auto [math_fidelity, fp32_dest_acc_en] = get_compute_params(arch);
         if (single_core) {
-            math_fidelity = fidel == 0 ? MathFidelity::LoFi : MathFidelity::HiFi2;
+            math_fidelity = fidel == 0 ? tt::tt_metal::MathFidelity::LoFi : tt::tt_metal::MathFidelity::HiFi2;
             fp32_dest_acc_en = fp32 != 0;
         }
         auto [out_subblock_h, out_subblock_w] = get_out_subblock_params(per_core_Mt, per_core_Nt, subblock_choice);
@@ -833,11 +833,11 @@ CoreCoord get_core_range(
     return core_range;
 }
 
-std::tuple<MathFidelity, bool> get_compute_params(tt::ARCH arch) {
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+std::tuple<tt::tt_metal::MathFidelity, bool> get_compute_params(tt::ARCH arch) {
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     if (arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE) {
-        math_fidelity = MathFidelity::HiFi2;
+        math_fidelity = tt::tt_metal::MathFidelity::HiFi2;
         // TODO: apply packer_l1_acc
         // TODO: need to consider whether to set these variablias as arguments
         fp32_dest_acc_en = false;
@@ -895,7 +895,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>
 tt_metal::Program create_program_single_core(
     tt_metal::distributed::MeshDevice* /*device*/,
     tt::DataFormat cb_data_format,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     uint32_t single_tile_size,
     CoreCoord core_range,
@@ -1102,7 +1102,7 @@ tt_metal::Program create_program_single_core(
 tt_metal::Program create_program(
     tt_metal::distributed::MeshDevice* device,
     tt::DataFormat cb_data_format,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     uint32_t single_tile_size,
     CoreCoord core_range,

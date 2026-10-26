@@ -78,6 +78,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/resource_bindings/tensor_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/compile_time_varargs.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/tt_kernel_shim.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_kernel_defines.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/binding_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/compute_semaphore.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/kernel_args_loopbacks.cpp

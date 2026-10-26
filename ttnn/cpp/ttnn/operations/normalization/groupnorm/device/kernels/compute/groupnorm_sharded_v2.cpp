@@ -109,7 +109,8 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
     constexpr uint32_t dfb_ex_external_id = tt::CBIndex::c_10;
-    constexpr uint32_t dfb_ex_global_id = num_cores_per_mcast_group == 1 ? dfb_ex_partial_id : tt::CBIndex::c_15;
+    constexpr uint32_t dfb_ex_global_mcast_id = tt::CBIndex::c_15;
+    constexpr uint32_t dfb_ex_global_id = num_cores_per_mcast_group == 1 ? dfb_ex_partial_id : dfb_ex_global_mcast_id;
     constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
     constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
     // Composed-mask CBs, created only under pad correction (has_row_mask); aliased to
@@ -223,17 +224,28 @@ void kernel_main() {
         ckl::DataFormatReconfig::Disabled,
         ckl::TileAddressing::Strided);
 
+    DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
+    DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    DataflowBuffer dfb_ex_global_mcast(dfb_ex_global_mcast_id);
+    auto& dfb_ex_global = num_cores_per_mcast_group == 1 ? dfb_ex_partial : dfb_ex_global_mcast;
+    DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_in(dfb_in_id);
     DataflowBuffer dfb_in_negative_mask(dfb_in_negative_mask_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
     DataflowBuffer dfb_mask_last(dfb_mask_last_id);
+    DataflowBuffer dfb_ones(dfb_ones_id);
     DataflowBuffer dfb_out(dfb_out_id);
     DataflowBuffer dfb_outbeta(dfb_outbeta_id);
     DataflowBuffer dfb_outgamma(dfb_outgamma_id);
+    // dfb_inbeta_id always aliases one of these buffers; bind the existing object.
+    static_assert(dfb_inbeta_id == dfb_in_id || dfb_inbeta_id == dfb_out_id || dfb_inbeta_id == dfb_outgamma_id);
+    auto& dfb_inbeta = dfb_inbeta_id == dfb_in_id ? dfb_in : dfb_inbeta_id == dfb_out_id ? dfb_out : dfb_outgamma;
     DataflowBuffer dfb_rowvalid(dfb_rowvalid_id);
+    DataflowBuffer dfb_scaler(dfb_scaler_id);
+    DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_x(dfb_x_id);
 
 // tilize input from RM to tile layout
@@ -380,14 +392,14 @@ void kernel_main() {
                     ckl::input(
                         dfb_ones_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
                     ckl::Dst::D0,
-                    ckl::DestAccumulation::WholeShape>{ckl::StridedTileRange{0, block_w}},
+                    ckl::DestAccumulation::WholeShape>{dfb_x, dfb_ones, ckl::StridedTileRange{0, block_w}},
                 ckl::PackTile<ckl::output(
                     dfb_ex2pe_id,
                     ckl::ReservePolicy::OneUpfront,
                     ckl::PushPolicy::OneAtEnd,
                     ckl::DataFormatReconfig::Disabled,
                     ckl::TileAddressing::Direct,
-                    ckl::DestAccumulation::WholeShape)>{});
+                    ckl::DestAccumulation::WholeShape)>{dfb_ex2pe});
 
             // reduce only one final tile
             //
@@ -396,7 +408,7 @@ void kernel_main() {
             // non-result datum of dfb_ex_partial to zero.
             // If this `reduce<…, REDUCE_SCALAR>` pack into dfb_ex_partial is
             // ever replaced by something that does not have the same
-            // packer-zero contract (e.g. a `pack_tile` / `pack_tile_block`
+            // packer-zero contract (e.g. a `pack_tile` / `pack_block`
             // path like welford_groupnorm_sharded_v2.cpp uses), the sharded
             // reader's "single-tile-overwrite trick" must be adjusted accordingly
             // (e.g. use `zero_whole_cb` from groupnorm_zero_fill.hpp, mirroring the
@@ -445,7 +457,7 @@ void kernel_main() {
                     dfb_x_id,
                     ckl::ReservePolicy::PerBlockSize,
                     ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>(valid_group_shape);
+                    ckl::DataFormatReconfig::Disabled)>(valid_group_shape, dfb_x, dfb_ex_global, dfb_x);
 
             reconfig_data_format_srcb(dfb_ex_global_id, dfb_input_mask_id);
             // Re-mask (x - E[x]); otherwise each padding row is centered to (garbage - E[x])
@@ -475,7 +487,10 @@ void kernel_main() {
                         ckl::PushPolicy::PerBlockSize,
                         ckl::DataFormatReconfig::Disabled)>(
                     has_row_mask ? ckl::IterationShape::grid(bcast_row_tiles, block_w).block_size(subblock_w)
-                                 : valid_group_shape);
+                                 : valid_group_shape,
+                    dfb_x,
+                    dfb_input_mask,
+                    dfb_x);
             }
 
             // Peeled final row-tile: full-tile multiply with the composed mask.
@@ -499,7 +514,7 @@ void kernel_main() {
                         ckl::ReservePolicy::PerBlockSize,
                         ckl::PushPolicy::PerBlockSize,
                         ckl::DataFormatReconfig::Disabled)>(
-                    ckl::IterationShape::grid(1, block_w).block_size(subblock_w));
+                    ckl::IterationShape::grid(1, block_w).block_size(subblock_w), dfb_x, dfb_mask_last, dfb_x);
             }
             dfb_input_mask.pop_front(mask_tiles_per_group);
             if constexpr (has_row_mask) {
@@ -517,14 +532,14 @@ void kernel_main() {
                     x_strided_block_input,
                     ckl::Dst::D0,
                     ckl::DestAccumulation::WholeShape>{
-                    ckl::StridedTileRange{0, block_w}, ckl::StridedTileRange{0, block_w}},
+                    dfb_x, dfb_x, ckl::StridedTileRange{0, block_w}, ckl::StridedTileRange{0, block_w}},
                 ckl::PackTile<ckl::output(
                     dfb_ex2pe_id,
                     ckl::ReservePolicy::OneUpfront,
                     ckl::PushPolicy::OneAtEnd,
                     ckl::DataFormatReconfig::Disabled,
                     ckl::TileAddressing::Direct,
-                    ckl::DestAccumulation::WholeShape)>{});
+                    ckl::DestAccumulation::WholeShape)>{dfb_ex2pe});
 
             // If modifying this code, see the long comment at the first REDUCE_SCALAR
             // pack into dfb_ex_partial earlier in this kernel.
@@ -535,7 +550,6 @@ void kernel_main() {
                 reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
                     compute_kernel_lib::ReduceInputBlockShape::single());
 
-            dfb_ex_partial.wait_front(1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
                     PoolType::SUM,
@@ -571,13 +585,14 @@ void kernel_main() {
                         ckl::PopPolicy::PerTile,
                         ckl::DataFormatReconfig::Disabled),
                     ckl::input(
-                        dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled)>{},
+                        dfb_eps_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled)>{
+                    dfb_ex_global, dfb_eps},
                 ckl::Rsqrt<ckl::Approx::Exact, ckl::Dst::D0>{},
                 ckl::PackTile<ckl::output(
                     dfb_ex2pe_id,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>{});
+                    ckl::DataFormatReconfig::Disabled)>{dfb_ex2pe});
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             // fp32: reset both srcs so fp32 x/rstd aren't read through the (var+eps) bf16 dfb_eps format.
             if constexpr (enable_fp32_reconfig) {
@@ -601,7 +616,7 @@ void kernel_main() {
                     dfb_x_id,
                     ckl::ReservePolicy::PerBlockSize,
                     ckl::PushPolicy::PerBlockSize,
-                    ckl::DataFormatReconfig::Disabled)>(valid_group_shape);
+                    ckl::DataFormatReconfig::Disabled)>(valid_group_shape, dfb_x, dfb_ex2pe, dfb_x);
             dfb_x.wait_front(block_hw);
             //  add or copy with previous output results
             const uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
@@ -615,14 +630,14 @@ void kernel_main() {
                     if (copy_or_add) {
                         ckl::eltwise_chain(
                             ckl::IterationShape::col(block_h),
-                            ckl::CopyTile<x_strided_col_input>{input_range},
-                            ckl::PackTile<out_strided_output>{output_range});
+                            ckl::CopyTile<x_strided_col_input>{dfb_x, input_range},
+                            ckl::PackTile<out_strided_output>{dfb_out, output_range});
                     } else {
                         ckl::eltwise_chain(
                             ckl::IterationShape::col(block_h),
                             ckl::BinaryFpu<ckl::BinaryFpuOp::Add, out_strided_col_input, x_strided_col_input>{
-                                output_range, input_range},
-                            ckl::PackTile<out_strided_output>{output_range});
+                                dfb_out, dfb_x, output_range, input_range},
+                            ckl::PackTile<out_strided_output>{dfb_out, output_range});
                     }
 
                     // update group tile offset
@@ -659,8 +674,8 @@ void kernel_main() {
                             ckl::WaitPolicy::None,
                             ckl::PopPolicy::None,
                             ckl::InputTileMapping::Row,
-                            ckl::DataFormatReconfig::Disabled)>{output_range},
-                    ckl::PackTile<in_strided_output>{output_range});
+                            ckl::DataFormatReconfig::Disabled)>{dfb_in, dfb_in_negative_mask, output_range},
+                    ckl::PackTile<in_strided_output>{dfb_in, output_range});
 
                 // data in cb_x_id has valid data only for current group
                 // cb_in_id has cleared data for that group
@@ -669,8 +684,8 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(block_h, block_w_curr),
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Add, in_strided_block_input, x_strided_block_input>{
-                        output_range, ckl::StridedTileRange{0u, block_w}},
-                    ckl::PackTile<in_strided_output>{output_range});
+                        dfb_in, dfb_x, output_range, ckl::StridedTileRange{0u, block_w}},
+                    ckl::PackTile<in_strided_output>{dfb_in, output_range});
                 dfb_in_negative_mask.pop_front(block_w);
             }
 
@@ -717,7 +732,11 @@ void kernel_main() {
 
     if constexpr (!use_negative_mask) {
         dfb_out.push_back(per_core_MN);
+#ifdef TILIZE_IN
+        // Only the tilize path fills dfb_in (and waits on it above); without TILIZE_IN nothing was
+        // pushed, so a pop would over-acknowledge and break the later gamma/beta waits on this CB.
         dfb_in.pop_front(per_core_MN);
+#endif
 
     } else {
         // nothing, for the negative mask implementation, cb_in_id is the only cb in use, and it already has the data
@@ -749,7 +768,8 @@ void kernel_main() {
                     dfb_outgamma_id,
                     ckl::ReservePolicy::Upfront,
                     ckl::PushPolicy::AtEnd,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
+                    ckl::DataFormatReconfig::Disabled)>(
+                ckl::IterationShape::grid(per_core_M, per_core_N), dfb_out, dfb_gamma, dfb_outgamma);
             dfb_outgamma.wait_front(per_core_MN);
         } else {
             // cb in has data required for gamma, so we do it inplace
@@ -772,7 +792,8 @@ void kernel_main() {
                     dfb_in_id,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
+                    ckl::DataFormatReconfig::Disabled)>(
+                ckl::IterationShape::grid(per_core_M, per_core_N), dfb_in, dfb_gamma, dfb_in);
         }
     }
 
@@ -801,7 +822,8 @@ void kernel_main() {
                     dfb_outbeta_id,
                     ckl::ReservePolicy::Upfront,
                     ckl::PushPolicy::AtEnd,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
+                    ckl::DataFormatReconfig::Disabled)>(
+                ckl::IterationShape::grid(per_core_M, per_core_N), dfb_inbeta, dfb_beta, dfb_outbeta);
             dfb_outbeta.wait_front(per_core_MN);
         } else {
             // cb_in_id has data required for beta, so we do it inplace
@@ -824,8 +846,38 @@ void kernel_main() {
                     dfb_in_id,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::grid(per_core_M, per_core_N));
+                    ckl::DataFormatReconfig::Disabled)>(
+                ckl::IterationShape::grid(per_core_M, per_core_N), dfb_in, dfb_beta, dfb_in);
         }
+    }
+
+    // Buffers that hold a value reused for the whole core's work are waited once (or re-waited) and
+    // never popped inside the loops above; pop them here so they are left balanced. This mirrors the
+    // cleanup the Welford variant of this kernel performs. The scaler wait is not in this
+    // file: compute_kernel_lib::reduce waits one page on the buffer it is given as the scaler and
+    // leaves it unpopped so that one pushed tile serves all of this kernel's reduce calls. Popping
+    // it is left to this kernel.
+    dfb_scaler.pop_front(1);
+    // The all-ones tile is one tile the writer generates once into c_26 and this kernel re-waits
+    // inside the loops above, so pop that one tile here.
+    dfb_ones.pop_front(1);
+    // With a row mask this kernel waits one more single-use tile near the top, the row-validity
+    // tile. Pop it here under the same condition that gated that wait.
+    if constexpr (has_row_mask) {
+        dfb_rowvalid.pop_front(1);
+    }
+    if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
+        // The global-reduce scaler is waited by the two global reductions on the mcast sender only;
+        // pop it under the same guard that gated those reductions. The wait is inside
+        // compute_kernel_lib::reduce, as for the local scaler above.
+        dfb_scaler_global.pop_front(1);
+    }
+    dfb_eps.pop_front(1);
+    if constexpr (do_beta) {
+        dfb_beta.pop_front(per_core_N);
+    }
+    if constexpr (do_gamma) {
+        dfb_gamma.pop_front(per_core_N);
     }
 
 #ifdef UNTILIZE_OUT

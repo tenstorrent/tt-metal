@@ -75,6 +75,19 @@ public:
     size_t get_receiver_channel_number_of_slots(size_t vc_id, size_t channel_id) const;
 
     /**
+     * Get the number of slots for a receiver channel on the far end of the link.
+     *
+     * This, not the local count, is what a sender's flow control gates on: bubble flow control
+     * requires the immediate downstream receiver to hold at least two slots. The two counts are
+     * tracked separately, so the distinction matters.
+     *
+     * @param vc_id Virtual Channel ID (0 or 1)
+     * @param channel_id Channel ID within the VC
+     * @return Number of slots on the remote receiver
+     */
+    size_t get_remote_receiver_channel_number_of_slots(size_t vc_id, size_t channel_id) const;
+
+    /**
      * Get the base address for a specific receiver channel in a VC.
      * @param vc_id Virtual Channel ID (0 or 1)
      * @param channel_id Channel ID within the VC

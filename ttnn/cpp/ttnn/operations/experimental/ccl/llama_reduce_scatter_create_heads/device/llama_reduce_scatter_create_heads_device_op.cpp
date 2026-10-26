@@ -7,8 +7,11 @@
 
 #include "ttnn/tensor/types.hpp"
 #include "llama_reduce_scatter_create_heads_device_op.hpp"
+
+#include <sstream>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ccl {
@@ -121,6 +124,53 @@ LlamaReduceScatterCreateHeadsDeviceOperation::create_output_tensors(
         tensors.push_back(std::move(tensor));
     }
     return tensors;
+}
+
+std::vector<tt::tt_metal::TensorTopology> LlamaReduceScatterCreateHeadsDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+    // Along `cluster_axis` the op sums the partial QKV projections and scatters the rows: device c keeps rows
+    // [c * slice_size, (c + 1) * slice_size) of input dim 2 as output dim 1 (batch), input dim 0 stays dim 0, and the
+    // fused QKV width (input dim 3) is reshaped into heads (dims 2-3) and split across the q/k/v outputs. Every
+    // output carries the reduce_scatter label for scatter dim 2 renumbered to that layout: Shard{2} becomes Shard{1},
+    // Shard{0} and Replicate stay. A Shard of dim 1 (summed away) or dim 3 (reshaped into heads) on a non-cluster
+    // axis has no output dim to go to: refused like a helper refusal (an error under strict mode) and every output
+    // keeps the input's label, as with no honest label (nullopt, already reported).
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    const auto rs_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
+        tensor_args.input_tensor, attributes.cluster_axis, /*scatter_dim=*/2);
+    if (!rs_topology.has_value()) {
+        return {input_topology, input_topology, input_topology};
+    }
+    const auto rank = static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank());
+    ttnn::operations::ccl::common::TopologyPlacements placements;
+    placements.reserve(rs_topology->placements().size());
+    for (const auto& placement : rs_topology->placements()) {
+        const auto* shard = std::get_if<Shard>(&placement);
+        if (shard == nullptr) {
+            placements.push_back(placement);
+            continue;
+        }
+        const auto dim = ttnn::operations::ccl::common::normalize_tensor_dim(shard->dim, rank);
+        if (dim == 2u) {
+            placements.push_back(Shard{1});
+        } else if (dim == 0u) {
+            placements.push_back(Shard{0});
+        } else {
+            std::ostringstream label;
+            label << input_topology;
+            ttnn::operations::ccl::common::refuse(
+                "llama_reduce_scatter_create_heads cannot renumber a Shard of tensor dim " + std::to_string(*dim) +
+                    " into its [seq, batch, heads, head_dim] outputs: dim 1 is summed away and dim 3 is reshaped into "
+                    "heads (label " +
+                    label.str() + ")",
+                ttnn::operations::ccl::common::RefusalFamily::Scatter);
+            return {input_topology, input_topology, input_topology};
+        }
+    }
+    const tt::tt_metal::TensorTopology heads_topology(
+        rs_topology->distribution_shape(), std::move(placements), rs_topology->mesh_coords());
+    return {heads_topology, heads_topology, heads_topology};
 }
 
 tt::tt_metal::operation::Hash LlamaReduceScatterCreateHeadsDeviceOperation::compute_program_hash(

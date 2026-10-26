@@ -136,26 +136,7 @@ vector_aligned<uint32_t> DeviceCommand<hugepage_write>::cmd_vector() const {
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait(
-    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id, uint8_t dispatcher_type) {
-    // If there are no stream registers (Quasar), translate stream flags to memory flags and calculate the L1 worker
-    // completion counter address from the stream index.
-    TT_ASSERT(this->ctx_ != nullptr, "DeviceCommand used without a MetalContext");
-    const auto& ctx = *this->ctx_;
-    if (!ctx.hal().has_stream_registers() &&
-        (flags & (CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM))) {
-        const auto& mem_map = ctx.dispatch_mem_map();
-        const uint32_t first_stream = mem_map.get_dispatch_stream_index(0);
-        const uint32_t completion_counter_offset = mem_map.get_completion_counter_offset(cq_id);
-        address = mem_map.get_dispatch_message_addr_start() + completion_counter_offset * this->l1_alignment +
-                  mem_map.get_sync_offset(stream - first_stream);
-        uint32_t new_flags = flags & ~(CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM);
-        new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY;
-        if (flags & CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM) {
-            new_flags |= CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_MEMORY;
-        }
-        flags = new_flags;
-        stream = 0;
-    }
+    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t dispatcher_type) {
     auto initialize_wait_cmds = [&](CQPrefetchCmd* relay_wait, CQDispatchCmd* wait_cmd) {
         relay_wait->base.cmd_id = CQ_PREFETCH_CMD_RELAY_INLINE;
         relay_wait->relay_inline.dispatcher_type = dispatcher_type;
@@ -186,8 +167,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_wait(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::add_dispatch_wait_with_prefetch_stall(
-    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count, uint8_t cq_id) {
-    this->add_dispatch_wait(flags | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH, address, stream, count, cq_id);
+    uint32_t flags, uint32_t address, uint32_t stream, uint32_t count) {
+    this->add_dispatch_wait(flags | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH, address, stream, count);
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     auto initialize_stall_cmd = [&](CQPrefetchCmd* stall_cmd) {
         *stall_cmd = {};
@@ -551,14 +532,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint32_t go_signal,
     uint32_t wait_stream,
     uint8_t multicast_go_offset,
-    uint8_t num_unicast_txns,
-    uint8_t noc_data_start_index,
+    uint32_t go_ring_slot,
     DispatcherSelect dispatcher_type) {
-    TT_ASSERT(
-        num_unicast_txns <= std::numeric_limits<uint8_t>::max(),
-        "Number of unicast destinations {} exceeds maximum {}",
-        num_unicast_txns,
-        std::numeric_limits<uint8_t>::max());
     uint32_t lengthB = sizeof(CQDispatchCmd);
     TT_ASSERT(
         lengthB <= (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE),
@@ -570,8 +545,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->mcast.go_signal = go_signal;
         mcast_cmd->mcast.wait_count = wait_count;
         mcast_cmd->mcast.multicast_go_offset = multicast_go_offset;
-        mcast_cmd->mcast.num_unicast_txns = num_unicast_txns;
-        mcast_cmd->mcast.noc_data_start_index = noc_data_start_index;
+        mcast_cmd->mcast.go_ring_slot = go_ring_slot;
         mcast_cmd->mcast.wait_stream = wait_stream;
     };
     CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
@@ -810,44 +784,6 @@ void DeviceCommand<hugepage_write>::add_dispatch_set_sub_device_worker_counts(
     uint32_t* workers_per_sub_device_dst = this->reserve_space<uint32_t*>(data_sizeB);
     if (data_sizeB > 0) {
         this->memcpy(workers_per_sub_device_dst, workers_per_sub_device.data(), data_sizeB);
-    }
-    this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
-}
-
-template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_dispatch_set_go_signal_noc_data(
-    const vector_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type) {
-    TT_ASSERT(
-        noc_mcast_unicast_data.size() <= DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
-        "Number of words {} exceeds maximum {}",
-        noc_mcast_unicast_data.size(),
-        DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
-    auto data_sizeB = noc_mcast_unicast_data.size() * sizeof(uint32_t);
-    uint32_t lengthB = sizeof(CQDispatchCmd) + data_sizeB;
-    if (dispatcher_type == DispatcherSelect::DISPATCH_SUBORDINATE) {
-        constexpr uint32_t dispatch_page_size = 1 << DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
-        TT_FATAL(
-            lengthB <= dispatch_page_size,
-            "Data to set go signal noc data {} must fit within one dispatch page {} when sending to dispatch_s",
-            lengthB,
-            dispatch_page_size);
-    }
-    this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
-    auto initialize_set_go_signal_noc_data_cmd = [&](CQDispatchCmd* set_go_signal_noc_data_cmd) {
-        set_go_signal_noc_data_cmd->base.cmd_id = CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA;
-        set_go_signal_noc_data_cmd->set_go_signal_noc_data.num_words = noc_mcast_unicast_data.size();
-    };
-    CQDispatchCmd* set_go_signal_noc_data_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));
-    if constexpr (hugepage_write) {
-        alignas(MEMCPY_ALIGNMENT) CQDispatchCmd set_go_signal_noc_data_cmd{};
-        initialize_set_go_signal_noc_data_cmd(&set_go_signal_noc_data_cmd);
-        this->memcpy(set_go_signal_noc_data_cmd_dst, &set_go_signal_noc_data_cmd, sizeof(CQDispatchCmd));
-    } else {
-        initialize_set_go_signal_noc_data_cmd(set_go_signal_noc_data_cmd_dst);
-    }
-    uint32_t* noc_mcast_unicast_data_dst = this->reserve_space<uint32_t*>(data_sizeB);
-    if (data_sizeB > 0) {
-        this->memcpy(noc_mcast_unicast_data_dst, noc_mcast_unicast_data.data(), data_sizeB);
     }
     this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
 }

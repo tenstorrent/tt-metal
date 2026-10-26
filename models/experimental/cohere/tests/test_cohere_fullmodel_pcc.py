@@ -328,15 +328,22 @@ def test_cohere_final_norm_logits_pcc(max_seq_len, mesh_device, reset_seeds, ens
     # near-tie first token — CPU top-5 gaps ~0.12 logits); discriminate a systematic
     # last-position residual from bf16 numerics.
     starts = [0] if seq_len <= 32 else [0, seq_len - 32]
+    window_results = []
     for start in starts:
         tt_head_in = ttnn.slice(tt_normed, (0, 0, start, 0), (1, 1, start + 32, tt_normed.shape[-1]))
         if lm_head_input_mem_cfg.is_sharded():
             tt_head_in = ttnn.interleaved_to_sharded(tt_head_in, lm_head_input_mem_cfg)
         tt_logits = tt_head(tt_head_in)
+        # Per-device lm_head output is a SEQUENTIAL 64,000-wide vocab chunk (padded_vocab
+        # 256,000 / 4 devices — observed on-box run3: raw (1, 4, 32, 64000)); compose the
+        # mesh device axis onto the LAST tensor dim to rebuild full-vocab logits
+        # (dims=(0,1) wrongly stacks devices as a batch axis — run3 comp_pcc mismatch
+        # 1536000 vs 384000).
         logits_w = ttnn.to_torch(
             tt_logits,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
+        logger.info(f"[cohere-head] raw logits shape from device: {tuple(logits_w.shape)}")
         # The device window is always a full 32-row tile, but the CPU reference only
         # holds seq_len rows, so take the overlap: without this, any prompt shorter
         # than 32 tokens (all three DEFAULT_PROMPTS are) raises a shape mismatch in
@@ -344,31 +351,32 @@ def test_cohere_final_norm_logits_pcc(max_seq_len, mesh_device, reset_seeds, ens
         rows = min(32, ref_logits.shape[1] - start)
         logits_w = logits_w.reshape(1, -1, logits_w.shape[-1])[:, :rows, : model_args.vocab_size]
         passing_w, pcc_msg_w, pcc_w = _pcc(ref_logits[:, start : start + rows], logits_w.float())
+        window_results.append((start, rows, pcc_w, passing_w, pcc_msg_w))
         logger.info(
             f"[cohere-head] logits window rows {start}:{start+rows} pcc={pcc_w:.6f} "
             f"gate={'PASS' if passing_w else 'FAIL'} ({pcc_msg_w})"
         )
-    tt_head_in = ttnn.slice(tt_normed, (0, 0, 0, 0), (1, 1, 32, tt_normed.shape[-1]))
-    if lm_head_input_mem_cfg.is_sharded():
-        tt_head_in = ttnn.interleaved_to_sharded(tt_head_in, lm_head_input_mem_cfg)
-    tt_logits = tt_head(tt_head_in)
-    # Per-device lm_head output is a SEQUENTIAL 64,000-wide vocab chunk (padded_vocab
-    # 256,000 / 4 devices — observed on-box run3: raw (1, 4, 32, 64000)); compose the
-    # mesh device axis onto the LAST tensor dim to rebuild full-vocab logits
-    # (dims=(0,1) wrongly stacks devices as a batch axis — run3 comp_pcc mismatch
-    # 1536000 vs 384000).
-    logits_torch = ttnn.to_torch(
-        tt_logits,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-    )
-    logger.info(f"[cohere-head] raw logits shape from device: {tuple(logits_torch.shape)}")
-    logits_torch = logits_torch.reshape(1, -1, logits_torch.shape[-1])[:, :seq_len, : model_args.vocab_size]
-    # rows are the 32-row lm-head window; at seq_len > 32 the window cannot cover all
-    # real tokens — compare the overlapping rows only (seq-36 root-cause run hit
-    # "size of tensor a (9216000) must match the size of tensor b (8192000)").
-    rows = logits_torch.shape[1]
-    passing_l, pcc_msg_l, pcc_l = _pcc(ref_logits[:, :rows], logits_torch.float())
-    logger.info(f"[cohere-head] logits pcc={pcc_l:.6f} gate={'PASS' if passing_l else 'FAIL'} ({pcc_msg_l})")
+        # Release the 256,000-wide device tensor before the next window: at seq_len > 32
+        # two windows are live in sequence and neither is freed by the loop.
+        for t in (tt_head_in, tt_logits):
+            try:
+                ttnn.deallocate(t)
+            except Exception:
+                pass
+        del tt_head_in, tt_logits, logits_w
 
     assert passing_n, f"final_norm PCC < 0.99 (bounty gate): {pcc_msg_n}"
-    assert passing_l, f"logits PCC < 0.99 (bounty gate): {pcc_msg_l}"
+    # Gate EVERY window, not just the head window. The tail window
+    # (rows seq_len-32:seq_len) carries the serving-relevant LAST prompt position, whose
+    # logits produce the first generated token; the root-cause comment above explains it
+    # exists specifically to discriminate a systematic last-position residual from bf16
+    # numerics. Previously the loop computed and logged every window but dropped the
+    # verdicts, and a single trailing assertion re-derived only window 0 via a second,
+    # duplicate lm_head forward -- so the check the comment describes was never enforced.
+    gate = float(os.environ.get("COHERE_GATE", "0.99"))
+    failed_windows = [f"rows {s}:{s + r} pcc={p:.6f} ({m})" for s, r, p, ok, m in window_results if not ok]
+    gate_msg = (
+        f"logits PCC < {gate} (bounty gate) on {len(failed_windows)}/{len(window_results)} "
+        f"32-row window(s): " + ", ".join(failed_windows)
+    )
+    assert not failed_windows, gate_msg

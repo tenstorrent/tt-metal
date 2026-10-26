@@ -6,6 +6,7 @@
 
 #include <enchantum/enchantum.hpp>
 
+#include "metal/common/tensor_validation.hpp"
 #include "metal/ops/common/swiglu_packed_common.hpp"
 #include "swiglu_packed_bw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -20,16 +21,16 @@ void SwigluPackedBwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& packed = tensor_args.packed;
     const auto& dL_dh = tensor_args.dL_dh;
-    swiglu_packed::check_tensor(packed, "packed", kOp);
-    swiglu_packed::check_tensor(dL_dh, "dL_dh", kOp);
-    swiglu_packed::check_same_device(dL_dh, packed, "dL_dh", kOp);
+    check_device_tensor(packed, kOp, "packed");
+    check_device_tensor(dL_dh, kOp, "dL_dh");
+    check_same_device(dL_dh, packed, kOp, "dL_dh", "packed");
     swiglu_packed::validate_packed(packed, kOp);
     swiglu_packed::validate_half_of_packed(dL_dh, packed, "dL_dh", kOp);
 
     if (tensor_args.preallocated_dL_dpacked.has_value()) {
         const auto& out = *tensor_args.preallocated_dL_dpacked;
-        swiglu_packed::check_tensor(out, "preallocated_dL_dpacked", kOp);
-        swiglu_packed::check_same_device(out, packed, "preallocated_dL_dpacked", kOp);
+        check_device_tensor(out, kOp, "preallocated_dL_dpacked");
+        check_same_device(out, packed, kOp, "preallocated_dL_dpacked", "packed");
         swiglu_packed::validate_same_as_packed(out, packed, "preallocated_dL_dpacked", kOp);
     }
 }

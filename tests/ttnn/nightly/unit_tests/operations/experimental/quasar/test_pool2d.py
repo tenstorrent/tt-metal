@@ -221,7 +221,7 @@ def _run_cases(device, cases):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_qpool_c_sweep(mesh_device):
+def test_qpool_c_sweep(device):
     for c in C_VALUES:
         assert c % 8 == 0, f"C={c}: ROW_MAJOR sharding needs 16B-aligned rows (C % 8 == 0 for bf16)"
     # C >= 128 drops to the 32-stick single-core base, and C >= 384 is skipped on the SIMULATOR:
@@ -234,7 +234,7 @@ def test_qpool_c_sweep(mesh_device):
         if skipped:
             logger.info(f"QPOOL-SWEEP: skipping {skipped} on the sim (craq-sim volume corruption class)")
     cases = [(f"C{c}", dict(channels=c, in_h=16 if c < 128 else 8, in_w=8 if c < 128 else 4)) for c in c_values]
-    _run_cases(mesh_device, cases)
+    _run_cases(device, cases)
 
 
 MATRIX_CASES = [
@@ -514,10 +514,10 @@ UNIT_CASES = [
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_qpool_matrix(mesh_device):
-    _run_cases(mesh_device, MATRIX_CASES)
+def test_qpool_matrix(device):
+    _run_cases(device, MATRIX_CASES)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_qpool_unit_cases(mesh_device):
-    _run_cases(mesh_device, UNIT_CASES)
+def test_qpool_unit_cases(device):
+    _run_cases(device, UNIT_CASES)

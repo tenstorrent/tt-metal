@@ -17,7 +17,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include "jit_build/types.hpp"
 #include "jit_build_options.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace tt::llrt {
 class RunTimeOptions;
@@ -230,6 +230,10 @@ void sync_build_steps(std::vector<std::shared_future<void>>& events);
 // Returns immediately if hash was already built.
 // If build_fn throws, subsequent callers will retry.
 void jit_build_once(size_t hash, const std::function<void()>& build_fn);
+
+// Like jit_build_once(), but returns false instead of occupying the caller while
+// another thread builds the same hash.
+bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn);
 
 // Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
 void jit_build_cache_clear();

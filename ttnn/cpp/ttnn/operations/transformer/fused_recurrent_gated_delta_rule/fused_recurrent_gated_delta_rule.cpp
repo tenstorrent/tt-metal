@@ -33,14 +33,14 @@ ttnn::Tensor as_f32(const ttnn::Tensor& x) {
 // [B,T,H,D] -> [B*H, T, D], fp32 TILE (head-major; permute on TILE via transpose engine).
 ttnn::Tensor head_split(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t H, uint32_t D) {
     ttnn::Tensor t = as_f32(x);
-    t = ttnn::permute(t, ttnn::SmallVector<int64_t>{0, 2, 1, 3});  // [B,H,T,D]
+    t = ttnn::permute(t, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B,H,T,D]
     return ttnn::reshape(t, ttnn::Shape({B * H, T, D}));
 }
 
 // [B,T,H] -> [B*H, T], fp32 TILE.
 ttnn::Tensor headvec_split(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t H) {
     ttnn::Tensor t = as_f32(x);
-    t = ttnn::permute(t, ttnn::SmallVector<int64_t>{0, 2, 1});  // [B,H,T]
+    t = ttnn::permute(t, ttsl::SmallVector<int64_t>{0, 2, 1});  // [B,H,T]
     return ttnn::reshape(t, ttnn::Shape({B * H, T}));
 }
 
@@ -61,6 +61,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const ttnn::Tensor& beta_in,
     std::optional<float> scale_opt,
     const std::optional<ttnn::Tensor>& initial_state,
+    const std::optional<ttnn::Tensor>& initial_state_block_idx,
     bool output_final_state,
     bool output_per_token_state,
     bool use_qk_l2norm,
@@ -116,12 +117,18 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // always reads S (it takes the unconditional path; there is no in-kernel zeroing). Traced callers
     // pass a persistent state buffer (never absent); the zeros() fallback here is eager-only
     // (device-side fill, uncached), same caveat as chunk_gated_delta_rule.
-    std::optional<ttnn::Tensor> s0;
-    if (initial_state.has_value()) {
-        s0 = ttnn::reshape(as_f32(*initial_state), ttnn::Shape({BH, K, V}));
-    } else {
-        s0 = ttnn::zeros(
-            ttnn::Shape({BH, K, V}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
+    //
+    // Ring mode: initial_state is the [T*BH,K,V] ring and also the state output; pass it through untouched, since a
+    // reshape or typecast would break the in-place aliasing. The device op validates it.
+    const bool ring = initial_state_block_idx.has_value();
+    std::optional<ttnn::Tensor> s0 = initial_state;
+    if (!ring) {
+        if (initial_state.has_value()) {
+            s0 = ttnn::reshape(as_f32(*initial_state), ttnn::Shape({BH, K, V}));
+        } else {
+            s0 = ttnn::zeros(
+                ttnn::Shape({BH, K, V}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
+        }
     }
 
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
@@ -141,6 +148,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         decay,
         beta,
         s0,
+        initial_state_block_idx,
         T,
         want_state && !output_per_token_state,
         output_per_token_state,
@@ -152,11 +160,14 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     // o [BH*T,1,V] -> [B,HV,T,V] -> [B,T,HV,V].
     ttnn::Tensor o = ttnn::to_layout(o_pt, Layout::ROW_MAJOR);
     o = ttnn::reshape(o, ttnn::Shape({B, HV, T, V}));
-    o = ttnn::permute(o, ttnn::SmallVector<int64_t>{0, 2, 1, 3});  // [B,T,HV,V]
+    o = ttnn::permute(o, ttsl::SmallVector<int64_t>{0, 2, 1, 3});  // [B,T,HV,V]
     o = ttnn::to_layout(o, Layout::TILE);
 
     std::optional<ttnn::Tensor> state_opt;
-    if (output_per_token_state) {
+    if (ring) {
+        // res[1] is the caller's ring; return it as-is so the buffer stays aliased.
+        state_opt = st;
+    } else if (output_per_token_state) {
         // The writer lays per-token state out token-major, so the raw [BH*T,K,V] buffer already
         // reads as [T,B,HV,K,V]. At B==1 -- the speculative-decode case -- that IS the requested
         // [B,T,HV,K,V] element order, and K,V (the tiled dims) are untouched, so this is a pure
@@ -167,7 +178,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         } else {
             ttnn::Tensor s = ttnn::to_layout(st, Layout::ROW_MAJOR);
             s = ttnn::reshape(s, ttnn::Shape({T, B, HV, K, V}));
-            s = ttnn::permute(s, ttnn::SmallVector<int64_t>{1, 0, 2, 3, 4});  // [B,T,HV,K,V]
+            s = ttnn::permute(s, ttsl::SmallVector<int64_t>{1, 0, 2, 3, 4});  // [B,T,HV,K,V]
             state_opt = ttnn::to_layout(s, Layout::TILE);
         }
     } else if (output_final_state) {

@@ -19,41 +19,49 @@ The scaler B is a single face of 1.0 in F0 (the op's contract), so the pool is a
 pure MAX and the scaler is a no-op multiplier.
 
 Coverage (Blackhole + Wormhole B0):
-  * compile-time path, ``block_ct_dim`` sweep, bf16 and fp32-dest;
-  * runtime path (dynamic ``block_ct_dim``);
+  * compile-time path, ``block_ct_dim`` sweep, bf16 and fp32-dest, 32x32 tiles.
+    16x32 (bf16 only) is Blackhole-only: Wormhole unpack still hardcodes ``y_dim = 4``;
+  * runtime path (dynamic ``block_ct_dim``), including the Blackhole 16x32 sweep;
   * reinit_short / reinit_minimal / reinit (addrmod-only) re-arm after a clobbering op,
-    guarding the reconfig-escape path. Compile-time reinit_short/minimal are
+    guarding the reconfig-escape path. 32x32 only. Compile-time reinit_short/minimal are
     Blackhole-only lib fns; runtime reinit_short and runtime reinit run on both arches,
     runtime reinit_minimal is Blackhole-only.
   * trigger handshake (respect_trigger, + overlap_first_half on the runtime family):
     the unpack splits the block reduce into two half-width MOP runs gated by HW
-    semaphores; the PACK thread plays the producer. Both arches. Validates split-MOP
-    correctness + semaphore balance (not the SDPA live-data overlap; see the C++ note).
+    semaphores; the PACK thread plays the producer. 32x32 only, both arches. Validates
+    split-MOP correctness + semaphore balance (not the SDPA live-data overlap; see the
+    C++ note).
+
+``perf_reduce_block_max.py`` reuses ``_run_reduce_block_max`` with ``is_perf=True``.
 """
 
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import ReduceBlockMaxRowGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation
+from helpers.llk_params import DestAccumulation, PerfRunType
 from helpers.param_config import parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CLOBBER_OP,
+    LOOP_FACTOR,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     OVERLAP_FIRST_HALF,
     REDUCE_BLOCK_CT_DIM,
     REINIT_MODE,
     RESPECT_TRIGGER,
+    TILE_COUNT,
     USE_RUNTIME,
 )
+from helpers.tile_constants import MAX_FACE_R_DIM, MAX_NUM_FACES_C_DIM
 from helpers.tilize_untilize import tilize, untilize
-from helpers.utils import tolerances
 
-# 32x32 bf16 tile.
+# Tiles are 32 columns wide: 32x32 (4 faces) or a 16x32 tiny tile (2 faces, one face-row).
 TILE_DIM = 32
-ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
 
 # Inputs are always bf16 (the op's contract); only the DEST/output precision varies.
 FORMATS = [
@@ -85,12 +93,18 @@ _CLOBBER_FOR_REINIT = {
 }
 
 
-def _dest_acc(output_format):
-    return (
-        DestAccumulation.Yes
-        if output_format == DataFormat.Float32
-        else DestAccumulation.No
-    )
+def block_max_num_faces(formats):
+    """Face counts for one block-max format.
+
+    A 32-bit Dest does not support the 16x32 tiny tile, so fp32-dest stays at 4 faces.
+    16x32 (2 faces) is Blackhole-only: Wormhole unpack still hardcodes ``y_dim = 4``
+    and strides a full 32x32 tile between block tiles.
+    """
+    if dest_acc_for(formats.output_format) == DestAccumulation.Yes:
+        return [4]
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        return [4]
+    return [2, 4]
 
 
 def _run_reduce_block_max(
@@ -103,8 +117,25 @@ def _run_reduce_block_max(
     overlap_first_half=False,
     expect_mismatch=False,
     expected_nondeterministic=False,
+    num_faces=4,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
-    """Run one reduce_block_max_row variant and validate column [0] against golden.
+    """Run one reduce_block_max_row variant.
+
+    Functional runs validate column [0] against golden with an exact compare.
+    ``is_perf=True`` returns after ``configuration.run(perf_report)`` and does not
+    check golden. ``respect_trigger`` and ``overlap_first_half`` must stay false on
+    that path: the pack thread posts those semaphores once, before the loop, so
+    repeating the unpack/math body ``loop_factor`` times with either flag set
+    deadlocks or skews the measurement.
+
+    ``num_faces`` is 4 (32x32) or 2 (16x32, Blackhole bf16 only). ``loop_factor``
+    repeats the TILE_LOOP body (1 for functional, 32 for perf). ``run_types`` selects
+    the perf pipeline modes; functional runs use ``L1_TO_L1``.
 
     ``expect_mismatch`` inverts the verdict: the run must diverge from golden. Used by
     the negative controls, which pin that a clobber left un-repaired really does corrupt
@@ -116,15 +147,28 @@ def _run_reduce_block_max(
     arch-dependent: stable on Wormhole, a coin-flip on Blackhole). The single-run
     functional check above still applies.
     """
-    dest_acc = _dest_acc(formats.output_format)
+    if is_perf and (respect_trigger or overlap_first_half):
+        raise AssertionError(
+            "perf only covers respect_trigger=False and overlap_first_half=False; "
+            "the pack thread posts those semaphores once"
+        )
 
-    # Build operand A row-major (32 rows x block_ct_dim*32 cols), so the canonical
-    # ReduceBlockMaxRowGolden (which reshapes its operand to `dimensions` row-major)
-    # is unambiguous. A ~ U[0, 1] keeps every row-max well inside bf16's range.
-    dimensions = [TILE_DIM, block_ct_dim * TILE_DIM]
+    dest_acc = dest_acc_for(formats.output_format)
+    num_faces_r_dim = num_faces // MAX_NUM_FACES_C_DIM
+    tile_rows = MAX_FACE_R_DIM * num_faces_r_dim
+    tile_dimensions = [tile_rows, TILE_DIM]
+    elements_per_tile = tile_rows * TILE_DIM
+
+    # One permutation of 0..width-1 per row. The row max is width-1 only when every
+    # column is read, so a stride into the next tile or into scaler B (all 1.0) fails.
+    # Integers through 255 are exact in bf16 (block_ct_dim <= 8 => width <= 256).
+    width = block_ct_dim * TILE_DIM
+    dimensions = [tile_rows, width]
     src_A_rowmajor = (
-        torch.empty(TILE_DIM * block_ct_dim * TILE_DIM)
-        .uniform_(0.0, 1.0)
+        torch.stack(
+            [torch.randperm(width, dtype=torch.float32) for _ in range(tile_rows)]
+        )
+        .reshape(-1)
         .to(torch.bfloat16)
     )
 
@@ -135,68 +179,95 @@ def _run_reduce_block_max(
         src_A_rowmajor.clone(), block_ct_dim, formats.output_format, dimensions
     )
 
-    # Device operand is tilized per 32x32 tile (the layout the C++ reads from L1).
+    # Device operand is tilized per tile (the layout the C++ reads from L1).
     src_A = torch.cat(
         [
             tilize(
-                src_A_rowmajor.reshape(TILE_DIM, block_ct_dim * TILE_DIM)[
+                src_A_rowmajor.reshape(tile_rows, block_ct_dim * TILE_DIM)[
                     :, t * TILE_DIM : (t + 1) * TILE_DIM
                 ].reshape(-1),
                 formats.input_format,
+                num_faces=num_faces,
+                tile_dimensions=tile_dimensions,
             )
             for t in range(block_ct_dim)
         ]
     )
     # Scaler B: a single tile of 1.0 (F0 holds the scaler; the op multiplies by it).
-    src_B = torch.ones(ELEMENTS_PER_TILE, dtype=torch.bfloat16)
+    src_B = torch.ones(elements_per_tile, dtype=torch.bfloat16)
 
-    configuration = TestConfig(
-        "sources/reduce_block_max_test.cpp",
-        formats,
-        templates=[
-            REDUCE_BLOCK_CT_DIM(block_ct_dim),
-            USE_RUNTIME(use_runtime),
-            REINIT_MODE(_REINIT_DEFINE[reinit]),
-            CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
-            RESPECT_TRIGGER(respect_trigger),
-            OVERLAP_FIRST_HALF(overlap_first_half),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=block_ct_dim,
-            tile_count_B=1,
-            tile_count_res=1,
-            sfpu=False,
-        ),
-        dest_acc=dest_acc,
-        expected_nondeterministic=expected_nondeterministic,
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    templates = [
+        REDUCE_BLOCK_CT_DIM(block_ct_dim),
+        USE_RUNTIME(use_runtime),
+        REINIT_MODE(_REINIT_DEFINE[reinit]),
+        CLOBBER_OP(_CLOBBER_DEFINE[clobber]),
+        RESPECT_TRIGGER(respect_trigger),
+        OVERLAP_FIRST_HALF(overlap_first_half),
+    ]
+    runtimes = [
+        TILE_COUNT(block_ct_dim),
+        NUM_FACES_R_DIM(num_faces_r_dim, num_faces_r_dim),
+        NUM_FACES_C_DIM(MAX_NUM_FACES_C_DIM),
+        LOOP_FACTOR(loop_factor),
+    ]
+    config_kwargs = (
+        {} if is_perf else {"expected_nondeterministic": expected_nondeterministic}
     )
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types or [PerfRunType.L1_TO_L1],
+        test_config_kwargs=dict(
+            test_name="sources/reduce_block_max_test.cpp",
+            formats=formats,
+            templates=templates,
+            runtimes=runtimes,
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=block_ct_dim,
+                tile_count_B=1,
+                tile_count_res=1,
+                num_faces=num_faces,
+                tile_dimensions=tile_dimensions,
+                use_dense_tile_dimensions=True,
+                sfpu=False,
+            ),
+            dest_acc=dest_acc,
+            **config_kwargs,
+        ),
+    )
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 
     assert (
-        len(res_from_L1) == ELEMENTS_PER_TILE
-    ), f"Expected one {ELEMENTS_PER_TILE}-element output tile, got {len(res_from_L1)}"
+        len(res_from_L1) == elements_per_tile
+    ), f"Expected one {elements_per_tile}-element output tile, got {len(res_from_L1)}"
 
-    golden_rowmajor = golden_flat.reshape(TILE_DIM, block_ct_dim * TILE_DIM)
+    golden_rowmajor = golden_flat.reshape(tile_rows, block_ct_dim * TILE_DIM)
 
     # Untilize the device output tile to row-major so both sides share layout.
     res = untilize(
-        torch.tensor(res_from_L1, dtype=torch.float32), formats.output_format
-    ).reshape(TILE_DIM, TILE_DIM)
-    tol = tolerances[formats.output_format]
+        torch.tensor(res_from_L1, dtype=torch.float32),
+        formats.output_format,
+        tile_dimensions=tile_dimensions,
+    ).reshape(tile_rows, TILE_DIM)
 
     # Only column [0] of each physical row is defined (the row-max); the packer's
-    # REDUCE_ROW mask leaves every other lane unspecified, so validate column [0].
+    # REDUCE_ROW mask leaves every other lane unspecified. The stimulus is an integer
+    # permutation, so column [0] must match exactly; a tolerance would hide a bad stride.
     mismatches = [
         (pr, float(res[pr, 0]), float(golden_rowmajor[pr, 0]))
-        for pr in range(TILE_DIM)
-        if abs(float(res[pr, 0]) - float(golden_rowmajor[pr, 0]))
-        > tol.atol + tol.rtol * abs(float(golden_rowmajor[pr, 0]))
+        for pr in range(tile_rows)
+        if float(res[pr, 0]) != float(golden_rowmajor[pr, 0])
     ]
 
     if expect_mismatch:
@@ -223,19 +294,24 @@ def _run_reduce_block_max(
 @parametrize(
     formats=FORMATS,
     block_ct_dim=[1, 2, 3, 4, 8],
+    num_faces=block_max_num_faces,
 )
-def test_reduce_block_max(formats, block_ct_dim):
-    """Compile-time block_ct_dim sweep, bf16 and fp32-dest."""
-    _run_reduce_block_max(formats, block_ct_dim)
+def test_reduce_block_max(formats, block_ct_dim, num_faces):
+    """Compile-time block_ct_dim sweep, bf16 and fp32-dest.
+
+    32x32 on both arches. 16x32 bf16 is Blackhole-only.
+    """
+    _run_reduce_block_max(formats, block_ct_dim, num_faces=num_faces)
 
 
 @parametrize(
     formats=FORMATS,
     block_ct_dim=[1, 2, 4, 8],
+    num_faces=block_max_num_faces,
 )
-def test_reduce_block_max_runtime(formats, block_ct_dim):
-    """Runtime (dynamic block_ct_dim) path."""
-    _run_reduce_block_max(formats, block_ct_dim, use_runtime=True)
+def test_reduce_block_max_runtime(formats, block_ct_dim, num_faces):
+    """Runtime (dynamic block_ct_dim) path, including the Blackhole 16x32 sweep."""
+    _run_reduce_block_max(formats, block_ct_dim, use_runtime=True, num_faces=num_faces)
 
 
 @parametrize(

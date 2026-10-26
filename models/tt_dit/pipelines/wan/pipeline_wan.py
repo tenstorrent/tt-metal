@@ -26,6 +26,7 @@ from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
 from models.tt_dit.solvers import solver_for_scheduler
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.tensor import float32_tensor
+from models.tt_dit.utils.torch_threads import cap_torch_threads_to_half_the_cpus
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -589,6 +590,7 @@ class WanPipeline(PipelineAPIMixin):
     DEFAULT_NEGATIVE_PROMPT = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"  # noqa: E501, RUF001
 
     @torch.no_grad()
+    @cap_torch_threads_to_half_the_cpus()
     def __call__(
         self,
         *,

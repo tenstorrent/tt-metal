@@ -5,6 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "distributed/mesh_device_impl.hpp"
+#include "distributed/mesh_device_view_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include <internal/service/service_core_manager.hpp>
 #include "impl/context/metal_env_impl.hpp"
@@ -37,11 +38,12 @@ void validate_host_socket_allocation(MeshDevice& mesh_device, const MeshCoreCoor
     TT_FATAL(service_core == 0, "Host sockets on shared meshes do not support claimed service-core endpoints.");
 }
 
-void validate_host_socket_access(const MeshDevice* mesh_device, const MeshCoreCoord& endpoint) {
-    TT_FATAL(
-        !mesh_device || mesh_device->is_local(endpoint.device_coord),
-        "Host socket I/O requires the rank owning endpoint {}.",
-        endpoint.device_coord);
+bool rank_owns_host_socket_endpoint(const MeshDevice* mesh_device, const MeshCoreCoord& endpoint) {
+    return !mesh_device || mesh_device->is_local(endpoint.device_coord);
+}
+
+void validate_host_socket_access(bool rank_owns_endpoint, const MeshCoreCoord& endpoint) {
+    TT_FATAL(rank_owns_endpoint, "Host socket I/O requires the rank owning endpoint {}.", endpoint.device_coord);
 }
 
 namespace {
@@ -238,7 +240,7 @@ Tag generate_rank_scoped_exchange_tag(
 
 bool mesh_is_coowned(const MeshDevice& mesh_device) {
     const auto& view = mesh_device.get_view();
-    return view.num_devices() != view.get_devices().size();
+    return view.num_devices() != view.impl().get_devices().size();
 }
 
 std::unordered_set<MeshCoreCoord> socket_endpoint_cores(const SocketConfig& config, SocketEndpoint socket_endpoint) {

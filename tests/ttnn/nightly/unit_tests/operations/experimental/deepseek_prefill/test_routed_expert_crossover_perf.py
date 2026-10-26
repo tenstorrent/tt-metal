@@ -34,7 +34,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import is_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_p150
 from tests.ttnn.profiling.realtime_profiler_utils import (

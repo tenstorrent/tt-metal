@@ -5,6 +5,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 

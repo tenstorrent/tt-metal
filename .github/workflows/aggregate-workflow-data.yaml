@@ -19,6 +19,11 @@ on:
       slack-channel-id:
         description: "Slack channel ID for notifications. Leave empty to use repo secret FULL_CI_TRIAGE_CHANNEL."
         required: false
+      skip-slack:
+        description: "TEST MODE. Do not post to Slack. This also skips the regression-analysis dispatch."
+        required: false
+        type: boolean
+        default: false
       failures-to-elevate:
         description: 'TEST MODE. When set to N>0, discards real regressions and replaces them with N currently-stayed-failing JOBS (not pipelines). Produces exactly N top-level Slack messages, suppresses the "X other pipelines are failing" footer. Empty/0 = normal production behavior.'
         required: false
@@ -91,7 +96,21 @@ jobs:
               ".github/workflows/runtime-sanity-tests.yaml",
               ".github/workflows/runtime-unit-tests.yaml",
               ".github/workflows/runtime-integration-tests.yaml",
-              ".github/workflows/runtime-perf-tests.yaml"
+              ".github/workflows/runtime-perf-tests.yaml",
+
+              ".github/workflows/multi-host-physical.yaml",
+              ".github/workflows/multi-host-deepseekv3.yaml",
+              ".github/workflows/fabric-multihost-exabox.yaml",
+              ".github/workflows/upstream-tests.yaml",
+              ".github/workflows/sanity-tests-manylinux-nightly.yaml",
+              ".github/workflows/package-and-release.yaml",
+              ".github/workflows/demo-sp-release.yaml",
+              ".github/workflows/models-t1-sweep-tests.yaml",
+              ".github/workflows/agentic-research-model-tests.yaml",
+              ".github/workflows/blaze-models-prefill-tests.yaml",
+              ".github/workflows/llk-e2e.yaml",
+              ".github/workflows/llk-perf-gate.yaml",
+              ".github/workflows/ttnop-injector.yaml"
             ]
       - name: Upload workflow data
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -291,6 +310,7 @@ jobs:
           # Add any additional failure handling steps here
       - name: Post regressions to Slack
         id: slack-report
+        if: ${{ github.event.inputs.skip-slack != 'true' }}
         continue-on-error: true
         uses: ./.github/actions/slack-report-analyze-workflow-data
         with:
@@ -305,7 +325,9 @@ jobs:
         shell: bash
         run: |
           slack_ts="${{ steps.slack-report.outputs.slack_ts }}"
-          if [ -n "$slack_ts" ]; then
+          if [ "${{ steps.slack-report.outcome }}" = "skipped" ]; then
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+          elif [ -n "$slack_ts" ]; then
             echo "status=success" >> "$GITHUB_OUTPUT"
           else
             echo "status=failed" >> "$GITHUB_OUTPUT"
@@ -313,7 +335,7 @@ jobs:
 
   trigger-regression-analysis:
     needs: [analyze-data, handle-failures]
-    if: ${{ always() && needs.analyze-data.result == 'success' && needs.analyze-data.outputs.has_regressions == 'true' && needs.handle-failures.outputs.slack_notification_status == 'success' }}
+    if: ${{ always() && github.event.inputs.skip-slack != 'true' && needs.analyze-data.result == 'success' && needs.analyze-data.outputs.has_regressions == 'true' && needs.handle-failures.outputs.slack_notification_status == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write

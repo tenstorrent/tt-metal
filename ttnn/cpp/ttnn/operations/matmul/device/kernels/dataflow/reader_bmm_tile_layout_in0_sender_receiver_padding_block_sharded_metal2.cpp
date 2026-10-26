@@ -126,7 +126,8 @@ void kernel_main() {
     }
     receiver_sem.set(VALID);
 
-    dfb_in2.reserve_back(batch * in0_block_num_tiles);
+    constexpr uint32_t in0_num_tiles = batch * in0_block_num_tiles;
+    dfb_in2.reserve_back(in0_num_tiles);
 
     const uint32_t in0_tensor_shard_read_addr = dfb_in2.get_read_ptr();
     uint32_t in0_tensor_read_addr = 0;
@@ -381,4 +382,8 @@ void kernel_main() {
     }
 
     noc.async_write_barrier();
+
+    // The sharded in0 buffer is reserved only to take its address; the shard already sits in this
+    // core's SRAM. Push the reserved tiles so the buffer is left balanced.
+    dfb_in2.push_back(in0_num_tiles);
 }

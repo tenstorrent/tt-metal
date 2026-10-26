@@ -30,6 +30,16 @@
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
+namespace {
+// Quasar has one NOC and no torus: a multicast rectangle always runs low corner to high (see #48552).
+void quasar_ascending_mcast_rect(tt::tt_metal::CoreCoord& start, tt::tt_metal::CoreCoord& end) {
+    const tt::tt_metal::CoreCoord lo{std::min(start.x, end.x), std::min(start.y, end.y)};
+    const tt::tt_metal::CoreCoord hi{std::max(start.x, end.x), std::max(start.y, end.y)};
+    start = lo;
+    end = hi;
+}
+}  // namespace
+
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
@@ -52,7 +62,7 @@ namespace reuse_mcast_optimized_helpers {
 // [[maybe_unused]] suppresses -Wunused-function pending removal in a follow-up.
 [[maybe_unused]] static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     const tt::tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -111,11 +121,9 @@ namespace reuse_mcast_optimized_helpers {
 
     uint32_t num_blocks = K / in0_block_w;
 
-    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
-    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
-    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
-    // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_mesh.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -148,7 +156,10 @@ namespace reuse_mcast_optimized_helpers {
     uint32_t in1_aligned_tile_size =
         in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -1197,6 +1208,10 @@ namespace reuse_mcast_optimized_helpers {
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
         }
+        if (device.arch() == tt::ARCH::QUASAR) {
+            quasar_ascending_mcast_rect(in0_mcast_start, in0_mcast_end);
+            quasar_ascending_mcast_rect(in1_mcast_start, in1_mcast_end);
+        }
 
         // in0 sender
         if (in0_block_sharded) {
@@ -1552,7 +1567,7 @@ ttnn::device_operation::CachedProgram<MatmulMultiCoreReuseMcast2DProgramFactory:
 create_program_mcast_in0_in1(
     tt::tt_metal::Program& program,
     const tt::tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -1611,11 +1626,9 @@ create_program_mcast_in0_in1(
 
     uint32_t num_blocks = K / in0_block_w;
 
-    // Only enable packer l1 accumulation when there are num_blocks > 2, otherwise
-    // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
-    // does a spill and reload, so need more than 2 blocks to use l1 acc for packer
-    // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_mesh.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     // if fp32 enabled then we pack fp32 in l1, if not, then we pack fp16 in l1
     tt::DataFormat interm0_data_format = packer_l1_acc_en
@@ -1644,7 +1657,10 @@ create_program_mcast_in0_in1(
         B,
         per_core_M * per_core_N,
         B * per_core_M * per_core_N);
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -2670,6 +2686,10 @@ create_program_mcast_in0_in1(
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
         }
+        if (device.arch() == tt::ARCH::QUASAR) {
+            quasar_ascending_mcast_rect(in0_mcast_start, in0_mcast_end);
+            quasar_ascending_mcast_rect(in1_mcast_start, in1_mcast_end);
+        }
 
         // in0 sender
         if (in0_block_sharded) {
@@ -3287,7 +3307,7 @@ m2::KernelSpec make_compute_kernel(
 ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     const ttnn::Tensor& a,
     const tt_metal::distributed::MeshDevice& device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
     bool packer_l1_acc,
@@ -3341,7 +3361,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
 
     uint32_t num_blocks = K / in0_block_w;
 
-    bool packer_l1_acc_en = packer_l1_acc && (((bias_tensor.has_value()) && num_blocks > 1) || (num_blocks > 2));
+    // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
+    // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
@@ -3367,7 +3389,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     uint32_t in1_aligned_tile_size =
         in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
 
-    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h);
+    // A sharded output can share its region with the partials only when the core computes a single output
+    // block: spill and reload advance the region's pointers by one block, which only wraps back to the start
+    // when the region holds exactly one block (#58046).
+    bool do_not_inplace_interm0_out_CB = output_is_sharded && (per_core_M != out_block_h || per_core_N != out_block_w);
 
     uint32_t in0_block_h = out_block_h;
     uint32_t in1_block_w = out_block_w;
@@ -4453,6 +4478,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             std::swap(in0_mcast_sender, in1_mcast_sender);
             std::swap(in0_mcast_start, in1_mcast_end);
             std::swap(in0_mcast_end, in1_mcast_start);
+        }
+        if (device.arch() == tt::ARCH::QUASAR) {
+            quasar_ascending_mcast_rect(in0_mcast_start, in0_mcast_end);
+            quasar_ascending_mcast_rect(in1_mcast_start, in1_mcast_end);
         }
 
         // in0 sender / receiver

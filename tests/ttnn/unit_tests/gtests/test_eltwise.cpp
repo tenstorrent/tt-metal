@@ -54,6 +54,8 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/shape.hpp>
 #include "ttnn/device.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -419,6 +421,29 @@ TEST_F(EltwiseSmoke, WhereTensorScalarVariants) {
     }
     // TSS (both arms scalar) is covered by the test_where_tss selector in the pytest entry;
     // it shares the scalar packing exercised above and needs no tensor operand to reach.
+}
+
+// Regression: cores past the first range got no runtime args. Output stays correct; the watcher catches it.
+TEST_F(EltwiseSmoke, WhereShardedMultiRangeSubCoreGridsStartingAtOrigin) {
+    auto& device = *device_;
+    const ttnn::Shape shape({1, 1, 32, 224});
+    const auto shard_grid = CoreRangeSet(CoreRange(CoreCoord{0, 0}, CoreCoord{0, 6}));
+    const MemoryConfig sharded(
+        TensorMemoryLayout::WIDTH_SHARDED,
+        BufferType::L1,
+        tt::tt_metal::ShardSpec(
+            shard_grid, std::array<uint32_t, 2>{32, 32}, tt::tt_metal::ShardOrientation::ROW_MAJOR));
+    const auto sub_core_grids = CoreRangeSet(std::vector<CoreRange>{
+        CoreRange(CoreCoord{0, 0}, CoreCoord{3, 6}), CoreRange(CoreCoord{5, 0}, CoreCoord{6, 6})});
+    const auto sharded_full = [&](float value) {
+        return ttnn::to_memory_config(ttnn::full(shape, value, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device), sharded);
+    };
+
+    const auto output =
+        ttnn::where(sharded_full(1.0f), sharded_full(5.0f), sharded_full(2.0f), sharded, std::nullopt, sub_core_grids);
+
+    const auto expected = ttnn::full(shape, 5.0f, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    EXPECT_TRUE(ttnn::allclose<::bfloat16>(ttnn::from_device(expected), ttnn::from_device(output)));
 }
 
 }  // namespace ttnn::operations::eltwise::test

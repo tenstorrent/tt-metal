@@ -323,8 +323,6 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
         tensor: Input tensor
         mesh_config: Mesh configuration
         ccl_manager: Communication manager
-        batch_size: Batch size for final reshape
-        seq_len: Sequence length for final reshape
         hidden_size: Hidden size for final reshape
 
     Returns:

@@ -5,6 +5,8 @@ import struct
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
@@ -18,7 +20,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.sfpu_accuracy_budget import assert_within_contract_tolerance
+from helpers.sfpu_accuracy_budget import assert_against_contract
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     Operand,
@@ -35,14 +37,15 @@ from helpers.test_variant_parameters import (
     DISABLE_SRC_ZERO_FLAG,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_CLOBBER_LREGS,
     SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
 )
 
 _SCALAR_VALUE = 2.0
 
-#: The approximation mode every test here compiles sfpu_ternary_test.cpp with, and so the
-#: one test_sfpu_ternary's contract names.
+#: The default approximation mode sfpu_ternary_test.cpp is compiled with, and so the one
+#: test_sfpu_ternary's contract names. test_sfpu_ternary_approx_after_lreg_clobber overrides it.
 _APPROX_MODE = ApproximationMode.No
 _SCALAR_VALUE_BITS = struct.unpack("<I", struct.pack("<f", _SCALAR_VALUE))[0]
 
@@ -81,6 +84,8 @@ def _run_sfpu_ternary(
     spec_A=None,
     spec_B=None,
     spec_C=None,
+    approx_mode=_APPROX_MODE,
+    clobber_lregs=False,
 ):
     # The specs below carry no seed; seed here so a near-tolerance variant cannot pass by luck.
     torch.manual_seed(0)
@@ -120,16 +125,20 @@ def _run_sfpu_ternary(
         formats.output_format,
     )
 
+    templates = [
+        SFPU_TERNARY_OP(mathop),
+        SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
+        APPROX_MODE(approx_mode),
+        DISABLE_SRC_ZERO_FLAG(True),
+        DEST_SYNC(),
+    ]
+    if clobber_lregs:
+        templates.append(SFPU_CLOBBER_LREGS())
+
     configuration = TestConfig(
         "sources/sfpu_ternary_test.cpp",
         formats,
-        templates=[
-            SFPU_TERNARY_OP(mathop),
-            SFPU_TERNARY_SCALAR(_SCALAR_VALUE_BITS),
-            APPROX_MODE(_APPROX_MODE),
-            DISABLE_SRC_ZERO_FLAG(True),
-            DEST_SYNC(),
-        ],
+        templates=templates,
         runtimes=[NUM_BLOCKS(tile_cnt_A), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
             src_A.flatten(),
@@ -160,12 +169,12 @@ def _run_sfpu_ternary(
     golden_tensor = torch.tensor(golden, dtype=torch_format).flatten()
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format).flatten()
 
-    # The op's declared accuracy contract for this exact variant, the same lookup the
-    # binary driver makes. No ternary op is enrolled yet, so every one of them resolves
-    # to today's per-format tolerance -- enrolling one is then a table edit. The mode the
-    # kernel compiled is passed: left unset, a row keyed `approx: "No"` would not match.
-    assert_within_contract_tolerance(
-        mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=_APPROX_MODE
+    # The op's declared accuracy contract for this exact variant, the same gate the
+    # binary driver applies: the whole contract, step budget included, since the ternary
+    # rows were measured over this driver's own variants. The mode the kernel compiled
+    # is passed: left unset, a row keyed `approx: "No"` would not match.
+    assert_against_contract(
+        mathop, formats, dest_acc, golden_tensor, res_tensor, approx_mode=approx_mode
     )
 
 
@@ -187,8 +196,7 @@ def _run_sfpu_ternary(
     ],
 )
 def test_sfpu_ternary(formats, dest_acc, mathop):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if (
         formats.input_format == DataFormat.Bfp8_b
         and mathop != MathOperation.SfpuAddcmul
@@ -196,6 +204,41 @@ def test_sfpu_ternary(formats, dest_acc, mathop):
         pytest.skip("Bfp8_b is only supported for addcmul")
 
     _run_sfpu_ternary(formats, dest_acc, mathop)
+
+
+# Ops whose body runs sfpu_reciprocal_iter's Newton-Raphson step in every approximation
+# mode, so their init must program the vConstFloatPrgm0 = 2.0 that step reads in every mode
+# (tenstorrent/tt-llk#1701 items 2 and 5).
+_TERNARY_RECIP_NEWTON_OPS = [
+    MathOperation.SfpuAddcdiv,
+    MathOperation.SfpuSnakeBeta,
+]
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_TERNARY_RECIP_NEWTON_OPS,
+)
+def test_sfpu_ternary_approx_after_lreg_clobber(formats, dest_acc, mathop):
+    """APPROX_MODE=Yes with the SFPU registers clobbered first: the init must program the
+    Newton step's 2.0 (vConstFloatPrgm0) itself, or 1/c comes out about 47.6x too large.
+    """
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        pytest.skip(
+            "Blackhole regression for https://github.com/tenstorrent/tt-llk/issues/1701 "
+            "items 2 and 5, verified on Blackhole silicon only; Wormhole's "
+            "sfpu_reciprocal_init programs its constants in both modes"
+        )
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+
+    _run_sfpu_ternary(
+        formats,
+        dest_acc,
+        mathop,
+        approx_mode=ApproximationMode.Yes,
+        clobber_lregs=True,
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -236,8 +279,7 @@ _TERNARY_NONZERO_B = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], s
 )
 def test_sfpu_ternary_edges(formats, dest_acc, mathop):
     """Drive each ternary op's operand-C pole or knee, where it has one."""
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     spec_C = edge_spec(
         mathop,

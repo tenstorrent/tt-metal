@@ -76,6 +76,7 @@ private:
     void create_kernel_file();
     void create_kernel_elf_file();
     void init_device(ChipId device_id);
+    void reset_assert_records(ChipId device_id);
     void poll_watcher_data();
 
     std::atomic<bool> stop_server_ = false;
@@ -88,6 +89,11 @@ private:
     std::vector<std::string> kernel_names_;
     inline static std::chrono::time_point start_time = std::chrono::system_clock::now();
     std::mutex watch_mutex_;  // Guards server internal state + logfile + device watcher mailbox
+    // Guards kernel_names_, kernel_file_ and kernel_elf_file_. Kernel registration runs on the thread that builds
+    // programs and must not wait for a dump in progress, which holds watch_mutex_ across every device read. The
+    // readers take this lock only around their CPU-side kernel name lookups, never across a device read. When both
+    // locks are needed, take watch_mutex_ first.
+    std::mutex kernel_names_mutex_;
 
     std::thread* server_thread_{};
 
@@ -126,10 +132,15 @@ void WatcherServer::Impl::attach_devices() {
     {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         create_log_file();
-        create_kernel_file();
+        {
+            const std::lock_guard<std::mutex> names_lock(kernel_names_mutex_);
+            create_kernel_file();
+        }
         auto all_devices = env_.get_cluster().all_chip_ids();
         for (ChipId device_id : all_devices) {
-            device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_, env_, watcher_server_);
+            reset_assert_records(device_id);
+            device_id_to_reader_.try_emplace(
+                device_id, logfile_, device_id, kernel_names_, kernel_names_mutex_, env_, watcher_server_);
             log_debug(LogLLRuntime, "Watcher attached device {}", device_id);
             fprintf(logfile_, "At %.3lfs attach device %d\n\n", get_elapsed_secs(), device_id);
             fflush(logfile_);  // Ensure attach message is committed before watcher server thread writes
@@ -153,6 +164,7 @@ void WatcherServer::Impl::detach_devices() {
     };
     if (!server_thread_ and !server_killed_due_to_error_) {
         close_file(logfile_);
+        const std::lock_guard<std::mutex> names_lock(kernel_names_mutex_);
         close_file(kernel_file_);
         close_file(kernel_elf_file_);
         return;
@@ -195,6 +207,7 @@ void WatcherServer::Impl::detach_devices() {
         // Watcher server closed, can use dma library again.
         env_.get_rtoptions().set_disable_dma_ops(false);
         close_file(logfile_);
+        const std::lock_guard<std::mutex> names_lock(kernel_names_mutex_);
         close_file(kernel_file_);
         close_file(kernel_elf_file_);
     }
@@ -211,7 +224,8 @@ void WatcherServer::Impl::isolated_dump(std::vector<ChipId>& device_ids) {
     clear_log();
     read_kernel_ids_from_file();
     for (ChipId device_id : device_ids) {
-        device_id_to_reader_.try_emplace(device_id, logfile_, device_id, kernel_names_, env_, watcher_server_);
+        device_id_to_reader_.try_emplace(
+            device_id, logfile_, device_id, kernel_names_, kernel_names_mutex_, env_, watcher_server_);
         log_debug(LogLLRuntime, "Watcher attached device {}", device_id);
         fprintf(logfile_, "At %.3lfs attach device %d\n", get_elapsed_secs(), device_id);
     }
@@ -224,7 +238,9 @@ std::string WatcherServer::Impl::log_file_name() {
 }
 
 int WatcherServer::Impl::register_kernel(const std::string& name) {
-    const std::lock_guard<std::mutex> lock(watch_mutex_);
+    // Not watch_mutex_: a dump holds that across every device read, and on a multi-chip system with remote chips a
+    // dump can take tens of seconds, which would stall program creation for as long.
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex_);
 
     if (!kernel_file_) {
         create_kernel_file();
@@ -238,7 +254,7 @@ int WatcherServer::Impl::register_kernel(const std::string& name) {
 }
 
 void WatcherServer::Impl::register_kernel_elf_paths(int id, std::vector<std::string>& paths) {
-    const std::lock_guard<std::mutex> lock(watch_mutex_);
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex_);
     if (!kernel_elf_file_) {
         create_kernel_elf_file();
     }
@@ -258,6 +274,7 @@ void WatcherServer::Impl::read_kernel_ids_from_file() {
         TT_THROW("Watcher failed to open kernel name file: {}\n", fname);
     }
 
+    const std::lock_guard<std::mutex> lock(kernel_names_mutex_);
     std::string line;
     while (std::getline(f, line)) {
         kernel_names_.push_back(line.substr(line.find(':') + 2));
@@ -359,6 +376,52 @@ void WatcherServer::Impl::create_kernel_elf_file() {
     kernel_elf_file_ = f;
     fprintf(f, "0: blank\n");
     fflush(f);
+}
+
+// On Quasar the host releases the TRISCs together with the DMs, and at a cold boot their reset PCs are not
+// programmed yet: a TRISC can run from its default vector into firmware code and leave an assert record
+// behind before DM0 holds it. The firmware is up by the time the watcher attaches, so put the record back.
+void WatcherServer::Impl::reset_assert_records(ChipId device_id) {
+    const auto& cluster = env_.get_cluster();
+    const auto& hal = env_.get_hal();
+    if (hal.get_arch() != tt::ARCH::QUASAR) {
+        return;
+    }
+    const auto programmable_core_type = HalProgrammableCoreType::TENSIX;
+    auto factory = hal.get_dev_msgs_factory(programmable_core_type);
+    auto record = factory.create<dev_msgs::debug_assert_msg_t>();
+    auto view = record.view();
+    view.line_num() = DEBUG_SANITIZE_SENTINEL_OK_16;
+    view.tripped() = dev_msgs::DebugAssertOK;
+    view.which() = DEBUG_SANITIZE_SENTINEL_OK_8;
+    view.claim() = 0;
+    view.hw_fault_info() = 0;
+    const auto addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
+                      factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::assert_status);
+    const CoreType core_type = hal.get_core_type(hal.get_programmable_core_type_index(programmable_core_type));
+    const CoreCoord grid_size = cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    auto found = factory.create<dev_msgs::debug_assert_msg_t>();
+    for (uint32_t y = 0; y < grid_size.y; y++) {
+        for (uint32_t x = 0; x < grid_size.x; x++) {
+            const CoreCoord virtual_core =
+                cluster.get_virtual_coordinate_from_logical_coordinates(device_id, {x, y}, core_type);
+            const tt_cxy_pair core{static_cast<size_t>(device_id), virtual_core};
+            cluster.read_core(found.view().data(), found.view().size(), core, addr);
+            if (found.view().tripped() != dev_msgs::DebugAssertOK || found.view().claim() != 0) {
+                log_info(
+                    tt::LogMetal,
+                    "Watcher cleared a boot-time assert record on device {} core {}: tripped={} which={} line={} "
+                    "claim=0x{:x}",
+                    device_id,
+                    virtual_core.str(),
+                    found.view().tripped(),
+                    found.view().which(),
+                    found.view().line_num(),
+                    found.view().claim());
+            }
+            cluster.write_core(view.data(), view.size(), core, addr);
+        }
+    }
 }
 
 void WatcherServer::Impl::init_device(ChipId device_id) {
@@ -565,7 +628,7 @@ void WatcherServer::Impl::poll_watcher_data() {
     } else {
         disabled_features = "None";
     }
-    log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
+    log_debug(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     while (true) {
         // Need to hold the lock here as well to prevent kernel_names_ being modified from the main thread while being
@@ -613,7 +676,7 @@ void WatcherServer::Impl::poll_watcher_data() {
         }
     }
 
-    log_info(LogLLRuntime, "Watcher thread stopped watching...");
+    log_debug(LogLLRuntime, "Watcher thread stopped watching...");
     server_running_ = false;
     stop_server_ = false;
 }

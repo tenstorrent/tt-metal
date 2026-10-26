@@ -1,0 +1,94 @@
+name: "LLK hardware-free impl"
+
+# One leg from tests/pipeline_reorg/llk_hardware_free_tests.yaml. cpu_xlarge has
+# no card, so this workflow does not mount /dev/tenstorrent.
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        description: "The LLK Docker image to use"
+        required: true
+        type: string
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Commit SHA to test. Empty means github.sha."
+
+permissions:
+  checks: write
+  contents: read
+
+env:
+  LLK_PATH: tt_metal/tt-llk
+
+jobs:
+  load-test-matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+    env:
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_hardware_free_tests.yaml
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          sparse-checkout: |
+            .github
+            tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+      - name: Install dependencies
+        run: pip3 install PyYAML
+      - name: Build test matrix
+        id: build-matrix
+        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        with:
+          tests-yaml: ${{ env.TESTS_YAML_PATH }}
+          enabled-skus: cpu_xlarge
+          sku-config: ./.github/sku_config.yaml
+          event: ${{ github.event_name }}
+
+  llk-hardware-free-exec:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.load-test-matrix.outputs.matrix) }}
+    name: ${{ matrix.test-group.name }}
+    runs-on: ${{ matrix.test-group.runs_on }}
+    timeout-minutes: ${{ matrix.test-group.timeout }}
+    container:
+      image: ${{ inputs.docker-image }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+      - name: Install SFPI
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests
+        run: ./setup_testing_env.sh
+      - name: Run tests
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}
+        run: |
+          ${{ matrix.test-group.cmd }}
+      - name: Upload JUnit report
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: junit-report-llk-hardware-free
+          path: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-hardware-free-*.xml
+      - name: Publish Test Results
+        if: always()
+        uses: mikepenz/action-junit-report@3585e9575db828022551b4231f165eb59a0e74e3 # v5.6.2
+        with:
+          report_paths: ${{ env.LLK_PATH }}/tests/python_tests/pytest-report-hardware-free-*.xml
+          annotate_only: true
+          include_passed: true
+          fail_on_failure: false

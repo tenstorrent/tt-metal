@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 #include <algorithm>
+#include <initializer_list>
 #include <optional>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
@@ -16,19 +17,21 @@ inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
     const ttnn::MeshDevice& device,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
-    const tt::tt_metal::experimental::KernelSpecName& chronology_reader) {
+    std::initializer_list<tt::tt_metal::experimental::KernelSpecName> chronology_readers) {
     using namespace tt::tt_metal::experimental;
     TT_FATAL(sequence_parallel_axis < device.shape().dims(), "KDA: invalid sequence_parallel_axis");
     ttnn::device_operation::MeshWorkloadArtifacts workload;
     for (const auto& coordinate : tensor_coords.coords()) {
         auto spec = artifacts.spec;
-        auto reader = std::find_if(spec.kernels.begin(), spec.kernels.end(), [&](const auto& kernel) {
-            return kernel.unique_id == chronology_reader;
-        });
-        TT_FATAL(reader != spec.kernels.end(), "KDA: chronology reader is absent from the program");
-        reader->compile_time_args.insert({"sp_rank", coordinate[sequence_parallel_axis]});
-        reader->compile_time_args.insert({"sp_size", device.shape()[sequence_parallel_axis]});
-        reader->compile_time_args.insert({"local_rows", local_rows});
+        for (const auto& chronology_reader : chronology_readers) {
+            auto reader = std::find_if(spec.kernels.begin(), spec.kernels.end(), [&](const auto& kernel) {
+                return kernel.unique_id == chronology_reader;
+            });
+            TT_FATAL(reader != spec.kernels.end(), "KDA: chronology reader is absent from the program");
+            reader->compile_time_args.insert({"sp_rank", coordinate[sequence_parallel_axis]});
+            reader->compile_time_args.insert({"sp_size", device.shape()[sequence_parallel_axis]});
+            reader->compile_time_args.insert({"local_rows", local_rows});
+        }
         workload.programs.push_back({
             .range = ttnn::MeshCoordinateRange(coordinate),
             .spec = std::move(spec),
@@ -36,6 +39,16 @@ inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
         });
     }
     return workload;
+}
+inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
+    const ttnn::device_operation::ProgramArtifacts& artifacts,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ttnn::MeshDevice& device,
+    uint32_t sequence_parallel_axis,
+    uint32_t local_rows,
+    const tt::tt_metal::experimental::KernelSpecName& chronology_reader) {
+    return chronology_workload(
+        artifacts, tensor_coords, device, sequence_parallel_axis, local_rows, {chronology_reader});
 }
 
 inline void bind_chronology_channel(

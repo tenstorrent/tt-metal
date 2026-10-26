@@ -5,15 +5,40 @@
 import os
 import shutil
 import subprocess
+from functools import lru_cache
+from hashlib import sha256
 from pathlib import Path
 from typing import Dict, List
 
+from filelock import FileLock
 from helpers.chip_architecture import ChipArchitecture
 
 from .fuser_config import FuserConfig
 from .pipeline_plan import PlannedBlock, plan_pipeline
 
 FUSED_TESTS_DIR = Path("sources/fused_tests")
+
+
+@lru_cache(maxsize=512)
+def format_cpp(source: str, source_dir: Path, cache_dir: Path) -> str:
+    if not shutil.which("clang-format"):
+        return source
+
+    key = sha256(f"{source_dir}\0{source}".encode()).hexdigest()
+    cached = cache_dir / f"{key}.cpp"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with FileLock(cached.with_suffix(".lock")):
+        if not cached.exists():
+            formatted = subprocess.check_output(
+                ["clang-format", "--assume-filename=kernel.cpp"],
+                cwd=source_dir,
+                input=source,
+                text=True,
+            )
+            temporary = cached.with_suffix(".tmp")
+            temporary.write_text(formatted)
+            temporary.replace(cached)
+        return cached.read_text()
 
 
 def render_kernel(thread: str, headers, body: str) -> str:
@@ -66,6 +91,9 @@ class MathKernelGenerator:
             for unit in op.get_math_units():
                 all_headers.update(unit.get_headers())
 
+        if self.config.global_config.skip_math_init:
+            all_headers.discard("sfpu_operations_quasar.h")
+
         math_calls = "".join(
             op.do_math(self.config.global_config, blocks)
             for op, blocks in zip(self.config.pipeline, plans)
@@ -103,6 +131,9 @@ class PackKernelGenerator:
         for op in self.config.pipeline:
             for pack_node in op.pack_nodes:
                 all_headers.update(pack_node.get_headers())
+
+        if self.config.global_config.skip_math_init:
+            all_headers.discard("sfpu_operations_quasar.h")
 
         pack_calls = "".join(
             op.pack(self.config.global_config, blocks)
@@ -155,7 +186,7 @@ class FusedKernelGenerator:
             else '#include "operand.h"\n'
         )
 
-        combined = (
+        common = (
             f"#define FUSED_TEST\n"
             f'#include "ckernel.h"\n'
             f'#include "llk_defs.h"\n'
@@ -174,12 +205,7 @@ class FusedKernelGenerator:
             f"\n"
             f"{operands}"
             f"\n"
-            f"{kernels['unpack']}"
-            f"{kernels['math']}"
-            f"{kernels['sfpu']}"
-            f"{kernels['pack']}"
         )
-
         test_cpp_dir = Path(os.environ.get("LLK_HOME")) / "tests"
 
         fused_test_cpp_dir = test_cpp_dir / FUSED_TESTS_DIR
@@ -188,8 +214,12 @@ class FusedKernelGenerator:
         cpp_path = test_cpp_dir / f"{test_name}"
         cpp_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(cpp_path, "w") as f:
-            f.write(combined)
+        format_cache = self.config.ARTEFACTS_DIR / "fused-format"
+        common = format_cpp(common, cpp_path.parent, format_cache)
+        kernels = {
+            name: format_cpp(kernel, cpp_path.parent, format_cache)
+            for name, kernel in kernels.items()
+        }
+        cpp_path.write_text(common + "".join(kernels.values()))
 
-        if shutil.which("clang-format"):
-            subprocess.run(["clang-format", "-i", str(cpp_path)])
+        return {name: common + kernel for name, kernel in kernels.items()}

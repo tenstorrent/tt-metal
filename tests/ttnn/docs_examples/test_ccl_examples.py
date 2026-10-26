@@ -143,7 +143,9 @@ def test_mesh_partition(mesh_device):
 @pytest.mark.parametrize("device_params", FABRIC_1D, indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_point_to_point(mesh_device):
-    torch_input = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
+    # Shard dim 0 across both devices so each coordinate holds a [1, 1, 32, 256] shard.
+    num_devices = mesh_device.get_num_devices()
+    torch_input = torch.randn([num_devices, 1, 32, 256], dtype=torch.bfloat16)
     tt_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,

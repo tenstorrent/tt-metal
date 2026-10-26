@@ -35,7 +35,7 @@ struct PassBarrierPlan {
     uint32_t rect_y_end = 0;
     uint32_t num_receivers = 0;
     // Two per core: both data-movement kernels arrive, so a release implies every core's writer --
-    // and therefore its compute -- finished pass A.
+    // and therefore its compute -- finished the first pass.
     uint32_t total_arrivals = 0;
 };
 
@@ -64,12 +64,12 @@ struct MergeReport {
 // six kernels become three, and each half's compile-time and runtime argument lists are joined
 // behind the bases the union binaries were compiled with.
 //
-// `run_fused_pass` says whether pass A executes at all. When it is false the fused half's circular
+// `run_fused_pass` says whether the fused pass executes at all. When it is false the fused half's circular
 // buffers are dropped -- nothing will touch them -- and the union kernels are built without the
-// define that calls pass A. Both bodies are compiled in either way, so the argument bases have the
+// define that calls the fused pass. Both bodies are compiled in either way, so the argument bases have the
 // same shape in both modes.
 //
-// `l1_arena` is required only when pass A runs; it backs both halves' circular buffers. The two
+// `l1_arena` is required only when the fused pass runs; it backs both halves' circular buffers. The two
 // passes never run at once, so their CBs are laid out from the arena's base independently and the
 // program's L1 cost is the larger half, not the sum -- which is what lets both halves keep the
 // whole core grid.

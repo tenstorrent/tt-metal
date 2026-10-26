@@ -18,6 +18,7 @@
 #include "test_utils/random_data.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace {
@@ -101,7 +102,8 @@ void run_softmax_backward_case(
     const SoftmaxBackwardCase& test_case,
     const DTypeParam& dtype_param,
     ttnn::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt) {
+    std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt,
+    std::optional<tt::tt_metal::MemoryConfig> input_memory_config = std::nullopt) {
     using namespace ttml;
 
     const uint32_t logits_seed = make_case_seed(test_case, 0xA5A5A5A5U);
@@ -120,10 +122,16 @@ void run_softmax_backward_case(
     auto y_tensor = xt_softmax(logits_tensor, dim_u32);
     auto y_tt = to_device_tensor(y_tensor, device, dtype_param.dtype);
     auto grad_tt = to_device_tensor(grad_tensor, device, dtype_param.dtype);
+    if (input_memory_config.has_value()) {
+        y_tt = ttnn::interleaved_to_sharded(y_tt, *input_memory_config);
+        grad_tt = ttnn::interleaved_to_sharded(grad_tt, *input_memory_config);
+    }
 
     ttnn::Tensor result_tt = sub_core_grids.has_value()
                                  ? ttml::metal::softmax_backward(y_tt, grad_tt, test_case.dim, *sub_core_grids)
                                  : ttml::metal::softmax_backward(y_tt, grad_tt, test_case.dim);
+    // The output inherits the input's memory config, sharded included.
+    EXPECT_EQ(result_tt.memory_config().memory_layout(), y_tt.memory_config().memory_layout());
     auto result_xtensor = core::to_xtensor(result_tt);
 
     auto expected = reference_softmax_backward(core::to_xtensor(y_tt), core::to_xtensor(grad_tt), dim_u32);
@@ -169,6 +177,34 @@ TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_LastDim_1Tile) {
         .grad_max = 10.0F,
     };
     run_softmax_backward_case(test_case, GetParam(), s_device);
+}
+
+// The kernels address every tensor through TensorAccessor and the validator accepts any memory layout, so
+// height-sharded L1 inputs work and produce a sharded output. Pins the contract the op had before the shared
+// validation helper.
+TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_HeightShardedInputs) {
+    constexpr SoftmaxBackwardCase test_case{
+        .name = "height_sharded_l1",
+        .n = 1,
+        .c = 1,
+        .h = 64,
+        .w = 64,
+        .dim = 3,
+        .atol = 2e-2F,
+        .rtol = 2e-2F,
+        .grad_min = -10.0F,
+        .grad_max = 10.0F,
+    };
+    // 64 rows over two cores, one 32x64 shard each.
+    const tt::tt_metal::MemoryConfig height_sharded_l1{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+        tt::tt_metal::BufferType::L1,
+        tt::tt_metal::ShardSpec{
+            tt::tt_metal::CoreRangeSet{
+                tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 1}}},
+            {32U, 64U},
+            tt::tt_metal::ShardOrientation::ROW_MAJOR}};
+    run_softmax_backward_case(test_case, GetParam(), s_device, std::nullopt, height_sharded_l1);
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_SubCoreGrid_Rectangular) {

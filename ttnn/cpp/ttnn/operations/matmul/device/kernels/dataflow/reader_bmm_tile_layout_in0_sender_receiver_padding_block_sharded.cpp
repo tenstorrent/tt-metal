@@ -367,4 +367,8 @@ void kernel_main() {
     }
 
     noc.async_write_barrier();
+
+    // The sharded in0 buffer is reserved only to take its address; the shard already sits in this
+    // core's SRAM. Push the reserved tiles so the buffer is left balanced.
+    dfb_in2.push_back(batch * in0_block_num_tiles);
 }

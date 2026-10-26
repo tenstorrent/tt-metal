@@ -146,6 +146,28 @@ ALWI void topk_xl_rebuild(std::uint32_t idst, bool ascending) {
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_rebuild<K, fused>(idst, ascending)));
 }
 
+// clang-format off
+/**
+ * Sorts each 64 row column of a fused K = 1024 tile; every column must already be bitonic, as after a fused merge.
+ *
+ * Call it directly after topk_xl_merge<1024, true> on the same tile, with no unfused phase in between: it relies on
+ * the fused SFPLOADMACRO setup of that merge and does not program it. It overwrites replay slots [0, 16). It has no
+ * transposes and issues no CLR_AB, so it needs no SrcB dummy valid, unlike topk_xl_rebuild.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name      | Description                                                             | Type     | Valid Range                                           | Required |
+ * |------------|-----------|-------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | Template   | K         | Number of entries per sequence                                          | uint32_t | 1024                                                  | Yes      |
+ * | Function   | idst      | The index of the tile in DST register buffer to perform the computation | uint32_t | Must be less than the size of the DST register buffer | Yes      |
+ * | Function   | ascending | Sort direction of each column: true for ascending, false for descending | bool     | true, false                                           | Yes      |
+ */
+// clang-format on
+template <std::uint32_t K>
+ALWI void topk_xl_rebuild_columns(std::uint32_t idst, bool ascending) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_xl_rebuild_columns<K>(idst, ascending)));
+}
+
 /**
  * Initialize TopK-XL SFPU state.
  *
@@ -155,7 +177,8 @@ ALWI void topk_xl_rebuild(std::uint32_t idst, bool ascending) {
  *     +48 stride-folding slots that the inner loops depend on),
  *   * the math-thread MOP Expander with the merge body template (16-issue
  *     body for fused AND for the default macro-scheduled unfused path;
- *     18 for unfused only when built with -DDISABLE_TOPK_XL_SFPLOADMACRO),
+ *     18 for unfused only when built with -DDISABLE_TOPK_XL_SFPLOADMACRO,
+ *     which also turns off the fused SFPLOADMACRO step groups),
  *   * the SFPU index-tracking config in unfused mode.
  *
  * Because every merge/rebuild/local_sort relies on the ADDR_MOD programming
@@ -260,12 +283,64 @@ ALWI void topk_xl_add_lsb_indices(std::uint32_t idst) {
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices<K, core_id, row_major>(idst)));
 }
 
+// clang-format off
+/**
+ * Initialize supplied-index packing after copying the score and index operands.
+ * Call topk_xl_pack_supplied_indices before restoring TopK state as described there.
+ * This programs ADDR_MOD_0 for advancing stores; reinitialize datacopy before copying again.
+ *
+ * Return value: None
+ */
+// clang-format on
+ALWI void topk_xl_pack_supplied_indices_init() { MATH((llk_math_topk_xl_pack_supplied_indices_init())); }
+
+// clang-format off
+/**
+ * Combine BF16-expanded scores and raw UInt32 IDs into fused TopK entries.
+ * Preserve score bits 31:16 and insert ID bits 15:0. UINT32_MAX IDs produce
+ * negative-infinity padding; K=512 also fills the unused output half with padding.
+ * Load IDs in the order of the selected scores, enable FP32 DEST, and acquire the
+ * entire referenced DEST range. For K=512, IDs always occupy the first 512 elements
+ * of indices, even when score_half=1 selects scores 512-1023. The ID half is never shifted.
+ * Initialize with topk_xl_pack_supplied_indices_init. The accumulation and Dst template
+ * arguments must describe the actual acquired DEST state. Override them only after
+ * switching to FP32 or claiming full DEST at runtime; they do not perform that setup.
+ * Output can alias either input at the same start; other overlaps are unsupported.
+ * Before sorting/merging the fused entries, call topk_xl_init<K, true>(). If fused
+ * TopK state was already initialized and only operand copies and this packing step
+ * intervened, topk_xl_reinit_mop_after_copy<true>() suffices. Before subsequent unfused
+ * TopK work, call the full topk_xl_init<K, false>(): packing init clears SFPU index
+ * tracking, which topk_xl_reinit_unfused_rebuild_after_copy does not restore.
+ * High ID bits are not retained here.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name | Description | Type | Valid Range | Required |
+ * |------------|------|-------------|------|-------------|----------|
+ * | Template | K | Number of entries | uint32_t | 512, 1024, 2048 | Yes |
+ * | Template | is_fp32_dest_acc_en | Actual 32-bit DEST accumulation mode | bool | true (default: kernel setting) | No |
+ * | Template | Dst | Actual acquired DEST scope | DstSync | SyncHalf or SyncFull (default: kernel setting) | No |
+ * | Function | scores | First score tile in DEST | uint32_t | Acquired DEST | Yes |
+ * | Function | indices | First bit-preserving UInt32 ID tile | uint32_t | Acquired DEST | Yes |
+ * | Function | output | First packed output tile | uint32_t | Acquired DEST | Yes |
+ * | Function | score_half | Select score half for K=512; IDs still start at element zero | uint32_t | 0; 0 or 1 for K=512 | No |
+ */
+// clang-format on
+template <std::uint32_t K, bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DstSync Dst = DST_SYNC_MODE>
+ALWI void topk_xl_pack_supplied_indices(
+    std::uint32_t scores, std::uint32_t indices, std::uint32_t output, std::uint32_t score_half = 0) {
+    static_assert(is_fp32_dest_acc_en, "supplied-index packing requires FP32 DEST accumulation");
+    MATH((llk_math_topk_xl_pack_supplied_indices<K, is_fp32_dest_acc_en, Dst>(scores, indices, output, score_half)));
+}
+
 /**
  * Reprogram only the MOP Expander after topk_xl_copy_tile_init, instead of a
  * full topk_xl_init. copy init clobbers ADDR_MOD_0/3 and the MOP; the fused
  * merge/rebuild kernels use ADDR_MOD_1/5/6/7, so for fused = true only the MOP
  * needs reinstalling — saving the CFG/ADDR_MOD writes a full init would issue
- * per merge stage on the recv path.
+ * per merge stage on the recv path. For fused = false it also reprograms the
+ * unfused SFPLOADMACRO Sequence and Misc registers (a fused phase rewrites
+ * them) and clobbers LREG0.
  */
 template <bool fused = true>
 ALWI void topk_xl_reinit_mop_after_copy() {
@@ -277,8 +352,12 @@ ALWI void topk_xl_reinit_mop_after_copy() {
  *
  * In addition to the shared MOP Expander, unfused rebuild consumes ADDR_MOD_3,
  * which copy init rewrites, and ADDR_MOD_2, which is (re)established for the
- * unfused stride in case the preceding phase was fused. The remaining TopK
- * ADDR_MODs and SFPU index-tracking state stay live.
+ * unfused stride in case the preceding phase was fused. It also reprograms the
+ * unfused SFPLOADMACRO Sequence and Misc registers (a fused phase rewrites them)
+ * and clobbers LREG0. The remaining TopK
+ * ADDR_MODs and SFPU index-tracking state stay live across copy_tile_init.
+ * Supplied-index packing init clears index tracking; after that call, use the full
+ * topk_xl_init<K, false>() instead of this helper.
  *
  * NOT restored: ADDR_MOD_4. copy init does not touch it, but
  * topk_xl_add_lsb_indices_init reprograms it to +16 while unfused rebuild

@@ -22,6 +22,7 @@ SKIPPED_OPS = [
     "ttnn.composite_example",  # Example operation.
     "ttnn.composite_example_multiple_return",  # Example operation.
     "ttnn.fused_rms_minimal",  # Internal operation only.
+    "ttnn.index_fill_new",  # Phase 1 descriptor-migration twin of ttnn.index_fill; deleted in Phase 3 (#42392).
     "ttnn.matmul_batched_weights",  # Internal operation only.
     "ttnn.moreh_abs_pow",  # Moreh operation.
     "ttnn.moreh_adam",  # Moreh operation.

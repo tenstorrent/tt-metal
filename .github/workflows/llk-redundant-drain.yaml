@@ -1,0 +1,58 @@
+name: "LLK: drain added that orders nothing"
+
+# After a push to main that touches a C++ source file anywhere in the repository, find any
+# `tensix_sync()` / `mop_sync()` the push added that the redundant-drain checker flags, and
+# open an issue per merged pull request so the drain is removed or replaced by the wait the
+# real hazard needs. The pre-commit hook `llk-redundant-drain` already warns the author at
+# commit time; this is the follow-up for what still lands.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.h"
+      - "**/*.hpp"
+      - "**/*.cpp"
+      - "**/*.cc"
+      - "!tt_metal/third_party/**"
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "commit before the range to inspect"
+        required: true
+      head:
+        description: "last commit of the range"
+        required: true
+      dry_run:
+        description: "print instead of filing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+# Every push range must be inspected: queue runs instead of letting a newer one replace a
+# pending one.
+concurrency:
+  group: llk-redundant-drain
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  file-issues:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # The checker reads the sources and helper trees of the head being inspected.
+          ref: ${{ github.event.inputs.head || github.sha }}
+          fetch-depth: 0
+      - name: Open an issue per merge that added a flagged drain
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.inputs.base || github.event.before }}
+          HEAD: ${{ github.event.inputs.head || github.sha }}
+          DRY: ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        run: |
+          python3 tt_metal/tt-llk/infra/redundant_drain_issue.py --base "$BASE" --head "$HEAD" $DRY

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -23,6 +24,7 @@
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/conv3d_op.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/distributed/losses.hpp"
 #include "ops/dropout_op.hpp"
@@ -56,6 +58,7 @@ void py_module_types(nb::module_& m) {
     ttml::nanobind::util::export_enum<ReduceType>(m);
 
     m.def_submodule("binary");
+    m.def_submodule("conv");
     m.def_submodule("distributed");
     m.def_submodule("dropout");
     m.def_submodule("embedding");
@@ -131,6 +134,35 @@ void py_module(nb::module_& m) {
             nb::arg("b"));
         py_binary.def("min", &ttml::ops::min, nb::arg("a"), nb::arg("b"));
         py_binary.def("max", &ttml::ops::max, nb::arg("a"), nb::arg("b"));
+    }
+
+    {
+        auto py_conv = static_cast<nb::module_>(m.attr("conv"));
+        py_conv.def(
+            "conv3d",
+            [](const autograd::TensorPtr& input,
+               const autograd::TensorPtr& weight,
+               std::optional<autograd::TensorPtr> bias,
+               const ttml::ops::Conv3dDims& stride,
+               const ttml::ops::Conv3dDims& padding,
+               const ttml::ops::Conv3dDims& dilation) -> autograd::TensorPtr {
+                return ttml::ops::conv3d(input, weight, bias.value_or(nullptr), stride, padding, dilation);
+            },
+            nb::arg("input"),
+            nb::arg("weight"),
+            nb::arg("bias") = nb::none(),
+            nb::arg("stride") = ttml::ops::Conv3dDims{1, 1, 1},
+            nb::arg("padding") = ttml::ops::Conv3dDims{0, 0, 0},
+            nb::arg("dilation") = ttml::ops::Conv3dDims{1, 1, 1},
+            "Dense, zero-padded 3D convolution with autograd for input, weight and optional bias.\n"
+            "input:  [N, D, H, W, C_in] channels-last (not PyTorch's NCDHW); float, on device. Float tensors are\n"
+            "        read at autograd's bf16 precision, so float32 parameters are computed in bf16.\n"
+            "weight: [C_out, C_in, kD, kH, kW] (PyTorch layout).\n"
+            "bias:   any shape with volume C_out and last dim C_out, or None.\n"
+            "Returns [N, D_out, H_out, W_out, C_out] in the input's layout; gradients come back in the layout of\n"
+            "the tensor they belong to.\n"
+            "Constraints (ValueError): stride, dilation >= 1; padded input >= effective kernel on every spatial\n"
+            "axis. C_in and C_out are zero padded to the kernel's channel blocks on device and sliced back.");
     }
 
     {

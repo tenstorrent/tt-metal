@@ -15,7 +15,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from tests.ttnn.utils_for_testing import comp_pcc, assert_equal
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
@@ -231,9 +231,9 @@ def test_cast_to_fp8_power_of_two_scale_e4m3fn_boundary(device):
 
     y_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn.float32)
     y = ttnn.to_torch(y_tt).float()
-    # The hardware packer truncates instead of rounding to nearest. Values can
-    # therefore land one E4M3FN ULP below the mathematical result.
-    expected_output = torch.tensor([224.0, 240.0, 416.0, 448.0])
+    # Power-of-two scales and their reciprocals are exact, so every boundary
+    # value is representable after scaling and must round-trip exactly.
+    expected_output = (block_maxima / expected_scale).to(torch.float8_e4m3fn).float() * expected_scale
     actual_output = y[0, ::BLOCK_W]
     assert torch.equal(
         actual_output, expected_output

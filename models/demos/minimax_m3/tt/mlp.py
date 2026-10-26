@@ -213,14 +213,12 @@ class MLP:
         )
         self.ep_num_links = ccl_manager.num_links
 
-    def __call__(self, hidden_states, actual_isl=None, actual_start=0):
+    def __call__(self, hidden_states, chunks=None):
         """Forward (prefill): shared expert + expert-parallel routed experts.
 
-        actual_isl: real (non-pad) tokens in this chunk across the whole SP axis, or None for a full
-        chunk. Drives the padding config below; a wrong value silently drops real tokens, so a caller
-        that does not track it must pass None (correct, it just does the padded work).
-        actual_start: the chunk's global start (the cache offset); decides which rows of each SP chip are
-        real when the chunk starts mid-slab (see TopKRouter.build_padding_config).
+        chunks: the forward's PrefillChunks (tt/prefill_chunk.py), or None for all rows real. Their real-token
+        ranges drive the padding config below (see TopKRouter.build_padding_config); a wrong range silently
+        drops real tokens.
 
         hidden_states: per-device [1,1,S,H] at FULL emb (the prompts/seq-shards live in the mesh rows).
         Under a sharded residual that full width comes from the layer's single pre-MLP all-gather, and
@@ -243,10 +241,10 @@ class MLP:
                 shared_out = self.shared_expert(hidden_states)
 
         Hfull = hidden_states.shape[-1]
-        # ONE padding config per chunk, shared by the gate and the EP dispatch. Built (and memoized) by
-        # the router; None for a full chunk. Both consumers must see the SAME tensor — the gate
+        # ONE padding config per forward, shared by the gate and the EP dispatch. Built (and memoized) by
+        # the router; None when every row is real. Both consumers must see the SAME tensor — the gate
         # sentinel-marks the padded rows and dispatch shortens its token loop to match. See tt/topk.py.
-        padding_config = self.router.build_padding_config(actual_isl, actual_start)
+        padding_config = self.router.build_padding_config(chunks)
         with zone("router_topk"):
             idx, wts = self.router(hidden_states, padding_config=padding_config)  # per-row top-k
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device

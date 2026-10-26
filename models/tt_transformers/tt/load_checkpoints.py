@@ -14,6 +14,34 @@ from safetensors.torch import safe_open as safetensors_safe_open
 from tqdm import tqdm
 
 
+def _checkpoint_file_path(ckpt_dir, filename):
+    """Join a shard name read from the checkpoint index onto ckpt_dir, rejecting names that escape it.
+
+    The check is lexical (abspath, not realpath) on purpose: HF cache snapshots are symlinks into
+    ../../blobs, so resolving links would reject every checkpoint loaded from the HF cache.
+    """
+    root = os.path.abspath(ckpt_dir)
+    path = os.path.abspath(os.path.join(root, filename))
+    if path == root or os.path.commonpath([root, path]) != root:
+        raise ValueError(f"Checkpoint index entry {filename!r} resolves outside the checkpoint directory {ckpt_dir}")
+    return path
+
+
+def check_checkpoint_index(ckpt_dir):
+    """Raise ValueError if a local checkpoint's model.safetensors.index.json names a shard outside ckpt_dir.
+
+    transformers' from_pretrained joins weight_map entries onto a local directory without this check, so
+    callers that may fall back to it validate the index first. Hub repo ids are checked by huggingface_hub.
+    """
+    index_path = os.path.join(ckpt_dir, "model.safetensors.index.json")
+    if not os.path.isfile(index_path):
+        return
+    with open(index_path, "r") as f:
+        weight_map = json.load(f).get("weight_map", {})
+    for filename in set(weight_map.values()):
+        _checkpoint_file_path(ckpt_dir, filename)
+
+
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
 def load_hf_state_dict(ckpt_dir):
     # First check if index file exists
@@ -30,7 +58,7 @@ def load_hf_state_dict(ckpt_dir):
         # Read each safetensors file mentioned in the index
         loaded_weights = {}
         for file in safetensor_files:
-            safetensor_path = os.path.join(ckpt_dir, file)
+            safetensor_path = _checkpoint_file_path(ckpt_dir, file)
             weights = safetensors_load_file(safetensor_path)
             loaded_weights.update(weights)  # Merge weights into a single dictionary
     else:
@@ -91,7 +119,7 @@ def _load_hf_state_dict_matching(ckpt_dir, key_filter, local_files_only=None):
 
     def resolve_file(filename, allow_missing=False):
         if is_local_dir:
-            path = os.path.join(ckpt_dir, filename)
+            path = _checkpoint_file_path(ckpt_dir, filename)
             if os.path.exists(path):
                 return path
             if allow_missing:

@@ -117,8 +117,16 @@ def test_cached_and_in_memory_layers_match(device: ttnn.Device, tmp_path: Path) 
         "cache-only": _forward(cache_only_layer, hidden, cache_only_layer.allocate_state()),
     }
 
-    assert_accurate(outputs["in-memory"], outputs["preloaded-cache"], name="preloaded cache", pcc_threshold=0.9999)
-    assert_accurate(outputs["in-memory"], outputs["cache-only"], name="cache-only", pcc_threshold=0.9999)
+    assert_accurate(
+        outputs["in-memory"],
+        outputs["preloaded-cache"],
+        name="preloaded cache",
+        pcc_threshold=0.9999,
+        nrmse_threshold=1e-06,
+    )
+    assert_accurate(
+        outputs["in-memory"], outputs["cache-only"], name="cache-only", pcc_threshold=0.9999, nrmse_threshold=1e-06
+    )
 
 
 @pytest.mark.use_module_device

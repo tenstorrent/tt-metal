@@ -1,0 +1,16 @@
+# Host-only LLK tests (tests/hardware_free). No card.
+#
+# The cmd runs from tt_metal/tt-llk, after setup_testing_env.sh, in
+# llk-hardware-free-impl.yaml. cpu_xlarge is the xlarge CPU pool.
+# For max allowed timeout refer to .github/time_budget.yaml (llk -> pr_gate).
+# Not on the sanity pipeline.
+
+- name: llk_hardware_free
+  team: llk
+  budget_type: pr_gate
+  coverage: false
+  cmd: ./tests/run_hardware_free.sh
+  skus:
+    cpu_xlarge:
+      timeout: 10
+  owner_id: U09UC143684 # Nemanja Divnic

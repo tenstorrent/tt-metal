@@ -5,10 +5,9 @@
 #pragma once
 #include <mutex>
 #include <core_coord.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <string>
-#include "impl/context/context_types.hpp"
 #include <tt-metalium/experimental/context/metal_env.hpp>
 
 struct metal_SocDescriptor;

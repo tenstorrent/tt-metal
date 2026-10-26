@@ -10,6 +10,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/normalization/shard_spec_validation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
 

@@ -25,9 +25,11 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <google/protobuf/text_format.h>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/experimental/fabric/physical_node_id.hpp>  // experimental::canonical_cluster_id_for_node_id
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 #include <protobuf/factory_system_descriptor.pb.h>   // tt::scaleout_tools::fsd::proto (from scaleout_tools)
 #include <protobuf/physical_system_descriptor.pb.h>  // tt::fabric::proto (compiled into this lib)
@@ -170,7 +172,73 @@ std::vector<std::vector<uint32_t>> partition_fsd_hosts_by_connectivity(
     return result;
 }
 
+// The descriptor host indices a requested name list selects, or throw explaining why it selects nothing
+// usable. Split out of filter_factory_descriptor so the FSD host-filter derivation can run exactly these
+// checks as a dry run before the multi-rank agreement, without building a filtered copy to throw away.
+std::vector<uint32_t> select_host_filter(
+    const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd, const std::vector<std::string>& hostnames) {
+    // Both sides go through the mapper's canonicalization, so a live FQDN matches the short name an FSD
+    // author wrote (and the reverse). Matching raw strings would retain nothing in that case.
+    std::set<std::string> wanted;
+    for (const auto& hostname : hostnames) {
+        wanted.insert(::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(hostname));
+    }
+
+    std::set<std::string> present;
+    std::map<std::string, std::vector<std::string>> spellings_by_canonical;
+    std::vector<uint32_t> member_host_ids;
+    for (int i = 0; i < fsd.hosts_size(); ++i) {
+        const std::string& name = fsd.hosts(i).hostname();
+        const auto canonical = ::tt::tt_metal::experimental::canonical_cluster_id_for_node_id(name);
+        spellings_by_canonical[canonical].push_back(name);
+        if (wanted.contains(canonical)) {
+            member_host_ids.push_back(static_cast<uint32_t>(i));
+            present.insert(canonical);
+        }
+    }
+
+    // Two descriptor hosts under one canonical name would both be retained by a single requested name,
+    // pulling in a machine the caller did not ask for and doubling its chips in the mesh.
+    std::vector<std::string> collisions;
+    for (const auto& [canonical, names] : spellings_by_canonical) {
+        if (names.size() > 1 && wanted.contains(canonical)) {
+            collisions.push_back(fmt::format("{} <- {}", canonical, fmt::join(names, ", ")));
+        }
+    }
+    if (!collisions.empty()) {
+        throw std::runtime_error(fmt::format(
+            "Factory System Descriptor has {} requested host name(s) that name the same host after "
+            "canonicalization: {}. One requested name would retain several descriptor hosts.",
+            collisions.size(),
+            fmt::join(collisions, "; ")));
+    }
+
+    // Reject requested hostnames that aren't in the FSD (typo / wrong descriptor) rather than silently
+    // dropping. Report all of them: a wrong descriptor misses every host, and a per-name abort makes the
+    // operator re-run once per host.
+    if (present.size() != wanted.size()) {
+        std::vector<std::string> missing;
+        for (const auto& h : wanted) {
+            if (!present.contains(h)) {
+                missing.push_back(h);
+            }
+        }
+        throw std::runtime_error(fmt::format(
+            "Host filter references hostnames not present in the Factory System Descriptor: {}",
+            fmt::join(missing, ", ")));
+    }
+    return member_host_ids;
+}
+
 }  // namespace
+
+void validate_host_filter(
+    const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd, const std::vector<std::string>& hostnames) {
+    if (hostnames.empty()) {
+        return;
+    }
+    (void)select_host_filter(fsd, hostnames);
+}
 
 ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor load_factory_descriptor(const std::string& path) {
     std::ifstream f(path);
@@ -186,43 +254,91 @@ std::vector<std::vector<uint32_t>> partition_fsd_hosts_by_connectivity(
 }
 
 ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor filter_factory_descriptor(
-    const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd, const std::vector<std::string>& hostnames) {
+    const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
+    const std::vector<std::string>& hostnames,
+    FilterReport* report) {
+    if (report != nullptr) {
+        report->fsd_host_count = static_cast<std::size_t>(fsd.hosts_size());
+        report->retained_host_count = static_cast<std::size_t>(fsd.hosts_size());
+        report->dropped_connection_count = 0;
+    }
     if (hostnames.empty()) {
         return fsd;  // no filter: return a full copy so callers can use the result uniformly
     }
-    // Collect the host indices whose hostname is requested (original order), then reuse build_sub_fsd to
-    // densely renumber hosts and filter board_types / eth_connections to that subset.
-    const std::set<std::string> wanted(hostnames.begin(), hostnames.end());
-    std::set<std::string> present;
-    std::vector<uint32_t> member_host_ids;
-    for (int i = 0; i < fsd.hosts_size(); ++i) {
-        const std::string& name = fsd.hosts(i).hostname();
-        if (wanted.contains(name)) {
-            member_host_ids.push_back(static_cast<uint32_t>(i));
-            present.insert(name);
-        }
+
+    auto filtered = build_sub_fsd(fsd, select_host_filter(fsd, hostnames));
+    if (report != nullptr) {
+        report->retained_host_count = static_cast<std::size_t>(filtered.hosts_size());
+        const std::size_t before = fsd.has_eth_connections() ? fsd.eth_connections().connection_size() : 0;
+        const std::size_t after = filtered.has_eth_connections() ? filtered.eth_connections().connection_size() : 0;
+        report->dropped_connection_count = before - after;
     }
-    // Reject requested hostnames that aren't in the FSD (typo / wrong descriptor) rather than silently dropping.
-    if (present.size() != wanted.size()) {
-        std::string missing;
-        for (const auto& h : wanted) {
-            if (!present.contains(h)) {
-                missing += (missing.empty() ? "" : ", ") + h;
-            }
-        }
-        throw std::runtime_error(
-            fmt::format("Host filter references hostnames not present in the Factory System Descriptor: {}", missing));
+    return filtered;
+}
+
+::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor filter_factory_descriptor_to_allocation(
+    const ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor& fsd,
+    const std::set<::tt::tt_metal::experimental::PhysicalNodeId>& allocation,
+    FilterReport* report) {
+    if (report != nullptr) {
+        report->dropped_asic_count = 0;
     }
-    return build_sub_fsd(fsd, member_host_ids);
+    if (allocation.empty() || !fsd.has_eth_connections()) {
+        return fsd;
+    }
+
+    const int num_hosts = fsd.hosts_size();
+    auto node_of = [&](const auto& endpoint) {
+        if (endpoint.host_id() >= static_cast<uint32_t>(num_hosts)) {
+            throw std::runtime_error(
+                fmt::format("FSD references host_id {} but only {} hosts are defined", endpoint.host_id(), num_hosts));
+        }
+        return ::tt::tt_metal::experimental::make_physical_node_id(
+            fsd.hosts(static_cast<int>(endpoint.host_id())).hostname(),
+            ::tt::tt_metal::TrayID{endpoint.tray_id()},
+            ::tt::tt_metal::ASICLocation{endpoint.asic_location()});
+    };
+
+    ::tt::scaleout_tools::fsd::proto::FactorySystemDescriptor result = fsd;
+    result.mutable_eth_connections()->clear_connection();
+    std::set<::tt::tt_metal::experimental::PhysicalNodeId> before;
+    std::set<::tt::tt_metal::experimental::PhysicalNodeId> after;
+    for (const auto& conn : fsd.eth_connections().connection()) {
+        const auto a = node_of(conn.endpoint_a());
+        const auto b = node_of(conn.endpoint_b());
+        before.insert(a);
+        before.insert(b);
+        if (!allocation.contains(a) || !allocation.contains(b)) {
+            continue;
+        }
+        *result.mutable_eth_connections()->add_connection() = conn;
+        after.insert(a);
+        after.insert(b);
+    }
+    if (report != nullptr) {
+        report->dropped_connection_count += static_cast<std::size_t>(
+            fsd.eth_connections().connection_size() - result.eth_connections().connection_size());
+        report->dropped_asic_count = before.size() - after.size();
+    }
+    return result;
 }
 
 ::tt::tt_metal::PhysicalSystemDescriptor build_physical_descriptor_from_file(
-    const std::string& fsd_path, const std::vector<std::string>& host_filter) {
-    // parse FSD -> (optional host filter) -> PSD proto -> wrap in the C++ PhysicalSystemDescriptor (no protos leak).
+    const std::string& fsd_path,
+    const std::vector<std::string>& host_filter,
+    FilterReport* report,
+    const std::set<::tt::tt_metal::experimental::PhysicalNodeId>& allocation) {
+    // parse FSD -> (optional host filter) -> (optional allocation filter) -> PSD proto -> wrap in the C++
+    // PhysicalSystemDescriptor (no protos leak).
     auto fsd = load_factory_descriptor(fsd_path);
     if (!host_filter.empty()) {
-        fsd = filter_factory_descriptor(fsd, host_filter);
+        fsd = filter_factory_descriptor(fsd, host_filter, report);
+    } else if (report != nullptr) {
+        report->fsd_host_count = static_cast<std::size_t>(fsd.hosts_size());
+        report->retained_host_count = static_cast<std::size_t>(fsd.hosts_size());
+        report->dropped_connection_count = 0;
     }
+    fsd = filter_factory_descriptor_to_allocation(fsd, allocation, report);
     return ::tt::tt_metal::PhysicalSystemDescriptor(build_physical_descriptor(fsd));
 }
 
@@ -326,6 +442,8 @@ std::vector<std::vector<uint32_t>> partition_fsd_hosts_by_connectivity(
         desc->set_board_type(board_type_for(host_id, tray_id));
         desc->set_unique_id(unique_id);
         desc->set_host_name(hostname_of(host_id));
+        // Same index as host_to_rank. Live discovery overwrites it with the MPI rank at align time.
+        desc->set_mpi_rank(static_cast<uint32_t>(host_id));
     }
 
     if (!fsd.has_eth_connections()) {

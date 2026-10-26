@@ -20,7 +20,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 
 # N=2^20 with B=1 sits at the L1 boundary; only run it when the user opts in
 # via TT_FFT_AGGRESSIVE=1 (same convention as test_fft_all_n.py).

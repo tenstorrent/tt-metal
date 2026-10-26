@@ -13,8 +13,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
 #include <ttnn/tensor/layout/page_config.hpp>
+#include <tt_stl/fmt.hpp>
 
 namespace ttnn::prim {
 namespace {

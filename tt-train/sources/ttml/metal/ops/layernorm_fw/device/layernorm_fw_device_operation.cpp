@@ -4,50 +4,14 @@
 
 #include "layernorm_fw_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
 #include "layernorm_fw_program_factory.hpp"
+#include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttml::metal::ops::layernorm_fw::device {
 
 void LayerNormForwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "Tensor's '{}' storage type must be {}. Got storage type: {}",
-            name,
-            enchantum::to_string(ttnn::StorageType::DEVICE),
-            enchantum::to_string(tensor.storage_type()));
-
-        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
-
-        TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Tensor '{}' buffer must be in DRAM. Buffer of type {}",
-            name,
-            enchantum::to_string(tensor.buffer()->buffer_type()));
-
-        TT_FATAL(
-            tensor.layout() == tt::tt_metal::Layout::TILE,
-            "Tensor '{}' must be in Tile layout. Got layout: {}",
-            name,
-            enchantum::to_string(tensor.layout()));
-
-        TT_FATAL(
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "Tensor '{}' must be of BFLOAT16 data type. Got data type: {}",
-            name,
-            enchantum::to_string(tensor.dtype()));
-
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "Tensor '{}' must use Interleaved memory layout. Got memory layout: {}",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
     const auto& input_tensor = tensor_args.input;
     const auto& gamma_tensor = tensor_args.gamma;
     const auto& beta_tensor = tensor_args.beta;
@@ -55,17 +19,29 @@ void LayerNormForwardDeviceOperation::validate_on_program_cache_miss(
     const auto& preallocated_mean_tensor = tensor_args.preallocated_mean;
     const auto& preallocated_rstd_tensor = tensor_args.preallocated_rstd;
 
-    check_tensor(input_tensor, "Input");
-    check_tensor(gamma_tensor, "Gamma");
-    check_tensor(beta_tensor, "Beta");
+    check_device_tensor(input_tensor, "LayerNormForward", "Input", {.buffer_type = tt::tt_metal::BufferType::DRAM});
+    check_device_tensor(gamma_tensor, "LayerNormForward", "Gamma", {.buffer_type = tt::tt_metal::BufferType::DRAM});
+    check_device_tensor(beta_tensor, "LayerNormForward", "Beta", {.buffer_type = tt::tt_metal::BufferType::DRAM});
     if (preallocated_output_tensor.has_value()) {
-        check_tensor(preallocated_output_tensor.value(), "Preallocated output");
+        check_device_tensor(
+            preallocated_output_tensor.value(),
+            "LayerNormForward",
+            "Preallocated output",
+            {.buffer_type = tt::tt_metal::BufferType::DRAM});
     }
     if (preallocated_mean_tensor.has_value()) {
-        check_tensor(preallocated_mean_tensor.value(), "Preallocated mean");
+        check_device_tensor(
+            preallocated_mean_tensor.value(),
+            "LayerNormForward",
+            "Preallocated mean",
+            {.buffer_type = tt::tt_metal::BufferType::DRAM});
     }
     if (preallocated_rstd_tensor.has_value()) {
-        check_tensor(preallocated_rstd_tensor.value(), "Preallocated rstd");
+        check_device_tensor(
+            preallocated_rstd_tensor.value(),
+            "LayerNormForward",
+            "Preallocated rstd",
+            {.buffer_type = tt::tt_metal::BufferType::DRAM});
     }
 }
 

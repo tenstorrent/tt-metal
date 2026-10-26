@@ -17,18 +17,20 @@ import torch
 
 import ttnn
 
-from models.common.metrics import compute_max_abs_error, compute_pcc
+from models.common.metrics import compute_pcc
 from models.common.utility_functions import run_for_blackhole
 from models.experimental.nomic_embed_text_v2_moe.reference.modeling_nomic_moe import NomicMoELayer
 from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import (
     MOE_LAYER,
     TOKEN_SHAPES,
+    assert_bias_added_once,
     from_block_layout,
     hidden_states,
     load_reference,
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
+from models.experimental.nomic_embed_text_v2_moe.tt.experts import HELD_MAX_TILES, StackedBuffers
 from models.experimental.nomic_embed_text_v2_moe.tt.moe import TtNomicMoELayer
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -39,8 +41,6 @@ MODULE_PCC = 0.998
 # Gate 5 measures routing agreement properly. This is the loose ceiling that keeps a routing
 # regression from hiding inside a PCC taken over agreeing tokens only.
 MAX_DISAGREEING_FRACTION = 0.01
-
-BIAS_MISPLACEMENT_MAX_ABS = 1e-3
 
 PREFIX = f"encoder.layers.{MOE_LAYER}.mlp."
 
@@ -123,18 +123,20 @@ def test_renormalizing_the_routed_weights_is_measurably_wrong(device, config, re
     assert compute_pcc(wrong[agreeing], ref[agreeing]) < MODULE_PCC
 
 
-def test_the_shared_bias_lands_outside_the_reduce(device, config, reference, tt_moe, tt_config):
+@pytest.mark.parametrize("batch, seqlen", [(2, 128), (2, 512)])
+def test_the_shared_bias_lands_outside_the_reduce(device, config, reference, tt_moe, tt_config, batch, seqlen):
     """Negative control: the bias placement PCC cannot see.
 
     Adding the shared expert bias inside the per-expert loop scales it by the routed-weight sum,
     leaving a nearly constant offset of (sum(w) - 1) * bias.
 
-    As in test_ttnn_experts.py, the two oracles are built from the module's own bias-zeroed
-    output rather than from the reference, so the bfloat16 noise is common to both and cancels.
-    At real weights that noise is 0.22 against an offset far below it, so comparing against the
-    reference instead would measure the dtype rather than the placement.
+    As in test_ttnn_experts.py, the placement is read off the module's own bias-zeroed output
+    rather than the reference: at real weights the bfloat16 noise is 0.22 against an offset far
+    below it, so comparing against the reference would measure the dtype rather than the
+    placement. The output's difference from the bias-zeroed run is projected onto the bias over every
+    token, which averages away the rounding the two runs do differently when the bias is added inside
+    a matmul. 2x128 runs a stacked expert pass, 2x512 a transposed one.
     """
-    batch, seqlen = 2, 128
     x = hidden_states(batch, seqlen, config.hidden_size)
     x_tt = to_device(to_block_layout(x), device)
 
@@ -145,12 +147,26 @@ def test_the_shared_bias_lands_outside_the_reduce(device, config, reference, tt_
     tt_moe.experts.bias = to_device(torch.zeros(1, 1, 1, config.hidden_size), device, dtype=tt_config.weight_dtype)
     weighted_sum = from_block_layout(tt_moe(x_tt))
 
-    bias = reference.experts.bias.detach()
-    routed_weight_sum = top_weights.sum(-1).reshape(batch, seqlen, 1)
-    correct = weighted_sum + bias
-    inside_the_loop = weighted_sum + bias * routed_weight_sum
+    assert_bias_added_once(
+        got, weighted_sum, reference.experts.bias.detach(), top_weights.sum(-1).reshape(batch, seqlen, 1)
+    )
 
-    assert (routed_weight_sum < 1.0).all(), "top-k weights are not renormalized, so they must sum below 1"
-    assert compute_max_abs_error(correct, inside_the_loop) > BIAS_MISPLACEMENT_MAX_ABS
-    assert compute_pcc(inside_the_loop, correct) > 0.9999, "if PCC caught this, the docstring is stale"
-    assert compute_max_abs_error(got, correct) < compute_max_abs_error(got, inside_the_loop)
+
+@pytest.mark.parametrize("batch, seqlen", [(1, 128), (2, 64), (5, 1), (120, 1)])
+def test_buffers_are_held_only_for_a_small_block_input(device, config, tt_config, state_dict, batch, seqlen):
+    """A stacked pass's buffers are held only for at most HELD_MAX_TILES tile rows as the blocks count them.
+
+    The blocks pad each sequence to the tile, so the flat token axis undercounts a batch of short
+    sequences: 120 one-token sequences are 4 tile rows to the experts and 120 to every dense layer.
+    Held at 120x1, the buffers overflowed L1 beside the next layer's fc1.
+    """
+    buffers = StackedBuffers()
+    moe = TtNomicMoELayer(device, config, tt_config, state_dict, PREFIX, buffers=buffers)
+    x_tt = to_device(to_block_layout(hidden_states(batch, seqlen, config.hidden_size)), device)
+    try:
+        moe(x_tt)
+        held = buffers.get(batch * seqlen) is not None
+    finally:
+        buffers.release()
+
+    assert held == (batch * ttnn.core.divup(seqlen, ttnn.TILE_SIZE) <= HELD_MAX_TILES)

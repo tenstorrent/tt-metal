@@ -20,6 +20,11 @@
  * - `xxx_addrgen<ADDRGEN_1>()` - Functions for address generator 1
  * `xxx_addrgen_0()` / `xxx_addrgen_1()` aliases are provided at the end of the file.
  *
+ * The DM firmware resets both address generators before each kernel, so a kernel starts with clean generators.
+ * On Quasar DM cores with the ATT backend, TensorAccessor NoC transfers already use both address generators (the
+ * sequencer, tensor/addrgen_sequencer.h). A kernel that programs them directly with this API must be built with
+ * TT_TA_ADDRGEN_DISABLE, or the two will overwrite each other's state.
+ *
  * ## Hardware Loop Implementation
  *
  * Each address generator implements following loops in hardware:
@@ -66,6 +71,11 @@ enum AddrGen : uint32_t { ADDRGEN_0 = CMDBUF_0, ADDRGEN_1 = CMDBUF_1 };
 constexpr CmdBuf paired_cmdbuf(AddrGen addrgen) { return static_cast<CmdBuf>(static_cast<uint32_t>(addrgen)); }
 
 enum bank_order_e { BANK_INNER = 0, BANK_MIDDLE, BANK_OUTER };
+
+/* A RoCC instruction with no result. Hardware workaround (AIHWE-6506): two value-returning RoCC instructions in flight
+ * at once (e.g. back-to-back rd_reg into different registers) can hang; a rocc_nop between them avoids it.
+ * The compiler will eventually insert it automatically. */
+inline __attribute__((always_inline)) void rocc_nop() { CMDBUF_GET_VC_SPACE_NO_RESULT(0); }  // cmdbuf 0
 
 /*
  * Configuration structs for address generators.
@@ -413,7 +423,7 @@ inline __attribute__((always_inline)) uint64_t peek_src_addrgen() {
  */
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_src_addrgen() {
-    return __builtin_riscv_ttrocc_addrgen_pop_src(ADDRGEN);
+    return __builtin_riscv_ttrocc_addrgen_pop_x_src(ADDRGEN, 1);
 }
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_src_addrgen(uint64_t pop_amount) {
@@ -438,7 +448,7 @@ inline __attribute__((always_inline)) uint64_t peek_dest_addrgen() {
  */
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_dest_addrgen() {
-    return __builtin_riscv_ttrocc_addrgen_pop_dest(ADDRGEN);
+    return __builtin_riscv_ttrocc_addrgen_pop_x_dest(ADDRGEN, 1);
 }
 template <AddrGen ADDRGEN>
 inline __attribute__((always_inline)) uint64_t pop_dest_addrgen(uint64_t pop_amount) {

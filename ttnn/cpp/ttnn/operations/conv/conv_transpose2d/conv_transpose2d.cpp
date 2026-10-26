@@ -7,6 +7,7 @@
 #include <array>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/math.hpp>
 #include <tuple>
 #include <utility>
 

@@ -37,6 +37,7 @@ Example usage:
 
 # Import Python implementations first
 from .function import Function, FunctionContext, get_links
+from .numpy_assign import assign_numpy
 
 # Import C++ bindings from _ttml.autograd
 # Note: _ttml is a top-level module, not a subpackage of ttml
@@ -68,6 +69,7 @@ __all__ = [
     "Function",
     "FunctionContext",
     "get_links",
+    "assign_numpy",
     # C++ classes and enums (available after build)
     "AutoContext",
     "AutocastTensor",

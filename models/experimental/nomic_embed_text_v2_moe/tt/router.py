@@ -11,11 +11,18 @@ rather than after.
 
 from __future__ import annotations
 
+from functools import cache
+
 import torch
 import ttnn
 
 from models.common.lightweightmodule import LightweightModule
-from models.experimental.nomic_embed_text_v2_moe.tt.common import to_device, transpose_linear_weight
+from models.experimental.nomic_embed_text_v2_moe.tt.common import (
+    activation_memory_config,
+    block_spread,
+    to_device,
+    transpose_linear_weight,
+)
 from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import router_program_config
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 
@@ -25,6 +32,23 @@ from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
 # probabilities and the selection are bit-identical to 8 columns.
 SCORED_COLUMNS = 64
 PADDING_LOGIT = -1e30
+
+# The most tokens whose router intermediates go to L1: ten small ops, each faster reading and
+# writing L1, 44.8 -> 42.9 us a MoE layer at 128 tokens and 49.6 -> 47.1 at 576, bit-identical up
+# to 4096. Above, DRAM: the scores alone take 221 KB of every bank at 94k tokens, and
+# router_program_config plans the matmul's buffers against the whole of L1, so they clashed. The
+# dense weights the experts take follow activation_memory_config instead, and every intermediate is
+# freed before the experts run.
+_L1_MAX_TOKENS = 4096
+
+
+def _intermediate_memory(tokens: int) -> ttnn.MemoryConfig:
+    return ttnn.L1_MEMORY_CONFIG if tokens <= _L1_MAX_TOKENS else ttnn.DRAM_MEMORY_CONFIG
+
+
+@cache
+def _leading_cores(count: int, grid: ttnn.CoreCoord) -> ttnn.CoreRangeSet:
+    return ttnn.num_cores_to_corerangeset(count, grid, row_wise=True)
 
 
 class TtNomicRouter(LightweightModule):
@@ -63,14 +87,24 @@ class TtNomicRouter(LightweightModule):
         # 0/1 matrices for dense_weights: spread copies selected index k across column block k,
         # fold sums the K blocks back onto E columns. expert_ids holds 0..E-1 in every block.
         experts, top_k = self.num_experts, self.top_k
-        spread = torch.zeros(top_k, top_k * experts)
-        for k in range(top_k):
-            spread[k, k * experts : (k + 1) * experts] = 1.0
+        spread = block_spread(top_k, experts)
         fold = torch.cat([torch.eye(experts)] * top_k)
         expert_ids = torch.arange(experts, dtype=torch.float32).repeat(top_k).reshape(1, 1, 1, top_k * experts)
         self.spread, self.fold, self.expert_ids = (
             to_device(tensor, device, dtype=tt_config.activation_dtype) for tensor in (spread, fold, expert_ids)
         )
+
+    def _tile_cores(self, tensor: ttnn.Tensor) -> ttnn.CoreRangeSet | None:
+        """One core a tile of a (1, 1, T, C) output, or None (the whole grid) once there are as many tiles.
+
+        A binary op spreads its tiles over the whole grid by default, and its enqueue cost grows with
+        the cores it sets up: 23 us on 110 cores against 7 on 4 to 8 for each of the three below at
+        128 tokens, in the same 2 us on device, where a core's one tile is the critical path either
+        way. Bit-identical: the tiles are computed alike wherever they land.
+        """
+        grid = self.tt_config.core_grid
+        tiles = ttnn.core.divup(tensor.shape[-2], ttnn.TILE_SIZE) * ttnn.core.divup(tensor.shape[-1], ttnn.TILE_SIZE)
+        return None if tiles >= grid.x * grid.y else _leading_cores(tiles, grid)
 
     def logits(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """(1, 1, T, H) -> (1, 1, T, SCORED_COLUMNS) float32 scores, the experts first.
@@ -79,6 +113,7 @@ class TtNomicRouter(LightweightModule):
         measured the same error to 16 digits, at twice the read plus the cast.
         """
         compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.ROUTER)
+        memory = _intermediate_memory(x.shape[-2])
         scores = ttnn.linear(
             x,
             self.weight,
@@ -95,10 +130,17 @@ class TtNomicRouter(LightweightModule):
                 compute_kernel_config,
             ),
             compute_kernel_config=compute_kernel_config,
+            memory_config=memory,
         )
         # Its own fp32 add, exact on every column: given as the matmul's fused bias, the padding row
         # rounded all 64 outputs, up to 3e-3 on the real logits.
-        logits = ttnn.add(scores, self.padding, dtype=self.tt_config.router_dtype)
+        logits = ttnn.add(
+            scores,
+            self.padding,
+            dtype=self.tt_config.router_dtype,
+            memory_config=memory,
+            sub_core_grids=self._tile_cores(scores),
+        )
         ttnn.deallocate(scores)
         return logits
 
@@ -116,12 +158,18 @@ class TtNomicRouter(LightweightModule):
             indices (1, 1, T, K) uint32.
         """
         logits = self.logits(x)
+        memory = _intermediate_memory(x.shape[-2])
         scored = ttnn.softmax(
-            logits, dim=-1, compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.SOFTMAX)
+            logits,
+            dim=-1,
+            compute_kernel_config=self.tt_config.compute_kernel_config(OpGroup.SOFTMAX),
+            memory_config=memory,
         )
         ttnn.deallocate(logits)
-        values, indices = ttnn.topk(scored, k=self.top_k, dim=-1)
-        probabilities = ttnn.slice(scored, [0, 0, 0, 0], [1, 1, scored.shape[-2], self.num_experts])
+        values, indices = ttnn.topk(scored, k=self.top_k, dim=-1, memory_config=memory)
+        probabilities = ttnn.slice(
+            scored, [0, 0, 0, 0], [1, 1, scored.shape[-2], self.num_experts], memory_config=memory
+        )
         ttnn.deallocate(scored)
         return probabilities, values, indices
 
@@ -137,17 +185,28 @@ class TtNomicRouter(LightweightModule):
         """
         compute_kernel_config = self.tt_config.compute_kernel_config(OpGroup.ROUTER)
         activation_dtype = self.tt_config.activation_dtype
-        ids = ttnn.typecast(indices, activation_dtype)
-        spread = ttnn.matmul(ids, self.spread, dtype=activation_dtype, compute_kernel_config=compute_kernel_config)
+        memory = _intermediate_memory(probabilities.shape[-2])
+        ids = ttnn.typecast(indices, activation_dtype, memory_config=memory)
+        spread = ttnn.matmul(
+            ids, self.spread, dtype=activation_dtype, compute_kernel_config=compute_kernel_config, memory_config=memory
+        )
         ttnn.deallocate(ids)
-        hits = ttnn.eq(spread, self.expert_ids)
+        hits = ttnn.eq(spread, self.expert_ids, memory_config=memory, sub_core_grids=self._tile_cores(spread))
         ttnn.deallocate(spread)
-        mask = ttnn.matmul(hits, self.fold, dtype=activation_dtype, compute_kernel_config=compute_kernel_config)
+        mask = ttnn.matmul(
+            hits, self.fold, dtype=activation_dtype, compute_kernel_config=compute_kernel_config, memory_config=memory
+        )
         ttnn.deallocate(hits)
-        gate = ttnn.multiply(probabilities, mask, dtype=self.tt_config.router_dtype)
+        # The fp32 product written straight to bfloat16: bit-identical to an fp32 product and a
+        # typecast, at 128 to 4096 tokens, and one op fewer.
+        dense = ttnn.multiply(
+            probabilities,
+            mask,
+            dtype=activation_dtype,
+            memory_config=activation_memory_config(probabilities),
+            sub_core_grids=self._tile_cores(probabilities),
+        )
         ttnn.deallocate(mask)
-        dense = ttnn.typecast(gate, activation_dtype)
-        ttnn.deallocate(gate)
         return dense
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:

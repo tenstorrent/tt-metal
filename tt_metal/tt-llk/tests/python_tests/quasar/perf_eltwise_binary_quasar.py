@@ -16,7 +16,6 @@ from quasar.test_eltwise_binary_quasar import (
     ELTWISE_FORMATS,
     eltwise_binary_dest_sync_dest_acc,
     eltwise_binary_direct_indexing,
-    eltwise_binary_implied_math_formats,
     eltwise_binary_tile_dimensions,
 )
 from quasar.test_eltwise_binary_quasar import test_eltwise_binary as run_eltwise_binary
@@ -31,27 +30,22 @@ from quasar.test_eltwise_binary_quasar import (
     formats=ELTWISE_FORMATS,
     mathop=get_perf_math_operations,
     math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
-    implied_math_format=lambda formats: eltwise_binary_implied_math_formats(
-        formats, is_perf=True
-    ),
     dest_sync_dest_acc=lambda formats: eltwise_binary_dest_sync_dest_acc(
         formats, is_perf=True
     ),
-    enable_direct_indexing=lambda formats, mathop, math_fidelity, dest_sync_dest_acc, implied_math_format: eltwise_binary_direct_indexing(
+    enable_direct_indexing=lambda formats, mathop, math_fidelity, dest_sync_dest_acc: eltwise_binary_direct_indexing(
         formats,
         mathop,
         math_fidelity,
         dest_sync_dest_acc,
-        implied_math_format,
         is_perf=True,
     ),
     tile_dimensions=runtime(
-        lambda formats, mathop, math_fidelity, dest_sync_dest_acc, implied_math_format, enable_direct_indexing: eltwise_binary_tile_dimensions(
+        lambda formats, mathop, math_fidelity, dest_sync_dest_acc, enable_direct_indexing: eltwise_binary_tile_dimensions(
             formats,
             mathop,
             math_fidelity,
             dest_sync_dest_acc,
-            implied_math_format,
             enable_direct_indexing,
             is_perf=True,
         )
@@ -72,7 +66,6 @@ def test_perf_eltwise_binary_quasar(
     formats,
     mathop,
     math_fidelity,
-    implied_math_format,
     dest_sync_dest_acc,
     input_dimensions,
     acc_to_dest,
@@ -86,7 +79,6 @@ def test_perf_eltwise_binary_quasar(
         formats,
         mathop,
         math_fidelity,
-        implied_math_format,
         dest_sync_dest_acc,
         input_dimensions,
         acc_to_dest,

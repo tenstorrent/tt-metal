@@ -123,8 +123,6 @@ void kernel_main() {
     dfb_in.wait_front(num_tiles_per_block);
     pack_reconfig_data_format(dfb_in_id, dfb_x2_id);
 #else
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup
-    // full-init behaviour) should become a targeted DST re-arm.
     compute_kernel_hw_startup(dfb_in_id, dfb_in_id, dfb_x2_id);
 #endif
 
@@ -294,6 +292,12 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
         pack_init(dfb_reduction_out);
 #endif
+        // This buffer is reserved exactly once per kernel invocation. Where it resolves to dfb::ex2, the
+        // reader kernel pops it as soon as it has signalled the second-stage reader, without waiting for
+        // that core's NOC gather to finish, so the pages keep their contents only because nothing
+        // reserves them again. If there were ever a second reserve here, or a loop around this block,
+        // would overwrite partials that the second-stage reader has not yet read, so additional
+        // synchronization would be needed.
         DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
             .reserve_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
 
@@ -322,6 +326,16 @@ void kernel_main() {
         reduce_uninit();
         DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
             .push_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
+        if (dfb_reduction_out == dfb_out) {
+            // The statistics leave the device through the all-gather, not a kernel: compute is the only
+            // producer and consumer of the output DFB (self-loop), so pop what it just pushed. dummy_unpack
+            // orders the pop after the wait on Quasar (nothing unpacks this buffer).
+            const uint32_t num_out_tiles = num_tiles_per_partial_result * num_tiles_per_allgather_worker;
+            DataflowBuffer dfb_out_obj(dfb_out);
+            dfb_out_obj.wait_front(num_out_tiles);
+            dummy_unpack(dfb_out);
+            dfb_out_obj.pop_front(num_out_tiles);
+        }
         // The global-reduce scaler tile is pushed once (only on all-gather worker cores) and read by
         // tile index throughout the global reduce above without being popped. Pop it once here, inside
         // the same guard that gated the wait, so the buffer is left balanced on every core.

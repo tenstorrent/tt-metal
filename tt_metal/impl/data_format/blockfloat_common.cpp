@@ -11,6 +11,7 @@
 #include <future>
 
 #include <tt_stl/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "blockfloat_common.hpp"
 #include "common/executor.hpp"
 #include "constants.hpp"

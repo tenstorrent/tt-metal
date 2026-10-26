@@ -43,7 +43,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "single_core_compute_runners.hpp"
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -605,7 +605,7 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
 }
 
 // 32 tiles in 4 blocks of 8; single src→dst DFB path (Quasar). ROW/COL/SCALAR only (not NONE).
-TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfb) {
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixComputeUnaryBroadcastQuasarDfb) {
     constexpr BroadcastDim k_quasar_dims[] = {BroadcastDim::ROW, BroadcastDim::COL, BroadcastDim::SCALAR};
     constexpr struct {
         tt::DataFormat in_t;

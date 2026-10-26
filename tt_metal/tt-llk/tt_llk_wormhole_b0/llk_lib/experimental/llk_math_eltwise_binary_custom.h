@@ -50,6 +50,8 @@ inline void eltwise_binary_configure_addrmod_custom()
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param num_faces: Number of faces to process (1, 2, or 4)
+ * @note Establishes the operand-driven default Src zero-substitution state, which the bcast-col compute asserts
+ *       under LLK asserts; an op that leaves it at keep must be followed by this init again.
  */
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type>
 inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
@@ -64,6 +66,9 @@ inline void _llk_math_eltwise_binary_init_custom_(const std::uint32_t num_faces)
 
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // A preceding datacopy leaves the Src zero flag at keep; the FPU op needs the operand-driven value.
+    math::_configure_default_zero_flag_state_();
 }
 
 inline void _llk_math_eltwise_binary_uninit_custom_()
@@ -84,10 +89,15 @@ inline void _llk_math_eltwise_binary_uninit_custom_()
 // @param dst_index    Absolute dest tile slot where this block-row's ct_dim tiles begin. Multi-tile-row
 //                     callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
 //                     lands on its own dest slots; single-tile-row callers leave it at 0.
+// Call _llk_math_eltwise_binary_init_custom_ first; re-run it after any op that leaves the Src zero flag at keep.
 inline void _llk_math_sub_bcast_cols_reuse_custom_(
     const std::uint32_t ct_dim = 1, const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(
+        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
+        "bcast-col custom: Src zero-substitution flag does not hold the operand-driven value; an op between the init and "
+        "this call left it at keep, so denormal Src operands would not be flushed");
 
     // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
     const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;

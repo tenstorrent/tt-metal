@@ -26,34 +26,34 @@ static std::string M2ImplicitSyncParamName(const ::testing::TestParamInfo<bool>&
 // ====================================================================================
 
 // Metal 2.0 single-DFB config sweep
-#define DFB_TEST_2_0(suffix, p_type, c_type, num_p, pap_kind, num_c, cap_kind) \
-    TEST_P(DFBImplicitSyncParamFixture_2_0, suffix##_2_0) {                    \
-        M2SingleDFBParams params{                                              \
-            .producer_type = M2PorCType::p_type,                               \
-            .consumer_type = M2PorCType::c_type,                               \
-            .num_producers = (num_p),                                          \
-            .num_consumers = (num_c),                                          \
-            .pap = m2::DFBAccessPattern::pap_kind,                             \
-            .cap = m2::DFBAccessPattern::cap_kind,                             \
-            .implicit_sync = GetParam(),                                       \
-            .num_entries = default_num_entries((num_p), (num_c)),              \
-        };                                                                     \
-        run_single_dfb_program_2_0(this->device(), params);                    \
+#define DFB_TEST(suffix, p_type, c_type, num_p, pap_kind, num_c, cap_kind) \
+    TEST_P(DFBImplicitSyncParamFixture_2_0, suffix) {                      \
+        M2SingleDFBParams params{                                          \
+            .producer_type = M2PorCType::p_type,                           \
+            .consumer_type = M2PorCType::c_type,                           \
+            .num_producers = (num_p),                                      \
+            .num_consumers = (num_c),                                      \
+            .pap = m2::DFBAccessPattern::pap_kind,                         \
+            .cap = m2::DFBAccessPattern::cap_kind,                         \
+            .implicit_sync = GetParam(),                                   \
+            .num_entries = default_num_entries((num_p), (num_c)),          \
+        };                                                                 \
+        run_single_dfb_program_2_0(this->device(), params);                \
     }
 
-DFB_TEST_2_0(DMTest1xDFB1Sx1S, DM, DM, 1, STRIDED, 1, STRIDED)
-DFB_TEST_2_0(DMTensixTest1xDFB1Sx1S, DM, TENSIX, 1, STRIDED, 1, STRIDED)
-DFB_TEST_2_0(TensixDMTest1xDFB1Sx1S, TENSIX, DM, 1, STRIDED, 1, STRIDED)
+DFB_TEST(DMTest1xDFB1Sx1S, DM, DM, 1, STRIDED, 1, STRIDED)
+DFB_TEST(DMTensixTest1xDFB1Sx1S, DM, TENSIX, 1, STRIDED, 1, STRIDED)
+DFB_TEST(TensixDMTest1xDFB1Sx1S, TENSIX, DM, 1, STRIDED, 1, STRIDED)
 
-DFB_TEST_2_0(DMTest1xDFB1Sx4S, DM, DM, 1, STRIDED, 4, STRIDED)
-DFB_TEST_2_0(DMTest1xDFB4Sx1S, DM, DM, 4, STRIDED, 1, STRIDED)
+DFB_TEST(DMTest1xDFB1Sx4S, DM, DM, 1, STRIDED, 4, STRIDED)
+DFB_TEST(DMTest1xDFB4Sx1S, DM, DM, 4, STRIDED, 1, STRIDED)
 // DMTest1xDFB4Sx4S omitted: 4+4=8 DM cores exceeds Gen2 user-DM cap (6).
 // Legacy can do it via num_threads_per_cluster; m2's num_threads = literal DM cores.
-DFB_TEST_2_0(DMTest1xDFB2Sx2S, DM, DM, 2, STRIDED, 2, STRIDED)
-DFB_TEST_2_0(DMTensixTest1xDFB4Sx1S, DM, TENSIX, 4, STRIDED, 1, STRIDED)
-DFB_TEST_2_0(DMTensixTest1xDFB4Sx2S, DM, TENSIX, 4, STRIDED, 2, STRIDED)
-DFB_TEST_2_0(TensixDMTest1xDFB1Sx4S, TENSIX, DM, 1, STRIDED, 4, STRIDED)
-DFB_TEST_2_0(TensixDMTest1xDFB4Sx1S, TENSIX, DM, 4, STRIDED, 1, STRIDED)
+DFB_TEST(DMTest1xDFB2Sx2S, DM, DM, 2, STRIDED, 2, STRIDED)
+DFB_TEST(DMTensixTest1xDFB4Sx1S, DM, TENSIX, 4, STRIDED, 1, STRIDED)
+DFB_TEST(DMTensixTest1xDFB4Sx2S, DM, TENSIX, 4, STRIDED, 2, STRIDED)
+DFB_TEST(TensixDMTest1xDFB1Sx4S, TENSIX, DM, 1, STRIDED, 4, STRIDED)
+DFB_TEST(TensixDMTest1xDFB4Sx1S, TENSIX, DM, 4, STRIDED, 1, STRIDED)
 
 // ---------- Matrix completion: portable legacy DFB_TEST variants ported to M2 ----------
 // Filters applied (configs that violate these are documented but skipped):
@@ -70,72 +70,72 @@ DFB_TEST_2_0(TensixDMTest1xDFB4Sx1S, TENSIX, DM, 4, STRIDED, 1, STRIDED)
 //   TensixDM *3Sx                 : Tensix producer = 3, not in {1,2,4}
 
 // STRIDED — DM-DM additional variants
-DFB_TEST_2_0(DMTest1xDFB1Sx2S, DM, DM, 1, STRIDED, 2, STRIDED)
-DFB_TEST_2_0(DMTest1xDFB1Sx3S, DM, DM, 1, STRIDED, 3, STRIDED)
-DFB_TEST_2_0(DMTest1xDFB1Sx5S, DM, DM, 1, STRIDED, 5, STRIDED)
-DFB_TEST_2_0(DMTest1xDFB2Sx1S, DM, DM, 2, STRIDED, 1, STRIDED)
-DFB_TEST_2_0(DMTest1xDFB3Sx1S, DM, DM, 3, STRIDED, 1, STRIDED)
-DFB_TEST_2_0(DMTest1xDFB3Sx3S, DM, DM, 3, STRIDED, 3, STRIDED)
-DFB_TEST_2_0(DMTest1xDFB4Sx2S, DM, DM, 4, STRIDED, 2, STRIDED)
-DFB_TEST_2_0(DMTest1xDFB5Sx1S, DM, DM, 5, STRIDED, 1, STRIDED)
-DFB_TEST_2_0(DMTest1xDFB2Sx4S, DM, DM, 2, STRIDED, 4, STRIDED)
+DFB_TEST(DMTest1xDFB1Sx2S, DM, DM, 1, STRIDED, 2, STRIDED)
+DFB_TEST(DMTest1xDFB1Sx3S, DM, DM, 1, STRIDED, 3, STRIDED)
+DFB_TEST(DMTest1xDFB1Sx5S, DM, DM, 1, STRIDED, 5, STRIDED)
+DFB_TEST(DMTest1xDFB2Sx1S, DM, DM, 2, STRIDED, 1, STRIDED)
+DFB_TEST(DMTest1xDFB3Sx1S, DM, DM, 3, STRIDED, 1, STRIDED)
+DFB_TEST(DMTest1xDFB3Sx3S, DM, DM, 3, STRIDED, 3, STRIDED)
+DFB_TEST(DMTest1xDFB4Sx2S, DM, DM, 4, STRIDED, 2, STRIDED)
+DFB_TEST(DMTest1xDFB5Sx1S, DM, DM, 5, STRIDED, 1, STRIDED)
+DFB_TEST(DMTest1xDFB2Sx4S, DM, DM, 2, STRIDED, 4, STRIDED)
 
 // STRIDED — DM→Tensix additional variants (Tensix consumer ∈ {1,2,4})
-DFB_TEST_2_0(DMTensixTest1xDFB1Sx2S, DM, TENSIX, 1, STRIDED, 2, STRIDED)
-DFB_TEST_2_0(DMTensixTest1xDFB1Sx4S, DM, TENSIX, 1, STRIDED, 4, STRIDED)
-DFB_TEST_2_0(DMTensixTest1xDFB2Sx1S, DM, TENSIX, 2, STRIDED, 1, STRIDED)
-DFB_TEST_2_0(DMTensixTest1xDFB2Sx4S, DM, TENSIX, 2, STRIDED, 4, STRIDED)
-DFB_TEST_2_0(DMTensixTest1xDFB3Sx1S, DM, TENSIX, 3, STRIDED, 1, STRIDED)
-DFB_TEST_2_0(DMTensixTest1xDFB4Sx4S, DM, TENSIX, 4, STRIDED, 4, STRIDED)
-DFB_TEST_2_0(DMTensixTest1xDFB6Sx1S, DM, TENSIX, 6, STRIDED, 1, STRIDED)
-DFB_TEST_2_0(DMTensixTest1xDFB6Sx2S, DM, TENSIX, 6, STRIDED, 2, STRIDED)
+DFB_TEST(DMTensixTest1xDFB1Sx2S, DM, TENSIX, 1, STRIDED, 2, STRIDED)
+DFB_TEST(DMTensixTest1xDFB1Sx4S, DM, TENSIX, 1, STRIDED, 4, STRIDED)
+DFB_TEST(DMTensixTest1xDFB2Sx1S, DM, TENSIX, 2, STRIDED, 1, STRIDED)
+DFB_TEST(DMTensixTest1xDFB2Sx4S, DM, TENSIX, 2, STRIDED, 4, STRIDED)
+DFB_TEST(DMTensixTest1xDFB3Sx1S, DM, TENSIX, 3, STRIDED, 1, STRIDED)
+DFB_TEST(DMTensixTest1xDFB4Sx4S, DM, TENSIX, 4, STRIDED, 4, STRIDED)
+DFB_TEST(DMTensixTest1xDFB6Sx1S, DM, TENSIX, 6, STRIDED, 1, STRIDED)
+DFB_TEST(DMTensixTest1xDFB6Sx2S, DM, TENSIX, 6, STRIDED, 2, STRIDED)
 
 // STRIDED — Tensix→DM additional variants (Tensix producer ∈ {1,2,4})
-DFB_TEST_2_0(TensixDMTest1xDFB1Sx2S, TENSIX, DM, 1, STRIDED, 2, STRIDED)
-DFB_TEST_2_0(TensixDMTest1xDFB1Sx3S, TENSIX, DM, 1, STRIDED, 3, STRIDED)
-DFB_TEST_2_0(TensixDMTest1xDFB1Sx6S, TENSIX, DM, 1, STRIDED, 6, STRIDED)
-DFB_TEST_2_0(TensixDMTest1xDFB2Sx1S, TENSIX, DM, 2, STRIDED, 1, STRIDED)
+DFB_TEST(TensixDMTest1xDFB1Sx2S, TENSIX, DM, 1, STRIDED, 2, STRIDED)
+DFB_TEST(TensixDMTest1xDFB1Sx3S, TENSIX, DM, 1, STRIDED, 3, STRIDED)
+DFB_TEST(TensixDMTest1xDFB1Sx6S, TENSIX, DM, 1, STRIDED, 6, STRIDED)
+DFB_TEST(TensixDMTest1xDFB2Sx1S, TENSIX, DM, 2, STRIDED, 1, STRIDED)
 // TensixDMTest1xDFB2Sx3S omitted: 2P × 3C asymmetric STRIDED triggers an
 // M2-vs-legacy ring-slot mapping divergence (M2 interleaves consumer slots
 // across the ring per the [1126-1130] comment; the helper's identity-equal
 // verification doesn't match). Coverage of Tensix→DM asymmetric STRIDED is
 // preserved by 1Sx3S (asymmetric 1×N), 2Sx4S, 4Sx2S (asymmetric N×M with
 // divisible ratios) which all pass.
-DFB_TEST_2_0(TensixDMTest1xDFB2Sx4S, TENSIX, DM, 2, STRIDED, 4, STRIDED)
-DFB_TEST_2_0(TensixDMTest1xDFB2Sx6S, TENSIX, DM, 2, STRIDED, 6, STRIDED)
-DFB_TEST_2_0(TensixDMTest1xDFB4Sx2S, TENSIX, DM, 4, STRIDED, 2, STRIDED)
-DFB_TEST_2_0(TensixDMTest1xDFB4Sx4S, TENSIX, DM, 4, STRIDED, 4, STRIDED)
+DFB_TEST(TensixDMTest1xDFB2Sx4S, TENSIX, DM, 2, STRIDED, 4, STRIDED)
+DFB_TEST(TensixDMTest1xDFB2Sx6S, TENSIX, DM, 2, STRIDED, 6, STRIDED)
+DFB_TEST(TensixDMTest1xDFB4Sx2S, TENSIX, DM, 4, STRIDED, 2, STRIDED)
+DFB_TEST(TensixDMTest1xDFB4Sx4S, TENSIX, DM, 4, STRIDED, 4, STRIDED)
 
 // ALL — DM-DM (ImplicitSyncTrue auto-skips per known DM→DM ALL impl-sync gap)
-DFB_TEST_2_0(DMTest1xDFB1Sx3A, DM, DM, 1, STRIDED, 3, ALL)
-DFB_TEST_2_0(DMTest1xDFB1Sx4A, DM, DM, 1, STRIDED, 4, ALL)
-DFB_TEST_2_0(DMTest1xDFB2Sx3A, DM, DM, 2, STRIDED, 3, ALL)
-DFB_TEST_2_0(DMTest1xDFB2Sx4A, DM, DM, 2, STRIDED, 4, ALL)
-DFB_TEST_2_0(DMTest1xDFB3Sx1A, DM, DM, 3, STRIDED, 1, ALL)
-DFB_TEST_2_0(DMTest1xDFB3Sx2A, DM, DM, 3, STRIDED, 2, ALL)
-DFB_TEST_2_0(DMTest1xDFB3Sx3A, DM, DM, 3, STRIDED, 3, ALL)
-DFB_TEST_2_0(DMTest1xDFB4Sx1A, DM, DM, 4, STRIDED, 1, ALL)
-DFB_TEST_2_0(DMTest1xDFB4Sx2A, DM, DM, 4, STRIDED, 2, ALL)
+DFB_TEST(DMTest1xDFB1Sx3A, DM, DM, 1, STRIDED, 3, ALL)
+DFB_TEST(DMTest1xDFB1Sx4A, DM, DM, 1, STRIDED, 4, ALL)
+DFB_TEST(DMTest1xDFB2Sx3A, DM, DM, 2, STRIDED, 3, ALL)
+DFB_TEST(DMTest1xDFB2Sx4A, DM, DM, 2, STRIDED, 4, ALL)
+DFB_TEST(DMTest1xDFB3Sx1A, DM, DM, 3, STRIDED, 1, ALL)
+DFB_TEST(DMTest1xDFB3Sx2A, DM, DM, 3, STRIDED, 2, ALL)
+DFB_TEST(DMTest1xDFB3Sx3A, DM, DM, 3, STRIDED, 3, ALL)
+DFB_TEST(DMTest1xDFB4Sx1A, DM, DM, 4, STRIDED, 1, ALL)
+DFB_TEST(DMTest1xDFB4Sx2A, DM, DM, 4, STRIDED, 2, ALL)
 
 // ALL — DM→Tensix (Tensix consumer ∈ {1,2,4})
-DFB_TEST_2_0(DMTensixTest1xDFB1Sx4A, DM, TENSIX, 1, STRIDED, 4, ALL)
-DFB_TEST_2_0(DMTensixTest1xDFB2Sx4A, DM, TENSIX, 2, STRIDED, 4, ALL)
-DFB_TEST_2_0(DMTensixTest1xDFB3Sx1A, DM, TENSIX, 3, STRIDED, 1, ALL)
-DFB_TEST_2_0(DMTensixTest1xDFB3Sx2A, DM, TENSIX, 3, STRIDED, 2, ALL)
-DFB_TEST_2_0(DMTensixTest1xDFB3Sx4A, DM, TENSIX, 3, STRIDED, 4, ALL)
-DFB_TEST_2_0(DMTensixTest1xDFB4Sx1A, DM, TENSIX, 4, STRIDED, 1, ALL)
-DFB_TEST_2_0(DMTensixTest1xDFB4Sx2A, DM, TENSIX, 4, STRIDED, 2, ALL)
-DFB_TEST_2_0(DMTensixTest1xDFB4Sx4A, DM, TENSIX, 4, STRIDED, 4, ALL)
-DFB_TEST_2_0(DMTensixTest1xDFB6Sx1A, DM, TENSIX, 6, STRIDED, 1, ALL)
-DFB_TEST_2_0(DMTensixTest1xDFB6Sx2A, DM, TENSIX, 6, STRIDED, 2, ALL)
-DFB_TEST_2_0(DMTensixTest1xDFB6Sx4A, DM, TENSIX, 6, STRIDED, 4, ALL)
+DFB_TEST(DMTensixTest1xDFB1Sx4A, DM, TENSIX, 1, STRIDED, 4, ALL)
+DFB_TEST(DMTensixTest1xDFB2Sx4A, DM, TENSIX, 2, STRIDED, 4, ALL)
+DFB_TEST(DMTensixTest1xDFB3Sx1A, DM, TENSIX, 3, STRIDED, 1, ALL)
+DFB_TEST(DMTensixTest1xDFB3Sx2A, DM, TENSIX, 3, STRIDED, 2, ALL)
+DFB_TEST(DMTensixTest1xDFB3Sx4A, DM, TENSIX, 3, STRIDED, 4, ALL)
+DFB_TEST(DMTensixTest1xDFB4Sx1A, DM, TENSIX, 4, STRIDED, 1, ALL)
+DFB_TEST(DMTensixTest1xDFB4Sx2A, DM, TENSIX, 4, STRIDED, 2, ALL)
+DFB_TEST(DMTensixTest1xDFB4Sx4A, DM, TENSIX, 4, STRIDED, 4, ALL)
+DFB_TEST(DMTensixTest1xDFB6Sx1A, DM, TENSIX, 6, STRIDED, 1, ALL)
+DFB_TEST(DMTensixTest1xDFB6Sx2A, DM, TENSIX, 6, STRIDED, 2, ALL)
+DFB_TEST(DMTensixTest1xDFB6Sx4A, DM, TENSIX, 6, STRIDED, 4, ALL)
 
 // ALL — Tensix→DM (ported from the legacy sweep: Tensix producer + ALL DM consumer)
-DFB_TEST_2_0(TensixDMTest1xDFB1Sx4A, TENSIX, DM, 1, STRIDED, 4, ALL)
-DFB_TEST_2_0(TensixDMTest1xDFB2Sx4A, TENSIX, DM, 2, STRIDED, 4, ALL)
-DFB_TEST_2_0(TensixDMTest1xDFB4Sx1A, TENSIX, DM, 4, STRIDED, 1, ALL)
-DFB_TEST_2_0(TensixDMTest1xDFB4Sx2A, TENSIX, DM, 4, STRIDED, 2, ALL)
-DFB_TEST_2_0(TensixDMTest1xDFB4Sx4A, TENSIX, DM, 4, STRIDED, 4, ALL)
+DFB_TEST(TensixDMTest1xDFB1Sx4A, TENSIX, DM, 1, STRIDED, 4, ALL)
+DFB_TEST(TensixDMTest1xDFB2Sx4A, TENSIX, DM, 2, STRIDED, 4, ALL)
+DFB_TEST(TensixDMTest1xDFB4Sx1A, TENSIX, DM, 4, STRIDED, 1, ALL)
+DFB_TEST(TensixDMTest1xDFB4Sx2A, TENSIX, DM, 4, STRIDED, 2, ALL)
+DFB_TEST(TensixDMTest1xDFB4Sx4A, TENSIX, DM, 4, STRIDED, 4, ALL)
 
 // instantiations (each fixture instantiated exactly once in the whole binary)
 INSTANTIATE_TEST_SUITE_P(
@@ -148,5 +148,337 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     M2ImplicitSync, DFBImplicitSyncParamFixture_2_0, ::testing::Values(false, true), M2ImplicitSyncParamName);
 
+// =====================================================================================
+// BLOCKED access-pattern matrix
+// =====================================================================================
+#define DFB_BLOCKED_TEST(suffix, p_type, c_type, num_p, num_c, blk, entries, impl) \
+    TEST_F(UnitMeshFixture, suffix) {                                              \
+        M2SingleDFBParams params{                                                  \
+            .producer_type = M2PorCType::p_type,                                   \
+            .consumer_type = M2PorCType::c_type,                                   \
+            .num_producers = (num_p),                                              \
+            .num_consumers = (num_c),                                              \
+            .pap = m2::DFBAccessPattern::BLOCKED,                                  \
+            .cap = m2::DFBAccessPattern::BLOCKED,                                  \
+            .implicit_sync = (impl),                                               \
+            .num_entries = (entries),                                              \
+            .block_size = (blk),                                                   \
+        };                                                                         \
+        run_single_dfb_program_2_0(this->device(), params);                        \
+    }
+
+// STRIDED producers -> BLOCKED consumers. num_producers must divide block_size.
+#define DFB_STRIDED_TO_BLOCKED_TEST(suffix, p_type, c_type, num_p, num_c, cblk, entries, impl) \
+    TEST_F(UnitMeshFixture, suffix) {                                                          \
+        M2SingleDFBParams params{                                                              \
+            .producer_type = M2PorCType::p_type,                                               \
+            .consumer_type = M2PorCType::c_type,                                               \
+            .num_producers = (num_p),                                                          \
+            .num_consumers = (num_c),                                                          \
+            .pap = m2::DFBAccessPattern::STRIDED,                                              \
+            .cap = m2::DFBAccessPattern::BLOCKED,                                              \
+            .implicit_sync = (impl),                                                           \
+            .num_entries = (entries),                                                          \
+            .block_size = (cblk),                                                              \
+        };                                                                                     \
+        run_single_dfb_program_2_0(this->device(), params);                                    \
+    }
+
+// DM -> DM, explicit sync, data verified.
+DFB_STRIDED_TO_BLOCKED_TEST(DMTest1xDFB1Sx1B4, DM, DM, 1, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST(DMTest1xDFB2Sx2B4, DM, DM, 2, 2, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST(DMTest1xDFB2Sx1B4, DM, DM, 2, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST(DMTest1xDFB4Sx1B4, DM, DM, 4, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST(DMTest1xDFB1Sx2B4, DM, DM, 1, 2, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST(DMTest1xDFB2Sx2B2, DM, DM, 2, 2, 2, 16, false)
+// DM -> DM, implicit sync.
+DFB_STRIDED_TO_BLOCKED_TEST(DMTest1xDFB1Sx1B4_impl, DM, DM, 1, 1, 4, 16, true)
+DFB_STRIDED_TO_BLOCKED_TEST(DMTest1xDFB2Sx2B4_impl, DM, DM, 2, 2, 4, 16, true)
+DFB_STRIDED_TO_BLOCKED_TEST(DMTest1xDFB2Sx1B4_impl, DM, DM, 2, 1, 4, 16, true)
+// Tensix -> DM, data verified.
+DFB_STRIDED_TO_BLOCKED_TEST(TensixDMTest1xDFB1Sx1B4, TENSIX, DM, 1, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST(TensixDMTest1xDFB2Sx2B4, TENSIX, DM, 2, 2, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST(TensixDMTest1xDFB2Sx1B4, TENSIX, DM, 2, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST(TensixDMTest1xDFB4Sx1B4, TENSIX, DM, 4, 1, 4, 16, false)
+// DM -> Tensix, credits only (no data check).
+DFB_STRIDED_TO_BLOCKED_TEST(DMTensixTest1xDFB1Sx1B4, DM, TENSIX, 1, 1, 4, 16, false)
+DFB_STRIDED_TO_BLOCKED_TEST(DMTensixTest1xDFB2Sx2B4, DM, TENSIX, 2, 2, 4, 16, false)
+
+// BLOCKED -> BLOCKED, DM -> DM, explicit sync.
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk4, DM, DM, 1, 1, 4, 16, false)
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk2, DM, DM, 1, 1, 2, 16, false)
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk8, DM, DM, 1, 1, 8, 16, false)
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk4_ring32, DM, DM, 1, 1, 4, 32, false)
+DFB_BLOCKED_TEST(DMTest1xDFB2Bx2B_blk4, DM, DM, 2, 2, 4, 16, false)
+
+// 3 producers + 3 consumers uses all 6 DM cores.
+DFB_BLOCKED_TEST(DMTest1xDFB3Bx3B_blk4, DM, DM, 3, 3, 4, 24, false)
+// Non-power-of-2 block size.
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk3, DM, DM, 1, 1, 3, 12, false)
+
+// Same, with producer count != consumer count.
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx2B_blk4, DM, DM, 1, 2, 4, 16, false)
+DFB_BLOCKED_TEST(DMTest1xDFB2Bx1B_blk4, DM, DM, 2, 1, 4, 16, false)
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx4B_blk4, DM, DM, 1, 4, 4, 16, false)
+DFB_BLOCKED_TEST(DMTest1xDFB4Bx1B_blk4, DM, DM, 4, 1, 4, 16, false)
+DFB_BLOCKED_TEST(DMTest1xDFB2Bx4B_blk4, DM, DM, 2, 4, 4, 16, false)
+DFB_BLOCKED_TEST(DMTest1xDFB4Bx2B_blk4, DM, DM, 4, 2, 4, 16, false)
+
+// BLOCKED -> BLOCKED, DM -> DM, implicit sync.
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk4_impl, DM, DM, 1, 1, 4, 16, true)
+DFB_BLOCKED_TEST(DMTest1xDFB2Bx2B_blk4_impl, DM, DM, 2, 2, 4, 16, true)
+DFB_BLOCKED_TEST(DMTest1xDFB3Bx3B_blk4_impl, DM, DM, 3, 3, 4, 24, true)
+// Other block sizes.
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk2_impl, DM, DM, 1, 1, 2, 16, true)
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk8_impl, DM, DM, 1, 1, 8, 16, true)
+
+// Same, with producer count != consumer count.
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx2B_blk4_impl, DM, DM, 1, 2, 4, 16, true)
+DFB_BLOCKED_TEST(DMTest1xDFB2Bx1B_blk4_impl, DM, DM, 2, 1, 4, 16, true)
+
+// 2x2 with more blocks per thread, and with a non-power-of-2 block size.
+DFB_BLOCKED_TEST(DMTest1xDFB2Bx2B_blk2_e32, DM, DM, 2, 2, 2, 32, false)
+DFB_BLOCKED_TEST(DMTest1xDFB2Bx2B_blk3_e24, DM, DM, 2, 2, 3, 24, false)
+
+// 2048-byte entries (the default is 1024).
+TEST_F(UnitMeshFixture, DMTest1xDFB1Bx1B_blk4_entry2048) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = false,
+        .entry_size = 2048,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+TEST_F(UnitMeshFixture, DMTest1xDFB2Bx2B_blk4_entry2048) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 2,
+        .num_consumers = 2,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = false,
+        .entry_size = 2048,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+// BLOCKED -> BLOCKED, Tensix -> DM, explicit sync.
+// The host prefills the ring; the Tensix producer only posts credits.
+DFB_BLOCKED_TEST(TensixDMTest1xDFB1Bx1B_blk4, TENSIX, DM, 1, 1, 4, 16, false)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB1Bx1B_blk2, TENSIX, DM, 1, 1, 2, 16, false)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB1Bx1B_blk8, TENSIX, DM, 1, 1, 8, 16, false)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB1Bx1B_blk4_ring32, TENSIX, DM, 1, 1, 4, 32, false)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB1Bx1B_blk3, TENSIX, DM, 1, 1, 3, 12, false)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB2Bx2B_blk4, TENSIX, DM, 2, 2, 4, 16, false)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB4Bx4B_blk4, TENSIX, DM, 4, 4, 4, 32, false)
+// Same, with implicit sync on the DM consumer (the Tensix producer is always explicit).
+DFB_BLOCKED_TEST(TensixDMTest1xDFB2Bx2B_blk4_impl, TENSIX, DM, 2, 2, 4, 16, true)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB4Bx4B_blk4_impl, TENSIX, DM, 4, 4, 4, 32, true)
+
+// 2048-byte entries.
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB1Bx1B_blk4_entry2048) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = false,
+        .entry_size = 2048,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+// Same, with producer count != consumer count.
+DFB_BLOCKED_TEST(TensixDMTest1xDFB1Bx2B_blk4, TENSIX, DM, 1, 2, 4, 16, false)
+// 32 entries so that each of the 4 consumers gets more than one block.
+DFB_BLOCKED_TEST(TensixDMTest1xDFB1Bx4B_blk4, TENSIX, DM, 1, 4, 4, 32, false)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB2Bx4B_blk4, TENSIX, DM, 2, 4, 4, 32, false)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB2Bx1B_blk4, TENSIX, DM, 2, 1, 4, 16, false)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB4Bx1B_blk4, TENSIX, DM, 4, 1, 4, 32, false)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB4Bx2B_blk4, TENSIX, DM, 4, 2, 4, 32, false)
+
+// BLOCKED -> BLOCKED, DM -> Tensix, explicit sync.
+// The Tensix consumer reports a per-entry digest that the host checks against the expected page order.
+DFB_BLOCKED_TEST(DMTensixTest1xDFB1Bx1B_blk4, DM, TENSIX, 1, 1, 4, 16, false)
+DFB_BLOCKED_TEST(DMTensixTest1xDFB1Bx2B_blk4, DM, TENSIX, 1, 2, 4, 16, false)
+DFB_BLOCKED_TEST(DMTensixTest1xDFB2Bx2B_blk4, DM, TENSIX, 2, 2, 4, 16, false)
+DFB_BLOCKED_TEST(DMTensixTest1xDFB1Bx4B_blk4, DM, TENSIX, 1, 4, 4, 16, false)
+DFB_BLOCKED_TEST(DMTensixTest1xDFB2Bx1B_blk4, DM, TENSIX, 2, 1, 4, 16, false)
+DFB_BLOCKED_TEST(DMTensixTest1xDFB4Bx4B_blk4, DM, TENSIX, 4, 4, 4, 32, false)
+
+// BLOCKED -> ALL, Tensix -> DM, explicit sync: every consumer sees every block.
+#define DFB_TRISC_BLOCKED_ALL_TEST(suffix, num_p, num_c, blk, entries) \
+    TEST_F(UnitMeshFixture, suffix) {                                  \
+        M2SingleDFBParams params{                                      \
+            .producer_type = M2PorCType::TENSIX,                       \
+            .consumer_type = M2PorCType::DM,                           \
+            .num_producers = (num_p),                                  \
+            .num_consumers = (num_c),                                  \
+            .pap = m2::DFBAccessPattern::BLOCKED,                      \
+            .cap = m2::DFBAccessPattern::ALL,                          \
+            .implicit_sync = false,                                    \
+            .num_entries = (entries),                                  \
+            .block_size = (blk),                                       \
+        };                                                             \
+        run_single_dfb_program_2_0(this->device(), params);            \
+    }
+DFB_TRISC_BLOCKED_ALL_TEST(TensixDMTest1xDFB1Bx1A_blk4, 1, 1, 4, 16)  // P+C=2 (even): 1->1, no fan-out
+DFB_TRISC_BLOCKED_ALL_TEST(TensixDMTest1xDFB1Bx2A_blk4, 1, 2, 4, 16)  // P+C=3 (odd): 1->2 broadcast
+DFB_TRISC_BLOCKED_ALL_TEST(TensixDMTest1xDFB1Bx4A_blk4, 1, 4, 4, 16)  // P+C=5 (odd): 1->4 broadcast
+DFB_TRISC_BLOCKED_ALL_TEST(TensixDMTest1xDFB2Bx2A_blk4, 2, 2, 4, 16)  // P+C=4 (even): 2 pairs
+DFB_TRISC_BLOCKED_ALL_TEST(TensixDMTest1xDFB2Bx4A_blk4, 2, 4, 4, 16)  // P+C=6 (even): 2 pairs, P<C
+// 4 producers is the Tensix maximum; 32 entries so that each consumer gets more than one block.
+DFB_TRISC_BLOCKED_ALL_TEST(TensixDMTest1xDFB4Bx1A_blk4, 4, 1, 4, 32)  // P+C=5 (odd)
+DFB_TRISC_BLOCKED_ALL_TEST(TensixDMTest1xDFB4Bx2A_blk4, 4, 2, 4, 32)  // P+C=6 (even)
+
+// BLOCKED -> ALL, DM -> DM, explicit sync: every consumer reads every block.
+#define DFB_BLOCKED_ALL_TEST(suffix, num_p, num_c, blk, entries) \
+    TEST_F(UnitMeshFixture, suffix) {                            \
+        M2SingleDFBParams params{                                \
+            .producer_type = M2PorCType::DM,                     \
+            .consumer_type = M2PorCType::DM,                     \
+            .num_producers = (num_p),                            \
+            .num_consumers = (num_c),                            \
+            .pap = m2::DFBAccessPattern::BLOCKED,                \
+            .cap = m2::DFBAccessPattern::ALL,                    \
+            .implicit_sync = false,                              \
+            .num_entries = (entries),                            \
+            .block_size = (blk),                                 \
+        };                                                       \
+        run_single_dfb_program_2_0(this->device(), params);      \
+    }
+
+DFB_BLOCKED_ALL_TEST(DMTest1xDFB1Bx1A_blk4, 1, 1, 4, 16)
+DFB_BLOCKED_ALL_TEST(DMTest1xDFB1Bx2A_blk4, 1, 2, 4, 16)
+DFB_BLOCKED_ALL_TEST(DMTest1xDFB1Bx2A_blk2, 1, 2, 2, 16)
+DFB_BLOCKED_ALL_TEST(DMTest1xDFB1Bx4A_blk4, 1, 4, 4, 16)
+DFB_BLOCKED_ALL_TEST(DMTest1xDFB2Bx2A_blk4, 2, 2, 4, 16)
+DFB_BLOCKED_ALL_TEST(DMTest1xDFB2Bx4A_blk4, 2, 4, 4, 16)
+DFB_BLOCKED_ALL_TEST(DMTest1xDFB2Bx2A_blk2, 2, 2, 2, 16)
+DFB_BLOCKED_ALL_TEST(DMTest1xDFB3Bx1A_blk4, 3, 1, 4, 24)
+DFB_BLOCKED_ALL_TEST(DMTest1xDFB3Bx3A_blk4, 3, 3, 4, 24)
+
+// BLOCKED -> STRIDED, DM -> DM.
+#define DFB_BLOCKED_STRIDED_TEST(suffix, num_p, num_c, blk, entries, impl) \
+    TEST_F(UnitMeshFixture, suffix) {                                      \
+        M2SingleDFBParams params{                                          \
+            .producer_type = M2PorCType::DM,                               \
+            .consumer_type = M2PorCType::DM,                               \
+            .num_producers = (num_p),                                      \
+            .num_consumers = (num_c),                                      \
+            .pap = m2::DFBAccessPattern::BLOCKED,                          \
+            .cap = m2::DFBAccessPattern::STRIDED,                          \
+            .implicit_sync = (impl),                                       \
+            .num_entries = (entries),                                      \
+            .block_size = (blk),                                           \
+        };                                                                 \
+        run_single_dfb_program_2_0(this->device(), params);                \
+    }
+
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB1Bx2S_blk2_e4, 1, 2, 2, 4, false)
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB1Bx1S_blk4, 1, 1, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB1Bx2S_blk4, 1, 2, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB1Bx4S_blk4, 1, 4, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB2Bx2S_blk4, 2, 2, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB2Bx4S_blk4, 2, 4, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB2Bx1S_blk4, 2, 1, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB4Bx1S_blk4, 4, 1, 4, 16, false)
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB4Bx2S_blk4, 4, 2, 4, 16, false)
+
+// Implicit sync, mostly with more consumers than producers.
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB1Bx2S_blk4_impl, 1, 2, 4, 16, true)
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB1Bx4S_blk4_impl, 1, 4, 4, 16, true)
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB2Bx4S_blk4_impl, 2, 4, 4, 16, true)
+DFB_BLOCKED_STRIDED_TEST(DMTest1xDFB2Bx2S_blk4_impl, 2, 2, 4, 16, true)
+
+// BLOCKED -> STRIDED, Tensix -> DM, explicit sync.
+// The host prefills the ring; the Tensix producer only posts credits.
+#define DFB_TRISC_BLOCKED_STRIDED_TEST(suffix, num_p, num_c, blk, entries) \
+    TEST_F(UnitMeshFixture, suffix) {                                      \
+        M2SingleDFBParams params{                                          \
+            .producer_type = M2PorCType::TENSIX,                           \
+            .consumer_type = M2PorCType::DM,                               \
+            .num_producers = (num_p),                                      \
+            .num_consumers = (num_c),                                      \
+            .pap = m2::DFBAccessPattern::BLOCKED,                          \
+            .cap = m2::DFBAccessPattern::STRIDED,                          \
+            .implicit_sync = false,                                        \
+            .num_entries = (entries),                                      \
+            .block_size = (blk),                                           \
+        };                                                                 \
+        run_single_dfb_program_2_0(this->device(), params);                \
+    }
+DFB_TRISC_BLOCKED_STRIDED_TEST(TensixDMTest1xDFB1Bx1S_blk4, 1, 1, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST(TensixDMTest1xDFB1Bx2S_blk4, 1, 2, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST(TensixDMTest1xDFB1Bx4S_blk4, 1, 4, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST(TensixDMTest1xDFB2Bx2S_blk4, 2, 2, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST(TensixDMTest1xDFB2Bx4S_blk4, 2, 4, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST(TensixDMTest1xDFB4Bx4S_blk4, 4, 4, 4, 32)
+// More producers than consumers. The Tensix producer count must be 2 or 4.
+DFB_TRISC_BLOCKED_STRIDED_TEST(TensixDMTest1xDFB2Bx1S_blk4, 2, 1, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST(TensixDMTest1xDFB4Bx1S_blk4, 4, 1, 4, 16)
+DFB_TRISC_BLOCKED_STRIDED_TEST(TensixDMTest1xDFB4Bx2S_blk4, 4, 2, 4, 16)
+
+// BLOCKED -> ALL, DM -> Tensix, explicit sync: every consumer sees every block.
+// The Tensix consumer reports a per-entry digest that the host checks against the expected page order.
+#define DFB_DMTENSIX_BLOCKED_ALL_TEST(suffix, num_p, num_c, blk, entries) \
+    TEST_F(UnitMeshFixture, suffix) {                                     \
+        M2SingleDFBParams params{                                         \
+            .producer_type = M2PorCType::DM,                              \
+            .consumer_type = M2PorCType::TENSIX,                          \
+            .num_producers = (num_p),                                     \
+            .num_consumers = (num_c),                                     \
+            .pap = m2::DFBAccessPattern::BLOCKED,                         \
+            .cap = m2::DFBAccessPattern::ALL,                             \
+            .implicit_sync = false,                                       \
+            .num_entries = (entries),                                     \
+            .block_size = (blk),                                          \
+        };                                                                \
+        run_single_dfb_program_2_0(this->device(), params);               \
+    }
+DFB_DMTENSIX_BLOCKED_ALL_TEST(DMTensixTest1xDFB1Bx1A_blk4, 1, 1, 4, 16)
+DFB_DMTENSIX_BLOCKED_ALL_TEST(DMTensixTest1xDFB1Bx2A_blk4, 1, 2, 4, 16)
+DFB_DMTENSIX_BLOCKED_ALL_TEST(DMTensixTest1xDFB1Bx4A_blk4, 1, 4, 4, 16)
+DFB_DMTENSIX_BLOCKED_ALL_TEST(DMTensixTest1xDFB2Bx2A_blk4, 2, 2, 4, 16)
+DFB_DMTENSIX_BLOCKED_ALL_TEST(DMTensixTest1xDFB2Bx4A_blk4, 2, 4, 4, 16)
+
+// BLOCKED -> STRIDED, DM -> Tensix, explicit sync.
+// The Tensix consumer reports a per-entry digest that the host checks against the expected page order.
+#define DFB_DMTENSIX_BLOCKED_STRIDED_TEST(suffix, num_p, num_c, blk, entries) \
+    TEST_F(UnitMeshFixture, suffix) {                                         \
+        M2SingleDFBParams params{                                             \
+            .producer_type = M2PorCType::DM,                                  \
+            .consumer_type = M2PorCType::TENSIX,                              \
+            .num_producers = (num_p),                                         \
+            .num_consumers = (num_c),                                         \
+            .pap = m2::DFBAccessPattern::BLOCKED,                             \
+            .cap = m2::DFBAccessPattern::STRIDED,                             \
+            .implicit_sync = false,                                           \
+            .num_entries = (entries),                                         \
+            .block_size = (blk),                                              \
+        };                                                                    \
+        run_single_dfb_program_2_0(this->device(), params);                   \
+    }
+DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB1Bx1S_blk4, 1, 1, 4, 16)
+DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB1Bx2S_blk4, 1, 2, 4, 16)
+DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB1Bx4S_blk4, 1, 4, 4, 16)
+DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB2Bx2S_blk4, 2, 2, 4, 16)
+DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB2Bx4S_blk4, 2, 4, 4, 16)
+DFB_DMTENSIX_BLOCKED_STRIDED_TEST(DMTensixTest1xDFB4Bx4S_blk4, 4, 4, 4, 32)
 
 }  // namespace tt::tt_metal

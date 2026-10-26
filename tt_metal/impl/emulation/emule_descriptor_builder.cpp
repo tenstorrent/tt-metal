@@ -7,6 +7,7 @@
 // silicon's extraction 1:1 so the POD carries exactly what silicon feeds. Every consumer
 // (program_model / kernel_defines / metal2_emit / device_map / cb_dfb_setup) reads this POD.
 
+#include <filesystem>
 #include "emule_descriptor_builder.hpp"
 
 #include <optional>
@@ -33,13 +34,11 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/face_geometry.hpp>
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>         // is_2d_fabric_config
 #include <tt-metalium/experimental/fabric/control_plane.hpp>  // get_fabric_node_id_from_physical_chip_id
-#include <tt_stl/assert.hpp>                                  // TT_FATAL
 
 namespace tt_emule {
 
@@ -125,9 +124,9 @@ SocView build_soc_view(IDevice* device, Program& program) {
         v.l1_banks.push_back(bank);
     }
 
-    v.dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    v.l1_alignment = tt::tt_metal::hal::get_l1_alignment();
-    v.arch_num_circular_buffers = tt::tt_metal::hal::get_arch_num_circular_buffers();
+    v.dram_alignment = hw.get_alignment(tt::tt_metal::HalMemType::DRAM);
+    v.l1_alignment = hw.get_alignment(tt::tt_metal::HalMemType::L1);
+    v.arch_num_circular_buffers = hw.get_num_dataflow_buffers();
     v.num_semaphores = tt::tt_metal::NUM_SEMAPHORES;
     v.has_tile_counter_registers = hw.has_tile_counter_registers();
 
@@ -164,222 +163,10 @@ static ResolvedGeom to_resolved_geom(const tt::tt_metal::emule::ResolvedTileGeom
         g.narrow_tile};
 }
 
-EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device) {
-    (void)device;                 // kept for signature symmetry with build_soc_view; this half is program-only
-    auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
-    const auto& hw = MetalContext::instance().hal();
-    auto& metal_context = MetalContext::instance(impl.get_context_id());
-    const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
-    std::string quasar_arch_include;
-    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR && !rtoptions.get_quasar_arch_variant().empty()) {
-        quasar_arch_include =
-            rtoptions.get_root_dir() + "tt_metal/tt-llk/tt_llk_quasar/arch/" + rtoptions.get_quasar_arch_variant();
-    }
-
-    EmuleProgramDescriptor pd;
-    pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
-    pd.config.asan_enabled = tt::tt_metal::emule::emule_asan_enabled();
-
-    // Per (programmable core type, logical core) -> the kernels placed there with resolved launch
-    // offsets + unique RTA; stitched into each CoreDescriptor below. pct is part of the key because a
-    // worker and an ethernet core can share a logical (x,y) and must not merge their kernels.
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::vector<CoreKernel>> core_kernels;
-
-    const uint32_t pct_count = hw.get_programmable_core_type_count();
-    for (uint32_t pct = 0; pct < pct_count; ++pct) {
-        pd.config.sem_offset.push_back(impl.get_program_config(pct).sem_offset);
-
-        for (auto& [handle, kptr] : impl.get_kernels(pct)) {
-            if (!kptr) {
-                continue;
-            }
-            Kernel& k = *kptr;
-            KernelDescriptor kd;
-            kd.id = handle;
-            kd.compile_time_args = k.compile_time_args();
-            kd.named_compile_time_args = k.named_compile_time_args();
-            kd.common_runtime_args = k.common_runtime_args();
-            kd.programmable_core_type = static_cast<uint32_t>(k.get_kernel_programmable_core_type());
-
-            // source (raw KernelSource; path resolution stays in the consumer)
-            const auto& ksrc = k.kernel_source();
-            kd.source.is_file = (ksrc.source_type_ == KernelSource::FILE_PATH);
-            kd.source.path = ksrc.path_;
-            kd.source.inline_src = ksrc.source_;
-            k.process_include_paths([&kd](const std::string& p) { kd.include_paths.push_back(p); });
-            k.process_named_ct_arg_namespaces([&kd](const NamedCTArgNamespaces& ns) {
-                for (const auto& [name, entries] : ns) {
-                    kd.named_ct_arg_namespaces[name] = entries;
-                }
-            });
-            k.process_named_runtime_args([&kd](const NamedRuntimeArgNamespaces& ns) {
-                for (const auto& [name, entries] : ns) {
-                    auto& out = kd.named_runtime_arg_namespaces[name];
-                    for (const auto& e : entries) {
-                        out.push_back(NamedRtEntry{e.field, e.index, e.length, static_cast<uint32_t>(e.dispatch)});
-                    }
-                }
-            });
-            k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
-            if (!quasar_arch_include.empty()) {
-                kd.include_paths.insert(kd.include_paths.begin(), quasar_arch_include);
-            }
-            kd.is_compute = (k.get_kernel_processor_class() == HalProcessorClassType::COMPUTE);
-            {
-                const auto cfg = k.config();
-                if (const auto* dc = std::get_if<DataMovementConfig>(&cfg)) {
-                    kd.dm_processor = static_cast<uint32_t>(dc->processor);
-                }
-                if (const auto* cc = std::get_if<ComputeConfig>(&cfg)) {
-                    kd.has_compute_config = true;
-                    kd.fp32_dest_acc_en = cc->fp32_dest_acc_en;
-                    kd.dst_full_sync_en = cc->dst_full_sync_en;
-                    kd.math_fidelity = static_cast<uint32_t>(cc->math_fidelity);
-                } else if (const auto* qc = std::get_if<experimental::quasar::QuasarComputeConfig>(&cfg)) {
-                    // Quasar carries the same compute scalars on its own config type.
-                    kd.has_compute_config = true;
-                    kd.fp32_dest_acc_en = qc->fp32_dest_acc_en;
-                    kd.dst_full_sync_en = qc->dst_full_sync_en;
-                    kd.math_fidelity = static_cast<uint32_t>(qc->math_fidelity);
-                }
-            }
-            {
-                // COMPILE_FOR_* selection index + the PROCESSOR_INDEX define value (collect_kernels).
-                auto* dm_kernel = dynamic_cast<DataMovementKernel*>(&k);
-                kd.is_data_movement = (dm_kernel != nullptr);
-                uint32_t proc_type_idx = 0;
-                if (!kd.is_compute && dm_kernel != nullptr &&
-                    std::get<DataMovementConfig>(dm_kernel->config()).processor == DataMovementProcessor::RISCV_1) {
-                    proc_type_idx = 1;
-                }
-                kd.compile_processor_index = hw.get_processor_index(
-                    k.get_kernel_programmable_core_type(), k.get_kernel_processor_class(), proc_type_idx);
-            }
-            {
-                auto* qdm = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(&k);
-                auto* qck = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(&k);
-                ProcIdList procs = compute_proc_ids_and_thread_count(k, qdm, qck);
-                kd.proc_ids.assign(procs.proc_ids.begin(), procs.proc_ids.end());
-                kd.num_threads = procs.num_threads;
-                kd.is_quasar_compute = kd.is_compute && (qck != nullptr);
-            }
-            // Metal 2.0 binding handles (mirror build_metal2_snapshot).
-            kd.bindings.is_metal2 = k.is_metal2_kernel();
-            kd.bindings.rta_names = k.get_runtime_arg_names();
-            kd.bindings.crta_names = k.get_common_runtime_arg_names();
-            k.process_dataflow_buffer_binding_handles([&kd](
-                                                          const std::string& name,
-                                                          uint16_t id,
-                                                          bool is_relay,
-                                                          uint8_t pipe,
-                                                          const std::optional<LLKMetadata>& llk) {
-                kd.bindings.dfb.push_back(
-                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk) : ""});
-            });
-            k.process_semaphore_binding_handles(
-                [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {
-                    kd.bindings.sem.push_back(
-                        SemBinding{name, id, static_cast<tt_emule::SemScope>(static_cast<uint8_t>(scope)), harts});
-                });
-            k.process_tensor_binding_handles(
-                [&kd](
-                    const std::string& name,
-                    uint32_t cta_off,
-                    uint32_t addr_crta_off,
-                    uint32_t num_rt,
-                    const LLKMetadata& llk) {
-                    // Emule doesn't yet model per-binding runtime CRTA words; the downstream
-                    // get_common_vararg base math assumes 1 word/binding. Fail loudly on the
-                    // dynamic-shape case here (the sole binding reader) rather than in a consumer.
-                    TT_FATAL(
-                        num_rt == 0,
-                        "Emule does not yet support dynamic-shape Metal 2.0 tensor bindings "
-                        "(binding '{}' has num_runtime_field_crta_words={}). Wire the per-"
-                        "binding word count through Metal2BindingsSnapshot::TaEntry, the "
-                        "cache key, and emit_metal2_namespaces' get_common_vararg base "
-                        "before enabling this path.",
-                        name,
-                        num_rt);
-                    kd.bindings.tensor.push_back(
-                        TensorBinding{name, cta_off, addr_crta_off, serialize_llk_metadata(llk)});
-                });
-            k.process_scratchpad_binding_handles([&kd](
-                                                     const std::string& name,
-                                                     uint32_t size_bytes,
-                                                     uint32_t addr_crta_word,
-                                                     const std::optional<LLKMetadata>& llk) {
-                kd.bindings.scratch.push_back(
-                    ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk) : ""});
-            });
-            for (const auto& r : k.core_range_set().ranges()) {
-                kd.core_ranges.push_back(
-                    {static_cast<uint32_t>(r.start_coord.x),
-                     static_cast<uint32_t>(r.start_coord.y),
-                     static_cast<uint32_t>(r.end_coord.x),
-                     static_cast<uint32_t>(r.end_coord.y)});
-            }
-            pd.kernel_order.push_back(kd.id);
-            pd.kernels.emplace(kd.id, std::move(kd));
-        }
-
-        // Resolve each (kernel, core) launch offset + unique RTA — the KernelGroup launch_msg read,
-        // done here so collect_kernels needs no firmware/KG access. Mirrors collect_kernels' core loop:
-        // key by (kernel, core) because a kernel on cores across KGs has distinct launch layouts.
-        std::map<std::pair<uint32_t, std::pair<uint32_t, uint32_t>>, KernelGroup*> k2kg;
-        for (const auto& kg : impl.get_kernel_groups(pct)) {
-            if (!kg) {
-                continue;
-            }
-            for (const auto& cr : kg->core_ranges.ranges()) {
-                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
-                    for (auto y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
-                        for (auto kid : kg->kernel_ids) {
-                            k2kg.emplace(
-                                std::make_pair(
-                                    static_cast<uint32_t>(kid),
-                                    std::make_pair(static_cast<uint32_t>(x), static_cast<uint32_t>(y))),
-                                kg.get());
-                        }
-                    }
-                }
-            }
-        }
-        for (auto& [kernel_id, kptr] : impl.get_kernels(pct)) {
-            if (!kptr) {
-                continue;
-            }
-            Kernel& k = *kptr;
-            const uint32_t processor_index = hw.get_processor_index(
-                k.get_kernel_programmable_core_type(), k.get_kernel_processor_class(), k.get_kernel_processor_type(0));
-            for (const auto& cr : k.core_range_set().ranges()) {
-                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
-                    for (auto y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
-                        CoreKernel ck;
-                        ck.kernel = static_cast<uint32_t>(kernel_id);
-                        auto it = k2kg.find(std::make_pair(
-                            static_cast<uint32_t>(kernel_id),
-                            std::make_pair(static_cast<uint32_t>(x), static_cast<uint32_t>(y))));
-                        if (it != k2kg.end()) {
-                            auto kc = it->second->launch_msg.view().kernel_config();
-                            ck.kernel_config_base = static_cast<uint32_t>(kc.kernel_config_base()[pct]);
-                            auto rta = kc.rta_offset()[processor_index];
-                            ck.rta_offset = rta.rta_offset();
-                            ck.crta_offset = rta.crta_offset();
-                        }
-                        const tt::tt_metal::CoreCoord lc(x, y);
-                        if (k.cores_with_runtime_args().count(lc) != 0) {
-                            const auto& ra = k.runtime_args(lc);
-                            ck.unique_rt_args.assign(ra.begin(), ra.end());
-                        }
-                        core_kernels[std::make_tuple(pct, static_cast<uint32_t>(x), static_cast<uint32_t>(y))]
-                            .push_back(std::move(ck));
-                    }
-                }
-            }
-        }
-    }
-
-    // Per-core CB / DFB / semaphore setup (init_core_cb_sync / allocate_dfbs_on_core / init_core_semaphores).
+// Per-core CB / DFB / semaphore setup (init_core_cb_sync / allocate_dfbs_on_core / init_core_semaphores)
+// plus the semaphore table: everything setup_core_state reads on each dispatch.
+static void fill_core_state(Program& program, EmuleProgramDescriptor& pd) {
+    auto& impl = program.impl();
     // logical_cores() returns one vector per programmable core type; the outer index IS the pct.
     const auto logical_cores = impl.logical_cores();
     // Creation order is the order prep_kernel's set_cb/dfb_data_fmt_and_tile visit them.
@@ -463,11 +250,6 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     cs.semaphore_ids.push_back(sem.id());
                 }
             }
-            auto ck_it =
-                core_kernels.find(std::make_tuple(pct, static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)));
-            if (ck_it != core_kernels.end()) {
-                cs.kernels = std::move(ck_it->second);
-            }
             pd.cores.push_back(std::move(cs));
         }
     }
@@ -478,6 +260,265 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
         sd.initial_value = sem.initial_value();
         pd.semaphores.push_back(sd);
     }
+}
+
+EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device) {
+    (void)device;                 // kept for signature symmetry with build_soc_view; this half is program-only
+    auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
+    const auto& hw = MetalContext::instance().hal();
+    auto& metal_context = MetalContext::instance(impl.get_context_id());
+    const auto& rtoptions = MetalEnvAccessor(metal_context.get_env()).impl().get_rtoptions();
+    std::string quasar_arch_include;
+    if (metal_context.get_cluster().arch() == tt::ARCH::QUASAR) {
+        auto variant = metal_context.get_cluster().get_quasar_ip_variant();
+        const std::string lower_variant = [&]() {
+            std::string result = std::string(enchantum::to_string(variant));
+            std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+            return result;
+        }();
+        const std::string dir = rtoptions.get_root_dir() + "tt_metal/tt-llk/tt_llk_quasar/arch/" + lower_variant;
+        if (std::filesystem::is_directory(dir)) {
+            quasar_arch_include = dir;
+        }
+    }
+
+    EmuleProgramDescriptor pd;
+    pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
+    pd.config.asan_enabled = tt::tt_metal::emule::emule_asan_enabled();
+
+    // Per (programmable core type, logical core) -> the kernels placed there with resolved launch
+    // offsets + unique RTA; stitched into each CoreDescriptor below. pct is part of the key because a
+    // worker and an ethernet core can share a logical (x,y) and must not merge their kernels.
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::vector<CoreKernel>> core_kernels;
+
+    const uint32_t pct_count = hw.get_programmable_core_type_count();
+    for (uint32_t pct = 0; pct < pct_count; ++pct) {
+        pd.config.sem_offset.push_back(impl.get_program_config(pct).sem_offset);
+
+        for (auto& [handle, kptr] : impl.get_kernels(pct)) {
+            if (!kptr) {
+                continue;
+            }
+            Kernel& k = *kptr;
+            KernelDescriptor kd;
+            kd.id = handle;
+            kd.compile_time_args = k.compile_time_args();
+            kd.named_compile_time_args = k.named_compile_time_args();
+            kd.common_runtime_args = k.common_runtime_args();
+            kd.programmable_core_type = static_cast<uint32_t>(k.get_kernel_programmable_core_type());
+
+            // source (raw KernelSource; path resolution stays in the consumer)
+            const auto& ksrc = k.kernel_source();
+            kd.source.is_file = (ksrc.source_type_ == KernelSource::FILE_PATH);
+            kd.source.path = ksrc.path_;
+            kd.source.inline_src = ksrc.source_;
+            k.process_include_paths([&kd](const std::string& p) { kd.include_paths.push_back(p); });
+            k.process_named_ct_arg_namespaces([&kd](const NamedCTArgNamespaces& ns) {
+                for (const auto& [name, entries] : ns) {
+                    kd.named_ct_arg_namespaces[name] = entries;
+                }
+            });
+            k.process_named_runtime_args([&kd](const NamedRuntimeArgNamespaces& ns) {
+                for (const auto& [name, entries] : ns) {
+                    auto& out = kd.named_runtime_arg_namespaces[name];
+                    for (const auto& e : entries) {
+                        out.push_back(NamedRtEntry{e.field, e.index, e.length, static_cast<uint32_t>(e.dispatch)});
+                    }
+                }
+            });
+            k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
+            if (!quasar_arch_include.empty()) {
+                kd.include_paths.insert(kd.include_paths.begin(), quasar_arch_include);
+            }
+            kd.is_compute = (k.get_kernel_processor_class() == HalProcessorClassType::COMPUTE);
+            {
+                const auto cfg = k.config();
+                if (const auto* dc = std::get_if<DataMovementConfig>(&cfg)) {
+                    kd.dm_processor = static_cast<uint32_t>(dc->processor);
+                }
+                if (const auto* cc = std::get_if<ComputeConfig>(&cfg)) {
+                    kd.has_compute_config = true;
+                    kd.fp32_dest_acc_en = cc->fp32_dest_acc_en;
+                    kd.dst_full_sync_en = cc->dst_full_sync_en;
+                    kd.math_fidelity = static_cast<uint32_t>(cc->math_fidelity);
+                } else if (const auto* qc = std::get_if<experimental::quasar::QuasarComputeConfig>(&cfg)) {
+                    // Quasar carries the same compute scalars on its own config type.
+                    kd.has_compute_config = true;
+                    kd.fp32_dest_acc_en = qc->fp32_dest_acc_en;
+                    kd.dst_full_sync_en = qc->dst_full_sync_en;
+                    kd.math_fidelity = static_cast<uint32_t>(qc->math_fidelity);
+                }
+            }
+            {
+                // COMPILE_FOR_* selection index + the PROCESSOR_INDEX define value (collect_kernels). An ethernet
+                // kernel is data movement on its own core type (EthernetKernel is not a DataMovementKernel).
+                auto* dm_kernel = dynamic_cast<DataMovementKernel*>(&k);
+                auto* eth_kernel = dynamic_cast<EthernetKernel*>(&k);
+                kd.is_data_movement = (dm_kernel != nullptr || eth_kernel != nullptr);
+                uint32_t proc_type_idx = 0;
+                if (dm_kernel != nullptr &&
+                    std::get<DataMovementConfig>(dm_kernel->config()).processor == DataMovementProcessor::RISCV_1) {
+                    proc_type_idx = 1;
+                }
+                if (eth_kernel != nullptr) {
+                    const auto processor = std::get<EthernetConfig>(eth_kernel->config()).processor;
+                    kd.dm_processor = static_cast<uint32_t>(processor);
+                    proc_type_idx = static_cast<uint32_t>(processor);
+                    // Silicon's JIT takes an ethernet build's per-RISC macros (COMPILE_FOR_ERISC, ...) from HAL.
+                    const auto& rtoptions = MetalContext::instance().rtoptions();
+                    for (const auto& define : hw.get_jit_build_query().defines(
+                             {false,
+                              k.get_kernel_programmable_core_type(),
+                              HalProcessorClassType::DM,
+                              proc_type_idx,
+                              rtoptions})) {
+                        const auto eq = define.find('=');
+                        const std::string name = define.substr(0, eq);
+                        if (name == "PROCESSOR_INDEX" || name == "PROGRAMMABLE_CORE_TYPE") {
+                            continue;  // collect_kernels sets these for every kernel
+                        }
+                        kd.defines[name] = eq == std::string::npos ? "1" : define.substr(eq + 1);
+                    }
+                }
+                kd.compile_processor_index = hw.get_processor_index(
+                    k.get_kernel_programmable_core_type(), k.get_kernel_processor_class(), proc_type_idx);
+            }
+            {
+                auto* qdm = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(&k);
+                auto* qck = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(&k);
+                ProcIdList procs = compute_proc_ids_and_thread_count(k, qdm, qck);
+                kd.proc_ids.assign(procs.proc_ids.begin(), procs.proc_ids.end());
+                kd.num_threads = procs.num_threads;
+                kd.is_quasar_compute = kd.is_compute && (qck != nullptr);
+            }
+            // Metal 2.0 binding handles (mirror build_metal2_snapshot).
+            kd.bindings.is_metal2 = k.is_metal2_kernel();
+            kd.bindings.rta_names = k.get_runtime_arg_names();
+            kd.bindings.crta_names = k.get_common_runtime_arg_names();
+            k.process_dataflow_buffer_binding_handles([&kd](
+                                                          const std::string& name,
+                                                          uint16_t id,
+                                                          bool is_relay,
+                                                          uint8_t pipe,
+                                                          const std::optional<LLKMetadata>& llk,
+                                                          uint8_t /*pap*/,
+                                                          uint8_t /*cap*/) {
+                kd.bindings.dfb.push_back(
+                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk) : ""});
+            });
+            k.process_semaphore_binding_handles(
+                [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {
+                    kd.bindings.sem.push_back(
+                        SemBinding{name, id, static_cast<tt_emule::SemScope>(static_cast<uint8_t>(scope)), harts});
+                });
+            k.process_tensor_binding_handles([&kd](
+                                                 const std::string& name,
+                                                 uint32_t cta_off,
+                                                 uint32_t addr_crta_off,
+                                                 uint32_t /*num_rt*/,
+                                                 const LLKMetadata& llk) {
+                // num_rt needs no handling: crta_vararg_offset (below) already counts those words.
+                kd.bindings.tensor.push_back(TensorBinding{name, cta_off, addr_crta_off, serialize_llk_metadata(llk)});
+            });
+            k.process_prefetcher_pipe_binding_handles([&kd](const std::string& name, uint8_t prefetcher_pipe_id) {
+                kd.bindings.prefetcher_pipe.push_back(PrefetcherPipeBinding{name, prefetcher_pipe_id});
+            });
+            k.process_scratchpad_binding_handles([&kd](
+                                                     const std::string& name,
+                                                     uint32_t size_bytes,
+                                                     uint32_t addr_crta_word,
+                                                     const std::optional<LLKMetadata>& llk) {
+                kd.bindings.scratch.push_back(
+                    ScratchBinding{name, size_bytes, addr_crta_word, llk ? serialize_llk_metadata(*llk) : ""});
+            });
+            kd.bindings.crta_vararg_offset = k.get_crta_layout().vararg_section_offset;
+            k.process_tensor_binding_sequences([&kd](const std::string& name, const std::vector<std::string>& members) {
+                kd.bindings.tensor_sequences.push_back(TensorBindingSequence{name, members});
+            });
+            kd.bindings.compile_time_vararg_count = k.get_compile_time_vararg_count();
+            for (const auto& r : k.core_range_set().ranges()) {
+                kd.core_ranges.push_back(
+                    {static_cast<uint32_t>(r.start_coord.x),
+                     static_cast<uint32_t>(r.start_coord.y),
+                     static_cast<uint32_t>(r.end_coord.x),
+                     static_cast<uint32_t>(r.end_coord.y)});
+            }
+            pd.kernel_order.push_back(kd.id);
+            pd.kernels.emplace(kd.id, std::move(kd));
+        }
+
+        // Resolve each (kernel, core) launch offset + unique RTA — the KernelGroup launch_msg read,
+        // done here so collect_kernels needs no firmware/KG access. Mirrors collect_kernels' core loop:
+        // key by (kernel, core) because a kernel on cores across KGs has distinct launch layouts.
+        std::map<std::pair<uint32_t, std::pair<uint32_t, uint32_t>>, KernelGroup*> k2kg;
+        for (const auto& kg : impl.get_kernel_groups(pct)) {
+            if (!kg) {
+                continue;
+            }
+            for (const auto& cr : kg->core_ranges.ranges()) {
+                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+                    for (auto y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                        for (auto kid : kg->kernel_ids) {
+                            k2kg.emplace(
+                                std::make_pair(
+                                    static_cast<uint32_t>(kid),
+                                    std::make_pair(static_cast<uint32_t>(x), static_cast<uint32_t>(y))),
+                                kg.get());
+                        }
+                    }
+                }
+            }
+        }
+        for (auto& [kernel_id, kptr] : impl.get_kernels(pct)) {
+            if (!kptr) {
+                continue;
+            }
+            Kernel& k = *kptr;
+            const uint32_t processor_index = hw.get_processor_index(
+                k.get_kernel_programmable_core_type(), k.get_kernel_processor_class(), k.get_kernel_processor_type(0));
+            for (const auto& cr : k.core_range_set().ranges()) {
+                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+                    for (auto y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                        CoreKernel ck;
+                        ck.kernel = static_cast<uint32_t>(kernel_id);
+                        auto it = k2kg.find(std::make_pair(
+                            static_cast<uint32_t>(kernel_id),
+                            std::make_pair(static_cast<uint32_t>(x), static_cast<uint32_t>(y))));
+                        if (it != k2kg.end()) {
+                            auto kc = it->second->launch_msg.view().kernel_config();
+                            ck.kernel_config_base = static_cast<uint32_t>(kc.kernel_config_base()[pct]);
+                            auto rta = kc.rta_offset()[processor_index];
+                            ck.rta_offset = rta.rta_offset();
+                            ck.crta_offset = rta.crta_offset();
+                            ck.remote_cb_offset = static_cast<uint16_t>(kc.remote_cb_offset());
+                            ck.min_remote_cb_start_index = static_cast<uint32_t>(kc.min_remote_cb_start_index());
+                        }
+                        const tt::tt_metal::CoreCoord lc(x, y);
+                        if (k.cores_with_runtime_args().count(lc) != 0) {
+                            const auto& ra = k.runtime_args(lc);
+                            ck.unique_rt_args.assign(ra.begin(), ra.end());
+                        }
+                        core_kernels[std::make_tuple(pct, static_cast<uint32_t>(x), static_cast<uint32_t>(y))]
+                            .push_back(std::move(ck));
+                    }
+                }
+            }
+        }
+    }
+
+    fill_core_state(program, pd);
+    for (CoreDescriptor& cs : pd.cores) {
+        auto ck_it = core_kernels.find(std::make_tuple(cs.programmable_core_type, cs.logical_x, cs.logical_y));
+        if (ck_it != core_kernels.end()) {
+            cs.kernels = std::move(ck_it->second);
+        }
+    }
+    return pd;
+}
+
+EmuleProgramDescriptor build_core_state_descriptor(Program& program) {
+    EmuleProgramDescriptor pd;
+    fill_core_state(program, pd);
     return pd;
 }
 

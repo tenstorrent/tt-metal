@@ -47,14 +47,8 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     // Two semaphores:
     // - barrier_sem: one-shot init handshake ("I'm alive") to the neighbor.
     // - data_valid_sem: chunks upstream has relayed into our output (relay gate + completion).
-    bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
-    auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
-    if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
-        log_warning(
-            tt::LogOp,
-            "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
-            "allocations. Configure an L1_SMALL region to mitigate this.");
-    }
+    const auto sem_buffer_type = ttnn::ccl::prefer_l1_small_buffer_type(*mesh_device);
+    ttnn::ccl::warn_if_semaphores_fall_back_to_l1(sem_buffer_type);
     auto barrier_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     auto data_valid_sem =

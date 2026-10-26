@@ -88,30 +88,28 @@ class Attention:
         rope_mats,
         position_idx=None,
         kv_cache=None,
-        user_id=0,
-        batch_size=1,
-        cached_len=0,
         indexed_rope=False,
+        chunks=None,
     ):
         """
         Prefill attention forward.
 
         Args:
-            hidden_states: Input tensor [batch, seq_len, hidden_size]
+            hidden_states: Input tensor [1, 1, seq_len, hidden_size]
             rope_mats: Tuple of (cos, sin) matrices for RoPE
-            kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k). ``user_id`` is the
-                cache slot, ``self.local_layer_idx`` the (local) layer, ``cached_len`` the prior-prefix length.
-            user_id: User/batch index; also the cache slot index (default: 0).
+            kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k), written at
+                ``self.local_layer_idx`` (the local layer).
+            chunks: the forward's PrefillChunks (tt/prefill_chunk.py), each a slot_id and its
+                [actual_start, actual_end) token range; None = one full chunk in slot 0 at position 0.
 
         Returns:
-            Attention output [batch, seq_len, hidden_size]
+            Attention output [1, 1, seq_len, hidden_size]
         """
         transformation_mat = self.transformation_mats["prefill"] if self.transformation_mats else None
 
         return attention_forward(
             hidden_states=hidden_states,
             rope_mats=rope_mats,
-            user_id=user_id,
             weights=self.weights,
             kv_cache=kv_cache,
             config=self.config,
@@ -121,8 +119,7 @@ class Attention:
             transformation_mat=transformation_mat,
             position_idx=position_idx,
             ccl_manager=self.ccl_manager,
-            batch_size=batch_size,
             layer_idx=self.local_layer_idx,
-            cached_len=cached_len,
             indexed_rope=indexed_rope,
+            chunks=chunks,
         )

@@ -1,0 +1,30 @@
+# reshuffle_rows with the fixed RESHUFFLE_ROWS_FUSER_MASK (the fuser cannot pass an L1 mask).
+# Uniform stimuli make sums inexact, so atol/rtol 0 also checks the golden's per-row truncation
+# (SFPSTORE truncates into a 16-bit Dest).
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [32, 64]
+    format: [Float16]
+    stimuli:
+      include:
+        - [-2.0, 2.0]
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Float16
+    atol: 0.0  # any lost, doubled or misplaced row, or a rounding store, must fail
+    rtol: 0.0
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [32, 64]}
+      - type: "BinarySfpu"
+        operation: [SfpuReshuffleRows]
+        approximation_mode: false
+        iterations: 32
+        block_size: [32, 32]
+        indexes: {src0: 0, src1: 1, dest: 1}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 1, out: 0}}

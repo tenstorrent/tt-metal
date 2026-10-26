@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/utils/semver.hpp>
+#include <tt-umd/utils/semver.hpp>
 
 #include "blackhole/bh_hal.hpp"
 #include "rtoptions.hpp"
@@ -180,10 +180,9 @@ public:
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             if (enable_2_erisc_mode_) {
                 defines.push_back("ENABLE_2_ERISC_MODE");
-                defines.push_back("PHYSICAL_AERISC_ID=" + std::to_string(params.processor_id));
-            } else {
-                defines.push_back("PHYSICAL_AERISC_ID=1");
             }
+            defines.push_back(
+                "PHYSICAL_AERISC_ID=" + std::to_string(hal_.get_active_eth_physical_erisc(params.processor_id)));
             if (enable_aerisc_ptp_trace_) {
                 defines.push_back("AERISC_PTP_TRACE_SUPPORTED");
             }
@@ -341,17 +340,21 @@ void Hal::initialize_bh(
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
     HalCoreInfoType tensix_mem_map = blackhole::create_tensix_mem_map();
+    tensix_mem_map.num_physical_riscs_ = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
     this->core_info_.push_back(tensix_mem_map);
 
     HalCoreInfoType active_eth_mem_map = blackhole::create_active_eth_mem_map(enable_2_erisc_mode);
+    active_eth_mem_map.num_physical_riscs_ = static_cast<uint32_t>(EthProcessorTypes::COUNT);
     this->core_info_.push_back(active_eth_mem_map);
 
     HalCoreInfoType idle_eth_mem_map = blackhole::create_idle_eth_mem_map();
+    idle_eth_mem_map.num_physical_riscs_ = static_cast<uint32_t>(EthProcessorTypes::COUNT);
     this->core_info_.push_back(idle_eth_mem_map);
 
     if (!is_simulator && enable_blackhole_dram_programmable_cores) {
         // Dram cores are opt-in on Blackhole and are not yet supported in simulator.
         HalCoreInfoType dram_mem_map = blackhole::create_dram_mem_map();
+        dram_mem_map.num_physical_riscs_ = static_cast<uint32_t>(DramProcessorTypes::COUNT);
         this->core_info_.push_back(dram_mem_map);
     }
 
@@ -488,8 +491,15 @@ void Hal::initialize_bh(
     this->noc_stream_remote_dest_buf_space_available_reg_index_ = STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX;
     this->noc_stream_remote_dest_buf_space_available_update_reg_index_ =
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
+    this->noc_stream_remote_dest_words_free_width_ = REMOTE_DEST_WORDS_FREE_WIDTH;
+    this->noc_stream_remote_src_reg_index_ = STREAM_REMOTE_SRC_REG_INDEX;
     this->operand_start_stream_ = OPERAND_START_STREAM;
     this->has_stream_registers_ = true;
+    this->risc_soft_reset_addr_ = RISCV_DEBUG_REG_SOFT_RESET_0;
+    this->wall_clock_low_addr_ = RISCV_DEBUG_REG_WALL_CLOCK_L;
+    this->wall_clock_high_addr_ = RISCV_DEBUG_REG_WALL_CLOCK_H;
+    // In single-ERISC mode, base firmware keeps ERISC0 and the one processor runs on ERISC1.
+    this->active_eth_physical_eriscs_ = enable_2_erisc_mode ? std::vector<uint32_t>{0, 1} : std::vector<uint32_t>{1};
     this->supports_fds_ = false;
     this->noc_topology_ = NoCTopologyType::TORUS;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
@@ -518,6 +528,9 @@ void Hal::initialize_bh(
     this->pcie_addr_lower_bound_ = 0x0000000000000000ULL;
     this->pcie_addr_upper_bound_ = 0x13FF'FFFF'FFFF'FFFFULL;
     this->supports_64_bit_pcie_addressing_ = true;
+    // The top 512 MiB of the PCIe tile's NoC address space is its SerDes, PCIe controller and NIU configuration
+    // (same document as above).
+    this->pcie_tile_local_noc_addr_base_ = 0xFFFF'FFFF'E000'0000ULL;
 
     this->noc_x_id_translate_table_ = {
         NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0),

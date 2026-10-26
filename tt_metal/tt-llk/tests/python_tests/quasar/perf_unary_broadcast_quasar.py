@@ -18,7 +18,6 @@ from quasar.test_unary_broadcast_quasar import (
 )
 from quasar.test_unary_broadcast_quasar import (
     unary_broadcast_dest_sync_modes,
-    unary_broadcast_implied_math_formats,
 )
 
 
@@ -28,9 +27,6 @@ from quasar.test_unary_broadcast_quasar import (
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=get_valid_dest_acc_unary_broadcast,
     broadcast_type=BROADCAST_TYPES,
-    implied_math_format=lambda formats: unary_broadcast_implied_math_formats(
-        formats, is_perf=True
-    ),
     dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=True),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=PERF_RUN_TYPES_QUASAR,
@@ -42,7 +38,6 @@ def test_perf_unary_broadcast_quasar(
     formats,
     dest_acc,
     broadcast_type,
-    implied_math_format,
     dest_sync_mode,
     input_dimensions,
     run_types,
@@ -53,7 +48,6 @@ def test_perf_unary_broadcast_quasar(
         formats,
         dest_acc,
         broadcast_type,
-        implied_math_format,
         dest_sync_mode,
         input_dimensions,
         run_types=run_types,

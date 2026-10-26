@@ -17,6 +17,7 @@ import math
 import os
 
 import ttnn
+from models.common.tensor_utils import with_dram_sharded_cores_per_bank
 from models.common.utility_functions import is_blackhole
 
 TILE_SIZE = 32
@@ -64,8 +65,7 @@ def _find_grid(n_tiles, target=32):
 def _find_grid_k_n(k_tiles, n_tiles, max_rows=8, max_cols=8):
     """Core grid that evenly divides both K and N tile counts.
 
-    Same contract as ``tt_transformers.ModelArgs.find_grid_k_n`` /
-    ``models.common.modules.mlp.mlp_1d._find_grid_k_n``. A K-only grid with
+    Same contract as ``tt_transformers.ModelArgs.find_grid_k_n``. A K-only grid with
     ``per_core_N = n_tiles // num_cores`` silently truncates N when
     ``n_tiles % num_cores != 0`` — tt_transformers documents this as bad PCC
     (``dram_shard_grid_width`` comment). Prefer the largest feasible core count.
@@ -193,12 +193,13 @@ def decode_progcfg(m, k, n, dtype=None):
       * ``in0_block_w`` from K/core, L1-shrunk when needed
     """
     _rows, _cols, num_cores = _decode_core_grid(k, n)
-    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
         in0_block_w=_decode_in0_block_w(k, n, num_cores, dtype=dtype),
         per_core_M=math.ceil(m / TILE_SIZE),
         per_core_N=math.ceil(n / (TILE_SIZE * num_cores)),
         fused_activation=None,
     )
+    return with_dram_sharded_cores_per_bank(program_config, m, k, n, num_cores)
 
 
 def activation_memcfg(k, n):

@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import (
     assert_with_ulp,
     assert_equal,
 )
-from models.common.utility_functions import is_blackhole, is_slow_dispatch
+from tt_py_test_utils_common.utility_functions import is_blackhole, is_slow_dispatch
 
 
 @pytest.mark.parametrize(
@@ -289,28 +289,65 @@ def test_unary_right_shift(input_shapes, device):
         assert pcc >= 0.99, f"Failed for scalar={scalar}"
 
 
-# Kimi K3 betas: 4 for the gate half, 25 for the up half.
+# Kimi K3 betas: 4 for the gate half, 25 for the up half. These are the betas the fused SFPU kernel
+# (situ_glu_tile) compiles in, so they take the native single-op path.
 SITU_GLU_BETA1 = 4.0
 SITU_GLU_BETA2 = 25.0
+# Any other betas fall back to the composed softcap/sigmoid/multiply chain.
+SITU_GLU_FALLBACK_BETA1 = 2.0
+SITU_GLU_FALLBACK_BETA2 = 10.0
 
-# The bf16 arm is gated in ULP (measured worst case: 3.0 across three composed ops). bfp8_b
-# re-quantizes every intermediate and shares one exponent per 16-element block, which costs
-# hundreds of bf16 ULP on small elements regardless of op accuracy, so that arm is gated by PCC.
+# The bf16 arm is gated in ULP: measured worst case 1.42 for the fused kernel, which never rounds an
+# intermediate, and 3.0 for the composite's three rounded steps. bfp8_b shares one exponent per
+# 16-element block, which costs hundreds of bf16 ULP on small elements regardless of op accuracy, so
+# that arm is gated by PCC. The composite has no fp32 arm: softcap rejects fp32.
+SITU_GLU_NATIVE_ULP = 3
 SITU_GLU_ULP = 6
 SITU_GLU_BF16_PCC = 0.999
 SITU_GLU_BFP8_PCC = 0.99
+SITU_GLU_FP32_PCC = 0.9999
 
-# Numerics on both sides of the L1/DRAM intermediate split, also covering both dtypes. The
-# assertions below check the output placement and the values, not which branch ran -- output
-# placement is pinned to the input's for both.
 SITU_GLU_CASES = [
-    (torch.Size([1, 1, 512, 3072]), ttnn.bfloat16),  # K3 routed expert (3072) <= 3072 -> L1
-    (torch.Size([1, 1, 512, 6144]), ttnn.bfloat8_b),  # K3 shared expert (6144) > 3072 -> DRAM
+    (torch.Size([1, 1, 512, 3072]), ttnn.bfloat16),  # K3 routed-expert width
+    (torch.Size([1, 1, 512, 6144]), ttnn.bfloat8_b),  # K3 shared-expert width
+    (torch.Size([1, 1, 256, 1024]), ttnn.float32),  # fp32 DEST body of the kernel
 ]
 
 
+def _situ_glu_device_ops(fn):
+    """Runs fn under graph capture and returns the names of the device operations it launched."""
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        out = fn()
+    finally:
+        graph = ttnn.graph.end_graph_capture()
+    names = [
+        node["params"]["name"]
+        for node in graph
+        if node.get("node_type") == "function_start"
+        and node.get("params", {}).get("name", "").endswith("DeviceOperation")
+    ]
+    return out, names
+
+
+def _check_situ_glu(golden, tt_res, ttnn_dtype, beta1, beta2, ulp=SITU_GLU_ULP):
+    # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
+    is_bfp8 = ttnn_dtype == ttnn.bfloat8_b
+    bound = beta1 * beta2 * (1.0 + (5e-2 if is_bfp8 else 2**-8))
+    max_abs = tt_res.to(torch.float32).abs().max().item()
+    assert max_abs <= bound, f"situ_glu overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
+
+    if is_bfp8:
+        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BFP8_PCC)
+    elif ttnn_dtype == ttnn.float32:
+        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_FP32_PCC)
+    else:
+        assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=ulp)
+        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
+
+
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
-@pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES, ids=["hidden_le_3072", "hidden_gt_3072"])
+@pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES, ids=["hidden_le_3072", "hidden_gt_3072", "fp32"])
 def test_situ_glu(input_shape, ttnn_dtype, device):
     torch.manual_seed(0)
     # Span the saturating and near-linear regions of both halves.
@@ -320,23 +357,65 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
     gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2)
-    # Output placement follows the input, not the possibly-L1 intermediates.
+    # The gate and up halves differ in beta and in their sigmoid factor, so a swapped operand order
+    # inside the kernel fails the numerics below rather than passing on symmetric inputs.
+    out, ops = _situ_glu_device_ops(lambda: ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2))
+    assert ops == ["BinaryNgDeviceOperation"], f"Kimi betas should launch one fused op, got {ops}"
+    assert out.dtype == ttnn_dtype
     assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
     tt_res = ttnn.to_torch(out)
     golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    _check_situ_glu(golden, tt_res, ttnn_dtype, SITU_GLU_BETA1, SITU_GLU_BETA2, ulp=SITU_GLU_NATIVE_ULP)
 
-    is_bfp8 = ttnn_dtype == ttnn.bfloat8_b
-    # Both halves are bounded: |situ_a| <= beta1, |up_half| <= beta2.
-    bound = SITU_GLU_BETA1 * SITU_GLU_BETA2 * (1.0 + (5e-2 if is_bfp8 else 2**-8))
-    max_abs = tt_res.to(torch.float32).abs().max().item()
-    assert max_abs <= bound, f"situ_glu overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
 
-    if is_bfp8:
-        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BFP8_PCC)
-    else:
-        assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=SITU_GLU_ULP)
-        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize(
+    "gate_layout, up_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["rm_gate", "rm_up", "rm_both"],
+)
+def test_situ_glu_layouts(device, gate_layout, up_layout):
+    torch.manual_seed(0)
+    # The native op goes through the binary ops' shared entry point, which tilizes a mixed pair. Handed
+    # to the device op directly, a row-major operand next to a tiled one was read as if it were tiled.
+    shape = torch.Size([1, 1, 64, 96])
+    gate = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=gate_layout, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=up_layout, device=device)
+
+    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2)
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    _check_situ_glu(golden, tt_res, ttnn.bfloat16, SITU_GLU_BETA1, SITU_GLU_BETA2, ulp=SITU_GLU_NATIVE_ULP)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize("input_shape, ttnn_dtype", SITU_GLU_CASES[:2], ids=["hidden_le_3072", "hidden_gt_3072"])
+def test_situ_glu_fallback_betas(input_shape, ttnn_dtype, device):
+    torch.manual_seed(0)
+    # The fused kernel compiles Kimi's betas in; any other betas must keep the composite and its
+    # numerics rather than silently computing with the wrong betas.
+    gate = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(input_shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out, ops = _situ_glu_device_ops(
+        lambda: ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_FALLBACK_BETA1, SITU_GLU_FALLBACK_BETA2)
+    )
+    assert len(ops) > 1, f"non-Kimi betas should take the composite, got {ops}"
+    # Output placement follows the input, not the possibly-L1 intermediates.
+    assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(
+        gate, up, beta1=SITU_GLU_FALLBACK_BETA1, beta2=SITU_GLU_FALLBACK_BETA2
+    )
+    _check_situ_glu(golden, tt_res, ttnn_dtype, SITU_GLU_FALLBACK_BETA1, SITU_GLU_FALLBACK_BETA2)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
@@ -348,7 +427,8 @@ def test_situ_glu_l1_intermediates_fall_back(device):
     gate = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     up = ttnn.zeros(shape, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    out = ttnn.situ_glu(gate, up, SITU_GLU_BETA1, SITU_GLU_BETA2)
+    # Only the composite (non-Kimi betas) has intermediates to place.
+    out = ttnn.situ_glu(gate, up, SITU_GLU_FALLBACK_BETA1, SITU_GLU_FALLBACK_BETA2)
 
     assert out.memory_config().buffer_type == gate.memory_config().buffer_type
     gate.deallocate()
@@ -370,11 +450,16 @@ def test_situ_glu_l1_intermediates_fall_back(device):
     ],
     ids=["contiguous", "disjoint"],
 )
-def test_situ_glu_sub_core_grids(device, sub_core_grid):
+@pytest.mark.parametrize(
+    "beta1, beta2",
+    [(SITU_GLU_BETA1, SITU_GLU_BETA2), (SITU_GLU_FALLBACK_BETA1, SITU_GLU_FALLBACK_BETA2)],
+    ids=["native", "composite"],
+)
+def test_situ_glu_sub_core_grids(device, sub_core_grid, beta1, beta2):
     torch.manual_seed(0)
-    # A width under the 3072 L1 cutoff, so this also pins the core restriction's other effect: it
-    # holds the intermediates in the output's memory space instead of taking interleaved L1 on
-    # every core, the restricted-away ones included.
+    # A width under the 3072 L1 cutoff, so on the composite this also pins the core restriction's
+    # other effect: it holds the intermediates in the output's memory space instead of taking
+    # interleaved L1 on every core, the restricted-away ones included.
     shape = torch.Size([1, 1, 512, 3072])
     gate = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
     up = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
@@ -382,13 +467,51 @@ def test_situ_glu_sub_core_grids(device, sub_core_grid):
     gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2, sub_core_grids=sub_core_grid)
+    out = ttnn.situ_glu(gate_tt, up_tt, beta1, beta2, sub_core_grids=sub_core_grid)
 
     assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
     tt_res = ttnn.to_torch(out)
-    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=beta1, beta2=beta2)
     assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=SITU_GLU_ULP)
     assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")
+@pytest.mark.parametrize(
+    "gate_layout, up_layout",
+    [(ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT), (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT)],
+    ids=["rm_gate", "rm_up"],
+)
+def test_situ_glu_sub_core_grids_layout_conversion(device, gate_layout, up_layout):
+    torch.manual_seed(0)
+    # A mixed pair is tilized before the op runs. That conversion is a program of its own and must
+    # stay on the restricted cores too: the shared binary entry point tilizes on the full grid, which
+    # would land on the cores a concurrent op owns.
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))])
+    shape = torch.Size([1, 1, 64, 96])
+    gate = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    up = torch.empty(shape, dtype=torch.bfloat16).uniform_(-30.0, 30.0)
+    gate_tt = ttnn.from_torch(gate, dtype=ttnn.bfloat16, layout=gate_layout, device=device)
+    up_tt = ttnn.from_torch(up, dtype=ttnn.bfloat16, layout=up_layout, device=device)
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        out = ttnn.situ_glu(gate_tt, up_tt, SITU_GLU_BETA1, SITU_GLU_BETA2, sub_core_grids=cores)
+    finally:
+        graph = ttnn.graph.end_graph_capture()
+    # TilizeParams ends in its optional sub_core_grids, which serializes as std::nullopt when the
+    # conversion was left on the full grid.
+    tilize_params = [
+        node["arguments"][0]
+        for node in graph
+        if node.get("node_type") == "function_start" and node.get("params", {}).get("name") == "TilizeDeviceOperation"
+    ]
+    assert len(tilize_params) == 1, f"expected one tilize of the row-major operand, got {len(tilize_params)}"
+    assert tilize_params[0].endswith("<CoreRangeSet>)"), f"tilize ran unrestricted: {tilize_params[0]}"
+
+    tt_res = ttnn.to_torch(out)
+    golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
+    _check_situ_glu(golden, tt_res, ttnn.bfloat16, SITU_GLU_BETA1, SITU_GLU_BETA2, ulp=SITU_GLU_NATIVE_ULP)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")

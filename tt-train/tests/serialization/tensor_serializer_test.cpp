@@ -19,7 +19,9 @@
 #include "optimizers/adamw_full_precision.hpp"
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
+#include "test_utils/optimizer_state.hpp"
 #include "test_utils/random_data.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace {
@@ -202,28 +204,77 @@ protected:
         EXPECT_TRUE(compare_tensors(saved, trained)) << key << " in the checkpoint does not match the trained value";
     }
 
-    // Checks every model weight against its bf16 HALF view, and every tensor in the optimizer state entries
-    // `state_keys` against its `state_precision` view. The defaults are AdamW's moments, which the fused kernel
-    // updates in place in bf16; AdamWFullPrecision passes its fp32 master weights and moments with FULL.
+    // Checks every model weight against its bf16 HALF view, and every optimizer state tensor against its
+    // `state_precision` view. The default fits AdamW's moments, which the fused kernel updates in place in bf16;
+    // AdamWFullPrecision passes FULL for its fp32 master weights and moments.
     static void expect_checkpoint_matches(
         const std::filesystem::path& path,
         const ttml::serialization::NamedParameters& params,
         const ttml::optimizers::OptimizerBase& optimizer,
-        const std::vector<std::string>& state_keys = {"exp_avg", "exp_avg_sq"},
         ttml::autograd::PreferredPrecision state_precision = ttml::autograd::PreferredPrecision::HALF) {
         ttml::serialization::FlatBufferFile file;
         file.deserialize(path.string());
         for (const auto& [name, param] : params) {
             expect_saved(file, "model/" + name, param->get_value(ttml::autograd::PreferredPrecision::HALF));
         }
-        const auto state = optimizer.get_state_dict();
-        for (const auto& key : state_keys) {
-            const auto& tensors = std::get<ttml::serialization::NamedParameters>(state.at(key));
-            ASSERT_FALSE(tensors.empty()) << key;
-            for (const auto& [name, value] : tensors) {
-                expect_saved(file, "optimizer/" + key + "/" + name, value->get_value(state_precision));
-            }
+        const auto state = ttml::test_utils::state_tensors(optimizer);
+        ASSERT_FALSE(state.empty());
+        for (const auto& [name, value] : state) {
+            expect_saved(file, "optimizer/" + name, value->get_value(state_precision));
         }
+    }
+
+    // Stores every parameter as `dtype`, as a run that trains in that precision does. New parameters are bf16.
+    static void store_as(const ttml::serialization::NamedParameters& params, ttnn::DataType dtype) {
+        const auto precision = dtype == ttnn::DataType::FLOAT32 ? ttml::autograd::PreferredPrecision::FULL
+                                                                : ttml::autograd::PreferredPrecision::HALF;
+        for (const auto& [name, param] : params) {
+            param->set_value(param->get_value(precision));
+        }
+    }
+
+    // A loaded tensor keeps the dtype it is stored in and holds the checkpoint's values cast to it.
+    static void expect_loaded(
+        ttml::serialization::FlatBufferFile& file,
+        const std::string& key,
+        const ttml::autograd::TensorPtr& tensor,
+        ttnn::DataType dtype) {
+        ttnn::Tensor saved;
+        ttml::serialization::read_ttnn_tensor(file, key + "/value", saved);
+        const auto& loaded = tensor->get_value(ttml::autograd::PreferredPrecision::NATIVE);
+        EXPECT_EQ(loaded.dtype(), dtype) << key;
+        EXPECT_TRUE(compare_tensors(loaded, ttnn::typecast(saved, dtype))) << key << " does not hold the saved values";
+    }
+
+    // Trains a model stored as `saved` for a step, checkpoints it, and resumes it into a model stored as `resumed`.
+    // The parameters and the AdamW moments must load in the resumed model's dtype, and the fused AdamW step, which
+    // needs the moments in the parameter's dtype, must run.
+    void expect_resume_keeps_the_models_dtype(ttnn::DataType saved, ttnn::DataType resumed) {
+        ttml::modules::LinearLayer model(32, 64);
+        auto params = model.parameters();
+        store_as(params, saved);
+        ttml::optimizers::AdamW optimizer(params, adamw_config());
+        step_with_random_grads(params, optimizer, 1);
+        const auto path = save("saved", model, optimizer);
+
+        ttml::modules::LinearLayer resumed_model(32, 64);
+        auto resumed_params = resumed_model.parameters();
+        store_as(resumed_params, resumed);
+        ttml::optimizers::AdamW resumed_optimizer(resumed_params, adamw_config());
+        ttml::serialization::FlatBufferFile file;
+        file.deserialize(path.string());
+        ttml::serialization::read_module(file, "model", &resumed_model);
+        ttml::serialization::read_optimizer(file, "optimizer", &resumed_optimizer);
+
+        for (const auto& [name, param] : resumed_params) {
+            expect_loaded(file, "model/" + name, param, resumed);
+        }
+        const auto state = ttml::test_utils::state_tensors(resumed_optimizer);
+        ASSERT_FALSE(state.empty());
+        for (const auto& [name, value] : state) {
+            expect_loaded(file, "optimizer/" + name, value, resumed);
+        }
+        step_with_random_grads(resumed_params, resumed_optimizer, 1);
     }
 
     std::filesystem::path temp_dir;
@@ -281,9 +332,13 @@ TEST_F(CheckpointTrainingTest, CheckpointKeepsFullPrecisionOptimizerState) {
 
     step_with_random_grads(params, optimizer, 3);
     expect_checkpoint_matches(
-        save("only", model, optimizer),
-        params,
-        optimizer,
-        {"master_weights", "exp_avg", "exp_avg_sq"},
-        ttml::autograd::PreferredPrecision::FULL);
+        save("only", model, optimizer), params, optimizer, ttml::autograd::PreferredPrecision::FULL);
+}
+
+TEST_F(CheckpointTrainingTest, ResumeIntoFp32ModelKeepsItsDtype) {
+    expect_resume_keeps_the_models_dtype(ttnn::DataType::BFLOAT16, ttnn::DataType::FLOAT32);
+}
+
+TEST_F(CheckpointTrainingTest, ResumeIntoBf16ModelKeepsItsDtype) {
+    expect_resume_keeps_the_models_dtype(ttnn::DataType::FLOAT32, ttnn::DataType::BFLOAT16);
 }

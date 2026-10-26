@@ -7,7 +7,7 @@
  */
 
 #include <stdint.h>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
@@ -77,6 +77,8 @@ void kernel_main() {
     constexpr auto beta_is_row_major = get_arg(args::beta_is_row_major);
     constexpr auto dfb_length = get_arg(args::dfb_length);
     constexpr auto Wt = get_arg(args::Wt);  // Width in tiles
+    // Tiles between the starts of consecutive input rows; exceeds Wt when a core owns only a slice of each row.
+    constexpr auto row_stride = get_arg(args::row_stride);
     constexpr auto reduce_factor = get_arg(args::reduce_factor);
 
     const auto src_a = TensorAccessor(tensor::src);
@@ -207,5 +209,6 @@ void kernel_main() {
 #endif
 #endif
         }
+        inp_tile_idx += row_stride - Wt;
     }  // ncht loop
 }

@@ -7,6 +7,15 @@
 
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+
+#include <algorithm>
+#include <cstdint>
+#include <vector>
+
 namespace ttnn {
 
 using namespace ccl;
@@ -14,22 +23,12 @@ using namespace tt::constants;
 
 namespace experimental::prim {
 
-LlamaShardedMeshWorkloadFactory::cached_mesh_workload_t LlamaShardedMeshWorkloadFactory::create_mesh_workload(
-    const AllGatherAsyncParams& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const AllGatherAsyncInputs& tensor_args,
-    Tensor& output_tensor) {
-    tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(operation_attributes, coord, tensor_args, output_tensor);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
-        shared_variables.emplace(ttnn::MeshCoordinateRange(coord), cached_program.shared_variables);
-    }
-    return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
-}
+namespace {
 
-LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactory::create_at(
+constexpr uint32_t kLlamaShardedReaderKernelIdx = 0;
+constexpr uint32_t kLlamaShardedWriterKernelIdx = 1;
+
+tt::tt_metal::ProgramDescriptor build_llama_sharded_program_descriptor(
     const AllGatherAsyncParams& operation_attributes,
     const ttnn::MeshCoordinate& mesh_coordinate,
     const AllGatherAsyncInputs& tensor_args,
@@ -56,7 +55,7 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
 
     log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_sharded is called");
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::ProgramDescriptor desc;
 
     auto* mesh_device = input_tensor.device();
     if (!mesh_device) {
@@ -90,8 +89,13 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
             ? llama_specific::get_custom_worker_core_placement(num_links * num_workers_per_link)
             : ttnn::ccl::choose_worker_cores(num_links, num_workers_per_link, mesh_device, sub_device_id);
 
+    auto* input_buffer = input_tensor.buffer();
+    TT_FATAL(input_buffer != nullptr, "Llama sharded all-gather input buffer must be allocated on device");
+    auto* output_buffer = output_tensor.buffer();
+    TT_FATAL(output_buffer != nullptr, "Llama sharded all-gather output buffer must be allocated on device");
+
     // Tensor Info
-    const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
+    const auto input_tensor_num_pages = input_buffer->num_pages();
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec()->grid;
     const auto input_tensor_shard_shape = input_tensor.memory_config().shard_spec()->shape;
     const auto input_tensor_shard_num_pages = input_tensor_shard_shape[0] * input_tensor_shard_shape[1] / TILE_HW;
@@ -116,43 +120,51 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
     uint32_t src0_cb_index = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
-            .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = cb_num_pages * l1_scratch_cb_page_size_bytes,
+        .core_ranges = sender_worker_core_range,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = df,
+            .page_size = l1_scratch_cb_page_size_bytes,
+        }}},
+    });
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
-            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+        .total_size = static_cast<uint32_t>(num_packet_headers_storable * packet_header_size_bytes * 2),
+        .core_ranges = sender_worker_core_range,
+        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(reserved_packet_header_CB_index),
+            .data_format = tt::DataFormat::RawUInt32,
+            .page_size = static_cast<uint32_t>(packet_header_size_bytes),
+        }}},
+    });
 
     // KERNEL CREATION
     // Reader
-    auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    reader_kernel_config.compile_args = {
+    std::vector<uint32_t> reader_compile_args = {
         ring_index,                 // my_chip_id
         src0_cb_index,              // cb0_id
         op_config.get_page_size(),  // tensor0_page_size
     };
     log_trace(tt::LogOp, "Reader Compile Args:");
-    for ([[maybe_unused]] const auto& arg : reader_kernel_config.compile_args) {
+    for ([[maybe_unused]] const auto& arg : reader_compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
-    auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    tt::tt_metal::KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "llama_shapes_sharded_reader.cpp",
-        sender_worker_core_range,
-        reader_kernel_config);
+        "llama_shapes_sharded_reader.cpp";
+    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = sender_worker_core_range;
+    reader_kernel_desc.compile_time_args = std::move(reader_compile_args);
+    reader_kernel_desc.config = tt::tt_metal::ReaderConfigDescriptor{};
 
     // Writer
-    auto writer_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
-    writer_kernel_config.compile_args = {
+    std::vector<uint32_t> writer_compile_args = {
         ring_index,                       // my_chip_id
         reserved_packet_header_CB_index,  // reserved_packet_header_cb_id
         num_packet_headers_storable,      // num_packet_headers_storable
@@ -165,20 +177,32 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         barrier_semaphore.has_value() &&  // use_barrier_sem
             !using_persistent_buffers,
     };
-    writer_kernel_config.compile_args.insert(
-        writer_kernel_config.compile_args.end(), forward_args.begin(), forward_args.end());
-    writer_kernel_config.compile_args.insert(
-        writer_kernel_config.compile_args.end(), backward_args.begin(), backward_args.end());
+    writer_compile_args.insert(writer_compile_args.end(), forward_args.begin(), forward_args.end());
+    writer_compile_args.insert(writer_compile_args.end(), backward_args.begin(), backward_args.end());
     log_trace(tt::LogOp, "Writer Compile Args:");
-    for ([[maybe_unused]] const auto& arg : writer_kernel_config.compile_args) {
+    for ([[maybe_unused]] const auto& arg : writer_compile_args) {
         log_trace(tt::LogOp, "\t{}", arg);
     }
-    auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
+    tt::tt_metal::KernelDescriptor writer_kernel_desc;
+    writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-        "llama_shapes_sharded_writer.cpp",
-        sender_worker_core_range,
-        writer_kernel_config);
+        "llama_shapes_sharded_writer.cpp";
+    writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = sender_worker_core_range;
+    writer_kernel_desc.compile_time_args = std::move(writer_compile_args);
+    writer_kernel_desc.config = tt::tt_metal::WriterConfigDescriptor{};
+
+    const uint32_t reader_kernel_idx = static_cast<uint32_t>(desc.kernels.size());
+    desc.kernels.push_back(std::move(reader_kernel_desc));
+    const uint32_t writer_kernel_idx = static_cast<uint32_t>(desc.kernels.size());
+    desc.kernels.push_back(std::move(writer_kernel_desc));
+    TT_FATAL(
+        reader_kernel_idx == kLlamaShardedReaderKernelIdx && writer_kernel_idx == kLlamaShardedWriterKernelIdx,
+        "Llama sharded all-gather reader/writer must be kernel indices {}/{}, got {}/{}",
+        kLlamaShardedReaderKernelIdx,
+        kLlamaShardedWriterKernelIdx,
+        reader_kernel_idx,
+        writer_kernel_idx);
 
     // Kernel Runtime Args
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
@@ -258,7 +282,9 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         for ([[maybe_unused]] const auto& arg : reader_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
+        tt::tt_metal::KernelDescriptor::RTArgList reader_rt_arg_list;
+        reader_rt_arg_list.append(reader_rt_args);
+        desc.kernels[kLlamaShardedReaderKernelIdx].emplace_runtime_args(core, reader_rt_arg_list);
 
         // Set writer runtime args
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
@@ -288,50 +314,62 @@ LlamaShardedMeshWorkloadFactory::cached_program_t LlamaShardedMeshWorkloadFactor
         if (forward_coord.has_value()) {
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+            tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
         }
         writer_rt_args.push_back(backward_coord.has_value());
         if (backward_coord.has_value()) {
             const auto src_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
             const auto dst_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-            tt::tt_fabric::append_fabric_connection_rt_args(
-                src_fabric_node_id, dst_fabric_node_id, link, program, {core}, writer_rt_args);
+            tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                src_fabric_node_id, dst_fabric_node_id, link, desc, core, writer_rt_args);
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
+        tt::tt_metal::KernelDescriptor::RTArgList writer_rt_arg_list;
+        writer_rt_arg_list.append(writer_rt_args);
+        desc.kernels[kLlamaShardedWriterKernelIdx].emplace_runtime_args(core, writer_rt_arg_list);
     }
 
-    SetCommonRuntimeArgs(program, worker_sender_reader_kernel_id, {input_tensor.buffer()->address()});
-    SetCommonRuntimeArgs(
-        program,
-        worker_sender_writer_kernel_id,
-        {output_tensor.buffer()->address(), semaphore.address(), barrier_semaphore ? barrier_semaphore->address() : 0});
-    return {
-        std::move(program),
-        shared_variables_t{
-            .reader_args = GetCommonRuntimeArgs(program, worker_sender_reader_kernel_id),
-            .writer_args = GetCommonRuntimeArgs(program, worker_sender_writer_kernel_id),
-        }};
+    desc.kernels[kLlamaShardedReaderKernelIdx].emplace_common_runtime_args({input_buffer});
+    // Caller-owned semaphores stay out of the program hash. override_runtime_arguments rewrites these slots.
+    const uint32_t semaphore_addr = static_cast<uint32_t>(semaphore.address());
+    const uint32_t barrier_addr = barrier_semaphore ? static_cast<uint32_t>(barrier_semaphore->address()) : 0u;
+    desc.kernels[kLlamaShardedWriterKernelIdx].emplace_common_runtime_args(
+        {output_buffer,
+         semaphore_addr,  // smuggled-rta-ok: semaphore, override
+         barrier_addr});  // smuggled-rta-ok: semaphore, override
+    return desc;
+}
+
+}  // namespace
+
+tt::tt_metal::WorkloadDescriptor LlamaShardedMeshWorkloadFactory::create_workload_descriptor(
+    const AllGatherAsyncParams& operation_attributes,
+    const AllGatherAsyncInputs& tensor_args,
+    Tensor& output_tensor,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
+    const auto coords = tensor_coords.coords();
+    workload_descriptor.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        auto desc = build_llama_sharded_program_descriptor(operation_attributes, coord, tensor_args, output_tensor);
+        workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+    return workload_descriptor;
 }
 
 void LlamaShardedMeshWorkloadFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+    tt::tt_metal::Program& program,
     const AllGatherAsyncParams& operation_attributes,
-    const AllGatherAsyncInputs& tensor_args,
-    Tensor& output_tensor) {
-    const auto input_address = tensor_args.input_tensor.buffer()->address();
-    const auto output_address = output_tensor.buffer()->address();
-    const auto semaphore_address = operation_attributes.semaphore.at(0).address();
+    const AllGatherAsyncInputs& /*tensor_args*/,
+    Tensor& /*output_tensor*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
+    auto& writer = tt::tt_metal::GetCommonRuntimeArgs(program, kLlamaShardedWriterKernelIdx);
     const auto& barrier = operation_attributes.barrier_semaphore;
-    const auto barrier_address = barrier.has_value() ? barrier->address() : 0;
-    for (const auto& [coordinate_range, shared] : cached_workload.shared_variables) {
-        shared.reader_args.get()[ttnn::ccl::LlamaGatherReaderCommonArgs::input] = input_address;
-        auto& writer = shared.writer_args.get();
-        writer[ttnn::ccl::LlamaGatherWriterCommonArgs::output] = output_address;
-        writer[ttnn::ccl::LlamaGatherWriterCommonArgs::semaphore] = semaphore_address;
-        writer[ttnn::ccl::LlamaGatherWriterCommonArgs::barrier] = barrier_address;
-    }
+    writer[ttnn::ccl::LlamaGatherWriterCommonArgs::semaphore] =
+        static_cast<uint32_t>(operation_attributes.semaphore.at(0).address());
+    writer[ttnn::ccl::LlamaGatherWriterCommonArgs::barrier] =
+        barrier.has_value() ? static_cast<uint32_t>(barrier->address()) : 0u;
 }
 
 }  // namespace experimental::prim

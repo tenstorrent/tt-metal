@@ -26,6 +26,7 @@ namespace ttml::optimizers {
 
 MorehAdamW::MorehAdamW(serialization::NamedParameters parameters, const AdamWCompositeConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
+    require_bf16_parameters(m_parameters, "MorehAdamW");
     if (m_config.kahan_summation) {
         throw std::runtime_error("MorehAdamW: Kahan summation is not supported. Use default AdamWComposite instead.");
     }
@@ -67,17 +68,21 @@ void MorehAdamW::step() {
             continue;
         }
         auto& second_moment_ptr = m_second_moment.at(key);
-        const auto& first_moment = first_moment_ptr->get_value(autograd::PreferredPrecision::HALF);
-        const auto& second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::HALF);
+        // moreh_adamw writes the parameter and the moments in place, through its output tensors.
+        auto param = tensor_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
+        auto first_moment = first_moment_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
+        auto second_moment = second_moment_ptr->get_value_for_update(autograd::PreferredPrecision::HALF);
 
         auto gradients = tensor_ptr->get_grad();
 
-        auto output_tensor = tensor_ptr->get_value(autograd::PreferredPrecision::HALF);
+        // By value: the op below relabels its outputs (see optimizers::restore_topology).
+        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
+
         ttnn::moreh_adamw(
-            tensor_ptr->get_value(autograd::PreferredPrecision::HALF),
+            param.tensor(),
             gradients,
-            first_moment,
-            second_moment,
+            first_moment.tensor(),
+            second_moment.tensor(),
             m_config.lr,
             m_config.beta1,
             m_config.beta2,
@@ -86,15 +91,13 @@ void MorehAdamW::step() {
             m_steps,
             /* amsgrad */ false,
             /* max_exp_avg_sq_in */ std::nullopt,
-            /* param_out */ output_tensor,
-            /* exp_avg_out */ first_moment,
-            /* exp_avg_sq_out */ second_moment,
+            /* param_out */ param.tensor(),
+            /* exp_avg_out */ first_moment.tensor(),
+            /* exp_avg_sq_out */ second_moment.tensor(),
             /* max_exp_avg_sq_out */ std::nullopt,
             /* memory_config */ std::nullopt,
             /* compute_kernel_config */ core::ComputeKernelConfig::precise());
-        tensor_ptr->set_value(output_tensor);
-        first_moment_ptr->set_value(first_moment);
-        second_moment_ptr->set_value(second_moment);
+        restore_topology({tensor_ptr, first_moment_ptr, second_moment_ptr}, topology);
     }
 }
 
@@ -134,6 +137,7 @@ void MorehAdamW::set_lr(float lr) {
 
 AdamWComposite::AdamWComposite(serialization::NamedParameters parameters, const AdamWCompositeConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
+    require_bf16_parameters(m_parameters, "AdamWComposite");
     for (const auto& [key, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             m_first_moment.emplace(
@@ -189,6 +193,9 @@ void AdamWComposite::step() {
         auto second_moment = second_moment_ptr->get_value(autograd::PreferredPrecision::HALF);
 
         auto gradients = tensor_ptr->get_grad();
+
+        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
+        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
 
         if (m_config.weight_decay != 0.0F) {
             auto weight_decay_update = ttnn::multiply(
@@ -252,6 +259,14 @@ void AdamWComposite::step() {
 
             tensor_ptr->set_value(result);
             kahan_compensation_ptr->set_value(compensation_tensor);
+        }
+
+        restore_topology({tensor_ptr, first_moment_ptr, second_moment_ptr}, topology);
+        if (m_config.amsgrad) {
+            restore_topology({m_max_exp_avg_sq.at(key)}, topology);
+        }
+        if (m_config.kahan_summation) {
+            restore_topology({m_kahan_compensation.at(key)}, topology);
         }
     }
 }

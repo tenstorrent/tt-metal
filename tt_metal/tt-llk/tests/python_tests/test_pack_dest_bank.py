@@ -4,7 +4,8 @@
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from helpers.data_format_inference import unpacks_to_dest
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import DestAccumulation, L1Accumulation, Tilize, format_dict
 from helpers.param_config import (
@@ -68,14 +69,7 @@ def get_valid_num_faces_datacopy(tilize):
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            # DataFormat.Float32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            # DataFormat.Bfp8_b,
-        ]
-    ),
+    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     num_faces=4,
@@ -97,11 +91,7 @@ def test_pack_dest_bank(
     torch_format = format_dict[formats.output_format]
     golden_tensor = src_A.to(torch_format)
 
-    unpack_to_dest = (
-        False
-        if tilize == Tilize.Yes and formats.input_format == DataFormat.Float32
-        else formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc, tilize)
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -209,9 +199,7 @@ def test_pack_dest_bank_two_blocked_packs_of_4(
     torch_format = format_dict[formats.output_format]
     golden_tensor = src_A.to(torch_format)
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     configuration = TestConfig(
         "sources/pack_dest_bank_test.cpp",

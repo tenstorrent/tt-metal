@@ -51,6 +51,7 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -807,7 +808,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             act_block_h_ntiles,
             input_channels_padded,
             filter_w,
-            tt::tt_metal::hal::get_arch(),
+            device->arch(),
             a.dtype(),
             parallelization_config.per_core_out_matrix_width_ntile * block_config.act_block_w_ntiles,
             tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),

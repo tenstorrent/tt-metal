@@ -17,6 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.tensor_utils import with_dram_sharded_cores_per_bank
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
 from models.common.weight_cache import WEIGHT_CACHE_FORMAT_VERSION as _WC_FORMAT_VERSION
 from models.common.weight_cache import WEIGHT_CACHE_MARKER as _WC_MARKER
@@ -40,6 +41,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf  # Minimal addition for Mistral vision
 from models.tt_transformers.tt.load_checkpoints import (
+    check_checkpoint_index,
     convert_hf_to_meta,
     convert_hf_to_meta_mllama,
     convert_hf_to_meta_mllama_no_qkv_permute,
@@ -214,6 +216,12 @@ def should_pad_sampling_logits_to_power_of_2(
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
 
 
+def disables_batched_prefill(base_model_name: str, device_name: str) -> bool:
+    return (base_model_name == "Qwen3-32B" and device_name == "P150x4") or (
+        base_model_name == "Llama-3.1-8B" and device_name in ("P100", "P150", "P300", "P150x4", "P150x8")
+    )
+
+
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"
@@ -245,6 +253,7 @@ class ModelOptimizations:
         else:
             if (
                 base_model_name.startswith("Llama-3")
+                or base_model_name.startswith("Llama-Krikri")
                 or base_model_name.startswith("Mistral-7B")
                 or base_model_name.startswith("Phi-3-mini")
                 or base_model_name.startswith("phi-4")
@@ -301,7 +310,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"]:
+        if base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
@@ -449,14 +458,14 @@ def parse_optimizations(string):
 
         return string[open_brace + 1 : close_brace].strip()
 
-    precision_dict = extract_config(precision_start, "precision_cfg") if precision_start != -1 else {}
-    fidelity_dict = extract_config(fidelity_start, "fidelity_cfg") if fidelity_start != -1 else {}
+    precision_dict = extract_config(precision_start, "precision_cfg") if precision_start != -1 else ""
+    fidelity_dict = extract_config(fidelity_start, "fidelity_cfg") if fidelity_start != -1 else ""
 
     # Create ModelOptimizations instance with the parsed configs
     settings = {"TensorPrecision": {}, "OpFidelity": {}}
 
     # Parse precision config
-    for pair in precision_dict.split(","):
+    for pair in precision_dict.split(",") if precision_dict else []:
         if ":" not in pair:
             raise ValueError("Invalid format - missing ':' separator")
         key, value = pair.split(":")
@@ -469,7 +478,7 @@ def parse_optimizations(string):
         settings["TensorPrecision"][key] = PrecisionSetting(value)
 
     # Parse fidelity config
-    for pair in fidelity_dict.split(","):
+    for pair in fidelity_dict.split(",") if fidelity_dict else []:
         if ":" not in pair:
             raise ValueError("Invalid format - missing ':' separator")
         key, value = pair.split(":")
@@ -570,6 +579,9 @@ class ModelArgs:
         "GATE_MM_OUTPUT",
     )
 
+    # GQA models padded to the tensor-parallel width when their KV heads do not divide it.
+    PAD_HEADS_FOR_TP_MODELS = ("Qwen2.5-VL-3B", "Qwen2.5-VL-7B", "olmOCR-2-7B")
+
     LOCAL_LLAMA_PARAMS = {
         k: str(_REPO_ROOT / v)
         for k, v in {
@@ -595,6 +607,7 @@ class ModelArgs:
             "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
             "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
             "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
+            "Qwen2.5-VL-7B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-7B-Instruct",
             "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
             "Phi-4": "models/tt_transformers/model_params/phi-4",
             "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
@@ -690,6 +703,10 @@ class ModelArgs:
         self.sdpa_decode_k_chunk_size = 0
         self.sdpa_decode_use_default_compute_config = False
         self.use_hf_rope = use_hf_rope
+        # Opt-in (models with QKV biases): subtract the K-projection bias from post-RoPE keys.
+        # Mathematically a no-op for softmax; keeps QK^T small enough for the bf16 score
+        # intermediates of the decode SDPA kernel. See Attention._create_k_bias_shift.
+        self.subtract_k_bias_post_rope = False
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -740,31 +757,38 @@ class ModelArgs:
             raise ValueError(f"Batch size {self.max_batch_size} not supported")
 
         # Load model params
-        if self.base_model_name in ["Phi-3-mini-128k-instruct"]:
-            self.trust_remote_code_hf = True
-
+        # Do not force remote code for Phi-3. Its remote model leaves most weights randomly initialized on HF 5.x.
         self._set_hf_params(self.CKPT_DIR)
 
         # Set the max number of tokens for each prefill chunk based on the model and device
         self.max_prefill_chunk_size = self.get_max_prefill_chunk_size()
         # TODO: Enable batched_prefill once this is fixed: https://github.com/tenstorrent/tt-metal/issues/47238
-        # Prefill logits are batch-variant on multi-chip Blackhole: the
+        # Prefill logits are batch-variant on Blackhole: the
         # float-reduction order in the prefill matmul/attention depends on the
         # batched-token count, so identical same-seed requests that land in
         # different-sized prefill batches get slightly different logits. Seeded
         # sampling under concurrency then diverges (tt-inference-server#4004,
         # test_non_uniform_seeding). Forcing per-user batch-1 prefill removes the
         # variance. Workaround until the prefill kernels are batch-invariant.
-        # Disabled for Qwen3-32B (P150x4) and Llama-3.1-8B (P300/P150x4/P150x8).
-        self.disable_batched_prefill = (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4") or (
-            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P150", "P300", "P150x4", "P150x8")
-        )
+        self.disable_batched_prefill = disables_batched_prefill(self.base_model_name, self.device_name)
 
         if (
             self.base_model_name
-            in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b", "Phi-4"]
+            in [
+                "Llama-3.1-8B",
+                "Llama-Krikri-8B",
+                "Llama-3.2-11B",
+                "Mistral-7B",
+                "gemma-3-27b",
+                "gemma-3-4b",
+                "Phi-4",
+                "Qwen2.5-3B",
+            ]
             and self.device_name == "N150"
-        ) or (self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "Phi-4"] and self.device_name == "N300"):
+        ) or (
+            self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B", "olmOCR-2-7B", "Phi-4"]
+            and self.device_name == "N300"
+        ):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
         elif self.base_model_name in ["Mixtral-8x7B"] and self.device_name == "T3K":
@@ -871,22 +895,7 @@ class ModelArgs:
                     )
                 }
             )
-            if self.num_devices == 32:
-                lm_head_num_rows = 4
-                while self.dim % (self.num_devices * ttnn.TILE_SIZE * lm_head_num_rows) != 0:
-                    lm_head_num_rows -= 1
-            else:
-                lm_head_num_rows = 8
-            lm_head_cores_per_row = 8
-            while self.dim % (ttnn.TILE_SIZE * lm_head_num_rows * lm_head_cores_per_row) != 0:
-                lm_head_num_rows -= 1
-                if lm_head_num_rows == 0:
-                    lm_head_cores_per_row -= 1
-                    if lm_head_cores_per_row == 0:
-                        raise ValueError(
-                            f"Could not find a lm_head_num_rows such that self.dim(={self.dim}) % (lm_head_num_rows * 8) == 0"
-                        )
-                    lm_head_num_rows = 8
+            lm_head_num_rows, lm_head_cores_per_row = self._lm_head_grid_dims()
             self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
             self.max_columns_per_device_lm_head = self.get_lm_head_max_columns_per_device(
                 self.lm_head_core_grid, self.prefetcher
@@ -1462,8 +1471,10 @@ class ModelArgs:
                 # a measured fit, not an assertion that 4 is throughput-optimal.
                 in0_block_w=(
                     4
-                    if self.device_name == "N150"
-                    and self.base_model_name == "Llama-3.1-8B"
+                    if (
+                        (self.device_name == "N150" and self.base_model_name in ("Llama-3.1-8B", "Llama-Krikri-8B"))
+                        or (self.device_name == "P100" and self.base_model_name == "Llama-3.1-8B")
+                    )
                     and seq_len >= self.prefill_len_cutoff
                     else None
                 ),
@@ -1718,8 +1729,14 @@ class ModelArgs:
                 )
             )
         )
+        # Prefill Q, K and V are interleaved in DRAM, so the op is free to use the whole Blackhole grid.
+        grid_size = (
+            self.mesh_device.compute_with_storage_grid_size()
+            if is_blackhole() and self.mesh_device is not None
+            else (8, 8)
+        )
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=grid_size,
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
@@ -1750,13 +1767,38 @@ class ModelArgs:
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
             )
-        else:
+        grid = self.mesh_device.compute_with_storage_grid_size() if self.mesh_device is not None else None
+        # The full Blackhole grid is faster from batch 8 up to 64 (user, KV head) pairs per device; at 256 pairs (8B at
+        # batch 32) the (8, 8) grid is faster from position 2047.
+        wide_blackhole_grid = (
+            is_blackhole()
+            and grid is not None
+            and grid.x > 8
+            and grid.y > 4
+            and self.max_batch_size >= 8
+            and self.max_batch_size * max(1, self.n_kv_heads // self.cluster_shape[1]) <= 64
+        )
+        if wide_blackhole_grid:
+            # The op reads batch b's Q from the b-th core of sub_core_grids, so the 8x4 Q shard block comes first.
             return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                sub_core_grids=ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3)),
+                        ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(grid.x - 1, 3)),
+                        ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(grid.x - 1, grid.y - 1)),
+                    ]
+                ),
                 exp_approx_mode=False,
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
             )
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=q_chunk,
+            k_chunk_size=k_chunk,
+        )
 
     @lru_cache(maxsize=None)
     def get_attn_sdpa_program_config(
@@ -2406,6 +2448,26 @@ class ModelArgs:
     # =========================================================================
     # LM HEAD PROGRAM AND MEMORY CONFIGS AND HELPER METHODS
     # =========================================================================
+    def _lm_head_grid_dims(self):
+        """Return (rows, cores_per_row) for the LM head core grid; subclasses may override."""
+        if self.num_devices == 32:
+            lm_head_num_rows = 4
+            while self.dim % (self.num_devices * ttnn.TILE_SIZE * lm_head_num_rows) != 0:
+                lm_head_num_rows -= 1
+        else:
+            lm_head_num_rows = 8
+        lm_head_cores_per_row = 8
+        while self.dim % (ttnn.TILE_SIZE * lm_head_num_rows * lm_head_cores_per_row) != 0:
+            lm_head_num_rows -= 1
+            if lm_head_num_rows == 0:
+                lm_head_cores_per_row -= 1
+                if lm_head_cores_per_row == 0:
+                    raise ValueError(
+                        f"Could not find a lm_head_num_rows such that self.dim(={self.dim}) % (lm_head_num_rows * 8) == 0"
+                    )
+                lm_head_num_rows = 8
+        return lm_head_num_rows, lm_head_cores_per_row
+
     def get_lm_head_max_columns_per_device(self, core_grid: ttnn.CoreGrid, prefetcher: Prefetcher = None):
         # 128256 comes from original llama 3 vocab size. 128256 / 4 was experimentally the maximum columns that worked per device.
         # The LM head for that was on 48 cores, so we know 128256 / 4 / 48 = 668 columns per core is close to the L1 limit.
@@ -2584,16 +2646,18 @@ class ModelArgs:
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 32, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": None},
+                "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": None},
+                "olmOCR-2-7B": {"N150": 64, "N300": 128, "T3K": 128, "TG": 128, "P150x4": None},
                 "Qwen2.5-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P150x8": 128},
                 # Large single-chunk prefill matters for EXAONE: chunked prefill is
                 # unsupported on sliding-window layers (48 of its 64 layers).
                 "EXAONE-4.5-33B": {"P150x8": 128},
                 "Qwen2.5-Coder-32B": {"N150": None, "N300": None, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
-                "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-7B": {"N150": 64, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
-                "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
+                # 72B T3K: an 8k chunk leaves the DRAM for a KV pool covering the full 128k context
+                "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 8, "TG": None, "P150x4": None},
                 "Qwen3-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None, "P150x8": 64},
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -2838,7 +2902,7 @@ class ModelArgs:
     def _get_hidden_activation_type(self, config):
         activation_map = {
             "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
-            "gelu_pytorch_tanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
+            "gelu_pytorch_tanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH, 1.0),
             "relu": ttnn.UnaryOpType.RELU,
             "silu": ttnn.UnaryOpType.SILU,
             "swish": ttnn.UnaryOpType.SILU,
@@ -2933,6 +2997,25 @@ class ModelArgs:
         else:
             self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+
+        # GQA models whose KV heads do not split across the tensor-parallel width get padded heads:
+        # each KV head is duplicated over tp // n_kv_heads devices and each device's Q-head slots are
+        # zero-padded up to ceil(gqa_ratio / devices_per_kv_head). Weights are rearranged to match in
+        # Attention (see _rearrange_qkv_*), e.g. Qwen2.5-VL-7B 28/4 -> 32/8 and 3B 16/2 -> 16/8 at TP=8.
+        self.unpadded_n_heads = self.n_heads
+        self.unpadded_n_kv_heads = self.n_kv_heads
+        if self.base_model_name in self.PAD_HEADS_FOR_TP_MODELS and self.num_devices > 1:
+            tp = 8 if self.num_devices == 32 else self.num_devices
+            if self.n_kv_heads % tp != 0 and tp % self.n_kv_heads == 0:
+                devices_per_kv_head = tp // self.n_kv_heads
+                heads_per_device = math.ceil((self.n_heads // self.n_kv_heads) / devices_per_kv_head)
+                self.n_heads = heads_per_device * tp
+                self.n_kv_heads = tp
+                logger.info(
+                    f"Padding attention heads for TP={tp}: {self.unpadded_n_heads}/{self.unpadded_n_kv_heads} "
+                    f"-> {self.n_heads}/{self.n_kv_heads} (q/kv)"
+                )
+
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.num_local_experts = text_config.get("num_local_experts", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
@@ -2967,9 +3050,12 @@ class ModelArgs:
                 self.model_name = os.path.basename(normalized_path)
             logger.info(f"Model name from config: {self.model_name}")
 
-        if self.base_model_name in ["Qwen2.5-7B", "Qwen2.5-VL-7B"] and self.num_devices not in [0, 2, 4]:
+        if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
+            raise AssertionError("Qwen2.5-7B is only supported on 2 or 4 devices (N300)")
+        if self.base_model_name in ["Qwen2.5-VL-7B", "olmOCR-2-7B"] and self.num_devices not in [0, 2, 4, 8, 32]:
+            # 8 and 32 devices rely on the padded KV heads (PAD_HEADS_FOR_TP_MODELS)
             raise AssertionError(
-                "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
+                "Qwen2.5-VL-7B and olmOCR-2-7B are only supported on 2 or 4 devices (N300), 8 devices (T3K), or 32 devices (TG)"
             )
 
         if self.num_devices > 0 and self.cluster_shape != [1, 1]:
@@ -2998,6 +3084,20 @@ class ModelArgs:
                 # 28672 (112 tiles/device, gcd(160,112)=16 -> 16-core grids).
                 "EXAONE-4.5-33B": 16,
             }.get(self.base_model_name, 0)
+
+            # A hidden dim that is not a whole number of tiles cannot be sharded; zero padding is exact.
+            if default_padded_cores == 0 and self.hidden_dim % (ttnn.TILE_SIZE * max(self.num_devices, 1)):
+                default_padded_cores = 8
+            self.table_padded_hidden_dim = (
+                nearest_multiple(self.hidden_dim, default_padded_cores * ttnn.TILE_SIZE * self.num_devices)
+                if default_padded_cores > 0
+                else self.hidden_dim
+            )
+            # 8960 and 11008 share 8 cores with dim 1536 / 2048 -> 8-core decode MLP on one device; pad to 48 / 32.
+            if self.num_devices == 1:
+                default_padded_cores = {"Qwen2.5-3B": 32, "Qwen2.5-1.5B": 48}.get(
+                    self.base_model_name, default_padded_cores
+                )
 
             # Override MLP padding cores from env var
             mlp_padded_cores = int(os.environ.get("PAD_MLP_CORES", default_padded_cores))
@@ -3299,14 +3399,18 @@ class ModelArgs:
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
         if self.instruct:
-            return (
-                self.model_cache_path
-                / {ttnn.bfloat16: "tensor_cache_instruct_bf16", ttnn.bfloat8_b: "tensor_cache_instruct_bfp8"}[dtype]
-            )
+            cache_name = {
+                ttnn.bfloat16: "tensor_cache_instruct_bf16",
+                ttnn.bfloat8_b: "tensor_cache_instruct_bfp8",
+            }[dtype]
         else:
-            return (
-                self.model_cache_path / {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
-            )
+            cache_name = {ttnn.bfloat16: "tensor_cache_bf16", ttnn.bfloat8_b: "tensor_cache_bfp8"}[dtype]
+
+        if self.base_model_name == "Phi-3-mini-128k-instruct":
+            # Caches built before the native-loader fix may contain randomly initialized weights.
+            cache_name += "_hf_native"
+
+        return self.model_cache_path / cache_name
 
     # Name of the marker file dropped into a weight-cache directory once every weight for that
     # (model, dtype, mesh shape) has been materialized to disk. Generalizes the GPT-OSS
@@ -3349,7 +3453,7 @@ class ModelArgs:
             # slow but correct -- and the log says why. (#45400 review, finding R3)
             logger.warning(f"Could not compute the weight-cache build variant ({e!r}); warm-cache skip disabled.")
             return {"unverifiable": True, "error": f"{type(e).__name__}: {e}"}
-        return {
+        variant = {
             "prefetcher": bool(self.prefetcher),
             "precision": precision,
             # attention.py caches wqkv_bias_decode_sharded_{batch_size}, so batch is in a filename.
@@ -3362,6 +3466,13 @@ class ModelArgs:
             # certifying the other. (#45400 review, finding R2)
             "hf_rope": bool(getattr(self, "use_hf_rope", False)),
         }
+        # mlp.py names the MLP weights .hidden_dim_{hidden_dim} once hidden_dim is padded. Padding from the shared
+        # table is implied by the model, so only padding that departs from it (PAD_MLP_CORES, single-device entries)
+        # needs its own marker.
+        hidden_dim = getattr(self, "hidden_dim", None)
+        if hidden_dim != getattr(self, "table_padded_hidden_dim", hidden_dim):
+            variant["hidden_dim"] = int(hidden_dim)
+        return variant
 
     def _weight_cache_identity(self, components=None):
         """Marker identity for this build. `components` names the parts being constructed, so a
@@ -3565,6 +3676,9 @@ class ModelArgs:
             state_dict = model.state_dict()
         else:
             # Always HuggingFace since we only support HF_MODEL now
+            # Outside the per-layer read's try: a rejected index must not fall back to from_pretrained,
+            # which would open the escaping shard itself.
+            check_checkpoint_index(self.CKPT_DIR)
             state_dict = self._load_hf_state_dict_for_configured_layers()
             if state_dict is None:
                 model_cls = self.get_hf_model_cls()
@@ -3758,8 +3872,9 @@ class ModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        max_rows = 8 if is_wormhole_b0() else 10
-        max_cols = 8 if is_wormhole_b0() else 12
+        # Harvested Blackhole boards (p150b: 11 columns) have a smaller grid than 10x12.
+        max_rows = 8 if is_wormhole_b0() else min(10, self.max_grid_size.y)
+        max_cols = 8 if is_wormhole_b0() else min(12, self.max_grid_size.x)
         max_cores = max_rows * max_cols
 
         # Find all possible numbers of cores that divide N and are less than or equal to max_cores
@@ -3885,13 +4000,16 @@ class ModelArgs:
             in0_block_w = self.dram_decode_in0_block_w(k, n, num_cores)
         else:
             in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores))
-        return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=in0_block_w,
             per_core_M=math.ceil(m / ttnn.TILE_SIZE),
             per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
             fused_activation=fused_activation,
             num_workers_per_dram_bank=num_workers_per_dram_bank,
         )
+        if self.is_galaxy or self.prefetcher is not None:
+            return program_config
+        return with_dram_sharded_cores_per_bank(program_config, m, k, n, num_cores)
 
     def matmul_1d_ring_config(
         self,
@@ -4212,6 +4330,8 @@ class ModelArgs:
     def reference_transformer(self, wrap=True, load_checkpoint=False):
         from transformers import AutoConfig
 
+        # Every branch below may call from_pretrained(self.CKPT_DIR), and callers need not have run load_state_dict.
+        check_checkpoint_index(self.CKPT_DIR)
         model_cls = self.get_hf_model_cls()
 
         # HF is much faster at loading from a checkpoint than generating from config
@@ -4355,6 +4475,8 @@ class ModelArgs:
         # Always HuggingFace since we only support HF_MODEL now
         from transformers import AutoConfig
 
+        # Every branch below may call from_pretrained(self.CKPT_DIR), and callers need not have run load_state_dict.
+        check_checkpoint_index(self.CKPT_DIR)
         model_cls = self.get_hf_model_cls()
 
         if self.dummy_weights and not load_checkpoint:
@@ -4568,7 +4690,12 @@ class ModelArgs:
     def reference_decoder(self, load_checkpoint=False):
         model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
         layer = model.model.layers[0]
-        use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
+        # Remote Phi-3 computes RoPE internally, while native Transformers 5.x requires the caller to supply it.
+        use_position_embeddings = (
+            layer.__class__.__name__ != "Phi3DecoderLayer"
+            or "position_embeddings" in inspect.signature(layer.forward).parameters
+            or self.base_model_name in ("phi-4",)
+        )
         if hasattr(model.model, "rotary_emb_local"):
             rotary_emb_local = model.model.rotary_emb_local
         else:
@@ -4732,10 +4859,14 @@ class HfAttentionWrapper:
                 if self.rope_layer_type is not None
                 else getattr(self.attention, "layer_type", None)
             )
+            rope_position_ids = position_ids
+            if "Qwen2_5_VL" in type(self.rotary_emb).__name__ or "Qwen2VL" in type(self.rotary_emb).__name__:
+                # M-RoPE rotary expects (3, bs, S); text-only positions are identical on all three axes.
+                rope_position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
             if _layer_type is not None and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters:
-                position_embeddings = self.rotary_emb(x, position_ids, layer_type=_layer_type)
+                position_embeddings = self.rotary_emb(x, rope_position_ids, layer_type=_layer_type)
             else:
-                position_embeddings = self.rotary_emb(x, position_ids)
+                position_embeddings = self.rotary_emb(x, rope_position_ids)
             output, *_ = self.attention(
                 x,
                 position_embeddings=position_embeddings,

@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 
 // Forked from reader_rotary_embedding_llama_interleaved_start_id.cpp for KV-pad-aware indexed RoPE,
 // on the Metal 2.0 named-arg API.
@@ -75,12 +76,12 @@ void kernel_main() {
     // Without this the read is intermittently STALE -> a wrong rotation offset that compounds (the
     // metadata KV-PCC run-to-run non-determinism).
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Raw address needed: the uncached alias is the scratchpad's address offset by MEM_L1_UNCACHED_BASE.
     volatile tt_l1_ptr uint32_t* meta_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        static_cast<uintptr_t>(meta.get_base_address()) + MEM_L1_UNCACHED_BASE);
+        local_mem::detail::AddressAccess::address(meta.local_mem()) + MEM_L1_UNCACHED_BASE);
 #else
     invalidate_l1_cache();
-    volatile tt_l1_ptr uint32_t* meta_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(static_cast<uintptr_t>(meta.get_base_address()));
+    volatile tt_l1_ptr uint32_t* meta_ptr = &meta[0];
 #endif
     const uint32_t kv_actual_global = meta_ptr[0];  // the 1-element tensor holds kv_actual_global directly
 #else

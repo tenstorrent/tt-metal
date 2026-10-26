@@ -525,7 +525,7 @@ ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign)); }
  */
 // clang-format on
 ALWI void tiled_prod_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tiled_prod, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tiled_prod, (APPROX), idst, VectorMode::RC_custom));
 }
 
 /**

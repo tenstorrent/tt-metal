@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "qkv_causal_conv1d_silu_nanobind.hpp"
 #include "qkv_causal_conv1d_silu.hpp"
+#include "device/qkv_causal_conv1d_silu_program_factory.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail {
 void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
@@ -33,8 +34,10 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         mesh coordinate.
 
         Args:
-            input (ttnn.Tensor): Current tokens ``[1, T, Q+K+V]``. Must be an
-                interleaved ROW_MAJOR BFLOAT16 device tensor.
+            input (ttnn.Tensor): Interleaved TILE BFLOAT16 ``[1, T, W]`` whose
+                channels from ``input_column_offset`` are the convolution input,
+                read in place (such as a fused projection). A ROW_MAJOR input is
+                tilized first.
             history (ttnn.Tensor): Interleaved ROW_MAJOR BFLOAT16 history.
                 Shape ``[1,3,Q+K+V]``. SP calls supply the predecessor's three-row
                 history separately. The kernel derives when each history is needed
@@ -62,6 +65,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
+            input_column_offset (int, optional): First convolution channel of
+                ``input``; tile aligned. Defaults to 0.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: New TILE-layout BFLOAT16
@@ -89,6 +94,58 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
 
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("sequence_parallel_axis") = 0);
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("input_column_offset") = 0);
+
+    mod.def(
+        "qkv_causal_conv1d_silu_exchange_core",
+        &ttnn::experimental::prim::qkv_causal_conv1d_silu_exchange_core,
+        nb::arg("grid"),
+        R"doc(
+        The core of a ``grid``-sized compute grid that runs
+        ``qkv_causal_conv1d_silu_with_carry``'s fabric history exchange, and so
+        the core its ``exchange_semaphores`` must cover.
+        )doc");
+
+    ttnn::bind_function<"qkv_causal_conv1d_silu_with_carry", "ttnn.experimental.kda.">(
+        mod,
+        R"doc(
+        ``qkv_causal_conv1d_silu`` that also exchanges the sequence-parallel
+        histories itself and returns the replacement carry. Every rank must call
+        it.
+
+        ``exchange_buffer`` is a persistent ``[1, 12, Q+K+V]`` ROW_MAJOR BFLOAT16
+        DRAM tensor and ``exchange_semaphores`` three persistent global semaphores
+        on ``qkv_causal_conv1d_silu_exchange_core``, zero before the first call. Each segment
+        that does not start the logical sequence reads the preceding rank's last
+        three rows, which arrive over the fabric. The fourth output is the
+        three-token history ending at the logical end of the interval
+        (``actual_end``, default full capacity), for the next call.
+
+        Returns:
+            tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: ``q``, ``k``,
+                ``v`` as ``qkv_causal_conv1d_silu``, and the ROW_MAJOR BFLOAT16
+                ``[1, 3, Q+K+V]`` replacement carry, replicated across SP.
+        )doc",
+        &ttnn::experimental::kda::qkv_causal_conv1d_silu_with_carry,
+        nb::arg("input").noconvert(),
+        nb::arg("history").noconvert(),
+        nb::arg("tap0").noconvert(),
+        nb::arg("tap1").noconvert(),
+        nb::arg("tap2").noconvert(),
+        nb::arg("tap3").noconvert(),
+        nb::arg("q_width"),
+        nb::arg("k_width"),
+        nb::arg("v_width"),
+        nb::kw_only(),
+        nb::arg("program_config").noconvert(),
+        nb::arg("actual_start").noconvert(),
+        nb::arg("exchange_buffer").noconvert(),
+        nb::arg("exchange_semaphores"),
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("sequence_parallel_axis") = 0,
+        nb::arg("input_column_offset") = 0);
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

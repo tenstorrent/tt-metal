@@ -8,7 +8,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_equal
 
@@ -262,8 +262,8 @@ TOPK_LARGE_INDICES_PERF_MARGIN = 0.01
 # regressions and unexpected speedups that should trigger baseline review.
 TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
     # (case_id, num_rows, allocated_length, valid_length, k, expected_duration_ns)
-    ("prefill", 640, 51200, None, 1536, 1_286_400),
-    ("bounded_cache", 2, 102400, 56320, 1536, 242_560),
+    ("prefill", 640, 51200, None, 1536, 1_151_000),
+    ("bounded_cache", 2, 102400, 56320, 1536, 217_000),
 ]
 
 

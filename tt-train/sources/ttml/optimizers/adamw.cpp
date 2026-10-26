@@ -27,6 +27,12 @@ bool is_effectively_1d(const ttnn::Tensor& tensor) {
     }
     return non_unit_dims < 2;
 }
+
+// A zero optimizer-state tensor for a parameter. The kernel needs the state in the parameter's own dtype.
+autograd::TensorPtr zeros_state_like(const autograd::TensorPtr& parameter) {
+    return autograd::create_tensor(
+        core::zeros_like(parameter->get_value(autograd::PreferredPrecision::NATIVE)), /* requires_grad */ false);
+}
 }  // namespace
 
 std::string AdamW::get_name() const {
@@ -37,16 +43,8 @@ AdamW::AdamW(ttml::serialization::NamedParameters parameters, const AdamWConfig&
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
-            m_exp_avg.emplace(
-                name,
-                autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
-                    /* requires_grad */ false));
-            m_exp_avg_sq.emplace(
-                name,
-                autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
-                    /* requires_grad */ false));
+            m_exp_avg.emplace(name, zeros_state_like(tensor_ptr));
+            m_exp_avg_sq.emplace(name, zeros_state_like(tensor_ptr));
         }
     }
     if (m_config.amsgrad) {
@@ -78,27 +76,31 @@ void AdamW::step() {
         }
 
         auto gradients = theta_ptr->get_grad();
-        auto param = theta_ptr->get_value(autograd::PreferredPrecision::HALF);
+        // The kernel updates the parameter and its state in place: write through the native tensors.
+        auto param = theta_ptr->get_value_for_update();
+        auto exp_avg = m_exp_avg.at(name)->get_value_for_update();
+        auto exp_avg_sq = m_exp_avg_sq.at(name)->get_value_for_update();
 
-        const auto& exp_avg = m_exp_avg.at(name)->get_value(autograd::PreferredPrecision::HALF);
-        const auto& exp_avg_sq = m_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::HALF);
-
-        std::optional<ttnn::Tensor> max_exp_avg_sq;
+        std::optional<autograd::MutableTensorView> max_exp_avg_sq;
         if (m_config.amsgrad) {
-            max_exp_avg_sq = m_max_exp_avg_sq.at(name)->get_value(autograd::PreferredPrecision::HALF);
+            max_exp_avg_sq.emplace(m_max_exp_avg_sq.at(name)->get_value_for_update());
         }
 
         float weight_decay = m_config.weight_decay;
-        if (m_config.weight_decay_skip_1d && is_effectively_1d(param)) {
+        if (m_config.weight_decay_skip_1d && is_effectively_1d(param.tensor())) {
             weight_decay = 0.0F;
         }
+        // Stochastic rounding recovers updates that bf16 storage would lose; an fp32 parameter doesn't lose them,
+        // and the kernel supports it for bf16 parameters only.
+        const bool stochastic_rounding =
+            m_config.stochastic_rounding && param.tensor().dtype() == ttnn::DataType::BFLOAT16;
 
         ttml::metal::adamw(
-            param,
+            param.tensor(),
             gradients,
-            exp_avg,
-            exp_avg_sq,
-            max_exp_avg_sq,
+            exp_avg.tensor(),
+            exp_avg_sq.tensor(),
+            autograd::optional_tensor(max_exp_avg_sq),
             m_config.lr,
             m_config.beta1,
             m_config.beta2,
@@ -106,10 +108,9 @@ void AdamW::step() {
             m_beta2_pow,
             m_config.epsilon,
             weight_decay,
-            static_cast<ttml::metal::StochasticRounding>(m_config.stochastic_rounding),
-            m_config.stochastic_rounding
-                ? std::optional<uint32_t>{static_cast<uint32_t>(autograd::ctx().get_generator()())}
-                : std::nullopt);
+            static_cast<ttml::metal::StochasticRounding>(stochastic_rounding),
+            stochastic_rounding ? std::optional<uint32_t>{static_cast<uint32_t>(autograd::ctx().get_generator()())}
+                                : std::nullopt);
     }
 }
 
@@ -230,11 +231,7 @@ void AdamW::set_stochastic_rounding(bool stochastic_rounding) {
 void AdamW::init_max_exp_avg_sq() {
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
-            m_max_exp_avg_sq.emplace(
-                name,
-                autograd::create_tensor(
-                    core::zeros_like(tensor_ptr->get_value(autograd::PreferredPrecision::HALF)),
-                    /* requires_grad */ false));
+            m_max_exp_avg_sq.emplace(name, zeros_state_like(tensor_ptr));
         }
     }
 }

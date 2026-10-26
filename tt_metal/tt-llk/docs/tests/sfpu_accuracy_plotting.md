@@ -90,7 +90,7 @@ Sensible defaults cover the common cases, so override only when needed.
 - `approx_mode` — the default is the accurate path. Set to `ApproximationMode.Yes` to test the fast, less accurate SFPU path.
 - `clamp_negative` — enable the kernel's negative-input clamp. Wormhole/Blackhole only.
 - `dest_acc` and `unpack_to_dest` — override the format-derived accumulator defaults. On Quasar only `dest_acc` exists; the data route, and with it `unpack_to_dest`, is decided by the format resolver.
-- `dest_sync` and `implied_math_format` — Quasar-only kernel knobs. Defaults are `DestSync.Half` and `ImpliedMathFormat.Yes`, the same values the functional suite pins in perf mode.
+- `dest_sync` — Quasar-only kernel knob. Default is `DestSync.Half`, the same value the functional suite pins in perf mode.
 - `input_dimensions` — set how many points sample the domain (see below).
 - `batch_tiles` — tiles per batch for a large `ulp_sweep`. Auto-chosen if you don't set it; only matters when a range is too big for one run. Must be between 1 and the single-run size (64 on Wormhole/Blackhole, the Dest capacity on Quasar).
 - `extra_undefined_ranges` — override the red undefined-domain shading on the plot.
@@ -120,6 +120,6 @@ The Quasar harness produces the same plots but the device side is different. Wha
 
 ## Reading the output
 
-The plot title names the op, the format and the device family (`[Wormhole]`, `[Blackhole]`, `[Quasar]`). Under it, a parameter line records the case id, input and output format, `dest_acc`, approx mode, the sampling distribution and the point count, so a saved image is self-describing. Quasar plots also spell out the data route (input → Dest → SFPU → pack → output) and the `dest_sync` / `implied_math_format` settings.
+The plot title names the op, the format and the device family (`[Wormhole]`, `[Blackhole]`, `[Quasar]`). Under it, a parameter line records the case id, input and output format, `dest_acc`, approx mode, the sampling distribution and the point count, so a saved image is self-describing. Quasar plots also spell out the data route (input → Dest → SFPU → pack → output) and the `dest_sync` setting.
 
 For details on how to read each plot, see [SFPU Accuracy Plots & Metrics](sfpu_accuracy_plots_metrics.md).

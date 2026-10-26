@@ -25,7 +25,10 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/bfloat4.hpp>
+#include <tt-metalium/bfloat8.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
+#include "pinned_upload.hpp"
 #include <tt_stl/concepts.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt_stl/small_vector.hpp>
@@ -36,10 +39,8 @@ namespace tt::tt_metal {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-constexpr size_t k_pin_write_threshold_bytes = 32 * 1024 * 1024;
-
 bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t size_bytes) {
-    if (size_bytes <= k_pin_write_threshold_bytes) {
+    if (size_bytes <= pinned_upload::k_pin_write_threshold_bytes) {
         return false;
     }
     const auto params = experimental::GetMemoryPinningParameters(mesh_device);

@@ -120,10 +120,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     auto* mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
-    auto* const target_device = mesh_device->get_device(mesh_coord);
-    std::vector<IDevice*> devices = (operation_attributes.cluster_axis == 0)
-                                        ? mesh_view.get_devices_on_column(mesh_coord[1])
-                                        : mesh_view.get_devices_on_row(mesh_coord[0]);
+    const uint32_t coord_index = mesh_coord[operation_attributes.cluster_axis];
     const auto fabric_node_ids = (operation_attributes.cluster_axis == 0)
                                      ? mesh_view.get_fabric_node_ids_on_column(mesh_coord[1])
                                      : mesh_view.get_fabric_node_ids_on_row(mesh_coord[0]);
@@ -132,7 +129,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     std::optional<tt::tt_fabric::FabricNodeId> backward_fabric_node_id = std::nullopt;
     uint32_t device_index = 0;
     for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        if (devices.at(i) == target_device) {
+        if (i == coord_index) {
             device_index = i;
             if (i != 0) {
                 backward_fabric_node_id = fabric_node_ids.at(i - 1);
@@ -281,11 +278,7 @@ ProgramDescriptor AllReduceCreateQkvHeadsMeshWorkloadFactory::create_descriptor(
     [[maybe_unused]] bool is_first_chip = device_index == 0;
     [[maybe_unused]] bool is_last_chip = device_index == operation_attributes.ring_size - 1;
     log_trace(
-        tt::LogOp,
-        "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
-        target_device->id(),
-        is_first_chip,
-        is_last_chip);
+        tt::LogOp, "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}", mesh_coord, is_first_chip, is_last_chip);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors_ccl = {input_tensor};

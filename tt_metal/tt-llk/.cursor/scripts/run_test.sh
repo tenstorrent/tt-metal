@@ -2,8 +2,8 @@
 # run_llk_tests.sh — centralised LLK test runner for codegen agents.
 #
 # Encapsulates the two-step compile-then-simulate flow, flock-based simulator
-# serialisation, stale-process cleanup, and temp-file lifecycle so agents never
-# have to manage any of that themselves.
+# serialisation, and temp-file lifecycle so agents never have to manage any of
+# that themselves. Stale simulation hosts are killed by SimulationServer.
 #
 # Usage:
 #   run_llk_tests.sh <COMMAND> --worktree DIR --arch ARCH --test FILE [FILE ...] [OPTIONS]
@@ -28,7 +28,7 @@
 #   --k        EXPR   pytest -k filter expression
 #   --test-id  ID     Full parametrize ID for a single variant run
 #                     (single-quotes, brackets, commas are safe — no escaping needed)
-#   --port     PORT   Simulator port (default: 5556)
+#   --port     PORT   Deprecated, ignored
 #   --timeout  SECS   pytest --timeout ceiling (default: 600)
 #   --jobs     N      Compile parallelism (default: 15)
 #   --lock     FILE   flock lock file (default: /tmp/tt-llk-test-<arch>.lock)
@@ -52,7 +52,7 @@
 #   0  All tests passed (or count written to stdout successfully)
 #   1  One or more tests failed
 #   2  Compile step failed  (only from the 'run' command)
-#   3  Environment error (flock timeout, simulator port stuck, venv missing)
+#   3  Environment error (flock timeout, venv missing)
 #   4  Usage / validation error (missing required options)
 #
 # Agents invoke this via the Bash tool with timeout: 1800000 (synchronous,
@@ -91,7 +91,6 @@ TEST_FILES=()
 MAXFAIL=""
 K_FILTER=""
 TEST_ID=""
-PORT="5556"
 TIMEOUT="600"
 JOBS="15"
 LOCKFILE=""  # set in _validate based on ARCH if not user-overridden
@@ -110,7 +109,7 @@ while [[ $# -gt 0 ]]; do
     --maxfail)       MAXFAIL="$2";       shift 2 ;;
     --k)             K_FILTER="$2";      shift 2 ;;
     --test-id)       TEST_ID="$2";       shift 2 ;;
-    --port)          PORT="$2";          shift 2 ;;
+    --port)          shift 2 ;;
     --timeout)       TIMEOUT="$2";       shift 2 ;;
     --jobs)          JOBS="$2";          shift 2 ;;
     --lock)          LOCKFILE="$2";      shift 2 ;;
@@ -212,7 +211,7 @@ _validate() {
 
   # Mode inferred from arch: quasar runs against the UMD simulator; blackhole
   # and wormhole run against physical silicon. Hardware mode skips the
-  # --run-simulator flag, port cleanup, and TT_UMD_SIMULATOR_PATH.
+  # --run-simulator flag and TT_UMD_SIMULATOR_PATH.
   case "$ARCH" in
     quasar)              MODE="simulator" ;;
     blackhole|wormhole)  MODE="hardware"  ;;
@@ -299,14 +298,13 @@ _do_compile() {
 # ── simulate ──────────────────────────────────────────────────────────────────
 # Runs the consumer step under a per-arch flock so only one agent at a time
 # uses the resource for that arch — the UMD simulator for quasar, or the
-# physical card for blackhole / wormhole. All internals (temp-script lifecycle,
-# stale-process cleanup, lock acquisition) are handled here; callers just read
-# the exit code.
+# physical card for blackhole / wormhole. All internals (temp-script lifecycle
+# and lock acquisition) are handled here; callers just read the exit code.
 
 _do_simulate() {
   _validate
   if [[ "$MODE" == "simulator" ]]; then
-    _vlog "consume: $(_test_label) (arch=${ARCH}, mode=simulator, port=${PORT})"
+    _vlog "consume: $(_test_label) (arch=${ARCH}, mode=simulator)"
   else
     _vlog "consume: $(_test_label) (arch=${ARCH}, mode=hardware)"
   fi
@@ -323,12 +321,12 @@ _do_simulate() {
   trap 'rm -f "${sim_script}"' EXIT INT TERM
 
   # Build the pytest flags string.
-  # Simulator mode adds --run-simulator/--port; hardware mode targets silicon directly.
+  # Simulator mode adds --run-simulator; hardware mode targets silicon directly.
   # --no-split: run combined (no prior compile step needed, no --compile-consumer).
   # Default (split): requires a prior compile-producer run; passes --compile-consumer.
   local pytest_flags="--timeout=${TIMEOUT} -rN"
   if [[ "$MODE" == "simulator" ]]; then
-    pytest_flags="${pytest_flags} --run-simulator --port=${PORT}"
+    pytest_flags="${pytest_flags} --run-simulator"
   fi
   [[ "$NO_SPLIT" == "false" ]] && pytest_flags="${pytest_flags} --compile-consumer"
   [[ "$SPEED_OF_LIGHT" == "true" ]] && pytest_flags="${pytest_flags} --speed-of-light"
@@ -347,25 +345,14 @@ _do_simulate() {
     pytest_target="$(_quote_args "${TEST_FILES[@]}")"
   fi
 
-  # Write the consumer script. Simulator mode prepends port-cleanup and the
-  # TT_UMD_SIMULATOR_PATH env var; hardware mode skips both since BH/WH run
-  # against silicon directly.
+  # Write the consumer script. Simulator mode sets the TT_UMD_SIMULATOR_PATH
+  # env var; hardware mode skips it since BH/WH run against silicon directly.
   # Single-quotes around variable expansions are intentional: the values are
   # fixed at script-write time and contain no shell-special chars that matter
   # to the inner bash invocation.
   {
     printf '#!/bin/bash\n'
     printf 'set -u\n\n'
-    if [[ "$MODE" == "simulator" ]]; then
-      printf '# Kill any process holding port %s\n' "${PORT}"
-      printf 'STALE=$(lsof -ti :%s 2>/dev/null || true)\n' "${PORT}"
-      printf 'if [ -n "$STALE" ]; then\n'
-      printf '  echo "[run_llk_tests] Killing stale port %s processes: $STALE"\n' "${PORT}"
-      printf '  echo "$STALE" | xargs kill -9 2>/dev/null || true\n'
-      printf 'fi\n'
-      printf 'pkill -9 -f "tt-exalens.*--port=%s" 2>/dev/null || true\n' "${PORT}"
-      printf 'sleep 1\n\n'
-    fi
     printf 'source %q\n' "${VENV}/bin/activate"
     printf 'cd %q\n\n' "${TEST_DIR}"
     if [[ "$MODE" == "simulator" ]]; then

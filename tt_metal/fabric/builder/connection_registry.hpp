@@ -12,20 +12,11 @@
 namespace tt::tt_fabric {
 
 /**
- * ConnectionType - Categorizes the type of connection between routers
- */
-enum class ConnectionType {
-    INVALID,
-    INTRA_MESH,   // Connection between mesh routers on different devices
-    MESH_TO_Z,    // Connection from mesh router to Z router (same device)
-    Z_TO_MESH,    // Connection from Z router to mesh router (same device)
-};
-
-/**
  * RouterConnectionRecord - Records a single connection between routers
  *
  * This structure captures all relevant information about a connection
- * for testing and validation purposes.
+ * for testing and validation purposes. Connections carry no type: a local turn is identified by
+ * its source/destination directions and channels, which is all the record needs.
  */
 struct RouterConnectionRecord {
     // Source router information
@@ -41,9 +32,6 @@ struct RouterConnectionRecord {
     chan_id_t dest_eth_chan = -1;
     uint32_t dest_vc = -1;
     uint32_t dest_sender_channel = -1;
-
-    // Connection metadata
-    ConnectionType connection_type = ConnectionType::INVALID;
 };
 
 /**
@@ -98,14 +86,6 @@ public:
     std::vector<RouterConnectionRecord> get_connections_to_dest(
         FabricNodeId dest_node,
         RoutingDirection dest_direction) const;
-
-    /**
-     * Get connections of a specific type
-     *
-     * @param type The connection type to filter by
-     * @return Vector of connections of the specified type
-     */
-    std::vector<RouterConnectionRecord> get_connections_by_type(ConnectionType type) const;
 
     /**
      * Get connections by source node (all routers on that node)
