@@ -653,7 +653,7 @@ class Qwen38TTNNMoE:
                     mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 0)),
                 )
                 mesh_contract.validate_tensor(self.expert_owner, placement=TensorPlacement.EXPERT_SHARDED, shard_dim=0)
-            if self.slab and self.routed_calls != 1:
+            if self.block_slab:
                 self.block_instance = Qwen38TTNNMoE(
                     mesh_device,
                     mesh_contract,
@@ -922,8 +922,11 @@ class Qwen38TTNNMoE:
         the answer and a refusal's reason are logged with the slab form they select (one call per layer, or 128-row
         blocks). The capture is process-global: no other thread may run ttnn work meanwhile."""
 
-        if not self.slab or self.routed_calls != 1:
-            raise ValueError(f"the one-call admission is a one-call slab instance's, not a {self.rows}-row instance's")
+        if not self.slab or self.block_slab:
+            raise ValueError(
+                f"the one-call admission is a one-call slab instance's, not a {self.rows}-row instance's of "
+                f"{self.routed_tokens} tokens per call"
+            )
         if ttnn.graph.is_graph_capture_active():
             raise RuntimeError(
                 "the slab call admission cannot run inside another graph capture: the outer capture's run mode, not "
@@ -969,7 +972,7 @@ class Qwen38TTNNMoE:
         text = str(refusal)
         reason = text.partition("info:\n")[2].partition("\n")[0] or text.partition("\n")[0]  # a TT_FATAL's info
         calls = self.rows // LONG_PREFILL_CHUNK_ROWS
-        logger.info(
+        logger.warning(
             f"the {self.rows}-row prefill slab routes its experts in {calls} moe_compute calls of "
             f"{LONG_PREFILL_CHUNK_ROWS} tokens per layer: moe_compute refuses its one {self.rows}-token call ({reason})"
         )
@@ -1008,7 +1011,7 @@ class Qwen38TTNNMoE:
         if packed_w0_w1.dtype != ttnn.bfloat4_b or packed_w2.dtype != ttnn.bfloat4_b:
             raise RuntimeError("routed expert tensors must be BFLOAT4_B")
 
-        if self.slab and self.routed_calls != 1:
+        if self.block_slab:
             return self._routed_partial_blocks(full_hidden, routing, packed_w0_w1, packed_w2, phase_observer)
         if self.routed_calls != 1:
             return self._routed_partial_tiles(full_hidden, routing, packed_w0_w1, packed_w2, phase_observer)
@@ -1428,6 +1431,12 @@ class Qwen38TTNNMoE:
         call, one 128-row worker call per 128-row block."""
 
         return is_slab_rows(self.rows)
+
+    @property
+    def block_slab(self) -> bool:
+        """A slab that routes its experts one 128-row block per ``moe_compute`` call, through ``block_instance``."""
+
+        return self.slab and self.routed_calls != 1
 
     def _slab_router_logits(self, full_hidden):
         """The slab's router logits: one 2D-multicast matmul over every row (bf16 out, as the decode linear), widened

@@ -2725,6 +2725,7 @@ def main() -> int:
                 [t for t in (chain.chunk_trace_id, chain.long_chunk_trace_id, chain.slab_trace_id) if t is not None]
             ),
             "prefill_slab_rows": args.prefill_slab,
+            "prefill_slab_routed_tokens": None if chain.slab_state is None else chain.slab_state.routed_tokens_per_call,
             "prefill_long_chunks": chain.long_chunk_trace_id is not None,
             "chunk_capture_ms": chain.chunk_capture_ms,
             "long_chunk_capture_ms": chain.long_chunk_capture_ms,
@@ -2877,6 +2878,8 @@ def main() -> int:
                 "fused_kernels": sorted(fused.enabled_names()),
                 "dram_workers_per_bank": report["chain"]["dram_workers_per_bank"],
                 "moe_local_output": True,
+                "prefill_slab_rows": report["chain"]["prefill_slab_rows"],
+                "prefill_slab_routed_tokens": report["chain"]["prefill_slab_routed_tokens"],
                 "dram_workers_fallback": report["chain"]["dram_workers_fallback"],
                 "dram_workers_placement": report["chain"].get("dram_workers_placement"),
                 "dense_weight_dtype": report["chain"]["dense_weight_dtype"],

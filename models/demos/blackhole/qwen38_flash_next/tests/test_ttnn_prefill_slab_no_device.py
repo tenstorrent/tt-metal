@@ -190,21 +190,26 @@ def test_block_slab_routes_each_128_row_block_through_the_128_row_worker(monkeyp
     """A slab the op refuses in one call routes each 128-row block through the 128-row worker; every slice is freed
     after its block and the concatenated partial is marked as the slab's local partial."""
     freed, slices, blocks, marked, phases = [], [], [], [], []
-    K, H, block = moe_module.TOP_K, moe_module.HIDDEN_SIZE, LONG_CHUNK_ROWS
+    top_k, hidden_size, block = moe_module.TOP_K, moe_module.HIDDEN_SIZE, LONG_CHUNK_ROWS
+    starts = range(0, rows, block)
 
     def slice_(tensor, start, end, memory_config):
         slices.append((tensor.name, start[2], end[2]))
-        return _AliasingTensor(tuple(e - s for s, e in zip(start, end)), f"{tensor.name}[{start[2]}]")
+        extent = tuple(stop - first for first, stop in zip(start, end))
+        return _AliasingTensor(extent, f"{tensor.name}[{start[2]}]")
 
     def concat(tensors, dim, memory_config):
-        assert dim == 2 and [t.name for t in tensors] == [f"partial[{s}]" for s in range(0, rows, block)]
-        return _AliasingTensor((1, 1, sum(t.shape[2] for t in tensors), H), "concat")
+        names = [tensor.name for tensor in tensors]
+        assert dim == 2 and names == [f"partial[{first}]" for first in starts], (dim, names)
+        return _AliasingTensor((1, 1, sum(tensor.shape[2] for tensor in tensors), hidden_size), "concat")
 
     def block_partial(hidden, routing, packed_w0_w1, packed_w2):
-        assert hidden.shape == (1, 1, block, H) and routing.scores.shape == routing.indices.shape == (1, 1, block, K)
-        assert (packed_w0_w1, packed_w2) == ("w0_w1", "w2") and routing.tiles is None
+        shapes = (hidden.shape, routing.scores.shape, routing.indices.shape)
+        assert shapes == ((1, 1, block, hidden_size), (1, 1, block, top_k), (1, 1, block, top_k)), shapes
+        assert (packed_w0_w1, packed_w2) == ("w0_w1", "w2"), (packed_w0_w1, packed_w2)
+        assert routing.tiles is None, routing.tiles
         blocks.append((hidden.name, routing.scores.name, routing.indices.name))
-        return _AliasingTensor((1, 1, block, H), f"partial[{hidden.name.partition('[')[2][:-1]}]")
+        return _AliasingTensor((1, 1, block, hidden_size), f"partial[{hidden.name.partition('[')[2][:-1]}]")
 
     monkeypatch.setattr(
         moe_module,
@@ -215,24 +220,200 @@ def test_block_slab_routes_each_128_row_block_through_the_128_row_worker(monkeyp
     )
     owner = object.__new__(moe_module.Qwen38TTNNMoE)
     owner.rows, owner.block_instance = rows, SimpleNamespace(_routed_partial=block_partial)
-    owner.row_contract = SimpleNamespace(full_hidden=(1, 1, rows, H))
+    owner.row_contract = SimpleNamespace(full_hidden=(1, 1, rows, hidden_size))
     owner.mesh_contract = SimpleNamespace(
         validate_tensor=lambda tensor, placement: None,
         mark_local_partial=lambda tensor, **kwargs: marked.append((tensor.name, kwargs["expected_shape"])),
     )
     routing = moe_module.Qwen38TTNNRouting(
-        _AliasingTensor((1, 1, rows, K), "scores"), _AliasingTensor((1, 1, rows, K), "indices")
+        _AliasingTensor((1, 1, rows, top_k), "scores"), _AliasingTensor((1, 1, rows, top_k), "indices")
     )
-    hidden = _AliasingTensor((1, 1, rows, H), "hidden")
+    hidden = _AliasingTensor((1, 1, rows, hidden_size), "hidden")
     partial = owner._routed_partial_blocks(hidden, routing, "w0_w1", "w2", phases.append)
-    starts = range(0, rows, block)
-    assert blocks == [(f"hidden[{s}]", f"scores[{s}]", f"indices[{s}]") for s in starts], blocks
-    assert slices == [(name, s, s + block) for s in starts for name in ("hidden", "scores", "indices")], slices
-    assert freed == [f"{name}[{s}]" for s in starts for name in ("hidden", "scores", "indices")] + [
-        f"partial[{s}]" for s in starts
-    ], freed
-    assert partial.name == "concat" and marked == [("concat", (1, 1, rows, H))], marked
+    names = ("hidden", "scores", "indices")
+    assert blocks == [tuple(f"{name}[{first}]" for name in names) for first in starts], blocks
+    assert slices == [(name, first, first + block) for first in starts for name in names], slices
+    expected_freed = [f"{name}[{first}]" for first in starts for name in names] + [
+        f"partial[{first}]" for first in starts
+    ]
+    assert freed == expected_freed, freed
+    assert partial.name == "concat", partial.name
+    assert marked == [("concat", (1, 1, rows, hidden_size))], marked
     assert phases[:2] == ["before-routed-dispatch", "after-routed-dispatch"], phases
+
+
+class _Stub:
+    """Any attribute and any call: the device configs the MoE constructor builds and never reads back here."""
+
+    def __getattr__(self, name):
+        return _Stub()
+
+    def __call__(self, *args, **kwargs):
+        return _Stub()
+
+
+def _moe_constructor_fakes(monkeypatch, *, fail_free: str | None = None):
+    """``Qwen38TTNNMoE.__init__`` on a fake ttnn: every buffer is an ``_AliasingTensor`` named for its owner,
+    ``ttnn.deallocate`` records the names it frees (``fail_free`` fails once), the rest is ``_Stub``."""
+
+    freed, failures = [], []
+    built = iter(range(1, 100))
+
+    def deallocate(tensor):
+        if tensor.name == fail_free and not failures:
+            failures.append(tensor.name)
+            raise RuntimeError(f"cannot free {tensor.name}")
+        freed.append(tensor.name)
+
+    fake_ttnn = _Stub()
+    for name, value in {
+        "bfloat16": "bf16",
+        "uint16": "u16",
+        "ROW_MAJOR_LAYOUT": "rm",
+        "DRAM_MEMORY_CONFIG": "dram",
+        "from_torch": lambda tensor, **kwargs: _AliasingTensor(tensor.shape, f"expert_mapping{next(built)}"),
+        "deallocate": deallocate,
+    }.items():
+        setattr(fake_ttnn, name, value)
+    monkeypatch.setattr(moe_module, "ttnn", fake_ttnn)
+    monkeypatch.setattr(moe_module, "effective_matmul_ring_size", lambda mesh: 8)
+    for name in ("auto_output_width_shard_dim", "replicate_tensor_2d_mesh_mapper"):
+        monkeypatch.setattr(moe_module, name, _Stub())
+    monkeypatch.setattr(moe_module, "dram_sharded_matmul_configs", lambda *args, **kwargs: (_Stub(), _Stub()))
+    monkeypatch.setattr(moe_module, "dense_math_fidelity_name", lambda dtype: "HiFi4")
+    monkeypatch.setattr(
+        moe_module.Qwen38TTNNPrefillDense, "resolve", classmethod(lambda cls, given, mesh: given or "prefill-dense")
+    )
+    monkeypatch.setattr(
+        moe_module,
+        "allocate_local_combine_output",
+        lambda mesh, contract, rows: _AliasingTensor(
+            (moe_module.TOP_K, rows, moe_module.HIDDEN_SIZE), f"own combine[{rows}]", "bf16", "rm"
+        ),
+    )
+
+    def build(rows: int, routed_tokens_per_call: int | None = None, local_combine_output=None):
+        return moe_module.Qwen38TTNNMoE(
+            _Stub(),
+            SimpleNamespace(validate_mesh=lambda mesh: None, validate_tensor=lambda tensor, **kwargs: None),
+            SimpleNamespace(shared_dtype="bf16", shared_gate_up_scalar=None),
+            tt_ccl="ccl",
+            rows=rows,
+            routed_tokens_per_call=routed_tokens_per_call,
+            admitted_rows=moe_module.SUPPORTED_ROWS + ((rows,) if is_slab_rows(rows) else ()),
+            local_combine_output=local_combine_output,
+        )
+
+    return SimpleNamespace(build=build, freed=freed, failures=failures)
+
+
+@pytest.mark.parametrize(
+    "rows, per_call, expected",
+    [
+        (512, None, 512),
+        (2048, None, 2048),
+        (512, 512, 512),
+        (512, 128, 128),
+        (2048, 128, 128),
+        (512, 32, None),
+        (2048, 32, None),
+        (2048, 256, None),
+        (2048, 1024, None),
+        (128, None, 128),
+        (128, 32, 32),
+        (32, 128, None),
+    ],
+)
+def test_a_slab_routes_its_rows_or_128_tokens_per_call_and_never_32(
+    monkeypatch, expect_error, rows, per_call, expected
+):
+    """A slab's ``moe_compute`` call takes the slab's rows (one call) or 128 tokens (one call per 128-row block); 32
+    per call, the 128-row chunk's oracle form, and every other count are refused at construction."""
+    fakes = _moe_constructor_fakes(monkeypatch)
+    if expected is None:
+        with expect_error(ValueError, "routed tokens per call must be"):
+            fakes.build(rows, per_call)
+        return
+    module = fakes.build(rows, per_call)
+    assert (module.routed_tokens, module.routed_calls) == (expected, rows // expected), (
+        module.routed_tokens,
+        module.routed_calls,
+    )
+    block_slab = is_slab_rows(rows) and expected == LONG_CHUNK_ROWS
+    assert module.block_slab is block_slab, (module.block_slab, block_slab)
+    assert (module.block_instance is not None) is block_slab, module.block_instance
+
+
+def test_a_slab_off_the_512_row_reduce_blocks_is_refused_in_either_form(monkeypatch, expect_error) -> None:
+    """768 rows is not a multiple of the 512-row reduce block: refused in one call and in 128-row blocks alike."""
+    fakes = _moe_constructor_fakes(monkeypatch)
+    for per_call in (None, LONG_CHUNK_ROWS):
+        with expect_error(contracts_module.Qwen38SlabRefused, "the slab reduces in 512-row blocks"):
+            fakes.build(768, per_call)
+
+
+@pytest.mark.parametrize("owned", [False, True], ids=["shared buffer", "own buffer"])
+def test_the_128_row_worker_borrows_the_block_slab_combine_buffer(monkeypatch, owned: bool) -> None:
+    """The block slab's 128-row worker writes the parent's [10, 128, 2560] combine buffer (shared by every layer's
+    slab, or the parent's own) and borrows its weights and prefill dense policy; it owns only its expert mapping."""
+    fakes = _moe_constructor_fakes(monkeypatch)
+    shared = None if owned else _AliasingTensor((moe_module.TOP_K, 128, moe_module.HIDDEN_SIZE), "shared", "bf16", "rm")
+    parent = fakes.build(SLAB, LONG_CHUNK_ROWS, shared)
+    worker = parent.block_instance
+    expected_buffer = "own combine[128]" if owned else "shared"
+    assert parent.local_combine_output.name == expected_buffer, parent.local_combine_output.name
+    assert worker.local_combine_output is parent.local_combine_output, worker.local_combine_output.name
+    assert (worker.rows, worker.routed_tokens, worker.block_instance) == (128, 128, None), (
+        worker.rows,
+        worker.routed_tokens,
+        worker.block_instance,
+    )
+    assert worker.weights is parent.weights and worker.prefill_dense is parent.prefill_dense, worker.prefill_dense
+    assert (parent._owns_local_combine_output, worker._owns_local_combine_output) == (owned, False), (
+        parent._owns_local_combine_output,
+        worker._owns_local_combine_output,
+    )
+    assert worker.expert_mapping is not parent.expert_mapping, worker.expert_mapping.name
+    one_call = fakes.build(SLAB)
+    assert one_call.block_instance is None and one_call.local_combine_output.name == f"own combine[{SLAB}]", (
+        one_call.block_instance,
+        one_call.local_combine_output.name,
+    )
+
+
+@pytest.mark.parametrize("owned", [False, True], ids=["shared buffer", "own buffer"])
+def test_the_block_slab_releases_its_worker_first_and_never_the_borrowed_buffer(monkeypatch, owned: bool) -> None:
+    """``release_owned_buffers`` releases the worker before the parent; the combine buffer is freed only by the
+    instance that allocated it, once: never by the worker, never when it is the shared one."""
+    fakes = _moe_constructor_fakes(monkeypatch)
+    shared = None if owned else _AliasingTensor((moe_module.TOP_K, 128, moe_module.HIDDEN_SIZE), "shared", "bf16", "rm")
+    parent = fakes.build(SLAB, LONG_CHUNK_ROWS, shared)
+    worker = parent.block_instance
+    assert (parent.expert_mapping.name, worker.expert_mapping.name) == ("expert_mapping1", "expert_mapping2"), (
+        parent.expert_mapping.name,
+        worker.expert_mapping.name,
+    )
+    parent.release_owned_buffers()
+    expected = ["expert_mapping2", "expert_mapping1"] + (["own combine[128]"] if owned else [])
+    assert fakes.freed == expected, fakes.freed
+    assert parent.block_instance is None and parent._owned_buffers_released, parent.block_instance
+    assert worker.local_combine_output is None and worker._owned_buffers_released, worker.local_combine_output
+
+
+def test_a_failed_worker_release_is_retried_and_the_parent_still_releases(monkeypatch, expect_error) -> None:
+    """A worker whose release fails stays attached (named in the error) while the parent releases its own buffers;
+    the next call releases only the worker."""
+    fakes = _moe_constructor_fakes(monkeypatch, fail_free="expert_mapping2")
+    parent = fakes.build(SLAB, LONG_CHUNK_ROWS)
+    worker = parent.block_instance
+    with expect_error(RuntimeError, "failed to release MoE instance-owned buffer.*block_instance"):
+        parent.release_owned_buffers()
+    assert fakes.failures == ["expert_mapping2"], fakes.failures
+    assert fakes.freed == ["expert_mapping1", "own combine[128]"], fakes.freed
+    assert parent.block_instance is worker, parent.block_instance
+    parent.release_owned_buffers()
+    assert fakes.freed == ["expert_mapping1", "own combine[128]", "expert_mapping2"], fakes.freed
+    assert parent.block_instance is None, parent.block_instance
 
 
 @pytest.mark.parametrize("case", ["admitted", "refused", "inside a capture", "model error", "128-row blocks"])
@@ -240,7 +421,8 @@ def test_slab_call_admission_asks_the_op_without_dispatching(monkeypatch, expect
     """The slab's one moe_compute call is put to the op under a NO_DISPATCH graph capture before any slab work.
 
     True when the op takes the call, False on an op refusal (TT_FATAL / TT_THROW), each logged with the slab form it
-    selects; any other error stays itself; inside another capture, or on a 128-row-block instance, it does not run."""
+    selects (a refusal, which falls back to the 128-row blocks, as a warning); any other error stays itself; inside
+    another capture, or on a 128-row-block instance, it does not run."""
     capture, freed, calls, stamped, logged = [], [], [], [], []
     combine = _AliasingTensor((moe_module.TOP_K, SLAB, moe_module.HIDDEN_SIZE), "combine")
     combine.tensor_id, combine.buffer_address = 0, lambda: 4096
@@ -277,15 +459,27 @@ def test_slab_call_admission_asks_the_op_without_dispatching(monkeypatch, expect
     )
     monkeypatch.setattr(moe_module, "ttnn", fake_ttnn)
     monkeypatch.setattr(moe_module.fused.program, "stamp_topology", lambda tensor, reference: stamped.append(reference))
-    monkeypatch.setattr(moe_module, "logger", SimpleNamespace(info=logged.append))
+    monkeypatch.setattr(
+        moe_module,
+        "logger",
+        SimpleNamespace(
+            info=lambda message: logged.append(("info", message)),
+            warning=lambda message: logged.append(("warning", message)),
+        ),
+    )
     module = object.__new__(moe_module.Qwen38TTNNMoE)
-    module.rows, module.routed_calls = SLAB, SLAB // LONG_CHUNK_ROWS if case == "128-row blocks" else 1
+    module.routed_tokens = LONG_CHUNK_ROWS if case == "128-row blocks" else SLAB
+    module.rows, module.routed_calls = SLAB, SLAB // module.routed_tokens
     module.row_contract = moe_module.Qwen38TTNNMoERowContract(SLAB, moe_module.SUPPORTED_ROWS + (SLAB,))
     module.mesh_device, module.expert_mapping, module.local_combine_output = "mesh", "mapping", combine
     module.routing_l1_memory_config, module.output_height_shard_dim = "drain-shard", 1
     if case in ("inside a capture", "128-row blocks"):
         error = RuntimeError if case == "inside a capture" else ValueError
-        match = "cannot run inside another graph capture" if case == "inside a capture" else "one-call slab instance"
+        match = (
+            "cannot run inside another graph capture"
+            if case == "inside a capture"
+            else f"one-call slab instance's, not a {SLAB}-row instance's of {LONG_CHUNK_ROWS} tokens per call"
+        )
         with expect_error(error, match):
             module.admit_slab_call("w0_w1", "w2")
         assert capture == [] and calls == [], (capture, calls)
@@ -311,14 +505,19 @@ def test_slab_call_admission_asks_the_op_without_dispatching(monkeypatch, expect
     assert kwargs["optional_output_tensor"] is combine and kwargs["output_height_shard_dim"] == 1, kwargs
     assert all(stand_in in freed for stand_in in stand_ins), [tensor.name for tensor in freed]
     assert combine not in freed and captured_combine not in freed, [tensor.name for tensor in freed]
-    assert logged[0].startswith(f"asking moe_compute whether it takes the {SLAB}-row slab in one call"), logged
+    level, message = logged[0]
+    assert level == "info" and message.startswith(f"asking moe_compute whether it takes the {SLAB}-row slab"), logged
     if case == "refused":
         assert logged[1:] == [
-            f"the {SLAB}-row prefill slab routes its experts in 16 moe_compute calls of 128 tokens per layer: "
-            f"moe_compute refuses its one {SLAB}-token call ({fatal})"
+            (
+                "warning",
+                f"the {SLAB}-row prefill slab routes its experts in 16 moe_compute calls of 128 tokens per layer: "
+                f"moe_compute refuses its one {SLAB}-token call ({fatal})",
+            )
         ], logged
     else:
-        assert logged[1:] == [f"the {SLAB}-row prefill slab routes its experts in one moe_compute call per layer"]
+        one_call = f"the {SLAB}-row prefill slab routes its experts in one moe_compute call per layer"
+        assert logged[1:] == [("info", one_call)], logged
         others = [tensor.name for tensor in freed if tensor not in stand_ins]
         assert others == ["out0", "out1", "out2", "out4"], others
 
@@ -923,6 +1122,7 @@ def test_slab_chunk_state_routes_in_the_form_moe_compute_takes(monkeypatch, take
     assert state.rows == SLAB and state.local_combine_output.shape == (moe_module.TOP_K, routed, moe_module.HIDDEN_SIZE)
     assert all(layer_state.local_combine_output is state.local_combine_output for layer_state in state.layers)
     assert [layer_state.routed_tokens_per_call for layer_state in state.layers] == [routed, routed]
+    assert state.routed_tokens_per_call == routed, state.routed_tokens_per_call  # READY's prefill_slab_routed_tokens
     # the combine buffer's validation (the chunk's RoPE rows and feature rows validate their own 4-D shapes too)
     assert [shape[1] for shape, _ in fakes.validated if len(shape) == 3] == [routed]
     assert admitted == [

@@ -7,7 +7,8 @@ The routed experts are the BF4 cache's, so the PCC floor is below the BF16 block
 
 test_moe_component.py proves ``Qwen38MoE`` against the pinned Transformers module on the CPU; this is the device side.
 The slab call admission (``Qwen38TTNNMoE.admit_slab_call``) leaves the program cache and the allocators as it found
-them, admitted or refused.
+them, admitted or refused. The block-form slab (128 tokens per ``moe_compute`` call, the form a slab takes where the op
+refuses its one call) matches the reference on every row, and its routed partial is the 128-row worker's per block.
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/tests/test_moe_tp.py -v -s
 Env:  MODEL_WEIGHTS_DIR, MESH_DEVICE="(1, 4)", QWEN38_CACHE_ROOT (skipped without it); QWEN38_BF4_CORPUS with
@@ -22,10 +23,16 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS, HIDDEN_SIZE, pcc
+from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import (
+    DEVICE_PARAMS,
+    HIDDEN_SIZE,
+    assert_tensors_equal,
+    download_shards,
+    pcc,
+)
 from models.demos.blackhole.qwen38_flash_next.tt.moe import Qwen38MoE, Qwen38MoEWeights
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
-from models.demos.blackhole.qwen38_flash_next.ttnn.moe import SUPPORTED_ROWS, Qwen38TTNNMoE
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import LONG_CHUNK_ROWS, MESH_SHAPE
+from models.demos.blackhole.qwen38_flash_next.ttnn.moe import SUPPORTED_ROWS, TOP_K, Qwen38TTNNMoE, Qwen38TTNNRouting
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("QWEN38_FUSED_DEVICE_TEST") != "1",
@@ -106,3 +113,76 @@ def test_moe_slab_call_admission_allocates_and_caches_nothing(tp_harness, rows: 
     finally:
         slab.release_owned_buffers()
     assert after == before, f"{rows} rows: (cache entries, [(allocated, largest free) L1, DRAM]) {before} -> {after}"
+
+
+@run_for_blackhole()
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("rows", [512, 2048])
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+def test_moe_tp_block_slab(tp_harness, pcc_thresholds, rows: int):
+    harness = tp_harness
+    builder, layer = harness.build_layer(LAYER_INDEX)
+    # the slab's resident [gate | up] prefill weight, attached as a build with enable_prefill_slab attaches it
+    builder.enable_prefill_slab(rows)
+    builder._attach_prefill_dense_weights([layer])
+    mlp = layer.mlp
+    reference = Qwen38MoE(Qwen38MoEWeights(harness.checkpoint, harness.placement, layer_index=LAYER_INDEX))
+    generator = torch.Generator().manual_seed(3000 + rows)
+    hidden = torch.randn((1, 1, rows, HIDDEN_SIZE), generator=generator).to(torch.bfloat16)
+    slab = Qwen38TTNNMoE(
+        harness.mesh_device,
+        mlp.mesh_contract,
+        mlp.weights,
+        tt_ccl=mlp.tt_ccl,
+        collective_topology=mlp.collective_topology,
+        rows=rows,
+        routed_tokens_per_call=LONG_CHUNK_ROWS,
+        admitted_rows=SUPPORTED_ROWS + (rows,),
+        prefill_dense=mlp.prefill_dense,
+    )
+    dram, owned = ttnn.DRAM_MEMORY_CONFIG, []
+    try:
+        assert slab.block_slab and slab.block_instance.rows == LONG_CHUNK_ROWS, (slab.routed_tokens, slab.routed_calls)
+        with builder.expert_streamer.layer(LAYER_INDEX) as (packed_w0_w1, packed_w2):
+            device_hidden = harness.upload_sharded(hidden)
+            owned.append(device_hidden)
+            result = slab.forward(device_hidden, packed_w0_w1, packed_w2, return_routing=True)
+            owned += [result.hidden_sharded, result.routing.scores, result.routing.indices]
+            got = harness.download_sharded(result.hidden_sharded).reshape(1, rows, HIDDEN_SIZE)
+            # The routed partial (the blocks concatenated) against the 128-row worker run on each block's rows.
+            full_hidden = slab._all_gather_hidden(device_hidden)
+            owned.append(full_hidden)
+            partial = slab._routed_partial(full_hidden, result.routing, packed_w0_w1, packed_w2)
+            owned.append(partial)
+            partial_shards = download_shards(partial)
+            for start in range(0, rows, LONG_CHUNK_ROWS):
+                stop = start + LONG_CHUNK_ROWS
+                block_rows = ttnn.slice(full_hidden, (0, 0, start, 0), (1, 1, stop, HIDDEN_SIZE), memory_config=dram)
+                block_scores = ttnn.slice(
+                    result.routing.scores, (0, 0, start, 0), (1, 1, stop, TOP_K), memory_config=dram
+                )
+                block_indices = ttnn.slice(
+                    result.routing.indices, (0, 0, start, 0), (1, 1, stop, TOP_K), memory_config=dram
+                )
+                owned += [block_rows, block_scores, block_indices]
+                block_partial = slab.block_instance._routed_partial(
+                    block_rows, Qwen38TTNNRouting(block_scores, block_indices), packed_w0_w1, packed_w2
+                )
+                owned.append(block_partial)
+                for device, block in enumerate(download_shards(block_partial)):
+                    assert_tensors_equal(
+                        partial_shards[device][:, :, start:stop],
+                        block,
+                        f"{rows}-row slab, rows {start}..{stop}, device {device}",
+                    )
+    finally:
+        for tensor in owned:
+            if tensor.is_allocated():
+                ttnn.deallocate(tensor)
+        slab.release_owned_buffers()
+
+    expected, _routing = reference(hidden.reshape(1, rows, HIDDEN_SIZE))
+    score = pcc(got, expected)
+    logger.info(f"layer {LAYER_INDEX} {rows}-row block slab: PCC {score:.6f}")
+    assert score >= pcc_thresholds["test_moe_tp"], f"{rows}-row block slab: PCC {score:.6f}"

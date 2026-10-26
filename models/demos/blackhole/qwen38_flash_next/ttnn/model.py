@@ -663,6 +663,8 @@ class Qwen38TTNNTextModelChunkState:
     _owner: object = field(repr=False, compare=False)
     rows: int = CHUNK_ROWS
     local_combine_output: Any | None = None
+    # Beside a base state, one moe_compute call's tokens: the rows, or 128 for a slab whose one call the op refuses.
+    routed_tokens_per_call: int | None = None
     # The generic state's device position: a caller that writes a chunk's inputs without the rows' positions (the
     # eager tools) gets the plain rows from a readback of ``P``; the prefill driver passes the positions instead.
     position: Any = None
@@ -2605,6 +2607,7 @@ class Qwen38TTNNTextModel:
                 _owner=self._state_owner,
                 rows=rows,
                 local_combine_output=local_combine_output,
+                routed_tokens_per_call=routed_tokens,
                 position=state.position,
             )
             self._validate_chunk_state(result)
