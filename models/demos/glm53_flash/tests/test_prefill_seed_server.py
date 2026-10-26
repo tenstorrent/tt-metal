@@ -144,6 +144,38 @@ def _prefill(model, ids: list[int]):
     return model.prefill(t, user=0)
 
 
+def _warm_tails(model, mesh_device):
+    """tt-blaze G53F-0225 (``GLM53F_SEED_WARMUP_TAILS`` = "multi", "single" or "multi+single"; unset = off): create the
+    programs of every ragged last-chunk shape before the first request. A chunk's programs are keyed by its padded
+    length (32 rows per mesh row granularity, so CHUNK / (32 * rows) shapes per family); a request whose last chunk has
+    a shape this process never ran pays its compile (14.35 s vs 0.672 s warm for a 4240-token tail, G53F-0221). "multi":
+    one tail-sized ``prefill`` at start CHUNK per shape (a multi-chunk prompt's last chunk; the cache's stale rows below
+    the start only feed the throw-away result); "single": the same lengths at start 0 (a prompt of at most one chunk).
+    Values are not checked: the results are discarded, only the program cache is filled."""
+    fams = [f for f in os.environ.get("GLM53F_SEED_WARMUP_TAILS", "").split("+") if f]
+    if not fams:
+        return
+    unit = 32 * model.mesh.rows
+    t_all, n = time.perf_counter(), 0
+    for fam in fams:
+        assert fam in ("multi", "single"), fam
+        start = CHUNK if fam == "multi" else 0
+        for k in range(1, CHUNK // unit + (0 if fam == "multi" else 1)):  # a full chunk at CHUNK is the warm-up's
+            L = k * unit - 1  # T_loc = 32 k; one padding row on the last mesh row
+            if start + L > MAX_SEQ:
+                break
+            ids = torch.tensor(([785, 6722, 315, 9621] * (L // 4 + 1))[:L], dtype=torch.int64)
+            tw = time.perf_counter()
+            st, lg, _ = model.prefill(ids, user=0, start=start)
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(st)
+            if lg is not None:
+                ttnn.deallocate(lg)
+            n += 1
+            logger.info(f"[seed-server] tail warm-up {fam} {L} tokens at {start}: {time.perf_counter() - tw:.3f} s")
+    logger.info(f"[seed-server] tail warm-up: {n} shapes in {time.perf_counter() - t_all:.1f} s")
+
+
 class _SelectionTrace:
     """G53F-0170 diagnosis: every DSA layer's sparse index rows for the last ``rows`` prompt positions -- how many of
     the needle's token positions [lo, hi) each row selects (``TtDSA.on_indices``; mesh row r's slab read on its
@@ -275,6 +307,7 @@ def test_prefill_seed_server(mesh_device):
                 f"[seed-server] warm-up {len(ids)} tokens pass {rep}: prefill {tp - tw:.3f} s, export {te - tp:.3f} s "
                 f"({nbytes / 2**20:.1f} MiB)"
             )
+    _warm_tails(model, mesh_device)
     decs = {d.layer_idx: d for d in model.layers}
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
