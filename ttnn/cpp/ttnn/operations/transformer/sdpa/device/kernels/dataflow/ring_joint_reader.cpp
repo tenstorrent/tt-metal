@@ -615,6 +615,13 @@ void kernel_main() {
     // the upstream can have two pieces in flight while this core computes a third. 0 = the M8 one-outstanding
     // handshake (TT_SOL_CHAIN_CREDITS=0, A/B).
     constexpr bool sol_chain_credits = get_named_compile_time_arg_val("sol_chain_credits") == 1;
+    // D1 (sparse_attn_design_2026-10-23.md 4.2): the resident piece stream replaces the chain with one producer per
+    // head group that reads each piece from DRAM and multicasts it to every other member (no forwarding). The head
+    // chain's membership and semaphores are reused: sender = the producer's credit count (+1 per consumer per
+    // piece), receiver = each consumer's delivered count (set to the running piece count by multicast), valid = the
+    // producer's local source word for that set. The group arguments follow the Sol chain members.
+    constexpr bool sol_res_mcast = get_named_compile_time_arg_val("sol_res_mcast") == 1;
+    static_assert(!sol_res_mcast || (sol_resident && !sol_chain_credits), "group delivery is the resident stream");
     constexpr uint32_t cb_k_stage = get_named_compile_time_arg_val("cb_k_stage");
     constexpr uint32_t cb_v_stage = get_named_compile_time_arg_val("cb_v_stage");
     constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
@@ -1183,6 +1190,9 @@ void kernel_main() {
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
     bool q_pushed = false;
+    // D1 (resident group delivery): pieces this core has pushed through the group stream since launch. The
+    // producer's delivered count and the consumers' credits are running totals of it, never reset in a launch.
+    [[maybe_unused]] uint32_t res_group_pieces = 0;
 
     /**
      * Iterate over ring indices.
@@ -1824,6 +1834,131 @@ void kernel_main() {
                 }
                 KV_chunks_processed_in_iter++;
             };
+            // D1: group delivery. Arguments (after the Sol chain members): role (0 = not in a group: reads its own
+            // K/V; 1 = producer; 2 = consumer), producer NoC x, y, receiver count, rectangle count, then per
+            // rectangle (x_start, y_start, x_end, y_end, cores), producer only. Every member pushes the same page
+            // sequence into cb_k_in / cb_v_in (same pieces, same pooled pages, same phase-alignment dummies), so
+            // the producer's write pointer for a piece is every consumer's page for it.
+            //   consumer: reserve the piece's K and V pages, credit the producer (+1), wait until the delivered
+            //     count reaches the piece, push. Credits run ahead up to kv_cb_pages pieces, never past the
+            //     iteration's last piece (the pooled and dummy pages after it are this core's own).
+            //   producer: reserve its own pages, read K and V from DRAM, push them for its compute, wait for
+            //     receivers x (piece + 1) credits, multicast K and V to every rectangle, then the new count.
+            [[maybe_unused]] const uint32_t g_base = sol_members_base + 2 * sol_n_members;
+            [[maybe_unused]] const uint32_t g_role = sol_res_mcast ? get_arg_val<uint32_t>(g_base) : 0;
+            [[maybe_unused]] uint32_t g_granted = 0;  // pieces credited this iteration
+            [[maybe_unused]] uint32_t g_ahead = 0;    // pieces credited, not yet pushed
+            const auto g_try_grant = [&](bool blocking) -> bool {
+                if (g_granted >= n_pieces) {
+                    return false;
+                }
+                CircularBuffer cb_k(cb_k_in);
+                CircularBuffer cb_v(cb_v_in);
+                const uint32_t k_need = k_chunk_tiles * (g_ahead + 1);
+                const uint32_t v_need = v_cb_entry_tiles * (g_ahead + 1);
+                if (!blocking && (g_ahead + 1 > kv_cb_pages || !cb_k.pages_reservable_at_back(k_need) ||
+                                  !cb_v.pages_reservable_at_back(v_need))) {
+                    return false;
+                }
+                cb_k.reserve_back(k_need);
+                cb_v.reserve_back(v_need);
+                ++g_ahead;
+                ++g_granted;
+                Semaphore<>(head_sender_semaphore_id)
+                    .up(noc, get_arg_val<uint32_t>(g_base + 1), get_arg_val<uint32_t>(g_base + 2), 1);
+                return true;
+            };
+            const auto g_grant_ahead = [&]() {
+                while (g_try_grant(false)) {
+                }
+            };
+            const auto stream_piece_group = [&](uint32_t nb, uint32_t nq, uint32_t k) {
+                CircularBuffer cb_k(cb_k_in);
+                CircularBuffer cb_v(cb_v_in);
+                if (g_role == 2) {
+                    if (g_ahead == 0) {
+                        g_try_grant(true);
+                    }
+                    {
+                        SOL_ZONE("RD_GROUP_RX");  // the wait for the producer's multicast (the credit went out earlier)
+                        Semaphore<>(head_receiver_semaphore_id).wait_min(res_group_pieces + 1);
+                    }
+                    cb_k.push_back(k_chunk_tiles);
+                    cb_v.push_back(v_cb_entry_tiles);
+                    --g_ahead;
+                    ++res_group_pieces;
+                    g_grant_ahead();
+                    KV_chunks_processed_in_iter++;
+                    return;
+                }
+                // Producer.
+                const uint32_t nk = nq / q_heads_per_k;
+                const uint32_t nv = nq / q_heads_per_v;
+                const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
+                const uint32_t gathered_kv_batch = indexed_kv_cache ? 0 : nb;
+                const uint32_t src_batch = source_is_local ? kv_batch : gathered_kv_batch;
+                const uint32_t row0 = (source_is_local ? 0 : source_start_tile) + k * Sk_chunk_t;
+                const Slice k_slice(src_batch, nk, row0, row0 + Sk_chunk_t, 0, DHt);
+                const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
+                cb_k.reserve_back(k_chunk_tiles);
+                cb_v.reserve_back(v_cb_entry_tiles);
+                const uint32_t k_addr = cb_k.get_write_ptr();
+                const uint32_t v_addr = cb_v.get_write_ptr();
+                {
+                    SOL_ZONE("RD_FETCH_K");
+                    if (source_is_local) {
+                        fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
+                        fetch_block(local_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
+                    } else {
+                        fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
+                        fetch_block(gathered_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
+                    }
+                }
+                // Push first: the multicast only reads the pages, and they are not reserved again before this
+                // core's compute has popped them and the writes below are flushed.
+                cb_k.push_back(k_chunk_tiles);
+                cb_v.push_back(v_cb_entry_tiles);
+                ++res_group_pieces;
+                const uint32_t n_recv = get_arg_val<uint32_t>(g_base + 3);
+                const uint32_t n_rects = get_arg_val<uint32_t>(g_base + 4);
+                {
+                    SOL_ZONE("RD_GROUP_TX");  // the wait for the slowest consumer's credit, then the multicasts
+                    Semaphore<>(head_sender_semaphore_id).wait_min(n_recv * res_group_pieces);
+                    Semaphore<> count_src(head_valid_semaphore_id);
+                    count_src.set(res_group_pieces);
+                    for (uint32_t r = 0; r < n_rects; ++r) {
+                        const uint32_t a = g_base + 5 + 5 * r;
+                        // NoC 1 runs the other way: its rectangle starts at the high corner.
+                        const bool rev = noc.get_noc_id() == 1;
+                        const uint32_t x0 = get_arg_val<uint32_t>(a + (rev ? 2 : 0));
+                        const uint32_t y0 = get_arg_val<uint32_t>(a + (rev ? 3 : 1));
+                        const uint32_t x1 = get_arg_val<uint32_t>(a + (rev ? 0 : 2));
+                        const uint32_t y1 = get_arg_val<uint32_t>(a + (rev ? 1 : 3));
+                        const uint32_t n_dests = get_arg_val<uint32_t>(a + 4);
+                        // K and V linked, then the count: back to back, no flush in between (ChainLink::forward).
+                        noc.async_write_multicast(
+                            CoreLocalMem<uint32_t>(k_addr),
+                            MulticastEndpoint{},
+                            k_chunk_tiles * k_tile_bytes,
+                            n_dests,
+                            {},
+                            {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = k_addr},
+                            /*linked=*/true);
+                        noc.async_write_multicast(
+                            CoreLocalMem<uint32_t>(v_addr),
+                            MulticastEndpoint{},
+                            v_cb_entry_tiles * v_tile_bytes,
+                            n_dests,
+                            {},
+                            {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = v_addr},
+                            /*linked=*/true);
+                        count_src.relay_multicast(
+                            noc, Semaphore<>(head_receiver_semaphore_id), x0, y0, x1, y1, n_dests, /*linked=*/false);
+                    }
+                    noc.async_writes_flushed();
+                }
+                KV_chunks_processed_in_iter++;
+            };
             {
                 SOL_ZONE("RD_RES_PIECES");  // the whole piece stream of this iteration (fetch / chain / CB waits)
                 // Two passes over the same (piece, head group) order: a count first, so each streamed piece knows
@@ -1833,6 +1968,11 @@ void kernel_main() {
                     if (pass == 1 && chain_member) {
                         if constexpr (sol_chain_credits) {
                             grant_ahead();  // the first pieces' grants, before the first wait
+                        }
+                    }
+                    if constexpr (sol_res_mcast) {
+                        if (pass == 1 && g_role == 2) {
+                            g_grant_ahead();  // the first pieces' credits, before the first wait
                         }
                     }
                     for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
@@ -1856,7 +1996,14 @@ void kernel_main() {
                                     ++n_pieces;
                                 } else {
                                     ++j;
-                                    if constexpr (sol_chain_credits) {
+                                    if constexpr (sol_res_mcast) {
+                                        // A group serves one head; a member's chunks never span two (factory).
+                                        if (g_role != 0) {
+                                            stream_piece_group(res_nb[i0], res_nq[i0], k);
+                                        } else {
+                                            stream_piece(res_nb[i0], res_nq[i0], k, false);
+                                        }
+                                    } else if constexpr (sol_chain_credits) {
                                         stream_piece_credited(res_nb[i0], res_nq[i0], k);
                                     } else {
                                         stream_piece(res_nb[i0], res_nq[i0], k, j < n_pieces);

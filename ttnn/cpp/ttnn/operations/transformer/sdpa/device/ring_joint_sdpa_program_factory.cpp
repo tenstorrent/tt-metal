@@ -1471,12 +1471,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // arrivals as monotonic counters, several transfers in flight per link) over a 3-deep K/V CB, so the upstream
     // can write two pieces ahead of the piece this core computes. TT_SOL_CHAIN_CREDITS=0 restores the M8
     // one-outstanding handshake for an A/B (then the default depth is 2 again); TT_SOL_KV_PAGES still overrides.
+    // D1 (sparse_attn_design_2026-10-23.md 4.2): the resident stream delivers each head chain's pieces by multicast
+    // from one producer per group instead of forwarding them core to core (see sol_res_mcast in the reader). It
+    // replaces the M11 credits; TT_SOL_RES_MCAST=0 falls back to the chain for an A/B. Same 3-deep K/V CB.
+    const bool sol_res_mcast =
+        sol_resident && build_kv_chains && use_head_chain && sol_chain_len == 0 &&
+        !(std::getenv("TT_SOL_RES_MCAST") && std::string(std::getenv("TT_SOL_RES_MCAST")) == "0");
     const bool sol_chain_credits =
-        sol_resident && build_kv_chains &&
+        sol_resident && build_kv_chains && !sol_res_mcast &&
         !(std::getenv("TT_SOL_CHAIN_CREDITS") && std::string(std::getenv("TT_SOL_CHAIN_CREDITS")) == "0");
     const uint32_t kv_cb_pages = [&]() -> uint32_t {
         const char* env = std::getenv("TT_SOL_KV_PAGES");
-        const uint32_t default_pages = sol_chain_credits ? 3u : 2u;
+        const uint32_t default_pages = (sol_chain_credits || sol_res_mcast) ? 3u : 2u;
         const uint32_t pages = env ? static_cast<uint32_t>(std::atoi(env)) : default_pages;
         return (pages >= 2 && pages <= 8 && !v_shares_k_buffer) ? pages : default_pages;
     }();
@@ -3378,6 +3384,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"sol_res_block_words", sol_resident ? tt::div_up(sol_nb, 32u) : 0u},
         // M11: the resident piece stream's chain protocol (see kv_cb_pages above): 1 = counting credits.
         {"sol_chain_credits", sol_chain_credits ? 1u : 0u},
+        // D1: resident group delivery by multicast (see sol_res_mcast above).
+        {"sol_res_mcast", sol_res_mcast ? 1u : 0u},
         // M4 static row max (see sol_static_max above): 1 iff sol_row_max is present (resident only). The reader
         // then has a sol_row_max accessor right after sol_pv's and its address at rotated_args_base + 3, with the
         // bias / n_members / my_start / table / member words shifted up by one (no slot otherwise, so every other
@@ -3525,6 +3533,87 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         for (uint32_t len = 0; len <= 65; ++len) {
             const float v = (len == 0 || len > 64) ? kSolBiasNeg : std::log(static_cast<float>(len)) / scale_value;
             sol_len_bias_table[len / 2] |= f2bf(v) << (16 * (len % 2));
+        }
+    }
+
+    // D1 group delivery: per core [role, producer x, producer y, receivers, rectangles, (x0, y0, x1, y1, cores)...].
+    // A group is a head chain's members (resident chains hold single-head cores only); the producer is the chain's
+    // injector, which reads every piece from DRAM. The receivers are covered by rectangles of consecutive NoC x on
+    // one row each, so a multicast never lands on a core outside the group. The injector is the first member in core
+    // order, so it sits at the start of its row and does not split a rectangle.
+    constexpr uint32_t kSolGroupMaxRects = 8;
+    std::vector<std::vector<uint32_t>> sol_group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
+    if (sol_res_mcast) {
+        for (uint32_t h = 0; h < static_cast<uint32_t>(head_segments.size()); ++h) {
+            std::vector<uint32_t> members;
+            std::optional<uint32_t> producer;
+            for (const auto& seg : head_segments[h]) {
+                const auto& cfg = head_chain_configs.at(seg.core_idx);
+                if (!cfg.participates || cfg.head != h ||
+                    std::find(members.begin(), members.end(), seg.core_idx) != members.end()) {
+                    continue;
+                }
+                TT_FATAL(
+                    core_work[seg.core_idx].head_work.size() == 1,
+                    "sol resident group delivery: core {} of head {} spans two heads",
+                    seg.core_idx,
+                    h);
+                members.push_back(seg.core_idx);
+                if (cfg.is_injector) {
+                    producer = seg.core_idx;
+                }
+            }
+            if (members.size() < 2) {
+                continue;
+            }
+            TT_FATAL(producer.has_value(), "sol resident group delivery: head {} chain has no injector", h);
+            const CoreCoord prod_phys = core_work[*producer].physical_core;
+            std::map<uint32_t, std::vector<uint32_t>> receiver_xs_by_row;
+            for (const uint32_t ci : members) {
+                if (ci != *producer) {
+                    receiver_xs_by_row[core_work[ci].physical_core.y].push_back(core_work[ci].physical_core.x);
+                }
+            }
+            std::vector<std::array<uint32_t, 5>> rects;
+            for (auto& [y, xs] : receiver_xs_by_row) {
+                std::sort(xs.begin(), xs.end());
+                size_t run_start = 0;
+                for (size_t k = 1; k <= xs.size(); ++k) {
+                    if (k == xs.size() || xs[k] != xs[k - 1] + 1) {
+                        rects.push_back({xs[run_start], y, xs[k - 1], y, static_cast<uint32_t>(k - run_start)});
+                        run_start = k;
+                    }
+                }
+            }
+            TT_FATAL(
+                rects.size() <= kSolGroupMaxRects,
+                "sol resident group delivery: head {} needs {} multicast rectangles (at most {})",
+                h,
+                rects.size(),
+                kSolGroupMaxRects);
+            const uint32_t n_receivers = static_cast<uint32_t>(members.size() - 1);
+            for (const uint32_t ci : members) {
+                auto& a = sol_group_args[ci];
+                a = {
+                    ci == *producer ? 1u : 2u,
+                    static_cast<uint32_t>(prod_phys.x),
+                    static_cast<uint32_t>(prod_phys.y),
+                    n_receivers,
+                    0u};
+                if (ci == *producer) {
+                    a[4] = static_cast<uint32_t>(rects.size());
+                    for (const auto& r : rects) {
+                        a.insert(a.end(), r.begin(), r.end());
+                    }
+                }
+            }
+            log_debug(
+                tt::LogOp,
+                "sol resident group: head {} producer core {} -> {} receivers in {} rectangles",
+                h,
+                *producer,
+                n_receivers,
+                rects.size());
         }
     }
 
@@ -3697,6 +3786,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             for (const auto& [start, count] : sol_members) {
                 reader_args.push_back(start);
                 reader_args.push_back(count);
+            }
+            if (sol_res_mcast) {
+                for (const uint32_t w : sol_group_args[i]) {
+                    reader_args.push_back(w);
+                }
             }
         }
         reader_kernel.emplace_runtime_args(core, reader_args.args);

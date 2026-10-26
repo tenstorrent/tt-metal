@@ -604,6 +604,16 @@ if want m11ab; then
     [ -f generated/watcher/watcher.log ] && cp generated/watcher/watcher.log "log_val_m11ab_watcher.log" 2>/dev/null
 fi
 
+# Design gate D0 (2026-10-23, sparse_attn_design_2026-10-23.md §2): traced dense and the gather alone in the same job,
+# at the power the 2x target is judged at (180 W). If 2 x (gather + 0.25 ms) > dense, 2x at 5 s is out of reach for
+# any in-chip design while the gather stays as it is. No rebuild needed.
+if want design0; then
+    run design0_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 \
+        pytest "$B" -s -k "4x8 and nl2 and 768p_5s and dense"
+    run design0_trace_agather 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 \
+        pytest "$B" -s -k "4x8 and nl2 and 768p_5s and agather"
+fi
+
 # M11 race fix (2026-10-23). m11ab: credits off passed at 2 and 3 pages, credits on failed at 3 pages (0.973) and
 # worse at 2 (0.938). Cause: a member granted the page of a chunk it had pushed but not yet forwarded (compute pops
 # an empty piece at once), so the upstream overwrote the chunk before the forward read it; the reserve now also
@@ -642,6 +652,43 @@ if want m11fix_t; then
     run m11fix_profile 900 env TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 \
         SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0 TT_SOL_KV_PAGES=2 pytest "$B" -s -k "$S"
     [ -d generated/profiler/.logs ] && cp -r generated/profiler/.logs "profile_m11fix_logs" 2>/dev/null
+fi
+
+# D1 (2026-10-26, sparse_attn_design_2026-10-23.md §4.2): the resident piece stream delivered by multicast groups.
+# Each head chain's injector reads every piece from DRAM and multicasts K, V and a running count to the other
+# members (row rectangles); members credit the producer per page they can reserve, up to the 3-page K/V CB. No
+# forwarding, so no slowest-member lockstep along a chain. Rebuild first (reader kernel + factory changed).
+# Correctness gates the timings (a hang shows as exit 124):
+#   check / r1184   512 / 1024 / 1184-row resident vs compact
+#   parity          5 s per-call parity (the shape that fills the lookahead; M11 passed the small checks and failed here)
+#   parity_kv2      the same with a 2-page CB (one piece ahead)
+# Then traced (6 replays): dense, the M8 chain baseline (TT_SOL_RES_MCAST=0 TT_SOL_CHAIN_CREDITS=0), D1 at tau 1/2/3,
+# and one D1 profile (per-core idle: RD_GROUP_RX / RD_GROUP_TX zones against the chain's RD_CHAIN_* ones).
+# Pass: parity >= 0.9996 on every call; tau 1 below the M8 baseline by most of the ~1.0 ms chain idle.
+if want d1; then
+    P="4x8 and resident_call_parity and r4736"
+    ok=1
+    run d1_check 900 pytest "$T" -s -k "4x8sp1tp0nl2 and resident_matches_compact and (r512 or r1024)" || ok=0
+    run d1_r1184 900 pytest "$T" -s -k "4x8sp1tp0nl2 and resident_matches_compact and r1184k512" || ok=0
+    run d1_parity 600 pytest "$T" -s -k "$P" || ok=0
+    run d1_parity_kv2 600 env TT_SOL_KV_PAGES=2 pytest "$T" -s -k "$P" || ok=0
+    if [ "$ok" != 1 ]; then
+        echo "    d1: a correctness run failed; skipping the timings"
+    else
+        ONLY=d1_t
+    fi
+fi
+if want d1_t; then
+    S="4x8 and nl2 and 768p_5s and not dense and not agather"
+    TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off"
+    run d1_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 pytest "$B" -s -k "4x8 and nl2 and 768p_5s and dense"
+    run d1_trace_m8_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_RES_MCAST=0 TT_SOL_CHAIN_CREDITS=0 pytest "$B" -s -k "$S"
+    for tau in 1.0 2.0 3.0; do
+        run "d1_trace_tau${tau}" 900 env $TR SOL_TAU=$tau pytest "$B" -s -k "$S"
+    done
+    run d1_profile 900 env TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 \
+        SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0 pytest "$B" -s -k "$S"
+    [ -d generated/profiler/.logs ] && cp -r generated/profiler/.logs "profile_d1_logs" 2>/dev/null
 fi
 
 # M10 timing only (2026-10-23): the first M10 build passed the correctness set but the 5 s runs overflowed the kernel
