@@ -15,8 +15,8 @@
   },
   "rounds": [
     {"round": 0, "paper_accuracy_device_ms": 1056.8, "multivariate_device_ms": 2003.9, "long_context_device_ms": 96.1, "paper_performance_device_ms": 1042.9, "job": 495},
-    {"round": 1, "paper_accuracy_device_ms": 541.0, "delta": "-48.8 %", "accepted": ["R1-1 read-out cut", "R1-2 Wo.Wv fold for G=1", "R1-4 fused SwiGLU", "R1-5 QKV minimal_matmul", "R1-6+7 wo/w_down epilogue residual add + SDPA concat heads"], "rejected": {"R1-3 split streams": "failed micro-benchmark gate", "R1-8 embed minimal_matmul": "-0.6 %, below 2 % gate", "R1-9 host scaler skip": "-1.8 ms host, below gate"}},
-    {"round": 2, "paper_accuracy_device_ms": 516.7, "delta": "-4.5 % (< 5 %: diminishing-returns exit)", "accepted": ["R2-1 permute-free group attention with same-slot mask (multivariate -44 %)", "R2-3 fused per-head QK-norm + RoPE"], "rejected": {"R2-2 ff1 re-sweep": "current blocks fastest", "R2-4 drop create_qkv_heads": "per-head norm needs head-major rows", "R2-5 embed HiFi2": "<0.5 % possible, long_context drift", "R2-6 compact rows": "failed micro-benchmark (repacking cost > saving)"}}
+    {"round": 1, "paper_accuracy_device_ms": 541.0, "long_context_device_ms": 59.9, "multivariate_device_ms": 1331.7, "paper_performance_device_ms": 612.3, "job": 564, "delta": "-48.8 %", "accepted": ["R1-1 read-out cut", "R1-2 Wo.Wv fold for G=1", "R1-4 fused SwiGLU", "R1-5 QKV minimal_matmul", "R1-6+7 wo/w_down epilogue residual add + SDPA concat heads"], "rejected": {"R1-3 split streams": "failed micro-benchmark gate", "R1-8 embed minimal_matmul": "-0.6 %, below 2 % gate", "R1-9 host scaler skip": "-1.8 ms host, below gate"}},
+    {"round": 2, "paper_accuracy_device_ms": 516.7, "long_context_device_ms": 58.5, "multivariate_device_ms": 717.4, "paper_performance_device_ms": 588.5, "job": 614, "delta": "-4.5 % (< 5 %: diminishing-returns exit)", "accepted": ["R2-1 permute-free group attention with same-slot mask (multivariate -44 %)", "R2-3 fused per-head QK-norm + RoPE"], "rejected": {"R2-2 ff1 re-sweep": "current blocks fastest", "R2-4 drop create_qkv_heads": "per-head norm needs head-major rows", "R2-5 embed HiFi2": "<0.5 % possible, long_context drift", "R2-6 compact rows": "failed micro-benchmark (repacking cost > saving)"}}
   ],
   "total_improvement": {"paper-accuracy": "1056.8 -> 516.7 ms (-51.1 %)", "multivariate-accuracy": "2003.9 -> 717.3 ms (-64.2 %)", "long_context-accuracy": "96.1 -> 58.4 ms (-39.2 %)", "paper-performance": "1042.9 -> 588.8 ms (-43.5 %)"},
   "configs": {
@@ -31,8 +31,8 @@
   "named_limitations": [
     "paper-performance (bfp8/LoFi) is slower than accuracy (588.8 vs 516.7 ms): the residual-epilogue matmul does not take bfp8 weights, so wo/w_down fall back to matmul + add",
     "rows padded 66 -> 96 per series (45 % padding) in time attention; compacting costs more in repacking than it saves (R2-6 micro)",
-    "non-matmul ops ~47 % of device time (LayerNorm, RoPE, create_heads, SDPA); matmuls at ~29 % weighted peak FLOPs (iter_02/analysis.md)",
-    "SDPA with a user mask over 768 keys is wrong at k_chunk 256 (PCC 0.985), right at 128 (jobs 582, 583)",
+    "non-matmul ops ~47 % of device time (LayerNorm, RoPE, create_heads, SDPA); matmuls at ~29 % weighted peak FLOPs (iter_02/analysis.md; measured on the iter_02 code, before R2-1 and R2-3; not re-measured)",
+    "SDPA with a user mask over 768 keys is wrong at k_chunk 256 (PCC 0.985), right at 128 (jobs 582, 584)",
     "host prepare ~100 ms of the 673 ms steady wall (CPU scaler, float64)"
   ],
   "not_applicable": {

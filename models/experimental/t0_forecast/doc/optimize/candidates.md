@@ -1,6 +1,6 @@
 # t0-gamma optimization candidates
 
-Contract (`/home/andy/avan/fleet/t0-gamma/CONTRACT.md` v1, approved in D0):
+Contract (`/home/andy/avan/fleet/t0-gamma/CONTRACT.md` v1.2):
 - **Target:** `forward` (one `_single_pass`), `paper` shape: 1024 univariate series x context 2048 -> horizon 64
   (66 patches per row, 2 read out), `accuracy` precision (bf16 weights and activations, HiFi2 matmuls with fp32
   accumulation, norms at HiFi4 / fp32). Device time is primary (median of 5 `forward_device` calls, each after a
@@ -18,15 +18,18 @@ Contract (`/home/andy/avan/fleet/t0-gamma/CONTRACT.md` v1, approved in D0):
   G1): accuracy 0.999 / 0.998 / 0.995 / 0.98 / 0.99; performance 0.995 / 0.99 / 0.97 / 0.90 / 0.98; single
   0.999 / 0.999 / - / - / 0.99; single_long 0.9975 / 0.998 / - / - / 0.99; coverage cases (e2e, paths) 0.999 /
   0.998 / reported / reported / 0.99. Proposed drift vs round 0 on the target: normalized 0.0005, spread 0.002,
-  row p01 0.002.
+  row p01 0.002. **Floors in force:** D3 (the above, set at G1) plus D4 (the band floors `pcc_final_spread`,
+  `spread_ratio` p01 / p50 / p99 / min per class, single and single_long performance floors, coverage at both
+  precisions; drift of the band metrics against the round-2 bench, job 614). All in `tests/helpers.FLOORS` / `DRIFT` /
+  `DRIFT_BAND`, applied by `tests/perf/check_gates.py`.
 - **Precision exceptions (confirmed in D1):** fp32 dest accumulation on every matmul in both precisions (jobs 395,
   398); the patch encoder at HiFi4 (jobs 414, 417); the decoder output and monotone head in fp32 (job 383). Per-role
   sweep for the single-series cases: `iter_00/precision_sweep.json` (job 467), `precision_sweep_realistic.json` (job 475).
 - **Gate:** accept at >= 2 % target device time (wall for host-only changes), no guard regressing by > 3 %, every
   floor holding: `compare_bench.py <cand> <best> --target paper:accuracy --pcc-key pcc_normalized --pcc-floor 0.995`,
   then the target floor by hand.
-- **Exit:** two consecutive rounds each under 3 %, or matmuls > 65 % of FLOPs and non-matmul ops < 15 % of device
-  time, or 6 rounds.
+- **Exit:** U4 (it governs over the contract's older rule): a round under 5 % on the target ends optimization. Taken
+  after round 2 (-4.5 %).
 - **Commits:** one per accepted change, unsigned, one lowercase line, model paths only (PLAN.md section 7).
 
 Headline: `forward`, `paper`, `accuracy`. Guards: `long_context-accuracy`, `multivariate-accuracy`, `paper-performance`.
@@ -42,7 +45,7 @@ Headline: `forward`, `paper`, `accuracy`. Guards: `long_context-accuracy`, `mult
 | 1 | R1-6 + R1-7: wo / w_down on `dit_minimal_matmul_addcmul_fused` (residual add in the epilogue, blocks 16/8/4, 4 x 1 = the R1-8 sweep winner for wo, wvo, ff2: 1.53 vs 2.41, 2.17 vs 3.61 ms per call); SDPA `output_concat_heads=True` in time attention. Performance precision falls back to matmul + ADD (bfp8 weights) | 672.8 | 541.0 (−18.0 %) | −48.8 % vs round 0 | long 59.9 (−14.5 %), multi 1331.7 (−8.2 %), perf 612.3 (−2.2 %) | norm 0.999966, p01 0.999536, min 0.997279 | **accept**; check_gates PASS | iter_01/candidates/r1_6_7_only.json (job 564), iter_01/matmul_sweep_{wo,wvo,ff2}.json (job 557), suite 50/50 (job 559) |
 | 1 | R1-8 (rest): patch encoder on `minimal_matmul`, ReLU fused, skip sum in the output epilogue | 667.3 | 537.7 (−0.6 % vs R1-6+7) | – | long 59.1, multi 1327.3, perf 610.3 | norm 0.999967, p01 0.999458, min 0.997844 | **reject** (below the 2 % gate); wo / ff2 configs already landed with R1-6 | iter_01/candidates/r1_8_embed_minimal.json (job 563), r1_6_7_8_bundle.json (job 558), matmul_sweep_embed_*.json |
 | 1 | R1-9: host prepare: skip the global (known-future) scaler statistics when no row is known-future | – | – (host only) | – | – | prepare outputs bit-identical (tokens, loc, scale) | **reject**: prepare 69.7 -> 68.0 ms on the CPU pool (−1.8 ms, ≈ 0.3 % wall). cProfile: the 69 ms is spread over scale_input 25, causal_stats 13, prepare_series self 13, torch.cat 10 ms, with no single hot spot. A vectorized rewrite goes to round 2 if wall matters | CPU jobs prep-old / prep-new (/tmp/t0_prep_time.py) |
-| 2 | R2-1: group attention without permutes: qkv viewed as (B, 1, G·S_pad, 3d), SDPA over a series' tokens with an additive same-slot mask (k chunk ≤ 128: chunk 256 with a mask gave PCC 0.985) | 657.4 | 541.5 (0.0 %) | – | multi 742.3 (−44.3 % vs 1331.7) | multi norm 0.999941, spread 0.999951, p01 0.999675, min 0.993279, spread_ratio p01 0.987; paper unchanged | **accept** (D2 guard-only rule: multivariate ≥ 10 % better, target within ±1 %); check_gates PASS; micro 110.7 -> 23.9 ms per layer, PCC 0.99998 | iter_02/r2_1_micro.json (jobs 582, 583), iter_02/candidates/r2_1_packed_group.json (job 586), group-layer PCC 4/4 (job 585), test_model 13/13 |
+| 2 | R2-1: group attention without permutes: qkv viewed as (B, 1, G·S_pad, 3d), SDPA over a series' tokens with an additive same-slot mask (k chunk ≤ 128: chunk 256 with a mask gave PCC 0.985) | 657.4 | 541.5 (0.0 %) | – | multi 742.3 (−44.3 % vs 1331.7) | multi norm 0.999941, spread 0.999951, p01 0.999675, min 0.993279, spread_ratio p01 0.987; paper unchanged | **accept** (D2 guard-only rule: multivariate ≥ 10 % better, target within ±1 %); check_gates PASS; micro 110.7 -> 23.9 ms per layer, PCC 0.99998 | iter_02/r2_1_micro.json (jobs 582, 584), iter_02/candidates/r2_1_packed_group.json (job 586), group-layer PCC 4/4 (job 585), test_model 13/13 |
 | 2 | R2-2: ff1 fused SwiGLU re-sweep at M = 98304 (N block 4-16, subblocks up to 1 x 8) | – | – | – | – | – | **reject**: current 8/16/2, 2 x 2 stays fastest (6.34 ms); N 8, 1 x 4 7.13 ms; every subblock over 4 tiles is illegal with fp32 dest | iter_02/swiglu_sweep_r2.json (job 587) |
 | 2 | R2-3: per-head QK-norm + RoPE in one pass (`wan_fused_rmsnorm_pre/post_allgather` on the (1, 1, R·H·S_pad, hd) view, gain as weight, RoPE tables tiled over rows and heads, cached per (R, S)) | 670.6 (prepare noise 92 -> 114 ms; cold +1.3 s for the tiled tables) | 516.4 (−4.6 %) | −51.1 % vs round 0 | long 58.5 (−2.2 %), multi 717.3 (−3.4 %) | norm 0.999966, spread 0.999951, p01 0.999418, min 0.997575, spread_ratio p01 0.991; q / k vs dataflow 0.99998-0.99999 | **accept**; check_gates PASS. Micro: current 9.76, gains folded into the tables 9.48, joint q|k (2H heads, slices, v concat) 12.03, fused 8.19 ms per time layer | iter_02/r2_3_micro.json (jobs 597, 599), iter_02/candidates/r2_3_fused_qk_rope.json (job 605; job 601 built the tables on every call), test_modules + test_model 50/50 (jobs 600, 602) |
 | 2 | R2-4: drop nlp_create_qkv_heads (QKV written as heads by the matmul) | – | – | – | – | – | **reject without a run**: the per-head QK-norm needs head-major rows, and the fused norm + RoPE normalizes whole rows of its input; no op normalizes per head from the flat QKV. The joint-heads variant (one 2H-head split) lost in the R2-3 micro | iter_02/r2_3_micro.json |
