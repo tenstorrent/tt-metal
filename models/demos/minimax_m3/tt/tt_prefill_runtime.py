@@ -443,8 +443,7 @@ class TtPrefillRuntime:
             kv_cache: the engine-owned MiniMaxKVCache (from the adapter's allocate_kv_cache); the chunks'
                 KV is written into it. The same object is passed on every call.
             chunks: the forward's PrefillChunk list, in pack order (validate_chunks).
-            request_id: the runner's chunk counter at the forward's first chunk, part of the runner's call
-                contract; unused here.
+            request_id: the runner's forward index, part of the runner's call contract; unused here.
             d2h_service: the device-side per-layer ack transport. When None, acks go through the host sink
                 (set_layer_completion_sink).
             record_dev: the forward's metadata tensor, unused here.

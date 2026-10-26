@@ -138,8 +138,8 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         hidden state on a non-last pipeline rank, or None on the last/single rank (the
         populated cache is the output).
 
-        `request_id` is the runner's chunk counter, increasing by one per chunk; the runner ALWAYS
-        passes it, so accept it even if unused."""
+        `request_id` is the runner's forward index, increasing by one per forward. No runtime keys on it
+        (TODO: drop it from the contract); the runner ALWAYS passes it, so accept it even if unused."""
 
     def capture_trace(self, kv_cache) -> None:
         """OPTIONAL — implement only if your model supports segmented trace capture/replay. The
@@ -213,8 +213,8 @@ adapter, and the runtime then gets `prefill_forward` instead of `prefill_chunk`:
         chunk order: `chunk_layout.pack_forward_tokens`), or the `[1, 1, forward_tokens_budget, H]` activation
         from the previous rank. Return the forward_tokens_budget-row activation on a non-last rank, None on the
         last. Size the non-first-rank placeholder input to forward_tokens_budget. Report layer completions as
-        `prefill_chunk` does, once for each non-empty chunk, after that chunk's layers ran. `request_id` is the
-        runner's chunk counter at the forward's first chunk; it advances by the forward's non-empty chunks."""
+        `prefill_chunk` does, once for each non-empty chunk, after that chunk's layers ran. `request_id` is as
+        for `prefill_chunk`."""
 ```
 
 Metadata (`prefill_chunk`), little-endian uint32: at F = 1 today's 12 B `(slot_id, actual_start, actual_end)`
