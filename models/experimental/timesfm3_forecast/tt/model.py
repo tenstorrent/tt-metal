@@ -60,6 +60,9 @@ MASK_FILL = -1e9  # finite: a fully masked query row (leading padding) gets unif
 _MAX_SDPA_CHUNK = 256
 
 
+ROPE_VIEW_GROUPS = 8  # heads per RoPE call: 16 / 8 = 2
+
+
 def checkpoint_path() -> Path:
     """``model.safetensors`` at the pinned revision in the HF cache (offline)."""
     hub = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")) / "hub"
@@ -160,7 +163,9 @@ class TtTimesFM3:
         self.precision = TtPrecision.accuracy() if precision is None else precision
         # R1-5: the last layer runs only the read-out query slots after K / V. Off until it is bundled (alone -1.5 %,
         # under the 2 % bar: candidates.md); ``test_last_layer_cut`` covers the path.
-        self.cut_last_layer = False
+        self.cut_last_layer = True
+        self.pack_variates = True  # R2-2
+        self._mask_cache = {}
         p = self.precision
         up = lambda t, role: upload_linear(device, t, p.weight_dtype(role))  # noqa: E731
         self.tok_hidden, self.tok_out, self.tok_res = (
@@ -309,14 +314,19 @@ class TtTimesFM3:
             to_rows(qkv, r, s), num_heads=NUM_HEADS, transpose_key=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(qkv)
-        rope = lambda t: ttnn.experimental.rotary_embedding_llama(  # noqa: E731
-            t,
-            inputs.cos,
-            inputs.sin,
-            self.rope_trans,
-            is_decode_mode=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=p.norm_config(),
+        # R2-1: RoPE on a free (R * 8, 2, S, 96) leading-dim view (iter_00/r1_6: 2.56 vs 3.78 ms/call, bitwise equal).
+        g = ROPE_VIEW_GROUPS
+        rope = lambda t: ttnn.reshape(  # noqa: E731
+            ttnn.experimental.rotary_embedding_llama(
+                ttnn.reshape(t, (r * g, NUM_HEADS // g, s, t.shape[-1])),
+                inputs.cos,
+                inputs.sin,
+                self.rope_trans,
+                is_decode_mode=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=p.norm_config(),
+            ),
+            (r, NUM_HEADS, s, t.shape[-1]),
         )
         qr, kr = rope(q), rope(k)
         ttnn.deallocate(q)
@@ -353,6 +363,8 @@ class TtTimesFM3:
             ttnn.deallocate(xn)
             return self._post(o, w["post"], h1)
         r, s, v = inputs.rows, inputs.padded_seq, inputs.variates
+        if self.pack_variates and inputs.var_mask is None and TILE % v == 0 and (r * s) % TILE == 0:
+            return self._var_attention_packed(w, xn, h1, inputs)
         qkv = linear(xn, w["wqkv"], p)
         ttnn.deallocate(xn)
         slot_major = ttnn.permute(to_rows(qkv, r, s), (1, 0, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -383,6 +395,41 @@ class TtTimesFM3:
         o = linear(to_flat(row_major), w["wo"], p)
         ttnn.deallocate(row_major)
         return self._post(o, w["post"], h1)
+
+    def _var_attention_packed(self, w, xn, h1, inputs: TtInputs):
+        """R2-2: 32 / V items per 32-row tile, block-diagonal mask. The permute runs on the 1280-wide xn and o
+        instead of the 4608-wide qkv and the 1536-wide context; consumes ``xn``, borrows ``h1``."""
+        import ttnn
+
+        p, r, s, v = self.precision, inputs.rows, inputs.padded_seq, inputs.variates
+        slot_major = ttnn.permute(to_rows(xn, r, s), (1, 0, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)  # (S, R, D)
+        ttnn.deallocate(xn)
+        qkv = linear(to_flat(slot_major), w["wqkv"], p)
+        ttnn.deallocate(slot_major)
+        tiles = s * r // TILE
+        q, k, val = ttnn.transformer.split_query_key_value_and_split_heads(
+            ttnn.reshape(qkv, (tiles, TILE, qkv.shape[-1])),
+            num_heads=NUM_HEADS,
+            transpose_key=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv)
+        q, k = self._qk_norm(q, k, w)
+        merged = self._sdpa(q, k, val, self._block_mask(v, tiles), causal=False)  # (tiles, 32, 1536)
+        o = linear(to_flat(merged), w["wo"], p)  # slot-major (S * R, D)
+        ttnn.deallocate(merged)
+        o_rows = ttnn.permute(ttnn.reshape(o, (s, r, o.shape[-1])), (1, 0, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(o)
+        return self._post(to_flat(o_rows), w["post"], h1)
+
+    def _block_mask(self, v: int, tiles: int):
+        """(tiles, 1, 32, 32) additive block-diagonal mask (V x V blocks), cached per shape and kept alive."""
+        key = (v, tiles)
+        if key not in self._mask_cache:
+            group = torch.arange(TILE) // v
+            m = torch.where(group[:, None] == group[None, :], 0.0, MASK_FILL)
+            self._mask_cache[key] = upload(self.device, m.expand(tiles, 1, TILE, TILE).contiguous())
+        return self._mask_cache[key]
 
     def ffn(self, i: int, h2):
         """h2 + post_ln(ff1(relu(ff0(pre_ln(h2))))); ``h2`` is borrowed."""

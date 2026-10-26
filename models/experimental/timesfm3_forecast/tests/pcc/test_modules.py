@@ -192,3 +192,64 @@ def test_sdpa_padded_keys(device):
         f"[SDPA] V=8 max error: no mask {err_none:.4f}, logical user mask {err_logical:.4f}, padded + masked {err_padded:.4f}"
     )
     assert err_none < 0.05 and err_padded < 0.05
+
+
+@pytest.mark.parametrize("variates", [2, 8, 32])
+def test_var_attention_packed(device, variates):
+    """R2-2: the packed variate attention (32 / V items per tile, block-diagonal mask) against the unpacked
+    path on the same input, shared leading padding (no variate mask); random h1 at realistic scale."""
+    import ttnn
+
+    tt = _model(device)
+    items, n = 64 // variates, 40
+    nfm = torch.full((items, 1), 3, dtype=torch.long).expand(-1, variates).reshape(-1)
+    inputs = _inputs(tt, nfm, variates, n)
+    assert inputs.var_mask is None
+    h1 = torch.randn(items * variates, n, 1280, generator=torch.Generator().manual_seed(5)) * 4.0
+    outs = []
+    saved = tt.pack_variates
+    try:
+        for packed in (False, True):
+            tt.pack_variates = packed
+            x = _upload_rows(tt, h1, inputs)
+            out = tt.var_attention(0, x, inputs)
+            outs.append(tt.rows_to_torch(out, inputs))
+            for t in (x, out):
+                ttnn.deallocate(t)
+    finally:
+        tt.pack_variates = saved
+        tt.deallocate_inputs(inputs)
+    valid = (torch.arange(n)[None, :] >= nfm[:, None])[..., None].expand(-1, -1, 1280)
+    check_pcc(f"packed vs unpacked V={variates}", outs[0], outs[1], 0.9999, where=valid)
+    assert (outs[0][valid] - outs[1][valid]).abs().max() < 0.25
+
+
+def test_var_attention_packed_mask_control(device):
+    """Positive control for ``test_var_attention_packed``: with the block-diagonal mask dropped (items attend
+    across each other), the packed output must differ clearly from the unpacked one."""
+    import ttnn
+
+    from models.experimental.timesfm3_forecast.tt.common import upload
+
+    tt = _model(device)
+    variates, items, n = 8, 8, 40
+    nfm = torch.zeros(items * variates, dtype=torch.long)
+    inputs = _inputs(tt, nfm, variates, n)
+    h1 = torch.randn(items * variates, n, 1280, generator=torch.Generator().manual_seed(5)) * 4.0
+    outs, saved, saved_mask = [], tt.pack_variates, tt._block_mask
+    try:
+        for packed in (False, True):
+            tt.pack_variates = packed
+            if packed:
+                tt._block_mask = lambda v, tiles: upload(tt.device, torch.zeros(tiles, 1, 32, 32))
+            x = _upload_rows(tt, h1, inputs)
+            out = tt.var_attention(0, x, inputs)
+            outs.append(tt.rows_to_torch(out, inputs))
+            for t in (x, out):
+                ttnn.deallocate(t)
+    finally:
+        tt.pack_variates, tt._block_mask = saved, saved_mask
+        tt.deallocate_inputs(inputs)
+    diff = (outs[0] - outs[1]).abs().max().item()
+    print(f"[control] packed without mask: max |diff| {diff:.4f}")
+    assert diff > 1.0
