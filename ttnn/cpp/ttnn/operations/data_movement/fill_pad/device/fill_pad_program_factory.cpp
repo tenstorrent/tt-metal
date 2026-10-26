@@ -9,6 +9,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"

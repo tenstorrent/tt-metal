@@ -50,7 +50,7 @@ ALWI void pack_init(LLKOperand<Format, Shape> /*out*/) {
  * | Template | Shape     | Output tile geometry (deduced from LLKOperand)         | TensorShape |         | True |
  * | Function | out       | The output L1 operand (format+shape+buffer base)      | LLKOperand  |         | True |
  * | Function | itile     | Index of the output tile within `out`, relative to its base | uint32_t | N/A   | True |
- * | Function | ifrom_dst | Tile index in the DST register                         | uint32_t   | 0 to 15 | True |
+ * | Function | ifrom_dst | Tile index in the DST register                         | uint32_t   | Must be less than the acquired size of DST REG | True |
  */
 // clang-format on
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, DataFormat Format, TensorShape Shape>
@@ -81,8 +81,8 @@ ALWI void pack_tile(LLKOperand<Format, Shape> out, std::uint32_t itile, std::uin
  * | Template   | Format        | Output buffer L1 data format (deduced from LLKOperand)     | DataFormat  |                                      | True     |
  * | Template   | Shape         | Output tile geometry (deduced from LLKOperand)            | TensorShape |                                      | True     |
  * | Function   | out           | The output L1 operand (format+shape+block base address)   | LLKOperand  |                                      | True     |
- * | Function   | ifrom_dst     | Index of the first tile in the DST register               | uint32_t    | 0 to 15                              | True     |
- * | Function   | ntiles        | Number of tiles to pack from DST to L1                     | uint32_t    | ifrom_dst + ntiles <= DST size (16) | True     |
+ * | Function   | ifrom_dst     | Index of the first tile in the DST register               | uint32_t    | Must be less than the acquired size of DST REG | True     |
+ * | Function   | ntiles        | Number of tiles to pack from DST to L1                     | uint32_t    | ifrom_dst + ntiles <= acquired size of DST REG | True     |
  * | Function   | start_out_tile| Starting output tile index (offset into the block base)   | uint32_t    | N/A                                  | False    |
  */
 // clang-format on

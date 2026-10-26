@@ -36,7 +36,6 @@ def test_layer0_deltanet_prefill_block(device, setup):
     x = torch.randn(B, T, args.dim, dtype=torch.bfloat16)
 
     block = Qwen36DecoderLayer(device, args, sd, layer_num=0)
-    block.attention.reset_state(B)
 
     x_t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     out = ttnn.to_torch(block.forward(x_t, mode="prefill", chunk_size=GDN_PREFILL_CHUNK))
@@ -60,7 +59,6 @@ def test_layer0_deltanet_decode(device, setup):
     device.enable_program_cache()
 
     layer = Qwen36DecoderLayer(device, args, sd, layer_num=0)
-    layer.attention.reset_state(1)
 
     # Prefill to establish GDN recurrent + conv state (the state decode continues from).
     x_pf = torch.randn(1, GDN_PREFILL_CHUNK, args.dim, dtype=torch.bfloat16)

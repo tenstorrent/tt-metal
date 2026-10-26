@@ -1,0 +1,6 @@
+# Native CUDA capture only: use a separate CUDA environment, not TT CI.
+-r requirements.txt
+torch==2.10.0
+torchaudio==2.10.0
+soundfile>=0.12,<1
+voxcpm @ git+https://github.com/OpenBMB/VoxCPM.git@f0c787f0937dc1c9a8f4f64d9a332d9c5da2e629

@@ -10,7 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 #include <tt-metalium/work_split.hpp>
 

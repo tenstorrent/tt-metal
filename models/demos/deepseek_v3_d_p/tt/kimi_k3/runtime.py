@@ -11,8 +11,9 @@
 * the KDA carries must be zeroed at the head of a request. A carry summarises the whole prefix
   behind it, so leaving the previous request's carry in place is not a small error — it conditions
   every token of the new one on text it never saw; and
-* both chunk bounds must be 32-token aligned for KDA. Host bounds are checked before execution;
-  device-only trace metadata must satisfy the same contract on every replay.
+* the chunk start must be 32-token aligned for KDA; the end may be any real length. Host bounds
+  are checked before execution; device-only trace metadata must satisfy the same contract on
+  every replay.
 """
 
 from __future__ import annotations
@@ -47,6 +48,38 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         same boundary and disagreeing shows up as a rendezvous failure, not a wrong answer.
         """
         return 1 + self.config.first_layer_idx // KimiK3Config.ATTN_RES_BLOCK_SIZE
+
+    def _pack_activation(self, hidden, partial):
+        """The drafter partial rides the handoff as one more plane after the AttnRes ones: the payload is
+        already [1, planes, rows, H], and widening it to 2H would double every sealed plane too."""
+        packed = ttnn.concat([hidden, partial], dim=1)
+        ttnn.deallocate(hidden)
+        ttnn.deallocate(partial)
+        return packed
+
+    def _unpack_activation(self, packed):
+        """Inverse of `_pack_activation`: every plane but the last is the AttnRes payload, the last is the partial."""
+        hidden_planes = packed.shape[1] - 1
+        hidden = ttnn.slice(packed, [0, 0, 0, 0], [1, hidden_planes, packed.shape[2], packed.shape[3]])
+        partial = ttnn.slice(packed, [0, hidden_planes, 0, 0], list(packed.shape))
+        return hidden, partial
+
+    def make_placeholder_activation(self, dflash_packed=True):
+        """Under DSpark the packed form is built the way it is sent: the AttnRes planes plus the partial's."""
+        if not (self.config.dflash_enabled and dflash_packed):
+            return super().make_placeholder_activation(dflash_packed)
+        return self._pack_activation(super().make_placeholder_activation(False), self._make_partial_placeholder())
+
+    def _make_partial_placeholder(self):
+        """One plane at the hidden's width: the partial alone, without the AttnRes planes beside it."""
+        hidden = super().make_placeholder_activation(dflash_packed=False)
+        partial = ttnn.slice(hidden, [0, 0, 0, 0], [1, 1, hidden.shape[2], hidden.shape[3]])
+        ttnn.deallocate(hidden)
+        return partial
+
+    def _dflash_tap_layer(self, target_layer_idx: int) -> int:
+        """DSpark taps target t at layer t+1's attention input, so tap 23 belongs to the rank starting at 24."""
+        return target_layer_idx + 1
 
     def _my_mla_layer_ids(self):
         """The GLOBAL model layers in this rank's slice that own a KV slab."""
@@ -86,7 +119,8 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         carries.bind_slabs(slabs)
 
     def kv_migration_stages(self, kv_caches, first_layer_idx=None, num_my_layers=None):
-        """Three stages, always, in table-config order: kvpe, KDA recurrent, KDA convolution.
+        """Three stages, always, in table-config order: kvpe, KDA recurrent, KDA convolution. Under DSpark
+        the drafter's K and V follow, as in the shared runtime.
 
         Kimi-K3 writes a KV slab on 24 of its 93 layers, so a 12-layer rank owns 3. The shared
         implementation reports the rank's LAYER span, which disagrees with the cache it describes
@@ -112,9 +146,6 @@ class TtKimiK3Runtime(TtPrefillRuntime):
 
         if kv_caches.index is not None:
             raise RuntimeError("Kimi-K3 has no DSA index cache; a merged table here is unexpected")
-        if self.config.dflash_enabled:
-            raise RuntimeError("Kimi-K3 declares its own three migration stages; DFlash stages are not supported")
-
         # An empty stage still sits at this rank's slot offset: the merged table requires the gathered
         # stages to tile [0, total), and one at 0 would break that on any later rank.
         null_kda = KvCacheStage(0, first_kda, 0)
@@ -138,7 +169,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         if kda is None:
             if my_kda:
                 raise RuntimeError(f"no KDA state slabs allocated but layers {my_kda} are KDA layers")
-            return [kvpe_stage, null_kda, null_kda]
+            return [kvpe_stage, null_kda, null_kda, *self._dflash_stages(last)]
         if tuple(kda.layer_ids) != tuple(my_kda):
             raise RuntimeError(f"KDA slabs cover layers {kda.layer_ids} but this stage owns {my_kda}")
         if kda.num_slots != self.config.num_users:
@@ -147,7 +178,13 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             kvpe_stage,
             KvCacheStage(int(kda.recurrent.buffer_address()), first_kda, len(my_kda)),
             KvCacheStage(int(kda.convolution.buffer_address()), first_kda, len(my_kda)),
+            *self._dflash_stages(last),
         ]
+
+    def _dflash_stages(self, end_layer: int):
+        """The drafter's K and V after the three stages. Their rows continue the model's layer axis (93..97 on
+        the tail), where the drafter's layer completions are numbered too."""
+        return self._dflash_migration_stages(end_layer) if self.config.dflash_enabled else []
 
     def kv_table_layer_rows(self, stage_layouts):
         """Publish slab i at its model layer, so table rows stay on the layer axis.
@@ -205,6 +242,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
                 )
                 for stage in self.kv_migration_stages(kv_caches, first_layer_idx, num_my_layers)
             ]
+        stage_layouts, dflash_caches, dflash_spec, dflash_first_layer = self._dflash_table_args(stage_layouts, 3)
         if len(stage_layouts) != 3:
             raise RuntimeError(
                 f"Kimi-K3 declares three migration stages (kvpe, KDA recurrent, KDA convolution) but "
@@ -256,21 +294,10 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             stage_layouts=[kvpe_layout],
             layer_rows=self.kv_table_layer_rows([kvpe_layout]),
             kda=kda,
+            dflash_caches=dflash_caches,
+            dflash_spec=dflash_spec,
+            dflash_first_layer=dflash_first_layer,
         )
-
-    def warmup_ack_count(self) -> int:
-        """One record per KV-WRITING layer, not per layer.
-
-        `capture_trace()`'s warm pass fires the ack from `zero_pad_and_ack`, which a block only calls
-        when its attention wrote a KV slab. Kimi-K3 is hybrid: a 24-layer rank owns 6 MLA layers and
-        69 of the model's 93 layers are KDA and ack nothing. The shared implementation reports the
-        rank's LAYER count, so the runner's drain loop asked the FIFO for 24 records when 6 exist and
-        blocked on the seventh -- every traced 4-rank run hung after capture, before the request loop,
-        spinning at ~76% CPU with no log line after "layer-completion routing up".
-        """
-        if not self.config.use_trace or self._trace_d2h_service is None:
-            return 0
-        return len(self._my_mla_layer_ids())
 
     def prefill_chunk(self, *args, **kwargs):
         """Reset the KDA carries at the start of a request, then defer to the shared runtime.
@@ -287,7 +314,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         bound = inspect.signature(TtPrefillRuntime.prefill_chunk).bind_partial(self, *args, **kwargs)
         actual_start = bound.arguments.get("actual_start")
         # Validate before resetting carries or replaying a trace. Device-only
-        # metadata must satisfy the same aligned, nonempty-interval contract.
+        # metadata must satisfy the same aligned-start, nonempty-interval contract.
         validate_kda_bounds(actual_start, bound.arguments.get("actual_end"))
         if actual_start == 0:
             states = getattr(self.model, "kda_states", None)

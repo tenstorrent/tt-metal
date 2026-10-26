@@ -8,6 +8,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import parametrize
 from quasar.test_sfpu_exp_parallel_matmul_quasar import (
+    ALL_SFPU_SRCS_IMPLS,
     SFPU_UNARY_FORMATS,
     generate_parallel_matmul_exp_combinations,
 )
@@ -19,8 +20,8 @@ from quasar.test_sfpu_exp_parallel_matmul_quasar import (
 @pytest.mark.perf
 @pytest.mark.quasar
 @parametrize(
-    format_dest_acc_sync_implied_math=generate_parallel_matmul_exp_combinations(
-        SFPU_UNARY_FORMATS, is_perf=True
+    format_dest_acc_sync=generate_parallel_matmul_exp_combinations(
+        SFPU_UNARY_FORMATS, is_perf=True, impls=ALL_SFPU_SRCS_IMPLS
     ),
     run_types=PERF_RUN_TYPES_QUASAR_4_TRISC,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
@@ -28,13 +29,13 @@ from quasar.test_sfpu_exp_parallel_matmul_quasar import (
 )
 def test_perf_sfpu_exp_parallel_matmul_quasar(
     perf_report,
-    format_dest_acc_sync_implied_math,
+    format_dest_acc_sync,
     run_types,
     loop_factor,
     is_perf,
 ):
     run_sfpu_exp_parallel_matmul(
-        [format_dest_acc_sync_implied_math],
+        [format_dest_acc_sync],
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

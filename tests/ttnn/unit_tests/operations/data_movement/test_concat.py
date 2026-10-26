@@ -11,7 +11,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
-from models.common.utility_functions import is_watcher_enabled, is_n300
+from tt_py_test_utils_common.utility_functions import is_watcher_enabled, is_n300
 
 torch.manual_seed(0)
 
@@ -598,28 +598,62 @@ def test_concat_1d(device, layout, dim, input_shapes):
     assert_equal(torch_output_tensor, output)
 
 
-@pytest.mark.parametrize("num_inputs", [47, 48, 100])
-def test_concat_many_inputs(device, num_inputs):
-    """
-    Regression test for concat hang with many tiled inputs.
-    Fixed by commit 85d11279d27 (re-calculated batch size).
-    Previously hung at 48+ inputs with ETH dispatch on N300.
-    """
-    torch_input = torch.zeros((1,), dtype=torch.bfloat16)
-    torch_expected = torch.concat([torch_input] * num_inputs, dim=0)
+TWO_CORE_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
 
-    input_tensor = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+
+@pytest.mark.parametrize(
+    "num_inputs, shapes, dim, layout, sub_core_grids",
+    [
+        # 47 is the most inputs one concat kernel takes; 48 is the first count that is batched.
+        (47, [(1,)], 0, ttnn.TILE_LAYOUT, None),
+        (48, [(1,)], 0, ttnn.TILE_LAYOUT, None),
+        (100, [(1,)], 0, ttnn.TILE_LAYOUT, None),
+        # Row-major reader. Split over the full grid, cores start mid-block and cross input boundaries.
+        (33, [(1, 1, 8, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, None),
+        (119, [(1, 1, 8, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, None),
+        # Each core reads more than one output block, so it wraps from the last input back to the first
+        # after starting mid-block. Inputs cycle through the shapes, so they have different page counts.
+        (33, [(1, 131, 32, 32), (1, 131, 64, 32), (1, 131, 96, 32)], 2, ttnn.TILE_LAYOUT, None),
+        (33, [(1, 131, 1, 64), (1, 131, 2, 64), (1, 131, 3, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, None),
+        (33, [(1, 7, 32, 32), (1, 7, 64, 32), (1, 7, 96, 32)], 2, ttnn.TILE_LAYOUT, TWO_CORE_GRID),
+        (33, [(1, 7, 1, 64), (1, 7, 2, 64), (1, 7, 3, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, TWO_CORE_GRID),
+        # Every other input is empty along dim, so the reader has to step past 0-page blocks.
+        (33, [(1, 1, 8, 64), (1, 1, 0, 64)], 2, ttnn.ROW_MAJOR_LAYOUT, None),
+    ],
+)
+def test_concat_many_inputs(device, num_inputs, shapes, dim, layout, sub_core_grids):
+    """
+    Regression test for concat with many interleaved inputs.
+    TILE: hung at 48+ inputs with ETH dispatch on N300; fixed by commit 85d11279d27 (re-calculated batch size).
+    TILE and ROW_MAJOR: above 32 inputs the readers' per-input stack frame overwrote TLS on Quasar
+    (abort at 33-36 inputs, hang at 40+), #59906.
+    Every input is distinct, so a reader that reads the wrong input or page shows up as a mismatch.
+    """
+    torch_inputs = [
+        torch.rand(shapes[i % len(shapes)], dtype=torch.float32).to(torch.bfloat16) for i in range(num_inputs)
+    ]
+    torch_expected = torch.concat(torch_inputs, dim=dim)
+
+    input_tensors = []
+    for torch_input in torch_inputs:
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if layout == ttnn.TILE_LAYOUT:
+            tiled_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(input_tensor)
+            input_tensor = tiled_tensor
+        input_tensors.append(input_tensor)
+
+    output_tensor = ttnn.concat(
+        input_tensors, dim=dim, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_core_grids=sub_core_grids
     )
-    tiled_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(input_tensor)
-
-    output_tensor = ttnn.concat([tiled_tensor] * num_inputs, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(tiled_tensor)
+    for input_tensor in input_tensors:
+        ttnn.deallocate(input_tensor)
 
     output_host = ttnn.to_torch(output_tensor)
     assert_equal(torch_expected, output_host)
@@ -743,6 +777,32 @@ def test_concat_fp32_last_dim_mantissa_not_truncated(device, width, layout):
 
     tt_a = ttnn.from_torch(torch_input, layout=layout, device=device, dtype=ttnn.float32)
     tt_b = ttnn.from_torch(torch_input, layout=layout, device=device, dtype=ttnn.float32)
+    tt_output = ttnn.concat([tt_a, tt_b], dim=3)
+
+    assert tt_output.dtype == ttnn.float32
+    assert_equal(torch_output, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize("num_cores", [1, 2])
+def test_sharded_concat_height_fp32_mantissa_not_truncated(device, num_cores):
+    """fp32 width concat of HEIGHT_SHARDED tiled inputs must be bitwise exact.
+
+    This path transposes every tile in the compute kernel; unpacking through SrcA would
+    truncate each element to TF32.
+    """
+    shape = (1, 1, 32 * num_cores, 64)
+    numel = shape[2] * shape[3]
+    k = torch.arange(numel, dtype=torch.int64) % 23 + 1
+    torch_a = (1.0 + torch.pow(2.0, -k.to(torch.float64))).to(torch.float32).reshape(shape)
+    torch_b = -torch_a
+    torch_output = torch.cat([torch_a, torch_b], dim=3)
+
+    grid = ttnn.CoreGrid(y=1, x=num_cores)
+    input_mem = ttnn.create_sharded_memory_config(shape, grid, ttnn.ShardStrategy.HEIGHT)
+    tt_a, tt_b = (
+        ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32, memory_config=input_mem)
+        for t in (torch_a, torch_b)
+    )
     tt_output = ttnn.concat([tt_a, tt_b], dim=3)
 
     assert tt_output.dtype == ttnn.float32
@@ -1163,3 +1223,123 @@ def test_sharded_concat_height_interleaves_leading_dims(device, strategy, shape,
         f"column 0 of each flattened row:\n  got     : {got_col0}\n  expected: {expected_col0}"
     )
     assert_equal(torch_out, ttnn_out)
+
+
+def _noc_max_burst_bytes():
+    """NOC_MAX_BURST_SIZE for the running arch: 256 words x the NoC word width."""
+    return {"blackhole": 16384, "quasar": 65536}.get(ttnn.get_arch_name(), 8192)
+
+
+def _row_width(spec, element_size):
+    """Shard width in elements for a row at / just over / well over the one-packet limit.
+
+    Widths step by a whole 32 byte unit: the dataflow buffer rounds its entry size up to 32 B
+    while the tensor allocates the unrounded row, so a row that is only 16 B aligned makes the
+    buffer larger than the shard it borrows. "double_over" is sized so that even after dividing
+    by two groups the row is still over the limit.
+    """
+    at_limit = _noc_max_burst_bytes() // element_size
+    step = 32 // element_size
+    return {"at": at_limit, "over": at_limit + step, "double_over": 2 * (at_limit + step)}[spec]
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
+@pytest.mark.parametrize(
+    "spec_0, spec_1, groups, ragged_height",
+    (
+        ("at", "at", 1, False),
+        ("over", "over", 1, False),
+        ("over", "at", 1, False),
+        ("at", "over", 1, False),
+        ("over", "over", 2, False),
+        ("double_over", "double_over", 2, False),
+        ("over", "over", 1, True),
+    ),
+    ids=(
+        "at_limit_control",
+        "both_over",
+        "first_over",
+        "second_over",
+        "groups2_row_over_group_within",
+        "groups2_group_over",
+        "ragged_height_last_core_short",
+    ),
+)
+def test_height_sharded_width_concat_row_over_noc_burst(device, dtype, spec_0, spec_1, groups, ragged_height):
+    """A shard row longer than NOC_MAX_BURST_SIZE used to go out as one oversized packet and hang.
+
+    ConcatS2SRMProgramFactory's kernel asked for one-packet mode unconditionally by passing
+    NOC_MAX_BURST_SIZE as the max_page_size template argument. Passing the row instead keeps the
+    same instantiation when it fits and takes the splitting path when it does not.
+
+    "at_limit_control" sits exactly on the limit and must keep the one-packet path.
+    """
+    element_size = 2 if dtype == ttnn.bfloat16 else 4
+    width_0 = _row_width(spec_0, element_size)
+    width_1 = _row_width(spec_1, element_size)
+
+    num_cores, shard_h = 8, 4
+    # A height that is not a multiple of the shard height leaves the last core short, which is
+    # what selects the factory's separate "_last" kernel pair.
+    height = shard_h * num_cores - 2 if ragged_height else shard_h * num_cores
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+
+    def mem(width):
+        return ttnn.create_sharded_memory_config(
+            (shard_h, width),
+            core_grid=grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+    torch_inputs = [random_torch_tensor(dtype, (1, 1, height, w)) for w in (width_0, width_1)]
+    expected = ttnn.concat.golden_function(torch_inputs, 3, groups)
+    tt_inputs = [
+        ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem(w))
+        for t, w in zip(torch_inputs, (width_0, width_1))
+    ]
+
+    result = ttnn.concat(tt_inputs, dim=3, memory_config=mem(width_0 + width_1), groups=groups)
+    assert_equal(expected, ttnn.to_torch(result))
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
+def test_width_sharded_height_concat_page_over_noc_burst(device, dtype):
+    """Drive ConcatS2SMultiProgramFactory's page over NOC_MAX_BURST_SIZE.
+
+    That factory's page is the gcd of the aligned stick sizes, so two equal rows push it to the
+    row itself. At 8224 B it clears the 8192 B limit on Wormhole and the kernel takes its
+    splitting path. Nothing else in the suite reaches that path: every other sharded case has a
+    page well under the limit, so the branch would otherwise never run.
+
+    Checked by deliberately halving the read in that branch, which turns this case wrong and
+    leaves the rest of the suite passing.
+
+    Sized in elements, not bytes, to work around a known defect: the factory's gcd takes the
+    output's stick as a count of elements and the inputs' as bytes, so the page follows the
+    element count whatever the dtype. Tracked in #60710; when it is fixed this needs resizing
+    to bytes / element_size to keep crossing the limit.
+    """
+    # Sized in elements because of the unit mismatch noted above, not because that is correct.
+    shard_w = _noc_max_burst_bytes() + 32
+    num_cores, height = 4, 2
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+
+    def mem(h):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(grid, (h, shard_w), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    width = shard_w * num_cores
+    torch_inputs = [random_torch_tensor(dtype, (1, 1, height, width)) for _ in range(2)]
+    expected = torch.cat(torch_inputs, dim=2)
+    tt_inputs = [
+        ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem(height))
+        for t in torch_inputs
+    ]
+
+    result = ttnn.concat(tt_inputs, dim=2, memory_config=mem(2 * height))
+    assert_equal(expected, ttnn.to_torch(result))

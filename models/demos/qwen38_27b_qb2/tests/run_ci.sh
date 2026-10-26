@@ -51,7 +51,8 @@ export MODEL_WEIGHTS_DIR
 MODEL_WEIGHTS_DIR=$(python -c 'from models.demos.qwen38_27b_qb2.tt.model import checkpoint_path; print(checkpoint_path())')
 python -m pytest "$model_dir/tests/unit" "$model_dir/tests/vllm" "$model_dir/tests/test_benchmark.py" \
     --timeout 300 --junitxml "$results/host.xml"
-python -m pytest "$model_dir/tests/test_decode_conv.py" --timeout 300 --junitxml "$results/device.xml"
+python -m pytest "$model_dir/tests/test_decode_conv.py" "$model_dir/tests/test_cache_initialization.py" \
+    --timeout 300 --junitxml "$results/device.xml"
 
 export QWEN_DECODE_BUCKETS=1 QWEN_COMPACT_DECODE_RESIDUAL=1 QWEN_COMPACT_DECODE_MLP=1
 export QWEN_BATCHED_DECODE_ROPE=1 QWEN_COMPACT_DECODE_ATTENTION=1
@@ -95,9 +96,14 @@ for capacity in 1 8 16; do
     server_pid=$!
     wait_started=$SECONDS
     while ! curl --max-time 2 -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; do
-        kill -0 "$server_pid"
+        if ! kill -0 "$server_pid" 2>/dev/null; then
+            echo "Qwen3.8 server exited before readiness at capacity=$capacity" >&2
+            tail -n 200 "$logs/qwen38_server_$capacity.log" >&2
+            exit 1
+        fi
         if (( SECONDS - wait_started > 1200 )); then
-            echo "Qwen3.8 readiness deadline exceeded at capacity=$capacity"
+            echo "Qwen3.8 readiness deadline exceeded at capacity=$capacity" >&2
+            tail -n 200 "$logs/qwen38_server_$capacity.log" >&2
             exit 1
         fi
         sleep 4

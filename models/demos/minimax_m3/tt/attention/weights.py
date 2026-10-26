@@ -7,6 +7,7 @@ import torch
 
 import ttnn
 from models.demos.minimax_m3.config import MeshConfig
+from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.substate import substate
 
@@ -169,6 +170,7 @@ def load_attention_weights(
         mesh_mapper=col_mesh_mapper,
         cache_file_name=get_cache_file_name(tensor_cache_path, "wqkv"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_dump_mode=CACHE_DUMP_MODE,
     )
 
     o_proj_tt = ttnn.as_tensor(
@@ -179,6 +181,7 @@ def load_attention_weights(
         mesh_mapper=row_mesh_mapper,
         cache_file_name=get_cache_file_name(tensor_cache_path, f"o_proj{o_proj_cache_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_dump_mode=CACHE_DUMP_MODE,
     )
 
     # QK-norm gains (M3 per-head): a single [head_dim] gain replicated across all devices
@@ -194,6 +197,7 @@ def load_attention_weights(
             mesh_mapper=replicate_mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, "q_norm"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
         if build_qk_norm
         else None
@@ -207,6 +211,7 @@ def load_attention_weights(
             mesh_mapper=replicate_mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, "k_norm"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
         if build_qk_norm
         else None
@@ -226,6 +231,7 @@ def load_attention_weights(
             mesh_mapper=mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, name),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
 
     index_q_proj_tt = _as_index(index_q_proj_w, col_mesh_mapper, ttnn.TILE_LAYOUT, "index_q_proj", weight_dtype)

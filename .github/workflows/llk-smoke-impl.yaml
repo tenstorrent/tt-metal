@@ -52,7 +52,7 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.hardware-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_pr_gate_tests.yaml
     steps:
@@ -76,6 +76,26 @@ jobs:
           sku-config: ./.github/sku_config.yaml
           event: ${{ github.event_name }}
           sku-allowlist: ${{ inputs.sku-allowlist }}
+
+      # Quasar shards in the same yaml run on ttsim (sim_quasar_xl) from
+      # llk-ttsim-pr-gate-impl.yaml. This job mounts /dev/tenstorrent.
+      - name: Drop simulator legs
+        id: hardware-matrix
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+        run: |
+          python3 - << 'PY'
+          import json
+          import os
+
+          rows = json.loads(os.environ["MATRIX"] or "[]")
+          kept = [row for row in rows if not str(row.get("sku", "")).startswith("sim_")]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write("matrix<<EOF\n")
+              handle.write(json.dumps(kept))
+              handle.write("\nEOF\n")
+          print(f"Hardware legs: {len(kept)} (dropped {len(rows) - len(kept)} simulator legs)")
+          PY
 
   llk-smoke-exec:
     needs: load-test-matrix

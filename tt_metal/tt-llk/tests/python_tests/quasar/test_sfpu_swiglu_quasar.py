@@ -25,7 +25,6 @@ match.
 """
 
 from enum import Enum
-from typing import List
 
 import pytest
 import torch
@@ -33,7 +32,6 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
-    ImpliedMathFormat,
     MathOperation,
     UnpackerEngine,
     format_dict,
@@ -52,7 +50,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     MATH_OP,
     NUM_FACES,
     TEST_FACE_DIMS,
@@ -248,19 +245,6 @@ def _prepare_swiglu_inputs(
     return gate.to(torch_dtype), up.to(torch_dtype)
 
 
-def _generate_sfpu_swiglu_combinations(formats_list: List[InputOutputFormat]):
-    """Build the resolved format/path and implied-math parameter product."""
-    combinations = []
-
-    for format_variant in generate_quasar_sfpu_format_variants(
-        MathOperation.SfpuSwiGLU, formats_list
-    ):
-        for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-            combinations.append((format_variant, implied_math_format))
-
-    return combinations
-
-
 # Float-only per the planner spec (swiglu needs float arithmetic: clamp,
 # sigmoid via SFPNONLINEAR EXP/RECIP, alpha/clamp_limit float constants).
 # Tf32 is supported by the kernel but the test framework's format_dict in
@@ -276,12 +260,12 @@ SFPU_SWIGLU_FORMATS = input_output_formats(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_implied_math=_generate_sfpu_swiglu_combinations(
-        SFPU_SWIGLU_FORMATS
+    format_variant=generate_quasar_sfpu_format_variants(
+        MathOperation.SfpuSwiGLU, SFPU_SWIGLU_FORMATS
     ),
     distribution=runtime(list(_StimulusDistribution)),
 )
-def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
+def test_sfpu_swiglu_quasar(format_variant, distribution):
     """
     Swiglu SFPU kernel end-to-end test.
 
@@ -290,7 +274,6 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
     next 1024 → up. The first ``len(_SWIGLU_CORNER_CASES)`` lanes are
     deterministic boundary cases; the rest is sampled from ``distribution``.
     """
-    format_variant, implied_math_format = formats_dest_acc_implied_math
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
@@ -326,7 +309,6 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
         formats,
         templates=[
             MATH_OP(mathop=MathOperation.SfpuSwiGLU),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
@@ -421,7 +403,6 @@ def test_sfpu_swiglu_nan_inf_quasar():
     """
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     dest_acc = DestAccumulation.Yes
-    implied_math_format = ImpliedMathFormat.No
 
     torch.manual_seed(42)
 
@@ -463,7 +444,6 @@ def test_sfpu_swiglu_nan_inf_quasar():
         formats,
         templates=[
             MATH_OP(mathop=MathOperation.SfpuSwiGLU),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA

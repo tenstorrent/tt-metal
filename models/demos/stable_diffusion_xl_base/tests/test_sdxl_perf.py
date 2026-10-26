@@ -108,12 +108,14 @@ def test_refiner_unet(
 # Format: {test_id: {"wormhole": perf_ns, "blackhole": perf_ns}}
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
-        "wormhole": 191_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        # bh_p150 run 2026-09-24 (73.75M) on #55698; previous target from scheduled runs 2026-09-19..09-24 (74.85M..74.96M)
-        "blackhole": 73_753_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 3 scheduled wh_n150 runs 2026-10-10..10-12 (187.29M..187.60M); previous target 191.20M
+        "wormhole": 187_442_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        # mean of 3 scheduled bh_p150 runs 2026-10-10..10-12 (70.70M..70.74M); previous target 73.75M (2026-09-24, #55698)
+        "blackhole": 70_724_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        "wormhole": 77_800_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,  # Measured: ~77.7–77.9 ms
+        # mean of 3 scheduled wh_n150 runs 2026-10-10..10-12 (73.25M..73.35M); previous target 77.80M
+        "wormhole": 73_287_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {
@@ -127,8 +129,9 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
-        # bh_p150 run 2026-09-25 (260.30M) on #55698; previous target 267.50M
-        "blackhole": 260_304_000,
+        # mean of bh_p150 runs 2026-10-17..19 (254.07M..254.62M) after #60876 (padded_slice RM reader no longer
+        # over-reads the input row); previous target 260.30M (2026-09-25, #55698)
+        "blackhole": 254_384_000,
     },
     "vae_decode_512x512": {
         "wormhole": 167_473_541,
@@ -145,12 +148,17 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "clip_encoder_1": {
-        "wormhole": 23_745_000,  # Average of 3 main CI runs (Jun 22, 2026); transformers 5.10.2 bump reduced CLIP encoder dispatch
-        "blackhole": 11_720_533,
+        # Mean of 3 main CI runs 2026-10-20..22 (19.25M-19.30M). #57208 runs tt_dit Linear inputs of up to 128 rows as
+        # a 1D mcast matmul; previous target 23.75M.
+        "wormhole": 19_270_000,
+        # Mean of bh_p150 main CI runs 2026-10-20..21 (9.465M, 9.469M) after #57208; previous target 11.72M.
+        "blackhole": 9_467_000,
     },
     "clip_encoder_2": {
-        "wormhole": 88_529_000,  # Average of 3 main CI runs (Jun 22, 2026)
-        "blackhole": 42_895_094,
+        # Mean of 3 main CI runs 2026-10-20..22 (63.57M-63.80M) after #57208; previous target 88.53M.
+        "wormhole": 63_681_000,
+        # Mean of bh_p150 main CI runs 2026-10-20..21 (35.22M, 35.24M) after #57208; previous target 42.90M.
+        "blackhole": 35_231_000,
     },
 }
 

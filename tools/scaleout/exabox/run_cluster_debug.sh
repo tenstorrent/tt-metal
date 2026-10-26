@@ -227,6 +227,8 @@ fi
 
 FIRST_HOST="${HOST_LIST[0]}"
 if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+    # Pinned with btl_tcp_if_include, which Open MPI refuses alongside an inherited one.
+    unset OMPI_MCA_btl_tcp_if_include OMPI_MCA_btl_tcp_if_exclude
     # Given an interface, only check it exists here. The usual probe mpiruns to the first
     # host, and this script is called after the failures that leave a host down; the
     # pre-flight below handles reachability host by host.
@@ -234,6 +236,8 @@ if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
         echo "Error: MPI interface '$MPI_IF' does not exist on this host" >&2
         exit 1
     fi
+elif mpi_if_set_by_env; then
+    MPI_IF=""
 else
     MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
     if [[ -z "$MPI_IF" ]]; then
@@ -241,6 +245,9 @@ else
         exit 1
     fi
 fi
+
+MPI_IF_ARGS=()
+[[ -n "$MPI_IF" ]] && MPI_IF_ARGS=(--mca btl_tcp_if_include "$MPI_IF")
 
 # The default embeds the cluster name, not the host list as run_validation.sh does: sixteen
 # hostnames exceed the 255-character filename limit.
@@ -315,7 +322,7 @@ else
     echo "QSFP cage sweep: over the BMC API at ${TT_BMC_API_URL:-<unset: set TT_BMC_API_URL, or pass --use-ipmi>}"
 fi
 echo "Collection timeout: $COLLECT_TIMEOUT"
-echo "MPI interface: $MPI_IF"
+echo "MPI interface: ${MPI_IF:-set by the MPI environment}"
 if [[ ${#MPI_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
 fi
@@ -431,7 +438,7 @@ echo \"PREFLIGHT|\$h|\$bad|\$ipmi|\$rootbad|\$notool\""
 preflight_mpirun() {
     run_stage timeout --signal=TERM --kill-after=15s 90s \
         mpirun --host "$HOSTS" \
-            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_IF_ARGS[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
             bash -c "$PREFLIGHT_CMD" > "$PREFLIGHT_FILE"
 }
@@ -612,7 +619,7 @@ COLLECT_RESULT_FILE="$OUTPUT_DIR/.collect_results_$$"
 
 run_stage timeout --signal=TERM --kill-after=30s "$COLLECT_TIMEOUT" \
     mpirun --host "$HOSTS" \
-        --mca btl_tcp_if_include "$MPI_IF" \
+        "${MPI_IF_ARGS[@]}" \
         "${MPI_ENV_ARGS[@]}" \
         "${MPI_EXTRA_ARGS[@]}" \
         bash -c "$COLLECT_CMD" > "$COLLECT_RESULT_FILE"

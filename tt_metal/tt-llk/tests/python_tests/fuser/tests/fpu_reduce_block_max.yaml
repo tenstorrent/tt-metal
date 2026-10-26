@@ -1,20 +1,33 @@
-# Block max reduce. Source B is all ones as the identity scale.
+# Block max reduce with full and 16x32 tiny tiles. Source B is the identity scale.
 
 supported_archs: ["wormhole", "blackhole"]
 
-dest_acc: true
+dest_acc: false
 
 operands:
   - name: "input_A"
     dims: [256, 256]
-    format: "Float32"
+    format: "Float16_b"
   - name: "input_B"
     dims: [256, 256]
-    format: "Float32"
+    format: "Float16_b"
     stimuli: 1.0
   - name: "reduce_block_max_out"
     dims: [256, 256]
-    format: "Float32"
+    format: "Float16_b"
+  - name: "tiny_input_A"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+  - name: "tiny_input_B"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float16_b"
+    stimuli: 1.0
+  - name: "reduce_block_max_tiny_out"
+    dims: [256, 256]
+    tile_dims: [16, 32]
+    format: "Float16_b"
 
 operations:
   - math:
@@ -28,4 +41,16 @@ operations:
     pack:
       - output: "reduce_block_max_out"
         block_size: [64, 64]
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        block_size: [16, 128]
+        in0: "tiny_input_A"
+        in1: "tiny_input_B"
+        operation: "ReduceBlockMax"
+        unpacker: "ReduceBlockMaxUnpacker"
+        math_fidelity: "HiFi2"
+    pack:
+      - output: "reduce_block_max_tiny_out"
+        block_size: [16, 128]
         packer: "Packer"

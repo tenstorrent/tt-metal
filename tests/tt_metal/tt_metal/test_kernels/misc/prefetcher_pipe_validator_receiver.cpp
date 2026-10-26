@@ -59,7 +59,7 @@ void kernel_main() {
     const uint32_t page_bytes = k_block_w_tiles * slice_bytes;
 
     Scratchpad<uint32_t> scratchpad(scratch::expected);
-    const uint32_t scratch_addr = scratchpad.get_base_address();
+    const auto scratch = scratchpad.local_mem();
 
     Noc noc;
     experimental::PrefetcherPipe pipe(pipe::in);
@@ -78,23 +78,15 @@ void kernel_main() {
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             pipe.wait_front(1);
             const auto entry = pipe.scoped_read_lock(1);
-            const uint32_t page_addr = entry.get_ptr().get_address();
+            const auto page = entry.get_ptr();
 
             // Streaming delivers each receiver's blocks ring-rotated, so FIFO position blk is
             // physical block (lead_block + blk) mod num_blocks; batched delivery is the identity.
             const uint32_t phys_blk = streaming ? ((lead_block + blk) % num_blocks) : blk;
             prefetcher_validator::read_expected_block_tiles(
-                accessor,
-                scratch_addr,
-                tile_bytes,
-                phys_blk,
-                k_block_w_tiles,
-                total_n_tiles,
-                n_col_start,
-                n_per_recv_tiles);
+                accessor, scratch, tile_bytes, phys_blk, k_block_w_tiles, total_n_tiles, n_col_start, n_per_recv_tiles);
 
-            const uint32_t mismatch_word =
-                prefetcher_validator::first_mismatching_word(page_addr, scratch_addr, page_bytes);
+            const uint32_t mismatch_word = prefetcher_validator::first_mismatching_word(page, scratch, page_bytes);
             if (mismatch_word != prefetcher_validator::kNoMismatch) {
                 DPRINT(
                     "PIPE_VALIDATOR_MISMATCH layer={} blk={} bank={} recv_idx={} word={} got=0x{:x} exp=0x{:x}\n",
@@ -103,8 +95,8 @@ void kernel_main() {
                     bank_id,
                     recv_idx_in_bank,
                     mismatch_word,
-                    prefetcher_validator::l1_word(page_addr, mismatch_word),
-                    prefetcher_validator::l1_word(scratch_addr, mismatch_word));
+                    prefetcher_validator::l1_word(page, mismatch_word),
+                    prefetcher_validator::l1_word(scratch, mismatch_word));
                 // Hang so the dispatch timeout surfaces this core.
                 while (true) {
                     ;

@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 // Stand-alone example demonstrating usage of native multi-device TT-Metalium APIs
 // for issuing Read and Write commands to a distributed memory buffer spanning

@@ -1,0 +1,74 @@
+{
+ "dense_us": {
+  "global": {
+   "128": 1001.7,
+   "256": 857.9,
+   "512": 1152.2,
+   "1024": 1623.1,
+   "2048": 3361.4
+  },
+  "sliding": {
+   "128": 895.7,
+   "256": 747.5,
+   "512": 1023.1,
+   "1024": 1462.4,
+   "2048": 2949.3
+  }
+ },
+ "gattn_us": {
+  "1024": [72.0774587000069, 0.02052653437689976],
+  "2048": [177.05121859767132, 0.017643010611832707],
+  "4096": [231.12401433691548, 0.028347243911110306],
+  "8192": [342.47741935483646, 0.0685547859438004],
+  "16384": [1041.4333333333343, 0.125335693359375]
+ },
+ "lattn_us": {
+  "1024": 118.4,
+  "2048": 161.0,
+  "4096": 207.3,
+  "8192": 309.3,
+  "16384": 484.9
+ },
+ "notes": [
+  "Measured 2026-10-08 on bh-glx-110-d07u08 (RevC, 130 W), tree b583043bcf4 with no experiment knobs. Per chunk size: one tracy capture of a global and a sliding layer at chunk index 1 (dense = everything but SDPA), and one host-timed replay of each layer at every chunk index to 256k (global attention slope).",
+  "Dense time per step (60 layers): 54.8 / 46.0 / 62.7 / 89.4 / 181 ms at 128 / 256 / 512 / 1024 / 2048 rows per device. Below 256 rows it gets slower, not faster (the short-slab paths are keyed to chunk 2048). Past 1024 rows it stops getting cheaper per row.",
+  "Global attention per layer is a line in prefix depth per chunk size, [a us, b us per prefix token], fitted by least squares over every depth (the per-depth points are in prefill-docs gemma4/perf_understand/harness/batching/model_data_revc.json) (max residual 69 µs at 1k and 2k, 0.6–0.9 ms at 8k and 16k). Sliding attention is flat with depth and includes the halo.",
+  "Device time at full clock. Long runs sit under the 130 W cap (−3 to −8% at 256k on RevC); the model has no clock term.",
+  "The last chunk of every prompt is padded to the unit (fixed trace shapes)."
+ ],
+ "calibration": {
+  "_note": "Silicon replays of three AgentX slices (bh-glx-110-d06u02, main 836bf0b + the batched prefill runtime, 2026-10-14): device time per step over this model (scale) and host time per step (busy minus trace replay), per scheduler: unit x budget, keyed by unit for one request per step and 'batched' for 2k lanes. The batched entry (bh-glx-120-c05u08, 2026-10-15) is fitted to the 12,837 serving steps of seven AgentX slice replays, each step's lanes rebuilt from the demo's step log: device time per component (dense incl. fixed, global attention per lane count, sliding attention), host time per lane count, and gap_ms, the scheduler's time between steps (admit, plan, log), which the replay's busy time leaves out but the clock does not (the unbatched factors absorb it). The 8192 / 4096 scales were refit on 2026-10-18 for the projection fidelity a server uses (LoFi from 512 rows per device; the 10-14 replays ran every projection at HiFi2): each is the old scale times the LoFi / HiFi2 step-time ratio, measured on bh-glx-120-b08u02 on two of those slices at both fidelities (8192: 0.942, 0.943; 4096: 0.980, 0.980). 2048 and the batched lanes run at HiFi2 either way.",
+  "8192": {
+   "scale": 1.060,
+   "host_ms": 3.3
+  },
+  "4096": {
+   "scale": 1.036,
+   "host_ms": 3.3
+  },
+  "2048": {
+   "scale": 1.009,
+   "host_ms": 3.3
+  },
+  "batched": {
+   "unit": 2048,
+   "scale": {
+    "dense": 0.919,
+    "gattn": {
+     "1": 1.203,
+     "2": 1.194,
+     "3": 1.197,
+     "4": 1.254
+    },
+    "lattn": 1.107
+   },
+   "host_ms": {
+    "1": 4.6,
+    "2": 7.0,
+    "3": 8.1,
+    "4": 8.1
+   },
+   "gap_ms": 0.82
+  }
+ }
+}
