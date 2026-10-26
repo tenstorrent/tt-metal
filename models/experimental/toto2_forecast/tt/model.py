@@ -19,6 +19,7 @@ Host / device split for the benchmarks: ``prepare_inputs`` -> ``upload_inputs`` 
 
 from __future__ import annotations
 
+import os
 from collections import OrderedDict
 from dataclasses import dataclass
 
@@ -78,7 +79,13 @@ def _pad_variate_mask(mask: Tensor) -> Tensor:
 class TtToto2:
     """Device Toto 2.0 (single chip). Weights move host -> device once in ``__init__``."""
 
-    def __init__(self, device, weights: Toto2Weights, precision: Toto2Precision | None = None):
+    def __init__(
+        self, device, weights: Toto2Weights, precision: Toto2Precision | None = None, fold_betas: bool | None = None
+    ):
+        if fold_betas is None:  # R2-1 screening switch
+            fold_betas = os.environ.get("TOTO2_FOLD_BETAS", "1") == "1"
+        if fold_betas:
+            weights = weights.fold_residual_betas()
         self.device = device
         self.weights = weights
         self.config = c = weights.config
@@ -96,6 +103,7 @@ class TtToto2:
         self._head = TtResidualMLP(
             device, weights.head, p.for_role("head"), out_dtype=ttnn.float32 if p.fp32_head_out else None
         )
+        self._head_eps = c.norm_eps if weights.head_eps is None else weights.head_eps
         self._constants: OrderedDict[tuple, object] = OrderedDict()
 
     @classmethod
@@ -241,7 +249,7 @@ class TtToto2:
         """Read-out hidden states ``(1, 1, R * h, d)`` -> ``(1, 1, R * h, 288)``; consumes ``x``."""
         import ttnn
 
-        normed = rms_norm(x, self.config.norm_eps, self.precision)
+        normed = rms_norm(x, self._head_eps, self.precision)
         ttnn.deallocate(x)
         out = self._head(normed)
         ttnn.deallocate(normed)

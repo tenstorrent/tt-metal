@@ -102,6 +102,8 @@ class LayerWeights:
     beta_mlp: float
     attn_tau: float
     mlp_tau: float
+    eps_attn: float | None = None  # set by fold_residual_betas (eps / c^2); None = config.norm_eps
+    eps_mlp: float | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +113,7 @@ class Toto2Weights:
     layers: tuple[LayerWeights, ...]
     head: ResidualMLPWeights
     name: str = ""
+    head_eps: float | None = None  # set by fold_residual_betas
 
     @classmethod
     def from_checkpoint(cls, name: str) -> "Toto2Weights":
@@ -137,6 +140,33 @@ class Toto2Weights:
     def reduced(self, indices) -> "Toto2Weights":
         """Same model with only ``layers[indices]`` (profile runs); the config keeps its layer kinds."""
         return replace(self, layers=tuple(self.layers[i] for i in indices))
+
+    def fold_residual_betas(self) -> "Toto2Weights":
+        """R2-1: carry ``y = x / c`` with ``c`` the running product of the residual betas, so every residual is a
+        plain add. The norms are weightless, so ``RMSNorm(c y; eps) = RMSNorm(y; eps / c^2)``; ``1 / c`` after each
+        sublayer folds into ``W_o``, ``b_o`` and ``W_fc2`` (float64). Exact in real arithmetic. Apply after
+        ``reduced``."""
+        assert all(lw.eps_attn is None for lw in self.layers), "already folded"
+        eps, c, layers = self.config.norm_eps, 1.0, []
+        for lw in self.layers:
+            eps_attn = eps / c**2
+            c *= lw.beta_attn
+            w_o, b_o = _f32(lw.w_o.double() / c), _f32(lw.b_o.double() / c)
+            eps_mlp = eps / c**2
+            c *= lw.beta_mlp
+            layers.append(
+                replace(
+                    lw,
+                    w_o=w_o,
+                    b_o=b_o,
+                    w_fc2=_f32(lw.w_fc2.double() / c),
+                    beta_attn=1.0,
+                    beta_mlp=1.0,
+                    eps_attn=eps_attn,
+                    eps_mlp=eps_mlp,
+                )
+            )
+        return replace(self, layers=tuple(layers), head_eps=eps / c**2)
 
 
 def _f32(t: Tensor) -> Tensor:

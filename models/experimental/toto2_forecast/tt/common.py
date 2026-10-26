@@ -219,6 +219,10 @@ def scaled_residual(f, x, beta: float):
     """``f + beta * x``; consumes ``f``, borrows ``x``."""
     import ttnn
 
+    if beta == 1.0:  # folded (R2-1)
+        out = ttnn.add(f, x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(f)
+        return out
     scaled = ttnn.multiply(x, beta, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     out = ttnn.add(f, scaled, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(scaled)

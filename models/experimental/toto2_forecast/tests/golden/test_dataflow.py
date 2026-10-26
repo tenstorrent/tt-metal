@@ -18,6 +18,7 @@ For each golden case this checks, against the reference captures:
 from __future__ import annotations
 
 import json
+import math
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -104,4 +105,25 @@ def test_dataflow(ckpt, case):
     errs["q"] = rel_err(q, cap["q"])
     _record({"ckpt": ckpt, "case": case, **errs})
     print(f"\n[DATAFLOW] {ckpt}/{case}: " + " ".join(f"{k}={v:.2e}" for k, v in errs.items()))
+    assert errs["head"] <= HEAD_TOL and errs["q"] <= HEAD_TOL, errs
+
+
+@pytest.mark.parametrize("ckpt,case", CASES, ids=[f"{c}-{n}" for c, n in CASES])
+def test_dataflow_folded_betas(ckpt, case):
+    """R2-1: the beta-folded weights (plain residual adds, eps / c^2) give the reference head and quantiles."""
+    if not have_golden(ckpt, case):
+        pytest.skip(f"golden {ckpt}/{case} not generated yet")
+    torch.set_num_threads(8)
+    g = load_golden(ckpt, case)
+    inp, cap = g["inputs"], g["captures"]
+    host = prepare_inputs(inp["target"], inp["target_mask"], inp["series_ids"], inp["horizon"])
+    w = _weights(ckpt)
+    folded = w.fold_residual_betas()
+    assert all(lw.beta_attn == 1.0 and lw.beta_mlp == 1.0 for lw in folded.layers)
+    head = FoldedToto2(w, fold_betas=True).forward(host, cut=True, padded_seq=pad_to_tile(host.seq_len))
+    errs = {"head": rel_err(head, cap["head_out"])}
+    q = postprocess(head, host.loc, host.scale, host.caps, host.horizon)
+    errs["q"] = rel_err(q, cap["q"])
+    errs["c_final"] = math.sqrt(w.config.norm_eps / folded.head_eps)
+    print(f"\n[DATAFLOW-FOLD] {ckpt}/{case}: " + " ".join(f"{k}={v:.2e}" for k, v in errs.items()))
     assert errs["head"] <= HEAD_TOL and errs["q"] <= HEAD_TOL, errs

@@ -36,8 +36,8 @@ def residual_mlp(w: ResidualMLPWeights, x: Tensor) -> Tensor:
 
 
 class FoldedToto2:
-    def __init__(self, weights: Toto2Weights, dtype=torch.float32):
-        self.w = weights
+    def __init__(self, weights: Toto2Weights, dtype=torch.float32, fold_betas: bool = False):
+        self.w = weights.fold_residual_betas() if fold_betas else weights
         self.c = weights.config
         self.dtype = dtype
 
@@ -61,7 +61,7 @@ class FoldedToto2:
         """``x`` ``(R, S_pad, d)`` -> attention residual output, same shape."""
         d = self.c.d_model
         r, sp, _ = x.shape
-        xn = rms_norm(x, self.c.norm_eps)
+        xn = rms_norm(x, self.c.norm_eps if lw.eps_attn is None else lw.eps_attn)
         qkv = F.linear(xn, self._cast(lw.w_qkv), self._cast(lw.b_qkv))
         q, k, v = (self._heads(qkv[..., i * d : (i + 1) * d]) for i in range(3))
         rope = host.rope
@@ -87,7 +87,7 @@ class FoldedToto2:
         return lw.beta_attn * x + F.linear(ctx, self._cast(lw.w_o), self._cast(lw.b_o))
 
     def mlp(self, lw: LayerWeights, x: Tensor) -> Tensor:
-        xn = rms_norm(x, self.c.norm_eps)
+        xn = rms_norm(x, self.c.norm_eps if lw.eps_mlp is None else lw.eps_mlp)
         g, u = F.linear(xn, self._cast(lw.w_fc1)).chunk(2, dim=-1)
         return lw.beta_mlp * x + F.linear(g * F.silu(u), self._cast(lw.w_fc2))
 
@@ -96,7 +96,7 @@ class FoldedToto2:
         d = self.c.d_model
         r, n, _ = x.shape
         b, v_count = host.batch, host.variates
-        xn = rms_norm(x, self.c.norm_eps)
+        xn = rms_norm(x, self.c.norm_eps if lw.eps_attn is None else lw.eps_attn)
         w_o, b_o = self._cast(lw.w_o), self._cast(lw.b_o)
         if v_count == 1:
             v = F.linear(xn, self._cast(lw.w_qkv[2 * d :]), self._cast(lw.b_qkv[2 * d :]))
@@ -114,7 +114,9 @@ class FoldedToto2:
 
     def head(self, x: Tensor) -> Tensor:
         """``(R, n, d)`` read-out tokens -> ``(R, n, 288)``."""
-        return residual_mlp(self._mlp(self.w.head), rms_norm(x, self.c.norm_eps))
+        return residual_mlp(
+            self._mlp(self.w.head), rms_norm(x, self.c.norm_eps if self.w.head_eps is None else self.w.head_eps)
+        )
 
     def forward(self, host: Toto2HostInputs, *, padded_seq: int | None = None, cut: bool = True, capture=None):
         """Head output ``(9, B, V, h, 32)``. Rows run padded to ``padded_seq`` tokens (pads after the real ones)

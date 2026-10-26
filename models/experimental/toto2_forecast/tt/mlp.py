@@ -17,16 +17,16 @@ from __future__ import annotations
 import torch
 
 from models.experimental.toto2_forecast.tt.common import (
+    TILE,
     Toto2Precision,
     linear,
     pad_to_tile,
     rms_norm,
-    scaled_residual,
     upload,
     upload_bias,
     upload_linear,
 )
-from models.experimental.toto2_forecast.tt.attention import mm_config, mm_linear
+from models.experimental.toto2_forecast.tt.attention import epilogue_config, mm_config, mm_linear_residual
 from models.experimental.toto2_forecast.tt.weights import LayerWeights, ResidualMLPWeights, Toto2Config
 
 # Fused-SwiGLU blocks (M, K, N, subblock_h, subblock_w) in tiles, by d_model; the fastest of job 720's sweep at the
@@ -64,7 +64,7 @@ def swiglu_config(device, d_model: int):
 class TtSwiGLU:
     def __init__(self, device, lw: LayerWeights, config: Toto2Config, precision: Toto2Precision):
         self.precision = precision.for_role("ffn")
-        self.eps = config.norm_eps
+        self.eps = config.norm_eps if lw.eps_mlp is None else lw.eps_mlp
         self.beta = lw.beta_mlp
         f = config.d_ff
         fp = pad_to_tile(f)
@@ -73,6 +73,8 @@ class TtSwiGLU:
         self._swiglu_config = swiglu_config(device, config.d_model)
         self._w_down = upload_linear(device, lw.w_fc2, precision.weight_dtype("ffn_out"), pad_in=fp)
         self._down_config = mm_config(device, config.d_model, "down", k=fp)
+        self._ones = upload(device, torch.ones(1, config.d_model)) if self.beta == 1.0 else None
+        self._down_config_ep = epilogue_config(self._down_config, fp // TILE)
 
     def __call__(self, x):
         """Flat ``(1, 1, tokens, d)`` -> same; consumes ``x``."""
@@ -89,9 +91,8 @@ class TtSwiGLU:
             compute_kernel_config=p.matmul_config(),
         )
         ttnn.deallocate(xn)
-        out = mm_linear(hidden, self._w_down, p, self._down_config)
+        y = mm_linear_residual(hidden, self._w_down, p, (self._down_config, self._down_config_ep), x, self.beta, self._ones)
         ttnn.deallocate(hidden)
-        y = scaled_residual(out, x, self.beta)
         ttnn.deallocate(x)
         return y
 

@@ -17,6 +17,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+import torch
+
 from models.experimental.toto2_forecast.tt.common import (
     TILE,
     Toto2Precision,
@@ -24,6 +26,7 @@ from models.experimental.toto2_forecast.tt.common import (
     linear,
     rms_norm,
     scaled_residual,
+    upload,
     upload_bias,
     upload_linear,
 )
@@ -70,6 +73,25 @@ def mm_config(device, d_model: int, role: str, k: int | None = None):
     )
 
 
+def epilogue_config(config, k_tiles: int):
+    """``config`` with K_block cut to the largest divisor of ``k_tiles`` up to half (env
+    ``TOTO2_EPILOGUE_KDIV``, default 2): the fused residual's extra circular buffers overflow L1 at the R1-4
+    blocks (1594752 > 1572864 B on 313m out_proj)."""
+    import ttnn
+
+    if config is None:
+        return None
+    cap = max(1, config.K_block_size // int(os.environ.get("TOTO2_EPILOGUE_KDIV", "2")))
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=config.M_block_size,
+        K_block_size=max(b for b in range(1, cap + 1) if k_tiles % b == 0),
+        N_block_size=config.N_block_size,
+        subblock_h=config.subblock_h,
+        subblock_w=config.subblock_w,
+        compute_with_storage_grid_size=config.compute_with_storage_grid_size,
+    )
+
+
 def mm_linear(x, weight, precision: Toto2Precision, config, *, bias=None):
     """``x @ weight (+ bias)`` through ``minimal_matmul`` (``config`` None: ``ttnn.linear``)."""
     import ttnn
@@ -84,6 +106,39 @@ def mm_linear(x, weight, precision: Toto2Precision, config, *, bias=None):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=precision.matmul_config(),
     )
+
+
+# R2-2 screening switch: residual add in the minimal_matmul epilogue (needs folded betas, R2-1).
+_EPILOGUE_RESIDUAL = os.environ.get("TOTO2_EPILOGUE_RESIDUAL", "1") == "1"
+
+
+def mm_linear_residual(x, weight, precision: Toto2Precision, configs, residual, beta: float, ones, *, bias=None):
+    """``beta * residual + x @ weight (+ bias)``; consumes neither input. With ``beta == 1``, a ``minimal_matmul``
+    config and matching dtypes the add runs in the matmul epilogue (``dit_minimal_matmul_addcmul_fused`` with a
+    row of ones); otherwise a separate add. ``configs``: (plain, epilogue) ``MinimalMatmulConfig``."""
+    import ttnn
+
+    config, config_ep = configs
+
+    if (
+        _EPILOGUE_RESIDUAL
+        and beta == 1.0
+        and config is not None
+        and ones is not None
+        and x.dtype == weight.dtype == residual.dtype
+    ):
+        return ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+            x,
+            weight,
+            1.0,
+            residual,
+            ones,
+            bias,
+            config=config_ep,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=precision.matmul_config(),
+        )
+    return scaled_residual(mm_linear(x, weight, precision, config, bias=bias), residual, beta)
 
 
 _MAX_SDPA_CHUNK = 256
@@ -125,7 +180,7 @@ class TtTimeAttention:
         self.precision = precision
         self.num_heads = config.num_heads
         self.head_dim = config.head_dim
-        self.eps = config.norm_eps
+        self.eps = config.norm_eps if lw.eps_attn is None else lw.eps_attn
         self.beta = lw.beta_attn
         dtype = precision.weight_dtype()
         self._w_qkv = upload_linear(device, lw.w_qkv, dtype)
@@ -135,6 +190,8 @@ class TtTimeAttention:
         d = config.d_model
         self._qkv_config = mm_config(device, d, "qkv")
         self._o_config = mm_config(device, d, "out")
+        self._ones = upload(device, torch.ones(1, d)) if self.beta == 1.0 else None
+        self._o_config_ep = epilogue_config(self._o_config, d // TILE)
 
     def __call__(self, x, inputs: TimeInputs):
         """Flat ``(1, 1, R * S_pad, d)`` -> same shape; consumes ``x``."""
@@ -181,9 +238,8 @@ class TtTimeAttention:
             merged = ttnn.experimental.nlp_concat_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(ctx)
         merged = ttnn.reshape(merged, (1, 1, r * sp, merged.shape[-1]))
-        out = mm_linear(merged, self._w_o, p, self._o_config, bias=self._b_o)
+        y = mm_linear_residual(merged, self._w_o, p, (self._o_config, self._o_config_ep), x, self.beta, self._ones, bias=self._b_o)
         ttnn.deallocate(merged)
-        y = scaled_residual(out, x, self.beta)
         ttnn.deallocate(x)
         return y
 
@@ -203,7 +259,7 @@ class TtVariateAttention:
         self.precision = precision
         self.num_heads = config.num_heads
         self.head_dim = config.head_dim
-        self.eps = config.norm_eps
+        self.eps = config.norm_eps if lw.eps_attn is None else lw.eps_attn
         self.beta = lw.beta_attn
         d = config.d_model
         dtype = precision.weight_dtype()
