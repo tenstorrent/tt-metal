@@ -5,6 +5,7 @@ from itertools import chain, product
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIM,
@@ -34,6 +35,7 @@ from helpers.test_variant_parameters import (
     IN_TILE_DIMS,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_ROW_MOP,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
@@ -121,14 +123,14 @@ ALL_TEST_PARAMS = list(
     chain(
         # Regular matmul with all throttle levels
         (
-            (fidelity, combinations, throttle)
+            (fidelity, combinations, throttle, False)
             for fidelity, combinations, throttle in product(
                 MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
             )
         ),
         # Tiny tiles at throttle 0: the full sweep, unchanged.
         (
-            (fidelity, combinations, 0)
+            (fidelity, combinations, 0, False)
             for fidelity, combinations in product(
                 MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
             )
@@ -136,7 +138,7 @@ ALL_TEST_PARAMS = list(
         # Tiny tiles at a throttled level <= 3: the fallback to the unthrottled MOP is taken
         # at every fidelity.
         (
-            (fidelity, combinations, TINY_TILE_LOW_THROTTLE)
+            (fidelity, combinations, TINY_TILE_LOW_THROTTLE, False)
             for fidelity, combinations in product(
                 MATH_FIDELITIES, TINY_TILES_THROTTLE_COMBINATIONS
             )
@@ -148,19 +150,35 @@ ALL_TEST_PARAMS = list(
         # the LLK assert, others time out first) and with asserts off. Adding it here would wedge
         # the board rather than fail the case.
         (
-            (MathFidelity.LoFi, combinations, TINY_TILE_HIGH_THROTTLE)
+            (MathFidelity.LoFi, combinations, TINY_TILE_HIGH_THROTTLE, False)
             for combinations in TINY_TILES_THROTTLE_COMBINATIONS
+        ),
+        # Blackhole row MOP (one MOP walks a reuse row of full 32x32 tiles) at throttle 0: every
+        # fidelity, rt/ct shape (both reuse directions), transpose, dest mode and dst_index.
+        (
+            (fidelity, combinations, 0, True)
+            for fidelity, combinations in product(
+                MATH_FIDELITIES,
+                (
+                    MATMUL_COMBINATIONS
+                    if get_chip_architecture() == ChipArchitecture.BLACKHOLE
+                    else []
+                ),
+            )
         ),
     )
 )
 
 
 @pytest.mark.nightly
-@pytest.mark.parametrize("math_fidelity,matmul_config,throttle", ALL_TEST_PARAMS)
+@pytest.mark.parametrize(
+    "math_fidelity,matmul_config,throttle,row_mop", ALL_TEST_PARAMS
+)
 def test_math_matmul(
     math_fidelity,
     matmul_config,
     throttle,
+    row_mop,
 ):
     formats = matmul_config.formats
     in0_dimensions = matmul_config.tile_dimensions.in0_dimensions
@@ -276,6 +294,7 @@ def test_math_matmul(
             STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
             MATH_FIDELITY(math_fidelity),
             THROTTLE_LEVEL(throttle),
+            MATMUL_ROW_MOP(row_mop),
             DEST_SYNC(matmul_config.dest_sync),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
         ],

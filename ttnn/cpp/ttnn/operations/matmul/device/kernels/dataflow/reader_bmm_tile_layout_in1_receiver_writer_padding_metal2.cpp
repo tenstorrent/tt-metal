@@ -134,10 +134,20 @@ void kernel_main() {
                     // Atomic increment source core counter
                     sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
 
+#ifdef IN1_MCAST_CHUNKS
+                    // The sender multicasts the block in IN1_MCAST_CHUNKS column chunks and sets the semaphore to
+                    // the number sent after each: publish each chunk to compute as soon as it has landed.
+                    static_assert(in1_block_num_tiles % IN1_MCAST_CHUNKS == 0, "a chunk is a whole number of columns");
+                    for (uint32_t chunk = 1; chunk <= IN1_MCAST_CHUNKS; ++chunk) {
+                        receiver_sem.wait_min(chunk);
+                        dfb_in1.push_back(in1_block_num_tiles / IN1_MCAST_CHUNKS);
+                    }
+#else
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     receiver_sem.wait(VALID);
 
                     dfb_in1.push_back(in1_block_num_tiles);
+#endif  // IN1_MCAST_CHUNKS
                 }
 
 #ifdef FUSE_BIAS

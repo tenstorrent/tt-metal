@@ -349,6 +349,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     tt::DataFormat output_data_format,
     bool untilize_out,
     bool row_broadcast_bias = true,
+    bool bias_in_dest = false,
     CoreCoord sub_device_start_core = {0, 0},
     uint32_t in0_row_tiles = 0,
     uint32_t in0_column_offset_tiles = 0,
@@ -699,8 +700,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     std::map<std::string, std::string> mm_kernel_in1_sender_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_defines;
     std::map<std::string, std::string> mm_kernel_in1_receiver_writer_other_noc_setup_defines;
+    // Compute adds the bias either in a pass over the packed partials (FUSE_BIAS) or to each output
+    // subblock in DEST right after its matmul (FUSE_BIAS_IN_DEST); the readers deliver it the same way.
+    const bool fuse_bias_in_dest = bias_in_dest && bias_mesh.has_value();
     if (bias_mesh.has_value()) {
-        mm_kernel_defines["FUSE_BIAS"] = "1";
+        mm_kernel_defines[fuse_bias_in_dest ? "FUSE_BIAS_IN_DEST" : "FUSE_BIAS"] = "1";
         mm_kernel_in1_sender_writer_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_receiver_writer_defines["FUSE_BIAS"] = "1";
         mm_kernel_in1_receiver_writer_other_noc_setup_defines["FUSE_BIAS"] = "1";
@@ -732,6 +736,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         device.arch(), cores.size(), mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
         device.arch(), cores.size(), mm_kernel_defines, throttle_level);
+    operations::matmul::utilities::add_row_mop_define_if_supported(
+        device.arch(), in0_tile, in1_tile, mm_kernel_defines);
 
     if (in0_receiver_interleaved.num_cores() == 0) {
         mm_kernel_in0_sender_interleaved_defines["SKIP_MCAST"] = "1";
@@ -755,6 +761,19 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
         }
     }
 
+    // Interleaved, multicast in1 goes out in column chunks that compute starts on as they land.
+    if (!in1_is_sharded && in1_receiver.num_cores() > 0) {
+        const uint32_t in1_chunks = operations::matmul::utilities::in1_mcast_column_chunks(
+            device.arch(), in0_block_w, in1_block_w, out_subblock_w, in1_single_tile_size);
+        if (in1_chunks > 0) {
+            const std::string chunks = std::to_string(in1_chunks);
+            mm_kernel_defines["IN1_MCAST_CHUNKS"] = chunks;
+            mm_kernel_in1_sender_writer_defines["IN1_MCAST_CHUNKS"] = chunks;
+            mm_kernel_in1_receiver_writer_defines["IN1_MCAST_CHUNKS"] = chunks;
+            mm_kernel_in1_receiver_writer_other_noc_setup_defines["IN1_MCAST_CHUNKS"] = chunks;
+        }
+    }
+
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
@@ -766,9 +785,9 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     // copies through intermed0_reload_alias, a second buffer over the same SRAM carrying
     // UnpackToDest, while the bias add keeps reading intermed0 via SrcA. The alias is handed to the
     // compute kernel through the MM_PARTIALS_RELOAD_ALIAS define, which selects the alias reload path
-    // there. Without bias the reload reads intermed0 and the flag is set on it.
-    const bool bias_reload_alias =
-        fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value();
+    // there. Without bias, or with the bias added in DEST, the reload reads intermed0 and the flag is set on it.
+    const bool bias_reload_alias = fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 &&
+                                   bias_tensor.has_value() && !fuse_bias_in_dest;
     if (bias_reload_alias) {
         mm_kernel_defines["MM_PARTIALS_RELOAD_ALIAS"] = "1";
     }
@@ -2118,6 +2137,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
         output_data_format,
         untilize_out,
         fused_matmul_bias_row_broadcastable(bias),
+        program_config.bias_in_dest,
         sub_device_start_core,
         in0_row_tiles,
         in0_column_offset_tiles,

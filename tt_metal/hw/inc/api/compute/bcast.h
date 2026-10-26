@@ -362,6 +362,52 @@ ALWI void add_bcast_rows_init(uint32_t icb0, uint32_t icb1, uint32_t call_line =
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }
 
+#ifdef ARCH_BLACKHOLE
+// Blackhole only: the Wormhole row-broadcast acc_to_dest unpack publishes a single zeroed SrcA bank per tile while
+// its ELWADD releases one per face, and Quasar does not wire this unpack mode.
+
+/**
+ * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for add_tiles_bcast_rows_to_dst
+ * to be executed correctly. The srcB data format must already be configured for icb (reconfig_data_format_srcb).
+ */
+ALWI void add_bcast_rows_to_dst_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::SRCB>(icb, call_line);
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::ROW, MathFidelity::LoFi>(
+        icb, icb, true /* acc_to_dest */)));
+    UNPACK((llk_unpack_A_init<BroadcastType::ROW, true /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE>(
+        false /* transpose_of_faces */, false /* within_face_16x16_transpose */, icb)));
+}
+
+// clang-format off
+/**
+ * Adds row 0 of the tile icb[itile], broadcast over all rows, to the tile already in DST at index idst:
+ * *DST[idst][h, w] += B[0, w]*. The unpacker zeroes SrcA and places the bias row in SrcB, and the FPU
+ * accumulates 0 + B into DST in DST's own format. The DST tile never passes through a source register, so
+ * with a 32-bit DST (fp32_dest_acc_en) it keeps its full FP32 precision; this is how a matmul adds a bias
+ * row to an output subblock while it is still in DST. The DST register buffer must be in acquired state
+ * via *tile_regs_acquire* call. This call is blocking and is only available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                              | Type     | Valid Range                                    | Required |
+ * |----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | icb            | The identifier of the circular buffer (CB) containing B  | uint32_t | 0 to 31                                        | True     |
+ * | itile          | The index of tile B within the CB                        | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst           | The index of the tile in DST REG to accumulate into      | uint32_t | Must be less than the acquired size of DST REG | True     |
+ */
+// clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void add_tiles_bcast_rows_to_dst(uint32_t icb, uint32_t itile, uint32_t idst) {
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWADD,
+          BroadcastType::ROW,
+          is_fp32_dest_acc_en,
+          MathFidelity::LoFi,
+          EltwiseBinaryReuseDestType::NONE>(icb, icb, idst, true /* clear_fp32_dst_acc */)));
+    UNPACK((llk_unpack_A<BroadcastType::ROW, true /* acc_to_dest */, EltwiseBinaryReuseDestType::NONE>(icb, itile)));
+}
+#endif  // ARCH_BLACKHOLE
+
 /**
  * Performs a first-call or switch-from-another-op tile hw reconfiguration step needed for sub_tiles_bcast_rows to be
  * executed correctly.

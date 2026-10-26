@@ -172,6 +172,30 @@ inline void llk_unpack_A_block(
     }
 }
 
+// Unpacks ntiles 32-bit tiles of operand from start_tile_index into consecutive DEST tiles (see
+// _llk_unpack_A_to_dest_tiles_); pair with llk_math_unpack_to_dest_tiles on the math thread.
+inline void llk_unpack_A_to_dest_tiles(
+    const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+    const std::uint32_t page_size = get_local_cb_interface(operand_id).fifo_page_size;
+    const std::uint32_t address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1 + start_tile_index * page_size;
+
+    LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");
+    LLK_ASSERT(
+        is_32bit_input(unpack_src_format[operand_id], unpack_dst_format[operand_id]),
+        "Unpack to DEST of whole tiles needs a 32-bit operand");
+    // The unpacker steps from tile to tile by whole faces, so the tiles must be back to back in L1.
+    LLK_ASSERT(
+        (page_size << 4) == num_faces * face_r_dim * FACE_C_DIM * sizeof(std::uint32_t),
+        "Unpack to DEST of whole tiles needs unpadded pages");
+
+    WAYPOINT("UPAW");
+    _llk_unpack_A_to_dest_tiles_(address, ntiles, face_r_dim, num_faces, unpack_dst_format[operand_id]);
+    WAYPOINT("UPAD");
+}
+
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_A_uninit() {
     SAN_HOOK(uninit<OperationUnpackUnary>(StateVal<OperationUnpackUnary::BroadcastType>(to_underlying(BType))));

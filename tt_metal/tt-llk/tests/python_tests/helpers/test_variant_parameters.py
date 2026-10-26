@@ -92,6 +92,16 @@ class THROTTLE_LEVEL(TemplateParameter):
 
 
 @dataclass
+class MATMUL_ROW_MOP(TemplateParameter):
+    """Blackhole matmul: run each reuse row of the block as one MOP instead of one MOP per tile."""
+
+    row_mop: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool MATMUL_ROW_MOP = {str(self.row_mop).lower()};"
+
+
+@dataclass
 class MATH_TRANSPOSE_FACES(TemplateParameter):
     math_transpose_faces: Transpose
 

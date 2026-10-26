@@ -9,6 +9,7 @@
 #include <set>
 
 #include "tt-metalium/allocator.hpp"
+#include "tt-metalium/constants.hpp"
 #include "tt-metalium/experimental/device.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/hal.hpp"
@@ -329,6 +330,47 @@ void validate_matmul_reuse_work_split(
         "num_output_blocks_total ({}) must be >= num_cores ({}); some cores would have no work",
         num_output_blocks_total,
         num_cores);
+}
+
+void add_row_mop_define_if_supported(
+    tt::ARCH arch,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    std::map<std::string, std::string>& mm_kernel_defines) {
+    const auto is_full_tile = [](const tt::tt_metal::Tile& tile) {
+        return tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+    };
+    const bool full_tiles = is_full_tile(in0_tile) && is_full_tile(in1_tile);
+    // A throttled matmul keeps the per-tile MOP (matmul_runs_row_mop), so the define would be inert.
+    const auto throttle = mm_kernel_defines.find("MM_THROTTLE");
+    const bool throttled = throttle != mm_kernel_defines.end() && throttle->second != "0";
+    if (arch != tt::ARCH::BLACKHOLE || !full_tiles || throttled) {
+        return;
+    }
+    mm_kernel_defines["MM_ROW_MOP"] = "1";
+}
+
+uint32_t in1_mcast_column_chunks(
+    tt::ARCH arch, uint32_t in1_block_h, uint32_t in1_block_w, uint32_t out_subblock_w, uint32_t in1_tile_bytes) {
+    constexpr uint32_t max_chunks = 8, min_chunks = 4;
+    constexpr uint32_t max_chunk_tiles = 128;  // reads in flight per transaction id (kernel static_assert)
+    // Each K-row of a chunk is multicast separately: below this many bytes per row the extra multicasts cost
+    // more than the early start gains (e.g. 1x4 subblocks of bfloat4_b tiles at kb 16).
+    constexpr uint32_t min_chunk_row_bytes = 4096;
+    if (arch != tt::ARCH::BLACKHOLE || in1_block_w % out_subblock_w != 0) {
+        return 0;
+    }
+    const uint32_t num_subblocks = in1_block_w / out_subblock_w;
+    for (uint32_t chunks = std::min(num_subblocks, max_chunks); chunks >= min_chunks; --chunks) {
+        if (num_subblocks % chunks != 0) {
+            continue;
+        }
+        const uint32_t chunk_w = in1_block_w / chunks;
+        if (chunk_w * in1_block_h <= max_chunk_tiles && chunk_w * in1_tile_bytes >= min_chunk_row_bytes) {
+            return chunks;
+        }
+    }
+    return 0;
 }
 
 }  // namespace ttnn::operations::matmul::utilities

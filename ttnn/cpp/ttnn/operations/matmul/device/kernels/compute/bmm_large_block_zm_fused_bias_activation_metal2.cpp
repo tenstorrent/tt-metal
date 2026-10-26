@@ -13,7 +13,11 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "internal/mod_div_lib.h"
 
-#ifdef FUSE_BIAS
+// A fused bias is added either in a pass over the packed partials after the last K block
+// (FUSE_BIAS), or to each output subblock in DST right after its last K block's matmul
+// (FUSE_BIAS_IN_DEST). With FUSE_BIAS_IN_DEST the kernel otherwise runs as without bias: each
+// subblock packs, through the fused activation, while the next one multiplies.
+#if defined FUSE_BIAS or defined FUSE_BIAS_IN_DEST
 #include "api/compute/bcast.h"
 #endif
 
@@ -115,9 +119,6 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     // reload copies through that alias while the FPU consumer keeps the original view. The alias
     // has its own read pointer, so align it with the partials buffer's current read position
     // before copying.
-    // Reconfigure input
-    reconfig_data_format_srca(in1_dfb_id, mm_partials_reload_dfb_id);
-    copy_init(mm_partials_reload_dfb_id);
     mm_partials_dfb.wait_front(out_subblock_num_tiles);
 
 #ifdef MM_PARTIALS_RELOAD_ALIAS
@@ -127,14 +128,19 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     }
 #endif
 
-    uint32_t start_dst_index = 0;
-    uint32_t start_tile_index = 0;
-    copy_block(mm_partials_reload_dfb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    // Copy the partials into DST and return the unpacker and math engine to the matmul.
+    matmul_block_reload_partials(
+        in0_dfb_id,
+        in1_dfb_id,
+        mm_partials_reload_dfb_id,
+        0,
+        out_subblock_num_tiles,
+        in1_transpose_tile,
+        out_subblock_w,
+        out_subblock_h,
+        in0_block_w);
 
     mm_partials_dfb.pop_front(out_subblock_num_tiles);
-    // Reconfigure srcA back
-    reconfig_data_format_srca(mm_partials_reload_dfb_id, in1_dfb_id);
-    matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w, typename IntermDFB, typename OutDFB>
@@ -262,7 +268,10 @@ void kernel_main() {
     DataflowBuffer out_dfb(out_dfb_id);
     auto& untilize_mode_out_dfb = untilize_out ? mm_partials_dfb : out_dfb;
 
-#ifdef FUSE_BIAS
+#if defined FUSE_BIAS or defined FUSE_BIAS_IN_DEST
+#if defined FUSE_BIAS and defined FUSE_BIAS_IN_DEST
+#error "FUSE_BIAS and FUSE_BIAS_IN_DEST are exclusive"
+#endif
     constexpr uint32_t bias_dfb_id = dfb::bias;
     constexpr auto bias_ntiles = get_arg(args::bias_ntiles);
 #ifdef BIAS_PER_GROUP
@@ -270,14 +279,23 @@ void kernel_main() {
 #else
     constexpr bool bias_per_group = false;
 #endif
+    DataflowBuffer bias_dfb(bias_dfb_id);
+#endif
+#ifdef FUSE_BIAS
     constexpr uint32_t mm_out_dfb_id = mm_partials_dfb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = (bool)get_arg(args::row_broadcast_bias);
-    DataflowBuffer bias_dfb(bias_dfb_id);
     auto& mm_out_dfb = mm_partials_dfb;
 #else
     constexpr uint32_t mm_out_dfb_id = untilize_mode_out_dfb_id;
     auto& mm_out_dfb = untilize_mode_out_dfb;
+#endif
+#ifdef FUSE_BIAS_IN_DEST
+#ifndef ARCH_BLACKHOLE
+#error "FUSE_BIAS_IN_DEST uses the Blackhole row-broadcast accumulate unpack"
+#endif
+    // The in-DST add broadcasts row 0 of one bias tile per output column; an [M, N] bias block takes FUSE_BIAS.
+    static_assert((bool)get_arg(args::row_broadcast_bias), "FUSE_BIAS_IN_DEST requires a row-broadcast bias");
 #endif
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
@@ -298,6 +316,9 @@ void kernel_main() {
     // src-register handshake and hangs. The factory must not pad per_core_N_compute on Quasar.
     static_assert(!last_subblock_padded, "a narrowed last in1 subblock (padded per_core_N) is not supported on Quasar");
 #endif
+#if defined MM_ROW_MOP && MM_ROW_MOP
+    static_assert(!last_subblock_padded, "MM_ROW_MOP needs every matmul_block call at the init's subblock");
+#endif
 
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type = static_cast<KernelActivation>(get_arg(args::activation_type));
@@ -312,6 +333,17 @@ void kernel_main() {
     constexpr uint32_t in1_transpose_tile = true;
 #else
     constexpr uint32_t in1_transpose_tile = false;
+#endif
+
+#ifdef IN1_MCAST_CHUNKS
+#ifdef ARCH_QUASAR
+#error "IN1_MCAST_CHUNKS waits for growing in1 prefixes, which Quasar's dataflow buffers do not allow"
+#endif
+    // in1 is delivered in IN1_MCAST_CHUNKS chunks of whole columns per K-block (see the in1 reader), each a
+    // whole number of output subblocks wide.
+    static_assert(in1_num_subblocks % IN1_MCAST_CHUNKS == 0, "an in1 chunk is a whole number of output subblocks");
+    constexpr uint32_t in1_chunk_subblocks = in1_num_subblocks / IN1_MCAST_CHUNKS;
+    constexpr uint32_t in1_chunk_num_tiles = in1_block_num_tiles / IN1_MCAST_CHUNKS;
 #endif
 
     constexpr bool spill = num_blocks_inner_dim > 1;
@@ -426,7 +458,18 @@ void kernel_main() {
 #endif
 
                     in0_dfb.wait_front(in0_block_num_tiles);
+#ifndef IN1_MCAST_CHUNKS
                     in1_dfb.wait_front(in1_block_num_tiles);
+#endif
+#ifdef FUSE_BIAS_IN_DEST
+                    // The reader pushes the bias after this output block's last in1 block, and only once
+                    // when num_blocks_w_dim == 1 (the tiles then stay resident across bh/batch iterations).
+                    // With IN1_MCAST_CHUNKS, waiting here forfeits the chunked early start on the last K block
+                    // (the bias follows the block's last chunk).
+                    if (last_out && (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1)) {
+                        bias_dfb.wait_front(bias_ntiles);
+                    }
+#endif
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -442,6 +485,13 @@ void kernel_main() {
                             const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
+#ifdef IN1_MCAST_CHUNKS
+                            // in1 arrives in column chunks of in1_chunk_subblocks output subblocks: before the
+                            // first row of subblocks reads a chunk, wait for it (the later rows find it there).
+                            if (in0_subblock == 0 && in1_subblock % in1_chunk_subblocks == 0) {
+                                in1_dfb.wait_front((in1_subblock / in1_chunk_subblocks + 1) * in1_chunk_num_tiles);
+                            }
+#endif
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_dfb_to_dst(
@@ -457,36 +507,53 @@ void kernel_main() {
                             }
 
 #ifndef SKIP_COMPUTE
-                            // Compute output sub-block
-                            uint32_t dst_index =
-                                0;  // start at 0, each call to matmul_block internally increments dst_index
-                            uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
-                            uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                            // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                            for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
-                                // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
-                                // accumulation is done by iterating matmul_block across inner dim
-                                // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
-                                // in0
-                                matmul_block(
-                                    in0_dfb_id,
-                                    in1_dfb_id,
-                                    in0_index,
-                                    in1_index,
-                                    dst_index,
-                                    in1_transpose_tile,
-                                    effective_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
-                                in0_index++;               // stride right by 1
-                                in1_index += in1_block_w;  // to stride down by 1 need to stride by in_per_core_w
-                                                           // (should be called in1_block_w)
-                            }
+                            // Compute output sub-block: accumulate the in0_block_w inner-dim steps into DST. Step k
+                            // reads in0 tile in0_index_subblock_offset + k (in0 rows are in0_block_w tiles wide) and
+                            // in1 tile in1_index_subblock_offset + k * in1_block_w (in1 rows are in1_block_w wide).
+                            matmul_block_k(
+                                in0_dfb_id,
+                                in1_dfb_id,
+                                in0_index_subblock_offset,
+                                in1_index_subblock_offset,
+                                0,
+                                in1_transpose_tile,
+                                effective_subblock_w,
+                                out_subblock_h,
+                                in0_block_w,
+                                in0_block_w,
+                                in1_block_w);
 
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
+#ifdef FUSE_BIAS_IN_DEST
+                                // Add the bias row to the finished subblock while it is still in DST, at DST's
+                                // precision. Padded lanes of a narrowed last in1 subblock add bias tile 0; the
+                                // writer drops those columns.
+                                reconfig_data_format_srcb(in0_dfb_id, bias_dfb_id);
+                                add_bcast_rows_to_dst_init(bias_dfb_id);
+                                for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
+                                    for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
+                                        const uint32_t bias_tile_idx =
+                                            (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
+                                                ? 0u
+                                                : static_cast<uint32_t>(in1_index_subblock_offset) + k;
+                                        add_tiles_bcast_rows_to_dst(bias_dfb_id, bias_tile_idx, i);
+                                    }
+                                }
+#endif
                                 tile_regs_commit();
+#ifdef FUSE_BIAS_IN_DEST
+                                // Back to the matmul while the packer drains this subblock.
+                                reconfig_data_format_srcb(bias_dfb_id, in0_dfb_id);
+                                matmul_block_init(
+                                    in0_dfb_id,
+                                    in1_dfb_id,
+                                    in1_transpose_tile,
+                                    out_subblock_w,
+                                    out_subblock_h,
+                                    in0_block_w);
+#endif
                                 mm_out_dfb.reserve_back(out_subblock_num_tiles);
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
@@ -618,6 +685,11 @@ void kernel_main() {
                     in1_dfb.pop_front(in1_block_num_tiles);
                 }
 
+#ifdef FUSE_BIAS_IN_DEST
+                if constexpr (bias_per_group || num_blocks_w_dim > 1) {
+                    bias_dfb.pop_front(bias_ntiles);
+                }
+#endif
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
@@ -765,7 +837,7 @@ void kernel_main() {
             }
         }
     }
-#ifdef FUSE_BIAS
+#if defined FUSE_BIAS or defined FUSE_BIAS_IN_DEST
     // For num_blocks_w_dim == 1 the reader pushes bias once and the kernel holds it resident,
     // reusing it across all batch/bh/block iterations without popping. Pop it once here, after the
     // last use, so the buffer is balanced. (For num_blocks_w_dim > 1 the per-block pop above already

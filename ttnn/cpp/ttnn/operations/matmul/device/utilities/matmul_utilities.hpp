@@ -5,8 +5,12 @@
 #pragma once
 
 #include <bit>
+#include <map>
 #include <optional>
+#include <string>
 #include <vector>
+
+#include <tt-umd/types/arch.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -367,6 +371,25 @@ void validate_matmul_reuse_work_split(
     const MatmulMultiCoreReuseProgramConfig& program_config,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set = std::nullopt);
+
+/*
+ * Sets MM_ROW_MOP (api/compute/matmul.h) where supported: Blackhole, full 32x32 tiles, no compute throttle (call it
+ * after throttle_mm_perf: a non-zero MM_THROTTLE keeps the per-tile throttled MOP). The caller must pass each
+ * matmul_block the dims of its init.
+ */
+void add_row_mop_define_if_supported(
+    tt::ARCH arch,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    std::map<std::string, std::string>& mm_kernel_defines);
+
+/*
+ * Column chunks per interleaved in1 K-block for the 2D-multicast sender (IN1_MCAST_CHUNKS), 0 for whole blocks;
+ * Blackhole only; each chunk is a whole number of out_subblock_w subblocks of at most 128 tiles and at least 4 KiB
+ * per K-row.
+ */
+uint32_t in1_mcast_column_chunks(
+    tt::ARCH arch, uint32_t in1_block_h, uint32_t in1_block_w, uint32_t out_subblock_w, uint32_t in1_tile_bytes);
 
 }  // namespace ttnn::operations::matmul::utilities
 

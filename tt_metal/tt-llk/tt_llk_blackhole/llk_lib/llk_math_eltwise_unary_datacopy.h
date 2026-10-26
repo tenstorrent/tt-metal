@@ -20,6 +20,36 @@ using namespace ckernel;
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
 
 /**
+ * @brief Re-clear the DEST zero flags of the tile at dst_index after an unpack to DEST.
+ *
+ * Due to a bug in Blackhole Tensix (budabackend#2730), when an event with the side effect of clearing DEST zero flags
+ * (such as unpack-to-dest or RISC-to-dest) and a ZEROACC instruction from the packer occur in the same cycle, the zero
+ * flag clearing is dropped. To mitigate that, a zero flag clear is issued right after an unpack of a tile to DEST is
+ * done. RISC-to-dest is not currently used.
+ *
+ * @tparam addr_mod: The address mod the ZEROACCs use (one that steps no counter).
+ * @param dst_index: DEST tile index.
+ * @param dst_format: DEST data format (DataFormat enum underlying value).
+ * @param num_faces: Faces per tile, values = <1, 2, 4>.
+ */
+template <std::uint8_t addr_mod>
+inline void _llk_math_clear_unpack_to_dest_zero_flags_(const std::uint32_t dst_index, const std::uint32_t dst_format, const std::uint32_t num_faces)
+{
+    const std::uint32_t dst_format_masked = masked_data_format(dst_format);
+    const int clear_fp32                  = static_cast<int>(
+        dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
+        dst_format_masked == (std::uint32_t)DataFormat::UInt32);
+    const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
+    const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
+#pragma GCC unroll 0
+    for (std::uint32_t i = 0; i < num_faces; i++)
+    {
+        // Clears zero flags in DEST for one face.
+        TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, addr_mod, get_dest_index_in_faces(local_tile, i));
+    }
+}
+
+/**
  * @brief Copy a tile into the destination register, optionally broadcasting source B.
  *
  * For the unpack-to-dest path with 32-bit data, applies the Blackhole hi16/lo16 broadcast workarounds
@@ -63,24 +93,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
         }
 
-        // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
-        // (such as Unpack-to-dest or RISC-to-dest) and a ZEROACC instruction from packer occur in the same cycle,
-        // zero flags clearing is dropped.
-        // To mitigate that, we issue additional zero flag clear instruction immediately after unpack tile to dest is done.
-        // RISC-to-dest event is not currently used.
-
-        const std::uint32_t dst_format_masked = masked_data_format(dst_format);
-        const int clear_fp32                  = static_cast<int>(
-            dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
-            dst_format_masked == (std::uint32_t)DataFormat::UInt32);
-        const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
-        const std::uint32_t local_tile     = dst_index & (tiles_per_bank - 1);
-#pragma GCC unroll 0
-        for (std::uint32_t i = 0; i < num_faces; i++)
-        {
-            // Clears zero flags in DEST for one face.
-            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_3, get_dest_index_in_faces(local_tile, i));
-        }
+        // budabackend#2730
+        _llk_math_clear_unpack_to_dest_zero_flags_<ADDR_MOD_3>(dst_index, dst_format, num_faces);
 
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
@@ -588,4 +602,38 @@ inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_faces
 template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_dest = false>
 inline void _llk_math_eltwise_unary_datacopy_uninit_()
 {
+}
+
+/**
+ * @brief Math-thread half of @ref _llk_unpack_A_to_dest_tiles_: hand the unpacker the DEST address of ntiles
+ *        consecutive 32-bit tiles at once, wait until it has written them, then re-clear their zero flags.
+ *
+ * @param dst_index: DEST tile index of the first tile, relative to the current DEST section.
+ * @param ntiles: Number of tiles.
+ * @param dst_format: DEST data format of the operand (DataFormat enum underlying value); a 32-bit format.
+ * @param num_faces: Faces per tile, values = <1, 2, 4>.
+ * @note Needs no datacopy init and leaves the MOP and every address mod but ADDR_MOD_7 as they were. Pair with
+ *       @ref _llk_unpack_A_to_dest_tiles_ on the unpack thread, with the same ntiles.
+ */
+inline void _llk_math_unpack_to_dest_tiles_(
+    const std::uint32_t dst_index, const std::uint32_t ntiles, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
+
+    math_unpack_to_dest_math_ready();
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
+    math::math_unpack_to_dest_tile_ready();
+
+#pragma GCC unroll 0
+    for (std::uint32_t t = 0; t < ntiles; t++)
+    {
+        _llk_math_clear_unpack_to_dest_zero_flags_<ADDR_MOD_7>(dst_index + t, dst_format, num_faces);
+    }
 }

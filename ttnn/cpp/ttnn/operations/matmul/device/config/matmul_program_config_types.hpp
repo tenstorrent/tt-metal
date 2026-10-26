@@ -35,6 +35,8 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
     std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
+    // Add a row-broadcast bias to each output subblock in DEST (Blackhole only; no effect without a bias).
+    bool bias_in_dest = false;
 };
 
 // 1D mcast matmul program config.
