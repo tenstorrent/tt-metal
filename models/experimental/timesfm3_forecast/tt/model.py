@@ -58,6 +58,7 @@ EPS = torch.finfo(torch.float32).eps  # nn.RMSNorm(eps=None) on fp32 weights
 QK_EPS = EPS * QK_EPS_PAD
 MASK_FILL = -1e9  # finite: a fully masked query row (leading padding) gets uniform weights, never NaN
 _MAX_SDPA_CHUNK = 256
+_MASKED_SDPA_CHUNK = 128
 
 
 # R2-4 (iter_01/r2_4/micro.json): the fused kernel wins at 65536 rows (1.70 vs 2.76 ms) and loses at 2048-3008
@@ -87,9 +88,10 @@ def load_checkpoint_weights(num_layers: int = NUM_LAYERS, layers=None) -> Weight
     return w
 
 
-def sdpa_chunk(padded_len: int) -> int:
-    """Largest tile multiple up to 256 that divides the padded sequence."""
-    return max(c for c in range(TILE, min(padded_len, _MAX_SDPA_CHUNK) + 1, TILE) if padded_len % c == 0)
+def sdpa_chunk(padded_len: int, masked: bool = False) -> int:
+    """Largest tile multiple up to 256 (128 with a user mask, PLAN F9) that divides the padded sequence."""
+    cap = _MASKED_SDPA_CHUNK if masked else _MAX_SDPA_CHUNK
+    return max(c for c in range(TILE, min(padded_len, cap) + 1, TILE) if padded_len % c == 0)
 
 
 @dataclass
@@ -290,8 +292,8 @@ class TtTimesFM3:
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-            q_chunk_size=sdpa_chunk(q.padded_shape[-2]),
-            k_chunk_size=sdpa_chunk(k.padded_shape[-2]),
+            q_chunk_size=sdpa_chunk(q.padded_shape[-2], mask is not None),
+            k_chunk_size=sdpa_chunk(k.padded_shape[-2], mask is not None),
             exp_approx_mode=False,
         )
         ctx = ttnn.transformer.scaled_dot_product_attention(

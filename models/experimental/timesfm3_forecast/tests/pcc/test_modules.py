@@ -194,6 +194,61 @@ def test_sdpa_padded_keys(device):
     assert err_none < 0.05 and err_padded < 0.05
 
 
+@pytest.mark.parametrize("seq", [256, 512])
+def test_sdpa_masked_chunk_cap(device, seq):
+    """PLAN F9 / v1.13: SDPA with a user mask at the model's chunk (capped at 128 when masked) against torch,
+    with realistic logits (std ~3), fully masked query rows (leading padding) and a masked key tail. Prints the
+    max |diff| between the capped run and a run forced to chunk 256; a positive control (the mask dropped on one
+    masked key block) must fail the same check."""
+    import ttnn
+
+    from models.experimental.timesfm3_forecast.common.decomposition import HEAD_DIM_PAD, SDPA_SCALE
+    from models.experimental.timesfm3_forecast.tt.common import upload
+    from models.experimental.timesfm3_forecast.tt.model import MASK_FILL, sdpa_chunk
+
+    torch.manual_seed(1)
+    b, h, d = 2, 4, HEAD_DIM_PAD
+    lead, tail = seq // 4 + 32, 32  # leading padding spans past one 128 key block; a padded key tail
+    q, k, val = torch.randn(b, h, seq, d), torch.randn(b, h, seq, d), torch.randn(b, h, seq, d)
+    q = q * (3.0 / (SDPA_SCALE * d**0.5))  # logit std ~3
+    mask = torch.zeros(b, 1, seq, seq)
+    mask[..., :lead] = MASK_FILL
+    mask[..., seq - tail :] = MASK_FILL
+    ref = torch.softmax((q @ k.transpose(-1, -2)) * SDPA_SCALE + mask, -1) @ val
+    rows = slice(lead, seq - tail)  # valid query rows (masked rows are uniform over masked keys: not compared)
+    dev = [upload(device, t) for t in (q, k, val)]
+
+    def run(m, chunk):
+        cfg = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=chunk,
+            k_chunk_size=chunk,
+            exp_approx_mode=False,
+        )
+        out = ttnn.transformer.scaled_dot_product_attention(
+            *dev, attn_mask=upload(device, m), is_causal=False, scale=SDPA_SCALE, program_config=cfg
+        )
+        got = ttnn.to_torch(out).float()
+        assert torch.isfinite(got).all()
+        return got[:, :, rows]
+
+    chunk = sdpa_chunk(seq, masked=True)
+    assert chunk == 128
+    capped, forced = run(mask, chunk), run(mask, 256)
+    broken_mask = mask.clone()
+    broken_mask[..., 128:256] = 0.0  # positive control: one masked key block un-masked
+    broken = run(broken_mask, chunk)
+    want = ref[:, :, rows]
+    err = lambda t: float((t - want).abs().max())  # noqa: E731
+    print(
+        f"[F9] S={seq}: max|err| capped {err(capped):.4f}, forced-256 {err(forced):.4f}, "
+        f"max|capped - forced| {float((capped - forced).abs().max()):.4f}, positive control {err(broken):.4f}"
+    )
+    tol = 0.5  # bf16 inputs at logit std 3 measure 0.12-0.20 (job 808); the positive control measures ~3.4
+    assert err(capped) < tol
+    assert err(broken) >= tol, "positive control passed: the check is too weak to judge the mask"
+
+
 @pytest.mark.parametrize("variates", [2, 8, 32])
 def test_var_attention_packed(device, variates):
     """R2-2: the packed variate attention (32 / V items per tile, block-diagonal mask) against the unpacked
@@ -248,11 +303,29 @@ def test_var_norm_fused(device, variates):
     finally:
         tt.fuse_var_norm = saved
         tt.deallocate_inputs(inputs)
+    from models.experimental.timesfm3_forecast.tests.golden import dataflow
+    from models.experimental.timesfm3_forecast.tt.model import load_checkpoint_weights
+
+    # D5: the tolerance is judged against the fp32 reference, which both device paths are measured against.
+    masks = dataflow.Masks.build(nfm, variates, n)
+    ref = dataflow.var_attention(h1, load_checkpoint_weights(layers=[0]).layers[0].var, masks, masks.token_valid)
     valid = (torch.arange(n)[None, :] >= nfm[:, None])[..., None].expand(-1, -1, 1280)
-    diff = float((outs[0][valid] - outs[1][valid]).abs().max())
-    print(f"[var norm fused] V={variates} max diff vs chain {diff:.5f}")
-    check_pcc(f"fused vs chain V={variates}", outs[0], outs[1], 0.99999, where=valid)
-    assert diff < 0.25  # one bf16 rounding at |out| >= 16, as test_var_attention_packed
+    err = lambda t: float((t[valid] - ref[valid]).abs().max())  # noqa: E731
+    chain, fused = outs
+    broken = fused.clone()
+    broken[: items * variates // 2] = h1[: items * variates // 2]  # positive control: half the rows skip the sublayer
+    diff = float((chain[valid] - fused[valid]).abs().max())
+    print(
+        f"[var norm fused] V={variates} max|err| vs fp32: chain {err(chain):.5f}, fused {err(fused):.5f}, "
+        f"positive control {err(broken):.5f}; max|fused - chain| {diff:.5f}"
+    )
+    check_pcc(f"fused vs chain V={variates}", chain, fused, 0.99999, where=valid)
+    # The unfused chain is itself ~0.40 off fp32 (job 811: bf16 at |h| >= 16, one ulp 0.125), so 0.25 fused vs
+    # chain (2 ulp; 0.125 measured, jobs 777 and 811) is within the chain's own error; the fused path may add at
+    # most one ulp of error over the chain against fp32.
+    tol = 0.25
+    assert diff < tol and err(fused) <= err(chain) + 0.125
+    assert err(broken) > err(chain) + 0.125, "positive control passed: the check is too loose to judge the kernel"
 
 
 def test_var_attention_packed_mask_control(device):
@@ -429,11 +502,16 @@ def test_post_add_norm(device, rows):
     h, xn = post_add_norm(o, r, gain, epsilon=EPS)
     got = [ttnn.to_torch(t).float() for t in (h, xn)]
     ref = [ttnn.to_torch(t).float() for t in (h_ref, xn_ref)]
-    scale = ttnn.to_torch(r).float().abs() + ttnn.to_torch(y).float().abs()
+    o_t, r_t = ttnn.to_torch(o).float(), ttnn.to_torch(r).float()
+    scale = r_t.abs() + ttnn.to_torch(y).float().abs()
     for t in (o, r, y, h_ref, xn_ref, h, xn):
         ttnn.deallocate(t)
     for name, a, b in zip(("h", "xn"), ref, got):
         check_pcc(f"post_add_norm {name} @ {rows}", a, b, 0.99999)
     # h: within one bf16 rounding of its operands (|res| + |y|; h itself can cancel to ~0); xn: a few ulp.
-    assert ((got[0] - ref[0]).abs() <= scale * 2**-7 + 1e-3).all()
-    assert (got[1] - ref[1]).abs().max() <= 0.0625
+    within = lambda h, x: ((h - ref[0]).abs() <= scale * 2**-7 + 1e-3).all() and (x - ref[1]).abs().max() <= 0.0625  # noqa: E731
+    assert within(*got)
+    # Positive control: the post norm skipped on one 32-row tile (h = r + o there) must fail the same check.
+    bad_h, bad_x = got[0].clone(), got[1].clone()
+    bad_h[..., :32, :] = r_t[..., :32, :] + o_t[..., :32, :]
+    assert not within(bad_h, bad_x), "positive control passed: the tolerance is too loose to judge the kernel"

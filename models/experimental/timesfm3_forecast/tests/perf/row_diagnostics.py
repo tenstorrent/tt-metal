@@ -95,6 +95,25 @@ def main():
     report["worst_by_spread_ratio"] = rows(idx[torch.argsort((ratio[idx] - 1).abs(), descending=True)])
     report["worst_by_pcc"] = rows(idx[torch.argsort(pccs[idx])])
     report["band_norm_median_active"] = float(band[active].median())
+    # D5 / PLAN v1.16: the element behind abs_err_max, against its row's own scale and the bf16 spacing there.
+    diff = (d - e).flatten(1).abs()
+    r, j = divmod(int(diff.argmax()), diff.shape[1])
+    gv, dv = float(e.flatten(1)[r, j]), float(d.flatten(1)[r, j])
+    report["abs_err_max"] = {
+        "row": r,
+        "kind": str(kinds[r]),
+        "active": bool(active[r]),
+        "element": j,
+        "golden": gv,
+        "device": dv,
+        "abs_err": float(diff[r, j]),
+        "row_std": float(e[r].std()),
+        "row_abs_max": float(e[r].abs().max()),
+        "rel_to_row_std": float(diff[r, j] / e[r].std()),
+        "bf16_ulp_at_golden": float(2.0 ** (torch.tensor(abs(gv)).log2().floor() - 7)) if gv else 0.0,
+        "row_abs_err_max_p99_over_rows": float(torch.quantile(diff.amax(-1), 0.99)),
+    }
+    print(f"[ABS_ERR_MAX] {report['abs_err_max']}")
     args.out.write_text(json.dumps(report, indent=1) + "\n")
     print(json.dumps({k: report[k] for k in ("precision", "metrics")}, indent=1))
     for k, v in report["kinds"].items():

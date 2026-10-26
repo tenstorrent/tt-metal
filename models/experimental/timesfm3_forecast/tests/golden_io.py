@@ -116,9 +116,28 @@ DRIFT = {
 DRIFT_CASE = {("paper", "spread_ratio_p01"): 0.03}
 
 
-def gate_failures(metrics: dict, precision: str) -> dict:
-    """The metrics outside their gate: {metric: (value, op, bound)}."""
+# D5: ``inactive_err_max_rel`` floor (<=) per case, both precisions; a case is matched by name ("bench_paper[:64]"
+# is paper). Not applicable when the golden has no inactive rows (``rows_inactive`` 0): printed as N/A.
+INACTIVE_ERR_MAX_REL = {"paper": 0.15, "long_context": 0.06, "multivariate": 0.06}
+
+
+def inactive_floor(case: str | None) -> float | None:
+    """The ``inactive_err_max_rel`` bound of the case named ``case``, or None if it has none."""
+    hits = [b for k, b in INACTIVE_ERR_MAX_REL.items() if case and k in case]
+    return hits[0] if len(hits) == 1 else None
+
+
+def gate_failures(metrics: dict, precision: str, case: str | None = None) -> dict:
+    """The metrics outside their gate: {metric: (value, op, bound)}. With ``case``, also ``inactive_err_max_rel``
+    against the case's floor when the metrics have inactive rows; a case with inactive rows and no floor fails."""
     out = {}
+    if case is not None:
+        if "rows_inactive" not in metrics:
+            out["rows_inactive"] = (None, ">=", 0)
+        elif metrics["rows_inactive"] > 0:
+            bound, v = inactive_floor(case), metrics.get("inactive_err_max_rel")
+            if bound is None or v is None or not v <= bound:
+                out["inactive_err_max_rel"] = (v, "<=", bound)
     for k, (op, bound) in GATES[precision].items():
         if k not in metrics:
             out[k] = (None, op, bound)
@@ -228,7 +247,11 @@ def check_gates(
         + ", ".join(f"{k} {v:.6f}" + (f" ({gates[k][0]} {gates[k][1]})" if k in gates else "") for k, v in m.items()),
         flush=True,
     )
-    failures = gate_failures(m, precision)
+    failures = gate_failures(m, precision, name)
+    if m["rows_inactive"]:
+        print(f"[METRICS] {name}: inactive_err_max_rel <= {inactive_floor(name)}", flush=True)
+    else:
+        print(f"[METRICS] {name}: inactive_err_max_rel N/A (rows_inactive 0)", flush=True)
     if expected_q is None:  # head-only check: the data-space metrics are not computed here
         failures = {k: v for k, v in failures.items() if not k.startswith("pcc_final")}
     assert not failures, f"{name}: outside the gates: {failures}"

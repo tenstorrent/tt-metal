@@ -182,8 +182,10 @@ def test_v19_broken_outputs_fail_a_floor(name):
         m = head_metrics(head, broken, active)
         print(f"[BROKEN {label}] {name}: " + ", ".join(f"{k} {v:.5f}" for k, v in m.items()))
         for precision in ("accuracy", "performance"):
-            fails = gate_failures(m, precision)
+            fails = gate_failures(m, precision, name)
             print(f"   {precision}: fails {sorted(fails)}")
+            if label == "inactive collapsed":  # D5: the per-case inactive floor alone must reject it
+                assert "inactive_err_max_rel" in fails, f"{name}: inactive collapse passes inactive_err_max_rel"
             assert fails, f"{name}: '{label}' passes every {precision} floor"
 
 
@@ -195,3 +197,35 @@ def test_dropped_trailing_tokens(horizon):
     assert g["horizon"] == horizon
     assert hi.num_kept_patches == hi.readout_tokens.stop
     assert hi.num_patches - hi.num_kept_patches == host.ROLLS == 2
+
+
+def test_check_gates_rejects_broken_records():
+    """PLAN v1.17 / D5: the measured final record passes ``check_gates.py`` against its fixed records, and each
+    broken variant fails: an inactive collapse at the paper broken score (0.213) and at the long_context /
+    multivariate ones (0.097 / 0.102), abs_err_max at 2x, a missing drift metric, a fixed record lacking a drift
+    metric, a missing ``git_dirty``."""
+    import copy
+    import json
+
+    from models.experimental.timesfm3_forecast.tests.perf import check_gates as cg
+
+    paths = {cg.DEFAULT_REFERENCE, *cg.METRIC_REFERENCES.values(), *cg.CASE_REFERENCES.values()}
+    refs = {p: cg._load(p) for p in paths}
+    final = cg._load(cg._OPT / "final" / "bench.json")
+    assert cg.check(final, refs) == 0
+
+    def broken(case, edit, in_refs=False):
+        c, r = copy.deepcopy(final), copy.deepcopy(refs)
+        if in_refs:
+            edit(next(v for k, v in r[cg.DEFAULT_REFERENCE].items() if k[1] == case))
+        else:
+            edit(next(v for k, v in c.items() if k[1] == case))
+        return cg.check(c, r)
+
+    for case, score in (("paper", 0.213), ("long_context", 0.097), ("multivariate", 0.102)):
+        assert broken(case, lambda rec: rec.update(inactive_err_max_rel=score)) == 1, case
+    assert broken("paper", lambda rec: rec.update(abs_err_max=2 * rec["abs_err_max"])) == 1
+    assert broken("paper", lambda rec: rec.pop("pcc_spread")) == 1
+    assert broken("paper", lambda rec: rec.pop("pcc_spread"), in_refs=True) == 1
+    assert broken("paper", lambda rec: rec.pop("git_dirty")) == 1
+    print(json.dumps({"checked": len(final)}))

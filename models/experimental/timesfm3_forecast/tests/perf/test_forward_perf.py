@@ -121,7 +121,7 @@ def test_forward_perf(device, shape, precision):
 
     metrics = {**head_metrics(g["head_readout"], head), **final_metrics(g["quantiles"], torch.from_numpy(quantiles))}
     pcc_normalized = metrics["pcc_normalized"]
-    failures = gate_failures(metrics, precision)
+    failures = gate_failures(metrics, precision, shape)
     rows, tokens = prepared.rows, prepared.num_patches
     print(
         f"\n[PERF] forward {shape} / {precision}: {rows} rows x {tokens} tokens"
