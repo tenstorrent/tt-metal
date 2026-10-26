@@ -70,7 +70,7 @@ struct Widths {
 };
 
 struct Inputs {
-    ttnn::Tensor input_rm, input_tile, history_rm, actual_start;
+    ttnn::Tensor input_tile, history_rm, actual_start;
     std::array<ttnn::Tensor, 4> taps;
     ttnn::Tensor grad_q, grad_k, grad_v;
 };
@@ -78,10 +78,8 @@ struct Inputs {
 Inputs make_inputs(uint32_t T, Widths w) {
     auto* device = &ttml::autograd::ctx().get_device();
     const auto tap = [&](uint32_t j) { return random_device(ttnn::Shape{1, 1, w.c()}, 3 + j); };
-    auto input_rm = random_device(ttnn::Shape{1, T, w.c()}, 1, ttnn::Layout::ROW_MAJOR);
     return Inputs{
-        input_rm,
-        ttnn::to_layout(input_rm, ttnn::Layout::TILE),
+        random_device(ttnn::Shape{1, T, w.c()}, 1),
         random_device(ttnn::Shape{1, 3, w.c()}, 2, ttnn::Layout::ROW_MAJOR),
         ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
             std::vector<uint32_t>{0}, ttnn::Shape({1}), device, ttnn::Layout::ROW_MAJOR),
