@@ -228,6 +228,9 @@ class GLM53MeshModel:
                     ttnn.deallocate(out[1])
             t0 = time.perf_counter()
             out = self.prefill(prompt_ids[s0:e], user=user, start=s0)
+            # host time to enqueue the chunk (tt-blaze G53F-0202): ~ the wall when the host binds, below it when
+            # the device does (the command queue absorbs the difference)
+            self.last_enqueue_s = time.perf_counter() - t0
             if on_chunk is not None:
                 ttnn.synchronize_device(self.device)
                 on_chunk(s0, e, time.perf_counter() - t0)

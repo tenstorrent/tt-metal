@@ -126,7 +126,8 @@ REGIONS_GATHER = os.environ.get("GLM53_REGIONS_GATHER", "embedding")
 REGIONS_COMBINE = os.environ.get("GLM53_REGIONS_COMBINE", "fused")
 # regions path: the expert output (bf8 TILE [max_buf, H]) -> the gather table (bf16 rows) (tt-blaze G53F-0192): "two" =
 # ttnn.typecast to bf16 TILE, then to_layout(ROW_MAJOR); "direct" = one ttnn.untilize (bf8 in, bf16 rows out; default since
-# 2026-10-26, bitwise on 32 chips, 2.2x per call). Read at call time.
+# 2026-10-26, bitwise on 32 chips, 2.2x per call); "used" = custom_ops/untilize_used, only the rows below the
+# device-side end of the local regions + the dummy row (zeros), routed path only (G53F-0203). Read at call time.
 REGIONS_UNTILIZE = os.environ.get("GLM53_REGIONS_UNTILIZE", "direct")
 # regions path: how the region buffer is filled (tt-blaze G53F-0193): "embedding" = slots to a uint32 row copy +
 # ttnn.scatter of a slot -> token map + ttnn.embedding of every max_buf row; "custom" = custom_ops/region_scatter, only
@@ -355,7 +356,7 @@ class TtRouter(LightweightModule):
         ttnn.deallocate(scores)
         return w, idx32, dense
 
-    def _forward_topk(self, scores, choice, T, dense_only=False, ep_rows=False):
+    def _forward_topk(self, scores, choice, T, dense_only=False, ep_rows=False, need_dense=True):
         """One fp32 ``ttnn.topk`` (stable bitonic network: exact fp32 ranking, lowest index on ties) over the
         biased scores, the unbiased scores gathered at the winners, renormalized (sum -> scale/sum -> multiply;
         the sum of sigmoids is > 0, no epsilon) and scattered into the dense [1,1,T,E] matrix: 8 device ops
@@ -380,6 +381,11 @@ class TtRouter(LightweightModule):
         if ep_rows:  # the EP mesh path: the bf16 weights and the uint32 ids as topk ranked them, no dense matrix
             ttnn.deallocate(w)
             return w16, idx, None
+        if not need_dense:  # the routed regions path reads the lists only (tt-blaze G53F-0201)
+            ttnn.deallocate(w16)
+            idx32 = ttnn.typecast(idx, ttnn.float32)
+            ttnn.deallocate(idx)
+            return w, idx32, None
         dense = ttnn.scatter(self._dense_zeros(T), -1, idx, w16)  # [1,1,T,E] bf16: weights at their columns
         ttnn.deallocate(w16)
         if dense_only:
@@ -399,12 +405,19 @@ class TtRouter(LightweightModule):
         return self._const[key]
 
     def forward(
-        self, x: ttnn.Tensor, *, dense_only: bool = False, ep_rows: bool = False, prefill: bool = False
+        self,
+        x: ttnn.Tensor,
+        *,
+        dense_only: bool = False,
+        ep_rows: bool = False,
+        prefill: bool = False,
+        need_dense: bool = True,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """x [1,1,T,H] bf16 -> (weights [1,1,T,8] fp32, indices [1,1,T,8] fp32 (integral), dense [1,1,T,E] fp32).
         ``dense_only`` (the MoE forward): weights / indices come back as ``None`` (their host-side casts are skipped).
         ``ep_rows`` (the EP mesh path, ``topk`` tie-break only): (weights [1,1,T,8] bf16, indices [1,1,T,8] uint32,
-        None): the exact ids for the all_to_all dispatch, no dense matrix.
+        None): the exact ids for the all_to_all dispatch, no dense matrix. ``need_dense=False`` (the routed regions
+        path, ``TtRoutedExperts.needs_dense``; composite topk path only): (weights, indices, None), no scatter.
 
         Exact fp32 selection (HF noaux_tc, n_group=1): ``choice = sigmoid(logits) + bias``, top-8 by
         iterative masked argmax, weights = unbiased scores at the selected experts, renormalized and
@@ -425,7 +438,7 @@ class TtRouter(LightweightModule):
             ttnn.deallocate(logits)
         choice = ttnn.add(scores, self.bias)
         if self.tie_break == "topk":
-            return self._forward_topk(scores, choice, T, dense_only=dense_only, ep_rows=ep_rows)
+            return self._forward_topk(scores, choice, T, dense_only=dense_only, ep_rows=ep_rows, need_dense=need_dense)
         assert not ep_rows, "ep_rows needs the topk tie-break"
         dense = None  # selected unbiased scores at their expert columns, else 0
         idx_cols, w_cols = [], []
@@ -683,6 +696,7 @@ class TtRoutedExperts(LightweightModule):
         self._gather_combine = None  # custom_ops/gather_combine_reduce (GLM53_REGIONS_COMBINE=fused), on first use
         self._region_scatter = None  # custom_ops/region_scatter (GLM53_REGIONS_SCATTER=custom), on first use
         self._route_table = None  # custom_ops/route_table (GLM53_REGIONS_ROUTE=custom), on first use
+        self._untilize_used = None  # custom_ops/untilize_used (GLM53_REGIONS_UNTILIZE=used, G53F-0203), on first use
         if self.prefill_experts in ("dispatch", "regions"):
             self._build_dispatch_path(fabric=self.prefill_experts == "dispatch")
         # column c's expert selector: the [E, E_local] block of the identity for its experts
@@ -1086,8 +1100,19 @@ class TtRoutedExperts(LightweightModule):
             y = ttnn.typecast(y, self.activation_dtype)
         return y
 
+    def needs_dense(self, T: int) -> bool:
+        """Whether ``forward`` over T gathered tokens reads the router's dense [T, E] matrix (tt-blaze G53F-0201): the
+        fabric dispatch and the routed regions path (route table + region scatter + fused combine, no fit buffer)
+        read the top-k lists only, so the router skips its scatter and the rows skip its all-gather."""
+        if self.dense or self._dispatch is None or not (T > TILE or self.w13 is None):
+            return True
+        if self._dispatch["fabric"]:
+            return False
+        routed = REGIONS_ROUTE == "custom" and REGIONS_SCATTER == "custom" and REGIONS_COMBINE == "fused"
+        return not routed or (REGIONS_BUF == "fit" and not self.dispatch_max_tokens)
+
     def _forward_regions_chunked(
-        self, x: ttnn.Tensor, dense_w: ttnn.Tensor, idx: ttnn.Tensor, w: ttnn.Tensor
+        self, x: ttnn.Tensor, dense_w: ttnn.Tensor | None, idx: ttnn.Tensor, w: ttnn.Tensor
     ) -> ttnn.Tensor:
         """The regions path in row sub-chunks of at most REGIONS_T gathered tokens (memory bound of the region buffer
         and the per-pick gather tables at long contexts); one call when T fits."""
@@ -1102,10 +1127,14 @@ class TtRoutedExperts(LightweightModule):
             return self._forward_regions(x, dense_w, idx, w, max_buf=bufs[0] if bufs else None)
         outs = []
         for i, (t0, t1) in enumerate(spans):
-            parts = [ttnn.slice(t, [0, 0, t0, 0], [1, 1, t1, t.shape[-1]]) for t in (x, dense_w, idx, w)]
+            parts = [
+                None if t is None else ttnn.slice(t, [0, 0, t0, 0], [1, 1, t1, t.shape[-1]])
+                for t in (x, dense_w, idx, w)
+            ]
             outs.append(self._forward_regions(*parts, max_buf=bufs[i] if bufs else None))
             for t in parts:
-                ttnn.deallocate(t)
+                if t is not None:
+                    ttnn.deallocate(t)
         y = ttnn.concat(outs, dim=-2)
         for o in outs:
             ttnn.deallocate(o)
@@ -1160,7 +1189,8 @@ class TtRoutedExperts(LightweightModule):
         T_pad = -(-T // TILE) * TILE
         padded = []
         if T_pad != T:
-            x, dense_w, idx, w = padded = [self._pad_rows(t, T_pad) for t in (x, dense_w, idx, w)]
+            x, dense_w, idx, w = [None if t is None else self._pad_rows(t, T_pad) for t in (x, dense_w, idx, w)]
+            padded = [t for t in (x, dense_w, idx, w) if t is not None]
         T_logical, T = T, T_pad
         if REGIONS_ROUTE == "custom" and REGIONS_SCATTER == "custom" and REGIONS_COMBINE == "fused":
             return self._forward_regions_routed(x, idx, w, T_logical, padded, max_buf)
@@ -1293,6 +1323,9 @@ class TtRoutedExperts(LightweightModule):
             from models.demos.glm53_flash.custom_ops.gather_combine_reduce.op import GatherCombineReduce
 
             self._gather_combine = GatherCombineReduce(self.device)
+        nd = os.environ.get("GLM53_REGIONS_WEIGHTS_ND", "")
+        if nd and d.get("nd") != nd:
+            self._weights_to_nd(nd)
         pos_tk, w_loc, counts, offsets = self._route_table(idx, w, d["table_rm"], max_buf)
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [T, H])
         buf = self._region_scatter(x_rm, pos_tk, max_buf)
@@ -1310,7 +1343,15 @@ class TtRoutedExperts(LightweightModule):
             activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
         )  # [max_buf, H] bf8 TILE
         ttnn.deallocate(buf)
-        if REGIONS_UNTILIZE == "direct" and out.dtype == ttnn.bfloat8_b:
+        if REGIONS_UNTILIZE == "used" and out.dtype == ttnn.bfloat8_b:
+            # G53F-0203: only the rows below the device-side run (the local regions) + the zeroed dummy row
+            if self._untilize_used is None:
+                from models.demos.glm53_flash.custom_ops.untilize_used.op import UntilizeUsed
+
+                self._untilize_used = UntilizeUsed(self.device)
+            y_rm = self._untilize_used(out, counts, offsets)
+            ttnn.deallocate(out)
+        elif REGIONS_UNTILIZE == "direct" and out.dtype == ttnn.bfloat8_b:
             y_rm = ttnn.untilize(out)
             ttnn.deallocate(out)
         else:
@@ -1333,6 +1374,24 @@ class TtRoutedExperts(LightweightModule):
         if T_logical != T:
             y = ttnn.slice(y, [0, 0, 0, 0], [1, 1, T_logical, H])
         return y
+
+    def _weights_to_nd(self, mode: str) -> None:
+        """``GLM53_REGIONS_WEIGHTS_ND`` = ``down`` | ``all`` (tt-blaze G53F-0204): move the regions path's per-expert
+        weights (interleaved ``ttnn.slice`` copies) to the DRAM ND-sharded placement ``unified_routed_expert_moe``
+        coalesces into one NoC request per core per K row (``deepseek_v3_d_p`` ``routed_expert_weight_memory_config``,
+        the d_p model's Blackhole default). Same values, so the same outputs; one-way, on the first call that asks."""
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import routed_expert_weight_memory_config
+
+        assert mode in ("down", "all"), mode
+        d = self._dispatch
+        for name in ("down",) if mode == "down" else ("gate", "up", "down"):
+            moved = []
+            for w_ in d[name]:
+                cfg = routed_expert_weight_memory_config(self.device, int(w_.shape[-1]), True)
+                moved.append(ttnn.to_memory_config(w_, cfg))
+                ttnn.deallocate(w_)
+            d[name] = moved
+        d["nd"] = mode
 
     def _gather_rows(self, idx: ttnn.Tensor, table: ttnn.Tensor) -> ttnn.Tensor:
         """[1, N] uint32 ids into a [R, H] bf16 row-major table -> [1, N, H] row-major (``REGIONS_GATHER``)."""
@@ -1418,14 +1477,16 @@ class TtRoutedExperts(LightweightModule):
         reduce-scattered back to each token's row."""
         if self.mesh.rows > 1:
             x = self.mesh.all_gather_rows(x, dim=2)
-            dense_w = self.mesh.all_gather_rows(dense_w, dim=2)
+            if dense_w is not None:  # None: the routed regions path (needs_dense)
+                dense_w = self.mesh.all_gather_rows(dense_w, dim=2)
             if idx is not None:
                 idx = self.mesh.all_gather_rows(idx, dim=2)
                 w = self.mesh.all_gather_rows(w, dim=2)
         y = self._local_experts(x, dense_w, idx, w)
         if self.mesh.rows > 1:
             ttnn.deallocate(x)
-            ttnn.deallocate(dense_w)
+            if dense_w is not None:
+                ttnn.deallocate(dense_w)
             if idx is not None:
                 ttnn.deallocate(idx)
                 ttnn.deallocate(w)
@@ -1936,10 +1997,13 @@ class TtMoE(LightweightModule):
             for t in (w, idx, dense):
                 ttnn.deallocate(t)
         elif getattr(self.experts, "_dispatch", None) is not None:
-            w, idx, dense = self.router(x, prefill=prefill)
+            need = (
+                self.experts.needs_dense(x.shape[-2] * self.mesh.rows) or os.environ.get("GLM53_MOE_DENSE", "") == "1"
+            )
+            w, idx, dense = self.router(x, prefill=prefill, need_dense=need)
             routed = self.experts(x, dense, idx=idx, w=w)
             for t in (w, idx, dense):
-                if t.is_allocated():
+                if t is not None and t.is_allocated():
                     ttnn.deallocate(t)
         else:
             _, _, dense = self.router(x, dense_only=True, prefill=prefill)

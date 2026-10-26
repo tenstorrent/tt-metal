@@ -112,6 +112,21 @@ def _instrument(model, prof: Prof):
         if layer.is_moe:
             for sub in ("router", "experts", "shared"):
                 prof.wrap(getattr(layer.mlp, sub), "forward", f"ffn.moe.{sub}")
+            prof.wrap(layer.mlp.experts, "_local_experts", "ffn.moe.experts.local")
+        # tt-blaze G53F-0202: the wraps' pre / post blocks (the instance attributes shadow the class methods)
+        for hc_name in ("attn_hc", "ffn_hc"):
+            hc = getattr(layer, hc_name)
+            for part in ("_pre", "_post"):
+                if hasattr(hc, part):
+                    prof.wrap(hc, part, f"mhc.{part[1:]}")
+    # every row / column collective of the model (one GLMMesh object is shared by all modules)
+    meshes = {
+        id(dec.layer.mesh): dec.layer.mesh for dec in model.layers if getattr(dec.layer, "mesh", None) is not None
+    }
+    for m in meshes.values():
+        for name in ("all_gather_rows", "reduce_scatter_rows", "all_reduce_cols", "all_gather_cols", "all_reduce_rows"):
+            if hasattr(m, name):
+                prof.wrap(m, name, f"ccl.{name}")
 
 
 def _set_dsa_timer(model, prof: Prof, on: bool):
@@ -145,6 +160,7 @@ def test_prefill_profile(mesh_device):
     prompt = torch.tensor(ids, dtype=torch.int64)
     prof = Prof(mesh_device)
     _instrument(model, prof)
+    run_env_prev: dict = {}
     f = open(OUT, "a")
     full = prompt
     for p, spec in enumerate(RUNS):
@@ -172,9 +188,17 @@ def test_prefill_profile(mesh_device):
             moe_mod.REGIONS_ROUTE = spec[13]
         if len(spec) > 14 and spec[14]:  # prefill mHC h through the pre-mix kernel (0 | 1, G53F-0197; read per call)
             os.environ["GLM53_MHC_PREFILL_HMIX"] = spec[14]
+        # the previous run's env knobs back to their values before it (a knob holds for its own run only)
+        for k_, old in run_env_prev.items():
+            if old is None:
+                os.environ.pop(k_, None)
+            else:
+                os.environ[k_] = old
+        run_env_prev = {}
         if len(spec) > 15 and spec[15]:  # NAME=VALUE|NAME=VALUE: env knobs read per call (bucket, no-crop, gather ring)
             for kv in spec[15].split("|"):
                 k_, _, v_ = kv.partition("=")
+                run_env_prev.setdefault(k_, os.environ.get(k_))
                 os.environ[k_] = v_
         if len(spec) > 7 and spec[7]:  # prefill mHC rows (wrap | fast | trace, G53F-0187 / 0188; tt/mhc.py)
             from models.demos.glm53_flash.tt import mhc as mhc_mod
@@ -200,6 +224,7 @@ def test_prefill_profile(mesh_device):
                 start=s0,
                 end=e,
                 seconds=round(secs, 4),
+                enqueue_s=round(getattr(model, "last_enqueue_s", float("nan")), 4),
             )
             if instr:
                 row["parts"] = {k: round(v, 4) for k, v in prof.take().items()}
