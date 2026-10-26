@@ -1,0 +1,26 @@
+{
+  "shape": "paper",
+  "precision": "accuracy",
+  "test": "forward",
+  "checkpoint": "2.5B-FT",
+  "rows": 1024,
+  "seq_len": 66,
+  "window": [
+    "MODEL_START",
+    "MODEL_END"
+  ],
+  "sections": [
+    "embed",
+    "layer_time",
+    "last_time",
+    "layer_variate",
+    "head"
+  ],
+  "counts": {
+    "embed": 1,
+    "layer_time": 46,
+    "last_time": 1,
+    "layer_variate": 1,
+    "head": 1
+  }
+}

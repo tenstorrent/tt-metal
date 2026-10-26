@@ -1,0 +1,220 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'MODEL_START'.
+Using operations until 'MODEL_END'.
+Detected data from 1 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID   Total %  Bound  OP Code                                    Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs         FLOPs %  Math Fidelity            
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 69    3.4 %   SLOW  MatmulDeviceOperation 98304 x 64 x 8192          0    10,089 μs                  110  161 GB/s  31.4 %   10.2 TFLOPs    3.4 %  HiFi2 BF16 x BF16 => BF16
+ 70    2.4 %         UnaryDeviceOperation                             0     7,080 μs          1 μs    110                                                        BF16 => BF16
+ 71   13.2 %   SLOW  MatmulDeviceOperation 98304 x 8192 x 2048        0    39,636 μs          1 μs    110   52 GB/s  10.1 %   83.2 TFLOPs   27.4 %  HiFi2 BF16 x BF16 => BF16
+ 72    0.8 %   SLOW  MatmulDeviceOperation 98304 x 64 x 2048          0     2,482 μs          1 μs    110  167 GB/s  32.7 %   10.4 TFLOPs    3.4 %  HiFi2 BF16 x BF16 => BF16
+ 73    0.9 %         BinaryNgDeviceOperation                          0     2,681 μs          1 μs    110                                                  BF16, BF16 => BF16
+ 76    0.8 %         LayerNormDeviceOperation                         0     1,918 μs        399 μs    110                                                        BF16 => BF16
+ 77   11.1 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 6144        0    33,228 μs          1 μs    110   49 GB/s   9.6 %   74.5 TFLOPs   24.5 %  HiFi2 BF16 x BF16 => BF16
+ 78    1.9 %         NlpCreateHeadsDeviceOperation                    0     5,740 μs          1 μs    110                                                        BF16 => BF16
+ 79    1.4 %         RotaryEmbeddingLlamaDeviceOperation              0     4,302 μs          1 μs    110                                                  BF16, BF16 => BF16
+ 80    1.4 %         RotaryEmbeddingLlamaDeviceOperation              0     4,341 μs          1 μs    110                                                  BF16, BF16 => BF16
+ 81    1.2 %         SDPAOperation                                    0     3,590 μs          1 μs    110                                                  BF16, BF16 => BF16
+ 82    0.7 %         NLPConcatHeadsDeviceOperation                    0     1,951 μs          1 μs    110                                                        BF16 => BF16
+ 83    3.7 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 2048        0    11,233 μs          1 μs    110   72 GB/s  14.1 %   73.4 TFLOPs   24.1 %  HiFi2 BF16 x BF16 => BF16
+ 84    0.7 %         BinaryNgDeviceOperation                          0     2,187 μs          1 μs    110                                                        BF16 => BF16
+ 85    0.9 %         BinaryNgDeviceOperation                          0     2,674 μs          1 μs    110                                                  BF16, BF16 => BF16
+ 86    0.6 %         LayerNormDeviceOperation                         0     1,908 μs          1 μs    110                                                        BF16 => BF16
+ 87    8.9 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 5472        0    26,713 μs          1 μs    110   56 GB/s  11.0 %   82.5 TFLOPs   27.1 %  HiFi2 BF16 x BF16 => BF16
+ 88    8.9 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 5472        0    26,681 μs          1 μs    110   56 GB/s  11.0 %   82.6 TFLOPs   27.2 %  HiFi2 BF16 x BF16 => BF16
+ 89    2.6 %         UnaryDeviceOperation                             0     7,911 μs          1 μs    110                                                        BF16 => BF16
+ 90    2.4 %         BinaryNgDeviceOperation                          0     7,237 μs          1 μs    110                                                  BF16, BF16 => BF16
+ 91    3.7 %   FLOP  MatmulDeviceOperation 98304 x 5472 x 2048        0    11,010 μs          1 μs    110  136 GB/s  26.6 %  200.1 TFLOPs   65.8 %  HiFi2 BF16 x BF16 => BF16
+ 92    0.7 %         BinaryNgDeviceOperation                          0     2,210 μs          1 μs    110                                                        BF16 => BF16
+ 93    0.9 %         BinaryNgDeviceOperation                          0     2,695 μs          1 μs    110                                                  BF16, BF16 => BF16
+ 96    0.7 %         LayerNormDeviceOperation                         0     1,905 μs        335 μs    110                                                        BF16 => BF16
+ 97   11.1 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 6144        0    33,330 μs          1 μs    110   49 GB/s   9.6 %   74.2 TFLOPs   24.4 %  HiFi2 BF16 x BF16 => BF16
+ 98    1.9 %         NlpCreateHeadsDeviceOperation                    0     5,738 μs          1 μs    110                                                        BF16 => BF16
+ 99    1.4 %         RotaryEmbeddingLlamaDeviceOperation              0     4,319 μs          1 μs    110                                                  BF16, BF16 => BF16
+100    1.4 %         RotaryEmbeddingLlamaDeviceOperation              0     4,340 μs          1 μs    110                                                  BF16, BF16 => BF16
+101    1.2 %         SDPAOperation                                    0     3,584 μs          1 μs    110                                                  BF16, BF16 => BF16
+102    0.7 %         NLPConcatHeadsDeviceOperation                    0     1,966 μs          1 μs    110                                                        BF16 => BF16
+103    3.8 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 2048        0    11,355 μs          1 μs    110   72 GB/s  14.0 %   72.6 TFLOPs   23.9 %  HiFi2 BF16 x BF16 => BF16
+104    0.7 %         BinaryNgDeviceOperation                          0     2,202 μs          1 μs    110                                                        BF16 => BF16
+105    0.9 %         BinaryNgDeviceOperation                          0     2,699 μs          1 μs    110                                                  BF16, BF16 => BF16
+106    0.6 %         UntilizeCodegenDeviceOperation                   0     1,881 μs          1 μs    110                                                        BF16 => BF16
+107    0.0 %         SliceDeviceOperation                             0        91 μs          1 μs    110                                                        BF16 => BF16
+108    0.2 %         TilizeWithValPaddingDeviceOperation              0       747 μs          0 μs    103                                                        BF16 => BF16
+109    0.2 %         ReshapeViewDeviceOperation                       0       452 μs          1 μs    110                                                        BF16 => BF16
+110    0.0 %         LayerNormDeviceOperation                         0        54 μs          0 μs     64                                                        BF16 => BF16
+111    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 5472         0       294 μs          1 μs    110  181 GB/s  35.4 %  156.3 TFLOPs   51.4 %  HiFi2 BF16 x BF16 => BF16
+112    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 5472         0       294 μs          1 μs    110  181 GB/s  35.3 %  156.1 TFLOPs   51.3 %  HiFi2 BF16 x BF16 => BF16
+113    0.1 %         UnaryDeviceOperation                             0       185 μs          1 μs    110                                                        BF16 => BF16
+114    0.1 %         BinaryNgDeviceOperation                          0       151 μs          1 μs    110                                                  BF16, BF16 => BF16
+115    0.1 %   SLOW  MatmulDeviceOperation 2048 x 5472 x 2048         0       278 μs          1 μs    110  192 GB/s  37.4 %  165.2 TFLOPs   54.3 %  HiFi2 BF16 x BF16 => BF16
+116    0.0 %         BinaryNgDeviceOperation                          0        48 μs          1 μs    110                                                        BF16 => BF16
+117    0.0 %         BinaryNgDeviceOperation                          0        57 μs          1 μs    110                                                  BF16, BF16 => BF16
+120    0.1 %         LayerNormDeviceOperation                         0        52 μs        305 μs     64                                                        BF16 => BF16
+121    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 2048         0       148 μs         43 μs    110  170 GB/s  33.2 %  116.0 TFLOPs   38.1 %  HiFi2 BF16 x BF16 => BF16
+122    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 2048         0       155 μs          1 μs    110  162 GB/s  31.7 %  110.7 TFLOPs   36.4 %  HiFi2 BF16 x BF16 => BF16
+123    0.0 %         BinaryNgDeviceOperation                          0        46 μs          1 μs    110                                                        BF16 => BF16
+124    0.0 %         BinaryNgDeviceOperation                          0        57 μs          1 μs    110                                                  BF16, BF16 => BF16
+125    0.0 %         LayerNormDeviceOperation                         0        52 μs          0 μs     64                                                        BF16 => BF16
+126    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 5472         0       293 μs          1 μs    110  181 GB/s  35.4 %  156.4 TFLOPs   51.4 %  HiFi2 BF16 x BF16 => BF16
+127    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 5472         0       294 μs          1 μs    110  181 GB/s  35.3 %  156.1 TFLOPs   51.3 %  HiFi2 BF16 x BF16 => BF16
+128    0.1 %         UnaryDeviceOperation                             0       183 μs          1 μs    110                                                        BF16 => BF16
+129    0.1 %         BinaryNgDeviceOperation                          0       153 μs          1 μs    110                                                  BF16, BF16 => BF16
+130    0.1 %   SLOW  MatmulDeviceOperation 2048 x 5472 x 2048         0       277 μs          0 μs    110  192 GB/s  37.5 %  165.8 TFLOPs   54.5 %  HiFi2 BF16 x BF16 => BF16
+131    0.0 %         BinaryNgDeviceOperation                          0        48 μs          1 μs    110                                                        BF16 => BF16
+132    0.0 %         BinaryNgDeviceOperation                          0        57 μs          1 μs    110                                                  BF16, BF16 => BF16
+135    0.1 %         LayerNormDeviceOperation                         0        54 μs        290 μs     64                                                        BF16 => BF16
+136    0.2 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 8192         0       435 μs         40 μs    110  174 GB/s  33.9 %  158.1 TFLOPs   52.0 %  HiFi2 BF16 x BF16 => BF16
+137    0.1 %         UnaryDeviceOperation                             0       152 μs          1 μs    110                                                        BF16 => BF16
+138    0.1 %   SLOW  MatmulDeviceOperation 2048 x 8192 x 288          0       326 μs          1 μs     90  121 GB/s  23.7 %   29.7 TFLOPs   11.9 %  HiFi2 BF16 x BF16 => BF16
+139    0.0 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 288          0        92 μs          1 μs     90  116 GB/s  22.7 %   26.1 TFLOPs   10.5 %  HiFi2 BF16 x BF16 => BF16
+140    0.0 %         BinaryNgDeviceOperation                          0         9 μs          1 μs    110                                                  BF16, BF16 => BF16
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+     100.0 %         64 device ops, 0 host ops, 0 signposts               298,350 μs      1,443 μs          47 GB/s   9.2 %                                                  
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+ 76    0.8 %         LayerNormDeviceOperation                         0     1,918 μs        399 μs    110                                                        BF16 => BF16
+ 96    0.7 %         LayerNormDeviceOperation                         0     1,905 μs        335 μs    110                                                        BF16 => BF16
+120    0.1 %         LayerNormDeviceOperation                         0        52 μs        305 μs     64                                                        BF16 => BF16
+121    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 2048         0       148 μs         43 μs    110  170 GB/s  33.2 %  116.0 TFLOPs   38.1 %  HiFi2 BF16 x BF16 => BF16
+135    0.1 %         LayerNormDeviceOperation                         0        54 μs        290 μs     64                                                        BF16 => BF16
+136    0.2 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 8192         0       435 μs         40 μs    110  174 GB/s  33.9 %  158.1 TFLOPs   52.0 %  HiFi2 BF16 x BF16 => BF16
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 1376 μs (0.5% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.
+
+Matmul Optimization
+-------------------
+ 69    3.4 %   SLOW  MatmulDeviceOperation 98304 x 64 x 8192          0    10,089 μs                  110  161 GB/s  31.4 %   10.2 TFLOPs    3.4 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 2x4 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+ 71   13.2 %   SLOW  MatmulDeviceOperation 98304 x 8192 x 2048        0    39,636 μs          1 μs    110   52 GB/s  10.1 %   83.2 TFLOPs   27.4 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 2x4 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+ 72    0.8 %   SLOW  MatmulDeviceOperation 98304 x 64 x 2048          0     2,482 μs          1 μs    110  167 GB/s  32.7 %   10.4 TFLOPs    3.4 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 2x4 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+ 77   11.1 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 6144        0    33,228 μs          1 μs    110   49 GB/s   9.6 %   74.5 TFLOPs   24.5 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 2x4 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+ 83    3.7 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 2048        0    11,233 μs          1 μs    110   72 GB/s  14.1 %   73.4 TFLOPs   24.1 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 2x4 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+ 87    8.9 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 5472        0    26,713 μs          1 μs    110   56 GB/s  11.0 %   82.5 TFLOPs   27.1 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 7x1 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+ 88    8.9 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 5472        0    26,681 μs          1 μs    110   56 GB/s  11.0 %   82.6 TFLOPs   27.2 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 7x1 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+ 91    3.7 %   FLOP  MatmulDeviceOperation 98304 x 5472 x 2048        0    11,010 μs          1 μs    110  136 GB/s  26.6 %  200.1 TFLOPs   65.8 %  HiFi2 BF16 x BF16 => BF16
+✅ Optimized
+
+ 97   11.1 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 6144        0    33,330 μs          1 μs    110   49 GB/s   9.6 %   74.2 TFLOPs   24.4 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 2x4 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+103    3.8 %   SLOW  MatmulDeviceOperation 98304 x 2048 x 2048        0    11,355 μs          1 μs    110   72 GB/s  14.0 %   72.6 TFLOPs   23.9 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=2 and output subblock 2x4 look good 🤷
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+111    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 5472         0       294 μs          1 μs    110  181 GB/s  35.4 %  156.3 TFLOPs   51.4 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+112    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 5472         0       294 μs          1 μs    110  181 GB/s  35.3 %  156.1 TFLOPs   51.3 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+115    0.1 %   SLOW  MatmulDeviceOperation 2048 x 5472 x 2048         0       278 μs          1 μs    110  192 GB/s  37.4 %  165.2 TFLOPs   54.3 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+121    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 2048         0       148 μs         43 μs    110  170 GB/s  33.2 %  116.0 TFLOPs   38.1 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+122    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 2048         0       155 μs          1 μs    110  162 GB/s  31.7 %  110.7 TFLOPs   36.4 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+126    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 5472         0       293 μs          1 μs    110  181 GB/s  35.4 %  156.4 TFLOPs   51.4 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+127    0.1 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 5472         0       294 μs          1 μs    110  181 GB/s  35.3 %  156.1 TFLOPs   51.3 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+130    0.1 %   SLOW  MatmulDeviceOperation 2048 x 5472 x 2048         0       277 μs          0 μs    110  192 GB/s  37.5 %  165.8 TFLOPs   54.5 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+136    0.2 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 8192         0       435 μs         40 μs    110  174 GB/s  33.9 %  158.1 TFLOPs   52.0 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+138    0.1 %   SLOW  MatmulDeviceOperation 2048 x 8192 x 288          0       326 μs          1 μs     90  121 GB/s  23.7 %   29.7 TFLOPs   11.9 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+139    0.0 %   SLOW  MatmulDeviceOperation 2048 x 2048 x 288          0        92 μs          1 μs     90  116 GB/s  22.7 %   26.1 TFLOPs   10.5 %  HiFi2 BF16 x BF16 => BF16
+- If possible place input 0 in L1 (currently in DEV_1_DRAM_INTERLEAVED)
+- in0_block_w=1 is small, try in0_block_w=2 or above
+- If your matmuls are not FLOP-bound use HiFi4 with BF16 activations for full accuracy
+
+Warning: Unclassified operation 'UntilizeCodegenDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                                     Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+69.93 %  MatmulDeviceOperation (in0:dram_interleaved)                  208,643.26 μs        21      Compute     3.36 %    65.80 %     34.02 %    18.48 %              26.83 %
+ 8.45 %  BinaryNgDeviceOperation (in0:dram_interleaved)                 25,211.48 μs        17      Compute                                                                  
+ 5.80 %  RotaryEmbeddingLlamaDeviceOperation (in0:dram_interleaved)     17,302.28 μs         4      Compute                                                                  
+ 5.20 %  UnaryDeviceOperation (in0:dram_interleaved)                    15,510.96 μs         5      Compute                                                                  
+ 3.85 %  NlpCreateHeadsDeviceOperation (in0:dram_interleaved)           11,478.51 μs         2           TM                                                                  
+ 2.40 %  SDPAOperation (in0:dram_interleaved)                            7,173.10 μs         2      Compute                                                                  
+ 1.99 %  LayerNormDeviceOperation (in0:dram_interleaved)                 5,942.14 μs         7      Compute                                                                  
+ 1.31 %  NLPConcatHeadsDeviceOperation (in0:dram_interleaved)            3,917.16 μs         2           TM                                                                  
+ 0.63 %  UntilizeCodegenDeviceOperation (in0:dram_interleaved)           1,881.26 μs         1        Other                                                                  
+ 0.25 %  TilizeWithValPaddingDeviceOperation (in0:dram_interleaved)        746.63 μs         1           TM                                                                  
+ 0.15 %  ReshapeViewDeviceOperation (in0:dram_interleaved)                 452.48 μs         1           TM                                                                  
+ 0.03 %  SliceDeviceOperation (in0:dram_interleaved)                        91.03 μs         1           TM                                                                  
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
