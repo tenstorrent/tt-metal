@@ -51,8 +51,14 @@ State discipline (plan section 2c, refined):
   launch ``j`` reads every user's state but writes only the gated users' (the writer skips the state tiles, the
   reader merges the history shift row-wise), so user ``u`` takes exactly launches ``0 .. m_u`` -- the same programs
   on the same inputs as the plain path -- and keeps the bytes of ``S_{m_u + 1}`` afterwards. No blends, no restore:
-  C is ``K + 1`` launches instead of ``K + 1`` launches + ``6 (K + 1)`` full-state elementwise ops. One commit per
-  verify in both modes.
+   C is ``K + 1`` launches instead of ``K + 1`` launches + ``6 (K + 1)`` full-state elementwise ops. **fused** (SP2):
+  the fused ``T = K + 1`` ``kda_decode`` variant (``KdaDecode(fused_steps=T)``) takes the whole ``[1, 1, R, W]``
+  candidate-major slabs and applies, per user, its candidates in order with the state kept in L1: V is ONE dry launch
+  per layer on the live state (read once, never written: no backup, no slices, no concat; the ``[R, H V]`` output
+  feeds ``o_proj`` directly) and C is ONE commit launch per layer on the cached ``qkv_all`` / ``g2_all`` with the
+  per-user step page ``n_u = m_u + 1`` (a ``[1, 32]`` int32 device page per chip refreshed by the host before C):
+  user ``u`` applies candidates ``0 .. m_u`` on its live state and is written once. No blends, no gates, no scratch
+  state. One commit per verify in every mode.
 
 Trace safety: every per-iteration input is a persistent tensor refreshed with ``copy_host_to_device_tensor``
 (ids, positions, ring slots, pool ids, masks / write gates, the select matrix); every buffer the graphs write for the host or
@@ -88,14 +94,15 @@ if TYPE_CHECKING:  # no import cycle at runtime (mesh_model does not import this
 
 TILE = 32
 MAX_VERIFY_ROWS = TILE  # B (K + 1) <= 32: one tile row of candidates per mesh row
-SPEC_COMMIT_MODES = ("blend", "gated")
+SPEC_COMMIT_MODES = ("blend", "gated", "fused")
 
 
 def spec_commit_mode(env=None) -> str:
     """``GLM53_SPEC_COMMIT``: ``blend`` (the default: V's launches on the live state after a backup, C replays them on
     the backup and blends ``live = live * keep_j + backup * take_j`` after every launch) or ``gated`` (SP1: V's launches
     on a scratch copy, C replays them on the LIVE state through ``kda_decode``'s per-user write gate, launch ``j``
-    writing user ``u`` iff ``m_u >= j``; no blends, no restore)."""
+    writing user ``u`` iff ``m_u >= j``; no blends, no restore) or ``fused`` (SP2: V = one dry fused T = K + 1 launch per
+    layer on the live state, C = one fused launch per layer applying ``m_u + 1`` candidates per user in place)."""
     env = os.environ if env is None else env
     mode = env.get("GLM53_SPEC_COMMIT", "blend").strip().lower()
     if mode not in SPEC_COMMIT_MODES:
@@ -221,6 +228,18 @@ def commit_gate_rows(gate_j: torch.Tensor, users_per_row: int, rows: int, words:
     out = torch.zeros(rows, words, dtype=torch.int32)
     out[:, :B] = g
     return out
+
+
+def kda_commit_steps(m: torch.Tensor) -> torch.Tensor:
+    """``[N]`` int32: ``n_u = m_u + 1`` -- the candidates (the anchor + the accepted drafts) the fused commit launch
+    applies to user ``u`` (``sum_j gate[j, u]`` of ``kda_commit_gates``)."""
+    return (torch.as_tensor(m).long().reshape(-1) + 1).to(torch.int32)
+
+
+def commit_steps_page(m: torch.Tensor, users_per_row: int, rows: int, words: int = GATE_WORDS) -> torch.Tensor:
+    """The fused commit's ``[rows, words]`` int32 step page (row ``r`` = mesh row ``r``'s ``B`` user slots in the first
+    ``B`` words, padding 0): the kernels read page ``tb`` = ``[32]`` words, word ``u`` = ``m_u + 1``."""
+    return commit_gate_rows(kda_commit_steps(m), users_per_row, rows, words)
 
 
 def ring_slots_masked(positions: list[int], m: torch.Tensor, j: int, kpool: int) -> list[int]:
@@ -603,7 +622,16 @@ class KdaSpecState:
     launch is the plain program's update (same inputs: the live state after its launches ``< j``, the cached slab),
     an ungated user's launch leaves its recurrent tiles and history rows byte for byte. No masks, no blends. Tensors
     read: ``qkv_all``, ``g2_all``, ``gate[j]``, the layer constants; written in place: ``bk`` (V) and
-    ``kda_batched.recurrent`` / ``.convolution`` (C, gated per user)."""
+    ``kda_batched.recurrent`` / ``.convolution`` (C, gated per user).
+
+    Mode ``fused`` (SP2, ``GLM53_SPEC_COMMIT=fused``): ``verify_attention`` runs ONE dry fused launch
+    (``kda_fused_v = attn.kda_decode.fused_twin(K + 1, dry=True)``) on the ``[1, 1, R, W]`` slabs against the live
+    state (read only: no backup, no scratch, no slices, no concat: its ``[1, 1, R, H V]`` output is ``o_proj``'s input);
+    ``commit()`` runs ONE fused commit launch (``kda_fused_c``, ``dry=False``) on ``qkv_all`` / ``g2_all`` with the step
+    page ``steps`` (``[1, 32]`` int32 per chip, word ``u`` = ``m_u + 1``, refreshed by ``set_masks``): user ``u`` applies
+    candidates ``0 .. m_u`` in order on its live state in L1 and is written once (the plain state after ``m_u + 1``
+    steps, bit for bit). Tensors read: ``qkv_all``, ``g2_all``, ``steps``, the layer constants; written in place:
+    ``kda_batched.recurrent`` / ``.convolution`` (C only). No ``bk``, no masks, no gates."""
 
     def __init__(
         self, dec: FunctionalDecoder, mesh: GLMMesh, users_per_row: int, draft_len: int, commit: str = "blend"
@@ -623,9 +651,14 @@ class KdaSpecState:
         H, Kd, V = attn.H, attn.K, attn.V
         Hb = -(-H // TILE) * TILE
         self.taps = int(self.state.convolution.shape[0])
-        self.bk = KdaState(
-            recurrent=_zeros_like(self.state.recurrent, device), convolution=_zeros_like(self.state.convolution, device)
-        )
+        self.bk = (
+            None
+            if commit == "fused"
+            else KdaState(
+                recurrent=_zeros_like(self.state.recurrent, device),
+                convolution=_zeros_like(self.state.convolution, device),
+            )
+        )  # blend: the backup; gated: the verify's scratch; fused: none
         self.qkv_all = _zeros((1, 1, self.R, 3 * H * Kd), ttnn.bfloat16, device)
         self.g2_all = _zeros((1, 1, self.R, H * Kd + H * V + Hb), ttnn.float32, device)
         N = users_per_row * mesh.rows
@@ -633,16 +666,26 @@ class KdaSpecState:
             raise ValueError(f"commit mode {commit!r}: expected one of {SPEC_COMMIT_MODES}")
         self.commit_mode = commit
         self.rows = mesh.rows
-        if commit == "gated":
+        self.kda_gated = self.kda_fused_v = self.kda_fused_c = None
+        self.gate: list = []
+        self.steps = None
+        self.take_rec = self.keep_rec = self.take_conv = self.keep_conv = []
+        if commit == "fused":
+            # the fused T = K + 1 programs (the verify's dry one, the commit's) and the per-user step page: one
+            # [1, 32] int32 ROW_MAJOR page per chip (mesh row r's B user slots in words 0 .. B-1), read by the commit
+            # kernels at run time; the verify's dry launch takes the same tensor and never reads it
+            self.kda_fused_v = attn.kda_decode.fused_twin(self.K + 1, dry=True)
+            self.kda_fused_c = attn.kda_decode.fused_twin(self.K + 1, dry=False)
+            zero_page = torch.zeros(mesh.rows, GATE_WORDS, dtype=torch.int32)
+            self.steps = _upload(mesh, zero_page, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, 0)
+            self.bk = None  # no backup / scratch state in the fused mode
+        elif commit == "gated":
             # the per-launch write gates: one [1, 32] int32 ROW_MAJOR page per chip (mesh row r's B user slots in
             # words 0 .. B-1), read by the gated kernels at run time; the gated twin of the layer's program
             self.kda_gated = attn.kda_decode.gated_twin()
             zero_page = torch.zeros(mesh.rows, GATE_WORDS, dtype=torch.int32)
             self.gate = [_upload(mesh, zero_page, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, 0) for _ in range(self.K + 1)]
-            self.take_rec = self.keep_rec = self.take_conv = self.keep_conv = []
         else:
-            self.kda_gated = None
-            self.gate = []
             rec_mask = torch.zeros(N, H, Kd, 1)
             conv_mask = torch.zeros(self.taps, N, 1)
             self.take_rec = [_upload(mesh, rec_mask, ttnn.float32, ttnn.TILE_LAYOUT, 0) for _ in range(self.K + 1)]
@@ -654,9 +697,16 @@ class KdaSpecState:
     def gated(self) -> bool:
         return self.commit_mode == "gated"
 
+    @property
+    def fused(self) -> bool:
+        return self.commit_mode == "fused"
+
     def set_masks(self, m: torch.Tensor):
         """``m`` ``[N]``: user ``u``'s state is taken after launch ``m_u`` (blend: the take / keep masks; gated: the
-        write gates ``gate_j[u] = m_u >= j``)."""
+        write gates ``gate_j[u] = m_u >= j``; fused: the step page ``n_u = m_u + 1``)."""
+        if self.fused:
+            _refresh(self.mesh, commit_steps_page(m, self.B, self.rows), self.steps, 0)
+            return
         if self.gated:
             gates = kda_commit_gates(m, self.K)  # [K+1, N]
             for j in range(self.K + 1):
@@ -703,6 +753,33 @@ class KdaSpecState:
             self.kda_gated(*args, gate=gate)
         return o
 
+    def _launch_fused(self, qkv_all: ttnn.Tensor, g2_all: ttnn.Tensor, st: KdaState, dry: bool) -> ttnn.Tensor:
+        """One fused ``T = K + 1`` program on the ``[1, 1, R, W]`` candidate-major slabs against the state ``st``:
+        ``dry`` = the verify (``K + 1`` steps per user, the state read only), else the commit (``steps`` page: ``m_u + 1``
+        steps per user, the state updated in place). Returns the ``[1, 1, R, H V]`` output (candidate-major)."""
+        attn = self.attn
+        o = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, self.R, attn.H * attn.V]),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            self.mesh.device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+        op = self.kda_fused_v if dry else self.kda_fused_c
+        op(
+            qkv_all,
+            g2_all,
+            st.convolution,
+            st.recurrent,
+            attn.taps_blk,
+            attn.chan_consts,
+            attn.o_norm_w32,
+            attn.selectors,
+            o,
+            steps=self.steps,
+        )
+        return o
+
     def backup(self):
         """``bk`` := the live state (``S_0`` of the iteration; a whole-tensor copy, fp32 / bf16 preserved). Blend: the
         backup the commit replays on; gated: the scratch the verify's launches run on."""
@@ -720,22 +797,28 @@ class KdaSpecState:
         ttnn.deallocate(g1)
         ttnn.copy(qkv, self.qkv_all)
         ttnn.copy(g2, self.g2_all)
-        self.backup()  # S_0 of this iteration (blend: the commit's replay base; gated: the verify's scratch)
-        target = self.bk if self.gated else self.state  # gated: the live state is untouched by the verify
-        outs = []
-        for j in range(K + 1):
-            qkv_j, g2_j = _rows(qkv, j, B), _rows(g2, j, B)
-            outs.append(self._launch(qkv_j, g2_j, target))
-            ttnn.deallocate(qkv_j)
-            ttnn.deallocate(g2_j)
-        ttnn.deallocate(qkv)
-        ttnn.deallocate(g2)
-        if K == 0:
-            o_all = outs[0]
+        if self.fused:
+            # one dry launch on the whole slab against the live state (read only): no backup, no slices, no concat
+            o_all = self._launch_fused(qkv, g2, self.state, dry=True)  # [1,1,R,HV] candidate-major
+            ttnn.deallocate(qkv)
+            ttnn.deallocate(g2)
         else:
-            o_all = ttnn.concat(outs, dim=-2)  # [1,1,R,HV] candidate-major
-            for o in outs:
-                ttnn.deallocate(o)
+            self.backup()  # S_0 of this iteration (blend: the commit's replay base; gated: the verify's scratch)
+            target = self.bk if self.gated else self.state  # gated: the live state is untouched by the verify
+            outs = []
+            for j in range(K + 1):
+                qkv_j, g2_j = _rows(qkv, j, B), _rows(g2, j, B)
+                outs.append(self._launch(qkv_j, g2_j, target))
+                ttnn.deallocate(qkv_j)
+                ttnn.deallocate(g2_j)
+            ttnn.deallocate(qkv)
+            ttnn.deallocate(g2)
+            if K == 0:
+                o_all = outs[0]
+            else:
+                o_all = ttnn.concat(outs, dim=-2)  # [1,1,R,HV] candidate-major
+                for o in outs:
+                    ttnn.deallocate(o)
         y = attn.lin_o(o_all, dtype=ttnn.bfloat16, compute_kernel_config=attn.hifi2)
         ttnn.deallocate(o_all)
         return attn.mesh.all_reduce_cols(y)
@@ -747,7 +830,13 @@ class KdaSpecState:
         keep_j + bk * take_j``: exact products / adds). Every user is taken exactly once, so the live state's
         post-verify content never survives. The backup is consumed: one commit per verify (the next verify backs up
         again). Gated: the launches ``0 .. K`` run on the live state (``S_0``: the verify ran on the scratch) through
-        the gated program, launch ``j`` writing the users with ``m_u >= j`` only; no blend, nothing consumed."""
+        the gated program, launch ``j`` writing the users with ``m_u >= j`` only; no blend, nothing consumed. Fused: ONE
+        launch on the cached slabs applies ``m_u + 1`` candidates per user on the live state (the step page) and writes
+        every user once; nothing consumed."""
+        if self.fused:
+            o = self._launch_fused(self.qkv_all, self.g2_all, self.state, dry=False)
+            ttnn.deallocate(o)
+            return
         if self.gated:
             for j in range(self.K + 1):
                 qkv_j, g2_j = _rows(self.qkv_all, j, self.B), _rows(self.g2_all, j, self.B)

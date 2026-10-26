@@ -37,7 +37,7 @@ COMMON = dict(num_heads=2, gate_lower_bound=-5.0, l2_eps=1e-6, norm_eps=1e-5)
 
 # ------------------------------------------------------------------------------------------------ knob + gates
 def test_commit_mode_knob():
-    assert spec_commit_mode({}) == "blend" and tuple(SPEC_COMMIT_MODES) == ("blend", "gated")
+    assert spec_commit_mode({}) == "blend" and tuple(SPEC_COMMIT_MODES) == ("blend", "gated", "fused")
     assert spec_commit_mode({"GLM53_SPEC_COMMIT": "gated"}) == "gated"
     assert spec_commit_mode({"GLM53_SPEC_COMMIT": " GATED "}) == "gated"
     assert spec_commit_mode({"GLM53_SPEC_COMMIT": "blend"}) == "blend"

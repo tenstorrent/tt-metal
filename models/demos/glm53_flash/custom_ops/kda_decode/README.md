@@ -42,6 +42,31 @@ imported an older `op.py` compiles whatever is on disk, so an ABI change in the 
   and the writer (3 blocks from 7); runtime: the v2 reader vector + the gate address at 20 (21), the writer vector + the
   gate address at 7 (8) (`READER_RT_GATED`, `WRITER_RT_GATED`, `*_RT_LEN["gated"]`). `golden_gated` is the torch
   reference (`golden` with the per-user select).
+* `KdaDecode(fused_steps=T, fused_dry=...)` (`variant == "fused"`; the speculative loop under `GLM53_SPEC_COMMIT=fused`,
+  `_agents/spec_sp2/STATUS.md`): `kernels/{reader,writer,compute}_kda_decode_fused.cpp`. ONE launch on one tile row of
+  `R = B x T` candidate-major rows (row `j B + u` = user `u`, candidate `j`; `qkv [1, 1, R, 3 H K]`, `gates [1, 1, R, Wg]`,
+  `out [1, 1, R, H V]` against the `B`-slot `recurrent` / `conv_hist`) applies, per user, its candidates in order with the
+  recurrent state kept in L1 across the steps (read once, written at most once). The reader assembles the three conv
+  tap blocks of the R rows in the history CB (row `(j, u)` of tap `t` = history tap `j + t` of user `u` for `j + t < 3`,
+  else raw row `(j + t - 3, u)`; NoC row-run copies on the part-0 core, then the usual multicast), so the conv / norms /
+  gates / derived phases run once on the R-row block; the compute loops `(user, step)` with the state ping-ponged
+  through a two-slot loop CB (index 28 = the v1 / v2 `oq`; `qd . S` rides `cb_vread`), `r = j B + u` selecting the row,
+  the output block accumulating row `r` of every step. `fused_dry=True` (the verify): `T` steps per user, nothing
+  written. `fused_dry=False` (the commit): the step page `steps [Bt, 32]` int32 ROW_MAJOR (word `u` = `n_u`, the
+  candidates user `u` applies; 0 = untouched: no state read, no write) read at run time by the reader (its selector /
+  state stream; a copy handed to the compute as the first `cb_selT` page, read by the unpacker and broadcast to the
+  math / pack threads by mailbox) and the writer (one state write per user with `n_u > 0`, after its last step); the
+  part-0 reader writes the new history (row `u` of tap `i` = `x_{p_u + n_u + i - 3}`: tap block `n_u + i` row `u` for
+  `n_u + i < 3`, else raw row `(n_u + i - 3, u)`; merged in the scratch region = the `GATED_SCRATCH_PAGES` layout: the
+  step page at +0 / the writer's copy at +2048, then 9 Kt bf16 tiles = the live history tiles (the assembly source),
+  afterwards the merged tiles). The result equals the sequential launches' per user, bit for bit (`golden_fused`).
+  ABI: compile-time = the v2 scalars + `USERS, STEPS, DRY` at 12 / 13 / 14 (reader, compute; reader accessors from 15:
+  the v2 eight + the step page) and `[Kt, Vt, Bt, B, H, parts, HV_t, USERS, STEPS, DRY]` (writer; 3 accessor blocks from
+  10: out, recurrent, steps); `B` = R, `Bt` = 1 (`USERS x STEPS = B <= 32`, static-asserted by every kernel); runtime: the
+  v2 reader vector + the page address at 20 (21), the writer vector + the page address at 7 (8) (`READER_RT_FUSED`,
+  `WRITER_RT_FUSED`, `*_RT_LEN["fused"]`, `READER_CT_SCALARS["fused"] = 15`, `WRITER_CT_SCALARS["fused"] = 10`,
+  `COMPUTE_CT_LEN["fused"] = 15`). CBs: as v2 except `cb_onw` + `FUSED_SCRATCH_PAGES` (19 fp32 pages), `cb_selT` 3 pages,
+  index 28 `loop` = 2 kv fp32 pages (`CB_FUSED`); L1 per core 1.03 MB at parts = 5, 1.05 MB at 6 (`l1_bytes`).
 
 ## Contract (all tensors interleaved DRAM/L1 on the same device; K = V = 128, conv kernel 4)
 
