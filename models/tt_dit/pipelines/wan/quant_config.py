@@ -194,6 +194,19 @@ def _apply_linear_config(linear, lc: LinearQuantConfig, arch, name: str) -> None
     linear.compute_config = _make_linear_compute_config(arch, lc)
 
 
+def _needs_separate_cfg_passes(config: QuantConfig) -> bool:
+    linears = (
+        config.self_attn_qkv,
+        config.self_attn_out,
+        config.cross_attn_q,
+        config.cross_attn_kv,
+        config.cross_attn_out,
+        config.ffn_ff1,
+        config.ffn_ff2,
+    )
+    return any(lc.math_fidelity == ttnn.MathFidelity.LoFi for lc in linears)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -224,6 +237,13 @@ def apply_quant_config(model, config: QuantConfig) -> None:
     n_blocks = len(model.blocks)
 
     logger.info(f"Applying quant config to {n_blocks} transformer blocks")
+
+    # Workaround: with CFG batching (8192 rows per device at 480p on WH Galaxy 4x8), LoFi projections hang in the
+    # bias add of a projection all-gather-matmul (one core's unpacker and math wait on each other), so such configs
+    # run the CFG passes as two forwards.
+    model.cfg_batch = model.cfg_batch_requested and not _needs_separate_cfg_passes(config)
+    if model.cfg_batch_requested and not model.cfg_batch:
+        logger.warning("LoFi projections: running the CFG passes as two forwards")
 
     for idx, block in enumerate(model.blocks):
         # Self-attention linears
@@ -299,8 +319,14 @@ def set_quant_config(pipeline, config: QuantConfig) -> None:
     """
     # Apply compute configs now (these survive eviction since they are
     # module attributes, not Parameter data).
+    batched = [state.model.cfg_batch for state in pipeline.transformer_states]
     for state in pipeline.transformer_states:
         apply_quant_config(state.model, config)
+    if any(was and not state.model.cfg_batch for was, state in zip(batched, pipeline.transformer_states)):
+        # The pipeline's allocation run sized the CCL buffers for the batched rows; free them so that those of the
+        # two forwards fit. Captured traces hold the batched graph and these buffers, so release them first.
+        pipeline.release_traces()
+        pipeline.dit_ccl_manager.free_ping_pong_buffers()
 
     # Patch _prepare_transformer to re-apply weight typecast after each reload.
     # Stash the original so repeated calls don't stack wrappers.

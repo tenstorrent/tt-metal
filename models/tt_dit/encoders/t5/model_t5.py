@@ -84,6 +84,7 @@ class T5Encoder(Module):
         mesh_device: ttnn.Device,
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
+        shard_token_embeddings: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -91,7 +92,12 @@ class T5Encoder(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
-        self.token_embeddings = Embedding(config.vocab_size, config.embed_dim, device=self.mesh_device)
+        # shard_token_embeddings: shard the embedding table over the tensor parallel axis instead of replicating it
+        # (the looked-up rows are all-gathered), to save DRAM: for UMT5-XXL the table is 256k x 4096 (2 GiB in bf16)
+        self._token_embeddings_axis = parallel_config.tensor_parallel.mesh_axis if shard_token_embeddings else None
+        self.token_embeddings = Embedding(
+            config.vocab_size, config.embed_dim, device=self.mesh_device, mesh_axis=self._token_embeddings_axis
+        )
         self.encoder = T5Stack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
         self.final_layer_norm = T5RMSNorm(  # final layer norm
             embedding_dim=self.config.embed_dim,
@@ -110,6 +116,10 @@ class T5Encoder(Module):
         self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None, zero_masking: bool = False
     ) -> list[ttnn.Tensor]:
         embeddings = self.token_embeddings(prompt)
+        if self._token_embeddings_axis is not None:
+            embeddings = self.ccl_manager.all_gather(
+                embeddings, dim=len(embeddings.shape) - 1, mesh_axis=self._token_embeddings_axis, use_hyperparams=True
+            )
         hidden_states = self.encoder(embeddings, attention_mask=attention_mask)
         output = self.final_layer_norm(hidden_states[-1])
         if zero_masking and attention_mask is not None:
