@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""TTNN implementation for the exact Qwen3.8-Flash-Next text model.
+"""TTNN implementation of the Qwen3.8-Flash-Next text model.
 
-The sibling :mod:`..tt` package is the frozen CPU golden.  Device code lives in
-this package so that TTNN work cannot accidentally reformat or mutate the
-golden implementation while the bring-up is in progress.
+The sibling :mod:`..tt` package is the CPU golden; device code lives here so it cannot mutate the golden.
 """
 
 from .contracts import Qwen38MeshContract, TensorPlacement

@@ -3,17 +3,9 @@
 
 """Fixed-row true-global Qwen4Exp MoE on a 1x4 Blackhole mesh.
 
-The fused all-to-all dispatch path cannot represent one interactive token on
-EP4.  This module instead replicates exactly one logical row set, runs the 128
-resident BF4_B experts independently at each coordinate with
-the explicit extent-one axis (``cluster_axis=0``), applies the real normalized top-10 scores, adds the
-separately and dynamically gated shared-expert partial, and reduce-scatters the
-sum over the expert-parallel axis.  Ordinary decode uses one row.  The fixed
-target verifier uses five rows (the current token plus four drafts).
-
-The TTNN SingleCluster source admits non-tile token counts, but the five-row path is
-hardware-unproven on Blackhole while tt-metal issue #50038 remains relevant to
-MoE numerics.  Static/source-contract validation is not a numerical claim.
+The fused all-to-all dispatch cannot represent one interactive token on EP4, so each coordinate runs its 128 resident
+BF4_B experts on the replicated rows (``cluster_axis=0``), applies the normalized top-10 scores, adds the dynamically
+gated shared-expert partial and reduce-scatters the sum over the expert-parallel axis.
 """
 
 from __future__ import annotations
@@ -66,8 +58,8 @@ EXPERTS_PER_DEVICE = 128
 TOP_K = 10
 LOCAL_COMBINE_AXIS = 0
 # The one-call slab's weighted reduce runs in blocks of this many rows: the fused reduce keeps one score table per
-# row tile in L1 (512 rows admitted bitwise the 128-row form, 1024 refused) and the whole [10, rows, 2560] page set
-# tilized at once would not fit L1.
+# row tile in L1 (512 rows is the largest block that fits), and the whole [10, rows, 2560] page set tilized at once
+# would not.
 SLAB_REDUCE_BLOCK_ROWS = 512
 EP_AXIS = 1
 TARGET_VERIFIER_ROWS = 5
@@ -85,10 +77,10 @@ MOE_COMPUTE_HIDDEN_TILES = HIDDEN_SIZE // 32
 
 
 def moe_compute_output_height_shard_dim(rows: int, *, matmul_ring_size: int) -> int:
-    """The smallest ``output_height_shard_dim`` under which ``moe_compute`` admits ``rows`` tokens (1 for every
-    form up to 32 rows; the 128-row form needs 1 on an 8-bank part and 4 on a 7-bank part). A slab's one call runs
-    on the local output path at 1; whether the op takes that many tokens in one call is the op's to say
-    (``Qwen38TTNNMoE.admit_slab_call``)."""
+    """The smallest ``output_height_shard_dim`` under which ``moe_compute`` admits ``rows`` tokens.
+
+    A slab's one call uses 1; whether the op takes that many tokens in one call is ``Qwen38TTNNMoE.admit_slab_call``'s
+    to say."""
 
     if is_slab_rows(rows):
         return 1
@@ -96,9 +88,8 @@ def moe_compute_output_height_shard_dim(rows: int, *, matmul_ring_size: int) -> 
     return -(-rows // (MOE_COMPUTE_TOKEN_SIZE * data_parallel_cores))
 
 
-# The multi-row counts share moe_compute's one code path past rows == 1 (5 = the MTP verifier, 32 = the prefill chunk,
-# 128 = the long chunk's one call); each matched the one-row calls bitwise on this model's silicon in its own check (the
-# prefill chunk discriminator on all 48 layers, the MTP-v2 numerics gates, the moe_compute 128 micro-test).
+# The multi-row counts share moe_compute's one code path past rows == 1; each was checked bitwise against the one-row
+# calls on device.
 ROWS5_HARDWARE_PROVEN = True
 ROWS32_HARDWARE_PROVEN = True
 ROWS128_HARDWARE_PROVEN = True
@@ -109,11 +100,9 @@ LONG_CHUNK_ROUTED_TOKENS_PER_CALL = LONG_PREFILL_CHUNK_ROWS
 
 
 def routed_tokens_per_call_for(rows: int) -> int:
-    """The token count of one ``moe_compute`` call of a ``rows``-row instance by default: the rows themselves up to
-    32, for the 128-row chunk (``LONG_CHUNK_ROUTED_TOKENS_PER_CALL``), the whole slab for a slab (each expert's
-    tokens packed into 32-row chunks once per slab: 223 chunks per layer per device against 745 in 128-row blocks on
-    the captured natural-text routing). A slab whose one call moe_compute refuses routes 128-row blocks instead
-    (``Qwen38TTNNTextModel.allocate_chunk_state``)."""
+    """The token count of one ``moe_compute`` call of a ``rows``-row instance by default: the rows up to 32,
+    ``LONG_CHUNK_ROUTED_TOKENS_PER_CALL`` for the 128-row chunk, the whole slab for a slab. A slab whose one call the
+    op refuses routes 128-row blocks instead (``Qwen38TTNNTextModel.allocate_chunk_state``)."""
 
     if is_slab_rows(rows):
         return rows
@@ -148,12 +137,9 @@ MOE_PHASE_STAGES = (
 class Qwen38TTNNMoESyncPolicy(str, Enum):
     """Host-drain policy for the six named MoE dependency boundaries.
 
-    ``CORRECTNESS_FENCED`` is the fail-closed default for direct construction
-    and the single-slot weight streamer.  ``RESIDENT_ASYNC`` is selected only
-    by the resident builder: expert weights then remain owned for the complete
-    graph lifetime, and every temporary is released only after its final
-    same-command-queue consumer has been enqueued.  The latter matches the
-    traced Qwen3.6 decode schedule without weakening exception ownership.
+    ``CORRECTNESS_FENCED`` (the default) drains at each boundary. ``RESIDENT_ASYNC`` (resident builder only) keeps the
+    expert weights owned for the graph lifetime and releases each temporary only after its last same-queue consumer is
+    enqueued.
     """
 
     CORRECTNESS_FENCED = "correctness-fenced"
@@ -182,9 +168,7 @@ def _ignore_phase(_phase: str) -> None:
 class Qwen38TTNNMoERowContract:
     """Exact logical shapes for ordinary decode (1 row), target verification (5) or a prefill chunk (32).
 
-    ``admitted_rows`` is ``SUPPORTED_ROWS`` unless the caller admits another row count for this instance alone
-    (an explicit diagnostic override, e.g. the k = 5 verifier's 6 rows); the module's admission and proof flags
-    are untouched by it.
+    ``admitted_rows`` widens ``SUPPORTED_ROWS`` for this instance alone (an explicit diagnostic override).
     """
 
     rows: int = 1
@@ -220,8 +204,7 @@ class Qwen38TTNNMoERowContract:
 
     @property
     def moe_sparse_input(self) -> tuple[int, ...]:
-        # Preserve the existing B=1 API/byte path.  For several rows, expose the
-        # row count in dimension 1 because moe_compute counts dims 0 * 1.
+        # One row keeps the rank-four layout; several rows go in dimension 1 because moe_compute counts dims 0 * 1.
         if self.rows == 1:
             return self.full_hidden
         return (1, self.rows, HIDDEN_SIZE)
@@ -377,11 +360,9 @@ class Qwen38TTNNMoEWeights:
                 cache_file_name=cache_dir / dense_weight_name(name, dtype),
             )
 
-        # TTNN linear consumes [K,N]; checkpoint Linear weights are [N,K].
-        # Weights are DRAM width-sharded for the decode matmul program; the
-        # renamed tensorbins deliberately orphan interleaved caches.  The
-        # 2.6 MB router is replicated so every device computes all 512 logits
-        # locally; no logits all-gather.
+        # TTNN linear consumes [K,N]; checkpoint Linear weights are [N,K]. Weights are DRAM width-sharded for the decode
+        # matmul program (tensorbin names distinct from the interleaved layout's). The router is replicated so every
+        # device computes all 512 logits locally (no logits all-gather).
         local_intermediate = INTERMEDIATE_SIZE // MESH_SHAPE[1]
         router = upload(
             source.router_weight.transpose(0, 1).reshape(1, 1, HIDDEN_SIZE, ROUTED_EXPERTS),
@@ -495,14 +476,11 @@ class Qwen38TTNNMoE:
         admitted_rows: tuple[int, ...] = SUPPORTED_ROWS,
         prefill_dense: Qwen38TTNNPrefillDense | None = None,
     ) -> None:
-        """``routed_tokens_per_call`` is the token count of one ``moe_compute`` call: the rows themselves up to 32, for
-        the 128-row form 128 (the default, ``routed_tokens_per_call_for``: one call, the chunk's expert union streamed
-        once) or 32 (four calls of the 32-row program, bitwise the 32-row chunk per tile; the micro-tests' oracle), for
-        a slab its rows (the default: one call) or 128 (the 128-row instance's call per 128-row block, through a worker
-        sharing the combine buffer).  ``local_combine_output`` hands in a shared
-        ``[10, routed_tokens_per_call, 2560]`` ROW_MAJOR BF16 combine buffer (the 48 long-chunk instances share one:
-        the layers run one after another and every call fills it first); it is borrowed, so
-        ``release_owned_buffers`` leaves it to its owner."""
+        """``routed_tokens_per_call`` is the token count of one ``moe_compute`` call: the rows up to 32; 128 (default)
+        or 32 (four calls of the 32-row program, the micro-tests' oracle) for the 128-row form; the rows (default, one
+        call) or 128 (one call per 128-row block) for a slab. ``local_combine_output`` lends a shared
+        ``[10, routed_tokens_per_call, 2560]`` ROW_MAJOR BF16 combine buffer, which ``release_owned_buffers`` leaves to
+        its owner."""
 
         if type(synchronization_policy) is not Qwen38TTNNMoESyncPolicy:
             raise TypeError(
@@ -544,8 +522,7 @@ class Qwen38TTNNMoE:
                 f"the slab reduces in {SLAB_REDUCE_BLOCK_ROWS}-row blocks; {self.rows} rows is not a multiple"
             )
         # The one-tile router tail (rows <= 32): the fused program (ttnn/fused/router_tail) by default, the composed
-        # chain under QWEN38_FUSED_OFF=router_tail; the long chunk and the slab keep their inline chain until the
-        # four-tile form is proven in the model.
+        # chain under QWEN38_FUSED_OFF=router_tail; the long chunk and the slab keep their inline chain.
         self._route_tail = fused.resolve("router_tail") if self.row_contract.row_tiles == 1 else None
         if self._route_tail is fused.kernel("router_tail").fused:
             fused.router_tail.router_tail_prepare(mesh_device)  # the constant index tiles, before any trace capture
@@ -617,13 +594,9 @@ class Qwen38TTNNMoE:
             ttnn.BufferType.L1,
             ttnn.ShardSpec(drain_cores, [self.routed_tokens, TOP_K], ttnn.ShardOrientation.ROW_MAJOR),
         )
-        # DRAM-sharded decode matmul configs.  Every K=2560 linear (router,
-        # shared gate/up/scalar) reads the gathered hidden, which the hidden
-        # all-gather writes straight into the five-core width-sharded layout.  The
-        # replicated router's 512 logits are 16 output tiles, four per core on
-        # four of the five.  The shared chain stays on that grid: gate/up
-        # outputs feed silu/mul/down without resharding, and the down input
-        # splits its 160-column K into exactly one tile per core.
+        # DRAM-sharded decode matmul configs. Every K=2560 linear reads the gathered hidden in the five-core
+        # width-sharded layout the all-gather writes; the router's 16 logit tiles land four per core on four cores, and
+        # the shared chain stays on that grid (the down input's 160-column K is one tile per core).
         local_intermediate = INTERMEDIATE_SIZE // MESH_SHAPE[1]
         self.hidden_act_memory_config, self.router_program_config = dram_sharded_matmul_configs(
             mesh_device, HIDDEN_SIZE, ROUTED_EXPERTS, num_cores=5
@@ -702,11 +675,9 @@ class Qwen38TTNNMoE:
             raise
 
     def release_owned_buffers(self) -> None:
-        """Retry-safe release of this row instance's two private buffers.
+        """Retry-safe release of this row instance's two private buffers (router/shared weights are borrowed).
 
-        Router/shared weights are borrowed and deliberately excluded.  Each
-        successful release clears its attribute immediately; if another release
-        fails, a later call retries only that still-owned tensor.
+        Each successful release clears its attribute, so a later call retries only a still-owned tensor.
         """
 
         if self._poisoned_error is not None:
@@ -802,13 +773,9 @@ class Qwen38TTNNMoE:
     def _route(self, full_hidden, *, hidden_tiles=None, phase_observer=None) -> Qwen38TTNNRouting:
         if phase_observer is None:
             phase_observer = _ignore_phase
-        # The router is a DRAM-sharded decode linear: one row tile per call.  Up to 32 rows the gathered
-        # shard is the call's input; the long chunk runs the router per row tile (``hidden_tiles``: the four
-        # tiles in the activation shard, shared with the shared-expert chain), concatenates the four FP32
-        # logits tiles and runs the softmax, the top-k and the normalization ONCE on the 128 rows: every op
-        # of the tail is per row (the top-k's single-core factory hands each 32-row tile to its own core;
-        # the multi-core factory needs a width of 1024, so the 512 logits never reach it), so row j sees the
-        # same programs on the same values as in the 32-row form.
+        # The router is a DRAM-sharded decode linear (one row tile per call). The long chunk runs it per row tile,
+        # concatenates the four FP32 logit tiles and runs the softmax, top-k and normalization once on 128 rows; every
+        # tail op is per row, so row j sees the 32-row form's programs on the same values.
         if self.slab:
             hidden_tiles = []
         elif self.row_contract.row_tiles == 1:
@@ -827,11 +794,9 @@ class Qwen38TTNNMoE:
             )
             if self.routing_in_l1:
                 return self._route_into_shards(logits_ws, phase_observer)
-            # The pinned reference evaluates the router softmax in FP32 even though
-            # the projection is BF16.  The move that drains the router's L1 shard
-            # widens the logits on the way out (exact), so no separate typecast.
-            # FP32 is kept through top-k renormalization; only the selected scores
-            # are cast back to the BF16 format consumed by ``moe_compute``.
+            # The reference evaluates the router softmax in FP32 although the projection is BF16: the drain of the
+            # router's L1 shard widens the logits exactly, FP32 is kept through top-k renormalization, and only the
+            # selected scores go back to BF16 for moe_compute.
             logits_tiles.append(ttnn.to_memory_config(logits_ws, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32))
             _deallocate(logits_ws)
         expected_logits = (1, 1, self.rows, ROUTED_EXPERTS)
@@ -951,11 +916,11 @@ class Qwen38TTNNMoE:
         return outputs[5]
 
     def admit_slab_call(self, packed_w0_w1, packed_w2) -> bool:
-        """Whether moe_compute takes this slab's rows in one call, asked before any slab work: the slab's own call on
-        stand-in inputs of its shapes under a NO_DISPATCH graph capture (mocked buffers, nothing dispatched, no
-        program cached), so the op's validation decides, as ``ttnn::graph::query_op_constraints`` asks an op.  The
-        answer and the op's reason for a refusal are logged with the slab form they select (one call per layer, or
-        128-row blocks).  The capture is process-global: no other thread may run ttnn work meanwhile."""
+        """Whether moe_compute takes this slab's rows in one call, asked before any slab work.
+
+        Runs the slab's own call on stand-in inputs under a NO_DISPATCH graph capture so the op's validation decides;
+        the answer and a refusal's reason are logged with the slab form they select (one call per layer, or 128-row
+        blocks). The capture is process-global: no other thread may run ttnn work meanwhile."""
 
         if not self.slab or self.routed_calls != 1:
             raise ValueError(f"the one-call admission is a one-call slab instance's, not a {self.rows}-row instance's")
@@ -1048,22 +1013,16 @@ class Qwen38TTNNMoE:
         if self.routed_calls != 1:
             return self._routed_partial_tiles(full_hidden, routing, packed_w0_w1, packed_w2, phase_observer)
         phase_observer("before-routed-dispatch")
-        # Keep the ordinary one-row call byte/API-compatible with the existing
-        # rank-four input.  A multi-row instance must expose its rows in dim 1:
-        # moe_compute derives total_tokens from sparse_input.shape[0:2].  The
-        # rows are untilized first (the one-row op on the same 32-row tile) and
-        # reshaped ROW_MAJOR: the same bytes, no un-shard or relayout kernel.
+        # One row keeps the rank-four input; a multi-row instance exposes its rows in dim 1 (moe_compute derives
+        # total_tokens from sparse_input.shape[0:2]). The rows are untilized first and reshaped ROW_MAJOR (same bytes).
         sparse_input = ttnn.to_layout(
             full_hidden,
             ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if self.rows != 1:
-            # ttnn.reshape of a ROW_MAJOR device tensor is a zero-cost view: a new tensor id over the SAME buffer, so a
-            # tensor-id test says "different" and freeing the source frees the rows the view still reads (the
-            # 2026-09-26 slab defect: the op's next DRAM allocation, its packed token-list page, landed on the input's
-            # first rows; docs/NUMERICS.md).  The source is freed only when the reshape produced its own buffer; a
-            # view's buffer is released once, through sparse_input, after the call.
+            # A ROW_MAJOR reshape is a zero-cost view: a new tensor id over the same buffer, so freeing the source would
+            # free the rows the view still reads. The source is freed only when the reshape produced its own buffer.
             untilized_rows = sparse_input
             sparse_input = ttnn.reshape(untilized_rows, self.row_contract.moe_sparse_input)
             if not same_buffer(sparse_input, untilized_rows):
@@ -1099,11 +1058,9 @@ class Qwen38TTNNMoE:
         self.mesh_contract.validate_tensor(scores_l1, placement=TensorPlacement.REPLICATED)
         phase_observer("after-routed-dispatch")
 
-        # Local combine writes only owned k slots.  Clear every invocation so a
-        # masked 0*uninitialized-NaN cannot poison fast-reduce.  The long chunk's shared buffer is zero at
-        # allocation and every slot it ever holds is a finite expert output (the weighted reduce multiplies
-        # the slots this device does not own by an exact 0), so its 48 layers skip the 6.5 MB fill; the slab's
-        # 105 MB buffer likewise uses the same finite-buffer contract; the op leaves unowned rows untouched.
+        # Local combine writes only owned k slots; clear every invocation so a masked 0 * uninitialized NaN cannot
+        # poison fast-reduce. The long chunk's shared buffer and the slab's buffer are zero at allocation and only ever
+        # hold finite expert outputs (unowned slots are multiplied by an exact 0), so they skip the fill.
         if self.rows != LONG_PREFILL_CHUNK_ROWS and not self.slab:
             zeroed = ttnn.fill(self.local_combine_output, 0.0, output_tensor=self.local_combine_output)
             if zeroed.tensor_id != self.local_combine_output.tensor_id:
@@ -1126,9 +1083,8 @@ class Qwen38TTNNMoE:
                 f"weighted-reduce input must be {self.row_contract.fast_reduce_input}, got {_shape(local_stack)}"
             )
         if self.rows == LONG_PREFILL_CHUNK_ROWS:
-            # The 6.5 MB combine tilized as one [1280, 2560] tile grid (the tilize spreads its 40 tile rows over
-            # the grid; the rank-4 form works one 4-tile-row batch at a time: 0.28 -> 0.14 ms) and viewed back
-            # as the reduce's [10, 1, 128, 2560] (the same tile order; the view owns the buffer).
+            # The combine tilized as one [1280, 2560] tile grid (the tilize spreads its 40 tile rows over the grid) and
+            # viewed back as the reduce's [10, 1, 128, 2560] (the same tile order; the view owns the buffer).
             combine_flat = ttnn.to_layout(
                 ttnn.reshape(combine, (TOP_K * self.rows, HIDDEN_SIZE)),
                 ttnn.TILE_LAYOUT,
@@ -1181,11 +1137,9 @@ class Qwen38TTNNMoE:
         phase_observer("before-selective-reduce")
         dram = ttnn.DRAM_MEMORY_CONFIG
         block = SLAB_REDUCE_BLOCK_ROWS
-        # A slab of exactly one block (512 rows) has no sub-range to slice: ``ttnn.slice`` over a tensor's full extent
-        # returns its INPUT (an alias), and ``ttnn.concat`` of one tensor likewise, so the block's pages are the
-        # combine buffer itself and the block's scores / indices are the routing's own tensors -- never freed here
-        # (freeing "pages" would free the persistent combine page under the next layer). Only what this method
-        # created is released.
+        # A slab of exactly one block has no sub-range: ``ttnn.slice`` over the full extent and ``ttnn.concat`` of one
+        # tensor return their input, so the block's pages are the persistent combine buffer and its scores / indices
+        # the routing's own tensors; only what this method created is released.
         one_block = self.rows == block
         partials = []
         for start in range(0, self.rows, block):
@@ -1279,9 +1233,8 @@ class Qwen38TTNNMoE:
         if packed_w0_w1.dtype != ttnn.bfloat4_b or packed_w2.dtype != ttnn.bfloat4_b:
             raise RuntimeError("routed expert tensors must be BFLOAT4_B")
         phase_observer("before-routed-dispatch")
-        # The untilize reads the width-sharded hidden at any row count as it does at one row; several rows then take
-        # the ROW_MAJOR view moe_compute counts (dims 0 x 1) -- no un-sharding of the tiles first (one program per
-        # layer at B > 1 in the 2026-09-25 lane census).
+        # The untilize reads the width-sharded hidden at any row count; several rows then take the ROW_MAJOR view
+        # moe_compute counts (dims 0 x 1), with no un-sharding of the tiles first.
         if sparse_rows is None:
             sparse_input = ttnn.to_layout(full_hidden, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
@@ -1311,7 +1264,7 @@ class Qwen38TTNNMoE:
         if _shape(combine) != self.row_contract.local_combine:
             raise RuntimeError(f"local combine produced {_shape(combine)}, expected {self.row_contract.local_combine}")
         if sparse_rows is None or not same_buffer(sparse_input, sparse_rows):
-            # own rows, or a reshape that copied; a VIEW of the caller's rows shares their buffer and the caller frees it
+            # own rows or a copying reshape; a view of the caller's rows shares their buffer and the caller frees it
             _deallocate(sparse_input)
         if not self.routing_in_l1:
             _deallocate(indices_l1, scores_l1)
@@ -1423,9 +1376,9 @@ class Qwen38TTNNMoE:
             raise RuntimeError("moe_compute scores are not RM BF16 on the exact L1 drain-core shard")
 
     def _route_into_shards(self, logits_ws, phase_observer) -> Qwen38TTNNRouting:
-        """The fused tail on the drained fp32 logits (the chain's own drain: the TensorAccessor misreads the router's
-        bf16 L1 width shard on the upper tiles, measured 2026-09-15), writing its rows into the drain-core shards
-        moe_compute reads: no routing copies."""
+        """The fused tail on the drained fp32 logits, writing its rows into the drain-core shards moe_compute reads.
+
+        Uses the chain's own drain: the TensorAccessor misreads the router's bf16 L1 width shard on the upper tiles."""
 
         logits = ttnn.to_memory_config(logits_ws, ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.float32)
         _deallocate(logits_ws)
@@ -1469,11 +1422,10 @@ class Qwen38TTNNMoE:
 
     @property
     def slab(self) -> bool:
-        """A prefill-slab instance (256..2048 rows): its dense linears are 2D-multicast matmuls, its routed stream one
-        call on the op's local output path with no zero fill of the rows this device's experts do not own (the buffer
-        is zero at allocation and only ever holds finite expert outputs that the weighted reduce multiplies by an
-        exact 0 where unowned), the reduce in 512-row blocks; or, at 128 routed tokens per call, the 128-row
-        worker's call per 128-row block."""
+        """A prefill-slab instance (256..2048 rows): 2D-multicast dense linears, one routed call on the op's local
+        output path with no zero fill (the buffer is zero at allocation and holds only finite expert outputs, which the
+        reduce multiplies by an exact 0 where unowned), the reduce in 512-row blocks; or, at 128 routed tokens per
+        call, one 128-row worker call per 128-row block."""
 
         return is_slab_rows(self.rows)
 
@@ -1836,11 +1788,8 @@ class Qwen38TTNNMoE:
                 release(name)
 
         try:
-            # Keep the six proven dependency boundaries explicit.  Direct or
-            # streamed construction drains at each boundary.  A resident
-            # graph visits the same boundaries without a host call: each
-            # producer remains owned until its final same-CQ consumer enqueue
-            # returns, matching the Qwen3.6 traced schedule.
+            # The six dependency boundaries stay explicit: fenced construction drains at each; a resident graph visits
+            # them without a host call, keeping each producer owned until its last same-CQ consumer is enqueued.
             observe("before-hidden-all-gather")
             raise_deferred_phase_error()
             temporaries["full_hidden"] = self._all_gather_hidden(hidden_sharded)
@@ -1848,11 +1797,9 @@ class Qwen38TTNNMoE:
             observe("after-hidden-all-gather")
             raise_deferred_phase_error()
 
-            # The gathered width-sharded hidden feeds the router, every
-            # shared-expert linear and the routed untilize; it is owned until
-            # the reduce-scatter enqueue returns.  The long chunk moves its four
-            # row tiles into the dense linears' shard once for the router and
-            # the shared chain and lets them go before the expert stream.
+            # The gathered width-sharded hidden feeds the router, every shared-expert linear and the routed untilize;
+            # it is owned until the reduce-scatter enqueue returns. The long chunk moves its four row tiles into the
+            # dense linears' shard once and lets them go before the expert stream.
             if self.row_contract.row_tiles != 1:
                 if not self.slab:  # the slab's linears take the interleaved rows whole
                     temporaries["hidden_tiles"] = dram_sharded_row_tiles(
@@ -1938,10 +1885,8 @@ class Qwen38TTNNMoE:
             observe("after-partial-combine")
             raise_deferred_phase_error()
 
-            # Match the Qwen3.6 TP4 line-mesh path: the helper deliberately
-            # uses cluster_axis=0 on (1,4) to select whole-line minimal
-            # reduce-scatter with the model-scoped, cyclic TT_CCL semaphore
-            # pool.
+            # cluster_axis=0 on (1,4) selects the whole-line minimal reduce-scatter with the model-scoped, cyclic
+            # TT_CCL semaphore pool (the Qwen3.6 TP4 line-mesh path).
             observe("before-output-reduce-scatter")
             raise_deferred_phase_error()
             temporaries["output"] = tt_all_reduce(
@@ -1977,7 +1922,7 @@ class Qwen38TTNNMoE:
             release_many("local_sum", "full_hidden", "routing_tiles")
 
             if return_routing:
-                # The routing tiles (the long chunk's per-tile inputs) are released above; the caller reads scores/indices.
+                # The long chunk's routing tiles are released above; the caller reads scores/indices.
                 result = Qwen38TTNNMoEResult(temporaries["output"], routing)
                 temporaries["output"] = None
                 temporaries["routing_scores"] = None

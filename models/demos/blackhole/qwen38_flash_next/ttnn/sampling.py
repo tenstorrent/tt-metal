@@ -3,50 +3,10 @@
 
 """Host sampling for Qwen3.8 logits: the full-vocabulary sampler and the candidate-row sampler.
 
-Penalties follow the OpenAI additive semantics (``presence_penalty`` once per
-seen token, ``frequency_penalty`` per occurrence) over the request's own output,
-``token_history[prompt_tokens:]`` (the vLLM rule: the prompt's words are not
-penalized), and then the transformers ``repetition_penalty`` rule (positive
-logits divided, negative multiplied) over the prompt and the output.
-Temperature is applied next, then the transformers warper order: stable
-global-index top-k, shifted nucleus top-p, min-p.  One uniform draw from a CPU
-``torch.Generator`` picks the token by inverse CDF, so the same draw gives the
-same token whether the filters ran over the full vocabulary or over the
-candidate row; a chat request passes its own generator with the same initial
-seed to advance one reproducible stream across tokens.  ``temperature=0`` is
-the exact greedy baseline and retains the lowest global token ID on ties.
-
-The candidate row (:class:`Qwen38CandidateRow`, produced by the optional TAIL
-epilogue ``Qwen38TTNNLMHead.sampling_candidates``) holds every shard's top-k
-logits and ids and nothing else.  With ``top_k`` at most k the filters see
-exactly the vector the full-vocabulary sampler sees whenever every token that
-could be kept was read: the guard ``kept minimum > max over shards of the
-shard's k-th value`` (after the penalties, on the temperature-scaled values)
-proves it, because an unread token's value is at most its shard's k-th value
-and the penalties only lower logits.  Top-p and min-p act on the softmax of the
-kept top-k vector (the transformers warper order), so they need no
-full-vocabulary normalizer and are exact over the row.  When the guard fails, or
-``top_k`` is 0 (the nucleus may extend past the row), or a penalty would raise
-logits, :class:`Qwen38CandidateFallback` tells the caller to take the
-full-vocabulary path for that step.  Only the reported log-probabilities depend
-on the normalizer: the row sampler reports them relative to the read candidates
-(``Qwen38CandidateSample.logprob``), the full-vocabulary sampler exactly.
-
-Within-shard ties at the k-th value: the device top-k and ``torch.topk`` may keep
-different members of a tie group at the boundary.  The values are still bitwise
-the same multiset, the guard is unchanged (the k-th value is the floor either
-way), and :meth:`Qwen38CandidateRow.agreement` accepts id sets that differ only
-among candidates at the k-th value while reporting how many such ties there are.
-
-:func:`candidate_distribution` and :func:`full_distribution` are the two samplers
-stopped before their draw: the kept tokens and their probabilities as one
-:class:`Qwen38RowDistribution`, the object the speculative acceptance of the MTP
-verify rows (``ttnn/speculative_sampling.py``) reads and conditions.  The same
-``_penalize`` and ``_filter`` run in all four functions.  :func:`candidate_distributions`
-is :func:`candidate_distribution` over the k + 1 rows of one MTP pass in one batched
-pass (:class:`Qwen38CandidateRows` parses them at once): the same operations along the
-last dimension of ``[rows, candidates]`` tensors, bitwise per row, so the pass loop's
-decision costs a few dozen tensor operations instead of a few dozen per row.
+Penalties (OpenAI presence / frequency over the output, transformers repetition over prompt and output), then
+temperature, top-k, shifted top-p and min-p; one uniform draw picks the token by inverse CDF. The candidate row
+(each shard's top-k) gives the full sampler's token whenever the kept minimum exceeds every shard's k-th value;
+otherwise :class:`Qwen38CandidateFallback` sends the step to the full vocabulary.
 """
 
 from __future__ import annotations
@@ -94,9 +54,7 @@ class Qwen38SamplingProfile(str, Enum):
 class Qwen38SamplingParameters:
     """One deterministic host-sampling policy.
 
-    Use :meth:`official_thinking` or :meth:`official_non_thinking` for the
-    released model-card defaults.  ``custom`` is explicit so a caller cannot
-    accidentally report modified parameters as an official profile.
+    ``custom`` is explicit so modified parameters cannot be reported as an official profile.
     """
 
     temperature: float
@@ -258,9 +216,8 @@ UNIFORM_BITS = 24  # u = n * 2**-24: exact in fp32, the draw the device sampler 
 class UniformStream:
     """splitmix64 per request: ``state += gamma; z = mix(state); u = (z >> 40) * 2**-24`` (exact in fp32).
 
-    The draw of the device sampler (``ttnn/device_sampler.py``), written to the device once per step; given to the
-    host samplers in place of a ``torch.Generator`` it makes a host fallback step continue the same sequence.
-    Reproducible from any language: ten lines of 64-bit integer arithmetic.
+    The device sampler's draw; passed to the host samplers in place of a ``torch.Generator`` so a host fallback step
+    continues the same sequence.
     """
 
     def __init__(self, seed: int) -> None:
@@ -302,11 +259,8 @@ def _validate_generator(generator: torch.Generator | UniformStream, *, seed: int
 
 
 # --- the filter core shared by the full-vocabulary and the candidate samplers ---------------------
-#
-# Every function below works on one row: fp32 ``scores`` over tokens ``ids`` (int64, ascending, so
-# the stable sort breaks ties on the lowest global id the way torch.argmax does).  The same fp32
-# operations run whether ``ids`` is the whole vocabulary or the candidate set, which is what makes
-# the candidate sampler bitwise equal to the full one on the kept vector.
+# Each function works on one row: fp32 ``scores`` over ascending int64 ``ids`` (stable-sort ties go to the lowest id,
+# as torch.argmax). The same fp32 ops run on the vocabulary or the candidate set, so the two stay bitwise equal.
 
 
 def _penalize(
@@ -355,9 +309,8 @@ def _seen(ids: torch.Tensor | None, tokens: tuple[int, ...]) -> tuple[torch.Tens
 def _filter(scores: torch.Tensor, p: Qwen38SamplingParameters) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Temperature, top-k, shifted top-p, min-p (the transformers warper order) over one penalized row.
 
-    Returns ``(positions, scaled, probabilities)``: the kept positions in descending
-    order (top-k prefix of the stable sort), their temperature-scaled logits, and
-    their probabilities with the nucleus / min-p cut zeroed and the rest renormalized.
+    Returns ``(positions, scaled, probabilities)``: kept positions in descending order, their scaled logits, and
+    their probabilities with the cut zeroed and the rest renormalized.
     """
 
     scaled = scores / p.temperature
@@ -414,12 +367,9 @@ class Qwen38CandidateFallback(Qwen38SamplingError):
 
 @dataclass(frozen=True)
 class Qwen38RowDistribution:
-    """The post-processor distribution of one logits row: the kept tokens in the filter's order (descending
-    scaled score, ties by the lowest id) and their probabilities (zero where the nucleus or min-p cut removed a
-    token).  Both samplers draw from exactly this (``tokens[_inverse_cdf(probabilities, u)]``); the speculative
-    acceptance reads ``probability`` and conditions with ``without``.  The dtype is the caller's (fp32 from the
-    samplers; the algebra tests use float64).  ``checked=False`` skips the validation: for
-    :func:`candidate_distributions`, which verified the invariants over every row of a pass at once."""
+    """The post-processor distribution of one logits row: kept tokens in filter order and their probabilities.
+
+    Both samplers draw from exactly this; ``checked=False`` skips validation for rows already checked as a batch."""
 
     tokens: torch.Tensor  # int64 [n]
     probabilities: torch.Tensor  # floating [n], summing to 1
@@ -475,12 +425,8 @@ class Qwen38RowDistribution:
 class Qwen38CandidateSample:
     """One sampled token with its raw (pre-penalty, pre-temperature) log-probability.
 
-    ``logprob`` and ``top_logprobs`` are log-softmax values of the raw logits.  From
-    :func:`sample_full_vocabulary` the softmax runs over the whole vocabulary; from
-    :func:`sample_candidates` it runs over the read candidates (the epilogue reads no
-    normalizer), so the row's values exceed the full ones by ``-log`` of the probability
-    mass the read candidates hold: a few hundredths of a nat for a peaked distribution,
-    never negative.
+    From :func:`sample_candidates` the log-softmax runs over the read candidates only (no full normalizer), so it is
+    never below the full-vocabulary value.
     """
 
     token_id: int
@@ -510,8 +456,7 @@ def sample_full_vocabulary(
 ) -> Qwen38CandidateSample:
     """The reference: one fp32 ``[VOCAB_SIZE]`` row, every filter over the whole vocabulary.
 
-    ``token_history`` is the prompt followed by the request's output so far; its first
-    ``prompt_tokens`` are exempt from the presence and frequency penalties.
+    ``token_history`` is the prompt then the output; its first ``prompt_tokens`` skip presence and frequency penalties.
     """
 
     if not isinstance(parameters, Qwen38SamplingParameters):
@@ -643,11 +588,7 @@ class Qwen38CandidateRow:
     def agreement(self, truth: "Qwen38CandidateRow") -> dict[str, Any]:
         """Per shard against the emulation: values bitwise; id sets equal, or equal up to boundary ties.
 
-        Two top-k selections of one shard may keep different members of a tie group at
-        the k-th value.  ``ids_equal_up_to_boundary_ties`` is true when every id one row
-        has and the other lacks carries the k-th value in its row; ``boundary_ties`` is the
-        number of read candidates at the k-th value (1 when there is no tie), and
-        ``ids_exchanged`` how many ids the two rows chose differently.
+        Two top-k selections may keep different members of a tie at the k-th value; the report counts those ties.
         """
 
         report: dict[str, list] = {
@@ -688,11 +629,8 @@ def sample_candidates(
 ) -> Qwen38CandidateSample:
     """Sample from the candidate row exactly as :func:`sample_full_vocabulary` would, or raise the fallback.
 
-    Refuses ``top_k`` above ``CANDIDATE_TOP_K_LIMIT`` (a request-time error, never a
-    fallback).  Raises :class:`Qwen38CandidateFallback` before any draw when
-    ``top_k`` is 0, a penalty raises logits, or the kept minimum does not exceed the
-    shard floor; the generator is untouched then, so the fallback sampler continues
-    the same stream.  ``token_history`` and ``prompt_tokens`` as for the reference.
+    ``top_k`` above ``CANDIDATE_TOP_K_LIMIT`` is an error. :class:`Qwen38CandidateFallback` is raised before any draw
+    (``top_k`` 0, a logit-raising penalty, or a failed guard), so the fallback sampler continues the same stream.
     """
 
     if not isinstance(row, Qwen38CandidateRow):
@@ -729,9 +667,9 @@ def sample_candidates(
 def _candidate_scores(
     row: Qwen38CandidateRow, parameters: Qwen38SamplingParameters, history: tuple[int, ...], prompt_tokens: int
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """The read candidates in ascending global id order (the stable sort then breaks ties on the lowest id, as the
-    full row does), their raw and penalized scores and the shard floor; ``top_k`` above the row's k is refused, and
-    ``top_k`` 0 or a boosting penalty over a history is the fallback (before any draw)."""
+    """The read candidates in ascending id order, their raw and penalized scores and the shard floor.
+
+    ``top_k`` above the row's k is refused; ``top_k`` 0 or a boosting penalty falls back before any draw."""
 
     if parameters.top_k > CANDIDATE_TOP_K_LIMIT:
         raise Qwen38SamplingError(f"top_k {parameters.top_k} exceeds the candidate limit {CANDIDATE_TOP_K_LIMIT}")
@@ -782,13 +720,8 @@ def candidate_distribution(
 
 
 # --- the verify rows of one MTP pass: the candidate sampler's distributions in one batched pass -----------------
-#
-# ``candidate_distributions`` is ``candidate_distribution`` for the k + 1 rows of a pass, computed together: every
-# operation of ``_penalize`` and ``_filter`` runs along the last dimension of a ``[rows, candidates]`` tensor.  On the
-# CPU each of those kernels (the stable sort, softmax, the cumulative sum, the elementwise updates) works one row at a
-# time, so the rows come out bitwise as the per-row function computes them; the one reduction whose 1-D and last-dim
-# kernels differ (``sum``) is taken row by row.  The history is counted in C once for every row instead of walked
-# in Python once per row.
+# ``_penalize`` and ``_filter`` run along the last dimension of ``[rows, candidates]``; the CPU kernels work row by
+# row, so each row is bitwise the per-row result. ``sum`` (1-D and last-dim kernels differ) is taken per row.
 
 
 @dataclass(frozen=True)
@@ -802,7 +735,7 @@ class Qwen38CandidateRows:
 
     @classmethod
     def from_host_rows(cls, rows: torch.Tensor) -> "Qwen38CandidateRows":
-        """``rows`` fp32 ``[rows, 2 * TP_SIZE * k]``, row j flattened as :meth:`Qwen38CandidateRow.from_host_row` reads it."""
+        """``rows`` fp32 ``[rows, 2 * TP_SIZE * k]``, each row as :meth:`Qwen38CandidateRow.from_host_row` reads it."""
 
         width = SAMPLING_CANDIDATE_ROW_SHAPE[-1]
         if (
@@ -851,11 +784,8 @@ class Qwen38CandidateRows:
 
 @dataclass(frozen=True)
 class Qwen38CandidateDistributions:
-    """The rows of one pass after the processors: row j's kept tokens ``tokens[j]`` (descending scaled score, ties by
-    the lowest id) and probabilities ``probabilities[j]``, or in ``outcomes[j]`` what :func:`candidate_distribution`
-    raises for it (the :class:`Qwen38CandidateFallback` of a row the guard cannot bound, a ``ValueError`` or
-    ``RuntimeError`` of the filters).  :meth:`row` answers like the per-row function, so a caller that asks row by row
-    (the acceptance never asks past its first rejection) sees the fallbacks the per-row function would have raised."""
+    """The rows of one pass after the processors: per-row kept tokens and probabilities, or in ``outcomes[j]`` the
+    exception :func:`candidate_distribution` would raise for row j."""
 
     tokens: torch.Tensor  # int64 [rows, kept]
     probabilities: torch.Tensor  # floating [rows, kept]
@@ -875,10 +805,9 @@ class Qwen38CandidateDistributions:
 
 
 def _history_tensor(values: Sequence[int], *, label: str) -> torch.Tensor:
-    """:func:`_normalize_one_history` for the long committed stream, in C: ``array.array`` refuses a non-integer element
-    and the range check runs vectorised; int64 ``[len]``.  The relaxation against the per-row check: any ``__index__``
-    object (a bool, a numpy int, a 0-dim tensor) passes as its integer value, and an int past 64 bits is a
-    ``TypeError`` rather than the range ``ValueError``; the session's committed stream holds Python ints."""
+    """:func:`_normalize_one_history` for the long committed stream, vectorised; returns int64 ``[len]``.
+
+    Looser than the per-row check: any ``__index__`` object passes, and an int past 64 bits is a ``TypeError``."""
 
     if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
         raise TypeError(f"{label} must be a sequence of token IDs")
@@ -973,12 +902,10 @@ def candidate_distributions(
     row_tokens: Sequence[int],
     prompt_tokens: int = 0,
 ) -> Qwen38CandidateDistributions:
-    """:func:`candidate_distribution` over the ``rows`` of one MTP pass in one batched pass, bitwise: row j's history is
-    ``token_history + row_tokens[:j + 1]`` (the committed stream, then the pass's ``[t_P, d_1 .. d_j]``), its first
-    ``prompt_tokens`` exempt from the additive penalties.  The checks and fallbacks are the per-row function's: the
-    refusals (``top_k`` above the row's k, temperature 0) are raised here, ``top_k`` 0 and a boosting penalty make
-    every row fall back, the guard and the filters' errors are recorded per row
-    (:attr:`Qwen38CandidateDistributions.outcomes`)."""
+    """:func:`candidate_distribution` over the ``rows`` of one MTP pass in one batched pass, bitwise per row.
+
+    Row j's history is ``token_history + row_tokens[:j + 1]``. Refusals raise here; fallbacks and filter errors are
+    recorded per row (:attr:`Qwen38CandidateDistributions.outcomes`)."""
 
     if not isinstance(rows, Qwen38CandidateRows):
         raise TypeError("rows must be Qwen38CandidateRows")

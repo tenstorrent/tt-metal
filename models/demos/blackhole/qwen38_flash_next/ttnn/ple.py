@@ -3,15 +3,9 @@
 
 """Exact host-lookup/device-compute PLE for Qwen3.8-Flash-Next.
 
-The 51.2B-parameter n-gram table remains on the host.  Only the sixteen
-selected 160-wide rows are read for one token, concatenated to one BF16 vector,
-and uploaded as four disjoint 640-wide ROW_MAJOR shards (1,280 B per device);
-the captured device body tilizes the row as its first PLE op.  All projection,
-gating, dilated-convolution, and residual arithmetic then runs on the exact
-1x4 mesh.
-
-This is the synchronous correctness path.  It intentionally establishes value
-and ordering semantics before asynchronous host prefetch is introduced.
+The 51.2B-parameter n-gram table stays on the host: one token's sixteen 160-wide rows are read, concatenated and
+uploaded as four 640-wide ROW_MAJOR BF16 shards, which the captured body tilizes first. Projection, gating, dilated
+convolution and residual arithmetic run on the 1x4 mesh.
 """
 
 from __future__ import annotations
@@ -408,10 +402,9 @@ def _rows_residual_shape(rows: int) -> tuple[int, int, int, int]:
 class Qwen38TTNNPLERowsState:
     """Persistent state of the ``rows``-row PLE path (MTP v2 verify): one history buffer, not nine slots.
 
-    ``history`` holds the CONV_STATE_LENGTH normalized rows before the first new row (token-major
-    ``[1,9,4,640]``); ``normalized`` keeps this pass's conv input rows so the commit can select the next
-    history without recomputing them.  ``token_context`` is the host n-gram context ``(c0, c1)`` of the
-    committed stream (``None`` = fresh EOS history).  Both buffers have fixed addresses.
+    ``history`` holds the CONV_STATE_LENGTH normalized rows before the first new row (token-major ``[1,9,4,640]``);
+    ``normalized`` keeps this pass's conv input rows for the commit's history select. ``token_context`` is the
+    committed stream's host n-gram context (``None`` = fresh EOS history). Fixed addresses.
     """
 
     rows: int
@@ -511,12 +504,10 @@ class Qwen38TTNNPLERowsState:
 
 @dataclass
 class Qwen38TTNNPLERowsPreparedInput:
-    """Host-resolved PLE rows for one verify pass: the ``rows`` tokens ``[t_p, d_1 .. d_k]`` looked up with
-    their own contexts, uploaded as one persistent ROW_MAJOR BF16 ``[1,1,rows,640]`` per device.
+    """Host-resolved PLE rows for one verify pass: the ``rows`` tokens ``[t_p, d_1 .. d_k]`` looked up with their own
+    contexts, uploaded as one persistent ROW_MAJOR BF16 ``[1,1,rows,640]`` per device.
 
-    ``contexts[c]`` is the host n-gram context after committing ``c`` of these rows (``c = 0 .. rows``); the
-    commit picks ``contexts[accepted + 1]``.  A runner rewrites ``embedding_rows`` in place between replays
-    (``copy_host_to_device_tensor`` of :meth:`Qwen38TTNNPLE.host_rows`); the body tilizes it.
+    ``contexts[c]`` is the host n-gram context after committing ``c`` rows; the commit picks ``contexts[accepted + 1]``.
     """
 
     embedding_rows: Any
@@ -736,13 +727,9 @@ def ngram_token_ids_decode_step(
 ) -> tuple[list[int], tuple[int, int]]:
     """``reference.ngram_token_ids`` for one decode step, in plain integers.
 
-    ``context`` is the raw two-token history ``(c0, c1)``; ``None`` is a fresh
-    history of EOS.  At the last history column the reference's EOS-aware shifts
-    reduce to ``s0 = x``, ``s1 = c1`` and ``s2 = eos if c1 == eos else c0``.
-    Every ``token * multiplier`` is below 2**63 by construction of the
-    multipliers (``build_ngram_hash_spec``), so Python ints reproduce the int64
-    mix, XOR and remainder bit for bit.  Returns the head ids (bigram heads
-    first, then trigram heads) and the next context ``(c1, x)``.
+    ``context`` is the raw history ``(c0, c1)``; ``None`` is a fresh EOS history. Every ``token * multiplier`` is below
+    2**63 (``build_ngram_hash_spec``), so Python ints reproduce the int64 mix bit for bit. Returns the head ids (bigram
+    heads first) and the next context ``(c1, x)``.
     """
 
     c0, c1 = (eos_token_id, eos_token_id) if context is None else context
@@ -759,15 +746,9 @@ def ngram_token_ids_decode_step(
 class Qwen38ResidentPLELookup:
     """``Qwen38HostPLEEmbedding.lookup`` over one persistent descriptor per table part.
 
-    Same hashed ids, same bytes, same row order as the host oracle; the 128
-    parts are opened once through the checkpoint file guard and every token's
-    sixteen rows are advised together before they are read.  ``lookup_token``
-    is the decode-step form: the hash in plain integers, the rows as one
-    payload, no torch.  A batch (:meth:`_read_rows`) re-proves the file guard's
-    identity once per touched shard file before and after its reads (the
-    identity is the file's, not the part's) and issues one WILLNEED and one
-    ``pread`` per distinct row: an MTP pass's 80 rows cost about 130 syscalls
-    where the per-part checked calls cost 344.
+    Same hashed ids, bytes and row order as the host oracle. A batch (:meth:`_read_rows`) re-proves the file guard's
+    identity once per touched shard file before and after its reads and issues one WILLNEED and one ``pread`` per
+    distinct row.
     """
 
     def __init__(self, host_embedding: Qwen38HostPLEEmbedding) -> None:
@@ -796,11 +777,8 @@ class Qwen38ResidentPLELookup:
     def _read_rows(self, hashed: Sequence[int]) -> bytearray:
         """The rows ``hashed`` in request order as one contiguous BF16 payload.
 
-        One identity proof per touched shard file before and after the batch (the file guard's contract at the
-        file, whose identity it is, instead of three ``fstat`` per touched part), every distinct row advised
-        (WILLNEED: cold rows cost the batch one disk latency, not one per row) before any is read, one ``pread``
-        per distinct row, the duplicates joined from the first read.  Same bytes in the same order as the per-part
-        ``advise`` / ``read_rows`` calls."""
+        One identity proof per touched shard file before and after the batch, every distinct row advised (WILLNEED)
+        before any is read, one ``pread`` per distinct row; same bytes in the same order as the per-part calls."""
 
         rows_per_shard = self.host_embedding.rows_per_shard
         readers = self.readers
@@ -853,9 +831,8 @@ class Qwen38ResidentPLELookup:
     def lookup_tokens(
         self, tokens: Sequence[int], context: tuple[int, int] | None
     ) -> tuple[bytearray, tuple[tuple[int, int] | None, ...]]:
-        """:meth:`lookup_token` over a token stream in one read: the decode-step hash per token, the contexts chained
-        as the steps chain them (``contexts[c]`` after c tokens), then every row in one ``_read_rows`` batch (one
-        WILLNEED pass per part; the same bytes in the same order as the per-token calls, about three times faster)."""
+        """:meth:`lookup_token` over a token stream in one read: the contexts chained as the steps chain them
+        (``contexts[c]`` after c tokens), every row in one ``_read_rows`` batch; same bytes as the per-token calls."""
 
         for value in (*tokens, *(() if context is None else context)):
             if isinstance(value, bool) or type(value) is not int or not 0 <= value < self.vocab_size:
@@ -977,7 +954,7 @@ class Qwen38TTNNPLE:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        # QWEN38_FUSED=ple: the fused device body (ttnn/fused/ple) binds at construction; forward_prepared's chain stays.
+        # QWEN38_FUSED=ple binds the fused device body (ttnn/fused/ple) here; forward_prepared's chain stays.
         from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
 
         if fused_kernels.enabled("ple"):
@@ -1146,10 +1123,8 @@ class Qwen38TTNNPLE:
         if not self._same_host_context(state.token_context, prepared.source_token_context):
             raise RuntimeError("prepared PLE input does not match the state's host token context")
         self._validate_prepared_row(prepared.embedding_sharded, label="prepared PLE row")
-        # The body's one layout op: the 1,280 B row-major shard becomes the
-        # 32x640 tile the projections consume (ttnn::tilize_with_val_padding,
-        # zero pad rows; a data movement, no arithmetic).  The persistent row
-        # itself is untouched so the host can rewrite it for the next token.
+        # The body's one layout op: tilize the 1,280 B row-major shard into the 32x640 tile (zero pad rows). The
+        # persistent row stays untouched so the host can rewrite it for the next token.
         embedding_tile = ttnn.to_layout(
             prepared.embedding_sharded, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -1271,15 +1246,11 @@ class Qwen38TTNNPLE:
         return result
 
     # ------------------------------------------------------------------ rows path (MTP v2 verify)
-    #
-    # ``forward_prepared_rows`` runs the 1-row device PLE on ``[1,rows,4,640]`` (token-major: dim 1 is the
-    # token, each token keeps its [4,640] branch block, so every op sees the 1-row tile structure per
-    # token).  The dilated conv is a fixed window ``[9 history rows | rows new rows]`` read with four
-    # slices (taps at window offsets 0, 3, 6, 9); ``commit_rows`` selects the next history
-    # ``window[c : c + 9]`` with ``c = accepted + 1`` by an exact one-hot multiply/add.  The host
-    # supplies the ``rows`` tokens looked up with their own sequential contexts (:meth:`host_rows`).
-    # Assumption to confirm on hardware: rms_norm_post_all_gather applies the [1,1,4,640] per-branch
-    # weight per tile row, so it is reused for every token (row 0 must match the 1-row path).
+    # ``forward_prepared_rows`` runs the 1-row device PLE on token-major ``[1,rows,4,640]``. The dilated conv reads the
+    # window ``[9 history rows | rows new rows]`` with four slices (taps at offsets 0, 3, 6, 9); ``commit_rows``
+    # selects the next history ``window[c : c + 9]``, ``c = accepted + 1``, by an exact one-hot multiply/add. The
+    # [1,1,4,640] per-branch norm weight is reused for every token (assumes rms_norm_post_all_gather applies it per
+    # tile row).
 
     def allocate_rows_state(self, rows: int, *, history=None) -> Qwen38TTNNPLERowsState:
         return Qwen38TTNNPLERowsState.allocate(self.mesh_device, self.mesh_contract, rows=rows, history=history)
@@ -1295,9 +1266,7 @@ class Qwen38TTNNPLE:
     ) -> tuple[torch.Tensor, tuple[tuple[int, int] | None, ...]]:
         """The n-gram rows of ``tokens`` looked up sequentially from ``context``, as BF16 ``[1,1,rows,2560]``.
 
-        Row i uses the context after rows 0 .. i-1; ``contexts`` has rows + 1 entries, ``contexts[c]`` being
-        the context after committing c rows.  Same hash, bytes and row order as the 1-row decode step, read in one
-        batch (:meth:`Qwen38ResidentPLELookup.lookup_tokens`).
+        Row i uses the context after rows 0 .. i-1; ``contexts[c]`` is the context after committing c rows.
         """
 
         if len(tokens) == 0:
@@ -1411,9 +1380,8 @@ class Qwen38TTNNPLE:
             raise RuntimeError(f"PLE rows key projection has local shape {_shape(key_flat)}")
         if _shape(value_flat) != (1, 1, rows, LOCAL_HIDDEN_SIZE):
             raise RuntimeError(f"PLE rows value projection has local shape {_shape(value_flat)}")
-        # Token t's 2560 key columns become its [4,640] branch block; the value row becomes [1,640] per token.  At one
-        # row the value keeps its shape: a same-shape reshape is a view of its input on this runtime (releasing the
-        # input freed the view: PLE lanes at B = 1, 2026-09-04), so the row is used as it is.
+        # Token t's 2560 key columns become its [4,640] branch block; the value row becomes [1,640] per token. At one
+        # row a same-shape reshape is a view of its input (releasing the input frees it), so the row is used as is.
         key = ttnn.reshape(key_flat, _rows_residual_shape(rows))
         value_shape = (1, rows, 1, LOCAL_HIDDEN_SIZE)
         value = value_flat if _shape(value_flat) == value_shape else ttnn.reshape(value_flat, value_shape)
@@ -1601,10 +1569,8 @@ class Qwen38TTNNPLE:
         _deallocate(acc, terms[-1])
 
     # ------------------------------------------------------------------ lane rows path (MTP lanes verify)
-    # B lanes of R rows in one 32-row tile, lane-major (row u*R + j = lane u's row j): the projection, gate and
-    # group norm are the rows forms over the B*R token rows (row-independent); the dilated FIR runs on every lane's
-    # own window ``[history_u | normalized_u]`` through the batch axis; the commit selects lane u's next history with
-    # the pass's per-lane one-hots (the KEEP candidate for a lane that commits nothing).
+    # B lanes of R rows in one 32-row tile, lane-major (row u*R + j = lane u's row j). Projection, gate and norm run
+    # over the B*R rows; the dilated FIR runs per lane window through the batch axis; the commit selects per lane.
 
     def allocate_lane_rows_state(self, lanes: int, rows: int) -> Qwen38TTNNPLELaneRowsState:
         return Qwen38TTNNPLELaneRowsState.allocate(self.mesh_device, self.mesh_contract, lanes=lanes, rows=rows)
@@ -1776,12 +1742,8 @@ class Qwen38TTNNPLE:
         rows_state.validate()
 
     # ------------------------------------------------------------------ lanes path (batched decode)
-    #
-    # ``forward_prepared_lanes`` is the 1-row body on ``[1,lanes,4,640]`` (token-major: dim 1 is the lane, each
-    # lane keeps its [4,640] branch block): the rows path's projection, gate and norm over ``lanes`` rows, then
-    # the 1-row dilated conv on the nine per-lane slots (taps at slots 0, 3, 6 and the new row) with the same
-    # shift; lane u is bitwise the 1-row path on user u's stream.  The host looks every lane's token up with
-    # that lane's own context in one batched read (:meth:`host_lanes`).
+    # ``forward_prepared_lanes`` is the 1-row body on token-major ``[1,lanes,4,640]`` with the nine per-lane slots;
+    # lane u is bitwise the 1-row path on user u's stream.
 
     def allocate_lanes_state(self, lanes: int) -> Qwen38TTNNPLELanesState:
         return Qwen38TTNNPLELanesState.allocate(self.mesh_device, self.mesh_contract, lanes=lanes)

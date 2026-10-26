@@ -3,39 +3,10 @@
 
 """Strict ordinary greedy-decode session for Qwen3.8-Flash-Next TTNN.
 
-This module is the request/state owner above :class:`Qwen38TTNNTextModel`.
-It deliberately does not open or close a device, acquire a lease, convert a
-weight, implement sampling, or render chat.  A launcher must first open one
-qualified physical ``1x4`` Blackhole mesh under its full-lifetime locks and
-enforcing broker lease, construct :class:`Qwen38TTNNBuilder`, and supply the
-independently recorded live identity and provenance here.
-
-The correctness baseline is fully serialized.  Each prompt token and each
-generated-token continuation is one true-global-B1 target invocation bracketed
-by explicit mesh synchronization.  The reported ``model_call_ns`` is host wall
-time for the Python/TTNN call and can include implicit synchronization needed
-to return the CPU greedy candidate.  It is not a device-profiler measurement.
-``pre_sync_ns`` and ``post_sync_ns`` are recorded separately, and
-``end_to_end_ns`` spans the entire token or TTFT boundary.  These domains must
-not be added to device-profiler or Tracy timings.
-
-The state position counts tokens already consumed by the target.  A generated
-token is emitted before it is consumed, so ``pending_token_id`` is explicit.
-Continuing a completed request without resetting requires the next prompt
-suffix to begin with that pending token.  This prevents a later chat owner from
-silently appending new text to a cache which does not contain the previous
-assistant terminator.
-
-``stop_on_eos=False`` exists only for bounded benchmark runs that must collect
-a fixed sample count even when an early greedy token is in the pinned EOS set.
-It never disables the independent ``max_new_tokens`` or allocated-context
-bounds.  Production callers retain the default EOS termination behavior.
-
-Any model-call, state-validation, cleanup, clock, or synchronization failure
-poisons this session permanently.  If the transaction-hardened model reports
-itself poisoned, its error is retained as the cause.  A poisoned session never
-calls reset or release methods: the enclosing task-owned hardware process must
-terminate and release its already-held lease without resetting hardware.
+Request/state owner above :class:`Qwen38TTNNTextModel`; it does not open a device, convert weights, sample or render
+chat. Each token is one serialized B1 target call bracketed by mesh synchronization; ``*_ns`` fields are host wall
+time, not device-profiler time. ``pending_token_id`` is emitted but not yet consumed, so a continued request must
+begin with it. Any failure poisons the session permanently; a poisoned session never resets or releases state.
 """
 
 from __future__ import annotations
@@ -657,10 +628,7 @@ class Qwen38OrdinaryDecodeSession:
     ) -> Qwen38OrdinaryToken:
         """Consume an exact prompt suffix and return its first greedy token.
 
-        On a nonzero cache, the suffix must begin with ``pending_token_id``.
-        The first timing is TTFT and includes every serialized prompt-token
-        invocation.  Input/template/tokenizer time before this call is outside
-        the timing boundary.
+        On a nonzero cache the suffix must begin with ``pending_token_id``. The first timing is TTFT.
         """
 
         self._assert_usable("begin a request")

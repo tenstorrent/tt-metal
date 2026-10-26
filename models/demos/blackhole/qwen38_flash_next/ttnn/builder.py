@@ -3,28 +3,10 @@
 
 """Fail-closed construction for the exact four-P150 Qwen3.8 target.
 
-This module separates conversion from model construction.  A caller must:
-
-1. supply the pinned checkpoint and every provenance digest explicitly;
-2. open an already-leased physical ``1x4`` Blackhole mesh and name the
-   collective topology selected by the topology gate;
-3. stage each routed-expert layer independently with
-   :meth:`Qwen38TTNNBuilder.stage_bf4_layer`; and
-4. call :meth:`Qwen38TTNNBuilder.build_target` only after all 48 backbone
-   artifacts are present and hash-valid.
-
-Staging never retains packed routed weights: the converter returns one live
-BF4_B layer, this owner validates it, and then immediately deallocates it.
-The default completed target shares one single-slot
-:class:`Qwen38BF4Streamer` across all layers.  An explicit resident policy
-instead preloads exact TP4/EP4 BF4 pairs during component construction and
-requires a bounded physical QSA-cache capacity.
-
-The builder does not open devices, acquire locks, choose physical IDs, infer a
-runtime revision, or choose a collective topology.  Those are launch-time
-safety decisions and are mandatory constructor inputs.  Constructing this
-object performs live mesh and DRAM-ring queries, so it must happen only inside
-the full-lifetime exact-device lease.
+The caller supplies the pinned checkpoint and provenance digests, an already-leased ``1x4`` Blackhole mesh and its
+collective topology, stages each routed-expert layer with :meth:`Qwen38TTNNBuilder.stage_bf4_layer`, then calls
+:meth:`Qwen38TTNNBuilder.build_target` once all 48 backbone artifacts are hash-valid. The builder never opens devices,
+takes locks or picks IDs; construction queries the live mesh, so it must run inside the device lease.
 """
 
 from __future__ import annotations
@@ -124,12 +106,9 @@ ROUTED_EXPERTS = 512
 EXPERTS_PER_DEVICE = 128
 TOP_K = 10
 BUILDER_FORMAT_VERSION = 1
-# The resident build allocates one of four contexts: 32,768 (the default; every timing and bitwise pin is at this
-# allocation), 65,536, 131,072 or 262,144 (every QSA op admitted at each by the long-context micro-test, the 4x p150 host
-# 2026-09-03; the state grows by 1,088 bytes per token per QSA layer: 1.71 GB per device at 131,072, 3.43 GB at
-# 262,144, which leaves about 2.7 GB and about 1 GB of the measured 4.4 GB headroom, so 262,144 is a single-user
-# configuration).  RESIDENT_MAX_QSA_CACHE_CAPACITY keeps the default's historical name: demo/production.py and the
-# 32k pins read it.
+# The resident build allocates one of RESIDENT_QSA_CACHE_CAPACITIES (32,768 by default). The state grows by 1,088 bytes
+# per token per QSA layer, so 262,144 leaves only about 1 GB of DRAM headroom (a single-user configuration).
+# RESIDENT_MAX_QSA_CACHE_CAPACITY is the default under the name demo/production.py and the 32k pins read.
 RESIDENT_DEFAULT_QSA_CACHE_CAPACITY = 32_768
 RESIDENT_QSA_CACHE_CAPACITIES = (8_192, RESIDENT_DEFAULT_QSA_CACHE_CAPACITY, 65_536, 131_072, 262_144)
 RESIDENT_MAX_QSA_CACHE_CAPACITY = RESIDENT_DEFAULT_QSA_CACHE_CAPACITY
@@ -149,9 +128,7 @@ Namespace = Literal["backbone", "mtp"]
 class Qwen38ResidentContext:
     """One resident build's allocated context and every size the builder, the chain and the admission derive from it.
 
-    The QSA caches, the compressed-index cache (the generic state carries one extra tile: the fixed indexer window),
-    the RoPE tables and the position constants all follow ``allocated_context``; the reserve grows by the state the
-    larger context adds over the default, so the capacity admission stays the measured 5 GiB bucket plus that delta.
+    The reserve grows by the state the larger context adds over the default, on top of the 5 GiB default bucket.
     """
 
     allocated_context: int = RESIDENT_DEFAULT_QSA_CACHE_CAPACITY
@@ -490,7 +467,7 @@ class Qwen38LiveBuildIdentity:
     def key(self) -> str:
         payload = asdict(self)
         if self.decode_dram_workers_per_bank == 1:
-            del payload["decode_dram_workers_per_bank"]  # the one-reader caches keep the identity they were built under
+            del payload["decode_dram_workers_per_bank"]  # one reader keeps the cache identity without this field
         return _payload_key(payload)
 
 
@@ -778,7 +755,7 @@ class Qwen38TTNNBuilder:
             if decode_dram_workers_per_bank is None
             else validate_decode_dram_workers(decode_dram_workers_per_bank)
         )
-        # The resident dense matmul weights' dtype per module (decode_matmul: QWEN38_DENSE_WEIGHT_DTYPE, bf16 unless set).
+        # The resident dense matmul weights' dtype per module (decode_matmul.QWEN38_DENSE_WEIGHT_DTYPE, bf8 unless set).
         if dense_weight_plan is None:
             dense_weight_plan = default_dense_weight_plan()
         if not isinstance(dense_weight_plan, DenseWeightPlan):
@@ -810,8 +787,7 @@ class Qwen38TTNNBuilder:
         if mesh_device.arch() != ttnn.Arch.BLACKHOLE:
             raise ValueError("Qwen3.8 four-P150 construction requires a Blackhole mesh")
         ring_order = qualify_live_bf4_ring(mesh_device)
-        # Two readers per bank need one bank -> worker assignment on every device (decode_matmul): a mesh of
-        # differently harvested dies runs one reader, and the one-reader caches keep their identity.
+        # Two readers per bank need one validated bank -> worker placement on every device (decode_matmul).
         decode_dram_workers_per_bank, decode_dram_workers_fallback = qualify_decode_dram_workers(
             mesh_device, decode_dram_workers_per_bank
         )
@@ -842,11 +818,9 @@ class Qwen38TTNNBuilder:
             decode_dram_workers_per_bank=decode_dram_workers_per_bank,
         )
 
-        # The component and model-I/O caches receive a root namespaced by the complete builder identity (the
-        # runtime digest, the live ring, the allocated context); component-specific paths add their own layer/block
-        # key.  The routed BF4 cache is keyed by its own identity only (checkpoint, converter sources, mesh, ring): the
-        # expert bytes depend neither on the allocated context nor on the rest of the runtime, so one conversion serves
-        # every context and survives a runtime rebuild.
+        # Component and model-I/O caches are namespaced by the full builder identity (runtime digest, live ring,
+        # allocated context). The routed BF4 cache is keyed by its own identity only, so one conversion serves every
+        # context and survives a runtime rebuild.
         component_cache_root = cache_roots.component_weights / live_identity.key
         routed_cache_root = cache_roots.routed_bf4
         io_cache_root = cache_roots.model_io / live_identity.key
@@ -919,12 +893,8 @@ class Qwen38TTNNBuilder:
     def enable_vision(
         self, dram_view, *, reserved_bytes_per_bank: int = 0, buckets=VISION_ROW_BUCKETS
     ) -> Qwen38VisionResidency:
-        """Give this process the vision tower: the checkpoint's 333 tower tensors read from the host now (BF16), the
-        residency decided and made in the chain's warm hook (``vision_residency.vision_warm_hook`` goes to
-        ``construct_chain(warm_hook=...)``, composed with any other hook): the admission on the live allocator, the
-        weights resident, one forward per row bucket compiled before the captures.  ``dram_view`` reads the mesh's
-        DRAM view (the server's symmetric probe bound to its route); ``reserved_bytes_per_bank`` is what the chain
-        allocates after the hook (its traces).  Called at most once per builder; the tower is never rebuilt."""
+        """Give this process the vision tower: its weights read from the host now, the residency decided and made in
+        the chain's warm hook (``vision_residency.vision_warm_hook``). Called at most once per builder."""
 
         self._assert_resident_builder_usable()
         if self.vision_residency is not None:
@@ -944,10 +914,8 @@ class Qwen38TTNNBuilder:
             return
         published = self._resident_graph_is_published()
         self._resident_build_failed = True
-        # Every caught build failure follows entry into a device-building
-        # operation.  Publication controls whether this method may enqueue
-        # resident releases; it does not make an unpublished partial build safe
-        # to reuse or exempt it from process/mesh teardown.
+        # Publication only decides whether this method may enqueue resident releases; an unpublished partial build is
+        # never safe to reuse.
         cleanup_status = "not_attempted_published_graph" if published else "pending_unpublished_cleanup"
         self._resident_build_failure = (operation, primary_error, True, published, cleanup_status)
         if published:
@@ -1121,11 +1089,9 @@ class Qwen38TTNNBuilder:
         self.prefill_slab_rows = rows
 
     def _attach_prefill_dense_weights(self, layers: Sequence[Qwen38TTNNDecoderLayer]) -> None:
-        """The resident prefill-only weights of the slab's dense linears (the fused [k | v] and [gate | up] siblings),
-        only for a build that runs a slab (enable_prefill_slab): nothing without one.  Built after the decode weights
-        and the resident experts so the DRAM admission sees the real free bytes; refused, with the numbers, when they
-        plus the context-scaled state, the slab's measured working set and the margin exceed the free DRAM
-        (prefill_dense.admit_prefill_dense_dram)."""
+        """The resident prefill-only weights of the slab's dense linears, only for a build that runs a slab.
+
+        Built after the decode weights and resident experts so the DRAM admission sees the real free bytes."""
 
         if self.prefill_slab_rows is None:
             return

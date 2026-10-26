@@ -1,32 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Lane lifecycle of the batched decode lanes: eviction of one lane's state to a pinned host pool and its
-re-admission into any lane, the host page table (session -> lane or host slot) and the residue-aligned admission
-scheduler.
+"""Lane lifecycle of the batched decode lanes: eviction to a pinned host pool, re-admission into any lane, the host
+page table (session -> lane or host slot) and the residue-aligned admission scheduler.
 
-The lane state of the batched layout is 237 fixed-address tensors per device (12 QSA packed KV caches
-``[1,1,B*C,512]``, 12 compressed index caches ``[B,1,C/4+32,128]``, 12 KV staging tiles ``[1,B,32,512]``, 12
-raw-key rings ``[1,B,32,128]``, 36 GDN recurrent states ``[B,12,128,128]``, 144 GDN ring slots ``[1,1,B,2560]``,
-9 PLE slots ``[1,B,4,640]``); lane u is a batch index, a dim-1 index, a row of a tile or a ``C``-row region of
-every one of them.  Moving lane u tensor by tensor costs one host transfer per tensor (61 / 53 ms per leg at 32k on
-measured 2026-09-04, most of it per-transfer overhead), so the pager moves a *packed lane image* instead:
-
-* six small pack buffers (compressed ``[12,1,R,128]``, recurrent ``[36,12,128,128]``, staging ``[12,1,32,512]``,
-  ring ``[12,1,32,128]``, PLE ``[9,1,4,640]``, ring slots ``[1,144,1,2560]`` ROW_MAJOR) filled by one *pack trace*
-  per lane (slices at the lane index and concats into the persistent buffers) and read with six transfers; written
-  back with six transfers and one *unpack trace* per lane (``fill_cache`` at the lane's batch index for the
-  batch-indexed families, the selection write ``slot * keep + hit @ row`` for the ring-slot rows);
-* the 12 KV regions, the bytes that scale with the context, as 12 whole-lane slabs: ``slice`` of the ``C`` rows into
-  an alternating pair of staging buffers and one transfer each; back by one transfer and one whole-slab
-  ``update_padded_kv_cache`` at row ``u*C`` (bitwise at 4k / 8k / 32k, 0.15-0.38 ms, measured 2026-09-04).
-
-Every op is data movement or an exact one-term select, so the round trip is bitwise; the traces bake the lane
-index, so there are ``B`` pack and ``B`` unpack traces, captured after every lane tensor and pack buffer exists.
-The pager never touches the position row: re-admission goes through :meth:`Qwen38TTNNDevicePositionRow.admit`
-first (the residue rule), a masked lane reset is the components' ``reset_lane_inplace``.  Page moves run from
-:class:`Qwen38LaneMover`, one helper thread, after the step's non-blocking launch (they queue behind the step on
-command queue 0) and are joined before the next step's host writes.  The 1-row production path is untouched.
+The pager moves a packed lane image (six small pack buffers plus the 12 KV regions as whole-lane slabs). Every op is
+data movement or an exact one-term select, so the round trip is bitwise. Re-admission applies the residue rule first
+(:meth:`Qwen38TTNNDevicePositionRow.admit`); moves queue behind the step on command queue 0.
 """
 
 from __future__ import annotations
@@ -95,10 +75,9 @@ def _shape(tensor) -> tuple[int, ...]:
 
 
 def slice_owned(tensor, start: Sequence[int], end: Sequence[int]):
-    """``tensor[start:end]`` in DRAM as a tensor the caller owns and releases.  ``ttnn.slice`` over the whole tensor
-    returns its input (the no-op path of ``slice.cpp``): a lane slice of a 1-lane layout or of a 1-layer pack would
-    alias the state or the pack, and the pack body's release of its parts would free that (the generic pager over a
-    chain's 1-lane state freed every GDN recurrent, 2026-09-20); that case is a clone."""
+    """``tensor[start:end]`` in DRAM as a tensor the caller owns and releases.
+
+    ``ttnn.slice`` over the whole tensor returns its input, which the caller would then free; that case is a clone."""
 
     start, end = tuple(int(v) for v in start), tuple(int(v) for v in end)
     if all(v == 0 for v in start) and end == _shape(tensor):
@@ -329,17 +308,11 @@ class Qwen38LaneMoveTiming:
 
 
 class Qwen38TTNNLanePager:
-    """Evicts one lane's image into a host slot and re-admits a slot into any lane, bitwise (module docstring).
+    """Evicts one lane's image into a host slot and re-admits a slot into any lane, bitwise.
 
-    Construction allocates the pack buffers and the KV staging pair, runs every lane's pack then unpack once
-    eagerly (the compile warm-up; a pack followed by the unpack of the same lane is the identity on the lane) and
-    captures the ``B`` pack and ``B`` unpack traces.  Build it after every lane tensor exists; run the tracker's
-    ``verify_before_replay`` on :attr:`pack_traces` / :attr:`unpack_traces` after any later allocation.  ``evict``
-    and ``readmit`` are synchronous and return their leg timing; the caller serializes them with the steps (the
-    :class:`Qwen38LaneMover` pattern).  ``fill_families`` names the families written back by ``fill_cache``; the
-    others take the selection write (``target * keep + repeat(part) * hit``, exact for finite values).  ``buffers``
-    lends another pager's pack buffers and KV staging pair (the per-lane family shapes are the same at any lane count
-    and context, so one set serves a lane state and the generic state beside it); the borrower never releases them.
+    Build after every lane tensor exists: construction warms each lane's pack and unpack and captures the ``B`` pack
+    and ``B`` unpack traces; run ``verify_before_replay`` on them after any later allocation. ``evict`` / ``readmit``
+    are synchronous. ``buffers`` lends another pager's pack buffers and KV staging; the borrower never releases them.
     """
 
     def __init__(
@@ -599,9 +572,9 @@ class Qwen38TTNNLanePager:
         ttnn.event_synchronize(ttnn.record_event(self.mesh_device, cq_id=self.cq_id))
 
     def _run_pack(self, lane: int) -> None:
-        """The pack body: one replayed trace when captured, else the eager op sequence.  Eager is the default: the
-        pack/unpack bodies allocate transient slices and concat intermediates, and ``verify_before_replay`` refuses
-        a replay whose baked scratch overlaps another lane's trace, so the traced form is opt-in (single-lane use)."""
+        """The pack body: one replayed trace when captured, else the eager op sequence (the default).
+
+        The traced form is opt-in (single-lane use): its baked scratch can overlap another lane's trace."""
 
         if self.traced:
             ttnn._ttnn_execute_trace(self.mesh_device, self.pack_traces[lane], cq_id=self.cq_id, blocking=False)
@@ -620,9 +593,8 @@ class Qwen38TTNNLanePager:
 
         lane, slot = _exact_index(lane, self.layout.lanes, label="evicted lane"), self._slot(slot)
         started = time.perf_counter_ns()
-        # A move runs between two replays of the lane traces and consumes every device buffer it allocates before
-        # the next one: whatever the ops allocate (the tracker saw the KV region slice and a pack copy outlive the
-        # move on a 4x p150 lane, run lfm-disc-a-4883992f) may sit in a trace's scratch and be overwritten later.
+        # A move runs between two replays of the lane traces: every buffer it allocates is consumed before the next
+        # replay, since it may sit in a trace's scratch.
         with corruptible_allocation_scope(self.mesh_device):
             self._run_pack(lane)
             self._fence()
@@ -660,11 +632,9 @@ class Qwen38TTNNLanePager:
         )
 
     def warm_moves(self, slot: Qwen38LaneHostSlot) -> list[tuple[Qwen38LaneMoveTiming, Qwen38LaneMoveTiming]]:
-        """One eviction into ``slot`` and one re-admission of every lane in turn (the identity on each lane): the KV
-        slab legs compile here, not on the first move under the lane traces (construction warms the pack and unpack
-        bodies only; the slice program is keyed by the lane's row offset: the first eviction on a 4x p150 lane
-        compiled 3 programs and took 559 ms, lfm-disc-a-91284b89, and lane 1's slice one more after a lane-0 warm-up,
-        lfm-disc-a-73ab5fd7)."""
+        """One eviction into ``slot`` and one re-admission of every lane in turn (the identity on each lane).
+
+        Compiles the KV slab legs (keyed by the lane's row offset) here, not on the first move under the traces."""
 
         return [(self.evict(lane, slot), self.readmit(slot, lane)) for lane in range(self.layout.lanes)]
 

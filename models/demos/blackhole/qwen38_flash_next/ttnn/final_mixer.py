@@ -110,10 +110,8 @@ def _cache_directory(
 def _prepare(source: Qwen38FinalMixerWeights) -> dict[str, torch.Tensor]:
     """Put every weight in its device-local decode layout before mesh sharding.
 
-    As in ttnn/gr.py, the sharded axis of each matmul weight is ordered
-    (device, branch, local hidden): ``down`` stacks its input-branch blocks
-    along K, ``up`` its output-branch blocks along N, so each projection is one
-    matmul on the flat residual row.
+    As in ttnn/gr.py, each matmul weight's sharded axis is ordered (device, branch, local hidden), so each projection
+    is one matmul on the flat residual row.
     """
 
     config = source.config
@@ -210,9 +208,7 @@ class Qwen38TTNNFinalMixerWeights:
                 hidden_output_mapper,
                 ttnn.DRAM_MEMORY_CONFIG,
             ),
-            # The matmul weights are DRAM width-sharded for the decode program;
-            # the renamed tensorbins deliberately orphan the batched
-            # interleaved caches.
+            # DRAM width-sharded for the decode program, under tensorbin names the interleaved layout never used.
             down=upload(
                 prepared["down"],
                 "down-dram-sharded.bf16" if weight_dtype == ttnn.bfloat16 else f"down-dram-sharded.{weight_tag}",
@@ -309,9 +305,8 @@ class Qwen38TTNNFinalMixer:
     def _normalize(self, residual):
         stats = ttnn.rms_norm_pre_all_gather(
             residual,
-            # Avoid the standard all-gather's one-page Fabric scatter-state
-            # initializer defect. BF16 produces the same two-page statistics
-            # transfer already exercised by the GR and PLE paths.
+            # BF16 statistics: the two-page transfer the GR and PLE paths use, avoiding the standard all-gather's
+            # one-page fabric scatter-state initializer defect.
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_config,
@@ -326,12 +321,9 @@ class Qwen38TTNNFinalMixer:
         )
         _deallocate(stats)
         self.mesh_contract.validate_tensor(gathered, placement=TensorPlacement.REPLICATED)
-        # The fused post kernel broadcasts one gamma tile row-block over every
-        # branch block of the branch-major residual, so apply the per-branch
-        # scale elementwise after the unscaled RMS unit (the GR pattern).  The
-        # scale already carries the 1/4 branch mean.  The multiply reads both
-        # operands through their flat views and writes the down matmul's
-        # five-core activation shard directly.
+        # The fused post kernel broadcasts one gamma row-block over every branch block, so the per-branch scale (which
+        # carries the 1/4 branch mean) is applied elementwise after the unscaled RMS unit, through the flat views,
+        # straight into the down matmul's five-core activation shard.
         unit = ttnn.rms_norm_post_all_gather(
             residual,
             gathered,
@@ -419,10 +411,8 @@ class Qwen38TTNNFinalMixer:
         gated_flat = ttnn.multiply(normalized_ws, gate_flat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         _deallocate(gate_flat, normalized_ws)
         gated = ttnn.experimental.view(gated_flat, RESIDUAL_LOCAL_SHAPE)
-        # Branch mean without a permute: fast_reduce_nc sums the four branch
-        # tile row-blocks (generic dim-1 reduce would transpose); the 1/4 is
-        # already in normalized_ws.  fast_reduce_nc reports the 32-row tile
-        # padding as its logical row count; restore the logical shape without
+        # Branch mean without a permute: fast_reduce_nc sums the four branch row-blocks (the 1/4 is already in
+        # normalized_ws). It reports the 32-row tile padding as its row count; restore the logical shape without
         # moving data.
         gated_sum = ttnn.experimental.fast_reduce_nc(
             gated,
@@ -449,10 +439,7 @@ class Qwen38TTNNFinalMixer:
 
     def rows(self, residual_rows, *, flat_views: bool = False):
         """``__call__`` over ``rows`` branch-major residual rows ``[1,4,rows,640]`` (1..32, row u = lane u) ->
-        ``[1,1,rows,640]``: the same ops row for row (every op is per row or per element; the DRAM-sharded matmuls
-        read one tile row either way), the two zero-copy views replaced by real permutes (the GR rows pattern) unless
-        ``flat_views`` (the same pages under ``ttnn.experimental.view``, as the 1-row body and GR ``read_rows``).  The
-        1-row body above is untouched."""
+        ``[1,1,rows,640]``, row for row; the zero-copy views become real permutes unless ``flat_views``."""
 
         shape = _shape(residual_rows)
         if len(shape) != 4:
@@ -491,7 +478,7 @@ class Qwen38TTNNFinalMixer:
             unit_flat = ttnn.reshape(unit_tokens, flat_shape)
             if not same_buffer(
                 unit_flat, unit_tokens
-            ):  # a copy today (the last dim changes); never free a view's source
+            ):  # the reshape copies when the last dim changes; never free a view's source
                 _deallocate(unit_tokens)
         if _shape(unit_flat) != flat_shape or _padded_shape(unit_flat) != flat_padded:
             raise RuntimeError(
@@ -552,7 +539,7 @@ class Qwen38TTNNFinalMixer:
             gated = ttnn.experimental.view(gated_flat, residual_shape)  # owns gated_flat's buffer
         else:
             gated_tokens = ttnn.reshape(gated_flat, (1, rows, RESIDUAL_BRANCHES, LOCAL_HIDDEN_SIZE))
-            if not same_buffer(gated_tokens, gated_flat):  # a copy today (the last dim changes)
+            if not same_buffer(gated_tokens, gated_flat):
                 _deallocate(gated_flat)
             gated = ttnn.permute(gated_tokens, (0, 2, 1, 3), memory_config=dram)
             _deallocate(gated_tokens)

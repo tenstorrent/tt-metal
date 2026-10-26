@@ -3,36 +3,15 @@
 
 """Exact Qwen3.8-Flash-Next TTNN decoder-layer orchestration.
 
-This module owns composition and state lifetime, not component arithmetic.  A
-decode token follows the checkpoint order exactly::
+Owns composition and state lifetime, not component arithmetic. A decode token follows the checkpoint order::
 
     PLE residual injection (checkpoint layer 1 only)
       -> attention GR read -> GDN or QSA -> attention GR write
       -> MLP GR read -> routed + dynamically-gated shared MoE -> MLP GR write
 
-The public residual is branch-major and hidden sharded.  Its local shape is
-``[1, 4, 1, 640]`` on every coordinate of the exact 1x4 mesh; the leading one
-is the *global* batch and dimension one is the four hyper-connection branches.
-No path in this file turns the four coordinate-local shards into four
-replicated batch elements.
-
-PLE remains a deliberately explicit dependency.  Its 51B-parameter n-gram
-table is host resident, while its convolution rows are fixed-address device
-state.  The layer performs the checkpoint's residual addition immediately
-before the attention GR read and owns PLE snapshot lifetime alongside the
-attention state.
-
-Speculative verification has two different state mechanisms:
-
-* GDN recurrent and convolution buffers mutate in place and are copied into a
-  preallocated snapshot.
-* QSA caches are append-only while state objects are immutable metadata views;
-  rollback restores the prior view and deterministically overwrites rejected
-  cache bytes on replay.
-
-The QSA module owns its transient-tensor aliasing and therefore supplies the
-``restore_state`` and ``commit_state`` operations used here.  Guessing which
-view owns reused complete-block indices would make rejection cleanup unsafe.
+The residual is branch-major and hidden-sharded, local ``[1, 4, 1, 640]`` on the 1x4 mesh (dim 1 is the four
+hyper-connection branches, never a batch). For speculative rollback GDN and PLE buffers are copied into a
+preallocated snapshot; QSA caches are append-only and the QSA module supplies ``restore_state`` / ``commit_state``.
 """
 
 from __future__ import annotations
@@ -135,12 +114,7 @@ def _run_cleanup_actions(
 
 
 class Qwen38TTNNLayerNamespace(str, Enum):
-    """Checkpoint namespaces accepted by the device layer.
-
-    ``BACKBONE`` is the target model used for verification.  ``MTP`` is the
-    released one-layer draft head.  These values intentionally match the BF4,
-    GR, and MoE cache namespaces.
-    """
+    """Checkpoint namespaces accepted by the device layer; the values match the BF4, GR and MoE cache namespaces."""
 
     BACKBONE = "backbone"
     MTP = "mtp"
@@ -164,12 +138,7 @@ class Qwen38TTNNDecoderLayerState:
 
 @dataclass(frozen=True)
 class Qwen38TTNNDecoderLayerGenericState:
-    """Fixed-address state of one layer for the position-generic decode body.
-
-    No host position: the body derives it on device.  GDN and PLE buffers are
-    the same in-place tensors as :class:`Qwen38TTNNDecoderLayerState` holds;
-    the QSA state is the QSA module's generic (in-place, fixed-shape) state.
-    """
+    """Fixed-address state of one layer for the position-generic decode body (the position is derived on device)."""
 
     namespace: Qwen38TTNNLayerNamespace
     layer_index: int
@@ -181,12 +150,9 @@ class Qwen38TTNNDecoderLayerGenericState:
 class Qwen38TTNNDecoderLayerChunkState:
     """Per-layer buffers of the prefill chunk body, beside the generic state (all fixed addresses).
 
-    ``attention`` is the GDN rows state (the FIR history carried between chunks, the chunk's kept q|k|v rows,
-    the chunk kernel's inputs, the output rows) or the QSA chunk state (the kept slab and raw keys of the
-    hand-off); ``ple`` the PLE rows state on the PLE layer; ``moe`` a rows-``rows`` instance borrowing the
-    layer's router and shared weights (its own [10,32,2560] combine buffer at 32 rows; the 128-row instances
-    share one).  The 128-row state shares the GDN and PLE histories with the 32-row state it was allocated
-    beside, so chunks of either row count carry one history.
+    ``attention`` is the GDN rows state or the QSA chunk state, ``ple`` the PLE rows state on the PLE layer, ``moe`` a
+    rows-``rows`` instance borrowing the layer's router and shared weights. The 128-row state shares the GDN and PLE
+    histories with its 32-row state, so chunks of either row count carry one history.
     """
 
     namespace: Qwen38TTNNLayerNamespace
@@ -201,10 +167,9 @@ class Qwen38TTNNDecoderLayerChunkState:
 class Qwen38TTNNDecoderLayerLaneState:
     """Fixed-address state of one layer for B batched decode lanes (lane u = row / batch index u).
 
-    ``attention`` is the B-lane GDN state (recurrent ``[B,12,128,128]``, ring slots ``[1,1,B,2560]``, one shared
-    phase) or the QSA lane state; ``ple`` the PLE lanes state on the PLE layer; ``moe`` a rows-B instance over the
-    layer's router and shared weights (its own ``[10,B,2560]`` combine buffer); ``attention_rows`` the persistent
-    ``[1,1,B,640]`` hidden-sharded rows a QSA layer's 32-row output is sliced into (None on GDN layers and at B = 32).
+    ``attention`` is the B-lane GDN or QSA lane state, ``ple`` the PLE lanes state, ``moe`` a rows-B instance over the
+    layer's weights; ``attention_rows`` is the persistent ``[1,1,B,640]`` output a QSA layer's 32-row output is sliced
+    into (None on GDN layers and at B = 32).
     """
 
     namespace: Qwen38TTNNLayerNamespace
@@ -290,11 +255,7 @@ def _normalize_namespace(value: Qwen38TTNNLayerNamespace | str) -> Qwen38TTNNLay
 class Qwen38TTNNDecoderLayer:
     """One exact true-global-B1 TTNN target or MTP decoder layer.
 
-    Component weights are constructed outside this class so their conversion
-    and cache provenance remains independently inspectable.  ``expert_streamer``
-    is mandatory: each invocation loads one exact BF4_B routed-expert layer and
-    releases that slot after the MoE operation.  There is no replicated-expert
-    fallback.
+    ``expert_streamer`` is mandatory: each call loads one BF4_B routed-expert layer and releases it after the MoE.
     """
 
     _fused_apply_ple = None  # QWEN38_FUSED=ple binds ttnn/fused/ple's layer glue per instance; the body is the chain
@@ -374,7 +335,7 @@ class Qwen38TTNNDecoderLayer:
         self.mlp_gr = mlp_gr
         self.expert_streamer = expert_streamer
         self.ple = ple
-        # QWEN38_FUSED=ple: the fused PLE body with the layer's output permute + residual add folded into its conv program.
+        # QWEN38_FUSED=ple: the fused PLE body, the layer's output permute + residual add folded into its conv program.
         from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
 
         if ple is not None and fused_kernels.enabled("ple"):
@@ -580,9 +541,7 @@ class Qwen38TTNNDecoderLayer:
     ) -> None:
         """Release every independent copy after semantic consumption.
 
-        ``snapshot.active`` must already be false.  Failed resources remain
-        referenced for diagnostics, but the snapshot can never be retried and
-        therefore cannot double-free resources which were already released.
+        ``snapshot.active`` must already be false; failed resources stay referenced for diagnostics, never retried.
         """
 
         actions = []
@@ -949,15 +908,8 @@ class Qwen38TTNNDecoderLayer:
     ):
         """Advance one token through the position-generic body; every state buffer is updated in place.
 
-        Same PLE -> attention GR -> attention -> attention GR -> MLP GR -> MoE
-        -> MLP GR sequence as :meth:`forward_decode`, with no host position:
-        ``rope`` holds the device-selected rows (:class:`Qwen38TTNNRoPEInputs`)
-        and ``qsa_position`` the QSA module's device-derived position inputs.
-        ``release_input=False`` leaves the input residual allocated after the
-        PLE add consumed it (the HEAD/TAIL trace handoff the caller retains at a
-        fixed address); only the PLE layer accepts it, every other layer's input
-        is consumed by its attention GR write.  Returns the ``[1,4,1,640]``
-        residual.
+        ``rope`` holds the device-selected rows and ``qsa_position`` the device-derived QSA inputs.
+        ``release_input=False`` (PLE layer only) leaves the input residual allocated for the HEAD/TAIL trace handoff.
         """
 
         if phase_observer is not None and not callable(phase_observer):
@@ -974,10 +926,8 @@ class Qwen38TTNNDecoderLayer:
                 raise ValueError("the generic PLE layer requires its prepared persistent row")
             if prepared_ple.source_token_context is not None:
                 raise ValueError("the generic PLE row must be prepared without a host n-gram context")
-            # The caller owns the n-gram context in the generic body (it derives
-            # each token's row itself and rewrites prepared_ple.embedding_sharded
-            # in place), so the PLE module's host bookkeeping is pinned to the
-            # context-free prepared row at every position.
+            # The caller owns the n-gram context in the generic body (it rewrites prepared_ple.embedding_sharded in
+            # place), so the PLE module's host context stays None at every position.
             state.ple.token_context = None
         if self.layer_type is Qwen38TTNNLayerType.QSA and (rope is None or qsa_position is None):
             raise ValueError("generic QSA decode requires device RoPE rows and QSA position inputs")
@@ -1037,13 +987,10 @@ class Qwen38TTNNDecoderLayer:
         return_routing: bool = False,
         phase_observer: Callable[[str], None] | None = None,
     ) -> Qwen38TTNNDecoderLayerResult:
-        """Advance exactly one global token through one device layer.
+        """Advance exactly one global token through one device layer; the input residual is consumed.
 
-        The input residual is consumed.  A speculative caller must first call
-        :meth:`snapshot_state`; ``retain_input_state`` preserves QSA view
-        transients but cannot itself copy GDN's or PLE's mutable buffers.  The
-        first QSA call after a checkpoint must set ``retain_input_state=True``;
-        the QSA ownership tracker rejects a destructive branch otherwise.
+        A speculative caller must first call :meth:`snapshot_state`, and the first QSA call after it must pass
+        ``retain_input_state=True`` (it keeps QSA view transients but does not copy GDN or PLE buffers).
         """
 
         if phase_observer is not None and not callable(phase_observer):
@@ -1123,9 +1070,7 @@ class Qwen38TTNNDecoderLayer:
         )
 
     # ------------------------------------------------------------------ rows path (MTP v2 verify)
-    # Thin, typed entry points to the GDN and PLE multi-row paths.  They are the only way the layer
-    # runs more than one row; the 1-row bodies above are untouched.  GR, MoE and QSA rows support
-    # is not part of this step, so a whole-layer rows body is not offered yet.
+    # Thin, typed entry points to the GDN and PLE multi-row paths; no whole-layer rows body is offered.
 
     def _require_gdn(self, operation: str) -> Qwen38TTNNGDN:
         if not isinstance(self.attention, Qwen38TTNNGDN):
@@ -1192,12 +1137,9 @@ class Qwen38TTNNDecoderLayer:
         self._require_ple("commit_ple_rows").commit_rows(rows_state, selectors)
 
     # ------------------------------------------------------------------ prefill chunk (32 or 128 rows)
-    # forward_chunk_generic is forward_decode_generic over the rows of one chunk: PLE rows (+ commit) ->
-    # attention GR read_rows -> GDN forward_rows + commit_rows (the history carry) or QSA forward_chunk_generic
-    # -> attention GR write_rows -> MLP GR read_rows -> the rows-32 / rows-128 MoE -> MLP GR write_rows.  The
-    # chunk state holds what a chunk carries to the next one; the generic state is the decode's, updated in
-    # place.  The 32-row form commits through the accept-scalar selectors (a full chunk or the padded tail);
-    # the 128-row form always commits every row (no selectors).
+    # forward_chunk_generic is forward_decode_generic over the rows of one chunk. The chunk state holds what a chunk
+    # carries to the next; the generic state is the decode's, updated in place. The 32-row form commits through the
+    # accept-scalar selectors (full chunk or padded tail); the 128-row form commits every row.
 
     def _validate_residual_rows(self, residual, *, label: str, rows: int = CHUNK_ROWS) -> None:
         expected = residual_rows_shape(rows)
@@ -1254,11 +1196,9 @@ class Qwen38TTNNDecoderLayer:
     ) -> Qwen38TTNNDecoderLayerChunkState:
         """Allocate this layer's chunk buffers before any capture: rows state, PLE rows state, the MoE instance.
 
-        ``constants.rows`` picks the form.  The 128-row form and a slab need ``base``, this layer's 32-row chunk
-        state, whose GDN and PLE histories they share, and ``local_combine_output``, the combine buffer shared by
-        every layer's MoE instance of that form.  ``gdn_body`` (slab GDN layers after the first) is the rows state
-        whose pass buffers this layer's rows state reuses.  ``routed_tokens_per_call`` is the MoE instance's (a
-        slab's 128-row blocks where moe_compute refuses its one call; ``Qwen38TTNNMoE``).
+        The 128-row form and a slab need ``base`` (this layer's 32-row chunk state, whose histories they share) and
+        ``local_combine_output`` (shared by every layer's MoE of that form); ``gdn_body`` lends its pass buffers.
+        ``routed_tokens_per_call`` is passed to the MoE instance (``Qwen38TTNNMoE``).
         """
 
         rows = constants.rows
@@ -1345,10 +1285,10 @@ class Qwen38TTNNDecoderLayer:
     def reset_chunk_state_inplace(
         self, state: Qwen38TTNNDecoderLayerChunkState, generic_state: Qwen38TTNNDecoderLayerGenericState
     ) -> None:
-        """Seed the chunk carry from the generic state at fixed addresses (after the generic reset, or after
-        decode steps that ended at P % 32 == 0): the GDN history from the ring, the PLE history from the nine
-        slots, the QSA kept buffers zeroed (hygiene; every chunk rewrites them).  The 128-row state shares its
-        histories with the 32-row state, which seeds them; only its QSA buffers are zeroed here."""
+        """Seed the chunk carry from the generic state at fixed addresses (after a reset, or at P % 32 == 0).
+
+        The 128-row state shares its histories with the 32-row state, which seeds them; only its QSA buffers are
+        zeroed here."""
 
         self._validate_chunk_state(state)
         self._validate_generic_state(generic_state)
@@ -1415,15 +1355,10 @@ class Qwen38TTNNDecoderLayer:
     ):
         """Advance the rows of one chunk through this layer; the input rows are consumed.
 
-        ``selectors`` (from the device accept scalar: 31 for a full chunk, r - 1 for the padded tail) drive
-        the GDN and PLE history commits of the 32-row form, so one trace serves both; the 128-row form takes
-        ``None`` and commits every row (``commit_rows_full``: the forward pass's own final state, no re-run).
-        ``rope_rows`` holds the chunk's cos/sin tiles and ``qsa_chunk`` the derived chunk inputs; both are None
-        on GDN layers' callers' side only by omission (they are shared by every layer).  ``gdn_step_anchor``
-        commits the GDN state through the 1-row FP32 step arithmetic over the committed rows
-        (``commit_rows(step_committed_rows=True)``: the committed state is the 1-row path's, not the chunk
-        kernel's) at about 16 ops per row per GDN layer; the 128-row form does not offer it.  Returns the
-        ``[1,4,rows,640]`` residual rows.
+        ``selectors`` (31 for a full chunk, r - 1 for the padded tail) drive the 32-row form's GDN and PLE history
+        commits, so one trace serves both; the 128-row form passes ``None`` and commits every row.
+        ``gdn_step_anchor`` (32-row form only) commits the GDN state through the 1-row FP32 step arithmetic.
+        Returns the ``[1,4,rows,640]`` residual rows.
         """
 
         rows = chunk_state.rows
@@ -1538,10 +1473,8 @@ class Qwen38TTNNDecoderLayer:
             generic_state.ple.token_context = None  # the generic body's caller owns the n-gram context
 
     # ------------------------------------------------------------------ lanes path (batched decode)
-    # forward_decode_lanes is forward_decode_generic over B lanes (row u = lane u): PLE lanes -> attention GR
-    # read_rows -> GDN forward_decode_lanes or QSA forward_decode_lanes on the 32-row tile -> attention GR
-    # write_rows -> MLP GR read_rows -> the rows-B MoE -> MLP GR write_rows.  The lane state is fixed-address and
-    # updated in place; the 1-row bodies above are untouched.
+    # forward_decode_lanes is forward_decode_generic over B lanes (row u = lane u); the lane state is fixed-address
+    # and updated in place.
 
     def _validate_rows(self, tensor, expected: tuple[int, ...], *, label: str) -> None:
         if _shape(tensor) != expected or tensor.dtype != ttnn.bfloat16 or tensor.layout != ttnn.TILE_LAYOUT:
@@ -1680,13 +1613,10 @@ class Qwen38TTNNDecoderLayer:
         qsa_constants: qsa_module.Qwen38TTNNQSAChunkConstants | None,
         qsa_lane_constants: qsa_module.Qwen38TTNNQSALaneConstants | None,
     ):
-        """Advance one token per lane through this layer; the ``[1,4,B,640]`` input rows are consumed and every
-        state buffer is updated in place.
+        """Advance one token per lane through this layer; the ``[1,4,B,640]`` input rows are consumed.
 
-        No host position: ``rope`` holds the per-lane RoPE rows (``Qwen38TTNNRoPEInputs`` of the 32-lane lookup)
-        and ``qsa_lanes`` the derived lane inputs, both shared by every layer.  The caller owns the PLE n-gram
-        contexts: the prepared lanes are looked up context-free and the state's contexts are pinned to None at every
-        step (the generic body's rule).  Returns the ``[1,4,B,640]`` residual rows.
+        ``rope`` and ``qsa_lanes`` are the per-lane inputs shared by every layer; the caller owns the PLE n-gram
+        contexts (the state's contexts stay None). Returns the ``[1,4,B,640]`` residual rows.
         """
 
         lanes = self._validate_lane_state(state)

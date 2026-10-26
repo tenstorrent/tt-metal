@@ -3,18 +3,8 @@
 
 """One-token, explicitly nonqualifying Qwen3.8 decode mechanics.
 
-This adapter is intentionally smaller than a serving session.  It consumes an
-already-built, caller-pinned target, executes the existing serialized 48-layer
-ordinary-decode path once, and closes the state owner.  The underlying path is
-the same one used by :class:`Qwen38OrdinaryDecodeSession`: embedding, all 48
-backbone layers, terminal hyper-connection RMS normalization, the untied
-vocabulary-sharded LM head, and exact TP4 greedy argmax.
-
-The returned token proves only that those mechanics executed.  It is always
-marked ``NONQUALIFYING`` and this module performs no golden comparison,
-production admission, publication, device discovery, mesh open, or weight
-staging.  Those concerns remain with the bounded diagnostic runner that owns
-the already-open mesh and its full-lifetime locks.
+Runs the :class:`Qwen38OrdinaryDecodeSession` path once on an already-built target. It performs no golden
+comparison, device discovery, mesh open or weight staging; the caller owns the open mesh and its locks.
 """
 
 from __future__ import annotations
@@ -76,11 +66,7 @@ def decode_first_nonqualifying_token(
 ) -> Qwen38NonqualifyingDecodedToken:
     """Consume one token and return one explicitly nonqualifying greedy token.
 
-    ``built_target`` must already own the exact 48-layer target.  Constructor
-    validation in :class:`Qwen38OrdinaryDecodeSession` remains unchanged and
-    verifies its independently supplied provenance, route, and identity.  A
-    healthy session is always closed; a poisoned session is deliberately left
-    for process-level diagnostic cleanup without attempting state reuse.
+    A healthy session is always closed; a poisoned one is left for process-level cleanup.
     """
 
     if isinstance(input_token_id, bool) or not isinstance(input_token_id, int) or not 0 <= input_token_id < VOCAB_SIZE:

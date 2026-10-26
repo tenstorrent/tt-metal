@@ -3,37 +3,12 @@
 
 """Exact TP4 token embedding and vocabulary-parallel LM head.
 
-Qwen3.8-Flash-Next has *untied* ``[248320, 2560]`` input and output
-tables.  Both tables are sharded by contiguous vocabulary rows over mesh axis
-1; no coordinate stores a replicated table.
-
-The token embedding uses the sentinel construction from MiniMax's parallel
-embedding.  Each coordinate owns ``62080`` real vocabulary rows, padded with
-one zero row on either side.  Range-checked host token IDs are converted into
-the four exact local UINT32 indices and shard-uploaded; non-owning coordinates
-select a sentinel.  A single-token decode is host-padded to one 32-index tile,
-which selects TTNN's fused TILE embedding program; the 31 padding positions
-select zero sentinel row 0.  The four full-width, mutually exclusive lookup
-results are exposed through a metadata-only logical sequence-one view.  The
-qualified single-token path all-gathers those four mutually exclusive
-partials, selects the range-checked vocabulary owner's contribution, and
-partitions hidden dimension 3 back across the line.  Multi-token embedding
-retains the existing TT_CCL reduction.  Both paths return hidden-sharded
-logical ``[1, 1, S, 640]`` while preserving their TILE backing allocations.
-
-The LM head gathers that hidden shard, computes only its local ``62080``
-vocabulary columns, and returns an object whose vocabulary range and TTNN
-topology are explicit.  Greedy decode reduces each local shard to one
-``(value, index)`` candidate and reads back only those eight scalars; it never
-gathers the 248,320 logits.  Ties retain PyTorch's lowest-global-index rule.
-
-There is intentionally no standalone final RMSNorm here.  The pinned
-Qwen4Exp model applies the terminal zero-centred RMS normalization inside
-``model.language_model.hyper_connection_mixer``.  The checkpoint contains no
-``model.language_model.norm.weight`` tensor, and SGLang explicitly removes
-the inherited norm.  :func:`validate_terminal_architecture` rejects a
-checkpoint that would make a second final norm necessary instead of silently
-inventing one.
+The untied ``[248320, 2560]`` input and output tables are sharded by contiguous vocabulary rows over mesh axis 1.
+Each embedding shard holds ``62080`` rows plus one zero sentinel row on either side, so a non-owning coordinate's
+lookup is exactly zero; the four partials are owner-selected or summed into hidden-sharded ``[1, 1, S, 640]``. The LM
+head computes only its local vocabulary columns; greedy decode reads back one ``(value, index)`` candidate per shard
+(lowest global index on ties) and never gathers the logits. There is no standalone final RMSNorm: the terminal
+normalization lives in the final GR mixer (:func:`validate_terminal_architecture`).
 """
 
 from __future__ import annotations
@@ -88,13 +63,10 @@ LOCAL_HIDDEN_SIZE = HIDDEN_SIZE // TP_SIZE
 VOCAB_SIZE = 248_320
 LOCAL_VOCAB_SIZE = VOCAB_SIZE // TP_SIZE
 RMS_NORM_EPS = 1e-6
-# Owner tie-break step of resolve_greedy_on_device: owner d's bf16 maximum is lowered
-# by d * GREEDY_TIE_BREAK_EPS in FP32 before the device argmax, so equal maxima leave
-# a unique maximum at the lowest owner (the torch.argmax rule of resolve_greedy).
-# 2**-16 is the FP32 ulp of |v| in [128, 256): for every |v| < 256 the four shifts
-# d * 2**-16 (d <= 3) are exact and strictly ordered, and the largest shift
-# 3 * 2**-16 < 2**-14 is below the spacing of two distinct bf16 values whose larger
-# magnitude is >= 2**-6, so distinct candidates keep their order.
+# Owner tie-break of resolve_greedy_on_device: owner d's bf16 maximum is lowered by d * GREEDY_TIE_BREAK_EPS in FP32 so
+# equal maxima leave a unique maximum at the lowest owner (torch.argmax's rule). 2**-16 is the FP32 ulp of |v| in
+# [128, 256): the shifts are exact and ordered for |v| < 256, and 3 * 2**-16 is below the spacing of distinct bf16
+# values >= 2**-6, so distinct candidates keep their order.
 GREEDY_TIE_BREAK_EPS = 2.0**-16
 
 EMBEDDING_NAME = "model.language_model.embed_tokens.weight"
@@ -122,12 +94,9 @@ PINNED_TENSOR_MANIFEST_SHA256 = CHECKPOINT_TENSOR_MANIFEST_SHA256
 IO_CACHE_FORMAT_VERSION = 1
 IO_CACHE_LOCK_TIMEOUT_SECONDS = 60.0
 
-# LM-head column chunks.  Each chunk stays under the wide-N L1 limits of the
-# existing Blackhole Qwen path and spans a multiple of four tiles per DRAM
-# bank, so the DRAM-sharded reader's two-tile K blocks page at the 16 KB NOC
-# burst (must match dram_sharded_matmul_configs over 40 storage cores).
-# 5 * 8192 + 3 * 7040 = 62080 pads twelve tiles per K row, the least of any
-# such split.
+# LM-head column chunks: each stays under the wide-N L1 limits and spans a multiple of four tiles per DRAM bank, so the
+# two-tile K blocks page at the 16 KB NOC burst (must match dram_sharded_matmul_configs over 40 storage cores).
+# 5 * 8192 + 3 * 7040 = 62080 pads the fewest tiles of any such split.
 LM_HEAD_CHUNK_COLUMNS = (8192,) * 5 + (7040,) * 3
 TILE_SIZE = 32
 
@@ -140,13 +109,9 @@ TOKEN_ROW_SHAPE = (1, 1, 1, TILE_SIZE)
 # device-token embedding of that lane is exactly zero (the padding rows of an MTP v2 verify pass).
 ZERO_EMBEDDING_TOKEN = -1
 
-# The optional sampling epilogue of TAIL: per vocabulary shard the top-k logits and their
-# global ids, packed per shard and all-gathered into one replicated FP32 ROW_MAJOR row
-#   [shard 0: values(k) ids(k) | shard 1: values(k) ids(k) | shard 2 ... | shard 3 ...]
-# i.e. ``row.reshape(TP_SIZE, 2, k)[:, 0]`` are the values and ``[:, 1]`` the ids.  k is a
-# tile width so the per-shard pack is a tile-aligned concat; 32 and 64 cost the same on the
-# device (measured, both 0.340 ms tails), 32 is enough for the card profiles' top_k 20 and
-# halves the readback.  The host samples on this row; the greedy token row is untouched.
+# The optional sampling epilogue of TAIL: per vocabulary shard the top-k logits and their global ids, packed and
+# all-gathered into one replicated FP32 ROW_MAJOR row ``[shard d: values(k) ids(k)]`` (``row.reshape(TP_SIZE, 2, k)``).
+# k is a tile width so the pack is a tile-aligned concat; 32 covers the card profiles' top_k 20.
 SAMPLING_CANDIDATES_PER_DEVICE = 32
 SAMPLING_CANDIDATE_ROW_SHAPE = (1, 1, 1, 2 * TP_SIZE * SAMPLING_CANDIDATES_PER_DEVICE)
 
@@ -244,12 +209,9 @@ def _all_reduce_owner_select_hidden(
 ):
     """Token-invariant owner selection for trace capture (``rows`` token rows, S=1 by default).
 
-    The four devices hold mutually exclusive [1,1,rows,2560] partials; per row
-    three are exactly zero (their sentinel row), so the TP sum reproduces the
-    owner's row bitwise (x + 0 + 0 + 0 is exact at every hop) without the
-    token-dependent slice offset that keeps
-    :func:`_all_gather_owner_select_hidden_fallback` outside a trace.
-    ``mesh_partition`` restores the hidden-sharded topology.
+    Per row three of the four [1,1,rows,2560] partials are exactly zero (sentinel rows), so the TP sum reproduces the
+    owner's row bitwise without the token-dependent slice offset of
+    :func:`_all_gather_owner_select_hidden_fallback`; ``mesh_partition`` restores the hidden-sharded topology.
     """
 
     if collective_topology != ttnn.Topology.Linear:
@@ -301,25 +263,11 @@ def _all_gather_owner_select_hidden_fallback(
     _retain_async_failure_owners: Callable[..., None] | None = None,
     _diagnostic_stage_callback: Callable[[str], None] | None = None,
 ):
-    """S=1 correctness fallback that selects the exact vocabulary owner.
+    """S=1 fallback that selects the exact vocabulary owner.
 
-    Host-token path for the eager and fixed-position lanes; the sequential
-    trace chain embeds from a device token row through the token-invariant
-    :func:`_all_reduce_owner_select_hidden`.  The slice offset here depends on
-    the token, so this path is never trace-captured.
-
-    This path is deliberately self-contained and is the qualified production
-    S=1 path.  It uses the retained Linear
-    all-gather-async configuration, selects the one contribution identified by
-    the original range-checked CPU token, then mesh-partitions that exact
-    hidden width over axis 1.  The three sentinel contributions are exactly
-    zero, so owner selection is equivalent to their sum for one token without
-    an add/reduce kernel or an activation host payload.
-
-    The correctness-fenced policy drains each producer stage.  Resident decode
-    instead relies on same-command-queue ordering and releases each producer
-    only after its final consumer has been enqueued.  On an asynchronous
-    failure, all wrappers and local handles are retained through teardown.
+    Host-token path for the eager and fixed-position lanes. All-gathers the four partials, slices the range-checked
+    CPU token's owner contribution and mesh-partitions it over axis 1. The slice offset depends on the token, so this
+    path is never trace-captured. On an asynchronous failure all wrappers and handles are retained through teardown.
     """
 
     if type(synchronization_policy) is not Qwen38TTNNEmbeddingSyncPolicy:
@@ -508,13 +456,10 @@ def _all_gather_owner_select_hidden_fallback(
 
 
 def _localize_token_ids_on_host(input_ids: torch.Tensor) -> torch.Tensor:
-    """Return exact sentinel indices for all four vocabulary shards.
+    """Return exact sentinel indices for all four vocabulary shards from range-checked CPU token IDs.
 
-    The caller still supplies global CPU token IDs.  Range checking and the
-    vocabulary transform happen while those IDs are host resident, avoiding a
-    device arithmetic chain for a value that is already known exactly.  Axis 1
-    is laid out as the TP4 vocabulary axis so ``ShardTensor2dMesh`` gives every
-    coordinate one local ``[1, 1, sequence]`` UINT32 index tensor.
+    Axis 1 is the TP4 vocabulary axis, so ``ShardTensor2dMesh`` gives every coordinate one local ``[1, 1, sequence]``
+    UINT32 index tensor.
     """
 
     if input_ids.device.type != "cpu" or input_ids.ndim != 2 or input_ids.shape[0] != 1:
@@ -653,11 +598,8 @@ class Qwen38TTNNTokenRowConstants:
 class Qwen38TTNNSamplingCandidateConstants:
     """Device constants of :meth:`Qwen38TTNNLMHead.sampling_candidates`, built only by a sampling chain.
 
-    ``shard_vocab_start`` is vocab-sharded FP32 TILE ``[1,1,1,1]``: coordinate d holds
-    ``d * LOCAL_VOCAB_SIZE``, the scalar the shard's local top-k ids are rebased by
-    before the gather.  ``readback_row`` is replicated FP32 ROW_MAJOR
-    ``SAMPLING_CANDIDATE_ROW_SHAPE``, the persistent trace-stable target of the
-    epilogue's final ``ttnn.copy`` and the one tensor the host reads on a sampled step.
+    ``shard_vocab_start`` (vocab-sharded FP32 TILE ``[1,1,1,1]``) rebases shard d's local top-k ids by
+    ``d * LOCAL_VOCAB_SIZE``; ``readback_row`` is the persistent trace-stable target the host reads on a sampled step.
     """
 
     shard_vocab_start: Any
@@ -715,13 +657,9 @@ def resolve_greedy_lanes_on_device(
 ):
     """``Qwen38TTNNLMHead.resolve_greedy_on_device`` for ``rows`` = 1..32 candidate rows (the batched lanes).
 
-    The same gather, tie-break, argmax, rebase and 32-bit select per row.  The two ``[1,1,1,4]`` constants are
-    applied as TILE row broadcasts (exact SFPU fp32 elementwise ops on a tilized copy: no reduction touches the
-    tile padding; ``ttnn.repeat`` of a 16-byte ROW_MAJOR row crashes the pinned runtime's repeat codegen); the
-    argmax and the select stay ROW_MAJOR on the exact width-four rows.  The ``[1,1,rows,1]`` id column is padded
-    to 32 rows with zeros (rows < 32), read as the ``[1,1,1,32]`` row (a ROW_MAJOR view of the contiguous
-    column) and tilized: lane u = row u's global id, lanes ``rows..31`` zero.  Row u is bitwise ``resolve_greedy``
-    row u; the 1-row method is untouched (its token row splats the id into every column, this one fills lane u).
+    The same gather, tie-break, argmax, rebase and 32-bit select per row; lane u of the tilized token row is row u's
+    global id (lanes ``rows..31`` zero), bitwise ``resolve_greedy`` row u. The ``[1,1,1,4]`` constants are applied as
+    TILE row broadcasts because ``ttnn.repeat`` of a 16-byte ROW_MAJOR row crashes the pinned runtime.
     """
 
     if not isinstance(candidates, Qwen38GreedyCandidates):
@@ -1172,8 +1110,7 @@ class Qwen38TTNNModelIOWeights:
                     f"got {metadata.dtype} {metadata.shape}"
                 )
         if checkpoint.weight_map[EMBEDDING_NAME] == checkpoint.weight_map[LM_HEAD_NAME]:
-            # The released tensors are untied and even reside in distinct source
-            # shards.  This cheap invariant catches accidental aliasing before a
+            # The released tensors are untied and live in distinct source shards; catch accidental aliasing before a
             # 1.27-GB tensor is read.
             raise ValueError("pinned input embedding and LM head must be distinct checkpoint artifacts")
 
@@ -1420,12 +1357,8 @@ class Qwen38TTNNTokenEmbedding:
     def embed_device_token(self, token_row):
         """Hidden-sharded [1,1,1,640] embedding of a token row with token-invariant program identity.
 
-        Every coordinate localizes the token against its own vocabulary range on
-        device (out-of-range tokens clamp to the zero sentinel rows) and looks up
-        its padded shard; the four mutually exclusive partials are summed instead
-        of sliced.  No host upload or readback, so the whole chain is trace
-        capturable.  The output matches ``__call__``'s owner-select result
-        bitwise because three partials are exactly zero.
+        Each coordinate localizes the token on device (out-of-range tokens clamp to the zero sentinel rows) and the
+        four partials are summed, so the chain is trace capturable and bitwise ``__call__``'s owner-select result.
         """
 
         self._require_healthy()
@@ -1454,9 +1387,8 @@ class Qwen38TTNNTokenEmbedding:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         _deallocate(row_major)
-        # ttnn.embedding returns [batch, sentence, hidden] for indices of rank > 1
-        # (ttnn/cpp/ttnn/operations/embedding/embedding.cpp:38-39,73); the fused
-        # TILE program's 32-row allocation is the padded shape.  Same as __call__.
+        # ttnn.embedding returns [batch, sentence, hidden] for indices of rank > 1; the fused TILE program's 32-row
+        # allocation is the padded shape. Same as __call__.
         embedded_padded = embedded_base
         if len(embedded_base.shape) == 3:
             embedded_padded = ttnn.unsqueeze_to_4D(embedded_base)
@@ -1551,11 +1483,8 @@ class Qwen38TTNNTokenEmbedding:
     def embed_device_token_rows(self, token_row):
         """Hidden-sharded ``[1,1,rows,640]`` embedding of the lanes of a token-rows tile (one prefill chunk).
 
-        :meth:`embed_device_token` without its one-row view: every lane is
-        localized against ``vocab_localize_lanes`` (one row, broadcast over the
-        tile's rows), the fused lookup's rows are the tokens, and the owner sum
-        is per row.  Row j is bitwise the 1-row path's result for lane j.  No
-        host upload or readback.
+        :meth:`embed_device_token` per lane (localized against ``vocab_localize_lanes``); row j is bitwise the 1-row
+        result for lane j. No host upload or readback.
         """
 
         self._require_healthy()
@@ -1648,10 +1577,9 @@ class Qwen38TTNNTokenEmbedding:
         _diagnostic_stage(_diagnostic_stage_callback, "before-local-embedding")
         resident_async_result = False
         if sequence == 1:
-            # The public embedding wrapper selects EmbeddingsFusedProgramFactory
-            # exactly when the ROW_MAJOR index width and table width are tile
-            # aligned and TILE output is requested.  Host padding establishes
-            # width 32 without queuing the failing standalone RM->TILE program.
+            # The embedding wrapper picks EmbeddingsFusedProgramFactory only when the ROW_MAJOR index width and table
+            # width are tile aligned and TILE output is requested; host padding sets width 32 without the failing
+            # standalone RM->TILE program.
             if _padded_shape(local_indices) != expected_indices:
                 raise RuntimeError(
                     f"padded decode indices have physical shape {_padded_shape(local_indices)}, "
@@ -1708,11 +1636,8 @@ class Qwen38TTNNTokenEmbedding:
             expected_shape=expected_collective_input,
         )
         if sequence == 1:
-            # The qualified S=1 path uses the range-checked CPU token's exact
-            # logical vocabulary owner.  All-gather preserves the four local
-            # partials, one aligned slice selects the only non-sentinel row,
-            # and mesh-partition restores the strict hidden-sharded topology.
-            # The helper consumes ``embedded`` after producer-safe fences.
+            # S=1: all-gather the four partials, slice the range-checked CPU token's owner row and mesh-partition it
+            # back to the hidden-sharded topology. The helper consumes ``embedded`` after producer-safe fences.
             _diagnostic_stage(_diagnostic_stage_callback, "before-owner-select-hidden-reducer")
             hidden_shard = _all_gather_owner_select_hidden_fallback(
                 embedded,
@@ -1729,9 +1654,8 @@ class Qwen38TTNNTokenEmbedding:
             )
             resident_async_result = synchronization_policy is Qwen38TTNNEmbeddingSyncPolicy.RESIDENT_ASYNC
         else:
-            # Multi-token embedding retains the existing whole-line collective
-            # path.  tt_all_reduce consumes its input tensor, including any
-            # metadata view's backing allocation.
+            # Multi-token embedding uses the whole-line collective; tt_all_reduce consumes its input tensor, including
+            # any metadata view's backing allocation.
             _diagnostic_stage(_diagnostic_stage_callback, "before-tt-ccl-reduce-scatter")
             hidden_shard = tt_all_reduce(
                 embedded,
@@ -1967,10 +1891,8 @@ class Qwen38TTNNLMHead:
     ) -> Qwen38GreedyCandidates:
         """The per-row local argmax and maximum of the vocabulary shard.
 
-        ``values_by_gather``: the maximum of each row as a ROW_MAJOR ``ttnn.gather`` copy of the row's argmax element
-        (a maximum is one of the row's own bf16 values, so this is the reduce's result bitwise), tilized for the
-        resolve's all-gather: one data-movement op instead of the padded grid's pad, relayout and two reduces.  The
-        default keeps the grid reduce (the 1-row production path's form).
+        ``values_by_gather`` takes each row's maximum as a ROW_MAJOR ``ttnn.gather`` of its argmax element (bitwise the
+        reduce's result) instead of the padded grid reduce, which stays the default.
         """
 
         rows = self._validate_logits(logits)
@@ -2052,29 +1974,12 @@ class Qwen38TTNNLMHead:
         return tokens.reshape(1, 1, candidates.rows)
 
     def resolve_greedy_on_device(self, candidates: Qwen38GreedyCandidates, *, into=None):
-        """Resolve the greedy token on device into one replicated token row; ``into`` (a resident TOKEN_ROW) receives a
-        copy as the last op (the server's persistent token row; the fused greedy tail writes it from its program).
+        """Resolve the greedy token on device into one replicated ``TOKEN_ROW`` whose column 0 is the global id.
 
-        Gathers the four (value, index) candidates, lowers owner ``d``'s value by
-        ``d * GREEDY_TIE_BREAK_EPS`` in FP32 so equal maxima leave a unique maximum
-        at the lowest owner (the lowest-index tie rule of ``torch.argmax`` in
-        :meth:`resolve_greedy`, enforced by the data rather than by the device
-        argmax kernel), argmaxes that row, rebases the four indices to global ids
-        and copies the owner's id out of that row with ``ttnn.gather``.  The
-        result is a ``TOKEN_ROW`` whose column 0 is the global id: the runner reads
-        back this one tiny replicated tensor instead of two mesh-composer
-        readbacks, and it is the exact input
-        :meth:`Qwen38TTNNTokenEmbedding.embed_device_token` consumes.
-
-        Exactness: the SFPU typecasts, add and multiply run in the fp32 DEST and
-        are exact for every id below ``2**24``; the select is a 32-bit
-        data-movement copy and the final tilize unpacks FP32 straight into DEST.
-        No id may enter an FPU or reduce stage: Blackhole feeds those through the
-        19-bit srcA/srcB (TF32), which keeps only 11 significant bits of an id.
-
-        The width-four gather stays ROW_MAJOR through the tie-break, argmax and
-        select so no sub-tile TILE reduction can fold tile padding into the
-        result; only the final width-32 row is tilized.
+        ``into`` (a resident TOKEN_ROW) receives a copy as the last op. The four candidates are tie-broken in FP32
+        (``GREEDY_TIE_BREAK_EPS``), argmaxed, rebased to global ids and the owner's id copied out with ``ttnn.gather``.
+        No id may enter an FPU or reduce stage: Blackhole feeds those through TF32 srcA/srcB, which keeps 11 significant
+        bits. The width-four row stays ROW_MAJOR so no sub-tile TILE reduction folds padding into the result.
         """
 
         if not isinstance(candidates, Qwen38GreedyCandidates) or candidates.rows != 1:
@@ -2088,12 +1993,8 @@ class Qwen38TTNNLMHead:
         constants = self.weights.token_row
         anchor = self.weights.replicated_anchor
 
-        # Gather the four local maxima and pick the owner (lowest index on ties).
-        # The bf16 maxima are widened to FP32 and owner d's is lowered by
-        # d * GREEDY_TIE_BREAK_EPS: exact for |v| < 256 and below the spacing of
-        # distinct bf16 values, so ties become a unique maximum at the lowest
-        # owner and the argmax result no longer depends on the kernel's tie rule.
-        # ROW_MAJOR argmax reduces the exact width-four logical row.
+        # Gather the four local maxima, widen to FP32 and lower owner d's by d * GREEDY_TIE_BREAK_EPS, so the ROW_MAJOR
+        # argmax over the exact width-four row picks the lowest owner on ties.
         gathered_values = ttnn.all_gather(
             candidates.local_values, dim=3, cluster_axis=TP_AXIS, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -2164,24 +2065,10 @@ class Qwen38TTNNLMHead:
     ):
         """Optional TAIL epilogue after the greedy resolve: the host sampler's candidate row.
 
-        ``candidates`` (the step's greedy candidates) is the fused candidate row's input (``QWEN38_FUSED=candidate_row``
-        binds :func:`ttnn.fused.greedy_tail.sampling_candidates_fused` here); the chain does not read it.
-
-        Per shard ``ttnn.topk`` over the TILE bf16 logits (k = ``SAMPLING_CANDIDATES_PER_DEVICE``,
-        sorted descending: bf16 values and UINT16 local ids, the stock path without an
-        ``indices_tensor``, whose label copy costs milliseconds), both widened to FP32 on
-        the SFPU (exact: bf16 -> fp32, ids < 2**16) and the ids rebased by the shard's
-        first global id; the pack ``[values | global ids]`` is untilized to a padding-free
-        ROW_MAJOR row and the four shards' packs are all-gathered once.  The row is copied
-        into ``into``, a trace-stable buffer the host reads: ``constants.readback_row`` by
-        default (the 1-row TAIL's).  No id enters an FPU or reduce stage (the TF32 rule of
-        :meth:`resolve_greedy_on_device`): there is no reduce at all, so every lane of the
-        row is bitwise.  The softmax normalizer is not read back: with ``top_k`` at most k
-        per shard the host's filters are exact over the row (``ttnn/sampling.py``), and the
-        denominator lanes cost more than the whole tail is allowed to.
-
-        ``rows`` in 1 .. 32 (the MTP verify head's k + 1 rows take a ``[1,1,rows,256]``
-        ``into``): the same ops per row, row j of the result the 1-row row of logits row j.
+        Per shard ``ttnn.topk`` (k = ``SAMPLING_CANDIDATES_PER_DEVICE``) over the bf16 logits, values and ids widened to
+        FP32 on the SFPU and the ids rebased to global; the ``[values | global ids]`` packs are all-gathered once and
+        copied into ``into`` (default ``constants.readback_row``). No reduce runs, so every lane is bitwise.
+        ``candidates`` feeds only the fused candidate row; ``rows`` is 1 .. 32, row j matching the 1-row result.
         """
 
         rows = self._validate_logits(logits)
@@ -2223,12 +2110,9 @@ class Qwen38TTNNLMHead:
 
     def resolve_greedy_rows_on_device(self, candidates: Qwen38GreedyCandidates):
         """:meth:`resolve_greedy_on_device` for ``rows`` candidate rows (1 .. 32): one FP32 ROW_MAJOR ``[1,1,1,rows]``
-        row whose lane j is the global greedy id of row j (the MTP v2 verify pass's per-row argmaxes).
+        row whose lane j is row j's global greedy id (the MTP v2 verify pass's per-row argmaxes).
 
-        The same arithmetic per row (the owner tie-break in FP32, a width-four ROW_MAJOR argmax, the rebase and
-        a 32-bit ``ttnn.gather`` copy of the owner's id), then one ROW_MAJOR transpose of the ``[1,1,rows,1]`` id
-        column into the lane row the accept logic reads (a data-movement copy: no id enters an FPU or reduce
-        stage).  Fewer rows are the 32-row form's first rows, bitwise.
+        The same per-row arithmetic, then one ROW_MAJOR transpose of the id column (data movement only).
         """
 
         if not isinstance(candidates, Qwen38GreedyCandidates) or not 1 <= candidates.rows <= TILE_SIZE:

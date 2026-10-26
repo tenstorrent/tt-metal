@@ -1,34 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Correctness-first TP4 Qwen Sparse Attention decode.
+"""TP4 Qwen Sparse Attention for Qwen3.8-Flash-Next.
 
-This module is deliberately decode-only.  It implements the exact text-model
-QSA geometry from the pinned ``Qwen4Exp`` checkpoint while keeping every
-placement-changing operation explicit:
-
-* 24 query heads are sharded six per device;
-* the two K/V heads are expanded as ``[kv0, kv0, kv1, kv1]`` and then sharded,
-  which is pair-grouping rather than four-way replication;
-* the four 128-wide index queries are sharded one per device, scored with
-  :func:`ttnn.experimental.indexer_score_dsa`, and genuinely summed over TP;
-* four-token compressed blocks are expanded back to token indices and the
-  incomplete causal tail is appended without being scored;
-* the sparse value kernel consumes ``q=[zeros(256)|Q(256)]`` and
-  ``kv=[V(256)|K(256)]`` with ``K_DIM=512`` and ``v_dim=256``.
-
-``sparse_sdpa`` requires a row-major cache, whereas the generic per-token cache
-writer is tile-only.  Eager bring-up therefore owns a 32-token row-major staging
-tile and rewrites that one tile with the existing row-major-capable
-``update_padded_kv_cache`` operation on mesh axis 0 (whose extent is exactly
-one).  This is intentionally a correctness path, not the final traced decode
-path.  It never converts or copies the full cache.
-
-State objects are functional metadata views over shared append-only caches.
-Old views remain usable for speculative rollback: bytes past ``next_position``
-and ``compressed_blocks`` are ignored and deterministically overwritten on
-replay.  Callers which retain an input state must pass ``retain_input_state``;
-ordinary decode lets this module release replaced staging tensors.
+24 query heads are sharded six per device; the two K/V heads are pair-grouped (``[kv0, kv0, kv1, kv1]``, then
+sharded); the four 128-wide index queries are sharded one per device, scored with
+:func:`ttnn.experimental.indexer_score_dsa` and summed over TP. Four-token compressed blocks expand back to token
+indices with the incomplete causal tail appended unscored, and ``sparse_sdpa`` reads ``q=[zeros(256)|Q(256)]`` against
+``kv=[V(256)|K(256)]``. ``sparse_sdpa`` needs a row-major cache, so tokens go through a 32-token staging tile written
+with ``update_padded_kv_cache``. States are metadata views over shared append-only caches: bytes past
+``next_position`` / ``compressed_blocks`` are ignored and overwritten on replay, so old views stay valid for rollback;
+callers that retain an input state must pass ``retain_input_state``.
 """
 
 from __future__ import annotations
@@ -135,13 +117,10 @@ MAX_REUSE_TAIL = COMPRESS_RATIO - 1 + MAX_SPECULATIVE_STEPS
 MAX_SELECTED_TOKENS = TOKEN_BUDGET + MAX_REUSE_TAIL
 SPARSE_INDEX_CAPACITY = math.ceil(MAX_SELECTED_TOKENS / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
-# Position-generic decode: every position-dependent quantity is derived on
-# device from a UINT32 position scalar, so one captured graph serves every
-# position.  The query is row 0 of its own tile (a buffer view) and the fixed
-# indexer window is the tile just past the last resident block, so every
-# resident column is unmasked for that row; blocks at or past the
-# complete-block count are hidden by adding the most negative finite BF16
-# value to their scores.
+# Position-generic decode derives every position-dependent quantity on device from a UINT32 position scalar, so one
+# graph serves every position. The query is row 0 of its own tile and the fixed indexer window is the tile past the
+# last resident block, so every resident column is unmasked for that row; blocks at or past the complete-block count
+# are hidden by adding the most negative finite BF16 value to their scores.
 INDEXER_MASK_VALUE = -3.3895313892515355e38
 KV_ROW_MASK = CACHE_WRITE_ROWS - 1
 KV_BLOCK_START_MASK = 0xFFFFFFFF ^ KV_ROW_MASK
@@ -175,17 +154,10 @@ EXPANSION_GATHER_WIDTH = TOKEN_BUDGET // 2
 def qsa_row_constants() -> dict[str, torch.Tensor]:
     """Host values of the module's replicated UINT32 ROW_MAJOR rows, ``[1, 1, 1, width]`` int64.
 
-    ``rep_index_lo`` and ``rep_index_hi`` gather each of the ``BLOCK_TOPK``
-    block starts four times (``[0, 0, 0, 0, 1, 1, 1, 1, ...]`` in two halves),
-    the two-gather form of the four-way last-dim ``repeat_interleave``;
-    ``block_offsets`` then adds the token offset inside each block.
-    ``sentinel_pad`` completes the 2048 expanded slots to the sparse row
-    width.  The two step rows are twice that width: a window of
-    ``SPARSE_INDEX_CAPACITY`` slots starting ``count`` slots before the
-    middle holds ``count`` leading entries of the first half and then the
-    second half, so one slice yields the mask row for any count.
-    ``slot_zero`` is the metadata slot the generic body hands
-    ``update_padded_kv_cache``.
+    ``rep_index_lo`` / ``rep_index_hi`` gather each of the ``BLOCK_TOPK`` block starts four times (the two-gather form
+    of a last-dim ``repeat_interleave``) and ``block_offsets`` adds the offset inside each block; ``sentinel_pad``
+    completes the sparse row. The two step rows are twice ``SPARSE_INDEX_CAPACITY`` wide so one slice yields the mask
+    row for any count. ``slot_zero`` is the metadata slot the generic body hands ``update_padded_kv_cache``.
     """
 
     ones = torch.full((SPARSE_INDEX_CAPACITY,), MASKED_INDEX)
@@ -207,24 +179,17 @@ def qsa_row_constants() -> dict[str, torch.Tensor]:
 QSA_ROW_WIDTHS = {name: int(values.shape[-1]) for name, values in qsa_row_constants().items()}
 # Eager per-token rows kept per mesh before the oldest is released.
 SHARED_ROW_CACHE = 8
-# Regime split: while the budget covers every complete block, scoring only
-# orders the row, so the natural-order row could replace it.  Off: the order
-# changes the sparse_sdpa accumulation and the bf16 output moves well past
-# one ulp on this runtime.  The path stays
-# for an A/B under a later runtime; the constructor's regime_split overrides
-# the default per layer.
+# Regime split: while the budget covers every complete block, scoring only orders the row, so the natural-order row
+# could replace it. Off: the order changes the sparse_sdpa accumulation and the bf16 output moves past one ulp. The
+# constructor's regime_split overrides the default per layer.
 QSA_INDEXER_REGIME_SPLIT = False
 
 
 def qsa_natural_row_regime(complete_blocks: int, *, regime_split: bool = QSA_INDEXER_REGIME_SPLIT) -> bool:
     """True when the row is every causal token in natural order and no block is scored.
 
-    Without a complete block that is the only row.  With the split on, it also
-    covers every position whose complete blocks all fit the budget
-    (``complete_blocks <= BLOCK_TOPK``, contexts up to 2050 tokens): the CPU
-    oracle selects ``topk(min(BLOCK_TOPK, complete_blocks))`` of them, i.e.
-    all of them, so the selected set is unchanged and only the order inside
-    the row differs.
+    Without a complete block that is the only row; with the split on it also covers ``complete_blocks <= BLOCK_TOPK``,
+    where the oracle selects every block and only the order inside the row differs.
     """
 
     if isinstance(complete_blocks, bool) or not isinstance(complete_blocks, int) or complete_blocks < 0:
@@ -367,13 +332,10 @@ def _retag_tensor(tensor, *, reference, shard_dim: int | None) -> None:
 
 
 def _canonicalize_flat_replicated_topology(tensor, mesh_contract: Qwen38MeshContract) -> None:
-    """Retag the legacy flat mesh returned by device-side zero allocation.
+    """Retag the flat mesh returned by device-side zero allocation.
 
-    ``ttnn.zeros`` creates the requested full local value on every worker but
-    currently reports the four workers as one distribution axis while retaining
-    their two-dimensional mesh coordinates.  The already opened model mesh is
-    explicitly ``(1, 4)``.  Accept only that exact native representation, then
-    change metadata to the canonical two-axis topology without moving bytes.
+    ``ttnn.zeros`` reports the four workers as one distribution axis while keeping their 2-D mesh coordinates; accept
+    only that exact representation and relabel it as the canonical ``(1, 4)`` topology without moving bytes.
     """
 
     topology = tensor.tensor_topology()
@@ -606,9 +568,8 @@ class Qwen38TTNNQSAWeights:
                 cache_file_name=cache / dense_weight_name(name, dtype),
             )
 
-        # Projection weights are DRAM width-sharded for the decode matmul
-        # program; the renamed tensorbins deliberately orphan interleaved
-        # caches.
+        # Projection weights are DRAM width-sharded for the decode matmul program, under tensorbin names no interleaved
+        # cache uses.
         qg_tt = upload(
             qg.transpose(0, 1).reshape(1, 1, HIDDEN_SIZE, 2 * QUERY_WIDTH),
             "qg_dram_sharded",
@@ -790,17 +751,11 @@ class Qwen38TTNNQSAWeights:
 class Qwen38TTNNQSASelection:
     """Selected complete blocks plus one materialized sparse-kernel row.
 
-    ``complete_indices`` is the ``TOKEN_BUDGET``-wide expansion of the top-k
-    block slots in score order; the first ``complete_token_count`` entries are
-    the selected complete-block tokens and the rest are masked out of every
-    row built from it.  It deliberately excludes the incomplete tail so an MTP
-    caller can reuse the frozen block choice and append all in-flight positions
-    from ``tail_start``.  ``None`` means no block was scored: the row holds
-    every causal token in natural order and ``tail_start`` is 0.
-
-    ``sparse_indices`` is released with the view that produced it unless
-    ``owns_sparse_indices`` is false, in which case it is a per-token row the
-    module shares between its layers.
+    ``complete_indices`` is the ``TOKEN_BUDGET``-wide expansion of the top-k block slots in score order (the first
+    ``complete_token_count`` are real); it excludes the incomplete tail so an MTP caller can reuse the frozen block
+    choice and append in-flight positions from ``tail_start``. ``None``: no block was scored and the row is every
+    causal token in natural order. ``sparse_indices`` is released with the view unless ``owns_sparse_indices`` is false
+    (a per-token row the layers share).
     """
 
     layer_index: int
@@ -1025,14 +980,9 @@ def derive_qsa_position_inputs(
 def emulate_qsa_position_inputs(position: int, *, allocated_compressed_blocks: int) -> dict[str, torch.Tensor]:
     """Torch reference of :func:`derive_qsa_position_inputs` (same names, shapes, dtypes).
 
-    UINT32 values are ``torch.int64`` in ``[0, 2**32)``; the BF16 one-hot
-    masks use the device's ``1.0 - hit`` arithmetic and match bit for bit.
-    ``indexer_neg_mask`` is a select, not the device's ``(1.0 - valid) *
-    INDEXER_MASK_VALUE``: on this runtime a BF16 multiply of ``0.0`` by a
-    negative scalar returns ``+0.0`` (binary_ng, calculate_sfpu_binary_mul in
-    ckernel_sfpu_binary.h forces ``result = 0.0f`` whenever an input is zero,
-    matching the FPU), where torch would give ``-0.0``; observed bitwise on
-    silicon (the 4x p150 host, 2026-09-02). Visible blocks are therefore ``+0.0``.
+    UINT32 values are ``torch.int64`` in ``[0, 2**32)``; the BF16 one-hot masks match bit for bit.
+    ``indexer_neg_mask`` is a select, not the device's ``(1.0 - valid) * INDEXER_MASK_VALUE``: the device's BF16
+    multiply of ``0.0`` by a negative scalar returns ``+0.0`` (torch gives ``-0.0``), so visible blocks are ``+0.0``.
     """
 
     if isinstance(position, bool) or not isinstance(position, int) or not 0 <= position < MAX_CONTEXT:
@@ -1068,11 +1018,9 @@ def emulate_qsa_position_inputs(position: int, *, allocated_compressed_blocks: i
 
 
 # --------------------------------------------------------------------------- prefill chunk (32 or 128 rows)
-# One chunk holds ``rows`` consecutive positions P .. P + rows - 1 with P % 32 == 0: rows / 4 complete
-# compressed blocks, one rows-row KV slab, and per row the selection geometry of position P + j.  Every
-# per-row quantity below is the 1-row derivation on a same-shape template whose row j carries j, so
-# the only broadcast is the scalar P (the class the decode already uses).  The 128-row form runs every
-# row-shaped op on the four tiles at once and the six DRAM-sharded linears and the indexer once per tile.
+# One chunk holds ``rows`` positions P .. P + rows - 1 with P % 32 == 0. Every per-row quantity is the 1-row derivation
+# on a same-shape template whose row j carries j, so the only broadcast is the scalar P. The 128-row form runs the
+# row-shaped ops on four tiles at once and the DRAM-sharded linears and the indexer once per tile.
 
 CHUNK_BLOCKS = CHUNK_ROWS // COMPRESS_RATIO
 
@@ -1086,12 +1034,9 @@ def chunk_blocks(rows: int) -> int:
 def qsa_chunk_constant_rows(allocated_compressed_blocks: int, rows: int = CHUNK_ROWS) -> dict[str, torch.Tensor]:
     """Host images of the chunk constants (UINT32 rows as int64; the two bf16 select tiles as float).
 
-    ``arange32_lanes`` ``[1,1,tiles,32]`` carries lane j = j over the chunk's row tiles.  ``pool_select``
-    ``[32, rows]`` row i (i < rows / 4) holds 0.25 at columns 4i .. 4i+3: ``pool_select @ raw_keys`` is the
-    block mean of the chunk's raw index keys (four exact power-of-two products summed in fp32, one bf16
-    rounding: the same value as the decode ring's quarter-scaled sum; at 128 rows the other three K tiles add
-    exact zeros).  ``row_select[i]`` is the 0/1 tile whose row 0 picks row i (the exact selection matmul of
-    the GDN rows path), so block i's compressed row becomes the one-row input of ``paged_update_cache``.
+    ``pool_select`` ``[32, rows]`` row i holds 0.25 at columns 4i .. 4i+3, so ``pool_select @ raw_keys`` is the block
+    mean of the raw index keys (exact power-of-two products, one bf16 rounding: the decode ring's value).
+    ``row_select[i]`` picks row i, so block i's compressed row becomes the one-row input of ``paged_update_cache``.
     """
 
     blocks = validate_qsa_cache_capacity(allocated_compressed_blocks * COMPRESS_RATIO) // COMPRESS_RATIO
@@ -1154,10 +1099,9 @@ def qsa_chunk_constant_rows(allocated_compressed_blocks: int, rows: int = CHUNK_
     }
 
 
-# The slab keeps at most this many bytes of hoisted QSA block masks (rows / 512 masks of [512, blocks] BF16 at
-# 2048 rows: 32 MB at a 32k context, 64 MB at 64k, 128 MB at 128k); past it, or when the free DRAM after the build would
-# not hold the masks plus the slab's working set, the slab derives the masks per layer (the previous form) instead of
-# taking the slab body's transient headroom.
+# The slab keeps at most this many bytes of hoisted QSA block masks (rows / 512 masks of [512, blocks] BF16); past it,
+# or when the free DRAM after the build would not hold the masks plus the slab's working set, the slab derives the
+# masks per layer instead.
 HOISTED_MASK_BYTES_MAX = 64 << 20
 
 
@@ -1262,17 +1206,12 @@ def slab_hoisted_mask_admission(mesh_device, rows: int, blocks: int) -> Qwen38Ho
 
 @dataclass(frozen=True)
 class Qwen38TTNNQSAChunkConstants:
-    """Replicated constants of one chunk form, one set per model per row count (about 2.3 MB at 8192 resident
-    blocks for 32 rows, four times that for 128).
+    """Replicated constants of one chunk form, one set per model per row count.
 
-    UINT32 ROW_MAJOR: ``arange32_lanes`` ``[1,1,tiles,32]`` (lane j = j) and ``block_start_lanes`` ``[1,1,1,32]``
-    (lane i = 4i for the rows / 4 block starts) added to the position's index row for the RoPE lookups;
-    ``row_index_blocks`` / ``arange_blocks_rows`` ``[1,1,rows,blocks]`` and ``row_index_slots`` /
-    ``arange_slots_rows`` / ``all_ones_rows`` ``[1,1,rows,2080]``, the same-shape templates of the per-row
-    geometry; ``block_offsets_rows`` ``[1,1,rows,2048]`` and ``sentinel_pad_rows`` ``[1,1,rows,32]``, the 1-row
-    index rows repeated per row.  BF16 TILE: ``pool_select`` ``[1,1,32,rows]``, the rows / 4 ``row_selects``
-    (see :func:`qsa_chunk_constant_rows`) and ``zero_value_half_rows`` ``[1,6,rows,128]``, the zero V half of
-    the sparse_sdpa query rows.
+    UINT32 ROW_MAJOR: the lane rows added to the position's index row for the RoPE lookups, the ``[1,1,rows,blocks]``
+    and ``[1,1,rows,2080]`` same-shape templates of the per-row geometry and the 1-row index rows repeated per row.
+    BF16 TILE: ``pool_select``, the ``row_selects`` (see :func:`qsa_chunk_constant_rows`) and the zero V half of the
+    sparse_sdpa query rows.
     """
 
     allocated_compressed_blocks: int
@@ -1461,11 +1400,9 @@ def _derive_slab_tile_inputs(position_scalar, chunk: Qwen38TTNNQSAChunkConstants
 
 
 def slab_block_mask(complete_blocks_col, arange_blocks_row, start: int, value: float):
-    """The causal block mask of the SLAB_SCORE_BLOCK_ROWS-row score block at ``start``: block b of row j is hidden
-    when b >= complete(j), the comparison broadcasting the block index row against the block's complete-block column
-    (bitwise the chunk forms' row templates, measured 2026-09-09); ``value`` is what a hidden block's score gains.
-    The per-layer derivation and the per-slab hoist run this one function, so the hoisted masks are bitwise the
-    per-layer ones."""
+    """The causal block mask of the SLAB_SCORE_BLOCK_ROWS-row score block at ``start``: block b of row j is hidden when
+    b >= complete(j), by a broadcast comparison bitwise equal to the chunk forms' row templates; ``value`` is what a
+    hidden block's score gains. The per-layer and per-slab derivations share this function, so they agree bitwise."""
 
     dram = ttnn.DRAM_MEMORY_CONFIG
     # A one-block slab has no sub-range: ttnn.slice over a full extent returns its input, so the column is the block.
@@ -1756,16 +1693,11 @@ STAGE_LANE_BIAS = CACHE_WRITE_ROWS
 def qsa_verify_constant_rows(rows: int, allocated_compressed_blocks: int) -> dict[str, torch.Tensor]:
     """Host images of the verify constants of one row count (UINT32 as int64; the bf16 select stack as float).
 
-    ``row_index_blocks`` / ``row_index_slots`` are the chunk templates with the row index clamped to
-    ``rows - 1``: row j >= rows takes the geometry of the last real row, so its sparse row and mask are
-    valid (finite attention) and never read a position past the pass.  ``stage_a_lanes[i, j] = i - j + 32``
-    (j < rows, else 0) equals ``P % 32 + 32`` exactly where staging row i of the block at ``P & ~31`` takes
-    new row j (i = P % 32 + j); ``stage_b_lanes[i, j] = i - j + 64`` does the same for the next block
-    (i = P % 32 + j - 32).  ``pool_select_stack`` row r (r = P % 4) is the flattened ``[32, 64]`` 0.25-valued
-    select over the raw window ``[history tile | new rows tile]`` (history row w holds position P - 3 + w, new
-    row j position P + j): output row 0 pools the four positions of block P // 4, row 1 those of block
-    P // 4 + 1 (only the new rows below ``rows`` can belong to it; a block that does not complete inside the
-    pass pools finite garbage that the per-row mask hides until the pass that completes it rewrites it).
+    The row index templates are clamped to ``rows - 1`` so pad rows take the last real row's geometry (finite attention,
+    no position past the pass). ``stage_a_lanes[i, j] = i - j + 32`` / ``stage_b_lanes = i - j + 64`` equal
+    ``P % 32 + 32`` exactly where staging row i of the current / next KV block takes new row j. Row ``P % 4`` of
+    ``pool_select_stack`` pools blocks P // 4 and P // 4 + 1 from the raw window ``[history tile | new rows tile]``; a
+    block that does not complete in the pass pools finite garbage the per-row mask hides until it is rewritten.
     """
 
     if isinstance(rows, bool) or type(rows) is not int or not 1 <= rows <= VERIFY_MAX_ROWS:
@@ -1802,21 +1734,10 @@ def qsa_verify_constant_rows(rows: int, allocated_compressed_blocks: int) -> dic
 
 
 # --------------------------------------------------------------------------- batched lanes (32 rows)
-# B lanes decode together in one 32-row tile (row u = lane u); the position row [1,1,1,32] carries P_u.  The
-# layout (one entry point per lane count, the 1-row path untouched):
-# * KV cache: one [1,1,B*C,512] ROW_MAJOR tensor, lane u at rows [uC, (u+1)C).  sparse_sdpa reads one contiguous
-#   cache by absolute row id with batch-1 KV and a [1,1,S,TOPK] index tensor, so the lane offset u*C is carried
-#   in every id of row u (the expanded block starts and the tail ids) and one call serves the B query rows.
-# * compressed cache: [B,1,blocks+32,128] TILE, user u = lane u: paged_update_cache writes all B rows in one
-#   call from a [1,B,1,128] input (one user per core).  The indexer scores it either as the flat view
-#   [1,1,B*(blocks+32),128] (one call, lane u's blocks at columns [u*(blocks+32), +blocks)) or per lane with
-#   cache_batch_idx (B calls); either way lane u's row is sliced out, so the mask / top-k / index rows stay at
-#   the lane-local [32, blocks] shapes.
-# * staging [1,B,32,512] and raw-key ring [1,B,32,128]: lane u's slot tiles; the per-lane one-hots are selection
-#   tiles (u; r, c) = (r == P_u mod m) * (c == u) whose matmul with the 32-row tile places row u of every lane
-#   at its own slot in one op, and keep columns (u; r) = 1 - (r == P_u mod m).
-# The derivation is the chunk derivation in column form (row u of every same-shape template is P_u) plus the
-# lane offsets; the emulation is the 1-row emulation per lane with the offsets applied.
+# B lanes decode together in one 32-row tile (row u = lane u; the position row carries P_u). The KV cache is one
+# [1,1,B*C,512] ROW_MAJOR tensor with lane u at rows [uC, (u+1)C): sparse_sdpa reads one cache by absolute row id, so
+# every id of row u carries the offset u*C. The compressed cache is [B,1,blocks+32,128] (user u = lane u); staging and
+# the raw-key ring are per-lane slot tiles written by exact 0/1 selection matmuls.
 
 INDEXER_FORMS = ("wide", "per_lane")
 LANE_CORE_GRID_WIDTH = 8
@@ -1954,16 +1875,10 @@ class Qwen38TTNNQSALaneConstants:
 class Qwen38TTNNQSALaneInputs:
     """Per-step device tensors derived from the position row; shared by all QSA layers.
 
-    ``kv_row_start_row`` UINT32 ROW_MAJOR ``[1,1,1,32]`` (lane ``u = u*C + (P_u & ~31)``, the flat-cache row of
-    lane ``u``'s slab) and ``kv_row_start_lanes``, its B ``[1,1,1,1]`` scalars for ``update_padded_kv_cache``;
-    ``block_index_i32`` INT32 ``[B]`` (lane ``u = P_u // 4``, the per-user index of ``paged_update_cache``);
-    the BF16 TILE selection tiles ``kv_hit_tiles`` / ``ring_hit_tiles`` ``[1,B,32,32]`` and keep columns
-    ``kv_keep_col`` / ``ring_keep_col`` ``[1,B,32,1]``; ``indexer_neg_mask`` BF16 ROW_MAJOR ``[1,1,32,blocks]``
-    and the UINT32 ROW_MAJOR ``[1,1,32,2080]`` ``row_keep_bits`` / ``row_fill`` (row ``u`` is the 1-row input at
-    ``P_u``, the tail ids carrying lane ``u``'s offset).  ``kv_block_start`` UINT32 ROW_MAJOR ``[1,1,1,32]`` (lane
-    ``u = P_u & ~31``, no lane offset) and ``kv_row_hit`` BF16 TILE ``[1,B,32,1]`` (lane ``u``'s one-hot column of
-    ``P_u % 32``) are the chain's 1-row position fields per lane: the fused QSA kernels read ``P_u`` from them, so
-    this object is the ``position`` of the fused lane body (:meth:`Qwen38TTNNQSA._forward_decode_lanes_fused`).
+    Row u of each per-row field is the 1-row input at ``P_u`` (tail ids carrying lane u's KV offset). The KV and ring
+    hit tiles / keep columns are the per-lane selection operands; ``kv_block_start`` (``P_u & ~31``, no lane offset)
+    and ``kv_row_hit`` are what the fused QSA kernels read, so this object is the ``position`` of the fused lane body
+    (:meth:`Qwen38TTNNQSA._forward_decode_lanes_fused`).
     """
 
     kv_row_start_row: Any
@@ -2221,13 +2136,9 @@ def emulate_qsa_lane_inputs(positions, *, allocated_compressed_blocks: int, lane
 class Qwen38TTNNQSAVerifyConstants:
     """Replicated constants of the verify path for one row count, beside one set of chunk constants.
 
-    Exposes the six template names :func:`derive_qsa_chunk_inputs` reads (``allocated_compressed_blocks``,
-    ``row_index_blocks``, ``row_index_slots`` clamped to ``rows``; ``arange_blocks_rows``,
-    ``arange_slots_rows``, ``all_ones_rows`` shared with the chunk constants), so the per-row masks and sparse
-    rows of a verify pass are the chunk derivation on the clamped templates.  UINT32 TILE ``stage_a_lanes`` /
-    ``stage_b_lanes`` ``[1,1,32,32]`` and ``arange32_row`` ``[1,1,1,32]`` compare against the tiled
-    position remainders; BF16 TILE ``pool_select_stack`` ``[1,1,32,2048]`` is read with one exact one-hot
-    matmul per pass.
+    Exposes the six template names :func:`derive_qsa_chunk_inputs` reads (the row index templates clamped to
+    ``rows``), so a verify pass's per-row masks and sparse rows are the chunk derivation on the clamped templates; plus
+    the staging lane rows and ``pool_select_stack``, read with one exact one-hot matmul per pass.
     """
 
     rows: int
@@ -2319,22 +2230,11 @@ class Qwen38TTNNQSAVerifyConstants:
 class Qwen38TTNNQSAVerifyInputs:
     """Per-pass device tensors of the verify path, derived from ``P``; shared by every QSA layer.
 
-    ``chunk`` holds the per-row masks / sparse rows on the clamped templates, ``kv_block_start`` (= P & ~31)
-    and the block indices (``block_index_i32[0]`` = P // 4, ``[1]`` = P // 4 + 1 are the two blocks a pass
-    can complete).  ``kv_block_start_next`` UINT32 ``[1,1,1,1]`` is the next KV block, ``kv_read_indices``
-    UINT32 ``[1,1,32]`` the rows of the current block (an embedding index row: a view of ``kv_read_row``, the
-    rank-4 owner that ``deallocate`` releases), ``stage_keep`` BF16 TILE
-    ``[1,1,32,1]`` is 1.0 for the block rows below P % 32 (already committed), ``stage_a_select`` /
-    ``stage_b_select`` BF16 TILE ``[1,1,32,32]`` place new row j at staging row P % 32 + j of the current /
-    next block, ``pool_select`` BF16 TILE ``[1,1,32,64]`` pools the two blocks out of the raw window.
-
-    ``single_row`` (a one-row pass, the draft rows): the row never reaches the next KV block or the next compressed
-    block, so ``kv_block_start_next`` and ``stage_b_select`` are None and ``chunk.block_index_i32`` holds P // 4 alone;
-    the layer skips those two writes (they wrote rows and a block no pass reads before rewriting them).
-
-    ``position`` (the caller's P scalar) and ``rows_u32`` (the verify constants' R scalar), UINT32 ROW_MAJOR
-    ``[1,1,1,1]``, are the fused verify rows form's inputs (ttnn/fused/qsa_rows main_tail_rows reads P and R on the
-    core); references, not released here.
+    ``chunk`` holds the per-row masks and sparse rows on the clamped templates and the two block indices a pass can
+    complete (P // 4, P // 4 + 1). The staging selects place new row j at staging row P % 32 + j of the current / next
+    KV block, ``stage_keep`` keeps the committed rows below P % 32, and ``pool_select`` pools the two blocks out of the
+    raw window. ``single_row`` (the draft rows) never reaches the next KV or compressed block, so those fields are None.
+    ``position`` and ``rows_u32`` are references for the fused verify rows form, not released here.
     """
 
     chunk: Qwen38TTNNQSAChunkInputs
@@ -2370,11 +2270,8 @@ def derive_qsa_verify_inputs(
 ) -> Qwen38TTNNQSAVerifyInputs:
     """:func:`derive_qsa_chunk_inputs` on the clamped templates plus the two-block staging selects.
 
-    Exact UINT32 ops on the replicated scalar ``P``; the only casts are the 0/1 selects to BF16 (the
-    comparisons write 0/1 UINT32) and the pool select, one row of a 0.25-valued constant stack picked by a
-    one-hot matmul (each output element is one term times 1.0).  No value is read back to the host.
-    ``single_row``: the one-row pass's inputs (:class:`Qwen38TTNNQSAVerifyInputs`): no next-block index, no
-    next-block select, one compressed block index.
+    Exact UINT32 ops on the replicated scalar ``P``; the only casts are the 0/1 selects to BF16 and the pool select
+    (one row of a 0.25-valued stack picked by a one-hot matmul). No value is read back to the host.
     """
 
     chunk = derive_qsa_chunk_inputs(
@@ -2578,29 +2475,19 @@ class Qwen38TTNNQSALaneState:
 
 
 # --------------------------------------------------------------------------- lane verify (B lanes x R rows, one tile)
-# The MTP lanes verify: B lanes each verify R = k + 1 consecutive positions in ONE 32-row tile, lane-major (row
-# u*R + j = lane u's row j; rows B*R .. 31 pad).  The dense stages (the all-gather, the five linears, the RoPE rows,
-# the sparse attention over the flat cache, the output projection) are the chunk path's 32-row forms and
-# row-independent; the per-lane cache writes take lane u's rows out of the tile with exact 0/1 selects: the raw
-# index keys into lane u's raw-rows tile, the two compressed block means of every lane pooled into ONE tile (row
-# 2u + i = lane u's block i) before the norm and the block-start RoPE (whose cos / sin rows are lanes 2u + i), the
-# packed KV rows into every lane's current and next block through the lane-indicator staging selects, written per
-# lane at the lane's flat-cache rows (an inactive lane's writes redirected to the scratch rows past the last lane).
-# The wide indexer scores the lane-major tile against the flat compressed cache once; row r's window is lane_of(r)'s.
+# B lanes each verify R = k + 1 positions in one lane-major 32-row tile (row u*R + j = lane u's row j). The dense stages
+# are the chunk path's row-independent 32-row forms; the per-lane cache writes take lane u's rows out of the tile with
+# exact 0/1 selects, at lane u's flat-cache rows (an inactive lane's writes go to the scratch rows past the last lane).
+# The wide indexer scores the tile against the flat compressed cache once; row r's window is lane_of(r)'s.
 
 
 def qsa_lane_verify_constant_rows(lanes: int, rows: int, allocated_context: int) -> dict[str, torch.Tensor]:
     """Host images of the lane verify constants (UINT32 rows as int64, the bf16 select tiles as float).
 
-    Rows ``[1,1,1,32]``: ``lane_of_row`` (row r -> lane ``r // R``; pad rows lane 0), ``draft_of_row`` (``r % R``; pad
-    rows ``R - 1``: lane 0's last real row's geometry, never read or written into a cache), ``block_lane_of_row`` /
-    ``block_offset_row`` (pooled-tile row ``2u + i`` -> lane u, ``4i``; pad rows 0, 0), ``scratch_row`` (``B*C`` on
-    every lane: the inactive lane's KV write rows); ``arange_per_lane`` ``[1,1,1,B*32]`` (``u*32 + i -> i``: the
-    current-block row lookup).  Templates ``block_offsets_lanes`` ``[1,1,32,2048]`` / ``arange_slots_rows``
-    ``[1,1,32,2080]``: the chunk rows' index templates plus ``C * lane_of(r)`` (row r's ids address lane_of(r)'s
-    region).  Tiles: ``expand_select`` ``[B*32, 32]`` (row ``u*32 + j`` <- row ``u*R + j``), ``lane_indicator_rows``
-    ``[B, 32, 32]`` (``(u; i, c) = [lane_of(c) == u]``, zero on the pad columns), ``pick_pooled`` ``[32, B*32]``
-    (``(2u + i, u*32 + i) = 1``), ``pick_users`` ``[2, B, 32, 32]`` (``(i; u; 0, 2u + i) = 1``).
+    Row maps ``lane_of_row`` (``r // R``), ``draft_of_row`` (``r % R``; pad rows take lane 0's last real row),
+    ``block_lane_of_row`` / ``block_offset_row`` (pooled row ``2u + i`` -> lane u, ``4i``) and ``scratch_row``
+    (``B*C``); index templates offset by ``C * lane_of(r)``; and the exact 0/1 tiles ``expand_select``,
+    ``lane_indicator_rows``, ``pick_pooled`` and ``pick_users``.
     """
 
     lanes = require_lane_count(lanes, label="QSA lane verify lanes")
@@ -2758,14 +2645,9 @@ class Qwen38TTNNQSALaneVerifyInputs:
     """Per-pass device tensors of the lane verify, derived from the lane position row (lane u = P_u), the active
     mask and the lane-major row positions (row r = P_{lane_of(r)} + draft_of(r)); shared by every QSA layer.
 
-    Per row (the chunk derivation's forms): ``indexer_neg_mask`` BF16 ROW_MAJOR ``[1,1,32,blocks]``, ``row_keep_bits`` /
-    ``row_fill`` UINT32 ``[1,1,32,2080]`` (the tail ids carry lane_of(r)'s offset).  Per lane: ``block_index_i32`` two
-    INT32 ``[B]`` (P_u // 4, + 1), ``kv_row_start_lanes`` / ``kv_row_start_next_lanes`` B UINT32 ``[1,1,1,1]`` each
-    (``active_u * (u*C + (P_u & ~31)) + (1 - active_u) * B*C`` and + 32), ``kv_read_indices`` UINT32 ``[1,1,B*32]``
-    (lane u's current block rows; a view of the rank-4 ``kv_read_row``), ``stage_keep`` BF16 TILE ``[1,B,32,1]``
-    (``[i < P_u % 32]``), ``stage_a_select`` / ``stage_b_select`` BF16 TILE ``[1,B,32,32]`` (``(u; i, c) = [i ==
-    P_row[c] % 32] * [c's block is lane u's current / next block] * [lane_of(c) == u]``), ``pool_select`` BF16 TILE
-    ``[1,B,32,64]`` (lane u's 0.25-valued block pools over ``[raw_history_u | raw_rows_u]``).
+    The per-row fields are the chunk derivation's forms (tail ids carrying lane_of(r)'s offset). The per-lane fields
+    are the two block indices, the current / next block row starts (redirected to the scratch rows when inactive), the
+    current block's read rows, and the staging keep / select and pool select tiles.
     """
 
     lanes: int
@@ -2812,13 +2694,10 @@ def derive_qsa_lane_verify_inputs(
     *,
     single_row: bool = False,
 ) -> Qwen38TTNNQSALaneVerifyInputs:
-    """The lane verify's per-pass inputs from the UINT32 ROW_MAJOR ``[1,1,1,32]`` rows ``position_row`` (lane u =
-    P_u), ``active_row`` / ``inactive_row`` (0/1 per lane, host-written) and ``row_positions`` (row r = P_row[r]):
-    exact UINT32 ops, the 0/1 selects cast to BF16 by the comparisons, the pool select one row of the verify constants'
-    0.25-valued stack per lane (one nonzero term per element).  No value is read back to the host.  ``single_row``
-    (one real row per lane: the draft rows) leaves out the next KV block's row starts and select and the second
-    compressed block index (the B=1 ``derive_qsa_verify_inputs(single_row=True)``): a lane's one row never reaches
-    them, and at the lane's last block the next block is the next lane's first."""
+    """The lane verify's per-pass inputs from the UINT32 ROW_MAJOR ``[1,1,1,32]`` rows ``position_row``,
+    ``active_row`` / ``inactive_row`` and ``row_positions``: exact UINT32 ops and 0/1 selects, no host readback.
+    ``single_row`` (the draft rows) leaves out the next KV block and the second compressed block, which a lane's one
+    row never reaches."""
 
     for name, tensor in (
         ("position row", position_row),
@@ -3224,11 +3103,9 @@ class Qwen38TTNNQSA:
         self._next_view_id = 1
         self._live_views: dict[int, int] = {}
         self._protected_views: set[int] = set()
-        # A decode-trace chain captures one exact-position graph per token.
-        # Every graph consumes the preceding QSA metadata view, so its staging,
-        # raw-tail, and selection buffers must keep their capture-time addresses
-        # until all dependent traces are released.  Production eager decode
-        # leaves this disabled and retains its existing immediate reclamation.
+        # A decode-trace chain captures one exact-position graph per token, each consuming the preceding QSA view, so
+        # its staging, raw-tail and selection buffers must keep their capture-time addresses until the traces are
+        # released. Eager decode leaves this off and reclaims immediately.
         self._trace_input_retention_active = False
         self._trace_retained_inputs: dict[tuple[str, int], Any] = {}
         self._trace_rollover_staging: list[Any] = []
@@ -4246,13 +4123,9 @@ class Qwen38TTNNQSA:
         valid_padded = math.ceil(complete_blocks / ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         query_view = valid_padded + ttnn.TILE_SIZE <= self.allocated_compressed_blocks
         if query_view:
-            # The query's own tile, presented as the 32-row logical shape the
-            # kernel validates (a buffer view; no kernel).  With the query in
-            # row 0 its causal diagonal tile is the one just past every
-            # complete block, so the window ends one tile later.  Rows 1-31
-            # hold whatever the tile carried: every kernel stage is per
-            # element or per row, so row 0's scores are the bytes the padded
-            # placement produced.
+            # The query's own tile as the 32-row logical shape the kernel validates (a buffer view). With the query in
+            # row 0 its causal diagonal tile is the one past every complete block, so the window ends one tile later;
+            # every kernel stage is per element or per row, so rows 1-31 do not affect row 0's scores.
             query_row = 0
             chunk_start = valid_padded
             kv_len = valid_padded + ttnn.TILE_SIZE
@@ -4380,11 +4253,8 @@ class Qwen38TTNNQSA:
             # Every causal token, natural order: the per-token shared row.
             sparse_indices = self._natural_row(context_length)
         else:
-            # [expanded | sentinel_pad] masked to the selected slots, then the
-            # tail ids and sentinels OR'd in: three ops per layer, the two
-            # mask rows built once per token.  Same bytes as the old
-            # [complete | tail | sentinels] concat, without its unaligned
-            # pieces (the transpose fallback of concat.cpp).
+            # [expanded | sentinel_pad] masked to the selected slots, then the tail ids and sentinels OR'd in: three ops
+            # per layer, the two mask rows built once per token, with no unaligned concat pieces.
             keep, tail_sentinel = self._template_masks(complete_token_count, tail_start, valid_count)
             template = ttnn.concat([complete_indices, self.sentinel_pad], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             kept = ttnn.bitwise_and(template, keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -4448,11 +4318,8 @@ class Qwen38TTNNQSA:
         )
 
     def _sparse_value_attention(self, query, gate, sparse_indices, state):
-        # q = [zeros(256) | Q(256)] per local head (tile-aligned concat), untilized,
-        # then the 26 zero heads appended in ROW_MAJOR, whose device pad is one
-        # program on any dim (a TILE pad on the head dim is FillPad + Pad).  Same
-        # bytes as the old pad / zeros_like / concat / untilize chain: +0.0 bf16
-        # everywhere Q is not.
+        # q = [zeros(256) | Q(256)] per local head (tile-aligned concat), untilized, then the 26 zero heads appended in
+        # ROW_MAJOR, whose device pad is one program on any dim: +0.0 bf16 everywhere Q is not.
         sparse_query_tiled = ttnn.concat([self.zero_value_half, query], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         _deallocate(query)
         _retag_tensor(sparse_query_tiled, reference=state.packed_kv_cache, shard_dim=1)
@@ -4497,11 +4364,10 @@ class Qwen38TTNNQSA:
         activated_gate = ttnn.sigmoid(gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         gated = ttnn.mul(local_tiled, activated_gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         _deallocate(local_tiled, activated_gate, gate)
-        # Head-major flatten: the [1, heads, 1, 256] row-major order is the
-        # [1, 1, 1, 1536] row, so one tiled-reshape program replaces the
-        # transpose(1, 2) + reshape pair (same bytes).
+        # Head-major flatten: the [1, heads, 1, 256] row-major order is the [1, 1, 1, 1536] row, so one tiled-reshape
+        # program does it.
         local_flat = ttnn.reshape(gated, (1, 1, 1, LOCAL_QUERY_WIDTH))
-        if not same_buffer(local_flat, gated):  # a copy today (the last dim changes); never free a view's source
+        if not same_buffer(local_flat, gated):  # never free a view's source
             _deallocate(gated)
         _retag_tensor(local_flat, reference=state.packed_kv_cache, shard_dim=3)
         self.mesh_contract.validate_tensor(local_flat, placement=TensorPlacement.HEAD_SHARDED, shard_dim=3)
@@ -4605,15 +4471,9 @@ class Qwen38TTNNQSA:
             replicated_reference=full_hidden,
             expected_shape=(1, 1, 1, HIDDEN_SIZE),
         )
-        # ttnn.reduce_scatter accumulates in its operand dtype at every hop of
-        # the four-coordinate line, so BF16 partials are rounded to BF16 three
-        # times before a shard is written.  The position-one device-sum check
-        # measured that hop-wise rounding at 1.5x the certified single-rounding
-        # bound.  Widen the four BF16 partials to FP32 (exact), let the
-        # collective sum them in FP32 (the runtime selects HiFi4 with FP32 DEST
-        # accumulation for FLOAT32 operands), and round the H/4 shard to BF16
-        # exactly once.  The result matches an FP32 host sum of the same BF16
-        # partials up to that one final rounding.
+        # ttnn.reduce_scatter accumulates in its operand dtype at every hop of the line, so BF16 partials would round
+        # three times. Widen the four BF16 partials to FP32 (exact), sum in FP32 and round the H/4 shard to BF16 once:
+        # the result is an FP32 host sum of the same partials up to that one rounding.
         local_partial_fp32 = ttnn.typecast(local_partial, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         _deallocate(local_partial)
         self.mesh_contract.mark_local_partial(
@@ -4687,10 +4547,9 @@ class Qwen38TTNNQSA:
             raise RuntimeError("raw QSA index key ring update was not in place")
         _deallocate(kept, placed)
 
-        # Rows 4-31 are exactly zero, so the 1/4-scaled sum over 32 rows is the
-        # same reduce as today's mean over the four-row concat.  The entry is
-        # only complete (and unmasked) at P % 4 == 3; earlier writes of the
-        # same block are finite garbage hidden by indexer_neg_mask.
+        # Rows 4-31 are exactly zero, so the 1/4-scaled sum over 32 rows is the four-row block mean. The entry is only
+        # complete (and unmasked) at P % 4 == 3; earlier writes of the same block are finite garbage hidden by
+        # indexer_neg_mask.
         pooled = ttnn.sum(
             state.raw_key_ring,
             dim=2,
@@ -4724,11 +4583,9 @@ class Qwen38TTNNQSA:
 
     def _project_merged(self, full_hidden):
         """The served fused path's five K = 2560 projections of one token as one DRAM-sharded linear against
-        ``weights.projections``: the [1, 1, 1, PROJECTIONS_WIDTH] L1 width shard (the eight storage cores of the
-        separate linears, 15 tiles each) whose column windows (PROJECTION_FIRST_TILE) the fused index tail, main tail
-        and post-attention read by first tile; :meth:`_sparse_value_attention_fused` releases it after the gates are
-        read.  The separate linears' program (in0_block_w 5, the same K accumulation per output column), one reader
-        per bank."""
+        ``weights.projections``: the [1, 1, 1, PROJECTIONS_WIDTH] L1 width shard whose column windows
+        (PROJECTION_FIRST_TILE) the fused tails read by first tile; :meth:`_sparse_value_attention_fused` releases it.
+        The separate linears' program (in0_block_w 5, the same K accumulation per column), one reader per bank."""
 
         return ttnn.linear(
             full_hidden,
@@ -4751,12 +4608,11 @@ class Qwen38TTNNQSA:
         *,
         rows: int = 1,
     ):
-        """The index linears, then the fused index tail (ttnn/fused/qsa_block.index_tail) in place of the chain after
-        them in :meth:`_index_projection` and :meth:`_write_compressed_index_generic`.  With ``projections`` (the
-        merged shard of :meth:`_project_merged`, the one-row served path) the linears do not run: the tail reads the
-        index query and raw key windows of that shard, which its owner releases.  ``rows`` = the row tile's valid rows:
-        1 for the decode step, B for the lanes (``state`` a lane state, ``position`` the lane inputs, the separate
-        linears)."""
+        """The index linears, then the fused index tail (ttnn/fused/qsa_block.index_tail) in place of the chain.
+
+        With ``projections`` (the merged shard of :meth:`_project_merged`) the linears do not run and the tail reads its
+        windows of that shard. ``rows`` is the row tile's valid rows: 1 for the decode step, B for the lanes.
+        """
 
         if projections is None:
             index_q_ws = ttnn.linear(
@@ -4871,13 +4727,12 @@ class Qwen38TTNNQSA:
     def _main_tail_step(
         self, full_hidden, cos, sin, state, position, projections=None, *, rows: int = 1, lane_rows: int = 0
     ):
-        """The three main linears, then the fused main tail (ttnn/fused/qsa_block.main_tail) in place of the chain after
-        them in :meth:`_main_projection`, :meth:`_write_packed_kv_generic` and the query build of
-        :meth:`_sparse_value_attention`.  Returns the sparse query and the qg shard (the gates for the post-attention
-        program, released there).  With ``projections`` (the merged shard of :meth:`_project_merged`, the one-row
-        served path) the linears do not run: the tail reads the qg, k and v windows of that shard, which is returned as
-        the qg shard.  ``rows`` valid rows; ``lane_rows`` = the KV rows per lane of a lane state's flat cache (lane u's
-        block lands at u * lane_rows + (P_u & ~31); 0 for the 1-row cache)."""
+        """The three main linears, then the fused main tail (ttnn/fused/qsa_block.main_tail) in place of the chain.
+
+        Returns the sparse query and the qg shard (released by the post-attention program). With ``projections`` the
+        linears do not run and the merged shard is returned as the qg shard. ``lane_rows`` is the KV rows per lane of a
+        lane state's flat cache (lane u's block lands at ``u * lane_rows + (P_u & ~31)``; 0 for the 1-row cache).
+        """
 
         if projections is None:
             qg_ws = ttnn.linear(
@@ -5009,12 +4864,9 @@ class Qwen38TTNNQSA:
     def _score_blocks_generic(
         self, index_query, state: Qwen38TTNNQSAGenericState, position: Qwen38TTNNQSAPositionInputs
     ):
-        # The query's own tile as the 32-row shape the kernel validates (a
-        # buffer view, no kernel; the same view _score_complete_blocks takes).
-        # Row 0's causal diagonal is the fixed window past the last resident
-        # block, so every resident column is visible to it; rows 1-31 carry the
-        # tile's padding and are sliced away (every kernel stage is per element
-        # or per row).  The additive mask hides incomplete blocks.
+        # The query's own tile as the 32-row shape the kernel validates (a buffer view, as in _score_complete_blocks):
+        # row 0's causal diagonal is the fixed window past the last resident block, so every resident column is
+        # visible; rows 1-31 are sliced away. The additive mask hides incomplete blocks.
         tile_shape = ttnn.Shape((1, INDEX_QUERY_HEADS_PER_DEVICE, ttnn.TILE_SIZE, INDEX_HEAD_DIM))
         query_tile = ttnn.reshape(index_query, tile_shape, tile_shape)
         _retag_tensor(query_tile, reference=index_query, shard_dim=1)
@@ -5198,11 +5050,9 @@ class Qwen38TTNNQSA:
     ):
         """Decode one token at the device-resident position; same op sequence for every position.
 
-        ``state`` is mutated in place and keeps its addresses; ``position`` holds
-        the per-token tensors of :func:`derive_qsa_position_inputs`; the RoPE
-        rows are the table lookups at ``P`` and ``P & ~3``.  Returns the
-        ``[1,1,1,640]`` BF16 TILE hidden-sharded output.  Like
-        :meth:`forward_decode`, the input is left for the caller to release.
+        ``state`` is mutated in place and keeps its addresses; ``position`` holds the per-token tensors of
+        :func:`derive_qsa_position_inputs`. Returns the ``[1,1,1,640]`` BF16 TILE hidden-sharded output; the input is
+        left for the caller to release.
         """
 
         self._validate_generic_state(state)
@@ -5288,10 +5138,9 @@ class Qwen38TTNNQSA:
         return output
 
     # ------------------------------------------------------------------ prefill chunk (32 rows)
-    # forward_chunk_generic is forward_decode_generic over the 32 rows P .. P + 31 of one chunk (P % 32 == 0):
-    # the same ops in the same order on 32-row operands, with the per-token staging/ring one-hots replaced
-    # by whole-slab writes (one KV slab, eight complete compressed blocks) and the per-row selection built
-    # from the chunk inputs.  The 1-row generic body above is untouched.
+    # forward_chunk_generic is forward_decode_generic over the 32 rows P .. P + 31 of one chunk (P % 32 == 0), with the
+    # per-token staging / ring one-hots replaced by whole-slab writes and the per-row selection built from the chunk
+    # inputs.
 
     def allocate_chunk_state(self, rows: int = CHUNK_ROWS) -> Qwen38TTNNQSAChunkState:
         chunk_row_tiles(rows)
@@ -6157,12 +6006,10 @@ class Qwen38TTNNQSA:
     ) -> None:
         """Eager hand-off after the last chunk of a prefill: the generic body's per-token buffers from the kept rows.
 
-        ``kv_staging`` takes the kept ``[v|k]`` slab when the prompt ends inside the last chunk's block
-        (``open_block``: rows past the prompt hold the padded rows' values, which the next replay rewrites or
-        never gathers), zero when the block is complete.  ``raw_key_ring`` is ``ring_select @ kept_raw``
-        (:func:`chunk_handoff_ring_select_rows`: the open compressed block's raw keys in rows 0 .. P % 4 - 1, every
-        other row exact zero).  The two caches need nothing: rows past the prompt are never gathered and the open
-        block's compressed row is rewritten from the ring before it is scored.
+        ``kv_staging`` takes the kept ``[v|k]`` slab when the prompt ends inside the last chunk's block (zero when the
+        block is complete); ``raw_key_ring`` is ``ring_select @ kept_raw`` (:func:`chunk_handoff_ring_select_rows`). The
+        caches need nothing: rows past the prompt are never gathered and the open block's compressed row is rewritten
+        from the ring before it is scored.
         """
 
         self._validate_generic_state(state)
@@ -6191,23 +6038,12 @@ class Qwen38TTNNQSA:
             raise RuntimeError("QSA raw-key ring hand-off was not in place")
 
     # ------------------------------------------------------------------ MTP v2 verify (R rows at any P)
-    # forward_verify_generic is forward_chunk_generic at an arbitrary P for the R = k + 1 rows of one verify
-    # pass: the same projections, indexer, per-row selection and sparse_sdpa on the 32-row tile (rows past R
-    # are zero hidden rows with the geometry of row R - 1), with the cache writes replaced by the two-block
-    # forms below.  Nothing here is rolled back after a partial accept:
-    #   * packed KV cache: rows P .. P + R - 1 are written every pass (block P & ~31 is rebuilt from its
-    #     resident rows below P % 32 plus the new rows, the next block from the new rows that cross into it).
-    #     Rows past the accepted prefix are garbage that the next pass overwrites before any sparse row can
-    #     name them (every sparse row of pass N+1 holds positions <= P' + j with P' = P + a + 1 <= P + R).
-    #   * compressed index cache: blocks P // 4 and P // 4 + 1 are written every pass from the raw window
-    #     [history | new rows].  A block completed by a rejected row (or not completed at all) holds finite
-    #     garbage that the per-row mask hides (complete_blocks(P' + j) <= that block) until the pass whose rows
-    #     complete it rewrites it, inside the same trace, before its indexer runs.
-    #   * raw history: the only state with a commit.  The next pass selects rows a + 1 .. a + 3 of
-    #     [history | last raw rows] with the GDN selectors' history_select, exactly the FIR history rule.
-    # The verify path never touches the generic state's kv_staging or raw_key_ring; an eager sync loads the
-    # raw history from the ring at a mode switch.  The cache must hold the next KV block as well
-    # (P & ~31 + 64 <= allocated_context): the host stops verify passes before that.
+    # forward_verify_generic is forward_chunk_generic at an arbitrary P for the R = k + 1 rows of one verify pass, with
+    # the cache writes replaced by two-block forms. Nothing is rolled back after a partial accept: KV rows and the
+    # compressed blocks P // 4, P // 4 + 1 are written every pass, and rows or blocks past the accepted prefix are
+    # finite garbage that the next pass rewrites before any sparse row or per-row mask can expose them. The raw history
+    # is the only state with a commit (the GDN FIR history rule). The cache must also hold the next KV block
+    # (P & ~31 + 64 <= allocated_context); the host stops verify passes before that.
 
     def allocate_verify_state(self) -> Qwen38TTNNQSAVerifyState:
         epoch = self._next_epoch
@@ -6482,18 +6318,12 @@ class Qwen38TTNNQSA:
         _deallocate(rotated)
 
     def _main_tail_rows_step(self, full_hidden, cos, sin, state, verify: Qwen38TTNNQSAVerifyInputs, constants):
-        """The three main linears on the gathered tile (L1 width-sharded, as the decode step's), then the fused main
-        tail of the verify rows (ttnn/fused/qsa_rows main_tail_rows) in place of the chain after them in
-        :meth:`_main_projection_rows`, :meth:`_write_packed_kv_verify` and the query build of
-        :meth:`_sparse_value_attention_rows`: the norm / RoPE / head-split / query kernels of the decode program on the
-        tile's 32 rows, the KV write of rows P .. P + R - 1 (P and R read on the core from ``verify.position`` and
-        ``verify.rows_u32``; the current block's rows past them zeroed, the next block written unless ``single_row``,
-        as the chain does).  The gate keeps the chain's head slices of qg: the decode post-attention program on the
-        tile (six cores, one per head) measured slower than the chain's full-grid ops at 32 rows (0.087 against 0.059 ms
-        per call, 2026-09-26), so the tail stays the chain's -- unless program 5 of the family
-        (``qsa_rows_post_attention``, one core per head and tile column) is on: then the qg shard itself is returned
-        for it.  Returns the sparse query ``[1,32,32,512]`` ROW_MAJOR and the gate ``[1,6,32,256]`` TILE (or the qg
-        shard)."""
+        """The three main linears on the gathered tile, then the fused main tail of the verify rows
+        (ttnn/fused/qsa_rows main_tail_rows) in place of the chain: the decode program's norm / RoPE / head-split /
+        query kernels on the tile's 32 rows and the KV write of rows P .. P + R - 1 (P and R read on the core). The
+        gate keeps the chain's head slices of qg, which are faster here than the decode post-attention program, unless
+        program 5 (``qsa_rows_post_attention``) is on: then the qg shard itself is returned for it. Returns the sparse
+        query ``[1,32,32,512]`` ROW_MAJOR and the gate ``[1,6,32,256]`` TILE (or the qg shard)."""
 
         rows = constants.rows
         qg_ws = ttnn.linear(
@@ -6654,13 +6484,10 @@ class Qwen38TTNNQSA:
     ):
         """The R rows P .. P + R - 1 of one verify pass on the 32-row tile at any P; same op sequence for every P.
 
-        ``hidden_rows`` is the ``[1,1,32,640]`` tile whose rows past R are zero.  ``state`` is mutated in
-        place (KV rows P .. P + R - 1 across the current and next 32-row block, compressed blocks P // 4 and
-        P // 4 + 1; with ``verify.single_row`` the current block and P // 4 alone); ``verify_state.raw_rows``
-        takes this pass's raw keys and ``raw_history`` is read only
-        (the caller commits it with :meth:`commit_verify` at the start of the next pass).  The RoPE rows are
-        the table lookups at P + j and at 4 * (P // 4) + 4i (rows 0 and 1 are used).  Returns the ``[1,1,32,640]``
-        BF16 TILE hidden-sharded rows; the input is left for the caller to release.
+        ``hidden_rows`` is the ``[1,1,32,640]`` tile whose rows past R are zero. ``state`` is mutated in place (KV rows
+        across the current and next 32-row block, compressed blocks P // 4 and P // 4 + 1; only the current ones with
+        ``verify.single_row``); ``verify_state.raw_rows`` takes this pass's raw keys and ``raw_history`` is read only
+        (:meth:`commit_verify` commits it next pass). Returns the ``[1,1,32,640]`` BF16 TILE hidden-sharded rows.
         """
 
         self._validate_generic_state(state)
@@ -6704,10 +6531,7 @@ class Qwen38TTNNQSA:
 
     # ------------------------------------------------------------------ batched lanes (B rows, one tile)
     # forward_decode_lanes is forward_decode_generic for B lanes at their own positions: the chunk path's row-batched
-    # stages on the 32-row tile (row u = lane u) with the per-token staging/ring one-hots replaced by the lane
-    # selection tiles, the compressed rows written for all users in one paged_update_cache, lane u's block scored
-    # out of its own compressed cache, the KV slabs written per lane into the flat cache.  The 1-row generic body
-    # and the chunk body above are untouched.
+    # stages on the 32-row tile (row u = lane u) with the per-token one-hots replaced by the lane selection tiles.
 
     def allocate_lane_state(self, lanes: int, *, kv_scratch_rows: int = 0) -> Qwen38TTNNQSALaneState:
         """Allocate the fixed-address caches, staging tiles and raw-key rings of ``lanes`` decode lanes.
@@ -7209,10 +7033,9 @@ class Qwen38TTNNQSA:
     ):
         """Decode one token per lane at the lanes' own positions; same op sequence for every position row.
 
-        ``hidden_rows`` is the ``[1,1,32,640]`` hidden-sharded tile with row u = lane u (rows past the lane count
-        idle); ``state`` is mutated in place and keeps its addresses; ``lanes`` holds the per-step tensors of
-        :func:`derive_qsa_lane_inputs`; the RoPE rows are the table lookups at ``P_u`` and ``P_u & ~3``.  Returns
-        the ``[1,1,32,640]`` BF16 TILE hidden-sharded output rows; the input is left for the caller to release.
+        ``hidden_rows`` is the ``[1,1,32,640]`` hidden-sharded tile with row u = lane u; ``state`` is mutated in place
+        and keeps its addresses; ``lanes`` holds the per-step tensors of :func:`derive_qsa_lane_inputs`. Returns the
+        ``[1,1,32,640]`` BF16 TILE output rows; the input is left for the caller to release.
         """
 
         self._validate_lane_state(state)
@@ -7306,11 +7129,9 @@ class Qwen38TTNNQSA:
         target: Qwen38TTNNQSALaneVerifyState | None = None,
     ) -> None:
         """``raw_history_u <- window_u[c_u : c_u + 3]`` for every lane: one equal-batch exact 0/1 selection matmul
-        against the pass's per-lane ``history_select`` ``[1,B,32,64]``, landing in the persistent history tiles (the
-        KEEP row copies an inactive lane's history unchanged).  With ``target`` the selected histories land in
-        ``target.raw_history`` and ``verify_state`` is read only: the lane draft body derives the MTP layer's
-        committed histories into its own state while the alignment state keeps its windows for the pass's real
-        commit (the B=1 :meth:`commit_verify` ``target``)."""
+        against the pass's per-lane ``history_select`` (the KEEP row copies an inactive lane's history unchanged). With
+        ``target`` the histories land in ``target.raw_history`` and ``verify_state`` is read only (as in
+        :meth:`commit_verify`)."""
 
         lanes = self._validate_lane_verify_state(verify_state)
         target = verify_state if target is None else target
@@ -7520,12 +7341,11 @@ class Qwen38TTNNQSA:
         lane_verify: Qwen38TTNNQSALaneVerifyConstants,
     ):
         """The R rows ``P_u .. P_u + R - 1`` of every lane in one lane-major 32-row tile; same op sequence for every
-        position row.  ``hidden_rows`` is the ``[1,1,32,640]`` tile (rows past B*R zero); ``state`` is mutated in
-        place (lane u's KV rows across its current and next block, its compressed blocks ``P_u // 4`` and + 1; an
-        inactive lane's KV writes land in the scratch rows); ``verify_state.raw_rows`` takes the pass's raw keys per
-        lane and ``raw_history`` is read only (:meth:`commit_verify_lanes` commits it).  The RoPE rows are the
-        lookups at ``P_row[r]`` and at the block starts of lanes ``2u + i``.  Returns the ``[1,1,32,640]`` BF16 TILE
-        hidden-sharded rows; the input is left for the caller to release.
+        position row.
+
+        ``state`` is mutated in place (an inactive lane's KV writes land in the scratch rows);
+        ``verify_state.raw_rows`` takes the pass's raw keys per lane and ``raw_history`` is read only
+        (:meth:`commit_verify_lanes` commits it). Returns the ``[1,1,32,640]`` BF16 TILE hidden-sharded rows.
         """
 
         self._validate_lane_state(state)
@@ -7569,12 +7389,8 @@ class Qwen38TTNNQSA:
 
     # ------------------------------------------------------------------ fused lane body (the six programs at B rows)
     # _forward_decode_lanes_fused is _forward_decode_generic_fused over B lanes: the same six ttnn/fused/qsa_block
-    # programs with rows = lanes (each kernel reads P_u from the lane inputs' kv_block_start + kv_row_hit and takes
-    # the lane state's [B,1,H,128] compressed cache, [1,B,32,*] ring / staging and the flat KV cache with lane_rows
-    # = C), around the same kept kernels as the lane chain above.  The 32-row lane tile is viewed as its B valid
-    # rows (one tile, the same pages, the chain's zero rows past B), so every kept kernel runs the 1-row body's own
-    # configuration (the DRAM-sharded linears are one tile in either form).  Bound to forward_decode_lanes at
-    # construction when all six programs are on; with any of them off the lane chain above runs unchanged.
+    # programs with rows = lanes, on the lane tile viewed as its B valid rows (same pages), so every kept kernel runs
+    # the 1-row body's configuration. Bound to forward_decode_lanes at construction when all six programs are on.
 
     def _validate_lane_call(
         self, state, cos, sin, block_start_cos, block_start_sin, lanes, constants, lane_constants
@@ -7692,8 +7508,8 @@ class Qwen38TTNNQSA:
             replicated_reference=state.compressed_index_cache,
             expected_shape=(1, 1, count, blocks),
         )
-        # the rows as 2 KB pages, as the one-row path gathers them (ttnn.all_gather refuses a 65,536-byte page: the
-        # whole row at a 131072-token context); device d's row r page c lands at gathered page (d * count + r) * pages + c
+        # the rows as 2 KB pages, as the one-row path gathers them (ttnn.all_gather refuses a 65,536-byte page);
+        # device d's row r page c lands at gathered page (d * count + r) * pages + c
         pages = blocks // SCORE_GATHER_PAGE
         paged = ttnn.reshape(score_rows, (1, 1, count * pages, SCORE_GATHER_PAGE))
         _deallocate(score_rows)
@@ -7728,12 +7544,8 @@ class Qwen38TTNNQSA:
         lane_constants: Qwen38TTNNQSALaneConstants,
     ):
         """:meth:`forward_decode_lanes` with the six ttnn/fused/qsa_block programs at B rows in place of the lane
-        chain's 32-row glue; bound to ``forward_decode_lanes`` at construction when all six are on (the class body
-        stays the lane chain the programs are gated against).  Same contract: the ``[1,1,32,640]`` lane tile in,
-        the state mutated in place, the ``[1,1,32,640]`` output rows (row u = lane u; rows past the lane count are
-        exact zeros: zero gates on zeroed attention rows, a zero partial, zero reduce-scatter rows), the input
-        left for the caller.  ``lanes``: the full :class:`Qwen38TTNNQSALaneInputs` or the fused derive's
-        :class:`Qwen38TTNNQSAFusedLaneInputs` (the five fields the programs read)."""
+        chain's 32-row glue; bound at construction when all six are on. Same contract; rows past the lane count are
+        exact zeros. ``lanes`` is a full :class:`Qwen38TTNNQSALaneInputs` or a :class:`Qwen38TTNNQSAFusedLaneInputs`."""
 
         count = self._validate_lane_call(
             state, cos, sin, block_start_cos, block_start_sin, lanes, constants, lane_constants

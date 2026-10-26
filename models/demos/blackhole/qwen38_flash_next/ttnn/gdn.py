@@ -3,21 +3,9 @@
 
 """Tensor-parallel Qwen3.8-Flash-Next Gated DeltaNet.
 
-This is the device implementation of the pinned ``Qwen4Exp`` linear-attention
-block, not the CPU oracle.  It deliberately has a narrow boundary:
-
-* input and output are hidden-width shards on the columns of an exact 1x4 mesh;
-* Q/K heads (16) and value heads (48) are split 4/12 per device;
-* convolution and recurrent state are genuinely head sharded, never represented
-  by four replicated tensors that happen to contain different values;
-* the recurrent state remains FP32 and is updated in preallocated buffers;
-* the Qwen3.8 output gate is ``sigmoid(z)`` (Qwen3.6 uses ``silu(z)``);
-* the row-parallel output is reduced and scattered back to H/4.
-
-The ordinary-decode path is the primary bring-up path.  ``forward_prefill`` is
-an exact device-only serial baseline over that same transition.  A future
-chunk-prefill optimization may replace it only after matching this state and
-output contract.
+Inputs and outputs are hidden-width shards on the 1x4 mesh; Q/K heads (16) and value heads (48) split 4/12 per device,
+and the convolution and FP32 recurrent state are genuinely head sharded in preallocated buffers. The Qwen3.8 output
+gate is ``sigmoid(z)`` (Qwen3.6 uses ``silu(z)``); the row-parallel output is reduce-scattered back to H/4.
 """
 
 from __future__ import annotations
@@ -90,11 +78,9 @@ QK_L2_NORM_EPS = 1.0e-6
 CHUNK_SIZE = ttnn.TILE_SIZE
 CONV_HISTORY_ROWS = CONV_KERNEL_SIZE - 1
 CONV_WINDOW_ROWS = CONV_HISTORY_ROWS + CHUNK_SIZE
-# The rows path keeps the FIR history in a full 32-row tile (rows 0..2 hold the history, rows 3..31
-# are never read) so ``[history | qkv]`` is a tile-aligned concat of two tiles; every row read from
-# that 64-row window (the FIR taps, the next history) is an exact 0/1 selection matmul against a
-# constant, never a row-unaligned slice.  Logical window row m (m = 0..34: the three history rows,
-# then the CHUNK_SIZE new rows) sits at buffer row ``_window_buffer_row(m)``.
+# The rows path keeps the FIR history in a full 32-row tile (rows 0..2 valid) so ``[history | qkv]`` is a tile-aligned
+# concat; every row read from that 64-row window is an exact 0/1 selection matmul, never a row-unaligned slice. Logical
+# window row m (the three history rows, then the CHUNK_SIZE new rows) sits at buffer row ``_window_buffer_row(m)``.
 CONV_WINDOW_TILE_ROWS = 2 * CHUNK_SIZE
 CHUNK_QUADRANT_MASK_WIDTH = 3 * ttnn.TILE_SIZE
 # The long prefill chunk hands the kernel LONG_CHUNK_ROWS rows (four 32-row chunks in one call, the state
@@ -121,13 +107,10 @@ def _window_buffer_row(logical_row: int) -> int:
 def rows_window_select_tiles(rows: int) -> dict[str, torch.Tensor]:
     """Host images of the rows path's exact 0/1 selection matrices (one nonzero per selected element).
 
-    ``conv_taps[t]`` ``[T, 32 + T]`` (T the kernel rows): row j selects logical window row t + j (FIR tap
-    t, t = 0..2; tap 3 is the new rows themselves).  ``history_select_stack`` ``[32, 2048]``: row a is the
-    flattened ``[32, 64]`` select whose rows 0..2 pick logical window rows a + 1 .. a + 3 (the next history
-    after committing a + 1 rows; rows 3..31 are zero); the long chunk commits every row, so it carries the
-    one constant ``history_select_full`` ``[32, 32 + T]`` (rows 0..2 pick logical window rows T .. T + 2)
-    instead.  ``qk_expand`` ``[512, 1536]``: the GQA expansion, key head h to value heads 3h .. 3h + 2 (one
-    1.0 per output column), so the chunk kernel sees H = HV = 12 heads and skips its own repeat_interleave.
+    ``conv_taps[t]`` ``[T, 32 + T]`` selects window row t + j for FIR tap t (tap 3 is the new rows); row a of
+    ``history_select_stack`` ``[32, 2048]`` is the flattened select of the next history after a + 1 committed rows (the
+    long chunk carries ``history_select_full`` instead); ``qk_expand`` ``[512, 1536]`` is the GQA expansion, key head h
+    to value heads 3h .. 3h + 2.
     """
 
     kernel_rows = rows_tile_count(rows)
@@ -240,8 +223,7 @@ def _require_shape(tensor, expected: tuple[int, ...], *, label: str) -> None:
 def softplus_gate(a_fp32, dt_bias, *, memory_config):
     """``softplus(a + dt_bias)`` in FP32 as two programs: the add, then ``ttnn.softplus``.
 
-    Not the fused ``SOFTPLUS`` activation of ``ttnn.add``: it returns exactly 0 below about -5 and
-    is 1.5e-3 off elsewhere; the standalone op never flushes and is 4.7e-4-accurate.
+    Not the fused ``SOFTPLUS`` activation of ``ttnn.add``: it flushes to 0 below about -5 and is less accurate.
     """
     shifted = ttnn.add(a_fp32, dt_bias, memory_config=memory_config)
     softplus = ttnn.softplus(shifted, beta=1.0, threshold=20.0, memory_config=memory_config)
@@ -258,10 +240,8 @@ def _exact_lane(lane, lanes: int) -> int:
 def _retag_head_shard_after_reshape(tensor, *, reference, shard_dim: int) -> None:
     """Record the new logical head axis after a local-only reshape.
 
-    TTNN reshape/repeat currently preserve the input ``PlacementShard`` axis.
-    GDN splits the fused last-axis shard into ``[..., heads, head_dim]`` without
-    moving bytes between devices, so the same physical shard becomes the head
-    axis in the reshaped tensor.
+    TTNN reshape / repeat keep the input ``PlacementShard`` axis; splitting the fused last-axis shard into
+    ``[..., heads, head_dim]`` moves no bytes, so the same physical shard becomes the head axis.
     """
 
     topology = reference.tensor_topology()
@@ -285,10 +265,8 @@ def _allocate_head_sharded_zero(
 ):
     """Allocate one zero-filled local tensor per device and record its TP shard.
 
-    ``moreh_full`` avoids the host-to-device zero upload while preserving the
-    exact local storage that the former ``ShardTensor2dMesh`` path produced.
-    The fill initially reports replicated placement metadata; changing that
-    metadata to the known head shard is local-only and moves no bytes.
+    ``moreh_full`` avoids a host-to-device zero upload; relabeling its replicated metadata as the head shard moves no
+    bytes.
     """
 
     tensor = ttnn.moreh_full(
@@ -412,21 +390,16 @@ class Qwen38TTNNGDNWeights:
     ) -> "Qwen38TTNNGDNWeights":
         """Pack and upload one exact checkpoint layer.
 
-        The host packing order is ``[device0 local streams | ... | device3]``.
-        Sharding that reordered dimension gives each coordinate exactly its four
-        Q/K heads and twelve value heads.  No projection tensor is replicated.
-        Cache paths bind the checkpoint config, exact tt-metal commit, physical
-        mesh order, layer, and dtype so a stale cross-runtime tensorbin cannot
-        be selected silently.
+        Sharding the ``[device0 local streams | ... | device3]`` packing gives each coordinate exactly its four Q/K
+        heads and twelve value heads; no projection tensor is replicated. Cache paths bind the checkpoint config,
+        tt-metal commit, physical mesh order, layer and dtype.
         """
 
         validate_decode_dram_workers(decode_dram_workers_per_bank)
         mesh_contract.validate_mesh(mesh_device)
         _require_pinned_config(checkpoint, layer_index)
         if projection_dtype is None:
-            # The continuation's correctness path keeps non-expert projection
-            # weights in BF16.  BF8_B is an explicit later experiment, never
-            # an implicit substitute during ordinary-decode bring-up.
+            # BF16 unless the caller names a dense weight format.
             projection_dtype = ttnn.bfloat16
         if projection_dtype not in DENSE_DTYPE_TAGS:
             raise ValueError("GDN projection weights must use BFLOAT16, BFLOAT8_B or BFLOAT4_B")
@@ -443,9 +416,8 @@ class Qwen38TTNNGDNWeights:
         expected_qkvzab = (1, 1, HIDDEN_SIZE, TP_SIZE * PROJECTION_WIDTH_PER_DEVICE)
         if tuple(qkvzab_host.shape) != expected_qkvzab:
             raise RuntimeError(f"packed qkvzab shape {tuple(qkvzab_host.shape)} != {expected_qkvzab}")
-        # Projection weights are DRAM width-sharded for the decode matmul
-        # program; the renamed tensorbins deliberately orphan interleaved
-        # caches and the unpadded 4120-column packing.
+        # Projection weights are DRAM width-sharded for the decode matmul program, under tensorbin names that no
+        # interleaved or unpadded 4120-column cache uses.
         if decode_dram_workers_per_bank != 1 and projection_dtype not in TWO_READER_QUALIFIED_DTYPES:
             raise ValueError(
                 "two DRAM readers per bank are qualified for "
@@ -613,12 +585,9 @@ class Qwen38TTNNGDNSnapshot:
 class Qwen38TTNNGDNState:
     """Fixed-address mutable state owned by exactly one GDN layer.
 
-    The four convolution buffers form a ring: the token at step ``n`` is
-    written straight into slot ``n % 4`` and the FIR pairs tap ``i`` with slot
-    ``(n + 1 + i) % 4``, so no shift copies run.  ``conv_phase`` is the slot
-    the next token lands in; snapshots carry it.  A captured graph binds one
-    phase, so a trace is valid at positions congruent mod 4 (the decoder's
-    graphs are already per position mod 32 through the QSA layers).
+    The four convolution buffers form a ring: the token at step ``n`` is written into slot ``n % 4`` and FIR tap ``i``
+    reads slot ``(n + 1 + i) % 4``, so no shift copies run. ``conv_phase`` is the next token's slot; a captured graph
+    binds one phase, so a trace is valid at positions congruent mod 4.
     """
 
     layer_index: int
@@ -751,11 +720,9 @@ class Qwen38TTNNGDNState:
         return snapshot
 
     def reset_lane_inplace(self, lane: int) -> None:
-        """Zero lane ``lane`` of the recurrent state and of every ring slot, every other lane unchanged, no address
-        change: a keep-mask multiply (lane 1.0 everywhere but 0.0 at ``lane``; x * 1.0 is x, x * 0.0 is the zero
-        source's +0.0) landed by an in-place copy.  Eager host uploads: a lifecycle op between steps, never traced.
-        The ring phase is shared, so the lane joins the resident residue class (the caller admits it at a step of
-        its position's residue)."""
+        """Zero lane ``lane`` of the recurrent state and every ring slot by a keep-mask multiply, other lanes and
+        addresses unchanged. Eager host uploads: a lifecycle op between steps, never traced. The ring phase is shared,
+        so the caller admits the lane at a step of its position's residue."""
 
         self.validate()
         lane = _exact_lane(lane, self.batch_size)
@@ -864,13 +831,9 @@ def chunk_constant_tiles() -> dict[str, torch.Tensor]:
 class Qwen38TTNNGDNRowsConstants:
     """Read-only device tensors shared by every GDN layer's ``rows``-row path (one set per row count).
 
-    ``row_mask_*`` is 1.0 for rows below ``rows`` and 0.0 for the padding rows up to the chunk; ``arange``
-    (a column) and ``arange_row`` (a row) hold the row index (fp32, exact); ``one`` is the fp32 scalar 1.0;
-    ``conv_taps``, ``history_select_stack`` and ``qk_expand`` are the 0/1 selection matrices of
-    :func:`rows_window_select_tiles` (bf16: exactly representable); ``eye``/``tril``/``ones``/``masks`` are
-    the chunk kernel's constant tiles.  Everything is uploaded here so nothing is uploaded inside a trace.
-    ``select_compute_config`` (HiFi4, fp32 accumulation, no approximations) is the matmul configuration
-    under which a 0/1 selection is exact: every output element is one bf16 value times 1.0 plus exact zeros.
+    ``row_mask_*`` is 1.0 for rows below ``rows`` and 0.0 for the padding; the selection matrices are those of
+    :func:`rows_window_select_tiles` (exact in bf16). Everything is uploaded here so nothing is uploaded inside a trace.
+    ``select_compute_config`` (HiFi4, fp32 accumulation) makes a 0/1 selection exact.
     """
 
     rows: int
@@ -891,10 +854,8 @@ class Qwen38TTNNGDNRowsConstants:
     masks: Any
     select_compute_config: Any
     mesh_contract: Qwen38MeshContract
-    # ``[12, 1, 32, 1]`` FP32 row index in the chunk prims' own layout, uploaded for the 32-row form when the
-    # verify-rows wrap runs (``fused.gdn_rows_wrap``, a default; None under QWEN38_FUSED_OFF=gdn_rows_wrap): its
-    # commit masks ``beta_c`` / ``g_c`` in that layout, so the mask is built there too and the multiply is element
-    # for element.
+    # ``[12, 1, 32, 1]`` FP32 row index in the chunk prims' layout, uploaded for the 32-row form when the verify-rows
+    # wrap (``fused.gdn_rows_wrap``) runs; None otherwise. Its commit masks ``beta_c`` / ``g_c`` element for element.
     arange_c: Any = None
 
     @property
@@ -1017,11 +978,9 @@ class Qwen38TTNNGDNRowsConstants:
 class Qwen38TTNNRowsSelectors:
     """Per-pass device selects derived once from the accept count and shared by every layer's commit.
 
-    ``accepted`` is the number of accepted drafts (fp32 scalar on device, 0 <= accepted < rows); row 0 is
-    the base token and is always committed, so ``committed_mask`` is ``arange <= accepted`` (accepted + 1
-    rows).  ``history_select`` is the ``[32, 64]`` 0/1 matrix that reads the next GDN FIR history (window
-    rows accepted + 1 .. accepted + 3) out of the ``[history | qkv]`` window with one exact matmul per
-    layer; ``onehot_bf16[j]`` (``accepted == j``) drives the PLE commit's exact multiply/add select.
+    ``accepted`` drafts (0 <= accepted < rows) plus the always-committed base row give ``committed_mask`` =
+    ``arange <= accepted``; ``history_select`` ``[32, 64]`` reads the next FIR history out of the ``[history | qkv]``
+    window with one exact matmul; ``onehot_bf16[j]`` (``accepted == j``) drives the PLE commit's select.
     """
 
     rows: int
@@ -1064,11 +1023,9 @@ class Qwen38TTNNRowsSelectors:
 def build_rows_selectors(accepted, constants: Qwen38TTNNGDNRowsConstants) -> Qwen38TTNNRowsSelectors:
     """Derive the commit selects from the device accept count (fp32 ``[1,1,1,1]``, replicated).
 
-    rows + 4 tiny ops per pass, not per layer (one more with the verify-rows wrap's prim-layout mask): the
-    mask, the one-hot row (``arange_row == accepted``,
-    written as bf16 by the comparison), the history select as ``onehot_row @ history_select_stack``
-    (exact: one row of the stack) reshaped to ``[32, 64]``, and the rows one-hot scalars for the PLE.
-    Comparisons on fp32 integers are exact.
+    A few tiny ops per pass, not per layer: the mask, the one-hot row, the history select as
+    ``onehot_row @ history_select_stack`` (exact: one row of the stack) and the PLE's one-hot scalars. Comparisons on
+    fp32 integers are exact.
     """
 
     _require_shape(accepted, (1, 1, 1, 1), label="accept count")
@@ -1105,13 +1062,9 @@ def build_rows_selectors(accepted, constants: Qwen38TTNNGDNRowsConstants) -> Qwe
 class Qwen38TTNNGDNRowsState:
     """Per-layer persistent buffers of the ``rows``-row path (fixed addresses across passes).
 
-    ``history`` is the FIR history (rows 0..2: the CONV_HISTORY_ROWS q/k/v rows before the first new
-    row, in a full 32-row tile whose rows 3..31 are never read; it replaces the phase-indexed ring of
-    the 1-row path, which a variable-advance trace cannot bind).  ``qkv`` holds this pass's projected
-    q|k|v rows (CHUNK_SIZE rows, rows past ``rows`` zero) and ``q``/``k``/``v``/``beta``/``g`` the chunk
-    kernel's inputs (q/k already expanded to the 12 value heads; v token-major flat, the composite's
-    ``flat v`` form that the prep reader addresses by tile without a head-split relayout), kept so the
-    commit can rerun the kernel over the committed prefix from the committed recurrent state.
+    ``history`` is the FIR history (rows 0..2 of a full tile; a variable-advance trace cannot bind the 1-row path's
+    phase-indexed ring). ``qkv`` holds this pass's projected rows and ``q``/``k``/``v``/``beta``/``g`` the chunk
+    kernel's inputs, kept so the commit can rerun the kernel over the committed prefix.
     """
 
     layer_index: int
@@ -1254,24 +1207,17 @@ class Qwen38TTNNGDNRowsState:
 
 
 # --------------------------------------------------------------------------- lane rows path (the MTP lanes verify)
-# B lanes verify R = k + 1 rows each in ONE 32-row tile, lane-major (row u*R + j = lane u's row j; rows B*R .. 31 pad).
-# The dense work (all-gather, projection, output projection, reduce-scatter) runs on that tile exactly as the
-# rows path does; the per-lane work (FIR history, chunk kernel from lane u's recurrent state, commit) runs on a
-# batch axis: one exact 0/1 ``expand_select`` copies lane u's rows into its own 32-row tile (rows R .. 31 zero),
-# the recurrence takes ``[B, 32, 12, 128]`` from ``recurrent [B, 12, 128, 128]`` (the single stream's recurrence once
-# per lane, on lane u's ``[1, 32, 12, 128]`` slice; the verify-rows fold's lanes form replaces this block), and one
-# ``fold_select`` brings the per-lane outputs back to the lane-major tile before the gate.  Every select is one
-# nonzero term per output element under HiFi4 / fp32 accumulation.
+# B lanes verify R = k + 1 rows each in one lane-major 32-row tile (row u*R + j = lane u's row j). The dense work runs
+# on that tile as the rows path does; the per-lane work (FIR history, chunk kernel from lane u's recurrent state,
+# commit) runs on a batch axis through exact 0/1 ``expand_select`` / ``fold_select`` matmuls (one nonzero term each).
 
 
 def lane_rows_select_tiles(lanes: int, rows: int) -> dict[str, torch.Tensor]:
     """Host images of the lane rows path's exact 0/1 selects.
 
-    ``expand_select`` ``[B*32, 32]``: row ``u*32 + j`` takes lane-major row ``u*R + j`` for ``j < R``;
-    ``fold_select`` ``[32, B*32]`` is its transpose; ``history_select_stack`` ``[32, 2048]``: row ``c`` (``c = 0 ..
-    R``) is the flattened ``[32, 64]`` select whose rows 0..2 pick logical window rows ``c .. c + 2`` -- the FIR
-    history after committing ``c`` rows (row 0 = the KEEP row: an inactive or freshly admitted lane commits nothing
-    and its history is copied unchanged).
+    ``expand_select`` ``[B*32, 32]`` takes lane-major row ``u*R + j`` into row ``u*32 + j`` (``fold_select`` is its
+    transpose); row ``c`` of ``history_select_stack`` ``[32, 2048]`` selects the FIR history after committing ``c``
+    rows (row 0 is the KEEP row: the history is copied unchanged).
     """
 
     lanes = require_lane_count(lanes, label="lane rows lanes")
@@ -1295,12 +1241,8 @@ class Qwen38TTNNGDNLaneRowsConstants:
     """Read-only device tensors of the lane rows path for one ``(lanes, rows)``, beside the ``rows``-row
     :class:`Qwen38TTNNGDNRowsConstants` (whose ``qk_expand`` and chunk tiles the lane path shares).
 
-    ``expand_select`` ``[1,1,B*32,32]`` / ``fold_select`` ``[1,1,32,B*32]`` BF16; ``history_select_stack``
-    ``[1,1,32,2048]`` BF16 indexed by committed rows (the KEEP row at 0); ``conv_taps`` 3 x ``[1,B,32,64]`` BF16 (the
-    rows path's tap selects, one copy per lane: the A operand of an equal-batch matmul carries the batch);
-    ``row_mask_bf16`` ``[B,32,1,1]``, ``row_mask_bf16_col`` / ``row_mask_fp32`` ``[1,B,32,1]`` (1.0 below ``rows``);
-    ``arange`` ``[1,B,32,1]`` and ``arange_row`` ``[1,B,1,32]`` FP32 row indices per lane (the per-lane comparisons
-    against a ``[1,B,1,1]`` count).
+    The selects of :func:`lane_rows_select_tiles` in BF16, the rows path's tap selects with one copy per lane (the A
+    operand of an equal-batch matmul carries the batch), and the per-lane row masks and FP32 row indices.
     """
 
     lanes: int
@@ -1525,12 +1467,9 @@ class Qwen38TTNNRowsSelectorsLanes:
     """Per-pass device selects of the lane commit, derived once from the per-lane accept counts and the active mask
     and shared by every layer's commit.
 
-    ``c_u = (a_u + 1) * active_u`` committed rows per lane (``a_u = -1`` for a seeded, not yet verified lane, 0 for
-    an inactive one: the KEEP row).  ``committed_mask`` ``[1,B,32,1]`` FP32 = ``arange < c_u``; ``history_select``
-    ``[1,B,32,64]`` BF16 the stack row ``c_u`` per lane; ``commit_col`` / ``keep_col`` ``[B,1,1,1]`` FP32 = ``[c_u >= 1]``
-    and its complement (the exact per-lane state select of the commit: an inactive or freshly seeded lane keeps its
-    recurrent state bitwise); ``onehot_bf16[c]`` ``[B,1,1,1]`` BF16 = ``c_u == c`` for ``c = 0 .. R``
-    (the PLE lane commit's multiply/add select, the KEEP candidate at 0).
+    ``c_u = (a_u + 1) * active_u`` rows commit per lane (0 = the KEEP row for an inactive or freshly seeded lane, which
+    keeps its recurrent state bitwise through ``commit_col`` / ``keep_col``). ``onehot_bf16[c]`` (``c_u == c``) drives
+    the PLE lane commit's select.
     """
 
     lanes: int
@@ -1722,10 +1661,10 @@ class Qwen38TTNNGDN:
         # projection -> gated output: the composed chain, or the fused kernel when QWEN38_FUSED names gdn_step
         self._step = fused.resolve("gdn_step")
         # the rows body between the projection and the out-projection: the wrap's two programs around the two prims
-        # (a default) where the rows state carries its buffers, the chain elsewhere and under QWEN38_FUSED_OFF=gdn_rows_wrap
+        # where the rows state carries its buffers, the chain elsewhere (and under QWEN38_FUSED_OFF=gdn_rows_wrap)
         self._rows_body_call = fused.resolve_admitted("gdn_rows_wrap")
         # the verify rows' fold (opt-in QWEN38_FUSED=gdn_rows_scan): one serial-recurrence program where the rows state
-        # carries its prefix states, today's stream (the wrap or the chain, through _rows_body_wrap) elsewhere
+        # carries its prefix states, the wrap or the chain (through _rows_body_wrap) elsewhere
         self._rows_scan_call = fused.resolve_admitted("gdn_rows_scan")
         # The lane body runs the same program on its B rows (one item per (lane, value head), one state slot per
         # lane); with the kernel off it stays the lane chain, the class attribute.
@@ -1751,10 +1690,9 @@ class Qwen38TTNNGDN:
         return step
 
     def _rows_body_wrap(self):
-        """Today's rows body from the projection to the out-projection: on a rows state that carries the wrap's
-        buffers (the 32-row verify tile, by default) ``gdn_pre_rows`` + the two chunk prims + ``gdn_post_rows``
-        (ttnn/fused/gdn_rows_wrap), the chain elsewhere and under QWEN38_FUSED_OFF=gdn_rows_wrap; resolved once (fakes
-        that skip ``__init__`` resolve here).  The verify-rows fold's composed callable."""
+        """The rows body from the projection to the out-projection: ``gdn_pre_rows`` + the two chunk prims +
+        ``gdn_post_rows`` (ttnn/fused/gdn_rows_wrap) on a rows state that carries the wrap's buffers, the chain
+        elsewhere; resolved once (fakes that skip ``__init__`` resolve here)."""
 
         body = self.__dict__.get("_rows_body_call")
         if body is None:
@@ -1763,8 +1701,8 @@ class Qwen38TTNNGDN:
 
     def _rows_body(self):
         """The rows body ``forward_rows`` dispatches to: on a rows state that carries the verify-rows fold's buffers
-        (opt-in QWEN38_FUSED=gdn_rows_scan) the one-program serial recurrence (ttnn/fused/gdn_rows_scan), else today's
-        stream through ``_rows_body_wrap``; resolved once (fakes that skip ``__init__`` resolve here)."""
+        (opt-in QWEN38_FUSED=gdn_rows_scan) the one-program serial recurrence (ttnn/fused/gdn_rows_scan), else
+        ``_rows_body_wrap``; resolved once (fakes that skip ``__init__`` resolve here)."""
 
         body = self.__dict__.get("_rows_scan_call")
         if body is None:
@@ -1879,11 +1817,8 @@ class Qwen38TTNNGDN:
         )
         _deallocate(conv)
 
-        # Heads go on dim 1 so every recurrent operand is already in matmul
-        # form [1,H,1,128]: the head split is one repack per operand and the
-        # GQA repeat over dim 1 is one page-copy op.  k's tile padding is
-        # zeroed because k^T's padding lanes enter the outer-product
-        # contraction (0 * finite = 0); q's and v's padding never does.
+        # Heads go on dim 1 so every recurrent operand is already in matmul form [1,H,1,128]. k's tile padding is
+        # zeroed because k^T's padding lanes enter the outer-product contraction (0 * finite = 0); q's and v's never do.
         q_heads = ttnn.reshape(q_slice, (1, QK_HEADS_PER_DEVICE, 1, HEAD_DIM))
         k_heads = ttnn.reshape(k_slice, (1, QK_HEADS_PER_DEVICE, 1, HEAD_DIM), pad_value=0.0)
         q = ttnn.repeat_interleave(q_heads, QK_REPEAT_FACTOR, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -1900,11 +1835,9 @@ class Qwen38TTNNGDN:
                 label=f"GDN recurrent {name}",
             )
 
-        # The authenticated token17 layer-0 boundary requires the explicit
-        # FP32 sigmoid path; beta stays FP32 straight into the FP32 recurrent
-        # step. Retain every producer until the recurrent consumer is
-        # enqueued: reshape/topology metadata does not transfer the underlying
-        # buffer lifetime.  [1,H,1,1] is the broadcast form the step consumes.
+        # beta takes the explicit FP32 sigmoid path straight into the FP32 recurrent step. Retain every producer until
+        # the recurrent consumer is enqueued: reshape / topology metadata does not carry the buffer's lifetime.
+        # [1,H,1,1] is the broadcast form the step consumes.
         b_fp32 = ttnn.typecast(b, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
         beta_fp32 = ttnn.sigmoid(b_fp32, memory_config=ttnn.L1_MEMORY_CONFIG)
         beta = ttnn.reshape(beta_fp32, (1, VALUE_HEADS_PER_DEVICE, 1, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -2028,7 +1961,7 @@ class Qwen38TTNNGDN:
         self.mesh_contract.validate_tensor(normalized, placement=TensorPlacement.HEAD_SHARDED, shard_dim=3)
         _require_shape(normalized, (1, 1, 1, VALUE_WIDTH_PER_DEVICE), label="GDN normalized output")
 
-        # Exact Qwen4Exp difference from the Qwen3.6 jumping-off point.
+        # Qwen3.8's sigmoid(z) output gate (Qwen3.6 uses silu).
         z_fp32 = ttnn.typecast(z, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
         _deallocate(z)
         sigmoid_fp32 = ttnn.sigmoid(z_fp32, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -2091,10 +2024,7 @@ class Qwen38TTNNGDN:
     def forward_prefill(self, hidden_sharded, state: Qwen38TTNNGDNState) -> Qwen38TTNNGDNResult:
         """Exact device-only serial prefill over the ordinary decode transition.
 
-        ``hidden_sharded`` has local shape ``[1,1,T,640]`` and must carry the
-        same hidden-sharded mesh topology as decode.  This path intentionally
-        establishes the state-transition golden before the chunk kernel is
-        admitted; it performs no host inference and does not replace GDN with a
+        ``hidden_sharded`` is local ``[1,1,T,640]`` with the decode's hidden-sharded topology; no host inference and no
         dense or CPU fallback.
         """
 
@@ -2125,14 +2055,10 @@ class Qwen38TTNNGDN:
         return Qwen38TTNNGDNResult(output, state)
 
     # ------------------------------------------------------------------ lanes path (batched decode)
-    #
-    # ``forward_decode_lanes`` is ``forward_decode`` on B lanes: the same ops on ``[1,1,B,*]`` rows (row u = lane
-    # u), the recurrent operands ``[B,12,1,128]`` (lane u's heads at batch index u) against the ``[B,12,128,128]``
-    # state, the ring slots ``[1,1,B,2560]`` under one shared phase (the residue rule: every resident lane's
-    # position is congruent to the slot mod 4).  Every op is per row / per (lane, head) tile or a batched matmul
-    # over (lane, head) with the 1-row program config (per_core_M = 1), so lane u is the 1-row path on user u's
-    # stream.  Lanes without a session replay harmlessly in their own rows; a lane joins through
-    # ``Qwen38TTNNGDNState.reset_lane_inplace`` at a step of its position's residue class.
+    # ``forward_decode_lanes`` is ``forward_decode`` on B lanes (row u = lane u): the recurrent operands are
+    # ``[B,12,1,128]`` against the ``[B,12,128,128]`` state and the ring slots share one phase (the residue rule).
+    # Every op is per row, per (lane, head) tile or batched with the 1-row program config, so lane u is the 1-row
+    # path on user u's stream.
 
     def allocate_lane_state(self, lanes: int) -> Qwen38TTNNGDNState:
         return Qwen38TTNNGDNState.allocate(
@@ -2398,11 +2324,8 @@ class Qwen38TTNNGDN:
 
     def _forward_decode_lanes_fused(self, hidden_lanes, state: Qwen38TTNNGDNState) -> Qwen38TTNNGDNResult:
         """:meth:`forward_decode_lanes` with the fused ``gdn_step`` program on the B rows in place of the lane chain
-        from the projection to the gated output (ttnn/fused/gdn_step: one core per (lane, value head) item, lane u's
-        state slot updated in place); bound to ``forward_decode_lanes`` at construction when ``QWEN38_FUSED`` names
-        gdn_step (the class body stays the fallback).  The ring order is the chain's: the window is read before the
-        step, the program lands row u's q/k/v in row u of the window's last slot, and the phase advances once after.
-        """
+        (one core per (lane, value head) item); bound at construction when ``QWEN38_FUSED`` names gdn_step. The ring
+        order is the chain's: the window is read before the step and the phase advances once after."""
 
         lanes = self._validate_lane_state(state)
         full_hidden = self._all_gather_hidden_lanes(hidden_lanes, lanes)
@@ -2414,16 +2337,10 @@ class Qwen38TTNNGDN:
         return Qwen38TTNNGDNResult(output, state)
 
     # ------------------------------------------------------------------ rows path (MTP v2 verify)
-    #
-    # ``forward_rows`` runs R = rows consecutive positions in one pass: the same projection, FIR,
-    # normalization, gate and output ops as ``forward_decode`` on CHUNK_SIZE-row tiles (the input
-    # is zero padded to one tile, so every matmul keeps per_core_M = 1), and the recurrence through
-    # ``ttnn.transformer.chunk_gated_delta_rule`` over exactly one full chunk with the rows past R
-    # zeroed on device (k = v = 0, beta = 0, g = 0: an identity update).  It reads the committed
-    # recurrent state and never writes it; ``commit_rows`` reruns the kernel over the committed
-    # prefix (beta and g masked by the per-pass selectors) and lands the state in place, then moves
-    # the FIR history forward by accepted + 1 rows with an exact 0/1 selection matmul.  Row-count and row
-    # index never appear as per-pass host arguments: one program set per R, fixed buffers.
+    # ``forward_rows`` runs R consecutive positions in one pass: ``forward_decode``'s ops on CHUNK_SIZE-row tiles and
+    # the recurrence through ``ttnn.transformer.chunk_gated_delta_rule`` over one full chunk, rows past R zeroed (an
+    # identity update). It never writes the committed state; ``commit_rows`` reruns the kernel over the committed
+    # prefix and moves the FIR history forward by accepted + 1 rows. No per-pass host ints: one program set per R.
 
     def allocate_rows_constants(self, rows: int) -> Qwen38TTNNGDNRowsConstants:
         return Qwen38TTNNGDNRowsConstants.allocate(self.mesh_device, self.mesh_contract, rows=rows)
@@ -2500,9 +2417,8 @@ class Qwen38TTNNGDN:
         if _shape(hidden_rows) != (1, 1, tile_rows, HIDDEN_SIZE_PER_DEVICE):
             _require_shape(hidden_rows, (1, 1, rows, HIDDEN_SIZE_PER_DEVICE), label="GDN rows input")
         self.mesh_contract.validate_tensor(hidden_rows, placement=TensorPlacement.HIDDEN_SHARDED, shard_dim=3)
-        # Zero rows up to one tile on device: the projection of a zero row is exactly zero.  The padding
-        # stays inside the input's own tile, so ``ttnn.pad`` returns a view of the input on this runtime
-        # (measured on 4x p150: deallocating it freed the caller's rows); it is never deallocated here.
+        # Zero rows up to one tile on device (the projection of a zero row is exactly zero). ``ttnn.pad`` inside the
+        # input's own tile returns a view of the input, so it is never deallocated here.
         if _shape(hidden_rows)[2] < tile_rows:
             padded = ttnn.pad(
                 hidden_rows,
@@ -2529,12 +2445,9 @@ class Qwen38TTNNGDN:
     def _project_rows_linear(self, full_hidden, rows_state: Qwen38TTNNGDNRowsState):
         """The rows projection itself, with the mesh tags and the shape the rows path checks.
 
-        The DRAM-sharded matmul admits one row tile per call on the pinned runtime: at 32 rows the gathered
-        shard is the call's input; at 128 rows each row tile is moved into the in-proj activation shard and
-        the four projections are concatenated (the same program on the same rows, so row j is bitwise).
-
-        Returns the ``[1, 1, T, 4160]`` projection; the caller owns it -- ``_project_rows`` lands the q|k|v columns
-        and slices z / a / b out of it, the fused rows body hands the whole tile to ``gdn_pre_rows``.
+        The DRAM-sharded matmul admits one row tile per call: at 128 rows each row tile runs the same program and the
+        four projections are concatenated, so row j is bitwise. Returns the ``[1, 1, T, 4160]`` projection; the caller
+        owns it.
         """
 
         tile_rows = rows_state.constants.tile_rows
@@ -2698,13 +2611,10 @@ class Qwen38TTNNGDN:
     def _make_chunk_inputs(self, conv, a, b, rows_state: Qwen38TTNNGDNRowsState) -> None:
         """Write the chunk kernel's inputs into the persistent rows buffers.
 
-        q and k are expanded to the 12 value heads first (``qk_expand``: an exact 0/1 matmul, so the chunk
-        kernel sees H = HV and skips its GQA repeat), then l2-normalized per row in BF16 exactly as
-        ``_recurrent_decode`` does it (rms_norm with eps / head_dim, then head_dim ** -0.5): a copied head
-        normalizes to the same bits, so the kernel reads what the 1-row path's repeat_interleave would
-        have given it.  beta and the log decay use the 1-row arithmetic.  The row masks zero rows >= R
-        (x * 1.0 and x * 0.0 are exact) and are the ops that land in the persistent buffers; the long chunk
-        has no padding rows (every mask is all ones), so its producing ops land in the buffers themselves.
+        q and k are GQA-expanded first (``qk_expand``, exact) and then l2-normalized per row in BF16 exactly as
+        ``_recurrent_decode`` does, so the kernel reads what the 1-row path's repeat_interleave would give it. The row
+        masks zero rows >= R (x * 1.0 and x * 0.0 are exact) and land in the persistent buffers; the long chunk has no
+        padding rows, so its producing ops land in the buffers themselves.
         """
 
         l1 = ttnn.L1_MEMORY_CONFIG
@@ -2778,12 +2688,9 @@ class Qwen38TTNNGDN:
     ):
         """One full-chunk run of the kernel from ``initial_state`` (read only).
 
-        Returns the head-major output ``[VALUE_HEADS_PER_DEVICE, CHUNK_SIZE, HEAD_DIM]`` (TILE, the kernel's
-        own layout and output dtype: FP32 on the pinned runtime, measured on 4x p150; ``output_head_major``
-        skips the composite's untilize / row-major permute) and the FP32 final state
-        ``[1, VALUE_HEADS_PER_DEVICE, HEAD_DIM, HEAD_DIM]`` in a new buffer.  With ``committed_mask`` beta
-        and g of the rows past the committed prefix are zeroed first (the catch-up), which makes those
-        rows an identity update.
+        Returns the head-major output ``[VALUE_HEADS_PER_DEVICE, CHUNK_SIZE, HEAD_DIM]`` (TILE, the kernel's own layout
+        and output dtype, FP32) and the FP32 final state ``[1, VALUE_HEADS_PER_DEVICE, HEAD_DIM, HEAD_DIM]`` in a new
+        buffer. With ``committed_mask`` beta and g past the committed prefix are zeroed first (an identity update).
         """
 
         constants = rows_state.constants
@@ -2941,11 +2848,9 @@ class Qwen38TTNNGDN:
             _deallocate(output)
             output = rows_state.output
         else:
-            # The long chunk folds one 32-row tile at a time: the head-major rows of tile c are a whole-tile
-            # slice whose fold is the same metadata view, gated by the gate's rows of that tile straight into
-            # the out-proj activation shard; the out-proj and its reduce-scatter run per tile (the 32-row
-            # programs on the same rows) and the tiles are copied into the persistent output (concat admits no
-            # output tensor on this runtime).
+            # The long chunk folds one 32-row tile at a time (the same metadata view, gated straight into the out-proj
+            # activation shard); the out-proj and reduce-scatter run per tile with the 32-row programs, and the tiles
+            # are copied into the persistent output (concat admits no output tensor here).
             output_tiles = []
             for start in range(0, tile_rows, CHUNK_SIZE):
                 heads_tile = ttnn.slice(
@@ -3035,19 +2940,16 @@ class Qwen38TTNNGDN:
     ) -> Qwen38TTNNGDNRowsResult:
         """Run ``rows`` consecutive positions from the committed state without committing anything.
 
-        ``hidden_rows`` has local shape ``[1,1,rows,640]`` (hidden sharded).  ``state.recurrent`` is read
-        only; the ring and its phase are not touched (the rows path keeps its own ``history``).  The
-        result's ``final_state`` is the state after all rows in a new buffer.  With ``full_tile`` the result's
-        ``hidden_rows`` is the whole 32-row output tile in a new buffer the caller deallocates (rows past ``rows``
-        exact zeros), not the persistent ``rows_state.output`` slice: the caller that pads the rows back to the
-        tile saves the slice and the pad.
+        ``hidden_rows`` is local ``[1,1,rows,640]``; ``state.recurrent`` is read only and the ring is not touched. The
+        result's ``final_state`` is the state after all rows in a new buffer. With ``full_tile`` the result's
+        ``hidden_rows`` is the whole 32-row output tile in a new buffer the caller frees (rows past ``rows`` zero).
         """
 
         self._validate_state(state)
         rows = self._validate_rows_state(rows_state)
         full_hidden = self._all_gather_rows(hidden_rows, rows)
-        # The body between the gather and the result: today's chain (``rows_body_composed``: the same calls in the
-        # same order) or, on a rows state the verify-rows wrap owns, its two programs around the two chunk prims.
+        # The body between the gather and the result: the chain (``rows_body_composed``) or, on a rows state the
+        # verify-rows wrap owns, its two programs around the two chunk prims.
         body = self._rows_body()
         output, final_state = body(self, full_hidden, rows_state, state, full_tile=full_tile)
         return Qwen38TTNNGDNRowsResult(output, final_state, state, rows_state)
@@ -3180,21 +3082,11 @@ class Qwen38TTNNGDN:
     ) -> None:
         """Commit ``accepted + 1`` rows of the last ``forward_rows`` pass into ``state`` in place.
 
-        The catch-up reruns the chunk kernel from the committed state with beta and g of the rows past the
-        committed prefix zeroed (``selectors.committed_mask``); the resulting state lands in
-        ``state.recurrent`` and the FIR history moves forward by ``accepted + 1`` rows.
-
-        Row 0 (the base token) is always committed, so there is no identity pass: the design's earlier
-        "restore the old state when nothing was accepted" switch (written for the ``arange < a`` mask) has no
-        case left.  The default therefore accepts the kernel's TF32-class state rounding on every commit (the
-        design's decision: 4.9e-4 on a passthrough, below the kernel's own 2.1e-3 state error).  The switch
-        kept in its place, ``step_on_full_rejection``, commits a full rejection (one row) through the 1-row
-        FP32 step arithmetic instead, selected exactly against the kernel's result
-        (``step * [a == 0] + chunk * [a != 0]``); it is a diagnostic for a state divergence that tracks full
-        rejections and costs about 20 more ops per layer.  ``step_committed_rows`` (the state re-anchor)
-        replaces the kernel's committed state altogether: every committed row goes through the 1-row FP32 step
-        arithmetic (``_step_committed_rows_state``), so the committed state is the 1-row path's; the chunk
-        kernel is not rerun.  About ``rows`` x 16 + 3 ``rows`` ops per layer.
+        The catch-up reruns the chunk kernel from the committed state with beta and g past the committed prefix zeroed,
+        lands the state in ``state.recurrent`` and moves the FIR history forward by ``accepted + 1`` rows. Row 0 is
+        always committed, so every commit takes the kernel's state rounding. ``step_on_full_rejection`` (a diagnostic)
+        commits a full rejection through the 1-row FP32 step arithmetic instead; ``step_committed_rows`` (the state
+        re-anchor) steps every committed row through it and does not rerun the kernel.
         """
 
         self._validate_state(state)
@@ -3570,11 +3462,9 @@ class Qwen38TTNNGDN:
 
         rows = self._validate_lane_rows_state(rows_state, state)
         full_hidden = self._all_gather_rows(hidden_rows, rows)
-        # The body between the gather and the result, dispatched exactly as ``forward_rows`` dispatches the single
-        # stream's: the verify-rows fold's registry step (``fused.resolve_admitted("gdn_rows_scan")``, resolved once)
-        # runs the fold's lanes form on a lane rows state that carries its buffers and the lanes chain
-        # (``_rows_body_lanes_chain``, the fold's composed fallback for a lane rows state) otherwise --
-        # QWEN38_FUSED_OFF=gdn_rows_scan restores the chain for both streams.
+        # The body between the gather and the result, dispatched as ``forward_rows`` dispatches it: the verify-rows
+        # fold's lanes form on a lane rows state that carries its buffers, else the lanes chain
+        # (``_rows_body_lanes_chain``); QWEN38_FUSED_OFF=gdn_rows_scan restores the chain for both streams.
         body = self._rows_body()
         output, final_state = body(self, full_hidden, rows_state, state)
         _require_shape(output, (1, 1, CHUNK_SIZE, HIDDEN_SIZE_PER_DEVICE), label="GDN lane rows output tile")
@@ -3611,12 +3501,10 @@ class Qwen38TTNNGDN:
     ) -> None:
         """Commit ``c_u`` rows of the last ``forward_rows_lanes`` pass into lane u's state in place.
 
-        The catch-up reruns the recurrence (``_chunk_rows_lanes``) from the committed states with every lane's beta and
-        g masked past its committed prefix; the final states land in ``state.recurrent`` through the exact fp32 0/1
-        select ``recurrent * [c_u == 0] + final * [c_u >= 1]`` (a lane committing nothing -- inactive, or seeded and not
-        yet verified -- keeps its recurrent bitwise: the masked rerun is an identity only to TF32 precision), and every
-        lane's FIR history moves forward by ``c_u`` rows with one equal-batch 0/1 selection matmul (the KEEP row copies
-        an inactive lane's history unchanged).
+        The recurrence reruns from the committed states with every lane's beta and g masked past its prefix; the final
+        states land through the exact select ``recurrent * [c_u == 0] + final * [c_u >= 1]`` (a lane committing nothing
+        keeps its state bitwise; the masked rerun is an identity only to TF32 precision), and each lane's FIR history
+        moves forward by ``c_u`` rows.
         """
 
         rows = self._validate_lane_rows_state(rows_state, state)
@@ -3651,7 +3539,7 @@ class Qwen38TTNNGDN:
 
 
 def validate_gdn_static_contract() -> None:
-    """No-device invariant gate used by static bring-up tests."""
+    """No-device invariant gate used by the static tests."""
 
     exact = {
         "TP_SIZE": TP_SIZE,

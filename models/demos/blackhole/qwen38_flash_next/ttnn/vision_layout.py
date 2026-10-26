@@ -3,13 +3,9 @@
 
 """Host-side layout of the vision tower's weights and rotary tables for the device (pure torch, no TTNN import).
 
-Head dim 72 is not a tile multiple.  q, k and v are zero-padded to 96 per head inside the fused qkv projection's
-output columns, the attention output projection takes the padded head concatenation as its input rows, and q and k
-are permuted inside each head to the interleaved rotary layout (the rotate-half pair (i, i + 36) becomes the adjacent
-pair (2i, 2i + 1)) so the device rotary op's 32x32 pair-swap transformation reproduces rotate-half exactly; v and the
-output projection keep the checkpoint order (q . k is invariant under one permutation of both).  The MLP width 4304
-is zero-padded to 4320.  Row counts are padded to tile multiples; cos / sin carry the identity rotation (cos 1, sin 0)
-in the padded head columns and the padded rows.
+Head dim 72 is zero-padded to 96 inside the fused qkv columns. q and k are permuted within each head to the
+interleaved rotary layout (pair (i, i + 36) -> (2i, 2i + 1)) so the device rotary op reproduces rotate-half; v and
+the output projection keep checkpoint order. MLP width 4304 is padded to 4320; cos / sin are identity in all pads.
 """
 
 from __future__ import annotations
@@ -37,7 +33,7 @@ def interleave_permutation(head_dim: int) -> torch.Tensor:
 
 
 def rotary_transformation_tile() -> torch.Tensor:
-    """``[1, 1, 32, 32]``: ``x @ T`` maps the pair ``(a, b)`` at ``(2i, 2i + 1)`` to ``(-b, a)`` (rotate-half on pairs)."""
+    """``[1, 1, 32, 32]``: ``x @ T`` maps the pair ``(a, b)`` at ``(2i, 2i + 1)`` to ``(-b, a)``."""
 
     matrix = torch.zeros(1, 1, TILE, TILE, dtype=torch.float32)
     matrix[..., torch.arange(0, TILE, 2), torch.arange(1, TILE, 2)] = 1.0
@@ -46,7 +42,7 @@ def rotary_transformation_tile() -> torch.Tensor:
 
 
 def interleave_cos_sin(cos: torch.Tensor, sin: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Rotate-half ``[N, head_dim]`` cos / sin (``[c_0..c_35, c_0..c_35]``) -> interleaved (``[c_0, c_0, c_1, c_1, ..]``)."""
+    """Rotate-half ``[N, head_dim]`` cos / sin -> interleaved (``[c_0, c_0, c_1, c_1, ..]``)."""
 
     half = cos.shape[-1] // 2
     return cos[..., :half].repeat_interleave(2, dim=-1), sin[..., :half].repeat_interleave(2, dim=-1)
@@ -69,7 +65,7 @@ def device_cos_sin(
 
 
 def rotate_interleaved(x: torch.Tensor, cos_meta: torch.Tensor, sin_meta: torch.Tensor) -> torch.Tensor:
-    """What the device rotary computes on interleaved ``[.., N, D]`` input (D a tile multiple): ``x cos + (x T) sin``."""
+    """Device rotary on interleaved ``[.., N, D]`` input (D a tile multiple): ``x cos + (x T) sin``."""
 
     width = x.shape[-1]
     if width % TILE:
@@ -190,8 +186,7 @@ def block_layout(
 
 
 def tower_layout(state_dict: Mapping[str, torch.Tensor], config: VisionTowerConfig) -> dict[str, object]:
-    """Every device-resident tensor of the tower as FP32 host tensors in device layout (the position table stays a
-    host table: its per-grid resampling is host work)."""
+    """Every device-resident tensor of the tower as FP32 host tensors in device layout (position table stays host)."""
 
     patch_w, patch_b = padded_linear(
         state_dict["patch_embed.proj.weight"].reshape(config.hidden_size, config.patch_dim),

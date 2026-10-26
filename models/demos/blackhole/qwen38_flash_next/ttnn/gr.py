@@ -3,37 +3,10 @@
 
 """Exact TP4 gated residual for Qwen3.8-Flash-Next decode.
 
-The persistent residual is represented as ``[1, 4, 1, 640]`` on every
-coordinate.  The last dimension is the coordinate's slice of hidden size and
-dimension one is the four hyper-connection branches.  Keeping the branch axis
-explicit is important: sharding a flattened branch-major 10,240 vector would
-put a different complete branch, rather than every branch's hidden slice, on
-each device.  The branch axis leads (each branch owns its own tile row-block)
-so the gate multiply consumes the residual directly, with no per-read branch
-permute, and the same tiles read as one ``[1, 1, 1, 2560]`` row indexed
-(branch, local hidden) for the decode matmuls.
-
-Two exact host folds keep the read short.  The 1/4 branch mean is folded into
-the RMS gamma (a power-of-two scale commutes with BF16 rounding), so the
-normalized residual, both projections, the gate product and the branch mean
-all carry the mean with no device multiply.  The up weight's K is zero-padded
-to the fused row width so the reduced row feeds it whole, with no slice.
-
-The two elementwise producers that feed the decode matmuls write the matmul
-activation layouts directly: the gamma multiply lands in the down+inject
-matmul's five-core width-sharded L1 row and the SiLU in the up matmul's
-two-core row, so no interleaved-to-sharded copy precedes either matmul.  The
-five-core shard is defined on the flat row (five 512-column shards do not
-divide the 640-column branch-major view), so the gamma multiply and the gate
-multiply both run on the flat row and the branch reduce reads the product
-through the branch-major view.
-
-The down and injection projections are row-parallel over that flat row.  Their
-outputs are local partial sums until an explicit all-reduce over mesh axis 1.
-They must never be treated as replicated merely because every coordinate has
-the same local shape.  Both partials come out of one matmul and cross the mesh
-in one collective: the injection columns ride as the eleventh tile of the
-rank-320 down row and are sliced back out after the reduce.
+The persistent residual is ``[1, 4, 1, 640]`` per coordinate (dim 1: the four hyper-connection branches, each holding
+the coordinate's hidden slice); its tiles also read as one flat ``[1, 1, 1, 2560]`` (branch, local hidden) row for the
+decode matmuls. The 1/4 branch mean is folded into the RMS gamma (a power-of-two scale is exact in BF16). The down and
+injection projections are row-parallel: their outputs are partial sums until the explicit all-reduce.
 """
 
 from __future__ import annotations
@@ -229,13 +202,9 @@ def _validate_exact_config(source: Qwen38GatedResidualWeights) -> None:
 def _prepare_host_weights(source: Qwen38GatedResidualWeights) -> dict[str, torch.Tensor]:
     """Put every weight in its device-local decode layout before mesh sharding.
 
-    The sharded axis of each matmul weight is ordered (device, branch, local
-    hidden): device ``d`` receives rows/columns ``[2560 d, 2560 (d + 1))``, its
-    hidden slice of all four branches in flat-row order.  ``down`` and
-    ``inject`` stack their four input-branch blocks along K into one weight
-    whose N is the fused partial row (ten rank tiles, the injection tile, a
-    zero tile); ``up`` stacks its four output-branch blocks along N and
-    zero-pads its K to that row.  The 1/4 branch mean lives in ``norm_scale``.
+    Each matmul weight's sharded axis is ordered (device, branch, local hidden). ``down`` and ``inject`` stack their
+    input-branch blocks along K into one weight whose N is the fused partial row (ten rank tiles, the injection tile, a
+    zero tile); ``up`` stacks its output-branch blocks along N with K zero-padded to that row.
     """
 
     _validate_exact_config(source)
@@ -246,11 +215,8 @@ def _prepare_host_weights(source: Qwen38GatedResidualWeights) -> dict[str, torch
     )
     up_pad = torch.zeros(PARTIAL_WIDTH - RESIDUAL_RANK, TP_SIZE * FLAT_LOCAL_WIDTH, dtype=source.up.dtype)
     prepared = {
-        # Qwen4Exp uses zero-centred RMSNorm: gamma = 1 + checkpoint weight.
-        # Preserve the addition in FP32 and fold in the 1/4 branch mean (an
-        # exact exponent shift); the normalized activation is cast back to
-        # BF16 only after this multiplication.  Branch-major to match the
-        # persistent residual layout.
+        # Zero-centred RMSNorm: gamma = 1 + checkpoint weight, kept in FP32 with the 1/4 branch mean folded in (an
+        # exact exponent shift); the activation is cast to BF16 only after this multiply. Branch-major, as the residual.
         "norm_scale": ((1.0 + norm.float()) / RESIDUAL_BRANCHES)
         .reshape(1, RESIDUAL_BRANCHES, 1, HIDDEN_SIZE)
         .contiguous(),
@@ -308,7 +274,7 @@ class Qwen38TTNNGatedResidualWeights:
     block: Literal["attn", "mlp"]
     namespace: Literal["backbone", "mtp"]
     # norm_scale with its one row repeated over the 32 tile rows, [1, 4, 32, local] fp32: the fused read's gamma
-    # operand (its reader streams tiles as they are; copying the row on the RISC cost 175 us per read).
+    # operand (its reader streams tiles as they are).
     norm_scale_rows: Any = None
 
     @classmethod
@@ -487,18 +453,18 @@ class Qwen38TTNNGatedResidual:
         # The gamma multiply runs on the flat row (see _normalize); this view
         # shares the resident weight's buffer.
         self.norm_scale_flat = ttnn.experimental.view(weights.norm_scale, FLAT_LOCAL_SHAPE)
-        # The read resolves through the fused registry at construction (ttnn/fused/gr_read when it is on: in
-        # registry.DEFAULT_ON or QWEN38_FUSED=gr_read; QWEN38_FUSED_OFF keeps the chain) and stays so through trace capture; the class body of
-        # read() is the composed chain the fused kernel is gated against.
+        # The read resolves through the fused registry at construction (ttnn/fused/gr_read when on by default or via
+        # QWEN38_FUSED=gr_read; QWEN38_FUSED_OFF keeps the chain) and stays so through trace capture. read() is the
+        # composed chain the fused kernel is gated against.
         from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
 
         self._read_fused = None
         if fused_kernels.enabled("gr_read"):
             name = "gr_read"
             if fused_kernels.enabled("gr_recip_last"):
-                # the COMPONENT-class front (ttnn/fused/gr_recip_last: the rsqrt applied after the down projection, on
-                # by default) runs on gr_fold's line transports, whose global semaphores must exist before any trace
-                # capture; QWEN38_FUSED_OFF=gr_recip_last keeps gr_read's stock collectives
+                # The COMPONENT-class front ttnn/fused/gr_recip_last (the rsqrt after the down projection) runs on
+                # gr_fold's line transports, whose global semaphores must exist before any trace capture;
+                # QWEN38_FUSED_OFF=gr_recip_last keeps gr_read's stock collectives.
                 name = "gr_recip_last"
                 fused_kernels.gr_fold.line_semaphores(mesh_device)
             self._read_fused = fused_kernels.kernel(name).fused
@@ -640,13 +606,9 @@ class Qwen38TTNNGatedResidual:
         )
         _deallocate(gathered_stats)
         self.mesh_contract.validate_tensor(unit, placement=TensorPlacement.HIDDEN_SHARDED, shard_dim=3)
-        # The fused post kernel accepts one hidden-width gamma vector and
-        # broadcasts it over the row axis.  Qwen3.8 instead has a distinct
-        # learned scale for each of its four hyper-connection branches, so
-        # apply the full branch-major scale elementwise after computing the
-        # unscaled RMS unit.  norm_scale already carries the 1/4 branch mean.
-        # The multiply reads both operands through their flat views (the same
-        # tile pages) and writes the down+inject activation shard directly.
+        # The fused post kernel broadcasts one hidden-width gamma over the rows, but each branch has its own scale, so
+        # the branch-major scale (carrying the 1/4 mean) is applied elementwise after the unscaled RMS unit, through
+        # the flat views, straight into the down+inject activation shard.
         normalized_ws = ttnn.multiply(
             ttnn.experimental.view(unit, FLAT_LOCAL_SHAPE),
             self.norm_scale_flat,
@@ -741,10 +703,8 @@ class Qwen38TTNNGatedResidual:
         gated_flat = ttnn.multiply(normalized_ws, gate_flat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         _deallocate(gate_flat, normalized_ws)
         gated = ttnn.experimental.view(gated_flat, RESIDUAL_LOCAL_SHAPE)
-        # Branch mean without a permute: fast_reduce_nc sums the four branch
-        # tile row-blocks (generic dim-1 reduce would transpose); the 1/4 is
-        # already in normalized_ws.  fast_reduce_nc reports the 32-row tile
-        # padding as its logical row count; restore the logical shape without
+        # Branch mean without a permute: fast_reduce_nc sums the four branch row-blocks (the 1/4 is already in
+        # normalized_ws). It reports the 32-row tile padding as its row count; restore the logical shape without
         # moving data.
         gated_sum = ttnn.experimental.fast_reduce_nc(
             gated,
@@ -792,12 +752,9 @@ class Qwen38TTNNGatedResidual:
         return output
 
     # ------------------------------------------------------------------ rows path (prefill chunk)
-    # read_rows / write_rows are read / write over the rows of one chunk (32 or 128): the same ops row
-    # for row (every op is per row or per element), with the two zero-copy views replaced by real
-    # permutes at 32 rows and by branch slices + concats at 128.  The two DRAM-sharded matmuls read one
-    # 32-row tile per call on this runtime: at 32 rows the tile is the chunk, at 128 rows the four row
-    # tiles run the same program one after another (row j sees the same program on the same values either
-    # way) and their FP32 partials are reduced over TP in one collective.  The 1-row bodies above are untouched.
+    # read_rows / write_rows are read / write over the rows of one chunk (32 or 128), row for row; the zero-copy views
+    # become permutes at 32 rows and branch slices + concats at 128. The DRAM-sharded matmuls read one 32-row tile per
+    # call, so at 128 rows the four row tiles run the same program and every row matches the 32-row result.
 
     def _validate_rows(self, tensor, expected: tuple[int, ...], *, label: str) -> None:
         if _shape(tensor) != expected or tensor.layout != ttnn.TILE_LAYOUT or tensor.dtype != ttnn.bfloat16:
@@ -809,11 +766,9 @@ class Qwen38TTNNGatedResidual:
     def read_rows(self, residual_rows, *, flat_views: bool = False) -> tuple[Any, Qwen38TTNNGatedResidualState]:
         """:meth:`read` for the residual rows ``[1,4,rows,640]`` of a chunk -> block rows ``[1,1,rows,640]``.
 
-        ``flat_views``: the branch-major <-> flat walks as the 1-row read's ``ttnn.experimental.view`` (every branch
-        is one 32-row tile row, so the branch-major tile sequence is the flat rows' tile sequence: the same pages,
-        no permute and no relayout; the forms of at most 32 rows: the chunk and the batched lanes); the default keeps
-        the permutes (the prefill chunks' form, 32 or 128 rows).  Below 32 rows (B lanes) every flat tensor is one
-        padded tile and the two fast_reduce_nc calls report the tile as their row count: the logical rows are restored.
+        ``flat_views`` (at most 32 rows) walks branch-major <-> flat through ``ttnn.experimental.view`` (the same
+        pages); the default permutes. Below 32 rows the fast_reduce_nc results report the padded tile as their rows
+        and the logical rows are restored.
         """
 
         rows = _shape(residual_rows)[2]  # residual_rows_shape admits 1..32, 128 and the slab counts
@@ -865,7 +820,7 @@ class Qwen38TTNNGatedResidual:
             unit_flat = ttnn.reshape(unit_tokens, flat_rows_shape)
             if not same_buffer(
                 unit_flat, unit_tokens
-            ):  # a copy today (the last dim changes); never free a view's source
+            ):  # the reshape copies when the last dim changes; never free a view's source
                 _deallocate(unit_tokens)
         if _shape(unit_flat) != flat_rows_shape or _padded_shape(unit_flat) != flat_rows_padded:
             raise RuntimeError(
@@ -943,9 +898,9 @@ class Qwen38TTNNGatedResidual:
                 f"GR rows partial must be FP32 TILE DRAM {partial_rows_shape}; "
                 f"got {_shape(partial)}/{_padded_shape(partial)} {partial.dtype} {partial.layout}"
             )
-        # The 1-row partial reduction over the row tiles: the same gather + fast reduce, the logical shape
-        # already the padded one.  The slab gathers the same [4, rows, 384] fp32 bytes into the same page order by
-        # the generic all_gather (0.23 ms per read against the async op's 0.59).
+        # The 1-row partial reduction over the row tiles: the same gather + fast reduce, the logical shape already the
+        # padded one. The slab gathers the same [4, rows, 384] fp32 bytes in the same page order with the generic
+        # all_gather, which is faster there than the async op.
         if slab:
             gathered = ttnn.all_gather(partial, dim=0, cluster_axis=TP_AXIS, memory_config=dram)
         else:
@@ -1063,7 +1018,7 @@ class Qwen38TTNNGatedResidual:
             _deallocate(*branches)
         else:
             gated_tokens = ttnn.reshape(gated_flat, (1, rows, RESIDUAL_BRANCHES, LOCAL_HIDDEN_SIZE))
-            if not same_buffer(gated_tokens, gated_flat):  # a copy today (the last dim changes)
+            if not same_buffer(gated_tokens, gated_flat):
                 _deallocate(gated_flat)
             gated = ttnn.permute(gated_tokens, (0, 2, 1, 3), memory_config=dram)
             _deallocate(gated_tokens)

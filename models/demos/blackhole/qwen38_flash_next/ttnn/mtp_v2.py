@@ -1,43 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""MTP v2: the traced (k + 1)-row verify pass of the speculative decode (design sections 2.3, 2.4, 2.6, 2.7).
+"""MTP v2: the traced (k + 1)-row verify pass of the speculative decode.
 
-One pass at the device position ``P`` runs the R = k + 1 rows ``[t_P, d_1 .. d_k]`` through all 48 layers on
-32-row tiles (rows R .. 31 are zero embedding rows; every op is per row or masked), resolves the R greedy ids
-on device, accepts the longest matching draft prefix (``a`` in 0 .. k, exact integer arithmetic), feeds the R
-target roots and the R target predictions ``[argmax_0 .. argmax_k]`` (row a's is ``t'``) through the MTP alignment
-layer, and ends with ``P <- P + a + 1``.  The host reads one FP32 row per pass: ``[a, t', d_1', argmax_0 .. argmax_31]``.
-
-State after a partial accept, without snapshots:
-
-* GDN recurrent state and FIR history, PLE conv history, QSA raw-key history: committed at the START of the
-  next pass from the device accept count (``catch_up=True``): every layer first replays its committed prefix
-  (``commit_rows`` / ``commit_verify`` with the pass's ``build_rows_selectors``) and then runs the new rows.
-  The first pass after an eager mode switch runs with ``catch_up=False`` (its histories come from the eager
-  seed), so the two bodies are captured as two traces.
-* QSA KV rows and compressed blocks: written by absolute position every pass and never rolled back; rows and
-  blocks past the accepted prefix are finite garbage that the next pass rewrites before any sparse row or
-  indexer mask can expose them (``ttnn/qsa.py``, the verify section).
-* The MTP alignment layer's caches follow the same rule at positions P .. P + k; the next draft trace starts
-  from row ``a`` of its residuals (``alignment.residual``).
-
-The draft body (design section 2.5, :func:`forward_draft`) runs the k - 1 MTP rows at MTP positions
-P .. P + k - 2 with a device token chain (d_1 out of the verify readback row, later ids the previous row's
-argmax) and assembles the next verify pass's token row and draft lanes on device, so the host segment of a pass
-is one 128-byte readback of the assembled ids and the PLE n-gram lookup + upload for the R rows
-(:func:`write_verify_ple_rows`).  :func:`forward_commit` is the split form of the catch-up (all commits as one
-body, replayed while the host does the lookup); :class:`Qwen38TTNNMTPChain` is the pass loop over the traces.
-
-The split verify (:func:`forward_verify_head` / :func:`forward_verify_tail`) is the same pass with the decision on the
-host: the head stops after the device accept and reads back ``[a, t', argmax_0 .. argmax_31 | per-row candidates]``
-(the k + 1 rows' top-32-per-shard logits and ids, the epilogue of ``Qwen38TTNNLMHead.sampling_candidates`` on rows);
-the host writes ``(a*, x*)`` and the alignment rows' tokens (:func:`write_verify_decision`: the device's own ``(a, t')``
-and the argmax lanes on the greedy path, bitwise the fused body; a sampled request's point-mass acceptance,
-``ttnn/speculative_sampling.py``, otherwise); the tail runs the alignment on the head's retained roots with those
-tokens, lands the accept scalar and advances ``P``.  The fused :func:`forward_verify` stays the default.
-
-The 1-row production paths are untouched: everything here is a new entry point over the layers' rows paths.
+One pass at device position ``P`` runs the R = k + 1 rows ``[t_P, d_1 .. d_k]`` through all 48 layers on 32-row tiles
+(rows R .. 31 are zero embedding rows), resolves the R greedy ids on device, accepts the longest matching draft prefix
+``a``, runs the MTP alignment layer on the target roots and predictions, and ends with ``P <- P + a + 1``. No
+snapshots: GDN, PLE and QSA raw histories commit at the start of the next pass from the device accept count
+(``catch_up=True``); QSA KV rows and compressed blocks past the accepted prefix are finite garbage that the next pass
+rewrites before any sparse row or indexer mask can expose them.
 """
 
 from __future__ import annotations
@@ -99,10 +70,9 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.ple import (
     Qwen38TTNNPLERowsState,
 )
 
-# k = 3 and 4 run the 5-row verify MoE form, k = 5 the 32-row form (``moe_rows_for``, which holds every k up to 31);
-# the QSA verify path admits k + 1 <= qsa.VERIFY_MAX_ROWS = 6 rows per pass (two compressed blocks completed, two KV
-# blocks spanned, so the op sequence never depends on P), so k = 5 is the largest draft count until that path is
-# proven wider on silicon.
+# k = 3 and 4 run the 5-row verify MoE form, k = 5 its own (``moe_rows_for``). The QSA verify path admits
+# k + 1 <= qsa.VERIFY_MAX_ROWS = 6 rows per pass (two compressed blocks completed, two KV blocks spanned, so the op
+# sequence never depends on P), which caps k at 5.
 SUPPORTED_DRAFTS = (3, 4, 5)
 DEFAULT_DRAFTS = 4
 RESIDUAL_ROWS_SHAPE = (1, RESIDUAL_BRANCHES, CHUNK_ROWS, LOCAL_HIDDEN_SIZE)
@@ -206,7 +176,7 @@ def _pad_rows(tensor, rows: int, *, label: str):
     return padded
 
 
-# --------------------------------------------------------------------------- device accept (design 2.6)
+# --------------------------------------------------------------------------- device accept
 
 
 @dataclass(frozen=True)
@@ -296,11 +266,9 @@ class Qwen38TTNNAcceptResult:
 def accept_rows(argmax_lanes, draft_lanes, constants: Qwen38TTNNAcceptConstants) -> Qwen38TTNNAcceptResult:
     """The accept count and the next token from the verify argmaxes and the uploaded drafts, exact integers.
 
-    ``argmax_lanes`` (lane j = argmax of verify row j) and ``draft_lanes`` (lane j = d_{j+1} for j < k, else
-    ``ZERO_EMBEDDING_TOKEN``) are FP32 ROW_MAJOR ``[1,1,1,32]``.  ``eq`` gives the k match flags (lanes >= k
-    are 0), the prefix matmul their running counts, a second ``eq`` the lanes whose prefix is all ones, and the
-    sum of those lanes is ``a``.  The next token is a 32-bit ``ttnn.gather`` copy of lane ``a``: no id ever
-    enters an FPU or reduce stage (TF32 would round ids >= 2048).
+    ``argmax_lanes`` and ``draft_lanes`` are FP32 ROW_MAJOR ``[1,1,1,32]``; ``a`` is the sum of the lanes whose match
+    prefix is all ones. The next token is a 32-bit ``ttnn.gather`` copy of lane ``a``: no id enters an FPU or reduce
+    stage (TF32 would round ids >= 2048).
     """
 
     for name, lanes in (("verify argmax lanes", argmax_lanes), ("draft lanes", draft_lanes)):
@@ -390,15 +358,13 @@ class Qwen38TTNNVerifyAlignment:
 
 @dataclass(frozen=True)
 class Qwen38TTNNVerifySplit:
-    """The split verify's buffers beside the verify state.  Host-written per pass (:func:`write_verify_decision`,
-    between the head and the tail): ``accept_tile`` FP32 TILE ``[1,1,1,1]`` and ``accept_index`` UINT32 ROW_MAJOR
-    ``[1,1,1,1]`` = ``a*``, ``next_token`` FP32 ROW_MAJOR ``[1,1,1,1]`` = ``x*``, ``alignment_tokens`` FP32 ROW_MAJOR
-    ``[1,1,1,32]`` = ``[d_1 .. d_a*, x*, ZERO_EMBEDDING_TOKEN ...]``.  Device-written by the head:
-    ``candidates_readback`` FP32 ROW_MAJOR ``[1,1,rows,256]``, the persistent copy of the rows' candidate rows
-    (``candidates_constants`` are the sampling chain's: the shard start scalar the ids are rebased by).  Device-written
-    by the accept program of the device-decided form (:func:`forward_verify_sampled`): ``statistics`` FP32 ROW_MAJOR
-    ``[1,1,1,16]``, ``fused.mtp_accept``'s lanes (the rows' draft weights and kept totals, the guard mask, the
-    resample flag, a*, x*, theta, the drawing row's kept count), read once per pass for the ledger."""
+    """The split verify's buffers beside the verify state.
+
+    Host-written between the head and the tail (:func:`write_verify_decision`): ``accept_tile`` / ``accept_index``
+    (``a*``), ``next_token`` (``x*``) and ``alignment_tokens`` (``[d_1 .. d_a*, x*, ZERO_EMBEDDING_TOKEN ...]``).
+    Device-written: ``candidates_readback`` ``[1,1,rows,256]`` by the head, and ``statistics`` ``[1,1,1,16]`` by the
+    accept program of :func:`forward_verify_sampled` (read once per pass for the ledger).
+    """
 
     candidates_constants: Qwen38TTNNSamplingCandidateConstants
     candidates_readback: Any
@@ -470,13 +436,9 @@ class Qwen38TTNNVerifySplit:
 class Qwen38TTNNVerifyState:
     """Fixed-address buffers of the verify body, allocated beside the generic state before any capture.
 
-    Host-written per pass (outside the traces): ``token_row`` FP32 TILE ``[1,1,1,32]`` (lane j = token j of
-    ``[t_P, d_1 .. d_k]``, then ``ZERO_EMBEDDING_TOKEN``), ``draft_lanes`` FP32 ROW_MAJOR ``[1,1,1,32]`` (lane
-    j = d_{j+1} for j < k, then ``ZERO_EMBEDDING_TOKEN``) and ``ple_rows`` (the R n-gram rows).  Device-written:
-    ``accepted`` FP32 TILE ``[1,1,1,1]`` (the pass's accept count, read by the next pass's commits).
-    ``moe_rows`` is every layer's verify MoE row count (``moe_rows_for(rows)`` unless the allocation was given
-    an explicit override); ``gdn_step_anchor_layers`` the GDN layers whose commits run the state re-anchor.
-    ``split`` holds the split verify's buffers when the chain decides its passes on the host, else None.
+    Host-written per pass: ``token_row`` (``[t_P, d_1 .. d_k]``, then ``ZERO_EMBEDDING_TOKEN``), ``draft_lanes``
+    (``d_{j+1}`` for j < k) and ``ple_rows``. Device-written: ``accepted``, read by the next pass's commits. ``split``
+    holds the split verify's buffers when the chain decides its passes on the host, else None.
     """
 
     drafts: int
@@ -519,18 +481,14 @@ class Qwen38TTNNVerifyReadback:
     argmaxes: tuple[int, ...]
 
 
-# The 6-row verify MoE form (k = 5 on its own tile rows instead of the 32-row chunk feed) proven on silicon
-# 2026-09-26: the component discriminator on the four-die line reads the 6-row MoE output, routing scores and
-# indices bitwise against six 1-row steps (the 5-row control identical in form), the mixers bitwise, the accept
-# chain exact, the GDN rows tool at 6 = the 5-row control. Its admission states term is measured (2026-09-26, the
-# first served 6-row open's growth over the 5-row form; tools/qwen38_chat_session.py).
+# The 6-row verify MoE form (k = 5) was checked bitwise against six 1-row steps on device.
 ROWS6_HARDWARE_PROVEN = True
 
 
 def moe_rows_for(rows: int) -> int:
-    """The smallest admitted MoE row count that holds ``rows`` (5 for k = 3 and 4; 6 for k = 5 since the 6-row form's
-    silicon proof, ROWS6_HARDWARE_PROVEN; 32 for rows 7..32); a verify pass is one 32-row tile, so the 128-row prefill
-    form is not a candidate."""
+    """The smallest admitted MoE row count that holds ``rows`` (5 for k = 3 and 4, 6 for k = 5, 32 for 7..32).
+
+    A verify pass is one 32-row tile, so the 128-row prefill form is not a candidate."""
 
     # The verify forms proven on silicon: 5, 6 (behind ROWS6_HARDWARE_PROVEN) and 32 rows.  SUPPORTED_ROWS also admits
     # the batched lanes' 1..32, which are not verify candidates (the choice is pinned by the MTP tables).
@@ -751,12 +709,9 @@ def allocate_verify_state(
 ) -> Qwen38TTNNVerifyState:
     """Allocate the verify constants and every layer's verify buffers beside ``state`` (before any capture).
 
-    ``mtp_components`` (the builder's ``decoder_layer`` / ``input_mixer`` / ``final_mixer``) enables the
-    alignment rows; without it the pass reports ``first_draft = None`` and skips the MTP layer.  Every layer's verify
-    MoE row count is :func:`moe_rows_for`; ``gdn_step_anchor_layers`` names
-    the GDN layers whose commits run the committed rows through the 1-row FP32 step recurrence (the state
-    re-anchor) instead of the chunk kernel.  ``candidates_constants`` (the sampling chain's) adds the split
-    verify's buffers (:class:`Qwen38TTNNVerifySplit`) for a chain that decides its passes on the host.
+    ``mtp_components`` (the builder's) enables the alignment rows; without it the pass reports ``first_draft = None``.
+    ``gdn_step_anchor_layers`` names the GDN layers whose commits use the 1-row FP32 step recurrence;
+    ``candidates_constants`` adds the split verify's buffers (:class:`Qwen38TTNNVerifySplit`).
     """
 
     if drafts not in SUPPORTED_DRAFTS:
@@ -1119,12 +1074,9 @@ def _forward_layer_verify(
 ):
     """One layer of the verify pass on the 32-row tile; the input rows are consumed.
 
-    Commit first, then the new rows: with ``selectors`` (``catch_up=True``) the PLE, the GDN and the QSA raw
-    history commit the previous pass's accepted prefix out of their own persistent buffers before those buffers
-    are overwritten.  PLE runs on the R real rows (a copy slice at row 0), the MoE on its admitted row count
-    (a slice landing in the persistent ``moe_input``); both come back to the 32-row tile through an in-place
-    pad whose result is a view (never deallocated; the owner is).  The GR reads walk branch-major <-> flat rows
-    through ``ttnn.experimental.view`` (``flat_views``: the same tile pages, no permute or relayout kernels).
+    With ``selectors`` (``catch_up=True``) the PLE, GDN and QSA raw history first commit the previous pass's accepted
+    prefix out of their persistent buffers, then the new rows run. PLE and the MoE run on sliced real rows and come
+    back to the tile through an in-place pad whose result is a view (never deallocated; the owner is).
     """
 
     rows = layer_verify.rows
@@ -1229,13 +1181,10 @@ def _embed_rows(model: Qwen38TTNNTextModel, token_row):
 
 def _resolve_rows(model: Qwen38TTNNTextModel, hidden_rows, *, rows: int, sentinel_tail, retain: list | None = None):
     """Final-mixer output rows -> the ``rows`` real rows -> LM head -> the FP32 ROW_MAJOR ``[1,1,1,32]`` row of
-    per-row global greedy ids (lanes past ``rows`` hold ``ZERO_EMBEDDING_TOKEN`` from ``sentinel_tail``).
+    per-row global greedy ids (lanes past ``rows`` hold ``ZERO_EMBEDDING_TOKEN``).
 
-    The LM head, the local candidates (the argmax over the vocabulary, the head's cost, scales with the rows) and
-    the resolve run on the real rows alone: the 32-row forms' first rows, bitwise.  The row slice at row 0 is a
-    copy on this runtime (the PLE layer's form); the padding rows never reach the head.  ``retain`` (a list)
-    receives the sharded logits instead of their release: the split verify's head keeps them for its candidates
-    epilogue and the host's full-row fallback.
+    The head runs on the real rows alone, bitwise the 32-row forms' first rows. ``retain`` (a list) receives the
+    sharded logits instead of their release (the split verify's head keeps them).
     """
 
     lm_head = model.model_io.lm_head
@@ -1276,15 +1225,12 @@ def _forward_alignment(
     qsa_verify,
     selectors,
 ):
-    """The R alignment rows at P .. P + k: row j takes the target root at P + j and the target's own prediction
-    there, ``argmax_j`` (the token at P + j + 1: the accepted draft ``d_{j+1}`` for j < a, ``t'`` for j = a), through
-    the MTP layer; returns ``d_1'`` (lane ``a`` of its argmaxes) and lands row ``a`` of its residuals in
+    """The R alignment rows at P .. P + k: row j takes the target root at P + j and the target's prediction there,
+    ``argmax_j``; returns ``d_1'`` (lane ``a`` of its argmaxes) and lands row ``a`` of its residuals in
     ``alignment.residual``.
 
     The tokens must be the argmaxes, not the shifted verify tokens ``[d_1 .. d_k, t']``: that form gives row a the
-    rejected draft ``d_{a+1}`` whenever a < k, so ``d_1'`` (and every draft grown from it) predicts the successor of
-    a token the pass never committed.  Rows past a are speculative and rewritten by the next pass; rows past R stay
-    zero-embedding rows.
+    rejected draft ``d_{a+1}`` whenever a < k. Rows past a are speculative and rewritten by the next pass.
     """
 
     alignment = verify.alignment
@@ -1333,12 +1279,9 @@ def forward_verify(
 ) -> Qwen38TTNNVerifyOutput:
     """One verify pass at the device position: fixed op sequence, fixed shapes, no host ints, no host I/O.
 
-    ``catch_up=True`` commits the previous pass's accepted prefix first (from ``verify.accepted``); the first
-    pass after :func:`seed_verify_state_inplace` runs with ``catch_up=False``.  ``P <- P + a + 1`` is the last
-    op.  Any failure poisons the model owner: the in-place state cannot be rolled back.  ``observer`` (eager
-    diagnostics only, never inside a capture) is called with a stage label after the prologue, after every layer,
-    after the head, the accept, the alignment and the position update; ``hidden_observer`` (eager only) with the
-    final mixer's ``[1,1,32,640]`` rows before the head.
+    ``catch_up=True`` commits the previous pass's accepted prefix first; the first pass after
+    :func:`seed_verify_state_inplace` uses ``catch_up=False``. ``P <- P + a + 1`` is the last op. Any failure poisons
+    the model owner (the in-place state cannot be rolled back). ``observer`` / ``hidden_observer`` are eager only.
     """
 
     _validate_verify_state(model, verify)
@@ -1441,10 +1384,10 @@ def forward_verify(
 
 
 def _capture_trace(mesh_device, cq_id: int, body: Callable[[], Any]) -> tuple[int, Any]:
-    """One trace capture around ``body`` on ``cq_id``: begun, the body recorded, ended; returns the trace id and the
-    body's result.  When the body raises (a forbidden program-cache miss, a poisoned model) the capture is ENDED and
-    the trace released before the error propagates: a mesh closed with a capture still open never returns (the
-    "Event Synchronization is not supported during trace capture" hang), so no capture site may leave one behind."""
+    """One trace capture around ``body`` on ``cq_id``; returns the trace id and the body's result.
+
+    When the body raises, the capture is ended and the trace released before the error propagates: a mesh closed with
+    a capture still open never returns."""
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=cq_id)
     try:
@@ -1471,12 +1414,8 @@ def capture_verify(
     guard: Callable[[str], AbstractContextManager[Any]],
     cq_id: int = 0,
 ) -> tuple[int, Qwen38TTNNVerifyOutput]:
-    """Capture one verify body (``catch_up`` False for the first pass after a seed, True for every later pass);
-    returns the trace id and the output whose readback address every replay rewrites.
-
-    Same discipline as the model's captures: ``corruptible_allocation_scope`` and the caller's no-host-I/O
-    ``guard``.  Capture records without executing, so the device state is unchanged.
-    """
+    """Capture one verify body (``catch_up`` False for the first pass after a seed, True after); returns the trace id
+    and the output whose readback address every replay rewrites. Capture records without executing."""
 
     with corruptible_allocation_scope(model.mesh_device):
 
@@ -1564,12 +1503,11 @@ def forward_verify_head(
     catch_up: bool,
     observer: Callable[[str], Any] | None = None,
 ) -> Qwen38TTNNVerifyHeadOutput:
-    """The verify body up to and including the device accept, for a pass the host decides: the prologue, the 48
-    layers, the final mixer, the per-row argmaxes, ``accept_rows`` (its ``a`` and ``t'`` are read back as lanes: the
-    greedy path's values, the sampled path's cross-check), the candidates epilogue on the k + 1 rows, and the
-    readback row ``[a, t', argmax_0 .. argmax_31 | candidates rows]``.  No alignment, no position update: the
-    layer-47 residual rows and the sharded logits stay allocated for the tail and the host's fallback.  Same
-    contract as :func:`forward_verify`: fixed op sequence, no host tensor, a failure poisons the model owner.
+    """The verify body up to and including the device accept, for a pass the host decides.
+
+    Runs the 48 layers, the final mixer, the per-row argmaxes, ``accept_rows`` and the candidates epilogue, and lands
+    the readback row ``[a, t', argmax_0 .. argmax_31 | candidates rows]``. No alignment, no position update: the
+    layer-47 residual rows and the sharded logits stay allocated for the tail. Same contract as :func:`forward_verify`.
     """
 
     _validate_verify_state(model, verify)
@@ -1619,7 +1557,7 @@ def forward_verify_head(
             logits, split.candidates_constants, into=split.candidates_readback
         )
         flat = ttnn.reshape(candidates, (1, 1, 1, verify.rows * CANDIDATE_LANES_PER_ROW))
-        if not same_buffer(flat, candidates):  # a copy today (the last dim changes); never free a view's source
+        if not same_buffer(flat, candidates):  # never free a view's source
             _deallocate(candidates)
         readback = ttnn.concat([accept.accepted_lane, accept.next_token, argmax_lanes, flat], dim=3, memory_config=dram)
         width = head_readback_width(verify.rows)
@@ -1646,11 +1584,9 @@ def forward_verify_tail(
     catch_up: bool,
     observer: Callable[[str], Any] | None = None,
 ) -> Qwen38TTNNVerifyOutput:
-    """The rest of a split pass once the host wrote its decision (:func:`write_verify_decision`): the alignment
-    rows on the head's roots with the host's tokens and accept scalars (``first_draft`` = the alignment argmax at
-    row ``a*``, ``alignment.residual`` <- row ``a*``), the readback row ``[a*, x*, d_1', alignment tokens]`` the
-    draft body reads, the accept scalar for the next commit, then ``P <- P + a* + 1`` as the last op.  The
-    position inputs are derived again from the position scalar the head left unchanged."""
+    """The rest of a split pass once the host wrote its decision (:func:`write_verify_decision`): the alignment rows on
+    the head's roots with the host's tokens, the readback row ``[a*, x*, d_1', alignment tokens]``, the accept scalar
+    for the next commit, then ``P <- P + a* + 1`` as the last op."""
 
     _validate_verify_state(model, verify)
     if verify.split is None:
@@ -1916,14 +1852,9 @@ def forward_verify_sampled(
     observer: Callable[[str], Any] | None = None,
 ) -> Qwen38TTNNVerifyOutput:
     """The device-decided sampled pass, one body: :func:`forward_verify_head`, then ``fused.mtp_accept`` deciding the
-    pass on the device (the rows' candidates the head landed in ``split.candidates_readback``, the drafts in
-    ``verify.draft_lanes``, the request's policy and the pass's uniforms ``[u_0 .. u_{k-1}, v]`` in ``constants``, the
-    sampler tail's built with ``rows = k + 1``) into the split's four decision buffers exactly as
-    :func:`write_verify_decision` writes them, plus ``split.statistics``; then :func:`forward_verify_tail` on the
-    head's roots.  No host stop: the head and tail bodies are untouched, the head's retained tensors are released at
-    the end.  Same contract as :func:`forward_verify` (fixed op sequence, no host tensor, a failure poisons the model
-    owner).  :func:`capture_verify_sampled` traces it whole, so the eager warm must run this very function (a program
-    the warm did not compile cannot be loaded inside a capture)."""
+    pass on device into the split's decision buffers (as :func:`write_verify_decision` writes them) and
+    ``split.statistics``, then :func:`forward_verify_tail`. Same contract as :func:`forward_verify`. The eager warm must
+    run this very function: a program the warm did not compile cannot be loaded inside a capture."""
 
     if verify.split is None:
         raise ValueError("the device-decided sampled pass needs the verify state's split buffers")
@@ -1989,12 +1920,10 @@ def forward_commit(
     observer: Callable[[str], Any] | None = None,
 ):
     """The commits of one pass as their own body: every layer's PLE / GDN / QSA commit of the previous pass's
-    accepted prefix (``verify.accepted``), then the MTP alignment layer's raw-history commit.
+    accepted prefix, then the MTP alignment layer's raw-history commit.
 
-    ``forward_verify(catch_up=True)`` runs these at the start of each layer; this body runs them all first so a
-    pass can be ``draft -> commit -> forward_verify(catch_up=False)``: the draft body derives its history from the
-    still-uncommitted alignment window, and the commit replay overlaps the host's PLE lookup of the draft ids.
-    No host tensor, no position change.  ``observer`` (eager diagnostics only) is called after every layer's commit.
+    Lets a pass run ``draft -> commit -> forward_verify(catch_up=False)`` so the commit replay overlaps the host's PLE
+    lookup. No host tensor, no position change.
     """
 
     _validate_verify_state(model, verify)
@@ -2050,20 +1979,16 @@ def capture_commit(
     return trace_id
 
 
-# --------------------------------------------------------------------------- the draft body (design 2.5)
+# --------------------------------------------------------------------------- the draft body
 
 
 @dataclass(frozen=True)
 class Qwen38TTNNDraftState:
     """Fixed-address buffers of the draft body: the MTP layer at one real row on the verify path's 32-row operands.
 
-    ``qsa_state`` is the MTP layer's own draft raw history / raw rows (the alignment state keeps its window for
-    the pass's real commit); ``qsa_constants`` the rows = 1 verify constants; ``layer_state`` the rows = 1 verify
-    layer state over the MTP layer (the layer's own rows-1 MoE behind a persistent ``[1,1,1,640]`` input slice);
-    ``advance_selectors`` the constant a = 0 selectors (one committed row: the previous draft row joins the
-    history); ``sentinel_rest`` FP32 ROW_MAJOR ``[1,1,1,31]`` of ``ZERO_EMBEDDING_TOKEN``; ``pass_row`` FP32
-    ROW_MAJOR ``[1,1,1,PASS_ROW_WIDTH]`` = the verify readback row this draft followed, then the next verify pass's
-    ``[t', d_1 .. d_k, -1 ...]`` (device-written: the pass's one host readback).
+    ``qsa_state`` is the MTP layer's own draft raw history (the alignment state keeps its window for the pass's real
+    commit); ``advance_selectors`` are the constant a = 0 selectors (the previous draft row joins the history);
+    ``pass_row`` is the verify readback row this draft followed, then the next pass's ``[t', d_1 .. d_k, -1 ...]``.
     """
 
     drafts: int
@@ -2264,19 +2189,11 @@ def forward_draft(
 ) -> None:
     """The k - 1 draft rows of one pass at the device position ``P`` (after the previous verify's ``P <- P + a + 1``).
 
-    Row i (i = 1 .. k - 1) embeds ``d_i`` from the device token chain (``d_1`` = lane 2 of the verify readback
-    row, later ids the previous row's row-0 argmax), mixes it with the previous MTP residual (``alignment.residual``
-    for row 1), runs the MTP QSA layer at MTP position ``P + i - 1`` on the verify path with one real row (KV row and
-    compressed blocks written by absolute position, raw history in the draft QSA state, advanced by one committed
-    row between rows), the rows-1 MoE, the final mixer, the LM head and the on-device resolve, and emits ``d_{i+1}``.
-    Before the rows the draft raw history is derived from the alignment window with the previous pass's accept
-    count (the alignment state is read only).  Afterwards the next verify pass's inputs are assembled on device:
-    ``verify.token_row`` = ``[t', d_1 .. d_k, -1 ...]`` and ``verify.draft_lanes`` = ``[d_1 .. d_k, -1 ...]``, and
-    the pass row ``draft.pass_row`` = the verify readback row followed by the token lanes (the host's one readback
-    per pass: the accept and the ids to look up).  No host tensor, no position change, no id through an FPU or
-    reduce stage.  ``derive_history=False`` leaves the history derivation to :func:`forward_draft_history` (its own
-    trace, run first).  ``observer`` (eager diagnostics only) is called after the history derivation, after every
-    row's position inputs, embedding + mixer, MTP layer and head, and after the assembly.
+    Row i embeds ``d_i`` from the device token chain, mixes it with the previous MTP residual, runs the MTP QSA layer
+    at MTP position ``P + i - 1`` (writes by absolute position), the rows-1 MoE, final mixer, LM head and on-device
+    resolve, and emits ``d_{i+1}``. Afterwards the next verify pass's ``token_row``, ``draft_lanes`` and
+    ``draft.pass_row`` are assembled on device. No host tensor, no position change, no id through an FPU or reduce
+    stage. ``derive_history=False`` leaves the history derivation to :func:`forward_draft_history`.
     """
 
     def stage(name: str) -> None:
@@ -2452,15 +2369,12 @@ def verify_pass_fits(position: int, allocated_context: int) -> bool:
 
 @dataclass(frozen=True)
 class Qwen38TTNNMTPTraces:
-    """The captured traces of one chain.  ``verify_catch_up`` (``forward_verify(catch_up=True)``) or ``commit``
-    (``forward_commit``) is set, never both: the single-trace form runs ``draft -> verify_catch_up``, the split form
-    ``draft -> commit -> verify_first`` so the commit replay overlaps the host's PLE lookup.  ``draft_history`` is
-    the draft body's history derivation captured on its own (``forward_draft_history``; the draft trace then ran
-    ``derive_history=False``): the two-command-queue form's fence point.  ``verify_head`` / ``verify_tail`` (the
-    split verify, the host deciding between them) or ``verify_sampled`` (the device-decided sampled form: the head,
-    the accept program and the tail in one trace, :func:`capture_verify_sampled`) replace ``verify_first``; both need
-    the commit form.  One object holds one verify form (``form``); a chain that captures several holds one object per
-    form, sharing the commit."""
+    """The captured traces of one chain; exactly one of ``verify_catch_up`` (``draft -> verify_catch_up``) or
+    ``commit`` (``draft -> commit -> verify_first``) is set.
+
+    ``draft_history`` is the history derivation captured on its own (the two-command-queue form's fence point).
+    ``verify_head`` / ``verify_tail`` or ``verify_sampled`` replace ``verify_first`` and need the commit form. One
+    object holds one verify form (``form``)."""
 
     verify_first: int | None
     draft: int
@@ -2527,16 +2441,10 @@ class Qwen38TTNNMTPTraces:
 class Qwen38TTNNCommitQueue:
     """The commit trace on its own command queue, overlapping the draft rows on the main queue.
 
-    Two fences: the commit must not start before the draft's history derivation has read the alignment window the
-    commit rewrites (``history_derived`` records that point on the main queue after the draft-history trace;
-    ``enqueue_commit`` makes the commit queue wait for it, replays the commit there non-blocking and records the
-    committed event), and the next verify must not start before the commit is done (``wait_committed`` makes the
-    main queue wait for that event).  After the derivation the draft rows and the commit touch disjoint buffers
-    (the draft: its own QSA / layer state, the MTP layer's caches, the verify inputs and the pass row; the commit:
-    the backbone layers' rows histories and generic states, the alignment window).  What this does not settle is
-    the traces' transient buffers, allocated at capture time from one allocator: two traces replaying at once
-    share those addresses unless the captures kept them apart, so the form is a measurement until the runtime
-    keeps them apart (the exactness gates of a run are the detector).
+    Two fences: the commit waits for ``history_derived`` (the draft has read the alignment window the commit
+    rewrites), and the next verify waits for ``wait_committed``. After the derivation the two touch disjoint buffers,
+    but the traces' capture-time transient buffers may still share addresses, so this form is only as exact as the
+    run's exactness gates show.
     """
 
     def __init__(self, mesh_device, *, cq_id: int = 1, main_cq_id: int = 0) -> None:
@@ -2573,14 +2481,9 @@ class Qwen38TTNNEarlyRowsReader:
     """The verify readback row's fixed lanes read on a second command queue as soon as the verify is done, while the
     main queue runs the draft.
 
-    ``verify_launched`` records an event on the main queue right after the verify launch; ``read_fixed_lanes``
-    makes the second queue wait for it and reads the row there (one blocking buffer read of coordinate 0, the read
-    :func:`read_pass_row` makes on the main queue), so the host holds ``(a, t', d_1)`` a draft's length before the
-    pass row and looks the next pass's PLE rows 0-1 up meanwhile (:func:`lookup_verify_ple_rows_early`); rows 2..k
-    follow the pass row.  The second queue carries nothing but this read: a program or a trace there takes the
-    sub-device's workers and the main queue's programs are refused (one queue owns the workers), a buffer read
-    takes no ownership.  The draft trace reads the readback row and never writes it, and the next verify overwrites
-    it only after this pass's row was read, so the read sees this pass's lanes.
+    The host gets ``(a, t', d_1)`` a draft's length before the pass row and looks up the next pass's PLE rows 0-1
+    meanwhile (:func:`lookup_verify_ple_rows_early`). The second queue carries only this buffer read: a program or
+    trace there would take the sub-device's workers from the main queue.
     """
 
     def __init__(self, mesh_device, readback, *, cq_id: int = 1, main_cq_id: int = 0) -> None:
@@ -2613,12 +2516,7 @@ class Qwen38TTNNEarlyRowsReader:
 @dataclass(frozen=True)
 class Qwen38TTNNMTPPassRecord:
     """One pass: its host-mirrored start position, the R verify tokens, the accept count, the a + 1 committed ids
-    (cut at the first EOS), the 32 argmaxes, and the wall of every segment in ns (``commit_enqueue`` or
-    ``commit_replay``, ``ple_rows`` = lookup + upload, ``verify_enqueue`` / ``draft_enqueue`` or ``verify_replay`` /
-    ``draft_replay``, ``readback``; the bootstrap pass has ``host_inputs`` instead of the first two; with the early
-    rows reader ``early_readback`` = the second queue's read of the verify lanes, ``ple_rows_early`` = the lookup of
-    the next pass's rows 0-1 under the draft and ``ple_rows_late`` = its rows 2..k plus the upload replace
-    ``ple_rows``)."""
+    (cut at the first EOS), the 32 argmaxes, and the wall time of every host segment in ns."""
 
     index: int
     position: int
@@ -2642,44 +2540,15 @@ class Qwen38TTNNMTPPassRecord:
 
 
 class Qwen38TTNNMTPChain:
-    """The pass loop over the captured traces: ``replay(trace_id)`` is the caller's raw blocking replay (the timing
-    runner's ``ttnn._ttnn_execute_trace`` with ``verify_before_replay`` called once outside the window),
+    """The pass loop over the captured traces: ``replay(trace_id)`` is the caller's raw blocking replay,
     ``enqueue(trace_id)`` its non-blocking form.
 
-    Host segment per pass, the pipelined form (``enqueue`` given): (1) the commit trace (split form) is enqueued
-    non-blocking, so the device commits the previous pass while the host does the lookup; (2) the pass's R tokens
-    (read with the previous pass) are looked up in the PLE n-gram table from the committed context and the
-    ``[1,1,R,640]`` rows uploaded (queued behind the commit on the same command queue); (3) the verify body and,
-    right behind it, the draft body of the NEXT pass are enqueued non-blocking; (4) one blocking 268-byte readback
-    of the pass row the draft landed: the verify's ``[a, t', d_1', argmaxes]`` and the next pass's tokens
-    ``[t', d_1 .. d_k]`` (checked to start at ``t'``, ``d_1'``); the PLE context commits, ``argmax_0 .. argmax_a``
-    are emitted.  Without ``enqueue`` every trace is replayed blocking through ``replay`` (the segment-measuring
-    form), the readback last.  The draft that runs before the host reads a pass writes only the draft state and the
-    MTP layer's cache rows past the committed position (rewritten before any read); a pass loop that stops after the
-    pass leaves it unused.  The token row and the draft lanes never cross the host.  ``observer(segment)`` is called
-    before every segment (the runner's stall watchdog heartbeat).
-
-    With ``commit_queue`` (:class:`Qwen38TTNNCommitQueue`; needs ``traces.commit`` and ``traces.draft_history``)
-    the commit runs on its own command queue behind the draft-history fence and the verify waits for it
-    (``commit_wait``); the blocking form replays it there.
-
-    With the split verify (``traces.verify_head`` / ``verify_tail``, ``head_output``) the pass is: the head replay,
-    one blocking read of its row (:func:`read_verify_head`), ``decide(tokens, readback)`` on the host (the
-    greedy :func:`decide_greedy` by default; a sampled request's acceptance otherwise), the four decision writes
-    (:func:`write_verify_decision`), the tail replay, then the draft and the pass row as in the fused form.
-
-    With the device-decided sampled form (``traces.verify_sampled``) the pass is: ``before_verify_sampled(tokens)``
-    (the caller's hook, the pass's uniforms written to the accept program's constants), one launch (the head, the
-    accept program, the tail), the draft and the pass row as in the fused form, then one read of the split's
-    statistics row (:func:`read_accept_statistics`; the pass row's ``(a, t')`` must be the program's) and, with
-    ``record_candidate_rows``, one read of the rows the device decided on.  No head readback, no host decision, no
-    decision writes: the other two forms' behaviour is untouched.
-
-    With ``early_reader`` (:class:`Qwen38TTNNEarlyRowsReader`; the fused and the device-decided forms) the verify
-    lanes ``(a, t', d_1)`` are read on the second queue right after the draft launch, the next pass's PLE rows 0-1
-    are looked up while the draft runs, and the next ``step`` looks up only rows 2..k before the one upload: the
-    same rows from the same contexts, row for row.  The host-decided split form keeps today's order: its head
-    readback already blocks the host before the tail, so its lanes arrive with the pass row anyway.
+    Pipelined (``enqueue`` given): the commit trace enqueued non-blocking, the pass's R PLE rows looked up and uploaded
+    behind it, the verify and the next pass's draft enqueued, then one blocking readback of the pass row; without
+    ``enqueue`` every trace replays blocking. ``commit_queue`` runs the commit on its own command queue; the split
+    verify adds a host decision between head and tail; the device-decided form runs head, accept program and tail in
+    one launch; ``early_reader`` reads the verify lanes on a second queue to look up the next rows 0-1 under the draft.
+    ``observer(segment)`` is called before every segment.
     """
 
     def __init__(
@@ -2728,8 +2597,8 @@ class Qwen38TTNNMTPChain:
             if not isinstance(early_reader, Qwen38TTNNEarlyRowsReader):
                 raise TypeError("early_reader must be a Qwen38TTNNEarlyRowsReader")
             if traces.split:
-                # The host-decided split form keeps today's order: its head readback already blocks the host before
-                # the tail, so (a, t') are known before the draft anyway and d_1 only lands with the tail.
+                # The host-decided split form's head readback already blocks the host before the tail, so (a, t') are
+                # known before the draft anyway and d_1 only lands with the tail.
                 raise ValueError("the early rows reader serves the fused and the device-decided forms, not the split")
         self.early_reader = early_reader
         self._early_rows: Qwen38TTNNPLEEarlyRows | None = None
@@ -2920,17 +2789,12 @@ class Qwen38TTNNMTPChain:
         return emitted[:max_new_tokens]
 
 
-# --------------------------------------------------------------------------- the served chain (tools/qwen38_chat_session.py)
-# A chat server that drafts with MTP runs the 1-row decode traces for prefill and the verify / draft / commit traces
-# for generation.  The MTP layer must have consumed every position the target consumed before a pass can align
-# and draft at P: the 1-row TAIL carries the MTP layer's row at P (the target's layer-47 residual at P and the token
-# at P + 1: the next prompt token when the host knows it, else the step's own resolved argmax; the chain timing
-# tool's prefill-step body split into the TAIL epilogue), and the prefill chunk carries the MTP layer's 32 rows
-# (tokens P + 1 .. P + 32, host-written).  Two eager switches join the modes: enter_verify_mode seeds the verify
-# buffers from the 1-row state at P; leave_verify_mode commits the last pass's rows and rebuilds the 1-row buffers
-# from the verify buffers at the committed P.  A sampled step and the consumed EOS of a turn feed the MTP layer
-# the step's argmax instead of the token the host later fed the target (the draft quality at those positions is
-# approximate; the committed stream is the target's, exact).
+# --------------------------------------------------------------------------- the served chain
+# A chat server drafting with MTP runs the 1-row decode traces for prefill and the verify / draft / commit traces for
+# generation. The MTP layer must have consumed every position the target consumed before a pass can align at P: the
+# 1-row TAIL carries the MTP layer's row at P and the prefill chunk its 32 rows. enter_verify_mode / leave_verify_mode
+# are the eager switches between the modes. A sampled step and a turn's consumed EOS feed the MTP layer the step's
+# argmax (draft quality there is approximate; the committed stream stays exact).
 
 
 @dataclass(frozen=True)
@@ -3036,35 +2900,22 @@ def forward_mtp_step_row(
 
 @dataclass(frozen=True)
 class Qwen38TTNNMTPChunkExtension:
-    """The MTP layer's rows of a prefill chunk (the model's ``mtp`` keyword) in the chunk state's form, 32 or 128
-    rows: its own chunk state over the alignment layer and ``token_row`` FP32 TILE ``[1,1,rows / 32,32]`` (lane j =
-    the token at P + j + 1, host-written per chunk); the rows take the chunk's layer-47 residual rows as roots.
-    ``feature_rows`` are the extension's own vision feature rows (hidden-sharded BF16 ``[1,1,rows,640]``, the
-    backbone chunk's form shifted one position ahead): an image prompt's pad at P + j + 1 embeds the zero sentinel and
-    takes the tower's row there, as the reference's MTP module sees the next token's multimodal embedding; text lanes
-    hold -0.0 (the add's identity), so a text prompt's rows are bitwise the plain embedding.
+    """The MTP layer's rows of a prefill chunk (the model's ``mtp`` keyword) in the chunk state's form, 32 or 128 rows.
 
-    The 32-row twin owns the MTP layer's chunk buffers and is the hand-off form (``reset_chunk`` / ``finish_chunk``:
-    the per-layer chunk seed and hand-off of the MTP layer's generic state).  The 128-row twin of a ``--long-chunks``
-    chain is allocated ``base=`` the 32-row one and runs inside the 128-row chunk body the way the backbone's QSA layers
-    do at 128 rows: its layer chunk state is allocated beside the 32-row one (the QSA form shares nothing but the
-    rule; its kept buffers are its own) and its MoE instance borrows the 128-row chunk state's shared combine buffer
-    (the MTP layer runs after layer 47 in the same body, so the buffer is free).  Its ``finish_chunk`` is refused:
-    the hand-off reads the 32-row twin, whose kept buffers a long chunk never wrote, which is the closed-block
-    hand-off the backbone's 128-row chunks already make."""
+    ``token_row`` holds the tokens at P + j + 1 (host-written per chunk) and the roots are the chunk's layer-47 residual
+    rows. ``feature_rows`` carry the vision feature rows one position ahead; text lanes hold -0.0, so a text prompt's
+    rows are bitwise the plain embedding. The 32-row twin owns the chunk buffers and the hand-off; the 128-row twin is
+    allocated ``base=`` it and refuses ``finish_chunk``.
+    """
 
     alignment: Qwen38TTNNVerifyAlignment
     layer_chunk_state: Any
     token_row: Any
     rows: int = CHUNK_ROWS
     feature_rows: Any = None  # Qwen38TTNNChunkFeatureRows: the tower's rows at the pad lanes of the tokens ahead
-    # The slab form of the 128-row twin (a ``--prefill-slab`` chain under ``--mtp``, 2026-09-26): the twin runs the
-    # MTP layer's rows of a slab as ``slab_rows / 128`` slices of 128 inside the slab body, each slice the 128-row
-    # form exactly (its residual rows sliced from the slab's layer-47 residual, its RoPE and QSA chunk inputs derived
-    # at ``P + 128 i`` from the slab body's own index rows and the position scalar, its 128 MTP tokens from one of
-    # ``slab_token_rows``: one 128-lane tile per slice, host-written per slab).  ``qsa_chunk_constants`` are the
-    # 128-row chunk state's (the slices derive their QSA inputs with them); ``slab_position_offsets`` the UINT32
-    # ``[1,1,1,1]`` scalars 128 i for i >= 1.  Empty on the 32-row twin and on a chain without slabs.
+    # The slab form of the 128-row twin: the MTP rows of a slab run as ``slab_rows / 128`` slices, each exactly the
+    # 128-row form (inputs derived at ``P + 128 i``; tokens from one ``slab_token_rows`` tile per slice).
+    # ``slab_position_offsets`` are the UINT32 ``[1,1,1,1]`` scalars 128 i for i >= 1. Empty without slabs.
     slab_rows: int = 0
     slab_token_rows: tuple = ()
     slab_feature_rows: tuple = ()  # one feature-rows buffer per 128-row slice (the slab form's ``feature_rows``)
@@ -3214,13 +3065,9 @@ class Qwen38TTNNMTPChunkExtension:
             self._write_rows(model, slice_ids, slice_features, tile, feature_rows)
 
     def forward_slab_rows(self, model: Qwen38TTNNTextModel, residual_rows, *, rope_rows, position_scalar):
-        """The MTP layer's rows of a slab, inside the slab body after layer 47: ``slab_rows / 128`` slices, each the
-        128-row form of :meth:`forward_chunk_rows` exactly -- the slice's residual rows cut from the slab's ``[1,4,S,640]``
-        layer-47 residual (not consumed), its RoPE rows cut from the slab body's host-written rows ``rope_rows``
-        (cos / sin ``[1,1,S,64]`` and the block-start rows ``[1,1,S/4,64]``: the slice's 128 rows and its 32 block
-        starts, the 128-row body's own rows), its QSA chunk inputs derived from the position scalar plus ``128 i``
-        with the 128-row chunk constants, its MTP tokens from the slice's tile of ``slab_token_rows``.  The MTP
-        layer's KV rows land at the same positions the 128-row chunks would write them."""
+        """The MTP layer's rows of a slab, inside the slab body after layer 47: ``slab_rows / 128`` slices, each
+        exactly the 128-row form of :meth:`forward_chunk_rows` on its cut of the layer-47 residual and ``rope_rows``,
+        so the MTP layer's KV rows land where the 128-row chunks would write them."""
 
         if self.rows != LONG_CHUNK_ROWS or not self.slab_rows:
             raise ValueError("the slab form runs on the 128-row MTP chunk extension allocated with slab_rows")
@@ -3295,13 +3142,11 @@ class Qwen38TTNNMTPChunkExtension:
         token_row=None,
         feature_rows=None,
     ):
-        """The MTP layer's rows at the chunk's positions: the token rows' embedding plus their vision feature rows
-        (the image lanes embed the zero sentinel and take the tower's row; the text lanes' -0.0 leaves them bitwise),
-        mixed with the chunk's layer-47 residual rows (not consumed), through the layer's chunk body on the MTP generic
-        and chunk states.  The roots are ``[1,4,rows,640]`` and the embedding ``[1,1,rows,640]`` for this extension's
-        ``rows``; ``selectors`` is the chunk's (the 32-row form's accept selectors, None at 128 rows), as the backbone's
-        layers receive it.  ``token_row`` and ``feature_rows`` (the slab form) name the slice's tiles instead of this
-        extension's own."""
+        """The MTP layer's rows at the chunk's positions: the token rows' embedding plus their vision feature rows,
+        mixed with the chunk's layer-47 residual rows (not consumed), through the layer's chunk body.
+
+        ``selectors`` is the chunk's (None at 128 rows); ``token_row`` / ``feature_rows`` name a slab slice's tiles.
+        """
 
         residual_shape = (1, RESIDUAL_BRANCHES, self.rows, LOCAL_HIDDEN_SIZE)
         embedding_shape = (1, 1, self.rows, LOCAL_HIDDEN_SIZE)
@@ -3388,13 +3233,12 @@ def leave_verify_mode(
     committed_rows: int,
     commit: Callable[[], Any],
 ) -> tuple[int, int] | None:
-    """The served chain's eager switch verify -> 1-row after the last pass: commit ``committed_rows`` of that pass's
-    rows (``commit`` runs the commit body after the host wrote the accept scalar; fewer rows than the pass accepted
-    roll the state back to them), ``P <- position`` (the host's count of committed positions), then every layer's
-    1-row buffers from the verify buffers: the GDN ring slots (phase P mod 4) from the rows history, the PLE slots
-    from the rows history with the n-gram context of the committed rows, the QSA staging tile and raw-key ring
-    from the cache block and the raw history (the backbone's QSA layers and the MTP alignment layer alike).
-    Returns the n-gram context of the committed stream; synchronizes the device."""
+    """The served chain's eager switch verify -> 1-row after the last pass.
+
+    Commits ``committed_rows`` of that pass's rows (fewer than accepted roll the state back to them), sets
+    ``P <- position`` and rebuilds every layer's 1-row buffers from the verify buffers. Returns the committed stream's
+    n-gram context; synchronizes the device.
+    """
 
     _validate_verify_state(model, verify)
     if isinstance(committed_rows, bool) or type(committed_rows) is not int or not 1 <= committed_rows <= verify.rows:

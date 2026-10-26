@@ -3,21 +3,9 @@
 
 """Exact speculative sampling over the MTP verify rows: argmax drafts, point-mass acceptance.
 
-Verify row j of a pass (row 0 fed the pending token ``t_P``, row j the draft ``d_j``) gives the target's
-post-processor distribution ``p_j`` at that position, a :class:`Qwen38RowDistribution` built by the same penalties
-and filters plain sampling applies (``ttnn/sampling.py``); the draft the pass proposes there is ``d_{j+1}``.  With
-the deterministic proposal ``q_j = delta(d_{j+1})`` the Leviathan / Chen acceptance ``min(1, p / q)`` is
-``p_j(d_{j+1})`` and the rejection distribution ``norm(max(0, p - q))`` is ``p_j`` with ``d_{j+1}`` removed and
-renormalised.  So for j = 0, 1, ...: draw ``u_j`` and accept the draft iff ``u_j < p_j(d_{j+1})``; at the first
-rejection draw ``v`` and emit ``x ~ p_j'``; when every draft is accepted draw ``v`` and emit ``x ~ p_k``.
-
-Per row ``P(out = y) = p(d) 1[y = d] + (1 - p(d)) p'(y) 1[y != d] = p(y)``: the emitted token follows the target's
-conditional at its position whatever the draft, the accepted drafts are the prefix the later rows were computed
-on, so the stream's joint law is plain sampling's; the draft quality changes only the accepted length.  A kept set
-of one token (``p(d) = 1``) always accepts (``u < 1``), so no residual is ever formed from an empty remainder.
-
-``uniform`` is the request's draw source, consumed in the fixed order ``u_0, u_1, ..., v``: ``a* + 2`` draws when
-``a* < k``, ``k + 1`` when every draft was accepted.  Nothing here touches a device.
+Row j's target distribution ``p_j`` accepts the draft ``d_{j+1}`` iff ``u_j < p_j(d_{j+1})``. The first rejection
+emits ``x ~ p_j`` with ``d_{j+1}`` removed and renormalised; full acceptance emits ``x ~ p_k``. The emitted stream
+therefore has plain sampling's distribution. ``uniform`` is consumed in the order ``u_0, u_1, ..., v``.
 """
 
 from __future__ import annotations
@@ -30,9 +18,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import Qwen38RowDist
 
 @dataclass(frozen=True)
 class Qwen38SpeculativeAcceptance:
-    """One pass's verdict: ``accepted`` drafts (``a*``), the ``token`` emitted after them (``x*``), the acceptance
-    probabilities ``p_j(d_{j+1})`` of the rows drawn on (j = 0 .. min(a*, k - 1)), the draws consumed, and whether
-    the token came from a rejection's residual."""
+    """One pass's verdict: accepted draft count, emitted token, per-row acceptance probabilities and draws used."""
 
     accepted: int
     token: int
@@ -53,8 +39,7 @@ def accept_point_mass(
     drafts: Sequence[int],
     uniform: Callable[[], float],
 ) -> Qwen38SpeculativeAcceptance:
-    """The point-mass acceptance over the pass's rows: ``distribution(j)`` is ``p_j`` (asked for row by row, so a
-    row past the first rejection is never built), ``drafts`` ``[d_1 .. d_k]``, ``uniform`` the next draw."""
+    """Point-mass acceptance over a pass's rows; ``distribution(j)`` is built lazily, up to the first rejection."""
 
     drafts = [int(draft) for draft in drafts]
     if not drafts:

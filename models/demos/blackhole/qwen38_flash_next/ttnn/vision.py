@@ -3,19 +3,10 @@
 
 """The vision tower on the mesh: one image's pixel patches -> merged visual features, replicated per die.
 
-Every die runs the whole tower on the same input (no collectives); only the merger's second linear is column-sharded
-over the mesh so a die produces exactly its hidden columns, the placement of the language model's embedding output
-(per die ``[1, 1, T, 2560 / dies]`` BF16 TILE DRAM-interleaved, hidden-sharded over mesh axis 1, T = N / 4 merged
-tokens in the processor's token order), so the splice into the prompt embedding is a per-die row copy.
-
-Per image (eager ops, no trace: N varies): the host pads N to a tile multiple, computes the position embedding
-(bilinear resample of the learned table), the rotary cos / sin in the device's interleaved layout and, when there is
-padding or more than one frame, the attention windows; the device runs patch embed + position add, 27 blocks
-(LayerNorm -> fused qkv -> heads -> rotary -> windowed non-causal SDPA -> concat -> proj, residual, LayerNorm -> fc1 with
-GELU-tanh -> fc2, residual) and the merger (LayerNorm -> 2x2 group -> fc1 -> GELU -> column-sharded fc2).  Padded
-patches attend only among themselves (their own window) and land in rows past T.  Weights are BF16 and resident
-between ``load()`` and ``free()``; ``resident_bytes()`` is the MODELED footprint the admission ledger applies.
-Numerics are measured against ``vision_reference.py`` in ``tests/test_vision_tower.py``.
+Every die runs the whole tower on the same input (no collectives); only the merger's fc2 is column-sharded, so each
+die produces its hidden columns in the embedding output's placement (per die ``[1, 1, T, 2560 / dies]`` BF16 TILE,
+T = N / 4) and the splice into the prompt embedding is a per-die row copy. Runs eagerly (N varies); padded patches
+attend only among themselves and land in rows past T.
 """
 
 from __future__ import annotations
@@ -39,9 +30,7 @@ from models.demos.blackhole.qwen38_flash_next.vision_reference import (
 )
 
 DRAM = ttnn.DRAM_MEMORY_CONFIG
-# MEASURED on one p150 die (2026-09-29, six grids from 396 to 65,536 patches, the allocator sampled after every transient
-# buffer): the tower's live activation peak is 17.3-17.7 KB per padded patch per die, at block 1's SDPA output (fused
-# qkv + q/k/v heads + attention output alive together); 18.4 KB on the smallest padded grid.  The admission term rounds up.
+# Upper bound on the tower's live activation peak per padded patch per die; from a device measurement.
 PEAK_ACTIVATION_BYTES_PER_PATCH = 18_432
 # Linears: BF16 operands, HiFi2 with FP32 accumulation.  LayerNorm, rotary and attention: HiFi4 with FP32 accumulation.
 LINEAR_COMPUTE = ttnn.WormholeComputeKernelConfig(
@@ -180,8 +169,8 @@ class VisionTower:
         return -(-self.resident_bytes() // self.dram_banks())
 
     def peak_activation_bytes_per_bank(self, patches: int) -> int:
-        """The transient DRAM an image of ``patches`` patches needs per bank while the tower runs (MEASURED law:
-        ``PEAK_ACTIVATION_BYTES_PER_PATCH`` per padded row per die, spread over the banks)."""
+        """The transient DRAM an image of ``patches`` patches needs per bank while the tower runs
+        (``PEAK_ACTIVATION_BYTES_PER_PATCH`` per padded row per die, spread over the banks)."""
 
         if patches <= 0:
             raise ValueError(f"patches must be positive, got {patches}")
@@ -438,9 +427,8 @@ class VisionTower:
         windows: ttnn.Tensor | None,
         probe: Callable[[str], None] | None = None,
     ) -> ttnn.Tensor:
-        """One block on the BF16 residual stream (the measured stock form: an FP32 stream gained +0.0004 PCC at the merger
-        for 10 % more time); ``hidden`` is consumed (deallocated); ``probe`` samples the allocator after the transient
-        buffers of each step exist (the peak the admission needs)."""
+        """One block on the BF16 residual stream; ``hidden`` is consumed (deallocated); ``probe`` samples the allocator
+        after the transient buffers of each step exist (the peak the admission needs)."""
 
         block = self._require_weights().blocks[index]
         normed = self._layer_norm(hidden, block.norm1_weight, block.norm1_bias)
@@ -539,11 +527,8 @@ class VisionTower:
     # ------------------------------------------------------------------------------------------------------------------
 
     def prewarm_rows(self, rows: int) -> dict[str, float]:
-        """Compile the served program set of one row bucket: two zero images, one whose grid fills ``rows`` exactly
-        (2 x rows/2 patches; the attention windows ``[0, rows]``) and one four patches short of it (2 x (rows/2 - 2);
-        the windows ``[0, rows - 4, rows]``), since the windowed attention's program is keyed on the window tensor's
-        shape as well as the rows: every image of the bucket is one of the two forms.  The outputs are released;
-        returns the two forwards' timings summed."""
+        """Compile the served program set of one row bucket: a zero image that fills ``rows`` and one four patches
+        short, since windowed attention is keyed on the window tensor's shape too. Returns the summed timings."""
 
         if rows % (2 * TILE) or rows < 2 * TILE:
             raise ValueError(f"a prewarm bucket must be a positive multiple of {2 * TILE} rows, got {rows}")
@@ -570,7 +555,7 @@ class VisionTower:
         return host if rows is None else host[:rows]
 
     def run_block(self, index: int, hidden: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
-        """Block ``index`` alone on a host ``[N, hidden]`` input (the reference's, cast to BF16); ``[N, hidden]`` FP32."""
+        """Block ``index`` alone on a host ``[N, hidden]`` input (cast to BF16); ``[N, hidden]`` FP32."""
 
         rows = padded_rows(hidden.shape[0])
         padded = torch.zeros(rows, hidden.shape[1], dtype=torch.float32)

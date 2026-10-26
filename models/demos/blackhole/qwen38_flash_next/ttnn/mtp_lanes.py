@@ -1,26 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""MTP lanes: B lanes verify R = k + 1 rows each in ONE 32-row tile (speculative drafting with exact acceptance on
-the batched lane body).
+"""MTP lanes: B lanes verify R = k + 1 rows each in one 32-row tile (speculative drafting with exact acceptance on the
+batched lane body).
 
-Row layout, lane-major: row ``u*R + j`` is lane u's row j (j = 0 the pending token, j = 1 .. k the drafts); rows
-``B*R .. 31`` are pad rows (token ``ZERO_EMBEDDING_TOKEN``, lane 0's geometry, never read into or written from a
-cache).  Every dense op of the B=1 verify (``mtp_v2.forward_verify``) runs unchanged on the tile: the embedding, the
-GR reads and writes, the projections, the MoE on the ``B*R`` real rows, the final mixer, the LM head and the per-row
-greedy resolve are row-independent.  The per-lane state work runs on a batch axis behind exact 0/1 selects: the GDN
-rows path with lane u's own FIR history and recurrent state and one recurrence over the lanes
-(``gdn.forward_rows_lanes`` / ``commit_rows_lanes``), the QSA verify with lane u's KV region of the flat cache, its
-compressed blocks and its raw-key history (``qsa.forward_verify_lanes`` / ``commit_verify_lanes``), the PLE rows path
-with lane u's dilated history (``ple.inject_rows_lanes`` / ``commit_rows_lanes``), the MTP alignment layer's lane
-state and its per-lane residual row.  Positions live in one UINT32 row (lane u = P_u, any residues; the bodies bind
-no GDN ring phase) and every position-dependent input is derived from it on device, so one trace serves every
-combination of lane positions.
-
-Stage 1 (this module's first form): the verify + alignment + commit body with host-written accept counts and active
-mask (the teacher-forced measurement: every lane commits ``R`` rows per pass, ``accepted_u := R - 1``); the accept
-arithmetic runs and is read back but drives nothing.  The per-lane accept driving the pass, the seed / import and
-the draft body follow in the next stages on the same states.
+Rows are lane-major: row ``u*R + j`` is lane u's row j (j = 0 the pending token, 1 .. k the drafts); rows ``B*R .. 31``
+are pad rows that never touch a cache. Row-independent ops run unchanged on the tile; per-lane state work (GDN, QSA,
+PLE, the alignment layer) runs on a batch axis behind exact 0/1 selects. Positions live in one UINT32 row and every
+position-dependent input is derived from it on device, so one trace serves every combination of lane positions.
 """
 
 from __future__ import annotations
@@ -96,11 +83,9 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.mtp_v2 import (
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.ple import CONV_STATE_LENGTH, Qwen38TTNNPLERowsPreparedInput
 
-# The KV slab import writes ``update_padded_kv_cache`` chunks of this many rows (a lane's C-row slab in C / chunk
-# writes): the op needs the cache rows to be a multiple of the rows one call writes (its block-cyclic invariant,
-# ``cache_seq % written_seq == 0``; a 4-lane 32k cache with 64 scratch rows refused a 32k slab, mtp-b4-s2-lanes4), so
-# the scratch region past the last lane is exactly one chunk.  An inactive lane's two block writes land in its first
-# 64 rows.  4096 rows = 4 MiB per QSA layer per device; 8 writes per layer at 32k.
+# The KV slab import writes ``update_padded_kv_cache`` chunks of this many rows. The op needs the cache rows to be a
+# multiple of the rows one call writes (``cache_seq % written_seq == 0``), so the scratch region past the last lane is
+# exactly one chunk; an inactive lane's two block writes land in its first 64 rows.
 KV_IMPORT_CHUNK_ROWS = 4096
 
 
@@ -142,13 +127,10 @@ def _validate_lane_geometry(lanes: int, drafts: int) -> tuple[int, int]:
 def mtp_lane_constant_rows(lanes: int, drafts: int) -> dict[str, torch.Tensor]:
     """Host images of the accept and alignment constants of ``lanes`` lanes at ``drafts`` drafts (R = k + 1).
 
-    ``prefix_upper_block`` ``[32, 32]`` (``U[i, c] = 1`` iff ``lane_of(i) == lane_of(c)`` and ``i <= c``, both real):
-    the match flags' running counts per lane in one matmul; ``draft_plus_one_row`` ``[1, 32]`` (``draft_of(c) + 1``,
-    64 on the pad columns, whose flags are 1 -- the sentinel argmax equals the sentinel draft -- so no pad prefix flag
-    is ever 1); ``block_sum`` ``[32, B]`` (``[lane_of(c) == u]``, zero pad columns: the accept count per lane);
-    ``block_sum_t`` ``[B, 32]`` its transpose (the alignment residual row select's lane rows); ``draft_match_row``
-    ``[1, 32]`` (``draft_of(c)``, -1 on the pad columns: the one-hot of column ``u*R + a_u`` against the gathered
-    counts); ``lane_base_row`` ``[1, B]`` (``u*R``: the gather index base).
+    ``prefix_upper_block`` ``[32, 32]`` (``U[i, c] = 1`` iff same real lane and ``i <= c``) gives the per-lane running
+    match counts in one matmul; ``draft_plus_one_row`` is ``draft_of(c) + 1`` with 64 on the pad columns so no pad
+    prefix flag is ever 1; ``block_sum`` ``[32, B]`` sums per lane (``block_sum_t`` its transpose);
+    ``draft_match_row`` is ``draft_of(c)`` (-1 on pads); ``lane_base_row`` is ``u*R``.
     """
 
     lanes, rows = _validate_lane_geometry(lanes, drafts)
@@ -306,10 +288,9 @@ class Qwen38TTNNMTPLanePositions:
     positions: list[int]
     mesh_device: Any = field(repr=False, compare=False)
     mesh_contract: Qwen38MeshContract = field(repr=False, compare=False)
-    # Lane u's rotary shift ``S_u`` (UINT32 ROW_MAJOR ``[1,1,1,32]``, the pad lanes 0; ``S_u <= P_u & ~3``) and its
-    # host mirror: the RoPE table row of lane u's token at P_u is ``P_u - S_u`` (``mrope.Qwen38MRoPEPositions.shift``;
-    # 0 for text); the caches and masks stay on P_u.  Written with the position at an admission; a rewind keeps it.
-    # None: a row built without one (a text-only stand-in): the rotary rows are the plain rows.
+    # Lane u's rotary shift ``S_u`` (UINT32 ROW_MAJOR ``[1,1,1,32]``, pad lanes 0, ``S_u <= P_u & ~3``) and its host
+    # mirror: lane u's RoPE row is ``P_u - S_u``; caches and masks stay on P_u. Written at an admission; a rewind keeps
+    # it. None means plain rotary rows.
     shift_row: Any = None
     shifts: list[int] = field(default_factory=list)
 
@@ -489,18 +470,10 @@ class Qwen38TTNNMTPLaneAlignment:
 class Qwen38TTNNMTPLaneVerifyState:
     """Everything a lane verify pass reads or writes, allocated before any capture (the traces bake every address).
 
-    Host-written per pass: ``token_row`` FP32 TILE ``[1,1,1,32]`` (lane-major ``[t_u, d_1 .. d_k]`` blocks, then
-    ``ZERO_EMBEDDING_TOKEN``), ``draft_lanes`` FP32 ROW_MAJOR ``[1,1,1,32]`` (``d_{u, j+1}`` at ``u*R + j`` for j < k,
-    -1 at j = k and past B*R), ``ple_rows`` (the ``[1,1,B*R,640]`` upload of every lane's n-gram rows), and, when
-    they change, the per-lane accept counts (``accepted_lanes`` FP32 TILE ``[1,B,1,1]`` and ``accepted_row`` FP32
-    ROW_MAJOR ``[1,1,1,32]``, -1 on the pad lanes: stage 1 pins them at ``R - 1``), the active mask of this pass
-    (``active_lanes`` FP32 TILE ``[1,B,1,1]``; ``active_row`` / ``inactive_row`` UINT32 ROW_MAJOR ``[1,1,1,32]``: an
-    inactive lane's KV writes go to the scratch rows and its position does not advance), the commit mask
-    (``commit_lanes`` FP32 TILE ``[1,B,1,1]`` = the active mask of the pass being committed: a lane parked at this
-    pass still commits its last real pass, and a lane just un-parked commits nothing of its parked junk rows) and
-    ``k_eff_mask_row`` FP32 ROW_MAJOR ``[1,1,1,32]`` (1.0: every draft counts).  ``pass_contexts[u]`` holds lane u's R + 1 n-gram
-    contexts of the current pass (``[c]`` after committing c of its rows); the committed context per lane lives in
-    the checkpoint layer's PLE lane rows state.
+    Host-written per pass: ``token_row`` (lane-major ``[t_u, d_1 .. d_k]`` blocks, then ``ZERO_EMBEDDING_TOKEN``),
+    ``draft_lanes`` and ``ple_rows``; when they change, the per-lane accept counts, the active mask (an inactive lane's
+    KV writes go to the scratch rows and its position holds) and the commit mask (the active mask of the pass being
+    committed). ``pass_contexts[u]`` holds lane u's R + 1 n-gram contexts of the current pass.
     """
 
     lanes: int
@@ -1122,14 +1095,13 @@ def import_lane_state(
     alignment_pager: Qwen38TTNNLanePager,
     rope_shift: int = 0,
 ) -> None:
-    """Admit a prefilled sequence into lane ``lane`` from its 1-lane images: the pager's host slot of the generic
-    state (``model.generic_lane_layout``) and of the alignment layer's generic state, evicted after the prompt's
-    prefill at host-known ``position``; ``gdn_phases`` are the generic GDN states' ring phases at that moment (in
-    GDN-layer order).  Device -> device through the pagers' pack buffers, every family landing in lane u alone; the
-    phase-bound families are converted at P into the MTP-lane families (the B=1 seed forms of ``mtp_v2`` per lane).
-    Then the lane's position, rotary shift (``rope_shift``: the prompt's ``mrope`` shift, 0 for text) and n-gram
-    context.  Eager, never traced; the caller writes the lane's accept count (-1: the next commit keeps everything)
-    and active flag, and warms every (lane) variant before the captures."""
+    """Admit a prefilled sequence into lane ``lane`` from its 1-lane images (eager, never traced).
+
+    ``gdn_phases`` are the generic GDN states' ring phases at ``position``; the phase-bound families are converted at
+    P into the MTP-lane families. Then the lane's position, rotary shift and n-gram context are written; the caller
+    writes the accept count (-1: the next commit keeps everything) and active flag, and warms every variant before
+    the captures.
+    """
 
     _validate_lane_verify_state(model, verify)
     if isinstance(lane, bool) or type(lane) is not int or not 0 <= lane < verify.lanes:
@@ -1341,11 +1313,9 @@ def _lane_gather_index(verify: Qwen38TTNNMTPLaneVerifyState):
 
 
 def _select_lane_residual_rows(verify: Qwen38TTNNMTPLaneVerifyState, residual) -> None:
-    """``alignment.residual[:, :, u] <- residual[:, :, u*R + a_u]`` for every lane: the accept counts gathered per
-    column against the column's draft index give the one-hot row (one 1 per lane, 0 on the pad columns), times the
-    block-sum lane rows the per-lane select ``[1,1,B,32]``, repeated per branch and applied as one equal-batch
-    matmul whose rows are copied into the persistent buffer.  Exact: every output element is one bf16 value times 1.0 plus exact
-    zeros under the fp32-accumulating HiFi4 config."""
+    """``alignment.residual[:, :, u] <- residual[:, :, u*R + a_u]`` for every lane, as one equal-batch matmul by the
+    per-lane one-hot select ``[1,1,B,32]`` whose rows are copied into the persistent buffer. Exact: every output
+    element is one bf16 value times 1.0 plus exact zeros under the fp32-accumulating HiFi4 config."""
 
     constants = verify.constants
     dram = ttnn.DRAM_MEMORY_CONFIG
@@ -1361,8 +1331,8 @@ def _select_lane_residual_rows(verify: Qwen38TTNNMTPLaneVerifyState, residual) -
         raise RuntimeError(
             f"lane residual select has shape {_shape(select_branches)}, expected [1,4,{verify.lanes},32]"
         )
-    # The matmul's own output, then the copy into the persistent rows (the B=1 select's form): at M = B rows the
-    # matmul's ``optional_output_tensor`` came back under another tensor id on the pinned runtime (warm-up hold 2).
+    # The matmul's own output, then the copy into the persistent rows: at M = B rows the matmul's
+    # ``optional_output_tensor`` came back under another tensor id on the pinned runtime.
     selected = ttnn.matmul(
         select_branches, residual, memory_config=dram, compute_kernel_config=constants.compute_config
     )
@@ -1466,14 +1436,10 @@ def forward_verify_lanes(
 ) -> Qwen38TTNNVerifyOutput:
     """One lane verify pass at the lanes' positions: fixed op sequence, fixed shapes, no host ints, no host I/O.
 
-    ``catch_up=True`` commits every lane's previous pass first (``c_u = (a_u + 1) * commit_u`` rows out of the
-    persistent buffers, at the start of each layer; ``commit_u`` = that pass's active flag); the first pass after a
-    seed runs with ``catch_up=False``.  The accept counts are computed and read back; with ``land_accept`` they also
-    replace the per-lane accept rows the next commit, the gather index and the position advance read (stage 1
-    leaves them host-pinned at ``R - 1``).  ``P_u <- P_u + (a_u + 1) * active_u`` is the body's last op.  Any
-    failure poisons the model owner.  ``observer`` (eager diagnostics only) is called with a stage label after the
-    prologue, every layer, the head, the accept, the alignment and the epilogue; ``hidden_observer`` (eager only)
-    with the final mixer's ``[1,1,32,640]`` rows before the head.
+    ``catch_up=True`` first commits every lane's previous pass (``c_u = (a_u + 1) * commit_u`` rows); the first pass
+    after a seed uses ``catch_up=False``. With ``land_accept`` the computed accept counts replace the per-lane accept
+    rows. ``P_u <- P_u + (a_u + 1) * active_u`` is the body's last op; any failure poisons the model owner.
+    ``observer`` / ``hidden_observer`` are eager diagnostics only.
     """
 
     _validate_lane_verify_state(model, verify)
@@ -1707,12 +1673,9 @@ def verify_pass_fits_lanes(positions: Sequence[int], active: Sequence[int], allo
 
 
 # --------------------------------------------------------------------------- the draft body (k - 1 rows per lane)
-# forward_draft_lanes is mtp_v2.forward_draft on the lane tile: after a lane verify landed every lane's accept count,
-# the MTP layer runs k - 1 more rows per lane -- row u of a B-row tile is lane u's next draft at MTP position P_u' +
-# i (P_u' the position the verify advanced to) -- on the alignment layer's lane caches with the draft's own raw
-# history per lane, the rows-B MoE, the final mixer and the LM head; the resolved ids chain on the device (lane u's
-# id at lane u of the resolved row is the next row's token), and the next verify pass's token row / draft lanes and
-# the pass row are assembled by slices and concats (no id through an FPU, no host tensor).
+# forward_draft_lanes is mtp_v2.forward_draft on the lane tile: row u of a B-row tile is lane u's next draft. The
+# resolved ids chain on device, and the next verify pass's token row, draft lanes and pass row are assembled by slices
+# and concats (no id through an FPU, no host tensor).
 
 # Placeholder drafts of the bootstrap pass (the chain's ``[t_P, 0 .. 0]``; any exact ids would do).
 BOOTSTRAP_DRAFT_TOKEN = 0
@@ -1734,17 +1697,11 @@ def lane_pass_row_width(lanes: int) -> int:
 @dataclass
 class Qwen38TTNNMTPLaneDraftState:
     """Fixed-address buffers of the lane draft body: the MTP layer at one real row per lane (row u = lane u) on the
-    lane verify path's 32-row operands.  ``qsa_state`` is the MTP layer's DRAFT raw history / raw rows per lane (the
-    alignment lane state keeps its windows for the pass's real commit); ``qsa_verify_constants`` and
-    ``qsa_lane_verify_constants`` the rows = 1 forms, ``qsa_chunk_constants`` / ``qsa_lane_constants`` the verify
-    state's (the geometry :func:`_forward_layer_verify_lanes` reads: ``lanes``, ``rows``, the four constants);
-    ``layer_state`` runs the alignment layer's lane QSA state (the shared caches) through the draft raw rows and the
-    layer's own rows-B MoE; ``advance_selectors`` the constant a = 0 lane selectors (one committed row per lane: the
-    previous draft row joins its history); ``step_offset_rows[i]`` UINT32 ROW_MAJOR ``[1,1,1,32]`` (lane u = i, the
-    pad lanes 0: draft step i runs at ``P_u' + i``); ``sentinel_tail`` FP32 ROW_MAJOR ``[1,1,1,32-B]`` and
-    ``sentinel_lane`` ``[1,1,1,1]`` of ``ZERO_EMBEDDING_TOKEN``; ``pass_row`` FP32 ROW_MAJOR ``[1,1,1,W]`` = the lane
-    verify readback row this draft followed, then the next verify pass's token lanes (device-written: the pass's one
-    host readback)."""
+    lane verify path's 32-row operands.
+
+    ``qsa_state`` is the MTP layer's draft raw history per lane (the alignment lane state keeps its windows for the
+    pass's real commit); ``step_offset_rows[i]`` places draft step i at ``P_u' + i``; ``pass_row`` is the verify
+    readback row this draft followed, then the next pass's token lanes (the pass's one host readback)."""
 
     lanes: int
     drafts: int
@@ -1966,19 +1923,11 @@ def forward_draft_lanes(
 ) -> None:
     """The k - 1 draft rows of every lane after a lane verify (``P_u'`` = the position it advanced to).
 
-    Step i (i = 0 .. k - 2) embeds lane u's current draft (``d_{u,1}`` = the readback's first draft, then the
-    previous step's resolved id) at row u of a B-row tile, mixes it with the lane's alignment residual (the row
-    the verify selected at its accept), runs the MTP QSA layer at MTP position ``P_u' + i`` on the lane verify path
-    with one real row per lane (KV row and compressed block written by absolute position into the alignment layer's
-    lane caches, the draft raw history per lane, advanced by one committed row between steps; an inactive lane's KV
-    write is redirected like the verify's), the rows-B MoE, the final mixer, the LM head and the on-device resolve,
-    and emits ``d_{u,i+2}``.  Before the rows the draft raw histories are derived from the alignment windows with
-    this pass's accept counts (``derive_history``).  Afterwards the next verify pass's inputs are assembled on
-    device: ``verify.token_row`` = ``[t'_u, d_{u,1} .. d_{u,k}]`` per lane block then the sentinel,
-    ``verify.draft_lanes`` = ``[d_{u,1} .. d_{u,k}, -1]`` per lane block then the sentinel, and ``draft.pass_row``
-    = the verify readback row followed by the token lanes (the host's one readback per pass).  No host tensor, no
-    position change, no id through an FPU or reduce stage; ``observer`` (eager diagnostics only) is called after the
-    history derivation, every step's inputs, embedding + mixer, layer and head, and after the assembly.
+    Step i embeds lane u's current draft at row u of a B-row tile, mixes it with the lane's alignment residual and runs
+    the MTP QSA layer at ``P_u' + i`` (writes by absolute position into the alignment lane caches; an inactive lane's
+    KV write is redirected), the MoE, final mixer, LM head and on-device resolve, emitting ``d_{u,i+2}``. Afterwards
+    the next verify pass's ``token_row``, ``draft_lanes`` and ``draft.pass_row`` are assembled on device. No host
+    tensor, no position change, no id through an FPU or reduce stage.
     """
 
     def stage(name: str) -> None:
@@ -2196,15 +2145,12 @@ class Qwen38TTNNMTPLanePassRecord:
 
 
 class Qwen38TTNNMTPLaneChain:
-    """The lane pass loop over the three traces (``mtp_v2.Qwen38TTNNMTPChain`` with per-lane bookkeeping): per pass
-    (1) the commit trace enqueued non-blocking (every lane's previous pass out of its persistent buffers), (2) the
-    host looks up every lane's R n-gram rows from its committed context (one table read) and uploads them, (3) the
-    verify and, right behind it, the draft of the next pass enqueued, (4) ONE blocking readback of the pass row:
-    per lane the accept, the committed ids and the next pass's tokens; the PLE contexts commit and the position
-    mirror advances.  ``replay`` is the caller's raw blocking replay (``verify_before_replay`` called once outside
-    the loop), ``enqueue`` its non-blocking form (without it every trace replays blocking: the segment-measuring
-    form).  Every lane is active (stage 3: no lane parks; the section-9 mechanisms stay off: a pass that would not
-    fit any lane is refused, never truncated)."""
+    """The lane pass loop over the three traces (``mtp_v2.Qwen38TTNNMTPChain`` with per-lane bookkeeping).
+
+    Per pass: the commit trace enqueued non-blocking, every lane's R n-gram rows looked up and uploaded, the verify and
+    the next draft enqueued, then one blocking readback of the pass row. ``replay`` is the caller's blocking replay,
+    ``enqueue`` its non-blocking form (without it every trace replays blocking). A pass that would not fit any lane is
+    refused, never truncated."""
 
     def __init__(
         self,
@@ -2337,8 +2283,8 @@ class Qwen38TTNNMTPLaneChain:
             self._timed(segments, "commit_replay", lambda: self.replay(self.traces.commit))
         if self.commit_mask != self.active:
             # The commit just launched used the mask of the pass it commits; from the next commit on the mask is this
-            # pass's (the host write queues behind the commit on the same command queue).  Left stale, a parked lane's
-            # junk pass would be committed and an admitted lane's first pass never (mtp-b4-s4-lifecycle, 1b81ca8b).
+            # pass's (the host write queues behind the commit). Left stale, a parked lane's junk pass would be
+            # committed and an admitted lane's first pass never.
             self._timed(
                 segments,
                 "mask_refresh",
@@ -2350,15 +2296,10 @@ class Qwen38TTNNMTPLaneChain:
 
 
 # --------------------------------------------------------------------------- lifecycle: the MTP lane image
-# An MTP lane's parked image is the lane's slice of every MTP-lane family, read to the host as per-device torch shards
-# and written back through the import's landing forms (the chunked KV slab write, ``fill_cache`` at the lane's batch
-# index).  Unlike the generic lane image (the pager's) it holds the DERIVED histories -- the GDN FIR history rows, the
-# QSA raw history rows, the PLE history slots -- because the MTP lane state carries no phase-bound ring; no residue
-# conversion happens on either leg.  Only the used prefix of a lane's KV region and its whole compressed cache are
-# carried: rows at or past the committed position are rewritten by the next pass before any sparse row can name
-# them (the verify's write rule), so the image is exact for the stream that continues from it.  Eager, never traced;
-# the caller warms every lane's eviction and import before the captures (a program compiled after them is the
-# replay-hang class) and checks ``num_program_cache_entries()`` across every lifecycle op.
+# An MTP lane's parked image is the lane's slice of every MTP-lane family as per-device host shards, written back
+# through the import's landing forms. It holds the derived histories (no phase-bound ring, no residue conversion) and
+# only the used KV prefix, which is exact because rows at or past the committed position are rewritten before any
+# sparse row can name them. Eager, never traced: warm every eviction and import before the captures.
 
 
 @dataclass

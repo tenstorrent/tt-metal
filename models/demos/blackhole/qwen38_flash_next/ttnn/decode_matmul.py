@@ -3,22 +3,11 @@
 
 """DRAM-sharded decode matmul configuration shared by the device modules.
 
-Every converted decode ``ttnn.linear`` in this model multiplies one padded
-tile row of activations (M == one tile) by a resident weight.  The default
-interleaved program serializes one small in1 DRAM read per K block regardless
-of N or grid, so kernel time scales with K blocks alone; the DRAM-sharded
-program config (the tt_transformers decode pattern) instead streams each
-weight shard from its own DRAM bank into worker cores next to that bank.  The
-operands, dtypes, and per-element sequential K accumulation under the
-caller's compute kernel config are unchanged.
-
-Usage: upload the weight with :func:`dram_sharded_weight_memory_config`, move
-the activation to the activation config returned by
-:func:`dram_sharded_matmul_configs`, and call ``ttnn.linear`` with the
-returned program config and ``memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG``.
-The readers per DRAM bank
-(``num_workers_per_dram_bank``: the builder's ``decode_dram_workers_per_bank``,
-``DEFAULT_WORKERS_PER_DRAM_BANK`` unless named) go to both calls of one linear.
+Every decode ``ttnn.linear`` here multiplies one padded tile row of activations by a resident weight; the DRAM-sharded
+program streams each weight shard from its own bank into worker cores next to it. Upload the weight with
+:func:`dram_sharded_weight_memory_config`, move the activation to the config from :func:`dram_sharded_matmul_configs`,
+and call ``ttnn.linear`` with the returned program config and ``memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG``;
+both calls of one linear take the same ``num_workers_per_dram_bank``.
 """
 
 from __future__ import annotations
@@ -38,13 +27,8 @@ def _dram_bank_count(mesh_device) -> int:
     return grid.x
 
 
-# The DRAM-sharded program reads each weight bank with one worker core; on Blackhole it also admits two readers per
-# bank (``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.num_workers_per_dram_bank``, in1 on NOC_0).  Two
-# readers serve the projections in ``TWO_WORKER_PROJECTIONS`` by default (2026-09-16, 4x p150: bitwise at rows 1..32
-# and at the model level; kernel us per call GDN in-proj 85 -> 67, GDN/QSA out 34 -> 28, QSA query-gate 59 -> 43,
-# LM-head chunks 163/185 -> 93/107; 40.27 -> 38.67 ms per decode step); one reader per bank keeps the one-reader
-# caches' identity.  A bank's shard holds a whole number of tiles per reader, which widens only the GDN input
-# projection (4160 columns: 17 -> 18 tiles per bank, 544 -> 576 columns).
+# Readers per DRAM bank for the projections in ``TWO_WORKER_PROJECTIONS`` (Blackhole admits two; bitwise equal to one).
+# A bank's shard holds whole tiles per reader, which widens only the GDN input projection (544 -> 576 columns per bank).
 DEFAULT_WORKERS_PER_DRAM_BANK = 2
 WORKERS_PER_DRAM_BANK = (1, 2)
 # (K, N) -> activation storage cores of the decode linears that run two readers per bank: the GDN input (2560 x 4160)
@@ -66,20 +50,12 @@ def validate_decode_dram_workers(value) -> int:
     return value
 
 
-# -- dense weight dtype (QWEN38_DENSE_WEIGHT_DTYPE) -------------------------------------------------------------------
-# ``bf8`` (the default: HiFi2 matmuls, about 1 GB less per die and 3 % off the decode step at a KL of 0.007 against
-# the CPU oracle on the 2026-09-24 A/B) | ``bf16`` (the previous production format, byte for byte) | ``bf4``: the dtype of the resident dense
-# matmul weights the decode linears stream from DRAM -- the GDN projections (qkvzab, out), the QSA projections (qg,
-# k, v, out, index_q, index_k), the shared expert (gate, up, down, the scalar gate and the fused [gate|up|scalar]
-# row), the LM-head chunks, the final mixer (down, up) and the MTP input fc linears.  ``QWEN38_DENSE_WEIGHT_DTYPE_<M>``
-# (M in GDN, QSA, SHARED_EXPERT, LM_HEAD, FINAL_MIXER, MTP) overrides one module.  The matmuls whose weights changed
-# run the compute fidelity tech_reports/LLMs/llms.md gives for the weight format (HiFi4 for BF16, HiFi2 for BFP8,
-# LoFi for BFP4; fp32 accumulation, no approximation, no packer L1 accumulation, as before); every other program keeps
-# its config.  Kept BF16 regardless: the embedding table, the router (mlp.gate), every norm, the GDN conv taps /
-# dt_bias / A_log (the GDN gating projections in_proj_a / in_proj_b are packed into qkvzab and follow its dtype), the
-# PLE tables, and the hyper-connection (GR) mixers, whose default-on fused read program (ttnn/fused/gr_read) streams
-# BF16 tiles through BF16 circular buffers.  A converted tensorbin carries the dtype tag in its name (``.bf8b`` /
-# ``.bf4b``; the GDN's ``.bf16`` / ``.bf8b`` scheme), so the bf16 caches are never read or written by another dtype.
+# ``bf8`` (default) | ``bf16`` | ``bf4``: the dtype of the resident dense decode matmul weights (GDN, QSA, shared
+# expert, LM head, final mixer, MTP fc); ``QWEN38_DENSE_WEIGHT_DTYPE_<M>`` overrides one module. Those matmuls run
+# HiFi4 / HiFi2 / LoFi for BF16 / BFP8 / BFP4 with fp32 accumulation. The embedding, router, norms, GDN conv taps /
+# dt_bias / A_log, PLE tables and GR mixers stay BF16 (the fused gr_read uses BF16 circular buffers). Converted
+# tensorbins carry the dtype tag in their name, so caches of different dtypes never collide.
+# the dtype tag in their name, so caches of different dtypes never collide.
 DENSE_DTYPE_ENV = "QWEN38_DENSE_WEIGHT_DTYPE"
 DEFAULT_DENSE_DTYPE_NAME = "bf8"
 DENSE_MODULES = ("gdn", "qsa", "shared_expert", "lm_head", "final_mixer", "mtp")
@@ -88,11 +64,8 @@ DENSE_DTYPE_TAGS: dict[Any, str] = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bf8b
 DENSE_MATH_FIDELITY_NAMES: dict[Any, str] = {ttnn.bfloat16: "HiFi4", ttnn.bfloat8_b: "HiFi2", ttnn.bfloat4_b: "LoFi"}
 # One 32x32 tile: 1024 bf16 values; 1024 one-byte mantissas + 64 shared exponents; 512 bytes of 4-bit mantissas + 64.
 DENSE_TILE_BYTES: dict[Any, int] = {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}
-# The two-reader bank layouts are whole tiles per reader (bank_tiles), so they do not depend on the tile's bytes; a
-# dtype enters this set once one reader and two readers were checked bitwise equal on the device for every shape of
-# TWO_WORKER_PROJECTIONS (tools/qualify_dense_two_readers.py).  A dtype outside it runs one reader everywhere (the
-# builder records the reason in decode_dram_workers_fallback).  Qualified 2026-09-24 on a QuietBox p150b (eight
-# banks): bf16, bf8b (HiFi2) and bf4b (LoFi) bitwise equal one vs two readers on all five shapes at 32 rows.
+# Dtypes whose one- and two-reader programs were checked bitwise equal on device for every TWO_WORKER_PROJECTIONS shape
+# (tools/qualify_dense_two_readers.py); any other dtype runs one reader everywhere.
 TWO_READER_QUALIFIED_DTYPES: frozenset = frozenset({ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b})
 
 
@@ -170,7 +143,7 @@ class DenseWeightPlan:
 
 
 def default_dense_weight_plan(environ: Mapping[str, str] | None = None) -> DenseWeightPlan:
-    """``QWEN38_DENSE_WEIGHT_DTYPE`` (bf8 when unset) for every module, ``QWEN38_DENSE_WEIGHT_DTYPE_<MODULE>`` over it."""
+    """``QWEN38_DENSE_WEIGHT_DTYPE`` (bf8 when unset) per module, ``QWEN38_DENSE_WEIGHT_DTYPE_<MODULE>`` over it."""
 
     env = os.environ if environ is None else environ
     base = parse_dense_weight_dtype(env.get(DENSE_DTYPE_ENV, "").strip() or DEFAULT_DENSE_DTYPE_NAME)
@@ -199,12 +172,10 @@ def mesh_dram_bank_worker_signatures(mesh_device) -> dict[tuple[int, int], tuple
 
 
 def mesh_device_geometries(mesh_device) -> tuple[tuple[int, int], ...]:
-    """Per mesh coordinate (row-major), (DRAM bank count, the row extent max y + 1 of the device's optimal bank reader
-    cores): the geometry one shared DRAM-sharded placement must find on every device, read from the per-coordinate
-    bank -> worker assignment Python has (a MeshDevice exposes no per-device handle).  Harvesting moves columns, not
-    rows, so dies harvested in different columns share this geometry; a device whose worker grid differs in its rows
-    or bank count is refused here, one whose columns differ is refused by tt-metal's geometry check at the first
-    program build."""
+    """Per mesh coordinate (row-major): (DRAM bank count, max y + 1 of the optimal bank reader cores).
+
+    Harvesting moves columns, not rows, so dies harvested in different columns share this geometry; tt-metal's own
+    geometry check refuses differing columns at the first program build."""
 
     signatures = mesh_dram_bank_worker_signatures(mesh_device)
     out = []
@@ -232,18 +203,9 @@ def decode_dram_workers_placement(mesh_device) -> str:
 def qualify_decode_dram_workers(mesh_device, requested: int) -> tuple[int, str | None]:
     """The readers per DRAM bank this mesh admits: ``requested``, or 1 with the reason.
 
-    One DRAM-sharded matmul program is placed on every device of the mesh (tt-metal ``get_dram_bank_reader_assignments``):
-    the reference (first) device's optimal bank -> worker assignment is the placement everywhere.  The DRAM-sharded
-    readers address their shard by bank id, so any worker core can read any bank and the assignment is a locality
-    choice.  The shared placement is valid when every device has the reference device's worker grid and DRAM grid; a
-    mesh of dies harvested in different columns (a QuietBox 2: one die serves banks 4-7 from another worker column,
-    2026-09-29) then runs two readers with the odd dies reading those banks from a worker one or more NoC hops further
-    (``decode_dram_workers_placement`` names them, the READY record carries it, tt-metal warns once per program build
-    with the largest hop deviation; the acceptance replay is bitwise the one-reader stream, the rows of record in
-    NUMERICS).  One reader per bank remains for the cases the placement cannot be validated: a device whose DRAM bank
-    count or worker-row extent differs from the reference device's (another die geometry; a worker grid differing in
-    its columns is refused by tt-metal at the first program build), and a mesh whose bank count is not the eight the
-    two-reader table (``TWO_WORKER_PROJECTIONS``) was qualified on (a seven-bank Blackhole ring).
+    tt-metal places the reference device's bank -> worker assignment on every device; readers address shards by bank
+    id, so this is only a locality choice and stays bitwise. One reader remains when a device's bank count or worker-row
+    extent differs from the reference's, or the bank count is not the eight ``TWO_WORKER_PROJECTIONS`` was qualified on.
     """
 
     validate_decode_dram_workers(requested)
@@ -312,13 +274,8 @@ def validate_dram_sharded_weight(tensor, mesh_device, k: int, n: int, *, num_wor
 def dram_sharded_matmul_configs(mesh_device, k: int, n: int, *, num_cores: int, num_workers_per_dram_bank: int = 1):
     """Activation memory config plus program config for one decode linear.
 
-    ``num_cores`` is the L1 storage grid holding the width-sharded activation;
-    the kernel pins its compute workers to the DRAM banks holding the weight
-    (``num_workers_per_dram_bank`` of them per bank), so the grid only needs to
-    split ``k`` into whole tiles per core (which also fixes the in0 block width
-    to the largest tile divisor).  ``per_core_N`` is the output storage width:
-    the activation grid's share of ``n`` with one reader, the bank's tiles with
-    two (the configuration the two-reader form was qualified with).
+    ``num_cores`` is the L1 storage grid of the width-sharded activation; it only needs to split ``k`` into whole tiles
+    per core. ``per_core_N`` is the activation grid's share of ``n`` with one reader, the bank's tiles with two.
     """
 
     tiles = bank_tiles(mesh_device, k, n, num_workers_per_dram_bank)
@@ -349,7 +306,7 @@ def dram_sharded_matmul_configs(mesh_device, k: int, n: int, *, num_cores: int, 
         per_core_M=1,
         per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)) if num_workers_per_dram_bank == 1 else tiles,
         fused_activation=None,
-        # the one-reader constructor call stays the call of 2026-09-04 (the field's own default is 1)
+        # one reader leaves the field at its default (1)
         **({} if num_workers_per_dram_bank == 1 else {"num_workers_per_dram_bank": num_workers_per_dram_bank}),
     )
     return activation_memory_config, program_config
@@ -362,11 +319,9 @@ def _largest_divisor(value: int, cap: int) -> int:
 def prefill_matmul_program_config(mesh_device, rows: int, k: int, n: int):
     """The 2D-multicast program config of a ``[rows, k] x [k, n]`` prefill-slab linear on interleaved operands.
 
-    The grid width is the one that keeps the widest output subblock (the runtime's automatic config is 2-2.5x slower
-    on the K = 2560 linears), ``in0_block_w`` the largest divisor of the K tiles up to 8, the output subblock one tile
-    high and up to four wide (fp32 accumulation halves the destination registers), ``per_core_M`` the row tiles over
-    the grid's rows.  Measured 2026-09-09 on 4x p150: 10-12x the per-tile DRAM-sharded form at 2048 rows, within one
-    bf16 ULP of it.
+    The grid width keeps the widest output subblock (the automatic config is slower on the K = 2560 linears);
+    ``in0_block_w`` is the largest divisor of the K tiles up to 8; the output subblock is one tile high and up to four
+    wide (fp32 accumulation halves the destination registers).
     """
 
     grid = mesh_device.compute_with_storage_grid_size()
@@ -394,10 +349,9 @@ def prefill_matmul_program_config(mesh_device, rows: int, k: int, n: int):
 
 
 def prefill_linear(activation, weight, program_config, *, compute_kernel_config, dtype=None):
-    """One prefill-slab linear: the resident DRAM-width-sharded ``weight`` copied interleaved (the 2D-multicast
-    program admits a sharded in1 but reads it wrong: 96 % of the outputs, measured 2026-09-09), the matmul on the
-    interleaved activation into an interleaved DRAM output, the copy released.  The caller's compute config and
-    output dtype are the decode linear's."""
+    """One prefill-slab linear on an interleaved copy of the resident DRAM-width-sharded ``weight``, released after.
+
+    The 2D-multicast program admits a sharded in1 but reads it wrong, hence the copy."""
 
     weight_interleaved = ttnn.to_memory_config(weight, ttnn.DRAM_MEMORY_CONFIG)
     try:
@@ -414,11 +368,9 @@ def prefill_linear(activation, weight, program_config, *, compute_kernel_config,
 
 
 def dram_sharded_row_tiles(rows, activation_memory_config) -> list:
-    """The four 32-row tiles of an interleaved ``[1,1,128,W]`` activation (the long prefill chunk), each moved into
-    a decode linear's activation shard (``None``: left interleaved, for the per-tile routed expert stream): the
-    DRAM-sharded program admits one row tile per call (``per_core_M == 1``), so the 128-row activation runs four
-    calls of the same program on the same rows.  The slice bounds are literal (the captured bodies carry no
-    host-int-dependent shape op).  The caller deallocates the tiles."""
+    """The four 32-row tiles of an interleaved ``[1,1,128,W]`` activation, each moved into a decode linear's
+    activation shard (``None``: left interleaved). The DRAM-sharded program admits one row tile per call; the slice
+    bounds are literal (captured bodies carry no host-int shape op). The caller deallocates the tiles."""
 
     width = rows.shape[3]
     if tuple(int(value) for value in rows.shape) != (1, 1, 4 * ttnn.TILE_SIZE, width):

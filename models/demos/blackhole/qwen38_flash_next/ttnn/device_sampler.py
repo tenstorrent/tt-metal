@@ -3,56 +3,10 @@
 
 """The sampled token chosen on device, inside TAIL, from the candidate row: an integer-exact composite of ttnn ops.
 
-Today's sampled step reads the candidate row (``Qwen38TTNNLMHead.sampling_candidates``) back to the host, samples
-there and writes the token row before HEAD can start.  This module moves the choice of the token into TAIL's
-epilogue so the sampled loop is the greedy loop plus one small host write per step (the uniform draw).  The host
-reference :func:`device_sampler_reference` computes the same token from the same row bit for bit, so a run can be
-re-derived on the host from the read rows and the ledger of draws.
-
-The op sequence (:func:`sample_on_device`, 57 ttnn calls = 76 device programs on the replicated 128-lane row):
-
-1. Split: the row ``[v_d | g_d]`` per shard becomes the value lanes ``s`` and the global-id lanes ``g``
-   (``ttnn.gather`` with constant index rows: 32-bit copies).
-2. Rank, value descending and global id ascending: ``rank_j = #{i: s_i > s_j} + #{i: s_i == s_j, g_i < g_j}``
-   from three comparison matrices and a sum of 0/1 lanes (exact on every reduce path); the inverse permutation by
-   another 0/1 sum; the sorted views by gathers.  Equal values are ordered by the lowest global id, the rule of
-   the host samplers (``torch.argmax`` / the stable sort over ascending ids).
-3. Weights: the temperature is a host-written table ``W(i) = round(2**18 * exp(-i / (1024 T)))`` indexed by
-   ``floor(1024 * (s_max - s_j))`` (clamped to the table), so nothing transcendental runs on the device and the
-   host reference needs no model of the SFPU exp.  Lanes at or beyond ``top_k`` are masked to weight 0.
-4. Exact prefix sums: the weights split into an 11-bit high and an 8-bit low half through two ``[1,128] x
-   [128,128]`` fp32 matmuls against a constant upper-triangular 0/1 matrix (the TF32 input truncation of the FPU
-   is lossless on 11-bit integers, the fp32 accumulation exact); recombined on the SFPU.
-5. Filters as prefix lengths: ``K = min(#(C_ex <= tau), #(W >= max(m, 1)))`` with ``tau = top_p * S_k`` (the
-   total weight of the top-k lanes) and ``m = min_p * 2**18``: the top-k mask zeroes the lanes beyond ``top_k``,
-   so the second count is ``min(top_k, K_min_p, K_positive)``; ``K >= 1`` always (lane 0 has weight ``2**18``,
-   exclusive prefix 0).
-6. Draw: ``theta = u * S`` (``S`` the total kept weight); the chosen sorted lane is ``min(#(C_in <= theta), K - 1)``,
-   the reference's inverse CDF (a lane beyond ``K`` reaches ``theta`` only when ``theta == S``, where the clamp
-   decides); its id is a gather.
-7. Select: ``token_row = greedy_row * greedy_flag + splat(sampled) * (1 - greedy_flag)``; ``greedy_flag = 1``
-   makes the row the greedy resolve's, bitwise (the temperature-0 short-circuit).
-
-Exactly two fp32 roundings (``tau`` and ``theta``, single SFPU multiplies, RNE) are not integer-exact; the
-reference reproduces them with fp32 torch multiplies (``_sfpu_mul``).  Everything else is integer arithmetic
-below ``2**24`` on the SFPU, 0/1 or 11-bit inputs through the FPU, or 32-bit data movement.
-
-The uniform draw ``u = n * 2**-24`` comes from a host splitmix64 stream per request (:class:`UniformStream`),
-written per step into a persistent ``[1,1,1,1]`` tensor behind HEAD; the same stream feeds a host fallback so a
-fallback step continues the sequence.
-
-Ties: the per-shard ``ttnn.topk`` decides which members of a tie at a shard's 32nd value are read (unchanged from
-the host sampler's relaxed gate; the read set can differ from ``torch.topk``'s only there).  From the row on the
-sampler is a deterministic function of ``(row, parameters, u)`` with the lowest global id first among equal values,
-so on the same read row it agrees with ``sample_candidates`` up to the quantization boundaries below; against the
-full vocabulary it can also differ by exchanging tokens of equal bf16 logit at a shard's 32nd value.  Top-k is
-limited to the 32 candidates the row carries per shard.
-
-Deviations from the host sampler (:func:`~models.demos.blackhole.qwen38_flash_next.ttnn.sampling.sample_candidates`),
-stated: the weights are quantized (relative error at most ``2**-10`` from the 1/1024 grid plus ``0.5 / W`` from the
-rounding, far below the bf16 rounding of the logits themselves); the top-p boundary compares exact integer
-prefixes to one rounded product; a token with ``p / p_max < 2**-19`` gets weight 0.  The device path serves
-``0 < T <= 4``, ``1 <= top_k <= 32``, ``min_p <= 1`` and no penalties; everything else keeps the host loop.
+:func:`device_sampler_reference` computes the same token from the same row bit for bit; ties go to the lowest global
+id. Temperature is a host-written weight table, so nothing transcendental runs on device. The only fp32 roundings are
+``tau = top_p * S_k`` and ``theta = u * S`` (SFPU RNE); everything else is integer arithmetic below ``2**24``. Serves
+``0 < T <= 4``, ``1 <= top_k <= 32``, ``min_p <= 1`` and no penalties; anything else keeps the host loop.
 """
 
 from __future__ import annotations
@@ -96,7 +50,7 @@ DEVICE_OP_COUNT = 57
 
 
 def _sfpu_mul(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
-    """One fp32 SFPU multiply: the two rounding sites of the composite (RNE, pinned by micro-test M1)."""
+    """One fp32 SFPU multiply (RNE): the composite's two rounding sites."""
 
     return (left.to(torch.float32) * right.to(torch.float32)).to(torch.float32)
 
@@ -162,10 +116,7 @@ class Qwen38DeviceSamplerPolicy:
 
     @classmethod
     def refusal(cls, p: Qwen38SamplingParameters, *, presence_on_device: bool = False) -> str | None:
-        """Why a sampled request keeps the host loop: a temperature above ``MAX_TEMPERATURE``, ``top_k`` 0 or above
-        the row's 32 per shard, a frequency penalty (counts, not bits), a repetition penalty (the multiplicative
-        transformers rule), a negative presence penalty (it can lift unread tokens: the host path's own fallback),
-        or any presence penalty when the sampler serving cannot apply one (the composite)."""
+        """Why a sampled request keeps the host loop, or ``None`` when the device sampler can serve it."""
 
         if p.temperature == 0:
             return None
@@ -185,16 +136,16 @@ class Qwen38DeviceSamplerPolicy:
 
     @property
     def min_weight(self) -> float:
-        """``max(fp32(min_p) * 2**18, 1)``: a lane is kept when its weight reaches it (min-p, and the zero-weight tail)."""
+        """``max(fp32(min_p) * 2**18, 1)``: the weight a kept lane must reach (min-p and the zero-weight tail)."""
 
         return max(float(torch.tensor(self.min_p, dtype=torch.float32) * WEIGHT_ONE), 1.0)
 
 
 @dataclass(frozen=True)
 class Qwen38DeviceSample:
-    """What the composite decides for one row: the token, the kept prefix length and the chosen sorted lane; ``guard``
-    when a token the row did not read could change the draw (``fused/sampler_tail`` reports it, the host then samples
-    the full vocabulary)."""
+    """What the composite decides for one row: the token, the kept prefix length and the chosen sorted lane.
+
+    ``guard`` is set when an unread token could change the draw; the host then samples the full vocabulary."""
 
     token_id: int
     kept: int
@@ -212,14 +163,11 @@ def device_sampler_reference(
     table=None,
     seen: torch.Tensor | None = None,
 ) -> Qwen38DeviceSample:
-    """The host reference of :func:`sample_on_device` (and of ``fused/sampler_tail``) for one row: ``values`` fp32
-    ``[128]`` and ``ids`` int64 ``[128]`` in lane order (shard d's 32 lanes at ``32 d``), the policy's temperature
-    table, one draw ``u``; ``seen`` (bool ``[128]``: the lanes whose id the request has emitted) takes the policy's
-    presence penalty off those values first (an fp32 subtract, the host sampler's), required when it is nonzero.
+    """Host reference of :func:`sample_on_device` and ``fused/sampler_tail`` for one row.
 
-    The guard: an unread token is at most its shard's smallest raw value, so the shard floor (the largest shard minimum
-    of the raw values) bounds them all; the row is exact over the vocabulary unless the kept minimum does not clear the
-    floor or the top-k minimum lies below it (an unread token in the top-k moves ``S_k`` and with it the top-p cut)."""
+    ``values`` fp32 ``[128]`` and ``ids`` int64 ``[128]`` are in lane order (shard d at ``32 d``); ``seen`` marks the
+    emitted ids and is required when the presence penalty is nonzero. ``guard`` is set when an unread token, bounded by
+    the largest shard minimum, could change the kept set or the top-p cut."""
 
     if tuple(values.shape) != (LANES,) or values.dtype != torch.float32:
         raise ValueError(f"values must be fp32 [{LANES}], got {values.dtype} {tuple(values.shape)}")
@@ -280,11 +228,9 @@ def _value_index_row() -> torch.Tensor:
 
 @dataclass
 class Qwen38TTNNDeviceSamplerConstants:
-    """The composite's replicated device tensors: constants built once, per-request scalars, the per-step draw.
+    """The composite's replicated device tensors: constants, per-request scalars and the per-step draw.
 
-    Every tensor is replicated (the row is replicated after the all-gather).  The host writes ``weight_table``
-    when a request's temperature differs from the resident one, the request scalars at request start and
-    ``uniform`` once per step; all of them before the TAIL that reads them (cq 0 order).
+    The host writes the table, the scalars and ``uniform`` before the TAIL that reads them (cq 0 order).
     """
 
     value_index: Any  # uint32 TILE [128]: the row lanes holding the values
@@ -446,12 +392,10 @@ class Qwen38TTNNDeviceSamplerConstants:
 
 
 def sample_on_device(row: Any, greedy_token_row: Any, constants: Qwen38TTNNDeviceSamplerConstants):
-    """TAIL's last ops after the greedy resolve and the candidate row: the token row the epilogue copies out.
+    """TAIL's last ops after the greedy resolve: the token row the epilogue copies out.
 
-    ``row`` is the replicated FP32 ROW_MAJOR ``SAMPLING_CANDIDATE_ROW_SHAPE`` of ``sampling_candidates``,
-    ``greedy_token_row`` the FP32 TILE ``TOKEN_ROW_SHAPE`` of ``resolve_greedy_on_device``.  Returns an FP32 TILE
-    ``TOKEN_ROW_SHAPE`` whose column 0 is the chosen id (the module docstring's steps 1-7; every metadata check
-    prints actual against expected).  Neither input is consumed.
+    ``row`` is the replicated FP32 ROW_MAJOR candidate row, ``greedy_token_row`` the FP32 TILE greedy token row.
+    Returns an FP32 TILE ``TOKEN_ROW_SHAPE`` with the chosen id in column 0. Neither input is consumed.
     """
 
     dram = ttnn.DRAM_MEMORY_CONFIG

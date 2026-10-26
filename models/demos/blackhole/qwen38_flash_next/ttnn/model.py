@@ -3,37 +3,12 @@
 
 """Exact four-P150 owner for ordinary Qwen3.8-Flash-Next TTNN decode.
 
-This module composes already-created, provenance-bound device modules.  It
-does not hide conversion or construct weights: callers must provide the exact
-vocabulary-sharded model I/O, all 48 target layers, and the backbone terminal
-hyper-connection mixer.  Construction validates their live 1x4 physical mesh
-identity and rejects replicated or numerically similar substitutes.
-
-One ordinary decode step is deliberately serialized:
-
-* validate and upload one true-global-B1 token;
-* look up its vocab-row-sharded embedding and reduce-scatter to H/4;
-* repeat that H/4 shard across the checkpoint's four residual branches;
-* run all 48 target layers in checkpoint order, streaming exactly one BF4_B
-  routed-expert layer at a time through their shared streamer;
-* apply the terminal hyper-connection read and the untied vocab-sharded head.
-
-QSA RoPE is generated for the exact absolute position on the host and uploaded
-once per model step as a replicated read-only input.  Positions which close a
-four-token index block additionally receive that block's first-position RoPE.
-GDN layers never receive QSA inputs.
-
-State is explicit and single-sequence.  Model-wide one-shot transactions
-compose the per-layer GDN copy snapshots, QSA immutable cache views, and PLE
-history snapshots.  The first speculative step after :meth:`snapshot_state`
-must set ``retain_input_state=True``; the QSA owner independently fail-closes
-if that rule is violated.  Any exception after a model-level mutation boundary
-permanently poisons this owner; no state or snapshot can then be reused.  The
-caller must close the task-owned process/mesh without resetting hardware.
-
-No operation here opens a device or weakens lease requirements.  The supplied
-mesh must already have been opened under the task's full-lifetime exact-device
-locks and enforcing broker lease.
+Composes already-created, provenance-bound device modules (model I/O, all 48 target layers, the terminal mixer) and
+validates their live 1x4 mesh identity. One decode step embeds the token, repeats the H/4 shard across the four
+residual branches, runs the 48 layers in checkpoint order streaming one BF4_B routed-expert layer at a time, then
+applies the terminal mixer and the untied vocab-sharded head. The first speculative step after
+:meth:`snapshot_state` must pass ``retain_input_state=True``. Any exception after a mutation boundary permanently
+poisons the owner; the caller must then close the process / mesh without resetting hardware.
 """
 
 from __future__ import annotations
@@ -115,12 +90,9 @@ EXPECTED_LAYER_PATTERN = ("linear_attention", "linear_attention", "linear_attent
 EXPECTED_VOCAB_RANGES = tuple(
     (coordinate * LOCAL_VOCAB_SIZE, (coordinate + 1) * LOCAL_VOCAB_SIZE) for coordinate in range(TP_SIZE)
 )
-# HEAD/TAIL split of the position-generic body.  HEAD = device-token embedding +
-# layers[:GENERIC_HEAD_LAYERS]; TAIL = the device position derivation,
-# layers[GENERIC_HEAD_LAYERS:], final mixer, LM head and the position advance.
-# The first TAIL layer is the PLE consumer (PLE_CHECKPOINT_LAYER), so HEAD reads
-# neither the host-written PLE row nor the position and the retained handoff is
-# released by that layer's release_input keyword alone.
+# HEAD/TAIL split of the position-generic body: HEAD = device-token embedding + layers[:GENERIC_HEAD_LAYERS]; TAIL =
+# position derivation, the remaining layers, final mixer, LM head and position advance. The first TAIL layer is the PLE
+# consumer, so HEAD reads neither the PLE row nor the position and that layer's release_input frees the handoff.
 GENERIC_HEAD_LAYERS = 1
 GENERIC_TRACE_PARTS_SINGLE = ("body",)
 GENERIC_TRACE_PARTS_SPLIT = ("head", "tail")
@@ -226,9 +198,7 @@ def _release_tensor_slots(
 ) -> None:
     """Release every unique tensor and clear only successfully released slots.
 
-    The caller retains the mutable ``slots`` list.  If one release fails, a
-    retry visits only the failed ownership groups and cannot double-free a
-    tensor which a previous attempt released successfully.
+    A retry visits only the failed ownership groups, so no tensor is freed twice.
     """
 
     _release_tensor_slot_indices(slots, range(len(slots)), label=label, primary=primary)
@@ -407,10 +377,7 @@ class Qwen38TTNNRoPE:
 class Qwen38TTNNRoPETable:
     """Resident cos/sin rows for every allocated position, selected on device by ``P``.
 
-    Row ``p`` of each table is exactly ``_host_rope(p)``, so an embedding lookup
-    returns the same bits a per-position upload would.  One table pair per
-    model; the position-generic body reads it with the device position and
-    never uploads RoPE per token.
+    Row ``p`` of each table is exactly ``_host_rope(p)``, so a lookup returns the same bits a per-position upload would.
     """
 
     cos_table: Any
@@ -486,10 +453,8 @@ class Qwen38TTNNRoPETable:
         looked_up = ttnn.embedding(
             indices, table, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        # ttnn.embedding returns [batch, sentence, hidden] for indices of rank > 1
-        # (ttnn/cpp/ttnn/operations/embedding/embedding.cpp:38-39,73), so the
-        # [1,1,32] index row comes back as [1,32,64]; the fused TILE program's
-        # 32-row tile is its padded shape.  Same rule as embed_device_token.
+        # ttnn.embedding returns [batch, sentence, hidden] for indices of rank > 1, so the [1,1,32] index row comes back
+        # as [1,32,64]; the fused TILE program's 32-row tile is its padded shape. Same rule as embed_device_token.
         rows = ttnn.unsqueeze_to_4D(looked_up) if len(looked_up.shape) == 3 else looked_up
         padded = (1, 1, row_count, QSA_ROPE_DIM)
         if (
@@ -681,16 +646,10 @@ class Qwen38TTNNChunkFeatureRows:
 class Qwen38TTNNTextModelChunkState:
     """Fixed-address buffers of the prefill chunk body, allocated beside the generic state before any capture.
 
-    ``token_row`` (replicated FP32 TILE ``[1,1,tiles,32]``, lane j = token j), ``ple_rows`` (the persistent
-    ``[1,1,rows,640]`` upload of the n-gram rows), ``rope_rows`` (the rows' RoPE cos / sin ``[1,1,rows,64]`` and
-    block-start rows, replicated BF16 TILE: written per chunk from the rows' rotary positions, so image tokens read
-    their three-axis rows and text tokens the table's) and ``feature_rows`` (the vision splice) are the host-written
-    inputs of a chunk; ``accepted`` (FP32
-    ``[1,1,1,1]``) is 31 for a full chunk and r - 1 for the padded last chunk with r real rows, so one trace
-    serves both (the 128-row form has none: it always commits every row).  ``rows_constants`` /
-    ``qsa_chunk_constants`` are the model-lifetime chunk constants of this row count; ``local_combine_output``
-    is the MoE combine buffer the 128-row layer instances share.  A 128-row state is allocated beside the
-    32-row state whose GDN and PLE histories it shares.
+    Host-written per chunk: ``token_row`` (lane j = token j), ``ple_rows``, ``rope_rows`` (written from the rows' rotary
+    positions, so image tokens read their three-axis rows) and ``feature_rows``. ``accepted`` is 31 for a full chunk
+    and r - 1 for a padded last chunk of r rows, so one trace serves both (the 128-row form always commits every row).
+    A 128-row state shares the GDN and PLE histories of the 32-row state it is allocated beside.
     """
 
     rows_constants: gdn_module.Qwen38TTNNGDNRowsConstants
@@ -727,14 +686,11 @@ class Qwen38TTNNChunkHostInputs:
 
 @dataclass
 class Qwen38TTNNTextModelGenericSnapshot:
-    """Device-resident copy of the generic state's recurrent buffers at one position (the chat server's prompt-end
-    snapshot).
+    """Device-resident copy of the generic state's recurrent buffers at one position (the prompt-end snapshot).
 
-    ``pairs`` is ``(label, state tensor, snapshot tensor)`` for every GDN recurrent state and conv ring slot, every
-    PLE conv slot and every QSA staging tile and raw-key ring of the state's layers (and of ``extra_layers``: an
-    MTP alignment layer's generic state).  The QSA KV and compressed caches are positional (rows and blocks past the
-    position are rewritten before they are read) and are not copied.  ``gdn_states`` take ``position mod 4`` as
-    their conv phase on a restore; ``ple_states`` drop their host context (the generic body's caller owns it).
+    ``pairs`` is ``(label, state tensor, snapshot tensor)`` for every GDN recurrent state and conv ring slot, PLE conv
+    slot, QSA staging tile and raw-key ring. The QSA KV and compressed caches are positional (rewritten before they are
+    read) and are not copied.
     """
 
     pairs: tuple[tuple[str, Any, Any], ...]
@@ -751,11 +707,8 @@ class Qwen38TTNNTextModelLaneState:
     """Fixed-address 48-layer state of B batched decode lanes, the per-lane position row and the lane body's
     host-written inputs, all allocated before any capture (the lane traces bake every address in).
 
-    ``token_row`` (replicated FP32 TILE ``[1,1,1,32]``, lane u = the token lane u consumes this step, lanes B..31
-    zero) and ``ple_rows`` (the persistent ROW_MAJOR ``[1,1,B,640]`` upload of lane u's n-gram row) are the
-    host-written inputs; ``embedding_rows`` the persistent ``[1,1,B,640]`` the 32-lane embedding is sliced into
-    (None at B = 32); ``qsa_chunk_constants`` / ``qsa_lane_constants`` the lane count's constants of the QSA lane
-    derive and body.  All resident lanes share ``P_u mod 4`` with every GDN ring phase (the residue rule).
+    Host-written per step: ``token_row`` (lane u = lane u's token, lanes B..31 zero) and ``ple_rows``. All resident
+    lanes share ``P_u mod 4`` with every GDN ring phase (the residue rule).
     """
 
     lanes: int
@@ -894,11 +847,8 @@ class Qwen38TTNNGenericTraceKey:
 class Qwen38TTNNGenericDecodeCapture:
     """Traces of one (residue, regime) of the generic body and the tensors those traces own.
 
-    ``parts`` is ``("body",)`` for one single-body trace or ``("head", "tail")``
-    for the split.  ``head`` is the retained handoff of the split: both traces
-    bake its buffer address in, so it lives until :meth:`release_tensors`.
-    ``epilogue`` is whatever the caller's epilogue returned inside the last
-    part's capture; the caller owns those tensors.
+    ``parts`` is ``("body",)`` or ``("head", "tail")``; ``head`` is the split's retained handoff, whose address both
+    traces bake in, so it lives until :meth:`release_tensors`. The caller owns ``epilogue``'s tensors.
     """
 
     residue: int
@@ -1500,10 +1450,8 @@ class Qwen38TTNNTextModel:
                 repeat_enqueue_owners.extend(ttnn.get_device_tensors(residual))
                 self._validate_residual(residual, label="initial four-branch residual")
             except BaseException as error:
-                # Once repeat_interleave is attempted, producer/output ownership
-                # is ambiguous.  Keep every live owner through process/mesh
-                # teardown and make this model terminally unusable rather than
-                # scheduling cleanup onto the same queue.
+                # Once repeat_interleave is attempted ownership is ambiguous: keep every live owner through teardown
+                # and make this model terminally unusable instead of queueing cleanup.
                 for tensor in owned:
                     if tensor is not None and not any(tensor is retained for retained in repeat_enqueue_owners):
                         repeat_enqueue_owners.append(tensor)
@@ -1653,17 +1601,10 @@ class Qwen38TTNNTextModel:
         phase_observer: DecodePhaseObserver | None = None,
         _prepared_inputs: Qwen38TTNNPreparedDecodeInputs | None = None,
     ) -> Qwen38TTNNTextModelOutput:
-        """Advance one token through all 48 target layers.
+        """Advance one token through all 48 target layers; the input state is consumed into the returned state.
 
-        The input state is consumed into the returned state.  Activations are
-        returned only when their ``retain_*`` flag is true.  ``resolve_greedy``
-        transfers only four local candidates to the host; it never gathers the
-        full vocabulary.  Set ``return_logits`` independently when a later
-        verifier needs device-resident sharded logits.
-
-        An exception after any decoder layer may have mutated state and
-        permanently poisons this owner.  This method never guesses that a
-        partial layer is rollback-safe.
+        Activations are returned only when their ``retain_*`` flag is set; ``resolve_greedy`` transfers only four local
+        candidates. An exception after any decoder layer permanently poisons this owner.
         """
 
         if phase_observer is not None and not callable(phase_observer):
@@ -1949,12 +1890,7 @@ class Qwen38TTNNTextModel:
         retain_hyper_residual: bool = True,
         layer_observer: LayerObserver | None = None,
     ) -> Qwen38TTNNTextModelOutput:
-        """Correctness-first prefill by exact one-token device decode.
-
-        This is intentionally not a parallel prefill performance claim.  Only
-        the final token's activations/logits are retained; earlier rows are
-        released after their state has been committed.
-        """
+        """Prefill by exact one-token device decode; only the final token's activations / logits are retained."""
 
         self._require_healthy()
         self._require_no_active_snapshot("run serial prefill")
@@ -2184,11 +2120,8 @@ class Qwen38TTNNTextModel:
     ) -> Qwen38TTNNPreparedDecodeInputs:
         """The one persistent host-prepared input of the generic body: the PLE row of the seed token.
 
-        ``device_token`` is the caller-owned token row the body embeds.  No RoPE
-        upload and no host position: both are read on device.  The PLE row is
-        prepared without an n-gram context (a fresh or reset state); the caller
-        rewrites ``prepared.ple.embedding_sharded`` in place for later tokens
-        and tracks the n-gram context itself.
+        No RoPE upload and no host position (both read on device). The caller rewrites
+        ``prepared.ple.embedding_sharded`` in place for later tokens and tracks the n-gram context itself.
         """
 
         self._validate_generic_state(state)
@@ -2249,10 +2182,8 @@ class Qwen38TTNNTextModel:
     ) -> Qwen38TTNNGenericHead:
         """HEAD of one position-generic step: embed the device token row, run layers[:GENERIC_HEAD_LAYERS].
 
-        Reads the token row and layer 0's in-place GDN state only: no PLE row,
-        no position, no RoPE, no host-written input, so a captured HEAD can be
-        enqueued before the host knows the token.  Returns the handoff TAIL
-        consumes.  Any failure poisons this owner.
+        Reads no PLE row, position, RoPE or host-written input, so a captured HEAD can be enqueued before the host knows
+        the token. Any failure poisons this owner.
         """
 
         self._require_generic_decode_inputs(prepared, state)
@@ -2282,18 +2213,11 @@ class Qwen38TTNNTextModel:
         release_head: bool = True,
         retain_mtp_inputs: bool = False,
     ) -> Qwen38TTNNGenericDecodeOutput:
-        """TAIL of one position-generic step: position derivation, layers[GENERIC_HEAD_LAYERS:], mixer, LM head, advance.
+        """TAIL of one position-generic step: position derivation, the remaining layers, mixer, LM head, advance.
 
-        Derives every position-dependent input from the device position (RoPE
-        rows, QSA position inputs), runs the remaining layers in place (the
-        first one consumes the PLE row), applies the final mixer and LM head,
-        then advances the device position as the last op.  ``release_head=False``
-        leaves the head residual allocated: the HEAD/TAIL traces bake its fixed
-        address in, so the capture retains it for the life of the traces.
-        ``retain_mtp_inputs`` returns the layer-47 residual, the RoPE rows and
-        the QSA position inputs in the output instead of releasing them (the
-        MTP-drafting server's epilogue runs the MTP layer's row on them).  Any
-        failure poisons this owner: the in-place state cannot be rolled back.
+        ``release_head=False`` leaves the head residual allocated (the HEAD/TAIL traces bake its address in).
+        ``retain_mtp_inputs`` returns the layer-47 residual, RoPE rows and QSA position inputs in the output for the
+        MTP-drafting epilogue. Any failure poisons this owner: the in-place state cannot be rolled back.
         """
 
         self._require_generic_decode_inputs(prepared, state)
@@ -2352,13 +2276,7 @@ class Qwen38TTNNTextModel:
         *,
         return_logits: bool = True,
     ) -> Qwen38TTNNGenericDecodeOutput:
-        """One position-generic step: fixed op sequence, fixed shapes, no host ints, no host I/O.
-
-        HEAD then TAIL in one body (:meth:`forward_decode_generic_head`,
-        :meth:`forward_decode_generic_tail`); the first TAIL layer consumes the
-        head residual as before, so the eager step and the single-body capture
-        are the split's op sequence with nothing retained.
-        """
+        """One position-generic step: HEAD then TAIL in one body (fixed op sequence, no host ints, no host I/O)."""
 
         head = self.forward_decode_generic_head(prepared, state)
         return self.forward_decode_generic_tail(head, prepared, state, return_logits=return_logits)
@@ -2399,20 +2317,10 @@ class Qwen38TTNNTextModel:
     ) -> Qwen38TTNNGenericDecodeCapture:
         """Capture one residue class of the generic body: one single-body trace, or a HEAD and a TAIL trace.
 
-        Each part is recorded inside ``corruptible_allocation_scope`` and the
-        caller's ``guard(label)`` (a no-host-I/O, no-sync context; whatever it
-        yields is collected into ``guard_attempts``).  ``epilogue(output)`` runs
-        inside the last part's capture after the model (the caller's greedy
-        candidates, device resolve and token-row copy) and its result is
-        returned.  ``retain_mtp_inputs`` (the split form only) hands the epilogue
-        the TAIL's retained residual, RoPE rows and QSA position inputs.  Capture
-        records commands without executing them, so the device state is unchanged
-        while the host ring-phase bookkeeping advances as if the body ran;
-        ``phase_observer`` sees ``before-<part>-capture`` and
-        ``after-<part>-capture`` for the caller's phase checks.  A body failure
-        poisons this owner; the open capture is ended and its trace released
-        before the error propagates (a synchronize inside an open capture is a
-        TT_FATAL and the mesh close then hangs), then the process must exit.
+        Each part is recorded inside ``corruptible_allocation_scope`` and the caller's no-host-I/O ``guard(label)``;
+        ``epilogue(output)`` runs inside the last part's capture and its result is returned. Capture records without
+        executing, so the device state is unchanged while the host ring-phase bookkeeping advances. A body failure
+        poisons this owner; the open capture is ended and its trace released before the error propagates.
         """
 
         if phase_observer is not None and not callable(phase_observer):
@@ -2471,12 +2379,9 @@ class Qwen38TTNNTextModel:
         )
 
     # ------------------------------------------------------------------ prefill chunk (32 or 128 rows)
-    # forward_prefill_chunk_generic is the position-generic body over the positions P .. P + rows - 1 of one
-    # chunk (P % 32 == 0), traced once per row count and replayed per chunk: no final mixer, no LM head, no
-    # host ints; the chunk state carries the GDN/PLE histories and the hand-off sources between chunks, the
-    # generic state is the decode's and is updated in place, and P += rows is the last op.  The 32-row form
-    # serves full chunks and the padded tail through its accept scalar; the 128-row form (allocated beside the
-    # 32-row state, sharing its histories) serves full chunks only.
+    # forward_prefill_chunk_generic is the position-generic body over P .. P + rows - 1 of one chunk (P % 32 == 0),
+    # traced once per row count: no final mixer, no LM head, no host ints; P += rows is the last op. The 32-row form
+    # serves full chunks and the padded tail through its accept scalar; the 128-row form serves full chunks only.
 
     def _validate_chunk_state(self, chunk_state: Qwen38TTNNTextModelChunkState) -> None:
         self._require_healthy()
@@ -2837,14 +2742,12 @@ class Qwen38TTNNTextModel:
         features: torch.Tensor | None = None,
         start_position: int | None = None,
     ) -> Qwen38TTNNChunkHostInputs:
-        """The host half of one chunk's input write (no device call): the ``rows`` token ids as the token-rows
-        image (the zero sentinel at the image pads' lanes) and their n-gram rows, looked up from ``ple_context`` in
-        one pass (the raw ids, pads included, as the reference hashes them), the RoPE rows of the rows' rotary
-        positions ``positions`` (int64 ``[3, rows]``, ``mrope``; None: the plain positions of a text chunk from
-        ``start_position``, or, when that is None too, from a readback of the device position ``P`` -- the eager
-        tools' path; the prefill driver passes the positions) and the feature rows of the chunk's image pads
-        (``features`` ``[n, 2560]`` BF16 in pad order; None when it has none), as host tensors shaped for the chunk
-        state's persistent inputs."""
+        """The host half of one chunk's input write (no device call), as host tensors shaped for the chunk state.
+
+        The token-rows image (zero sentinel at image pads), the n-gram rows looked up from ``ple_context``, the RoPE
+        rows of ``positions`` (int64 ``[3, rows]``; None: plain text positions from ``start_position`` or the device
+        ``P``) and the feature rows of the chunk's image pads (``features`` in pad order).
+        """
 
         self._validate_chunk_state(chunk_state)
         ple = self.layers[PLE_CHECKPOINT_LAYER].ple
@@ -2906,9 +2809,8 @@ class Qwen38TTNNTextModel:
         self.write_chunk_feature_rows(chunk_state.feature_rows, prepared.feature_rows)
 
     def write_chunk_feature_rows(self, features: Qwen38TTNNChunkFeatureRows, host_rows) -> None:
-        """The copy into a chunk's persistent feature rows: ``host_rows`` (an image chunk's, ``host_chunk_feature_rows``)
-        when given, else the clean image when the buffer still holds an earlier chunk's rows (a text chunk after a
-        text chunk copies nothing)."""
+        """The copy into a chunk's persistent feature rows: ``host_rows`` (an image chunk's) when given, else the clean
+        image when the buffer still holds an earlier chunk's rows (a text chunk after a text chunk copies nothing)."""
 
         if host_rows is not None:
             ttnn.copy_host_to_device_tensor(host_rows, features.tensor)
@@ -2949,13 +2851,10 @@ class Qwen38TTNNTextModel:
         gdn_step_anchor: bool = False,
         mtp=None,
     ) -> None:
-        """One chunk: selectors (the 32-row form), RoPE rows and QSA chunk inputs from the device position, the
-        rows-lane embedding, 48 layers in place, ``P += rows``.  No final mixer or LM head: the first decode
-        replay after the prefill consumes the last prompt token.  ``gdn_step_anchor`` is every GDN layer's state
-        re-anchor (the layer commits through ``commit_rows(step_committed_rows=True)``; a 32-row option).  ``mtp``
-        (the MTP-drafting server's chunk extension of this chunk state's form, 32 or 128 rows; at slab rows the
-        128-row twin allocated with the slab form, which runs the slab as 128-row slices) runs the MTP layer's rows
-        on the layer-47 residual rows before they are released.  Any failure poisons this owner."""
+        """One chunk: selectors (32-row form), RoPE rows and QSA chunk inputs from the device position, the rows-lane
+        embedding, 48 layers in place, ``P += rows``. No final mixer or LM head: the first decode replay after the
+        prefill consumes the last prompt token. ``gdn_step_anchor`` (32-row form) commits GDN through the 1-row step
+        re-anchor; ``mtp`` runs the MTP layer's rows on the layer-47 residual rows. Any failure poisons this owner."""
 
         slab_mtp = mtp is not None and is_slab_rows(chunk_state.rows)
         if slab_mtp and not (mtp.rows == LONG_CHUNK_ROWS and mtp.slab_rows == chunk_state.rows):
@@ -3039,9 +2938,7 @@ class Qwen38TTNNTextModel:
     ) -> int:
         """Capture the chunk body once (after the decode captures, on the same generic state); returns the trace id.
 
-        Same discipline as :meth:`capture_decode_generic`: ``corruptible_allocation_scope`` and the
-        caller's no-host-I/O ``guard``.  Capture records without executing, so the device state is unchanged.
-        ``gdn_step_anchor`` is baked into the trace: every replay commits the GDN state through the re-anchor.
+        Same discipline as :meth:`capture_decode_generic`; ``gdn_step_anchor`` is baked into the trace.
         """
 
         with corruptible_allocation_scope(self.mesh_device):
@@ -3059,15 +2956,11 @@ class Qwen38TTNNTextModel:
         *,
         rope_shift: int = 0,
     ) -> None:
-        """Eager hand-off from the chunk body to the 1-row generic body after a prefill of ``prefilled`` positions
-        (0 .. prefilled - 1; the last chunk padded past prefilled % 32 with the accept scalar prefilled % 32 - 1).
+        """Eager hand-off from the chunk body to the 1-row generic body after a prefill of ``prefilled`` positions.
 
-        ``P`` becomes ``prefilled`` (the next replay's trace key: residue prefilled % 4, regime 0) and the rotary
-        shift ``S`` becomes ``rope_shift`` (the prefilled sequence's ``mrope`` shift: 0 for text); the GDN ring
-        slots and phase come from the committed history, the PLE slots from the rows history, the QSA staging
-        tile and raw-key ring from the kept slab and raw keys; the committed GDN state and the QSA caches are
-        already the decode's.  The accept scalar returns to a full chunk.  The caller keeps the n-gram context
-        (the PLE row of position ``prefilled`` is its ordinary pre-replay write).  Any failure poisons this owner.
+        ``P`` becomes ``prefilled`` and the rotary shift ``rope_shift``; the GDN ring slots and phase, the PLE slots and
+        the QSA staging tile and raw-key ring are rebuilt from the chunk carry. The caller keeps the n-gram context. Any
+        failure poisons this owner.
         """
 
         self._validate_generic_state(state)
@@ -3101,11 +2994,8 @@ class Qwen38TTNNTextModel:
             self._mark_poisoned("finish_prefill", 0, error)
 
     # ------------------------------------------------------------------ lanes (batched decode, B = 1..32)
-    # forward_decode_lanes is forward_decode_generic over B lanes: the per-lane RoPE rows and QSA lane inputs from
-    # the position row, the token row's B lanes embedded, 48 layers on [1,4,B,640] rows in place, the final mixer
-    # and LM head at B rows, the position row advanced as the last op.  One trace per GDN ring residue serves the
-    # step; every resident lane's position is congruent to the ring phase (the residue rule), so a lane is admitted
-    # at a step of its position's residue class.  The 1-row bodies above are untouched.
+    # forward_decode_lanes is forward_decode_generic over B lanes. One trace per GDN ring residue serves the step:
+    # every resident lane's position is congruent to the ring phase, so a lane is admitted at a step of its residue.
 
     def _validate_lane_state(self, state: Qwen38TTNNTextModelLaneState) -> int:
         self._require_healthy()
@@ -3406,10 +3296,8 @@ class Qwen38TTNNTextModel:
     ) -> Qwen38TTNNGenericDecodeOutput:
         """One batched step: fixed op sequence for every position row, no host ints, no host I/O.
 
-        Per-lane RoPE rows and QSA lane inputs from the position row, the token row's lanes embedded, the 48 layers
-        on ``[1,4,B,640]`` rows in place (the PLE layer consumes the persistent PLE rows), the final mixer and LM
-        head at B rows (row u = lane u), then the position row advanced as the last op.  Any failure poisons this
-        owner: the in-place state cannot be rolled back.
+        The 48 layers run on ``[1,4,B,640]`` rows in place, the head at B rows (row u = lane u), and the position row
+        advances as the last op. Any failure poisons this owner: the in-place state cannot be rolled back.
         """
 
         lanes = self._validate_lane_state(state)

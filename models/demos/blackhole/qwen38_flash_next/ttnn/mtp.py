@@ -1,22 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Exact TP4 Qwen3.8-Flash-Next MTP input mixer.
-
-The released checkpoint does not concatenate a token embedding and a normal
-hidden state.  Its recurrent hidden input is the four-branch gated-residual
-state.  The two inputs are normalized independently, projected by two distinct
-``2560 x 2560`` matrices, and the projected embedding is broadcast into every
-residual branch::
+"""Exact TP4 Qwen3.8-Flash-Next MTP input mixer::
 
     e = fc_embedding(zero_centered_rms_norm(embedding))
     h = fc_hidden(zero_centered_rms_norm(residual.reshape(4, H)))
     output = h + e[:, None, :, :]
 
-Both inputs and the result are hidden-sharded over the exact ``1x4`` mesh.  A
-projection weight is column-parallel (its output dimension is sharded); the
-normalized activation is therefore explicitly all-gathered before the linear.
-No projection or residual branch is silently replicated.
+Inputs and output are hidden-sharded over the ``1x4`` mesh; the projections are column-parallel, so the normalized
+activation is all-gathered before each linear.
 """
 
 from __future__ import annotations
@@ -61,9 +53,7 @@ RESIDUAL_LOCAL_SHAPE = (1, RESIDUAL_BRANCHES, 1, LOCAL_HIDDEN_SIZE)
 EMBEDDING_GLOBAL_SHAPE = (1, 1, 1, HIDDEN_SIZE)
 RESIDUAL_GLOBAL_SHAPE = (1, RESIDUAL_BRANCHES, 1, HIDDEN_SIZE)
 PROJECTION_LOCAL_SHAPE = (1, 1, HIDDEN_SIZE, LOCAL_HIDDEN_SIZE)
-# The stored hidden RMS scale keeps its qualified [1,1,4,H] row layout (and
-# weight cache); it is only ever consumed through the flattened 10,240-wide
-# reshape, which is layout-invariant.
+# Stored as [1,1,4,H] but only consumed through the flattened 10,240-wide reshape, which is layout-invariant.
 HIDDEN_NORM_SCALE_LOCAL_SHAPE = (1, 1, RESIDUAL_BRANCHES, LOCAL_HIDDEN_SIZE)
 HIDDEN_NORM_SCALE_GLOBAL_SHAPE = (1, 1, RESIDUAL_BRANCHES, HIDDEN_SIZE)
 
@@ -414,10 +404,7 @@ class Qwen38TTNNMTPInputWeights:
 class Qwen38TTNNMTPInput:
     """One exact global-B1 TP4 MTP embedding/residual input fusion.
 
-    The mixer has no recurrent state of its own.  A four-step controller feeds
-    the target residual on the first call and each preceding MTP layer residual
-    on the next call.  This owner retains the resident weights and releases
-    them through :meth:`deallocate`.
+    Stateless; owns the resident weights until :meth:`deallocate`.
     """
 
     def __init__(
@@ -473,13 +460,9 @@ class Qwen38TTNNMTPInput:
         local_shape: tuple[int, ...],
         flatten_residual_branches: bool = False,
     ):
-        # The embedding norm is H-wide.  In contrast, Qwen4Exp constructs
-        # ``pre_fc_norm_hidden`` with width ``hc_count * hidden_size`` and
-        # applies it *before* viewing the result as [4,H].  Preserve that
-        # 10,240-wide contract by flattening each coordinate's four H/4
-        # slices to one 2,560-wide local shard.  The TP all-gather of RMS
-        # statistics then covers all four branches on all four devices.  A
-        # per-branch RMS here is shape-compatible but numerically wrong.
+        # pre_fc_norm_hidden is 10,240 wide (all four branches, applied before the [4,H] view): flatten each device's
+        # four H/4 slices into one 2,560-wide shard so the TP RMS statistics cover every branch. A per-branch RMS is
+        # shape-compatible but numerically wrong.
         operation_tensor = tensor
         operation_weight = weight
         operation_shape = local_shape
@@ -668,16 +651,10 @@ class Qwen38TTNNMTPInput:
         return output
 
     def rows(self, input_embedding_rows, hidden_residual_rows):
-        """:meth:`__call__` for a chunk of token rows: 32 (the MTP alignment rows of an MTP v2 verify pass, the MTP
-        rows of a 32-row prefill chunk) or 128 (the MTP rows of a 128-row prefill chunk).
+        """Chunked :meth:`__call__` over 32 or 128 token rows (:data:`CHUNK_ROW_COUNTS`).
 
-        ``input_embedding_rows`` ``[1,1,rows,640]`` and the branch-major ``hidden_residual_rows`` ``[1,4,rows,640]``
-        give the fused ``[1,4,rows,640]`` rows; the row count is the inputs' (one of :data:`CHUNK_ROW_COUNTS`).  The
-        hidden norm keeps its 10,240-wide per-token contract: the rows go token-major and flat (``[1,1,rows,2560]``
-        local, the GR rows walk), are normalized with the same flattened scale, and go back to branch-major for the
-        per-branch projection.  Row j depends only on row j: the norms are per row, and at 128 rows the two
-        projections run once per 32-row tile of the gathered rows (:meth:`_project_rows`), so every row's result is
-        the 32-row form's bitwise.
+        ``input_embedding_rows`` ``[1,1,rows,640]`` and branch-major ``hidden_residual_rows`` ``[1,4,rows,640]`` give
+        ``[1,4,rows,640]``. Row j depends only on row j, so every row matches the 32-row form bitwise.
         """
 
         if self.weights.released:
@@ -699,7 +676,7 @@ class Qwen38TTNNMTPInput:
         )
         token_rows = ttnn.permute(hidden_residual_rows, (0, 2, 1, 3), memory_config=dram)
         flat_rows = ttnn.reshape(token_rows, flat_shape)
-        if not same_buffer(flat_rows, token_rows):  # a copy today (the last dim changes); never free a view's source
+        if not same_buffer(flat_rows, token_rows):  # never free a view's source
             ttnn.deallocate(token_rows)
         self.mesh_contract.validate_tensor(flat_rows, placement=TensorPlacement.HIDDEN_SHARDED, shard_dim=3)
         # The flattened scale broadcasts over the token rows (one [1,1,1,2560] row).
@@ -711,7 +688,7 @@ class Qwen38TTNNMTPInput:
         )
         ttnn.deallocate(flat_rows)
         normalized_tokens = ttnn.reshape(normalized_flat, (1, rows, RESIDUAL_BRANCHES, LOCAL_HIDDEN_SIZE))
-        if not same_buffer(normalized_tokens, normalized_flat):  # a copy today (the last dim changes)
+        if not same_buffer(normalized_tokens, normalized_flat):
             ttnn.deallocate(normalized_flat)
         normalized_hidden = ttnn.permute(normalized_tokens, (0, 2, 1, 3), memory_config=dram)
         ttnn.deallocate(normalized_tokens)
@@ -741,11 +718,9 @@ class Qwen38TTNNMTPInput:
         return output
 
     def _project_rows(self, gathered, weight, *, rows: int):
-        """``ttnn.linear`` of the gathered rows ``[1,B,rows,2560]`` by ``weight`` in the 32-row form's program: one
-        call at 32 rows; at 128 rows one call per 32-row tile (the tiles sliced along the rows, projected with the
-        32-row call's shapes, the outputs concatenated).  A 128-row ``ttnn.linear`` would pick its own matmul program,
-        and another K block order rounds the sums differently; per tile every row keeps the 32-row program and its
-        result."""
+        """``ttnn.linear`` of ``[1,B,rows,2560]`` rows by ``weight``, one call per 32-row tile.
+
+        A 128-row linear would pick another matmul program and K order; per tile every row keeps the 32-row result."""
 
         dram = ttnn.DRAM_MEMORY_CONFIG
 

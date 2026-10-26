@@ -40,11 +40,9 @@ CHUNK_ROWS = ttnn.TILE_SIZE
 # pinned runtime admits one row tile); every other op runs natively on the four tiles.
 LONG_CHUNK_ROWS = 4 * ttnn.TILE_SIZE
 CHUNK_ROW_COUNTS = (CHUNK_ROWS, LONG_CHUNK_ROWS)
-# Rows of one prefill slab (the opt-in layer-major form): a multiple of the long chunk, 256 .. 2048; the MoE serves the
-# multiples of its 512-row reduce block.  Every dense linear runs as one 2D-multicast matmul on an interleaved copy of
-# its weight; the routed experts run in one moe_compute call; the GDN kernel carries the state through the slab in one
-# call.  2048 rows is the largest slab measured to serve: at 4096 rows the first dense matmul's program needs
-# 1,705,344 B of statically allocated circular buffers per core (its TT_THROW), more than a core's 1,572,864 B of L1.
+# Rows of one prefill slab (the opt-in layer-major form): a multiple of the long chunk in 256 .. 2048; the MoE serves
+# the multiples of its 512-row reduce block. The 2048-row cap is L1: at 4096 rows the first dense matmul's static
+# circular buffers exceed a core's L1.
 SLAB_ROW_STEP = LONG_CHUNK_ROWS
 MIN_SLAB_ROWS = 2 * LONG_CHUNK_ROWS
 MAX_SLAB_ROWS = 16 * LONG_CHUNK_ROWS
@@ -124,12 +122,7 @@ class TensorPlacement(str, Enum):
 
 
 def _exact_integer(value, *, label: str, error_type: type[Exception] = RuntimeError) -> int:
-    """Return an integer-protocol value without accepting scalar aliases.
-
-    Nanobind integer results and other legitimate bound integer types implement
-    ``__index__``.  Decimal strings and floating-point values do not.  ``bool``
-    also implements ``__index__``, so reject it explicitly before conversion.
-    """
+    """Return an integer-protocol (``__index__``) value; ``bool``, decimal strings and floats are rejected."""
 
     if isinstance(value, bool):
         raise error_type(f"{label} must be an exact integer, not bool")
@@ -174,11 +167,8 @@ def tensor_metadata(tensor) -> str:
 class Qwen38TensorBackingIdentity:
     """Exact ownership identity for one distributed device allocation.
 
-    ``tensor_id`` identifies a TTNN graph object and Python object identity
-    identifies only one wrapper.  Neither is an allocation identity.  Device
-    lifetime ledgers instead bind every local backing buffer to its exact mesh
-    coordinate and physical device.  This permits two wrappers over the same
-    four buffers to share one release while rejecting ambiguous topology.
+    Binds every local buffer to its mesh coordinate and physical device; ``tensor_id`` and Python identity are not
+    allocation identities.
     """
 
     distribution_shape: tuple[int, int]
@@ -188,9 +178,7 @@ class Qwen38TensorBackingIdentity:
 def qwen38_tensor_backing_identity(tensor: Any) -> Qwen38TensorBackingIdentity:
     """Return the exact ordered 1x4 physical backing identity of ``tensor``.
 
-    The function is deliberately fail closed.  A device object without the
-    full tensor-topology and per-device buffer-address APIs cannot be safely
-    deduplicated for deallocation and must remain owned until mesh teardown.
+    Fails closed: a device object without the topology and buffer-address APIs stays owned until mesh teardown.
     """
 
     try:
@@ -280,9 +268,7 @@ def replicate_tensor_2d_mesh_mapper(mesh_device):
 class Qwen38MeshContract:
     """The physical and logical mesh admitted by the four-P150 model.
 
-    ``physical_ids`` are the TTNN IDs returned by ``MeshDevice.get_device_ids``
-    in mesh-coordinate order.  The caller must derive and record their node,
-    BDF, board-id, and fabric mapping before opening the mesh.
+    ``physical_ids`` are ``MeshDevice.get_device_ids`` in mesh-coordinate order.
     """
 
     physical_ids: tuple[int, int, int, int]
@@ -334,11 +320,8 @@ class Qwen38MeshContract:
     ) -> None:
         """Validate the actual ``tensor_topology()``, not only its values.
 
-        All model tensors use a 2-D distribution shape ``(1, 4)``.  A sharded
-        tensor must replicate over the size-one row and shard over the four-way
-        column; an intentionally replicated tensor must replicate on both axes.
-        Pair-grouped KV is represented by an expanded two-head tensor sharded on
-        the head dimension, not by a replicated topology.
+        The distribution shape is ``(1, 4)``: a sharded tensor replicates over the row and shards over the column; a
+        replicated tensor replicates on both axes. Pair-grouped KV is an expanded two-head tensor sharded on heads.
         """
 
         device = tensor.device()
@@ -395,12 +378,8 @@ class Qwen38MeshContract:
     def mark_local_partial(self, tensor, *, replicated_reference, expected_shape: tuple[int, ...]) -> None:
         """Label a full-shape per-device additive partial without copying values.
 
-        TTNN has no placement kind for values which have the complete local shape
-        but differ by device pending an all-reduce/reduce-scatter.  Such tensors
-        must carry Replicate *shape* metadata so the following collective sees a
-        full logical operand; ``LOCAL_PARTIAL`` records the stronger semantic
-        invariant in this model.  This method is only valid after a row-parallel
-        operation whose local output width is complete.
+        Carries Replicate shape metadata so the following all-reduce / reduce-scatter sees a full operand; valid only
+        after a row-parallel op whose local output width is complete.
         """
 
         self.validate_tensor(replicated_reference, placement=TensorPlacement.REPLICATED)
@@ -425,12 +404,9 @@ class Qwen38MeshContract:
         shard_dim: int,
         expected_local_shape: tuple[int, ...],
     ) -> None:
-        """Repair the known legacy reduce-scatter topology omission.
+        """Record the shard placement ``ttnn.reduce_scatter`` leaves unset (it has no ``compute_output_topologies``).
 
-        Standard ``ttnn.reduce_scatter`` changes the physical/local tensor shape
-        but currently has no ``compute_output_topologies`` hook.  Call this only
-        immediately after that collective; it records the actual shard placement
-        without moving or replicating data.
+        Call only immediately after that collective; no data moves.
         """
 
         canonical_shard_dim = _exact_integer(shard_dim, label="collective shard_dim", error_type=ValueError)
@@ -458,11 +434,9 @@ def _tensor_key(tensor) -> tuple[str, int]:
 
 
 def same_buffer(left, right) -> bool:
-    """Whether two device tensors are one allocation: a zero-cost view (``ttnn.reshape`` of a ROW_MAJOR tensor, or of
-    a TILE tensor that keeps its last dimension) and its source share a buffer under different tensor ids.  This is
-    the test that decides whether a reshape's SOURCE may be freed while the result is still read: freeing the source
-    of a view frees the result's rows (the 2026-09-26 slab defect, docs/NUMERICS.md); ``_tensor_key`` compares tensor
-    ids, which a view never shares, and must not decide it."""
+    """Whether two device tensors are one allocation: a zero-cost view and its source share a buffer.
+
+    Decides whether a reshape's source may be freed while the result is read; a view never shares the tensor id."""
 
     left_address, right_address = getattr(left, "buffer_address", None), getattr(right, "buffer_address", None)
     if not callable(left_address) or not callable(right_address):
@@ -488,12 +462,8 @@ def _require_uint32_row(tensor, shape: tuple[int, ...], mesh_contract: Qwen38Mes
 class Qwen38TTNNDevicePosition:
     """Device-resident absolute position ``P`` of the token a generic decode body decodes.
 
-    ``scalar`` is the only source of the position inside the captured body: it
-    is read at the start, every derived quantity comes from exact UINT32 device
-    ops, and :meth:`advance` increments it in place as the body's last op so a
-    replay alone moves to the next position.  The host writes it only through
-    :meth:`reset`.  All three tensors keep their addresses for the life of the
-    object.
+    ``scalar`` is the only position source inside the captured body; :meth:`advance` increments it in place as the
+    body's last op, and the host writes it only through :meth:`reset`. All tensors keep their addresses for life.
     """
 
     scalar: Any
@@ -501,11 +471,9 @@ class Qwen38TTNNDevicePosition:
     block_start_mask_row: Any
     mesh_device: Any = field(repr=False, compare=False)
     mesh_contract: Qwen38MeshContract = field(repr=False, compare=False)
-    # The rotary shift ``S`` (UINT32 ``[1,1,1,1]``): the rotary index of the token at ``P`` is ``P - S`` on every
-    # axis (``mrope.Qwen38MRoPEPositions.shift``: 0 for text, the images' accumulated ``max(h, w) // 2 - h * w // 4``
-    # otherwise), ``S <= P & ~3``.  Host-written with the position (:meth:`reset`); the cache, the KV row, the block
-    # index and the masks stay on ``P``.  ``rope_shift`` is its host mirror.  None: a position built without one (a
-    # text-only stand-in): the rotary rows are the plain rows.
+    # Rotary shift ``S`` (UINT32 ``[1,1,1,1]``, ``S <= P & ~3``; see ``mrope.Qwen38MRoPEPositions.shift``): the token
+    # at ``P`` reads rotary row ``P - S``; the cache, KV row, block index and masks stay on ``P``. ``rope_shift`` is
+    # its host mirror; None means plain rotary rows.
     shift: Any = None
     rope_shift: int = 0
 
@@ -642,10 +610,7 @@ class Qwen38TTNNDevicePosition:
 
 
 def require_rope_shift(rope_shift, position) -> int:
-    """The rotary shift: an exact int in ``[0, P & ~3]``, so neither the token's rotary index ``P - S`` nor its index
-    block's first token's ``(P & ~3) - S`` wraps (the block's first token is a text token of this sequence whose
-    rotary position is non-negative; ``mrope.Qwen38MRoPEPositions.tail_is_plain`` is the prompt-side form of the
-    same rule)."""
+    """The rotary shift: an exact int in ``[0, P & ~3]``, so neither ``P - S`` nor ``(P & ~3) - S`` wraps."""
 
     value = _exact_integer(rope_shift, label="rotary shift", error_type=ValueError)
     position = _exact_integer(position, label="device position", error_type=ValueError)
@@ -659,16 +624,9 @@ def require_rope_shift(rope_shift, position) -> int:
 class Qwen38TTNNDevicePositionRow:
     """Device-resident per-lane positions: the ``[1,1,1,32]`` UINT32 row with lane ``u = P_u``.
 
-    The batched form of :class:`Qwen38TTNNDevicePosition`: the row itself is the
-    embedding index row of the RoPE lookup (lane ``u`` reads row ``P_u``), the
-    per-lane QSA inputs are derived from it in column form (``qsa.derive_qsa_lane_inputs``),
-    and :meth:`advance` adds 1 to every lane in place as the body's last op.  All
-    resident lanes share ``P_u mod 4`` (``GDN_RESIDUE_CLASSES``): one trace and one
-    host ring slot serve the step, so a lane joins only at a step whose residue is
-    its position's (:func:`admission_wait_steps`).  Lanes ``lanes..31`` are idle and
-    hold the row's residue (a valid position of the class; their regions receive
-    harmless writes).  ``positions`` is the host mirror the host writes come from;
-    the 1-row class is untouched.
+    Batched :class:`Qwen38TTNNDevicePosition`. All resident lanes share ``P_u mod 4`` (``GDN_RESIDUE_CLASSES``), so a
+    lane joins only at a step of its residue (:func:`admission_wait_steps`). Idle lanes hold the shared residue;
+    ``positions`` is the host mirror.
     """
 
     row: Any

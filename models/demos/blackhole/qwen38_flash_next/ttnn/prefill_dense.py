@@ -3,23 +3,11 @@
 
 """The prefill slab's dense linears: the wide grid and the resident fused siblings.
 
-Inside a slab (``--prefill-slab ROWS``) every dense linear of a layer runs as one 2D-multicast matmul over the rows
-on a per-slab interleaved copy of its DRAM-width-sharded decode weight (``decode_matmul.prefill_linear``), in the
-weight's format (``QWEN38_DENSE_WEIGHT_DTYPE``, bf8 by default) with the module's compute config for it (HiFi4 for
-bf16, HiFi2 for bf8, LoFi for bf4; fp32 accumulation), on the wide grid: more columns for the narrow-N shapes
-(measured on the 4-chip line: the same completions, the dense family 92.6 -> 75.8 ms per 2048-row slab).  The
-pair-grouped K/V and the shared expert's gate/up run as one linear each on resident copies in the weights' format (the
-same tiles the separate linears read; 58 MB per device as bf8, 110 MB as bf16).
-
-The resident copies belong to a build that runs a slab: the builder is told the slab's rows before the target is built
-(``Qwen38TTNNBuilder.enable_prefill_slab``, called by the chat chain when ``--prefill-slab`` names one) and only
-then builds them behind the DRAM admission.  A build without a slab holds no slab linear, so it allocates nothing
-and admits nothing.
-
-The **exact set** keeps ``decode_matmul.prefill_matmul_program_config``: the MoE router (its logits pick the ten
-experts), the QSA ``index_q`` and ``index_k`` projections (their outputs pick the attended blocks and persist in the
-compressed index cache).  Their call sites ask for it with ``exact=True``.
-The decode path is untouched: the DRAM-sharded decode linears, their weights and ``decode_matmul`` are as before.
+Inside a slab every dense linear runs as one 2D-multicast matmul over the rows, on a per-slab interleaved copy of its
+decode weight in the weight's format, on a grid with more columns for narrow N. The QSA K/V and the MoE shared
+gate/up run fused on resident copies, built only when the builder is told the slab's rows before the build. The
+**exact set** (MoE router, QSA ``index_q`` / ``index_k``) keeps ``decode_matmul.prefill_matmul_program_config``
+because its outputs select experts and blocks; call sites ask for it with ``exact=True``.
 """
 
 from __future__ import annotations
@@ -59,20 +47,8 @@ def weight_dtype_name(dtype) -> str:
 # The DRAM the builder keeps free beyond the resident prefill weights and the context-scaled state (the traces, the
 # slab state, the transients inside a layer).
 DRAM_MARGIN_BYTES = 512 << 20
-# The 2048-row slab's DRAM working set per device beyond the resident prefill weights, the context state and the
-# margin: what a slab process allocates after the build over those (the chunk states, the tensors alive through a
-# slab, the layer transients and the prefill traces are the margin's contents; the allocator's fragmentation and the
-# rest of the process are the excess).  MEASURED as a band on the 4-chip line at a 32k context (2026-09-25; the free
-# bytes read after the build, before the context state is allocated): the slab ran with 251,272,000 B free per bank
-# (the wide plan resident; 2,010,176,000 B per device) and OOM'd in its first layer with 141,002,560 B free per bank
-# (the bf8 + wide plan under the device profiler's 64,000-program reservation; 1,128,020,480 B per device), so the
-# post-build need lies in (1,128,020,480, 2,010,176,000] B per device.  The conservative reading is the band's upper
-# end, the only value the slab is known to fit: the lower end is the OOM itself, and the slab8k derivation's 145 MB
-# (the QSA sparse_sdpa stage's peak alone) plus the context state and the margin sum to 1,119 MB per device, which
-# would have admitted the run that OOM'd.  The band holds the context state (436,797,440 B at 32k: 12 QSA generic
-# states and the RoPE tables) and the margin, which the admission adds on their own, so the term is the band's upper
-# end less those two: at 32k the admission asks for exactly the measured pass point after the plan (251.27 MB per
-# bank), and the context state's growth at larger contexts adds on top of it.
+# The 2048-row slab's post-build DRAM need per device beyond the resident weights, the context state and the margin:
+# the upper end of a device-measured pass / OOM band at a 32k context.
 SLAB_WORKING_SET_BYTES = 2_010_176_000 - 436_797_440 - DRAM_MARGIN_BYTES  # 1,036,507,648 B (988.5 MiB)
 
 
@@ -137,10 +113,8 @@ class ResidentSpec:
 
 
 def resident_plan(module: str, weight_dtype: str = "bf16") -> tuple[ResidentSpec, ...]:
-    """The resident prefill weights one module of ``module`` holds: the fused [k | v] (QSA) and [gate | up] (MoE)
-    siblings in ``weight_dtype`` (the module's dense weight format, QWEN38_DENSE_WEIGHT_DTYPE: the fused linear then
-    reads the same tiles the separate linears read); none for the gated residual and the GDN.  The exact set is never
-    in the plan."""
+    """The resident prefill weights of ``module``: the fused [k | v] (QSA) and [gate | up] (MoE) siblings in
+    ``weight_dtype``, so the fused linear reads the same tiles; none for the gated residual and the GDN."""
 
     if module not in MODULES:
         raise ValueError(f"prefill dense module must be one of {MODULES}, got {module!r}")
@@ -167,12 +141,9 @@ def plan_bytes_per_device(weight_dtypes: Mapping[str, str] | None = None) -> int
 def wide_prefill_matmul_program_config(mesh_device, rows: int, k: int, n: int):
     """The 2D-multicast config that runs the most columns for a ``[rows, k] x [k, n]`` slab linear.
 
-    decode_matmul's rule (``prefill_matmul_program_config``) picks the widest output subblock first and leaves the
-    narrow-N linears on 10-40 of the 110 cores.  This one ranks the column count the program factory runs
-    (``ceil(N_tiles / per_core_N)``) first, among the configs whose output subblock is at least two tiles wide (a
-    one-tile subblock stalls the matmul), then the wider subblock; a one-tile N falls back to decode_matmul's rule.
-    The K block, the row split and every other field are decode_matmul's, so the per-column arithmetic is the same
-    and only the block order over the cores changes.
+    Ranks the program factory's column count first among configs whose output subblock is at least two tiles wide (a
+    one-tile subblock stalls the matmul); a one-tile N falls back to decode_matmul's rule. Every other field is
+    decode_matmul's, so only the block order over the cores changes.
     """
 
     grid = mesh_device.compute_with_storage_grid_size()
@@ -387,8 +358,7 @@ def _upload(mesh_device, host, spec: ResidentSpec, cache_dir: Path):
 
 
 def _host_blocks(module: str, checkpoint, placement, *, layer_index: int) -> dict:
-    """The [1, 1, K_total, N_total] host blocks of a module's fused siblings, from the same tt/ sources the decode
-    loaders use (the decode loaders themselves are not touched)."""
+    """The [1, 1, K_total, N_total] host blocks of a module's fused siblings, from the decode loaders' tt/ sources."""
 
     import torch
 

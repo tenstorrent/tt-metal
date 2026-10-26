@@ -3,29 +3,10 @@
 
 """The vision tower's residency in a served process: row buckets, the DRAM admission, the warm-hook load and prewarm.
 
-The served chain forbids program-cache misses once its captures exist, so an image may only run through programs that
-were compiled before the captures.  The tower therefore pads every image to one of ``VISION_ROW_BUCKETS`` (powers of
-two from 512 to 65,536 rows; 65,536 patches is the checkpoint's stock maximum image, 4096 x 4096 px) and the open runs
-two forwards per bucket (the filling and the padded window form) in the chain construction's warm hook, after the
-tower's weights are resident: eight compiled shape sets, every served image among them.  An image above the largest bucket is refused with the reason (nothing
-compiles at request time).  Padded patches form their own attention window (exact; ``ttnn/vision.py``), so a bucket
-costs time only: at most twice the rows of the image, at most twice its attention work.
-
-The admission is decided on the live allocator in the warm hook, the lanes' way: the required side is the resident
-weights (MODELED from the tile-padded layout, measured 0.2 % apart), the transient peak of the largest bucket (the
-MEASURED 17.3-17.7 KB per padded patch per die, rounded up to 18 KiB, rows of the largest bucket over the banks) and
-the growth margin; the free side is the live reading less what the chain still allocates after it (its traces).  The
-largest single buffer (the largest bucket's fused qkv activation) must fit the largest contiguous block.  On a
-shortfall the server starts TEXT-ONLY: the tower stays unloaded, the record (``vision_summary``) carries
-``resident: false`` with the shortfall's bytes per bank and the reason, and an image request is refused with that
-reason (the refuse-never-drop rule applies to the image field, not to the whole server: the image path is the default
-path, not an explicit request like ``--lanes``).  On a fit the tower is resident for the process and prewarmed, and the
-record goes to READY and ``/health``.  Two ladders are candidates for the stock one, ``EIGHT_BUCKET_LADDER`` and
-``FOUR_BUCKET_LADDER``; the choice was a MEASUREMENT (the READY cost of each on a quiet host against the padding cost,
-which is the linear layers' rows only since the padded patches are windowed out of attention; four buckets unless the
-eight cost under 30 s more): measured 43.7 against 33.5 s in the steady state (the JIT cache warm, every start after
-the first), so the eight buckets are the ladder of record.  The cold first start on a host is MODELED from the measured
-compiles beside it.
+The served chain forbids program-cache misses after capture, so every image is padded to one of
+``VISION_ROW_BUCKETS`` and each bucket is compiled in the warm hook; an image above the largest bucket is refused.
+Padded patches form their own attention window, so padding costs time only. When the live DRAM admission does not
+fit, the server starts text-only and image requests are refused with the shortfall's reason.
 """
 
 from __future__ import annotations
@@ -37,23 +18,18 @@ from typing import Any, Callable, Mapping, Sequence
 from models.demos.blackhole.qwen38_flash_next.tools.checkpoint_budget import vision_resident_layout
 from models.demos.blackhole.qwen38_flash_next.vision_reference import VisionTowerConfig
 
-# Rows per bucket: powers of two to the stock maximum image (65,536 patches = 4096 x 4096 px).  The eight-bucket ladder
-# pads at most 2x the rows, the four-bucket ladder at most 4x (the padded patches are windowed out of attention, so
-# the cost is the linear layers' rows only); the stock ladder is chosen by the measured READY cost of each.
+# Rows per bucket: powers of two up to the stock maximum image (65,536 patches = 4096 x 4096 px). The eight-bucket
+# ladder pads at most 2x the rows, the four-bucket ladder at most 4x.
 EIGHT_BUCKET_LADDER: tuple[int, ...] = (512, 1024, 2048, 4096, 8192, 16384, 32768, 65536)
 FOUR_BUCKET_LADDER: tuple[int, ...] = (1024, 4096, 16384, 65536)
-# The ladder of record, DECIDED BY MEASUREMENT (2026-09-29, the second line host quiet at 1-min load 1.9-5.2, the
-# JIT cache warm = the READY cost every server start after the first pays): the eight buckets prewarm in 43.7 s, the
-# four in 33.5 s, a difference of 10.2 s under the 30 s rule, for half the worst padding (2x the rows instead of 4x).
+# The stock ladder, picked by ``ladder_comparison`` from the measured READY costs.
 VISION_ROW_BUCKETS: tuple[int, ...] = EIGHT_BUCKET_LADDER
 READY_COST_DIFFERENCE_SECONDS_FOR_EIGHT = 30.0
-# MEASURED READY prewarm totals (both window forms per bucket): steady state on the quiet host, and the eight-bucket
-# cold first start on a host whose JIT cache had none of the tower's programs (load 9.8, one form per bucket).
+# READY prewarm totals in seconds (both window forms per bucket); from device measurements.
 PREWARM_READY_SECONDS_MEASURED = {"eight": 43.65, "four": 33.47}
 PREWARM_READY_SECONDS_COLD_MEASURED = {"eight": 103.11}
 STOCK_MAXIMUM_PATCHES = 65536
-# The transient DRAM the tower needs per padded row per die, MEASURED on one p150 die and on the line beside the live
-# chain (2026-09-29: 17.3-17.7 KB at block 0's attention output on 396 .. 65,536 rows), rounded up to 18 KiB.
+# Upper bound on the tower's transient DRAM per padded row per die; from a device measurement.
 PEAK_ACTIVATION_BYTES_PER_ROW_PER_DIE = 18_432
 # The largest single activation buffer: the fused qkv output [rows, 3 x 16 x 96] BF16 (its allocation must fit the
 # largest contiguous block per bank).
@@ -61,17 +37,14 @@ QKV_ACTIVATION_BYTES_PER_ROW_PER_DIE = 3 * 16 * 96 * 2
 RESIDENT_DRAM_BANKS = 8
 # The margin the MTP and lanes admissions carry on their modeled terms.
 VISION_GROWTH_ESTIMATE_MARGIN_PERCENT = 10
-# MODELED prewarm cost per bucket at READY: the program compile of one shape set (MEASURED 2026-09-29 in the warm hook
-# of a 32k chain, 1-min load 30-36: 9.5-12.4 s of device time for the first three buckets, 18.2 s for 65,536 rows
-# including its 12.4 s forward) plus the input tilize of a new shape (2.3-3.6 s), modeled as a flat compile part and
-# the warm forward law t(rows) = A rows + B rows^2 fitted to the measured warm device times (0.028 / 0.122 / 0.92 /
-# 12.4 s at 1,024 / 4,096 / 16,384 / 65,536 rows).
+# Modeled compile plus input-tilize seconds of one bucket's shape set at READY; the forward law below is
+# t(rows) = A rows + B rows^2. Both are fitted to device measurements.
 PREWARM_COMPILE_SECONDS_PER_BUCKET_MODELED = 12.0
 PREWARM_FIRST_BUCKET_EXTRA_SECONDS_MODELED = 3.0  # the tower's shape-independent programs compile with the first bucket
 WARM_FORWARD_SECONDS_PER_ROW = 1.91e-5
 WARM_FORWARD_SECONDS_PER_ROW_SQUARED = 2.6e-9
-PREWARM_SECONDS_MEASURED = {1024: 14.6, 4096: 13.1, 16384: 13.1, 65536: 22.3}  # cold, one form, 2026-09-29, load 30-36
-# Steady state per bucket (both forms, the JIT cache warm, quiet host): dominated by the 65,536-row bucket's forwards.
+PREWARM_SECONDS_MEASURED = {1024: 14.6, 4096: 13.1, 16384: 13.1, 65536: 22.3}  # cold, one form
+# Steady state per bucket (both forms, warm JIT cache).
 PREWARM_SECONDS_STEADY_MEASURED = {
     512: 0.27,
     1024: 0.25,
@@ -122,7 +95,7 @@ def warm_forward_seconds_modeled(rows: int) -> float:
 
 
 def prewarm_plan(buckets: Sequence[int] = VISION_ROW_BUCKETS) -> dict[str, Any]:
-    """The buckets the open compiles, ascending, each with its MODELED READY cost; the measured cost where one exists."""
+    """The buckets the open compiles, ascending, each with its modeled READY cost and the measured one if known."""
 
     ordered = tuple(sorted(set(int(b) for b in buckets)))
     if not ordered or any(b % 32 or b <= 0 for b in ordered):
@@ -150,9 +123,8 @@ def prewarm_plan(buckets: Sequence[int] = VISION_ROW_BUCKETS) -> dict[str, Any]:
 def ladder_comparison(
     eight_ready_seconds: float | None = None, four_ready_seconds: float | None = None
 ) -> dict[str, Any]:
-    """The two ladders side by side: the MEASURED steady-state READY costs of record (or the ones a caller measured),
-    the MODELED cold costs beside them, the worst padding factor of each, and the pick by the rule (four buckets
-    unless the eight cost under 30 s more at READY)."""
+    """The two ladders side by side: steady-state READY costs (measured, or the caller's), modeled cold costs, worst
+    padding, and the pick (four buckets unless the eight cost under 30 s more at READY)."""
 
     eight, four = prewarm_plan(EIGHT_BUCKET_LADDER), prewarm_plan(FOUR_BUCKET_LADDER)
     eight_cost = PREWARM_READY_SECONDS_MEASURED["eight"] if eight_ready_seconds is None else eight_ready_seconds
@@ -191,9 +163,8 @@ def vision_capacity_admission(
 ) -> dict[str, Any]:
     """Whether the resident tower and its largest bucket's transient peak fit the live allocator.
 
-    ``live`` is the mesh DRAM view (``free_bytes_per_bank``, ``largest_contiguous_bytes_free_per_bank``, ``num_banks``)
-    read in the chain's warm hook; ``reserved_bytes_per_bank`` is what the chain still allocates after that reading
-    (its traces, the long-chunk twin).  The required side is MODELED with the growth margin on the transient term.
+    ``live`` is the mesh DRAM view read in the warm hook; ``reserved_bytes_per_bank`` is what the chain still allocates
+    after that reading (its traces).
     """
 
     if isinstance(dies, bool) or type(dies) is not int or dies <= 0:
@@ -299,13 +270,10 @@ def shortfall_reason(admission: Mapping[str, Any]) -> str | None:
 
 @dataclass
 class Qwen38VisionResidency:
-    """The tower's life in one served process: admitted on the live allocator, loaded and prewarmed in the chain's warm
-    hook when the admission fits (text-only otherwise: the reason for an image's refusal is kept), resident until
-    ``release_vision``; the record for READY and ``/health``.
+    """The tower's life in one served process: admitted on the live allocator, loaded and prewarmed in the warm hook
+    when it fits (text-only otherwise), resident until ``release_vision``; the record for READY and ``/health``.
 
-    ``mesh_device`` and ``state_dict`` are the builder's; ``dram_view`` reads the mesh's DRAM view (the server passes
-    ``hardware_profiles.symmetric_mesh_dram_memory`` bound to its route); ``reserved_bytes_per_bank`` is what the chain
-    allocates after the hook (its traces).  The tower itself (``ttnn/vision.py``) is imported at load time.
+    ``reserved_bytes_per_bank`` is what the chain allocates after the hook (its traces).
     """
 
     mesh_device: Any
