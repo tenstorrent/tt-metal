@@ -47,7 +47,12 @@ struct FlatLayoutOptions {
     int32_t x_fwd_noc = -1;      // the forwarding NoC (-1: NOC0 with the NCRISC forwarder, else the receivers')
     int32_t x_fwd_depth = -1;    // pieces in flight per forwarder (-1: 3 with the NCRISC forwarder, else 6)
     int32_t x_relay_depth = -1;  // relay head-write batches in flight, 1..8 (-1: 4)
-    bool x_once = false;         // x read from DRAM once: rectangle 0's primary multicasts into both rectangles
+    // x read from DRAM once (rectangle 0's relays read and tilize it; with snakes its primary feeds one snake that runs
+    // through both rectangles, else it multicasts into both). -1: on where the plan has two full rectangles on the
+    // snakes, rows_hint <= 320 and no X2 / XFWD probe (GLM-5.3 / GLM-Flash / K3 / K2.7 at Galaxy loads -6.1 / -2.9 /
+    // -1.6 / -5.7%; above 320 rows an expert one 64-core snake loses to two);
+    // 0 off (each rectangle's relays read all of x: 2x the x DRAM bytes); 1 on (fails where the plan cannot)
+    int32_t x_once = -1;
     int32_t dw_batch = -1;       // down-weight blocks per read barrier (-1: DW_BATCH)
     uint32_t pin_ratio = 8;      // pin only an expert this many times the next one's rows (0: always pin)
     // one subgrid (one M group of gate/up cores) also for small I (It <= 32 tiles takes 2 or 3 subgrids by default,
@@ -168,6 +173,7 @@ struct FlatProbes {
     std::optional<std::string> w_noread;            // MIMO_FL_W_NOREAD
     std::optional<std::string> w_after_x;           // MIMO_FL_W_AFTER_X (probe: weights only once x arrived)
     std::optional<std::string> x2;                  // MIMO_FL_X2
+    std::optional<std::string> x1_heads;            // MIMO_FL_X1_HEADS
     std::optional<std::string> xdown;               // MIMO_FL_XDOWN
     std::optional<std::string> xfwd;                // MIMO_FL_XFWD
     std::optional<std::string> xhelp_all;           // MIMO_FL_XHELP_ALL

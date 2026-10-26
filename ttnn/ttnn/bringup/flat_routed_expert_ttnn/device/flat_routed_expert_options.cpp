@@ -12,7 +12,7 @@ std::vector<uint32_t> FlatLayoutOptions::key() const {
     const auto u = [](int32_t v) { return static_cast<uint32_t>(v); };
     return {drisc,        drisc_dual,     drisc_in_overlap, u(drisc_pure), u(max_down), u(x_helpers), half_width,
             u(hg_units),  u(row0),        u(row1),          u(x_path),     u(x_snakes), u(x_pieces),  u(x_fwd_ncrisc),
-            u(x_fwd_noc), u(x_fwd_depth), u(x_relay_depth), x_once,        u(dw_batch), pin_ratio,    single_subgrid,
+            u(x_fwd_noc), u(x_fwd_depth), u(x_relay_depth), u(x_once),     u(dw_batch), pin_ratio,    single_subgrid,
             even_split,   u(rows_hint),   u(gu_kgroup),     u(x_ready)};
 }
 
@@ -130,6 +130,7 @@ FlatProbes FlatProbes::from_env() {
     p.w_noread = read("MIMO_FL_W_NOREAD");
     p.w_after_x = read("MIMO_FL_W_AFTER_X");
     p.x2 = read("MIMO_FL_X2");
+    p.x1_heads = read("MIMO_FL_X1_HEADS");
     p.xdown = read("MIMO_FL_XDOWN");
     p.xfwd = read("MIMO_FL_XFWD");
     p.xhelp_all = read("MIMO_FL_XHELP_ALL");

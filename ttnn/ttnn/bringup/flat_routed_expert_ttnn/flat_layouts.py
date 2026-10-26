@@ -117,7 +117,7 @@ _ENV = {
     "MIMO_FL_X_CHAIN_NOC": ("x_fwd_noc", lambda v: int(_atoi(v) != 0)),
     "MIMO_FL_X_FWD_DEPTH": ("x_fwd_depth", _atoi),
     "MIMO_FL_X_CHAIN_DEPTH": ("x_relay_depth", _atoi),
-    "MIMO_FL_X1": ("x_once", lambda v: _atoi(v) != 0),
+    "MIMO_FL_X1": ("x_once", lambda v: int(_atoi(v) != 0)),
     "MIMO_FL_DW_BATCH": ("dw_batch", _atoi),
     "MIMO_FL_PIN_RATIO": ("pin_ratio", _atoi),
 }

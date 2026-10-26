@@ -2045,3 +2045,29 @@ the x reads; in switch mode also DRISC job 1, sending on NOC0), free (DRISC job 
   follow x's excess: Tensix readers -19 / -8 / -29 us on GLM-5.3 / GLM-Flash / K2.7, +31 on K3.
 - (AI clock sampled between runs read the 800 MHz idle clock: not a during-run sample.)
 Logs: /localdev/mstaletovic/drisc_mech/ (go.sh, go.out).
+
+### x read once on the snakes: one snake through both rectangles (2026-10-26, bh-lb-09, pure DRISC, default now)
+Why: each rectangle's relays read all of x (2 rectangles: 2x x's DRAM bytes, 31 MB a call at GLM-5.3 M 160); x's
+excess next to the DRISC streams was 82 us of which ~61 its (doubled) bytes. layout.x_once existed only for the
+multicast delivery (one multicaster into both rectangles), which wedged NOC0 beside the DRISC writes.
+- Try 1, rectangle 0's primary writes every block into both rectangles' snake heads (its relays read / tilize x
+  once, rectangle 1's idle; heads report to it): bit-exact; GLM-5.3 E 8 M 96 / 128 / 160 / 192 431 / 459 / 580 / 588
+  vs 460 / 495 / 526 / 555. The relays' DRAM waits fall 275 -> 85 us, but the primary's acked head writes cap ~35
+  GB/s (20 MB a call at M >= 160); 8 batches in flight / 2 pieces a block no help. (Probe MIMO_FL_X1_HEADS=1.)
+- Try 2 (kept), snake g of rectangle 0 continues into snake g of rectangle 1 (its tail forwards into that head,
+  credits hop by hop): the primary sends every block once, each core forwards it once. Bit-exact on all four models.
+| us a call | GLM-5.3 E 8 | GLM-Flash E 9 | K3 E 28 | K2.7 E 12 |
+|---|---|---|---|---|
+| Galaxy M (160 / 142 / 91 / 107): x twice -> once | 522 -> 490 (-6.1%) | 380 -> 369 (-2.9%) | 1216 -> 1197 (-1.6%) | 807 -> 761 (-5.7%) |
+| M 128 | 495 -> 466 | 373 -> 345 | 1326 -> 1253 | 822 -> 772 |
+| M 32 / 256 | 402 -> 402 ; 635 -> 622 | 306 -> 307 ; 475 -> 469 | 1110 -> 1093 ; 1705 -> 1529 | 694 -> 694 ; 1055 -> 1042 |
+| M 512 / 1024 | 956 -> 1106 ; 1714 -> 2056 | 720 -> 820 ; 1296 -> 1493 | 2785 -> 2536 ; 4983 -> 4939 | 1655 -> 1901 ; 3086 -> 3652 |
+- Above 320 rows an expert (128-row sub-blocks: the ring pins a whole sub-block until its last row pass, so every
+  sub-block boundary refills the snake) the 64-core snake loses to two 32-core ones (+14..20%; K3 still wins). So the
+  default (layout.x_once -1) is on only with the snakes and rows_hint <= 320 - the 64-row sub-block regime; 0 off,
+  1 forces. (Refill mechanism inferred, not profiled.) GLM-5.3 default M 32 / 160 / 320 / 512: 402 / 490 / 743 / 955.
+- Now ahead of the Tensix-reader layouts measured today on GLM-5.3 (503) and K2.7 (778), with no Tensix readers.
+- Block (2x4, traced, device; the fused call no longer forces x_once off - tt_k3_token_split_moe.py): K3 g224 chunk
+  1280 experts + combine 1206 -> 1170 us; GLM-Flash 1231 -> 1231 (that program is not flat-bound).
+- Checks: test_closeout_flat 9/9, test_closeout_plans; 20k-call soaks at the four Galaxy loads, no hang; block PCC
+  tests pass. Logs: /localdev/mstaletovic/x1/ (g*, val*, lm_*, soak_*, blk*), /localdev/mstaletovic/fc_ab/x1j_*.

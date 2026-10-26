@@ -139,14 +139,24 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     for (uint32_t ci = 0; ci < ngu; ++ci) {
         rect_cores[p.rect_of(p.gu[ci])].push_back(ci);
     }
-    // layout.x_once (prototype): x is read from DRAM once. Rectangle 0's relays (primary +
-    // helpers) read and tilize every super-block and the primary multicasts each one into BOTH rectangles
-    // (se11_xmc.cpp's second-rectangle args), gated on all gate/up cores' freed words; rectangle 1's relays idle.
-    // (Each rectangle's relays read all of x before: 2x the x DRAM bytes; NoC trace, worklog 8e.)
-    const bool x_once = lo.x_once;
-    TT_FATAL(
-        !x_once || (NR == 2 && p.nsg == 1 && !p.group_rect),
-        "flat layout x_once: two rectangles, one subgrid, no M-groups by rectangle only");
+    // layout.x_once: x is read from DRAM once. Rectangle 0's relays (primary + helpers) read and tilize every
+    // super-block; with snakes the primary feeds one snake that runs through both rectangles (below), else it
+    // multicasts each one into BOTH rectangles (se11_xmc.cpp's second-rectangle args), gated on all gate/up cores'
+    // freed words; rectangle 1's relays idle. (Otherwise each rectangle's relays read all of x: 2x the x DRAM bytes.)
+    // -1 (default): on where the plan has two full rectangles that take the snakes and the expected rows per expert
+    // (layout.rows_hint) are <= 320 - the 64-row sub-block regime; above it the one 64-core snake loses to two
+    // (GLM-5.3 / GLM-Flash / K2.7 M 512 +14..16%, M 1024 +15..20%; K3 -9 / -1%); 1 forces it.
+    const bool once_ok = NR == 2 && p.nsg == 1 && !p.group_rect;
+    bool rects_full = true;
+    for (uint32_t k = 0; k < NR; ++k) {
+        const auto [x0, x1, y0, y1] = p.rects[k];
+        rects_full = rects_full && rect_cores[k].size() == (x1 - x0 + 1) * (y1 - y0 + 1);
+    }
+    const bool x_probe2 = (cstr(pr.x2) && std::atoi(cstr(pr.x2)) != 0) || p.xfwd;
+    const bool x_once =
+        lo.x_once > 0 || (lo.x_once < 0 && once_ok && rects_full && !x_probe2 && (lo.x_path < 0 || lo.x_path == 3) &&
+                          p.nh >= 1 && lo.rows_hint > 0 && lo.rows_hint <= 320);
+    TT_FATAL(!x_once || once_ok, "flat layout x_once: two rectangles, one subgrid, no M-groups by rectangle only");
     // MIMO_FL_X2=1: x read once with both multicasters: rectangle k's relays read and tilize the super-blocks g with
     // g % 2 == k (helpers sharing them as before) and its primary multicasts each into BOTH rectangles, setting its own
     // arrival counter (rectangle 0's XARR, rectangle 1's semaphore 3); the gate/up cores merge the two streams
@@ -178,7 +188,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             const auto [x0, x1, y0, y1] = p.rects[k];
             full = full && rect_cores[k].size() == (x1 - x0 + 1) * (y1 - y0 + 1);
         }
-        const bool can = !x_once && !x_two && !p.xfwd && p.nh >= 1 && full;
+        // (x_once: rectangle 0's primary feeds every rectangle's snake / column heads - x read and tilized once)
+        const bool can = !x_two && !p.xfwd && p.nh >= 1 && full;
         xo.mode = opt(lo.x_path, can ? 3 : 0);
         TT_FATAL(xo.mode <= 3, "layout x_path {}: 0 multicast, 1 tree, 2 column chains, 3 snakes", xo.mode);
         if (xo.mode != 0) {
@@ -195,7 +206,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         log_info(
             tt::LogOp,
-            "flat_routed_expert: x {} (snakes {} pieces {} NCRISC forwarder {} NOC{} depth {})",
+            "flat_routed_expert: x {}{} (snakes {} pieces {} NCRISC forwarder {} NOC{} depth {})",
+            x_once ? "read once, " : "",
             xo.mode == 0   ? "multicast"
             : xo.mode == 1 ? "unicast tree"
             : xo.mode == 2 ? "unicast column chains"
@@ -215,10 +227,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     std::vector<XLink> xlink(ngu);
     std::vector<uint32_t> x_head(NR, 0);             // each rectangle's chain head (gate/up index)
     std::vector<std::vector<uint32_t>> x_heads(NR);  // column chains: every column's head (gate/up index)
+    std::vector<std::vector<uint32_t>> x_tails(NR);  // snakes: every snake's tail (gate/up index)
     if (x_chain) {
         TT_FATAL(
-            !x_once && !x_two && !p.xfwd && p.nh >= 1,
-            "flat x chains: one primary per rectangle (no x_once / X2 / XFWD)");
+            !x_two && !p.xfwd && p.nh >= 1 && (!x_once || x_chain_mode >= 2),
+            "flat x chains: one primary per rectangle, or x_once with snakes / column chains (no X2 / XFWD)");
         bool rv_noc1 = true;
         if (lo.x_fwd_noc >= 0 || x_fwd_nc) {  // (the forwarding NoC: no multicast now)
             rv_noc1 = xo.noc1;
@@ -259,6 +272,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                         }
                     }
                     x_heads[k].push_back(seq.front());
+                    x_tails[k].push_back(seq.back());
                     for (size_t j = 0; j < seq.size(); ++j) {
                         XLink& l = xlink[seq[j]];
                         l.pred = j ? pk(p.gu[seq[j - 1]]) : 0;
@@ -294,14 +308,34 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             }
         }
     }
-    auto word_rel = [&](uint32_t ci) {
-        if (x_once || x_two) {
-            return 4 * ci;  // every gate/up core's word on rectangle 0's primary
+    // x_once on snakes: x is read and tilized once (rectangle 0's relays) and rectangle 0's primary sends every block
+    // once: snake g of rectangle 0 continues into snake g of rectangle 1 (its tail forwards into that head; credits
+    // stay hop by hop), so each block still crosses each gate/up core once. Probe MIMO_FL_X1_HEADS=1: the primary
+    // writes every block into every rectangle's heads instead (2x its sends: GLM-5.3 E 8 M 128 / 160 459 / 580 us vs
+    // 495 / 526 with x read per rectangle - the primary's acked head writes cap ~35 GB/s)
+    std::vector<uint32_t> once_heads;
+    if (x_once) {
+        const bool join = x_chain_mode == 3 && !cstr(pr.x1_heads);
+        for (uint32_t k = 0; k < (join ? 1u : NR); ++k) {
+            once_heads.insert(once_heads.end(), x_heads[k].begin(), x_heads[k].end());
         }
+        if (join) {
+            TT_FATAL(NR == 2 && x_heads[0].size() == x_heads[1].size(), "flat x_once snakes: two rectangles alike");
+            for (size_t g = 0; g < x_heads[0].size(); ++g) {
+                const uint32_t t = x_tails[0][g], h = x_heads[1][g];
+                xlink[t].succ0 = pk(p.gu[h]);
+                xlink[h].pred = pk(p.gu[t]);
+            }
+        }
+    }
+    auto word_rel = [&](uint32_t ci) {
         if (x_chain) {  // (only chain heads report to the relay: the tree's one head, or each column's)
-            const auto& hs = x_heads[p.rect_of(p.gu[ci])];
+            const auto& hs = x_once ? once_heads : x_heads[p.rect_of(p.gu[ci])];
             const auto it = std::find(hs.begin(), hs.end(), ci);
             return x_chain_mode >= 2 && it != hs.end() ? 4 * static_cast<uint32_t>(it - hs.begin()) : 0u;
+        }
+        if (x_once || x_two) {
+            return 4 * ci;  // every gate/up core's word on rectangle 0's primary
         }
         const auto& rc = rect_cores[p.rect_of(p.gu[ci])];
         return 4 * static_cast<uint32_t>(std::find(rc.begin(), rc.end(), ci) - rc.begin());
@@ -1148,16 +1182,17 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             if (idx < NR) {
                 Args xm;
                 const uint32_t hxy = x_chain ? pk(p.gu[x_head[k]]) : 0;  // (x chains: the chain head)
+                const std::vector<uint32_t>& heads_k = x_once ? once_heads : x_heads[k];
                 xm.a(AddrSrc::Arena, p.x_off)
                     .lit(x_chain ? hxy : pk(CoreCoord(x0, y0)))
                     .lit(x_chain ? hxy : pk(CoreCoord(x1, y1)))
                     .lit(
-                        x_chain_mode >= 2 ? static_cast<uint32_t>(x_heads[k].size())
+                        x_chain_mode >= 2 ? static_cast<uint32_t>(heads_k.size())
                                           : (x_chain ? 1u : (x1 - x0 + 1) * (y1 - y0 + 1)))
                     .a(AddrSrc::Words)
                     .lit(
                         x_chain_mode >= 2
-                            ? static_cast<uint32_t>(x_heads[k].size())
+                            ? static_cast<uint32_t>(heads_k.size())
                             : (x_chain ? 1u : (x_once || x_two ? ngu : static_cast<uint32_t>(rect_cores[k].size()))))
                     .lits(
                         {V * p.nsb,
@@ -1165,7 +1200,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                          x_two ? NR : 1u,
                          x_two ? k : 0u,
                          p.group_rect ? ((idx * MTG) | ((idx + 1) * MTG << 8)) : 0});
-                if (x_once || x_two) {  // the second rectangle this primary multicasts into (se11_xmc.cpp RT 11-13)
+                if ((x_once && !x_chain) || x_two) {  // the second rectangle it multicasts into (se11_xmc.cpp RT 11-13)
                     const auto [u0, u1, v0, v1] = p.rects[x_two ? 1 - k : 1];
                     xm.lit((u1 - u0 + 1) * (v1 - v0 + 1)).lit(pk(CoreCoord(u0, v0))).lit(pk(CoreCoord(u1, v1)));
                 } else {
@@ -1184,7 +1219,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 }
                 if (x_chain_mode >= 2) {  // (the column / snake heads, listed from the arg RT 2 names)
                     xm.v[2] = static_cast<uint32_t>(xm.v.size());
-                    for (uint32_t ci : x_heads[k]) {
+                    for (uint32_t ci : heads_k) {
                         xm.lit(pk(p.gu[ci]));
                     }
                 }
@@ -1366,7 +1401,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                         .lit(xlink[ci].pred)
                         .lit(xlink[ci].second ? WORD : SFREE)
                         .lit(xlink[ci].succ0)
-                        .lit(pk(p.relays[p.rect_of(gc)]))
+                        .lit(pk(p.relays[x_once ? 0 : p.rect_of(gc)]))
                         .a(AddrSrc::Words, word_rel(ci));
                     add_rt(kxf, gc, f);
                 }

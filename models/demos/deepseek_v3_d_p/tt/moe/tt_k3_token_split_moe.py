@@ -1098,12 +1098,13 @@ class TtK3TokenSplitMoE:
         return arena
 
     def experts_combine(self, xg, pl, arena, op=None):
-        # x read from DRAM once (x_once): routed experts 2433 -> 2372 us traced with 48 gate/up cores; the shared
-        # expert's flat op keeps reading it twice (x_once there: 523 -> 702 us); off with gu64 (one multicaster cannot
-        # feed 64 gate/up cores) and routed_only (GLM-5.3-Flash: 1.99 -> 1.70 ms fused at S 640 without it)
-        # dw_batch: down-weight blocks per read barrier (2 by default; 4: block-level noise)
-        x1 = self.x_once if self.x_once is not None else not (self.gu64 or self.routed_only)
-        lay = dict(self.flat_layout, x_once=bool(x1), **self.layout_overrides)
+        # x read from DRAM once (x_once): unset - the layout's default (FlatLayoutOptions.x_once -1: on with the
+        # snakes up to 320 rows an expert, one snake through both rectangles). (The multicast form it replaced was
+        # off with gu64 - one multicaster cannot feed 64 gate/up cores - and routed_only: GLM-5.3-Flash 1.99 -> 1.70
+        # ms fused at S 640 without it.) dw_batch: down-weight blocks per read barrier (2 by default; 4: noise)
+        lay = dict(self.flat_layout, **self.layout_overrides)
+        if self.x_once is not None:
+            lay["x_once"] = int(bool(self.x_once))
         if self.dw_batch:
             lay["dw_batch"] = int(self.dw_batch)
         return self._experts_combine(xg, pl, arena, op or self.op, flat_layout(lay))
