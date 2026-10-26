@@ -380,6 +380,12 @@ def build_experts(mesh, loader, cfg, layer: int, max_chunk: int, weights_dtype=t
     """TtExperts for one MoE layer (288 / chips experts per chip; bfp8 by default, bfp4 for the whole model on a
     LoudBox). GLM_EXPERTS_MODE: ag (default) the MiMo all-gather MoE ops (tt/experts_ag.py), unified / loop TtExperts.
     """
+    if (
+        os.environ.get("GLM_EXPERTS_MODE", "ag") == "block"
+    ):  # (the MoE block, router + shared expert in: tt/experts_block.py)
+        from models.demos.glm53_flash_d_p.tt.experts_block import build_experts_block
+
+        return build_experts_block(mesh, loader, cfg, layer, max_chunk, weights_dtype=weights_dtype)
     if os.environ.get("GLM_EXPERTS_MODE", "ag") == "ts":  # (the K3 token-split block: tt/experts_ts.py)
         from models.demos.glm53_flash_d_p.tt.experts_ts import build_experts_ts
 

@@ -233,10 +233,12 @@ class TtGlmBlock:
             from models.demos.glm53_flash_d_p.tt.mlp import build_mlp
             from models.demos.glm53_flash_d_p.tt.router import build_router
 
-            self.router = build_router(mesh, loader, cfg, layer, max(chunks))
             self.experts = build_experts(
                 mesh, loader, cfg, layer, max(chunks), weights_dtype=experts_dtype or ttnn.bfloat8_b
             )
+            # (GLM_EXPERTS_MODE=block: the MoE block routes - no router of the model's)
+            routes_itself = getattr(self.experts, "routes_itself", False)
+            self.router = None if routes_itself else build_router(mesh, loader, cfg, layer, max(chunks))
             # (the token-split block with the shared expert folded in returns routed + shared: no separate one, the add
             # passes the experts' output through)
             folded = getattr(self.experts, "shared", None) is not None
@@ -247,11 +249,13 @@ class TtGlmBlock:
             from models.demos.glm53_flash_d_p.tt.experts_ts import TtExpertsTs
 
             # (the token-split block takes the router's top-k and gives the shared expert its gathered x, as ag)
-            ag = isinstance(self.experts, (TtExpertsAg, TtExpertsTs))
+            ag = isinstance(self.experts, (TtExpertsAg, TtExpertsTs)) or routes_itself
 
             joint = isinstance(self.experts, TtExpertsTs)  # (the token-split block reads router_topk's joint rows)
 
             def router(ctx, x):
+                if routes_itself:
+                    return None
                 if joint:  # one fused top-k writing the block's routing rows (ids and weights): no packing op
                     self._router_wts = None
                     return self.router.joint(x)
@@ -265,6 +269,8 @@ class TtGlmBlock:
                 return dense
 
             def experts(ctx, x, r, split=False, full_mesh=False):
+                if routes_itself:  # (router, shared expert and routed experts in one call)
+                    return self.experts(x)
                 if not ag:
                     return self.experts(x, dense=r, split=split)
                 wts, self._router_wts = self._router_wts, None
