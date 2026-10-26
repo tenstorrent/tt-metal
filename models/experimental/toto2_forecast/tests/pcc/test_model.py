@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from models.experimental.toto2_forecast.tests.golden.goldens import (
+    tree_state,
     below_floors,
     floors_for,
     info_misses,
@@ -98,7 +99,7 @@ def _record(entry: dict) -> None:
     if path:
         out = Path(path)
         data = json.loads(out.read_text()) if out.is_file() else []
-        out.write_text(json.dumps([*data, entry], indent=2) + "\n")
+        out.write_text(json.dumps([*data, {**entry, **tree_state()}], indent=2) + "\n")
 
 
 @pytest.mark.timeout(1800)

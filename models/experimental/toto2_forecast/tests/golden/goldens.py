@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 from functools import lru_cache
 from pathlib import Path
 
@@ -337,3 +338,19 @@ def all_degenerate(metrics: dict) -> bool:
 CEILINGS.update({"spread_ratio_max", "spread_ratio_inactive_p50"})
 # The G1 proposals are in force (D2); score_broken.py --proposed now scores the same floors.
 PROPOSED_FLOORS = GATE_FLOORS
+
+
+# D5 ruling 2: a gross single-element check on every non-degenerate 313m / 2.5B-FT case (suite and bench, both
+# precisions), not a band check: abs_err_max may be at most this multiple of the fixed record (accuracy 683/684,
+# performance 768/767). 4m / 22m stay floor-only (D3 ruling 1).
+ABS_ERR_CEILING = 1.5
+ABS_ERR_CHECKPOINTS = ("313m", "2.5B-FT")
+# D5 named re-base: this case's fixed record is job 768's (fused SwiGLU), so its ceiling is 0.117.
+ABS_ERR_REBASE = {("313m/missing_16x2048", "accuracy"): 0.07770979404449463}
+
+
+def tree_state() -> dict:
+    """PLAN v1.16: the commit an evidence record ran on, and whether tt/ or tests/ had uncommitted changes."""
+    here = Path(__file__).resolve().parents[2]
+    git = lambda *a: subprocess.run(["git", *a], cwd=here, capture_output=True, text=True).stdout.strip()
+    return {"git_head": git("rev-parse", "HEAD"), "git_dirty": bool(git("status", "--porcelain", "--", "tt", "tests"))}

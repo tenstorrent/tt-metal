@@ -10,6 +10,8 @@ record with the same (name, precision); ``DRIFT`` applies on the target and twic
 suite records (``pcc_metrics.json``); only 313m and 2.5B-FT are checked there (D4 condition 1; 4m / 22m stay
 floor-only, D3 ruling 1). An all-degenerate case gets no drift except abs_err_max (D4 ruling 1). A missing metric,
 a missing round-0 record and a round-0 record the candidate lacks are failures (D2). ``BENCH_LAYERS`` records are skipped (their metrics mean nothing).
+A non-degenerate 313m / 2.5B-FT record's abs_err_max may be at most 1.5x the fixed record (D5 ruling 2), and a
+record without ``git_dirty: false`` fails (PLAN v1.16).
 Exit status 1 on any failure.
 """
 
@@ -21,6 +23,9 @@ import sys
 from pathlib import Path
 
 from models.experimental.toto2_forecast.tests.golden.goldens import (
+    ABS_ERR_CEILING,
+    ABS_ERR_CHECKPOINTS,
+    ABS_ERR_REBASE,
     CEILINGS,
     DRIFT,
     DEGENERATE_ABS_ERR_GROWTH,
@@ -38,6 +43,8 @@ TARGET = ("paper", "accuracy")
 def check(rec: dict, ref: dict | None) -> list[str]:
     if ref is None:
         return ["no round-0 record"]
+    if rec.get("git_dirty") is not False:  # PLAN v1.16: evidence runs on a clean, committed tree
+        return [f"tree dirty or unrecorded (git_dirty={rec.get('git_dirty')})"]
     notes = [
         f"{k} {v[0]} misses floor {v[1]}"
         for k, v in below_floors(rec, floors_for(rec["checkpoint"], rec["precision"])).items()
@@ -49,6 +56,10 @@ def check(rec: dict, ref: dict | None) -> list[str]:
                 f"abs_err_max {rec['abs_err_max']:.6f} over {ceiling:.6f} (round 0 +{DEGENERATE_ABS_ERR_GROWTH:.0%})"
             )
         return notes
+    if rec["checkpoint"] in ABS_ERR_CHECKPOINTS:  # D5 ruling 2: gross single-element check, not a band check
+        fixed = ABS_ERR_REBASE.get((rec["name"], rec["precision"]), ref["abs_err_max"])
+        if rec["abs_err_max"] > ABS_ERR_CEILING * fixed:
+            notes.append(f"abs_err_max {rec['abs_err_max']:.6f} over {ABS_ERR_CEILING}x fixed record {fixed:.6f} (D5)")
     scale = 1.0 if (rec["name"], rec["precision"]) == TARGET else 2.0
     extra = DRIFT_EXTRA.get((rec["checkpoint"], rec["precision"].split("_")[0]), {})  # D3 ruling 2, scale 1
     for metric, margin in [*DRIFT.items(), *((m, x / scale) for m, x in extra.items())]:

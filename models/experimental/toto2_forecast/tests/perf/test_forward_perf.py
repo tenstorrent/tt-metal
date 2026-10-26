@@ -40,6 +40,7 @@ import pytest
 import torch
 
 from models.experimental.toto2_forecast.tests.golden.goldens import (
+    tree_state,
     below_floors,
     floors_for,
     info_misses,
@@ -135,7 +136,7 @@ def _record(entry: dict) -> None:
         return
     out = Path(path)
     records = json.loads(out.read_text()) if out.is_file() else []
-    records.append(entry)
+    records.append({**entry, **tree_state()})
     out.write_text(json.dumps(records, indent=2) + "\n")
 
 

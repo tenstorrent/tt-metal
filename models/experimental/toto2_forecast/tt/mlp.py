@@ -26,6 +26,7 @@ from models.experimental.toto2_forecast.tt.common import (
     upload_bias,
     upload_linear,
 )
+from models.experimental.toto2_forecast.tt.attention import mm_config, mm_linear
 from models.experimental.toto2_forecast.tt.weights import LayerWeights, ResidualMLPWeights, Toto2Config
 
 # Fused-SwiGLU blocks (M, K, N, subblock_h, subblock_w) in tiles, by d_model; the fastest of job 720's sweep at the
@@ -71,6 +72,7 @@ class TtSwiGLU:
         self._w_gu = upload(device, packed_fc1(lw.w_fc1, f, fp), dtype=dtype)
         self._swiglu_config = swiglu_config(device, config.d_model)
         self._w_down = upload_linear(device, lw.w_fc2, precision.weight_dtype("ffn_out"), pad_in=fp)
+        self._down_config = mm_config(device, config.d_model, "down", k=fp)
 
     def __call__(self, x):
         """Flat ``(1, 1, tokens, d)`` -> same; consumes ``x``."""
@@ -87,7 +89,7 @@ class TtSwiGLU:
             compute_kernel_config=p.matmul_config(),
         )
         ttnn.deallocate(xn)
-        out = linear(hidden, self._w_down, p)
+        out = mm_linear(hidden, self._w_down, p, self._down_config)
         ttnn.deallocate(hidden)
         y = scaled_residual(out, x, self.beta)
         ttnn.deallocate(x)

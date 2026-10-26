@@ -13,7 +13,13 @@ import sys
 
 import ttnn
 
-from models.experimental.toto2_forecast.tests.golden.goldens import _rows, active_rows, degenerate_rows, load_golden
+from models.experimental.toto2_forecast.tests.golden.goldens import (
+    _rows,
+    active_rows,
+    degenerate_rows,
+    load_golden,
+    tree_state,
+)
 from models.experimental.toto2_forecast.tests.pcc.test_model import run_forecast
 from models.experimental.toto2_forecast.tt.common import Toto2Precision
 from models.experimental.toto2_forecast.tt.model import TtToto2
@@ -66,6 +72,7 @@ def main(ckpt: str, case: str, precision: str, out: str | None = None) -> None:
     band = lambda t: (t - t.mean(0))[:, b, v].double().norm().item()
     rec["row_spread_ratio"] = band(head) / band(ref)
     rec["row_err_by_quantile"] = [err[i, b, v].max().item() for i in range(err.shape[0])]
+    rec.update(tree_state())
     print(json.dumps(rec, indent=2))
     if out:
         with open(out, "w") as f:
