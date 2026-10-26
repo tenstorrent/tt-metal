@@ -16,6 +16,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
+from models.demos.common.prefill.prefill_chunk import CHUNK_BYTES
 from models.demos.common.prefill.prefill_chunk import SHUTDOWN_WORD as SHUTDOWN_METADATA_WORD
 from models.demos.common.prefill.prefill_chunk import WARMUP_WORD as WARMUP_METADATA_WORD
 from models.demos.common.prefill.prefill_chunk import (
@@ -427,19 +428,21 @@ def _metadata_record_words(meta: dict) -> torch.Tensor:
     return torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1)
 
 
-def _send_metadata_record(outbound, meta: dict) -> ttnn.Tensor:
-    backing = outbound.get_backing_tensor()
+def _device_record(words: torch.Tensor, dev) -> ttnn.Tensor:
     return ttnn.from_torch(
-        _metadata_record_words(meta),
+        words,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=backing.device(),
+        device=dev,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.create_mesh_mapper(
-            backing.device(),
-            ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]),
+            dev, ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
         ),
     )
+
+
+def _send_metadata_record(outbound, meta: dict) -> ttnn.Tensor:
+    return _device_record(_metadata_record_words(meta), outbound.get_backing_tensor().device())
 
 
 def _fill_send_record(record: ttnn.Tensor, meta: dict) -> None:
@@ -648,6 +651,59 @@ def _with_hang_timeout():
         ttnn.device.SetOperationTimeoutSeconds(saved)
 
 
+def _chunk_rows(inp: ttnn.Tensor, k: int, rows: int) -> ttnn.Tensor:
+    """Chunk k's rows; dim 2 is the sequence for both token rows and activations."""
+    start = [0] * len(inp.shape)
+    end = list(inp.shape)
+    start[2], end[2] = k * rows, (k + 1) * rows
+    return ttnn.slice(inp, start, end, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _prefill_chunks(runtime, kv_caches, inp, chunks: list, request_id: int, d2h_service=None, free_input=True):
+    """A packed forward run one non-empty chunk at a time through prefill_chunk, chunk k as request_id + k.
+    Returns the activation in the packed layout, empty chunks as zero rows."""
+    rows = CHUNK_SIZE // _sp
+    dev = inp.device()
+    real = [c for c in chunks if not c.is_empty]
+    outs = []
+    for k, chunk in enumerate(real):
+        record = _device_record(
+            torch.tensor([chunk.slot_id, chunk.actual_start, chunk.actual_end], dtype=torch.int32).reshape(1, 1, 1, 3),
+            dev,
+        )
+        out = runtime.prefill_chunk(
+            _chunk_rows(inp, k, rows),
+            kv_caches,
+            slot_id=chunk.slot_id,
+            actual_start=chunk.actual_start,
+            actual_end=chunk.actual_end,
+            request_id=request_id + k,
+            d2h_service=d2h_service,
+            metadata_msg=record,
+        )
+        if record.is_allocated():  # the runtime may have freed it
+            ttnn.deallocate(record)
+        if out is not None:
+            outs.append(out)
+    if free_input:
+        ttnn.deallocate(inp)
+    if not outs:
+        return None
+    assert len(outs) == len(real), f"prefill_chunk returned {len(outs)} activations for {len(real)} chunks"
+    if len(real) < len(chunks):
+        shape = list(outs[0].shape)
+        shape[2] = (len(chunks) - len(real)) * rows
+        outs.append(
+            ttnn.zeros(
+                shape, dtype=outs[0].dtype, layout=outs[0].layout, device=dev, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+        )
+    act = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for o in outs:
+        ttnn.deallocate(o)
+    return act
+
+
 def _compute_and_send(
     runtime,
     kv_caches,
@@ -673,10 +729,22 @@ def _compute_and_send(
     )
 
     with _with_hang_timeout():
-        if FORWARD_CHUNKS > 1:
+        if FORWARD_CHUNKS > 1 and ADAPTER.supports_packed_forward:
             out = runtime.prefill_forward(
                 inp, kv_caches, meta["chunks"], request_id=c, d2h_service=d2h_service, metadata_msg=sockets.metadata
             )
+        elif FORWARD_CHUNKS > 1:
+            out = _prefill_chunks(
+                runtime,
+                kv_caches,
+                inp,
+                meta["chunks"],
+                c * FORWARD_CHUNKS,
+                d2h_service=d2h_service,
+                free_input=sockets.tokens is None,
+            )
+            if sockets.persistent_metadata() is None:
+                ttnn.deallocate(sockets.metadata)
         else:
             mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
             out = runtime.prefill_chunk(
@@ -1138,6 +1206,8 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         teardown_timeout_ms=30000,
     )
     if use_d2h:
+        # A forward run chunk by chunk acks each chunk with its own record.
+        per_chunk_acks = FORWARD_CHUNKS > 1 and not ADAPTER.supports_packed_forward
         fifo_size_bytes = LAYER_ACK_FIFO_SIZE_BYTES
         if runtime.config.use_trace:
             # The capture's warm pass fires a whole chunk's acks before any host reader exists. Acks
@@ -1150,7 +1220,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             global_spec=None,
             fifo_size_bytes=fifo_size_bytes,
             worker_cores=SYNC_WORKER_CORES,
-            metadata_size_bytes=(CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES),
+            metadata_size_bytes=(
+                CHUNK_BYTES if per_chunk_acks else (CHUNK_METADATA_SIZE_BYTES if rank == 0 else D2D_METADATA_SIZE_BYTES)
+            ),
             metadata_ring=True,
         )
         # The D2H record is the chunk's metadata {slot_id, actual_start, actual_end}; LayerAckService labels it
