@@ -16,8 +16,20 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/optional.hpp"
+#ifdef PAD_COLS_NEG_INF
+#include "pad_neg_inf.hpp"
+#endif
 
 namespace ckl = compute_kernel_lib;
+
+#ifdef PAD_COLS_NEG_INF
+struct PadNegInf : ckl::UnaryOp<PadNegInf, ckl::Dst::D0> {
+    static ALWI void init() { softmax_pad_neg_inf_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        softmax_pad_neg_inf_tile<PAD_COLS_NEG_INF>(ckl::to_u32(ckl::Dst::D0) + slot_offset);
+    }
+};
+#endif
 
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
@@ -314,6 +326,10 @@ void kernel_main() {
             // last tile of the row gets the -inf padding mask
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
+#ifdef PAD_COLS_NEG_INF
+                ckl::CopyTile<ckl::input(dfb_in0)>{dfb_in0_obj},
+                PadNegInf{},
+#else
                 ckl::BinaryFpu<
                     ckl::BinaryFpuOp::Add,
                     ckl::input(dfb_in0),
@@ -321,6 +337,7 @@ void kernel_main() {
                         dfb_mask_padded, ckl::BroadcastDim::Row, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None)>{
                     dfb_in0_obj, dfb_mask_padded_obj},  // dfb_mask_padded: held scalar, chain waits(1), no
                                                         // pop
+#endif
                 ckl::Optional<!numeric_stable, ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Dst::D0>>{},
                 ckl::PackTile<ckl::output(
                     dfb_x, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
