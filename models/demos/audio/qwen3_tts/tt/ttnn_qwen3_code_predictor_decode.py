@@ -418,7 +418,9 @@ class TtCodePredictorCachedDecoder:
 
     def _head(self, hidden, step):
         """Codebook logits for this step, from its own output head."""
-        return ttnn.linear(hidden, self.p["lm_head"][step], compute_kernel_config=self.compute_config)
+        return ttnn.linear(
+            hidden, self.p["lm_head"][step], dtype=ttnn.float32, compute_kernel_config=self.compute_config
+        )
 
     def _run(self, position):
         """One traced position, over whatever `_in` now holds."""
