@@ -263,7 +263,9 @@ class GenPrefillModel(DSV41PrefillModel):
         head and sampled greedily. The outputs (tokens [32,1], logits shard [1,1,32,vocab/cols] per user) are trace outputs read by ``Model._post_chunk``:
         NO eager device op or allocation happens between replays (they hang / corrupt traced programs)."""
         out = super().forward_device(bufs, S, s0, C, hook=hook, profile=profile, dyn=dyn)
-        if dyn:
+        if (
+            dyn and getattr(self, "_part", None) != "front"
+        ):  # (bounded replay: trace A ends in the bridge, the head belongs to trace B)
             self._ragged_head_traced(C)
         return out
 

@@ -1084,6 +1084,9 @@ class DSV41PrefillSparse:
         nr_ = ctx.rows if getattr(ctx, "per_row", False) else 1
         if not hasattr(ctx, "sp_perm"):
             ctx.sp_perm = mk_(self.md, perm_table(True).repeat(nr_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+        if os.environ.get("DSV41_PF_REPLAY", "0") != "0" and not hasattr(ctx, "sp_perm_b"):
+            assert paged, "DSV41_PF_REPLAY needs DSV41_PF_PAGED=read"
+            ctx.sp_perm_b = mk_(self.md, perm_table(True).repeat(nr_, 1, 1, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
         if r not in ctx.sp_win:
             ctx.sp_win[r] = mk_(
                 self.md, torch.zeros(nr_, 1, ctx.C, WINDOW, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
@@ -1117,6 +1120,10 @@ class DSV41PrefillSparse:
             if t is not None:
                 ttnn.deallocate(t)
                 del ctx.sp_perm
+            t = getattr(ctx, "sp_perm_b", None)
+            if t is not None:
+                ttnn.deallocate(t)
+                del ctx.sp_perm_b
             for d in (getattr(ctx, "sp_win", {}), getattr(ctx, "sp_vis", {})):
                 for t in d.values():
                     ttnn.deallocate(t)
@@ -1154,6 +1161,16 @@ class DSV41PrefillSparse:
             ),
             ctx.sp_perm,
         )
+        if hasattr(ctx, "sp_perm_b"):  # layers >= REPLAY_BACK: "first chunk" = first replay chunk
+            h2d(
+                ttnn.from_torch(
+                    torch.cat([perm_table(f) for f in ctx.first_b(s0s)], dim=0),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=mp,
+                ),
+                ctx.sp_perm_b,
+            )
         for r, dev in ctx.sp_win.items():
             L, C = ctx.L[r], ctx.C
             i = torch.arange(C).view(-1, 1)
@@ -1274,9 +1291,11 @@ class DSV41PrefillSparse:
         zero_heads = zeros_rm(self.md, [1, PAD_HEADS - LOCAL_HEADS, C, HEAD_DIM])
         outs = []
         for u in range(U):
-            wu = ttnn.slice(ctx.pg.win, [u, 0, 0, 0], [u + 1, 1, C, WINDOW]) if paged else win
+            pgw = ctx.pg.win_b if getattr(ctx, "back", False) else ctx.pg.win
+            wu = ttnn.slice(pgw, [u, 0, 0, 0], [u + 1, 1, C, WINDOW]) if paged else win
             idx = compact_rows(
-                ttnn.concat([wu, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3), ctx.sp_perm
+                ttnn.concat([wu, ttnn.slice(ids, [u, 0, 0, 0], [u + 1, 1, C, TOPK])], dim=3),
+                ctx.sp_perm_b if getattr(ctx, "back", False) else ctx.sp_perm,
             )
             qu = ttnn.to_layout(ttnn.slice(qh, [u, 0, 0, 0], [u + 1, LOCAL_HEADS, C, HEAD_DIM]), ttnn.ROW_MAJOR_LAYOUT)
             qu = ttnn.concat([qu, zero_heads], dim=1)

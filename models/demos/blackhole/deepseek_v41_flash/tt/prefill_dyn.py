@@ -131,6 +131,11 @@ class DynCtx:
             [],
         )  # extra per-chunk host updates (``hook(ctx, s0)``) / in-trace builders (``hook(ctx)``): tt/prefill_sparse.py
         self.masks = {}  # ratio -> full mask [1,1,C,128+C+L] built inside the traced forward by ``build_masks``
+        # bounded replay (DSV41_PF_REPLAY, tt/prefill_model.py): layers >= REPLAY_BACK run only in the chunks from ``p0`` on (per mesh row, chunk-aligned, set by the model before the
+        # window loop); for them the first replay chunk has NO halo (their window state of the skipped chunks does not exist): ``first_b`` tells which chunk starts are "first" (``back`` = the
+        # layers being traced read the ``*_b`` copies of the first-chunk tensors).
+        self.back = False
+        self.p0 = None
 
     def _host(self, t, dtype):
         return ttnn.from_torch(
@@ -184,6 +189,16 @@ class DynCtx:
             out.append((self._host(vals[("lim", r)][0], ttnn.float32), self.lim[r]))
             out.append((self._host(vals[("off", r)][0], ttnn.float32), self.off[r]))
         return out
+
+    def first_b(self, s0s):
+        """[bool] per entry of ``s0s``: the chunk starting there is the first chunk of the layers >= REPLAY_BACK (no halo). Without replay: the chunk 0."""
+        p0 = self.p0
+        if p0 is None:
+            return [x == 0 for x in s0s]
+        if len(p0) == len(s0s):
+            return [x <= p for x, p in zip(s0s, p0)]
+        m = min(p0)
+        return [x <= m for x in s0s]
 
     @staticmethod
     def _pre_key(s0):

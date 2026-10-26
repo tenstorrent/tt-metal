@@ -104,6 +104,19 @@ class PagedCtx:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self._m,
         )
+        # bounded replay (DSV41_PF_REPLAY): the window ids of the layers >= REPLAY_BACK ("first chunk" = first replay chunk)
+        self.win_b = (
+            ttnn.from_torch(
+                torch.zeros(U * nr, 1, ctx.C, WINDOW, dtype=torch.int32),
+                device=md,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=self._m,
+            )
+            if os.environ.get("DSV41_PF_REPLAY", "0") != "0"
+            else None
+        )
 
     def scratch_base(self, u):
         return self.pool.scratch_origin + u * self.W
@@ -130,7 +143,7 @@ class PagedCtx:
         i = torch.arange(C).view(-1, 1)
         c = torch.arange(WINDOW).view(1, -1)
         ws = {}
-        for x in set(s0s):
+        for x in set(s0s) | {0, -1}:  # (-1: the not-first window)
             if x == 0:  # kv of position p at scratch row base + 128 + p; valid positions max(0, i - 127) .. i
                 p = (i - (WINDOW - 1)).clamp(min=0) + c
                 rel = torch.where(p <= i, WINDOW + p, torch.full_like(p, -1))
@@ -142,6 +155,9 @@ class PagedCtx:
             ws[x] = torch.where(w < 0, torch.full_like(w, -1), w).to(torch.int64).to(torch.int32)  # -1 -> 0xFFFFFFFF
         w = torch.cat([ws[x] for x in s0s], dim=0)
         h2d(ttnn.from_torch(w, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._m), self.win)
+        if self.win_b is not None:
+            wb = torch.cat([ws[0] if f else ws[-1] for f in ctx.first_b(s0s)], dim=0)
+            h2d(ttnn.from_torch(wb, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._m), self.win_b)
 
     def translate(self, ids, ratio, src_layer):
         """ids [U,1,C,512] uint32 RM (FIFO slots; single trace: slots of the scratch / history layout, tt/prefill_single.py) -> pool rows (same shape)."""
