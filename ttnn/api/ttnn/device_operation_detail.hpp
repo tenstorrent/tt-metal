@@ -24,6 +24,7 @@ class TensorTopology;
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
+class MeshWorkload;
 }  // namespace tt::tt_metal::distributed
 
 namespace ttnn::device_operation::detail {
@@ -83,5 +84,14 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinate
  * therefore still drop the per-core bit unnoticed; tracked in #51482.
  */
 void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index);
+
+// True while a ttnn::experimental::CommandListBuilder records on the calling thread (ttnn/command_list.hpp).
+bool is_recording_command_list();
+
+// Adds `workload` to the CommandListBuilder recording on the calling thread instead of enqueueing it.
+void record_to_command_list(
+    std::string_view operation_name,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::distributed::MeshWorkload& workload);
 
 }  // namespace ttnn::device_operation::detail
