@@ -1818,3 +1818,26 @@ has none, so Python-built programs always take the slow path.
 Bit-exact block outputs on four inputs (both models); test_moe_block eager PCC 0.9961-0.9962 (K3), traced replays
 unchanged (K3 2006-2011, GLM-Flash 1690-1695 us). Left on the host (K3): ~400 us of per-call arena allocations (SE,
 tail, combine + its fit check), ~110 us the fused flat + combine op, the rest the enqueues.
+- Next round (same day), toward the traced time in a synced forward (what a layer sees with nothing before it):
+  host stage marks show everything after the head's launch is enqueued ahead of the device; the loss is the host
+  work before the head reaches the device. Done:
+  - prepared_program: an io tensor's slots are rewritten only when its first slot does not already hold its address
+    (state kept in the program itself - all its slots are written together): ~1350 patch writes a chip on the head
+    (every SE core carries the same dozen addresses) become ~12 lookups. Head launch 608 -> 426 us into the forward.
+  - SE compute kernels: the per-group block and the RS / prep tables' prefix every core of a group shares go as common
+    runtime args (sent once a chip) - the head's runtime-arg payload 39152 -> 29692 words a chip; the kernel indexes
+    them through se_arg (indices stay absolute).
+  - The fused head's per-call outputs (router rows, dispatch buffer, route words, latent, SE output; DRAM) are made
+    once and reused when the block has its fused tail (nothing outlives a forward).
+  - mesh_plan / manifest_spec memoized per mesh (~180 us of host a call, behind the device by then).
+| us | K3 g224 | GLM-Flash |
+|---|---|---|
+| synced untraced wall: start of day / prepared / now | 4310 / 2573 / 2284-2306 | 3847 / 2438 / 2007-2029 |
+| traced replay | 2006-2012 | 1690-1694 |
+| host enqueue now | 920-1021 | 814-834 |
+| head reaches the device (host mark) | ~320 | ~315 |
+  Left: ~270-330 us before the head starts - its enqueue (~165 us: 116 KB of runtime args a chip, written chip after
+  chip by the mesh queue), the SE arena taken again (~95 us: it shares its L1 with the exchange's arena), small items.
+  Outputs: bit-exact against the start-of-day path on GLM-Flash; on K3 one input alternates run to run between the
+  reference and one row (365) off by 0.0156 in 6 values - two outcomes only (accumulation order of one token's
+  contributions), PCC unchanged (0.99624 / 0.99616 / 0.99611).

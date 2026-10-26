@@ -64,11 +64,30 @@ void PreparedProgramFactory::override_runtime_arguments(
         return;
     }
     const auto& io = tensor_args.io_tensors;
-    for (const auto& r : p.rt[pi]) {
-        tt::tt_metal::GetRuntimeArgs(program, r.kernel, CoreCoord(r.x, r.y))[r.arg] = address_of(io[r.io]);
-    }
-    for (const auto& r : p.crt[pi]) {
-        tt::tt_metal::GetCommonRuntimeArgs(program, r.kernel)[r.arg] = address_of(io[r.io]);
+    // (an io tensor's slots are always written together, so its first slot tells whether this program already holds
+    // its address - the usual case, the same buffers every call: one lookup instead of every slot)
+    for (size_t j = 0; j < io.size(); ++j) {
+        const uint32_t a = address_of(io[j]);
+        const auto& rts = p.rt_of_io[pi][j];
+        if (!rts.empty()) {
+            const auto& r0 = p.rt[pi][rts.front()];
+            if (tt::tt_metal::GetRuntimeArgs(program, r0.kernel, CoreCoord(r0.x, r0.y))[r0.arg] != a) {
+                for (const uint32_t ri : rts) {
+                    const auto& r = p.rt[pi][ri];
+                    tt::tt_metal::GetRuntimeArgs(program, r.kernel, CoreCoord(r.x, r.y))[r.arg] = a;
+                }
+            }
+        }
+        const auto& crts = p.crt_of_io[pi][j];
+        if (!crts.empty()) {
+            const auto& r0 = p.crt[pi][crts.front()];
+            if (tt::tt_metal::GetCommonRuntimeArgs(program, r0.kernel)[r0.arg] != a) {
+                for (const uint32_t ri : crts) {
+                    const auto& r = p.crt[pi][ri];
+                    tt::tt_metal::GetCommonRuntimeArgs(program, r.kernel)[r.arg] = a;
+                }
+            }
+        }
     }
     if (!p.cbs[pi].empty()) {
         const auto program_cbs = program.circular_buffers();

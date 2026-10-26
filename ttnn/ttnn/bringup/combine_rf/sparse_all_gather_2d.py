@@ -511,8 +511,22 @@ def route_words(N):
     return 1 if N <= 16 else 2
 
 
+_PLAN_CACHE = {}  # mesh_plan / manifest_spec by (mesh, its shape, options); the mesh kept alive so its id stays its own
+
+
 def mesh_plan(mesh_device, num_links, torus=(False, False)):
-    """Ports of every chip: {coord: {dir: dict(peer, links)}}; torus = (wrap X, wrap Y) where cabled."""
+    """Ports of every chip: {coord: {dir: dict(peer, links)}}; torus = (wrap X, wrap Y) where cabled. Memoized per mesh
+    and options (the fabric's links do not change; ~120 us of host a call otherwise)."""
+    key = ("plan", id(mesh_device), tuple(mesh_device.shape), num_links, tuple(torus))
+    hit = _PLAN_CACHE.get(key)
+    if hit is not None and hit[0] is mesh_device:
+        return hit[1]
+    out = _mesh_plan(mesh_device, num_links, torus)
+    _PLAN_CACHE[key] = (mesh_device, out)
+    return out
+
+
+def _mesh_plan(mesh_device, num_links, torus):
     R, C = tuple(mesh_device.shape)
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
     wrap_x = torus[0] and C > 2
@@ -670,7 +684,11 @@ def manifest_spec(mesh_device, S, *, num_links=2, torus=(False, False)):
     """(shape, dtype, layout, device, memory config) of the port cores' manifest rings for S own rows per chip:
     allocate it per call (ttnn.allocate_tensor_on_device) and pass it as ``manifest`` (its contents need no zeroing:
     the rings are consumed by count, and the counters are global semaphores the reader resets), instead of the
-    persistent one (~123 KB of every core's L1 at K3's 2560 rows)."""
+    persistent one (~123 KB of every core's L1 at K3's 2560 rows). Memoized per mesh, S and options."""
+    key = ("manifest", id(mesh_device), tuple(mesh_device.shape), S, num_links, tuple(torus))
+    hit = _PLAN_CACHE.get(key)
+    if hit is not None and hit[0] is mesh_device:
+        return hit[1]
     R, C = tuple(mesh_device.shape)
     chips, _, (wrap_x, wrap_y) = mesh_plan(mesh_device, num_links, torus)
     cores = sorted({(c.x, c.y) for c in place_ports(mesh_device, chips).values()})
@@ -681,7 +699,9 @@ def manifest_spec(mesh_device, S, *, num_links=2, torus=(False, False)):
         ttnn.BufferType.L1,
         ttnn.ShardSpec(crs, [1, man_words], ttnn.ShardOrientation.ROW_MAJOR),
     )
-    return ttnn.Shape([1, 1, len(cores), man_words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, mc
+    out = (ttnn.Shape([1, 1, len(cores), man_words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, mc)
+    _PLAN_CACHE[key] = (mesh_device, out)
+    return out
 
 
 def static_cb_bytes(N, S, row_width, *, group=8, manifest_batch=16, dtype_bytes=2):

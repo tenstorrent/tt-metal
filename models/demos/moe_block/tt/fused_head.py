@@ -581,7 +581,19 @@ class HeadSE3:
         if self.eng.arena.is_allocated():
             ttnn.deallocate(self.eng.arena)
 
+    def _out(self, name, make):
+        """A per-call output: with persist (the MoE block with its fused tail - nothing outlives a forward), made once
+        and reused - its DRAM stays, the allocation (~10-20 us of host each, ahead of the head's launch) goes."""
+        t = self._persist.get(name) if getattr(self, "persist", False) else None
+        if t is None or not t.is_allocated():
+            t = make()
+            if getattr(self, "persist", False):
+                self._persist[name] = t
+        return t
+
     def run(self, x, w):
+        if not hasattr(self, "_persist"):
+            self._persist = {}
         if self.rs_mode == "fused" and not self.eng.arena.is_allocated():
             self.eng.realloc_arena()
             if self.router is not None:  # (its CBs are carved from the arena too)
@@ -590,7 +602,7 @@ class HeadSE3:
             G = self.plan.G
             self.outputs = {}
             if self.router is not None:
-                self.rout = self.outputs["rows"] = self.router.out_tensor()
+                self.rout = self.outputs["rows"] = self._out("rows", self.router.out_tensor)
                 if self.routing is not None:
                     self.routing.router_out = self.rout
                 if self.router.prep is not None:
@@ -600,27 +612,36 @@ class HeadSE3:
                     rw = route_words(N)
                     # the dispatch buffer [N S, W] row-major (W: the latent's width, else H): the program writes this
                     # chip's slots me S .. (its owned rows); the dispatch fills the rest
-                    self.outputs["xbuf"] = ttnn.allocate_tensor_on_device(
-                        ttnn.Shape([1, 1, N * self.rows // G, self.latent or self.H]),
-                        ttnn.bfloat16,
-                        ttnn.ROW_MAJOR_LAYOUT,
-                        self.mesh,
-                        ttnn.DRAM_MEMORY_CONFIG,
+                    self.outputs["xbuf"] = self._out(
+                        "xbuf",
+                        lambda: ttnn.allocate_tensor_on_device(
+                            ttnn.Shape([1, 1, N * self.rows // G, self.latent or self.H]),
+                            ttnn.bfloat16,
+                            ttnn.ROW_MAJOR_LAYOUT,
+                            self.mesh,
+                            ttnn.DRAM_MEMORY_CONFIG,
+                        ),
                     )
-                    self.outputs["route"] = ttnn.allocate_tensor_on_device(
-                        ttnn.Shape([1, 1, 1, rw * self.rows // G]),
-                        ttnn.uint32,
-                        ttnn.ROW_MAJOR_LAYOUT,
-                        self.mesh,
-                        ttnn.DRAM_MEMORY_CONFIG,
+                    self.outputs["route"] = self._out(
+                        "route",
+                        lambda: ttnn.allocate_tensor_on_device(
+                            ttnn.Shape([1, 1, 1, rw * self.rows // G]),
+                            ttnn.uint32,
+                            ttnn.ROW_MAJOR_LAYOUT,
+                            self.mesh,
+                            ttnn.DRAM_MEMORY_CONFIG,
+                        ),
                     )
             if self.latent:
-                self.lout = self.outputs["latent"] = ttnn.allocate_tensor_on_device(
-                    ttnn.Shape([1, 1, self.rows // G, self.latent]),
-                    ttnn.bfloat16,
-                    ttnn.TILE_LAYOUT,
-                    self.mesh,
-                    ttnn.DRAM_MEMORY_CONFIG,
+                self.lout = self.outputs["latent"] = self._out(
+                    "latent",
+                    lambda: ttnn.allocate_tensor_on_device(
+                        ttnn.Shape([1, 1, self.rows // G, self.latent]),
+                        ttnn.bfloat16,
+                        ttnn.TILE_LAYOUT,
+                        self.mesh,
+                        ttnn.DRAM_MEMORY_CONFIG,
+                    ),
                 )
             return self._run(
                 x, w, self.H // G if self.rs_dim == -1 else self.H, self.rows // G if self.rs_dim == -2 else self.rows
@@ -640,12 +661,15 @@ class HeadSE3:
     def _run(self, x, w, width, rows=None):
         from models.demos.moe_block.tt.se_engine3 import XREADY
 
-        y = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, rows or self.rows, width]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            self.mesh,
-            ttnn.DRAM_MEMORY_CONFIG,
+        y = self._out(
+            "y",
+            lambda: ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, rows or self.rows, width]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                self.mesh,
+                ttnn.DRAM_MEMORY_CONFIG,
+            ),
         )
         io = [x, w, y, self.eng.arena]
         io += list(self.outputs.values()) + (list(self.rw) if self.router is not None else [])

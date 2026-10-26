@@ -3,9 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <memory>
+#include <set>
+#include <string>
+#include <tuple>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
 
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
@@ -27,7 +34,114 @@ void bind_prepared_program(nb::module_& mod) {
         )doc")
         .def_prop_ro("patch_count", &Prepared::patch_count)
         .def_prop_ro("n_io", [](const Prepared& p) { return p.n_io; })
-        .def_prop_ro("hash", [](const Prepared& p) { return static_cast<uint64_t>(p.hash); });
+        .def_prop_ro("hash", [](const Prepared& p) { return static_cast<uint64_t>(p.hash); })
+        // (the launch payload of the first mesh program: runtime-arg words over its cores, kernel-cores with args,
+        // common runtime-arg words, CBs)
+        // (per kernel of the first mesh program: source (head of), kernel-cores, runtime-arg words, distinct per-core
+        // arg vectors, words in positions equal on every core)
+        .def_prop_ro(
+            "kernel_stats",
+            [](const Prepared& p) {
+                const auto& pd = p.desc.mesh_programs.at(0).second;
+                std::vector<std::tuple<std::string, size_t, size_t, size_t, size_t>> out;
+                for (const auto& k : pd.kernels) {
+                    std::set<std::vector<uint32_t>> distinct;
+                    size_t words = 0, cores = 0, mx = 0;
+                    for (const auto& [core, args] : k.runtime_args) {
+                        words += args.size();
+                        cores += !args.empty();
+                        mx = std::max(mx, args.size());
+                        distinct.insert(std::vector<uint32_t>(args.begin(), args.end()));
+                    }
+                    std::string src = k.kernel_source;
+                    const auto slash = src.find_last_of('/');
+                    if (src.size() < 200 && slash != std::string::npos) {
+                        src = src.substr(slash + 1);
+                    } else {
+                        src = src.substr(0, 60);
+                    }
+                    // (words in arg positions holding one value on every core of the kernel: common-arg material)
+                    size_t same = 0;
+                    if (cores > 1) {
+                        for (size_t i = 0; i < mx; ++i) {
+                            bool eq = true, first = true;
+                            uint32_t v = 0;
+                            for (const auto& [core, args] : k.runtime_args) {
+                                if (args.size() <= i) {
+                                    eq = false;
+                                    break;
+                                }
+                                if (first) {
+                                    v = args[i];
+                                    first = false;
+                                } else if (args[i] != v) {
+                                    eq = false;
+                                    break;
+                                }
+                            }
+                            same += eq ? cores : 0;
+                        }
+                    }
+                    out.emplace_back(src, cores, words, distinct.size(), same);
+                }
+                return out;
+            })
+        // (per kernel of the first mesh program: the arg positions equal on every core, as [start, end) runs, and
+        // each core's arg count range)
+        .def_prop_ro(
+            "invariant_runs",
+            [](const Prepared& p) {
+                const auto& pd = p.desc.mesh_programs.at(0).second;
+                std::vector<std::tuple<size_t, size_t, std::vector<std::pair<size_t, size_t>>>> out;
+                for (const auto& k : pd.kernels) {
+                    size_t mn = SIZE_MAX, mx = 0, cores = 0;
+                    for (const auto& [core, args] : k.runtime_args) {
+                        if (!args.empty()) {
+                            mn = std::min(mn, args.size());
+                            mx = std::max(mx, args.size());
+                            ++cores;
+                        }
+                    }
+                    std::vector<std::pair<size_t, size_t>> runs;
+                    for (size_t i = 0; cores > 1 && i < mn; ++i) {
+                        bool eq = true, first = true;
+                        uint32_t v = 0;
+                        for (const auto& [core, args] : k.runtime_args) {
+                            if (args.empty()) {
+                                continue;
+                            }
+                            if (first) {
+                                v = args[i];
+                                first = false;
+                            } else if (args[i] != v) {
+                                eq = false;
+                                break;
+                            }
+                        }
+                        if (eq) {
+                            if (!runs.empty() && runs.back().second == i) {
+                                runs.back().second = i + 1;
+                            } else {
+                                runs.emplace_back(i, i + 1);
+                            }
+                        }
+                    }
+                    out.emplace_back(mn == SIZE_MAX ? 0 : mn, mx, runs);
+                }
+                return out;
+            })
+        .def_prop_ro("payload", [](const Prepared& p) {
+            const auto& pd = p.desc.mesh_programs.at(0).second;
+            size_t words = 0, cores = 0, common = 0;
+            for (const auto& k : pd.kernels) {
+                for (const auto& [core, args] : k.runtime_args) {
+                    words += args.size();
+                    cores += !args.empty();
+                }
+                common += k.common_runtime_args.size();
+            }
+            return std::make_tuple(words, cores, common, pd.cbs.size(), pd.kernels.size(), p.desc.mesh_programs.size());
+        });
 
     mod.def(
         "prepare_program",

@@ -45,6 +45,9 @@ struct Prepared {
     std::vector<std::vector<RtPatch>> rt;
     std::vector<std::vector<CommonRtPatch>> crt;
     std::vector<std::vector<CbPatch>> cbs;
+    // per mesh program, per io tensor: its rt / crt patches (indices); a hit rewrites an io tensor's slots only when
+    // the first of them does not already hold its address (they are always written together)
+    std::vector<std::vector<std::vector<uint32_t>>> rt_of_io, crt_of_io;
     size_t n_io = 0;
     ttsl::hash::hash_t hash = 0;
 

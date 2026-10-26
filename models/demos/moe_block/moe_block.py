@@ -441,6 +441,8 @@ class MoEBlock(LightweightModule):
             f"{g.tokens_per_chip} owned a chip), {g.experts_per_chip} experts a chip, routed width {model.routed_width}; "
             f"{self.summary}; flat layout {self.experts.layout_fields}; dtypes {dtypes}; options {options}"
         )
+        if self.fused is not None:  # (the fused tail frees nothing of the head's: its outputs are reused each forward)
+            self.fused.head.persist = self.tail is not None
 
     def _mark(self, name):
         if self.stage_hook is not None:
@@ -466,12 +468,14 @@ class MoEBlock(LightweightModule):
                 self._taps = dict(rows=[ttnn.to_torch(t) for t in ttnn.get_device_tensors(out["rows"])])
             # owners' sums [S/N, Hr] (the fused tail: the combine's row-major rows, tilized in its program)
             y_own = self.exchange.prepped((out["xbuf"], out["route"]), hook=self.stage_hook, tilize=self.tail is None)
+            persist = getattr(self.fused.head, "persist", False)  # (the head's outputs reused across forwards)
             for k in ("rows", "xbuf", "route", "latent"):
-                if k in out and out[k].is_allocated():
+                if not persist and k in out and out[k].is_allocated():
                     ttnn.deallocate(out[k])
             if self.tail is not None:
                 y = self.tail(y_own, se)
-                ttnn.deallocate(se)
+                if not persist:
+                    ttnn.deallocate(se)
                 self._mark("tail")
                 return y
             return self._tail(y_own, se)

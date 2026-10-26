@@ -798,6 +798,13 @@ constexpr uint32_t POMAX = get_compile_time_arg_val(6), KBD = get_compile_time_a
 constexpr uint32_t NPD = get_compile_time_arg_val(9), WSLOT = get_compile_time_arg_val(10), PWDMAX = get_compile_time_arg_val(11);
 constexpr uint32_t G = get_compile_time_arg_val(12), SPS = get_compile_time_arg_val(13);  // (shards, steps a shard)
 constexpr uint32_t GX = get_compile_time_arg_val(14), HA = GX * MT * POMAX;  // (h-all: [column][MT][POMAX])
+// Words [0, NC) - the per-group block (gate / down tables, h column offsets, HT) and the RS / prep tables' prefix every
+// core of the group shares - are this kernel's common args (sent once a chip, not once a core); the rest of a core's
+// tables are its runtime args from NC on. Indices stay absolute (the host's tables point at them).
+constexpr uint32_t SE_NC = get_compile_time_arg_val(15);
+FORCE_INLINE uint32_t se_arg(uint32_t i) {
+    return i < SE_NC ? get_common_arg_val<uint32_t>(i) : get_arg_val<uint32_t>(i - SE_NC);
+}
 constexpr uint32_t XIN = 0, WIN = 1, HOWN = 2, HALL = 3, OUT = 4, ACC = 5;
 // (runtime args: the column's gate / up pass widths [NPG], then down pass widths [NPD])
 #ifdef SE_RTR
@@ -875,7 +882,7 @@ void kernel_main() {
         for (uint32_t k = 0; k < G; ++k) {
             uint32_t hoff = 0, loff = 0;
             for (uint32_t pg = 0; pg < NPG; ++pg) {
-                const uint32_t pw = get_arg_val<uint32_t>(pg), n = MT * pw;
+                const uint32_t pw = se_arg(pg), n = MT * pw;
                 tile_regs_acquire();
                 if (k > 0) {
                     cb_wait_front(ACC, n);
@@ -972,7 +979,7 @@ void kernel_main() {
         // entry, exchanged as is); hand e - entry e's start sub-block is complete (a FINC page: the BRISC's hand-off);
         // fin e - HOLD + the arrival(s) in fp32 DEST, packed bf16 into FINB (relay: handed off) or OUTF (fin: y).
         // Partials accumulate fp32 in L1; only the exchanged sub-blocks are bf16 (matmul_reduce_scatter's rule).
-        const uint32_t r0 = NPG + NPD + GX + 1, nops = get_arg_val<uint32_t>(r0), pt0 = r0 + 1 + nops;
+        const uint32_t r0 = NPG + NPD + GX + 1, nops = se_arg(r0), pt0 = r0 + 1 + nops;
         const uint32_t et0 = pt0 + NPD * (1 + MT);
         uint32_t npass = 0, hin = 0;  // (h-all columns waited for: the first pass follows the exchange's rounds)
         if (NCH > 1 && m > 0) {  // (the ports read the last chunk's FINB: mine to write again - the NCRISC's credit)
@@ -980,12 +987,12 @@ void kernel_main() {
             cb_pop_front(SE_FFREE, 1);
         }
         for (uint32_t o = 0; o < nops; ++o) {
-            const uint32_t op = get_arg_val<uint32_t>(r0 + 1 + o), kind = op & 0xFF, idx = op >> 8;
+            const uint32_t op = se_arg(r0 + 1 + o), kind = op & 0xFF, idx = op >> 8;
             if (kind == 0) {
 #ifdef SE_PROBE_RSSTAT
                 DeviceZoneScopedN("SE-DPASS");
 #endif
-                const uint32_t pd = idx, pw = get_arg_val<uint32_t>(pt0 + pd * (1 + MT));
+                const uint32_t pd = idx, pw = se_arg(pt0 + pd * (1 + MT));
                 reconfig_data_format(WIN, HALL);
                 matmul_block_init(HALL, WIN, 0, pw, MT, POMAX);
                 uint32_t c = 0;
@@ -994,12 +1001,12 @@ void kernel_main() {
                     cb_wait_front(WIN, WSLOT);
                     for (uint32_t k = 0; k < KBD; ++k) {
                         const uint32_t kt = i * KBD + k;
-                        while (kt >= get_arg_val<uint32_t>(NPG + NPD + c + 1)) ++c;
+                        while (kt >= se_arg(NPG + NPD + c + 1)) ++c;
                         if (c >= hin) {
                             hin = c + 1;
                             cb_wait_front(HALL, hin * MT * POMAX);
                         }
-                        const uint32_t a0 = c * MT * POMAX + kt - get_arg_val<uint32_t>(NPG + NPD + c);
+                        const uint32_t a0 = c * MT * POMAX + kt - se_arg(NPG + NPD + c);
 #ifndef SE_PROBE_NOMATH
                         matmul_block(HALL, WIN, a0, k * pw, 0, false, pw, MT, POMAX);
 #endif
@@ -1009,7 +1016,7 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t r = 0; r < MT; ++r) {
-                    const uint32_t bw = get_arg_val<uint32_t>(pt0 + pd * (1 + MT) + 1 + r);
+                    const uint32_t bw = se_arg(pt0 + pd * (1 + MT) + 1 + r);
                     const uint32_t ocb = (bw >> 31) ? SE_HOLD : SE_FINB, base = bw & 0x7FFFFFFF;
                     pack_reconfig_data_format(ocb);
                     for (uint32_t t = 0; t < pw; ++t) pack_tile<true>(r * pw + t, ocb, base + t);
@@ -1029,9 +1036,9 @@ void kernel_main() {
                 DeviceZoneScopedN("SE-PREP");
 #ifdef SE_PREP_LAST
                 // (with chunks: every chunk's units in the last chunk's op - no prep writes under the W re-reads)
-                const uint32_t nu = m + 1 == NCH ? get_arg_val<uint32_t>(idx) : 0, u0 = 0, u1 = NCH * nu;
+                const uint32_t nu = m + 1 == NCH ? se_arg(idx) : 0, u0 = 0, u1 = NCH * nu;
 #else
-                const uint32_t nu = get_arg_val<uint32_t>(idx), u0 = m * nu, u1 = (m + 1) * nu;
+                const uint32_t nu = se_arg(idx), u0 = m * nu, u1 = (m + 1) * nu;
 #endif
                 uint32_t pu0 = 0;
                 UNPACK((pu0 = get_local_cb_interface(SE_PU).fifo_rd_ptr));
@@ -1042,7 +1049,7 @@ void kernel_main() {
                     pack_untilize_init<SE_PREP_BCT, SE_PREP_FULL>(SE_PU, SE_PO);
                 }
                 for (uint32_t u = u0; u < u1; ++u) {  // (chunk u / nu's units)
-                    const uint32_t off = get_arg_val<uint32_t>(idx + 1 + 2 * u), fl = get_arg_val<uint32_t>(idx + 2 + 2 * u);
+                    const uint32_t off = se_arg(idx + 1 + 2 * u), fl = se_arg(idx + 2 + 2 * u);
                     const uint32_t n = fl & 0xFFFF;
 #ifdef SE_LRDY
                     if ((fl >> 16) && lrdy < u / nu + 1) {  // (a unit of the latent's arrivals: once they all landed)
@@ -1062,9 +1069,9 @@ void kernel_main() {
                 (void)lrdy;
 #endif
             } else {
-                const uint32_t e6 = et0 + 6 * idx, cnt = get_arg_val<uint32_t>(e6), mode = get_arg_val<uint32_t>(e6 + 1);
-                const uint32_t sf = get_arg_val<uint32_t>(e6 + 2), sb = get_arg_val<uint32_t>(e6 + 3);
-                const uint32_t ho = get_arg_val<uint32_t>(e6 + 4), fbo = get_arg_val<uint32_t>(e6 + 5);
+                const uint32_t e6 = et0 + 6 * idx, cnt = se_arg(e6), mode = se_arg(e6 + 1);
+                const uint32_t sf = se_arg(e6 + 2), sb = se_arg(e6 + 3);
+                const uint32_t ho = se_arg(e6 + 4), fbo = se_arg(e6 + 5);
                 cb_wait_front(SE_PSYNC, npass);
                 // (sf / sb: the arrivals' zone offsets, tiles - every slot before them pushed with them)
                 if (mode & 1) cb_wait_front(SE_ARRF, sf + cnt);
@@ -1107,7 +1114,7 @@ void kernel_main() {
             cb_wait_front(SE_PSYNC, npass);
             cb_pop_front(SE_PSYNC, npass);
             uint32_t mf = 0;
-            for (uint32_t e = 0; e < G; ++e) mf |= get_arg_val<uint32_t>(et0 + 6 * e + 1);
+            for (uint32_t e = 0; e < G; ++e) mf |= se_arg(et0 + 6 * e + 1);
             if (mf & 1) {
                 cb_wait_front(SE_ARRF, SE_ZF);
                 cb_pop_front(SE_ARRF, SE_ZF);
@@ -1123,7 +1130,7 @@ void kernel_main() {
         // down: per pass all of K in DEST over h-all and the streamed W_down blocks, y packed once
         cb_wait_front(HALL, HA);
         for (uint32_t pd = 0; pd < NPD; ++pd) {
-            const uint32_t pw = get_arg_val<uint32_t>(NPG + pd);
+            const uint32_t pw = se_arg(NPG + pd);
             matmul_block_init(HALL, WIN, 0, pw, MT, POMAX);  // (h rows strided POMAX within a column's block)
             uint32_t c = 0;  // (the column block of K tile k: k in [h0[c], h0[c + 1]))
             tile_regs_acquire();
@@ -1131,8 +1138,8 @@ void kernel_main() {
                 cb_wait_front(WIN, WSLOT);
                 for (uint32_t k = 0; k < KBD; ++k) {
                     const uint32_t kt = i * KBD + k;
-                    while (kt >= get_arg_val<uint32_t>(NPG + NPD + c + 1)) ++c;
-                    const uint32_t a0 = c * MT * POMAX + kt - get_arg_val<uint32_t>(NPG + NPD + c);
+                    while (kt >= se_arg(NPG + NPD + c + 1)) ++c;
+                    const uint32_t a0 = c * MT * POMAX + kt - se_arg(NPG + NPD + c);
 #ifndef SE_PROBE_NOMATH
                     matmul_block(HALL, WIN, a0, k * pw, 0, false, pw, MT, POMAX);
 #endif
@@ -1876,13 +1883,24 @@ class SeEngine3:
             modes[ACC] = ttnn.UnpackToDestMode.UnpackToDestFp32
             comp.unpack_to_dest_mode = modes
             c_rt = ttnn.RuntimeArgs()
+            # (the per-group block - gate / down tables, the h column offsets, HT - and the prefix of the RS / prep
+            # tables every core of the group shares go as the kernel's common args, sent once a chip instead of once a
+            # core: ~86 of ~91 words; each core's runtime args are the rest, the kernel indexing them from SE_NC)
+            pre = list(wg) + list(wd) + list(self.h0) + [self.HT]
+            ras = {}
             for c in cols:
                 for cy in range(GY):
-                    pre = list(wg) + list(wd) + list(self.h0) + [self.HT]  # (+ the h column offsets)
                     ra = self.rs.compute_args(rs_pos, c, cy) if self.rs is not None else []
                     if prep is not None:
                         ra = self._prep_compute(ra, len(pre), rs_pos, prep, c, cy)
-                    c_rt[cx0 + c][cy] = pre + ra
+                    ras[(c, cy)] = ra
+            shared = 0
+            first = next(iter(ras.values()))
+            while shared < len(first) and all(len(r) > shared and r[shared] == first[shared] for r in ras.values()):
+                shared += 1
+            common_c = pre + first[:shared]
+            for (c, cy), ra in ras.items():
+                c_rt[cx0 + c][cy] = ra[shared:] if len(ra) > shared else [0]
             kernels.append(
                 ttnn.KernelDescriptor(
                     kernel_source=f"#define SE_GLU {glu_code}\n" + nd + _probes() + _COMPUTE,  # noqa
@@ -1904,8 +1922,10 @@ class SeEngine3:
                         len(so),
                         self.NSG // len(so),
                         GX,
+                        len(common_c),
                     ],
                     runtime_args=c_rt,
+                    common_runtime_args=common_c,
                     config=comp,
                 )
             )

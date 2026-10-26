@@ -146,6 +146,16 @@ std::shared_ptr<const Prepared> prepare(
         TT_FATAL(r == p->rt[pi].size(), "prepared_program: patch walk out of step ({} of {})", r, p->rt[pi].size());
     }
     p->hash = h;
+    p->rt_of_io.assign(np, std::vector<std::vector<uint32_t>>(p->n_io));
+    p->crt_of_io.assign(np, std::vector<std::vector<uint32_t>>(p->n_io));
+    for (size_t pi = 0; pi < np; ++pi) {
+        for (uint32_t r = 0; r < p->rt[pi].size(); ++r) {
+            p->rt_of_io[pi][p->rt[pi][r].io].push_back(r);
+        }
+        for (uint32_t r = 0; r < p->crt[pi].size(); ++r) {
+            p->crt_of_io[pi][p->crt[pi][r].io].push_back(r);
+        }
+    }
     p->desc = std::move(desc);
     return p;
 }
