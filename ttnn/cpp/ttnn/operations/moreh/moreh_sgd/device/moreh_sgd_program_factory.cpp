@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <array>
 #include <bit>
 #include <vector>
 
 #include "moreh_sgd_device_operation.hpp"
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -22,7 +24,7 @@ static constexpr const char* WRITER_KERNEL_PATH =
 static constexpr const char* COMPUTE_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/moreh/moreh_sgd/device/kernels/moreh_sgd.cpp";
 
-ProgramDescriptor MorehSgdOperation::create_descriptor(
+ProgramDescriptor MorehSgdOperation::MorehSgdProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -289,6 +291,52 @@ ProgramDescriptor MorehSgdOperation::create_descriptor(
     }
 
     return desc;
+}
+
+void MorehSgdOperation::MorehSgdProgramFactory::override_runtime_arguments(
+    Program& program,
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output_tensor,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Since lr is not part of the program hash, a cache hit can come from a call with a different lr.
+    // This hook writes the current lr into reader arg 5 on every core.
+    constexpr uint32_t kReaderKernelIdx = 0;
+    constexpr uint32_t kWriterKernelIdx = 1;
+    constexpr uint32_t kReaderLrIdx = 5;
+
+    const auto& momentum_buffer_in = tensor_args.momentum_buffer_in;
+    const auto& momentum_buffer_out = output_tensor.at(1);
+    const std::array<uint32_t, 3> reader_addrs{
+        tensor_args.param_in.buffer()->address(),
+        tensor_args.grad.buffer()->address(),
+        momentum_buffer_in.has_value() ? momentum_buffer_in->buffer()->address() : 0u};
+    const std::array<uint32_t, 2> writer_addrs{
+        output_tensor.at(0)->buffer()->address(),
+        momentum_buffer_out.has_value() ? momentum_buffer_out->buffer()->address() : 0u};
+    const uint32_t u_lr = std::bit_cast<uint32_t>(operation_attributes.lr);
+
+    for (auto& column : GetRuntimeArgs(program, kReaderKernelIdx)) {
+        for (auto& args : column) {
+            if (args.size() <= kReaderLrIdx) {
+                continue;
+            }
+            for (uint32_t i = 0; i < reader_addrs.size(); ++i) {
+                args[i] = reader_addrs[i];
+            }
+            args[kReaderLrIdx] = u_lr;
+        }
+    }
+    for (auto& column : GetRuntimeArgs(program, kWriterKernelIdx)) {
+        for (auto& args : column) {
+            if (args.size() < writer_addrs.size()) {
+                continue;
+            }
+            for (uint32_t i = 0; i < writer_addrs.size(); ++i) {
+                args[i] = writer_addrs[i];
+            }
+        }
+    }
 }
 
 }  // namespace ttnn::operations::moreh::moreh_sgd
