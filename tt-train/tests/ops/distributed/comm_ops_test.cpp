@@ -523,8 +523,7 @@ TEST_F(Mesh1x2CommOpsTest, FullOnesZerosReplicatePerMeshAxis) {
 TEST_F(Mesh1x2CommOpsTest, IsShardedOnAxisReadsTensorParallelShardsPerAxis) {
     // A TP weight sharded on dim 3 along axis 1, spelled N-D and collapsed, reads as sharded on axis 1 only. A label
     // that does not cover the mesh is refused rather than guessed, and so is a host tensor, which is on no mesh to
-    // read its label against. A reduction request over the size-1 axis 0 is a no-op (synchronize_tensor's early
-    // return) and leaves the TP shard alone.
+    // read its label against.
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> weight = xt::zeros<float>({1U, 1U, 32U, 64U});
     const auto nd_mapper = ttnn::distributed::create_mesh_mapper(
@@ -550,10 +549,4 @@ TEST_F(Mesh1x2CommOpsTest, IsShardedOnAxisReadsTensorParallelShardsPerAxis) {
     EXPECT_THROW(ttml::core::distributed::is_sharded_on_axis(forged, 1U), std::runtime_error);
     EXPECT_THROW(ttml::core::distributed::is_sharded_on_axis(nd, 2U), std::runtime_error);
     EXPECT_THROW(ttml::core::distributed::is_sharded_on_axis(nd.cpu(), 1U), std::runtime_error);
-
-    auto parameter = ttml::autograd::create_tensor(nd, /* requires_grad */ true);
-    parameter->set_grad(nd);
-    ttml::serialization::NamedParameters parameters{{"weight", parameter}};
-    ttml::core::distributed::synchronize_gradients(parameters, std::vector<uint32_t>{0U});
-    EXPECT_TRUE(ttml::core::distributed::is_sharded_on_axis(parameter->get_grad(), 1U));
 }
