@@ -259,6 +259,30 @@ for (uint32_t unit_idx = 0; unit_idx < num_units; ++unit_idx) {
 | `kb` and `KB_MIN_RESIDENT` | Residency trades a smaller `kb` (more mcast rounds per entry) for (G-1)× fewer reads of the cross-block operand. | Stream at the largest `kb` vs resident at a smaller `kb`, on the focus and GLM cases. |
 | Reader issue load | One NCRISC issues both mcast families plus the zone credits. Core (0,0) is a sender for both families during entry 0. | Move the W family to BRISC (`split_reader`), but only if the reader is shown to be issue-bound. |
 | `depth_handoff = 2` | A port gathering ~50 cores per unit may ack late cores after the next entry's finish. | `depth_handoff = 3`. |
+| Weight prefetch: one window, two jobs per line | Only W window 0 fits the L1 that is free while the KDA norm runs (its CBs end below the W CB at base + 442 KiB, the norm output sits ~602 KiB above base; window 1 would end ~80 KiB past it). | Measured, kept: one job per line (9 senders of 119 KiB, `MRS_W_PREFETCH_PARTS=1`) gate 0.9284 vs 0.9267 ms (7 interleaved rounds), no gain. |
+
+### Weight prefetch (`w_prefetch`)
+
+`matmul_reduce_scatter_weight_prefetch(A shape, A dtype, W, ...)` returns the jobs that land W's first K-block window(s)
+of a later call, for the program just before it to run (`ttnn/cpp/ttnn/kernel_lib/l1_prefetch_dataflow.hpp`; the KDA
+gated norm's reader runs them once the norm's inputs are read). Each job is this op's own entry-0 W work for one
+(n-line, W part): one core of the line reads the part from DRAM into its W slot, then multicasts it along the line.
+
+- **Where.** Program CBs are placed in descriptor order up from the L1 allocator base, and the descriptor orders them
+  A, hold, zero, W, so the W CB's address is known on the host before the program exists (`_w_cb_layout`). The host op
+  checks that the region is free while it runs (above its own CBs, below the lowest L1 buffer); nothing is allocated
+  for it and nothing stays resident between calls.
+- **Plan.** The jobs assume the preferred plan (the one an unbounded budget gives). `run(w_prefetch=)` passes the
+  landed window count to the reader only if its own plan regenerates exactly the same jobs (and W is the same tensor);
+  the reader credits them only if its W CB is at the address the jobs wrote. Otherwise it reads them itself.
+- **Sync.** None beyond the program boundary: the host op's job ends with a write barrier (every multicast acked), so
+  its program ends after the data landed, and this op starts after it. Trace replays the same pair of programs.
+- **Reader.** A prelanded window is reserved and pushed without reads or multicasts (every core of the grid agrees, the
+  CB layout is the same); the sender's look-ahead walks past it, so window 1's reads start at the first step.
+
+Measured (Galaxy SP8xTP4, Kimi-K3 o_proj, KDA layer): norm 19.6 -> 19.6 us, mmrs 148.6 -> 143.1 us (median chip),
+165.6 -> 158.7 us (slowest); gate -4.9 us, sustained -3.7 us (4 interleaved rounds). Bound
+(`MRS_ABLATE=w_prefill1`, window 0 free): about -6 us.
 
 ## Dataflow Strategy
 
