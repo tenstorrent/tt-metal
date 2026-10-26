@@ -194,12 +194,15 @@ def test_sdpa_padded_keys(device):
     assert err_none < 0.05 and err_padded < 0.05
 
 
+@pytest.mark.parametrize("causal", [False, True], ids=["keymask", "causal"])
 @pytest.mark.parametrize("seq", [256, 512])
-def test_sdpa_masked_chunk_cap(device, seq):
+def test_sdpa_masked_chunk_cap(device, seq, causal):
     """PLAN F9 / v1.13: SDPA with a user mask at the model's chunk (capped at 128 when masked) against torch,
-    with realistic logits (std ~3), fully masked query rows (leading padding) and a masked key tail. Prints the
-    max |diff| between the capped run and a run forced to chunk 256; a positive control (the mask dropped on one
-    masked key block) must fail the same check."""
+    with realistic logits (std ~3). keymask: masked leading keys and a masked key tail (no query row fully
+    masked). causal (D6): causal + leading padding as the model builds seq_mask, so the leading query rows see
+    only masked keys; those rows must be finite and the valid rows are compared. Prints the max |diff| between
+    the capped run and a run forced to chunk 256; a positive control (the mask dropped on one key block) must
+    fail the same check."""
     import ttnn
 
     from models.experimental.timesfm3_forecast.common.decomposition import HEAD_DIM_PAD, SDPA_SCALE
@@ -213,9 +216,13 @@ def test_sdpa_masked_chunk_cap(device, seq):
     q = q * (3.0 / (SDPA_SCALE * d**0.5))  # logit std ~3
     mask = torch.zeros(b, 1, seq, seq)
     mask[..., :lead] = MASK_FILL
-    mask[..., seq - tail :] = MASK_FILL
+    if causal:
+        mask[..., torch.ones(seq, seq, dtype=torch.bool).triu(1)] = MASK_FILL
+        rows = slice(lead, seq)  # rows < lead are fully masked (finite only); the rest are valid
+    else:
+        mask[..., seq - tail :] = MASK_FILL
+        rows = slice(lead, seq - tail)  # valid query rows (masked rows are uniform over masked keys: not compared)
     ref = torch.softmax((q @ k.transpose(-1, -2)) * SDPA_SCALE + mask, -1) @ val
-    rows = slice(lead, seq - tail)  # valid query rows (masked rows are uniform over masked keys: not compared)
     dev = [upload(device, t) for t in (q, k, val)]
 
     def run(m, chunk):
@@ -243,6 +250,7 @@ def test_sdpa_masked_chunk_cap(device, seq):
     print(
         f"[F9] S={seq}: max|err| capped {err(capped):.4f}, forced-256 {err(forced):.4f}, "
         f"max|capped - forced| {float((capped - forced).abs().max()):.4f}, positive control {err(broken):.4f}"
+        f" ({'causal + leading pad' if causal else 'key mask'})"
     )
     tol = 0.5  # bf16 inputs at logit std 3 measure 0.12-0.20 (job 808); the positive control measures ~3.4
     assert err(capped) < tol
@@ -509,9 +517,13 @@ def test_post_add_norm(device, rows):
     for name, a, b in zip(("h", "xn"), ref, got):
         check_pcc(f"post_add_norm {name} @ {rows}", a, b, 0.99999)
     # h: within one bf16 rounding of its operands (|res| + |y|; h itself can cancel to ~0); xn: a few ulp.
-    within = lambda h, x: ((h - ref[0]).abs() <= scale * 2**-7 + 1e-3).all() and (x - ref[1]).abs().max() <= 0.0625  # noqa: E731
+    within = (
+        lambda h, x: ((h - ref[0]).abs() <= scale * 2**-7 + 1e-3).all() and (x - ref[1]).abs().max() <= 0.0625
+    )  # noqa: E731
     assert within(*got)
     # Positive control: the post norm skipped on one 32-row tile (h = r + o there) must fail the same check.
     bad_h, bad_x = got[0].clone(), got[1].clone()
     bad_h[..., :32, :] = r_t[..., :32, :] + o_t[..., :32, :]
+    excess = float(((bad_h - ref[0]).abs() / (scale * 2**-7 + 1e-3)).max())
+    print(f"[post_add_norm] R={rows} positive control: max h error / allowed {excess:.2f} (must exceed 1)")
     assert not within(bad_h, bad_x), "positive control passed: the tolerance is too loose to judge the kernel"
