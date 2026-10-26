@@ -45,7 +45,7 @@ class MuseGlimmerDecoderLayer:
 
     def _block(self, x, attn_fn):
         decode = is_decode(x)
-        mem = decode_memcfg(x.shape[-1]) if decode else None
+        mem = decode_memcfg(x.shape[-1], self.mesh_device) if decode else None
         res_mem = mem if decode else ttnn.DRAM_MEMORY_CONFIG
         xr = x
         if decode and not (x.is_sharded() and x.memory_config() == mem):

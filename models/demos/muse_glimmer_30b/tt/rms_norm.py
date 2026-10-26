@@ -105,13 +105,14 @@ class RMSNorm:
         if self.weight_rm is None and self.weight is None:
             # weightless norm: unit gamma so the sharded path can be used
             self.weight_rm = self._make_rm_gamma(torch.ones(dim))
-        mem = decode_memcfg(dim)
+        mem = decode_memcfg(dim, self.mesh_device)
+        g = self.mesh_device.compute_with_storage_grid_size()
         own = not (x.is_sharded() and x.memory_config() == mem)
         x_sh = ttnn.to_memory_config(x, mem) if own else x
         block_w = mem.shard_spec.shape[1] // TILE
         subblock_w = next(s for s in (4, 3, 2, 1) if block_w % s == 0)
         pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[8, 8], subblock_w=subblock_w, block_h=1, block_w=block_w, inplace=False
+            compute_with_storage_grid_size=[g.x, g.y], subblock_w=subblock_w, block_h=1, block_w=block_w, inplace=False
         )
         # Default kernel config (None) is the fast path for the sharded decode norm.
         y = ttnn.rms_norm(

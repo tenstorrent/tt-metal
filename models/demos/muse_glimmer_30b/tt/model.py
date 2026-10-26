@@ -145,7 +145,9 @@ class MuseGlimmerModel:
             g = self.ccl.all_gather(e, dim=3)
             ttnn.deallocate(e)
             e = g
-        out = self.embed_norm(e, memory_config=decode_memcfg(self.args.hidden_size) if m == 32 else None)
+        out = self.embed_norm(
+            e, memory_config=decode_memcfg(self.args.hidden_size, self.mesh_device) if m == 32 else None
+        )
         ttnn.deallocate(e)
         return out
 
@@ -156,7 +158,7 @@ class MuseGlimmerModel:
         outs = []
         for r in range(0, rows, 32):
             hs = h if rows <= 32 else ttnn.slice(h, [0, 0, r, 0], [1, 1, min(r + 32, rows), int(h.shape[3])])
-            n = self.norm(hs, memory_config=decode_memcfg(a.hidden_size))
+            n = self.norm(hs, memory_config=decode_memcfg(a.hidden_size, self.mesh_device))
             if hs is not h:
                 ttnn.deallocate(hs)
             lg = self.lm_head.decode(n)

@@ -73,8 +73,9 @@ class MuseCCL:
         if self.tp == 1:
             return x
         if self.ring and is_decode(x):
-            mem = decode_memcfg(x.shape[-1])
-            xs = ttnn.to_memory_config(x, mem)
+            mem = decode_memcfg(x.shape[-1], self.mesh_device)
+            own = x.memory_config() != mem
+            xs = ttnn.to_memory_config(x, mem) if own else x
             key = (tuple(x.shape), x.dtype)
             if key not in self._ar_buffers:
                 shard = mem.shard_spec
@@ -100,7 +101,8 @@ class MuseCCL:
                 num_links=self.num_links,
             )
             self._ar_idx = 1 - self._ar_idx
-            xs.deallocate(True)
+            if own:
+                xs.deallocate(True)
             if memory_config.is_sharded():
                 return out
             res = ttnn.sharded_to_interleaved(out, memory_config)

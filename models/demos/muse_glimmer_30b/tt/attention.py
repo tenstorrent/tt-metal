@@ -96,7 +96,7 @@ class MuseLinear:
         if self.sharded:
             self.linear = DramShardedLinear(weight_torch, mesh_device, mapper, k, n, dtype, cache_file_name)
             self.weight = self.linear.weight
-            self._decode_mem = decode_memcfg(k)
+            self._decode_mem = decode_memcfg(k, mesh_device)
             # Multi-core DRAM-sharded pipeline; readers/block tuned per shape on QB2.
             self._decode_pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
                 in0_block_w=block,
@@ -320,7 +320,7 @@ class MuseGlimmerAttention:
 
         xqkvg = self.wqkvg.decode(x)
         qkv, gate = self._split_qkv_gate(xqkvg)
-        qkv = ttnn.to_memory_config(qkv, decode_memcfg(a.qkv_width_local))
+        qkv = ttnn.to_memory_config(qkv, decode_memcfg(a.qkv_width_local, self.mesh_device))
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             qkv, num_heads=a.q_heads_local, num_kv_heads=a.kv_heads_local, memory_config=heads_mem
         )
@@ -428,4 +428,4 @@ class MuseGlimmerAttention:
             w = attn.shape[-1]
             attn = ttnn.reshape(attn, ttnn.Shape([1, 1, batch, w]), ttnn.Shape([1, 1, 32, w]))
         sdpa.deallocate(True)
-        return self._gate_oproj(attn, gate, out_mem=decode_memcfg(a.hidden_size))
+        return self._gate_oproj(attn, gate, out_mem=decode_memcfg(a.hidden_size, self.mesh_device))

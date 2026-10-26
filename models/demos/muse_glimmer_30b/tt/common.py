@@ -33,12 +33,18 @@ def sdpa_compute_config(mesh_device):
     return _cfg(mesh_device, ttnn.MathFidelity.HiFi4, False)
 
 
+def decode_memcfg(width, mesh_device):
+    """L1 width-sharded config for a [32, width] decode activation: row-major over the device grid,
+    the same core order as decode matmul outputs."""
+    g = mesh_device.compute_with_storage_grid_size()
+    return _decode_memcfg(width, g.x, g.y)
+
+
 @functools.lru_cache(maxsize=None)
-def decode_memcfg(width):
-    """L1 width-sharded memory config for a [32, width] decode activation."""
+def _decode_memcfg(width, gx, gy):
     tiles = width // 32
     n = max(c for c in range(1, 65) if tiles % c == 0)
-    cores = ttnn.num_cores_to_corerangeset(n, ttnn.CoreCoord(8, 8), row_wise=True)
+    cores = ttnn.num_cores_to_corerangeset(n, ttnn.CoreCoord(gx, gy), row_wise=True)
     spec = ttnn.ShardSpec(cores, [32, width // n], ttnn.ShardOrientation.ROW_MAJOR)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, spec)
 

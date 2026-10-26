@@ -79,7 +79,7 @@ class MuseGlimmerMLP:
         out = self.w_down.decode(h) if decode else self.w_down(h)
         ttnn.deallocate(h)
         if decode:
-            reduced = self.ccl.all_reduce(out, memory_config=decode_memcfg(self.args.hidden_size))
+            reduced = self.ccl.all_reduce(out, memory_config=decode_memcfg(self.args.hidden_size, self.mesh_device))
         else:
             reduced = self.ccl.all_reduce(out)
         if reduced is not out:
