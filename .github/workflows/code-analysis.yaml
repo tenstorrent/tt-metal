@@ -46,6 +46,11 @@ on:
         type: boolean
         default: false
         description: "Post inline clang-tidy fix suggestions on PR diffs"
+      publish-annotations:
+        required: false
+        type: boolean
+        default: true
+        description: "Emit ::error file annotations for violations on the PR diff / checks tab"
       check-harbor-runs-on:
         required: false
         type: string
@@ -197,6 +202,7 @@ jobs:
       prereq-targets: ''
       scan-targets: ''
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      publish-annotations: ${{ inputs.publish-annotations || false }}
       clang-tidy-version: ${{ inputs.clang-tidy-version || '20' }}
 
   # Incremental scan: parallel jobs for different targets
@@ -219,6 +225,7 @@ jobs:
       prereq-targets: ''
       scan-targets: 'tt_metal'
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      publish-annotations: ${{ inputs.publish-annotations || false }}
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
@@ -239,6 +246,7 @@ jobs:
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      publish-annotations: ${{ inputs.publish-annotations || false }}
 
   clang-tidy-incremental-tt-train:
     name: 🤖 Clang Tidy (tt-train)
@@ -259,6 +267,7 @@ jobs:
       prereq-targets: 'tt_metal ttnn'
       scan-targets: 'tt-train'
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      publish-annotations: ${{ inputs.publish-annotations || false }}
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
@@ -279,6 +288,7 @@ jobs:
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
+      publish-annotations: ${{ inputs.publish-annotations || false }}
 
   # Gate: every tt_metal public header must include exactly what it uses
   # (clang-tidy misc-include-cleaner, no missing and no unused includes). Any

@@ -32,6 +32,11 @@ on:
         type: boolean
         default: false
         description: "Export clang-tidy fixes and post inline review suggestions on the PR diff"
+      publish-annotations:
+        required: false
+        type: boolean
+        default: true
+        description: "Emit ::error file annotations for violations on the PR diff / checks tab"
       clang-tidy-version:
         required: false
         type: string
@@ -429,7 +434,11 @@ jobs:
             echo ""
             # One ::error annotation per violation, so they show up on the PR diff /
             # checks tab, not just as a "there were N violations" summary line.
-            python3 "$REPORT" "$FIXES_DIR" --format annotations --repo-root "$(pwd)"
+            # Opt out for shadow/experimental runs whose findings shouldn't be
+            # confused with the real gate's.
+            if [ "${{ inputs.publish-annotations }}" = "true" ]; then
+              python3 "$REPORT" "$FIXES_DIR" --format annotations --repo-root "$(pwd)"
+            fi
             exit 1
           fi
           # No violations but the build failed: a real compile/link error, not a diagnostic.

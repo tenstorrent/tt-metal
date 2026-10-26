@@ -528,6 +528,7 @@ jobs:
       dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
       force-scan: true
       post-pr-suggestions: false
+      publish-annotations: false
       clang-tidy-version: "23"
       check-harbor-runs-on: tt-ubuntu-light
 
