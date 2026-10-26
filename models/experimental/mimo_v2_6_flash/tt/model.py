@@ -36,12 +36,13 @@ from .decoder import TtMiMoDecoderLayer, TtRMSNorm
 from .device_sampler import DeviceSampler
 from .greedy_head import GreedyHead
 from .moe import expert_quant
-from .moe_stream import zero_output
+from .moe_stream import ReduceExpand, fabric_row_gather, user_rows, zero_output
 from .mtp import TtMiMoMTP
 from .profiling import zone
 from .rope import MiMoRotarySetup, partial_rope_table
+from .dflash import TtDFlash
 from .spec_inputs import SpecInputs
-from .verify_sampler import VerifySampler
+from .verify_sampler import GreedyVerify, VerifySampler
 
 # Rows of the decode RoPE tables past max_seq_len - 1: a position derived on device before the host checks it (a
 # verify or draft chained on device, a few positions ahead) still reads a row of the table, not another buffer.
@@ -129,13 +130,17 @@ class TtMiMoModel:
         logits_dtype=None,
         num_links=2,
         replicate_global_kv=False,
+        decode_users=None,
     ):
         """``ckpt`` may be None when ``cache_dir`` already holds every tensor (a later DP replica).
         ``max_prefill_chunk``: the default prefill chunk (a multiple of ``block_size``).
         ``replicate_global_kv``: ``setup_kv_cache`` keeps every user's global-layer K / V on both chips of a pair, as
         vLLM's caches do (twice the global KV memory), so a later prefill chunk splits its heads over the pair.
         ``logits_dtype``: fp32 keeps near-tied logits apart; in bf16 (a step of 0.125 at the usual top logit of
-        16-32) they often tie exactly and the lowest token id wins. Default fp32 (MIMO_LOGITS_FP32=0: bf16)."""
+        16-32) they often tie exactly and the lowest token id wins. Default fp32 (MIMO_LOGITS_FP32=0: bf16).
+        ``decode_users``: the decode users the caller will set up (setup_kv_cache / setup_vllm_kv_cache), known now so
+        that the fused reductions' fabric gather buffer is made before anything else takes L1 (``_set_decode_users``).
+        """
         assert max_prefill_chunk % block_size == 0
         self.mesh_device = mesh_device
         self.cfg = cfg
@@ -151,6 +156,12 @@ class TtMiMoModel:
         self.prefill_context_blocks = pad_to(-(-(max_seq_len + kv_lib.PREFILL_MAX_PAD) // block_size), 8)
         if cache_dir is not None:
             os.makedirs(cache_dir, exist_ok=True)
+        if decode_users is not None and decode_users <= 8 and self._fabric_gather_enabled():
+            # The first L1 allocation: the gather buffer then sits at the top of L1 (see _set_decode_users).
+            fabric_row_gather(
+                plan,
+                ReduceExpand(plan, cfg.hidden_size, plan.tp, None, rows=user_rows(decode_users)),
+            )
 
         head_dim = cfg.head_dim
         rope_dim = int(head_dim * cfg.partial_rotary_factor)
@@ -227,7 +238,8 @@ class TtMiMoModel:
         self.decode_trace = None
         self.verify_trace = None  # speculative verify step (capture_verify_trace)
         self.mtp = None  # the MTP drafter (setup_mtp)
-        self.spec_inputs = None  # the packed verify / draft uploads (setup_mtp, tt/spec_inputs.py)
+        self.dflash = None  # the DFlash drafter (setup_dflash, tt/dflash.py)
+        self.spec_inputs = None  # the packed verify / draft uploads (setup_mtp / setup_dflash, tt/spec_inputs.py)
         self.greedy_head = None
         self.sampler = None  # vLLM mode: temperature / top-k / top-p decode sampling (setup_vllm_kv_cache)
         self.verify_sampler = None  # vLLM mode with MTP: a verify's acceptance on device (setup_vllm_kv_cache)
@@ -255,6 +267,28 @@ class TtMiMoModel:
         )
 
     # ------------------------------------------------------------------ setup
+    def _set_decode_users(self, num_users):
+        """Size the decode programs for ``num_users`` users: the MoE streams and the compact attention rows (4 up to 4
+        users, 8 up to 8)."""
+        rows = user_rows(num_users) if num_users <= 8 else 4
+        for layer in self.layers:
+            if layer.is_moe:
+                layer.mlp.set_decode_users(num_users)
+            layer.attn.set_decode_rows(rows)
+        # The fused reductions' fabric gather buffer (persistent L1, 64 KB per reduce core, 128 KB with 8 user rows),
+        # made now if __init__ did not (``decode_users``): made at the first decode step it lands below the buffers that
+        # step leaves, where a later prefill program's static circular buffers reach (the prefill SDPA's end at
+        # 1179008, 3 KB under it with 4 users); made after the weights it may still land under a hole they left.
+        red = next(
+            (layer.mlp.reduce_expand for layer in self.layers if layer.is_moe and layer.mlp.gate_up_stream), None
+        )
+        if self._fabric_gather_enabled() and red is not None:
+            gather = fabric_row_gather(self.plan, red)
+            assert gather.tiles_per_core == red.tiles_per_core, "the gather buffer was made for other decode users"
+
+    def _fabric_gather_enabled(self):
+        return os.environ.get("MIMO_FABRIC_GATHER", "1") == "1" and tuple(self.mesh_device.shape) == (1, self.plan.tp)
+
     def setup_kv_cache(self, num_users):
         """Allocate paged KV for ``num_users`` users in decode slots [0, num_users).
 
@@ -273,9 +307,7 @@ class TtMiMoModel:
                 for t in kv:
                     t.deallocate(True)
         self.decode_users = num_users
-        for layer in self.layers:
-            if layer.is_moe:
-                layer.mlp.set_decode_users(num_users)
+        self._set_decode_users(num_users)
         self.kv_caches, tables = [], {}
         max_blocks = page_table_width(self.max_seq_len // self.block_size)
         swa_layers = [layer for layer in self.layers if layer.is_swa]
@@ -340,9 +372,7 @@ class TtMiMoModel:
         assert self.decode_trace is None and self.kv_caches is None, "the KV cache is already set up"
         assert len(kv_caches) == len(layer_groups) == len(self.layers)
         self.decode_users = num_users
-        for layer in self.layers:
-            if layer.is_moe:
-                layer.mlp.set_decode_users(num_users)
+        self._set_decode_users(num_users)
         self.kv_caches = kv_caches
         self.layer_groups = list(layer_groups)
         self._keep_global_kv_on_both_chips()
@@ -353,11 +383,18 @@ class TtMiMoModel:
         # Decode's device-sampled greedy token and sampled tokens (decode_forward_device); persistent buffers, made
         # before any capture.
         self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
-        self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
-        if self.mtp is not None:
+        # The device sampler serves up to 8 users (its candidate pages); more decode users sample on the host.
+        self.sampler = None
+        if self.decode_users <= 8:
+            self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
+        if self.mtp is not None or self.dflash is not None:
             # A verify's acceptance on device (the plugin's fused_sample, capture_verify_trace): its persistent
-            # inputs and output, like the samplers' buffers, before any capture.
-            self.verify_sampler = VerifySampler(self.sampler, self.cfg.vocab_size)
+            # inputs and output, like the samplers' buffers, before any capture. A verify with more slots than the
+            # device sampler's users (or no device sampler: more than 8 decode users) accepts greedy requests only.
+            if self.sampler is not None and self.sampler.users >= SPEC_SLOTS:
+                self.verify_sampler = VerifySampler(self.sampler, self.cfg.vocab_size)
+            else:
+                self.verify_sampler = GreedyVerify(self.plan, self.max_batch)
         self.page_table_tt = {
             g: ttnn.from_torch(
                 empty,
@@ -490,7 +527,7 @@ class TtMiMoModel:
                 zero_output(self.plan, self.cfg.hidden_size),
             )
         for i, layer in enumerate(self.layers):
-            if layer.attn_reduce is None and self.decode_users <= 4 and layer.can_compact_attention():
+            if layer.attn_reduce is None and self.decode_users <= 8 and layer.can_compact_attention():
                 layer.set_compact_attention(self.plan)
             if layer.fused_norm is not None or not layer.can_fuse_norms():
                 continue
@@ -499,9 +536,9 @@ class TtMiMoModel:
         self._setup_swa_qkv()
 
     def _uses_swa_qkv(self):
-        """Every SWA layer decodes through the shared SwaDecodeQkv: compact decode (the BFP4 streaming MoE, at most 4
+        """Every SWA layer decodes through the shared SwaDecodeQkv: compact decode (the BFP4 streaming MoE, at most 8
         users) and not turned off (MIMO_SWA_QKV=0 keeps the ttnn ops)."""
-        if os.environ.get("MIMO_SWA_QKV", "1") != "1" or self.decode_users > 4:
+        if os.environ.get("MIMO_SWA_QKV", "1") != "1" or self.decode_users > 8:
             return False
         return all(layer.can_fuse_norms() for layer in self.layers if layer.is_swa)
 
@@ -560,11 +597,13 @@ class TtMiMoModel:
         return logits
 
     # ------------------------------------------------------------------ prefill
-    def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None, after_layer=None):
+    def _prefill_chunk(self, tokens, slot, start_pos, hidden, layers=None, draft_group=0, after_layer=None):
         """One chunk (``tokens`` 1D torch) at ``start_pos`` through the layers ``layers`` (indices, default all);
         returns the last one's output [1, 1, padded, hidden] and appends (copy, real rows) of every layer's output to
-        ``hidden`` when given. ``after_layer(i)`` runs after layer ``i`` is enqueued (profiling: tests/perf/
-        profile_prefill.py reads the device profiler there)."""
+        ``hidden`` when given. With the DFlash drafter the chunk's last rows also go into draft group ``draft_group``'s
+        context ring (TtDFlash.prefill_context; a warm-up through a subset of the layers runs the same programs).
+        ``after_layer(i)`` runs after layer ``i`` is enqueued (profiling: tests/perf/profile_prefill.py reads the
+        device profiler there)."""
         n = tokens.numel()
         padded = prefill_padded_len(n)
         assert start_pos + n <= self.max_seq_len, f"chunk ends at {start_pos + n} > {self.max_seq_len}"
@@ -577,6 +616,7 @@ class TtMiMoModel:
             setup.begin_prefill_chunk()
         with zone("embed"):
             x = self._embed(torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)))
+        dflash_acc = None
         with self._prefill_reduce(padded):
             for k, i in enumerate(layers):
                 layer = self.layers[i]
@@ -592,10 +632,16 @@ class TtMiMoModel:
                     )
                 x.deallocate(True)
                 x = y
+                if self.dflash is not None:
+                    dflash_acc = self.dflash.prefill_tap(i, x, dflash_acc)
                 if hidden is not None:
                     hidden[k].append((ttnn.clone(x), n))
                 if after_layer is not None:
                     after_layer(i)
+        if self.dflash is not None:
+            if dflash_acc is None:
+                dflash_acc = self.dflash.prefill_tap(self.dflash.tap_layers[0], x, None)
+            self.dflash.prefill_context(dflash_acc, start_pos, n, draft_group)
         # Enqueued: freeing them now is ordered with the work that reads them.
         for setup in self.rope_setups.values():
             setup.end_prefill_chunk()
@@ -606,7 +652,15 @@ class TtMiMoModel:
         return x, padded
 
     def prefill_enqueue(
-        self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None, layers=None, history_continues=False
+        self,
+        tokens,
+        slot,
+        return_hidden=False,
+        start_pos=0,
+        chunk_size=None,
+        layers=None,
+        history_continues=False,
+        draft_group=0,
     ):
         """Enqueue prefill of one user (``tokens`` 1D torch, positions start_pos ..) into batch ``slot``, in chunks
         of ``chunk_size`` tokens (default ``max_prefill_chunk``; a multiple of the block size, as is ``start_pos``).
@@ -614,14 +668,15 @@ class TtMiMoModel:
         layers (indices; warmup). Nothing is read back; returns a pending handle for ``prefill_read``. With the MTP
         history each chunk also writes its last rows' final normed hidden into the slot's history
         (tt/mtp_backfill.py); ``history_continues``: the first chunk continues the request's earlier chunks (their
-        entries stay), else it is the request's first and the slot's other entries are invalidated."""
+        entries stay), else it is the request's first and the slot's other entries are invalidated.
+        ``draft_group``: the request's draft group (its DFlash context ring)."""
         n = tokens.numel()
         chunk = chunk_size or self.max_prefill_chunk
         assert n > 0 and chunk % self.block_size == 0 and start_pos % self.block_size == 0
         hidden = [[] for _ in (range(len(self.layers)) if layers is None else layers)] if return_hidden else None
         hist = self._history()
         for s in range(0, n, chunk):
-            x, padded = self._prefill_chunk(tokens[s : s + chunk], slot, start_pos + s, hidden, layers)
+            x, padded = self._prefill_chunk(tokens[s : s + chunk], slot, start_pos + s, hidden, layers, draft_group)
             if hist is not None and slot < SPEC_SLOTS:
                 writes = hist.chunk_writes(slot, start_pos + s, tokens[s : s + chunk], 0, history_continues or s > 0)
                 write_list = hist.prefill_list(writes)
@@ -1063,6 +1118,8 @@ class TtMiMoModel:
             )
             x.deallocate(True)
             x = y
+            if self.dflash is not None:
+                self.dflash.tap(i, y)  # DFlash's context: the target layers' outputs it reads (tt/dflash.py)
         logits = self._logits(x, h)
         x.deallocate(True)
         for t in (*rot_mats[True][:2], *rot_mats[False], *made, *sdpa_tables.values()):
@@ -1161,6 +1218,9 @@ class TtMiMoModel:
             # Keeps the persistent buffers: GreedyHead's and the sampler's tokens and the final norm's "hidden" (the
             # MTP drafter's input).
             self._release(warm)
+        if self.verify_sampler is not None and not isinstance(self.verify_sampler, VerifySampler):
+            # The greedy accept step, which no sampled step compiled above.
+            self.verify_sampler(None, self.greedy_head.next_tokens)
         if self.spec_chain is not None:
             # The chain and drafts steps (tt/spec_chain.py) of the accept and MTP traces, and the verify trace's relay
             # step, compile here too, on the persistent buffers their captures use; so do the history's kernel steps
@@ -1168,6 +1228,10 @@ class TtMiMoModel:
             self.spec_chain.warm(self.verify_sampler.ctrl)
         if self._history() is not None:
             self._history().warm(self.mtp.inputs)
+        if self.spec_chain is not None:
+            # The drafter's programs too (its setup made the chain): they compile before any capture (TtMiMoMTP.warm,
+            # TtDFlash.warm).
+            (self.mtp if self.mtp is not None else self.dflash).warm()
         ttnn.synchronize_device(self.mesh_device)
         captured = []
         for sample in variants:
@@ -1230,6 +1294,15 @@ class TtMiMoModel:
         traces (persistent: before any capture). ``backfill``: the target-hidden history and the ring backfill."""
         assert self.mtp is None and self.decode_trace is None
         self.mtp = TtMiMoMTP(self, ckpt, cache_dir, layers, backfill=backfill)
+        kv_rep = kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
+        self.spec_inputs = SpecInputs(self.plan, self.max_batch, kv_rep)
+
+    def setup_dflash(self, model_path, cache_dir, load=True):
+        """Load the DFlash draft model (``model_path``/dflash, tt/dflash.py) as the speculative drafter (its buffers
+        and trace: TtDFlash.setup_cache, capture_spec_traces), and make the verify's packed upload (persistent: before
+        any capture). ``load``: read the checkpoint (False: a later replica, from the tensor cache)."""
+        assert self.mtp is None and self.dflash is None and self.decode_trace is None
+        self.dflash = TtDFlash(self, model_path, cache_dir, load=load)
         kv_rep = kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
         self.spec_inputs = SpecInputs(self.plan, self.max_batch, kv_rep)
 
@@ -1304,9 +1377,13 @@ class TtMiMoModel:
         return output
 
     def capture_spec_traces(self):
-        """The verify step and the MTP draft program, after the decode trace (persistent buffers already exist)."""
+        """The verify step and the drafter's program (MTP or DFlash), after the decode trace (persistent buffers
+        already exist)."""
         self.capture_verify_trace()
-        self.mtp.capture_trace()
+        if self.mtp is not None:
+            self.mtp.capture_trace()
+        if self.dflash is not None:
+            self.dflash.capture_trace()
 
     def release_spec_traces(self):
         if self.verify_trace is not None:
@@ -1316,6 +1393,8 @@ class TtMiMoModel:
             self.verify_trace = None
         if self.mtp is not None:
             self.mtp.release_trace()
+        if self.dflash is not None:
+            self.dflash.release_trace()
 
     def verify_enqueue(self, tokens, positions, chain=None, accept=None):
         """A verify step (tokens, positions: torch [max_batch], -1 an idle slot). Non-blocking; returns the verify

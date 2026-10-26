@@ -223,7 +223,7 @@ class TtMiMoDecoderLayer:
             fp32_dest_acc_en=True,
             dst_full_sync_en=False,
         )
-        self.attn_reduce = ReduceExpand(plan, self.hidden, plan.tp, cfg)
+        self.attn_reduce = ReduceExpand(plan, self.hidden, plan.tp, cfg, rows=self.attn.rows)
 
     def _ffn(self, x, token_mask, decode=False):
         h = self.post_norm(x, prefill=not decode)

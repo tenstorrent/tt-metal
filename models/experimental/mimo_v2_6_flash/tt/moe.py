@@ -34,11 +34,13 @@ from .common import (
 from .moe_stream import (
     DownStream,
     GateUpStream,
+    DEDUP,
     PendingCompact,
     ReduceExpand,
     fabric_row_gather,
     fabric_transport_noc,
     is_dram_interleaved,
+    stick_buffer,
 )
 from .moe_prefill import PrefillExperts
 from .profiling import zone
@@ -264,7 +266,8 @@ class TtMiMoMoE:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=rep,
         )
-        if self.expert_dtype == ttnn.bfloat4_b and num_users <= GateUpStream.MAX_USERS:
+        stream_users = GateUpStream.MAX_USERS_DEDUP if DEDUP else GateUpStream.MAX_USERS
+        if self.expert_dtype == ttnn.bfloat4_b and num_users <= stream_users:
             # BFP4 decode: top-k routing, gate|up, SwiGLU and the routing weight in one bank-local DRAM-streaming
             # program. It writes only row u of pair (u, k) into this persistent zeroed activation (the other rows
             # stay zero) and the pairs' uint16 expert ids into ids_buf for the down sparse_matmul.
@@ -278,30 +281,24 @@ class TtMiMoMoE:
                 norm_topk_prob=self.cfg.norm_topk_prob,
                 routed_scaling_factor=self.cfg.routed_scaling_factor,
             )
-            # Same row-major uint16 [1, 1, 1, pairs] stick the routing glue used to build with typecast.
-            ids32 = ttnn.from_torch(
-                torch.zeros(1, 1, 1, pairs, dtype=torch.int32),
-                device=self.plan.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=rep,
-            )
-            self.ids_buf = ttnn.typecast(ids32, ttnn.uint16)
-            ids32.deallocate(True)
+            # The row-major uint16 expert stick (the pairs' ids, or deduplicated [count, distinct ids...]).
+            self.ids_buf = stick_buffer(self.plan, pairs, self.gate_up_stream.dedup)
             # Down + sum over pairs, bank-local from the interleaved w_down, into a persistent compact
             # [1, 1, 32, hidden / 8] output holding only the user rows; one row all-gather of it, then ReduceExpand
             # sums the chips' copies and restores [1, 1, 32, hidden] with zero padding rows.
-            self.down_stream = DownStream(self.plan, self.hidden, self.inter_local, pairs)
+            rows = self.gate_up_stream.rows
+            self.down_stream = DownStream(
+                self.plan, self.hidden, self.inter_local, pairs, self.gate_up_stream.dedup, rows=rows
+            )
             self.act_buf = self.down_stream.activation_buffer(self.plan)
             self.out_buf = self.down_stream.compact_output(self.plan)
             self.reduce_expand = ReduceExpand(
-                self.plan, self.hidden, self.plan.tp, self.down_stream.compute_config, DownStream.TINY_ROWS
+                self.plan, self.hidden, self.plan.tp, self.down_stream.compute_config, rows
             )
             # Router logits, sigmoid and the bias add in one bank-local launch (scores and biased are persistent).
             try:
                 bias = ttnn.to_torch(ttnn.get_device_tensors(self.score_bias)[0]).float().reshape(-1)
-                self.router_scores = RouterScoreStream(self.plan, self.hidden, self.num_experts, bias)
+                self.router_scores = RouterScoreStream(self.plan, self.hidden, self.num_experts, bias, rows=rows)
             except AssertionError:
                 self.router_scores = None
 

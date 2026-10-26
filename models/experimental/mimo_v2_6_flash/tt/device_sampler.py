@@ -8,8 +8,8 @@ whose probability reaches top_p, and draws from it. Here, per user (rows 0..user
 
 1. SampleScan, on 32 cores per chip, each over a range of the chip's vocab shard: the compute kernel sums
    exp((logit - the range's largest) / T) over the range in fp32 (the SFPU's exact exp) while the reader and the
-   writer keep two users' K largest fp32 logits each (exact values, integer keys); the writer then adds up the sums
-   per user in fixed point;
+   writer keep half of the user slots' K largest fp32 logits each (two of 4 slots, or four of 8 past 4 users; exact
+   values, integer keys); the writer then adds up the sums per user in fixed point;
 2. SampleChipMerge, one core per user: the chip's K largest, sorted, and its normalizer, the sum of
    exp((logit - the chip's largest) / T) over the shard;
 3. after one row all-gather, SampleMerge walks the row's candidates (the chips' lists, merged) in descending
@@ -128,8 +128,9 @@ def _ranges(cores):
 
 class DeviceSampler:
     def __init__(self, plan, vocab_local, users, max_batch, scan_cores=SCAN_CORES):
-        assert vocab_local % TILE == 0 and 1 <= users <= 4 and max_batch * 4 <= 1024
+        assert vocab_local % TILE == 0 and 1 <= users <= 8 and max_batch * 4 <= 1024
         self.plan, self.vocab_local, self.users, self.max_batch = plan, vocab_local, users, max_batch
+        self.slots = 4 if users <= 4 else 8  # user slots of a scan core's partials block
         self.k = CANDIDATES_PER_CHIP
         self.candidates = self.k * plan.tp
         device = plan.mesh_device
@@ -152,9 +153,11 @@ class DeviceSampler:
                 t, device=device, dtype=dtype, layout=layout, memory_config=memory_config, mesh_mapper=rep
             )
 
-        # Scan partials: 4 user slots of K (key, index) pairs per scan core, and 4 uint64 sums per scan core, as raw
-        # 4096-byte pages. The chip candidates page: the users' sorted lists, then their normalizers at byte 2048.
-        partial_pages = scan_cores * 4 * self.k * 8 // 4096
+        # Scan partials: ``slots`` user slots of K (key, index) pairs per scan core, and ``slots`` uint64 sums per scan
+        # core, as raw 4096-byte pages. The chip candidates page: the users' sorted lists, then their normalizers at
+        # byte 2048.
+        assert scan_cores * self.slots * 8 <= 4096 and self.users * self.k * 8 <= 2048
+        partial_pages = scan_cores * self.slots * self.k * 8 // 4096
         self.partials = persistent((1, 1, TILE, TILE * partial_pages), ttnn.uint32)
         self.sums = persistent((1, 1, TILE, TILE), ttnn.uint32)
         self.chip_cands = persistent((1, 1, TILE, TILE), ttnn.uint32)
@@ -261,7 +264,7 @@ class DeviceSampler:
         params = self.params if params is None else params
         cores, crs = self.scan_cores, _ranges(self.scan_cores)
         params_bytes = self.max_batch * PARAM_WORDS * 4
-        block_bytes = 4 * self.k * 8
+        block_bytes = self.slots * self.k * 8
         reader_args = [
             [logits.buffer_address(), self.partials.buffer_address(), params.buffer_address(), b, e, i]
             for i, (b, e) in enumerate(self.ranges)
@@ -270,7 +273,7 @@ class DeviceSampler:
             "sample_scan.cpp",
             cores,
             crs,
-            [self.users, self.k, self.max_batch, CB_X, CB_M, CB_A, CB_SCRATCH, CB_READY],
+            [self.users, self.k, self.max_batch, CB_X, CB_M, CB_A, CB_SCRATCH, CB_READY, self.slots],
             reader_args,
             ttnn.ReaderConfigDescriptor(),
         )
@@ -286,7 +289,7 @@ class DeviceSampler:
             "sample_scan_writer.cpp",
             cores,
             crs,
-            [self.users, self.k, CB_S, CB_OUT, CB_READY],
+            [self.users, self.k, CB_S, CB_OUT, CB_READY, self.slots],
             [
                 [self.partials.buffer_address(), self.sums.buffer_address(), b, e, i]
                 for i, (b, e) in enumerate(self.ranges)
@@ -300,7 +303,7 @@ class DeviceSampler:
             _cb(CB_A, tile, crs, ttnn.float32),
             _cb(CB_S, tile, crs, ttnn.float32),
             _cb(CB_SCRATCH, block_bytes // 2 + params_bytes, crs),
-            _cb(CB_OUT, block_bytes // 2 + 32, crs),
+            _cb(CB_OUT, block_bytes // 2 + self.slots * 8, crs),
             _cb(CB_READY, 16, crs),
         ]
         prog = ttnn.ProgramDescriptor(kernels=[reader, compute, writer], semaphores=[], cbs=cbs)
@@ -316,12 +319,12 @@ class DeviceSampler:
             params.buffer_address(),
             self.chip_cands.buffer_address(),
         ]
-        scratch = self.num_scan * (self.k * 8 + 32) + self.max_batch * PARAM_WORDS * 4 + self.k * 8 + 16
+        scratch = self.num_scan * (self.k * 8 + self.slots * 8) + self.max_batch * PARAM_WORDS * 4 + self.k * 8 + 16
         kernel = _kernel(
             "sample_chip_merge.cpp",
             cores,
             crs,
-            [self.num_scan, self.k, CB_SCRATCH, self.max_batch],
+            [self.num_scan, self.k, CB_SCRATCH, self.max_batch, self.slots],
             [addrs + [u] for u in range(self.users)],
             ttnn.ReaderConfigDescriptor(),
         )
@@ -341,7 +344,7 @@ class DeviceSampler:
             token_input.buffer_address() if token_input is not None else 0,
             _is_dram(token_input) if token_input is not None else 0,
         ]
-        scratch = tp * (self.users * self.k * 8 + 64) + self.max_batch * (PARAM_WORDS * 4 + 8)
+        scratch = tp * (self.users * self.k * 8 + self.slots * 16) + self.max_batch * (PARAM_WORDS * 4 + 8)
         scratch += 2 * self.candidates * 4 + self.max_batch * 4
         kernel = _kernel(
             "sample_merge.cpp",

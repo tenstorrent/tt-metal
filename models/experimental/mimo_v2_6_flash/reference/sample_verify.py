@@ -45,11 +45,11 @@ Layouts (uint32 words):
 import math
 import struct
 
-from .spec_decode import MAX_DRAFTS, SPEC_SLOTS
+from .spec_decode import GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS
 
 PARAM_WORDS = 8
-GROUP_WORDS = 16
-OUT_WORDS = 8
+GROUP_WORDS = 16 if MAX_DRAFTS <= 5 else 32  # a control group: 6 + 2 * MAX_DRAFTS words
+OUT_WORDS = 8 if MAX_DRAFTS <= 5 else 16  # an output group: 3 + MAX_DRAFTS words
 GROUPS = SPEC_SLOTS  # a pass holds at most one request per slot
 NO_GROUP = 0xFFFFFFFF
 NO_TOKEN = 0xFFFFFFFF  # the plugin's PLACEHOLDER_TOKEN_ID (-1) as uint32
@@ -172,11 +172,12 @@ def group_words(first_slot, drafts, greedy, u_bonus, u_accept, u_corr):
 
 
 def control_words(groups):
-    """The pass's control page: ``groups`` [(first_slot, drafts, greedy, u_bonus, u_accept, u_corr)], at most GROUPS."""
+    """The pass's control page: ``groups`` [(first_slot, drafts, greedy, u_bonus, u_accept, u_corr), or None for an
+    unused group], at most GROUPS."""
     assert len(groups) <= GROUPS
     words = []
     for g in groups:
-        words += group_words(*g)
+        words += [NO_GROUP] + [0] * (GROUP_WORDS - 1) if g is None else group_words(*g)
     for _ in range(GROUPS - len(groups)):
         words += [NO_GROUP] + [0] * (GROUP_WORDS - 1)
     return words
@@ -192,26 +193,38 @@ def unpack_out(words, groups=GROUPS):
     return out
 
 
+def pass_rows(vp):
+    """The requests of a verify pass in the accept page's group order, [(group, row)]: in the order their rows first
+    appear, or with draft groups (GROUP_SLOTS < SPEC_SLOTS) each at its draft group's index, so that the chain step
+    finds draft group g's commit in accept group g."""
+    rows = list(dict.fromkeys(row for _, row, _ in vp.answers))
+    if GROUP_SLOTS == SPEC_SLOTS:
+        return list(enumerate(rows))
+    first = {row: min(s for s, r, _ in vp.answers if r == row) for row in rows}
+    return [(first[row] // GROUP_SLOTS, row) for row in rows]
+
+
 def pass_inputs(vp, spec_sampling):
     """VerifySampler.host_inputs' (slots, groups) for a verify pass (reference.spec_decode.VerifyPass): one group per
-    request of the pass, in the order its rows first appear, with its first slot, its drafts (the tokens of its later
+    request of the pass (``pass_rows``' index; None unused), with its first slot, its drafts (the tokens of its later
     slots), and greedy or its uniforms; a sampled request's slots take its (temperature, top_k, top_p).
     ``spec_sampling``: the plugin's per-row tensors (temperature, top_k, top_p, greedy, uniforms [B, K + 2]), or None
     (every row greedy)."""
     by_row = {}
     for s, row, col in vp.answers:
         by_row.setdefault(row, []).append((col, s))
-    slots, groups = {}, []
-    for row, cells in by_row.items():
-        cells.sort()
+    order = pass_rows(vp)
+    slots, groups = {}, [None] * (1 + max((g for g, _ in order), default=-1))
+    for g, row in order:
+        cells = sorted(by_row[row])
         first = cells[0][1]
         drafts = [int(vp.tokens[s]) for _, s in cells[1:]]
         if spec_sampling is None or bool(spec_sampling["greedy"][row]):
-            groups.append((first, drafts, True, 0.0, [0.0] * len(drafts), 0.0))
+            groups[g] = (first, drafts, True, 0.0, [0.0] * len(drafts), 0.0)
             continue
         u = [float(x) for x in spec_sampling["uniforms"][row]]
         k = len(u) - 2
-        groups.append((first, drafts, False, u[0], u[1 : 1 + k], u[k + 1]))
+        groups[g] = (first, drafts, False, u[0], u[1 : 1 + k], u[k + 1])
         params = (
             float(spec_sampling["temperature"][row]),
             int(spec_sampling["top_k"][row]),
@@ -225,10 +238,9 @@ def pass_inputs(vp, spec_sampling):
 
 
 def commit_pass(vp, accepted, committed, counts):
-    """Writes a pass's accept results (``unpack_out``, groups in ``pass_inputs``' order) into the verify's
+    """Writes a pass's accept results (``unpack_out``, groups in ``pass_rows``' order) into the verify's
     ``committed`` [B, 1 + K] and ``counts`` [B] rows (torch int32)."""
-    rows = list(dict.fromkeys(row for _, row, _ in vp.answers))
-    for g, row in enumerate(rows):
+    for g, row in pass_rows(vp):
         count, tokens, _ = accepted[g]
         width = sum(1 for _, r, _ in vp.answers if r == row)
         if not 1 <= count <= width or len(tokens) != count:

@@ -91,7 +91,7 @@ def profile(models, tokens, context, chunk, layers, fill, graph_report=None):
     def run(s):
         t0 = time.time()
         for model, after_layer in zip(models, readers):
-            x, _ = model._prefill_chunk(tokens[s : s + chunk], 0, s, None, layers, after_layer)
+            x, _ = model._prefill_chunk(tokens[s : s + chunk], 0, s, None, layers, after_layer=after_layer)
             x.deallocate(True)
         for model in models:
             ttnn.synchronize_device(model.mesh_device)

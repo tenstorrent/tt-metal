@@ -3,7 +3,8 @@
 
 """MiMo MoE decode against prefill on the same tokens, one Galaxy row (TP=8), BFP4 experts.
 
-Each step takes 4 real users (layer-1 MoE inputs of the golden prompts) in rows 0-3 of a 32-row tile and runs
+Each step takes 4 (or 8: the deduplicated stream's 8-row tiles) real users (layer-1 MoE inputs of the golden prompts)
+in the first rows of a 32-row tile and runs
 TtMiMoMoE.forward_decode (the streaming path: GateUpStream, DownStream, the compact row all-gather and ReduceExpand)
 and TtMiMoMoE.forward (prefill) on the same tile with the token mask. Every reduction variant of the decode path
 is checked:
@@ -15,7 +16,9 @@ is checked:
   bit-identical.
 
 Several steps run back to back and each decodes before its prefill, so an output that depends on what ran before
-fails (an unwritten output buffer can otherwise hold the last freed tensor of the same size). Every decode output
+fails (an unwritten output buffer can otherwise hold the last freed tensor of the same size). Besides the golden
+steps (4 different tokens), two steps exercise the deduplicated stream (tt/moe_stream.py): users that select the
+same experts (rows 0 / 2 and 1 / 3 equal), and a masked user (its row is zero, and it streams nothing). Every decode output
 must be bit-identical on the 8 chips of the row (the fixed-order chip sum). Last, the fabric variant runs every step
 again with no host read in between, so the chips drift up to a gather phase apart and both gather buffers are in
 use, and must reproduce the per-step results bit for bit.
@@ -41,7 +44,6 @@ from models.experimental.mimo_v2_6_flash.tt.moe import TtMiMoMoE
 from models.experimental.mimo_v2_6_flash.tt.moe_stream import zero_output
 
 LAYER = 1
-USERS = 4
 STEPS = 4
 RESIDUAL_STD = 0.5
 
@@ -74,15 +76,21 @@ def read_normed(plan, result):
     return read(plan, y), read(plan, h, free=False)
 
 
-def ulps(a, b):
-    """Largest |a - b| in bf16 ulps of the larger magnitude (both bf16-exact)."""
-    mag = torch.maximum(a.abs(), b.abs()).clamp(min=2.0**-100)
+def ulps(a, b, *operands):
+    """Largest |a - b| in bf16 ulps of the larger magnitude (both bf16-exact), or of the largest of ``operands``
+    (the terms a and b are sums of: where they cancel, a few ulps of the terms are many ulps of the result)."""
+    mag = torch.maximum(a.abs(), b.abs())
+    for t in operands:
+        mag = torch.maximum(mag, t.abs())
+    mag = mag.clamp(min=2.0**-100)
     return ((a - b).abs() / torch.exp2(torch.floor(torch.log2(mag)) - 7)).max().item()
 
 
+@pytest.mark.parametrize("users", [4, 8])
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-def test_moe_decode_vs_prefill(mesh_device):
+def test_moe_decode_vs_prefill(mesh_device, users):
+    USERS = users
     golden_path()  # skips without the golden file
     torch.manual_seed(0)
     cfg, ckpt = load_config_and_ckpt()
@@ -101,21 +109,29 @@ def test_moe_decode_vs_prefill(mesh_device):
         expert_dtype=ttnn.bfloat4_b,
     )
     moe.set_decode_users(USERS)
-    assert moe.gate_up_stream is not None, "BFP4 experts with 4 users take the streaming decode path"
+    assert moe.gate_up_stream is not None, f"BFP4 experts with {USERS} users take the streaming decode path"
     red = moe.reduce_expand
     assert red.can_norm
     gamma = ckpt.norms(LAYER + 1)["input_layernorm"]  # the next layer's input norm, as in the model
     eps = cfg.layernorm_epsilon
     norm_out = zero_output(plan, cfg.hidden_size)
     norm = (red.compact_gamma(plan, gamma), norm_out, eps)
-    mask = to_device(plan, (torch.arange(TILE) < USERS).float().reshape(TILE, 1))
+    # Per step: the users' rows and the token mask's users.
+    cases = [(inputs[step * USERS : (step + 1) * USERS], [1] * USERS) for step in range(STEPS)]
+    pairs = torch.arange(USERS) % 2  # users 0, 2, ... and 1, 3, ... select the same experts
+    cases.append((inputs[pairs], [1] * USERS))
+    cases.append((inputs[USERS : 2 * USERS], [0 if u == 2 else 1 for u in range(USERS)]))  # user 2 masked
 
     worst_pcc, worst_ulps = 1.0, 0.0
-    steps = []  # (x, r, y_fab, h_fab) per step, for the back-to-back run
-    for step in range(STEPS):
+    steps = []  # (x, r, mask, y_fab, h_fab) per step, for the back-to-back run
+    for step, (rows, live) in enumerate(cases):
         x = torch.zeros(TILE, cfg.hidden_size)
-        x[:USERS] = inputs[step * USERS : (step + 1) * USERS]
+        x[:USERS] = rows
         x_tt = to_device(plan, x)
+        m = torch.zeros(TILE, 1)
+        m[:USERS, 0] = torch.tensor(live, dtype=torch.float32)
+        mask = to_device(plan, m)
+        active = [u for u in range(USERS) if live[u]]
         r = (torch.randn(TILE, cfg.hidden_size) * RESIDUAL_STD).bfloat16().float()
         r_tt = to_device(plan, r)
 
@@ -132,10 +148,12 @@ def test_moe_decode_vs_prefill(mesh_device):
 
         for name, t in (("out", out), ("y", y), ("y_ag", y_ag), ("h_ag", h_ag), ("y_fab", y_fab), ("h_fab", h_fab)):
             assert torch.isfinite(t).all(), f"step {step}: {name} is not finite"
-        user_pcc = [pcc(out[u], expected[u]) for u in range(USERS)]
+        user_pcc = [pcc(out[u], expected[u]) for u in active]
+        for u in set(range(USERS)) - set(active):
+            assert torch.count_nonzero(out[u]) == 0 and torch.count_nonzero(expected[u]) == 0, f"step {step}: user {u}"
         # bf16(residual + the bf16-rounded sum); the fused reductions sum the chips with FPU adds instead of SFPU
         res_ulps = ulps(y[:USERS], (r[:USERS] + out[:USERS]).bfloat16().float())
-        fused_ulps = ulps(y_ag[:USERS], y[:USERS])
+        fused_ulps = ulps(y_ag[:USERS], y[:USERS], out[:USERS], r[:USERS])
         norm_pcc = pcc(h_ag[:USERS], ref.rms_norm(y_ag[:USERS], gamma, eps))
         logger.info(
             f"step {step}: decode vs prefill per user {[round(p, 5) for p in user_pcc]}; residual {res_ulps:g} ulp, "
@@ -149,9 +167,9 @@ def test_moe_decode_vs_prefill(mesh_device):
         assert norm_pcc >= 0.9999, f"step {step}"
         # Down inside the fabric launch must give exactly what Down alone + all_gather gives.
         assert torch.equal(y_fab, y_ag) and torch.equal(h_fab, h_ag), f"step {step}: fabric and all_gather differ"
-        for t in (x_tt, r_tt):
+        for t in (x_tt, r_tt, mask):
             t.deallocate(True)
-        steps.append((x, r, y_fab, h_fab))
+        steps.append((x, r, m, y_fab, h_fab))
 
     logger.info(f"worst decode vs prefill user pcc {worst_pcc:.6f}, worst residual / fused ulps {worst_ulps:g}")
     assert worst_pcc >= 0.999
@@ -159,14 +177,15 @@ def test_moe_decode_vs_prefill(mesh_device):
     # Every step's fabric decode enqueued before any read, each with its own norm buffer.
     moe.fabric_gather = True
     pending = []
-    for x, r, _, _ in steps:
+    for x, r, m, _, _ in steps:
         x_tt, r_tt, h_buf = to_device(plan, x), to_device(plan, r), zero_output(plan, cfg.hidden_size)
-        y_tt, h_tt = moe.forward_decode(x_tt, mask, residual=r_tt, norm=(norm[0], h_buf, eps))
-        pending.append((y_tt, h_tt, x_tt, r_tt))
+        m_tt = to_device(plan, m)
+        y_tt, h_tt = moe.forward_decode(x_tt, m_tt, residual=r_tt, norm=(norm[0], h_buf, eps))
+        pending.append((y_tt, h_tt, x_tt, r_tt, m_tt))
     moe.fabric_gather = False
-    for step, ((y_tt, h_tt, x_tt, r_tt), (_, _, y_fab, h_fab)) in enumerate(zip(pending, steps)):
+    for step, ((y_tt, h_tt, x_tt, r_tt, m_tt), (_, _, _, y_fab, h_fab)) in enumerate(zip(pending, steps)):
         y_b, h_b = read(plan, y_tt), read(plan, h_tt)
         assert torch.equal(y_b, y_fab) and torch.equal(h_b, h_fab), f"step {step}: back-to-back fabric run differs"
-        for t in (x_tt, r_tt):
+        for t in (x_tt, r_tt, m_tt):
             t.deallocate(True)
     logger.info(f"{len(steps)} fabric decodes back to back: bit-identical to the per-step runs on every chip")

@@ -32,6 +32,7 @@ void kernel_main() {
     constexpr uint32_t cb_part = get_compile_time_arg_val(6);
     constexpr uint32_t cb_gather = get_compile_time_arg_val(7);
     constexpr uint32_t group = get_compile_time_arg_val(8);
+    constexpr uint32_t rows = get_compile_time_arg_val(9);  // the user rows: 4 or 8
     constexpr uint32_t kq = num_blocks * block_rows;
     const bool leader = get_arg_val<uint32_t>(0) == 1;
 
@@ -70,10 +71,10 @@ void kernel_main() {
         }
         cb_pop_front(cb_gather, group - 1);
     }
-    // sigmoid on rows 0-3 of faces 0 and 1 only (2 SFPU iterations per face): the user rows
+    // sigmoid on the user rows of faces 0 and 1 only (rows / 2 SFPU iterations per face)
     sigmoid_tile_init();
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sigmoid, (false, DST_ACCUM_MODE, 2), 0, VectorMode::R));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sigmoid, (false, DST_ACCUM_MODE, rows / 2), 0, VectorMode::R));
     cb_wait_front(cb_bias, 1);
     reconfig_data_format_srca(cb_bias);
     copy_tile_to_dst_init_short(cb_bias);

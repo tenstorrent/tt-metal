@@ -1,14 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// BRISC: rows 0-3 of this core's kq bf16 x tiles [k0, k0 + kq) into cb_x (one 640 B read per tile covers rows 0-3 of
-// faces 0 and 1; every read in flight at once). A non-leader then sends rows 0-3 of its partial logits tile (faces 0
-// and 1, 2 x 256 B) to slot q - 1 of its leader's cb_gather and increments the leader's semaphore. The leader reads
-// the bias tile, hands compute the group's partials once all have landed, and writes rows 0-3 of the scores and
-// biased tiles into page out_page of the two fp32 DRAM-interleaved outputs, whose rows 4-31 the caller keeps.
+// BRISC: the user rows 0..rows-1 (rows 4 or 8) of this core's kq bf16 x tiles [k0, k0 + kq) into cb_x (one read per
+// tile covers those rows of faces 0 and 1; every read in flight at once). A non-leader then sends the user rows of its
+// partial logits tile (faces 0 and 1) to slot q - 1 of its leader's cb_gather and increments the leader's semaphore.
+// The leader reads the bias tile, hands compute the group's partials once all have landed, and writes the user rows of
+// the scores and biased tiles into page out_page of the two fp32 DRAM-interleaved outputs, whose other rows the
+// caller keeps.
 //
-// Only rows 0-3 of x carry users and an output row depends only on the same x row, so the unread rows of cb_x reach
-// only output rows that are never written.
+// Only the user rows of x carry users and an output row depends only on the same x row, so the unread rows of cb_x
+// reach only output rows that are never written.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -28,13 +29,14 @@ void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(6);
     constexpr uint32_t group = get_compile_time_arg_val(7);
     constexpr uint32_t sem_id = get_compile_time_arg_val(8);
-    constexpr uint32_t x_tile_bytes = 2048;  // bf16 32x32
-    constexpr uint32_t x_face_bytes = 512;   // bf16 16x16
-    constexpr uint32_t x_user_bytes = 128;   // rows 0-3 of a bf16 face
+    constexpr uint32_t rows = get_compile_time_arg_val(9);  // the user rows: 4 or 8
+    constexpr uint32_t x_tile_bytes = 2048;                 // bf16 32x32
+    constexpr uint32_t x_face_bytes = 512;                  // bf16 16x16
+    constexpr uint32_t x_user_bytes = rows * 32;            // the user rows of a bf16 face
     constexpr uint32_t x_read_bytes = x_face_bytes + x_user_bytes;
-    constexpr uint32_t out_tile_bytes = 4096;  // fp32 32x32
-    constexpr uint32_t out_face_bytes = 1024;  // fp32 16x16
-    constexpr uint32_t out_user_bytes = 256;   // rows 0-3 of an fp32 face
+    constexpr uint32_t out_tile_bytes = 4096;       // fp32 32x32
+    constexpr uint32_t out_face_bytes = 1024;       // fp32 16x16
+    constexpr uint32_t out_user_bytes = rows * 64;  // the user rows of an fp32 face
 
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t scores_addr = get_arg_val<uint32_t>(1);
