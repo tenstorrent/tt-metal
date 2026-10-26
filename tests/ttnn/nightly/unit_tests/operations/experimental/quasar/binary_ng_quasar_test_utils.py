@@ -11,12 +11,13 @@ be reused by both the no-broadcast suite and upcoming subtile-broadcast test fil
 Not collected by pytest: the module deliberately has no `test_` prefix.
 """
 
+import math
 import os
 
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
 def _on_quasar():
@@ -32,6 +33,15 @@ def _height_sharded_config(shard_shape, core_grid):
         strategy=ttnn.ShardStrategy.HEIGHT,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
+    )
+
+
+def _dram_height_sharded_config(shard_shape, core_grid):
+    # core_grid is in DRAM-bank coordinates, not worker-core coordinates.
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
     )
 
 
@@ -100,6 +110,122 @@ def _act(act_type):
     return [ttnn.UnaryWithParam(act_type)] if act_type is not None else []
 
 
+# The largest ULP distance from torch's result on the device's operands, per dtype and op. fp32 was measured on
+# craq-sim: add, subtract and multiply match bit for bit, and divide is within one step. bf16 takes production's bound
+# of 1: Quasar's SFPU multiply truncates, while Wormhole and Blackhole, where these suites also run, round to nearest
+# even. maximum and minimum select an operand, so they are exact.
+_ULP = {
+    ttnn.float32: {"add": 0, "subtract": 0, "multiply": 0, "divide": 1, "maximum": 0, "minimum": 0},
+    ttnn.bfloat16: {"add": 1, "subtract": 1, "multiply": 1, "divide": 1, "maximum": 0, "minimum": 0},
+}
+# Activations that keep the golden exact: RELU, and SQUARE in fp32.
+_EXACT_ACTS = {
+    ttnn.float32: (None, ttnn.UnaryOpType.RELU, ttnn.UnaryOpType.SQUARE),
+    ttnn.bfloat16: (None, ttnn.UnaryOpType.RELU),
+}
+# The other activations, after a multiply: the largest ULP distance measured on craq-sim against a golden that rounds
+# each intermediate to the dtype, or production's bound where that is larger (TANH: 5). The bounds were measured on a
+# multiply only; beside another op the check is PCC only. GELU's fused form is the fast lookup table, for which
+# production's own bounds (30,000 ULP in bf16) show that ULP is not a measure, so it is PCC only too.
+_ACT_ULP = {
+    ttnn.float32: {ttnn.UnaryOpType.TANH: 5, ttnn.UnaryOpType.SIGMOID: 3, ttnn.UnaryOpType.SILU: 4},
+    ttnn.bfloat16: {
+        ttnn.UnaryOpType.TANH: 5,
+        ttnn.UnaryOpType.SIGMOID: 4,
+        ttnn.UnaryOpType.SILU: 4,
+        ttnn.UnaryOpType.SQUARE: 4,
+    },
+}
+# Below these inputs SIGMOID and SILU are under 2%, and their approximation is off by 6-7% of the value, not by a few
+# ULP. As production does for approximate modes, the ULP check skips that tail, and at most _MAX_EXCLUDED of the
+# elements may fall in it.
+_ACT_TAIL = {ttnn.UnaryOpType.SIGMOID: -4.0, ttnn.UnaryOpType.SILU: -4.0}
+_MAX_EXCLUDED = 0.05
+_TORCH_DTYPE = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
+
+
+def _golden(torch_fn, a, b, dtype_tt, lhs_act=None, rhs_act=None, post_act=None):
+    """torch's result on the device's operands, with each intermediate rounded to the dtype as the device stores it:
+    lhs and rhs activations before the op, a post activation after it. Also returns the elements whose activation
+    inputs lie outside every activation's tail (_ACT_TAIL)."""
+
+    def rnd(x):
+        return x.to(_TORCH_DTYPE[dtype_tt]).float() if dtype_tt in _TORCH_DTYPE else x
+
+    inputs = []
+    if lhs_act is not None:
+        inputs.append((lhs_act, a))
+        a = rnd(_ACT_GOLDEN[lhs_act](a))
+    if rhs_act is not None:
+        inputs.append((rhs_act, b))
+        b = rnd(_ACT_GOLDEN[rhs_act](b))
+    golden = torch_fn(a, b)
+    if post_act is not None:
+        x = rnd(golden)
+        inputs.append((post_act, x))
+        golden = _ACT_GOLDEN[post_act](x)
+    keep = torch.ones(golden.shape, dtype=torch.bool)
+    for act, x in inputs:
+        if act in _ACT_TAIL:
+            keep &= torch.broadcast_to(x >= _ACT_TAIL[act], golden.shape)
+    return golden, keep
+
+
+def _assert_ulp(out_torch, golden, dtype_tt, ulp_threshold, allow_nonfinite=False):
+    # ULP is measured in the golden's resolution, so both sides go to the output's float width: bfloat8_b is
+    # compared at bfloat16 resolution, as assert_with_ulp documents. Unlike PCC, a few misplaced or stale
+    # shards cannot hide in a high correlation over the rest of the tensor.
+    cmp_dtype = torch.float32 if dtype_tt == ttnn.float32 else torch.bfloat16
+    assert_with_ulp(
+        expected_result=golden.to(cmp_dtype),
+        actual_result=out_torch.to(cmp_dtype),
+        ulp_threshold=ulp_threshold,
+        allow_nonfinite=allow_nonfinite,
+    )
+
+
+def _assert_output(out_torch, golden, dtype_tt, op_name, acts=(), pcc=None, keep=None):
+    """Check an output as production does: PCC first, then a ULP bound where one is known, so that a few wrong
+    elements cannot hide in a high correlation. The bound is the op's, or the largest of its activations' after a
+    multiply; `keep` drops the activations' tails from the ULP check."""
+    assert_with_pcc(golden, out_torch, pcc or _PCC[dtype_tt])
+    bound = _ULP.get(dtype_tt, {}).get(op_name)
+    if bound is None:
+        return
+    for act in acts:
+        if act in _EXACT_ACTS[dtype_tt]:
+            continue
+        act_bound = _ACT_ULP[dtype_tt].get(act) if op_name == "multiply" else None
+        if act_bound is None:
+            return
+        bound = max(bound, act_bound)
+    if keep is not None and not keep.all():
+        excluded = 1.0 - keep.float().mean().item()
+        assert excluded <= _MAX_EXCLUDED, f"{excluded:.1%} of the elements fall in an activation's tail"
+        out_torch, golden = out_torch[keep], golden[keep]
+    _assert_ulp(out_torch, golden, dtype_tt, bound)
+
+
+# Special values, checked as production checks them (test_div_fp32): every pair of these through an op, with inf and
+# NaN where torch puts them (allow_nonfinite) and the sign of zero not checked. Quasar's divide gives a number where
+# IEEE gives NaN for the pairs in _DIVIDE_NOT_NAN, so those run apart.
+_SPECIAL = {"1.5": 1.5, "-2": -2.0, "+0": 0.0, "-0": -0.0, "inf": math.inf, "-inf": -math.inf, "nan": math.nan}
+_DIVIDE_NOT_NAN = [("+0", "-0"), ("-0", "+0"), ("-0", "-0"), ("inf", "inf"), ("-inf", "-inf"), ("nan", "+0")]
+
+
+def _run_special(device, op_name, dtype_tt, pairs):
+    """One 32x32 tile of special-value pairs, named by the keys of _SPECIAL, through an op, checked against torch."""
+    n = 32 * 32
+    reps = -(-n // len(pairs))
+    a = torch.tensor(([_SPECIAL[x] for x, _ in pairs] * reps)[:n]).reshape(32, 32)
+    b = torch.tensor(([_SPECIAL[y] for _, y in pairs] * reps)[:n]).reshape(32, 32)
+    cfg = dict(dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    a_tt, b_tt = ttnn.from_torch(a, **cfg), ttnn.from_torch(b, **cfg)
+    out = ttnn.to_torch(_OPS[op_name][0]()(a_tt, b_tt, dtype=dtype_tt)).float()
+    golden = _OPS[op_name][1](ttnn.to_torch(a_tt).float(), ttnn.to_torch(b_tt).float())
+    _assert_ulp(out, golden, dtype_tt, _ULP[dtype_tt][op_name], allow_nonfinite=True)
+
+
 def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, rhs_act=None, post_act=None, pcc=None):
     torch.manual_seed(0)
     ttnn_fn = _OPS[op_name][0]()
@@ -121,15 +247,12 @@ def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, rhs_act=Non
         # Keep the divisor away from zero so bf16 PCC is meaningful.
         b = b * 0.5 + 2.0
 
-    # Golden: lhs/rhs activations apply before the binary op (to a/b respectively), post activation after.
-    a_golden = _ACT_GOLDEN[lhs_act](a) if lhs_act is not None else a
-    b_golden = _ACT_GOLDEN[rhs_act](b) if rhs_act is not None else b
-    golden = torch_fn(a_golden, b_golden)
-    if post_act is not None:
-        golden = _ACT_GOLDEN[post_act](golden)
-
     a_tt = ttnn.from_torch(a, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
     b_tt = ttnn.from_torch(b, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
+    # The golden uses the operands as the device holds them, so input quantization does not count as error.
+    golden, keep = _golden(
+        torch_fn, ttnn.to_torch(a_tt).float(), ttnn.to_torch(b_tt).float(), dtype_tt, lhs_act, rhs_act, post_act
+    )
 
     kwargs = {"memory_config": mem_config, "dtype": dtype_tt}
     if post_act is not None:
@@ -150,7 +273,7 @@ def _run(device, op_name, mem_config, dtype_tt, shape, lhs_act=None, rhs_act=Non
         assert (
             out_torch.float().std() > 0.1 * golden_std
         ), "output is ~constant while the golden varies (operand-switch?)"
-    assert_with_pcc(out_torch, golden, pcc or _PCC[dtype_tt])
+    _assert_output(out_torch, golden, dtype_tt, op_name, (lhs_act, rhs_act, post_act), pcc, keep)
     return out_tt
 
 
@@ -167,6 +290,7 @@ def _run_mixed(
     post_act=None,
     pcc=None,
     output_tensor_mem=None,
+    ulp_threshold=None,
 ):
     # Like _run, but with an INDEPENDENT memory config per operand (a, b, output) so the borrow-vs-NoC
     # routing in the DFB factory is exercised across mixed sharded/interleaved layouts (borrow only when
@@ -194,15 +318,12 @@ def _run_mixed(
     if op_name == "divide":
         b = b * 0.5 + 2.0
 
-    # Golden: lhs/rhs activations apply before the binary op (to a/b respectively), post activation after.
-    a_golden = _ACT_GOLDEN[lhs_act](a) if lhs_act is not None else a
-    b_golden = _ACT_GOLDEN[rhs_act](b) if rhs_act is not None else b
-    golden = torch_fn(a_golden, b_golden)
-    if post_act is not None:
-        golden = _ACT_GOLDEN[post_act](golden)
-
     a_tt = ttnn.from_torch(a, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=a_mem)
     b_tt = ttnn.from_torch(b, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=b_mem)
+    # The golden uses the operands as the device holds them, so input quantization does not count as error.
+    golden, keep = _golden(
+        torch_fn, ttnn.to_torch(a_tt).float(), ttnn.to_torch(b_tt).float(), dtype_tt, lhs_act, rhs_act, post_act
+    )
 
     kwargs = {"memory_config": out_mem, "dtype": dtype_tt}
     if post_act is not None:
@@ -230,11 +351,27 @@ def _run_mixed(
         assert (
             out_torch.float().std() > 0.1 * golden_std
         ), "output is ~constant while the golden varies (wrong tile pairing?)"
-    assert_with_pcc(out_torch, golden, pcc or _PCC[dtype_tt])
+    if ulp_threshold is not None:
+        _assert_ulp(out_torch, golden, dtype_tt, ulp_threshold)
+    else:
+        _assert_output(out_torch, golden, dtype_tt, op_name, (lhs_act, rhs_act, post_act), pcc, keep)
     return out_tt
 
 
-def _run_scalar(device, op_name, mem_config, dtype_tt, shape, scalar, lhs_act=None, post_act=None, pcc=None):
+def _run_scalar(
+    device,
+    op_name,
+    mem_config,
+    dtype_tt,
+    shape,
+    scalar,
+    lhs_act=None,
+    post_act=None,
+    pcc=None,
+    out_mem=None,
+    infer_output_config=False,
+    ulp_threshold=None,
+):
     # Tensor-SCALAR sibling of _run: operand A is a tensor, the RHS is a Python number (not a tensor),
     # and the golden uses that same scalar. Same op->torch map, PCC thresholds, and degenerate-constant
     # guard as _run. On Quasar the DFB path is the only path that can run (the descriptor throws as
@@ -248,16 +385,15 @@ def _run_scalar(device, op_name, mem_config, dtype_tt, shape, scalar, lhs_act=No
 
     a = torch.randn(shape, dtype=torch.float32)
 
-    # Golden: an lhs (pre) activation applies to A before the binary op; a post activation applies to the
-    # result. The Python scalar RHS is used as-is.
-    a_golden = _ACT_GOLDEN[lhs_act](a) if lhs_act is not None else a
-    golden = torch_fn(a_golden, scalar)
-    if post_act is not None:
-        golden = _ACT_GOLDEN[post_act](golden)
-
     a_tt = ttnn.from_torch(a, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
+    # The golden uses a as the device holds it, and the Python scalar as is.
+    golden, keep = _golden(torch_fn, ttnn.to_torch(a_tt).float(), scalar, dtype_tt, lhs_act, None, post_act)
 
-    kwargs = {"memory_config": mem_config, "dtype": dtype_tt}
+    # infer_output_config omits memory_config so the op derives the output config from a's, which routes through
+    # the default-config path instead of an explicit one. out_mem overrides the output config explicitly.
+    kwargs = {"dtype": dtype_tt}
+    if not infer_output_config:
+        kwargs["memory_config"] = out_mem if out_mem is not None else mem_config
     if post_act is not None:
         kwargs["activations"] = _act(post_act)
     if lhs_act is not None:
@@ -271,5 +407,8 @@ def _run_scalar(device, op_name, mem_config, dtype_tt, shape, scalar, lhs_act=No
     golden_std = golden.float().std()
     if golden_std > 0.1:
         assert out_torch.float().std() > 0.1 * golden_std, "output is ~constant while the golden varies (scalar fill?)"
-    assert_with_pcc(out_torch, golden, pcc or _PCC[dtype_tt])
+    if ulp_threshold is not None:
+        _assert_ulp(out_torch, golden, dtype_tt, ulp_threshold)
+    else:
+        _assert_output(out_torch, golden, dtype_tt, op_name, (lhs_act, post_act), pcc, keep)
     return out_tt

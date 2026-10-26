@@ -17,7 +17,6 @@
 
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "common/filesystem_utils.hpp"
-#include "context/context_types.hpp"
 #include "context/metal_env_impl.hpp"
 #include "tt_cluster.hpp"
 #include "fabric/fabric_host_utils.hpp"
@@ -25,7 +24,6 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt_stl/fmt.hpp>
-#include "tt_metal.hpp"
 
 namespace tt::tt_metal {
 

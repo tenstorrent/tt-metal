@@ -204,6 +204,12 @@ def test_comments_and_strings_are_ignored(tmp_path):
             "TTI_ZEROACC(reinterpret_cast<int>(p_zerosrc::SOMETHING), 0, 0, 0);",
             "belongs to p_zerosrc, passed to ZEROACC",
         ),
+        # the SFPLOAD/SFPSTORE format table in SFPLOADI, whose Mod0 table differs (2 is USHORT
+        # there, so the bf16 -inf immediate zero-extends to a positive denormal)
+        (
+            "TTI_SFPLOADI(p_sfpu::LREG0, InstrModLoadStore::FP16B, 0xFF80);",
+            "InstrModLoadStore::FP16B is an SFPLOAD/SFPSTORE format, passed to SFPLOADI",
+        ),
     ],
 )
 def test_constant_from_another_instruction_fails(tmp_path, stmt, fragment):
@@ -225,6 +231,11 @@ def test_constant_from_another_instruction_fails(tmp_path, stmt, fragment):
         # families shared by design are not enforced
         "TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);",
         "TTI_MOVD2A(0, p_mova2d::MATH_HALO_ROWS + 0, ADDR_MOD_0, p_movd2a::MOV_4_ROWS, 0);",
+        # InstrModLoadStore is the SFPLOAD/SFPSTORE table; SFPLOADMACRO and SFPCONFIG take it too
+        "TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP16B, ADDR_MOD_3, 0);",
+        "TTI_SFPSTORE(p_sfpu::LREG0, is_fp32 ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B, ADDR_MOD_3, 0);",
+        "TTI_SFPLOADMACRO(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);",
+        "TTI_SFPCONFIG(0x100 | InstrModLoadStore::INT32, 8, 1);",
     ],
 )
 def test_constant_in_its_own_instruction_is_clean(tmp_path, stmt):
@@ -241,6 +252,7 @@ def test_constant_in_its_own_instruction_is_clean(tmp_path, stmt):
         "TTI_SFPLOAD(p_sfpu::LREG0, to_mode<std::uint32_t>(SFPLOADI_MOD0_FLOATB), ADDR_MOD_3, 0);",
         "TTI_SFPLOAD(p_sfpu::LREG0, wrap<a<b>>(SFPLOADI_MOD0_FLOATB), ADDR_MOD_3, 0);",
         "_sfpu_load_imm_(SFPLOADI_MOD0_FLOATB, 0x3f80);",
+        "TTI_SFPLOADI(p_sfpu::LREG0, to_loadi_mode(InstrModLoadStore::FP16B), 0xFF80);",
         "constexpr std::uint32_t mode = SFPLOADI_MOD0_FLOATB;",
         "__builtin_rvtt_sfpxiadd_i(a, b, SFPIADD_MOD1_CC_NONE);",
         # a non-instruction TT_ macro is not an instruction call

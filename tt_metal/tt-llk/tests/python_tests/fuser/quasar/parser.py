@@ -435,6 +435,7 @@ UNARY_SFPU_OPS = {
     MathOperation.Tanhshrink,
     MathOperation.Xielu,
     MathOperation.Neg,
+    MathOperation.Dropout,
     MathOperation.Add1,
     MathOperation.Cbrt,
     MathOperation.Exp2,
@@ -537,6 +538,7 @@ BINARY_SFPU_OPS = {
     MathOperation.SfpuElwRightShift,
     MathOperation.SfpuElwLeftShift,
     MathOperation.SfpuElwLogicalRightShift,
+    MathOperation.SfpuReshuffleRows,
 }
 
 
@@ -554,6 +556,7 @@ class FpuMathSchema(FpuMathSchemaBase):
 class QuasarUnarySfpuMathSchema(UnarySfpuMathSchema):
     _sfpu_cls: ClassVar = UnarySfpu
     _sfpu_ops: ClassVar = UNARY_SFPU_OPS
+    _dropout_ops: ClassVar = {"Dropout"}
 
 
 class QuasarBinarySfpuMathSchema(BinarySfpuMathSchema):

@@ -8,7 +8,7 @@
 #include <limits>
 
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_operand.h"
+#include "ckernel_sfpu_operand.h"
 
 namespace ckernel {
 namespace sfpu {

@@ -20,7 +20,8 @@ FIXED: the pack-destination retarget (pack_reconfig_data_format + pack_init) is 
 noinline qsr_pack_retarget() helper instead of inlined at each switch site, so trisc0 fits at per_core_N=84
 (measured text+data ~8.2KB was ~40B over the ~8KB trisc L1 budget). This test reconstructs that exact
 program config + matching shapes and PCC-checks the result, guarding against a regression of that overflow.
-Inputs built via quasar.tilize (from_torch(TILE) faults on Quasar wide-short tensors).
+Inputs built via quasar.tilize (from_torch(TILE) faults on Quasar wide-short tensors). no_program_config runs
+the same shapes through ttnn.experimental.quasar.matmul with no program config.
 
 Run (Quasar sim, 2-node emulator, SLOW dispatch):
     TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0 TT_METAL_SIMULATOR=~/sim/libttsim.so TT_METAL_SLOW_DISPATCH_MODE=1 \
@@ -33,6 +34,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_allclose
 
 # Exact compile-time args of the failing e2e matmul.
 GRID = (2, 1)  # compute_with_storage_grid_size = 2x1 (the 2-node emulator)
@@ -71,7 +73,8 @@ def _pcc(a, b):
 
 
 @pytest.mark.timeout(3600)
-def test_matmul_large_n_build(mesh_device):
+@pytest.mark.parametrize("use_program_config", [True, False], ids=["mcast_1d", "no_program_config"])
+def test_matmul_large_n_build(mesh_device, use_program_config):
     """Build the exact large-N 1D-mcast matmul in isolation and check PCC. Guards against a regression of the
     trisc0 code-size overflow: bmm_large_block_zm_fused_bias_activation_metal2's pack-destination retarget
     (pack_reconfig_data_format + pack_init) is emitted once via the noinline qsr_pack_retarget helper instead
@@ -96,7 +99,10 @@ def test_matmul_large_n_build(mesh_device):
         mcast_in0=True,
     )
 
-    out = ttnn.matmul(at, bt, program_config=program_config, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if use_program_config:
+        out = ttnn.matmul(at, bt, program_config=program_config, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        out = ttnn.experimental.quasar.matmul(at, bt, program_config=None, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.synchronize_device(mesh_device)
     o = ttnn.to_torch(out)
 
@@ -105,3 +111,5 @@ def test_matmul_large_n_build(mesh_device):
     logger.info(f"[matmul-large-n] out {tuple(o.shape)} finite={torch.isfinite(o).all().item()} PCC={pcc:.5f}")
     assert tuple(o.shape) == (1, 1, M, N), f"unexpected shape {tuple(o.shape)}"
     assert pcc > 0.99, f"matmul PCC {pcc}"
+    if not use_program_config:
+        assert_allclose(ref.reshape(1, 1, M, N), o.float(), rtol=0.02, atol=0.02 * ref.abs().max().item())

@@ -23,6 +23,7 @@ from models.demos.gpt_oss_d_p.tt.moe.router import TtGptOssRouter
 from models.demos.gpt_oss_d_p.tt.moe.tt_gpt_oss_moe import TtGptOssMoE
 from models.demos.gpt_oss_d_p.tt.moe.weights import prepare_routed_expert_weights
 from models.demos.gpt_oss_d_p.utils.general_utils import get_cache_file_name
+from models.demos.gpt_oss_d_p.utils.profiler_utils import zone
 from models.demos.gpt_oss_d_p.utils.substate import substate
 
 
@@ -138,17 +139,19 @@ class MLP:
         Returns [1,1,S,H] (all-gathered back to full emb to match the layer residual).
         """
         Hfull = hidden_states.shape[-1]
-        idx, wts = self.router(hidden_states)  # per-row top-k on [1,1,S,H] -> [tokens, k]
+        with zone("router_topk"):
+            idx, wts = self.router(hidden_states)  # per-row top-k on [1,1,S,H] -> [tokens, k]
         x3d = ttnn.squeeze(hidden_states, dim=0)  # [1,1,S,H] -> [1,S,H] per device
         out = self.experts(x3d, topk_indices=idx, topk_weights=wts)  # -> [1,S,H/tp] reduce-scattered
         out = ttnn.unsqueeze(out, dim=0)  # -> [1,1,S,H/tp]
         if self.mesh_device.shape[1] > 1 and out.shape[-1] < Hfull:
             # TP all-gather (reduce-scattered emb -> full emb). Prefer the managed all_gather (the
             # path DeepSeek/M3 use) over raw ttnn.all_gather to avoid stale-tile garbage.
-            if self.mesh_config is not None and self.ccl is not None:
-                out = self.mesh_config.allgather(out, self.ccl, axis=1, dim=3)
-            else:
-                out = ttnn.all_gather(
-                    out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
-                )
+            with zone("tp_allgather"):
+                if self.mesh_config is not None and self.ccl is not None:
+                    out = self.mesh_config.allgather(out, self.ccl, axis=1, dim=3)
+                else:
+                    out = ttnn.all_gather(
+                        out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
+                    )
         return out

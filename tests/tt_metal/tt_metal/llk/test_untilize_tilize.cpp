@@ -27,8 +27,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/float8.hpp>
-#include <tt-metalium/int8.hpp>
-#include <tt-metalium/uint8.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -44,9 +42,11 @@
 #include "test_golden_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/int8.hpp"
+#include "tt_metal/test_utils/uint8.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -362,9 +362,6 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
         compute_defines.emplace("EXPLICIT_FACE_R_DIM", std::to_string(test_config.face_r_dim));
         compute_defines.emplace("EXPLICIT_NUM_FACES", std::to_string(num_faces));
         compute_defines.emplace("EXPLICIT_NARROW_ROW", test_config.explicit_untilize_narrow_row ? "1" : "0");
-    }
-    if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     if (test_config.fast_tilize) {
         compute_defines.emplace("FAST_TILIZE", "1");
@@ -686,9 +683,6 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         {"REDUCE_OP", "PoolType::MAX"},
         {"REDUCE_DIM", "ReduceDim::REDUCE_COL"},
     };
-    if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     experimental::ComputeHardwareConfig compute_hw_config;
     compute_hw_config = experimental::ComputeHardwareConfig{
@@ -833,8 +827,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {false, true}) {
             std::uint32_t num_tiles_total = num_tile[0] * num_tile[1];
-            auto src_data =
-                create_random_vector_of_int8(tt::tile_size(tt::DataFormat::Int8) * num_tiles_total, /*seed=*/42);
+            auto src_data = tt::test_utils::create_random_vector_of_int8(
+                tt::tile_size(tt::DataFormat::Int8) * num_tiles_total, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
@@ -857,8 +851,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {false, true}) {
             std::uint32_t num_tiles_total = num_tile[0] * num_tile[1];
-            auto src_data =
-                create_random_vector_of_uint8(tt::tile_size(tt::DataFormat::UInt8) * num_tiles_total, /*seed=*/42);
+            auto src_data = tt::test_utils::create_random_vector_of_uint8(
+                tt::tile_size(tt::DataFormat::UInt8) * num_tiles_total, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
@@ -1218,9 +1212,9 @@ static void run_quasar_tilize_untilize_test(
 
     std::vector<std::uint32_t> src_vec;
     if (input_data_format == tt::DataFormat::Int8) {
-        src_vec = create_random_vector_of_int8(src_dram_buffer_size, /*seed=*/42);
+        src_vec = tt::test_utils::create_random_vector_of_int8(src_dram_buffer_size, /*seed=*/42);
     } else if (input_data_format == tt::DataFormat::UInt8) {
-        src_vec = create_random_vector_of_uint8(src_dram_buffer_size, /*seed=*/42);
+        src_vec = tt::test_utils::create_random_vector_of_uint8(src_dram_buffer_size, /*seed=*/42);
     } else if (input_data_format == tt::DataFormat::Int16) {
         src_vec.resize(src_dram_buffer_size / sizeof(std::uint32_t));
         for (std::uint32_t i = 0; i < src_vec.size(); i++) {
@@ -1692,7 +1686,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             std::uint32_t num_t = num_tile[0] * num_tile[1];
-            auto src_data = create_random_vector_of_int8(tt::tile_size(tt::DataFormat::Int8) * num_t, /*seed=*/42);
+            auto src_data =
+                tt::test_utils::create_random_vector_of_int8(tt::tile_size(tt::DataFormat::Int8) * num_t, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
@@ -1715,7 +1710,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputePackUntilizeUInt8) {
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             std::uint32_t num_t = num_tile[0] * num_tile[1];
-            auto src_data = create_random_vector_of_uint8(tt::tile_size(tt::DataFormat::UInt8) * num_t, /*seed=*/42);
+            auto src_data = tt::test_utils::create_random_vector_of_uint8(
+                tt::tile_size(tt::DataFormat::UInt8) * num_t, /*seed=*/42);
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
                 .fp32_dest_acc_en = true,
