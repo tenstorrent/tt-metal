@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import sys
 import types
+from contextlib import contextmanager
 
 import pytest
 import torch
+from loguru import logger
 
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
 from models.demos.glm53_flash.tests.test_generator_vllm_host import PAD, _FakeMeshModel
@@ -34,6 +36,7 @@ ROWS, COLS = 8, 4
 # the README envelope (slots = rows x users per row) with ONE routed-expert layout (the regions lists)
 
 
+@contextmanager
 def expect_error(error, message):
     """The root conftest's ``expect_error`` fixture (the CI triager's [EXPECTED_ERROR] markers), local to this module:
     the host test runs with ``--noconftest`` because the root conftest imports ttnn at collection."""
