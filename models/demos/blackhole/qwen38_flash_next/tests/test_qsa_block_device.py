@@ -212,6 +212,51 @@ def test_score_merge_against_chain_per_row(mesh_device, rows):
             _free(owned)
 
 
+LANES = 4
+LANE_CACHE_ROWS = BLOCKS + 32  # a lane's blocks and its never-written tile in the flat compressed cache
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [TRACED], indirect=True)
+@pytest.mark.parametrize(
+    "lanes_of_rows",
+    # the lane decode's B rows; the lane verify's 32-row tile at k = 4 (row r -> lane r // 5, the pad rows lane 0)
+    [tuple(range(LANES)), tuple(row // 5 if row < LANES * 5 else 0 for row in range(32))],
+    ids=["decode", "verify-k4"],
+)
+def test_lane_score_rows_of_against_chain(mesh_device, lanes_of_rows):
+    rows, cached = len(lanes_of_rows), None
+    for seed in (941, 942):
+        rng = torch.Generator().manual_seed(seed)
+        host = torch.randn(1, 1, 32, LANES * LANE_CACHE_ROWS, generator=rng).to(torch.bfloat16)
+        windows = torch.stack(
+            [
+                host[0, 0, row, lane * LANE_CACHE_ROWS : lane * LANE_CACHE_ROWS + BLOCKS]
+                for row, lane in enumerate(lanes_of_rows)
+            ]
+        ).reshape(1, 1, rows, BLOCKS)
+        owned = []
+        try:
+            scores = upload(mesh_device, host, BF16, layout=RM)
+            chain = qsa._lane_score_rows_of_composed(scores, lanes_of_rows, LANES, LANE_CACHE_ROWS, BLOCKS)
+            owned += [scores, chain]
+            assert_tensors_equal(download_replica(chain), windows, f"chain, rows={rows}, seed={seed}")
+
+            def check(outputs):
+                assert_shards_equal(outputs[0], chain, f"lane_score_rows_of, rows={rows}, seed={seed}")
+
+            def run():
+                return (qb.lane_score_rows_of(scores, lanes_of_rows, LANES, LANE_CACHE_ROWS, BLOCKS),)
+
+            outputs = run()
+            owned.extend(outputs)
+            check(outputs)
+            cached = assert_program_cache_stable(mesh_device, cached)
+            replay_trace(mesh_device, run, check, owned)
+        finally:
+            _free(owned)
+
+
 # The verify forms (the MTP rows of one tile) are compared eagerly.
 
 

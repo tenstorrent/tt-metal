@@ -1311,18 +1311,12 @@ register(
 )
 
 
-def lane_score_rows(local_scores, lanes: int, cache_rows: int, blocks: int):
-    """Row u of the local block scores [1, 1, lanes, blocks] bf16 ROW_MAJOR = lane u's window (row u, columns
-    u * cache_rows .. + blocks) of the wide indexer's scores [1, 1, 32, lanes * cache_rows]: the lane chain's B slices and
-    concat as one program, one core per lane (row copies at the 64-byte grain)."""
-
-    return lane_score_rows_of(local_scores, tuple(range(lanes)), lanes, cache_rows, blocks)
-
-
 def lane_score_rows_of(local_scores, lanes_of_rows, lanes: int, cache_rows: int, blocks: int):
-    """Row r of the local block scores [1, 1, len(lanes_of_rows), blocks] = lane ``lanes_of_rows[r]``'s window (row r,
-    columns lane * cache_rows .. + blocks) of the wide indexer's scores [1, 1, 32, lanes * cache_rows]: the MTP lanes
-    verify's lane-major rows (row u*R + j reads lane u's columns), one core per output row."""
+    """Row r of the local block scores [1, 1, len(lanes_of_rows), blocks] bf16 ROW_MAJOR = lane ``lanes_of_rows[r]``'s
+    window (row r, columns lane * cache_rows .. + blocks) of the wide indexer's scores [1, 1, 32, lanes * cache_rows],
+    one core per output row (row copies at the 64-byte grain): the lane decode's rows ``0 .. B - 1`` and the MTP lanes
+    verify's lane-major rows (row u*R + j reads lane u's columns).  The model runs it with ``qsa_score_merge`` on, in
+    place of the chain's slices and concat (``ttnn/qsa.py`` ``_lane_score_rows_of_composed``)."""
 
     rows = len(lanes_of_rows)
     shape = tuple(local_scores.shape)
@@ -1359,33 +1353,6 @@ def lane_score_rows_of(local_scores, lanes_of_rows, lanes: int, cache_rows: int,
         NAME, "lane_score_rows", rows, writes=(out,), partial=((local_scores, rows * blocks * 2),), cores=rows
     )
     return fp.run_program([local_scores, out], fp.program_descriptor([kernel], cbs=cbs), meta=meta)
-
-
-def lane_score_rows_composed(local_scores, lanes: int, cache_rows: int, blocks: int):
-    """The lane chain's windows (ttnn/qsa.py ``_score_blocks_lanes``, wide form): B slices and their concat."""
-
-    return lane_score_rows_of_composed(local_scores, tuple(range(lanes)), lanes, cache_rows, blocks)
-
-
-def lane_score_rows_of_composed(local_scores, lanes_of_rows, lanes: int, cache_rows: int, blocks: int):
-    """:func:`lane_score_rows_of` as the chain: one slice per output row and their concat."""
-
-    dram = ttnn.DRAM_MEMORY_CONFIG
-    windows = [
-        ttnn.slice(
-            local_scores,
-            (0, 0, row, lane * cache_rows),
-            (1, 1, row + 1, lane * cache_rows + blocks),
-            memory_config=dram,
-        )
-        for row, lane in enumerate(lanes_of_rows)
-    ]
-    if len(windows) == 1:
-        return windows[0]
-    out = ttnn.concat(windows, dim=2, memory_config=dram)
-    for w in windows:
-        ttnn.deallocate(w)
-    return out
 
 
 # ------------------------------------------------------------------------------------------- program B1: score merge
@@ -1514,7 +1481,8 @@ def score_merge_composed(gathered, mask):
 register(
     FusedKernel(
         name="qsa_score_merge",
-        replaces="QSA score merge after the all-gather: tilize, moreh_sum over devices, untilize, mask add (4 programs/layer)",
+        replaces="QSA score merge after the all-gather: tilize, moreh_sum over devices, untilize, mask add "
+        "(4 programs/layer); with it the lanes' score-row windows (lane_score_rows_of: a slice per row and the concat)",
         tolerance=BITWISE,
         fused=score_merge,
         composed=score_merge_composed,

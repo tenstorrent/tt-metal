@@ -3155,6 +3155,8 @@ def _lane_score_rows_of_composed(local_scores, lanes_of_rows, lanes: int, cache_
         )
         for row, lane in enumerate(lanes_of_rows)
     ]
+    if len(windows) == 1:
+        return windows[0]  # ttnn.concat of one tensor returns it: freeing the window would free the result
     stacked = ttnn.concat(windows, dim=2, memory_config=dram)
     _deallocate(*windows)
     return stacked
@@ -3192,13 +3194,13 @@ class Qwen38TTNNQSA:
     # its admission predicate, bound with the handle (the fused module is a local import of __init__)
     _post_attention_rows_admits = None
     _rows_fused = None  # ttnn/fused/qsa_rows: the verify-form glue on the 32-row tile (QWEN38_FUSED=qsa_rows)
-    _lane_score_rows_fused = None
     # QWEN38_FUSED=sparse_sdpa_tiled: the slab's attention as the block-shared kernel (ttnn/fused/sparse_sdpa_tiled)
     # in place of the block-id expansion + zero half + head pad + sparse_sdpa + slice; tolerance class against the
     # chain (docs/PREFILL.md), resolved at construction and kept through trace capture; the chunk forms never see it.
     _slab_attention_fused = None
     _slab_attention_base_config = None
-    _lane_score_rows_of = staticmethod(_lane_score_rows_of_composed)  # the fused row windows when the programs are on
+    # the lanes' score-row windows: the chain here, ttnn/fused/qsa_block.lane_score_rows_of with qsa_score_merge
+    _lane_score_rows_of = staticmethod(_lane_score_rows_of_composed)
     # The prefill slab's dense linears (ttnn/prefill_dense): the query-gate / K / V / output projections; the index
     # projections and every decode linear never read it.
     prefill_dense: Qwen38TTNNPrefillDense | None = None
@@ -3372,6 +3374,7 @@ class Qwen38TTNNQSA:
             self._selection_row_fused = fused_kernels.kernel("qsa_selection_row").fused
         if fused_kernels.enabled("qsa_score_merge"):
             self._score_merge_fused = fused_kernels.kernel("qsa_score_merge").fused
+            self._lane_score_rows_of = fused_kernels.qsa_block.lane_score_rows_of
         if fused_kernels.enabled("qsa_rows"):
             # the verify-form rows family (forward_verify_generic's glue on the 32-row tile), program by program
             self._rows_fused = fused_kernels.qsa_rows
@@ -3383,8 +3386,6 @@ class Qwen38TTNNQSA:
             self._slab_attention_fused = fused_kernels.kernel("sparse_sdpa_tiled").fused
             # the served HiFi2 compute config, kept through trace capture
             self._slab_attention_base_config = fused_kernels.sparse_sdpa_tiled.HIFI2
-            self._lane_score_rows_fused = fused_kernels.qsa_block.lane_score_rows  # the lanes' windows, one program
-            self._lane_score_rows_of = fused_kernels.qsa_block.lane_score_rows_of  # the lane verify's row windows
         # The served path's one linear for the five projections (_project_merged): both fused tails read their column
         # windows of its shard, so it needs both on and the merged weight resident (a container built without it, the
         # dev microtests' random weights, runs the separate linears).  The lanes run the separate linears.
@@ -7766,8 +7767,8 @@ class Qwen38TTNNQSA:
         lane_constants: Qwen38TTNNQSALaneConstants,
     ):
         """:meth:`_score_blocks_lanes` up to the lane rows (the wide indexer on the flat cache with the lane windows
-        taken by one program, ttnn/fused/qsa_block.lane_score_rows, in place of the chain's B slices and concat; or
-        one indexer call per lane), then the 1-row fused form's collective split: the all-gather of the B local rows
+        taken by ``_lane_score_rows_of``, qsa_block's program here, in place of the chain's B slices and concat; or one
+        indexer call per lane), then the 1-row fused form's collective split: the all-gather of the B local rows
         (device d's rows at d * B) and the fused merge (ttnn/fused/qsa_block.score_merge: moreh_sum's device order,
         then the lane inputs' mask rows, read per lane)."""
 
@@ -7786,7 +7787,7 @@ class Qwen38TTNNQSA:
                 compute_kernel_config=self.indexer_compute_config,
                 seq_shard_axes=[STAGING_AXIS],
             )
-            lane_rows.append(self._lane_score_rows_fused(local_scores, count, rows, blocks))
+            lane_rows.append(self._lane_score_rows_of(local_scores, tuple(range(count)), count, rows, blocks))
             _deallocate(local_scores)
         else:
             for lane in range(count):
