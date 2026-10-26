@@ -123,6 +123,10 @@ REGIONS_GATHER = os.environ.get("GLM53_REGIONS_GATHER", "embedding")
 # gather_combine_reduce, post_combine_reduce's own compute + writer kernels behind a reader that fetches the table rows
 # directly and only those the reduce uses (bit-identical). Read at call time.
 REGIONS_COMBINE = os.environ.get("GLM53_REGIONS_COMBINE", "reduce")
+# regions path: the expert output (bf8 TILE [max_buf, H]) -> the gather table (bf16 rows) (tt-blaze G53F-0192): "two" =
+# ttnn.typecast to bf16 TILE, then to_layout(ROW_MAJOR); "direct" = one ttnn.untilize (bf8 in, bf16 rows out). Read at
+# call time.
+REGIONS_UNTILIZE = os.environ.get("GLM53_REGIONS_UNTILIZE", "two")
 # what the regions calls actually ran (host-side ints, no device sync): the region buffer rows and the combine path,
 # so an A/B can show the knob took effect (G53F-0183: a knob echoed in a summary is not its effect). Reset by the reader.
 REGIONS_STATS: dict = {}
@@ -1200,10 +1204,16 @@ class TtRoutedExperts(LightweightModule):
             activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
         )  # [max_buf, H] bf8 TILE
         ttnn.deallocate(buf)
-        out16 = ttnn.typecast(out, ttnn.bfloat16)
-        ttnn.deallocate(out)
-        y_rm = ttnn.to_layout(out16, ttnn.ROW_MAJOR_LAYOUT)  # the gather table [max_buf, H] bf16 rows
-        ttnn.deallocate(out16)
+        if REGIONS_UNTILIZE == "direct" and out.dtype == ttnn.bfloat8_b:
+            # G53F-0192: one program, bf8 TILE -> bf16 rows (the untilize unpacks bfp8 natively; bfp8_b decodes exactly
+            # to bf16), instead of a typecast to a [max_buf, H] bf16 TILE copy and its untilize
+            y_rm = ttnn.untilize(out)
+            ttnn.deallocate(out)
+        else:
+            out16 = ttnn.typecast(out, ttnn.bfloat16)
+            ttnn.deallocate(out)
+            y_rm = ttnn.to_layout(out16, ttnn.ROW_MAJOR_LAYOUT)  # the gather table [max_buf, H] bf16 rows
+            ttnn.deallocate(out16)
         w_loc = ttnn.multiply(w, loc_tk)  # the routing weights, 0 at the non-local picks (their rows are garbage)
         ttnn.deallocate(loc_tk)
         w16 = ttnn.typecast(w_loc, ttnn.bfloat16)
