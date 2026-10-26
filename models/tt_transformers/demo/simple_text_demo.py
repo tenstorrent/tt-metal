@@ -683,7 +683,7 @@ def prepare_generator_args(
             1,  # data_parallel
             True,  # token_accuracy
             False,  # stress_test
-            False,  # enable_trace -> Teacher forcing does not work if it is on
+            False,  # enable_trace (--enable_trace runs teacher forcing traced, reloading the inputs every step)
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
@@ -1353,7 +1353,10 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
-            reload_decode_inputs = iteration == 0 or not enable_trace or device_sampling_params is None
+            # Teacher forcing replaces the sampled token on the host, so the trace inputs must be reloaded every step
+            reload_decode_inputs = (
+                iteration == 0 or not enable_trace or device_sampling_params is None or token_accuracy
+            )
             decode_output = generator.decode_forward(
                 out_tok,
                 current_pos,
