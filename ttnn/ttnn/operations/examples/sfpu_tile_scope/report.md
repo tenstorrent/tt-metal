@@ -58,7 +58,7 @@ Three runs: rsqrt zone 7.30x x3, recip zone 6.69x x3, rsqrt whole-op 2.21/2.22/2
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz (this test uses 1 Tensix core) |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | same as the blocks above: `test_sfpu_tile_scope_device_perf` (MATH-thread (TRISC_1) ns per SFPU call, N=5 median, reps=2000) and `test_sfpu_tile_scope_regimes` (11 interleaved trials, median (min-max); math zone reps=2000, whole op = DEVICE KERNEL DURATION with reps=1) |
 
 ### Sweep (`test_sfpu_tile_scope_device_perf`)

@@ -2,7 +2,7 @@
 
 **Problem type:** cross-core communication  ·  **Concept(s):** Tensix-to-Tensix transfer topology and reduction work distribution
 **First profiled on:** `bgd-lab-t3003-special-mstaletovic-for-reservation-40918` · Wormhole B0 · 1000 MHz · 2026-07-10 · `5f0ad060667`
-**Measured on:** WH B0 n150 (regimes, 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
+**Measured on:** WH B0 n150 (regimes, 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19) · BH p150b 13×10 grid (`bh-50-special-adamjanovic-for-reservation-143315`, AICLK 1350 MHz, 2026-10-26: flush-before-signal lever, large-payload boundary)
 
 > Reading order: [`../master.md`](../master.md) → **this file** → run the CLI, and read the code only if you need to.
 
@@ -27,6 +27,8 @@ pattern becomes the main design choice when the input and output are already sha
 | `reduce_root_mcast` | Non-root cores unicast to one root; the root reduces all blocks and multicasts the result. | Cuts communication, but serializes all reduction work on the root. |
 | `reduce_scatter_mcast` | All `min(num_tiles, group_size)` workers - the root included - gather and reduce disjoint tile indices, write partials to the root, then the root multicasts the assembled result. The tile split need not divide the group. | Keeps the reduced communication volume while parallelizing the root's compute and reads. |
 | `reduce_scatter_push` | Same algorithm and gather layout as `reduce_scatter_mcast`, with the transfer reversed: contributors write their tiles into the owning worker's gather buffer instead of each worker reading from every contributor. | Trades the read round trip for a `group_size * num_workers` semaphore handshake that the pull side does not need at all. |
+| `reduce_scatter_mcast_flush` | `reduce_scatter_mcast` with one change: before the semaphore increment that publishes a worker's partials to the root, it waits for the writes to be *flushed* (left this Tensix core) instead of *barriered* (acknowledged by the root). | Saves one write-acknowledgement round trip per published signal; the increment still lands after the data because both travel on the same NoC and VC (see *Signal after a flush, not a barrier*). |
+| `reduce_scatter_push_flush` | `reduce_scatter_push` with the same change at both of its publishing points (gather writes → each worker's gather semaphore; partial writes → the root's progress semaphore). | Two fenced signals per all-reduce instead of one, so twice the saving of the pull twin. |
 | `tree_reduce_mcast` | Hierarchical reduce over the 2-D core grid. Stage 1: within each grid row the `cols` cores gather to their row's leader, which reduces them to a per-row partial. Stage 2: the `rows` row-leaders gather to the group root, which reduces the partials into the group sum. Stage 3: the root multicasts the sum to the whole group. | Splits the reduction across the two grid axes, so each gather stage has a small fan-in (`cols`, then `rows`) instead of one all-to-root fan-in of `rows*cols`, at the cost of one extra communication round. On a 1-D group (one row or one column) there is only one axis to reduce, so it collapses to the single gather-to-root path. |
 | `unicast_all_gather` | Every core unicasts its local block to every other core, then every core reduces the gathered blocks. | Simple but creates quadratic unicast traffic. |
 
@@ -171,9 +173,138 @@ second-order choice next to the topology decision above:
   where push stays monotone at ~247 ns/tile and under 1.5%. That instability, not a push advantage, is
   what can look like a crossover. Its cause is not established here.
 
-Prefer **pull**; take **push** when predictability matters more than the median. Compare the two only
+Prefer **pull** on groups with 4 or more grid rows; take **push** when predictability matters more than the median. Compare the two only
 at `--kernel-iters 1`: push has no consumer back-pressure, so in-kernel repeats let contributors run
 ahead of the workers and inflate it for reasons unrelated to steady-state throughput.
+
+The large-payload sweep (BH p150b, 2026-10-26, below) shows where pull's instability starts. It depends
+on group shape, not only on tiles per core. On **1-D lines of 10 or more Tensix cores** (`1x13`, `10x1`)
+pull goes erratic from **16 tiles per Tensix core**: per-trial spread is 10–40 %, and it loses to root
+reduction (0.66–0.97×). On the same lines push's spread stays under 1.5 %, and it keeps a 1.19–1.35×
+lead over root. On `1x8` lines the switch comes at 32 tiles per Tensix core (pull 0.94×, push 1.30×),
+and on 2-row groups (`2x8`, `2x13`) push is faster from 32 tiles per Tensix core (`2x13` from 8). On groups with 4 or more
+rows (`4x4`, `5x6`) pull is the faster form through 32 tiles per Tensix core (`4x4` through 128; `5x6` push
+edges ahead at 64). So use **push on lines and 2-row groups past ~16 tiles per Tensix core, and pull on
+groups with 4 or more rows**. The cause of pull's spread is still not established;
+the sweep only shows it is worst where every worker's reads share one row of links.
+
+## Signal after a flush, not a barrier
+
+Each reduce-scatter worker writes its partial tiles into the root's output shard and then bumps the
+root's `progress` semaphore. The push form also does this for its gather: contributor writes, then each
+worker's `gathered` semaphore. The barrier twins put `noc_async_write_barrier()` between the two calls.
+That waits until every write is **acknowledged**, one full round trip to the destination and back. The
+`_flush` twins use `noc_async_writes_flushed()` instead, which waits only until the writes have **left**
+this Tensix core, and then issue the increment.
+
+**Why the increment still lands after the data.** The NoC ordering rules
+(`docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ordering.rst`, *Ordering (NOC,
+CMD_BUF, VC)*) state: writes on different NoCs have no ordering guarantee; writes on the same NoC but
+different VCs have none either; *"if writes are on the same NoC and same VC, they will be ordered based
+on program order, regardless whether you use the same CMD_BUF or different ones."* The semaphore
+increment is an atomic issued from `AT_CMD_BUF`, and the data goes through `WR_CMD_BUF`. The doc's
+"regardless of CMD_BUF" clause covers that difference. Both default to the same static VC:
+`noc_async_write` and `Semaphore::up(noc, x, y, n)` (and the `noc_semaphore_inc` it calls) all take
+`vc = NOC_UNICAST_WRITE_VC` (VC 1) with `NOC_CMD_VC_STATIC`. So the flush pattern is correct only when
+all of the following hold:
+
+1. **Same NoC.** The data and the increment use the same `noc` argument. Here both use the kernel's
+   default NoC.
+2. **Same VC, statically allocated.** No explicit `vc` override on either call. A **multicast** data
+   write rides `NOC_MULTICAST_WRITE_VC` (VC 4), so a multicast write followed by a unicast increment is
+   **not** covered.
+3. **Same destination Tensix core.** The doc does not state this condition, but it is the only case where "lands
+   after" means anything: the increment must target the Tensix core that received the data. Here it
+   always does: the partials go to the root and so does its `progress` increment, and the gather pages go to a
+   worker and so does that worker's `gathered` increment.
+4. **The source buffer can be reused after a flush.** This is what `noc_async_writes_flushed()`
+   guarantees ("depart, but will not wait for them to complete"). Popping the partial CB right after it is safe.
+5. **Retire the acknowledgements before exit.** A flush is not completion, so the `_flush` kernels call
+   `noc_async_write_barrier()` once at kernel end (`retire_writes_at_exit()`). The flush variants pass
+   under `--dev` (watcher NoC sanitizer) at 1 and 32 tiles per Tensix core with kernel-iters 10.
+
+**Measured** (BH p150b `bh-50`, AICLK 1350 MHz, kernel-iters 1, interleaved A/B, median of 11). Barrier
+twin → flush twin, ns per all-reduce:
+
+| Group (members) | Tiles per Tensix core | pull: barrier → flush | push: barrier → flush |
+|---|---:|---|---|
+| `1x8` (8), 1 group | 1 | 1 611 → 1 504 ns **1.07×** | 1 493 → 1 260 ns **1.19×** |
+| | 6 | 2 307 → 2 201 ns **1.05×** | 2 596 → 2 381 ns **1.09×** |
+| | 32 | 11 041 → 11 068 ns **1.00×** | 8 397 → 8 218 ns **1.02×** |
+| `1x13` whole row (13), 1 group | 1 | 1 901 → 1 801 ns **1.06×** | 1 748 → 1 506 ns **1.16×** |
+| | 6 | 3 273 → 3 173 ns **1.03×** | 3 523 → 3 309 ns **1.07×** |
+| | 32 | 17 389 → 17 400 ns **1.00×** | 12 799 → 12 585 ns **1.02×** |
+| `2x13` two rows (26), 1 group | 1 | 2 680 → 2 502 ns **1.07×** | 2 577 → 2 255 ns **1.14×** |
+| | 6 | 4 055 → 3 893 ns **1.04×** | 4 053 → 3 774 ns **1.07×** |
+| | 32 | 27 045 → 27 758 ns **0.97×** (pull noisy) | 13 883 → 13 553 ns **1.02×** |
+| `1x4` (4), 1 group | 1 | 1 366 → 1 265 ns **1.08×** | 1 316 → 1 084 ns **1.21×** |
+
+The full table, which also covers `10x1` and every shape packed across the whole grid, is in
+[`report.md`](report.md). **Reading:** the saving is a nearly constant amount per fenced signal, about
+60–180 ns, larger for longer paths (`2x13` is the largest). The pull form has one fenced signal per
+all-reduce and saves ~0.1 µs. The push form has two and saves ~0.2–0.3 µs. Because the saving is a
+fixed amount, the ratio depends only on how short the all-reduce is. It helps latency-bound
+all-reduces. At 1–6 tiles per Tensix core, isolated groups give pull 1.03–1.08× and push 1.06–1.21×.
+Packed across the grid the range is pull 1.02–1.15× and push 1.01–1.18×, with wider spread. Group size
+(4–26 members) does not change this. By 32 tiles per Tensix core the lever is a null (0.97–1.05×). The lever has no L1 cost and no
+correctness cost under the conditions above. Use it whenever the data write and the signal share a
+NoC, VC and destination; expect it to matter only when the all-reduce is a few microseconds.
+
+## Large payloads - where root reduction catches up
+
+The 1-D sweep in [`report_bh_p150b_1d.md`](report_bh_p150b_1d.md) found reduce-scatter's advantage
+over root reduction gone by 32 tiles per Tensix core on `1x8` lines. This sweep extends it to longer
+lines, 2-D groups and up to 128 tiles per Tensix core (256 does not fit any reduce-scatter
+group, because its input and output shards alone take 1 MiB). It runs on BH p150b `bh-50` (13×10 grid,
+AICLK 1350 MHz), with an interleaved A/B and the median of 5. Baseline `reduce_root_mcast` → lever
+`reduce_scatter_mcast` (pull) at kernel-iters 10. ns per all-reduce; *1 group* = isolated, *full grid*
+= the shape packed across all 130 Tensix cores.
+
+| Group (members) | Tiles per Tensix core | 1 group: root → pull | full grid: root → pull |
+|---|---:|---|---|
+| `1x8` (8) | 8 / 16 | **1.65× / 1.63×** | **1.61× / 1.55×** |
+| | 24 / 32 | **1.23× / 1.15×** | **1.16× / 0.97×** |
+| | 48 / 64 | **1.05× / 1.21×** | **0.95× / 1.05×** |
+| `1x13` whole row (13) | 8 | 4 855 → 3 034 ns **1.60×** | **1.44×** |
+| | 16 / 32 | 8 916 → 10 821 ns **0.82×** / 17 238 → 23 011 ns **0.75×** | **0.76× / 0.66×** |
+| `10x1` whole column (10) | 8 | **1.63×** | **1.60×** |
+| | 16 / 32 / 48 | **0.97× / 0.87× / 0.89×** | **0.94× / 0.77× / 0.81×** |
+| `2x8` (16) | 8 / 16 / 32 | **2.30× / 2.88× / 2.15×** | **0.98× / 1.38× / 1.51×** |
+| `4x4` (16) | 8 / 16 / 32 | **2.48× / 3.73×** / 19 897 → 4 930 ns **4.04×** | **1.38× / 1.32× / 1.07×** |
+| `2x13` two rows (26) | 8 / 16 / 24 | **2.29× / 1.55× / 1.48×** | **1.24× / 1.14× / 1.16×** |
+| `5x6` (30) | 8 / 16 | **3.15×** / 18 355 → 3 942 ns **4.66×** | **1.90× / 1.56×** |
+
+Past the last column of each row, root reduction **does not fit in L1**. Its gather buffer on every
+Tensix core plus the input and output shards need `(G + 2) · T` bf16 tiles: it fits at 1 344 KiB and
+fails at 1 440 KiB, so the limit is about `(G + 2) · T ≤ 670` tiles. Reduce-scatter runs to 128 tiles
+per Tensix core on every shape.
+
+At kernel-iters 1 (latency) with the push form added, isolated groups (root → pull | root → push):
+`1x8` 32 tiles 0.94× | **1.30×**, 64 tiles 1.40× | 1.34×; `1x13` 16 tiles 0.88× | **1.22×**, 32 tiles
+1.04× | **1.35×**; `10x1` 16 tiles 0.78× | **1.19×**; `2x8` 32 tiles 1.36× | **2.21×**; `2x13` 16 tiles
+1.58× | **2.14×**; `4x4` 32 tiles **3.67×** | 2.85×; `5x6` 16 tiles **4.13×** | 3.38×. The full
+tables are in [`report.md`](report.md).
+
+**Reconciling with "gone by 32 tiles per core":**
+- **It holds only for the pull form on 1-D lines.** On `1x8` packed 10 groups to a grid, pull
+  reaches parity at 32–48 tiles per Tensix core (0.95–0.97×), which reproduces the earlier claim. Isolated, it is 1.15×
+  at 32 and 1.05× at 48. On lines of 10 or more Tensix cores, pull is already gone by **16** tiles per Tensix core
+  (0.66–0.97×).
+- **It does not hold for 2-D groups.** With 2 or more rows, reduce-scatter wins at every payload where
+  root reduction fits: 1.5–4.7× isolated and 1.07–1.9× packed across the grid. The single exception
+  is `2x8` packed at 8 tiles (0.98×). The gain does not shrink with tiles on `4x4` (2.5× → 4.0× from
+  8 to 32 tiles per Tensix core).
+- **It does not hold for the push form on lines.** Push keeps 1.19–1.35× over root on `1x8`,
+  `1x13` and `10x1` through 32 tiles per Tensix core (64 on `1x8`).
+- **Root reduction has no large-payload regime at all on big groups.** Its time is linear in
+  members × tiles, about 40 ns per member-tile (`1x8` 64 tiles: 20.9 µs; `5x6` 16 tiles: 18.4 µs),
+  and its L1 runs out at `(G + 2) · T ≈ 670` tiles. A 23-member group at ~200 tiles per Tensix core
+  needs ~4 600 tiles (9 MiB) per Tensix core, so a root combine measured there must be a streamed or
+  chunked one, which is not this variant. Extrapolating this root's linear cost to 23 × 200 member-tiles
+  gives ≈ 184 µs. Reduce-scatter on 2-D groups measured 32–47 µs at 128 tiles per Tensix core (`5x6`
+  push, `2x13` push), which is ≈ 50–73 µs scaled to 200 tiles, i.e. ≈ 2.5–3.7×. That is an
+  extrapolation, not a measurement, but it is consistent in direction and size with a ~3.3× gain on a
+  2-D group (or a push-form line).
 
 ## CLI - measure your own shapes and parameters
 
@@ -183,7 +314,7 @@ python -m ttnn.operations.examples.tensix_all_reduce [options]
 
 | Flag | Type | Default | Meaning |
 |---|---|---|---|
-| `--variant` | `recommended` \| `all` \| any of `{reduce_root_mcast,reduce_scatter_mcast,tree_reduce_mcast,unicast_all_gather,mcast_all_gather,ring_pull,ring_push}` | `recommended` | methods to run. `recommended` skips the measured nulls; `all` includes them. |
+| `--variant` | `recommended` \| `all` \| any of `{reduce_root_mcast,reduce_scatter_mcast,reduce_scatter_push,reduce_scatter_mcast_flush,reduce_scatter_push_flush,tree_reduce_mcast,unicast_all_gather,mcast_all_gather,ring_pull,ring_push}` | `recommended` | methods to run. `recommended` skips the measured nulls; `all` includes them. |
 | `--group-shape` | `ROWS,COLS` | grid-derived sweep | rectangular shape of each group |
 | `--num-groups` | int | `1` | equal groups packed row-major into the worker grid |
 | `--num-tiles` | int | `6` | bf16 tiles contributed by every core |
@@ -322,6 +453,12 @@ Tensix core contributes ≥ ~4 tiles (enough serial tile-adds on the root to spl
 4–6 Tensix cores and 1-tile payloads lose on both boards. Payload crossover on a `1x8` line: between 1 and
 6 tiles per core on WH B0 n150 (no points in between), 2–4 tiles per core on BH (`bh-49` sweep).
 BH p150b gains less where it helps (1.43× vs 1.68×) and loses more where it does not.
+**Upper boundary (BH p150b `bh-50`):** the gain fades with tiles per Tensix core **only for the pull form on
+1-D lines**. On `1x8` it reaches parity at 32–48 tiles per Tensix core when packed across the grid, and on
+lines of ≥ 10 Tensix cores it loses from 16 tiles per Tensix core (0.66–0.97×). There, switch to
+`reduce_scatter_push` (1.19–1.35× over root through 32 tiles per Tensix core). Groups with 2 or more rows keep
+1.5–4.7× isolated, and 1.07–1.9× packed across the grid, up to root reduction's L1 limit
+`(G + 2) · T ≈ 670` tiles. See *Large payloads - where root reduction catches up*.
 
 Baseline `reduce_root_mcast` → lever `reduce_scatter_mcast`; bf16; "6 tiles" = tiles per Tensix core;
 parentheses = min–max over the retained trials.
@@ -337,7 +474,7 @@ parentheses = min–max over the retained trials.
 | **Helps:** full grid, whole columns, 6 tiles | `8x1` × 8: 6 230 → 3 664 ns **1.70×** | `10x1` × 12: 3 198 → 2 548 ns **1.26×** | not measured |
 | **Does not help:** full grid, half rows, 6 tiles | `1x4` × 16: 4 005 → 5 505 ns **0.73×** (lever noisy) | `1x6` × 20: 2 816 → 2 936 ns **0.96×** | not measured |
 | **Helps (vs root):** full grid, two rows, 6 tiles | `2x8` × 4: 12 325 → 8 364 ns **1.47×** (lever noisy) | `2x12` × 5: 9 401 → 6 599 ns **1.42×** (both noisy); `tree_reduce_mcast` 5 171 ns is fastest | not measured |
-| **Boundary** | group: 4 → 8 Tensix cores; payload: 1 → 6 tiles | group: 6 → 8 Tensix cores (`1x6` 0.96×); payload: 1 → 6 tiles | payload: 2–4 tiles; gone by 32 tiles |
+| **Boundary** | group: 4 → 8 Tensix cores; payload: 1 → 6 tiles | group: 6 → 8 Tensix cores (`1x6` 0.96×); payload: 1 → 6 tiles | payload: 2–4 tiles; gone by 32 tiles (pull form on lines only: ≥ 10-Tensix-core lines from 16 tiles, 2-D groups never, push form never — `bh-50` sweep) |
 
 **Why the boards differ:**
 - The root's serial reduction shrinks more on BH p150b than reduce-scatter's fixed worker-to-root handoff
@@ -369,7 +506,16 @@ both boards (spread up to ~25% on WH B0, ~30% on BH p150b); the root times are s
 - Other boards: `bh-50` 2-D groups (isolated and grid-filling, with `tree_reduce_mcast`) — see *Measured
   result - the 2-D reducers depend on the regime* above.
 
-Reproduce (same regimes on any board; asserts only what held on every measured board, `measure` regimes only log):
+Reproduce. The first three regimes assert what held on both measured boards; the large-payload and
+flush regimes were measured on BH p150b only, and a regime that needs a line longer than the grid's
+row is skipped:
 ```bash
-scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_tensix_all_reduce.py::test_tensix_all_reduce_regimes
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_tensix_all_reduce.py -k regimes
+# the sweeps behind the large-payload and flush tables (~100 programs; AR_SWEEP_REPORT=<path> appends the tables)
+AR_SWEEPS=1 AR_SWEEP_TRIALS=11 scripts/run_safe_pytest.sh --run-all \
+  tests/ttnn/unit_tests/operations/examples/test_tensix_all_reduce.py::test_tensix_all_reduce_flush_sweep
+AR_SWEEPS=1 scripts/run_safe_pytest.sh --run-all \
+  tests/ttnn/unit_tests/operations/examples/test_tensix_all_reduce.py::test_tensix_all_reduce_boundary_sweep
+# latency form with the push lever: AR_BOUNDARY_KERNEL_ITERS=1 AR_BOUNDARY_GROUPINGS=isolated
+#   AR_BOUNDARY_LEVERS=reduce_scatter_mcast,reduce_scatter_push AR_BOUNDARY_TILES=8,16,32,64,128
 ```

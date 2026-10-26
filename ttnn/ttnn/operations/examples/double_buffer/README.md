@@ -150,8 +150,8 @@ and **never reaches a clean flat**, even on the full grid. bf16 (2048 B per tile
 
 *How measured:* `DEVICE KERNEL DURATION [ns]`, baseline → lever.
 - **WH B0 n150:** 1, 8 and 64 Tensix cores from `test_double_buffer_regimes` (median of 12 trials
-  per variant, a trial = mean of 5 launches, variants interleaved; speedups stable over 4 runs), branch
-  `adamjanovic/perf-example-improvements`, 2026-10-12; 16 and 32 Tensix cores from that day's
+  per variant, a trial = mean of 5 launches, variants interleaved; speedups stable over 4 runs),
+  2026-10-12; 16 and 32 Tensix cores from that day's
   `test_double_buffer_device_perf` core-count sweep (mean of 20 launches; [`report.md`](report.md)).
 - **BH p150b:** 1, 8 and 64 Tensix cores from `test_double_buffer_regimes`; 120 Tensix cores from a BH-only
   regime of the same A/B that the arch-agnostic test no longer runs (`small_120cores_34tiles_per_core`, same

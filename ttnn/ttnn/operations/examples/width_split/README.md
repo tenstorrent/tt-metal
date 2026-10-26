@@ -106,7 +106,7 @@ and out; baseline = `single_core`, lever = `width_split` (1 tile per Tensix core
 
 *How measured:* `DEVICE KERNEL DURATION [ns]`, baseline → lever.
 - **WH B0 n150:** Wt = 64 and Wt = 2 tiles from `test_width_split_regimes` (median of 12 trials
-  per variant, a trial = mean of 5 launches, variants interleaved), branch `adamjanovic/perf-example-improvements`,
+  per variant, a trial = mean of 5 launches, variants interleaved),
   2026-10-12; Wt = 1, 3, 4, 8 tiles from that day's `test_width_split_device_perf` crossover sweep, Wt = 32, 128,
   256 tiles from the 2026-07-24 sweep on `bgd-lab-16-…` (mean of 20 launches each; [`report.md`](report.md)).
 - **BH p150b:** Wt = 64 and Wt = 2 tiles from `test_width_split_regimes` (same method; Wt = 2

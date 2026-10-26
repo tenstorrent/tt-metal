@@ -32,7 +32,7 @@ With kernel_iters=1 (cold, includes launch/startup) B=2 is 1199 / 555 / 554 ns, 
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz (this test uses 1 Tensix core) |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | same as the blocks above: DEVICE KERNEL DURATION [ns]; `test_eltwise_l1_vs_dest_accumulate_device_perf` (64 blocks × 1 tile, fp32, kernel-iters 100, rounds 10×5, ns per 100 passes) and `test_eltwise_l1_vs_dest_accumulate_regimes` (kernel-iters 100, 11 interleaved trials, ns per accumulation pass, median) |
 
 ### Sweep (`test_eltwise_l1_vs_dest_accumulate_device_perf`) — 64 steps × 1 tile, 6400 accumulation steps per launch

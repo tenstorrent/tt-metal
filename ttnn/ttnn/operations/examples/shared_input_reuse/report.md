@@ -59,7 +59,7 @@ Test runs (helps / does_not_help speedup): 1.32x / 0.82x; 1.34x / 0.82x; 1.34x /
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | worker rectangle | 2 × 12 = 24 Tensix cores, injector = top-left (0,0) |
 | metric / method | DEVICE KERNEL DURATION [ns], median of 10 interleaved windows × 5 launches (`test_shared_input_reuse_device_perf`, `test_shared_input_reuse_regimes`, and a probe using the regimes test's `_measure_interleaved_ns`) |
 

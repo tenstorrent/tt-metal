@@ -41,7 +41,7 @@ Small outputs (1x1 -> largest legal subblock, Kt=1): 2x2 1.01x; 1x8 (Mt=1,Nt=8) 
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz (this test uses 1 Tensix core) |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | same as the blocks above: DEVICE KERNEL DURATION [ns]; `test_matmul_output_subblock_device_perf` (kernel-iters 100, rounds 10×5, ns per 100 iterations) and `test_matmul_output_subblock_regimes` (kernel-iters 20, 11 interleaved trials, ns per matmul, median) |
 
 ### Sweep (`test_matmul_output_subblock_device_perf`) — M=16 N=16 K=1 tiles, 256 output tiles, DEST = 8 tiles

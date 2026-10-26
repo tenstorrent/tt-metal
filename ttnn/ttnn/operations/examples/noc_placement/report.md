@@ -89,7 +89,7 @@ write row NoC1/NoC0 4.29× vs 4.3×).
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks (DRAM in NoC columns 0 and 9), AICLK 1350 MHz |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | `DEVICE KERNEL DURATION [ns]`, in-process profiler. `test_noc_placement_device_perf`: `shape=(1024, 2048)`, 8 Tensix cores, `block=16`, `kernel_iters=8`, 20 profiled launches averaged. `test_noc_placement_regimes`: same as the 2026-10-12 WH block (interleaved A,B; one trial = mean of 3 launches; median of 12 trials; `kernel_iters=2`) |
 
 ### NoC × operation × placement (`test_noc_placement_device_perf`)
@@ -134,3 +134,147 @@ the run "WH B0"; the device was BH p150b). The fourth case was then named `noc_l
 - **No single-Tensix-core loss.** WH B0 n150 is 0.94× with the canonical pairing at (0,0); BH p150b is 1.02×.
 - **Row ≈ diagonal** on BH p150b as on WH B0 (copy 2.33× vs 2.32×; read NoC0 106k vs 107k). The boundary sweep
   (outstanding reads 4–64) was not repeated on BH p150b.
+
+## Blackhole p150b — bh-50-special-adamjanovic-for-reservation-143315 (2026-10-26): write split + full grid
+
+| stamp | value |
+|---|---|
+| arch / board | Blackhole p150b, compute grid 13×10 = 130 Tensix cores, CHIP_FREQ 1350 MHz (profiler log header; absolute numbers matched across 4 runs) |
+| commit | `5eac7659e6c` + the `write_split` / `noc_mode` / `grid` change to this example, Release build |
+| metric / method | `DEVICE KERNEL DURATION [ns]`, in-process profiler. `test_noc_placement_write_split_perf`: per case all six methods once per trial, starting method rotated per trial, one sample = mean of 3 launches, median of 5 trials. `test_noc_placement_regimes`: interleaved A,B, median of 12 trials × 3 launches |
+| methods | `base` reads NoC0 / writes NoC1, dedicated · `dynamic` same, `NOC_MODE::DM_DYNAMIC_NOC` (control) · `split4` / `split2` / `split1` every 4th / 2nd / every output page written on NoC0 (dynamic) · `swapped` reads NoC1 / writes NoC0, dedicated |
+
+### Write-split sweep (`test_noc_placement_write_split_perf`)
+
+GB/s = (read + write bytes) / median ns; "vs base" = base ns / method ns.
+
+```
+grid_dram_to_dram_32mb: placement=grid cores=130 (grid 13x10) shape=(4096, 4096) (16384 tiles, 126 tiles/core) block=16 kernel_iters=1 dram->dram
+    method   other-NoC writes   median ns            min-max ns    GB/s  vs base
+    base                    0      172776     171866-174012       388.4   1.000x
+    dynamic                 0      173175     172964-174140       387.5   0.998x
+    split4                1/4      166619     166263-167176       402.8   1.037x
+    split2                1/2      170127     169316-170665       394.5   1.016x
+    split1                  1      225565     223764-226795       297.5   0.766x
+    swapped        all (swap)      208750     208046-209234       321.5   0.828x
+grid_dram_to_dram_64mb: placement=grid cores=130 (grid 13x10) shape=(8192, 4096) (32768 tiles, 252 tiles/core) block=16 kernel_iters=1 dram->dram
+    method   other-NoC writes   median ns            min-max ns    GB/s  vs base
+    base                    0      373606     367559-377901       359.2   1.000x
+    dynamic                 0      372851     368958-382902       360.0   1.002x
+    split4                1/4      341523     340052-343929       393.0   1.094x
+    split2                1/2      344470     341963-345635       389.6   1.085x
+    split1                  1      446845     446112-448055       300.4   0.836x
+    swapped        all (swap)      407081     406624-408505       329.7   0.918x
+grid_dram_to_dram_128mb: placement=grid cores=130 (grid 13x10) shape=(16384, 4096) (65536 tiles, 504 tiles/core) block=16 kernel_iters=1 dram->dram
+    method   other-NoC writes   median ns            min-max ns    GB/s  vs base
+    base                    0      755836     747599-779987       355.2   1.000x
+    dynamic                 0      753623     737231-762671       356.2   1.003x
+    split4                1/4      725344     714610-731133       370.1   1.042x
+    split2                1/2      697177     695553-700857       385.0   1.084x
+    split1                  1      891540     890568-892687       301.1   0.848x
+    swapped        all (swap)      806363     805417-810292       332.9   0.937x
+grid64_dram_to_dram_32mb: placement=grid cores=64 (grid 13x10) shape=(4096, 4096) (16384 tiles, 256 tiles/core) block=16 kernel_iters=1 dram->dram
+    method   other-NoC writes   median ns            min-max ns    GB/s  vs base
+    base                    0      186289     183558-187077       360.2   1.000x
+    dynamic                 0      184706     183892-185830       363.3   1.009x
+    split4                1/4      178306     177985-178846       376.4   1.045x
+    split2                1/2      179377     178506-181480       374.1   1.039x
+    split1                  1      238489     237897-239913       281.4   0.781x
+    swapped        all (swap)      228326     226779-230190       293.9   0.816x
+grid_l1_to_dram: placement=grid cores=130 (grid 13x10) shape=(2048, 4096) (8192 tiles, 63 tiles/core) block=16 kernel_iters=1 l1->dram
+    method   other-NoC writes   median ns            min-max ns    GB/s  vs base
+    base                    0       60321      59310-61723        556.3   1.000x
+    dynamic                 0       60477      60049-61703        554.8   0.997x
+    split4                1/4       53703      52071-56497        624.8   1.123x
+    split2                1/2       60043      58626-62162        558.8   1.005x
+    split1                  1      105598     104639-105957       317.8   0.571x
+    swapped        all (swap)      108278     107635-109547       309.9   0.557x
+grid_dram_to_l1: placement=grid cores=130 (grid 13x10) shape=(2048, 4096) (8192 tiles, 63 tiles/core) block=16 kernel_iters=1 dram->l1
+    method   other-NoC writes   median ns            min-max ns    GB/s  vs base
+    base                    0       42786      42293-42844        784.2   1.000x
+    dynamic                 0       42692      42557-42877        786.0   1.002x
+    split4                1/4       45988      45746-46063        729.6   0.930x
+    split2                1/2       48754      48221-49140        688.2   0.878x
+    split1                  1       56094      55764-56477        598.2   0.763x
+    swapped        all (swap)       68624      68569-69004        489.0   0.623x
+grid_l1_to_l1: placement=grid cores=130 (grid 13x10) shape=(2048, 4096) (8192 tiles, 63 tiles/core) block=16 kernel_iters=1 l1->l1
+    method   other-NoC writes   median ns            min-max ns    GB/s  vs base
+    base                    0       36337      35043-40768        923.4   1.000x
+    dynamic                 0       35551      34323-36788        943.8   1.022x
+    split4                1/4       46785      42314-48287        717.2   0.777x
+    split2                1/2       48287      45575-48407        694.9   0.753x
+    split1                  1       54204      49485-55999        619.0   0.670x
+    swapped        all (swap)       42047      38998-44485        798.0   0.864x
+row8_dram_to_dram: placement=row cores=8 (grid 13x10) shape=(1024, 2048) (2048 tiles, 256 tiles/core) block=16 kernel_iters=2 dram->dram
+    method   other-NoC writes   median ns            min-max ns    GB/s  vs base
+    base                    0       54025      53090-55006        310.5   1.000x
+    dynamic                 0       54193      53788-55278        309.6   0.997x
+    split4                1/4       55440      54616-56431        302.6   0.974x
+    split2                1/2       69014      68162-69350        243.1   0.783x
+    split1                  1      113940     113244-114336       147.2   0.474x
+    swapped        all (swap)      107938     107277-108134       155.4   0.501x
+row2_dram_to_dram: placement=row cores=2 (grid 13x10) shape=(1024, 2048) (2048 tiles, 1024 tiles/core) block=16 kernel_iters=2 dram->dram
+    method   other-NoC writes   median ns            min-max ns    GB/s  vs base
+    base                    0      113457     113206-114358       147.9   1.000x
+    dynamic                 0      124859     124642-125001       134.4   0.909x
+    split4                1/4      136899     136652-136958       122.6   0.829x
+    split2                1/2      140436     140276-140469       119.5   0.808x
+    split1                  1      161655     159379-162193       103.8   0.702x
+    swapped        all (swap)      147417     147167-147522       113.8   0.770x
+core1_dram_to_dram: placement=row cores=1 (grid 13x10) shape=(1024, 2048) (2048 tiles, 2048 tiles/core) block=16 kernel_iters=2 dram->dram
+    method   other-NoC writes   median ns            min-max ns    GB/s  vs base
+    base                    0      221646     221535-221906        75.7   1.000x
+    dynamic                 0      246007     245830-246118        68.2   0.901x
+    split4                1/4      271174     271148-271262        61.9   0.817x
+    split2                1/2      278620     278385-278632        60.2   0.796x
+    split1                  1      285397     285316-286006        58.8   0.777x
+    swapped        all (swap)      234874     234126-235519        71.4   0.944x
+core1_block64_dram_to_dram: placement=row cores=1 (grid 13x10) shape=(1024, 2048) (2048 tiles, 2048 tiles/core) block=64 kernel_iters=2 dram->dram
+    method   other-NoC writes   median ns            min-max ns    GB/s  vs base
+    base                    0      137031     136932-137211       122.4   1.000x
+    dynamic                 0      189032     189000-189050        88.8   0.725x
+    split4                1/4      213975     213899-214362        78.4   0.640x
+    split2                1/2      222721     222704-222768        75.3   0.615x
+    split1                  1      199723     199669-200361        84.0   0.686x
+    swapped        all (swap)      137638     137615-137826       121.9   0.996x
+```
+Earlier runs of the same kernels (3–5 trials) agree within ±0.03× (grid 32 MB `split4` 1.036–1.045×, `split2`
+1.011–1.020×; 64 MB `split4` 1.074–1.094×; L1→DRAM `split4` 1.104–1.123×; 8-core row `split2` 0.78–0.81×). A first
+writer version that picked the NoC as a runtime value per page lost a further ~10% on 1–2 Tensix cores (`split4`
+0.71–0.72×); the committed one names each NoC as a compile-time constant. Exploratory (5 trials): grid 32 MB `block=8` split4 0.988×,
+split2 0.971×, swapped 0.825×; `block=32` split4 1.029×, split2 1.007×, swapped 0.803×; `kernel_iters=2` split4 1.016×,
+split2 0.985×, swapped 0.824×; 32 Tensix cores split4 1.01×, split2 1.11× (noisy baseline, 221–247 µs).
+
+One exploratory run showed every absolute number ~1.7× high (L1→DRAM base 102 µs vs 60 µs) while the profiler log
+header still read CHIP_FREQ 1350 MHz — the AICLK drop does not show in that header. In that run the full-grid ratios
+also moved (64 MB split2 0.92×, swapped 0.61×): at the lower clock the NoC, not DRAM, bounds the full-grid copy.
+Those numbers are not used above.
+
+### Regimes (`test_noc_placement_regimes`, this board)
+
+```
+regime                                       baseline -> lever                          base / lever (ns)      speedup  asserted
+placement_helps_8cores_block16               column -> row (NoC0)                       98166 /  54554         1.80     >= 1.62
+placement_flat_2cores_block1                 column -> row (NoC0)                      888743 / 888546         1.00     <= 1.05
+noc_helps_row_8cores_block16                 row: rd NoC1 -> NoC0                      107578 /  54619         1.97     >= 1.72
+noc_flat_1core_block16                       row: rd NoC1 -> NoC0                      234192 / 221731         1.056    <= 1.08
+noc_helps_grid_dram                          grid 32 MB: rd NoC1 -> NoC0               208978 / 173195         1.21     >= 1.10
+write_split_helps_grid_l1_to_dram_quarter    grid 16 MB L1->DRAM: 1/4 writes on NoC0    60141 /  53772         1.12     >= 1.05
+write_split_flat_grid_dram_half              grid 32 MB DRAM->DRAM: 1/2 on NoC0        173706 / 170239         1.02     <= 1.05
+write_split_loses_grid_dram_to_l1_half       grid 16 MB DRAM->L1: 1/2 on NoC0           42777 /  48763         0.88     <= 1.00
+write_split_loses_row8_half                  8-core row 4 MB: 1/2 on NoC0               54146 /  68922         0.79     <= 1.00
+```
+`noc_flat_1core_block16` measured 1.056× on this board (1.02× on the 12×10 board, 0.94× on WH B0 n150); its bound
+moved from ≤ 1.05 to ≤ 1.08. The same copy in the write-split sweep: 1 Tensix core `swapped` 0.944–0.948×.
+
+### Reading it
+- **Hypothesis "half the writes on the other NoC is ~0.96× and a quarter is flat on a full-grid DRAM-bound copy":**
+  the direction holds — no variant moves the copy past the DRAM ceiling (~390–405 GB/s read+write) — but half is not
+  a loss on this board at `block=16` (1.02×; 0.97× at `block=8`) and a quarter is a slight gain (1.04×).
+- **The split pays only below the ceiling** (64 / 128 MB footprints at 355–360 GB/s unsplit: 1.04–1.09×; write-only
+  DRAM stream at 278 GB/s: 1/4 → 1.12×). It brings the copy up to the ceiling, never past it.
+- **"It may help when the NoC is the bound" does not hold:** a few Tensix cores and L1 destinations all lose
+  (0.62–0.97×). The usual pairing already gives each NoC one stream; moving writes onto the read NoC unbalances them.
+- **Dynamic NoC mode alone costs 9–27% on 1–2 Tensix cores** and nothing on ≥ 8 — part of the lever's price.
+- **Swapped pairing:** full grid 32 MB 0.83×, 64–128 MB 0.92–0.94×, L1 on one side 0.56–0.62×, 8-core row 0.50×,
+  1 Tensix core 0.94–1.00×.

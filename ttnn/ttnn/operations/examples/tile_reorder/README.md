@@ -53,7 +53,7 @@ mattering there once the writes became local; on BH p150b it also stops for a fu
 
 *How measured:* `test_tile_reorder_regimes`, `DEVICE KERNEL DURATION [ns]`, baseline/lever interleaved A,B,A,B,
 median of 12 trials × 3 launches.
-- **WH B0 n150:** branch `adamjanovic/perf-example-improvements`, 2026-10-12, at `(2048, 1024)` (one tile-row per
+- **WH B0 n150:** 2026-10-12, at `(2048, 1024)` (one tile-row per
   Tensix core on the 8×8 grid).
 - **BH p150b:** the `(3840, 1024)` cells (one tile-row per Tensix core on 12×10, the shape the regimes test now
   sizes to this grid) come from a probe of the same A/B at that shape; all `(2048, 1024)` cells come from a BH run

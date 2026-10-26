@@ -57,7 +57,7 @@ with width. The only regime where it doesn't help is `Wt ≤ 1` (nothing to spli
 | stamp | value |
 |---|---|
 | board | Wormhole B0 n150 (8×8 = 64 Tensix cores) |
-| branch | `adamjanovic/perf-example-improvements` (base `adce58258c3`) |
+| base commit | `adce58258c3` |
 | test | `test_width_split_regimes` (bf16, H=32, interleaved DRAM) |
 | method | 5 warmup launches per variant; then 12 trials per variant, interleaved single_core/width_split; a trial = mean `DEVICE KERNEL DURATION [ns]` over 5 launches (one profiler window); median compared |
 
@@ -91,7 +91,7 @@ pays from `Wt = 3`.
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | `DEVICE KERNEL DURATION [ns]`, same as the blocks above: `test_width_split_device_perf` (mean of 20 launches per cell) and `test_width_split_regimes` (5 warmup launches; 12 trials per variant interleaved, a trial = mean of 5 launches; medians compared) |
 
 ### Sweep (`test_width_split_device_perf`) — bfloat16, H=32 (one tile-row), interleaved DRAM, iters=1, trials=20

@@ -200,7 +200,7 @@ essentially undiminished (1.54× → 1.48× at block=1; 1.37× → 1.36× at blo
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | same op and CB as §2: `test_trid_double_issue_device_perf`, `DEVICE KERNEL DURATION [ns]`, mean of 10 profiled launches per cell (the test's default; §2 used 20), 1 Tensix core, `[512, 512]` bf16, `cb_blocks = 6` in every cell |
 
 ### Main table (`test_trid_double_issue_device_perf`) — same schema as §2

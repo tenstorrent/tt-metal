@@ -136,7 +136,7 @@ reaches ~**33 GB/s**. To push bf16 to ~32 GB/s on one core you must make each No
 | stamp | value |
 |---|---|
 | board | Wormhole B0 n150 (8×8 = 64 Tensix cores, 12 DRAM banks) |
-| branch | `adamjanovic/perf-example-improvements` (base `adce58258c3`) |
+| base commit | `adce58258c3` |
 | test | `test_double_buffer_regimes` (bf16, 2048 B per tile, interleaved DRAM) |
 | baseline / lever | `block=1, single_buffered` (trap) / `block=4, double_buffered` |
 | method | 5 warmup launches per variant; then 12 trials per variant, interleaved trap/lever; a trial = mean `DEVICE KERNEL DURATION [ns]` over 5 launches; median compared |
@@ -172,7 +172,7 @@ the ~190 GB/s DRAM peak, and is flat from ≈32 Tensix cores up (bf16).
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | same as the WH blocks above: `test_double_buffer_device_perf` (mean of 20 launches per cell) and `test_double_buffer_regimes` (5 warmup launches; 12 trials per variant interleaved, a trial = mean `DEVICE KERNEL DURATION [ns]` over 5 launches; medians compared). GB/s = read+write DRAM traffic ÷ device time |
 
 ### Config A — 1 Tensix core, `shape=(512,512)`, bfloat16 (256 tiles, 2048 B per tile, 1.05 MB traffic) — `test_double_buffer_device_perf`

@@ -7,7 +7,7 @@ WH B0 n150 numbers live in [`README.md`](README.md) (*When it helps / when it do
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | `test_tile_reorder_regimes`: `DEVICE KERNEL DURATION [ns]`, baseline `scatter` (4 × 512 B writes + 4 write barriers per tile) vs lever `relocate` (1 × 2 KB write + 1 barrier per tile), interleaved A,B,A,B, median of 12 trials × 3 launches; full grid; input DRAM interleaved (`TensorMemoryLayout::INTERLEAVED`), bf16 |
 
 ### Regimes and shape sweep

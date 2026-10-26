@@ -41,7 +41,7 @@ Three runs of the regime test gave speedups identical to +-0.01x (row32 2.09x x3
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz (this test uses 1 Tensix core) |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | same as the blocks above: `test_reduce_block_device_perf` (N=5 median, kernel-iters 200, bf16 in, fp32 out, HiFi4; perf at fp32 accum, accuracy at bf16 accum) and `test_reduce_block_regimes` (11 interleaved trials, median (min-max)) |
 
 ### Sweep (`test_reduce_block_device_perf`) — median ns per whole-block reduce

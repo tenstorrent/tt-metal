@@ -37,7 +37,7 @@ brackets), ns per ring round. Three runs:
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | ns per ring round from DEVICE KERNEL DURATION; `test_tensix_all_reduce_ring_transport_device_perf` (N=5 median, kernel-iters 100, every placement fills all 120 Tensix cores) and `test_tensix_all_reduce_ring_transport_regimes` (kernel-iters 20, interleaved A/B, median of 11 retained trials, same as the WH B0 regime check above) |
 
 ### Sweep (`test_tensix_all_reduce_ring_transport_device_perf`)

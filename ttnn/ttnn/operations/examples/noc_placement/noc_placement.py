@@ -12,6 +12,16 @@ switchable knobs so you can measure any cell of the matrix:
     placement : "column" (0,0)..(0,N-1)  -- the split_work_to_cores row_wise=False default / trap
                 "row"    (0,0)..(N-1,0)
                 "diagonal" (i,i)
+                "grid"   the first N Tensix cores of the full worker grid, row-major (default: all of them)
+
+One more knob applies to "copy" only:
+
+    write_split : 0 = every output page is written on the write NoC (the other NoC from the reads).
+                  k >= 1 = every k-th output page is written on the READ NoC instead, so 1/k of the
+                  write stream moves to the other NoC (k=2: half, k=4: a quarter, k=1: all writes on
+                  the read NoC). Reads never change. Issuing on both NoCs from one RISC-V needs
+                  NOC_MODE::DM_DYNAMIC_NOC; noc_mode="dynamic" with write_split=0 is the matching
+                  control (same mode, no split) so the mode's own cost is measured separately.
 
 The kernels are byte-identical across placements; only the physical cores and the chosen
 NoC(s) change, so any measured difference is pure NoC routing. `read`/`write` isolate a
@@ -32,11 +42,17 @@ CB_ID = 0
 # Switch space. Column is first so the "trap" is the baseline (it is what
 # split_work_to_cores(..., row_wise=False), the default, hands you).
 PLACEMENTS = ("column", "row", "diagonal")
+# "grid" (the full worker grid, row-major) is accepted everywhere but kept out of PLACEMENTS so the
+# line-placement matrices above stay as they are.
+GRID = "grid"
+ALL_PLACEMENTS = PLACEMENTS + (GRID,)
 OPS = ("read", "write", "copy")
 NOCS = ("noc0", "noc1")
+NOC_MODES = ("dedicated", "dynamic")
 
 _NOC = {"noc0": ttnn.NOC.NOC_0, "noc1": ttnn.NOC.NOC_1}
 _OTHER = {"noc0": "noc1", "noc1": "noc0"}
+_NOC_MODE = {"dedicated": ttnn.NOC_MODE.DM_DEDICATED_NOC, "dynamic": ttnn.NOC_MODE.DM_DYNAMIC_NOC}
 
 
 def validate(input_tensor):
@@ -53,17 +69,19 @@ def validate(input_tensor):
         raise ValueError(f"noc_placement example: H and W must be multiples of {TILE}, got {shape}")
 
 
-def _ordered_cores(placement, n):
+def _ordered_cores(placement, n, grid=None):
     """The N cores of a placement, in a fixed order so page assignment is identical
     across placements (core index k always gets the same page range; only its
     physical (x, y) differs)."""
+    if placement == GRID:
+        return [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(n)]
     if placement == "row":
         return [ttnn.CoreCoord(i, 0) for i in range(n)]
     if placement == "column":
         return [ttnn.CoreCoord(0, i) for i in range(n)]
     if placement == "diagonal":
         return [ttnn.CoreCoord(i, i) for i in range(n)]
-    raise ValueError(f"noc_placement example: placement must be one of {PLACEMENTS}, got {placement!r}")
+    raise ValueError(f"noc_placement example: placement must be one of {ALL_PLACEMENTS}, got {placement!r}")
 
 
 def _core_range_set(cores):
@@ -83,30 +101,31 @@ def _assign_pages(num_pages, n):
     return ranges
 
 
-def _resolve_num_cores(device, num_cores):
-    """Cap at min(grid.x, grid.y) so a diagonal of this length fits on the grid."""
+def _resolve_num_cores(device, num_cores, placement):
+    """Cap a line at min(grid.x, grid.y) so a diagonal of this length fits on the grid;
+    "grid" may use every Tensix core of the worker grid."""
     grid = device.compute_with_storage_grid_size()
-    max_line = min(grid.x, grid.y)
+    max_line = grid.x * grid.y if placement == GRID else min(grid.x, grid.y)
     if num_cores is None:
         return max_line
     if num_cores < 1 or num_cores > max_line:
         raise ValueError(
-            f"noc_placement example: num_cores must be in [1, {max_line}] "
-            f"(a diagonal must fit on the {grid.x}x{grid.y} grid), got {num_cores}"
+            f"noc_placement example: num_cores must be in [1, {max_line}] for placement {placement!r} "
+            f"(a line must fit on the {grid.x}x{grid.y} grid as a diagonal), got {num_cores}"
         )
     return num_cores
 
 
-def _dm_config(processor, noc):
-    return ttnn.DataMovementConfigDescriptor(processor=processor, noc=_NOC[noc])
+def _dm_config(processor, noc, noc_mode="dedicated"):
+    return ttnn.DataMovementConfigDescriptor(processor=processor, noc=_NOC[noc], noc_mode=_NOC_MODE[noc_mode])
 
 
 def _line(device, placement, num_cores, min_pages):
     """Resolve the placement into (cores, core_ranges, assignment, page_bytes)."""
-    num_cores = _resolve_num_cores(device, num_cores)
+    num_cores = _resolve_num_cores(device, num_cores, placement)
     if min_pages < num_cores:
         raise ValueError(f"noc_placement example: need >= {num_cores} pages, got {min_pages}")
-    cores = _ordered_cores(placement, num_cores)
+    cores = _ordered_cores(placement, num_cores, device.compute_with_storage_grid_size())
     return cores, _core_range_set(cores), _assign_pages(min_pages, num_cores)
 
 
@@ -155,9 +174,10 @@ def _bench(input_tensor, *, op, noc, placement, num_cores, kernel_iters, block):
     return ttnn.generic_op([input_tensor, output_tensor], program)
 
 
-def _copy(input_tensor, *, noc, placement, num_cores, kernel_iters, block, memory_config):
+def _copy(input_tensor, *, noc, placement, num_cores, kernel_iters, block, memory_config, write_split, noc_mode):
     """Identity DRAM->DRAM copy: reader on `noc`, writer on the other NoC (so the read
-    and write streams never share links). Output equals input for every placement/NoC."""
+    and write streams never share links). Output equals input for every placement/NoC.
+    write_split=k moves every k-th output page's write onto the read NoC (see module doc)."""
     device = input_tensor.device()
     out_mem = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
     output_tensor = ttnn.allocate_tensor_on_device(
@@ -177,7 +197,9 @@ def _copy(input_tensor, *, noc, placement, num_cores, kernel_iters, block, memor
     )
 
     reader_ct = [page_bytes, kernel_iters, block] + list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    writer_ct = [page_bytes, kernel_iters, block] + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct = [page_bytes, kernel_iters, block, write_split] + list(
+        ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
+    )
 
     reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     in_addr, out_addr = input_tensor.buffer_address(), output_tensor.buffer_address()
@@ -190,14 +212,16 @@ def _copy(input_tensor, *, noc, placement, num_cores, kernel_iters, block, memor
         core_ranges=core_ranges,
         compile_time_args=reader_ct,
         runtime_args=reader_rt,
-        config=_dm_config(ttnn.DataMovementProcessor.RISCV_1, noc),  # reads on `noc`
+        config=_dm_config(ttnn.DataMovementProcessor.RISCV_1, noc, noc_mode),  # reads on `noc`
     )
     writer = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "copy_writer.cpp"),
         core_ranges=core_ranges,
         compile_time_args=writer_ct,
         runtime_args=writer_rt,
-        config=_dm_config(ttnn.DataMovementProcessor.RISCV_0, _OTHER[noc]),  # writes on the other NoC
+        # writes on the other NoC (every write_split-th page on `noc`); both kernels on a Tensix core
+        # must share one NOC_MODE, so the reader follows the writer into dynamic mode
+        config=_dm_config(ttnn.DataMovementProcessor.RISCV_0, _OTHER[noc], noc_mode),
     )
     program = ttnn.ProgramDescriptor(kernels=[reader, writer], semaphores=[], cbs=[cb])
     return ttnn.generic_op([input_tensor, output_tensor], program)
@@ -213,6 +237,8 @@ def noc_placement(
     kernel_iters: int = 1,
     block: int = 16,
     memory_config: ttnn.MemoryConfig = None,
+    write_split: int = 0,
+    noc_mode: str = None,
 ) -> ttnn.Tensor:
     """Run one cell of the placement × NoC × operation matrix.
 
@@ -220,10 +246,18 @@ def noc_placement(
         op: "read" (DRAM->L1 bench), "write" (L1->DRAM bench), or "copy" (identity copy).
         noc: "noc0" or "noc1" -- the stream's NoC; for "copy" this is the read NoC and
             writes use the other NoC.
-        placement: "column" (the split_work_to_cores default trap), "row", or "diagonal".
-        num_cores: line length; defaults to min(grid.x, grid.y) so a diagonal fits.
+        placement: "column" (the split_work_to_cores default trap), "row", "diagonal", or
+            "grid" (the first num_cores Tensix cores of the worker grid, row-major).
+        num_cores: line length; defaults to min(grid.x, grid.y) so a diagonal fits (for "grid":
+            every Tensix core of the worker grid).
         kernel_iters: in-kernel repeat of the range (1 = single pass; larger = steady state).
         block: pages issued per NoC barrier (outstanding transactions; larger = more NoC pressure).
+        memory_config: output placement for op="copy" (default DRAM interleaved; an L1-interleaved
+            config makes the writes land in Tensix-core L1 instead of DRAM).
+        write_split: op="copy" only. 0 = all writes on the write NoC; k >= 1 = every k-th output
+            page is written on the read NoC instead (1/k of the writes move NoC).
+        noc_mode: "dedicated" (default when write_split == 0) or "dynamic" (required, and the
+            default, when write_split > 0). Applies to both copy kernels.
 
     Returns the copy output for op="copy" (== input); for the benches the returned tensor's
     contents are meaningless -- the point is the isolated read/write NoC traffic.
@@ -232,10 +266,22 @@ def noc_placement(
         raise ValueError(f"noc_placement example: op must be one of {OPS}, got {op!r}")
     if noc not in NOCS:
         raise ValueError(f"noc_placement example: noc must be one of {NOCS}, got {noc!r}")
-    if placement not in PLACEMENTS:
-        raise ValueError(f"noc_placement example: placement must be one of {PLACEMENTS}, got {placement!r}")
+    if placement not in ALL_PLACEMENTS:
+        raise ValueError(f"noc_placement example: placement must be one of {ALL_PLACEMENTS}, got {placement!r}")
     if block < 1:
         raise ValueError(f"noc_placement example: block must be >= 1, got {block}")
+    if write_split < 0:
+        raise ValueError(f"noc_placement example: write_split must be >= 0, got {write_split}")
+    if write_split and op != "copy":
+        raise ValueError("noc_placement example: write_split applies to op='copy' only")
+    if noc_mode is None:
+        noc_mode = "dynamic" if write_split else "dedicated"
+    if noc_mode not in NOC_MODES:
+        raise ValueError(f"noc_placement example: noc_mode must be one of {NOC_MODES}, got {noc_mode!r}")
+    if write_split and noc_mode != "dynamic":
+        raise ValueError("noc_placement example: write_split > 0 issues on both NoCs and needs noc_mode='dynamic'")
+    if noc_mode != "dedicated" and op != "copy":
+        raise ValueError("noc_placement example: noc_mode applies to op='copy' only")
     validate(input_tensor)
 
     if op == "copy":
@@ -247,6 +293,8 @@ def noc_placement(
             kernel_iters=kernel_iters,
             block=block,
             memory_config=memory_config,
+            write_split=write_split,
+            noc_mode=noc_mode,
         )
     return _bench(
         input_tensor,

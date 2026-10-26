@@ -102,7 +102,7 @@ Differences from the 2026-07-13 table above: the `helper` row numbers are ~30% l
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz (this test uses 1 Tensix core) |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | same as the blocks above: `test_reduce_accumulate_device_perf` (N=5 median, kernel-iters 200, bf16 in, fp32 out, HiFi4; perf at accum=fp32) and `test_reduce_accumulate_regimes` (11 interleaved trials, median, min-max) |
 
 ### Sweep (`test_reduce_accumulate_device_perf`) — median ns per reduce; speedup vs helper; `dispatch` uses the code's thresholds row=4, col=8, scalar=8
