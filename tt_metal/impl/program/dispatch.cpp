@@ -625,9 +625,11 @@ uint32_t finalize_kernel_bins(
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    // Quasar mock doesn't have real binaries, skip finalization.
+    // Quasar mock doesn't have real binaries, skip finalization. Neither does emule for a core type with no kernel
+    // groups, whose base_offset can still be nonzero (ETH semaphores are laid out for both ETH core types).
     const auto target = metal_ctx.get_cluster().get_target_device_type();
-    if (target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) {
+    if ((target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) ||
+        (target == tt::TargetDevice::Emule && kernel_groups.empty())) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
         return base_offset;
