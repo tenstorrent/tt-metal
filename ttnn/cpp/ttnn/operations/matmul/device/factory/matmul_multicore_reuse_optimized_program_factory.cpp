@@ -121,7 +121,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     uint32_t num_blocks = (K / in0_block_w);
     // Honor packer_l1_acc whenever partials are kept between K blocks. The partials CB takes the output
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
-    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
+    bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1 && batch_scale_factor == 1;
 
     tt::DataFormat interm0_data_format = packer_l1_acc_en
                                              ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
