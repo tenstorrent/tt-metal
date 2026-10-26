@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_reflect.cpp
+    test_dynamic_length.cpp
     sdpa/test_ring_joint_ksplit.cpp
     sdpa/test_ring_mla_packing_plan.cpp
     sdpa/test_sliding_window_work_plan.cpp
@@ -20,6 +21,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_add_int.cpp
     test_broadcast_to.cpp
     test_convert_to_hwc_gather.cpp
+    test_dynamic_length_launch.cpp
     test_eltwise.cpp
     test_gelu_bw_ulp.cpp
     test_gelu_bw_main_ulp.cpp

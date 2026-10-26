@@ -4,8 +4,7 @@
 
 #pragma once
 
-#include <variant>
-
+#include "ttnn/dynamic_length.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -17,7 +16,7 @@ namespace ttnn::transformer {
 
 // A logical (unpadded) sequence length: a host scalar, or a single-valued device tensor read on-device so
 // the value can change between replays of one captured trace.
-using LogicalLength = std::variant<std::size_t, ttnn::Tensor>;
+using LogicalLength = ttnn::dynamic_length::ValidLength;
 
 ttnn::Tensor scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,

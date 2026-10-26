@@ -33,6 +33,7 @@
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/device_operation_detail.hpp"
+#include "ttnn/dynamic_length.hpp"
 
 namespace ttnn::device_operation {
 
@@ -567,6 +568,18 @@ void validate_input_tensors(
     }
 }
 
+// Runs ahead of the program cache lookup, so a cache hit is held to the same capacity as a miss.
+template <DeviceOperationConcept device_operation_t>
+void validate_dynamic_axes(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    if constexpr (HasDynamicAxes<device_operation_t>) {
+        const std::vector<dynamic_length::DynamicAxis> axes =
+            device_operation_t::dynamic_axes(operation_attributes, tensor_args);
+        dynamic_length::validate_axes(axes, get_operation_name<device_operation_t>(operation_attributes));
+    }
+}
+
 // Restricts the outputs to the mesh coordinates the inputs occupy and assigns the output topologies.
 template <DeviceOperationConcept device_operation_t>
 void place_output_tensors(
@@ -618,6 +631,7 @@ typename device_operation_t::tensor_return_value_t launch(
     tt::tt_metal::internal::ScopedTrackedFunction tracked_function(operation_name, operation_attributes, input_tensors);
 
     detail::validate_input_tensors<device_operation_t>(operation_attributes, input_tensors);
+    detail::validate_dynamic_axes<device_operation_t>(operation_attributes, tensor_args);
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
 
@@ -656,6 +670,7 @@ void prepare(
     ttsl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
     detail::validate_input_tensors<device_operation_t>(operation_attributes, input_tensors);
+    detail::validate_dynamic_axes<device_operation_t>(operation_attributes, tensor_args);
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     auto* mesh_device = detail::get_mesh_device<device_operation_t>(operation_attributes, tensor_args);

@@ -22,6 +22,16 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+std::vector<ttnn::dynamic_length::DynamicAxis> ExpRingJointSDPADeviceOperation::dynamic_axes(
+    const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
+    return {ttnn::dynamic_length::DynamicAxis{
+        .name = "logical_n",
+        .capacity = static_cast<std::size_t>(tensor_args.gathered_k.logical_shape()[2]),
+        .value = args.logical_n,
+        .tensor = tensor_args.logical_n_tensor ? &*tensor_args.logical_n_tensor : nullptr,
+    }};
+}
+
 void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
@@ -150,12 +160,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_local,
         args.ring_size);
 
-    TT_FATAL(
-        args.logical_n <= N_global,
-        "Logical sequence length must be less than or equal to global sequence length. Got logical sequence length: "
-        "{}, global sequence length: {}",
-        args.logical_n,
-        N_global);
+    // logical_n against N_global and the logical_n tensor itself are checked by dynamic_axes.
 
     // Trailing fully-pad shards are supported (the kernels skip them consistently on all devices).
     // Only shard 0 must be real, so every device has >=1 active iteration and an output-drain point.
@@ -164,21 +169,7 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         "Logical sequence length must be at least 1 (shard 0 must contain real tokens). Got logical sequence "
         "length: {}",
         args.logical_n);
-
-    if (tensor_args.has_logical_n_tensor()) {
-        const auto& t = tensor_args.logical_n_tensor.value();
-        TT_FATAL(
-            t.dtype() == DataType::UINT32 || t.dtype() == DataType::INT32,
-            "logical_n tensor must be UINT32 or INT32 (the kernels read element 0 as a raw 32-bit word). Got {}",
-            t.dtype());
-        TT_FATAL(t.storage_type() == StorageType::DEVICE, "logical_n tensor must be on device");
-        TT_FATAL(t.is_allocated(), "logical_n tensor must be allocated on device");
-        TT_FATAL(
-            t.logical_volume() == 1,
-            "logical_n tensor must hold exactly one value (the kernels read page 0, element 0). Got volume {}",
-            t.logical_volume());
-        // Live-value range is a caller contract, unverifiable on host: live logical_n must be >= 1.
-    }
+    // Live-value range of a logical_n tensor is a caller contract, unverifiable on host: live logical_n must be >= 1.
 
     TT_FATAL(
         k_shape[2] == v_shape[2],
@@ -395,8 +386,11 @@ ExpRingJointSDPAResult ExpRingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADeviceOperation::create_op_performance_model(
-    const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args, ExpRingJointSDPAResult& output_tensors) {
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors>
+ExpRingJointSDPADeviceOperation::create_op_performance_model(
+    const ExpRingJointSDPAParams& args,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& output_tensors) {
     // Order mirrors compute_program_hash: q/k/v, then joints (if present), then gathered k/v.
     Tensors input_tensors = {tensor_args.input_q, tensor_args.input_k, tensor_args.input_v};
     if (tensor_args.joint_q.has_value()) {
