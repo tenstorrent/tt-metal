@@ -136,23 +136,37 @@ ALWI void sigmoid_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  *
+ * Call sigmoid_tile_init immediately before: another SFPU op's init in between overwrites the programmable
+ * constants (vConstFloatPrgm0..2) this op reads.
+ *
  * Return value: None
+ *
+ * | Template Parameter  | Description                                                    | Type       | Valid Range      | Default |
+ * |---------------------|----------------------------------------------------------------|------------|------------------|---------|
+ * | vec_mode            | The faces to compute                                           | VectorMode | R, C, RC         | RC      |
+ * | fast_and_approx     | Enable approximate mode                                        | bool       | true, false      | false   |
+ * | is_fp32_dest_acc_en | Whether DST holds 32-bit data                                  | bool       | true, false      | DST_ACCUM_MODE |
+ * | iterations          | Number of iterations over 32-SFPU lanes to run (8 = whole face) | int       | Positive integer | 8       |
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <VectorMode vec_mode = VectorMode::RC, bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <
+    VectorMode vec_mode = VectorMode::RC,
+    bool fast_and_approx = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE,
+    int iterations = 8>
 ALWI void sigmoid_tile(uint32_t idst) {
 #ifdef ARCH_QUASAR
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sigmoid, (8 /*ITERATIONS*/), idst, vec_mode));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sigmoid, (iterations), idst, vec_mode));
 #else
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_sigmoid,
-        (fast_and_approx, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
+        (fast_and_approx, is_fp32_dest_acc_en, iterations),
         idst,
         vec_mode));
 #endif
@@ -165,6 +179,9 @@ ALWI void sigmoid_tile(uint32_t idst) {
  * Silu[x] = x*Sigmoid[x]
  *
  * Ref: https://pytorch.org/docs/stable/generated/torch.nn.SiLU.html?highlight=silu#torch.nn.SiLU
+ *
+ * Call silu_tile_init immediately before: another SFPU op's init in between overwrites the programmable
+ * constants (vConstFloatPrgm0..2) this op reads.
  *
  * Return value: None
  *
@@ -252,17 +269,29 @@ ALWI void tanh_tile(uint32_t idst) {
  *
  * Return value: None
  *
+ * | Template Parameter  | Description                                                    | Type       | Valid Range                  | Default |
+ * |---------------------|----------------------------------------------------------------|------------|------------------------------|---------|
+ * | is_fp32_dest_acc_en | Whether DST holds 32-bit data                                  | bool       | true, false                  | DST_ACCUM_MODE |
+ * | vec_mode            | The faces to compute (Quasar: RC only)                         | VectorMode | R, C, RC                     | RC      |
+ * | iterations          | Number of iterations over 32-SFPU lanes to run (8 = whole face) | int       | Even positive integer (Quasar: 8) | 8  |
+ *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, VectorMode vec_mode = VectorMode::RC, int iterations = 8>
 ALWI void square_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_square, (APPROX, is_fp32_dest_acc_en), idst, VectorMode::RC));
+        DST_SYNC_MODE,
+        is_fp32_dest_acc_en,
+        calculate_square,
+        (APPROX, is_fp32_dest_acc_en, iterations),
+        idst,
+        vec_mode));
 #else
+    static_assert(vec_mode == VectorMode::RC && iterations == 8, "Quasar square_tile computes whole tiles only");
     MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (SFPU_ITERATIONS), idst, VectorMode::RC));
 #endif
 }

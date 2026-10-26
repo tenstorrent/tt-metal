@@ -27,37 +27,38 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform requested operation| uint32_t | Must be less than the size of the DST register buffer       | True     |
  * | mode           | 0, 1, 2, 3, and 4                                                          | uint32_t | 0, 1, 2, 3, 4 corresponding to add, mul, sub, div, and rsub | True     |
  * | param1         | fp32 value scalar encoded as uint32                                        | uint32_t | Must be less than the size of the DST register buffer       | True     |
+ * | vector_mode    | The faces to compute (default: VectorMode::RC)                             | VectorMode | Subject to specific hardware/kernel limits                  | False    |
  */
 // clang-format on
 enum { ADD_UNARY = 0, SUB_UNARY = 1, MUL_UNARY = 2, DIV_UNARY = 3, RSUB_UNARY = 4 };
 #ifndef ARCH_QUASAR
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void add_unary_tile(uint32_t idst, uint32_t param1) {
+ALWI void add_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
         (APPROX, ADD_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
-        VectorMode::RC,
+        vector_mode,
         param1));
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void sub_unary_tile(uint32_t idst, uint32_t param1) {
+ALWI void sub_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
         (APPROX, SUB_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
-        VectorMode::RC,
+        vector_mode,
         param1));
 }
 #endif
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
+ALWI void mul_unary_tile(uint32_t idst, uint32_t param1, [[maybe_unused]] VectorMode vector_mode = VectorMode::RC) {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, sfpu::BinopMode::Mul>(idst, param1)));
 #else
@@ -67,33 +68,33 @@ ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
         calculate_binop_with_scalar,
         (APPROX, MUL_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
-        VectorMode::RC,
+        vector_mode,
         param1));
 #endif
 }
 
 #ifndef ARCH_QUASAR
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void div_unary_tile(uint32_t idst, uint32_t param1) {
+ALWI void div_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
         (APPROX, DIV_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
-        VectorMode::RC,
+        vector_mode,
         param1));
 }
 
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
+ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1, VectorMode vector_mode = VectorMode::RC) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_binop_with_scalar,
         (APPROX, RSUB_UNARY, 8 /* ITERATIONS */, is_fp32_dest_acc_en),
         idst,
-        VectorMode::RC,
+        vector_mode,
         param1));
 }
 

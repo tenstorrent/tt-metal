@@ -38,10 +38,11 @@ ALWI void rsqrt_tile_init() { MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (
  * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | vector_mode    | The faces to compute (default: VectorMode::RC, the whole tile)              | VectorMode | Subject to specific hardware/kernel limits          | False    |
  */
 // clang-format on
 template <RsqrtMode mode = RsqrtMode::Default, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void rsqrt_tile(uint32_t idst) {
+ALWI void rsqrt_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
     [[maybe_unused]] constexpr bool FAST_APPROX = mode == RsqrtMode::Fast;
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -49,7 +50,7 @@ ALWI void rsqrt_tile(uint32_t idst) {
         calculate_rsqrt,
         (APPROX, 8 /* ITERATIONS */, is_fp32_dest_acc_en, FAST_APPROX),
         idst,
-        VectorMode::RC));
+        vector_mode));
 }
 
 }  // namespace ckernel

@@ -367,32 +367,47 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+// The FP32 constants of _sfpu_exp_fp32_accurate_: 1/ln2, the two-part Cody-Waite split of -ln2, and the degree-6
+// minimax for exp(f) on [-ln2/2, ln2/2]. As literals each use reloads its constant (two SFPLOADI for all but c5), and
+// the compiler does not hoist them out of a row loop.
+struct ExpFp32Constants {
+    static constexpr float one_ln2 = 1.442695f;
+    static constexpr float neg_ln2_hi = -6.93145752e-1f;
+    static constexpr float neg_ln2_lo = -1.42860677e-6f;
+    static constexpr float c5 = 1.37805939e-3f;
+    static constexpr float c4 = 8.37312452e-3f;  // 0x1.125edcp-7
+    static constexpr float c3 = 4.16695364e-2f;  // 0x1.555b5ap-5
+    static constexpr float c2 = 1.66664720e-1f;  // 0x1.555450p-3
+    static constexpr float c1 = 4.99999851e-1f;  // 0x1.fffff6p-2
+};
+
 // Non-finite behaviour of the guarded form (unsafe = false), measured on Blackhole silicon:
 //   +-NaN (either sign, quiet or signalling) -> NaN    +Inf -> +Inf    -Inf -> +0
 // unsafe = true drops both guards and preserves none of this.
 template <bool unsafe = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+    using C = ExpFp32Constants;
     sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
     sfpi::vSMag16 sm;
 
     // j = round(a / ln2)
     // interleaved with first coefficient of polynomial
-    j = 1.442695f * a;
-    r = 1.37805939e-3f;
+    j = C::one_ln2 * a;
+    r = C::c5;
     sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
     j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
     // f = a - i*j (two-part cody-waite)
-    f = j * -6.93145752e-1f + a;
-    f = j * -1.42860677e-6f + f;
+    f = j * C::neg_ln2_hi + a;
+    f = j * C::neg_ln2_lo + f;
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
     // interleaved with conversion of i from sign-mag to two's complement via abs and copysgn
-    r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
-    r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
-    r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
-    r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
+    r = r * f + C::c4;
+    r = r * f + C::c3;
+    r = r * f + C::c2;
+    r = r * f + C::c1;
     i = sfpi::abs(sfpi::as<sfpi::vInt>(sm));
     y = r * f + 1.0f;
     i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
@@ -421,6 +436,96 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     }
 
     return y;
+}
+
+// _sfpu_exp_fp32_accurate_ (guarded) of N independent rows, step by step across the rows up to the guards, so each
+// row's dependent instructions fill the latency of the others' (the single-row chain is latency-bound on Blackhole).
+// Bit-identical to the guarded _sfpu_exp_fp32_accurate_ (test_sfpu_bit_identity.py): the overflow value is r * inf
+// instead of y * inf, which only matters when e >= 255, where r and y are both +inf or NaN. Two rows fit the lregs
+// with the constants reloaded where they are used, each load serving both rows.
+template <int N>
+sfpi_inline void _sfpu_exp_fp32_accurate_rows_(sfpi::vFloat (&a)[N]) {
+    static_assert(N == 1 || N == 2, "two rows use seven of the eight lregs");
+    using C = ExpFp32Constants;
+    sfpi::vFloat j[N], f[N], r[N];
+    sfpi::vInt i[N];
+
+    // j = round(a / ln2), i = j as two's complement.
+    sfpi::vFloat k = C::one_ln2;
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        j[n] = k * a[n];
+    }
+    sfpi::vSMag16 sm[N];
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        sm[n] = sfpi::convert<sfpi::vSMag16>(j[n], sfpi::RoundMode::Nearest);
+    }
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        j[n] = sfpi::convert<sfpi::vFloat>(sm[n], sfpi::RoundMode::Nearest);
+    }
+    // INT32<->SM32 SFPCAST is an involution; -0 would become INT_MIN but SFPSTOCHRND never yields a -0 magnitude.
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        i[n] = sfpi::vInt(__builtin_rvtt_sfpcast(sm[n].get(), sfpi::SFPCAST_MOD1_INT32_TO_SM32));
+    }
+
+    // f = a - j * ln2 (two-part Cody-Waite).
+    k = C::neg_ln2_hi;
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        f[n] = j[n] * k + a[n];
+    }
+    k = C::neg_ln2_lo;
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        f[n] = j[n] * k + f[n];
+    }
+
+    // exp(f) on [-ln2/2, ln2/2].
+    k = C::c5;
+    sfpi::vFloat c = C::c4;
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        r[n] = k * f[n] + c;
+    }
+    c = C::c3;
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        r[n] = r[n] * f[n] + c;
+    }
+    c = C::c2;
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        r[n] = r[n] * f[n] + c;
+    }
+    c = C::c1;
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        r[n] = r[n] * f[n] + c;
+    }
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        r[n] = r[n] * f[n] + 1.0f;
+    }
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        r[n] = r[n] * f[n] + 1.0f;
+    }
+
+    // The guards, row by row: overflow gives infinity (or NaN), y = 2**i * r, underflow gives 0.
+#pragma GCC unroll 2
+    for (int n = 0; n < N; n++) {
+        a[n] = r[n] * std::numeric_limits<float>::infinity();
+        sfpi::vInt e = sfpi::exexp(r[n], sfpi::ExponentMode::Biased) + i[n];
+        v_if(sfpi::nearby(e < 255)) {
+            a[n] = sfpi::setexp(r[n], e);
+            v_if(sfpi::nearby(e < 1)) { a[n] = 0.0f; }
+            v_endif;
+        }
+        v_endif;
+    }
 }
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
@@ -491,10 +596,26 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             // effectively free (no other instruction to interleave with SFPMAD).
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         } else {
-            for (int d = 0; d < ITERATIONS; d++) {
-                sfpi::vFloat val = sfpi::dst_reg[0];
-                sfpi::dst_reg[0] =
-                    _ckernel_sfpu_exp_accurate_<SCALE_EN, is_fp32_dest_acc_en>(val, exp_base_scale_factor);
+            // _ckernel_sfpu_exp_accurate_ for an FP32 destination, two rows at a time.
+#pragma GCC unroll 4
+            for (int d = 0; d < ITERATIONS / 2; d++) {
+                sfpi::vFloat rows[2] = {sfpi::dst_reg[0], sfpi::dst_reg[1]};
+                if constexpr (SCALE_EN) {
+                    rows[0] = rows[0] * sfpi::sFloat16b(exp_base_scale_factor);
+                    rows[1] = rows[1] * sfpi::sFloat16b(exp_base_scale_factor);
+                }
+                _sfpu_exp_fp32_accurate_rows_(rows);
+                sfpi::dst_reg[0] = rows[0];
+                sfpi::dst_reg[1] = rows[1];
+                sfpi::dst_reg += 2;
+            }
+            if constexpr (ITERATIONS % 2 != 0) {
+                sfpi::vFloat row[1] = {sfpi::dst_reg[0]};
+                if constexpr (SCALE_EN) {
+                    row[0] = row[0] * sfpi::sFloat16b(exp_base_scale_factor);
+                }
+                _sfpu_exp_fp32_accurate_rows_(row);
+                sfpi::dst_reg[0] = row[0];
                 sfpi::dst_reg++;
             }
         }
