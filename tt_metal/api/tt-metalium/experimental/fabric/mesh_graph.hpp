@@ -121,10 +121,13 @@ using RequestedIntermeshPorts =
 
 class MeshGraph {
 public:
+    // fabric_config is a single override owned by one mesh (local_mesh_id); other meshes derive their config
+    // from their own MGD dim_types. local_mesh_id = nullopt applies the override to every mesh (legacy).
     explicit MeshGraph(
         tt::tt_metal::ClusterType cluster_type,
         const std::string& mesh_graph_desc_file_path,
-        std::optional<FabricConfig> fabric_config = std::nullopt);
+        std::optional<FabricConfig> fabric_config = std::nullopt,
+        std::optional<MeshId> local_mesh_id = std::nullopt);
 
     explicit MeshGraph(
         const tt::Cluster& cluster,
@@ -246,7 +249,10 @@ private:
         const MeshCoordinateRange& mesh_coord_range,
         FabricType fabric_type) const;
     void initialize_from_mgd(
-        const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy);
+        const MeshGraphDescriptor& mgd,
+        std::optional<FabricConfig> fabric_config,
+        bool is_ubb_galaxy,
+        std::optional<MeshId> local_mesh_id = std::nullopt);
 
     void add_to_connectivity(
         MeshId src_mesh_id,

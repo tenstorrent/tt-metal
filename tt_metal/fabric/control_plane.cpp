@@ -419,8 +419,10 @@ void ControlPlane::init_control_plane(
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
 
-    // Create mesh_graph first
-    this->mesh_graph_ = std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config);
+    // Create mesh_graph first. fabric_config is this process's override; it belongs to the mesh this process owns
+    // (config_.mesh_id), so other meshes derive their config from their own MGD dim_types.
+    this->mesh_graph_ =
+        std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config, config_.mesh_id);
     this->validate_system_health_against_mesh_graph_policy();
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);

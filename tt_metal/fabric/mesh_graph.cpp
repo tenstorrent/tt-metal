@@ -147,14 +147,15 @@ const ttsl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_g
 MeshGraph::MeshGraph(
     tt::tt_metal::ClusterType cluster_type,
     const std::string& mesh_graph_desc_file_path,
-    std::optional<FabricConfig> fabric_config) {
+    std::optional<FabricConfig> fabric_config,
+    std::optional<MeshId> local_mesh_id) {
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
         auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
         mesh_graph_desc_file_path_ = filepath;
         mesh_graph_descriptor_.emplace(filepath, true);
         this->initialize_from_mgd(
-            mesh_graph_descriptor_.value(), fabric_config, tt::Cluster::is_ubb_galaxy(cluster_type));
+            mesh_graph_descriptor_.value(), fabric_config, tt::Cluster::is_ubb_galaxy(cluster_type), local_mesh_id);
     } else {
         TT_THROW(
             "Mesh graph descriptor file must use the .textproto format. "
@@ -305,7 +306,10 @@ static std::vector<std::pair<ChipId, ChipId>> expand_express_link_edges(
 }
 
 void MeshGraph::initialize_from_mgd(
-    const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
+    const MeshGraphDescriptor& mgd,
+    std::optional<FabricConfig> fabric_config,
+    bool is_ubb_galaxy,
+    std::optional<MeshId> local_mesh_id) {
     // Intentionally leaked: a control plane (and thus a MeshGraph) can be constructed from the atexit
     // teardown path, after a plain function-local static's destructor has already run.
     static const auto& proto_arch_to_arch = *new std::unordered_map<const proto::Architecture, tt::ARCH>{
@@ -459,8 +463,13 @@ void MeshGraph::initialize_from_mgd(
         // Build intra-mesh connectivity based on FabricConfig override (if provided) or the config derived from
         // the MGD's dim_types
         FabricType mgd_fabric_type = MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc);
+        // The single fabric_config override belongs to the local mesh (this process owns one mesh); every other
+        // mesh derives its config from its own dim_types, so a heterogeneous system reserves the right torus edge
+        // ports per mesh. local_mesh_id = nullopt keeps the legacy "override applies to all meshes" behavior.
+        const bool override_applies =
+            fabric_config.has_value() && (!local_mesh_id.has_value() || mesh_id == *local_mesh_id);
         const FabricConfig mesh_fabric_config =
-            fabric_config.value_or(mgd.default_fabric_config_from_dim_types(mesh_id));
+            override_applies ? *fabric_config : mgd.default_fabric_config_from_dim_types(mesh_id);
         FabricType effective_fabric_type = get_fabric_type(mesh_fabric_config, is_ubb_galaxy);
         // Validate that FabricConfig doesn't try to create connections that don't exist
         if (requires_more_connectivity(effective_fabric_type, mgd_fabric_type, mesh_shape)) {
