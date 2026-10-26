@@ -29,38 +29,35 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
+template <typename PreLhsDFB, typename PostLhsDFB, typename PreRhsDFB, typename PostRhsDFB, typename OutDFB>
 ALWI void process_tile(
-    tt::CBIndex cb_pre_lhs_id,
-    tt::CBIndex cb_post_lhs_id,
-    tt::CBIndex cb_pre_rhs_id,
-    tt::CBIndex cb_post_rhs_id,
-    tt::CBIndex cb_out_id,
+    PreLhsDFB& cb_pre_lhs,
+    PostLhsDFB& cb_post_lhs,
+    PreRhsDFB& cb_pre_rhs,
+    PostRhsDFB& cb_post_rhs,
+    OutDFB& cb_out,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle ISCLOSE_RT_ARG_PARAMS) {
     using namespace ckernel;
 
-    DataflowBuffer cb_post_lhs(cb_post_lhs_id);
-    DataflowBuffer cb_post_rhs(cb_post_rhs_id);
-    DataflowBuffer cb_out(cb_out_id);
-
 #if BCAST_INPUT
-#define CB_PRE_BCAST cb_pre_rhs_id
-#define CB_PRE_OTHER cb_pre_lhs_id
+#define CB_PRE_BCAST cb_pre_rhs
+#define CB_PRE_OTHER cb_pre_lhs
     auto& cb_post_bcast = cb_post_rhs;
     auto& cb_post_other = cb_post_lhs;
 #else
-#define CB_PRE_BCAST cb_pre_lhs_id
-#define CB_PRE_OTHER cb_pre_rhs_id
+#define CB_PRE_BCAST cb_pre_lhs
+#define CB_PRE_OTHER cb_pre_rhs
     auto& cb_post_bcast = cb_post_lhs;
     auto& cb_post_other = cb_post_rhs;
 #endif
 
-    PREPROCESS(BCAST_OP, DataflowBuffer(CB_PRE_BCAST), cb_post_bcast, cb_out, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, CB_PRE_BCAST, cb_post_bcast, cb_out, num_tiles_per_cycle);
     cb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-        PREPROCESS(OTHER_OP, DataflowBuffer(CB_PRE_OTHER), cb_post_other, cb_out, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, CB_PRE_OTHER, cb_post_other, cb_out, num_tiles_per_cycle);
         cb_post_other.wait_front(num_tiles_per_cycle);
 
         cb_out.reserve_back(num_tiles_per_cycle);
@@ -126,6 +123,20 @@ void kernel_main() {
     constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
     constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
 
+    DataflowBuffer cb_pre_lhs(cb_pre_lhs_id);
+    DataflowBuffer cb_pre_rhs(cb_pre_rhs_id);
+    DataflowBuffer cb_out(cb_out_id);
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer cb_post_lhs(cb_post_lhs_id);
+#else
+    auto& cb_post_lhs = cb_pre_lhs;
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer cb_post_rhs(cb_post_rhs_id);
+#else
+    auto& cb_post_rhs = cb_pre_rhs;
+#endif
+
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
     copy_init(cb_post_lhs_id);
 #ifdef PACK_RELU
@@ -141,11 +152,11 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            cb_pre_lhs_id,
-            cb_post_lhs_id,
-            cb_pre_rhs_id,
-            cb_post_rhs_id,
-            cb_out_id,
+            cb_pre_lhs,
+            cb_post_lhs,
+            cb_pre_rhs,
+            cb_post_rhs,
+            cb_out,
             tile_freq,
             tile_start,
             num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);
@@ -153,11 +164,11 @@ void kernel_main() {
 
     if (remaining_iterations > 0) {
         process_tile(
-            cb_pre_lhs_id,
-            cb_post_lhs_id,
-            cb_pre_rhs_id,
-            cb_post_rhs_id,
-            cb_out_id,
+            cb_pre_lhs,
+            cb_post_lhs,
+            cb_pre_rhs,
+            cb_post_rhs,
+            cb_out,
             remaining_iterations,
             tile_start,
             num_tiles_per_cycle ISCLOSE_RT_ARG_FWD);

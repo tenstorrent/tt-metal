@@ -55,6 +55,10 @@ bool is_axis_wrap_wired(const tt::tt_metal::distributed::MeshDevice& mesh_device
 // itself (see selective_reduce_combine, whose mux is by far the greediest).
 tt::tt_metal::BufferType prefer_l1_small_buffer_type(const tt::tt_metal::distributed::MeshDevice& mesh_device);
 
+// Companion to prefer_l1_small_buffer_type: when it fell back to L1, name the device-open parameter
+// that would have kept the semaphores in L1_SMALL.
+void warn_if_semaphores_fall_back_to_l1(tt::tt_metal::BufferType sem_buffer_type);
+
 // Floor of the L1_SMALL region, i.e. the highest address a fabric mux's raw-L1 map may reach. Derived
 // from immutable limits: worker L1 is fixed and the L1_SMALL bank is never shrunk, whereas the L1 bank
 // size IS reduced by a sub-device manager's bottom-up reservation
@@ -78,42 +82,10 @@ std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
     ttnn::ccl::Topology topology,
     const std::optional<uint32_t>& cluster_axis);
 
-struct SyncModeSpec {
-    uint32_t num_signals = 0;
-    CoreCoord core;
-    std::vector<uint32_t> sem_ids;
-    std::vector<uint32_t> wait_counts;
-
-    void add_signal(uint32_t sem_id, uint32_t wait_count);
-};
-
 enum class LineDirection : uint8_t {
     FORWARD,
     BACKWARD,
 };
-
-// Configuration structure for a device, containing its receiver and sender device ids.
-struct SenderReceiverConfig {
-    uint32_t device_index = 0;
-    std::optional<tt::ChipId> sender_device_id;
-    std::optional<tt::ChipId> receiver_device_id;
-};
-
-// Returns `SenderReceiverConfig` for a given device, given topology.
-SenderReceiverConfig get_device_sender_receiver_config(
-    const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
-
-// Returns `SenderReceiverConfig` for a given device in a ring topology with a given cluster axis.
-SenderReceiverConfig get_device_sender_receiver_config_in_ring(
-    const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
-
-// Returns a vector of devices that the given tensor is stored on.
-std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
-
-// Returns a vector of devices that `tensor_shards` are stored on.
-// Each `tensor_shard` is assumed to be allocated on a 1x1 "unit-mesh"; the function returns the devices that the shards
-// to run a CCL over the unit-meshes.
-std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
 
 enum class CoreAllocationStrategy {
     ROW_MAJOR,
@@ -134,7 +106,7 @@ struct WorkerCoreSelection {
 WorkerCoreSelection try_choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
-    IDevice* device,
+    distributed::MeshDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
@@ -143,19 +115,13 @@ WorkerCoreSelection try_choose_worker_cores(
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
-    IDevice* device,
+    distributed::MeshDevice* device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
     CoreAllocationStrategy strategy = CoreAllocationStrategy::ROW_MAJOR);
 
 class EriscDatamoverBuilder;
-
-std::vector<ttnn::Tensor> unpad_output_tensor(
-    const std::vector<ttnn::Tensor>& output_tensor,
-    uint32_t num_devices,
-    const ttsl::SmallVector<uint32_t>& unpad_elements,
-    int dim);
 
 class LineTopology {
 public:
@@ -179,112 +145,6 @@ private:
     size_t _line_index;
 };
 
-// Eventual home: ccl_topology_descriptors
-struct RingTopology {
-    RingTopology(
-        const tt::tt_metal::IDevice* device,
-        Topology topology,
-        std::optional<uint32_t> sender_device_id,
-        std::optional<uint32_t> receiver_device_id,
-        uint32_t num_links,
-        uint32_t ring_size,
-        uint32_t ring_index);
-
-    bool is_first_device_in_line(bool in_clockwise_direction) const;
-    bool is_last_device_in_line(bool in_clockwise_direction) const;
-
-    const tt::tt_metal::IDevice* device;
-
-    std::vector<CoreCoord> eth_sender_cores;
-    std::vector<CoreCoord> eth_receiver_cores;
-
-    uint32_t num_links;
-    uint32_t ring_size;
-    uint32_t ring_index;
-    bool is_linear;
-};
-
-class CclOpTensorConfig {
-public:
-    static std::unique_ptr<CclOpTensorConfig> build_all_gather_tensor_config(const Tensor& tensor);
-
-    CclOpTensorConfig(const Tensor& tensor);
-    uint32_t get_page_size() const;
-    uint32_t get_tile_size() const;
-    tt::tt_metal::Tile get_tile() const;
-
-    uint32_t get_buffer_start_address() const;
-
-    virtual ~CclOpTensorConfig() = default;
-
-protected:
-    uint32_t page_size;
-    uint32_t tile_size;
-    tt::tt_metal::Tile tile;
-    uint32_t buffer_start_address;
-    tt::DataFormat df;
-};
-
-class CclOpInterleavedTensorConfig final : public virtual CclOpTensorConfig {
-public:
-    CclOpInterleavedTensorConfig(const Tensor& input_tensor);
-};
-
-class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
-public:
-    CclOpShardedTensorConfig(const Tensor& tensor);
-
-    const tt::tt_metal::ShardSpec& get_shard_spec() const;
-
-private:
-    const tt::tt_metal::ShardSpec shard_spec;
-};
-
-struct CclTensorSlicer {
-    CclTensorSlicer(
-        const tt::tt_metal::Shape& tensor_shape,
-        const tt::tt_metal::Shape& dim_slice_factors,
-        // tt::tt_metal::Shape page_shape,
-        std::size_t num_pages,
-        std::size_t elem_size,
-        std::size_t page_size_in_bytes) :
-        tensor_shape(tensor_shape),
-        dim_slice_factors_per_rank(dim_slice_factors),
-        // page_shape(page_shape),
-        num_pages(num_pages),
-        page_size_in_bytes(page_size_in_bytes),
-        elem_size(elem_size) {
-        TT_ASSERT(
-            tensor_shape.rank() == dim_slice_factors.rank(),
-            "Tensor shape and dim slice factors must have the same size");
-        TT_ASSERT(
-            std::all_of(
-                dim_slice_factors.cbegin(), dim_slice_factors.cend(), [](uint32_t factor) { return factor > 0; }),
-            "All factors must be greater than 0");
-    }
-
-    std::size_t get_num_pages_per_slice() const {
-        std::size_t n = std::accumulate(
-            dim_slice_factors_per_rank.cbegin(), dim_slice_factors_per_rank.cend(), 1, std::multiplies<uint32_t>());
-        for (uint32_t i = 0; i < (tensor_shape.rank() - dim_slice_factors_per_rank.rank()); ++i) {
-            n *= tensor_shape[i];
-        }
-        return n;
-    }
-
-    const tt::tt_metal::Shape tensor_shape;
-    const tt::tt_metal::Shape dim_slice_factors_per_rank;
-    // tt::tt_metal::Shape const page_shape;
-    const std::size_t num_pages;
-
-    // tt::tt_metal::Shape rank_slice_shape;
-
-    const std::size_t page_size_in_bytes;
-    const std::size_t elem_size;
-};
-
-// To be replaced by the CclTensorSlicer class, which should be reusable between sharded and interleaved
-// specs and also provides a simpler interface to reason about
 struct LegacyCclTensorSlicer {
     LegacyCclTensorSlicer() :
         input_page_size(0),
@@ -657,20 +517,10 @@ public:
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
-    const IDevice* device,
     const EriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
     tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id);
-
-void generate_edm_kernels_for_ring_or_linear_topology(
-    tt::tt_metal::Program& program,
-    const IDevice* device,
-    const RingTopology& topology_config,
-    const std::vector<ccl::EriscDatamoverBuilder>& clockwise_edm_builders,
-    const std::vector<ccl::EriscDatamoverBuilder>& counter_clockwise_edm_builders,
-    std::optional<uint32_t> receiver_device_id,
-    std::optional<uint32_t> sender_device_id);
 
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_channels,
@@ -678,105 +528,6 @@ ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_buffers_per_channel,
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     EriscDataMoverTerminationMode termination_mode);
-
-class GenericWrappedTensorSlicer {
-public:
-    GenericWrappedTensorSlicer(
-        const Tensor& input_tensor,
-        const Tensor& output_tensor,
-        int slice_dim,
-        uint32_t partition_index,
-        uint32_t partition_size,
-        uint32_t total_num_workers,
-        uint32_t max_slice_size_in_bytes,
-        uint32_t half_cb_n_pages);
-
-    ccl::InterleavedTensorWorkerSlice get_worker_slice(std::size_t global_worker_index);
-
-    ttnn::ccl::v2::TensorSlice get_worker_slice_v2(std::size_t global_worker_index);
-
-    // method to compute offsets in a wrapped layout
-    std::vector<tt_xy_pair> compute_worker_slice_offsets(
-        const std::vector<tt_xy_pair>& worker_slice_shapes, const tt_xy_pair& tensor_slice_shape);
-
-    // method to create worker slice shapes in a tile layout
-    std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        const ttnn::Shape& tensor_shape,
-        const tt_xy_pair& tensor_slice_shape_in_tiles,
-        uint32_t num_workers,
-        uint32_t max_slice_size_in_pages,
-        uint32_t half_cb_n_pages);
-
-private:
-    void initialize(
-        const Tensor& input_tensor,
-        const Tensor& output_tensor,
-        int slice_dim,
-        uint32_t partition_index,
-        uint32_t partition_size,
-        uint32_t total_num_workers,
-        uint32_t max_slice_size_in_bytes,
-        uint32_t half_cb_n_pages);
-
-    tt_xy_pair calculate_tensor_slice_shape(const Tensor& input_tensor, int slice_dim, uint32_t partition_size);
-    Shape4D<uint32_t> calculate_tensor_slice_offset(
-        const Tensor& input_tensor, int slice_dim, uint32_t partition_index);
-
-    // Class member variables
-    tt_xy_pair flattened_tensor_shape;
-    tt_xy_pair tensor_slice_shape;
-    Shape4D<uint32_t> tensor_slice_offset{};
-    std::vector<tt_xy_pair> worker_slice_shapes;
-    std::vector<tt_xy_pair> worker_slice_offsets;
-    uint32_t input_page_size{};
-    bool row_major{};
-    uint32_t partition_index{};
-    uint32_t partition_size{};
-};
-
-class GenericWrappedTensorSlicerV2 {
-public:
-    GenericWrappedTensorSlicerV2(
-        const Tensor& input_tensor,
-        int slice_dim,
-        uint32_t partition_index,
-        uint32_t partition_size,
-        uint32_t total_num_workers);
-
-    ttnn::ccl::v2::TensorSlice get_worker_slice_v2(std::size_t global_worker_index);
-
-    // method to compute offsets in a wrapped layout
-    std::vector<Shape4D<uint32_t>> compute_worker_slice_offsets(
-        const std::vector<Shape4D<uint32_t>>& worker_slice_shapes);
-
-    // method to create worker slice shapes in a tile layout
-    std::vector<Shape4D<uint32_t>> create_worker_slice_shapes_for_tile_layout(
-        const Shape4D<uint32_t>& tensor_slice_shape_in_tiles, uint32_t num_workers);
-
-private:
-    void initialize(
-        const Tensor& input_tensor,
-        int slice_dim,
-        uint32_t partition_index,
-        uint32_t partition_size,
-        uint32_t total_num_workers);
-
-    Shape4D<uint32_t> calculate_tensor_slice_shape(
-        const Shape4D<uint32_t>& input_shape, int slice_dim, uint32_t partition_size);
-    Shape4D<uint32_t> calculate_tensor_slice_offset(
-        const Shape4D<uint32_t>& input_shape, int slice_dim, uint32_t partition_index) const;
-
-    // Class member variables
-    Shape4D<uint32_t> tensor_shape{};
-    Shape4D<uint32_t> tensor_slice_shape{};
-    Shape4D<uint32_t> tensor_slice_offset{};
-    std::vector<Shape4D<uint32_t>> worker_slice_shapes;
-    std::vector<Shape4D<uint32_t>> worker_slice_offsets;
-    uint32_t input_page_size{};
-    bool row_major{};
-    uint32_t partition_index{};
-    uint32_t partition_size{};
-};
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
     size_t ring_size, size_t ring_index, Topology topology);

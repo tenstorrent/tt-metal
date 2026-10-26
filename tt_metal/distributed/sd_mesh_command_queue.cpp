@@ -67,7 +67,7 @@ void drain_emule_run(tt::tt_metal::distributed::MeshDevice* mesh_device, tt::Tar
     }
     tt::tt_metal::emule::flush_deferred_mesh_dispatch();
     std::vector<int> device_ids;
-    device_ids.reserve(mesh_device->get_devices().size());
+    device_ids.reserve(mesh_device->impl().get_devices().size());
     for (auto device_id : mesh_device->get_device_ids()) {
         device_ids.push_back(static_cast<int>(device_id));
     }
@@ -94,7 +94,7 @@ SDMeshCommandQueue::SDMeshCommandQueue(
     active_distributed_context_(std::move(distributed_context)) {
     // Init thread pool with all local devices for parallel dispatch.
     // One thread per device enables NUMA-aware CPU binding.
-    auto local_devices = mesh_device_->get_devices();
+    auto local_devices = mesh_device_->impl().get_devices();
     if (local_devices.size() > 1) {
         launch_thread_pool_ = create_device_bound_thread_pool(mesh_device_->impl().get_context_id(), local_devices);
     }

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     FACE_DIM,
@@ -13,7 +14,6 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
-    DestAccumulation,
     UnpackerEngine,
     format_dict,
 )
@@ -224,11 +224,7 @@ def test_sfpu_welfords_quasar(formats, scenario_name):
     """Welford running per-column mean / population variance over a stream of Dest tiles."""
     scenario = SCENARIOS[scenario_name]
     scenario.validate()
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        else DestAccumulation.No
-    )
+    dest_acc = dest_acc_for(formats.input_format)
     torch_format = format_dict[formats.input_format]
     tile_count = scenario.tile_count
     dims = [TILE_DIM, tile_count * TILE_DIM]

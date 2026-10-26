@@ -28,7 +28,7 @@ namespace tt::tt_metal::slow_dispatch {
 inline IDevice& physical_device_from_unit_mesh(distributed::MeshDevice& unit_mesh) {
     TT_FATAL(
         unit_mesh.num_devices() == 1, "Expected a unit MeshDevice (num_devices == 1), got {}", unit_mesh.num_devices());
-    return *unit_mesh.get_devices().at(0);
+    return *unit_mesh.get_device(distributed::MeshCoordinate::zero_coordinate(unit_mesh.shape().dims()));
 }
 
 // MeshBuffer host↔device transfer for a unit mesh (coord (0, 0)). Prefer these over

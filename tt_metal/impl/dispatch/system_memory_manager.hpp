@@ -6,8 +6,8 @@
 
 // needed for private members
 #include "system_memory_cq_interface.hpp"
-#include <umd/device/io_window/io_window.hpp>     // for tt::umd::IoWindow
-#include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
+#include <tt-umd/io_window/io_window.hpp>     // for tt::umd::IoWindow
+#include <tt-umd/types/xy_pair.hpp>           // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
 #include <memory>

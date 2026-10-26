@@ -12,8 +12,16 @@ and ``where`` in tensor-scalar-scalar / tensor-scalar-tensor / tensor-tensor-ten
 Each piece is also tested on its own (``test_unary.py``, ``test_comparison.py``,
 ``test_where.py``, ``test_binary.py``).
 
-On Quasar, ``ttnn.experimental.quasar.atan2`` is a single binary_ng ``ATAN2`` op rather than
-this composite; the test checks the same result either way.
+Second cache (in-tree OFT at ``628a4797bf7``): ``atan2`` is native, a single binary_ng op
+``eltwise_binary_sfpu_no_bcast/453912`` (``atan2_binary_tile``, bf16, HiFi4, approx off, no fp32
+dest acc). Its reader is ``reader_interleaved_no_bcast/179439`` with both operands L1 interleaved,
+and the writer is L1. The operands are the ``angle_offsets[:, 0]`` / ``[:, 1]`` tile slices,
+[1, 159, 159] [H op/mem, M shape]. None of the composite's pieces are in that cache.
+
+Current main (and ``ttnn.experimental.quasar.atan2``) lowers ``ttnn.atan2`` to that same native
+binary_ng ``ATAN2`` op, so this case is the cache-#2 form. Cache #1's composite pieces are
+tested on their own in the files listed above. Quasar's ``atan2`` SFPU kernel landed in
+``9a2c0e18337``; ``QUASAR_LLK_GAPS.md`` still lists it as missing, but that doc is stale.
 
 ``atan`` is a polynomial approximation, so this checks PCC plus a max-abs bound.
 """
@@ -26,7 +34,7 @@ from models.experimental.ops.quasar.tests.oft_ops import op_utils as U
 
 
 @U.with_default_mesh()
-@pytest.mark.parametrize("shape", [pytest.param(U.HEATMAP, id="atan2-sin-cos-1x159x159")])
+@pytest.mark.parametrize("shape", [pytest.param(U.HEATMAP, id="atan2-sin-cos-1x159x159-453912")])
 def test_atan2(ttnn_mesh_device, reset_seeds, shape):
     mesh = ttnn_mesh_device
     theta = (torch.rand(shape) * 2 - 1) * torch.pi
