@@ -161,16 +161,18 @@ class TTFPN:
             )
 
             laterals_sliced = ttnn.to_memory_config(laterals_sliced, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            laterals_sliced = ttnn.to_layout(laterals_sliced, ttnn.TILE_LAYOUT)
-            laterals[i - 1] = ttnn.add(laterals[i - 1], laterals_sliced)
+            # Added in ROW_MAJOR, the layout the upsample emits and the output conv reads: the lower
+            # lateral untilizes once, where a TILE add would tilize the upsample and untilize the sum.
+            lower = ttnn.to_layout(laterals[i - 1], ttnn.ROW_MAJOR_LAYOUT)
+            laterals[i - 1] = ttnn.add(lower, laterals_sliced)
         # Every level leaves L1 before the first output conv, whose circular buffers would clash
         # with a level still there.
         laterals = [ttnn.to_memory_config(lateral, memory_config=ttnn.DRAM_MEMORY_CONFIG) for lateral in laterals]
         for i in range(used_backbone_levels):
             lateral = ttnn.to_layout(laterals[i], ttnn.ROW_MAJOR_LAYOUT)
-            # The FPN emits TILE levels; a single-slice DRAM conv already returns TILE.
-            output = ttnn.to_layout(self.fpn_convs[i](lateral), ttnn.TILE_LAYOUT)
-            outs.append(output)
+            # A DRAM level stays ROW_MAJOR, as its sliced conv writes it: its consumer splits the
+            # cameras in ROW_MAJOR anyway (TTPerceptionTransformer.camera_features).
+            outs.append(self.fpn_convs[i](lateral))
         for i in range(used_backbone_levels, len(self.fpn_convs)):
             extra_source = outs[-1]
             if i > used_backbone_levels and self.relu_before_extra_convs:
