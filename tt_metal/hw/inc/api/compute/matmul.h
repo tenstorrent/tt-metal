@@ -7,6 +7,8 @@
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/tile_move_copy.h"
 #include "llk_assert.h"
 #include "sanitizer/api.h"
 #ifdef TRISC_MATH
@@ -20,6 +22,15 @@
 #ifndef MM_THROTTLE
 #define MM_THROTTLE 0
 #endif
+// Blackhole: when 1, matmul_block_init/matmul_block run one math MOP per reuse row of the output block (default 0;
+// bit-identical, see _llk_math_matmul_init_). Full 32x32 in0/in1 tiles only, and every matmul_block call must pass
+// the ct_dim/rt_dim of its matmul_block_init.
+#ifndef MM_ROW_MOP
+#define MM_ROW_MOP 0
+#endif
+#if MM_ROW_MOP && !defined(ARCH_BLACKHOLE)
+#error "MM_ROW_MOP is only implemented for Blackhole"
+#endif
 namespace ckernel {
 
 #ifdef ARCH_BLACKHOLE
@@ -30,6 +41,8 @@ volatile tt_l1_ptr std::uint32_t* throttle_ptr =
     reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
 // tracks the state of the currently programmed matmul MOP (0: default throttle level, 1: max throttle level)
 static std::uint32_t throttled_mop_status = 0;
+// whether the unthrottled block matmul runs one math MOP per reuse row (see MM_ROW_MOP)
+constexpr bool mm_row_mop = MM_ROW_MOP != 0;
 
 // clang-format off
 /**
@@ -48,7 +61,7 @@ static std::uint32_t throttled_mop_status = 0;
  * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
  * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
  * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
- * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
+ * | k_steps        | Consecutive inner-dimension steps accumulated into the same output block | uint32_t | >= 1                                          | False    |
  */
 // clang-format on
 ALWI void matmul_block_math_dynamic_throttle(
@@ -57,7 +70,8 @@ ALWI void matmul_block_math_dynamic_throttle(
     std::uint32_t idst,
     const std::uint32_t transpose,
     std::uint32_t ct_dim,
-    std::uint32_t rt_dim) {
+    std::uint32_t rt_dim,
+    std::uint32_t k_steps = 1) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Dynamic throttling is only available on Blackhole architecture
@@ -69,13 +83,14 @@ ALWI void matmul_block_math_dynamic_throttle(
                 llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 1;
         }
-        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim, k_steps)));
     } else {
         if (throttled_mop_status != 0) {
-            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, mm_row_mop>(
+                in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
         }
-        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, mm_row_mop>(idst, ct_dim, rt_dim, k_steps)));
     }
 #endif
 }
@@ -217,10 +232,13 @@ ALWI void matmul_block_init(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #ifdef ARCH_BLACKHOLE
+    MATH((
+        llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, mm_row_mop>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
+#else
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #endif
 #else
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
@@ -281,6 +299,156 @@ ALWI void matmul_block(
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_block(ct_dim, rt_dim)));
 #endif
+}
+
+// clang-format off
+/**
+ * Runs k_steps consecutive matmul_block calls into the same output block: step k multiplies the in0 tiles at
+ * in0_tile_index + k by the in1 tiles at in1_tile_index + k * in1_k_stride and accumulates into DST at idst, so
+ *
+ *   matmul_block_k(in0, in1, i0, i1, idst, transpose, ct, rt, kt, k_steps, in1_k_stride)
+ *
+ * gives the same result, bit for bit, as
+ *
+ *   for (k = 0; k < k_steps; k++) matmul_block(in0, in1, i0 + k, i1 + k * in1_k_stride, idst, transpose, ct, rt, kt);
+ *
+ * which is the inner-dimension loop of a block matmul whose in0 block is row-major with kt_dim tiles per row and
+ * whose in1 block is row-major with in1_k_stride tiles per row. On Blackhole with MM_ROW_MOP and a single reuse
+ * row (rt_dim == 1, or ct_dim == 1) the math thread writes the DEST offset once for all steps and runs one MOP per
+ * step with nothing between the runs; elsewhere it is the loop above.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     |
+ * | in0_tile_index | The index of the first step's tile in block A                           | uint32_t | Must be less than the size of the CB           | True     |
+ * | in1_tile_index | The index of the first step's tile in block B                           | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
+ * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
+ * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
+ * | kt_dim         | The inner dimension of block A (its row stride in tiles).               | uint32_t | Must be equal to block A column dimension      | True     |
+ * | k_steps        | The number of inner-dimension steps to accumulate.                      | uint32_t | >= 1                                           | True     |
+ * | in1_k_stride   | The tile stride between consecutive inner-dimension rows of block B.    | uint32_t | Any                                            | True     |
+ */
+// clang-format on
+ALWI void matmul_block_k(
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    std::uint32_t k_steps,
+    std::uint32_t in1_k_stride,
+    std::uint32_t call_line = __builtin_LINE()) {
+#ifdef ARCH_BLACKHOLE
+    LLK_SAN_FUNCTION();
+    state_configure(in1_cb_id, in0_cb_id, call_line);
+    UNPACK(({
+        for (std::uint32_t k = 0; k < k_steps; k++) {
+            llk_unpack_AB_matmul(
+                in0_cb_id, in1_cb_id, in0_tile_index + k, in1_tile_index + k * in1_k_stride, ct_dim, rt_dim, kt_dim);
+        }
+    }));
+    MATH((matmul_block_math_dynamic_throttle(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, k_steps)));
+#else
+    for (std::uint32_t k = 0; k < k_steps; k++) {
+        matmul_block(
+            in0_cb_id,
+            in1_cb_id,
+            in0_tile_index + k,
+            in1_tile_index + k * in1_k_stride,
+            idst,
+            transpose,
+            ct_dim,
+            rt_dim,
+            kt_dim,
+            call_line);
+    }
+#endif
+}
+
+// clang-format off
+/**
+ * Reloads a block matmul's spilled partial results into DST before its next inner-dimension block: copies the
+ * ntiles tiles of partials_cb from partials_tile_index into DST tiles 0 .. ntiles - 1, then leaves the unpacker and
+ * the math engine set up for matmul_block on in0_cb_id / in1_cb_id again. It gives the same DST contents and the
+ * same matmul state as
+ *
+ *   reconfig_data_format_srca(in1_cb_id, partials_cb_id);
+ *   copy_init(partials_cb_id);
+ *   copy_block(partials_cb_id, partials_tile_index, 0, ntiles);
+ *   reconfig_data_format_srca(partials_cb_id, in1_cb_id);
+ *   matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+ *
+ * which it is everywhere but on Blackhole with 32-bit partials (FP32 DST accumulation), where they go to DST through
+ * the unpacker (unpack to DEST). There all ntiles tiles take one unpacker/math DEST handshake instead of one each,
+ * the unpacker issues them without its datacopy MOP, and the math thread does no datacopy init, no srcA format
+ * change and no matmul re-init: it only hands the unpacker the DST address and re-clears the DST zero flags of the
+ * tiles written. The partials tiles must lie back to back in the CB (no wrap), as copy_block requires. The DST
+ * register buffer must be in acquired state via *tile_regs_acquire*.
+ *
+ * Return value: None
+ *
+ * | Argument            | Description                                                          | Type     | Valid Range                                    | Required |
+ * |---------------------|----------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | in0_cb_id           | The identifier of the matmul's first input circular buffer (CB)      | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id           | The identifier of the matmul's second input circular buffer (CB)     | uint32_t | 0 to 31                                        | True     |
+ * | partials_cb_id      | The identifier of the partial results' circular buffer (CB)          | uint32_t | 0 to 31                                        | True     |
+ * | partials_tile_index | The index of the first partial tile in partials_cb_id                | uint32_t | Must be less than the size of the CB           | True     |
+ * | ntiles              | The number of partial tiles, written to DST tiles 0 .. ntiles - 1    | uint32_t | Must be at most the acquired size of DST REG   | True     |
+ * | transpose           | The matmul's transpose flag for the tiles of B (see matmul_block)    | bool     | Must be true or false                          | True     |
+ * | ct_dim              | The matmul's ct_dim (see matmul_block_init)                          | uint32_t | As for matmul_block_init                       | True     |
+ * | rt_dim              | The matmul's rt_dim (see matmul_block_init)                          | uint32_t | As for matmul_block_init                       | True     |
+ * | kt_dim              | The matmul's kt_dim (see matmul_block_init)                          | uint32_t | As for matmul_block_init                       | True     |
+ */
+// clang-format on
+ALWI void matmul_block_reload_partials(
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t partials_cb_id,
+    std::uint32_t partials_tile_index,
+    std::uint32_t ntiles,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim) {
+    LLK_SAN_FUNCTION();
+#ifdef ARCH_BLACKHOLE
+    // Whether the partials unpack to DEST, decided from the same format tables on the two threads that take part (the
+    // pack thread does nothing on either path).
+    [[maybe_unused]] bool to_dest = false;
+    UNPACK(
+        (to_dest = ckernel::unpacker::is_32bit_input(
+             unpack_src_format[get_operand_id(partials_cb_id)], unpack_dst_format[get_operand_id(partials_cb_id)])));
+    MATH(
+        (to_dest = ckernel::math::is_32bit_input(
+             unpack_src_format[get_operand_id(partials_cb_id)], unpack_dst_format[get_operand_id(partials_cb_id)])));
+    if (to_dest) {
+        // Unpacker 0 takes the partials' formats for the copy and in1's back after it; the math thread's srcA format
+        // stays in1's, as no FPU op reads srcA in between. The copy reprograms unpacker 0's X end and transpose,
+        // which the matmul unpack init restores (its MOP is untouched; the copy runs no MOP).
+        UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE, false>(
+            in1_cb_id, partials_cb_id)));
+        UNPACK((llk_unpack_A_to_dest_tiles(partials_cb_id, partials_tile_index, ntiles)));
+        UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE, false>(
+            partials_cb_id, in1_cb_id)));
+        UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+        MATH((llk_math_unpack_to_dest_tiles(0, ntiles, partials_cb_id)));
+        return;
+    }
+#endif
+    reconfig_data_format_srca(in1_cb_id, partials_cb_id);
+    copy_init(partials_cb_id);
+    copy_block(partials_cb_id, partials_tile_index, 0, ntiles);
+    reconfig_data_format_srca(partials_cb_id, in1_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
 }
 
 }  // namespace ckernel

@@ -163,7 +163,8 @@ void py_module(nb::module_& mod) {
            bool transpose_mcast,
            std::optional<UnaryWithParam> fused_activation,
            bool fuse_batch,
-           std::optional<CoreRangeSet> allowed_worker_cores) {
+           std::optional<CoreRangeSet> allowed_worker_cores,
+           bool bias_in_dest) {
             std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
             std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
@@ -179,7 +180,8 @@ void py_module(nb::module_& mod) {
                 transpose_mcast,
                 std::move(fused_activation),
                 fuse_batch,
-                std::move(allowed_worker_cores)};
+                std::move(allowed_worker_cores),
+                bias_in_dest};
         },
         nb::kw_only(),
         nb::arg("compute_with_storage_grid_size"),
@@ -193,7 +195,8 @@ void py_module(nb::module_& mod) {
         nb::arg("transpose_mcast").noconvert(),
         nb::arg("fused_activation") = nb::none(),
         nb::arg("fuse_batch").noconvert() = true,
-        nb::arg("allowed_worker_cores") = nb::none());
+        nb::arg("allowed_worker_cores") = nb::none(),
+        nb::arg("bias_in_dest").noconvert() = false);
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
         "compute_with_storage_grid_size",
@@ -307,12 +310,24 @@ void py_module(nb::module_& mod) {
         When set, overrides ``compute_with_storage_grid_size`` for determining the active
         compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
     )doc");
+    matmul_multi_core_reuse_multicast_program_config.def_rw(
+        "bias_in_dest", &MatmulMultiCoreReuseMultiCastProgramConfig::bias_in_dest, R"doc(
+        Whether to add a fused row-broadcast bias to each output subblock in DEST.
+
+        When true, the bias is added in the destination register right after each output subblock's
+        last K block, instead of in a separate pass over the packed partials once every subblock is
+        done. Each subblock then packs, through the fused activation, while the next one multiplies.
+        With ``fp32_dest_acc_en`` the bias is added to the FP32 accumulator, so results may differ in
+        the last bits from the partials-pass add. Blackhole only; has no effect without a bias.
+        Defaults to false.
+    )doc");
     matmul_multi_core_reuse_multicast_program_config.def(
         "__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
                 "out_subblock_h={}, out_subblock_w={}, out_block_h={}, out_block_w={}, per_core_M={}, "
-                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={}, allowed_worker_cores={})",
+                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={}, allowed_worker_cores={}, "
+                "bias_in_dest={})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_subblock_h,
@@ -325,7 +340,8 @@ void py_module(nb::module_& mod) {
                 config.fused_activation,
                 config.fuse_batch,
                 config.allowed_worker_cores.has_value() ? fmt::format("{}", config.allowed_worker_cores.value())
-                                                        : "None");
+                                                        : "None",
+                config.bias_in_dest);
         });
 
     auto matmul_multi_core_reuse_multicast_1d_program_config =

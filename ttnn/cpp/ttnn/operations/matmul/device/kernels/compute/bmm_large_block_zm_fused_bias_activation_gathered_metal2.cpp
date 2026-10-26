@@ -51,19 +51,21 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
     DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
-    // Reconfigure input
-    reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
-    copy_init(mm_partials_dfb_id);
     mm_partials_dfb.wait_front(out_subblock_num_tiles);
 
-    const uint32_t start_dst_index = 0;
-    const uint32_t start_tile_index = 0;
-    copy_block(mm_partials_dfb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    // Copy the partials into DST and return the unpacker and math engine to the matmul.
+    matmul_block_reload_partials(
+        in0_dfb_id,
+        in1_dfb_id,
+        mm_partials_dfb_id,
+        0,
+        out_subblock_num_tiles,
+        /*transpose=*/false,
+        out_subblock_w,
+        out_subblock_h,
+        in0_block_w);
 
     mm_partials_dfb.pop_front(out_subblock_num_tiles);
-    // Reconfigure srcA back
-    reconfig_data_format_srca(mm_partials_dfb_id, in1_dfb_id);
-    matmul_block_init(in0_dfb_id, in1_dfb_id, /*transpose=*/false, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 void kernel_main() {
