@@ -1849,6 +1849,44 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
         // dequant_tile_init. The caller passes the bits of -zero_point.
         SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point);
     }
+    // The 8-bit quant entry points, each named after its quantization.h *_tile_init wrapper. The
+    // wrappers instantiate them with SIGN_MAGNITUDE_FORMAT = false; the flag is passed through so a
+    // non-default harness value still pairs the init with the matching calculate call.
+    else if constexpr (BINOP == BinaryOp::QUANT_UINT8)
+    {
+        SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::UInt8), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::QUANT_INT8)
+    {
+        SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::Int8), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT_UINT8)
+    {
+        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::UInt8), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT_INT8)
+    {
+        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::Int8), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT_INT8_IN)
+    {
+        SFPU_BINARY_INIT_FN_ARGS(
+            requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::Int32, true /*INT8_INPUT*/), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT_INT8_IN_UINT8_OUT)
+    {
+        SFPU_BINARY_INIT_FN_ARGS(
+            requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::UInt8, true /*INT8_INPUT*/), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT_INT8_IN_INT8_OUT)
+    {
+        SFPU_BINARY_INIT_FN_ARGS(
+            requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, DataFormat::Int8, true /*INT8_INPUT*/), zero_point);
+    }
+    else if constexpr (BINOP == BinaryOp::DEQUANT_INT8)
+    {
+        SFPU_BINARY_INIT_FN_ARGS(dequant_int32, sfpu::dequant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT, true /*INT8_INPUT*/), zero_point);
+    }
     else if constexpr (BINOP == BinaryOp::COPY_DEST)
     {
         // copy_dest_value_init is empty. The baseline addrmod setup is enough.
@@ -2415,6 +2453,92 @@ void call_binary_sfpu_operation(
             DST_ACCUM_MODE,
             calculate_dequant_int32,
             (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    // The 8-bit quant entry points: the same kernels as quantization.h's *_tile wrappers, with
+    // the int8-output ones going through the offset-128 pack kernels.
+    else if constexpr (BINOP == BinaryOp::QUANT_UINT8)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_quant_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::QUANT_INT8)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_quant_int32_int8_pack,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT_UINT8)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_requant_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SIGN_MAGNITUDE_FORMAT),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT_INT8)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_requant_int32_int8_pack,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT_INT8_IN || BINOP == BinaryOp::REQUANT_INT8_IN_UINT8_OUT)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_requant_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SIGN_MAGNITUDE_FORMAT, true /*INT8_INPUT*/),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::REQUANT_INT8_IN_INT8_OUT)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_requant_int32_int8_pack,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, true /*INT8_INPUT*/),
+            dst_index_in0,
+            dst_index_in1,
+            dst_index_out,
+            vector_mode);
+    }
+    else if constexpr (BINOP == BinaryOp::DEQUANT_INT8)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_dequant_int32,
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, SIGN_MAGNITUDE_FORMAT, true /*INT8_INPUT*/),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
