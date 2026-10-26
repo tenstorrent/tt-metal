@@ -47,9 +47,11 @@ namespace ckernel::sfpu {
 //       (each vector already spans two face rows) with the two chains
 //       interleaved: the chain crosses SFPU units (MAD -> swap -> round ->
 //       cast -> MAD ... -> setexp) and stalls when run alone. That stall
-//       rationale and the figure below were measured on Blackhole; this
-//       Wormhole variant (same coefficients, yh/round-to-nearest exponent
-//       extraction) has been compiled, not run on silicon.
+//       rationale and the figure below were measured on Blackhole. Wormhole
+//       uses the same coefficients with yh/round-to-nearest exponent
+//       extraction. Its clamps are predicated moves: sfpi::max against 0
+//       swaps with LCONST_0, and a second swap in the same iteration does
+//       not clamp (odd columns stored -inf for beta*x < ~-88).
 //       Measured on Blackhole over all 65536 bf16 encodings, scoring the
 //       49,711 whose exact answer is a normal bf16: max 0.52 ULP end-to-end.
 // ======================================================================
@@ -142,8 +144,8 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
 //   u = p(f) * 2^(k-127) is exactly setexp(p(f), k).
 //   For a > 88 (exp(-a) below the bf16 normal range) yh = 0: k = 0 and p(1/2)
 //   land under a zero exponent, i.e. a denormal the SFPU flushes to zero.
-//   The caller's max(yh, 0) is required: the conversion takes the magnitude,
-//   so an unclamped negative yh comes back as a positive k.
+//   The caller's clamp of yh to >= 0 is required: the conversion takes the
+//   magnitude, so an unclamped negative yh comes back as a positive k.
 // ======================================================================
 sfpi_inline sfpi::vFloat softplus_exp2_bf16(sfpi::vFloat yh) {
     sfpi::vUInt16 k = sfpi::convert<sfpi::vUInt16>(yh, sfpi::RoundMode::Nearest);
@@ -154,7 +156,28 @@ sfpi_inline sfpi::vFloat softplus_exp2_bf16(sfpi::vFloat yh) {
     return sfpi::setexp(p, sfpi::as<sfpi::vInt>(k));
 }
 
-// BF16 softplus for one vector, all lanes, no predication:
+// sfpi::max(v, 0) / sfpi::min(v, 0) lower to SFPSWAP against LCONST_0. On Wormhole
+// that swap writes the other extremum back into the constant register, so the
+// next clamp compares against the leftover instead of 0. In the two-vector loop
+// the odd dest vector then keeps a negative exponent for |t| > ~88 and stores
+// -inf (even columns stay correct, because they are the first swap). Copying 0
+// into a vFloat does not help: the compiler still emits SFPSWAP LCONST_0, Lx.
+// A predicated move only reads the constant. Blackhole's LCONST_0 is not
+// clobbered, so that path keeps sfpi::max.
+sfpi_inline sfpi::vFloat softplus_clamp_nonneg(sfpi::vFloat v) {
+    v_if(v < 0.0f) { v = 0.0f; }
+    v_endif;
+    return v;
+}
+
+sfpi_inline sfpi::vFloat softplus_clamp_nonpos(sfpi::vFloat v) {
+    v_if(v > 0.0f) { v = 0.0f; }
+    v_endif;
+    return v;
+}
+
+// BF16 softplus for one vector. The value itself is unpredicated; only the
+// clamps above are, and only so they do not consume LCONST_0:
 //   returns beta_reciprocal * softplus(t), rounded to bf16 unless dest is fp32.
 // f(a) = ln(1+u) = u * (1 + u*h(u)), u = exp(-a), a = |t|. No tail branch.
 template <bool is_fp32_dest_acc_en>
@@ -162,10 +185,10 @@ sfpi_inline sfpi::vFloat softplus_bf16_eval(sfpi::vFloat t, const float beta_rec
     sfpi::vFloat a = sfpi::setsgn(t, 0);
     // yh = y - 1/2 with y = 127 - a/ln2 (see softplus_exp2_bf16 for the rounding trick).
     sfpi::vFloat yh = a * sfpi::vConstFloatPrgm0 + (SOFTPLUS_BF16_EXP_BIAS - SOFTPLUS_BF16_HALF);
-    // max(t, 0) is independent of yh; issued here it fills the bubble between
-    // the MAD and the swap that clamps yh, and is long done when needed below.
-    sfpi::vFloat sp = sfpi::max(t, 0.0f);
-    yh = sfpi::max(yh, 0.0f);
+    // Clamp t first. softplus_clamp_nonneg does not write LCONST_0, so the yh
+    // clamp that follows still compares against 0 (see that helper).
+    sfpi::vFloat sp = softplus_clamp_nonneg(t);
+    yh = softplus_clamp_nonneg(yh);
     sfpi::vFloat u = softplus_exp2_bf16(yh);
     sfpi::vFloat h = PolynomialEvaluator::eval(
         u, SOFTPLUS_BF16_H0, sfpi::vConstFloatPrgm2, SOFTPLUS_BF16_H2, SOFTPLUS_BF16_H3, SOFTPLUS_BF16_H4);
@@ -282,8 +305,9 @@ sfpi_inline void softplus_body_bf16_x2(const sfpi::vFloat beta, const float beta
     sfpi::vFloat cBiasMinusHalf = SOFTPLUS_BF16_EXP_BIAS - SOFTPLUS_BF16_HALF;
     sfpi::vFloat y0 = sfpi::setsgn(beta * sfpi::dst_reg[0], 0) * sfpi::vConstFloatPrgm0 + cBiasMinusHalf;
     sfpi::vFloat y1 = sfpi::setsgn(beta * sfpi::dst_reg[1], 0) * sfpi::vConstFloatPrgm0 + cBiasMinusHalf;
-    y0 = sfpi::max(y0, 0.0f);
-    y1 = sfpi::max(y1, 0.0f);
+    // Both vectors. sfpi::max(y1, 0) does not clamp on Wormhole; see softplus_clamp_nonneg.
+    y0 = softplus_clamp_nonneg(y0);
+    y1 = softplus_clamp_nonneg(y1);
     sfpi::vUInt16 k0 = sfpi::convert<sfpi::vUInt16>(y0, sfpi::RoundMode::Nearest);
     sfpi::vUInt16 k1 = sfpi::convert<sfpi::vUInt16>(y1, sfpi::RoundMode::Nearest);
     sfpi::vFloat cHalf = SOFTPLUS_BF16_HALF;
@@ -331,11 +355,11 @@ sfpi_inline void softplus_body_bf16_x2(const sfpi::vFloat beta, const float beta
     sfpi::vFloat m0;
     sfpi::vFloat m1;
     if constexpr (positive_beta) {
-        m0 = sfpi::max(sfpi::dst_reg[0], 0.0f);
-        m1 = sfpi::max(sfpi::dst_reg[1], 0.0f);
+        m0 = softplus_clamp_nonneg(sfpi::dst_reg[0]);
+        m1 = softplus_clamp_nonneg(sfpi::dst_reg[1]);
     } else {
-        m0 = sfpi::min(sfpi::dst_reg[0], 0.0f);
-        m1 = sfpi::min(sfpi::dst_reg[1], 0.0f);
+        m0 = softplus_clamp_nonpos(sfpi::dst_reg[0]);
+        m1 = softplus_clamp_nonpos(sfpi::dst_reg[1]);
     }
     sfpi::vFloat r0 = u0 * h0 + m0;
     sfpi::vFloat r1 = u1 * h1 + m1;
