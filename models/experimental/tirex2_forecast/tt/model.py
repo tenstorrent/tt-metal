@@ -9,6 +9,11 @@ Host/device split (the bench measures each part):
     forward_device   embed, 12 blocks, final norm, head; returns the head output on a tile-aligned token window
     postprocess      host: read-out tokens, inverse scaling, band calibration, target rows
 
+Pad skip (R1-1): when every row starts with at least 64 all-NaN pad tokens (context <= 6144 steps), the states
+after the first ``cut`` pad tokens (a multiple of 64) are the same for every row and input (``pad_check.json``).
+They are computed once per ``cut`` on the host by the fp32 dataflow and kept as device constants, and the device
+runs only tokens ``cut .. 284`` (padded to a multiple of 64). Variate (grouped) batches keep the full path.
+
 Rows: the device batch is padded to a multiple of 32 with all-NaN dummy rows; for multivariate input every
 group (<= 32 rows) sits inside one 32-row block, so variate attention runs on 32 x 32 blocks.
 """
@@ -28,6 +33,24 @@ SEQ_CHUNK = 64
 SEQ = pad_to(df.NUM_TOKENS, SEQ_CHUNK)  # 320: five mLSTM chunks
 WINDOW = (224, 288)  # tile-aligned token window holding every read-out token (255 .. 283)
 ROW_BLOCK = 32
+PAD_CUT_MIN = 64  # below this the full path runs
+FUTURE_TOKENS = df.FUTURE_LEN // df.PATCH  # 29 all-NaN future tokens at the end of every row
+
+
+def pad_cut(tokens: torch.Tensor) -> int:
+    """Leading tokens that are all-NaN pad (``[0 x 32 | 0 x 32]``) in every row, rounded down to a multiple of
+    ``SEQ_CHUNK``; 0 when that is below ``PAD_CUT_MIN``."""
+    # the pad states are input-independent only while nothing reads ahead: no known-future covariates
+    assert not bool(tokens[:, df.NUM_TOKENS - FUTURE_TOKENS : df.NUM_TOKENS].any()), "future tokens must be pad"
+    used = tokens[:, : df.NUM_TOKENS].ne(0).any(-1).any(0)
+    first = int(used.nonzero()[0]) if bool(used.any()) else df.NUM_TOKENS - FUTURE_TOKENS
+    cut = first // SEQ_CHUNK * SEQ_CHUNK
+    return cut if cut >= PAD_CUT_MIN else 0
+
+
+def seq_len(cut: int) -> int:
+    """Device sequence length of a forward that skips ``cut`` pad tokens."""
+    return pad_to(df.NUM_TOKENS - cut, SEQ_CHUNK)
 
 
 @dataclass
@@ -41,6 +64,7 @@ class Prepared:
     target_mask: torch.Tensor  # [rows] bool, source order
     vmask: torch.Tensor | None  # [1, nb * 4, 32, 32] additive mask, or None when no group has > 1 row
     keep: torch.Tensor | None  # [1, nb, 32, 1]
+    cut: int = 0  # leading pad tokens skipped on device (0: full path)
 
     @property
     def device_rows(self) -> int:
@@ -52,6 +76,7 @@ class DeviceInputs:
     tokens: object
     vmask: object | None
     keep: object | None
+    cut: int = 0
 
 
 def pack_rows(group_ids: torch.Tensor, block: int = ROW_BLOCK) -> torch.Tensor:
@@ -99,13 +124,22 @@ def variate_masks(order: torch.Tensor, group_ids: torch.Tensor, target_mask: tor
 
 
 class TtTiRex2:
-    def __init__(self, device, host_weights: df.TiRex2W, precision: Precision | None = None, variate: bool = True):
+    def __init__(
+        self,
+        device,
+        host_weights: df.TiRex2W,
+        precision: Precision | None = None,
+        variate: bool = True,
+        pad_skip: bool = True,
+    ):
         self.device = device
         self.precision = precision or Precision.accuracy()
         self.host = host_weights
         self.weights = tw.build(device, host_weights, self.precision, variate=variate)
         self.consts = layers.DeviceConsts(device, SEQ_CHUNK)
         self.step_hook = None  # profiling: called after every sLSTM step
+        self.pad_skip = pad_skip
+        self._pad_states: dict = {}  # cut -> per-block host states (fp32 dataflow on one all-pad row)
 
     @classmethod
     def from_checkpoint(cls, device, precision: Precision | None = None, path=None, variate: bool = True):
@@ -125,13 +159,18 @@ class TtTiRex2:
         valid = order >= 0
         tokens[valid, : df.NUM_TOKENS] = p.tokens[order[valid]]
         vmask, keep = variate_masks(order, group_ids, target_mask)
-        return Prepared(tokens, p.loc, p.scale, order, rows, horizon, target_mask, vmask, keep)
+        cut = pad_cut(tokens) if self.pad_skip and vmask is None else 0
+        return Prepared(tokens, p.loc, p.scale, order, rows, horizon, target_mask, vmask, keep, cut)
 
     def upload_inputs(self, prep: Prepared, host: bool = False) -> DeviceInputs:
         """Device inputs (``host=True``: the same tensors on host, to copy into a traced forward's inputs)."""
         import ttnn
 
         device = None if host else self.device
+        if prep.cut:
+            seq = seq_len(prep.cut)
+            tokens = upload(device, prep.tokens[:, prep.cut : prep.cut + seq].reshape(prep.device_rows, 1, seq, -1))
+            return DeviceInputs(tokens, None, None, prep.cut)
         tokens = upload(device, prep.tokens.reshape(prep.device_rows, 1, SEQ, -1))
         if prep.vmask is None:
             return DeviceInputs(tokens, None, None)
@@ -153,6 +192,51 @@ class TtTiRex2:
     def deallocate_inputs(inputs: DeviceInputs):
         layers.free(inputs.tokens, inputs.vmask, inputs.keep)
 
+    def host_pad_states(self, cut: int) -> list:
+        """Per block, the state after ``cut`` all-pad tokens, from the fp32 dataflow on one all-pad row:
+        mLSTM ``(C [H, 64, 128], n [H, 64], m [H])``, sLSTM ``(y, c, n, m)`` each ``[512]``."""
+        if cut not in self._pad_states:
+            assert cut % SEQ_CHUNK == 0
+            W = self.host
+            x = df.residual_block(torch.zeros(1, cut, 2 * df.PATCH), W.embed)
+            states = []
+            for blk in W.blocks:
+                xn = df.rms_norm(x, blk.w_norm_lstm)
+                if df.is_mlstm(blk.index):
+                    cap = {}
+                    y = df.mlstm_cell(xn, blk.cell, chunk=SEQ_CHUNK, capture=cap)
+                    _, st = df.mlstm_chunkwise(
+                        cap["q"], cap["k"], cap["v"], cap["i"], cap["f"], chunk=SEQ_CHUNK, return_states=True
+                    )
+                    states.append(tuple(t[0] for t in st[-1]))
+                else:
+                    Wx = df.slstm_input(xn, blk.cell)
+                    yy, sts = df.slstm_recurrence(Wx, blk.cell.r)
+                    y = df.mh_layer_norm(yy, blk.cell.w_gnorm)
+                    states.append(tuple(t[0] for t in sts[-1]))
+                x = x + y
+                x = x + df.ffn(df.rms_norm(x, blk.w_norm_ffn), blk.ffn)
+            self._pad_states[cut] = states
+        return self._pad_states[cut]
+
+    def pad_state(self, cut: int, B: int, block: tw.TtBlock):
+        """Device starting state of ``block`` for ``B`` rows after ``cut`` pad tokens (cached constants)."""
+        st = self.host_pad_states(cut)[block.index]
+        key = (cut, B, block.index)
+        if df.is_mlstm(block.index):
+            C, n, m = st
+            H = C.shape[0]
+            rep = lambda t, shape: t.unsqueeze(0).expand(B, *t.shape).reshape(B * H, *shape).contiguous()
+            return (
+                self.consts.tensor((*key, "C"), rep(C, (1, *C.shape[1:]))),
+                self.consts.tensor((*key, "n"), rep(n, (1, n.shape[1], 1))),
+                self.consts.tensor((*key, "m"), rep(m, (1, 1, 1))),
+            )
+        return tuple(
+            self.consts.tensor((*key, nm), t.reshape(1, 1, 1, -1).expand(1, 1, B, t.numel()).contiguous())
+            for nm, t in zip("ycnm", st)
+        )
+
     # ------------------------------------------------------------------------------------ device side
 
     def release(self):
@@ -163,8 +247,9 @@ class TtTiRex2:
         return layers.residual_block(inputs.tokens, self.weights.embed, self.precision, "embed")
 
     def run_block(self, block: tw.TtBlock, x, inputs: DeviceInputs):
+        init = self.pad_state(inputs.cut, x.shape[0], block) if inputs.cut else None
         if df.is_mlstm(block.index):
-            y = layers.mlstm_layer(self.device, x, block.cell, self.precision, self.consts)
+            y = layers.mlstm_layer(self.device, x, block.cell, self.precision, self.consts, init=init)
         else:
             y = layers.slstm_layer(
                 self.device,
@@ -172,9 +257,10 @@ class TtTiRex2:
                 block.cell,
                 self.precision,
                 self.weights.head_mean,
-                df.NUM_TOKENS,
+                df.NUM_TOKENS - inputs.cut,
                 self.consts,
                 step_hook=self.step_hook,
+                init=init,
             )
         out = layers.ffn_residual(y, block.ffn, self.precision)
         layers.free(y)
@@ -184,14 +270,14 @@ class TtTiRex2:
             out = mixed
         return out
 
-    def head(self, x):
+    def head(self, x, cut: int = 0):
         import ttnn
 
         xn = layers.rms_norm(x, df.OUT_NORM_EPS)
         h = layers.residual_block(xn, self.weights.head, self.precision, "head")
         layers.free(xn)
         B = h.shape[0]
-        out = ttnn.slice(h, (0, 0, WINDOW[0], 0), (B, 1, WINDOW[1], h.shape[-1]))
+        out = ttnn.slice(h, (0, 0, WINDOW[0] - cut, 0), (B, 1, WINDOW[1] - cut, h.shape[-1]))
         layers.free(h)
         return out
 
@@ -201,7 +287,7 @@ class TtTiRex2:
             y = self.run_block(block, x, inputs)
             layers.free(x)
             x = y
-        out = self.head(x)
+        out = self.head(x, inputs.cut)
         layers.free(x)
         return out
 
@@ -229,4 +315,15 @@ class TtTiRex2:
         return df.sign_flip_average(q[:n], q[n:])
 
 
-__all__ = ["TtTiRex2", "Prepared", "DeviceInputs", "pack_rows", "variate_masks", "SEQ", "WINDOW", "TILE"]
+__all__ = [
+    "TtTiRex2",
+    "Prepared",
+    "DeviceInputs",
+    "pack_rows",
+    "variate_masks",
+    "pad_cut",
+    "seq_len",
+    "SEQ",
+    "WINDOW",
+    "TILE",
+]

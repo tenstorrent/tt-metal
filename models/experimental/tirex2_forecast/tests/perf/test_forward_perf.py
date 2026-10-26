@@ -12,7 +12,7 @@ Inputs, the upstream head output at the read-out tokens, ``q_one`` and the CPU t
 (``tests/golden/make_goldens.py``). The forward runs as a captured trace (the op-level sLSTM loop is ~50k ops).
 
 ``MODEL_PERF_JSON=<path>`` appends one record per case (keys per model_bringup_optim reference.md, plus
-``pcc_final``, ``median_err`` and the host split).
+``pcc_final``, ``median_err`` and the host split). ``TIREX2_PAD_SKIP=0`` forces the full path (R1-1 baseline).
 """
 
 from __future__ import annotations
@@ -94,7 +94,10 @@ def test_forward_perf(device, shape, precision):
     from models.experimental.tirex2_forecast.tt.trace import TracedForward
 
     g, ctx, horizon, gid, tm = shape_inputs(shape)
-    tt = TtTiRex2(device, host_weights(), Precision.by_name(precision), variate=shape == "multivariate")
+    pad_skip = os.environ.get("TIREX2_PAD_SKIP", "1") != "0"
+    tt = TtTiRex2(
+        device, host_weights(), Precision.by_name(precision), variate=shape == "multivariate", pad_skip=pad_skip
+    )
     traced = TracedForward(tt)
 
     def run():
@@ -149,6 +152,7 @@ def test_forward_perf(device, shape, precision):
             "device_rows": prep.device_rows,
             "context": int(ctx.shape[-1]),
             "horizon": horizon,
+            "pad_cut": prep.cut,
             "cold_s": cold_s,
             "steady_s": statistics.median(steady),
             "steady_runs": steady,

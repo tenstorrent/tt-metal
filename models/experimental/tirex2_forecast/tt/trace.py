@@ -4,7 +4,7 @@
 """Trace capture and replay of ``TtTiRex2.forward_device``.
 
 The op-level sLSTM loop issues ~50k ops per forward, so eager dispatch is host-bound; the trace replays the
-whole forward from stable device inputs. One trace per key (device-row count, variate mode); the device must be
+whole forward from stable device inputs. One trace per key (device-row count, variate mode, pad cut); the device must be
 opened with a ``trace_region_size`` large enough (about 0.5-1.5 GB for the round-0 graph).
 
 Trace safety (``tech_reports/.../TraceCorrectness.md``; checked with ``TT_METAL_TRACE_ALLOC_TRACKING=1``):
@@ -33,7 +33,7 @@ class TracedForward:
 
     @staticmethod
     def key(prep) -> tuple:
-        return (prep.device_rows, prep.vmask is not None)
+        return (prep.device_rows, prep.vmask is not None, prep.cut)
 
     def prepare(self, preps):
         """Warm every new key of ``preps``, then capture them (all keys must be prepared in one call)."""

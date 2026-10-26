@@ -109,7 +109,7 @@ def test_mlstm_block16(device, tt_model, b):
 
     g = golden("model16")
     x = to_device_seq(device, _block_input(g, b), SEQ)
-    inputs = type("I", (), {"vmask": None, "keep": None})()
+    inputs = type("I", (), {"vmask": None, "keep": None, "cut": 0})()
     got = from_device_seq(tt_model.run_block(tt_model.weights.blocks[b], x, inputs), 16, T)
     assert report(f"block{b}[16]", g[f"block{b}.out"], got, 0.999) >= 0.999
 
@@ -170,7 +170,7 @@ def test_slstm_block16(device, tt_model, b):
 
     g = golden("model16")
     x = to_device_seq(device, _block_input(g, b), SEQ)
-    inputs = type("I", (), {"vmask": None, "keep": None})()
+    inputs = type("I", (), {"vmask": None, "keep": None, "cut": 0})()
     got = from_device_seq(tt_model.run_block(tt_model.weights.blocks[b], x, inputs), 16, T)
     assert report(f"block{b}[16]", g[f"block{b}.out"], got, 0.995) >= 0.995
 

@@ -30,11 +30,14 @@ CONTRACT_MEDIAN = 1e-2
 MEDIAN_BOUND = {"accuracy": 0.1, "performance": 0.25}
 
 
-def model(device, precision="accuracy", variate=True):
+def model(device, precision="accuracy", variate=True, pad_skip=True):
     from models.experimental.tirex2_forecast.tt.common import Precision
     from models.experimental.tirex2_forecast.tt.model import TtTiRex2
 
-    return TtTiRex2(device, host_weights(), Precision.by_name(precision), variate=variate)
+    return TtTiRex2(device, host_weights(), Precision.by_name(precision), variate=variate, pad_skip=pad_skip)
+
+
+LAST_CUT = []  # the pad cut of every ``run`` (asserted per test: which path ran)
 
 
 def run(tt, context, horizon, group_ids=None, target_mask=None):
@@ -44,6 +47,7 @@ def run(tt, context, horizon, group_ids=None, target_mask=None):
     from models.experimental.tirex2_forecast.tt.model import WINDOW
 
     prep = tt.prepare_inputs(context, horizon, group_ids, target_mask)
+    LAST_CUT.append(prep.cut)
     inputs = tt.upload_inputs(prep)
     out = tt.forward_device(inputs)
     tt.deallocate_inputs(inputs)
@@ -100,6 +104,7 @@ def test_forward_16(device, precision):
     g = golden("model16")
     tt = model(device, precision, variate=False)
     head, q = run(tt, g["context"], g["horizon"])
+    assert LAST_CUT[-1] == 192  # 2048 steps: 192 pad tokens skipped
     tok = df.readout_tokens(g["horizon"])
     check_forecast(
         f"model16[{precision}]",
@@ -121,6 +126,7 @@ def test_multivariate_4x8(device):
     tm = (torch.arange(groups * per) % per) == 0
     tt = model(device)
     head, q = run(tt, g["context"].reshape(-1, T), g["horizon"], gid, tm)
+    assert LAST_CUT[-1] == 0  # grouped rows: full path
     tok = df.readout_tokens(g["horizon"])
     check_forecast("multivar4", head, q, g["head_out"][:, tok], g["q_one"], g["scale"], tm, loc=g["loc"])
 
@@ -130,6 +136,7 @@ def test_long_context_h928(device):
     g = golden("bench_long_context")
     tt = model(device, variate=False)
     head, q = run(tt, g["context"], g["horizon"])
+    assert LAST_CUT[-1] == 0  # no left pad: full path
     check_forecast(
         "long_context",
         head,
@@ -179,6 +186,7 @@ def test_paper_rows(device, precision):
     rows = slice(0, 64)
     tt = model(device, precision, variate=False)
     head, q = run(tt, g["context"][rows], g["horizon"])
+    assert LAST_CUT[-1] == 192
     check_forecast(
         f"paper64[{precision}]",
         head,
@@ -227,3 +235,29 @@ def test_ragged_groups(device):
     ref_head = df.forward(host_weights(), prep)[:, df.readout_tokens(64)]
     ref_q = df.postprocess(ref_head, prep)
     check_forecast("ragged", head, q, ref_head, ref_q, prep.scale, tm, loc=prep.loc)
+
+
+def test_pad_skip_vs_full(device):
+    """model16 through both paths (pad skip at cut 192, and the full 320-token path): each meets the floors
+    against the goldens, and they agree with each other."""
+    from models.experimental.tirex2_forecast.tests.pcc import metrics as M
+
+    g = golden("model16")
+    tok = df.readout_tokens(g["horizon"])
+    outs = {}
+    for skip in (True, False):
+        tt = model(device, variate=False, pad_skip=skip)
+        outs[skip] = run(tt, g["context"], g["horizon"])
+        assert LAST_CUT[-1] == (192 if skip else 0)
+        tt.release()
+        check_forecast(
+            f"model16[pad_skip={skip}]",
+            *outs[skip],
+            g["head_out"][:, tok],
+            g["q_one"],
+            g["scale"],
+            torch.ones(16, dtype=torch.bool),
+        )
+    agree = M.pearson(outs[False][0], outs[True][0])
+    print(f"[PCC] model16 pad skip vs full: head pcc {agree:.6f}")
+    assert agree >= 0.9995

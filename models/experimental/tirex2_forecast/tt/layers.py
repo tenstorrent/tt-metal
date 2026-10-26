@@ -49,6 +49,15 @@ class DeviceConsts:
             self._cache[key] = self._register(upload(self.device, torch.full(tuple(shape), float(value)), dtype=dtype))
         return self._cache[key]
 
+    def tensor(self, key, host: torch.Tensor, dtype=None):
+        """A cached device copy of ``host`` under ``key`` (e.g. the pad states), freed with the others."""
+        import ttnn
+
+        key = ("tensor", *key)
+        if key not in self._cache:
+            self._cache[key] = self._register(upload(self.device, host, dtype=dtype or ttnn.float32))
+        return self._cache[key]
+
     def release(self):
         import ttnn
 
@@ -120,12 +129,13 @@ def ffn_residual(x, w: TtFFN, precision: Precision):
 # ------------------------------------------------------------------------------------------------- mLSTM
 
 
-def mlstm_chunkwise(device, q, k, v, g, consts: DeviceConsts, eps: float = df.MLSTM_EPS):
+def mlstm_chunkwise(device, q, k, v, g, consts: DeviceConsts, eps: float = df.MLSTM_EPS, init=None):
     """Stabilized chunkwise mLSTM (see ``reference/dataflow.mlstm_chunkwise``).
 
     ``q [B, H, T, 64]`` (pre-scaled by 1/8), ``k [B, H, T, 64]``, ``v [B, H, T, 128]`` bf16;
     ``g [B, H, T, 32]`` fp32 with col 0 = capped input gate, col 1 = capped forget gate. -> ``h [B, H, T, 128]``
     fp32. The chunk-local terms are batched over (row, head, chunk); only the state carry loops over chunks.
+    ``init``: the starting state ``(C [B*H, 1, 64, 128], n [B*H, 1, 64, 1], m [B*H, 1, 1, 1])`` (default zeros).
     """
     import ttnn
 
@@ -174,9 +184,12 @@ def mlstm_chunkwise(device, q, k, v, g, consts: DeviceConsts, eps: float = df.ML
     a4 = ttnn.reshape(amax, (BH, NC, 1, 1))
     dC4 = ttnn.reshape(dC, (BH, NC, DK, DV))
     dn4 = ttnn.reshape(dn, (BH, NC, DK, 1))
-    m = consts.full(0.0, (BH, 1, 1, 1))
-    C = consts.full(0.0, (BH, 1, DK, DV))
-    n = consts.full(0.0, (BH, 1, DK, 1))
+    if init is None:
+        m = consts.full(0.0, (BH, 1, 1, 1))
+        C = consts.full(0.0, (BH, 1, DK, DV))
+        n = consts.full(0.0, (BH, 1, DK, 1))
+    else:
+        C, n, m = init
     Cs, ns, ms = [C], [n], [m]
     for c in range(NC - 1):  # the state after the last chunk is never read
         sl = lambda t, d1, d2: ttnn.slice(t, (0, c, 0, 0), (BH, c + 1, d1, d2))
@@ -234,8 +247,11 @@ def _keep(debug, name, t):
         debug[name] = ttnn.to_torch(t).float()
 
 
-def mlstm_layer(device, x, w: TtMLSTM, precision: Precision, consts: DeviceConsts, debug: dict | None = None):
-    """``x + mLSTM(RMSNorm(x))`` (time mixer only; the FFN follows). ``debug`` (tests) collects host copies."""
+def mlstm_layer(
+    device, x, w: TtMLSTM, precision: Precision, consts: DeviceConsts, debug: dict | None = None, init=None
+):
+    """``x + mLSTM(RMSNorm(x))`` (time mixer only; the FFN follows). ``debug`` (tests) collects host copies.
+    ``init``: the chunkwise starting state (see ``mlstm_chunkwise``)."""
     import ttnn
 
     xn = rms_norm(x, df.NORM_EPS)
@@ -262,7 +278,7 @@ def mlstm_layer(device, x, w: TtMLSTM, precision: Precision, consts: DeviceConst
     g = ttnn.multiply(gt, df.GATE_CAP)  # 15 tanh(x / 15) (the 1/15 is in the weights)
     free(gt)
     _keep(debug, "g", g)
-    h = mlstm_chunkwise(device, q, k, v, g, consts)
+    h = mlstm_chunkwise(device, q, k, v, g, consts, init=init)
     free(q, k, v, g)
     _keep(debug, "h", h)
     hn = ttnn.layer_norm(h, epsilon=df.NORM_EPS, compute_kernel_config=exact_config())  # per head (128)
@@ -298,14 +314,23 @@ def log_sigmoid(x):
 
 
 def slstm_recurrence(
-    device, WxT, r, steps: int, consts: DeviceConsts, record: list | None = None, step_hook=None, y_fp32: bool = False
+    device,
+    WxT,
+    r,
+    steps: int,
+    consts: DeviceConsts,
+    record: list | None = None,
+    step_hook=None,
+    y_fp32: bool = False,
+    init=None,
 ):
     """sLSTM time loop. ``WxT [T, 1, B, 2048]`` fp32 (bias folded), columns (gate i f z o, head, d).
 
     Returns the list of per-step ``y [1, 1, B, 512]`` fp32 and the last ``(c, n, m)``. ``record`` (tests
     only) collects host copies of ``(y, c, n, m)`` after every step; ``step_hook(t)`` (profiling) runs after
     every step, e.g. to drain the device profiler buffers. ``y_fp32`` feeds the fp32 ``y`` (not its bf16 cast)
-    into the recurrent matmul.
+    into the recurrent matmul. ``init``: the state ``(y, c, n, m)`` before the first step, each ``[1, 1, B, 512]``
+    fp32 (device constants; default: none, so step 0 uses ``m = pre_i``).
     """
     import ttnn
 
@@ -314,9 +339,12 @@ def slstm_recurrence(
     f32 = ttnn.float32
     ys = []
     y_bf = c = n = m = None
+    if init is not None:
+        y0, c, n, m = init
+        y_bf = y0 if y_fp32 else ttnn.typecast(y0, ttnn.bfloat16)
     for t in range(steps):
         wx = ttnn.slice(WxT, (t, 0, 0, 0), (t + 1, 1, B, G))
-        if t == 0:
+        if t == 0 and init is None:
             pre = wx
         else:
             ry = ttnn.matmul(y_bf, r, dtype=f32, compute_kernel_config=exact_config())
@@ -327,7 +355,7 @@ def slstm_recurrence(
         tz = ttnn.tanh(pz)
         so = ttnn.sigmoid(po)
         free(pz, po)
-        if t == 0:
+        if t == 0 and init is None:
             # n == 0 everywhere before the first step: m = pre_i, i = 1, c = tanh(z), n = 1
             free(pf)
             m, c = pi, tz
@@ -434,10 +462,14 @@ def slstm_layer(
     consts: DeviceConsts,
     debug: dict | None = None,
     step_hook=None,
+    init=None,
 ):
-    """``x + GroupNorm(sLSTM(RMSNorm(x)))``; the recurrence runs time-major. ``debug`` (tests) collects host copies."""
+    """``x + GroupNorm(sLSTM(RMSNorm(x)))``; the recurrence runs time-major. ``debug`` (tests) collects host copies.
+    ``init``: the state before the first step (see ``slstm_recurrence``)."""
     WxT = slstm_prepare(x, w, precision)
-    ys, (c, n, m) = slstm_recurrence(device, WxT, w.r, steps, consts, step_hook=step_hook, y_fp32=precision.y_fp32)
+    ys, (c, n, m) = slstm_recurrence(
+        device, WxT, w.r, steps, consts, step_hook=step_hook, y_fp32=precision.y_fp32, init=init
+    )
     free(WxT, c, n, m)
     return slstm_finish(device, x, ys, w, head_mean, consts, debug=debug)
 
