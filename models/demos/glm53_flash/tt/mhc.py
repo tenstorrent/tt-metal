@@ -117,14 +117,16 @@ def build_mhc(
 ):
     """One hyper-connection (attention or FFN) from the raw checkpoint tensors
     ``hc_*_fn [24, 16384]`` (bf16), ``hc_*_base [24]`` and ``hc_*_scale [3]`` (fp32).
-    ``impl``: "fast" (``TtMHCFast``, default) or "wrap" (``TtMHCWrap``); default from ``GLM53_MHC_IMPL``."""
+    ``impl``: "fast" (``TtMHCFast``) or "wrap" (``TtMHCWrap``) returns exactly that class (the unit tests); ``None``
+    (the model) takes ``GLM53_MHC_IMPL`` and, with ``GLM53_MHC_PREFILL_IMPL=wrap``, the ``TtMHCSplit`` pair."""
     kcfg = mhc_kernel_config(cfg)
     assert tuple(fn.shape) == (kcfg.mix_hc, cfg.hc_mult * cfg.hidden_size), fn.shape
     assert base.numel() == kcfg.mix_hc and scale.numel() == 3
+    explicit = impl is not None
     impl = impl or MHC_IMPL
     cls = {"fast": TtMHCFast, "wrap": TtMHCWrap}[impl]
     hc = cls(device, kcfg, fn.float(), base.float(), scale.float(), dtype=ttnn.float32)
-    if impl == "fast" and MHC_PREFILL_IMPL == "wrap":
+    if not explicit and impl == "fast" and MHC_PREFILL_IMPL == "wrap":
         # A/B: composite wrap for prefill rows, fast path for decode (one tile of rows)
         return TtMHCSplit(hc, TtMHCWrap(device, kcfg, fn.float(), base.float(), scale.float(), dtype=ttnn.float32))
     return hc
