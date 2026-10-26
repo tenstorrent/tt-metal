@@ -244,15 +244,17 @@ class TTResLayer:
         conv2 = block_args.conv2.conv_offset if "conv_offset" in block_args.conv2 else block_args.conv2
         return tuple(conv2.stride) != (1, 1)
 
-    def __call__(self, x):
+    def __call__(self, x, subsample=None):
+        """``subsample``: see TTBottleneck; it goes to the first block."""
         if self.cameras is not None:
-            return self.run_per_camera([self], x)
-        for block in self.layer:
+            return self.run_per_camera([self], x, first_subsample=subsample)
+        x = self.layer[0](x, subsample=subsample)
+        for block in self.layer[1:]:
             x = block(x)
         return x
 
     @staticmethod
-    def run_per_camera(layers, x, group_input=None):
+    def run_per_camera(layers, x, group_input=None, first_subsample=None, next_conv1=None):
         """Consecutive per-camera ``layers`` with one group size on the DRAM batch ``x``, a group of
         cameras at a time: its rows go into L1, pass through every block of every layer there, and
         the last layer's output is written back into one DRAM batch. Only that output crosses DRAM.
@@ -263,12 +265,18 @@ class TTResLayer:
         are whole tiles writes its TILE shards as they are. A tiled write must start on a tile row,
         so groups that do not write ROW_MAJOR instead, untilized in L1; that batch suits its
         consumers too, as a strided first block subsamples ROW_MAJOR and an FPN lateral tilizes its
-        DRAM input itself."""
+        DRAM input itself.
+
+        ``first_subsample`` goes to a whole first block (TTBottleneck). With ``next_conv1``, the
+        strided 1x1 conv1 of the next layer's first block, each group also takes that block's
+        subsample of its output while it is in L1, and the run returns ``(output, subsample)``, the
+        subsample ROW_MAJOR in DRAM; taken from the output in DRAM, it would untilize and read the
+        whole batch again."""
         first = layers[0]
         assert all(layer.cameras == first.cameras for layer in layers), "chained layers share a group size"
         assert all(layer.whole_first_block is None for layer in layers[1:]), "only a run's first layer reads DRAM"
         if first.whole_first_block is not None:
-            x = first.whole_first_block(x)
+            x = first.whole_first_block(x, subsample=first_subsample)
         rows = first.cameras * first.camera_rows
         # A group that starts inside a tile row makes the slice untilize, slice and tilize again, with
         # temporaries the size of the group; those go through DRAM, and one copy brings the group
@@ -289,7 +297,7 @@ class TTResLayer:
             return staged
 
         num_groups = first.batch_size // first.cameras
-        out = None
+        out = subsample = None
         for group in range(num_groups):
             y = (group_input or slice_group)(group)
             for layer in layers:
@@ -303,6 +311,29 @@ class TTResLayer:
                 ttnn.deallocate(y)
                 y = ttnn.to_layout(staged, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
                 ttnn.deallocate(staged)
+            if next_conv1 is not None:
+                # Whole tiles untilize in their shards; the ROW_MAJOR rows are already in L1 otherwise.
+                rows_major = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT) if tiled else y
+                group_sub = TTResLayer._subsample_group(rows_major, next_conv1, first.cameras)
+                if tiled:
+                    ttnn.deallocate(rows_major)
+                sub_rows = group_sub.shape[2]
+                if subsample is None:
+                    subsample = ttnn.empty(
+                        (1, 1, num_groups * sub_rows, channels),
+                        dtype=group_sub.dtype,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=group_sub.device(),
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                ttnn.experimental.slice_write(
+                    group_sub,
+                    subsample,
+                    [0, 0, group * sub_rows, 0],
+                    [1, 1, (group + 1) * sub_rows, channels],
+                    [1, 1, 1, 1],
+                )
+                ttnn.deallocate(group_sub)
             if out is None:
                 out = ttnn.empty(
                     (1, 1, num_groups * group_rows, channels),
@@ -315,7 +346,21 @@ class TTResLayer:
                 y, out, [0, 0, group * group_rows, 0], [1, 1, (group + 1) * group_rows, channels], [1, 1, 1, 1]
             )
             ttnn.deallocate(y)
-        return out
+        return out if next_conv1 is None else (out, subsample)
+
+    @staticmethod
+    def _subsample_group(rows_major, conv1, cameras):
+        """``cameras`` cameras of ``conv1``'s input, ``(1, 1, cameras*H*W, C)`` ROW_MAJOR in L1, at
+        its stride, in L1: ROW_MAJOR, where the strided slice copies whole channel rows."""
+        nhwc = (cameras, conv1.input_height, conv1.input_width, rows_major.shape[-1])
+        sub = ttnn.slice(
+            ttnn.reshape(rows_major, nhwc),
+            [0, 0, 0, 0],
+            list(nhwc),
+            [1, *conv1.stride, 1],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        return ttnn.reshape(sub, (1, 1, cameras * conv1.output_height * conv1.output_width, nhwc[-1]))
 
 
 def _for_cameras(args, cameras):
@@ -698,9 +743,12 @@ class TTBottleneck:
                 input_layout=input_layout,
             )
 
-    def __call__(self, x_identity):
+    def __call__(self, x_identity, subsample=None):
+        """``subsample``, for a block with ``shared_subsample``: the block input already subsampled at
+        conv1's stride, ROW_MAJOR in DRAM, which spares taking it from the whole input here."""
         if self.shared_subsample:
-            subsample = self.conv1.subsample(x_identity)
+            if subsample is None:
+                subsample = self.conv1.subsample(x_identity)
             x_identity = ttnn.to_layout(subsample, ttnn.TILE_LAYOUT)
             ttnn.deallocate(subsample)
         x, _, _ = self.conv1(x_identity, subsampled=self.shared_subsample)
@@ -927,10 +975,20 @@ class TTResNet:
         ttnn.deallocate(pooled)
         return out
 
+    def _shared_subsample_conv1(self, i):
+        """The strided conv1 of layer ``i``'s first block when that block takes a shared subsample of
+        its input (TTBottleneck.shared_subsample), else None."""
+        if i >= self.num_layers:
+            return None
+        layer = self.res_layers[i]
+        block = layer.whole_first_block if layer.cameras is not None else layer.layer[0]
+        return block.conv1 if isinstance(block, TTBottleneck) and block.shared_subsample else None
+
     def _run_layers(self, x, group_input=None):
         """The layers on the stem's output ``x``; ``group_input`` feeds the first per-camera run
         instead (TTResLayer.run_per_camera)."""
         outs = []
+        subsample = None
         i = 0
         while i < self.num_layers:
             # Consecutive per-camera layers with one group size run together, so the activations
@@ -948,10 +1006,20 @@ class TTResNet:
             # A run of chained layers is one region, named by its span.
             region = f"ResNet Layer{i + 1}" if i == j else f"ResNet Layer{i + 1}-{j + 1}"
             signpost(header=f"{region} Start")
+            next_conv1 = self._shared_subsample_conv1(j + 1) if cameras is not None else None
             if cameras is not None:
-                x = TTResLayer.run_per_camera(self.res_layers[i : j + 1], x, group_input if i == 0 else None)
+                x = TTResLayer.run_per_camera(
+                    self.res_layers[i : j + 1],
+                    x,
+                    group_input if i == 0 else None,
+                    first_subsample=subsample,
+                    next_conv1=next_conv1,
+                )
             else:
-                x = self.res_layers[i](x)
+                x = self.res_layers[i](x, subsample=subsample)
+            subsample = None
+            if next_conv1 is not None:
+                x, subsample = x
             signpost(header=f"{region} End")
             if j in self.out_indices:
                 outs.append(x)
