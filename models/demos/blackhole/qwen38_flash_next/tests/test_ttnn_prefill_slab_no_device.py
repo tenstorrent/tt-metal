@@ -349,7 +349,7 @@ def test_a_slab_off_the_512_row_reduce_blocks_is_refused_in_either_form(monkeypa
     """768 rows is not a multiple of the 512-row reduce block: refused in one call and in 128-row blocks alike."""
     fakes = _moe_constructor_fakes(monkeypatch)
     for per_call in (None, LONG_CHUNK_ROWS):
-        with expect_error(contracts_module.Qwen38SlabRefused, "the slab reduces in 512-row blocks"):
+        with expect_error(contracts_module.Qwen38SlabRefused, "a slab takes a multiple of 512 rows.* 768 rows is not"):
             fakes.build(768, per_call)
 
 

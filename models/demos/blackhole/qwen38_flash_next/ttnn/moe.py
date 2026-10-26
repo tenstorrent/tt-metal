@@ -520,7 +520,8 @@ class Qwen38TTNNMoE:
         # Every slab form keeps the one-call form's 512-row rule: the probe instance is built in that form.
         if self.slab and self.rows % SLAB_REDUCE_BLOCK_ROWS:
             raise Qwen38SlabRefused(
-                f"the slab reduces in {SLAB_REDUCE_BLOCK_ROWS}-row blocks; {self.rows} rows is not a multiple"
+                f"a slab takes a multiple of {SLAB_REDUCE_BLOCK_ROWS} rows, the one-call form's reduce block, in either "
+                f"form (the slab's admission probe is built in the one-call form); {self.rows} rows is not a multiple"
             )
         # The one-tile router tail (rows <= 32): the fused program (ttnn/fused/router_tail) by default, the composed
         # chain under QWEN38_FUSED_OFF=router_tail; the long chunk and the slab keep their inline chain.

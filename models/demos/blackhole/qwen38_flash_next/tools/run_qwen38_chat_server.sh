@@ -57,7 +57,7 @@ readonly REPO_ROOT="$(cd -- "$MODEL_DIR/../../../.." && pwd -P)"
 readonly SERVER="$HERE/qwen38_chat_server.py"
 
 die() { printf 'run_qwen38_chat_server: %s\n' "$*" >&2; exit 2; }
-usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 profile= instance=0 devices= checkpoint= cache_root= allocated_context=32768 mtp= port=8000 host=0.0.0.0 long_chunks=
 prefill_slab=
@@ -209,7 +209,7 @@ fi
 printf 'run_qwen38_chat_server: checkout %s (%s) head %s%s\n' "$REPO_ROOT" "$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)" "$head" "$([[ "$dirty" == 0 ]] || printf ' (%s modified files)' "$dirty")" >&2
 printf 'run_qwen38_chat_server: python %s, ttnn extension %s\n' "$python" "$extension" >&2
 printf 'run_qwen38_chat_server: profile %s devices %s context %s run %s\n' "$hardware_profile" "$visible_devices" "$allocated_context" "$run_dir" >&2
-[[ -z "${QWEN38_DENSE_WEIGHT_DTYPE:-}" ]] || printf 'run_qwen38_chat_server: QWEN38_DENSE_WEIGHT_DTYPE=%s (resident dense matmul weights; default bf8, bf16 = the previous production format)\n' "$QWEN38_DENSE_WEIGHT_DTYPE" >&2
+[[ -z "${QWEN38_DENSE_WEIGHT_DTYPE:-}" ]] || printf 'run_qwen38_chat_server: QWEN38_DENSE_WEIGHT_DTYPE=%s (resident dense matmul weights; default bf8)\n' "$QWEN38_DENSE_WEIGHT_DTYPE" >&2
 if [[ -n "$serve_seconds" ]]; then
     exec timeout --signal=TERM "$serve_seconds" "$python" "$SERVER" "${args[@]}"
 fi

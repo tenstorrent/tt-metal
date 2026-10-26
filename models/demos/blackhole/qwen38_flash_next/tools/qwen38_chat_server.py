@@ -2210,7 +2210,7 @@ def _parser() -> argparse.ArgumentParser:
         dest="sampling",
         action="store_true",
         default=False,
-        help="capture TAIL with the candidate-row epilogue: sampled requests served (+0.3 ms per greedy token); a "
+        help="capture TAIL with the candidate-row epilogue: sampled requests served; a "
         "request without sampling fields stays the bitwise greedy loop; the launchers pass this",
     )
     parser.add_argument(
@@ -2247,8 +2247,9 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         choices=MTP_DRAFTS,
         default=None,
-        help="draft K tokens per pass with the MTP layer (verify / draft / commit traces; greedy chunked-mode "
-        "requests generate through the pass loop); default off",
+        help="draft K tokens per pass with the MTP layer (verify / draft / commit traces; chunked-mode greedy "
+        "requests generate through the pass loop, and with --sampling the sampled ones too, except top_k 0, a "
+        "logit-raising penalty or logprobs); default off",
     )
     parser.add_argument(
         "--mtp-gdn-anchor",

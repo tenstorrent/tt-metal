@@ -747,9 +747,9 @@ register(
     FusedKernel(
         name=NAME,
         replaces="the GDN verify-rows body between the projection's sharded-to-interleaved and the out-projection "
-        "matmul (the wrap's six programs: gdn_pre_rows, chunk_gdn_prep, chunk_gdn_scan, post_cast, post_norm on the "
-        "chunk form; the chain's 53) as one serial-recurrence program with every prefix state, and the commit's masked "
-        "prep + scan re-run as one prefix-state pick",
+        "matmul (the wrap's gdn_pre_rows, the public chunk_gated_delta_rule, post_cast and post_norm, or the composed "
+        "chain) as one serial-recurrence program with every prefix state, and the commit's masked recurrence re-run "
+        "as one prefix-state pick",
         tolerance=COMPONENT,
         fused=rows_body_scan,
         composed=rows_body_fallback,
