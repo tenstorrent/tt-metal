@@ -128,3 +128,34 @@ def test_performance_precision(device, name):
     g = load_golden(name)
     _, _, head, q = _run(tt, _contexts(g), g["horizon"], **g.get("settings", {}))
     check_gates(f"{name} performance", g["head_readout"], head, g["quantiles"], q, precision="performance")
+
+
+@pytest.mark.parametrize(
+    "name,subset,many",
+    [
+        ("full16_2048_h64", None, False),
+        ("mv4x8_2048_h64", None, False),
+        ("full16_2048_h128", None, True),
+        ("bench_long_context", 4, True),
+    ],
+    ids=["padded_F1", "multivariate_F1", "padded_Fmany", "long_context_Fmany"],
+)
+def test_last_layer_cut(device, name, subset, many):
+    """R1-5: the last layer on the read-out query slots only (F = 1 and F > 1; leading-pad mask, V = 8) matches
+    the uncut forward and every gate."""
+    tt = _model(device)
+    g = load_golden(name)
+    contexts, kw = _contexts(g, subset), g.get("settings", {})
+    saved = tt.cut_last_layer
+    try:
+        tt.cut_last_layer = False
+        _, _, full, _ = _run(tt, contexts, g["horizon"], **kw)
+        tt.cut_last_layer = True
+        prepared, inputs, head, q = _run(tt, contexts, g["horizon"], **kw)
+    finally:
+        tt.cut_last_layer = saved
+    assert (inputs.readout_count > 1) == many, inputs.readout_count
+    check_pcc(f"{name} cut vs uncut", full, head, 0.99999)
+    rows, items = prepared.rows, len(contexts)
+    active = active_rows(g["head_readout"])[:rows]
+    check_gates(f"{name} cut", g["head_readout"][:rows], head, g["quantiles"][:items], q, active=active)

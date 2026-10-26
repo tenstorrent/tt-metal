@@ -20,6 +20,7 @@ Activations are flat ``(1, 1, R * S, 1280)`` with ``S`` the token count padded t
 from __future__ import annotations
 
 import os
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -100,9 +101,24 @@ class TtInputs:
     padded_seq: int
     readout_start: int
     readout_count: int
+    # Last-layer cut (R1-5): the masks of the read-out query slots only
+    readout_seq_mask: object = None  # (R, 1, F, S) additive: causal and leading padding
+    readout_var_mask: object = None  # (F * B, 1, Vp, Vp), or None as ``var_mask``
 
     def tensors(self):
-        return [t for t in (self.tokens, self.cos, self.sin, self.seq_mask, self.var_mask) if t is not None]
+        return [
+            t
+            for t in (
+                self.tokens,
+                self.cos,
+                self.sin,
+                self.seq_mask,
+                self.var_mask,
+                self.readout_seq_mask,
+                self.readout_var_mask,
+            )
+            if t is not None
+        ]
 
 
 def seq_mask_tensor(num_front_masked: torch.Tensor, padded_seq: int) -> torch.Tensor:
@@ -142,6 +158,9 @@ class TtTimesFM3:
     def __init__(self, device, weights: Weights, precision: TtPrecision | None = None):
         self.device = device
         self.precision = TtPrecision.accuracy() if precision is None else precision
+        # R1-5: the last layer runs only the read-out query slots after K / V. Off until it is bundled (alone -1.5 %,
+        # under the 2 % bar: candidates.md); ``test_last_layer_cut`` covers the path.
+        self.cut_last_layer = False
         p = self.precision
         up = lambda t, role: upload_linear(device, t, p.weight_dtype(role))  # noqa: E731
         self.tok_hidden, self.tok_out, self.tok_res = (
@@ -181,22 +200,27 @@ class TtTimesFM3:
         cos, sin = rope_tables(s, torch.float32)
         nfm = prepared.num_front_masked
         padded = bool((nfm > 0).any())
+        start, count = prepared.readout_start, prepared.num_forecast_patches
+        var_mask = var_mask_tensor(nfm, prepared.variates, s) if needs_var_mask(nfm, prepared.variates) else None
+        items = rows // prepared.variates
         return TtInputs(
             tokens=upload(self.device, tokens),
             cos=upload(self.device, cos.reshape(1, 1, s, HEAD_DIM_PAD)),
             sin=upload(self.device, sin.reshape(1, 1, s, HEAD_DIM_PAD)),
             seq_mask=upload(self.device, seq_mask_tensor(nfm, s)) if padded else None,
-            var_mask=(
-                upload(self.device, var_mask_tensor(nfm, prepared.variates, s))
-                if needs_var_mask(nfm, prepared.variates)
-                else None
-            ),
+            var_mask=None if var_mask is None else upload(self.device, var_mask),
             rows=rows,
             variates=prepared.variates,
             num_patches=n,
             padded_seq=s,
-            readout_start=prepared.readout_start,
-            readout_count=prepared.num_forecast_patches,
+            readout_start=start,
+            readout_count=count,
+            readout_seq_mask=upload(self.device, seq_mask_tensor(nfm, s)[:, :, start : start + count].contiguous()),
+            readout_var_mask=(
+                None
+                if var_mask is None
+                else upload(self.device, var_mask[start * items : (start + count) * items].contiguous())
+            ),
         )
 
     @staticmethod
@@ -271,8 +295,9 @@ class TtTimesFM3:
         """Gain-free pre-norm of the residual stream (the gain is folded into the next projection)."""
         return rms_norm(x, EPS, self.precision)
 
-    def seq_attention(self, i: int, x, inputs: TtInputs):
-        """h1 = x + post_ln(SeqAttn(pre_ln(x))); ``x`` is borrowed."""
+    def seq_attention(self, i: int, x, inputs: TtInputs, cut: bool = False):
+        """h1 = x + post_ln(SeqAttn(pre_ln(x))); ``x`` is borrowed. With ``cut`` (R1-5), only the read-out slots'
+        queries run: the result is (1, 1, R * F, D) at those slots."""
         import ttnn
 
         p, w = self.precision, self.layers[i]["seq"]
@@ -297,10 +322,23 @@ class TtTimesFM3:
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         q, k = self._qk_norm(qr, kr, w)
-        merged = self._sdpa(q, k, v, inputs.seq_mask, causal=True)
+        if not cut:
+            merged = self._sdpa(q, k, v, inputs.seq_mask, causal=True)
+            o = linear(to_flat(merged), w["wo"], p)
+            ttnn.deallocate(merged)
+            return self._post(o, w["post"], x)
+        # Q for every token, then sliced: projecting Q at the read-out slots only needs head permutes that cost
+        # more than they save (iter_00/r1_5b: 651.7 vs 598.1 ms).
+        start, count = inputs.readout_start, inputs.readout_count
+        qs = ttnn.slice(q, (0, 0, start, 0), (r, NUM_HEADS, start + count, q.shape[-1]))
+        ttnn.deallocate(q)
+        merged = self._sdpa(qs, k, v, inputs.readout_seq_mask, causal=True)
         o = linear(to_flat(merged), w["wo"], p)
         ttnn.deallocate(merged)
-        return self._post(o, w["post"], x)
+        residual = take_slots(x, r, s, start, count)
+        out = self._post(o, w["post"], residual)
+        ttnn.deallocate(residual)
+        return out
 
     def var_attention(self, i: int, h1, inputs: TtInputs):
         """h2 = h1 + post_ln(VarAttn(pre_ln(h1))); ``h1`` is borrowed."""
@@ -359,11 +397,16 @@ class TtTimesFM3:
         ttnn.deallocate(hidden)
         return self._post(o, layer["post_ff"], h2)
 
-    def layer(self, i: int, x, inputs: TtInputs, capture: dict | None = None):
-        """One MixingTransformer layer; consumes ``x``."""
+    def layer(self, i: int, x, inputs: TtInputs, capture: dict | None = None, cut: bool = False):
+        """One MixingTransformer layer; consumes ``x``. With ``cut``, the output holds only the read-out slots
+        (R1-5): everything after the time attention's keys and values is per slot."""
         import ttnn
 
-        h1 = self.seq_attention(i, x, inputs)
+        h1 = self.seq_attention(i, x, inputs, cut=cut)
+        if cut:
+            inputs = dataclasses.replace(
+                inputs, padded_seq=inputs.readout_count, var_mask=inputs.readout_var_mask, readout_start=0
+            )
         ttnn.deallocate(x)
         h2 = self.var_attention(i, h1, inputs)
         if capture is not None:
@@ -396,10 +439,14 @@ class TtTimesFM3:
         x = self.embed(inputs)
         if capture is not None:
             capture["transformer_input"] = self.rows_to_torch(x, inputs)
+        last = len(self.layers) - 1
         for i in range(len(self.layers)):
-            x = self.layer(i, x, inputs, capture)
+            cut = i == last and self.cut_last_layer and capture is None
+            x = self.layer(i, x, inputs, capture, cut=cut)
             if capture is not None:
                 capture[f"layer{i}"] = self.rows_to_torch(x, inputs)
+        if cut:
+            inputs = dataclasses.replace(inputs, padded_seq=inputs.readout_count, readout_start=0)
         out = self.head(x, inputs)
         ttnn.deallocate(x)
         return out

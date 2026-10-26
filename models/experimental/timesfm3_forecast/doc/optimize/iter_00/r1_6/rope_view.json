@@ -1,0 +1,22 @@
+{
+ "current": {
+  "ms_per_call": 3.7773125106468797,
+  "max_abs_diff_vs_current": 0.0
+ },
+ "view g=2": {
+  "ms_per_call": 3.7903164979070425,
+  "max_abs_diff_vs_current": 0.0
+ },
+ "view g=4": {
+  "ms_per_call": 3.790773847140372,
+  "max_abs_diff_vs_current": 0.0
+ },
+ "view g=8": {
+  "ms_per_call": 2.557122288271785,
+  "max_abs_diff_vs_current": 0.0
+ },
+ "view g=16": {
+  "ms_per_call": 3.782291617244482,
+  "max_abs_diff_vs_current": 0.0
+ }
+}
