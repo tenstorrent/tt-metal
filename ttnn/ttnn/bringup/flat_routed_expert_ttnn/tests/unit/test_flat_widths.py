@@ -47,7 +47,7 @@ CASES = [
     ("se_tp4_i576_e3", 576, 3, 640, "bf8", "glm"),
     ("se_tp2_i1152_glm", 1152, 1, 1024, "bf8", "glm"),
     ("se_tp2_i1152_full", 1152, 1, 1024, "bf8", "full"),
-    # the routed experts' width (16-column units, nu 3); skipped on a Galaxy chip (DS41-119)
+    # the routed experts' width (16-column units, nu 3); hung on a Galaxy chip before FIX.2 (DS41-119)
     ("routed_i2304_e4_bf4", 2304, 4, 640, "bf4", "glm"),
 ]
 
@@ -66,9 +66,6 @@ def _counts(E, m):
 @pytest.mark.parametrize("case", CASES, ids=[c[0] for c in CASES])
 def test_flat_widths(device, case):
     tag, I, E, m, wdtype, prec = case
-    if I == 2304 and device.compute_with_storage_grid_size().x == 12:
-        # (an unchanged plan: test_flat_uneven_split's cases hang there the same way, on the pre-FIX.1 code too)
-        pytest.skip("DS41-119: the flat op at I 2304 hangs on a single Galaxy card (also before FIX.1)")
     full = prec == "full"
     fmt = dict(x_bf16=full, h_bf16=full, fidelity="HiFi2" if full else "LoFi")
     fidelity = int((ttnn.MathFidelity.HiFi2 if full else ttnn.MathFidelity.LoFi).value)

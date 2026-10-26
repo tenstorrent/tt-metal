@@ -105,9 +105,10 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7) (the same 
   Any I / 32 that has a gate/up split: the down K is not tied to a block multiple (FIX.1: I 576 / 1152 at H 5120, K 18 /
   36 tiles, tests/unit/test_flat_widths.py). Small I at large H (It <= 32, H 5120) plans on one subgrid (the 2 / 3
   subgrids have no gate/up split there) with the uneven pair split, np 1: one gate/up core per tile column.
-- On a single Galaxy card (the `device` fixture) the op hangs on its first call for most shapes (tests/unit:
-  test_flat_uneven_split, the mimo cases, test_flat_widths I 2304; also on the code before FIX.1); 2x2-mesh runs on
-  the same box pass (test_weights_nk), as does the model's 8x4 mesh (deepseek_v41_flash_d_p DS41-119).
+- Galaxy cards (12 x 10 grid, physical column 1 harvested on some): run since FIX.2 (the SE_DYN_PULL leader is found
+  by its logical coordinate; it hung before on plans without reader tails, DS41-119). tests/unit/ on one Galaxy chip:
+  24 pass; the 12 TP2 / TP4 `p.nsg == 1` failures as on the QuietBox, and the mimo / k2 `indexed_perf` bands (QuietBox
+  timings) run 0.05-0.9 % past their upper bounds there.
 - x: ROW_MAJOR bf16 DRAM interleaved; page width a multiple of 1 KB (or wide rows with `hidden`). counts / regions:
   [1, NG] uint32 RM DRAM. y_bf16 and y_row_major are exclusive.
 - `x_bf16` / `h_bf16` must match the plan the weights were laid out with.
@@ -120,7 +121,7 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7) (the same 
 - With the combine_rf L1 hand-off, rows wider than SPC_PIECE (default 7168 B) hang unless SPC_PIECE >= row bytes
   and the fabric payload >= row + 32 B (FLAT_COMBINE_OVERLAP_WORKLOG.md; asserted in sparse_combine_rf.py).
 - GLM's experts_ag path only builds at <= 64 experts per chip; it was never run on a 2x2 (known_issues.md DS41-63).
-- Not tested on Wormhole or on meshes other than 1 chip, 2x2, LoudBox 8x1 / 2x4 (tests and worklogs).
+- Not tested on Wormhole or on meshes other than 1 chip, 2x2, LoudBox 8x1 / 2x4 (tests and worklogs), Galaxy 8x4 (deepseek_v41_flash_d_p).
 
 ## How to call
 ```python
