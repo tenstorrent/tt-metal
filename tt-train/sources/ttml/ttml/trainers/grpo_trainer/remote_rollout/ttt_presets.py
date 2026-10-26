@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Llama-family presets (optimizations + stop/pad IDs) for the family-agnostic
+"""Llama and Qwen3 presets (optimizations + stop/pad IDs) for the family-agnostic
 :mod:`ttt_rollout_sampler`. Consulted by the launcher, not the sampler."""
 
 from __future__ import annotations
@@ -22,17 +22,19 @@ from models.tt_transformers.tt.model_config import (
 )
 
 
-# Stop-token strings (stable across Llama-3 base/instruct variants; the IDs are
-# not). Resolved to IDs by :func:`llama_stop_and_pad`.
-LLAMA_STOP_TOKEN_STRS: tuple[str, ...] = (
+# Stop-token strings of the Llama-3 and Qwen3 chat templates (stable across
+# base/instruct variants; the IDs are not). Resolved to IDs by :func:`stop_and_pad`.
+STOP_TOKEN_STRS: tuple[str, ...] = (
     "<|eot_id|>",
     "<|end_of_text|>",
     "<|eom_id|>",
+    "<|im_end|>",
+    "<|endoftext|>",
 )
 
 
 def bf16_attn_bfp8_mlp_optimizations(num_decoders: int, model_name: str) -> Any:
-    """Llama-3 single-chip preset: bf16 attention (Q/K/V/O + KV cache) at HIFI4,
+    """Single-chip preset: bf16 attention (Q/K/V/O + KV cache) at HIFI4,
     BFP8 MLP (FF1/FF2/FF3) at HIFI2_FP16. Returns a ``DecodersPrecision``."""
     conf = ModelOptimizations(
         {
@@ -61,18 +63,18 @@ def bf16_attn_bfp8_mlp_optimizations(num_decoders: int, model_name: str) -> Any:
     return inst
 
 
-def llama_stop_and_pad(model_id: str) -> Tuple[Sequence[int], int]:
+def stop_and_pad(model_id: str) -> Tuple[Sequence[int], int]:
     """Load the HF tokenizer for ``model_id`` to derive ``(stop_token_ids,
     pad_token_id)`` for :class:`TTTRolloutSampler`.
 
     Call with the same ``model_id`` as the ttml side so the IDs stay consistent
     with the peer tokenizer.
     """
-    tok = AutoTokenizer.from_pretrained(model_id)
+    tok = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     ids: set[int] = set()
     if tok.eos_token_id is not None:
         ids.add(int(tok.eos_token_id))
-    for s in LLAMA_STOP_TOKEN_STRS:
+    for s in STOP_TOKEN_STRS:
         tid = tok.convert_tokens_to_ids(s)
         if tid is not None and tid >= 0 and tid != tok.unk_token_id:
             ids.add(int(tid))

@@ -613,6 +613,7 @@ class ModelArgs:
             "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
             "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
             "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
+            "qwen3-0.6b-base-think-sft": "models/tt_transformers/model_params/qwen3-0.6b-base-think-sft",
             "EXAONE-4.5-33B": "models/tt_transformers/model_params/EXAONE-4.5-33B",
             "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
             "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",

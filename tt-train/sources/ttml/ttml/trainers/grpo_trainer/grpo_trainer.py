@@ -140,12 +140,12 @@ def build_rollout_sampler(
             model, tokenizer, max_completion_length, temperature, completions_per_prompt, batch_layout
         )
     if source == "ttt":
-        from .remote_rollout.llama_ttt_presets import bf16_attn_bfp8_mlp_optimizations, llama_stop_and_pad
+        from .remote_rollout.ttt_presets import bf16_attn_bfp8_mlp_optimizations, stop_and_pad
         from .remote_rollout.ttt_rollout_sampler import TTTRolloutSampler
 
         if model_source is None or mesh_device is None or remote_rollout is None:
             raise ValueError("rollout sampler 'ttt' needs model_source, mesh_device and remote_rollout")
-        stop_token_ids, pad_token_id = llama_stop_and_pad(model_source)
+        stop_token_ids, pad_token_id = stop_and_pad(model_source)
         return TTTRolloutSampler(
             mesh_device=mesh_device,
             model_source=model_source,
@@ -976,9 +976,9 @@ def save_checkpoint(
 
 
 def _validate_remote_inputs(config: GRPOConfig, transformer_config: Any, device_config: Any, model_source: str) -> None:
-    if config.backend.sampler == "ttt" and transformer_config.model_type != "llama":
+    if config.backend.sampler == "ttt" and transformer_config.model_type not in ("llama", "qwen3"):
         raise ValueError(
-            f"GRPOTrainer: rollout_backend={config.rollout_backend!r} supports Llama models only, "
+            f"GRPOTrainer: rollout_backend={config.rollout_backend!r} supports Llama and Qwen3 models only, "
             f"got model_type={transformer_config.model_type!r}."
         )
     if config.backend.in_process:
@@ -1079,7 +1079,7 @@ class GRPOTrainer:
         self._rollout_mesh: Any = None
         self._rollout_server: Any = None
 
-        init_distributed_training(config)
+        init_distributed_training(config, device_config)
         if is_rollout_rank(config):
             # Rank 0 is blocked waiting for the handshake, terminating processes on a failure before handshake.
             with exit_on_error():
