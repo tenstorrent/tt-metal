@@ -22,6 +22,7 @@ from __future__ import annotations
 import atexit
 import json
 import logging
+import os
 import struct
 import traceback
 from typing import List, Tuple
@@ -78,11 +79,14 @@ class MPIRolloutServer:
         # connect() blocks until the peer constructs its MPIRolloutClient.
         self._bridge: WeightBridge = bridge
         self._bridge.connect()
+        # The peer waits on this rank until serve_forever returns; a normal exit before that hangs both ranks.
+        atexit.register(os._exit, 1)
 
     def serve_forever(self) -> None:
         """Block accepting requests until the peer sends ``OP_SHUTDOWN``, then close the sampler."""
         with exit_on_error():
             self._serve()
+        atexit.unregister(os._exit)
         self._sampler.close()
 
     def _serve(self) -> None:

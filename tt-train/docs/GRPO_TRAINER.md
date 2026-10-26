@@ -176,7 +176,8 @@ Rules and limitations of `ttt_remote_sync`:
 - **A failure on either rank ends the job.** An exception in rank 1's
   `generate` or `update_weights` is raised on rank 0 with rank 1's traceback.
   Rank 0 sends rank 1 the shutdown request when training ends or rank 0's setup
-  or training raises. A failure before the two ranks connect, or in the middle
+  or training raises. Rank 1 calls `os._exit(1)` at exit if it never finished
+  serving. A failure before the two ranks connect, or in the middle
   of a cross-rank exchange, prints the traceback and calls `os._exit(1)`.
   Cross-rank calls have no deadlines, so a stuck peer still hangs the other
   rank.
