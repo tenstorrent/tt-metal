@@ -19,7 +19,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.modules.tt_ccl import get_tt_ccl
+try:
+    from models.common.tt_ccl import get_tt_ccl  # tt-metal main
+except ImportError:
+    from models.common.modules.tt_ccl import get_tt_ccl  # the 2026-10 base
 from models.demos.glm53_flash.tt.mesh import GLMMesh, mesh_device_params
 
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))
