@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 
+import contextlib
 import json
 import os
 import signal
@@ -133,6 +134,7 @@ assert (
     not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv
 ), f"PREFILL_TP_SHARD_KV=1: model {ADAPTER.name!r} does not support a TP-deduped KV cache"
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
+CHUNK_TIMEOUT_SECONDS = float(os.environ.get("TT_PREFILL_CHUNK_TIMEOUT_SECONDS", 0))
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
 # that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
@@ -160,7 +162,7 @@ assert not (MTP_LEVELS and DFLASH_ENABLED), "PREFILL_MTP_LEVELS>0 and PREFILL_DF
 # PREFILL_USE_TRACE=1; this catches a run that overrides it back to 0 rather than letting it start and
 # diverge silently. To re-measure traced-vs-eager equivalence, drop this assert in a scratch tree --
 # deliberately not an env escape hatch, so a production run cannot reach the eager path by accident.
-assert not (DFLASH_ENABLED and not USE_TRACE), (
+assert not (DFLASH_ENABLED and not USE_TRACE and not ADAPTER.dflash_allows_eager), (
     "PREFILL_DFLASH=1 requires PREFILL_USE_TRACE=1: the DFlash drafter is only supported on the "
     "traced path. Unset PREFILL_USE_TRACE (the dflash manifest pins it to 1) or drop PREFILL_DFLASH."
 )
@@ -601,6 +603,19 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
         pass
 
 
+@contextlib.contextmanager
+def _with_hang_timeout():
+    if not CHUNK_TIMEOUT_SECONDS:
+        yield
+        return
+    saved = ttnn.device.GetOperationTimeoutSeconds()
+    ttnn.device.SetOperationTimeoutSeconds(CHUNK_TIMEOUT_SECONDS)
+    try:
+        yield
+    finally:
+        ttnn.device.SetOperationTimeoutSeconds(saved)
+
+
 def _compute_and_send(
     runtime,
     kv_caches,
@@ -626,18 +641,19 @@ def _compute_and_send(
     )
 
     mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
-    out = runtime.prefill_chunk(
-        inp,
-        kv_caches,
-        slot_id=meta["slot_id"],
-        actual_start=meta["actual_start"],
-        actual_end=meta["actual_end"],
-        request_id=c,
-        d2h_service=d2h_service,
-        metadata_msg=sockets.metadata,
-        **mtp_kwargs,
-        **({"indexer_indices": indices} if indices is not None else {}),
-    )
+    with _with_hang_timeout():
+        out = runtime.prefill_chunk(
+            inp,
+            kv_caches,
+            slot_id=meta["slot_id"],
+            actual_start=meta["actual_start"],
+            actual_end=meta["actual_end"],
+            request_id=c,
+            d2h_service=d2h_service,
+            metadata_msg=sockets.metadata,
+            **mtp_kwargs,
+            **({"indexer_indices": indices} if indices is not None else {}),
+        )
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
@@ -888,6 +904,9 @@ def main() -> None:
         trace_region_size=_TRACE_REGION_SIZE,
     )
 
+    if CHUNK_TIMEOUT_SECONDS:
+        ttnn.device.SetOperationTimeoutSeconds(0)
+
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = MAX_SEQ_LEN
 
@@ -938,12 +957,16 @@ def main() -> None:
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
     d2d_activation_rows = d2d_rows_for(CHUNK_SIZE, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
-    d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED)
+    # The drafter partial rides beside the hidden, as a 2H width or as its own plane (the adapter's choice).
+    dflash_plane = int(DFLASH_ENABLED and ADAPTER.dflash_partial_separate_plane)
+    d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED and not dflash_plane)
     # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
     # receives and what it sends on. Read off the runtime's own config rather than recomputing the
     # split, so the socket cannot be sized for a range the model was not built with.
-    d2d_in_planes = ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx)
-    d2d_out_planes = ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx + runtime.config.num_layers)
+    d2d_in_planes = ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx) + dflash_plane
+    d2d_out_planes = (
+        ADAPTER.pipeline_activation_planes(runtime.config.first_layer_idx + runtime.config.num_layers) + dflash_plane
+    )
 
     ttnn.distributed_context_barrier()
 

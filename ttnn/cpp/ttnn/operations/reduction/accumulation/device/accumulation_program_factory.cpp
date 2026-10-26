@@ -459,8 +459,8 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
     const int32_t dim{
         (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
     const bool scan_width = dim == input_rank - 1;
-    // Only forward scans get here: cumsum_tile scans forward only, so is_tile_axis_accumulation()
-    // rejects flip and validate_on_program_cache_miss() enforces that.
+    // Only forward scans get here: cumsum_tile and cumprod_tile scan forward only, so
+    // is_tile_axis_accumulation() rejects flip and validate_on_program_cache_miss() enforces that.
     TT_ASSERT(!operation_attributes.flip, "The tile-axis accumulation kernel only scans forward");
 
     const auto& tile = input_tensor.tensor_spec().tile();
@@ -476,18 +476,27 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
     const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
 
-    // 32-bit Dest keeps the running totals in fp32; only the packed output is rounded to bf16. The
-    // bf16 input goes through SrcA, which holds it exactly, so it needs no unpack-mode entry.
+    // 32-bit Dest keeps the running totals in fp32; only the packed output is rounded to the output
+    // format. A bf16 input goes through SrcA, which holds it exactly, so it needs no unpack-mode entry.
+    // SrcA would cut an fp32 input to tf32, so that one is unpacked straight into Dest.
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
+    if (input_dataformat == DataFormat::Float32) {
+        unpack_modes[ACCUM_SRC] = UnpackMode::UnpackToDest;
+    }
     const ComputeHardwareConfig compute_config{
         .fpu_math_fidelity = MathFidelity::HiFi4,
         .sfpu_precision_mode = Precision::Precise,
         .enable_32_bit_dest = true,
         .double_buffer_dest = true,
+        .unpack_modes = unpack_modes,
     };
 
     std::map<std::string, std::string> compute_defines_map;
     if (scan_width) {
         compute_defines_map["SCAN_WIDTH"] = "1";
+    }
+    if (operation_attributes.op == AccumulationOp::CUMPROD) {
+        compute_defines_map["CUMPROD"] = "1";
     }
     const KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);
 
