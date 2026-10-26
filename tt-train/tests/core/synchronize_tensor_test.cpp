@@ -171,3 +171,25 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsUsesTheReduceDtype) {
     expect_same_on_every_device(
         parameter->get_grad(), core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32));
 }
+
+// The C++ runners call this overload, which takes the DDP axis from the parallelism context.
+TEST_F(SynchronizeTensorTest, SynchronizeGradientsOverTheDdpAxisUsesTheReduceDtype) {
+    autograd::ctx().initialize_parallelism_context({.enable_ddp = true});
+    auto* device = &autograd::ctx().get_device();
+    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    // The value is replicated, as a data-parallel parameter's is; only its gradient differs per device.
+    auto parameter = autograd::create_tensor(
+        core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            xt::zeros<float>(std::array<std::size_t, 4>{1U, 1U, 64U, 128U}),
+            device,
+            ttnn::Layout::TILE,
+            replicate.get()),
+        /* requires_grad */ true);
+    const auto gradients = upload(make_gradients(64, 128, 8));
+    parameter->set_grad(gradients);
+
+    core::distributed::synchronize_gradients({{"parameter", parameter}}, ttnn::DataType::FLOAT32);
+
+    expect_same_on_every_device(
+        parameter->get_grad(), core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32));
+}
