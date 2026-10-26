@@ -184,7 +184,7 @@ def test_matmul(
                 formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim,
                 math_fidelity=math_fidelity,
             ),
-            *([] if (row_mop or unpack_ttsync) else MATMUL_REUSE_DIR.for_block(formats, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, dest_sync, kt_dim=matmul_dims.kt_dim)),
+            *MATMUL_REUSE_DIR.for_block(formats, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, dest_sync),
             *MATMUL_STREAM_Z.for_block(
                 formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim,
                 math_fidelity=math_fidelity,

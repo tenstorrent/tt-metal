@@ -94,18 +94,11 @@ class THROTTLE_LEVEL(TemplateParameter):
         return f"constexpr int THROTTLE_LEVEL = {self.throttle_level};"
 
 
-def matmul_reuse_dir_for(formats, math_fidelity, ct_dim: int, rt_dim: int, dest_sync=None, throttle: int = 0, kt_dim=None) -> int:
+def matmul_reuse_dir_for(formats, math_fidelity, ct_dim: int, rt_dim: int, dest_sync=None) -> int:
     """The reuse direction llk_matmul_forms.h matmul_reuse_dir picks (0 default, 1 hold in0, 2 hold in1): at LoFi a block of 4 or more
     tiles with one 32-bit and one 16-bit operand holds the 32-bit one when it is reused (input_format feeds SrcA = in1, input_format_B SrcB = in0)."""
     if get_chip_architecture() != ChipArchitecture.BLACKHOLE or math_fidelity != MathFidelity.LoFi or ct_dim * rt_dim < 4:
         return 0
-    # two-row scheme (value 4): a Float32 x Float32 block with an even held dimension, llk_matmul_forms.h
-    held = min(ct_dim, rt_dim)
-    # a static throttle makes the math the bound and the scheme's extra instructions per call read 1 to 3 percent slower
-    if formats.input_format == formats.input_format_B == DataFormat.Float32 and held >= 2 and held % 2 == 0 and throttle == 0:
-        # half sync with a Float32 output on one k step is pack bound and the 2x2 block measured 0.9 percent slower
-        if not (dest_sync == DestSync.Half and formats.output_format == DataFormat.Float32 and kt_dim == 1):
-            return 4
     # half sync with a Float32 output is pack bound and measured up to 1.7 percent slower
     if dest_sync == DestSync.Half and formats.output_format == DataFormat.Float32:
         return 0
@@ -136,9 +129,9 @@ class MATMUL_REUSE_DIR(TemplateParameter):
         return f"#define MATMUL_REUSE_DIR {self.reuse_dir}"
 
     @staticmethod
-    def for_block(formats, math_fidelity, ct_dim: int, rt_dim: int, dest_sync=None, throttle: int = 0, kt_dim=None) -> list:
+    def for_block(formats, math_fidelity, ct_dim: int, rt_dim: int, dest_sync=None) -> list:
         """[MATMUL_REUSE_DIR(n)] where matmul_reuse_dir is not 0, else []."""
-        d = matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync, throttle, kt_dim)
+        d = matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync)
         return [MATMUL_REUSE_DIR(d)] if d else []
 
 
@@ -150,14 +143,14 @@ class MATMUL_ROW_MOP(TemplateParameter):
         return "#define MATMUL_ROW_MOP"
 
     @staticmethod
-    def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int, sections: int = 1, throttle: int = 0) -> list:
+    def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int, sections: int = 1) -> list:
         """[MATMUL_ROW_MOP()] where the ttnn matmul kernels run the opt-in row MOP for a half-sync block of the sweep (one inner block, so
         the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form."""
         from helpers.matmul_prod_keys import forced_form, main_form_cell, m2_row_mop
 
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE or (dest_sync != DestSync.Half and math_fidelity != MathFidelity.LoFi):
             return []
-        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync, throttle, kt_dim):
+        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
             return []
         fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
         out_format = formats.output_format
@@ -255,7 +248,7 @@ class MATMUL_STREAM_Z(TemplateParameter):
             return []
         if ct_dim < rt_dim or in1_faces != 4 or in1_partial:
             return []
-        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync, throttle, kt_dim):
+        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
             return []
         # measured: only LoFi rows of 4 or more output tiles never lose; the fidelities above it, 1x1 and 1x2 are pack or hand-off bound
         if math_fidelity != MathFidelity.LoFi or ct_dim * rt_dim < 4:
@@ -477,7 +470,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         if _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim, rt_dim, kt_dim, throttle):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
         # a block that changes the reuse direction runs main's tile form and per-row unpack: the unknown-k key
-        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync, throttle, kt_dim):
+        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
         # 32-bit input at LoFi and full sync with four k steps: the 1x2 block with a 32-bit DEST and 16-bit or bfp8 output, and the 2x1 block
         # with a Float16_b output and a 16-bit DEST, read slower with the row forms: the unknown-k key, which is the tile form
@@ -637,7 +630,7 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
             return []
         if MATMUL_K_LOOP.for_block(formats, dest_acc, math_fidelity, ct_dim, rt_dim, kt_dim):
             return []
-        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync, 0, kt_dim):
+        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
             return []
         # the cells below measured 0 slower than the context poll over 1440 small-block rows (ABBA, both orders) and are the
         # same cells bmm_unpack_auto_ttsync takes in the metal2 matmul kernel

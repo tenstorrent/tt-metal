@@ -32,18 +32,11 @@ inline constexpr const char* matmul_forms_table[48] = {
 };
 
 // Reuse direction of a block: reuse_dir 0 holds in0 in SrcB and streams in1 through SrcA when ct_dim >= rt_dim (main's rule), 1 forces that
-// direction and 2 the other one (in1 held in SrcA, in0 streamed through SrcB). Bit 2 (value 4) is the two-row scheme: two rows (or columns) of the
-// held operand sit in the two banks of its source and every streamed tile is used for both; it keeps the default direction. A kernel fixes
-// the value at compile time with matmul_reuse_dir.
+// direction and 2 the other one (in1 held in SrcA, in0 streamed through SrcB). A kernel fixes it at compile time with matmul_reuse_dir.
 template <std::uint32_t reuse_dir>
 constexpr bool matmul_reuse_a(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
 {
-    return (reuse_dir & 3) == 0 ? ct_dim >= rt_dim : (reuse_dir & 3) == 1;
-}
-template <std::uint32_t reuse_dir>
-constexpr bool matmul_two_row()
-{
-    return (reuse_dir & 4) != 0;
+    return reuse_dir == 0 ? ct_dim >= rt_dim : reuse_dir == 1;
 }
 
 // A 32-bit tile takes twice the unpacker cycles of a 16-bit one (32 against 64 datums per cycle), and the streamed operand is unpacked once per
@@ -59,22 +52,9 @@ constexpr bool matmul_format_is_16bit(const DataFormat f)
     return f == DataFormat::Float16 || f == DataFormat::Float16_b;
 }
 // pack_bound: half sync with a Float32 output, where the pack is the bound and the cell measured up to 1.7 percent slower
-// two_row_off: the blocks of the two-row scheme that measured slower than the single row one
 constexpr std::uint32_t matmul_reuse_dir(
-    const MathFidelity fidelity,
-    const DataFormat in0,
-    const DataFormat in1,
-    const std::uint32_t ct_dim,
-    const std::uint32_t rt_dim,
-    const bool pack_bound   = false,
-    const bool two_row_off  = false)
+    const MathFidelity fidelity, const DataFormat in0, const DataFormat in1, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool pack_bound = false)
 {
-    // a Float32 x Float32 block with an even held dimension streams each tile once per pair of held rows
-    const std::uint32_t held = ct_dim >= rt_dim ? rt_dim : ct_dim;
-    if (fidelity == MathFidelity::LoFi && !two_row_off && in0 == DataFormat::Float32 && in1 == DataFormat::Float32 && held >= 2 && (held % 2) == 0)
-    {
-        return 4;
-    }
     if (fidelity != MathFidelity::LoFi || pack_bound || ct_dim * rt_dim < 4)
     {
         return 0;

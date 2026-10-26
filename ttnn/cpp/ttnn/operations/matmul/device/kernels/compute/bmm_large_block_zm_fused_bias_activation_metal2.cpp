@@ -58,9 +58,7 @@ constexpr uint32_t bmm_reuse_dir = ckernel::matmul_reuse_dir(
     static_cast<DataFormat>(unpack_src_format[dfb::in1]),
     get_arg(args::out_subblock_w),
     get_arg(args::out_subblock_h),
-    DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[dfb::out] == (uint8_t)DataFormat::Float32,
-    MM_THROTTLE != 0 || (DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[dfb::out] == (uint8_t)DataFormat::Float32 && get_arg(args::in0_block_w) == 1) ||
-    !(unpack_tile_r_dim[dfb::in0] == 32 && unpack_tile_c_dim[dfb::in0] == 32 && unpack_tile_r_dim[dfb::in1] == 32 && unpack_tile_c_dim[dfb::in1] == 32));
+    DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[dfb::out] == (uint8_t)DataFormat::Float32);
 #endif
 #if defined(UCK_CHLKC_PACK)
 constexpr bool bmm_k_loop_format = false;

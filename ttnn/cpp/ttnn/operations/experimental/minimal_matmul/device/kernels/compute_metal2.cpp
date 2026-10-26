@@ -588,11 +588,7 @@ void kernel_main() {
         static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::in1)]),
         subblock_w,
         subblock_h,
-        DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[static_cast<uint32_t>(dfb::out)] == (uint8_t)DataFormat::Float32,
-        MM_THROTTLE != 0 ||
-        (DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[static_cast<uint32_t>(dfb::out)] == (uint8_t)DataFormat::Float32 && K_block_tiles == 1) ||
-        !(unpack_tile_r_dim[static_cast<uint32_t>(dfb::in0)] == 32 && unpack_tile_c_dim[static_cast<uint32_t>(dfb::in0)] == 32 &&
-          unpack_tile_r_dim[static_cast<uint32_t>(dfb::in1)] == 32 && unpack_tile_c_dim[static_cast<uint32_t>(dfb::in1)] == 32));
+        DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[static_cast<uint32_t>(dfb::out)] == (uint8_t)DataFormat::Float32);
     constexpr bool mm_main_cell = mm_reuse_dir != 0 || ckernel::matmul_main_form_cell_selected<
         MATH_FIDELITY,
         K_block_tiles,
