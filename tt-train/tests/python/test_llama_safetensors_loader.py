@@ -239,6 +239,23 @@ class TestLoadPlan:
         headers = HeadersOnly({"gate": (64, HIDDEN), "up": (64, HIDDEN)})
         assert _load_plan(rule, self.param(64, HIDDEN), tp, 2, headers) == (ROW_DIM, (128, HIDDEN))
 
+    @pytest.mark.parametrize(
+        "suffix,rows",
+        [("attention/qkv_linear/weight", (96, 96, 64)), ("mlp/w_gate_up/weight", (96, 160))],
+        ids=["q short, k long", "gate short, up long"],
+    )
+    def test_rejects_a_fused_block_of_the_wrong_size(self, placements, suffix, rows, expect_error):
+        """One block is 32 rows short and the next 32 rows long, so together they still fill the parameter.
+        Each block must still have the rows the config gives it."""
+        rule = next(
+            rule
+            for rule in _rules(coverage_config(), param_names(_PER_LAYER_FUSED))
+            if rule.param == f"Llama/blocks/0/{suffix}"
+        )
+        headers = HeadersOnly({source: (n, MODEL_HIDDEN) for source, n in zip(rule.sources, rows)})
+        with expect_error(RuntimeError, "the config implies"):
+            _load_plan(rule, self.param(sum(rows), MODEL_HIDDEN), None, 1, headers)
+
 
 class TestHelpers:
     @pytest.mark.parametrize(
@@ -702,6 +719,24 @@ class TestLoadIntoModel:
             load_from_safetensors(model, tmp_path)
         for name, param in model.parameters().items():
             assert np.array_equal(param.to_numpy(ttnn.DataType.FLOAT32), before[name]), f"{name} was assigned"
+
+    @pytest.mark.parametrize(
+        "short,long",
+        [("self_attn.q_proj", "self_attn.k_proj"), ("mlp.gate_proj", "mlp.up_proj")],
+        ids=["q short, k long", "gate short, up long"],
+    )
+    def test_rejects_a_fused_block_of_the_wrong_size(self, tmp_path, short, long, expect_error):
+        """One block is a head's width short and the next as much long, so together they still fill the fused parameter,
+        and the RoPE unpermute still splits q and k into heads. Without a check on each block,
+        the long block's first rows would load where the short one's last rows belong."""
+        hf = hf_tensors()
+        pfx = "model.layers.0"
+        short_block, long_block = hf[f"{pfx}.{short}.weight"], hf[f"{pfx}.{long}.weight"]
+        hf[f"{pfx}.{short}.weight"] = short_block[:-MODEL_HEAD_DIM]
+        hf[f"{pfx}.{long}.weight"] = np.concatenate([long_block, short_block[-MODEL_HEAD_DIM:]])
+        write_hf_checkpoint(tmp_path, hf)
+        with expect_error(RuntimeError, "the config implies"):
+            load_from_safetensors(Llama(e2e_config(False, EmbeddingPlacement.Replicated)), tmp_path)
 
     @pytest.mark.parametrize("tying", TYINGS, ids=lambda v: v.name)
     def test_every_parameter_holds_its_sources(self, tmp_path, tying):

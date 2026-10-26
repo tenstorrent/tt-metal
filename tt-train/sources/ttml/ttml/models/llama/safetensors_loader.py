@@ -21,7 +21,7 @@ import ttml
 from ttml.common.utils import resolve_padded_load_shape, unpermute_proj_rows
 
 from .. import WeightTyingType
-from . import Llama, LlamaConfig
+from . import Llama, LlamaConfig, compute_swiglu_intermediate_size
 
 # TTML stores a weight as 4-D (1, 1, out_features, in_features).
 ROW_DIM, COL_DIM = 2, 3
@@ -202,6 +202,9 @@ class _Rule:
     # What the assembled sources must measure when the parameter is tile-padded above them (the
     # vocab); None means they must match the parameter exactly.
     source_shape: tuple[int, int] | None = None
+    # The rows each source must have, for a fused parameter: a short block next to a long one still
+    # fills the parameter. None for a single source, whose rows the parameter's shape already fixes.
+    block_rows: tuple[int, ...] | None = None
 
 
 def _load_plan(
@@ -209,7 +212,11 @@ def _load_plan(
 ) -> tuple[int | None, tuple[int, int]]:
     """Return the dim *param* is sharded on over 'tp', and the shape to pad its sources to."""
     shard_dim = _sharded_dim(param, tp, rule.param)
-    assembled = _assembled_shape([checkpoint.shape(s) for s in rule.sources], shard_dim, mesh_size, rule.param)
+    shapes = [checkpoint.shape(s) for s in rule.sources]
+    for source, (rows, _), expected in zip(rule.sources, shapes, rule.block_rows or ()):
+        if rows != expected:
+            raise RuntimeError(f"{rule.param}: {source} has {rows} rows; the config implies {expected}")
+    assembled = _assembled_shape(shapes, shard_dim, mesh_size, rule.param)
     param_shape = _global_shape(param, shard_dim, mesh_size)
     return shard_dim, resolve_padded_load_shape(
         assembled, param_shape, rule.source_shape or param_shape, name=rule.param
@@ -227,6 +234,11 @@ def _rules(config: LlamaConfig, parameter_names: set[str]) -> Iterator[_Rule]:
         yield _Rule("Llama/fc/weight", ("lm_head.weight",), source_shape=embedding_shape)
     yield _Rule("Llama/ln_fc/gamma", ("norm.weight",))
 
+    # As the model sizes them: GroupedQueryAttention and LlamaMLP.
+    head_dim = config.hidden_size // config.num_attention_heads
+    q_rows, kv_rows = config.num_attention_heads * head_dim, config.num_key_value_heads * head_dim
+    intermediate_size = config.intermediate_size or compute_swiglu_intermediate_size(config.hidden_size)
+
     def rope_unpermute(q: np.ndarray, k: np.ndarray, v: np.ndarray) -> list[np.ndarray]:
         return [
             unpermute_proj_rows(q, config.num_attention_heads),
@@ -243,12 +255,14 @@ def _rules(config: LlamaConfig, parameter_names: set[str]) -> Iterator[_Rule]:
             f"{param}/attention/qkv_linear/weight",
             tuple(f"{hf}.self_attn.{p}_proj.weight" for p in ("q", "k", "v")),
             transform=rope_unpermute,
+            block_rows=(q_rows, kv_rows, kv_rows),
         )
         yield _Rule(f"{param}/attention/out_linear/weight", (f"{hf}.self_attn.o_proj.weight",))
         # Block order is the contract with swiglu_packed, which reads [gate | up].
         yield _Rule(
             f"{param}/mlp/w_gate_up/weight",
             tuple(f"{hf}.mlp.{p}_proj.weight" for p in ("gate", "up")),
+            block_rows=(intermediate_size, intermediate_size),
         )
         yield _Rule(f"{param}/mlp/w2/weight", (f"{hf}.mlp.down_proj.weight",))
 
@@ -353,6 +367,7 @@ def load_from_safetensors(model: Llama, safetensors_path: str | os.PathLike) -> 
             - the checkpoint ships a bias the model has, which this loader can't load; any other lands in ``unused``
             - a tensor appears in two files, or is not 1-D or 2-D
             - a tensor's shape differs from what the config implies (a transposed weight included)
+            - a block of a fused parameter (q, k or v; gate or up) has other rows than the config implies
             - a parameter is sharded over a mesh axis other than 'tp', or over 'tp' on a dim other than rows or columns
     """
     parameters = model.parameters()
