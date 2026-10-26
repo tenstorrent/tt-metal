@@ -1951,3 +1951,51 @@ Takeaway: ttsim-perf is good to ~5% for NoC / snake work and single DRAM streams
 internals and no DRISC, so it cannot explain the +83 us; the silicon data point it adds is that the excess x cost is
 about twice as large next to DRISC streams as next to Tensix reader streams.
 Logs: /localdev/mstaletovic/ttsim_perf/ (si_*, sim_*, op_*, prof_*; scripts/).
+
+### DRAM alone: weights + gathered x, can the mix reach 90%? (2026-10-26, bh-lb-09 one P150 card, 12 x 10)
+models/demos/moe_block/tests/perf/test_dram_xw_mix.py: a generic_op with nothing but NoC reads DRAM -> L1 (no compute,
+forwards, tilize or writes). GLM-5.3 at Galaxy load per call: weights 169.9 MB (bfp4 gate/up/down, E 8) + x 15.7 MB
+(1280 bf16 rows of 12 KB, one row a page interleaved over the banks, a random permutation split in 8 experts of 160)
+= 185.6 MB: 100% of 512 GB/s = 362.5 us, 90% = 403. One kernel: a continuous queue of DEPTH reads (one transaction id
+each) over weight chunks and/or a per-core x read table; spans from the RISC wall clock at 1350 MHz (aiclk 1350 for the
+whole run; host time a launch = span + ~9 us in every case, which checks the conversion). Median of 5.
+Base = weights: per bank the optimal NOC0 core + its row neighbour (16 BRISC readers, NOC0) streaming their bank, 32 KB
+reads, 4 deep; x: 4 cores away from the DRAM columns (BRISC, NOC1), 2 KB segments of the rows, 3 deep. One variable at a
+time from base; us (% of 512 GB/s on the bytes of that mode):
+| variant | weights alone | x alone | both |
+|---|---|---|---|
+| base | 332.7 (99.7) | 264.6 (11.6) | 375.8 (96.5) |
+| x 4 KB / 12 KB reads | | 169 / 151 | 364.4 / 363.9 (99.5 / 99.6) |
+| x depth 1 / 2 / 6 / 12 | | 770 / 388 / 166 / 155 | 868 (41.7) / 493 (73.5) / 364.2 / 364.1 |
+| x barrier batches of 2 / 3 / 6 (not a queue) | | 435 / 341 / 231 | 540 (67.1) / 435 (83.3) / 363.7 (99.7) |
+| x on 2 / 8 / 16 cores | | 517 / 141 / 92 | 622 (58.3) / 363.9 / 363.9 |
+| x 2 KB, depth 2, 8 cores | | 198 | 363.9 (99.6) |
+| x on NOC0 (depth 3 / 6 / near-DRAM cores own bank) | | 251 / 134 / 134 | 556 (65.2) / 443 (81.8) / 452 (80.2) |
+| x near-DRAM 8 / 16 cores, own bank only (NOC1) | | 132 / 68 | 364.0 / 363.6 |
+| x on the weight readers' NCRISC (NOC1), own bank / any bank | | 67 / 84 | 363.7 / 364.2 |
+| x in the weight readers' queue (spread), own bank, 2 KB / 12 KB | | 40 / 31 | 363.9 / 363.7 (99.6 / 99.7) |
+| same, any bank / x first / weights first | | 59 / 39 / 40 | 389.6 (93.0) / 371.3 / 371.4 (97.6) |
+| x paced over 360 us, depth 3 / 6 | | 360 | 378.6 (95.7) / 364.2 (99.5) |
+| x pre-gathered (each bank's slab, 12 KB reads) | | 144 | 363.8 |
+| weight reads 8 / 16 / 64 KB | 380.1 (87.3) / 333.5 / 332.5 | | 399.3 (90.8) / 373.4 / 377.0 |
+| weight depth 2 / 8; 1 / 3 readers a bank | 332.9 / 333.0; 332.6 / 371.3 (89.3) | | 374.6 / 374.6; 375.9 / 391.6 |
+| weights rotating over banks / from mid cores / on NOC1 | 479.9 (69.1) / 495.3 (67.0) / 497.2 (66.7) | | 486.5 / 498.2 / 767.3 (47.2) |
+| weights as the flat op: down third as 9 KB blocks rotating from 32 cores, depth 2 | 355.2 (93.4) | | 384.9 (94.2) |
+| same, down depth 4; + x depth 6; + x in the reader queue 12 KB | 342.6 (96.9) | | 372.8 (97.2); 371.8; 372.3 |
+| K3 (520.1 + 18.3 MB, floor 1051.6): base / down as the flat op / + x in reader queue | 1017.7 / 1080.9 | 345 | 1053.7 (99.8) / 1116.0 (94.2) / 1090.6 (96.4) |
+- Yes, many ways: the combined bytes download at 99.5-99.7% (363.6-364.4 us vs the 362.5 floor) whenever x has enough
+  reads in flight on NOC1: >= 6 x 2 KB a core on 4 cores, or 4 KB+ reads, or 8+ cores, or x issued by the bank readers
+  from their own bank (either RISC). The weight stream then ends +31 us after weights alone = x's bytes at 512 GB/s:
+  random 2 KB row segments cost the banks no more than sequential bytes.
+- What caps a mix is never the banks: (1) x issue rate - with 24 KB of x in flight (base) x is latency-bound (0.41 us
+  a read alone, 0.58 us next to the weights) and becomes the tail (x 375 vs weights 363); depth 2 / barrier batches /
+  2 cores make it worse (67-83%); (2) x on NOC0 (65-82%, even near-DRAM cores reading their own bank); (3) weights on
+  NOC1, rotating over banks, or from cores away from the DRAM (67-69% alone); (4) the flat op's down pattern (9 KB
+  blocks rotating, depth 2) costs 6.6% alone (355 vs 333), depth 4 recovers half of it.
+- For the flat op (inferred, the real kernels are not in this benchmark): the DRAM can take x next to the weights for
+  +31 us, not +83 (DRISC) / +49 (Tensix readers, ttsim section above). The excess is in how x is issued / coupled,
+  not in the banks. Candidates: keep >= ~32-48 KB of x reads in flight continuously (trid queue, not barrier batches)
+  or larger reads, on NOC1; or have the bank readers read their own bank's x rows; down-weight reads 4 deep. The
+  DRISC DMA path is not reproduced here (no DRISC kernels in a generic_op), so its NOC1-endpoint interaction with x
+  stays the open suspect.
+Logs: /localdev/mstaletovic/dram_xw/ (r03_sweep, r04_combos, r05_batch; results.jsonl).
