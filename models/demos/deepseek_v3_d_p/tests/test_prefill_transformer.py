@@ -456,6 +456,8 @@ def run_model(
         seq_len=isl_total,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
+        # The sparse (DSA) path always dedups KV over TP, so its caches are SP*TP-striped like the write op.
+        tp_axis=tp_axis if has_indexer else None,
         num_kvpe_cache_layers=num_layers,
     )
 
@@ -474,6 +476,7 @@ def run_model(
             seq_len=isl_total,
             mesh_shape=mesh_shape,
             sp_axis=sp_axis,
+            tp_axis=tp_axis,
             num_kvpe_cache_layers=index_cache_layers,
             num_users=1,
             dtype=ttnn.bfloat8_b,
