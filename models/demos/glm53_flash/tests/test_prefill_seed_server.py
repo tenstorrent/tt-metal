@@ -88,11 +88,13 @@ _ST_DTYPES = {
 
 def st_parts(tensors: dict) -> list:
     """``safetensors.torch.save(tensors)``'s format as a list of buffers, without copying any tensor's data: the
-    8-byte header length + the JSON header (space-padded to 8 bytes), then each tensor's contiguous storage in name
-    order (``data_offsets`` consecutive from 0, as the format's validation requires). Their concatenation is a
-    safetensors file; ``safetensors.torch.load`` reads it back to equal tensors (tests/test_seed_zerocopy.py)."""
+    8-byte header length + the JSON header (space-padded to 8 bytes), then each tensor's contiguous storage in order
+    of decreasing element size, then name (``data_offsets`` consecutive from 0, as the format's validation
+    requires; every tensor starts aligned to its element size, as ``safetensors.torch.save`` lays them out, so the
+    ring can map them in place with ``torch.frombuffer``). Their concatenation is a safetensors file;
+    ``safetensors.torch.load`` reads it back to equal tensors (tests/test_seed_zerocopy.py)."""
     hdr, bufs, off = {}, [], 0
-    for k in sorted(tensors):
+    for k in sorted(tensors, key=lambda k: (-tensors[k].element_size(), k)):
         t = tensors[k].contiguous()
         n = t.numel() * t.element_size()
         hdr[k] = {"dtype": _ST_DTYPES[t.dtype], "shape": list(t.shape), "data_offsets": [off, off + n]}
@@ -455,13 +457,27 @@ def test_prefill_seed_server(mesh_device):
             # socket I/O on the pool's threads; the ttnn reads stay on this thread), so push_ack_s is only the tail
             # after the last export (G53F-0171: 8.3 s export + 8.8 s push at 1M back to back); 0 = export all first
             overlap = os.environ.get("GLM53F_SEED_OVERLAP", "1") == "1"
+            # G53F-0189: a test driver (prefill/fake_ring.py) may A/B the export per request with "opts"
+            # {"zerocopy": 0|1, "export_partition": 0|1}; the ring's driver sends none (the env defaults apply)
+            opts = hdr.get("opts") or {}
+            zc = bool(int(opts.get("zerocopy", ZERO_COPY)))
+            part_env = os.environ.get("GLM53F_EXPORT_PARTITION")
+            if "export_partition" in opts:
+                os.environ["GLM53F_EXPORT_PARTITION"] = str(int(opts["export_partition"]))
+            rep.update(zerocopy=int(zc), export_partition=int(os.environ.get("GLM53F_EXPORT_PARTITION", "0") == "1"))
             futs = []
-            for L in layers:
-                dec = decs[L]
-                state = _dsa_state_host(model, dec, sp) if dec.cache is not None else _kda_state_host(model, dec)
-                bodies[L] = st_parts(state) if ZERO_COPY else save({k: v.contiguous() for k, v in state.items()})
-                if overlap:
-                    futs.append(pool.submit(push, L))
+            try:
+                for L in layers:
+                    dec = decs[L]
+                    state = _dsa_state_host(model, dec, sp) if dec.cache is not None else _kda_state_host(model, dec)
+                    bodies[L] = st_parts(state) if zc else save({k: v.contiguous() for k, v in state.items()})
+                    if overlap:
+                        futs.append(pool.submit(push, L))
+            finally:
+                if part_env is None:
+                    os.environ.pop("GLM53F_EXPORT_PARTITION", None)
+                else:
+                    os.environ["GLM53F_EXPORT_PARTITION"] = part_env
             t_exp = time.perf_counter()
 
             try:
