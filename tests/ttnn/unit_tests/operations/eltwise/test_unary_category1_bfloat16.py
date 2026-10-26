@@ -748,3 +748,266 @@ def test_bessel_ops(device, ttnn_op, low, high):
     golden = flush_to_zero(golden)
 
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=1)
+
+
+def test_sigmoid_bf16_unflushed_zero_and_subnormal_inputs(device):
+    """TT-NN's copy into DEST keeps -0 and subnormal BF16 inputs, which the LLK sweep's unpack delivers as +0.
+
+    Each such input and +0 must store torch's result: its class as the BF16 pack stores it (NaN as
+    +inf, -0 as +0, a subnormal result as 0) and a finite result within 1 ULP of torch's float64
+    value. STOCK lists, per board, the inputs where the kernel stores its stock kernel's word
+    instead, as {word: [(first input, last input), ...]} over the input bits.
+    """
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.sigmoid keeps its stock kernel on {board}")
+    STOCK = {}
+    words = torch.cat([torch.arange(0x80), torch.arange(0x8000, 0x8080)]).to(torch.int16)
+    x = words.view(torch.bfloat16).repeat(4).reshape(1, 1, 32, 32)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tiny = torch.finfo(torch.bfloat16).tiny
+
+    def stored(t):
+        t = t.to(torch.bfloat16).to(torch.float64).flatten()
+        t = torch.where(torch.isnan(t), torch.full_like(t, float("inf")), t)
+        return torch.where(t.abs() < tiny, torch.zeros_like(t), t)
+
+    actual = stored(ttnn.to_torch(ttnn.sigmoid(tt_x)))
+    x64 = x.flatten().to(torch.float64)
+    reference = ttnn.get_golden_function(ttnn.sigmoid)(x64).to(torch.float64).flatten()
+    rounded = stored(reference)
+    spacing = 2.0 ** (torch.floor(torch.log2(reference.abs().clamp(min=tiny))) - 7)
+    close = torch.isfinite(reference) & (actual != 0) & ((actual - reference).abs() < spacing)
+    ok = (actual == rounded) | close
+    bits = words.repeat(4).to(torch.int32) & 0xFFFF
+    for word, ranges in STOCK.get(board, {}).items():
+        value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
+        for first, last in ranges:
+            ok |= (bits >= first) & (bits <= last) & (actual == value)
+    assert ok.all(), (
+        f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
+        f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
+    )
+
+
+def test_sigmoid_bf16_bfloat8_b(device):
+    """bfloat8_b in and out. The SFPU reads Bfp8_b data in DEST as BF16, so this runs the BF16 kernel, as the
+    BF16 cases do. The result must correlate with torch's on the input as stored to PCC 0.999, as upstream's
+    bfloat8_b unary cases require. Over every finite BF16 exponent, each output must also be within one bfloat8_b
+    step of the BF16 call's for the same stored input, packed to bfloat8_b (two in a block that holds an infinity
+    or NaN), and of its class (infinity, NaN, zero): the op packs DEST to Bfp8_b, and the typecast rounds and
+    sets a block's exponent its own way.
+    """
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.sigmoid keeps its stock kernel on {board}")
+    torch.manual_seed(0)
+    x = torch.empty(1, 1, 64, 64).uniform_(-10.0, 10.0).to(torch.bfloat16)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    stored = ttnn.to_torch(tt_x).to(torch.float64).flatten()
+    output = ttnn.sigmoid(tt_x)
+    assert output.dtype == ttnn.bfloat8_b
+    actual = ttnn.to_torch(output).to(torch.float64).flatten()
+    golden = ttnn.get_golden_function(ttnn.sigmoid)(stored).to(torch.float64)
+    pcc = torch.corrcoef(torch.stack([actual, golden]))[0, 1].item()
+    assert pcc >= 0.999, f"PCC {pcc:.6f} against torch"
+    # Every finite BF16 exponent and +-0, one exponent to each 16-value face row, so Bfp8_b keeps each value
+    # to 7 bits under its own exponent.
+    words = torch.arange(1 << 16, dtype=torch.int32)
+    exponent = (words >> 7) & 0xFF
+    zeros = torch.tensor([0x0000] * 256 + [0x8000] * 256, dtype=torch.int32)
+    words = torch.cat([words[(exponent > 0) & (exponent < 0xFF)], zeros])
+    x = words.to(torch.int16).view(torch.bfloat16).reshape(1, 1, 256, 256)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    stored = ttnn.to_torch(tt_x).to(torch.bfloat16)
+    tt_stored = ttnn.from_torch(stored, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(ttnn.sigmoid(tt_x)).to(torch.float32).flatten()
+    expected = ttnn.to_torch(ttnn.typecast(ttnn.sigmoid(tt_stored), ttnn.bfloat8_b)).to(torch.float32).flatten()
+    # One step of a Bfp8_b block: its 16 values share the largest one's exponent and keep 7 bits under it.
+    finite = torch.isfinite(actual) & torch.isfinite(expected)
+    magnitude = torch.where(finite, torch.maximum(actual.abs(), expected.abs()), torch.zeros_like(actual))
+    block = magnitude.reshape(-1, 16).amax(dim=1, keepdim=True).expand(-1, 16).reshape(-1)
+    step = torch.exp2(torch.floor(torch.log2(block.clamp_min(torch.finfo(torch.float32).tiny))) - 6)
+    # A block that also holds an infinity or NaN: the op's pack and the typecast set its exponent apart, and
+    # its finite values land up to two steps apart (polygamma's overflow binade, BH job 142644).
+    special = (~finite).reshape(-1, 16).any(dim=1, keepdim=True).expand(-1, 16).reshape(-1)
+    step = torch.where(special, 2 * step, step)
+    # Infinity, NaN and zero keep their class exactly; a finite value may round one step apart.
+    same = (
+        (actual == expected)
+        | (torch.isnan(actual) & torch.isnan(expected))
+        | (finite & ((actual == 0) == (expected == 0)) & ((actual - expected).abs() <= step))
+    )
+    assert same.all(), (
+        f"{int((~same).sum())} bfloat8_b outputs are more than one bfloat8_b step from the BF16 call's on the same "
+        "stored input; first at "
+        f"{stored.flatten()[~same][0].item()!r}: {actual[~same][0].item()!r}, BF16 call {expected[~same][0].item()!r}"
+    )
+
+
+def test_sigmoid_bf16_nonfinite_inputs(device):
+    """+-Inf and +-NaN through TT-NN, where the kernel may return its stock kernel's word for some of them.
+
+    Each must store torch's result as the BF16 pack stores it (NaN as an infinity), or the word STOCK
+    lists for that input on the board, as {input bits: word}.
+    """
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.sigmoid keeps its stock kernel on {board}")
+    STOCK = {"blackhole": {0x7FC0: 0x0000, 0xFFC0: 0x0000}, "wormhole_b0": {0x7FC0: 0x3F80, 0xFFC0: 0x0000}}
+    bits = torch.tensor([0x7F80, 0xFF80, 0x7FC0, 0xFFC0], dtype=torch.int32).repeat(256)
+    x = bits.to(torch.int16).view(torch.bfloat16).reshape(1, 1, 32, 32)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def stored(t):
+        return t.to(torch.bfloat16).to(torch.float64).flatten()
+
+    actual = stored(ttnn.to_torch(ttnn.sigmoid(tt_x)))
+    reference = ttnn.get_golden_function(ttnn.sigmoid)(x.flatten().to(torch.float64)).to(torch.float64)
+    expected = stored(reference)
+    for input_bits, word in STOCK.get(board, {}).items():
+        expected[bits == input_bits] = stored(
+            torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16)
+        )
+    spacing = 2.0 ** (torch.floor(torch.log2(expected.abs().clamp(min=torch.finfo(torch.bfloat16).tiny))) - 7)
+    ok = (actual == expected) | (torch.isfinite(expected) & ((actual - expected).abs() < spacing))
+    # A NaN result reaches L1 as a NaN or as an infinity of either sign.
+    ok |= torch.isnan(expected) & (torch.isnan(actual) | torch.isinf(actual))
+    assert (
+        ok.all()
+    ), f"input 0x{bits[~ok][0].item():04x} stored {actual[~ok][0].item()!r}, expected {expected[~ok][0].item()!r}"
+
+
+def test_sigmoid_bf16_exhaustive_inputs(device):
+    """All 65,536 BF16 inputs through ttnn.sigmoid, the call TT-NN users make.
+
+    Each must store torch's float64 result (torch.sigmoid(x)) as the BF16 pack stores it (NaN as an
+    infinity, a result below the smallest normal, or within 2^-12 above it, as 0), a finite word within
+    STEPS BF16 steps of it, or the word STOCK lists for that input on the board, as
+    {word: [(first input, last input), ...]} over the input bits. SKIP lists the inputs this case does
+    not judge, which the LLK sweep checks against its own golden: where torch's float64 formula misses
+    the exact result (a cancellation), where the kernel departs from torch by its spec, and NaN inputs
+    whose stock word varies with the payload. MODEL holds every other normal input whose torch result is finite to the
+    kernel's own word: torch's, moved by MODEL's whole BF16 steps where MODEL lists the input, as
+    {steps: "first-last first ..."} (hex input words) for each board.
+    """
+    board = "blackhole" if ttnn.device.is_blackhole(device) else "wormhole_b0"
+    if board not in ("blackhole", "wormhole_b0"):
+        pytest.skip(f"ttnn.sigmoid keeps its stock kernel on {board}")
+    STOCK = {
+        "blackhole": {0x0000: [(0x7F81, 0x7FFF), (0xFF81, 0xFFFF)]},
+        "wormhole_b0": {0x0000: [(0xFF81, 0xFFFF)], 0x3F80: [(0x7F81, 0x7FFF)]},
+    }
+    STEPS = 1
+    SKIP = [(0xC2AF, 0xC2B7)]
+    MODEL = {
+        "blackhole": {
+            -1: (
+                "3DB1 3DD1-3DD2 3DF1-3DF2 3E09 3E19 3E29-3E2A 3E39-3E3A 3E49-3E4A 3E59-3E5A 3E6A "
+                "3E7A 3E85 3E8D 3EB6 3F31 3F51 3F64 3F69 3F6E 3F73 "
+                "3F78 3F81 3FD6 4005 BB17-BB80 BC2D-BC40 BC9A-BCA0 BCDD-BCE0 BD10 BEBC "
+                "BEC0 BEC4 BEC8 BED5 BED9 BEDD BEE1 BEE5 BEEE BEF2 "
+                "BEF6 BEFF BF08 BF0A BF15 BF17 BF20 BF34 BF93 BF95 "
+                "BF97 BF9C BFA1 BFA4 BFB4 BFE1-BFE6 BFF4-BFF5 BFFB BFFE C006-C007 "
+                "C01C C01F C024-C025 C04E C051 C057-C058 C05E C078 C07A C07C "
+                "C07F C082 C091 C096 C098 C0AA C0B2 C0C3 C0C8 C0D9 "
+                "C0DB C0EF C0F4 C10E C11A C12E C139 C144 C150 C153 "
+                "C15B C174 C184 C194 C19F C1A5 C1B7 C1C1 C1D1 C1DD "
+                "C1E2 C1E9 C1F4 C207 C20D C20F C213 C21A C220 C228 "
+                "C233 C23E C241 C247 C24C C255 C25D C265 C269 C27E "
+                "C282 C289 C298 C2AA"
+            ),
+            1: (
+                "3BD1-3C00 3CB9-3CC0 3D1F-3D20 3ED7 3EF0 3F09 3F16 3F35 3F96 3FEE "
+                "4000 4034 BD51 BD71-BD72 BD89 BD99-BD9A BDA9-BDAA BDB9-BDBA BDC9-BDCB BDD9-BDDB "
+                "BDE9-BDEB BDF9-BDFB BE05 BE0D BE15-BE16 BE1D-BE1E BE25-BE26 BE2D-BE2E BE35-BE36 BE3D-BE3E "
+                "BE45-BE46 BE4D-BE4E BE55-BE56 BE5D-BE5E BE65-BE66 BE6E BE76 BE7E BE83 BE87 "
+                "BE8B BE8F BF29 BF49 BF50 BF57 BF5E BF63 BF6F BF74 "
+                "BF79 BF7E BFB1 BFBD BFC2-BFC3 BFC8-BFC9 BFD0-BFD1 C002 C009-C00A C010 "
+                "C03A-C03B C041 C05D C063 C066 C069-C06A C088-C089 C08D-C08E C09E-C0A0 C0B5-C0B6 "
+                "C0BA C0CE C0E1-C0E3 C0E5 C108-C109 C110 C112 C11C C12B C133-C134 "
+                "C13F C14B C154 C160 C16B C181 C185-C187 C197 C1A8 C1AD "
+                "C1BE C1C3-C1C4 C1D5 C1D9 C1E5 C1FA C20B C20E C211 C219 "
+                "C22D C240 C243 C24B C253 C256 C261 C272 C27D C280 "
+                "C287-C288 C28F C29E"
+            ),
+        },
+        "wormhole_b0": {
+            -1: (
+                "3DB1 3DD1-3DD2 3DF1-3DF2 3E09 3E19 3E29-3E2A 3E39-3E3A 3E49-3E4A 3E59-3E5A 3E6A "
+                "3E7A-3E7B 3E85 3E8D 3EAE 3EB6 3F31 3F51 3F64 3F69 3F6E "
+                "3F73 3F78 3F7D 3F81 3FD6 4005 4089 4094 40C8-40C9 BB0A-BB80 "
+                "BC2A-BC40 BC99-BCA0 BCDC-BCE0 BD0F-BD10 BEBC BEC0 BEC4 BEC8 BED5 BED9 "
+                "BEDD BEE1 BEE5 BEEE BEF2 BEF6 BEFA BEFF BF08 BF0A "
+                "BF15 BF17 BF20 BF34 BF93 BF95 BF97 BF9C BFA1 BFA4 "
+                "BFB4 BFE0-BFE7 BFF4-BFF5 BFFB BFFE C006-C007 C01C C01F C024-C025 C04E "
+                "C051 C056-C058 C05E C078 C07A C07C C07F C082 C091 C096 "
+                "C098 C0AA C0B2 C0C3 C0C8 C0D9 C0DB C0EF C0F4 C10E "
+                "C11A C12E C139 C144 C150 C153 C15B C174 C184 C194 "
+                "C19F-C1A0 C1A5 C1B7 C1C1 C1D1 C1DD C1E2 C1E9 C1F4 C207 "
+                "C20D C20F C213 C21A C220 C228 C233 C23E C241 C247 "
+                "C24C C255 C25D C265 C269 C27E C282 C289 C298 C2AA"
+            ),
+            1: (
+                "3BD5-3C00 3CB9-3CC0 3D1F-3D20 3ED7 3EF0 3F09 3F16 3F35 3FEE 4000 "
+                "4034 BD51 BD71-BD72 BD89 BD99-BD9A BDA9-BDAA BDB9-BDBA BDC9-BDCB BDD9-BDDB BDE9-BDEB "
+                "BDF9-BDFB BE05 BE0D BE15-BE16 BE1D-BE1E BE25-BE26 BE2D-BE2E BE35-BE36 BE3D-BE3E BE45-BE46 "
+                "BE4D-BE4E BE55-BE56 BE5D-BE5E BE65-BE66 BE6E BE76 BE7E BE83 BE87 BE8B "
+                "BE8F BF29 BF49 BF50 BF57 BF5E BF63 BF6F BF74 BF79 "
+                "BF7E BFB1 BFBD BFC2 BFC8-BFC9 BFD0-BFD1 C002 C009-C00A C010 C03A-C03B "
+                "C041 C05D C063 C066 C069-C06A C088-C089 C08D-C08E C09E-C0A0 C0B5-C0B6 C0CE "
+                "C0E1-C0E3 C0E5 C108-C109 C110 C112 C11C C12B C133-C134 C13F C14B "
+                "C154 C160 C16B C181 C185-C187 C197 C1A8 C1BE C1C3-C1C4 C1D5 "
+                "C1D9 C1E5 C1FA C20B C20E C211 C219 C22D C240 C243 "
+                "C24B C253 C256 C261 C272 C27D C280 C287-C288 C28F C29E"
+            ),
+        },
+    }
+    bits = torch.arange(1 << 16, dtype=torch.int32)
+    x = bits.to(torch.int16).view(torch.bfloat16).reshape(1, 1, 256, 256)
+    tt_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tiny = torch.finfo(torch.bfloat16).tiny
+
+    def stored(t):
+        t = t.to(torch.bfloat16).to(torch.float64).flatten()
+        return torch.where(t.abs() < tiny, torch.zeros_like(t), t)
+
+    def ordered(t):
+        # BF16 words in value order, so that adjacent finite values differ by one step.
+        words = t.to(torch.bfloat16).view(torch.int16).to(torch.int32)
+        return torch.where(words < 0, -(words & 0x7FFF), words)
+
+    actual = stored(ttnn.to_torch(ttnn.sigmoid(tt_x)))
+    x = x.flatten().to(torch.float64)
+    reference = (torch.sigmoid(x)).to(torch.float64).flatten()
+    expected = stored(reference)
+    finite = torch.isfinite(expected) & torch.isfinite(actual)
+    ok = (actual == expected) | (finite & ((ordered(actual) - ordered(expected)).abs() <= STEPS))
+    # A NaN result reaches L1 as a NaN or as an infinity of either sign.
+    ok |= torch.isnan(reference) & (torch.isnan(actual) | torch.isinf(actual))
+    # The SFPU flushes a result below the smallest normal, or within 2^-12 above it, to 0.
+    ok |= (actual == 0) & (reference.abs() < tiny * (1 + 2.0**-12))
+    listed = torch.zeros_like(ok)
+    for word, ranges in STOCK.get(board, {}).items():
+        value = stored(torch.tensor([word], dtype=torch.int32).to(torch.int16).view(torch.bfloat16))
+        for first, last in ranges:
+            lanes = (bits >= first) & (bits <= last)
+            listed |= lanes
+            ok |= lanes & ((actual == value) | (torch.isnan(actual) & torch.isnan(value)))
+    for first, last in SKIP:
+        listed |= (bits >= first) & (bits <= last)
+        ok |= (bits >= first) & (bits <= last)
+    shift = torch.zeros_like(bits)
+    for offset, spans in MODEL.get(board, {}).items():
+        for span in spans.split():
+            first, _, last = span.partition("-")
+            shift[(bits >= int(first, 16)) & (bits <= int(last or first, 16))] = offset
+    moved = ordered(expected) + shift
+    word = torch.where(moved < 0, (-moved) | 0x8000, moved)
+    held = stored(word.to(torch.int16).view(torch.bfloat16))
+    normal = ((bits & 0x7F80) != 0) & ((bits & 0x7F80) != 0x7F80)
+    ok = torch.where(normal & ~listed & torch.isfinite(expected), actual == held, ok)
+    assert ok.all(), (
+        f"{(~ok).sum().item()} of {ok.numel()} inputs off torch and stock; first input 0x{bits[~ok][0].item():04x} "
+        f"stored {actual[~ok][0].item()!r}, torch {reference[~ok][0].item()!r}"
+    )
