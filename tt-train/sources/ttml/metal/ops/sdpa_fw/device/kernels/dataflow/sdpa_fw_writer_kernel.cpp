@@ -19,15 +19,17 @@ void kernel_main() {
     constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
-    constexpr uint32_t vWt = get_compile_time_arg_val(0);         // number of tiles in output/value inner dimension
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);          // number of tiles in sequence dimension
-    constexpr uint32_t q_heads = get_compile_time_arg_val(2);     // num of heads in query
-    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);  // query tile-rows per Q chunk
+    constexpr uint32_t vWt = get_compile_time_arg_val(0);             // number of tiles in output/value inner dimension
+    constexpr uint32_t Ht = get_compile_time_arg_val(1);              // number of tiles in sequence dimension
+    constexpr uint32_t q_heads = get_compile_time_arg_val(2);         // num of heads in query
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);      // query tile-rows per Q chunk
+    constexpr uint32_t heads_per_item = get_compile_time_arg_val(4);  // Q heads stacked in one item
     constexpr uint32_t q_num_chunks = Ht / Sq_chunk_t;
+    constexpr uint32_t rows = Sq_chunk_t * heads_per_item;  // tile-rows of one item
 
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
-    constexpr auto output_args = TensorAccessorArgs<4>();
+    constexpr auto output_args = TensorAccessorArgs<5>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
     [[maybe_unused]] constexpr auto intermediates_args =
@@ -63,36 +65,38 @@ void kernel_main() {
     generate_tile_with_bfloat16_value(cb_attn_mask, BF16_NEG_LARGE_BITS);
 #endif
 
-    constexpr uint32_t out_tiles_per_chunk = Sq_chunk_t * vWt;
-    constexpr uint32_t kIntermediateTilesPerRow = 1U;
-
-    // One Q chunk: Sq_chunk_t consecutive output rows, contiguous in DRAM.
-    auto write_q_chunk = [&](const uint32_t global_q_chunk_idx) {
-        const uint32_t seq_idx = global_q_chunk_idx / q_num_chunks;  // batch * q_heads + head
-        const uint32_t first_row_tile = (global_q_chunk_idx % q_num_chunks) * Sq_chunk_t;
-        const uint32_t global_first_row = seq_idx * Ht + first_row_tile;
+    // One item: rows stacked head after head in the CBs, each head's Sq_chunk_t rows contiguous in DRAM.
+    auto write_q_chunk = [&](const uint32_t item) {
+        const auto w = decode_work_item<q_num_chunks, Sq_chunk_t, q_heads, heads_per_item>(item);
 
         // -------- Output: (B, H, S, D), heads NOT fused --------
         // Linear index for [B, H, S, D]: ((b * q_heads + h) * Ht + s_tile) * vWt + col
-        write_tiles_by_row(
-            cb_output,
-            output_addr_generator,
-            global_first_row * vWt,
-            out_tiles_per_chunk,
-            tile_bytes,
-            out_tiles_per_chunk);
+        constexpr uint32_t out_tiles_per_head = Sq_chunk_t * vWt;
+        cb_wait_front(cb_output, rows * vWt);
+        uint32_t l1_read_addr = get_read_ptr(cb_output);
+        for (uint32_t h = 0; h < heads_per_item; ++h) {
+            const uint32_t start_idx = ((w.batch * q_heads + w.head0 + h) * Ht + w.first_row_tile) * vWt;
+            for (uint32_t t = 0; t < out_tiles_per_head; ++t) {
+                noc_async_write_page(start_idx + t, output_addr_generator, l1_read_addr);
+                l1_read_addr += tile_bytes;
+            }
+        }
+        noc_async_write_barrier();
+        cb_pop_front(cb_output, rows * vWt);
 
 #ifdef RETURN_INTERMEDIATES
         // -------- Intermediates: (B, qNH, S, 32) = 1 FP32 tile per row: logsumexp --------
-        constexpr uint32_t interm_tiles = Sq_chunk_t * kIntermediateTilesPerRow;
-        cb_wait_front(cb_intermediates, interm_tiles);
+        cb_wait_front(cb_intermediates, rows);
         uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
-        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-            noc_async_write_page(global_first_row + r, intermediates_addr_generator, l1_intermediates_read_addr);
-            l1_intermediates_read_addr += interm_tile_bytes;
+        for (uint32_t h = 0; h < heads_per_item; ++h) {
+            const uint32_t first_page = (w.batch * q_heads + w.head0 + h) * Ht + w.first_row_tile;
+            for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                noc_async_write_page(first_page + r, intermediates_addr_generator, l1_intermediates_read_addr);
+                l1_intermediates_read_addr += interm_tile_bytes;
+            }
         }
         noc_async_write_barrier();
-        cb_pop_front(cb_intermediates, interm_tiles);
+        cb_pop_front(cb_intermediates, rows);
 #endif
     };
 
