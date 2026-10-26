@@ -31,9 +31,11 @@ import pytest
 
 from models.experimental.t0_forecast.tests.helpers import (
     FLOORS,
+    below,
     collapsed,
     final_metrics,
     golden,
+    misses,
     pcc,
     quantile_metrics,
     weights,
@@ -80,13 +82,13 @@ def check(case: str, floors: dict, head_ref, normalized, raw_ref=None, final=Non
         bad.update(final_metrics(raw_ref, collapsed(raw_ref)))
     show = lambda m: ", ".join(f"{k} {v:.6f}" if isinstance(v, float) else f"{k} {v}" for k, v in m.items())
     print(f"\n[pcc] {case}: {show(got)}\n[pcc] {case} collapsed: {show(bad)}")
+    missed = misses(got, floors)
+    assert not missed, f"{case}: {'; '.join(missed)}"
     for key, floor in floors.items():
-        if key in got:
-            assert got[key] >= floor, f"{case}: {key} {got[key]:.6f} < {floor}"
-        if strict and key in bad and key != "pcc_final":
-            assert bad[key] < floor, f"{case}: the collapsed output passes {key} ({bad[key]:.6f} >= {floor})"
+        if strict and key in bad and key.startswith("pcc_") and key != "pcc_final":
+            assert below(bad[key], floor), f"{case}: the collapsed output passes {key} ({bad[key]:.6f})"
     if floors:
-        assert any(bad[k] < f for k, f in floors.items() if k in bad), f"{case}: the collapsed output passes the gate"
+        assert misses(bad, floors), f"{case}: the collapsed output passes the gate"
     return got
 
 
@@ -98,9 +100,9 @@ CASES = {
     "multivariate": ("bench_multivariate.pt", 4, "accuracy", "accuracy", None),
     "long2": ("bench_long_context.pt", 2, "accuracy", "accuracy", None),
     "paper16_performance": ("bench_paper.pt", 16, "performance", "performance", None),
-    # Reported only (D3 condition 4; floors at G2-r2).
-    "single_performance": ("single.pt", None, "performance", "report", (63, 2)),
-    "single_long_performance": ("single_long.pt", None, "performance", "report", (255, 32)),
+    # D4 floors.
+    "single_performance": ("single.pt", None, "performance", "single_performance", (63, 2)),
+    "single_long_performance": ("single_long.pt", None, "performance", "single_long_performance", (255, 32)),
 }
 
 
@@ -159,30 +161,38 @@ def test_rope_cache_eviction(device):
     check("rope_cache_eviction", FLOORS["single"], g["head"][:, 63:65], normalized, strict=False)
 
 
-@pytest.mark.parametrize("levels", ["gift9", "gift21"])
-def test_e2e_gift_settings(device, levels):
+@pytest.mark.parametrize(
+    "precision,levels",
+    [("accuracy", "gift9"), ("accuracy", "gift21"), ("performance", "gift9"), ("performance", "gift21")],
+)
+def test_e2e_gift_settings(device, precision, levels):
     """GIFT-Eval settings: trim (PAD patches -> masked time attention), symmetric averaging (a second forward on
-    the negated series), clip and snap, at the 9 GIFT levels and the 21 trained levels."""
+    the negated series), clip and snap, at the 9 GIFT levels and the 21 trained levels. Scored (D4) on both forwards'
+    head read-outs against ``gift_head_readouts`` and on the final quantiles (``pcc_final``, ``pcc_final_spread``)
+    with the coverage floors; the collapsed output must fail them."""
+    import torch
+
     from models.experimental.t0_forecast.tt import host
 
     g = golden("e2e.pt")
-    tt = _tt(device, "accuracy")
+    tt = _tt(device, precision)
     trimmed = host.trim_leading(host.series_from_array(g["context"])[0], 2048)
     prepared = host.prepare_series(tt.config, trimmed, 64, 2048, range(64))
     assert prepared.time_mask is not None and not bool(prepared.real_tokens.all())
     q = GIFT_LEVELS if levels == "gift9" else tt.config.quantile_levels
-    got = tt.predict(
-        g["context"],
-        g["horizon"],
-        q,
-        trim_leading_missing=True,
-        symmetric_averaging=True,
-        clip_nonnegative=True,
-        snap_integers=True,
-    )
-    value = pcc(g[levels], got)
-    print(f"\n[pcc] e2e {levels} (GIFT-Eval settings): pcc_final {value:.6f}")
-    assert value >= 0.99
+    heads = []
+
+    def network(p):
+        out = tt.network(p)
+        heads.append(out)
+        return out
+
+    settings = dict(trim_leading_missing=True, symmetric_averaging=True, clip_nonnegative=True, snap_integers=True)
+    got = host.predict(tt.config, network, g["context"], g["horizon"], q, **settings)
+    ref_heads = g["gift_head_readouts"]
+    assert len(heads) == len(ref_heads) and all(h.shape == r.shape for h, r in zip(heads, ref_heads))
+    floors = FLOORS["coverage" if precision == "accuracy" else "coverage_performance"]
+    check(f"e2e_{levels}_{precision}", floors, torch.cat(ref_heads), torch.cat(heads), g[levels], got, strict=False)
 
 
 def test_branch_paths(device):

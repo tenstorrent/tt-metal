@@ -52,7 +52,8 @@ def quantile_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
     ``pcc_row_p01``, ``pcc_row_min``  per-row PCC of ``h`` (1st percentile, minimum); ``pcc_row_min_row`` is the row
     ``*_active``        the same over the active rows: golden row std >= 5 % of the golden's global std (the set comes
                         from the golden only; ``rows_excluded`` is fixed per golden)
-    ``spread_ratio_p01`` / ``_p99``  per active row, ``|h_dev - mean_q| / |h_ref - mean_q|`` (band amplitude; 0 for a
+    ``spread_ratio_inactive_p01``, ``pcc_spread_inactive``  the same band checks over the inactive rows (reported)
+    ``spread_ratio_p01`` / ``_p50`` / ``_p99`` / ``_min``  per active row, ``|h_dev - mean_q| / |h_ref - mean_q|`` (band amplitude; 0 for a
                         collapsed output)
     """
     e, g = expected.double(), got.double()
@@ -61,7 +62,8 @@ def quantile_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
     flat = e.reshape(n, -1)
     active = flat.std(dim=1) >= 0.05 * flat.std()
     ce, cg = _centre(e).reshape(n, -1), _centre(g).reshape(n, -1)
-    ratio = (cg.norm(dim=1) / ce.norm(dim=1).clamp(min=1e-30))[active]
+    ratio_all = cg.norm(dim=1) / ce.norm(dim=1).clamp(min=1e-30)
+    ratio, ratio_inactive = ratio_all[active], ratio_all[~active]
     rows_active = rows[active]
     q = lambda t, p: float(torch.quantile(t, p)) if t.numel() else float("nan")
     return {
@@ -74,7 +76,12 @@ def quantile_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
         "pcc_row_min_active": float(rows_active.min()) if rows_active.numel() else float("nan"),
         "rows_excluded": int((~active).sum()),
         "spread_ratio_p01": q(ratio, 0.01),
+        "spread_ratio_p50": q(ratio, 0.5),
         "spread_ratio_p99": q(ratio, 0.99),
+        "spread_ratio_min": float(ratio.min()) if ratio.numel() else float("nan"),
+        # D4 item 2 (reported, no floor yet): the inactive rows' band, which the floors above never see.
+        "spread_ratio_inactive_p01": q(ratio_inactive, 0.01),
+        "pcc_spread_inactive": pcc(ce[~active], cg[~active]) if ratio_inactive.numel() else float("nan"),
     }
 
 
@@ -84,9 +91,30 @@ def final_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
     return {"pcc_final": pcc(expected, got), "pcc_final_spread": pcc(_centre(expected.double()), _centre(got.double()))}
 
 
-# Gate floors per case class, set by the orchestrator in D3 (/home/andy/avan/fleet/t0-gamma/DECISIONS.md). They change
-# only through a decision. Shared by the PCC suite (tests/pcc/test_model.py), the bench records (``floor_ok``) and
-# tests/perf/check_gates.py, which also applies D3's drift margins against round 0.
+# Gate floors per case class, set by the orchestrator in D3 and D4 (/home/andy/avan/fleet/t0-gamma/DECISIONS.md). They
+# change only through a decision. Shared by the PCC suite (tests/pcc/test_model.py), the bench records (``floor_ok``) and
+# tests/perf/check_gates.py, which also applies the drift margins. A number is a lower bound; ``(lo, hi)`` a range.
+_BAND_ACCURACY = {  # D4: the bench shapes at accuracy
+    "pcc_final_spread": 0.998,
+    "spread_ratio_p01": 0.95,
+    "spread_ratio_p50": (0.97, 1.03),
+    "spread_ratio_p99": (0.0, 1.25),
+    "spread_ratio_min": 0.80,
+}
+_BAND_PERFORMANCE = {
+    "pcc_final_spread": 0.99,
+    "spread_ratio_p01": 0.92,
+    "spread_ratio_p50": (0.95, 1.05),
+    "spread_ratio_p99": (0.0, 1.75),
+    "spread_ratio_min": 0.70,
+}
+_BAND_SINGLE = {"pcc_final_spread": 0.998, "spread_ratio_p99": (0.80, 1.25)}  # one row: p01 = p99 = the row
+_BAND_COVERAGE = {  # e2e and the GIFT-settings cases, both precisions; spread_ratio_min reported only
+    "pcc_final_spread": 0.998,
+    "spread_ratio_p01": 0.90,
+    "spread_ratio_p50": (0.95, 1.05),
+    "spread_ratio_p99": (0.0, 1.5),
+}
 FLOORS = {
     "accuracy": {
         "pcc_normalized": 0.999,
@@ -94,6 +122,7 @@ FLOORS = {
         "pcc_row_p01": 0.995,
         "pcc_row_min": 0.99,
         "pcc_final": 0.99,
+        **_BAND_ACCURACY,
     },
     "performance": {
         "pcc_normalized": 0.995,
@@ -101,22 +130,41 @@ FLOORS = {
         "pcc_row_p01": 0.97,
         "pcc_row_min": 0.93,
         "pcc_final": 0.98,
+        **_BAND_PERFORMANCE,
     },
     # Branch-coverage inputs (e2e: the smooth generator plus counts and gaps; paths). Per-row PCC is reported every
     # round, not gated: it is ill-conditioned on rows whose quantiles span ~1 % of their level (e2e row 9: std 0.013
     # in asinh space, so a 0.002 absolute error reads 0.979).
-    "coverage": {"pcc_normalized": 0.999, "pcc_spread": 0.998, "pcc_final": 0.99},
-    "single": {"pcc_normalized": 0.999, "pcc_spread": 0.999, "pcc_final": 0.99},
-    "single_long": {"pcc_normalized": 0.9975, "pcc_spread": 0.998, "pcc_final": 0.9975},
-    # Reported only (D3: the orchestrator sets floors at G2-r2), e.g. the single-series cases at performance precision.
-    "report": {},
+    "coverage": {"pcc_normalized": 0.999, "pcc_spread": 0.998, "pcc_final": 0.99, **_BAND_COVERAGE},
+    "coverage_performance": {"pcc_normalized": 0.995, "pcc_spread": 0.99, "pcc_final": 0.98, **_BAND_COVERAGE},
+    "single": {"pcc_normalized": 0.999, "pcc_spread": 0.999, "pcc_final": 0.99, **_BAND_SINGLE},
+    "single_long": {"pcc_normalized": 0.9975, "pcc_spread": 0.998, "pcc_final": 0.9975, **_BAND_SINGLE},
+    "single_performance": {"pcc_normalized": 0.985, "pcc_final": 0.985, **_BAND_SINGLE},
+    "single_long_performance": {"pcc_normalized": 0.97, "pcc_final": 0.97, **_BAND_SINGLE},
 }
-# Drift margins against round 0 (D3): on the target (paper-accuracy); twice these on every other bench record.
+# Drift margins on the target (paper-accuracy); twice these on every other bench record. D3: against round 0; D4: the
+# band metrics against the round-2 bench (job 614), since round 0 did not record them. Upper-bounded metrics (p99)
+# drift upwards.
 DRIFT = {"pcc_normalized": 0.0005, "pcc_spread": 0.002, "pcc_row_p01": 0.002, "pcc_row_min": 0.005, "pcc_final": 0.0005}
+DRIFT_BAND = {"pcc_final_spread": 0.002, "spread_ratio_p01": 0.02, "spread_ratio_p99": 0.02}
+
+
+def below(value: float, floor) -> bool:
+    """``value`` misses ``floor`` (a lower bound, or an inclusive ``(lo, hi)`` range); NaN always misses."""
+    if value != value:
+        return True
+    if isinstance(floor, tuple):
+        return not floor[0] <= value <= floor[1]
+    return value < floor
+
+
+def misses(metrics: dict, floors: dict) -> list[str]:
+    """The floors ``metrics`` misses, as ``"<metric> <value> outside <floor>"``; metrics absent are skipped."""
+    return [f"{k} {metrics[k]:.6f} outside {f}" for k, f in floors.items() if k in metrics and below(metrics[k], f)]
 
 
 def meets(metrics: dict, floors: dict) -> bool:
-    return all(metrics[k] >= v for k, v in floors.items() if k in metrics)
+    return not misses(metrics, floors)
 
 
 def collapsed(t: torch.Tensor) -> torch.Tensor:
