@@ -18,7 +18,6 @@
 namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device {
 
 inline constexpr uint32_t qkv_conv_bw_tap_count = qkv_conv_bw::tap_count;
-inline constexpr uint32_t qkv_conv_bw_window_rows = qkv_conv_bw::window_rows;
 
 struct QkvCausalConv1dSiluBackwardDataflowBuffer {
     std::string_view name;
@@ -43,16 +42,18 @@ inline std::vector<QkvCausalConv1dSiluBackwardDataflowBuffer> qkv_conv_bw_datafl
         // when channel_tiles_per_block is not a multiple of 4, which with a 4-tile buffer made the next batch
         // straddle the end.
         {"sigmoid", channel_tiles_per_block, fp32},
-        {"grad_preact_tile", channel_tiles_per_block, bf16},
-        {"grad_preact_rm", 2 * channel_tiles_per_block, bf16},
-        // 4 shifted row-major copies of the grad_preact window; x2 because compute consumes them one step behind
-        // the writer (see the compute kernel)
-        {"grad_preact_shifted_rm", 8 * channel_tiles_per_block, bf16},
-        {"grad_preact_shifted_tile", 4 * channel_tiles_per_block, bf16},
+        // grad_preact tiles for the writer, which builds the 4 shifted copies out of them; x2 so compute runs a step
+        // ahead
+        {"grad_preact_out", 2 * channel_tiles_per_block, bf16},
+        // the 4 shifted copies as tiles [tap][ct]; x2 because compute consumes them one step behind the writer (see
+        // the compute kernel)
+        {"grad_preact_shifted_tile", 8 * channel_tiles_per_block, bf16},
         {"output", 2 * channel_tiles_per_block, bf16},
         {"ones", 1, bf16},
     };
     if (compute_tap_grads) {
+        // a second copy of the grad_preact tiles, consumed by the tap-gradient accumulation
+        buffers.push_back({"grad_preact_tile", channel_tiles_per_block, bf16});
         // grad_w [4][channel_tiles], L1 accumulated. One item deep: a core's next item waits for the writer to drain
         // it, but two items deep gained 1% at 8 splits and nothing at 16 for 128 KB more L1 at chunk 256.
         buffers.push_back({"partial", 4 * channel_tiles_per_block, fp32});
@@ -60,11 +61,7 @@ inline std::vector<QkvCausalConv1dSiluBackwardDataflowBuffer> qkv_conv_bw_datafl
     return buffers;
 }
 
-inline uint64_t qkv_conv_bw_window_bytes(uint64_t channel_tiles_per_block, uint64_t bytes_per_element) {
-    return qkv_conv_bw_window_rows * channel_tiles_per_block * tt::constants::TILE_WIDTH * bytes_per_element;
-}
-
-// L1 per core: every dataflow buffer, the reader's strip scratch and the writer's grad_preact row window.
+// L1 per core: every dataflow buffer and the reader's and the writer's strip scratch.
 inline uint64_t qkv_conv_bw_l1_bytes(
     uint32_t channel_tiles_per_block,
     tt::DataFormat input_format,
@@ -75,7 +72,7 @@ inline uint64_t qkv_conv_bw_l1_bytes(
         bytes += static_cast<uint64_t>(buffer.tiles) * tt::tile_size(buffer.format);
     }
     return bytes + qkv_conv_bw::ReaderScratch{channel_tiles_per_block}.bytes() +
-           qkv_conv_bw_window_bytes(channel_tiles_per_block, bytes_per_element);
+           qkv_conv_bw::WriterScratch{channel_tiles_per_block}.bytes();
 }
 
 struct QkvCausalConv1dSiluBackwardProgramFactory {

@@ -36,7 +36,7 @@ const m2::KernelSpecName READER{"reader"};
 const m2::KernelSpecName WRITER{"writer"};
 const m2::KernelSpecName COMPUTE{"compute"};
 const m2::ScratchpadSpecName X_WINDOW{"x_window"};
-const m2::ScratchpadSpecName GRAD_PREACT_WINDOW{"grad_preact_window"};
+const m2::ScratchpadSpecName GRAD_PREACT_STRIPS{"grad_preact_strips"};
 
 m2::DataflowBufferSpec make_dataflow_buffer(const m2::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
     return m2::DataflowBufferSpec{
@@ -89,9 +89,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     };
 
     const m2::DFBSpecName X_SHIFTED_TILE{"x_shifted_tile"}, WEIGHTS{"weights"}, GRAD_OUT{"grad_out"}, PREACT{"preact"},
-        SIGMOID{"sigmoid"}, GRAD_PREACT_TILE{"grad_preact_tile"}, GRAD_PREACT_RM{"grad_preact_rm"}, PARTIAL{"partial"},
-        GRAD_PREACT_SHIFTED_RM{"grad_preact_shifted_rm"}, GRAD_PREACT_SHIFTED_TILE{"grad_preact_shifted_tile"},
-        OUTPUT{"output"}, ONES{"ones"};
+        SIGMOID{"sigmoid"}, GRAD_PREACT_OUT{"grad_preact_out"}, GRAD_PREACT_TILE{"grad_preact_tile"},
+        PARTIAL{"partial"}, GRAD_PREACT_SHIFTED_TILE{"grad_preact_shifted_tile"}, OUTPUT{"output"}, ONES{"ones"};
     const m2::TensorParamName INPUT{"input"}, HISTORY{"history"}, GRAD_Q{"grad_q"}, GRAD_K{"grad_k"}, GRAD_V{"grad_v"},
         TAP0{"tap0"}, TAP1{"tap1"}, TAP2{"tap2"}, TAP3{"tap3"}, GRAD_INPUT{"grad_input"},
         GRAD_TAP_PARTIAL{"grad_tap_partial"};
@@ -102,9 +101,6 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
         dataflow_buffers.push_back(
             make_dataflow_buffer(m2::DFBSpecName{std::string(buffer.name)}, buffer.tiles, buffer.format));
     }
-    const auto window_bytes =
-        static_cast<uint32_t>(qkv_conv_bw_window_bytes(channel_tiles_per_block, input.element_size()));
-
     m2::KernelSpec reader{
         .unique_id = READER,
         .source = std::string(kernel_dir) + "dataflow/reader_qkv_causal_conv1d_silu_bw.cpp",
@@ -134,8 +130,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     m2::KernelSpec writer{
         .unique_id = WRITER,
         .source = std::string(kernel_dir) + "dataflow/writer_qkv_causal_conv1d_silu_bw.cpp",
-        .dfb_bindings = {consumer(GRAD_PREACT_RM), producer(GRAD_PREACT_SHIFTED_RM), consumer(OUTPUT)},
-        .scratchpad_bindings = {{GRAD_PREACT_WINDOW, "grad_preact_window"}},
+        .dfb_bindings = {consumer(GRAD_PREACT_OUT), producer(GRAD_PREACT_SHIFTED_TILE), consumer(OUTPUT)},
+        .scratchpad_bindings = {{GRAD_PREACT_STRIPS, "grad_preact_strips"}},
         .tensor_bindings = {tensor(GRAD_INPUT)},
         .compile_time_args =
             {{"channel_tiles_per_block", channel_tiles_per_block},
@@ -168,11 +164,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
              consumer(PREACT),
              producer(SIGMOID),
              consumer(SIGMOID),
-             producer(GRAD_PREACT_TILE),
-             consumer(GRAD_PREACT_TILE),
-             producer(GRAD_PREACT_RM),
-             consumer(GRAD_PREACT_SHIFTED_RM),
-             producer(GRAD_PREACT_SHIFTED_TILE),
+             producer(GRAD_PREACT_OUT),
              consumer(GRAD_PREACT_SHIFTED_TILE),
              producer(OUTPUT),
              consumer(ONES)},
@@ -190,6 +182,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
     if (tap_grads) {
         writer.dfb_bindings.push_back(consumer(PARTIAL));
         writer.tensor_bindings.push_back(tensor(GRAD_TAP_PARTIAL));
+        compute.dfb_bindings.push_back(producer(GRAD_PREACT_TILE));
+        compute.dfb_bindings.push_back(consumer(GRAD_PREACT_TILE));
         compute.dfb_bindings.push_back(producer(PARTIAL));
     }
     m2::ProgramSpec spec{
@@ -198,7 +192,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluBackwardProgramFacto
         .dataflow_buffers = std::move(dataflow_buffers),
         .scratchpads =
             {{.unique_id = X_WINDOW, .size_per_node = qkv_conv_bw::ReaderScratch{channel_tiles_per_block}.bytes()},
-             {.unique_id = GRAD_PREACT_WINDOW, .size_per_node = window_bytes}},
+             {.unique_id = GRAD_PREACT_STRIPS,
+              .size_per_node = qkv_conv_bw::WriterScratch{channel_tiles_per_block}.bytes()}},
         .tensor_parameters =
             {
                 {.unique_id = INPUT, .spec = input.tensor_spec()},
