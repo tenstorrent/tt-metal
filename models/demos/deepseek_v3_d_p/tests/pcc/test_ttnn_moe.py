@@ -967,6 +967,11 @@ def test_ds_moe(
 # ---------------------------------------------------------------------------
 # GLM-5.3 MoE
 # ---------------------------------------------------------------------------
+
+# The packed-forward sweep rows are a local measurement; the CI leg selects test_glm_moe by mesh only.
+_NOT_IN_CI = pytest.mark.skipif(
+    os.environ.get("CI") == "true" or "TT_GH_CI_INFRA" in os.environ, reason="local packed-forward sweep"
+)
 #
 # 256 experts / top-8, emb 6144, moe_int 2048. Exercises the >64-expert unfused
 # extract->FFN->insert routed-expert path on GLM dims. Gate is generic here (op-level test);
@@ -980,6 +985,10 @@ def test_ds_moe(
         # fmt: off
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
+        # Packed-forward sweep: 2 and 4 chunks' rows per chip in one MoE call. Expert weights are read once per
+        # call, so MoE time vs rows shows how much a packed forward amortizes them.
+        pytest.param(2 * PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), _NOT_IN_CI], id="perf-device-glm-256-x2"),
+        pytest.param(4 * PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.MOE_INTERMEDIATE_SIZE, GLM53Config.NUM_ROUTED_EXPERTS, GLM53Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), _NOT_IN_CI], id="perf-device-glm-256-x4"),
         # fmt: on
     ],
 )

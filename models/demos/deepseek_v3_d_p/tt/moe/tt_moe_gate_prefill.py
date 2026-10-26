@@ -1005,7 +1005,35 @@ class TtMoEGatePrefill(LightweightModule):
 
                 padding_config.append([local_real_tokens, pad_side])
 
-        config_tensor = ttnn.from_torch(
+        config_tensor = self._padding_config_tensor(padding_config)
+        self._padding_config_cache[cache_key] = config_tensor
+        return config_tensor
+
+    def build_padding_config_for_rows(self, real_rows: tuple) -> Optional[ttnn.Tensor]:
+        """Right-padded per-SP-shard config from each chip's count of leading real rows, or None when every
+        row is real.
+
+        For a packed forward (several chunks back to back on each chip), where no single (actual_isl,
+        actual_start) describes the rows: the caller derives the counts from the chunks (packed_real_rows).
+        Memoized and owned here like build_padding_config, so callers must NOT deallocate the result.
+        """
+        sp_factor = self.mesh_device.shape[0]
+        seq_len_per_chip = self.config.sp_dim
+        assert len(real_rows) == sp_factor, f"{len(real_rows)} real-row counts for SP={sp_factor}"
+        assert all(0 <= r <= seq_len_per_chip for r in real_rows), f"{real_rows} outside [0, {seq_len_per_chip}]"
+        if all(r == seq_len_per_chip for r in real_rows):
+            return None
+        cache_key = ("rows", tuple(real_rows))
+        cached = self._padding_config_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        config_tensor = self._padding_config_tensor([[r, 0] for r in real_rows])
+        self._padding_config_cache[cache_key] = config_tensor
+        return config_tensor
+
+    def _padding_config_tensor(self, padding_config: list) -> ttnn.Tensor:
+        """[sp, 2] (local_real_tokens, pad_side) rows -> the device tensor, one row per SP shard."""
+        return ttnn.from_torch(
             torch.tensor(padding_config, dtype=torch.int32),
             device=self.mesh_device,
             dtype=ttnn.uint32,
@@ -1017,8 +1045,6 @@ class TtMoEGatePrefill(LightweightModule):
                 mesh_shape=self.mesh_device.shape,
             ),
         )
-        self._padding_config_cache[cache_key] = config_tensor
-        return config_tensor
 
     def build_padding_config_device(self, metadata, padding_side: str = "right") -> ttnn.Tensor:
         """Trace-safe twin of build_padding_config: derive the per-device

@@ -806,6 +806,7 @@ class TtMoe(LightweightModule):
         metadata: Optional[tuple] = None,
         input_ids: Optional[torch.Tensor] = None,
         cache_user_id: int = 0,
+        padding_real_rows: Optional[tuple] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -834,6 +835,9 @@ class TtMoe(LightweightModule):
                 the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
                 HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
                 assumes sequential SP placement (not is_balanced).
+            padding_real_rows: a packed forward's per-SP-chip count of leading real rows (packed_real_rows),
+                used instead of actual_isl / actual_start, which describe a single chunk. Eager only: the
+                config is built on host. Requires right padding.
 
         Returns:
             Tuple of (final_output, intermediates):
@@ -889,7 +893,12 @@ class TtMoe(LightweightModule):
         #     actual_isl=None and get a capture with no padding-aware path at all.
         padding_config = None
         gate_marks_padding = self.gate.fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE)
-        if actual_isl is not None and gate_marks_padding:
+        if padding_real_rows is not None:
+            assert actual_isl is None and metadata is None, "padding_real_rows replaces actual_isl and metadata"
+            assert padding_side == "right", "a packed forward is right-padded per chunk"
+            if gate_marks_padding:
+                padding_config = self.gate.build_padding_config_for_rows(padding_real_rows)
+        elif actual_isl is not None and gate_marks_padding:
             if metadata is not None:
                 # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
                 # the config with the device op. The host builder's from_torch cannot run inside a

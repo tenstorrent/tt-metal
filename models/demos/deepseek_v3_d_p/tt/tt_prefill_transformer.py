@@ -199,10 +199,13 @@ class TtPrefillTransformer(LightweightModule):
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
         use_fused_rmsnorm: Optional[bool] = None,
+        forward_chunks: int = 1,
     ):
         super().__init__()
         self.mesh_device = mesh_device
         self.seq_len = seq_len
+        # Chunks per packed forward (forward(..., chunks=...)); seq_len stays the per-chunk size.
+        self.forward_chunks = forward_chunks
         self.padding_side = padding_side
         self.is_chunked = is_chunked
         self.num_layers = num_layers
@@ -303,6 +306,7 @@ class TtPrefillTransformer(LightweightModule):
                 first_layer_idx=first_layer_idx,
                 llama4_scale_cache=self._llama4_scale_cache,
                 use_fused_rmsnorm=use_fused_rmsnorm,
+                forward_chunks=forward_chunks,
             )
             self.layers.append(layer)
 
@@ -506,6 +510,7 @@ class TtPrefillTransformer(LightweightModule):
         provided_levels: int = 0,
         mtp_geometry=None,
         seed_indexer_indices: Optional[ttnn.Tensor] = None,
+        chunks: Optional[list] = None,
     ):
         """
         Forward pass: [embed] -> [block x N]. The populated KV cache is the output.
@@ -556,6 +561,11 @@ class TtPrefillTransformer(LightweightModule):
                         indexer_indices_shape()), reused by every leading ``shared`` layer. When
                         forwards_indexer_indices is set, this rank's last ``full`` layer indices are left in
                         last_indexer_indices for the caller to send downstream.
+            chunks: a packed forward's PrefillChunk list (forward_chunks of them, see forward_packed).
+                        token_ids then holds every chunk's rows back to back on each SP chip, and the chunk
+                        list replaces actual_isl / actual_start / actual_end / cache_user_id, and
+                        on_layer_complete is called as (layer_idx, chunk), once per non-empty chunk. Eager,
+                        single-rank only for now.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next rank.
@@ -566,6 +576,22 @@ class TtPrefillTransformer(LightweightModule):
             "norm" for h^0), otherwise None. No token is produced: the populated KV cache is
             the output.
         """
+        if chunks is not None:
+            assert (
+                d2h_service is None and metadata is None and mtp_union is None
+            ), "a packed forward is eager and host-acked only (no d2h_service / metadata / MTP yet)"
+            return self.forward_packed(
+                token_ids,
+                kvpe_cache,
+                chunks,
+                index_kv_cache=index_kv_cache,
+                return_intermediates=return_intermediates,
+                read_profiler=read_profiler,
+                on_layer_complete=on_layer_complete,
+                on_layer_hidden=on_layer_hidden,
+                input_is_embedded=input_is_embedded,
+            )
+
         # The two ack transports are mutually exclusive: the block takes the d2h_service branch and would
         # silently drop on_layer_complete, so a caller wiring both would get half the acks it asked for
         # with no diagnostic. The runner's single-rank and pipeline branches are disjoint today; keep it so.
@@ -734,6 +760,82 @@ class TtPrefillTransformer(LightweightModule):
             if on_mtp_complete is not None:
                 on_mtp_complete(mtp_out, mtp_generated)
 
+        return intermediates
+
+    def forward_packed(
+        self,
+        token_ids: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
+        chunks: list,
+        index_kv_cache: Optional[ttnn.Tensor] = None,
+        return_intermediates: bool = False,
+        read_profiler: bool = False,
+        on_layer_complete: Optional[Callable[[int, object], None]] = None,
+        on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
+        input_is_embedded: bool = False,
+    ):
+        """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them): every layer runs its
+        attention half once per non-empty chunk against that chunk's slot and offset, then its FFN half once
+        over all rows (TtPrefillBlock.forward_packed). Same inputs and returns as forward() otherwise.
+
+        on_layer_complete fires as (global layer index, chunk) once per non-empty chunk per layer.
+        GLM-5.3 indexer reuse is tracked per chunk: each "full" layer's top-k indices go to the following
+        "shared" layers of the same chunk. A pipeline boundary that would have to carry them is not
+        supported yet.
+        """
+        assert self.is_chunked, "a packed forward is chunked prefill; build with is_chunked=True"
+        assert len(chunks) == self.forward_chunks, f"{len(chunks)} chunks for a model built for {self.forward_chunks}"
+        assert (
+            not self.receives_indexer_indices and not self.forwards_indexer_indices
+        ), "a packed forward cannot carry per-chunk indexer indices across a pipeline boundary yet"
+        assert self.mtp_predictor is None, "MTP does not support packed forwards"
+        rope_tensors = self.indexed_rope
+        intermediates = {} if return_intermediates else None
+
+        if self.is_first_rank and not input_is_embedded:
+            h = ttnn.unsqueeze_to_4D(self.embed(token_ids))  # [1, 1, forward_chunks * chunk_local, emb_dim/tp]
+            if return_intermediates:
+                ttnn.synchronize_device(self.mesh_device)
+                intermediates["embed"] = self._to_host(h)
+        else:
+            h = token_ids
+
+        reuse = self.indexer_types is not None
+        indexer_indices = None  # per chunk, from the most recent "full" layer
+        for i, layer in enumerate(self.layers):
+            signpost(f"forward_layer_{i}_start")
+            mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
+            ret = layer.forward_packed(
+                h,
+                rope_tensors,
+                kvpe_cache,
+                chunks,
+                cache_layer_idx=i,
+                return_intermediates=return_intermediates,
+                on_layer_complete=on_layer_complete,
+                on_layer_hidden=on_layer_hidden,
+                indexer_indices=indexer_indices if (reuse and mode == "shared") else None,
+                return_indexer_indices=reuse,
+                index_kv_cache=index_kv_cache,
+            )
+            if reuse:
+                h, _, new_indices = ret
+                if mode == "full":
+                    indexer_indices = new_indices
+            else:
+                h, _ = ret
+            signpost(f"forward_layer_{i}_end")
+            if self.kv_only_last_layer and i == len(self.layers) - 1:
+                return intermediates
+            if return_intermediates:
+                ttnn.synchronize_device(self.mesh_device)
+                intermediates[f"layer_{i}"] = self._to_host(h)
+            if read_profiler:
+                ttnn.ReadDeviceProfiler(self.mesh_device)
+        indexer_indices = None
+
+        if not self.is_last_rank:
+            return h
         return intermediates
 
     def mtp_embed_ids(self, tt_ids: ttnn.Tensor) -> ttnn.Tensor:
