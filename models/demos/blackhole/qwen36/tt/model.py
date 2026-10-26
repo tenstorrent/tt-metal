@@ -4833,15 +4833,12 @@ class Qwen36Model:
             return self._slot_rope_delta[:B]
         return self.rope.rope_delta
 
-    def _remap_gdn_slots(self, remap, live=None):
-        """Apply a vLLM batch-condense slot_remap to every GDN layer's batched decode state
-        (device-side; slot i takes the state at slot remap[i]). Mirrors seed_manager.apply_slot_remap
-        for GDN's per-slot recurrent+conv state, which the plugin's slot_remap does not itself move.
-        No-op for an identity remap. `live` (optional list of bools, True = row holds a live request after the
-        remap) lets the recurrent-state move skip writes into dead rows."""
+    def _remap_gdn_slots(self, remap):
+        """Apply a vLLM slot_remap (slot i takes the state at slot remap[i]) to every GDN layer's decode state.
+        Every slot moves: an idle decode row can hold a running request the scheduler left out this step."""
         for layer in self.layers:
             if not layer.is_full_attention:
-                layer.attention.remap_slots(remap, live=live)
+                layer.attention.remap_slots(remap)
 
     def set_gdn_fused_decode(self, enabled: bool) -> None:
         """Select the GDN decode recurrence for EVERY GDN layer: the single fused device op

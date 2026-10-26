@@ -306,10 +306,9 @@ def test_gdn_packed_remap_exact(mesh_device, reset_seeds, ensure_gc, monkeypatch
 
 @torch.no_grad()
 @parametrize_mesh_tp()
-def test_gdn_rec_row_remap_live_only(mesh_device, reset_seeds, ensure_gc, monkeypatch):
-    """In-place rec_state row remap: bit-exact on live rows for vLLM-style condense permutations (dead rows are
-    don't-care), bit-exact on every row for random full permutations (live=None), buffer address stable, and no new
-    programs after the first full-reversal warm call."""
+def test_gdn_rec_row_remap_exact(mesh_device, reset_seeds, ensure_gc, monkeypatch):
+    """In-place rec_state row remap is bit-exact on every row (an idle row may hold an unscheduled request), keeps the
+    buffer address, and compiles nothing after the warm reversal."""
     import random
 
     mesh, Bmax = mesh_device, 32
@@ -350,13 +349,9 @@ def test_gdn_rec_row_remap_live_only(mesh_device, reset_seeds, ensure_gc, monkey
         free = sorted(set(range(Bmax)) - set(row_slots[:n_live]))
         remap = row_slots[:n_live] + free
         assert sorted(remap) == list(range(Bmax))
-        live = [d < n_live for d in range(Bmax)]
-        go.remap_slots(remap, live=live)
+        go.remap_slots(remap)
         ref = ref[:, remap]
-        new = host()
-        assert torch.equal(new[:, :n_live], ref[:, :n_live]), f"condense {it} (k={k}): live rows differ"
-        # dead rows are don't-care: resync the reference to the device so later iterations compare real content
-        ref = new.clone()
+        assert torch.equal(host(), ref), f"condense {it} (k={k}): rows differ"
         assert go.rec_state.buffer_address() == addr
 
     for it in range(5):

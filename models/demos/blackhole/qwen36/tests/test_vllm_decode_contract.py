@@ -75,6 +75,7 @@ class User:
     first_token: int = 0
     out: list = field(default_factory=list)  # sampled tokens produced by decode steps (applied on the host)
     submitted: int = 0  # decode steps submitted so far (the scheduler's count; the host token list lags in async)
+    pause: tuple = ()  # decode steps the scheduler leaves this running request out of (it keeps its state slot)
 
 
 class PluginDriver:
@@ -89,6 +90,8 @@ class PluginDriver:
         self.submitted_pt = None
         self.prev_layout = None
         self.pending = None  # (host_out, events, row_uids) of the in-flight async step
+        self.owner = None  # uid -> state slot, like TTModelRunner._req_state_slot
+        self.where = None  # uid -> slot holding its state, finished requests included
         self.step_times = []
         self.last_layout = None
 
@@ -144,17 +147,21 @@ class PluginDriver:
 
     # -- one decode submission ---------------------------------------------------------------------------------------
     def step(self, users, step_idx):
-        rows = [u for u in users if u.max_new > step_idx]  # front-packed (condensed) active rows
+        if self.owner is None:
+            self.owner = {u.uid: i for i, u in enumerate(users)}  # prefill slot == index
+            self.where = dict(self.owner)
+        for u in users:  # finished requests release their slot
+            if u.submitted >= u.max_new:
+                self.owner.pop(u.uid, None)
+        scheduled = [u for u in users if u.submitted < u.max_new and step_idx not in u.pause]
+        rows = sorted(scheduled, key=lambda u: self.owner[u.uid])  # front-packed decode rows
         layout = tuple(u.uid for u in rows)
         layout_changed = layout != self.prev_layout
-        remap = None
-        if layout_changed and self.prev_layout is not None:
-            # Row i of the new layout takes the state at the slot its request had in the previous layout.
-            old_slot = {uid: s for s, uid in enumerate(self.prev_layout)}
-            order = [old_slot[uid] for uid in layout if uid in old_slot]
-            if len(order) == len(layout) and order != list(range(len(layout))):
-                rest = [s for s in range(WIDTH) if s not in order]
-                remap = order + rest
+        # Row i reads slot remap[i]; every slot moves, so unscheduled owners follow their state.
+        want = [self.owner[u.uid] for u in rows]
+        remap = want + [s for s in range(WIDTH) if s not in want]
+        if remap == list(range(WIDTH)):
+            remap = None
         if layout_changed:
             self.finalize()  # drain: apply every pending token before the layout moves
 
@@ -194,6 +201,10 @@ class PluginDriver:
         else:
             out = self.gen.decode_forward(**kwargs, enable_trace=True, read_from_device=True)
         # accepted: commit the plugin-side residency / ownership state
+        if remap is not None:
+            moved = {old: new for new, old in enumerate(remap)}
+            self.owner = {uid: moved[slot] for uid, slot in self.owner.items()}
+            self.where = {uid: moved[slot] for uid, slot in self.where.items()}
         self.chain_valid = True
         self.prev_device_sampling = True
         self.prev_layout = layout
@@ -323,6 +334,7 @@ def _run(gen, kv_cache, mode, users, n_steps, delay=0.0):
         state=_gdn_state(gen.model[0]),
         step_times=drv.step_times,
         last_layout=[u.uid for u in drv.last_layout],
+        slots=dict(drv.where),
         users=users,
         positions=_device_positions(gen, drv_bucket(drv)) if mode != "host_reload" else None,
     )
@@ -345,10 +357,19 @@ def _scenario(name):
         return [User(0, 70, GREEDY), User(1, 70, GREEDY)], 70
     if name == "topk_topp_seeded":
         return [User(i, 40, _sampled(i)) for i in range(3)], 40
+    if name == "user_paused_resumed":  # user 0 sits out steps 10-15 in slot 1 (idle row) while user 1 decodes alone
+        return [User(0, 40, GREEDY, pause=tuple(range(10, 16))), User(1, 40, GREEDY)], 46
     raise KeyError(name)
 
 
-SCENARIOS = ["b1_greedy_64", "three_users_idle_row", "user_finishes_remap", "page_table_growth", "topk_topp_seeded"]
+SCENARIOS = [
+    "b1_greedy_64",
+    "three_users_idle_row",
+    "user_finishes_remap",
+    "page_table_growth",
+    "topk_topp_seeded",
+    "user_paused_resumed",
+]
 
 
 def _dump_or_compare(name, tokens):
@@ -414,6 +435,17 @@ def test_serving_decode_modes_agree(mesh_device, reset_seeds, ensure_gc, name):
             u = next(x for x in live if x.uid == uid)
             assert pos[row] == PROMPT_LEN + u.submitted, f"{name}/{mode}: row {row} position {pos[row]}"
         assert all(p == -1 for p in pos[len(got["last_layout"]) :]), f"{name}/{mode}: idle rows advanced: {pos}"
+
+    if name == "user_paused_resumed":
+        # Sitting out steps must not change a request's stream or GDN state: compare with nobody pausing.
+        nopause = _run(gen, kv, "host_reload", [User(0, 40, GREEDY), User(1, 40, GREEDY)], 40)
+        assert ref["tokens"] == nopause["tokens"], "pausing user 0 changed a token stream"
+        row_p, row_n = ref["slots"], nopause["slots"]
+        for (nm, ax, tp), (_, _, tn) in zip(ref["state"], nopause["state"]):
+            for uid in (0, 1):
+                for d, (a_d, b_d) in enumerate(zip(tp, tn)):
+                    same = torch.equal(a_d.narrow(ax, row_p[uid], 1), b_d.narrow(ax, row_n[uid], 1))
+                    assert same, f"pause/resume: {nm} device {d} user {uid} differs from the no-pause run"
 
 
 @torch.no_grad()

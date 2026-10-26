@@ -56,14 +56,6 @@ _RELOAD_COMMAND_DEFAULTS = {
 }
 
 
-def _live_rows(start_pos, n):
-    """Rows holding a live request (vLLM pads idle decode rows with position -1), or None if unknown / disabled."""
-    if os.environ.get("QWEN36_GDN_REMAP_LIVE_ONLY", "1") != "1" or start_pos is None:
-        return None
-    pos = start_pos.flatten().tolist() if hasattr(start_pos, "flatten") else list(start_pos)
-    return [int(p) != -1 for p in pos] if len(pos) == n else None
-
-
 def _build_model_capabilities():
     """The plugin-visible capabilities. QWEN36_SERVE_DEVICE_DECODE=0 returns exactly the pre-1.6S dict."""
     caps = {
@@ -648,8 +640,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         # decode trace reads it (the plugin remaps its own buffers; the sampler's seed/penalty state is remapped by
         # Generator.decode_forward; GDN state is model-internal, so mirror the reindex here). Exactly once.
         if slot_remap is not None and model.num_devices > 1 and model.args.max_batch_size > 1:
-            live = _live_rows(start_pos, model.args.max_batch_size)
-            model._remap_gdn_slots(slot_remap, live=live)
+            model._remap_gdn_slots(slot_remap)
             model.remap_slot_rope_delta(slot_remap)
 
         if bucket < width:
@@ -695,7 +686,6 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         gdn_remap = None
         if model.num_devices > 1 and model.args.max_batch_size > 1:
             gdn_remap = _read("slot_remap", 9)
-            gdn_live = _live_rows(_read("start_pos", 1), model.args.max_batch_size) if gdn_remap is not None else None
         # Decode bucketing (default on; TT_DECODE_BUCKETING=0 off): slice host inputs to the
         # smallest power-of-2 width >= active prefix [0:num_active) before the base forward.
         # No runner edit / output re-pad — plugin reads unpadded_batch_size in slot order.
@@ -745,7 +735,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
             if hasattr(model, "prepare_gdn_decode_width"):
                 model.prepare_gdn_decode_width(B)
         if gdn_remap is not None:
-            model._remap_gdn_slots(gdn_remap, live=gdn_live)
+            model._remap_gdn_slots(gdn_remap)
             model.remap_slot_rope_delta(gdn_remap)
         return super().decode_forward(*args, **kwargs)
 

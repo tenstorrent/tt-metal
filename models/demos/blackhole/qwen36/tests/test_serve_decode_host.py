@@ -44,7 +44,7 @@ def harness(monkeypatch):
 
     monkeypatch.setattr(Generator, "decode_forward", fake_decode_forward)
 
-    def remap(r, live=None):
+    def remap(r):
         rec.remaps.append(list(r))
         rec.events.append("remap")
 
@@ -316,6 +316,14 @@ def test_remap_applied_once_before_forward_and_forwarded_to_generator(harness):
     assert rec.events == ["remap", "forward"]
     # The Generator owns the sampler-side remap and gets the SAME remap exactly once (it is not applied twice here).
     assert rec.calls[-1]["slot_remap"] == remap
+
+
+def test_remap_moves_unscheduled_requests(harness):
+    # A (slot 0) is unscheduled, B (slot 1) decodes alone in row 0: A's state must reach slot 1 although row 1 is idle.
+    gen, rec = harness
+    remap = [1, 0, 2, 3, 4, 5, 6, 7]
+    _call(gen, 1, remap=remap)
+    assert rec.remaps == [remap]
 
 
 def test_remap_step_uses_the_steady_bucket_rule_and_bucket_is_stable(harness):

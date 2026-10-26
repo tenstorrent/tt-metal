@@ -2624,7 +2624,7 @@ class TPGatedDeltaNet:
             self._conv_fmt = "both"
             self._refresh_packed_single()
 
-    def remap_slots(self, remap, live=None):
+    def remap_slots(self, remap):
         """Reindex the batched decode state after a vLLM batch condense: slot i takes the state
         previously at slot remap[i] (identity entries are no-ops). Mirrors
         seed_manager.apply_slot_remap for GDN's per-slot recurrent+conv state, which the plugin's
@@ -2641,7 +2641,7 @@ class TPGatedDeltaNet:
             return
         self.sync_conv_taps()  # read-modify-write of the taps: they must be current first
         if self._rec_row_remap_ok():
-            self._remap_rec_rows(idx, live)
+            self._remap_rec_rows(idx)
         else:
             self._gather_indices(self.rec_state, idx, dim=0)
         if self._conv_fmt == "packed" and self._hist_hook_active() and self._decode_B > 1:
@@ -2681,14 +2681,13 @@ class TPGatedDeltaNet:
             self._rec_row_shard_cfg = cfg
         return cfg
 
-    def _remap_rec_rows(self, idx, live=None):
+    def _remap_rec_rows(self, idx):
         """In place: rec_state row d becomes old row idx[d] (idx is a permutation). Moves only the changed rows, one
         permutation cycle at a time: each row is sliced straight into an L1 height-sharded tile buffer and written back
         with the sharded-input slice_write, which writes tiles into rec_state's own buffer (no full-state concat + copy,
         no layout round trip, address unchanged). SHAPE-STABLE: only 1-row slices at offset s and 1-row writes at
         offset d, all compiled by the full-reversal remap in warmup_gdn_slot_ops (a reversal is all 2-cycles, so it
-        reads every row and writes every row). With `live`, rows whose destination holds no live request are left as
-        is."""
+        reads every row and writes every row)."""
         buf = self.rec_state
         cfg = self._rec_row_shard_memcfg()
         tail = list(buf.shape)[1:]
@@ -2711,21 +2710,6 @@ class TPGatedDeltaNet:
                 seen[d] = True
                 cyc.append(d)
                 d = idx[d]
-            if live is not None:
-                if not any(live[c] for c in cyc):
-                    continue
-                dead = next((j for j, c in enumerate(cyc) if not live[c]), None)
-                if dead is not None:
-                    # Rows without a live request are don't-care (a prefill rewrites the whole slot before reuse), so
-                    # skip writes into them. Rotating a dead row to the head means its old content is still in place
-                    # for the cycle's last write, so no temporary is needed (a condense is one read + write per move).
-                    cyc = cyc[dead:] + cyc[:dead]
-                    for j in range(len(cyc) - 1):
-                        if live[cyc[j]]:
-                            write(read(cyc[j + 1]), cyc[j])
-                    if live[cyc[-1]]:
-                        write(read(cyc[0]), cyc[-1])
-                    continue
             # cyc[j] <- old cyc[j + 1]; read each source just before its own row is overwritten, the head via tmp.
             tmp = read(cyc[0])
             for j in range(len(cyc) - 1):
