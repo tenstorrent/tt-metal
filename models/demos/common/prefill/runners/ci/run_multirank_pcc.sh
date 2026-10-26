@@ -170,6 +170,7 @@ TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
 mkdir -p "${TTRUN_CWD}"
 
 MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${MODEL}_prefill_ci_mr.XXXXXX")
+GATE_LOG="${MR_DIR}/gates.log"
 export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
@@ -234,6 +235,10 @@ cleanup() {
       fi
     fi
   fi
+  # Last in the log, after the rank-log tails, so a failed gate is what a tail reader sees.
+  echo "==================== gate verdicts ===================="
+  echo "producer rc=${PROD_RC:-<unset>} runner rc=${RUNNER_RC:-<unset>} perf gate rc=${PERF_GATE_RC:-<unset>} pcc gate rc=${PCC_GATE_RC:-<unset>}"
+  grep -h "GATE" "${GATE_LOG}" 2>/dev/null || true
   rm -rf "${MR_DIR}"
 }
 trap cleanup EXIT
@@ -375,11 +380,11 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
     "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" \
     --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
-    --require "${REQUIRE_TPS}" || PERF_GATE_RC=$?
+    --require "${REQUIRE_TPS}" 2>&1 | tee -a "${GATE_LOG}" || PERF_GATE_RC=$?
 fi
 
 PCC_GATE_RC=0
-python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" <<'PY' || PCC_GATE_RC=$?
+python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" <<'PY' 2>&1 | tee -a "${GATE_LOG}" || PCC_GATE_RC=$?
 import glob, json, math, os, sys
 
 pcc_dir, expected, threshold = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
