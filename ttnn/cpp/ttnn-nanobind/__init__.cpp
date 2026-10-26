@@ -29,6 +29,7 @@
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
+#include "ttnn-nanobind/operations/command_list.hpp"
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
 #include "ttnn-nanobind/tensor_accessor_args.hpp"
@@ -98,6 +99,9 @@ void py_module(nb::module_& mod) {
     auto m_trace = mod.def_submodule("trace", "trace operations");
     trace::py_module_types(m_trace);
     trace::py_module(m_trace);
+
+    auto m_command_list = mod.def_submodule("command_list", "command list operations (experimental)");
+    command_list::py_module_types(m_command_list);
 
     auto m_examples = mod.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);

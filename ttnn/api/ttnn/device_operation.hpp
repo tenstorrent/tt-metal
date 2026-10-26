@@ -227,7 +227,12 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    if (is_recording_command_list()) [[unlikely]] {
+        record_to_command_list(
+            get_operation_name<mesh_device_operation_t>(operation_attributes), mesh_device, workload);
+    } else {
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    }
 
     ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
 
