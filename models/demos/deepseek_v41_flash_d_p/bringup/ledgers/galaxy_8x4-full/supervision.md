@@ -12,3 +12,4 @@
   not blocking.
 - Known infra: real-time profiler D2H socket pin failed on devices 7 and 10 during B.1 (F155 perf measurement may be
   affected at X.1); a 2x2 submesh of a galaxy fails its fabric handshake (no TT_VISIBLE_DEVICES 2x2 subset exists).
+- 2026-10-26 10:42:47 CK.1 gate passed, commit refused (no git identity on the node): infra. Set repo-local user.name/email, gate CK.1 --commit-only, resume.
