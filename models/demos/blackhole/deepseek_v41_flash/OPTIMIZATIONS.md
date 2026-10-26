@@ -207,6 +207,92 @@ None yet. As of 2026-10-23 `L/ttopt/` holds the specs, the golden decode file an
 
 The printed outputs of both scenarios are byte-identical between the two trees (gsm8k answers 18, 3, 70000, 540; needle passcode 7816). The 40-layer saving (-1.4 to -1.5 ms) is about the 8-layer window gain times 5 plus the op-level saving of about 29 us per layer. Gains and gates were measured on the frozen-table fixture; a no-fixture adaptive run would only change the k mix.
 
+## 8.1 Drafter (L14)
+
+What changed: the drafter round (write_main + 3 MTP stages x k steps) no longer pays layout and gather round trips: sample_global from a gather instead of the 123 us max, the 128-expert draft gate through the fused router_select, the draft stream kept padded across the 3 stages, logits chain and the draft stream x / markov embeddings (confidence-head input) built row-major and tilized once, one batched compact-RoPE lookup for the write_main rows and the draft rows (`DraftState.build_both`). Files: `tt/mtp.py`, `tt/spec_decoder.py`, `tt/rope_compact.py`.
+
+Measured on the 1017 checkpoint, host .34, 2026-10-25/26 (base 9ed98f9bbf8 vs lever e8014c7fe5e, same session):
+- Drafter alone (test_spec_mtp, B=4, traced write_main + draft): k=3 6.32 -> 4.86 ms, k=5 6.35 -> 4.88 ms. Tokens, logits and confidence bit-identical to base (max abs diff 0, k=3 and k=5 sets).
+- 8-layer traced windows (layers 0,1,2,3,14,20,21,24, alternating, 2 reps each + gate run): calibrated verify round k=3 about 61.6 -> 59.6 ms (base 58.3/64.2/62.4, lever 59.5/61.2/58.1, noisy), k=5 85.4 -> 82.5 ms (6 runs each). test_decode_gate: stream PCC 1.000000, logits PCC 1.000000, ids and drafts equal, k=3 and k=5.
+- 40-layer adaptive demos, frozen table 3:47,5:58:
+  - gsm8k_b4_m1M: round 61.87 -> 60.50 ms (calibrated k=3 47.0 -> 45.1, k=5 58.8 -> 57.4), 62.49 -> 63.90 tok/s/user; accepted 2.8859 and k_hist {3:25,5:36} unchanged; 4/4 equal to plain greedy.
+  - needle64k_b4: round 70.73 -> 68.93 ms (calibrated k=3 61.6 -> 59.5, k=5 76.2 -> 74.6), 34.72 -> 35.62 tok/s/user; accepted 1.4557, k_hist {3:21,5:5} unchanged; 4/4 equal to plain greedy; printed outputs identical to base.
+
+Restore the old path: `DSV41_DRAFT_ROUTER=chain DSV41_DRAFT_KEEP_PAD=0 DSV41_DRAFT_X_RM=0 DSV41_DRAFT_SAMPLE_RM=0 DSV41_DRAFT_CONF_RM=0 DSV41_SAMPLE_V2=0` (drafter alone back to 6.32 ms; the batched RoPE lookup has no switch).
+Gates: op bit-exact, 8-layer gate PCC 1.0, 40-layer exactness and acceptance identical. Commits e8014c7fe5e (and ac920653505, d509e73ffb3, 88795ce96d6).
+
+## 8.2 Attention front (qkpost, L06)
+
+**What changed.** In `DSV41Attention._qkv_q` (the paged / spec decode caller; `tt/attention.py`) two op groups of the attention front become one program each (JIT `generic_op`, no C++ build):
+(1) `tt/qk_norm.py` + `tt/attn_kernels/qkn_{reader,compute,writer}.cpp` replace `slice` + `rms_norm` (q, 1280) + `slice` + `rms_norm` (kv, 512) of the wqkv output (4 ops -> 1; q norm on 8 cores, kv norm on 4 cores);
+(2) `tt/attn_pre.py::qk_heads` + `tt/attn_kernels/qkh_{reader,compute,writer}.cpp` replace `concat` + `nlp_create_qkv_heads_decode` + 2x `to_memory_config` + RoPE (5 ops -> 1; one core per (tile column, 8 users) reads the 9 whole source tiles of its column, RoPE is a tile matmul with a rotation matrix built from the cos / sin rows). Restore the old path: `DSV41_ATTN_QKPOST=0` (both); `DSV41_ATTN_QKNORM=0` (norm only; read at layer build); `DSV41_ATTN_QKHEADS=0` (heads only).
+
+**Exactness (bit-identical).** qk_heads: output bit-equal to the 5-op chain at T = 4, 6, 8. qk_norm: output bit-equal to `ttnn.rms_norm` of the slices at T = 4, 6, 8 and 3 seeds (q and kv, 100 % of the elements). The reference op runs with bf16 intermediates (fp32 destination accumulation off, approximate mode on) and a `reduce_tile` chain over the 40 (16) tiles of the row, so the row sum is order dependent in bf16: a first version that split the sum over cores in fp32 was NOT exact (7-35 % equal elements, 8-layer gate PCC 0.95 and different accepted drafts) and was replaced. The shipped kernel runs the LLK sequence of the reference op (square, `reduce_tile` SUM / REDUCE_ROW over all tiles in order, * fp32 1/N, + bf16 eps tile, rsqrt, column-broadcast multiply, gamma row-broadcast multiply); only the order-independent parts are parallel: every core squares its tiles, the other cores of a group write their bf16 square tiles to the group's reducer core (data, write barrier, semaphore increment), the reducer reduces all tiles in the reference order and sends the rs tile back (same handshake), every core finishes its own tiles.
+
+**Measured, op level (one chip, production shapes, traced marginal us/call, host .47, 1017 weights not involved, 2026-10-26):**
+
+| | old | fused |
+|---|---|---|
+| q + kv norm (2 slice + 2 rms_norm), T = 4 / 6 / 8 | 23.4 / 23.8 / 24.3 | 9.8 / 8.8 / 9.9 |
+| heads (concat + create heads + 2 to_memory_config + rope), T = 4 / 6 / 8 | 23.8 / 24.1 / 24.5 | 8.3 / 8.6 / 9.5 |
+
+**8-layer traced round window** (tt-opt harness `tests/tt_opt/test_tt_opt_decode.py`, 1017 weights, layers 0,1,2,3,14,20,21,24, alternating base / lever, 2 repetitions each, host .47, 2026-10-26; device ms per round): k=3 base 18.6987 / 18.6987, lever 18.4534 / 18.4524 (-0.246 ms); k=5 base 21.9663 / 21.9655, lever 21.7167 / 21.7155 (-0.250 ms). `test_decode_gate` (full harness, prefill + seed, golden written by the base tree): k=3 and k=5 streams PCC 1.000000 over 10 streams, logits PCC 1.000000, accepted ids and drafts equal; the base tree against its own golden gives the same scores.
+
+**40-layer adaptive demos, frozen table (DSV41_SPEC_TIMES=3:47,5:58, DSV41_SPEC_FREEZE_TIMES=1), 1017, host .47, base tree 9ed98f9bbf8 vs lever (same session, alternating):**
+
+| scenario | rounds | accepted / round | k_hist | round ms base | round ms lever | exactness vs plain |
+|---|---|---|---|---|---|---|
+| gsm8k_b4_m1M | 61 / 61 | 2.8859 / 2.8859 | {3:25, 5:36} both | 62.29 | 60.77 (-1.52) | 4/4 identical both |
+| needle64k_b4 | 26 / 26 | 1.4557 / 1.4557 | {3:21, 5:5} both | 70.33 | 68.96 (-1.37) | 4/4 identical both |
+
+The printed outputs of both scenarios are byte-identical between the two trees (gsm8k answers 18, 3, 70000, 540; needle passcode 7816). The 40-layer saving (-1.4 to -1.5 ms) is about the 8-layer window gain times 5 plus the op-level saving of about 29 us per layer. Gains and gates were measured on the frozen-table fixture; a no-fixture adaptive run would only change the k mix.
+
+## 8.3 Lean CCLs (L07)
+
+**What changed.** The attention all-reduce (reduce_scatter_minimal_async + all_gather_async) and the MoE combine all-gather (`layer.py`, [T, 640] per device) run with ONE worker per link (`num_workers_per_link=1`) on their own ping-pong semaphores (`tt/ccl_lean.py`, `LeanSems`; the semaphores are created in `DSV41DecodeChain.__init__` right after the CCLManager). Bit-identical: same ring order, only the transfer split changes. Big all-gathers (Engram kv) stay on the stock path (a one-worker gather of a big tensor is slower). `DSV41_CCL_LEAN=0` restores the stock MeshConfig methods. The MoE-combine `reduce_scatter_minimal_async` variant of the same lever is NOT part of this entry (wrong results in the model, see the lever README).
+
+**Measured (host .29, checkpoint 1017, 2026-10-26, device replay ms of the traced verify round, alternating base/lever in the same session, 5 replays each, spread < 0.01 ms).**
+
+| window | k=3 base -> lean | k=5 base -> lean |
+|---|---|---|
+| 8 layers (0,1,2,3,14,20,21,24) | 18.727 -> 18.672 ms (-0.055) | 21.539 -> 21.472 ms (-0.067, 2 reps each) |
+| 40 layers | 50.574 -> 50.342 ms (-0.232, -0.46 %) | 62.692 -> 61.856 ms (-0.836, -1.3 %) |
+
+With the frozen-times k mix of the GSM8K demo (25 rounds k=3, 36 rounds k=5) this is about 0.58 ms per round (about 0.9 %); estimate, not measured end to end (see below).
+
+**Gates.** Op level (tests/test_ccl_corr.py, test_ccl_micro.py on 1017 shapes): lean RS + AG pairs PCC 1.00000 against the reference at R=4/8/16/32. 8-layer test_decode_gate vs the base golden: k=3 and k=5 stream PCC 1.0, logits PCC 1.0, accepted ids and drafts equal. 40-layer adaptive demos (frozen table 3:47,5:58): gsm8k_b4_m1M 4/4 users spec == plain, accepted 2.8859/round, 61 rounds, k_hist {3:25, 5:36}, printed outputs byte-identical to base; needle64k_b4 4/4, accepted 1.4557, 26 rounds, k_hist {3:21, 5:5}, outputs byte-identical. Caveat: these demos were run with `DSV41_ENGRAM_RAM=0` (host .29 has 172 GB of foreign /dev/shm, the in-RAM Engram tables OOM-killed the first run), so their wall round_ms is host-bound and not a latency measurement; the latency numbers above are the device replay times.
+
+Commit: bd73c1eecfb on `ssinghal/dsv4p1-lever-ccl-r` (on top of 9ed98f9bbf8).
+
+## 8.4 Spec-verify indexer fused score (L12)
+
+**What changed.** `tt/idx_score.py` + `tt/idx_kernels/score_{reader,compute,writer}.cpp` (one JIT `generic_op`, no C++ build) replace, in `SpecIndexer.forward` (`tt/spec_paged.py`), the chain key-slab `slice` -> `matmul(q, K^T, relu)` -> `matmul(w, .)` -> row slice -> untilize -> `mask_scores`. The key slab is read in place, the relu intermediate stays in L1, rows come out masked (entries >= nvalid -> -1e30), and only the live key tiles are scored (the valid length is read on the device: one captured trace scores the live context whatever the position bucket). `topk_large_indices` is unchanged and the result goes through `indexer.canonical_ids` when the tree has the ids sort (DSV41_IDX_SORT), so it composes with it. Restore the old path: `DSV41_IDX_FUSED=0`.
+
+**Exactness (1017 checkpoint run, host .29, 2026-10-26).** Op level: selected ids identical (same ids, same order) to the chain in every shape below (random, tie-heavy and zero keys; valid lengths around 32768 / 65536 / 98304 entries; scored bucket 32,800 vs 65,568); with the ids-sort commits applied (13 tests) also identical. 8-layer gate at position 65,536 (`test_decode_gate`, golden = base): stream PCC 1.000000 (float noise at 1e-16, as base vs base), logits PCC 1.000000, accepted ids and drafts equal, k=3 and k=5. 40-layer adaptive demos (frozen table 3:47,5:58, DSV41_ENGRAM_RAM=0): spec == plain greedy for 4/4 users, accepted per round and k_hist identical to base in every pair (gsm8k 2.8859 / {3:25,5:36}; needle64k 1.4557 / {3:21,5:5}; needle128k 1.0105 / {3:27}).
+
+**Op level, whole indexer layer (project + score + mask + top-k), one chip, traced, us, chain -> fused** (production position-bucket ladder 512/2048/8192/32768/131072/524288; "start" = just inside a bucket, "end" = at its end; R = 4 rows (k=3) / 6 (k=5)):
+
+| layer geometry | position / bucket | k=3 (R=4) | k=5 (R=6) |
+|---|---|---|---|
+| ratio 2 (layers 2, 8, 14) | 8,212 / 32768 | 299 -> 153 | 349 -> 167 |
+| | 32,788 / 131072 | 727 -> 213 | 902 -> 231 |
+| | 65,556 / 131072 | 799 -> 297 | 971 -> 318 |
+| | 131,064 / 131072 (end) | 938 -> 453 | 1111 -> 483 |
+| | 131,093 / 524288 | 2820 -> 456 | 3591 -> 484 |
+| ratio 1 (layers 20..36) | 8,212 / 32768 | 442 -> 172 | 533 -> 187 |
+| | 32,788 / 131072 | 1485 -> 297 | 1872 -> 317 |
+| | 65,556 / 131072 | 1627 -> 455 | 2014 -> 484 |
+| | 131,064 / 131072 (end) | 1907 -> 772 | 2296 -> 819 |
+| | 131,093 / 524288 | 5481 -> 774 | 7007 -> 821 |
+
+**8-layer traced verify window** (tt-opt harness, layers 0,1,2,3,14,20,21,24, block at position 65,536, ladder 512/131072, alternating base/lever, 2 repetitions, device ms per round): k=3 23.955 / 23.954 -> 20.679 / 20.681 (-3.27 ms); k=5 27.935 / 27.934 -> 23.648 / 23.645 (-4.29 ms).
+
+**40-layer adaptive demos (round ms, base -> lever, same host and session; DSV41_ENGRAM_RAM=0 because .29 has 172 GB of foreign /dev/shm, so absolute round times are about 2x the ENGRAM_RAM=1 numbers and noisy):** needle64k_b4 126.08 -> 117.73 and 146.96 (base, repeat) vs 126.74 (lever, repeat); needle128k_b4 133.34 -> 121.90. On the previous host (.46, ENGRAM_RAM=1, same lever code): needle64k_b4 74.81 -> 65.77, gsm8k_b4_m1M 67.36 -> 66.69 (short context: the indexer runs in small buckets, little to gain). gsm8k on .29 (noisy): 160.82 / 185.19 (base) vs 146.55 / 142.7 (lever). The lever was faster in every pair; the long-context gain is about 8 to 11 ms per round in the first pairs (8 index layers; the repeat pair differed by 20 ms, noise), the short-context gain is within noise.
+
+## 8.5 Adaptive k: bounded staleness of the round-time estimate
+
+The adaptive scheduler probes the non-chosen k every 128 rounds so its per-k round-time estimate cannot go stale (`tt/spec_adapt.py`; CPU tests `tests/test_spec_adapt_cpu.py`, notes in `SPEC_ADAPT_NOTES.md`). `DSV41_SPEC_PROBE_EVERY=0` restores the old behaviour. Frozen-table runs do not exercise it (the fixture freezes the table).
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
