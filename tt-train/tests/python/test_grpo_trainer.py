@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import collections
 import contextlib
+import os
 import queue
 import threading
 from types import SimpleNamespace
@@ -817,7 +818,12 @@ def mpi_loopback(monkeypatch):
     )
     # Without real MPI: no os._exit, and no shutdown at pytest exit.
     monkeypatch.setattr(mpi_rollout, "exit_on_error", contextlib.nullcontext)
-    monkeypatch.setattr(mpi_rollout.atexit, "register", at_exit.append)
+
+    def unregister(fn):
+        at_exit[:] = [f for f in at_exit if f != fn]
+
+    monkeypatch.setattr(mpi_rollout.atexit, "register", lambda fn, *args: at_exit.append(fn))
+    monkeypatch.setattr(mpi_rollout.atexit, "unregister", unregister)
     return queues, at_exit
 
 
@@ -841,7 +847,9 @@ def test_mpi_rollout_loopback(mpi_loopback, expect_error):
     4. A raising update_weights() reaches the client the same way.
     5. After both errors the protocol is still in sync: the next remote_generate works.
     """
+    _, at_exit = mpi_loopback
     client, thread = _start_rollout_server(_EchoSampler())
+    assert at_exit == [os._exit, client.shutdown]
 
     client.send_weights({}, version=0)
     assert client.remote_generate([[1, 2], [3]]) == ([[1, 2], [3]], [[-0.5, -0.5], [-0.5]], 0)
@@ -854,6 +862,7 @@ def test_mpi_rollout_loopback(mpi_loopback, expect_error):
 
     client.shutdown()
     thread.join(timeout=30)
+    assert at_exit == [client.shutdown]
 
 
 class _IdsTokenizer:
