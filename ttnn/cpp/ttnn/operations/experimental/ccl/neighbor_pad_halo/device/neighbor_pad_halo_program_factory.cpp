@@ -66,8 +66,6 @@ NpHaloMeshWorkloadFactory::cached_mesh_workload_t NpHaloMeshWorkloadFactory::cre
 
 namespace {
 
-// Bank-major coalescing groups the pages p, p+B, p+2B, ... that an interleaved DRAM buffer places on one
-// bank, so B must be the device's DRAM bank count: 8 on a full Blackhole, 7 on a DRAM-harvested one.
 uint32_t np_num_dram_banks(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     return mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
 }
