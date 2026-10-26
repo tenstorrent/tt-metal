@@ -153,8 +153,9 @@ def test_flat_balanced_sweep(device):
             else:
                 call = lambda: op(x, cd, rd, token_index=td, y_row_major=YRM, down_fp32=DFP32)  # noqa: E731
             y0 = call()
-            if os.environ.get("GLM_SWEEP_DUMP") and M == 128:  # y of M 128, to compare variants for equality
-                torch.save(ttnn.to_torch(y0), os.environ["GLM_SWEEP_DUMP"])
+            if os.environ.get("GLM_SWEEP_DUMP") and (M == 128 or isinstance(M, str)):  # (to compare variants)
+                d = os.environ["GLM_SWEEP_DUMP"]  # (M 128; with GLM_SWEEP_COUNTS each pattern: <path>.<pattern>)
+                torch.save(ttnn.to_torch(y0), d if M == 128 else f"{d}.{M}")
             ttnn.deallocate(y0)
             ttnn.synchronize_device(device)
             ids = []

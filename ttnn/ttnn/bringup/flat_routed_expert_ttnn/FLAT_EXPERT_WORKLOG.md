@@ -2081,3 +2081,20 @@ multicast delivery (one multicaster into both rectangles), which wedged NOC0 bes
   512 / 1024: 490 / 1102 / 2056 ; 514 / 1146 / 2138 ; 510 / 1139 / 2109 (x twice, depth 12: 521 / 962 / 1688). The
   default stays rows_hint <= 320. To go further: a short joining hop (gate/up rectangles adjacent in the plan) or
   the crossing off the congested NOC0 row.
+
+### x read once under other routings (2026-10-26, bh-lb-09, one chip, Galaxy totals E x M)
+Patterns (routings.json in the log dir): uniform; zipf (hot first) / reversed; hot50 (one expert half the rows);
+half_empty (every other expert 2 M, the rest 0); random (Dirichlet 1, seed 7). us a call, x read twice / read once
+(rectangle 0's relays, NOC0 forwarding: 33a91e614b9) / read once (eastern rectangle's relays, NOC1 forwarding - the
+gate/up receiver's h writes then go on NOC0; not committed). Bit-exact on every pattern's real rows (padding rows of
+counts that are not multiples of 32 are never written and hold leftovers).
+| | uniform | zipf | zipf_rev | hot50 | half_empty | random |
+|---|---|---|---|---|---|---|
+| GLM-5.3 E 8 (160) | 534 / 493 / 484 | 530 / 515 / 506 | 524 / 512 / 510 | 555 / 549 / 542 | 387 / 411 / 405 | 520 / 537 / 529 |
+| GLM-Flash E 9 (142) | 387 / 367 / 360 | 399 / 383 / 380 | 401 / 387 / 382 | 409 / 401 / 403 | 293 / 315 / 305 | 390 / 390 / 384 |
+| K3 E 28 (91) | 1222 / 1195 / 1188 | 1281 / 1251 / 1272 | 1294 / 1262 / 1273 | 1227 / 1207 / 1195 | 776 / 700 / 711 | 1254 / 1207 / 1228 |
+| K2.7 E 12 (107) | 803 / 758 / 750 | 812 / 803 / 788 | 821 / 807 / 787 | 795 / 738 / 745 | 539 / 547 / 522 | 817 / 816 / 809 |
+- Read once wins where the weights dominate; it loses when few experts carry all rows (GLM-5.3 / GLM-Flash
+  half_empty +4..8%, GLM-5.3 random +2..3%): the same x per core in a shorter call - the one snake's x rate is then
+  the bound (as above 320 rows), the two read-twice snakes are not.
+Logs: /localdev/mstaletovic/routings/ (go.sh, go.out, routings.json).
