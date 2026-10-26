@@ -673,8 +673,8 @@ def rows_body_scan(gdn, full_hidden, rows_state, state, *, full_tile: bool = Fal
 
 def rows_body_fallback(gdn, full_hidden, rows_state, state, *, full_tile: bool = False):
     """Today's stream where the fold does not serve: the wrap on a rows state that carries its buffers, the chain
-    otherwise (the layer's resolved wrap-or-chain body); on a lane rows state, the lanes chain (one batched chunk
-    call from the lanes' states)."""
+    otherwise (the layer's resolved wrap-or-chain body); on a lane rows state, the lanes chain (the single stream's
+    recurrence once per lane)."""
 
     if is_lane_rows_state(rows_state):
         return gdn._rows_body_lanes_chain(full_hidden, rows_state, state)

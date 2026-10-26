@@ -3,9 +3,8 @@
 
 """MTP lanes stage 1: the lane forms on the torch-backed ttnn of steps 4 and 5 (no device).
 
-The step-5 fake is extended with the batched forms the lanes add (the chunk kernel over B lanes as B independent
-single-lane calls -- the per-lane bitwise property the single-chip forms test measured -- the multi-user
-``paged_update_cache`` and the ``(shape, padded_shape)`` view of row 0 of every lane's tile).  What is pinned:
+The step-5 fake is extended with the batched forms the lanes add (the multi-user ``paged_update_cache`` and the
+``(shape, padded_shape)`` view of row 0 of every lane's tile).  What is pinned:
 
 * the accept / alignment constants are block-diagonal per lane and zero on the pad columns; the GDN and QSA lane
   selects expand, fold, indicate and pick exactly the rows they name and never a pad row;
@@ -14,13 +13,13 @@ single-lane calls -- the per-lane bitwise property the single-chip forms test me
 * the per-lane rollback invariant: after a lane pass, a per-lane commit (a_u in 0..k, some lanes inactive) and the
   next pass, every active lane's KV rows, compressed blocks and raw history equal its own sequential 1-row stream
   and the B=1 verify path bitwise, and an inactive lane's region is untouched;
-* the GDN lane rows are the rows path per lane bitwise (one batched chunk call), and the lane commit lands each
-  lane's own prefix state and FIR history (an inactive or seeded lane keeps both bitwise);
+* the GDN lane rows are the rows path per lane bitwise (its recurrence called once per lane), and the lane commit
+  lands each lane's own prefix state and FIR history (an inactive or seeded lane keeps both bitwise);
 * the PLE lane rows are the rows path per lane bitwise, and the lane commit selects each lane's own history;
 * the device accept per lane is exact for every match pattern and large ids, the residual row select exact, the
   position advance exact per lane, and the readback parses per lane;
-* source pins: no host tensor in the lane bodies, no Python loop over the lanes, every layer commits before its new
-  rows, the position advance last.
+* source pins: no host tensor in the lane bodies, no Python loop over the lanes (except the GDN recurrence's
+  per-lane calls), every layer commits before its new rows, the position advance last.
 """
 
 from __future__ import annotations
@@ -38,8 +37,6 @@ from models.demos.blackhole.qwen38_flash_next.tests import test_mtp_v2_step6_dra
 from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_device import (
     BF16,
     FP32,
-    HEAD_DIM,
-    HEADS,
     ROW_MAJOR,
     TILE,
     TP,
@@ -103,41 +100,7 @@ LANE_POSITIONS = ((5, 31, 32, 100), (29, 30, 63, 60), (0, 3, 61, 127), (96, 33, 
 # --------------------------------------------------------------------------- the extended fake
 
 
-class FakeLaneChunk(FakeChunk):
-    """The step-4 kernel model per lane: a batched head-major call is B independent single-lane calls (the property
-    the single-chip forms test measured: bitwise per lane), so the lane orchestration around it is pinned bitwise
-    against the rows path.  Token-major calls fall through to the step-4 model."""
-
-    def chunk_gated_delta_rule(self, q, k, v, g, beta, *, output_head_major=False, **kwargs):
-        if not output_head_major:
-            return super().chunk_gated_delta_rule(q, k, v, g, beta, output_head_major=False, **kwargs)
-        lanes, rows = q.shape[0], q.shape[1]
-        initial_state, scale = kwargs["initial_state"], kwargs["scale"]
-        assert kwargs["output_final_state"] and kwargs["chunk_size"] == 32 and rows == 32, (kwargs, q.shape)
-        assert len(v.shape) == 3 and v.shape == (lanes, rows, HEADS * HEAD_DIM), v.shape
-        assert q.dtype is BF16 and k.dtype is BF16 and v.dtype is BF16 and g.dtype is FP32 and beta.dtype is FP32
-        assert initial_state.dtype is FP32 and initial_state.shape[0] == lanes, initial_state.shape
-        self.calls.append({"chunk_size": 32, "rows": rows, "lanes": lanes, "flat_v": True, "output_head_major": True})
-        outputs, states = [], []
-        for index in range(TP):
-            per_lane = [
-                self.impl(
-                    q.torch_shards()[index][lane : lane + 1],
-                    k.torch_shards()[index][lane : lane + 1],
-                    v.torch_shards()[index][lane : lane + 1].reshape(1, rows, HEADS, HEAD_DIM),
-                    g.torch_shards()[index][lane : lane + 1],
-                    beta.torch_shards()[index][lane : lane + 1],
-                    scale,
-                    initial_state.torch_shards()[index][lane : lane + 1],
-                )
-                for lane in range(lanes)
-            ]
-            outputs.append(torch.cat([o.permute(0, 2, 1, 3).reshape(HEADS, rows, HEAD_DIM) for o, _ in per_lane]))
-            states.append(torch.cat([s for _, s in per_lane]))
-        return FakeTensor(outputs, FP32, TILE), FakeTensor(states, FP32, TILE)
-
-
-def make_lane_fake(chunk: FakeLaneChunk) -> SimpleNamespace:
+def make_lane_fake(chunk: FakeChunk) -> SimpleNamespace:
     fake = make_verify_fake(chunk)
     base_reshape = fake.reshape
 
@@ -181,7 +144,7 @@ def make_lane_fake(chunk: FakeLaneChunk) -> SimpleNamespace:
 
 @pytest.fixture
 def fake(monkeypatch):
-    chunk = FakeLaneChunk()
+    chunk = FakeChunk()
     install_source_chunk_fake(monkeypatch, chunk)
     fake_ttnn = make_lane_fake(chunk)
     for module in (
@@ -650,7 +613,7 @@ def test_gdn_lane_rows_are_the_rows_path_per_lane_and_commit_lands_each_lanes_pr
         tile[:, lane * rows : (lane + 1) * rows] = hidden[lane]
     calls = len(fake.chunk.calls)
     result = module.forward_rows_lanes(_hidden_sharded(tile), lane_state, lane_rows)
-    assert len(fake.chunk.calls) - calls == 1 and fake.chunk.calls[-1]["lanes"] == lanes
+    assert len(fake.chunk.calls) - calls == lanes  # the rows path's recurrence, once per lane
     output = _cat(result.hidden_rows, 3)
     assert output.shape == (1, 1, 32, 2560) and torch.count_nonzero(output[:, :, lanes * rows :].float()) == 0
     final = _cat(result.final_state, 1)
@@ -683,7 +646,7 @@ def test_gdn_lane_rows_are_the_rows_path_per_lane_and_commit_lands_each_lanes_pr
     before_history = [x.clone() for x in lane_rows.history.locals]
     calls = len(fake.chunk.calls)
     module.commit_rows_lanes(lane_state, lane_rows, selectors)
-    assert len(fake.chunk.calls) - calls == 1  # one masked rerun for every lane
+    assert len(fake.chunk.calls) - calls == lanes  # the masked rerun, once per lane
     for lane in range(lanes):
         rows_state, _ = references[lane]
         if committed[lane] == 0:
@@ -988,13 +951,13 @@ LANE_BODY = (
     "_land_accept_rows",
     "_advance_lane_positions",
 )
+# The lane methods with no loop over the lanes (gdn.py's _chunk_rows_lanes runs the rows path's recurrence per lane).
 LANE_METHODS = {
     GDN_SOURCE: (
         "forward_rows_lanes",
         "commit_rows_lanes",
         "_causal_conv_rows_lanes",
         "_make_chunk_inputs_lanes",
-        "_chunk_rows_lanes",
         "_gate_and_project_rows_lanes",
         "build_rows_selectors_lanes",
     ),

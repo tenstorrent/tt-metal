@@ -219,6 +219,18 @@ def _copy_inplace(source, target, *, label: str) -> None:
         raise RuntimeError(f"{label} ttnn.copy returned a different tensor")
 
 
+def _lane_slice(tensor, axis: int, lane: int):
+    """Lane ``lane`` of ``tensor`` along ``axis`` in DRAM, owned by the caller (a full-extent ``ttnn.slice`` returns its
+    input, so the one lane of a one-lane tensor is a clone)."""
+
+    shape = _shape(tensor)
+    if shape[axis] == 1:
+        return ttnn.clone(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    start, end = [0] * len(shape), list(shape)
+    start[axis], end[axis] = lane, lane + 1
+    return ttnn.slice(tensor, tuple(start), tuple(end), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
 def _require_shape(tensor, expected: tuple[int, ...], *, label: str) -> None:
     actual = _shape(tensor)
     if actual != expected:
@@ -1246,9 +1258,10 @@ class Qwen38TTNNGDNRowsState:
 # The dense work (all-gather, projection, output projection, reduce-scatter) runs on that tile exactly as the
 # rows path does; the per-lane work (FIR history, chunk kernel from lane u's recurrent state, commit) runs on a
 # batch axis: one exact 0/1 ``expand_select`` copies lane u's rows into its own 32-row tile (rows R .. 31 zero),
-# one batched kernel call takes ``[B, 32, 12, 128]`` from ``recurrent [B, 12, 128, 128]`` (bitwise per lane: the
-# single-chip microbench of stage 0b), and one ``fold_select`` brings the per-lane outputs back to the lane-major
-# tile before the gate.  Every select is one nonzero term per output element under HiFi4 / fp32 accumulation.
+# the recurrence takes ``[B, 32, 12, 128]`` from ``recurrent [B, 12, 128, 128]`` (the single stream's recurrence once
+# per lane, on lane u's ``[1, 32, 12, 128]`` slice; the verify-rows fold's lanes form replaces this block), and one
+# ``fold_select`` brings the per-lane outputs back to the lane-major tile before the gate.  Every select is one
+# nonzero term per output element under HiFi4 / fp32 accumulation.
 
 
 def lane_rows_select_tiles(lanes: int, rows: int) -> dict[str, torch.Tensor]:
@@ -3434,40 +3447,43 @@ class Qwen38TTNNGDN:
         rows_state.validate()
 
     def _chunk_rows_lanes(self, rows_state: Qwen38TTNNGDNLaneRowsState, initial_state, committed_mask=None):
-        """ONE ``chunk_gated_delta_rule`` call over the B lanes from ``initial_state`` ``[B,12,128,128]`` (read only):
-        head-major output ``[B*12,32,128]`` and the FP32 final states ``[B,12,128,128]`` in a new buffer; with
-        ``committed_mask`` ``[1,B,32,1]`` beta and g of the rows past each lane's committed prefix are zeroed first."""
+        """The B lanes' recurrence from ``initial_state`` ``[B,12,128,128]`` (read only): per lane, on that lane's
+        slices, ``gdn_source_chunk.chunk_token_major`` with ``_chunk_rows``' arguments (the single stream's
+        recurrence); head-major output ``[B*12,32,128]`` and the FP32 final states ``[B,12,128,128]`` in new buffers;
+        with ``committed_mask`` ``[1,B,32,1]`` beta and g of the rows past each lane's committed prefix are zeroed
+        first."""
 
         lanes, constants = rows_state.lanes, rows_state.constants
+        dram = ttnn.DRAM_MEMORY_CONFIG
         if committed_mask is None:
             beta, g, masked = rows_state.beta, rows_state.g, ()
         else:
-            beta = ttnn.multiply(rows_state.beta, committed_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            g = ttnn.multiply(rows_state.g, committed_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            beta = ttnn.multiply(rows_state.beta, committed_mask, memory_config=dram)
+            g = ttnn.multiply(rows_state.g, committed_mask, memory_config=dram)
             masked = (beta, g)
-        # [1, B, T, HV] -> [B, T, HV] and [1, B, T, HV * V] -> [B, T, HV * V]: the tile grid is unchanged, views.
-        beta_rows = ttnn.reshape(beta, (lanes, CHUNK_SIZE, VALUE_HEADS_PER_DEVICE))
-        g_rows = ttnn.reshape(g, (lanes, CHUNK_SIZE, VALUE_HEADS_PER_DEVICE))
-        v_rows = ttnn.reshape(rows_state.v, (lanes, CHUNK_SIZE, VALUE_WIDTH_PER_DEVICE))
-        output, final_state = ttnn.transformer.chunk_gated_delta_rule(
-            rows_state.q,
-            rows_state.k,
-            v_rows,
-            g_rows,
-            beta_rows,
-            scale=HEAD_DIM**-0.5,
-            initial_state=initial_state,
-            output_final_state=True,
-            chunk_size=CHUNK_SIZE,
-            output_head_major=True,
-            eye=constants.eye,
-            tril=constants.tril,
-            ones=constants.ones,
-            masks=constants.masks,
-        )
+        outputs, final_states = [], []
+        for lane in range(lanes):
+            q, k, state = (_lane_slice(tensor, 0, lane) for tensor in (rows_state.q, rows_state.k, initial_state))
+            v, beta_lane, g_lane = (_lane_slice(tensor, 1, lane) for tensor in (rows_state.v, beta, g))
+            output, final_state = fused.gdn_source_chunk.chunk_token_major(
+                q,
+                k,
+                ttnn.reshape(v, (1, CHUNK_SIZE, VALUE_WIDTH_PER_DEVICE)),
+                ttnn.reshape(g_lane, (1, CHUNK_SIZE, VALUE_HEADS_PER_DEVICE)),
+                ttnn.reshape(beta_lane, (1, CHUNK_SIZE, VALUE_HEADS_PER_DEVICE)),
+                state,
+                (constants.eye, constants.tril, constants.ones, constants.masks),
+                rows_total=CHUNK_SIZE,
+                scale=HEAD_DIM**-0.5,
+            )
+            _deallocate(q, k, v, beta_lane, g_lane, state)
+            outputs.append(output)
+            final_states.append(final_state)
         _deallocate(*masked)
-        if final_state is None:
-            raise RuntimeError("chunk_gated_delta_rule returned no final state")
+        output = ttnn.concat(outputs, dim=0, memory_config=dram) if lanes > 1 else outputs[0]
+        final_state = ttnn.concat(final_states, dim=0, memory_config=dram) if lanes > 1 else final_states[0]
+        if lanes > 1:
+            _deallocate(*outputs, *final_states)
         _retag_head_shard_after_reshape(final_state, reference=initial_state, shard_dim=1)
         _require_shape(
             final_state, (lanes, VALUE_HEADS_PER_DEVICE, HEAD_DIM, HEAD_DIM), label="GDN lane rows final state"
@@ -3557,8 +3573,9 @@ class Qwen38TTNNGDN:
 
     def _rows_body_lanes_chain(self, full_hidden, rows_state: Qwen38TTNNGDNLaneRowsState, state: Qwen38TTNNGDNState):
         """The lanes chain between the gather and the result: the projection, the per-lane expands, the FIR, the
-        chunk inputs, ONE batched chunk call from the lanes' states and the gate + out-projection.  Returns
-        ``(output, final_state)`` with the lanes' states after all rows in a new buffer the caller deallocates."""
+        chunk inputs, the recurrence from the lanes' states (``_chunk_rows_lanes``) and the gate + out-projection.
+        Returns ``(output, final_state)`` with the lanes' states after all rows in a new buffer the caller
+        deallocates."""
 
         z, a, b = self._project_rows(full_hidden, rows_state)
         self._select_rows(
@@ -3584,12 +3601,12 @@ class Qwen38TTNNGDN:
     ) -> None:
         """Commit ``c_u`` rows of the last ``forward_rows_lanes`` pass into lane u's state in place.
 
-        The catch-up reruns the batched kernel from the committed states with every lane's beta and g masked past
-        its committed prefix; the final states land in ``state.recurrent`` through the exact fp32 0/1 select
-        ``recurrent * [c_u == 0] + final * [c_u >= 1]`` (a lane committing nothing -- inactive, or seeded and not yet
-        verified -- keeps its recurrent bitwise: the masked rerun is an identity only to TF32 precision), and every
-        lane's FIR history moves forward by ``c_u``
-        rows with one equal-batch 0/1 selection matmul (the KEEP row copies an inactive lane's history unchanged).
+        The catch-up reruns the recurrence (``_chunk_rows_lanes``) from the committed states with every lane's beta and
+        g masked past its committed prefix; the final states land in ``state.recurrent`` through the exact fp32 0/1
+        select ``recurrent * [c_u == 0] + final * [c_u >= 1]`` (a lane committing nothing -- inactive, or seeded and not
+        yet verified -- keeps its recurrent bitwise: the masked rerun is an identity only to TF32 precision), and every
+        lane's FIR history moves forward by ``c_u`` rows with one equal-batch 0/1 selection matmul (the KEEP row copies
+        an inactive lane's history unchanged).
         """
 
         rows = self._validate_lane_rows_state(rows_state, state)
