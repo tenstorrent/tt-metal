@@ -182,6 +182,10 @@ class KDAProgramConfig:
     # Fuse the output projection with its TP reduce-scatter (ttnn.operations.matmul_reduce_scatter): each output
     # block's partial travels the TP ring while the next block is multiplied, and partials never touch DRAM.
     fused_output_reduce_scatter: bool = False
+    # With fused_output_reduce_scatter: W K-block windows of the fused op's first entry that the gated norm's reader,
+    # idle once the norm's inputs are read, lands in the op's W circular buffer (an L1 region free while the norm runs),
+    # so the op starts its first matmul without the weight fill. 0: none.
+    output_weight_prefetch_windows: int = 0
 
     def __post_init__(self) -> None:
         if self.qkv_channel_chunk_size <= 0 or self.qkv_channel_chunk_size % ttnn.TILE_SIZE:
@@ -348,6 +352,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         overlap_output_gate=num_chunks <= _MAX_GROUP_CHUNKS,
         # Galaxy SP8xTP4 T=5120: 1.159 -> 1.099 ms; KDA_FUSED_MMRS=0 keeps the separate projection and reduce-scatter.
         fused_output_reduce_scatter=os.environ.get("KDA_FUSED_MMRS", "1") == "1",
+        output_weight_prefetch_windows=int(os.environ.get("KDA_MMRS_PREFETCH", "1")),
     )
 
 

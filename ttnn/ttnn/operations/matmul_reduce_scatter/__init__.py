@@ -7,6 +7,7 @@ from .matmul_reduce_scatter import (
     SUPPORTED,
     default_compute_kernel_config,
     matmul_reduce_scatter,
+    matmul_reduce_scatter_weight_prefetch,
     validate,
 )
 

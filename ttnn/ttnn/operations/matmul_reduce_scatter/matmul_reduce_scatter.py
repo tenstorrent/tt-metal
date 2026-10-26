@@ -126,6 +126,7 @@ def matmul_reduce_scatter(
     extra_tensors=(),
     staging: str | None = None,
     balance_lines: bool = False,
+    w_prefetch=None,
 ) -> ttnn.Tensor:
     """extra_program(coord, free_cores) -> ProgramDescriptor | None merges another program onto the cores this op
     leaves idle on each device (its core ranges must not overlap this op's); extra_tensors are its I/O tensors.
@@ -133,7 +134,9 @@ def matmul_reduce_scatter(
     balance_lines (scatter_dim -1): the planner may give the n-lines of a block that does not split evenly unequal,
     per-block rotating widths, using every line of the matmul rectangle (the busiest core computes fewer tiles over the
     call; more matmul cores, so fewer idle cores for extra_program). Same per-tile K accumulation; the cross-device add
-    order of some blocks can differ from the uniform split's, so the output matches it within BF16 rounding."""
+    order of some blocks can differ from the uniform split's, so the output matches it within BF16 rounding.
+    w_prefetch: the WeightPrefetch (matmul_reduce_scatter_weight_prefetch) whose jobs the previous program ran: W's
+    first windows are then already in L1 and entry 0 starts on them (ignored when this call's plan differs)."""
     validate(
         input_tensor,
         weight,
@@ -161,4 +164,37 @@ def matmul_reduce_scatter(
         extra_tensors=tuple(extra_tensors),
         staging=staging,
         balance_lines=balance_lines,
+        w_prefetch=w_prefetch,
+    )
+
+
+def matmul_reduce_scatter_weight_prefetch(
+    input_shape,
+    input_dtype,
+    weight: ttnn.Tensor,
+    *,
+    cluster_axis: int,
+    scatter_dim: int = -2,
+    topology=Topology.Linear,
+    num_links: int | None = None,
+    balance_lines: bool = False,
+    windows: int = 1,
+):
+    """The jobs that land W's first `windows` K-block windows of a later matmul_reduce_scatter(A, weight, ...) call
+    (A of input_shape / input_dtype, the same keywords) in L1, for the program just before it to run
+    (kernel_lib/l1_prefetch_dataflow.hpp; e.g. ttnn.experimental.kda.sigmoid_gated_rms_norm's prefetch_* arguments).
+    Returns a WeightPrefetch to pass to that call as w_prefetch, or None when its plan cannot take one."""
+    from .matmul_reduce_scatter_program_descriptor import weight_prefetch
+
+    return weight_prefetch(
+        weight,
+        a_shape=list(input_shape),
+        a_dtype=input_dtype,
+        cluster_axis=cluster_axis,
+        scatter_dim=_canonical_scatter_dim(scatter_dim, len(list(input_shape))),
+        topology=topology,
+        num_links=num_links,
+        hooks=sys.modules[__package__],
+        balance_lines=balance_lines,
+        windows=windows,
     )

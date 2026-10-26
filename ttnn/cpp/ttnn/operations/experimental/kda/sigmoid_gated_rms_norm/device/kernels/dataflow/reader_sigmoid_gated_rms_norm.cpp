@@ -9,12 +9,25 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/norm_items.hpp"
+#ifdef L1_PREFETCH
+#include "ttnn/cpp/ttnn/kernel_lib/l1_prefetch_dataflow.hpp"
+#endif
 
 // Reads each group's inputs (the writer reads the gate on the other NoC), then the weight after the first group.
 // With ACTIVATED_GATE the items of heads [0, Ha) then read their already activated FP32 gate ([B * Ha, T, V], laid out
 // as the input): only the group's last stage reads it, so the inputs every core waits on go first.
-template <uint32_t Vt, uint32_t epsilon_bits, uint32_t G, uint32_t H, uint32_t Ha, uint32_t Mt, uint32_t max_items>
-TT_KERNEL void reader(uint32_t first_item, uint32_t item_stride, uint32_t item_count) {
+// With L1_PREFETCH a core whose prefetch_job is nonzero then runs job prefetch_job - 1 of a later op's L1 prefetch
+// (l1_prefetch_dataflow.hpp): this RISC is idle for the rest of the norm, which the compute bounds.
+template <
+    uint32_t Vt,
+    uint32_t epsilon_bits,
+    uint32_t G,
+    uint32_t H,
+    uint32_t Ha,
+    uint32_t Mt,
+    uint32_t max_items,
+    uint32_t prefetch_scratch>
+TT_KERNEL void reader(uint32_t first_item, uint32_t item_stride, uint32_t item_count, uint32_t prefetch_job) {
     const auto x_acc = TensorAccessor(tensor::input);
     const auto w_acc = TensorAccessor(tensor::weight);
     DataflowBuffer x(dfb::x);
@@ -88,4 +101,15 @@ TT_KERNEL void reader(uint32_t first_item, uint32_t item_stride, uint32_t item_c
         }
 #endif
     }
+#ifdef L1_PREFETCH
+    if (prefetch_job != 0) {
+        l1_prefetch::run_job(
+            TensorAccessor(tensor::prefetch_jobs),
+            TensorAccessor(tensor::prefetch_source),
+            prefetch_job - 1,
+            prefetch_scratch);
+    }
+#else
+    (void)prefetch_job;
+#endif
 }

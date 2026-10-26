@@ -107,6 +107,24 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
         gate_width,
         attrs.gate_column_offset);
     TT_FATAL(in.weight.logical_volume() == attrs.value_dim, "sigmoid_gated_rms_norm: weight volume must equal V");
+    TT_FATAL(
+        in.prefetch_source.has_value() == in.prefetch_jobs.has_value() &&
+            (in.prefetch_jobs.has_value() || attrs.prefetch_cores.empty()),
+        "sigmoid_gated_rms_norm: a prefetch needs its source, its job table and its cores");
+    if (in.prefetch_jobs.has_value()) {
+        const auto& jobs = *in.prefetch_jobs;
+        TT_FATAL(
+            jobs.storage_type() == StorageType::DEVICE && jobs.buffer() != nullptr &&
+                jobs.dtype() == DataType::UINT32 && jobs.layout() == Layout::ROW_MAJOR && !jobs.is_sharded() &&
+                jobs.logical_shape()[-1] == 16 && jobs.logical_volume() / 16 >= attrs.prefetch_cores.size(),
+            "sigmoid_gated_rms_norm: prefetch_jobs must be an interleaved ROW_MAJOR UINT32 [..., jobs, 16] device "
+            "tensor "
+            "with a row per prefetch core");
+        TT_FATAL(
+            in.prefetch_source->storage_type() == StorageType::DEVICE && in.prefetch_source->buffer() != nullptr &&
+                !in.prefetch_source->is_sharded(),
+            "sigmoid_gated_rms_norm: prefetch_source must be an interleaved device tensor");
+    }
     TT_FATAL(attrs.batch > 0, "sigmoid_gated_rms_norm: batch must be positive");
     TT_FATAL(
         attrs.sequence > 0 && attrs.sequence % tt::constants::TILE_HEIGHT == 0,
@@ -155,7 +173,12 @@ Tensor sigmoid_gated_rms_norm(
     const DeviceComputeKernelConfig& compute_kernel_config,
     DataType output_dtype,
     uint32_t gate_column_offset,
-    const std::optional<Tensor>& activated_gate) {
+    const std::optional<Tensor>& activated_gate,
+    const std::optional<Tensor>& prefetch_source,
+    const std::optional<Tensor>& prefetch_jobs,
+    const std::vector<tt::tt_metal::CoreCoord>& prefetch_cores,
+    uint32_t prefetch_l1_begin,
+    uint32_t prefetch_l1_end) {
     const auto& input_shape = input.logical_shape();
     TT_FATAL(
         input_shape.rank() == 3 || input_shape.rank() == 4,
@@ -176,8 +199,17 @@ Tensor sigmoid_gated_rms_norm(
             .compute_kernel_config = compute_kernel_config,
             .gate_column_offset = gate_column_offset,
             .activated_heads =
-                activated_gate.has_value() ? static_cast<uint32_t>(activated_gate->logical_shape()[0] / batch) : 0u},
-        SigmoidGatedRmsNormInputs{.input = input, .gate = gate, .weight = weight, .activated_gate = activated_gate});
+                activated_gate.has_value() ? static_cast<uint32_t>(activated_gate->logical_shape()[0] / batch) : 0u,
+            .prefetch_cores = prefetch_cores,
+            .prefetch_l1_begin = prefetch_l1_begin,
+            .prefetch_l1_end = prefetch_l1_end},
+        SigmoidGatedRmsNormInputs{
+            .input = input,
+            .gate = gate,
+            .weight = weight,
+            .activated_gate = activated_gate,
+            .prefetch_source = prefetch_source,
+            .prefetch_jobs = prefetch_jobs});
     return results[0];
 }
 

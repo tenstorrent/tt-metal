@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import torch
-from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter
+from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter, matmul_reduce_scatter_weight_prefetch
 from ttnn.operations.matmul_reduce_scatter.matmul_reduce_scatter_program_descriptor import (
     prepare_mesh as prepare_matmul_reduce_scatter_mesh,
 )
@@ -433,6 +433,9 @@ class ttKDA:
             self.fused_output_compute_config = ttnn.ComputeConfigDescriptor(
                 math_fidelity=program_config.output_projection_math_fidelity, fp32_dest_acc_en=True
             )
+        self.output_weight_prefetch_windows = (
+            program_config.output_weight_prefetch_windows if self.fused_output_reduce_scatter else 0
+        )
 
     def _input_projection_gate_tiles(self, grid: ttnn.CoreCoord, program_config, width: int) -> int:
         """Output-gate tile columns the input projection keeps: its per-core width without the gate's columns plus
@@ -592,10 +595,21 @@ class ttKDA:
         output_gate: ttnn.Tensor,
         output_gate_offset: int,
         activated_gate: ttnn.Tensor | None = None,
+        prefetch=None,
     ) -> ttnn.Tensor:
         """Apply the KDA gated RMSNorm epilogue; ``activated_gate`` holds the first heads' sigmoid(g), and
-        ``output_gate`` the other heads' gate from ``output_gate_offset``."""
+        ``output_gate`` the other heads' gate from ``output_gate_offset``. ``prefetch``: a WeightPrefetch whose jobs
+        the norm's reader runs once the norm's inputs are read."""
         config, weights = self.config, self.weights
+        landing = {}
+        if prefetch is not None:
+            landing = dict(
+                prefetch_source=prefetch.source,
+                prefetch_jobs=prefetch.jobs,
+                prefetch_cores=prefetch.cores,
+                prefetch_l1_begin=prefetch.l1_begin,
+                prefetch_l1_end=prefetch.l1_end,
+            )
         return ttnn.experimental.kda.sigmoid_gated_rms_norm(
             output,
             output_gate,
@@ -607,7 +621,36 @@ class ttKDA:
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
             activated_gate=activated_gate,
+            **landing,
         )
+
+    def _output_weight_prefetch(self, normed_shape: list[int]):
+        """The fused output projection's first W windows, for the gated norm to land (None: not taken). The jobs
+        write where the projection's W circular buffer will be, which must be free L1 while the norm runs: below the
+        lowest L1 buffer once the norm output is allocated (the norm checks its own circular buffers)."""
+        if not self.output_weight_prefetch_windows or self.norm_output_memory_config.buffer_type != ttnn.BufferType.L1:
+            return None
+        prefetch = matmul_reduce_scatter_weight_prefetch(
+            normed_shape,
+            self.gated_rms_output_dtype,
+            self.weights.output_projection,
+            cluster_axis=self._tp_cluster_axis,
+            scatter_dim=-1,
+            topology=self.tp_ccl_topology,
+            num_links=self.tt_ccl.get_num_links(self._tp_cluster_axis),
+            balance_lines=True,
+            windows=self.output_weight_prefetch_windows,
+        )
+        if prefetch is None:
+            return None
+        lowest = ttnn._ttnn.device.GetLowestOccupiedComputeL1Address(self.device)
+        grid = self.device.compute_with_storage_grid_size()
+        tiles = normed_shape[-2] // ttnn.TILE_SIZE * (normed_shape[-1] // ttnn.TILE_SIZE)
+        element_bytes = 4 if self.gated_rms_output_dtype == ttnn.float32 else 2
+        output_bytes = -(-tiles // (grid.x * grid.y)) * ttnn.TILE_SIZE * ttnn.TILE_SIZE * element_bytes
+        if lowest is not None and prefetch.l1_end + output_bytes > int(lowest):
+            return None
+        return prefetch
 
     def _project_output(
         self,
@@ -741,11 +784,17 @@ class ttKDA:
         # matmul_reduce_scatter plans K-block 16 with a 2-window DEST super-block instead of K-block 12 without one.
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)
+        # The fused projection's first W window, landed by the norm's reader (idle once the norm's inputs are read).
+        prefetch = None
         if self.overlap_output_gate:
             # The norm reads the relay's output gate: the projection's last readers (chunk preparation's beta and the
             # relay's gate copy) ran inside the recurrence, so its L1 is freed first and the norm output can take it.
             ttnn.deallocate(inputs.projected)
-            output = self._kda_rms_norm(result.output, result.output_gate, 0, result.activated_gate)
+            if self.carry_with_output_projection and self.fused_output_reduce_scatter:
+                heads_batch, chunks, chunk, value = tuple(result.output.shape)
+                heads = self.config.num_heads
+                prefetch = self._output_weight_prefetch([heads_batch // heads, chunks * chunk, heads * value])
+            output = self._kda_rms_norm(result.output, result.output_gate, 0, result.activated_gate, prefetch=prefetch)
             ttnn.deallocate(result.output_gate)
             if result.activated_gate is not None:
                 ttnn.deallocate(result.activated_gate)
@@ -770,6 +819,8 @@ class ttKDA:
                 # Every n-line of the matmul rectangle, with per-block rotating widths (Galaxy SP8xTP4: 80 -> 90 cores,
                 # 56 -> 50 tile-entries on the busiest core; bit-identical). The final carry keeps the idle columns.
                 balance_lines=True,
+                # The first W window, landed by the norm's reader.
+                w_prefetch=prefetch,
                 extra_program=lambda coord, cores: self._mmrs_carry.program(
                     coord,
                     cores,

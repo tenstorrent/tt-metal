@@ -27,6 +27,12 @@ struct SigmoidGatedRmsNormParams {
     // Heads [0, activated_heads) take their sigmoid(gate) from activated_gate; the gate holds heads
     // [activated_heads, num_heads) from gate_column_offset.
     uint32_t activated_heads = 0;
+    // L1 prefetch ride-along (kernel_lib/l1_prefetch_dataflow.hpp): prefetch_cores[j] runs job j of the job table once
+    // its reads are done. Every job writes inside [prefetch_l1_begin, prefetch_l1_end), which must be free while the
+    // norm runs: above its circular buffers and below every L1 buffer.
+    std::vector<tt::tt_metal::CoreCoord> prefetch_cores;
+    uint32_t prefetch_l1_begin = 0;
+    uint32_t prefetch_l1_end = 0;
 };
 
 struct SigmoidGatedRmsNormInputs {
@@ -34,6 +40,9 @@ struct SigmoidGatedRmsNormInputs {
     Tensor gate;
     Tensor weight;
     std::optional<Tensor> activated_gate;
+    // The tensor the prefetch reads, and its per-device job table (ROW_MAJOR UINT32, one 16-word row per job).
+    std::optional<Tensor> prefetch_source;
+    std::optional<Tensor> prefetch_jobs;
 };
 
 }  // namespace ttnn::experimental::prim

@@ -252,8 +252,16 @@ void kernel_main() {
         const uint32_t eg = step / num_k_blocks;
         return eg % num_entries == 0 && (eg / num_entries) % n_inner == 0;
     };
+    // W's first w_pre windows were landed in their CB slots by an earlier program (weight prefetch: the gated norm's
+    // reader wrote them where the host placed this CB); they are only credited. Every core of the grid has the same CB
+    // layout, so all cores agree on w_pre.
+#ifdef MRS_W_PRELANDED
+    const uint32_t w_pre = get_write_ptr(cb_weight_k_window) == MRS_W_PRELANDED_ADDR ? MRS_W_PRELANDED : 0;
+#else
+    constexpr uint32_t w_pre = 0;
+#endif
     auto a_moves = [&](uint32_t step) { return !resident_a || reloads(step); };
-    auto w_moves = [&](uint32_t step) { return !resident_w || reloads(step); };
+    auto w_moves = [&](uint32_t step) { return step >= w_pre && (!resident_w || reloads(step)); };
     // DRAM reads of the parts this core sends, into window `dst`
     auto issue_a = [&](uint32_t step, uint32_t dst) {
 #ifndef MRS_SKIP_DRAM  // perf ablation only
@@ -363,6 +371,7 @@ void kernel_main() {
                           uint32_t win_tiles,
                           uint32_t slot,
                           uint32_t cap,
+                          uint32_t pre,
                           auto&& moves,
                           auto&& issue,
                           uint32_t base,
@@ -370,7 +379,8 @@ void kernel_main() {
         if (!sender) {
             return;
         }
-        while (issued < num_steps && issued <= s + prefetch_steps && moves(issued)) {
+        // prelanded windows (issued < pre) are reserved without reads, so the first moving window's reads start now
+        while (issued < num_steps && issued <= s + prefetch_steps && (moves(issued) || issued < pre)) {
             const uint32_t ahead = issued - s + 1;  // windows from the current write pointer
             if (ahead > cap || !cb_pages_reservable_at_back(cb, ahead * win_tiles)) {
                 break;
@@ -378,8 +388,10 @@ void kernel_main() {
             cb_reserve_back(cb, ahead * win_tiles);  // free: returns immediately
             uint32_t t_slot = slot + (issued - s);
             t_slot = t_slot >= cap ? t_slot - cap : t_slot;
-            set_trid(trid_of(issued));
-            issue(issued, base + t_slot * win_bytes);
+            if (moves(issued)) {
+                set_trid(trid_of(issued));
+                issue(issued, base + t_slot * win_bytes);
+            }
             ++issued;
         }
     };
@@ -392,6 +404,7 @@ void kernel_main() {
             a_window_tiles,
             a_slot,
             a_cap_windows,
+            0,
             a_moves,
             issue_a,
             a_base,
@@ -404,6 +417,7 @@ void kernel_main() {
             w_window_tiles,
             w_slot,
             w_cap_windows,
+            w_pre,
             w_moves,
             issue_w,
             w_base,
