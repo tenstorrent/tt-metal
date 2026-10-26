@@ -106,7 +106,8 @@ void kernel_main() {
     constexpr bool DRY = get_compile_time_arg_val(14) != 0;        // verify mode: STEPS per user, nothing written
     constexpr uint32_t conv_taps = 3;
     constexpr uint32_t R = B;
-    static_assert(Bt == 1 && USERS * STEPS == R && R <= 32 && USERS >= 1 && STEPS >= 1, "one tile row of USERS x STEPS rows");
+    static_assert(
+        Bt == 1 && USERS * STEPS == R && R <= 32 && USERS >= 1 && STEPS >= 1, "one tile row of USERS x STEPS rows");
 
     constexpr auto qkv_a = TensorAccessorArgs<15>();
     constexpr auto hist_a = TensorAccessorArgs<qkv_a.next_compile_time_args_offset()>();
@@ -248,7 +249,9 @@ void kernel_main() {
             }
         }
         const uint32_t hist_l1 = hist.get_write_ptr();  // the item's tile blocks (the CB is reserved whole)
-        auto hist_tile = [&](uint32_t br, uint32_t slot, uint32_t t) { return hist_l1 + ((br * 4 + slot) * Kt + t) * t16; };
+        auto hist_tile = [&](uint32_t br, uint32_t slot, uint32_t t) {
+            return hist_l1 + ((br * 4 + slot) * Kt + t) * t16;
+        };
         auto orig_tile = [&](uint32_t br, uint32_t j, uint32_t t) { return orig_l1 + ((br * 3 + j) * Kt + t) * t16; };
         if (part == 0) {
             // every per-item input in flight at once: the raw candidate blocks (hist slot 3), the live history tiles
@@ -257,7 +260,9 @@ void kernel_main() {
                 for (uint32_t j = 0; j < conv_taps; j++) {
                     for (uint32_t t = 0; t < Kt; t++) {
                         noc_async_read(
-                            hist_acc.get_noc_addr((j * Bt + tb) * Wq_t + br * HK_t + col + t), orig_tile(br, j, t), t16);
+                            hist_acc.get_noc_addr((j * Bt + tb) * Wq_t + br * HK_t + col + t),
+                            orig_tile(br, j, t),
+                            t16);
                     }
                 }
                 issue(qkv_acc, hist, t16, tb * Wq_t + br * HK_t + col, Kt, (br * 4 + 3) * Kt);

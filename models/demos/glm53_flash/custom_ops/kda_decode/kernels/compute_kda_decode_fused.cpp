@@ -282,22 +282,23 @@ void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t Bt = get_compile_time_arg_val(2);
-    constexpr uint32_t B = get_compile_time_arg_val(3);              // the R = USERS * STEPS candidate rows
-    constexpr uint32_t parts = get_compile_time_arg_val(4);          // user split of a tile row over cores
-    constexpr uint32_t lb_bits = get_compile_time_arg_val(5);        // gate lower bound (-5)
-    constexpr uint32_t l2eps_bits = get_compile_time_arg_val(6);     // 1e-6
-    constexpr uint32_t normeps_bits = get_compile_time_arg_val(7);   // o_norm eps
-    constexpr uint32_t qscale_bits = get_compile_time_arg_val(8);    // K^-0.5
-    constexpr uint32_t invv_bits = get_compile_time_arg_val(9);      // 1/V
-    constexpr uint32_t IT_H = get_compile_time_arg_val(10);          // SFPU iterations per face for <= 16-row slabs
-    constexpr bool GATES_ACT = get_compile_time_arg_val(11) != 0;    // gates already activated (no channel consts)
-    constexpr uint32_t USERS = get_compile_time_arg_val(12);         // user slots (the state's batch)
-    constexpr uint32_t STEPS = get_compile_time_arg_val(13);         // candidates per user: T = K + 1
-    constexpr bool DRY = get_compile_time_arg_val(14) != 0;          // verify mode: STEPS per user, no state written
+    constexpr uint32_t B = get_compile_time_arg_val(3);             // the R = USERS * STEPS candidate rows
+    constexpr uint32_t parts = get_compile_time_arg_val(4);         // user split of a tile row over cores
+    constexpr uint32_t lb_bits = get_compile_time_arg_val(5);       // gate lower bound (-5)
+    constexpr uint32_t l2eps_bits = get_compile_time_arg_val(6);    // 1e-6
+    constexpr uint32_t normeps_bits = get_compile_time_arg_val(7);  // o_norm eps
+    constexpr uint32_t qscale_bits = get_compile_time_arg_val(8);   // K^-0.5
+    constexpr uint32_t invv_bits = get_compile_time_arg_val(9);     // 1/V
+    constexpr uint32_t IT_H = get_compile_time_arg_val(10);         // SFPU iterations per face for <= 16-row slabs
+    constexpr bool GATES_ACT = get_compile_time_arg_val(11) != 0;   // gates already activated (no channel consts)
+    constexpr uint32_t USERS = get_compile_time_arg_val(12);        // user slots (the state's batch)
+    constexpr uint32_t STEPS = get_compile_time_arg_val(13);        // candidates per user: T = K + 1
+    constexpr bool DRY = get_compile_time_arg_val(14) != 0;         // verify mode: STEPS per user, no state written
     using SF = Sfpu<IT_H>;
     constexpr uint32_t ONE_BITS = 0x3F800000u;
     static_assert(Kt == DST_TILES && Vt == DST_TILES, "the kernel is written for K = V = 128 (4-tile blocks)");
-    static_assert(Bt == 1 && USERS * STEPS == B && B <= 32 && USERS >= 1 && STEPS >= 1, "one tile row of USERS x STEPS rows");
+    static_assert(
+        Bt == 1 && USERS * STEPS == B && B <= 32 && USERS >= 1 && STEPS >= 1, "one tile row of USERS x STEPS rows");
     const uint32_t item0 = get_arg_val<uint32_t>(0);
     const uint32_t n_items = get_arg_val<uint32_t>(1);
     const uint32_t stride = get_arg_val<uint32_t>(2);

@@ -34,7 +34,8 @@ void kernel_main() {
     constexpr uint32_t USERS = get_compile_time_arg_val(7);  // user slots (the state's batch)
     constexpr uint32_t STEPS = get_compile_time_arg_val(8);  // candidates per user: T = K + 1
     constexpr bool DRY = get_compile_time_arg_val(9) != 0;   // verify mode: no state written
-    static_assert(Bt == 1 && USERS * STEPS == B && B <= 32 && USERS >= 1 && STEPS >= 1, "one tile row of USERS x STEPS rows");
+    static_assert(
+        Bt == 1 && USERS * STEPS == B && B <= 32 && USERS >= 1 && STEPS >= 1, "one tile row of USERS x STEPS rows");
 
     constexpr auto o_a = TensorAccessorArgs<10>();
     constexpr auto st_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
