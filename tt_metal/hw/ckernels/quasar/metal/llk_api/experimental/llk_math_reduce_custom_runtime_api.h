@@ -19,11 +19,20 @@
  *
  * @tparam is_fp32_dest_acc_en  32-bit DEST accumulation mode (not yet supported on Quasar).
  * @param block_ct_dim  Number of tiles in the width dimension processed as one block.
+ * @param operandA      DFB id of the reduced input (-> SrcA).
+ * @param operandB      DFB id of the scaler (-> SrcB).
  * @param tensor_shape  Operand tile shape baked into the pool MOP.
  */
 template <bool is_fp32_dest_acc_en = false>
 inline void llk_math_reduce_block_max_row_init_runtime(
-    const std::uint32_t block_ct_dim, const ckernel::TensorShape& tensor_shape) {
+    const std::uint32_t block_ct_dim,
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const ckernel::TensorShape& tensor_shape) {
+    const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandA)));
+    const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandB)));
+    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, is_fp32_dest_acc_en>(
+        srcA_format, srcB_format);
     _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape);
 }
 
