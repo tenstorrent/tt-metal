@@ -29,6 +29,19 @@ imported an older `op.py` compiles whatever is on disk, so an ABI change in the 
   `rb_x0, rb_y0, rb_x1, rb_y1, n_b`; the column layout passes zeros and is bit-for-bit today's behaviour). The writer's
   gather (unicast to the part-0 core) and the compute kernel are placement-agnostic.
 * `KdaDecode(math_fidelity=HiFi2)`: the FPU fidelity of every matmul / broadcast in the program (default HiFi4).
+* `KdaDecode(gated=True)` (`variant == "gated"`; the speculative commit of `tt/spec_decode.py` under
+  `GLM53_SPEC_COMMIT=gated`, `_agents/spec_sp1/STATUS.md`): `kernels/reader_kda_decode_gated.cpp` +
+  `writer_kda_decode_gated.cpp` (the v2 reader / the default writer plus a per-user write gate) with the `_v2` compute
+  kernel. The call takes one more tensor, `gate [Bt, 32]` int32 ROW_MAJOR (page `tb` = the 32 users of tile row `tb`,
+  non-zero = write), read by the kernels at run time (a trace replays with any gate values): a gated-off user's recurrent
+  tiles are popped unwritten by the writer and its conv-history rows are kept by the part-0 reader (the shift is merged
+  row-wise in a scratch region: `cb_onw` grows by `GATED_SCRATCH_PAGES` = 19 fp32 pages after its Vt weight tiles = the
+  gate page (reader copy at +0, writer copy at +2048) + 9 Kt merged bf16 history tiles; all live users on = the plain
+  whole-tile shift, all off = no write); a gated-on user gets exactly the plain update. ABI: compile-time as v2 (`GATES_ACT`
+  at 11) + one more `TensorAccessorArgs` block (the gate) after the recurrent state's in the reader (9 blocks from 12)
+  and the writer (3 blocks from 7); runtime: the v2 reader vector + the gate address at 20 (21), the writer vector + the
+  gate address at 7 (8) (`READER_RT_GATED`, `WRITER_RT_GATED`, `*_RT_LEN["gated"]`). `golden_gated` is the torch
+  reference (`golden` with the per-user select).
 
 ## Contract (all tensors interleaved DRAM/L1 on the same device; K = V = 128, conv kernel 4)
 
