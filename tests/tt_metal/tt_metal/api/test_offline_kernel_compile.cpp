@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -192,6 +193,18 @@ TEST_F(OfflineKernelCompileMockFixture, CPU_CompileKernelOfflineRejectsEmptyOutp
         .cb_compile_configs = {},
     };
     EXPECT_THROW(experimental::CompileKernelOffline(kReaderKernelPath, kReaderDmConfig, params), std::invalid_argument);
+}
+
+TEST_F(OfflineKernelCompileMockFixture, CPU_CompileKernelOfflineRejectsComputeProcessor) {
+    experimental::OfflineKernelCompileParams params{.output_dir = fs::path("/tmp/unused")};
+    EXPECT_THAT(
+        [&] {
+            experimental::CompileKernelOffline(
+                "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp",
+                ComputeConfig{.processor = ComputeProcessor::MATH},
+                params);
+        },
+        ::testing::ThrowsMessage<std::exception>(::testing::HasSubstr("not supported by offline kernel compile")));
 }
 
 // Returns the number of subdirectories directly under `dir` whose names parse as decimal digits

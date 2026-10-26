@@ -42,3 +42,16 @@ def test_kernel_descriptor_legacy_positional_constructor():
     assert list(kernel.common_runtime_args) == [9]
     assert kernel.named_compile_time_args == [("legacy.value", 3)]
     assert kernel.blaze_named_compile_time_args == []
+
+
+def test_kernel_descriptor_copy_keeps_compute_processor():
+    core = ttnn.CoreCoord(0, 0)
+    original = ttnn.KernelDescriptor(
+        kernel_source="kernel.cpp",
+        core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]),
+        config=ttnn.ComputeConfigDescriptor(),
+    )
+    original.config.processor = ttnn.ComputeProcessor.MATH
+
+    copied = ttnn.KernelDescriptor(original)
+    assert copied.config.processor == ttnn.ComputeProcessor.MATH

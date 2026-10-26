@@ -20,6 +20,7 @@
 #include "llrt/rtoptions.hpp"
 
 #include <hostdevcommon/kernel_structs.h>
+#include <tt_stl/assert.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -81,6 +82,7 @@ std::shared_ptr<Kernel> make_offline_kernel(
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
                 return std::make_shared<DataMovementKernel>(DEFAULT_CONTEXT_ID, kernel_src, core_range_set, cfg);
             } else {
+                TT_FATAL(!cfg.processor, "ComputeConfig::processor is not supported by offline kernel compile");
                 return std::make_shared<ComputeKernel>(DEFAULT_CONTEXT_ID, kernel_src, core_range_set, cfg);
             }
         },
