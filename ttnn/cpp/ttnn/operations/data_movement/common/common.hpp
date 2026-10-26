@@ -445,6 +445,9 @@ uint32_t per_shard_page_size_bytes(const ttnn::Tensor& tensor, uint32_t row_byte
 // and the device stores pages at the aligned page size. The kernel-side TensorAccessor uses a single
 // page size both as the distance between pages and, in `noc_async_*_sharded`, as the bytes moved per
 // page, so one value is correct for both uses only when the shard row is a multiple of the alignment.
+// Always false for HEIGHT sharding. TensorSpec requires a HEIGHT-sharded tensor's shard width to equal
+// the tensor width, so for RM one page is a whole tensor row, which `noc_async_*_sharded` moves in a
+// single transfer of the size the caller asks for, using the page size only as the distance between pages.
 bool has_subaligned_shard_row(const tt::tt_metal::MemoryConfig& memory_config, uint32_t element_size);
 
 bool codegen_supported_on_arch(const ttnn::Tensor& input);
