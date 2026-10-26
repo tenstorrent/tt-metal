@@ -56,6 +56,10 @@ def _create_qkv_heads_from_separate_tensors(device, **kwargs):
     )
 
 
+def _nlp_create_qkv_heads_decode(device, **kwargs):
+    ttnn.experimental.nlp_create_qkv_heads_decode(_tile(device, (1, 1, 32, 192)), **kwargs)
+
+
 @pytest.mark.parametrize(
     "run, kwargs, message",
     [
@@ -105,6 +109,17 @@ def _create_qkv_heads_from_separate_tensors(device, **kwargs):
             {"num_heads": 1, "num_kv_heads": 2**31},
             "exceeds the KV hidden dimension",
         ),
+        (_nlp_create_qkv_heads_decode, {"num_heads": 0}, "num_heads .* and num_kv_heads .* must be greater than 0"),
+        (
+            _nlp_create_qkv_heads_decode,
+            {"num_heads": 1, "num_kv_heads": 0},
+            "num_heads .* and num_kv_heads .* must be greater than 0",
+        ),
+        (
+            _nlp_create_qkv_heads_decode,
+            {"num_heads": 2, "num_kv_heads": 2**31 - 1},
+            "exceeds the fused width",
+        ),
     ],
     ids=[
         "split_qkv_zero_q",
@@ -129,6 +144,9 @@ def _create_qkv_heads_from_separate_tensors(device, **kwargs):
         "create_qkv_heads_from_separate_tensors_zero_q",
         "create_qkv_heads_from_separate_tensors_zero_kv",
         "create_qkv_heads_from_separate_tensors_wrap",
+        "nlp_create_qkv_heads_decode_zero_q",
+        "nlp_create_qkv_heads_decode_zero_kv",
+        "nlp_create_qkv_heads_decode_wrap",
     ],
 )
 def test_head_count_rejected(device, expect_error, run, kwargs, message):
