@@ -183,6 +183,22 @@ def prepare_prefill_page_tables_per_layer(
     return result
 
 
+def _slice_request_kwargs(kwargs, start, end):
+    """Prefill kwargs for requests start..end-1 of a request-ordered batch (a group of a grouped batched prefill).
+
+    Per-layer page tables are request-ordered like page_table, so they are sliced by row; a table shared by several
+    layers stays one shared slice (prepare_prefill_page_tables_per_layer then still prepares it once).
+    """
+    tables = kwargs.get("page_tables_per_layer")
+    if tables is None:
+        return kwargs
+    sliced = {}
+    for table in tables:
+        if table is not None and id(table) not in sliced:
+            sliced[id(table)] = table[start:end]
+    return {**kwargs, "page_tables_per_layer": [None if t is None else sliced[id(t)] for t in tables]}
+
+
 def validate_compact_prefill_model(model, model_args):
     """Reject opt-ins whose cache or sampling layout cannot preserve slots."""
     if not getattr(model_args, "batched_prefill_compact_rows", False):
@@ -1459,7 +1475,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                         enable_trace=enable_trace,
                         model_id_warmup=model_id_warmup,
                         warmup_prefill=False,
-                        **kwargs,
+                        **_slice_request_kwargs(kwargs, g0, g1),
                     )
                 )
             return torch.cat(outputs, dim=0)

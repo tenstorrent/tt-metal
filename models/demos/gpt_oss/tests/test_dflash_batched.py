@@ -140,14 +140,15 @@ def test_dflash_batched(mesh_device, device_params, users, monkeypatch):
     )
 
     # teacher-forced against the batch-32 decode (the first and last 32-user groups; positions >= ISL, rewritten in
-    # order): toks[u] starts with the prefill's token, dec[u][j] is DFlash's token after position ISL + j
+    # order): toks[u] starts with the prefill's token, dec[u][j] is DFlash's token after position ISL + j (a user's
+    # tokens end at its first EOS: its later positions are fed its last token and not compared)
     dec = [t[1:] for t in toks]
     agree = []
     for g in sorted({0, U // 32 - 1}):
         us = range(32 * g, 32 * g + 32)
         a = n = 0
         for j in range(N_CHECK - 1):
-            tok_in = [firsts[u] if j == 0 else dec[u][j - 1] for u in us]
+            tok_in = [firsts[u] if j == 0 or not dec[u] else dec[u][min(j, len(dec[u])) - 1] for u in us]
             out = generator.decode_forward(
                 torch.tensor(tok_in), torch.tensor([ISL + j] * 32), enable_trace=False,
                 page_table=table[32 * g : 32 * g + 32], kv_cache=kv_cache, sampling_params=None, reload_inputs=True,
@@ -155,8 +156,8 @@ def test_dflash_batched(mesh_device, device_params, users, monkeypatch):
             )  # fmt: skip
             logits = out[0] if isinstance(out, tuple) else out
             arg = logits.reshape(32, -1)[:, :V].float().argmax(-1).tolist()
-            a += sum(int(arg[i] == dec[u][j]) for i, u in enumerate(us))
-            n += 32
+            a += sum(int(arg[i] == dec[u][j]) for i, u in enumerate(us) if j < len(dec[u]))
+            n += sum(j < len(dec[u]) for u in us)
         agree.append(a / n)
     logger.info(f"batched DFlash vs the batch-32 decode, teacher-forced over {N_CHECK - 1} positions: {agree}")
     assert min(agree) >= MIN_AGREEMENT, f"teacher-forced agreement {agree} < {MIN_AGREEMENT}"

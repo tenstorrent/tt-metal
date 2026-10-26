@@ -1932,7 +1932,9 @@ class BatchedDFlashRunner:
             ttnn.synchronize_device(self.mesh)
 
     def generate(self, prompts, max_new_tokens, firsts):
-        """Returns (per-user new tokens, per-user accepted counts, per-round seconds)."""
+        """Returns (per-user new tokens, per-user accepted counts, per-round seconds). A user's new tokens (the first one
+        is the prefill's) are at most max_new_tokens, up to and including its first EOS, as in the batch-1 runner (a
+        round appends its whole accepted block, which can pass either limit); the accepted counts keep every round."""
         mesh = self.mesh
         U = len(prompts)
         lens = [len(p) for p in prompts]
@@ -1970,4 +1972,8 @@ class BatchedDFlashRunner:
             self._accept(ids, accept, done, dr, post)
             t5 = time.perf_counter()
             times.append((t5 - t0, t2 - t1, t4 - t3, (t1 - t0) + (t3 - t2) + (t5 - t4)))  # round, draft, verify, host
-        return [ids[u][lens[u] : lens[u] + max_new_tokens] for u in range(U)], accept, times
+        out = []
+        for u in range(U):
+            toks = ids[u][lens[u] : lens[u] + max_new_tokens]
+            out.append(toks[: next((i + 1 for i, t in enumerate(toks) if t in self.eos_ids), len(toks))])
+        return out, accept, times
