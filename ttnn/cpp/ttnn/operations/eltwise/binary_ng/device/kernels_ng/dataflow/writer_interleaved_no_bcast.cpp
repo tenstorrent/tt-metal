@@ -66,14 +66,13 @@ void kernel_main() {
         for (uint32_t i = 0; i < dst_num_tiles; ++i) {
             dfb_dst.wait_front(onetile);
             noc.async_write(dfb_dst, dst, dst_tile_bytes, {}, {.page_id = channel_base + walk.th * Wt + walk.tw()});
-            // The slot is free once the data leaves L1.
-            noc.async_writes_flushed();
+            // Full barrier per tile: with many writes in flight, cores far from DRAM fall behind.
+            noc.async_write_barrier();
             dfb_dst.pop_front(onetile);
             if (walk.next()) {
                 channel_base += HtWt;
             }
         }
-        noc.async_write_barrier();
         return;
     }
 #endif
