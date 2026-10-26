@@ -74,6 +74,15 @@ def _equal_report(name: str, a: torch.Tensor, b: torch.Tensor, failures: list[st
         f"{name}: {int((d > 0).sum())} of {d.numel()} values differ, max abs {d.max().item():.3g}, "
         f"max {int((ia - ib).abs().max())} bf16 ulps"
     )
+    if a.dim() == 4 and a.shape[-2] == 32:  # [blocks, 1, 32, D] caches: which rows (pool / ring ids) differ
+        rows = d.amax(dim=-1).reshape(a.shape[0], 32)  # max abs per (block, row)
+        big = (rows > 1e-2).nonzero().tolist()
+        blocks = sorted({b for b, _ in big})
+        detail = ", ".join(f"b{b}r{r}={rows[b, r].item():.3g}" for b, r in big[:12])
+        msg += (
+            f"; rows with |d| > 1e-2: {len(big)} in blocks {blocks[:8]}"
+            f"{' (first 12: ' + detail + ')' if detail else ''}; rows with 1-ulp noise: {int(((rows > 0) & (rows <= 1e-2)).sum())}"
+        )
     logger.warning(msg)
     failures.append(msg)
     return False
