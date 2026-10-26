@@ -200,6 +200,10 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
             "scatter_codegen: preallocated output tensor must be on the same device as the input.");
         TT_FATAL(
             out.buffer() != nullptr, "scatter_codegen: preallocated output tensor has no device buffer allocated.");
+        TT_FATAL(
+            out.buffer() != src_tensor.buffer(),
+            "scatter_codegen: preallocated output tensor must not alias src (the readers scan the whole source "
+            "row while the writers update it).");
     }
 }
 
@@ -223,6 +227,10 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_hit(
         TT_FATAL(
             out.buffer() != nullptr && out.device() == input_tensor.device(),
             "scatter_codegen: preallocated output tensor must be allocated on the input's device.");
+        TT_FATAL(
+            out.buffer() != src_tensor.buffer(),
+            "scatter_codegen: preallocated output tensor must not alias src (the readers scan the whole source "
+            "row while the writers update it).");
     }
 }
 

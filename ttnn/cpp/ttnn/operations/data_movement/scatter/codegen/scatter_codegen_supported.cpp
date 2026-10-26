@@ -86,6 +86,11 @@ bool supported_execution_controls(
     if (out.layout() == Layout::TILE && !has_default_tile(out)) {
         return false;
     }
+    // The TILE writers compute each destination page from the input's tile-rounded geometry, so a
+    // destination padded past that would take its tiles in the padding, not in its logical rows.
+    if (!has_standard_padding(out)) {
+        return false;
+    }
     return true;
 }
 
@@ -340,6 +345,10 @@ bool codegen_plan_fits_live_l1(
             pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), input_tensor.memory_config()) +
             pending_l1_bytes(input_tensor, working_index, index_tensor.dtype(), index_tensor.memory_config()) +
             pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), src_tensor.memory_config());
+    } else if (src_tensor.logical_shape() != index_tensor.logical_shape()) {
+        // Nothing is transposed on the last axis, but a source wider than the index is sliced to the
+        // index's shape first, and that slice, in the source's own placement, is what the factory sees.
+        pending_bytes += pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), src_tensor.memory_config());
     }
     return ttnn::prim::scatter_rm_min_plan_fits_l1(
         rm_live_l1_budget(input_tensor, pending_bytes),
