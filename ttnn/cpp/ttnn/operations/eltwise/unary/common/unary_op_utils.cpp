@@ -4,10 +4,14 @@
 
 #include "unary_op_utils.hpp"
 
+#include <bit>
+#include <cstdint>
 #include <optional>
 #include <type_traits>
+#include <variant>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -128,6 +132,56 @@ const char* bitwise_shift_data_format_str(UnaryOpType op_type, std::optional<Dat
         return "UInt16";
     }
     TT_THROW("Unsupported input dtype for bitwise/shift op_type {}: expected Int32, UInt32, or UInt16.", op_type);
+}
+
+// 2^31: the sign bit of the signed 32-bit word the int32 compare kernels read, for the tile and the scalar.
+constexpr uint32_t kInt32SignBit = 0x80000000u;
+
+// Whether the scalar is a value of the integer dtype the op runs on (see int_compare_scalar_word).
+template <typename T>
+bool int_scalar_fits_dtype(T scalar, DataType op_dtype) {
+    if constexpr (std::is_same_v<T, float>) {
+        return binary::utils::scalar_fits_integer_dtype(scalar, op_dtype);
+    } else if constexpr (std::is_same_v<T, std::int32_t>) {
+        return op_dtype == DataType::INT32 || scalar >= 0;
+    } else {
+        return op_dtype == DataType::UINT32 || scalar < kInt32SignBit;
+    }
+}
+
+// Scalar word for the unary_*_tile_int32 compare kernels. op_dtype is the dtype of the data the op
+// runs on (the tensor dtype, or the target of a TYPECAST earlier in the chain). The scalar must be a
+// value of that dtype: a fractional, non-finite or out-of-range float has no exact integer image (and
+// its conversion is undefined), and an integer scalar outside the dtype's range (a negative int32_t on
+// UINT32, a uint32_t at or above 2^31 on INT32) would be read as a different number by the kernel, so
+// both are rejected. The word is the value's two's-complement bits. EQ/NE compare bits and take the
+// whole UINT32 range; GT/LT/GE/LE are signed compares in the kernel, so a UINT32 scalar at or above
+// 2^31 would be read as negative and is rejected. (A UINT32 tile value at or above 2^31 is read the
+// same way by those kernels; this check covers the scalar only.)
+template <typename T>
+uint32_t int_compare_scalar_word(T scalar, DataType op_dtype, UnaryOpType op_type) {
+    TT_FATAL(
+        int_scalar_fits_dtype(scalar, op_dtype),
+        "Unary: {} on {} data cannot represent the scalar {}: it must be a finite integer within the range of {}. "
+        "Use an integral scalar in that range, or run the compare on floating-point data.",
+        op_type,
+        op_dtype,
+        scalar,
+        op_dtype);
+    const uint32_t word = op_dtype == DataType::UINT32 ? static_cast<uint32_t>(scalar)
+                                                       : std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+    const bool ordered_compare = op_type == UnaryOpType::UNARY_GT || op_type == UnaryOpType::UNARY_LT ||
+                                 op_type == UnaryOpType::UNARY_GE || op_type == UnaryOpType::UNARY_LE;
+    if (op_dtype == DataType::UINT32 && ordered_compare) {
+        TT_FATAL(
+            word < kInt32SignBit,
+            "Unary: {} on UINT32 data is a signed 32-bit compare in the kernel, so the scalar must be below {} (2^31); "
+            "{} would be read as negative. Run the compare on floating-point data.",
+            op_type,
+            kInt32SignBit,
+            word);
+    }
+    return word;
 }
 
 template <typename T>
@@ -478,7 +532,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_ne_tile_init();",
-                    fmt::format("unary_ne_tile_int32({}, {}u);", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_ne_tile_int32({}, {}u);",
+                        idst,
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_ne_tile_init();",
@@ -490,7 +547,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_eq_tile_init();",
-                    fmt::format("unary_eq_tile_int32({}, {}u);", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_eq_tile_int32({}, {}u);",
+                        idst,
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_eq_tile_init();",
@@ -502,7 +562,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_gt_tile_init();",
-                    fmt::format("unary_gt_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_gt_tile_int32({}, {});",
+                        idst,
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_gt_tile_init();",
@@ -514,7 +577,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_lt_tile_init();",
-                    fmt::format("unary_lt_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_lt_tile_int32({}, {});",
+                        idst,
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_lt_tile_init();",
@@ -526,7 +592,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_ge_tile_init();",
-                    fmt::format("unary_ge_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_ge_tile_int32({}, {});",
+                        idst,
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_ge_tile_init();",
@@ -538,7 +607,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 return {
                     "unary_le_tile_init();",
-                    fmt::format("unary_le_tile_int32({}, {});", idst, std::bit_cast<uint32_t>(param0_raw))};
+                    fmt::format(
+                        "unary_le_tile_int32({}, {});",
+                        idst,
+                        int_compare_scalar_word(param0_raw, *input_dtype, op_type))};
             }
             return {
                 "unary_le_tile_init();",
@@ -730,11 +802,6 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(param1))};
-        }
-        case UnaryOpType::HARDMISH: {
-            return {
-                fmt::format("hardmish_tile_init<{}u>();", (uint32_t)param0),
-                fmt::format("hardmish_tile<{1}u>({0});", idst, (uint32_t)param0)};
         }
         case UnaryOpType::MISH: {
             return {
@@ -1091,7 +1158,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
     }
     if (name == "hardmish") {
-        return UnaryWithParam(UnaryOpType::HARDMISH, static_cast<float>(true));
+        // hardmish_tile takes no parameter; a parameter would route it to the parameterized
+        // generator, which has no HARDMISH case and rejects it at the host.
+        return UnaryWithParam(UnaryOpType::HARDMISH);
     }
     if (name == "mish") {
         return UnaryWithParam(UnaryOpType::MISH, static_cast<float>(false));
@@ -1157,6 +1226,21 @@ template std::pair<std::string, std::string> get_op_init_and_func<std::uint32_t>
     const std::string& idst,
     std::optional<DataType> input_dtype);
 
+// The target dtype of a TYPECAST or BITCAST is its second parameter, which may be float, int32_t or
+// uint32_t backed (EltwiseUnaryWithParam constructed with integers, also from Python); read the active
+// alternative. nullopt if the op has fewer than two parameters.
+std::optional<DataType> typecast_target_dtype(const EltwiseUnaryWithParam& op) {
+    constexpr std::size_t kTargetDtypeParam = 1;
+    return std::visit(
+        [](auto params) -> std::optional<DataType> {
+            if (params.size() <= kTargetDtypeParam) {
+                return std::nullopt;
+            }
+            return static_cast<DataType>(params[kTargetDtypeParam]);
+        },
+        op.get_params());
+}
+
 std::map<std::string, std::string> get_block_defines(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const std::string& block_id,
@@ -1164,15 +1248,24 @@ std::map<std::string, std::string> get_block_defines(
     std::optional<DataType> input_dtype) {
     std::map<std::string, std::string> block_defines;
     std::string block_define;
+    // A TYPECAST changes the dtype of the tile the ops after it see, so their kernel text is generated for
+    // the cast's target dtype (its second parameter), not for the tensor's dtype: a dtype-dispatched op
+    // such as UNARY_GT after an INT32->FLOAT32 cast must get the float compare, not the int32 one.
+    std::optional<DataType> op_dtype = input_dtype;
     for (uint32_t i = 0; i < op_chain.size(); i++) {
         std::string init_def = fmt::format("SFPU_OP_CHAIN_{}_INIT_{}", block_id, i);
         std::string func_def = fmt::format("SFPU_OP_CHAIN_{}_FUNC_{}", block_id, i);
         block_define += init_def + " " + func_def + " ";
         block_defines.merge(std::visit(
             [&](auto params) {
-                return get_defines_impl(op_chain[i].type(), params, idst, init_def, func_def, input_dtype);
+                return get_defines_impl(op_chain[i].type(), params, idst, init_def, func_def, op_dtype);
             },
             op_chain[i].get_params()));
+        if (op_chain[i].type() == UnaryOpType::TYPECAST) {
+            if (const auto target_dtype = typecast_target_dtype(op_chain[i])) {
+                op_dtype = target_dtype;
+            }
+        }
     }
     block_defines[fmt::format("SFPU_OP_CHAIN_{}", block_id)] = block_define;
     return block_defines;
