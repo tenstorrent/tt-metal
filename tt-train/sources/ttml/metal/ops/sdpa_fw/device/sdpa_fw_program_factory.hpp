@@ -16,6 +16,7 @@ struct SDPAForwardProgramFactory {
         tt::tt_metal::KernelHandle sdpa_fw_compute_kernel;
         uint32_t num_cores{};
         uint32_t num_cores_y{};
+        std::optional<ttnn::Tensor> scratch;  // partials of split units; lives as long as the program
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
