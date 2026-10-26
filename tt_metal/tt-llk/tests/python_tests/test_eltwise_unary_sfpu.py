@@ -655,6 +655,91 @@ def test_sqrt_family_negative_zero_regression(
     )
 
 
+def _run_unary_float32(mathop, src_A):
+    formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
+    dest_acc = DestAccumulation.Yes
+    input_dimensions = [32, 32]
+    assert negative_zero_delivered(formats.input_format, dest_acc)
+
+    src_B = torch.zeros_like(src_A)
+    tile_cnt = 1
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+    configuration = TestConfig(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            APPROX_MODE(ApproximationMode.No),
+            FAST_MODE(FastMode.No),
+            CLAMP_NEGATIVE(True),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[
+            TILE_COUNT(tile_cnt),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+        ],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_B,
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt,
+            tile_count_B=tile_cnt,
+            tile_count_res=tile_cnt,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=True,
+    )
+    return torch.tensor(configuration.run().result, dtype=torch.float32)
+
+
+def test_erfinv_small_magnitude_regression():
+    magnitudes = torch.logspace(-30, -1, 511, dtype=torch.float64)
+    src_A = torch.cat(
+        [magnitudes, -magnitudes, torch.tensor([0.0, -0.0], dtype=torch.float64)]
+    ).float()
+    res = _run_unary_float32(MathOperation.Erfinv, src_A)
+    golden = torch.erfinv(src_A.double()).float()
+
+    rel = ((res.double() - golden.double()).abs() / golden.double().abs()).nan_to_num(
+        0.0
+    )
+    worst = int(rel.argmax())
+    assert rel.max() <= 2e-5, (
+        f"erfinv({src_A[worst].item()!r}) = {res[worst].item()!r}, "
+        f"expected {golden[worst].item()!r}"
+    )
+    assert torch.equal(torch.signbit(res), torch.signbit(golden))
+
+
+def test_softsign_negative_zero_and_large_magnitude_regression():
+    src_A = torch.full((1024,), 2.0, dtype=torch.float32)
+    src_A[:6] = torch.tensor([-0.0, 0.0, 2.0**126, -(2.0**126), 3.0e38, -3.0e38])
+    res = _run_unary_float32(MathOperation.Softsign, src_A)
+    bits = res.view(torch.int32)
+
+    assert (
+        bits[0].item() & 0xFFFFFFFF == 0x80000000
+    ), f"softsign(-0.0) = {res[0].item()!r}"
+    assert (
+        bits[1].item() & 0xFFFFFFFF == 0x00000000
+    ), f"softsign(+0.0) = {res[1].item()!r}"
+    saturated = torch.tensor([1.0, -1.0, 1.0, -1.0])
+    assert (
+        (res[2:6] - saturated).abs() <= 2.0**-24
+    ).all(), f"softsign(+-2**126, +-3e38) = {res[2:6].tolist()}"
+    assert torch.allclose(res[6:], torch.tensor(2.0 / 3.0), rtol=1e-6, atol=0.0)
+
+
 # Integer unary SFPU ops. Each has a dedicated integer kernel and runs through the
 # shared driver with the input unpacked straight to DST (dest_acc=Yes is required for
 # the 32-bit int path). Golden is exact (no PCC/tolerance).

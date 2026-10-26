@@ -120,3 +120,30 @@ def test_pow_negative_base_zero_exponent_is_one(request, device, exponent, dtype
 def test_pow_negative_base_small_non_integer_exponent_is_nan(device, exponent):
     result = _run(device, -2.0, exponent)
     assert result.isnan().all(), f"pow(-2, {exponent:g}): expected nan, got {result[0].item()}"
+
+
+@pytest.mark.parametrize("exponent", [32769.0, -32769.0, 16777215.0, -16777215.0])
+def test_pow_negative_zero_odd_exponent_keeps_the_sign(request, device, exponent):
+    _allow_failure_on_quasar(request, device)
+    expected = torch.pow(torch.tensor(-0.0, dtype=torch.float32), torch.tensor(exponent, dtype=torch.float32)).item()
+    result = _run(device, -0.0, exponent)
+    assert (result == expected).all() and torch.signbit(
+        result
+    ).all(), f"pow(-0, {exponent:g}): expected {expected!r}, got {result[0].item()!r}"
+
+
+@pytest.mark.parametrize("base", [-2.0, -1.0, float("-inf")])
+@pytest.mark.parametrize("exponent", [float("nan"), -float("nan")])
+def test_pow_negative_base_nan_exponent_is_nan(device, base, exponent):
+    base_tt, exponent_tt = (
+        ttnn.from_torch(
+            _tile(value, ttnn.float32),
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.float32,
+            device=device,
+            preserve_nan_values=True,
+        )
+        for value in (base, exponent)
+    )
+    result = ttnn.to_torch(ttnn.pow(base_tt, exponent_tt)).double().reshape(-1)
+    assert torch.isnan(result).all(), f"pow({base:g}, {exponent}): expected nan, got {result[0].item()!r}"
