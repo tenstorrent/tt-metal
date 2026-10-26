@@ -17,6 +17,8 @@ a rare wrong answer downstream rather than an error here.
 
 from types import SimpleNamespace
 
+import pytest
+
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 
@@ -135,22 +137,32 @@ def test_row_major_cache_skips_the_zero_but_still_acks(monkeypatch):
     assert acked == [23]
 
 
-def test_metadata_and_scalar_forms_pass_different_arguments(monkeypatch):
-    """Traced callers pass on-device 1-element tensors; eager callers pass Python scalars."""
+@pytest.mark.parametrize(
+    "sp_axis,sp_factor,seq_len_local",
+    [
+        pytest.param(0, 8, 640, id="8x4-sp0"),
+        pytest.param(1, 4, 1280, id="4x4-sp1"),
+    ],
+)
+def test_metadata_and_scalar_forms_pass_different_arguments(monkeypatch, sp_axis, sp_factor, seq_len_local):
+    """Traced callers pass on-device 1-element tensors; eager callers pass Python scalars. Both forward
+    the stage's SP axis, which the zero op needs to find each chip's row of the sequence."""
     rec = _Recorder()
     rec.install(monkeypatch)
+    stage = dict(sp_axis=sp_axis, sp_factor=sp_factor, seq_len_local=seq_len_local)
 
-    zero_pad_and_ack(**_call(on_layer_complete=lambda _idx: None))
+    zero_pad_and_ack(**_call(**stage, on_layer_complete=lambda _idx: None))
     scalar_args = rec.zero_calls[-1]
-    assert scalar_args == (rec.zero_calls[-1][0], 1, 2, 6, 5000, 640 * 8, 0)
+    assert scalar_args[1:] == (1, 2, 6, 5000, 5120, sp_axis)
     assert rec.zero_kwargs[-1] == {"tp_axis": None}
 
-    zero_pad_and_ack(**_call(tp_axis=1, on_layer_complete=lambda _idx: None))
-    assert rec.zero_calls[-1] == scalar_args and rec.zero_kwargs[-1] == {"tp_axis": 1}
+    tp_axis = 1 - sp_axis
+    zero_pad_and_ack(**_call(**stage, tp_axis=tp_axis, on_layer_complete=lambda _idx: None))
+    assert rec.zero_calls[-1] == scalar_args and rec.zero_kwargs[-1] == {"tp_axis": tp_axis}
 
-    zero_pad_and_ack(**_call(metadata=("SLOT", "START", "END"), on_layer_complete=lambda _idx: None))
+    zero_pad_and_ack(**_call(**stage, metadata=("SLOT", "START", "END"), on_layer_complete=lambda _idx: None))
     traced_args = rec.zero_calls[-1]
-    assert traced_args[1:] == ("SLOT", "END", 2, 6, 640 * 8, 0), "traced form reads slot and end on device"
+    assert traced_args[1:] == ("SLOT", "END", 2, 6, 5120, sp_axis), "traced form reads slot and end on device"
     assert rec.zero_kwargs[-1] == {"tp_axis": None}
 
 
