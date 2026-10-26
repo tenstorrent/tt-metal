@@ -1,0 +1,48 @@
+{
+  "workload": {"profile": "forecast_forward", "target": "paper:accuracy", "series": 1024, "context": 2048, "horizon": 64, "patches": 66, "read_out_patches": 2,
+               "guards": ["long_context-accuracy (32 x 8192 -> 1024)", "multivariate-accuracy (128 x 8 x 2048 -> 64)", "paper-performance"]},
+  "chip": "blackhole p150, ttq part 3 (02A04EEB8B88AE6F)",
+  "final": {
+    "job": 621, "commit": "b6a7f510338", "bench": "doc/optimize/final/bench.json", "check_gates": "PASS (vs iter_00/bench.json)",
+    "device_ms": {"paper-accuracy": 516.7, "long_context-accuracy": 58.4, "multivariate-accuracy": 717.3,
+                  "paper-performance": 588.8, "long_context-performance": 63.3, "multivariate-performance": 779.2},
+    "steady_wall_ms": {"paper-accuracy": 673.5, "long_context-accuracy": 77.4, "multivariate-accuracy": 843.9,
+                       "paper-performance": 693.2, "long_context-performance": 82.0, "multivariate-performance": 887.7},
+    "speedup_vs_cpu_fp32_reference": {"paper-accuracy": 458.0, "multivariate-accuracy": 366.2},
+    "pcc_paper_accuracy": {"pcc_normalized": 0.999966, "pcc_spread": 0.999951, "pcc_row_p01": 0.999418, "pcc_row_min": 0.997575,
+                           "spread_ratio_p01": 0.9914, "spread_ratio_p99": 1.0353, "pcc_final": 0.999986, "pcc_final_spread": 0.999967},
+    "pcc_suite": "50/50 (job 622)", "watcher": "50/50 under TT_METAL_WATCHER=10, no watcher errors (job 623)"
+  },
+  "rounds": [
+    {"round": 0, "paper_accuracy_device_ms": 1056.8, "multivariate_device_ms": 2003.9, "long_context_device_ms": 96.1, "paper_performance_device_ms": 1042.9, "job": 495},
+    {"round": 1, "paper_accuracy_device_ms": 541.0, "delta": "-48.8 %", "accepted": ["R1-1 read-out cut", "R1-2 Wo.Wv fold for G=1", "R1-4 fused SwiGLU", "R1-5 QKV minimal_matmul", "R1-6+7 wo/w_down epilogue residual add + SDPA concat heads"], "rejected": {"R1-3 split streams": "failed micro-benchmark gate", "R1-8 embed minimal_matmul": "-0.6 %, below 2 % gate", "R1-9 host scaler skip": "-1.8 ms host, below gate"}},
+    {"round": 2, "paper_accuracy_device_ms": 516.7, "delta": "-4.5 % (< 5 %: diminishing-returns exit)", "accepted": ["R2-1 permute-free group attention with same-slot mask (multivariate -44 %)", "R2-3 fused per-head QK-norm + RoPE"], "rejected": {"R2-2 ff1 re-sweep": "current blocks fastest", "R2-4 drop create_qkv_heads": "per-head norm needs head-major rows", "R2-5 embed HiFi2": "<0.5 % possible, long_context drift", "R2-6 compact rows": "failed micro-benchmark (repacking cost > saving)"}}
+  ],
+  "total_improvement": {"paper-accuracy": "1056.8 -> 516.7 ms (-51.1 %)", "multivariate-accuracy": "2003.9 -> 717.3 ms (-64.2 %)", "long_context-accuracy": "96.1 -> 58.4 ms (-39.2 %)", "paper-performance": "1042.9 -> 588.8 ms (-43.5 %)"},
+  "configs": {
+    "precision_accuracy": "bf16 weights/activations, HiFi2 matmuls with fp32_dest_acc_en, HiFi4 norms/RoPE/patch encoder, fp32 decoder output + monotone head",
+    "precision_performance": "bfp8 weights, LoFi, fp32 dest acc; wo/w_down fall back to matmul + add",
+    "ff1": "minimal_matmul fuse_swiglu, blocks M8/K16/N2, subblock 2x2",
+    "qkv": "minimal_matmul blocks M16/K8/N4, subblock 4x1",
+    "wo_w_down_wvo": "dit_minimal_matmul_addcmul_fused (residual in epilogue), blocks 16/8/4, 4x1",
+    "attention": "SDPA output_concat_heads=True; group attention as SDPA over a series' tokens with additive same-slot mask, k_chunk <= 128",
+    "qk_norm_rope": "wan_fused_rmsnorm_pre/post_allgather on per-head view, RoPE tables cached per (R, S)"
+  },
+  "named_limitations": [
+    "paper-performance (bfp8/LoFi) is slower than accuracy (588.8 vs 516.7 ms): the residual-epilogue matmul does not take bfp8 weights, so wo/w_down fall back to matmul + add",
+    "rows padded 66 -> 96 per series (45 % padding) in time attention; compacting costs more in repacking than it saves (R2-6 micro)",
+    "non-matmul ops ~47 % of device time (LayerNorm, RoPE, create_heads, SDPA); matmuls at ~29 % weighted peak FLOPs (iter_02/analysis.md)",
+    "SDPA with a user mask over 768 keys is wrong at k_chunk 256 (PCC 0.985), right at 128 (jobs 582, 583)",
+    "host prepare ~100 ms of the 673 ms steady wall (CPU scaler, float64)"
+  ],
+  "not_applicable": {
+    "decode / paged KV-cache / trace replay of decode": "single-pass encoder-style forecaster, no autoregressive decode in the target",
+    "LM head / sampling / on-device token feedback": "quantile head, no vocab or sampling",
+    "vLLM / async decode": "not a serving stage",
+    "decode width-sharded L1 activations": "prefill-like large-M shapes; DRAM interleaved with minimal_matmul blocks",
+    "datatype-sweep / BFP4 attention projections": "precision policy fixed by the contract and D1/D3",
+    "multi-device topology": "single chip by contract",
+    "qualitative-check": "replaced by the contract's quantile metrics on realistic bench inputs"
+  },
+  "evidence": {"profiles": ["doc/optimize/iter_00", "doc/optimize/iter_02 (perf_report.txt with advice, multivariate/)"], "candidates": "doc/optimize/candidates.md", "sweeps": "doc/optimize/iter_01/*.json, iter_02/swiglu_sweep_r2.json"}
+}
