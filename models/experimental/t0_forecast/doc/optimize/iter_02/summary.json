@@ -1,0 +1,337 @@
+{
+  "shape": "paper",
+  "precision": "accuracy",
+  "window": [
+    "MODEL_START",
+    "MODEL_END"
+  ],
+  "reduced_window": {
+    "device_us": 70076.172,
+    "op_to_op_gap_us": 4870.121,
+    "ops": 54
+  },
+  "sections": {
+    "embed": {
+      "device_us": 7813.114,
+      "op_to_op_gap_us": 2.221,
+      "ops": 5
+    },
+    "layer_time": {
+      "device_us": 28345.055999999997,
+      "op_to_op_gap_us": 6.244999999999999,
+      "ops": 12
+    },
+    "layer_group": {
+      "device_us": 12409.313,
+      "op_to_op_gap_us": 2.309,
+      "ops": 5
+    },
+    "cut": {
+      "device_us": 20524.933999999997,
+      "op_to_op_gap_us": 8.295,
+      "ops": 16
+    },
+    "last": {
+      "device_us": 432.094,
+      "op_to_op_gap_us": 288.053,
+      "ops": 5
+    },
+    "head": {
+      "device_us": 551.6610000000001,
+      "op_to_op_gap_us": 2194.58,
+      "ops": 11
+    }
+  },
+  "counts": {
+    "embed": 1,
+    "layer_time": 15,
+    "layer_group": 7,
+    "cut": 1,
+    "last": 1,
+    "head": 1
+  },
+  "full_model_estimate": {
+    "device_ms": 541.3628339999999,
+    "ops": 252
+  },
+  "measured": {
+    "steady_s": 0.6850980180315673,
+    "device_s": 0.5418027867563069,
+    "cold_s": 0.8196186469867826,
+    "pcc_normalized": 0.9999657629964449
+  },
+  "category_percent": {
+    "Other": 46.23,
+    "Compute": 45.01,
+    "TM": 8.75
+  },
+  "matmul_weighted_flops_percent": 29.08,
+  "stacked": [
+    {
+      "op": "MinimalMatmulDeviceOperation (in0:dram_interleaved)",
+      "percent": 44.94,
+      "device_us": 31491.24,
+      "count": 14,
+      "category": "Other"
+    },
+    {
+      "op": "LayerNormDeviceOperation (in0:dram_interleaved)",
+      "percent": 15.34,
+      "device_us": 10752.79,
+      "count": 13,
+      "category": "Compute"
+    },
+    {
+      "op": "RotaryEmbeddingLlamaDeviceOperation (in0:dram_interleaved)",
+      "percent": 12.21,
+      "device_us": 8555.74,
+      "count": 4,
+      "category": "Compute"
+    },
+    {
+      "op": "MatmulDeviceOperation (in0:dram_interleaved)",
+      "percent": 8.12,
+      "device_us": 5691.05,
+      "count": 7,
+      "category": "Compute"
+    },
+    {
+      "op": "NlpCreateHeadsDeviceOperation (in0:dram_interleaved)",
+      "percent": 7.8,
+      "device_us": 5465.95,
+      "count": 2,
+      "category": "TM"
+    },
+    {
+      "op": "SDPAOperation (in0:dram_interleaved)",
+      "percent": 5.57,
+      "device_us": 3901.71,
+      "count": 2,
+      "category": "Compute"
+    },
+    {
+      "op": "BinaryNgDeviceOperation (in0:dram_interleaved)",
+      "percent": 2.19,
+      "device_us": 1536.66,
+      "count": 5,
+      "category": "Compute"
+    },
+    {
+      "op": "UnaryDeviceOperation (in0:dram_interleaved)",
+      "percent": 1.58,
+      "device_us": 1108.14,
+      "count": 3,
+      "category": "Compute"
+    },
+    {
+      "op": "UntilizeCodegenDeviceOperation (in0:dram_interleaved)",
+      "percent": 1.29,
+      "device_us": 904.01,
+      "count": 1,
+      "category": "Other"
+    },
+    {
+      "op": "TilizeWithValPaddingDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.53,
+      "device_us": 374.61,
+      "count": 1,
+      "category": "TM"
+    },
+    {
+      "op": "ReshapeViewDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.36,
+      "device_us": 248.78,
+      "count": 1,
+      "category": "TM"
+    },
+    {
+      "op": "SliceDeviceOperation (in0:dram_interleaved)",
+      "percent": 0.06,
+      "device_us": 45.47,
+      "count": 1,
+      "category": "TM"
+    }
+  ],
+  "slowest_ops": [
+    {
+      "id": "83",
+      "op": "MinimalMatmulDeviceOperation 98304 x 1024 x 4096",
+      "device_us": 6326.305,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 18.90569613700256,
+      "flops_percent": 42.860235991234255,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "76",
+      "op": "MinimalMatmulDeviceOperation 98304 x 1024 x 4096",
+      "device_us": 6319.801,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 18.92515286478166,
+      "flops_percent": 42.9043454457704,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "67",
+      "op": "MinimalMatmulDeviceOperation 98304 x 1024 x 3072",
+      "device_us": 4225.685,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 37.512308655283114,
+      "flops_percent": 48.1247878011243,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "88",
+      "op": "MinimalMatmulDeviceOperation 98304 x 1024 x 3072",
+      "device_us": 4178.59,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 37.93509293804848,
+      "flops_percent": 48.66718054161666,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "61",
+      "op": "MatmulDeviceOperation 98304 x 1024 x 1024",
+      "device_us": 2745.982,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 28.788535394623853,
+      "flops_percent": 49.371577317791086,
+      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "2x2"
+    },
+    {
+      "id": "89",
+      "op": "NlpCreateHeadsDeviceOperation",
+      "device_us": 2734.497,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "68",
+      "op": "NlpCreateHeadsDeviceOperation",
+      "device_us": 2731.456,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "84",
+      "op": "MinimalMatmulDeviceOperation 98304 x 2048 x 1024",
+      "device_us": 2379.899,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 49.91136178468078,
+      "flops_percent": 56.96605722606826,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "77",
+      "op": "MinimalMatmulDeviceOperation 98304 x 2048 x 1024",
+      "device_us": 2356.312,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 50.41098122829235,
+      "flops_percent": 57.53629511977303,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "93",
+      "op": "RotaryEmbeddingLlamaDeviceOperation",
+      "device_us": 2142.973,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "72",
+      "op": "RotaryEmbeddingLlamaDeviceOperation",
+      "device_us": 2142.15,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "92",
+      "op": "RotaryEmbeddingLlamaDeviceOperation",
+      "device_us": 2135.33,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "71",
+      "op": "RotaryEmbeddingLlamaDeviceOperation",
+      "device_us": 2135.284,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "73",
+      "op": "SDPAOperation",
+      "device_us": 1954.63,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "94",
+      "op": "SDPAOperation",
+      "device_us": 1947.081,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16, BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    }
+  ]
+}

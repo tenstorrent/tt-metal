@@ -1,0 +1,33 @@
+{
+  "shape": "multivariate",
+  "precision": "accuracy",
+  "test": "forward",
+  "rows": 1024,
+  "num_patches": 66,
+  "reduced_layers": {
+    "layer_time": 0,
+    "layer_group": 2,
+    "cut": 22,
+    "last": 23
+  },
+  "window": [
+    "MODEL_START",
+    "MODEL_END"
+  ],
+  "sections": [
+    "embed",
+    "layer_time",
+    "layer_group",
+    "cut",
+    "last",
+    "head"
+  ],
+  "counts": {
+    "embed": 1,
+    "layer_time": 15,
+    "layer_group": 7,
+    "cut": 1,
+    "last": 1,
+    "head": 1
+  }
+}
