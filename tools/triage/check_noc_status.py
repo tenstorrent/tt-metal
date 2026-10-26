@@ -61,17 +61,14 @@ def check_noc_status(
     # Skip check when operating in dynamic NOC mode.
     # DM_DEDICATED_NOC is 0 as defined in dev firmware headers (see dev_msgs.h).
     DM_DEDICATED_NOC = 0
+    noc_index: int | None = None
     if risc_name == "brisc":
         prev_noc_mode = fw_elf.get_global("prev_noc_mode", loc_mem_access).read_value()
         if prev_noc_mode != DM_DEDICATED_NOC:
             message += "    Skipping NOC status check: prev_noc_mode != DM_DEDICATED_NOC\n"
             log_check_location(location, True, message)
             return
-
-        # Also validate that BRISC's runtime-selected NOC matches the NOC being checked.
-        active_noc_index = to_noc_id(int(fw_elf.get_global("noc_index", loc_mem_access).read_value()))
-        if active_noc_index != noc_id:
-            return
+        noc_index = int(fw_elf.get_global("noc_index", loc_mem_access).read_value())
     elif kernel_elf is not None:
         # On erisc, the firmware doesn't necessarily select a NOC, so we need to check the kernel ELF.
         noc_mode = kernel_elf.get_global("noc_mode", loc_mem_access).read_value()
@@ -79,8 +76,21 @@ def check_noc_status(
             message += "    Skipping NOC status check: noc_mode != DM_DEDICATED_NOC\n"
             log_check_location(location, True, message)
             return
-        noc_index = to_noc_id(int(kernel_elf.get_global("noc_index", loc_mem_access).read_value()))
-        if noc_index != noc_id:
+        noc_index = int(kernel_elf.get_global("noc_index", loc_mem_access).read_value())
+
+    # Validate the runtime-selected NOC and that it matches the NOC being checked.
+    if noc_index is not None:
+        try:
+            read_noc_id = to_noc_id(noc_index)
+        except:
+            log_check_location(
+                location,
+                False,
+                f"{message}Read invalid noc_index {noc_index} from core, expected 0 or 1. Value likely corrupted.",
+            )
+            return
+
+        if read_noc_id != noc_id:
             return
 
     # Check if variables match with corresponding register

@@ -159,6 +159,13 @@ def require_src_a_tiles(*shapes):
     )
 
 
+def require_src_b_tiles(*shapes):
+    return reject(
+        lambda s, a, b: b is not None and b.tile_shape.tile_dims not in shapes,
+        f"Only {format_tile_dims(shapes)} in1 tiles are supported for this operation",
+    )
+
+
 def require_dest_tiles(*shapes):
     return reject(
         lambda s, a, b: s._dest_tile_shape is None
@@ -388,12 +395,17 @@ class UnarySfpuMathSchema(BaseModel):
 
     _sfpu_cls: ClassVar = None
     _sfpu_ops: ClassVar[set] = set()
+    _dropout_ops: ClassVar[set[str]] = set()
 
     type: Literal["UnarySfpu"]
     operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
     iterations: Literal[8, 32] = 8
     fill_const_value: float = 1.0
+    # Dropout only. The golden is exact only at p = 0 (keep x * scale) and p = 1 (drop all).
+    dropout_probability: Optional[Literal[0, 1]] = None
+    dropout_scale: Optional[float] = None
+    dropout_seed: Optional[Annotated[int, Field(ge=0, le=0xFFFFFFFF)]] = None
     indexes: Optional[Union[str, IndexesSchema]] = None
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
@@ -402,6 +414,17 @@ class UnarySfpuMathSchema(BaseModel):
     def parse_operation(cls, v):
         return parse_sfpu_operation(v, cls._sfpu_ops, "unary")
 
+    @model_validator(mode="after")
+    def validate_dropout_params(self):
+        params = (self.dropout_probability, self.dropout_scale, self.dropout_seed)
+        if any(p is not None for p in params) and (
+            self.operation.name not in self._dropout_ops
+        ):
+            raise ValueError(
+                f"dropout_* parameters are not supported for {self.operation.name} on this architecture"
+            )
+        return self
+
     def to_node(self, operands):
         sfpu = type(self)._sfpu_cls(
             self.operation,
@@ -409,6 +432,9 @@ class UnarySfpuMathSchema(BaseModel):
             self.iterations,
             self.fill_const_value,
         )
+        for name in ("dropout_probability", "dropout_scale", "dropout_seed"):
+            if getattr(self, name) is not None:
+                setattr(sfpu, name, getattr(self, name))
         return SfpuNode(sfpu=sfpu, index_spec=self.indexes)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
@@ -496,11 +522,13 @@ class BinarySfpuMathSchema(BaseModel):
 
     _sfpu_cls: ClassVar = None
     _sfpu_ops: ClassVar[set] = set()
+    _sign_magnitude_ops: ClassVar[set[str]] = {"SfpuElwadd", "SfpuElwsub"}
 
     type: Literal["BinarySfpu"]
     operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
     iterations: Literal[8, 32] = 8
+    sign_magnitude: Optional[bool] = None
     indexes: Optional[Union[str, IndexesSchema]] = None
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
 
@@ -509,12 +537,25 @@ class BinarySfpuMathSchema(BaseModel):
     def parse_operation(cls, v):
         return parse_sfpu_operation(v, cls._sfpu_ops, "binary")
 
+    @model_validator(mode="after")
+    def validate_sign_magnitude(self):
+        if self.sign_magnitude is not None and (
+            self.type != "BinarySfpu"
+            or self.operation.name not in self._sign_magnitude_ops
+        ):
+            raise ValueError(
+                f"sign_magnitude is not supported for {self.operation.name} on this architecture"
+            )
+        return self
+
     def to_node(self, operands):
         sfpu = type(self)._sfpu_cls(
             self.operation,
             self.approximation_mode,
             self.iterations,
         )
+        if self.sign_magnitude is not None:
+            sfpu.sign_magnitude = self.sign_magnitude
         return SfpuNode(sfpu=sfpu, index_spec=self.indexes)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
@@ -546,6 +587,7 @@ class FpuMathSchemaBase(BaseModel):
     _unpacker_map: ClassVar[dict] = {}
     _output_dims: ClassVar[dict] = {}
     _dest_tile_shape: Optional[TileShape] = None
+    _dest_acc: bool = False
 
     type: Literal["Fpu"]
     operation: str
@@ -836,6 +878,7 @@ class OperationSchemaBase(BaseModel):
         for m in self.math:
             if isinstance(m, FpuMathSchemaBase):
                 m._dest_tile_shape = tile_shape
+                m._dest_acc = dest_acc
 
         pack_nodes = []
         for i, p in enumerate(self.pack):

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #if !defined(ARCH_QUASAR)
 // ckernel::load_blocking (the store drain in drain_pad_stores) is WH/BH only: Quasar's ckernel.h has no
 // load_blocking, and from a data-movement build it #errors unless COMPILE_FOR_TRISC is defined. The Quasar

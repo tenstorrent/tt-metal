@@ -26,8 +26,8 @@
 #include <vector>
 #include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
 #include "tt_target_device.hpp"
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>  // For DispatchCoreConfig
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -245,6 +245,7 @@ class RunTimeOptions {
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     bool streaming_profiler_sync_events_enabled = false;
+    bool streaming_profiler_sync_check_enabled = false;
     bool streaming_profiler_inline_enabled = true;
     // Streaming device profiler. Mutually exclusive with profiler_enabled (the legacy profiler):
     // the two device producers overlay the same L1 profiler region and the two hosts would both drive it.
@@ -387,10 +388,13 @@ class RunTimeOptions {
     // Mock cluster initialization using a provided cluster descriptor
     std::string mock_cluster_desc_path;
 
+    // Cluster id handed to UMD topology discovery; unset means UMD uses the OS hostname
+    std::optional<std::string> cluster_id;
+
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
-    // Timeout duration for operations
-    std::chrono::duration<float> timeout_duration_for_operations = std::chrono::duration<float>(0.0f);
+    // Timeout duration for operations in seconds (0 = off)
+    std::atomic<float> timeout_duration_for_operations = 0.0f;
     // Command to run when a dispatch timeout occurs
     std::string dispatch_timeout_command_to_execute;
     // Dispatch kernel progress update period in milliseconds (default 100ms)
@@ -415,15 +419,11 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
-    // Serve simulation devices over sockets, you can disable it with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=0.
-    bool simulator_serve_over_sockets = true;
+    // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
+    bool simulator_serve_over_sockets = false;
 
     // NOC API version for Quasar
     uint32_t quasar_noc_api_version = 2;
-
-    // Quasar IP variant from QUASAR_ARCH_VARIANT: a directory under tt_metal/tt-llk/tt_llk_quasar/arch/ whose
-    // headers shadow the base Quasar ones. Empty means the base Quasar part.
-    std::string quasar_arch_variant;
 
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
@@ -435,9 +435,6 @@ class RunTimeOptions {
     // User override for fabric kernel compiler optimization level
     // If not set, automatic selection is used (O3 when VC1 inactive, Os when VC1 active)
     std::optional<tt_metal::KernelBuildOptLevel> fabric_kernel_opt_level = std::nullopt;
-
-    // Disable XIP dump
-    bool disable_xip_dump = false;
 
     // Dump JIT build commands to stdout for debugging
     bool dump_build_commands = false;
@@ -689,7 +686,7 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_sanitizer_hash(),
             get_kernels_early_return(),
@@ -697,8 +694,7 @@ public:
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
             get_disable_fabric_2_erisc_mode(),
-            get_eth_ptp_trace(),
-            get_quasar_arch_variant());
+            get_eth_ptp_trace());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -740,6 +736,7 @@ public:
     bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
     bool get_streaming_profiler_sync_events_enabled() const { return streaming_profiler_sync_events_enabled; }
+    bool get_streaming_profiler_sync_check_enabled() const { return streaming_profiler_sync_check_enabled; }
     bool get_streaming_profiler_inline_enabled() const { return streaming_profiler_inline_enabled; }
     bool get_streaming_profiler_enabled() const { return streaming_profiler_enabled; }
     uint32_t get_profiler_perf_counter_mode() const { return profiler_perf_counter_mode; }
@@ -828,15 +825,19 @@ public:
         return runtime_target_device_ == TargetDevice::Simulator || runtime_target_device_ == TargetDevice::Emule;
     }
     const std::filesystem::path& get_simulator_path() const { return simulator_path; }
-    // The qsr.s1 (Grendel) emulation model, recognised by its simulator directory name (emu-qsr-s1-*).
-    bool is_qsr_s1_simulator() const {
+    // The simulator directory name: the last component of TT_METAL_SIMULATOR, trailing '/' ignored.
+    // Empty unless the simulator target is selected.
+    std::string get_simulator_name() const {
+        if (!get_simulator_enabled()) {
+            return {};
+        }
         std::string simulator = simulator_path.string();
         while (simulator.size() > 1 && simulator.back() == '/') {
             simulator.pop_back();
         }
-        return get_simulator_enabled() &&
-               std::filesystem::path(simulator).filename().string().starts_with("emu-qsr-s1");
+        return std::filesystem::path(simulator).filename().string();
     }
+    bool is_qsr_s1_simulator() const { return get_simulator_name().starts_with("emu-qsr-s1"); }
 
     bool get_erisc_iram_enabled() const {
         // Disabled when debug tools are enabled due to IRAM size
@@ -946,6 +947,11 @@ public:
     // Reliability mode override accessor
     std::optional<tt::tt_fabric::FabricReliabilityMode> get_reliability_mode() const { return reliability_mode; }
 
+    // Cluster id to stamp on the discovered cluster descriptor. Nullopt on bare metal, where UMD
+    // falls back to the OS hostname; set from TT_METAL_CLUSTER_ID in a container or a VM, where the
+    // hostname names the container or the guest rather than the accelerator group.
+    const std::optional<std::string>& get_cluster_id() const { return cluster_id; }
+
     // Mock cluster accessors
     bool get_mock_enabled() const { return !mock_cluster_desc_path.empty(); }
     const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
@@ -1002,7 +1008,12 @@ public:
     // Target device accessor
     TargetDevice get_target_device() const { return runtime_target_device_; }
 
-    std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
+    std::chrono::duration<float> get_timeout_duration_for_operations() const {
+        return std::chrono::duration<float>(timeout_duration_for_operations.load(std::memory_order_relaxed));
+    }
+    void set_timeout_duration_for_operations(std::chrono::duration<float> timeout) {
+        timeout_duration_for_operations.store(timeout.count(), std::memory_order_relaxed);
+    }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
 
@@ -1026,7 +1037,6 @@ public:
     void set_simulator_serve_over_sockets(bool enable) { simulator_serve_over_sockets = enable; }
 
     uint32_t get_quasar_noc_api_version() const { return quasar_noc_api_version; }
-    const std::string& get_quasar_arch_variant() const { return quasar_arch_variant; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
@@ -1034,8 +1044,6 @@ public:
     void set_fabric_kernel_opt_level(std::optional<tt_metal::KernelBuildOptLevel> opt_level) {
         fabric_kernel_opt_level = opt_level;
     }
-
-    bool get_disable_xip_dump() const { return disable_xip_dump; }
 
     bool get_dump_build_commands() const { return dump_build_commands; }
 

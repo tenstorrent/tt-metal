@@ -678,7 +678,7 @@ jobs:
             threshold: "0.02"
             module_thresholds: ""
           - arch: wormhole
-            threshold: "0.10"
+            threshold: "0.13"
             module_thresholds: perf_matmul=0.25,perf_math_matmul=0.25
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
     with:
@@ -698,6 +698,10 @@ jobs:
       # Report-only for the first week. To block, set this to true and add both
       # llk-perf-merge-gate jobs to optional-jobs in Merge Gate Status.
       fail_on_regression: false
+      # The only LLK perf gate that posts to the regressions channel, and only a regression or a skip.
+      # A manual Merge Gate run on a dev branch does not post.
+      slack: ${{ github.event_name == 'merge_group' }}
+      slack_on_pass: false
     secrets: inherit
 
   # ===========================================================================

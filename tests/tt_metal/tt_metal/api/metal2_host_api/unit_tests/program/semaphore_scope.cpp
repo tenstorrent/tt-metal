@@ -9,9 +9,10 @@
 #include <unordered_map>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "distributed/mesh_device_impl.hpp"
-#include "impl/metal2_host_api/semaphore_scope.hpp"
+#include "impl/metal2_host_api/program_spec/construction/resource/resource.hpp"
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 
@@ -20,8 +21,10 @@ namespace {
 
 using test_helpers::BindSemaphoreToKernels;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
+using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::ProgramSpecTestBlackhole;
 using test_helpers::ProgramSpecTestGen1;
+using test_helpers::ProgramSpecTestQuasar;
 
 // ResolveSemaphoreScope picks how each bound semaphore is accessed, and codegen bakes the answer
 // into the kernel's binding token. A wrong answer is therefore a silently wrong *mechanism* on
@@ -29,21 +32,13 @@ using test_helpers::ProgramSpecTestGen1;
 // compiles into three TRISC binaries with two writers (UNPACK and PACK), so a compute-bound
 // semaphore must resolve to COMPUTE_ATOMIC, never to a non-atomic read-modify-write.
 
-// Resolve one semaphore's scope from a spec the way BuildProgramFromSpec does: census the binders
-// against each kernel's node set, then resolve. Placement is derived from the work units, which is
-// what CollectSpecData does for kernel_node_set.
+// Resolve one semaphore's scope from a spec the way BuildProgramFromSpec does: collect the binder
+// census, then resolve.
 SemScope ResolveScopeFor(MetalEnvImpl& env, const ProgramSpec& spec, const char* semaphore_name) {
-    std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_set;
-    for (const auto& work_unit : spec.work_units) {
-        const NodeRangeSet nodes = to_node_range_set(work_unit.target_nodes);
-        for (const auto& kernel_name : work_unit.kernels) {
-            kernel_node_set[kernel_name] = kernel_node_set[kernel_name].merge(nodes);
-        }
-    }
-    const sem_solver::SemaphoreBinderCensus census = sem_solver::CollectSemaphoreBinders(spec, kernel_node_set);
+    const CollectedSpecData collected = CollectSpecData(spec);
     // Resolve against the mesh device's env, mirroring BuildProgramFromSpec; configure_mock_mode
     // in each test fixture sets that env's arch.
-    return sem_solver::ResolveSemaphoreScopes(spec, census, env).at(SemaphoreSpecName{semaphore_name});
+    return ResolveSemaphoreScopes(spec, collected.semaphore_binders, env).at(SemaphoreSpecName{semaphore_name});
 }
 
 // The headline rule: a Blackhole semaphore with a compute binder gets the atomic mechanism.
@@ -72,6 +67,26 @@ TEST_F(ProgramSpecTestGen1, CPU_WormholeComputeBoundSemaphoreDoesNotResolveToCom
     BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
 
     EXPECT_EQ(ResolveScopeFor(mesh_device_->impl().metal_env(), spec, "compute_sem"), SemScope::LOCAL_NONATOMIC);
+}
+
+// Quasar resolves a compute-only semaphore to COMPUTE_ATOMIC ahead of the Gen2 tiers: a single compute
+// binder is still two writers (UNPACK and PACK), so the one-binder LOCAL_NONATOMIC rule must not apply.
+TEST_F(ProgramSpecTestQuasar, CPU_ComputeBoundSemaphoreResolvesToComputeAtomic) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
+    BindSemaphoreToKernels(spec, "compute_sem", {"compute_kernel"});
+
+    EXPECT_EQ(ResolveScopeFor(mesh_device_->impl().metal_env(), spec, "compute_sem"), SemScope::COMPUTE_ATOMIC);
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SemaphoreSharedByComputeAndDMIsRejected) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    BindSemaphoreToKernels(spec, "shared_sem", {"dm_kernel", "compute_kernel"});
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("bound by both a compute kernel and a data-movement kernel")));
 }
 
 }  // namespace

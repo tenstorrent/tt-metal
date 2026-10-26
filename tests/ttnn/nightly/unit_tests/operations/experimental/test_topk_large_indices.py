@@ -8,7 +8,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.utils_for_testing import assert_equal
 

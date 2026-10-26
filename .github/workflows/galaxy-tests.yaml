@@ -39,6 +39,8 @@ on:
           - galaxy-fabric-multi-mesh-4x4-2x4s
           - galaxy-fabric-multi-mesh-2x8-2x4s
           - bh-galaxy-fabric-torus-stability
+          - galaxy-fabric-2x2-channel-trimming-nonz
+          - galaxy-fabric-2x2-channel-trimming-z
           - bh-galaxy-socket-pipeline
           - bh-galaxy-tensor-prefetcher
           - bh-galaxy-complete-host-tensor-dual-rank

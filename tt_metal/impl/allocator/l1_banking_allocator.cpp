@@ -222,22 +222,19 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
-    // Under ATT a DRAM endpoint is only addressable within its window's local-address field, which
-    // can be smaller than the descriptor's DRAM view (quasar_aether_2x3: 64 MiB). Clamp the bank size
-    // to the selected map's window so top-down allocations (kernel binaries) never compose an
-    // out-of-window operand; see qa_att_windows.hpp for the per-map limits.
-    uint64_t att_dram_view_size = soc_desc.dram_view_size;
+    // Under Quasar ATT a DRAM bank cannot be larger than the map's DRAM window, so take the
+    // smaller of the descriptor's size and the window (qa_att_windows.hpp).
+    uint64_t dram_bank_size = soc_desc.dram_view_size;
     if (hal.get_arch() == tt::ARCH::QUASAR) {
         if (const auto att_map = env.get_rtoptions().get_noc_att_map(); att_map.has_value()) {
             const quasar_att::MapInfo* map_info = quasar_att::find_map(*att_map);
             TT_ASSERT(map_info != nullptr, "Unknown TT_METAL_NOC_ATT map '{}'", *att_map);
-            att_dram_view_size =
-                std::min<uint64_t>(att_dram_view_size, quasar_att::dram_window_local_address_limit(*map_info));
+            dram_bank_size = std::min<uint64_t>(dram_bank_size, quasar_att::dram_window_local_address_limit(*map_info));
         }
     }
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
-         .dram_bank_size = att_dram_view_size,
+         .dram_bank_size = dram_bank_size,
          .dram_bank_offsets = {},
          .dram_unreserved_base = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::UNRESERVED)),
          .dram_alignment = hal.get_alignment(HalMemType::DRAM),

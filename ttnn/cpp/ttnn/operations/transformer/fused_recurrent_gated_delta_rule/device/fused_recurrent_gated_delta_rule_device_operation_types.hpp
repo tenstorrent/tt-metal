@@ -40,6 +40,9 @@ struct FusedRecurrentGatedDeltaRuleParams {
 //   decay: [BH*T, 1, 1]   (= exp(g_t), one scalar per (head, token) in tile element [0,0])
 //   beta : [BH*T, 1, 1]
 //   initial_state: [BH, K, V] or absent (zeros).
+//
+// "Ring" mode (initial_state_block_idx present): initial_state is the [BH*T, K, V] ring and also the state output;
+// see the Python binding for the contract.
 struct FusedRecurrentGatedDeltaRuleInputs {
     Tensor q;
     Tensor k;
@@ -47,6 +50,7 @@ struct FusedRecurrentGatedDeltaRuleInputs {
     Tensor decay;
     Tensor beta;
     std::optional<Tensor> initial_state;
+    std::optional<Tensor> initial_state_block_idx;
 };
 
 }  // namespace ttnn::prim

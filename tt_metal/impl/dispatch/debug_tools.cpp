@@ -249,9 +249,6 @@ uint32_t dump_dispatch_cmd(MetalContext& metal_ctx, CQDispatchCmd* cmd, uint32_t
                 stride = ((stride + alignment - 1) / alignment) * alignment;
                 break;
             }
-            case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA:
-                cq_file << fmt::format(" (num_words={})", val(cmd->set_go_signal_noc_data.num_words));
-                break;
             // These commands don't have any additional data to dump.
             case CQ_DISPATCH_CMD_ILLEGAL:
             case CQ_DISPATCH_CMD_SINK:

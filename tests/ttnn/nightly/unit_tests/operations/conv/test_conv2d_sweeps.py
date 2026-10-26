@@ -13,7 +13,7 @@ from tests.sweep_framework.sweeps.conv2d.short.conv2d_ttforge_sweep import (
     failing_parameters as failing_parameters_ttnn_forge,
 )
 
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     is_wormhole_b0,
 )
 

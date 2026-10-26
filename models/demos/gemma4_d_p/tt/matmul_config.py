@@ -53,8 +53,11 @@ def prefill_matmul_program_config(hidden_states, weight, grid_x, grid_y, fused_a
     )
 
 
-def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activation=None, per_core_n=None):
-    """1D in0-multicast config for short-M prefill projections, or None when it does not apply.
+def prefill_1d_matmul_program_config(
+    hidden_states, weight, grid, fused_activation=None, per_core_n=None, max_m_tiles=None
+):
+    """1D in0-multicast config for short-M prefill projections (up to max_m_tiles tile rows, by default
+    _MAX_SHORT_M_TILES), or None when it does not apply.
 
     With at most 8 tile rows of M, the 2D config uses only 8 of the grid's rows and reads each weight column
     block through one core. Here every core reads its own two weight columns from DRAM while the activations
@@ -66,11 +69,13 @@ def prefill_1d_matmul_program_config(hidden_states, weight, grid, fused_activati
     m_tiles = hidden_states.padded_shape[-2] // tile
     k_tiles = hidden_states.padded_shape[-1] // tile
     n_tiles = weight.padded_shape[-1] // tile
-    if not is_short_m(hidden_states) or n_tiles % per_core_n or n_tiles // per_core_n > grid.x * grid.y:
+    too_tall = m_tiles > (max_m_tiles or _MAX_SHORT_M_TILES)
+    if too_tall or n_tiles % per_core_n or n_tiles // per_core_n > grid.x * grid.y:
         return None
-    # fp32 dest: at most 4 tiles (2 x 2) per output subblock.
-    out_subblock_w = 2 if per_core_n % 2 == 0 else 1
-    out_subblock_h = 2 if m_tiles % 2 == 0 else 1
+    # fp32 dest: at most 4 tiles per output subblock. A subblock as wide as the core's columns keeps the output valid
+    # for a width-sharded layout (which needs out_subblock_w == per_core_N or out_subblock_h == 1).
+    out_subblock_w = per_core_n if per_core_n <= 4 else (2 if per_core_n % 2 == 0 else 1)
+    out_subblock_h = 2 if out_subblock_w <= 2 and m_tiles % 2 == 0 else 1
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(grid.x, grid.y),
         in0_block_w=(
@@ -92,13 +97,18 @@ def _in0_block_w(k_tiles):
     return max(d for d in range(1, min(k_tiles, 16) + 1) if k_tiles % d == 0)
 
 
+def tile_rows(x):
+    """Tile rows (per device) of x."""
+    return x.padded_shape[-2] // ttnn.TILE_SIZE
+
+
 def _is_short_m_rows(rows):
     return rows // ttnn.TILE_SIZE <= _MAX_SHORT_M_TILES
 
 
 def is_short_m(x):
     """Whether x takes the 1D projection config: at most _MAX_SHORT_M_TILES tile rows."""
-    return _is_short_m_rows(x.padded_shape[-2])
+    return tile_rows(x) <= _MAX_SHORT_M_TILES
 
 
 def _width_sharded_l1(device, rows, num_cores, shard_tiles):
