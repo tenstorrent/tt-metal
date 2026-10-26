@@ -485,8 +485,14 @@ def test_prefill_seed_server(mesh_device):
                 os.environ["GLM53F_EXPORT_PARTITION"] = str(int(opts["export_partition"]))
             rep.update(zerocopy=int(zc), export_partition=int(os.environ.get("GLM53F_EXPORT_PARTITION", "0") == "1"))
             futs = []
+            # tt-blaze G53F-0219: the 11 DSA layers first (GLM53F_SEED_DSA_FIRST=1, default): their 1 GiB pushes + ring
+            # writes are the tail after the last export, and the 34 small KDA exports (~0.9 s, flat in S) then run
+            # under that tail instead of before it. Same bytes per layer; only the order of the pushes changes.
+            order = layers
+            if os.environ.get("GLM53F_SEED_DSA_FIRST", "1") == "1":
+                order = [L for L in layers if decs[L].cache is not None] + [L for L in layers if decs[L].cache is None]
             try:
-                for L in layers:
+                for L in order:
                     dec = decs[L]
                     state = _dsa_state_host(model, dec, sp) if dec.cache is not None else _kda_state_host(model, dec)
                     bodies[L] = st_parts(state) if zc else save({k: v.contiguous() for k, v in state.items()})
@@ -500,7 +506,7 @@ def test_prefill_seed_server(mesh_device):
             t_exp = time.perf_counter()
 
             try:
-                outs = [f.result() for f in futs] if overlap else list(pool.map(push, layers))
+                outs = [f.result() for f in futs] if overlap else list(pool.map(push, order))
             except (ConnectionError, OSError, ValueError) as e:  # a rank died mid-push: this ring is gone
                 try:
                     _send(s, {"op": "error", "request": request, "error": repr(e)})
