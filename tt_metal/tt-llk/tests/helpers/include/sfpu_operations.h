@@ -629,7 +629,8 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     else if constexpr (OPERATION == SfpuType::silu)
     {
         // silu_init routes to sigmoid_init<false>, seeding the reciprocal's
-        // vConstFloatPrgm0 that calculate_silu depends on.
+        // vConstFloatPrgm0 that calculate_silu depends on (and, on Blackhole,
+        // vConstFloatPrgm1 = 1/ln2 for its exp).
         llk_math_eltwise_unary_sfpu_init<OPERATION>(silu_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
@@ -2486,7 +2487,8 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
     {
-        // snake_beta uses sfpu_reciprocal_iter internally; snake_beta_init programs its Newton constant in every mode.
+        // snake_beta uses sfpu_reciprocal_iter internally; snake_beta_init programs its Newton constant in every mode
+        // (BH: Prgm0; WH: Prgm0..2) and, on Blackhole, also programs Prgm1/2 = 1/pi, pi for the range reduction.
         SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX_MODE));
     }
     else
