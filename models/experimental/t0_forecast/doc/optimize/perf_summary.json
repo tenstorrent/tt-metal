@@ -29,6 +29,8 @@
     "qk_norm_rope": "wan_fused_rmsnorm_pre/post_allgather on per-head view, RoPE tables cached per (R, S)"
   },
   "named_limitations": [
+    "GIFT-settings predict (trim, symmetric averaging = 2 forwards, clip, snap; 9 levels) on the paper input: 4100.6 ms steady at accuracy against 657.5 ms for one plain end-to-end forward; host steps dominate (final/bench_d4.json, job 661). Not optimized (D4: no new round)",
+    "performance precision misses the D4 floors (single_long spread_ratio 2.155, e2e GIFT p99 2.06, long_context p50 1.063); no swept variant meets every floor (final/precision_sweep_perf.json, job 642). Accuracy is the candidate shipping precision, pending the orchestrator",
     "paper-performance (bfp8/LoFi) is slower than accuracy (588.8 vs 516.7 ms): the residual-epilogue matmul does not take bfp8 weights, so wo/w_down fall back to matmul + add",
     "rows padded 66 -> 96 per series (45 % padding) in time attention; compacting costs more in repacking than it saves (R2-6 micro)",
     "non-matmul ops ~47 % of device time (LayerNorm, RoPE, create_heads, SDPA); matmuls at ~29 % weighted peak FLOPs (iter_02/analysis.md; measured on the iter_02 code, before R2-1 and R2-3; not re-measured)",
