@@ -113,9 +113,12 @@ class MhcPostMix:
         comb: ttnn.Tensor,
         out: ttnn.Tensor,
         collapse: bool = False,
+        post_first: bool = False,
     ) -> ttnn.Tensor:
+        """``post_first`` (v2, tt-blaze G53F-0188): the composite ``TtMHCWrap.hc_post``'s term order (post * y, then
+        the comb terms in stream order), bit-identical to the composite chain; default: the original order."""
         if self.version == 2:
-            return self._call_v2(x, y, post, comb, out, collapse)
+            return self._call_v2(x, y, post, comb, out, collapse, post_first=post_first)
         n = self.n
         for name, t in (("x", x), ("y", y), ("post", post), ("comb", comb), ("out", out)):
             assert t.dtype == ttnn.float32, f"mhc_post_mix: {name} must be float32 (got {t.dtype})"
@@ -228,7 +231,7 @@ class MhcPostMix:
     def allocate_h(self, x: ttnn.Tensor) -> ttnn.Tensor:
         return self.allocate_output(x, collapse=True)
 
-    def _call_v2(self, x, y, post, comb, out, collapse, hmode=False):
+    def _call_v2(self, x, y, post, comb, out, collapse, hmode=False, post_first=False):
         """v2: resident operands in the 8-slot fp32 dest, lane-layout coefficient tiles, hand-written SFPU mix;
         y may be the bf16 sublayer output. ``post``/``comb`` either raw (``[T,n]`` / ``[T,n*n]``, expanded on
         device once per token-tile) or already in the lane layout (``[T,32]`` / ``[T,n*32]``)."""
@@ -296,6 +299,7 @@ class MhcPostMix:
             f32_bits(1.0 / n),
             int(expand),
             int(hmode),
+            int(post_first and not collapse and not hmode),
         ]
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()

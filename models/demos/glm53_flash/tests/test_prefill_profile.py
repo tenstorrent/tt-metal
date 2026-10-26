@@ -55,6 +55,9 @@ OPS_AB = int(os.environ.get("PROF_OPS", "0"))
 #: G53F-0174 gate: "rt:rank,rt:rank,..." -- prefill the first PROF_EXPORT_N ids under each setting and sha256 every layer's
 #: exported seed state (the server's export helpers); bitwise-identical exports across settings = a pure-perf change
 EXPORT_AB = os.environ.get("PROF_EXPORT_AB", "")
+EXPORT_ONLY_N = int(
+    os.environ.get("PROF_EXPORT_ONLY_N", "0")
+)  # G53F-0182: export-only timing of the last pass's caches
 EXPORT_N = int(
     os.environ.get("PROF_EXPORT_N", "4092")
 )  # decoder index whose routed experts get an op-by-op device breakdown  # path prefix: save each pass's last-token logits
@@ -154,10 +157,11 @@ def test_prefill_profile(mesh_device):
             moe_mod.REGIONS_BUF = spec[5]
         if len(spec) > 6 and spec[6]:  # regions row gathers (embedding | row, G53F-0186)
             moe_mod.REGIONS_GATHER = spec[6]
-        if len(spec) > 7 and spec[7]:  # prefill mHC rows (wrap | fast, G53F-0187; tt/mhc.py MHC_PREFILL_RUNTIME)
+        if len(spec) > 7 and spec[7]:  # prefill mHC rows (wrap | fast | trace, G53F-0187 / 0188; tt/mhc.py)
             from models.demos.glm53_flash.tt import mhc as mhc_mod
 
-            mhc_mod.MHC_PREFILL_RUNTIME = "" if spec[7] == "wrap" else spec[7]
+            mhc_mod.MHC_PREFILL_RUNTIME = "" if spec[7] in ("wrap", "trace") else spec[7]
+            os.environ[mhc_mod.MHC_PREFILL_TRACE_ENV] = "1" if spec[7] == "trace" else "0"
         logger.info(
             f"[prof] run {p}: chunk {chunk} instr {spec[1]} n {int(prompt.numel())} regions_t {moe_mod.REGIONS_T}"
         )
@@ -211,12 +215,14 @@ def test_prefill_profile(mesh_device):
             rank=moe_mod.REGIONS_RANK,
             buf=moe_mod.REGIONS_BUF,
             gather=moe_mod.REGIONS_GATHER,
-            mhc=__import__("models.demos.glm53_flash.tt.mhc", fromlist=["x"]).MHC_PREFILL_RUNTIME or "wrap",
+            mhc=__import__("models.demos.glm53_flash.tt.mhc", fromlist=["x"]).MHC_PREFILL_RUNTIME
+            or ("trace" if os.environ.get("GLM53_MHC_PREFILL_TRACE", "0") not in ("", "0") else "wrap"),
             n=int(prompt.numel()),
             wall_s=round(wall, 3),
             tok_s=round(int(prompt.numel()) / wall, 1),
             first_token=first,
             warm_chunk_s=round(sum(r["seconds"] for r in warm) / len(warm), 4),
+            **_dram_view(mesh_device),
         )
         if instr:
             tot: dict[str, float] = defaultdict(float)
@@ -231,6 +237,8 @@ def test_prefill_profile(mesh_device):
         prof.on = False
         _set_dsa_timer(model, prof, False)
         _export_ab(model, full, f)
+    if EXPORT_ONLY_N:
+        _export_only(model, f)
     if OPS_AB:
         prof.on = False
         _set_dsa_timer(model, prof, False)
@@ -245,6 +253,21 @@ def test_prefill_profile(mesh_device):
         _set_dsa_timer(model, prof, False)
         _trace_ab(model, mesh_device, full, f)
     f.close()
+
+
+def _dram_view(dev) -> dict:
+    """Per-bank DRAM allocator state in MB after a pass (the seed server's reply fields): the headroom a lever that holds
+    device memory (G53F-0188's mHC traces) leaves at the 1M geometry."""
+    try:
+        v = ttnn.get_memory_view(dev, ttnn.BufferType.DRAM)
+        mb = lambda b: round(b / 1e6, 1)
+        return dict(
+            dram_alloc_mb=mb(v.total_bytes_allocated_per_bank),
+            dram_free_mb=mb(v.total_bytes_free_per_bank),
+            dram_largest_free_mb=mb(v.largest_contiguous_bytes_free_per_bank),
+        )
+    except Exception as e:  # noqa: BLE001 -- diagnosis only
+        return dict(dram_view_error=repr(e))
 
 
 def _trace_ab(model, dev, prompt: torch.Tensor, f):
@@ -501,6 +524,47 @@ def _regions_ops(model, dev, prompt: torch.Tensor, f, regions_t: int):
     f.write(json.dumps(row) + "\n")
     f.flush()
     logger.info(f"[prof] regions_ops {json.dumps(row)}")
+
+
+def _export_only(model, f):
+    """G53F-0182: time the export of the FIRST PROF_EXPORT_ONLY_N rows of the caches the last pass left (no
+    prefill), one-chip read vs mesh_partition + device untilize (GLM53F_EXPORT_PARTITION), with all-layer digests."""
+    import hashlib
+
+    from models.demos.glm53_flash.tests.test_prefill_vs_blaze_golden import _dsa_state_host, _kda_state_host
+
+    n = EXPORT_ONLY_N
+    res = {}
+    for mode in ("0", "1", "0"):
+        os.environ["GLM53F_EXPORT_PARTITION"] = mode
+        ttnn.synchronize_device(model.mesh.device)
+        t0 = time.perf_counter()
+        digests, dsa_s = [], 0.0
+        for dec in model.layers:
+            t1 = time.perf_counter()
+            st = _dsa_state_host(model, dec, n) if dec.cache is not None else _kda_state_host(model, dec)
+            if dec.cache is not None:
+                dsa_s += time.perf_counter() - t1
+            h = hashlib.sha256()
+            for key in sorted(st):
+                h.update(key.encode())
+                h.update(st[key].contiguous().view(torch.uint8).numpy().tobytes())
+            digests.append(h.hexdigest()[:16])
+        wall = time.perf_counter() - t0
+        ref = res.setdefault("ref", digests)
+        row = dict(
+            kind="export_only",
+            partition=mode,
+            n=n,
+            wall_s=round(wall, 3),
+            dsa_s=round(dsa_s, 3),
+            layers_equal=sum(a == b for a, b in zip(digests, ref)),
+            layers=len(digests),
+        )
+        f.write(json.dumps(row) + "\n")
+        f.flush()
+        logger.info(f"[prof] export_only {json.dumps(row)}")
+    os.environ.pop("GLM53F_EXPORT_PARTITION", None)
 
 
 def _export_ab(model, prompt: torch.Tensor, f):

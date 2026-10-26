@@ -145,6 +145,10 @@ FORCE_INLINE void expand_post(uint32_t src, uint32_t dst, uint32_t /*unused*/, u
 // `accumulate` starts from the current out (collapse: the streams sum into one tile), `scale` multiplies the
 // result by the fp32 `scale_bits` (collapse: 1/n). LREG1/3/5/4 accumulate the band's 4 slots, LREG7 holds the
 // coefficient slot, LREG0/LREG2 alternate as the data registers, LREG6 the scale.
+// `post_first` (tt-blaze G53F-0188): the composite TtMHCWrap.hc_post's order -- out = post_j * Y (SFPMUL, as
+// ttnn.multiply's fp32 SFPU path), then out = X_k * comb[k] + out for k = 0..n-1 (SFPMAD, as ttnn.addcmul's
+// (1.0 * b) * c + a) -- so the result is bit-identical to the composite chain; otherwise the comb terms first and
+// post * Y last (the original order).
 FORCE_INLINE void stream_mix(
     uint32_t out,
     uint32_t comb,
@@ -155,7 +159,8 @@ FORCE_INLINE void stream_mix(
     uint32_t j,
     bool accumulate,
     bool scale,
-    uint32_t scale_bits) {
+    uint32_t scale_bits,
+    bool post_first = false) {
     if (scale) {
         TT_SFPLOADI(L6, sfpi::SFPLOADI_MOD0_UPPER, scale_bits >> 16);
         TT_SFPLOADI(L6, sfpi::SFPLOADI_MOD0_LOWER, scale_bits & 0xFFFFu);
@@ -169,8 +174,9 @@ FORCE_INLINE void stream_mix(
             TT_SFPLOAD(L4, IM, ADDR_MOD_7, o + RIGHT);
             TT_SFPLOAD(L5, IM, ADDR_MOD_7, o + RIGHT + ODD);
         }
-        for (uint32_t k = 0; k <= n; ++k) {
-            const bool first = (k == 0) && !accumulate;
+        for (uint32_t s = 0; s <= n; ++s) {
+            const uint32_t k = (post_first && !accumulate) ? (s == 0 ? n : s - 1) : s;
+            const bool first = (s == 0) && !accumulate;
             const uint32_t x = (k < n ? k : y) * DT + off;
             const uint32_t c = (k < n) ? comb * DT + off + group_off(k) : post * DT + off + group_off(j);
             TT_SFPLOAD(L7, IM, ADDR_MOD_7, c);        // coefficient slot

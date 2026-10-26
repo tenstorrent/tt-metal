@@ -130,7 +130,10 @@ def build_mhc(
     hc = cls(device, kcfg, fn.float(), base.float(), scale.float(), dtype=ttnn.float32)
     if impl == "fast" and MHC_PREFILL_IMPL == "wrap":
         # A/B: composite wrap for prefill rows, fast path for decode (one tile of rows)
-        return TtMHCSplit(hc, TtMHCWrap(device, kcfg, fn.float(), base.float(), scale.float(), dtype=ttnn.float32))
+        # TtMHCWrapTraced = TtMHCWrap unless GLM53_MHC_PREFILL_TRACE=1 (G53F-0188)
+        return TtMHCSplit(
+            hc, TtMHCWrapTraced(device, kcfg, fn.float(), base.float(), scale.float(), dtype=ttnn.float32)
+        )
     return hc
 
 
@@ -151,6 +154,149 @@ class TtMHCSplit:
     @property
     def supports_collapse(self) -> bool:
         return bool(getattr(self.decode, "supports_collapse", False))
+
+
+# tt-blaze G53F-0188: "1" = the composite prefill wrap (TtMHCWrapTraced) replays its pre-block and its post-block from
+# two traces captured once per row count and shared by every wrap of the model: the composite's own programs in the
+# composite's order (bitwise; tests/test_mhc_trace_bench.py), ~8 host-issued ops per wrap instead of ~70. Needs a trace
+# region (the prefill tests' TRACE_MB). Read at call time, so one built model can A/B both. "" / "0" = eager (default).
+MHC_PREFILL_TRACE_ENV = "GLM53_MHC_PREFILL_TRACE"
+# row counts captured per device (each holds ~0.8 GiB of intermediates per chip at 2048 rows); other row counts
+# (a prompt's ragged last chunk) run eagerly
+MHC_TRACE_SHAPES = int(os.environ.get("GLM53_MHC_TRACE_SHAPES", "1"))
+# smallest row count (per chip) that is traced: keeps the wraps inside a captured model trace (trace_prefill's chunks are
+# <= 2048 rows over the mesh rows, i.e. <= 256 per chip) on the eager path, so no capture is nested in another
+MHC_TRACE_MIN_ROWS = int(os.environ.get("GLM53_MHC_TRACE_MIN_ROWS", "1024"))
+
+
+def _pre_body(hc, x, fn_T, consts, keep: list):
+    """``TtMHCWrap.hc_pre`` op for op (``_project`` then ``mhc_split_sinkhorn`` then ``_mix``) on explicit
+    parameters. Every intermediate is appended to ``keep`` (a trace's buffers must outlive it) and the mix
+    accumulates in place (``output_tensor``: the same program and the same per-element arithmetic as the
+    composite's fresh outputs). Returns (h, post, comb, streams); ``streams`` are the post-block's residual slices."""
+    T = x.shape[-2]
+    mixes_un = ttnn.matmul(x, fn_T, compute_kernel_config=hc.ckc)
+    xx = ttnn.multiply(x, x)
+    ss = ttnn.sum(xx, dim=-1, keepdim=True)
+    ms = ttnn.multiply(ss, 1.0 / x.shape[-1])
+    a = ttnn.add(ms, hc.norm_eps)
+    r = ttnn.rsqrt(a)
+    mixes = ttnn.multiply(mixes_un, r)
+    pre, post, comb = ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(mixes, consts, hc.n, hc.iters, hc.eps)
+    r4 = lambda t: ttnn.reshape(t, [1, 1, T, t.shape[-1]])
+    pre4, post4, comb4 = r4(pre), r4(post), r4(comb)
+    streams = _composite_streams(x, hc.n)
+    coeffs = _composite_cols(pre4, hc.n)
+    h = ttnn.multiply(coeffs[0], streams[0])
+    for s, c in zip(streams[1:], coeffs[1:]):
+        ttnn.addcmul(h, s, c, output_tensor=h)
+    keep += [mixes_un, xx, ss, ms, a, r, mixes, pre, post, comb, pre4, post4, comb4, h, *streams, *coeffs]
+    return h, post4, comb4, streams
+
+
+def _post_body(hc, y, res: list, post, comb, keep: list):
+    """``TtMHCWrap.hc_post`` op for op on the pre-block's residual slices ``res`` (slices of the same input, so
+    equal to the composite's own), accumulating in place; intermediates appended to ``keep``."""
+    n = hc.n
+    cmb = _composite_cols(comb, n * n)
+    pc = _composite_cols(post, n)
+    out = [ttnn.multiply(p, y) for p in pc]
+    for i in range(n):
+        for j in range(n):
+            ttnn.addcmul(out[j], res[i], cmb[i * n + j], output_tensor=out[j])
+    o = ttnn.concat(out, dim=-1)
+    keep += [*cmb, *pc, *out, o]
+    return o
+
+
+class _WrapTraces:
+    """The composite wrap's pre-block and post-block captured for one row count, shared by every
+    ``TtMHCWrapTraced`` on the device. Persistent operands: ``x`` (the wrap input = the post-block residual),
+    ``fn`` / ``consts`` (the calling wrap's parameters are copied in before a replay) and ``y`` (the sublayer's
+    output, fp32). Every intermediate of both captures stays allocated for the traces' life, so nothing allocated
+    later can sit where a replay writes."""
+
+    def __init__(self, hc, x, C: int):
+        dev = hc.device
+        T = x.shape[-2]
+        self.device, self.T = dev, T
+        self.x = ttnn.clone(x)
+        self.fn = ttnn.clone(hc.fn_T)
+        self.consts = ttnn.clone(hc.consts)
+        self.y = ttnn.from_torch(
+            torch.zeros(1, 1, T, C),
+            dtype=x.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(dev) if dev.get_num_devices() > 1 else None,
+        )
+        # eager warm-up: compiles every program the captures replay (in-place variants included)
+        tmp: list = []
+        h, post, comb, streams = _pre_body(hc, self.x, self.fn, self.consts, tmp)
+        _post_body(hc, self.y, streams, post, comb, tmp)
+        ttnn.synchronize_device(dev)
+        del tmp, h, post, comb, streams
+        self.keep: list = []
+        self.pre_id = ttnn.begin_trace_capture(dev, cq_id=0)
+        self.h, self.post, self.comb, streams = _pre_body(hc, self.x, self.fn, self.consts, self.keep)
+        ttnn.end_trace_capture(dev, self.pre_id, cq_id=0)
+        self.post_id = ttnn.begin_trace_capture(dev, cq_id=0)
+        self.out = _post_body(hc, self.y, streams, self.post, self.comb, self.keep)
+        ttnn.end_trace_capture(dev, self.post_id, cq_id=0)
+
+
+_WRAP_TRACES: dict = {}
+
+
+def _typecast_into(t, dtype, dst):
+    """``ttnn.typecast(t, dtype)`` written into ``dst`` (a persistent trace operand)."""
+    try:
+        ttnn.typecast(t, dtype, output_tensor=dst)
+    except TypeError:  # a binding without output_tensor: cast, then copy
+        y = ttnn.typecast(t, dtype)
+        ttnn.copy(y, dst)
+        ttnn.deallocate(y)
+
+
+class TtMHCWrapTraced(TtMHCWrap):
+    """``TtMHCWrap`` whose prefill forward can replay the shared ``_WrapTraces`` (``GLM53_MHC_PREFILL_TRACE=1``):
+    copy the input and this wrap's parameters into the persistent operands, replay the pre-block, run the
+    sublayer eagerly on the collapsed hidden, write its output into ``y``, replay the post-block and return a
+    clone of its output (the trace's own buffer is rewritten by the next wrap). Same programs, same operands,
+    same order as the eager composite: bitwise. Off (or a row count without a trace): the eager composite."""
+
+    def _traces(self, x):
+        key = (id(self.device), x.shape[-2], x.shape[-1], x.dtype)
+        tr = _WRAP_TRACES.get(key)
+        if tr is None:
+            if sum(1 for k in _WRAP_TRACES if k[0] == key[0]) >= MHC_TRACE_SHAPES:
+                return None
+            tr = _WRAP_TRACES[key] = _WrapTraces(self, x, x.shape[-1] // self.n)
+        return tr
+
+    def forward(self, x, sublayer, sublayer_dtype=None):
+        if (
+            os.environ.get(MHC_PREFILL_TRACE_ENV, "0") in ("", "0")
+            or sublayer_dtype is None
+            or self.tp_factor != 1
+            or x.shape[-2] < MHC_TRACE_MIN_ROWS
+            or x.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+        ):
+            return super().forward(x, sublayer, sublayer_dtype)
+        tr = self._traces(x)
+        if tr is None:
+            return super().forward(x, sublayer, sublayer_dtype)
+        ttnn.copy(x, tr.x)
+        ttnn.copy(self.fn_T, tr.fn)
+        ttnn.copy(self.consts, tr.consts)
+        ttnn.execute_trace(self.device, tr.pre_id, cq_id=0, blocking=False)
+        cast = ttnn.typecast(tr.h, sublayer_dtype)
+        out = sublayer(cast)
+        _typecast_into(out, x.dtype, tr.y)
+        ttnn.deallocate(out)
+        ttnn.deallocate(cast)
+        ttnn.execute_trace(self.device, tr.post_id, cq_id=0, blocking=False)
+        return ttnn.clone(tr.out)
 
 
 def streams_hf_to_packed(x: torch.Tensor) -> torch.Tensor:
@@ -889,7 +1035,10 @@ class TtMHCFast(LightweightModule):
         if self.post_kernel:
             # one program on the packed streams (any Tp): exact fp32, row-local (no pad-row guard needed)
             out = self.post_mix.allocate_output(x32, collapse)
-            self.post_mix(x32, y32, _view_rows(post, Tp), _view_rows(comb, Tp), out, collapse)
+            # prefill rows: the composite's term order (G53F-0188: bit-identical to TtMHCWrap.hc_post); the decode
+            # tile keeps the kernel's original order (GLM53_MHC_POST_ORDER=kernel: the original order everywhere)
+            post_first = Tp != TILE and os.environ.get("GLM53_MHC_POST_ORDER", "composite") == "composite"
+            self.post_mix(x32, y32, _view_rows(post, Tp), _view_rows(comb, Tp), out, collapse, post_first=post_first)
             return _view_rows(out, T)
         if Tp == TILE:
             if T != Tp:

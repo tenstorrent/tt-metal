@@ -66,6 +66,62 @@ def _send(sock, header: dict, body: bytes = b"") -> None:
     sock.sendall(struct.pack("<I", len(h)) + h + struct.pack("<Q", len(body)) + body)
 
 
+#: tt-blaze G53F-0189: "1" = a seed body goes out as safetensors' byte layout built by hand -- the header,
+#: then every tensor's own storage as a memoryview -- instead of ``safetensors.torch.save`` (1.27 s per 1 GiB DSA layer on
+#: the export thread, 11 layers at 1M) plus ``_send``'s concatenation (another copy). Same bytes on the wire (the ring's
+#: ``seed_transport.tensors_from_bytes`` loads them unchanged); "0" (default until the fake-ring measurement) = save +
+#: concatenation.
+ZERO_COPY = os.environ.get("GLM53F_SEED_ZEROCOPY", "0") == "1"
+_ST_DTYPES = {
+    torch.bfloat16: "BF16",
+    torch.float16: "F16",
+    torch.float32: "F32",
+    torch.float64: "F64",
+    torch.int8: "I8",
+    torch.int16: "I16",
+    torch.int32: "I32",
+    torch.int64: "I64",
+    torch.uint8: "U8",
+    torch.bool: "BOOL",
+}
+
+
+def st_parts(tensors: dict) -> list:
+    """``safetensors.torch.save(tensors)``'s format as a list of buffers, without copying any tensor's data: the
+    8-byte header length + the JSON header (space-padded to 8 bytes), then each tensor's contiguous storage in name
+    order (``data_offsets`` consecutive from 0, as the format's validation requires). Their concatenation is a
+    safetensors file; ``safetensors.torch.load`` reads it back to equal tensors (tests/test_seed_zerocopy.py)."""
+    hdr, bufs, off = {}, [], 0
+    for k in sorted(tensors):
+        t = tensors[k].contiguous()
+        n = t.numel() * t.element_size()
+        hdr[k] = {"dtype": _ST_DTYPES[t.dtype], "shape": list(t.shape), "data_offsets": [off, off + n]}
+        if n:
+            bufs.append(memoryview(t.reshape(-1).view(torch.uint8).numpy()))
+        off += n
+    h = json.dumps(hdr, separators=(",", ":")).encode()
+    h += b" " * (-len(h) % 8)
+    return [struct.pack("<Q", len(h)) + h, *bufs]
+
+
+def parts_len(parts) -> int:
+    return (
+        parts.nbytes
+        if isinstance(parts, memoryview)
+        else len(parts)
+        if isinstance(parts, bytes)
+        else sum(memoryview(p).nbytes for p in parts)
+    )
+
+
+def _send_parts(sock, header: dict, parts: list) -> None:
+    """``_send`` of a body given as buffers (``st_parts``): one small prefix, then every buffer as is."""
+    h = json.dumps(header).encode()
+    sock.sendall(struct.pack("<I", len(h)) + h + struct.pack("<Q", parts_len(parts)))
+    for p in parts:
+        sock.sendall(p)
+
+
 def _recv_exact(sock, n: int) -> bytes:
     buf = bytearray()
     while len(buf) < n:
@@ -387,9 +443,13 @@ def test_prefill_seed_server(mesh_device):
 
             def push(L):
                 tx = time.perf_counter()
-                _send(ranks[L], {"op": "seed", "n": sp, "slot": slot, "request": request}, bodies[L])
+                seed_hdr = {"op": "seed", "n": sp, "slot": slot, "request": request}
+                if isinstance(bodies[L], list):
+                    _send_parts(ranks[L], seed_hdr, bodies[L])
+                else:
+                    _send(ranks[L], seed_hdr, bodies[L])
                 ack, _ = _recv(ranks[L])
-                return L, len(bodies[L]), time.perf_counter() - tx, ack
+                return L, parts_len(bodies[L]), time.perf_counter() - tx, ack
 
             # GLM53F_SEED_OVERLAP=1 (default): each layer's push starts as soon as its export is done (the pushes are
             # socket I/O on the pool's threads; the ttnn reads stay on this thread), so push_ack_s is only the tail
@@ -399,7 +459,7 @@ def test_prefill_seed_server(mesh_device):
             for L in layers:
                 dec = decs[L]
                 state = _dsa_state_host(model, dec, sp) if dec.cache is not None else _kda_state_host(model, dec)
-                bodies[L] = save({k: v.contiguous() for k, v in state.items()})
+                bodies[L] = st_parts(state) if ZERO_COPY else save({k: v.contiguous() for k, v in state.items()})
                 if overlap:
                     futs.append(pool.submit(push, L))
             t_exp = time.perf_counter()

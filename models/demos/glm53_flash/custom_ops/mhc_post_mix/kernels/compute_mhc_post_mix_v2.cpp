@@ -42,6 +42,8 @@ constexpr bool EXPAND = get_compile_time_arg_val(9) != 0;
 // HMODE: the pre-mix h = sum_i pre_i x_i instead of the post-block -- the coefficient tile is `pre` [32 x n]
 // (raw, expanded like a post tile) or its lane layout, no y, one output tile per position
 constexpr bool HMODE = get_compile_time_arg_val(10) != 0;
+// POST_FIRST: the composite hc_post's term order, bit-identical to it (tt-blaze G53F-0188; mhc_sfpu::stream_mix)
+constexpr bool POST_FIRST = get_compile_time_arg_val(11) != 0;
 static_assert(N + 4 <= 8, "x_i, y, comb, post and out must fit the 8 fp32 dest slots");
 static_assert(N % 2 == 0 && N <= 4, "the x8 expansion pairs coefficients and keeps them in the left face");
 
@@ -167,7 +169,8 @@ void kernel_main() {
                 j,
                 accumulate,
                 scale,
-                INV_N_BITS)));
+                INV_N_BITS,
+                POST_FIRST)));
             if (COLLAPSE && j != N - 1) {
                 continue;
             }

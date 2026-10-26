@@ -152,9 +152,10 @@ def _replicated_rows_host(model: GLM53MeshModel, t: ttnn.Tensor, nb: int) -> tor
 
     Default: slice them on device and read one chip's replica (one chip's PCIe read: ~1.5 s per GiB). With
     ``GLM53F_EXPORT_PARTITION=1``: pad ``nb`` up to a multiple of the chip count D, ``ttnn.mesh_partition`` the slice
-    over dim 0 (a per-device slice, no fabric: chip i keeps rows [i nb/D, (i+1) nb/D)) and read all D parts in one mesh
-    read, concatenated in the mesh's device order -- every chip supplies 1/D of the bytes. Falls back to the default when
-    the padded count exceeds the tensor."""
+    over dim 0 (a per-device slice, no fabric: chip i keeps rows [i nb/D, (i+1) nb/D)), untilize the parts on device and
+    read all D in one mesh read, concatenated in the mesh's device order -- every chip supplies 1/D of the bytes
+    (tests/test_export_bw.py: 1 GiB in 0.66 s vs 1.52 s, bitwise equal). Falls back to the default when the padded count
+    exceeds the tensor."""
     nb = min(nb, int(t.shape[0]))
     rest = [int(t.shape[i]) for i in range(1, len(t.shape))]
     D = model.mesh.rows * model.mesh.cols
@@ -165,6 +166,10 @@ def _replicated_rows_host(model: GLM53MeshModel, t: ttnn.Tensor, nb: int) -> tor
             p = ttnn.mesh_partition(part, 0)
             if part.buffer_address() != t.buffer_address():  # a full-size slice IS t (the live cache): never free it
                 ttnn.deallocate(part)
+            if p.layout == ttnn.TILE_LAYOUT:  # untilize on device: the host untilize was 0.69 of 1.52 s per GiB
+                q = ttnn.to_layout(p, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(p)
+                p = q
             out = ttnn.to_torch(p, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh.device, dim=0))
             ttnn.deallocate(p)
             return out[:nb]
