@@ -71,6 +71,12 @@ public:
     void create_kernels();
 
     /**
+     * Collect this chip's manifest facts from its router builders and publish them to the builder context,
+     * which outlives this FabricBuilder. Must be called after create_kernels().
+     */
+    void build_and_publish_manifest_chip() const;
+
+    /**
      * Check if any routers were created.
      */
     bool has_routers() const { return !routers_.empty(); }
@@ -135,6 +141,9 @@ private:
 
     // Master router channel (first in map)
     chan_id_t master_router_chan_ = 0;
+
+    // Set by create_kernels(). The manifest records its chip-wide values on the chip.
+    KernelCreationContext kernel_creation_context_{};
 };
 
 }  // namespace tt::tt_fabric
