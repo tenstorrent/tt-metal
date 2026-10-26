@@ -16,9 +16,9 @@ vLLM's host sampler owns codebook 0: temperature, top-k, the repetition penalty,
 the code predictor's sampling, which reads the checkpoint's `subtalker_*` settings.
 
 Up to `max_num_seqs` requests decode together, one per talker row: decode row i is device
-slot i. Host sampling, no plugin trace: the pipeline captures its own step traces after
-every prefill, and every prefill releases them first, so a request arriving mid-decode
-stalls the others for its prefill and the recapture. Plugin capabilities used:
+slot i. Host sampling, no plugin trace: the pipeline captures its own step traces after the
+first prefill and keeps them. A later request's reference encoding and prefill run eagerly
+beside them, stalling the others for that long. Plugin capabilities used:
 
     supports_stage_inputs   prefill_forward(stage_inputs=[additional_information])
     supports_stage_outputs  pop_stage_outputs() after every decode_forward
@@ -30,7 +30,7 @@ import torch
 
 import ttnn
 from models.demos.audio.qwen3_tts import stage_inputs as stage
-from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import Qwen3TTSPipeline
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import Qwen3TTSPipeline, ReferenceEncoders
 
 # The talker's KV dtype. The plugin passes vLLM's torch dtype; the talker is bf16 throughout.
 KV_DTYPE = ttnn.bfloat16
@@ -96,13 +96,15 @@ class Qwen3TTSTalkerForConditionalGeneration:
         self.pipeline = Qwen3TTSPipeline(
             self.device, max_frames=self.max_seq_len, kv_cache=kv_cache, codec=False, batch=self.batch
         )
+        # Before any trace exists, so their weights are never allocated beside a live one.
+        self._encoders = ReferenceEncoders(self.device)
         return kv_cache
 
     def warmup_model_prefill(self, kv_cache, can_sample_on_device, enable_trace):
-        """Nothing to do: each prefill compiles what it needs and captures the traces."""
+        """Nothing to do: each prefill compiles what it needs."""
 
     def warmup_model_decode(self, kv_cache, max_batch_size, num_blocks, can_sample_on_device, enable_trace, **kwargs):
-        """Nothing to do: the step traces are captured after every prefill."""
+        """Nothing to do: the step traces are captured after the first prefill."""
 
     def release_request(self, slot):
         self._rows[slot] = None
@@ -142,9 +144,7 @@ class Qwen3TTSTalkerForConditionalGeneration:
         for row, (length, info, slot) in enumerate(zip(prompt_lens, stage_inputs, slots, strict=True)):
             if not isinstance(info, dict):
                 raise ValueError("a talker prefill needs the request's additional_information as stage_inputs")
-            # The encoders run eagerly, and nothing eager may run beside a live trace.
-            self.pipeline.release()
-            reference = self._references.reference(info, self.device)
+            reference = self._references.reference(info, self.device, self._encoders)
             embeddings, feed = stage.build_stage_prefill(info, reference, length, self.pipeline.tables)
             self.pipeline.talker.set_page_table(page_table[row], slot)
             # vLLM ends the request by the context length, which bounds its frames.
