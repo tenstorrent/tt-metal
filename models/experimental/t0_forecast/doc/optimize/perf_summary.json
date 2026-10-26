@@ -11,7 +11,7 @@
       "long_context-accuracy (32 x 8192 -> 1024)",
       "multivariate-accuracy (128 x 8 x 2048 -> 64)"
     ],
-    "precision_performance": "retired (D5): fails the D4 floors (single_long band ratio, best variant 1.45 in job 642) and is not clearly faster; kept as experimental_performance, timing only"
+    "precision_performance": "retired (D5): perf_wo_down_bf16 is 9 % faster (484.4 ms, job 642) but fails the D4 floors (single_long spread_ratio 2.767); retired under PLAN v1.12; kept as experimental_performance, timing only"
   },
   "chip": "blackhole p150, ttq part 3 (02A04EEB8B88AE6F)",
   "final": {
@@ -112,7 +112,7 @@
   },
   "configs": {
     "precision_accuracy": "bf16 weights/activations, HiFi2 matmuls with fp32_dest_acc_en, HiFi4 norms/RoPE/patch encoder, fp32 decoder output + monotone head",
-    "precision_performance": "bfp8 weights, LoFi, fp32 dest acc; wo/w_down fall back to matmul + add",
+    "precision_performance": "retired (D5): bfp8 weights, LoFi, fp32 dest acc; wo/w_down fall back to matmul + add",
     "ff1": "minimal_matmul fuse_swiglu, blocks M8/K16/N2, subblock 2x2",
     "qkv": "minimal_matmul blocks M16/K8/N4, subblock 4x1",
     "wo_w_down_wvo": "dit_minimal_matmul_addcmul_fused (residual in epilogue), blocks 16/8/4, 4x1",
@@ -120,8 +120,8 @@
     "qk_norm_rope": "wan_fused_rmsnorm_pre/post_allgather on per-head view, RoPE tables cached per (R, S)"
   },
   "named_limitations": [
-    "GIFT-settings predict (trim, symmetric averaging = 2 forwards, clip, snap; 9 levels) on the paper input: 4100.6 ms steady at accuracy against 657.5 ms for one plain end-to-end forward; host steps dominate (final/bench_d4.json, job 661). Not optimized (D4: no new round)",
-    "performance precision misses the D4 floors (single_long spread_ratio 2.155, e2e GIFT p99 2.06, long_context p50 1.063); no swept variant meets every floor (final/precision_sweep_perf.json, job 642). Accuracy is the candidate shipping precision, pending the orchestrator",
+    "GIFT-settings predict (trim, symmetric averaging = 2 forwards, clip, snap; 9 levels) on the paper input: 3932.9 ms steady at accuracy (final/bench_d5.json, job 688); its host/device split is unmeasured. Not optimized (D4: no new round)",
+    "performance precision misses the D4 floors (single_long spread_ratio 2.155, e2e GIFT p99 2.06, long_context p50 1.063); no swept variant meets every floor (final/precision_sweep_perf.json, job 642). Accuracy ships (D5, D6)",
     "paper-performance (bfp8/LoFi) is slower than accuracy (588.8 vs 516.7 ms): the residual-epilogue matmul does not take bfp8 weights, so wo/w_down fall back to matmul + add",
     "rows padded 66 -> 96 per series (45 % padding) in time attention; compacting costs more in repacking than it saves (R2-6 micro)",
     "non-matmul ops ~47 % of device time (LayerNorm, RoPE, create_heads, SDPA); matmuls at ~29 % weighted peak FLOPs (iter_02/analysis.md; measured on the iter_02 code, before R2-1 and R2-3; not re-measured)",
