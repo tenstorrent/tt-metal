@@ -200,49 +200,73 @@ def test_variate_attention(device, variates, masked):
 
 
 @pytest.mark.parametrize("s", [256, 768], ids=["s256", "s768"])
-@pytest.mark.parametrize("force_chunk", [None, 256], ids=["capped", "neg-control-chunk256"])
-def test_masked_time_sdpa_256(device, force_chunk, s):
-    """F9 (PLAN section 9 v1.10, D2 condition 2): the time-attention SDPA call with a user mask at a padded length
-    of 256, against torch, on the attention output alone (no residual). The mask hides whole 128-key blocks (a
-    two-group packing: each 128-token half sees only itself, causally). ``neg-control-chunk256`` forces the uncapped
-    chunk; it is expected to fail (xfail, non-strict, so an XPASS is reported rather than hidden)."""
+def test_masked_time_sdpa_256(device, s):
+    """F9 (PLAN section 9 v1.10/v1.13, D2 condition 2, D3 condition 2): the time-attention SDPA call with a user mask
+    at a padded length of 256 (and t0-gamma's repro length 768), against torch, on the attention output alone (no
+    residual). Logits have a std of about 2.5. The mask is built like the model's: ``_pad_time_mask`` over
+    ``s - 40`` real tokens (a masked pad-key tail), a two-group packing that hides whole 128-key blocks, and real
+    query rows with every key masked (excluded from the comparison: torch gives NaN there; the model drops them).
+
+    Three runs: the capped chunk (must pass), a negative control forced to chunk 256 (reported: max |diff| against
+    the capped run and whether it fails), and a positive control with the mask dropped on one 128-key block (must
+    fail, so the comparison can fail)."""
     import ttnn
 
     from models.experimental.toto2_forecast.tt.attention import sdpa_chunk
     from models.experimental.toto2_forecast.tt.common import Toto2Precision, upload
-    from models.experimental.toto2_forecast.tt.model import _additive
+    from models.experimental.toto2_forecast.tt.model import _additive, _pad_time_mask
 
-    h, dh = 4, 64  # s = 768 is t0-gamma's F9 repro length
+    h, dh, real = 4, 64, s - 40
     torch.manual_seed(0)
     q, k, v = (torch.randn(2, h, s, dh) for _ in range(3))
-    group = torch.arange(s) // 128
-    causal = torch.ones(s, s, dtype=torch.bool).tril()
-    mask = torch.stack([causal, (group[:, None] == group[None, :]) & causal])[:, None]  # row 1: 128-key blocks
-    chunk = force_chunk or sdpa_chunk(s, masked=True)
+    q = q * 20.0  # logits q.k / dh: std 20 * 8 / 64 = 2.5 (D3: >= 2)
+    group = torch.arange(real) // 128
+    causal = torch.ones(real, real, dtype=torch.bool).tril()
+    packed = (group[:, None] == group[None, :]) & causal
+    dead = torch.zeros(real, dtype=torch.bool)
+    dead[5:9] = True  # real query rows that see no key at all
+    packed[dead] = False
+    mask = _pad_time_mask(torch.stack([causal, packed]), s)[:, None]  # (2, 1, s, s)
+    live = torch.ones(2, 1, s, 1, dtype=torch.bool)
+    live[1, 0, :real][dead] = False
+    ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, scale=1.0 / dh)
     p = Toto2Precision.named("accuracy")
     dev = [upload(device, t) for t in (q, k, v)]
-    got = ttnn.transformer.scaled_dot_product_attention(
-        *dev,
-        attn_mask=upload(device, _additive(mask)),
-        is_causal=False,
-        scale=1.0 / dh,
-        program_config=ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-            q_chunk_size=chunk,
-            k_chunk_size=chunk,
-            exp_approx_mode=False,
-        ),
-        compute_kernel_config=p.sdpa_config(),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    got = ttnn.to_torch(got).float()
-    ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, scale=1.0 / dh)
-    rel = ((got - ref).norm() / ref.norm()).item()
-    pc = pcc(got, ref)
-    print(f"\n[F9] s {s} chunk {chunk}: pcc {pc:.6f} rel err {rel:.2e}")
-    ok = pc >= 0.9995 and rel < 0.02
-    if force_chunk is not None:
-        if ok:
-            pytest.xfail(f"negative control did NOT fail at chunk {chunk} (pcc {pc:.6f}, rel {rel:.2e}): XPASS-like")
-        pytest.xfail(f"negative control fails at chunk {chunk} as expected (pcc {pc:.6f}, rel {rel:.2e})")
-    assert ok, (pc, rel)
+
+    def run(chunk, m):
+        out = ttnn.transformer.scaled_dot_product_attention(
+            *dev,
+            attn_mask=upload(device, _additive(m)),
+            is_causal=False,
+            scale=1.0 / dh,
+            program_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+                q_chunk_size=chunk,
+                k_chunk_size=chunk,
+                exp_approx_mode=False,
+            ),
+            compute_kernel_config=p.sdpa_config(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ttnn.to_torch(out).float()
+
+    def score(got):
+        g, r = got.masked_select(live), ref.masked_select(live)
+        rel = ((g - r).norm() / r.norm()).item()
+        pc = pcc(g, r)
+        return pc, rel, pc >= 0.9995 and rel < 0.02
+
+    chunk = sdpa_chunk(s, masked=True)
+    capped = run(chunk, mask)
+    forced = run(256, mask)
+    leaky = mask.clone()
+    leaky[1, 0, :real, 128:256] = True  # positive control: one 128-key block unmasked for the real queries
+    leak = run(chunk, leaky)
+    res = {name: score(t) for name, t in (("capped", capped), ("forced256", forced), ("positive", leak))}
+    diff = (capped - forced).masked_select(live).abs().max().item()
+    dead_finite = bool(torch.isfinite(capped[1, :, :real][:, dead]).all())
+    for name, (pc, rel, ok) in res.items():
+        print(f"\n[F9] s {s} {name}: pcc {pc:.6f} rel err {rel:.2e} pass {ok}")
+    print(f"[F9] s {s}: max |capped - forced256| {diff:.3e}; dead query rows finite on device: {dead_finite}")
+    assert res["capped"][2], res["capped"]
+    assert not res["positive"][2], f"positive control passed: the comparison cannot fail {res['positive']}"

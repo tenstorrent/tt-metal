@@ -42,6 +42,7 @@ import torch
 from models.experimental.toto2_forecast.tests.golden.goldens import (
     below_floors,
     floors_for,
+    info_misses,
     gate_metrics,
     have_golden,
     load_golden,
@@ -211,6 +212,9 @@ def test_forward_perf(device, shape_name, precision_name):
         f"\n  " + "  ".join(f"{k} {v:.6f}" for k, v in metrics.items())
     )
     record["below_floors"] = below_floors(metrics, floors_for(shape.checkpoint, precision_name))
+    record["info"] = info_misses(metrics, shape.checkpoint, precision_name)  # D3 ruling 2: recorded, not gated
+    if record["info"]:
+        print(f"  info (not gated, D3): {record['info']}")
     _record(record)
     if os.environ.get("BENCH_SAVE_DIR"):
         save = Path(os.environ["BENCH_SAVE_DIR"]) / f"{shape.checkpoint}-{shape.golden}-{precision_name}.pt"
@@ -218,11 +222,10 @@ def test_forward_perf(device, shape_name, precision_name):
         torch.save({"head": head.float(), "q": q.float(), "record": record}, save)
     if BENCH_LAYERS:
         return
-    # The bench records every metric and asserts only the contract floors; the suite asserts the others.
+    # D3 defect 4: any gated floor miss fails the bench. D2 item 4: an all-degenerate case is judged as the suite
+    # judges it (abs_err_max plus the degenerate spread_ratio_p50 range); its pcc_normalized measures bf16 noise.
+    assert not record["below_floors"], record["below_floors"]
     if metrics["rows_degenerate"] == metrics["rows"]:
-        # D2 item 4: an all-degenerate case is judged as the suite judges it (abs_err_max plus the degenerate
-        # spread_ratio_p50 range); its pcc_normalized measures bf16 noise.
-        assert not record["below_floors"], record["below_floors"]
         return
     floor_n, floor_f = FLOORS[precision_name.split("_")[0]]
     assert pcc_normalized >= floor_n and pcc_final >= floor_f, (pcc_normalized, pcc_final)

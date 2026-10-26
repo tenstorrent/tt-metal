@@ -169,11 +169,14 @@ def below_floors(metrics: dict, floors: dict) -> dict:
         if key == "pcc_row_min_active_many":
             continue
         if key == "spread_ratio_p50_degenerate":
+            if not all_degenerate:
+                continue
+            key = "spread_ratio_p50"  # D2: the degenerate range; gated even where spread_ratio_p50 is INFO (D3)
+        elif key == "spread_ratio_p50":
+            if all_degenerate:
+                continue
+        elif all_degenerate != (key in DEGENERATE_GATED):
             continue
-        if all_degenerate != (key in DEGENERATE_GATED) and key != "spread_ratio_p50":
-            continue
-        if key == "spread_ratio_p50" and all_degenerate:
-            floor = floors["spread_ratio_p50_degenerate"]
         if key == "pcc_row_min_active" and metrics["rows"] > MANY_ROWS:
             floor = floors["pcc_row_min_active_many"]
         if key not in metrics:
@@ -265,19 +268,44 @@ TARGET_BAND = {
     "accuracy": dict(_BAND_COMMON, spread_ratio_p50=(0.97, 1.03), spread_ratio_max=2.0),
     "performance": dict(_BAND_COMMON, spread_ratio_p50=(0.95, 1.05), spread_ratio_max=2.0),
 }
-SMALL_BAND = dict(_BAND_COMMON, spread_ratio_p50=(0.95, 1.05), spread_ratio_p99=1.5, spread_ratio_max=2.5)
+SMALL_BAND = dict(_BAND_COMMON, spread_ratio_p50=(0.95, 1.05), spread_ratio_max=2.5)
 for _prec in ("accuracy", "performance"):
     GATE_FLOORS[_prec].update(TARGET_BAND[_prec])
     SMALL_CHECKPOINT_FLOORS[_prec].update(SMALL_BAND)
+# D3 ruling 1: 4m / 22m spread_ratio_p50 is 0.9-1.1 in both precisions (2 to 8 active rows; broken-output detection
+# is required on 2.5B-FT and 313m only). D3 ruling 3: small-checkpoint p99 is the tighter of the pre-D2 and D2 values.
+for _prec, _p99 in (("accuracy", 1.2), ("performance", 1.5)):
+    SMALL_CHECKPOINT_FLOORS[_prec].update(spread_ratio_p50=(0.9, 1.1), spread_ratio_p99=_p99)
+SMALL_313M_P99 = {"accuracy": 1.25, "performance": 1.5}
+
+# D3 ruling 2: on 313m performance (P1) these band metrics are INFO until G3 (recorded and printed, not gated); they
+# are held by drift against the job 683/684 round-0 records instead (check_gates.py). G3 ships performance only if
+# they pass the D2 floors with no INFO exemption.
+INFO = {("313m", "performance"): {"spread_ratio_p50", "spread_ratio_p99", "spread_ratio_max", "spread_ratio_inactive_p50"}}
 
 
-def floors_for(ckpt: str, precision: str) -> dict:
-    prec = precision.split("_")[0]
+def _all_floors(ckpt: str, prec: str) -> dict:
     if ckpt in ("4m", "22m"):
         return SMALL_CHECKPOINT_FLOORS[prec]
     if ckpt == "2.5B-FT":
         return GATE_FLOORS[prec]
-    return {**GATE_FLOORS[prec], **SMALL_BAND}
+    return {**GATE_FLOORS[prec], **SMALL_BAND, "spread_ratio_p99": SMALL_313M_P99[prec]}
+
+
+def info_keys(ckpt: str, precision: str) -> set:
+    return INFO.get((ckpt, precision.split("_")[0]), set())
+
+
+def floors_for(ckpt: str, precision: str) -> dict:
+    """The gated floors (D3: the INFO metrics are left out)."""
+    info = info_keys(ckpt, precision)
+    return {k: v for k, v in _all_floors(ckpt, precision.split("_")[0]).items() if k not in info}
+
+
+def info_misses(metrics: dict, ckpt: str, precision: str) -> dict:
+    """The INFO metrics (D3) that would miss their D2 floor: printed and recorded, never gated."""
+    floors = _all_floors(ckpt, precision.split("_")[0])
+    return below_floors(metrics, {k: floors[k] for k in info_keys(ckpt, precision)})
 
 
 # Drift from round 0 of the same precision (tests/perf/check_gates.py): a candidate may lose at most this much
@@ -294,6 +322,9 @@ DRIFT = {
     "spread_ratio_p50": 0.01,
 }
 TWO_SIDED = {"spread_ratio_p50"}
+# D3 ruling 2: extra drift on 313m performance only (scale 1; the DRIFT margins above already give p50 +-0.02 and
+# p99 +0.10 there at twice the target margin).
+DRIFT_EXTRA = {("313m", "performance"): {"spread_ratio_inactive_p50": 0.15}}
 
 
 CEILINGS.update({"spread_ratio_max", "spread_ratio_inactive_p50"})

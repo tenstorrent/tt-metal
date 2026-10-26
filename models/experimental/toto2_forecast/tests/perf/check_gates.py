@@ -18,7 +18,15 @@ import json
 import sys
 from pathlib import Path
 
-from models.experimental.toto2_forecast.tests.golden.goldens import CEILINGS, DRIFT, TWO_SIDED, below_floors, floors_for
+from models.experimental.toto2_forecast.tests.golden.goldens import (
+    CEILINGS,
+    DRIFT,
+    DRIFT_EXTRA,
+    TWO_SIDED,
+    below_floors,
+    floors_for,
+    info_misses,
+)
 
 TARGET = ("paper", "accuracy")
 
@@ -28,7 +36,8 @@ def check(rec: dict, ref: dict | None) -> list[str]:
         return ["no round-0 record"]
     notes = [f"{k} {v[0]} misses floor {v[1]}" for k, v in below_floors(rec, floors_for(rec["checkpoint"], rec["precision"])).items()]
     scale = 1.0 if (rec["name"], rec["precision"]) == TARGET else 2.0
-    for metric, margin in DRIFT.items():
+    extra = DRIFT_EXTRA.get((rec["checkpoint"], rec["precision"].split("_")[0]), {})  # D3 ruling 2, scale 1
+    for metric, margin in [*DRIFT.items(), *((m, x / scale) for m, x in extra.items())]:
         if metric not in rec or metric not in ref:
             notes.append(f"{metric} missing")
             continue
@@ -56,7 +65,13 @@ def main(argv=None) -> int:
         key = (rec["name"], rec["precision"])
         notes = check(rec, base.get(key))
         failed |= bool(notes)
-        print(("FAIL " if notes else "PASS ") + "-".join(key) + (": " + "; ".join(notes) if notes else ""))
+        info = info_misses(rec, rec["checkpoint"], rec["precision"])  # D3: printed, not gated
+        print(
+            ("FAIL " if notes else "PASS ")
+            + "-".join(key)
+            + (": " + "; ".join(notes) if notes else "")
+            + ("  [info: " + "; ".join(f"{k} {v[0]} vs {v[1]}" for k, v in info.items()) + "]" if info else "")
+        )
     seen = {(r["name"], r["precision"]) for r in json.loads(args.candidate.read_text()) if not r.get("bench_layers")}
     for key in sorted(set(base) - seen):  # D2 item 4: a round-0 record the candidate run lacks is a failure
         failed = True

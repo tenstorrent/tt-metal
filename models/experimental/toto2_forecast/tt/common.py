@@ -23,13 +23,14 @@ class Toto2Precision:
 
     | role                         | accuracy                          | performance                         |
     |------------------------------|-----------------------------------|-------------------------------------|
-    | QKV, out_proj, fc1, fc2      | bf16 W, HiFi2, fp32 dest acc      | bfp8 W, LoFi, fp32 dest acc         |
+    | QKV, out_proj, fc1, fc2      | bf16 W, HiFi2, fp32 dest acc      | bfp8 W, HiFi2, fp32 dest acc        |
     | SDPA (time and variate)      | HiFi2, fp32 dest acc              | HiFi2, fp32 dest acc                |
     | patch embedding (3 matmuls)  | fp32 tokens, bf16 W, HiFi4, fp32 acc | fp32 tokens, bf16 W, HiFi4, fp32 acc |
-    | head (3 matmuls)             | bf16 W, HiFi2, fp32 acc, fp32 out | bfp8 W, LoFi, fp32 acc, fp32 out    |
+    | head (3 matmuls)             | bf16 W, HiFi2, fp32 acc, fp32 out | bfp8 W, HiFi2, fp32 acc, fp32 out   |
     | RMSNorm                      | HiFi4, fp32 dest acc              | HiFi4, fp32 dest acc                |
     | RoPE (rotary_embedding_llama)| HiFi4, bf16 dest                  | HiFi4, bf16 dest                    |
-    Activations are bf16 throughout (the head output fp32).
+    Activations are bf16 throughout (the head output fp32). Performance is P1 (D2, G1 approval); the round-0 LoFi
+    performance is the sweep variant P0.
 
     Measured (2.5B-FT, paper; ttq jobs 474, 482, 486, 501, 518):
     - fp32 vs bf16 dest accumulation, accuracy, realistic paper_mix: active per-row PCC p01 0.9990 vs 0.9758 and

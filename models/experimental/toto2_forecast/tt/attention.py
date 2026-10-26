@@ -203,6 +203,7 @@ class TtVariateAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(blocks)
+        # No program config: the default SDPA chunk is 32 here, under the masked cap of 128 (F9, D3 defect 6).
         ctx = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,

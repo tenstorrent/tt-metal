@@ -31,6 +31,7 @@ import pytest
 from models.experimental.toto2_forecast.tests.golden.goldens import (
     below_floors,
     floors_for,
+    info_misses,
     gate_metrics,
     have_golden,
     load_golden,
@@ -112,5 +113,8 @@ def test_model(device, ckpt, case, precision_name):
     metrics = gate_metrics(head, q, cap["head_out"], cap["q"])
     _record({"ckpt": ckpt, "case": case, "precision": precision_name, **metrics})
     print(f"\n[MODEL] {ckpt}/{case}/{precision_name}: " + " ".join(f"{k}={v:.6f}" for k, v in metrics.items()))
+    info = info_misses(metrics, ckpt, precision_name)
+    if info:
+        print(f"[MODEL] info (not gated, D3): {info}")
     below = below_floors(metrics, floors_for(ckpt, precision_name))
     assert not below, f"below floor: {below}"
