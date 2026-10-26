@@ -95,6 +95,27 @@ def test_time_layer(device, case):
     assert min(a, o) >= FLOOR
 
 
+@pytest.mark.parametrize("patches", [256, 512, 768])
+def test_time_layer_masked_long(device, patches):
+    """D4 item 5: a PAD-masked time layer at a whole multiple of 256 patches (e.g. 8160 context + 32 horizon).
+    SDPA with a user mask must run at chunk 128 (chunk 256 was wrong, jobs 582, 584). Device against the fp32
+    dataflow, real tokens only."""
+    g = torch.Generator().manual_seed(256)
+    x = 4.0 * torch.randn(2, patches, 1024, generator=g)
+    groups, vtype, mask = clean_fields(2, patches)
+    mask[1, :3] = host.PAD
+    groups[1, :3] = -1
+    vtype[1, :3] = -1
+    prepared = module_inputs(x, groups, vtype, mask)
+    assert prepared.time_mask is not None
+    ref = x + Dataflow(weights()).time_attention(weights().layers[0].attention, x, prepared)
+    attn, _ = _run_layer(_model(device, [0]), 0, x, prepared)
+    real = prepared.real_tokens
+    value = pcc(ref[real], attn[real])
+    print(f"\n[pcc] time_layer_masked_{patches} (vs fp32 dataflow): attention {value:.6f}")
+    assert value >= FLOOR
+
+
 @pytest.mark.parametrize("case", ["g1", "g4", "g4_padded"])
 def test_group_layer(device, case):
     m = golden("modules.pt")[f"group_layer_{case}"]

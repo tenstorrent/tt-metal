@@ -35,7 +35,8 @@ from models.experimental.t0_forecast.tt.host import pair_rotation
 from models.experimental.t0_forecast.tt.weights import TIME, AttentionWeights
 
 _MAX_SDPA_CHUNK = 256
-# SDPA with a user mask over 768 keys was wrong at chunk 256 (PCC 0.985) and right at 128 (R2-1 micro, jobs 582, 583).
+# SDPA with a user mask over 768 keys was wrong at chunk 256 (PCC 0.985) and right at 128 (R2-1 micro, jobs 582, 584).
+# Every SDPA with a user mask (time or group) is capped at this chunk.
 _MAX_MASKED_CHUNK = 128
 # QKV on minimal_matmul: blocks M 16 / K 8 / N 4, subblock 4 x 1 (tests/perf/sweep_matmul.py at M = 98304,
 # doc/optimize/iter_01/matmul_sweep_qkv*.json: 4.24 ms against 12.67 ms for the auto 1D config).
@@ -161,6 +162,8 @@ class TtAttention:
     def _sdpa(self, q, k, v, *, mask, is_causal: bool, concat_heads: bool = False, chunk_limit=_MAX_SDPA_CHUNK):
         import ttnn
 
+        if mask is not None:
+            chunk_limit = min(chunk_limit, _MAX_MASKED_CHUNK)
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
             q_chunk_size=sdpa_chunk(q.padded_shape[-2], chunk_limit),
@@ -208,7 +211,6 @@ class TtAttention:
                 mask=inputs.packed_group_mask,
                 is_causal=False,
                 concat_heads=True,
-                chunk_limit=_MAX_MASKED_CHUNK,
             )
             return ttnn.reshape(ctx, (1, 1, r * s, d))
         qkv = ttnn.reshape(qkv, (r, s, 3 * d))
