@@ -872,6 +872,10 @@ class TtRoutedExperts(LightweightModule):
         )
         if self.prefill_experts in ("dispatch", "regions"):
             self._build_dispatch_path(fabric=self.prefill_experts == "dispatch")
+        # never retain the block-layout loaders past construction: ``make_w13`` / ``make_w2`` close over the layer's raw
+        # ``gate_up`` / ``down`` checkpoint tensors (~11 GB per layer in bf16), so keeping them for 45 layers held
+        # ~450 GB of host memory and the OOM killer took the 8x4 loads (2026-10-26, three kills)
+        self._block_source = None
         # column c's expert selector: the [E, E_local] block of the identity for its experts
         self.select = (
             None if ep == 1 else self.mesh.upload(torch.eye(self.E, dtype=torch.float32), ttnn.float32, cols=-1)
@@ -1129,6 +1133,11 @@ class TtRoutedExperts(LightweightModule):
         table (``0`` on its experts, ``-1`` elsewhere: a one-chip dispatch group), the local -> global expert ids."""
         E, E_loc, H, I = self.E, self.E_local, self.H, self.I_local
         cols = self.mesh.cols
+        if self.stream and self._block_source is None:
+            raise RuntimeError(
+                "the regions / dispatch per-expert lists must be built at construction with the stream layout "
+                "(the block-layout loaders are dropped afterwards to free the checkpoint tensors)"
+            )
         if self._block_source is not None:  # the stream layout: the block layout is loaded as the slicing source
             make_w13, make_w2, files_block = self._block_source
             w13_src = self.mesh.upload_cached(
