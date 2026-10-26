@@ -59,12 +59,12 @@ def rotated_chunk_real_counts(chunk_start: int, actual_isl: int, sp: int, chunk_
 
 
 def pack_forward_tokens(chunk_tokens: list, starts: list, sp: int) -> list:
-    """Chip-major token order of a packed forward: chip c's rows are slice c of every entry's rotated chunk
-    (rotate_chunk_tokens at the entry's start), in entry order. ``chunk_tokens`` are natural-order chunks.
-    One entry reduces to rotate_chunk_tokens."""
+    """Chip-major token order of a packed forward: chip c's rows are slice c of every chunk's rotated tokens
+    (rotate_chunk_tokens at the chunk's actual_start), in chunk order. ``chunk_tokens`` are natural-order chunks.
+    One chunk reduces to rotate_chunk_tokens."""
     per_chip = [[] for _ in range(sp)]
     for tokens, start in zip(chunk_tokens, starts, strict=True):
-        rotated = rotate_chunk_tokens(tokens, start, sp)
+        rotated = rotate_chunk_tokens(list(tokens), start, sp)
         s = len(rotated) // sp
         for c in range(sp):
             per_chip[c] += rotated[c * s : (c + 1) * s]

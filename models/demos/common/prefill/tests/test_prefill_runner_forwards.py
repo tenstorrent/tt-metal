@@ -7,11 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from models.demos.common.prefill.forward_entries import (
+from models.demos.common.prefill.prefill_chunk import (
     SHUTDOWN_WORD,
-    PrefillEntry,
+    PrefillChunk,
     forward_metadata_words,
-    pad_entries,
+    pad_chunks,
     sentinel_words,
 )
 from models.demos.common.prefill.runners import prefill_runner as runner
@@ -30,8 +30,8 @@ class _PackedRuntime:
         self.mesh_device = None
         self.calls = []
 
-    def prefill_forward(self, inp, kv, entries, request_id=0, d2h_service=None, *, metadata_msg=None):
-        self.calls.append((request_id, list(entries)))
+    def prefill_forward(self, inp, kv, chunks, request_id=0, d2h_service=None, *, metadata_msg=None):
+        self.calls.append((request_id, list(chunks)))
 
 
 def _configure(monkeypatch, *, supports_packed_forward):
@@ -49,7 +49,7 @@ def _configure(monkeypatch, *, supports_packed_forward):
 def loop(monkeypatch):
     def run(runtime, forwards, *, supports_packed_forward, num_ranks=1, d2d_out=None):
         _configure(monkeypatch, supports_packed_forward=supports_packed_forward)
-        words = [forward_metadata_words(pad_entries(f, F), F) for f in forwards]
+        words = [forward_metadata_words(pad_chunks(f, F), F) for f in forwards]
         words.append(sentinel_words(SHUTDOWN_WORD, F))
         it = iter(words)
 
@@ -73,16 +73,16 @@ def loop(monkeypatch):
 
 
 FORWARDS = [
-    [PrefillEntry(0, 0, C), PrefillEntry(0, C, 2 * C), PrefillEntry(1, 0, 500)],
-    [PrefillEntry(2, 0, C)],
-    [PrefillEntry(3, 0, C), PrefillEntry(4, 0, C), PrefillEntry(5, 0, C), PrefillEntry(6, 0, 40)],
+    [PrefillChunk(0, 0, C), PrefillChunk(0, C, 2 * C), PrefillChunk(1, 0, 500)],
+    [PrefillChunk(2, 0, C)],
+    [PrefillChunk(3, 0, C), PrefillChunk(4, 0, C), PrefillChunk(5, 0, C), PrefillChunk(6, 0, 40)],
 ]
 
 
 def test_request_id_counts_chunks(loop):
     runtime = _PackedRuntime()
     loop(runtime, FORWARDS, supports_packed_forward=True)
-    assert [(rid, [e for e in entries if not e.is_empty]) for rid, entries in runtime.calls] == [
+    assert [(rid, [c for c in chunks if not c.is_empty]) for rid, chunks in runtime.calls] == [
         (0, FORWARDS[0]),
         (3, FORWARDS[1]),
         (4, FORWARDS[2]),
@@ -90,7 +90,7 @@ def test_request_id_counts_chunks(loop):
 
 
 def test_first_rank_refuses_a_bad_forward(loop, expect_error):
-    split = [PrefillEntry(0, 0, C), PrefillEntry(1, 0, C), PrefillEntry(0, C, 2 * C)]
+    split = [PrefillChunk(0, 0, C), PrefillChunk(1, 0, C), PrefillChunk(0, C, 2 * C)]
     with expect_error(ValueError, "two separate runs"):
         loop(_PackedRuntime(), [split], supports_packed_forward=True)
 
@@ -102,7 +102,7 @@ def test_a_refused_forward_shuts_down_the_next_rank(loop, monkeypatch, expect_er
     runtime = _PackedRuntime()
     runtime.config.is_last_rank = False
     d2d_out = object()
-    split = [PrefillEntry(0, 0, C), PrefillEntry(1, 0, C), PrefillEntry(0, C, 2 * C)]
+    split = [PrefillChunk(0, 0, C), PrefillChunk(1, 0, C), PrefillChunk(0, C, 2 * C)]
     with expect_error(ValueError, "two separate runs"):
         loop(runtime, [split], supports_packed_forward=True, num_ranks=2, d2d_out=d2d_out)
     assert shutdowns == [d2d_out]
