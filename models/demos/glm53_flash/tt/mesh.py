@@ -17,6 +17,7 @@ second form (``GLM53_TP_ALLREDUCE=gather``): one all-gather of the column partia
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -286,7 +287,12 @@ class GLMMesh:
         # axis instead of the default Linear chain (a gather moves bytes: same output, fewer hops)
         topo = self._async_topology()
         if self.topology is None and os.environ.get("GLM53_CCL_GATHER_TOPOLOGY", "") == "ring":
-            topo = ttnn.Topology.Ring
+            # only large gathers: the MoE's [2048, 4096] bf16 hidden 2.886 -> 1.831 ms, its [2048, 32] fp32 lists 0.134 ->
+            # 0.218 ms (test_ccl_rows_bench.py); GLM53_CCL_GATHER_RING_MIN bytes per chip (default 8 MiB)
+            per = {ttnn.bfloat16: 2, ttnn.float32: 4, ttnn.uint32: 4, ttnn.int32: 4}.get(x.dtype, 1)
+            nbytes = math.prod(int(d) for d in x.shape) * per  # this chip's input (mesh tensors carry the shard shape)
+            if nbytes >= int(os.environ.get("GLM53_CCL_GATHER_RING_MIN", str(8 << 20))):
+                topo = ttnn.Topology.Ring
         return ttnn.experimental.all_gather_async(
             x,
             persistent_output_buffer=None,
