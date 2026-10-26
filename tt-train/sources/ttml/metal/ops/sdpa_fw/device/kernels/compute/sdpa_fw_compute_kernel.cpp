@@ -100,8 +100,7 @@ FORCE_INLINE void finalize_chunk(uint32_t cb_mm_out, uint32_t cb_max, uint32_t c
     // lse = scale*max + log(sum_exp)
     cb_reserve_back(cb_intermediates, Sq_chunk_t);
     for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-        compute_and_pack_lse(
-            cb_sum_exp, cb_max, cb_intermediates, cb_matmul_reduce, scaler_bits, r);
+        compute_and_pack_lse(cb_sum_exp, cb_max, cb_intermediates, cb_matmul_reduce, scaler_bits, r);
     }
     cb_push_back(cb_intermediates, Sq_chunk_t);
 #endif
