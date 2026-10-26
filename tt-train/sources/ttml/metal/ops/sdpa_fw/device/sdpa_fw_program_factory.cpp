@@ -334,7 +334,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         per_core_runs = split_items_contiguous(total_q_chunks, num_cores);
     }
 
-    // DST is the register file the math unit computes in: 4 tiles in fp32 mode (8 in bf16).
+    // DST is the register file the math unit computes in: 4 tiles per half in fp32 mode (8 in bf16);
+    // the kernels run half-sync, so one pass gets one half.
     // Everything below is "how many tiles go through DST per pass":
     //   block_size     output tiles per pass in the element-wise loops (one slot stays free for the
     //                  broadcast factor they multiply by)
