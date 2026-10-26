@@ -9,60 +9,50 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
 
-template <
-    uint32_t Vt,
-    uint32_t H,
-    uint32_t Mt,
-    uint32_t epsilon_bits,
-    uint32_t gate_row_tiles,
-    uint32_t gate_offset_tiles>
+// Reads each group's inputs (the writer reads the gate on the other NoC), then the weight after the first group.
+template <uint32_t Vt, uint32_t epsilon_bits, uint32_t G>
 TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto x_acc = TensorAccessor(tensor::input);
-    const auto g_acc = TensorAccessor(tensor::gate);
     const auto w_acc = TensorAccessor(tensor::weight);
     DataflowBuffer x(dfb::x);
-    DataflowBuffer gate(dfb::gate);
     DataflowBuffer weight(dfb::weight);
     DataflowBuffer epsilon(dfb::epsilon);
     Noc noc;
 
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        dfb::scaler,
-        ckernel::PoolType::AVG,
-        ckernel::ReduceDim::REDUCE_ROW,
-        Vt * tt::constants::TILE_WIDTH>();
-    generate_bcast_col_scalar(epsilon, epsilon_bits);
-
-    weight.reserve_back(Vt);
-    for (uint32_t vt = 0; vt < Vt; vt++) {
-        noc.async_read(
-            w_acc, weight, weight.get_entry_size(), {.page_id = vt}, {.offset_bytes = vt * weight.get_entry_size()});
-    }
-    noc.async_read_barrier();
-    weight.push_back(Vt);
-
-    for (uint32_t i = 0; i < wi_count; i++) {
-        const uint32_t wi = wi_start + i;
-        const uint32_t bh = wi / Mt;
-        const uint32_t mt = wi % Mt;
-        const uint32_t b = bh / H;
-        const uint32_t h = bh % H;
-        const uint32_t x_base = wi * Vt;
-        const uint32_t gate_base = (b * Mt + mt) * gate_row_tiles + gate_offset_tiles + h * Vt;
-        x.reserve_back(Vt);
-        gate.reserve_back(Vt);
-        for (uint32_t vt = 0; vt < Vt; vt++) {
+    for (uint32_t first = 0; first < wi_count; first += G) {
+        const uint32_t items = wi_count - first < G ? wi_count - first : G;
+        // The compute kernel's first stage is the first item's gate sigmoid, which these reads overlap.
+        x.reserve_back(items * Vt);
+        const uint32_t x_base = (wi_start + first) * Vt;
+        for (uint32_t t = 0; t < items * Vt; t++) {
             noc.async_read(
-                x_acc, x, x.get_entry_size(), {.page_id = x_base + vt}, {.offset_bytes = vt * x.get_entry_size()});
-            noc.async_read(
-                g_acc,
-                gate,
-                gate.get_entry_size(),
-                {.page_id = gate_base + vt},
-                {.offset_bytes = vt * gate.get_entry_size()});
+                x_acc, x, x.get_entry_size(), {.page_id = x_base + t}, {.offset_bytes = t * x.get_entry_size()});
+        }
+        if (first == 0) {
+            // The reduction scaler and epsilon are first used after the inputs.
+            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                dfb::scaler,
+                ckernel::PoolType::AVG,
+                ckernel::ReduceDim::REDUCE_ROW,
+                Vt * tt::constants::TILE_WIDTH>();
+            generate_bcast_col_scalar(epsilon, epsilon_bits);
         }
         noc.async_read_barrier();
-        x.push_back(Vt);
-        gate.push_back(Vt);
+        x.push_back(items * Vt);
+        if (first == 0) {
+            // The weight is first used once the group's items are scaled. Every core reads the same few weight pages:
+            // read before the inputs, they would hold up every core's first item behind the banks that hold them.
+            weight.reserve_back(Vt);
+            for (uint32_t vt = 0; vt < Vt; vt++) {
+                noc.async_read(
+                    w_acc,
+                    weight,
+                    weight.get_entry_size(),
+                    {.page_id = vt},
+                    {.offset_bytes = vt * weight.get_entry_size()});
+            }
+            noc.async_read_barrier();
+            weight.push_back(Vt);
+        }
     }
 }

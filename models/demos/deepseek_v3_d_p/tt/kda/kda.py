@@ -370,6 +370,7 @@ class ttKDA:
             self.config.head_k_dim,
             decay_width,
             ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
+            bias_in_dest=mesh_device.arch() == ttnn.device.Arch.BLACKHOLE,
         )
         # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
         self.decay_memory_config = l1_when_it_fits(
@@ -389,6 +390,8 @@ class ttKDA:
             packer_l1_acc=True,
         )
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
+        # The norm weight is a few tiles that every norm core reads before its first item: L1 spares that DRAM read.
+        self._norm_weight_l1 = ttnn.to_memory_config(self.weights.norm, ttnn.L1_MEMORY_CONFIG)
 
     def _input_projection_gate_tiles(self, grid: ttnn.CoreCoord, program_config, width: int) -> int:
         """Output-gate tile columns the input projection keeps: its per-core width without the gate's columns plus
@@ -553,7 +556,7 @@ class ttKDA:
         return ttnn.experimental.kda.sigmoid_gated_rms_norm(
             output,
             output_gate,
-            weights.norm,
+            self._norm_weight_l1,
             config.num_heads,
             epsilon=config.norm_eps,
             memory_config=self.norm_output_memory_config,

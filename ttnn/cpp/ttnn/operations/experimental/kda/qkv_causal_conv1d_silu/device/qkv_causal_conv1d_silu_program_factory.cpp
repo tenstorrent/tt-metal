@@ -272,6 +272,9 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const tt::tt_metal::experimental::ScratchpadSpecName act_window_name{"act_window"};
     const tt::tt_metal::experimental::ScratchpadSpecName staging_name{"staging"};
     const tt::tt_metal::experimental::DFBSpecName act_tile_dfb_name{"act_tile"};
+    const tt::tt_metal::experimental::DFBSpecName act_tile_writer_dfb_name{"act_tile_writer"};
+    const tt::tt_metal::experimental::DFBSpecName strips_dfb_name{"strips"};
+    const tt::tt_metal::experimental::DFBSpecName order_dfb_name{"order"};
     const tt::tt_metal::experimental::DFBSpecName taps_dfb_name{"taps"};
     const tt::tt_metal::experimental::DFBSpecName eye_dfb_name{"eye"};
     const tt::tt_metal::experimental::DFBSpecName weights_dfb_name{"weights"};
@@ -311,6 +314,20 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
     const auto dfb_tiles = qkv_causal_conv1d_silu_dfb_tiles(block_ct, dest_limit);
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(act_tile_dfb_name, dfb_tiles.act_tile),
+        make_dfb(act_tile_writer_dfb_name, dfb_tiles.act_tile_writer),
+        // Raw bytes between the two data-movement kernels.
+        tt::tt_metal::experimental::DataflowBufferSpec{
+            .unique_id = strips_dfb_name,
+            .entry_size = qkv_conv::StripEntry{block_ct}.bytes(),
+            .num_entries = qkv_causal_conv1d_silu_strip_entries,
+        },
+        // The reader's deferred tile row, for compute (one word).
+        tt::tt_metal::experimental::DataflowBufferSpec{
+            .unique_id = order_dfb_name,
+            .entry_size = qkv_causal_conv1d_silu_order_bytes,
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::UInt32,
+        },
         make_dfb(taps_dfb_name, dfb_tiles.taps),
         make_dfb(eye_dfb_name, dfb_tiles.eye),
         make_dfb(weights_dfb_name, dfb_tiles.weights),
@@ -330,6 +347,10 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                     taps_dfb_name, "taps", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     eye_dfb_name, "eye", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    strips_dfb_name, "strips", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    order_dfb_name, "order", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
             },
         .semaphore_bindings = {tt::tt_metal::experimental::SemaphoreBinding{
             predecessor_ready_semaphore, "predecessor_ready"}},
@@ -364,8 +385,15 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/kernels/dataflow/"
             "writer_qkv_causal_conv1d_silu.cpp",
-        .dfb_bindings = {tt::tt_metal::experimental::DFBBinding{
-            output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::CONSUMER}},
+        .dfb_bindings =
+            {
+                tt::tt_metal::experimental::DFBBinding{
+                    output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
+                    strips_dfb_name, "strips", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
+                    act_tile_writer_dfb_name, "act_tile_writer", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+            },
         .semaphore_bindings = {tt::tt_metal::experimental::SemaphoreBinding{staged_semaphore, "staged"}},
         .scratchpad_bindings = {{staging_name, "staging"}},
         .tensor_bindings =
@@ -405,6 +433,10 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::DFBBinding{
                     act_tile_dfb_name, "act_tile", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
+                    order_dfb_name, "order", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
+                    act_tile_writer_dfb_name, "act_tile_writer", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
                     taps_dfb_name, "taps", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::DFBBinding{
                     eye_dfb_name, "eye", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
@@ -415,12 +447,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::DFBBinding{
                     output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
             },
-        .compile_time_args =
-            {{"block_ct", block_ct},
-             {"Mt", Mt},
-             {"group", group},
-             {"dest_limit", dest_limit},
-             {"defer_first_rows", uint32_t(exchange)}},
+        .compile_time_args = {{"block_ct", block_ct}, {"Mt", Mt}, {"group", group}, {"dest_limit", dest_limit}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::to_compute_hardware_config(attrs.compute_kernel_config),
     };

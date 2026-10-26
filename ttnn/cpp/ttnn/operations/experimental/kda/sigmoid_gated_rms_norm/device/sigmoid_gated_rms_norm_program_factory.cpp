@@ -3,6 +3,7 @@
 
 #include "ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/sigmoid_gated_rms_norm_program_factory.hpp"
 
+#include <algorithm>
 #include <cstring>
 #include <vector>
 
@@ -42,6 +43,10 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     const uint32_t rms_core_limit = tt::div_up(total, max_items_per_core);
     auto dist = kda_factory_detail::distribute_prep(grid, total, rms_core_limit);
     const auto& cores = dist.core_set;
+    // A core runs its items in groups of up to max_group_items, each stage over the whole group. A group's inputs and
+    // FP32 intermediates stay in L1 until the group ends.
+    constexpr uint32_t max_group_items = 4;
+    const uint32_t group_items = std::max<uint32_t>(1, std::min(max_group_items, max_items_per_core));
 
     const m2::KernelSpecName READER{"reader"};
     const m2::KernelSpecName WRITER{"writer"};
@@ -54,6 +59,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     const m2::DFBSpecName STATS_DFB{"stats"};
     const m2::DFBSpecName INV_DFB{"inv"};
     const m2::DFBSpecName NORM_DFB{"norm"};
+    const m2::DFBSpecName SIG_DFB{"sig"};
     const m2::DFBSpecName OUT_DFB{"out"};
     const m2::DFBSpecName SCALER_DFB{"scaler"};
     const m2::DFBSpecName EPS_DFB{"epsilon"};
@@ -76,13 +82,14 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     };
 
     m2::Group<m2::DataflowBufferSpec> dfbs = {
-        make_dfb(X_DFB, 2 * Vt, input_format),
-        make_dfb(GATE_DFB, 2 * Vt, tt::DataFormat::Float16_b),
+        make_dfb(X_DFB, std::max<uint32_t>(group_items, 2) * Vt, input_format),
+        make_dfb(GATE_DFB, std::max<uint32_t>(group_items, 2) * Vt, tt::DataFormat::Float16_b),
         make_dfb(WEIGHT_DFB, Vt, tt::DataFormat::Float16_b),
-        make_dfb(TMP_DFB, Vt, tt::DataFormat::Float32),
-        make_dfb(STATS_DFB, 1, tt::DataFormat::Float32),
-        make_dfb(INV_DFB, 1, tt::DataFormat::Float32),
-        make_dfb(NORM_DFB, Vt, tt::DataFormat::Float32),
+        make_dfb(TMP_DFB, group_items * Vt, tt::DataFormat::Float32),
+        make_dfb(STATS_DFB, group_items, tt::DataFormat::Float32),
+        make_dfb(INV_DFB, group_items, tt::DataFormat::Float32),
+        make_dfb(NORM_DFB, group_items * Vt, tt::DataFormat::Float32),
+        make_dfb(SIG_DFB, group_items * Vt, tt::DataFormat::Float32),
         make_dfb(OUT_DFB, 2 * Vt, output_format),
         make_dfb(SCALER_DFB, 1, tt::DataFormat::Float32),
         make_dfb(EPS_DFB, 1, tt::DataFormat::Float16_b),
@@ -99,7 +106,6 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         .dfb_bindings =
             {
                 m2::DFBBinding{X_DFB, "x", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{GATE_DFB, "gate", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{WEIGHT_DFB, "weight", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{EPS_DFB, "epsilon", m2::DFBEndpointType::PRODUCER},
@@ -107,28 +113,30 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         .tensor_bindings =
             {
                 m2::TensorBinding{INPUT, "input"},
-                m2::TensorBinding{GATE, "gate"},
                 m2::TensorBinding{WEIGHT, "weight"},
             },
-        .compile_time_args =
-            {{"Vt", Vt},
-             {"H", attrs.num_heads},
-             {"Mt", Mt},
-             {"epsilon_bits", eps_bits},
-             {"gate_row_tiles", static_cast<uint32_t>(in.gate.padded_shape()[-1]) / TILE_WIDTH},
-             {"gate_offset_tiles", attrs.gate_column_offset / TILE_WIDTH}},
+        .compile_time_args = {{"Vt", Vt}, {"epsilon_bits", eps_bits}, {"G", group_items}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
-
     m2::KernelSpec writer{
         .unique_id = WRITER,
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/dataflow/"
             "writer_sigmoid_gated_rms_norm.cpp",
-        .dfb_bindings = {m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::CONSUMER}},
-        .tensor_bindings = {m2::TensorBinding{OUTPUT, "output"}},
-        .compile_time_args = {{"Vt", Vt}, {"H", attrs.num_heads}, {"Mt", Mt}},
+        .dfb_bindings =
+            {
+                m2::DFBBinding{GATE_DFB, "gate", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::CONSUMER},
+            },
+        .tensor_bindings = {m2::TensorBinding{GATE, "gate"}, m2::TensorBinding{OUTPUT, "output"}},
+        .compile_time_args =
+            {{"Vt", Vt},
+             {"H", attrs.num_heads},
+             {"Mt", Mt},
+             {"gate_row_tiles", static_cast<uint32_t>(in.gate.padded_shape()[-1]) / TILE_WIDTH},
+             {"gate_offset_tiles", attrs.gate_column_offset / TILE_WIDTH},
+             {"G", group_items}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
@@ -139,6 +147,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     unpack_modes[STATS_DFB] = UnpackMode::UnpackToSrc;
     unpack_modes[INV_DFB] = UnpackMode::UnpackToSrc;
     unpack_modes[NORM_DFB] = UnpackMode::UnpackToSrc;
+    unpack_modes[SIG_DFB] = UnpackMode::UnpackToSrc;
     unpack_modes[SCALER_DFB] = UnpackMode::UnpackToSrc;
     if (input_format == tt::DataFormat::Float32) {
         unpack_modes[X_DFB] = UnpackMode::UnpackToSrc;
@@ -163,11 +172,13 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::DFBBinding{INV_DFB, "inv", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{NORM_DFB, "norm", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{NORM_DFB, "norm", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{SIG_DFB, "sig", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{SIG_DFB, "sig", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{OUT_DFB, "out", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{SCALER_DFB, "scaler", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{EPS_DFB, "epsilon", m2::DFBEndpointType::CONSUMER},
             },
-        .compile_time_args = {{"Vt", Vt}},
+        .compile_time_args = {{"Vt", Vt}, {"G", group_items}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_count"}},
         .hw_config = std::move(compute_hw),
     };
@@ -216,7 +227,6 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         {WEIGHT, weight},
         {OUTPUT, output},
     };
-
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_args),

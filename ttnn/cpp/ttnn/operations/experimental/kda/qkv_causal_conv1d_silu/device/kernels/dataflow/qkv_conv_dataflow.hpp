@@ -8,11 +8,22 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/qkv_causal_conv1d_silu/device/hostdevcommon/qkv_causal_conv1d_silu_layout.hpp"
 #include "api/core_local_mem.h"
 #include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
 namespace qkv_conv {
 
 static_assert(kda_chronology::history_rows == history_rows);
+
+// The source arguments of a self-loopback read of this core's L1 at `address`.
+struct LocalSource {
+    uint32_t x;
+    uint32_t y;
+    explicit LocalSource(const Noc& noc) : x(my_x[noc.get_noc_id()]), y(my_y[noc.get_noc_id()]) {}
+    auto operator()(uint32_t address) const {
+        return noc_traits_t<UnicastEndpoint>::src_args_type{.noc_x = x, .noc_y = y, .addr = address};
+    }
+};
 
 // The first word of `accessor`'s page 0, read through the aligned L1 slot `slot`.
 template <typename Accessor>
@@ -32,6 +43,16 @@ inline kda_chronology::Topology read_chronology(Noc& noc, uint32_t slot) {
     } else {
         return kda_chronology::derive(start, sp_rank, sp_size, local_rows);
     }
+}
+
+// The tile row whose segment continues from the predecessor's rows, which the fabric exchange delivers late: row 0
+// on every rank but the first, the head/tail split row on a split first rank, none on an unsplit first rank. The
+// kernels walk its items last (for_each_work_item) so a late predecessor only delays those items.
+inline uint32_t predecessor_tile_row(const kda_chronology::Topology& topology) {
+    if (topology.rank != topology.first_rank) {
+        return 0;
+    }
+    return topology.local_split ? topology.head_rows / tile_height : no_deferred_row;
 }
 
 }  // namespace qkv_conv

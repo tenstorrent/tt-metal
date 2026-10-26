@@ -331,13 +331,21 @@ _DECAY_OUT_BLOCK_TILES = 32
 
 
 def decay_projection_program_config(
-    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int, fused_activation: ttnn.UnaryWithParam | None
+    grid: ttnn.CoreCoord,
+    rows: int,
+    key_dim: int,
+    width: int,
+    fused_activation: ttnn.UnaryWithParam | None,
+    bias_in_dest: bool = False,
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
 
     Each core's output is computed in blocks of at most _DECAY_OUT_BLOCK_TILES tiles, which bounds the output and
     FP32 intermediate circular buffers on geometries with many rows or heads per core (one Kimi-K3 Galaxy SP8xTP4
     core holds a single 2 x 8 block).
+
+    With bias_in_dest (Blackhole), the bias is added to each output subblock in the FP32 DEST right after its
+    matmul, so the fused activation of one subblock runs on the pack thread while the next subblock multiplies.
     """
     tile = ttnn.TILE_SIZE
     per_core_M = math.ceil(rows // tile / grid.y)
@@ -359,4 +367,5 @@ def decay_projection_program_config(
         transpose_mcast=False,
         fused_activation=fused_activation,
         fuse_batch=True,
+        bias_in_dest=bias_in_dest,
     )

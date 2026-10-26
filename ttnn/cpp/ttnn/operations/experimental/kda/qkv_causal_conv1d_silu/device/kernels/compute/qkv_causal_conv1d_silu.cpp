@@ -10,18 +10,22 @@
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 
-// The reader supplies, per channel tile, the four tap-shifted input tiles and, per channel block, the tap tiles
-// (weights in row 0). Scaling a tile's columns by a tap is a matmul with that tap's diagonal, so the four taps
-// accumulate in the destination registers with no partial round trip; SiLU then runs in place. The diagonals are
-// built here once per channel block, as the identity times the row-broadcast tap.
-template <uint32_t block_ct, uint32_t Mt, uint32_t group, uint32_t dest_limit, uint32_t defer_first_rows>
+// The reader (taps [0, reader_taps), act_tile) and the writer (the other taps, act_tile_writer) supply, per channel
+// tile, the four tap-shifted input tiles, and the reader, per channel block, the tap tiles (weights in row 0). Scaling
+// a tile's columns by a tap is a matmul with that tap's diagonal, so the four taps accumulate in the destination
+// registers with no partial round trip; SiLU then runs in place. The diagonals are built here once per channel block,
+// as the identity times the row-broadcast tap.
+template <uint32_t block_ct, uint32_t Mt, uint32_t group, uint32_t dest_limit>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     using qkv_conv::tap_count;
     static_assert(dest_limit <= compute_kernel_lib::DEST_AUTO_LIMIT);
     constexpr uint32_t weight_tiles = tap_count * block_ct;
     // Diagonals built per destination acquire.
     constexpr uint32_t diag_group = qkv_conv::dest_group(weight_tiles, dest_limit);
+    using qkv_conv::reader_taps;
+    using qkv_conv::writer_taps;
     DataflowBuffer activation(dfb::act_tile);
+    DataflowBuffer activation_writer(dfb::act_tile_writer);
     DataflowBuffer taps(dfb::taps);
     DataflowBuffer eye(dfb::eye);
     DataflowBuffer weights(dfb::weights);
@@ -62,12 +66,22 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             matmul_init(dfb::act_tile, dfb::weights);
         }
         for (uint32_t ct0 = 0; ct0 < block_ct; ct0 += group) {
-            activation.wait_front(group * tap_count);
+            activation.wait_front(group * reader_taps);
+            activation_writer.wait_front(group * writer_taps);
             output.reserve_back(group);
             tile_regs_acquire();
             for (uint32_t i = 0; i < group; ++i) {
-                for (uint32_t tap = 0; tap < tap_count; ++tap) {
-                    matmul_tiles(dfb::act_tile, dfb::weights, i * tap_count + tap, tap * block_ct + ct0 + i, i);
+                // The taps accumulate in order 0, 1, 2, 3, whichever kernel made their shifted tile.
+                for (uint32_t tap = 0; tap < reader_taps; ++tap) {
+                    matmul_tiles(dfb::act_tile, dfb::weights, i * reader_taps + tap, tap * block_ct + ct0 + i, i);
+                }
+                for (uint32_t tap = reader_taps; tap < tap_count; ++tap) {
+                    matmul_tiles(
+                        dfb::act_tile_writer,
+                        dfb::weights,
+                        i * writer_taps + tap - reader_taps,
+                        tap * block_ct + ct0 + i,
+                        i);
                 }
             }
             tile_regs_commit();
@@ -78,10 +92,16 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             }
             tile_regs_release();
             output.push_back(group);
-            activation.pop_front(group * tap_count);
+            activation.pop_front(group * reader_taps);
+            activation_writer.pop_front(group * writer_taps);
         }
     };
-    qkv_conv::for_each_work_item(wi_start, wi_count, Mt, defer_first_rows, process);
+    // Walk the reader's order, which runs the tile row that waits for the predecessor's rows last.
+    DataflowBuffer order(dfb::order);
+    order.wait_front(1);
+    const uint32_t deferred_row = order.read_tile_value(0, 0);
+    order.pop_front(1);
+    qkv_conv::for_each_work_item(wi_start, wi_count, Mt, deferred_row, process);
     if (current_block != no_block) {
         weights.pop_front(weight_tiles);
     }
