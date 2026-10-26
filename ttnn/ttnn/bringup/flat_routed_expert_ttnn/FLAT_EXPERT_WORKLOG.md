@@ -1875,3 +1875,23 @@ Galaxy loads pass. (1a relies on the NoC rule the DRISC already uses: a write th
 same static VC and route by the atomic.) New probes: MIMO_FL_SBT (super-block width), MIMO_FL_DRISC_PLACE=0 (the old
 round-robin). tt-npe could not model the placement: this install aborts on any workload, its own example included.
 Logs: /localdev/mstaletovic/fc_ab/ (p1a..p5b, *z zones + csv, zbase / zr* zipf, final, soak_*).
+
+### x data movement alone vs next to the weights (2026-10-26, bh-lb-09, GLM-5.3 E 8, one chip)
+One variable set at a time; "off" = NO_MATH H_NODATA YRM_NOWRITE. us a call, M 96 / 160:
+| case | us |
+|---|---|
+| real (base) | 460 / 523 |
+| x only: x DRAM reads + tilize + snakes; no weight reads or forwards (GU_NOREAD DN_NOREAD W_NOFWD + off) | 233 / 336 |
+| x only, x DRAM reads skipped (+XRD_SKIP) | 230 / 333 |
+| x only, relay sends no x bytes (+XMC_NODATA) | 232 / 335 |
+| weights read (not forwarded) + x (W_NOFWD + off) | 418 / 466 |
+| weights read (not forwarded), no x reads (+XRD_SKIP) | 355 / 383 |
+| weight forwards (no DRAM reads) + x (GU_NOREAD DN_NOREAD + off) | 318 / 378 |
+- Alone, x takes 336 us at M 160 (64% of the call). Its DRAM reads (+3) and bytes (+2) cost nothing: it is the snake's
+  per-block rate, 0.54 us a block x 24 blocks x 3 sub-blocks x 8 experts = 311 us + ~25 fixed (the acked NCRISC
+  forwarder, 3 pieces in flight, ~0.4 us round trip: ~30 GB/s a core vs ~10 MB of bfp8 x into every one of the 64
+  gate/up cores = 640 MB of L1 landings a call, 3.8x the weight bytes).
+- Next to the weights x gets slower two ways: its DRAM reads cost +83 us beside the weight streams (vs +3 alone), and
+  the snake loses +42 us sharing NOC0 links with the weight forwards. x alone (336) sits under the weight read floor
+  (383), so the snake's rate is not what binds the real run; the read interference is.
+Logs: /localdev/mstaletovic/xonly/.
