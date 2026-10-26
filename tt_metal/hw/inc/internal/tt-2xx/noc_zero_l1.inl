@@ -53,18 +53,12 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
     // No reset_cmdbuf_0() here: resetting per-call would be unsafe when callers batch
     // several async_write_zeros before a single barrier — a CMDBUF_RESET on the next
     // call may disturb a previous zero whose iDMA ack is still pending.
-    overlay::idma_setup_as_copy_cmdbuf_0(/*wrapping_en=*/false);              // MISC.idma_en + MISC.write_trans
+    overlay::idma_setup_as_copy_cmdbuf_0(/*wrapping=*/false);                 // MISC.idma_en + MISC.write_trans
     overlay::set_axi_opt_1_cmdbuf_0(/*src_protocol=*/4, /*decouple_aw=*/1);   // flip to zero mode
-    overlay::setup_ongoing_cmdbuf_0(
-        /*src_addr_inc_en=*/false,
-        /*dest_addr_inc_en=*/false,
-        /*trid_inc_en=*/false,
-        /*req_vc_inc_en=*/true,                                              // per-packet VC autoincrement
-        /*resp_vc_inc_en=*/false);
+    overlay::setup_ongoing_cmdbuf_0({.req_vc = true});                        // per-packet VC autoincrement
     overlay::setup_wrapping_vcs_cmdbuf_0(
-        /*wr=*/true,
-        /*req_start_vc=*/overlay::CMDBUF_FIRST_IDMA_VC,
-        /*req_end_vc=*/overlay::CMDBUF_FIRST_IDMA_VC + overlay::CMDBUF_NUM_IDMA_VCS - 1);  // all 8 iDMA VCs
+        {.start = overlay::CMDBUF_FIRST_IDMA_VC,
+         .end = overlay::CMDBUF_FIRST_IDMA_VC + overlay::CMDBUF_NUM_IDMA_VCS - 1});  // all 8 iDMA VCs
     overlay::setup_trids_cmdbuf_0(overlay::CMDBUF_DEF_TRID);
     overlay::set_dest_cmdbuf_0(local_addr);
     overlay::set_len_cmdbuf_0(size_bytes);

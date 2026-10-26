@@ -377,8 +377,10 @@ class PansegformerHead(nn.Module):
         # exclude background
         self.loss_cls = True
         if self.loss_cls:
-            cls_score = cls_score.sigmoid()
-            scores, indexes = cls_score.view(-1).topk(max_per_img)
+            # Stable order on the bf16 keys the TTNN head sorts, so exact ties resolve the same way.
+            cls_score = cls_score.sigmoid().view(-1).to(torch.bfloat16)
+            indexes = torch.argsort(cls_score, descending=True, stable=True)[:max_per_img]
+            scores = cls_score[indexes].to(bbox_pred.dtype)
             det_labels = indexes % self.num_things_classes
 
             bbox_index = indexes // self.num_things_classes
@@ -484,7 +486,7 @@ class PansegformerHead(nn.Module):
             seg_scores = seg_scores**2
             scores_all *= seg_scores
 
-            scores_all, index = torch.sort(scores_all, descending=True)
+            scores_all, index = torch.sort(scores_all, descending=True, stable=True)
 
             masks_all = masks_all[index]
             labels_all = labels_all[index]

@@ -20,7 +20,12 @@ from helpers.logger import logger
 from helpers.pack import pack_bfp2_b, pack_bfp4_b, pack_bfp8_b, pack_bfp16
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import CRK_TILE_DIMM, IN_FACE_DIMS, NUM_FACES
+from helpers.test_variant_parameters import (
+    CRK_TILE_DIMM,
+    CUSTOM_MM_CALLS,
+    IN_FACE_DIMS,
+    NUM_FACES,
+)
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize, untilize
 from helpers.unpack import unpack_bfp2_b, unpack_bfp4_b, unpack_bfp8_b
@@ -366,6 +371,7 @@ def run_compressed(
     pack_b,
     make_meta,
     pcc_threshold=None,
+    calls=CUSTOM_MM_CALLS(),
 ):
     # Shared driver for both compressed-matmul tests. Kernel-specific parts are passed
     # flat: kernel (C++ source), granularity (assignment unit — 32 tile / 16 face),
@@ -375,6 +381,8 @@ def run_compressed(
     #   make_meta(assignment, cu, ku, aux) -> meta   # aux is pack_b's side data
     # ku/cu are the assignment row/col counts (K//granularity, N//granularity), which
     # differ from the 32-tile grid kt/ct (K//32, N//32) on the face kernel.
+    # calls (CUSTOM_MM_CALLS) splits K over back-to-back calls; pack_b / make_meta then lay B and its meta
+    # out per call.
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM  # 32-tile kernel grid
     ku, cu = (
         K // granularity,
@@ -468,6 +476,7 @@ def run_compressed(
         ),
         templates=[
             CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+            calls,
         ],
         runtimes=[
             NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),

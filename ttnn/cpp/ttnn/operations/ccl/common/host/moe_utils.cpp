@@ -24,16 +24,6 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(tt::tt
     return has_wrap_around(topology) ? tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP
                                      : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
 }
-
-uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const tt::tt_metal::IDevice* device) {
-    for (uint32_t i = 0; i < devices.size(); i++) {
-        if (devices[i] == device) {
-            return i;
-        }
-    }
-    TT_THROW("Device not found in device_index");
-    return std::numeric_limits<uint32_t>::max();
-}
 }  // namespace detail
 
 std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(

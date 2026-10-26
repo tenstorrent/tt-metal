@@ -193,6 +193,7 @@ def prepare_sharded_grid_memory_config(
     grid_batching_factor=None,
     core_grid_override=None,
     mode="bilinear",
+    align_shard_width=True,
 ):
     """
     Create sharded memory configuration for grid tensor.
@@ -207,6 +208,7 @@ def prepare_sharded_grid_memory_config(
         grid_batching_factor: Optional batching factor
         core_grid_override: Optional core grid override (for custom sharding)
         mode: Interpolation mode ("nearest" or "bilinear")
+        align_shard_width: Pad the shard width so a shard row is a multiple of L1_ALIGNMENT_BYTES
 
     Returns:
         ttnn.MemoryConfig: Sharded memory configuration
@@ -252,12 +254,14 @@ def prepare_sharded_grid_memory_config(
 
     # Round up to L1 alignment: width * BYTES_PER_ELEMENT should be multiple of L1_ALIGNMENT_BYTES
     bytes_per_element = FLOAT32_BYTES_PER_ELEMENT if grid_dtype == ttnn.float32 else BFLOAT16_BYTES_PER_ELEMENT
-    grid_shard_width_aligned = (
+    grid_shard_width = (
         align_to_boundary(grid_logical_width * bytes_per_element, L1_ALIGNMENT_BYTES) // bytes_per_element
+        if align_shard_width
+        else grid_logical_width
     )
 
     return ttnn.create_sharded_memory_config(
-        (grid_shard_height, grid_shard_width_aligned),
+        (grid_shard_height, grid_shard_width),
         core_grid,
         ttnn.ShardStrategy.HEIGHT,
         ttnn.ShardOrientation.ROW_MAJOR,
@@ -275,6 +279,7 @@ def prepare_sharded_ttnn_grid(
     input_shape_nhwc=None,
     grid_batching_factor=None,
     core_grid_override=None,
+    align_shard_width=True,
 ):
     """
     Prepare TTNN grid tensor with sharding from PyTorch grid.
@@ -287,6 +292,7 @@ def prepare_sharded_ttnn_grid(
         input_shape_nhwc: Input shape in NHWC format (required for precomputed grid)
         grid_batching_factor: Optional batching factor for reshaping grid
         core_grid_override: Optional core grid override (for custom sharding)
+        align_shard_width: Pad the shard width so a shard row is a multiple of L1_ALIGNMENT_BYTES
 
     Returns:
         ttnn tensor: Prepared sharded grid tensor on device
@@ -308,6 +314,7 @@ def prepare_sharded_ttnn_grid(
         grid_batching_factor,
         core_grid_override,
         mode,
+        align_shard_width,
     )
 
     ttnn_grid_interleaved = ttnn.to_device(ttnn_grid_reshaped, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -663,6 +670,81 @@ def test_grid_sample_sharded_batched(
     validate_grid_sample_output(
         torch_output_nhwc,
         ttnn_output_torch,
+        use_precomputed_grid=use_precomputed_grid,
+        grid_dtype=grid_dtype,
+        mode=mode,
+    )
+
+
+@pytest.mark.parametrize(
+    "mode, use_precomputed_grid, grid_dtype",
+    [
+        ("nearest", True, ttnn.bfloat16),
+        ("bilinear", True, ttnn.bfloat16),
+        ("bilinear", False, ttnn.bfloat16),
+        ("bilinear", False, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_shape, grid_shape, grid_batching_factor",
+    [
+        ((1, 64, 16, 32), (1, 1, 640, 2), None),
+        ((1, 64, 16, 32), (1, 1, 640 * 7, 2), 7),
+    ],
+)
+def test_grid_sample_sharded_unaligned_shard_width(
+    device, input_shape, grid_shape, grid_batching_factor, mode, use_precomputed_grid, grid_dtype
+):
+    """Sharded grid whose shard row is not a multiple of the L1 alignment."""
+    torch.manual_seed(0)
+
+    batch_size, channels, height, width = input_shape
+    input_shape_nhwc = [batch_size, height, width, channels]
+    align_corners = False
+    batch_output_channels = grid_batching_factor is not None
+
+    torch_input_nhwc = torch.randn((batch_size, height, width, channels), dtype=torch.bfloat16)
+    torch_grid = torch.rand(grid_shape, dtype=torch.float32) * 2 - 1
+
+    golden_grid_dtype = torch.float32 if (grid_dtype == ttnn.float32 or use_precomputed_grid) else torch.bfloat16
+    torch_output_nhwc = golden_grid_sample(
+        input_tensor=torch_input_nhwc,
+        grid=torch_grid.to(golden_grid_dtype),
+        mode=mode,
+        padding_mode="zeros",
+        align_corners=align_corners,
+        batch_output_channels=batch_output_channels,
+        grid_batching_factor=grid_batching_factor,
+    )
+
+    ttnn_input = ttnn.from_torch(
+        torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    ttnn_grid_device = prepare_sharded_ttnn_grid(
+        torch_grid,
+        device,
+        use_precomputed_grid,
+        mode,
+        align_corners,
+        grid_dtype,
+        input_shape_nhwc,
+        grid_batching_factor,
+        ttnn.CoreGrid(y=4, x=5),
+        align_shard_width=False,
+    )
+
+    ttnn_output = ttnn.grid_sample(
+        ttnn_input,
+        ttnn_grid_device,
+        mode=mode,
+        align_corners=align_corners,
+        use_precomputed_grid=use_precomputed_grid,
+        batch_output_channels=batch_output_channels,
+    )
+
+    validate_grid_sample_output(
+        torch_output_nhwc,
+        ttnn.to_torch(ttnn_output),
         use_precomputed_grid=use_precomputed_grid,
         grid_dtype=grid_dtype,
         mode=mode,

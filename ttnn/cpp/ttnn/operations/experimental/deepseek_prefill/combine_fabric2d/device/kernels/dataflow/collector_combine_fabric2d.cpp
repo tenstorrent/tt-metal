@@ -16,34 +16,17 @@
 // Unicast rather than one multicast: the waiting cores are scattered over rows 0-1, and a rectangle over them
 // would also write into cores that are not part of this program. The routed expert's cores ARE a rectangle,
 // which is what lets `go` be one multicast.
-//
-// Compile-time args:
-//   [0] routed-expert writers      [1] steps (slots walked per pass x passes)
-//   [2] count array address        [3] ready semaphore id
-//   [4] go address                 [5..8] routed-expert rectangle (noc x0, y0, x1, y1)
-//   [9] routed-expert cores        [10] waiting cores N     [11 ..) N x (noc_x, noc_y)
-//   [11 + 2N] routed-expert cores outside the rectangle M, then M x (noc_x, noc_y): they get `go` unicast
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "combine_fabric2d_collector_ct_args.hpp"
+
+constexpr ::cmbf2d::CollectorCtArgs ct{};
 
 void kernel_main() {
-    constexpr uint32_t num_writers = get_compile_time_arg_val(0);
-    constexpr uint32_t num_steps = get_compile_time_arg_val(1);
-    constexpr uint32_t counts_addr = get_compile_time_arg_val(2);
-    constexpr uint32_t ready_sem = get_compile_time_arg_val(3);
-    constexpr uint32_t go_addr = get_compile_time_arg_val(4);
-    constexpr uint32_t re_x0 = get_compile_time_arg_val(5);
-    constexpr uint32_t re_y0 = get_compile_time_arg_val(6);
-    constexpr uint32_t re_x1 = get_compile_time_arg_val(7);
-    constexpr uint32_t re_y1 = get_compile_time_arg_val(8);
-    constexpr uint32_t re_cores = get_compile_time_arg_val(9);
-    constexpr uint32_t num_targets = get_compile_time_arg_val(10);
-    constexpr uint32_t targets_base = 11;
-
-    volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_addr);
-    for (uint32_t s = 0; s < num_steps; s++) {
+    volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.counts_addr);
+    for (uint32_t s = 0; s < ct.num_steps; s++) {
         counts[s] = 0;
     }
 #ifdef CMBF2D_PROGRESS_SEM
@@ -55,7 +38,7 @@ void kernel_main() {
     constexpr uint32_t MAX_CHUNKS = 16;
     constexpr uint32_t MAX_STEPS = 64;
     volatile tt_l1_ptr uint32_t* chunk_counts =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_addr + CHUNK_AREA_OFFSET);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.counts_addr + CHUNK_AREA_OFFSET);
     volatile tt_l1_ptr uint32_t* chunk_rows = chunk_counts + MAX_STEPS * MAX_CHUNKS;
     for (uint32_t i = 0; i < MAX_STEPS * MAX_CHUNKS; i++) {
         chunk_counts[i] = 0;
@@ -64,43 +47,34 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* progress = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(progress_addr);
 #endif
     // The word past the array is the source of the `go` multicast.
-    const uint32_t go_src_addr = counts_addr + num_steps * sizeof(uint32_t);
+    const uint32_t go_src_addr = ct.counts_addr + ct.num_steps * sizeof(uint32_t);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_src_addr) = 1;
-    noc_semaphore_set_multicast(go_src_addr, get_noc_multicast_addr(re_x0, re_y0, re_x1, re_y1, go_addr), re_cores);
-    constexpr uint32_t extra_base = targets_base + 2 * num_targets;
-    constexpr uint32_t num_extra = get_compile_time_arg_val(extra_base);
-    for (uint32_t t = 0; t < num_extra; t++) {
-        const uint32_t noc_x = kernel_compile_time_args[extra_base + 1 + 2 * t];
-        const uint32_t noc_y = kernel_compile_time_args[extra_base + 2 + 2 * t];
-        noc_semaphore_set_remote(go_src_addr, get_noc_addr(noc_x, noc_y, go_addr));
-    }
+    noc_semaphore_set_multicast(
+        go_src_addr, get_noc_multicast_addr(ct.re_x0, ct.re_y0, ct.re_x1, ct.re_y1, ct.go_addr), ct.re_cores);
 
     // This core's own copy of `ready` is the 4-byte source every remote set is written from.
-    const uint32_t ready_addr = static_cast<uint32_t>(get_semaphore(ready_sem));
+    const uint32_t ready_addr = static_cast<uint32_t>(get_semaphore(ct.ready_sem));
     volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_addr);
 
-    for (uint32_t s = 0; s < num_steps; s++) {
-        DeviceZoneScopedN("CMB-RELEASE");  // ends as step s is released (profiling)
+    for (uint32_t s = 0; s < ct.num_steps; s++) {
         invalidate_l1_cache();
 #ifdef CMBF2D_PROGRESS_SEM
         uint32_t done_mask = 0;
-        while (counts[s] < num_writers) {
+        while (counts[s] < ct.num_writers) {
             uint32_t newly = 0;
             uint32_t rows = 0;
             for (uint32_t c = 0; s < MAX_STEPS && c < MAX_CHUNKS; c++) {
-                if (!(done_mask & (1u << c)) && chunk_counts[s * MAX_CHUNKS + c] >= num_writers) {
+                if (!(done_mask & (1u << c)) && chunk_counts[s * MAX_CHUNKS + c] >= ct.num_writers) {
                     newly |= 1u << c;
                     rows = chunk_rows[s * MAX_CHUNKS + c];
                 }
             }
             if (newly != 0) {
                 done_mask |= newly;
-                // 8 bits of chunk size: a writer that never writes it (the flat expert's entries) leaves stale L1
-                // here, which would otherwise spill into the step field and release this step's chunks early
-                *progress = (s << 24) | ((rows & 0xFF) << 16) | done_mask;
-                for (uint32_t t = 0; t < num_targets; t++) {
-                    const uint32_t noc_x = kernel_compile_time_args[targets_base + 2 * t];
-                    const uint32_t noc_y = kernel_compile_time_args[targets_base + 2 * t + 1];
+                *progress = (s << 24) | (rows << 16) | done_mask;
+                for (uint32_t t = 0; t < ct.num_targets; t++) {
+                    const uint32_t noc_x = kernel_compile_time_args[ct.target_base + 2 * t];
+                    const uint32_t noc_y = kernel_compile_time_args[ct.target_base + 2 * t + 1];
                     noc_semaphore_set_remote(progress_addr, get_noc_addr(noc_x, noc_y, progress_addr));
                 }
                 noc_async_write_barrier();
@@ -108,14 +82,14 @@ void kernel_main() {
             invalidate_l1_cache();
         }
 #else
-        while (counts[s] < num_writers) {
+        while (counts[s] < ct.num_writers) {
             invalidate_l1_cache();
         }
 #endif
         *ready = s + 1;
-        for (uint32_t t = 0; t < num_targets; t++) {
-            const uint32_t noc_x = kernel_compile_time_args[targets_base + 2 * t];
-            const uint32_t noc_y = kernel_compile_time_args[targets_base + 2 * t + 1];
+        for (uint32_t t = 0; t < ct.num_targets; t++) {
+            const uint32_t noc_x = kernel_compile_time_args[ct.target_base + 2 * t];
+            const uint32_t noc_y = kernel_compile_time_args[ct.target_base + 2 * t + 1];
             noc_semaphore_set_remote(ready_addr, get_noc_addr(noc_x, noc_y, ready_addr));
         }
         // Landed before the source word changes, and so a later, larger value can never be overtaken.

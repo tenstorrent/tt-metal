@@ -71,18 +71,13 @@ struct ChipUnicastFields1D {
 };
 
 struct ChipUnicastFields2D {
-    ChipUnicastFields2D(uint16_t src_device_id, uint16_t dst_device_id, uint16_t dst_mesh_id, uint16_t ew_dim) :
-        src_device_id(src_device_id), dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id), ew_dim(ew_dim) {}
+    ChipUnicastFields2D(uint16_t dst_device_id, uint16_t dst_mesh_id) :
+        dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id) {}
 
-    std::vector<uint32_t> get_args() const {
-        std::vector<uint32_t> args = {src_device_id, dst_device_id, dst_mesh_id, ew_dim};
-        return args;
-    }
+    std::vector<uint32_t> get_args() const { return {dst_device_id, dst_mesh_id}; }
 
-    uint16_t src_device_id;
     uint16_t dst_device_id;
     uint16_t dst_mesh_id;
-    uint16_t ew_dim;
 };
 
 struct ChipMulticastFields1D {
@@ -365,11 +360,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         if (this->parameters.chip_send_type == ChipSendType::CHIP_UNICAST) {
             TT_FATAL(this->dst_node_ids.size() == 1, "2D unicast should have exactly one destination node.");
             const auto& dst_node_id = this->dst_node_ids[0];
-            const auto& mesh_shape = this->parameters.mesh_shape;
-            // TODO: move this out of here
-            const uint32_t EW_DIM = 1;
-            const auto unicast_fields = ChipUnicastFields2D(
-                this->src_node_id.chip_id, dst_node_id.chip_id, *dst_node_id.mesh_id, mesh_shape[EW_DIM]);
+            const auto unicast_fields = ChipUnicastFields2D(dst_node_id.chip_id, *dst_node_id.mesh_id);
             const auto unicast_args = unicast_fields.get_args();
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
@@ -556,16 +547,9 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             receiver_credit_info.has_value(), "Receiver credit info must be provided when flow control is enabled");
         // Add chip-level unicast routing info based on fabric type
         if (parameters.is_2D_routing_enabled) {
-            const auto& receiver_node = receiver_credit_info->receiver_node_id;
             const auto& sender_node = receiver_credit_info->sender_node_id;
-            const auto& mesh_shape = parameters.mesh_shape;
-            const uint32_t EW_DIM = 1;
-
-            const auto unicast_fields = ChipUnicastFields2D(
-                receiver_node.chip_id,  // src = receiver's chip (credit packet source)
-                sender_node.chip_id,    // dst = sender's chip (credit packet destination)
-                *sender_node.mesh_id,
-                mesh_shape[EW_DIM]);
+            const auto unicast_fields =
+                ChipUnicastFields2D(sender_node.chip_id, *sender_node.mesh_id);  // Credit destination is the sender.
             const auto unicast_args = unicast_fields.get_args();
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else {

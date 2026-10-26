@@ -55,6 +55,9 @@ static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
 // The one writer. Out-of-line so the STALLWAIT + RMW exist in a single copy (code size — a matmul
 // kernel otherwise overflows its slot).
+// Keep the STALLWAIT on Wormhole: an FPU instruction reads the live flag while it waits to enter the FPU
+// (e.g. for its Src operands), so a write must not land until MATH has drained. (Blackhole latches the
+// flag per instruction at issue and needs no stall.)
 inline __attribute__((noinline)) void _apply_src_zero_flag_(const std::uint32_t value)
 {
     src_zero_flag_hw = value;

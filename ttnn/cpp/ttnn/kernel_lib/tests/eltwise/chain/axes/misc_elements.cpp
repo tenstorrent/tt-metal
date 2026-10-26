@@ -37,22 +37,28 @@ void kernel_main() {
     constexpr uint32_t mode = get_compile_time_arg_val(1);
     static_assert(mode < 7);
 
+    DataflowBuffer cb_a_obj(cb_a);
+    DataflowBuffer cb_b_obj(cb_b);
+    DataflowBuffer cb_c_obj(cb_c);
+    DataflowBuffer cb_out_obj(cb_out);
+
     using namespace compute_kernel_lib;
     if constexpr (mode == 0) {
         compute_kernel_hw_startup(cb_a, cb_b, cb_out);
         eltwise_chain(
             IterationShape::tiles(n),
-            CopyTile<input(cb_a)>{},
-            CopyTile<input(cb_b), Dst::D1>{},
-            CopyTile<input(cb_c), Dst::D2>{},
+            CopyTile<input(cb_a)>{cb_a_obj},
+            CopyTile<input(cb_b), Dst::D1>{cb_b_obj},
+            CopyTile<input(cb_c), Dst::D2>{cb_c_obj},
             Where<DataFormat::Float16_b, Dst::D0, Dst::D1, Dst::D2, Dst::D0>{},
-            PackTile<output(cb_out)>{});
+            PackTile<output(cb_out)>{cb_out_obj});
     } else if constexpr (mode == 1) {
         constexpr uint32_t cb_linear = tt::CBIndex::c_17;
+        DataflowBuffer cb_linear_obj(cb_linear);
         compute_kernel_hw_startup(cb_a, cb_out);
         eltwise_chain(
             IterationShape::tiles(n),
-            CopyTile<input(cb_a)>{},
+            CopyTile<input(cb_a)>{cb_a_obj},
             PackTile<output(
                 cb_out,
                 ReservePolicy::PerTile,
@@ -61,21 +67,22 @@ void kernel_main() {
                 TileAddressing::Direct,
                 DestAccumulation::Disabled,
                 L1Accumulation::Disabled,
-                PackRelu::Zero)>{},
-            PackTile<output(cb_linear)>{});
+                PackRelu::Zero)>{cb_out_obj},
+            PackTile<output(cb_linear)>{cb_linear_obj});
     } else if constexpr (mode == 2) {
         compute_kernel_hw_startup(cb_a, cb_out);
         eltwise_chain(
             IterationShape::tiles(n),
-            CopyTile<input(cb_a), Dst::D0>{},
+            CopyTile<input(cb_a), Dst::D0>{cb_a_obj},
             CopyDest<Dst::D0, Dst::D1, DataFormat::Int32>{},
-            PackTile<output(cb_out), Dst::D1>{});
+            PackTile<output(cb_out), Dst::D1>{cb_out_obj});
     } else {
         compute_kernel_hw_startup(cb_a, cb_out);
         using RootOp = std::conditional_t<
             mode == 6,
             PreciseRecip,
             std::conditional_t<mode == 3, Recip<>, Rsqrt<mode == 5 ? Approx::Fast : Approx::Exact>>>;
-        eltwise_chain(IterationShape::tiles(n), CopyTile<input(cb_a)>{}, RootOp{}, PackTile<output(cb_out)>{});
+        eltwise_chain(
+            IterationShape::tiles(n), CopyTile<input(cb_a)>{cb_a_obj}, RootOp{}, PackTile<output(cb_out)>{cb_out_obj});
     }
 }

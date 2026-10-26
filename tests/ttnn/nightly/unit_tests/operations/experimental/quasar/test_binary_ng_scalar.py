@@ -120,6 +120,19 @@ def test_scalar_lhs_activation(device, op_name, lhs_act):
     _run_scalar(device, op_name, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, _SCALAR_LHS_SHAPE, 3.5, lhs_act=lhs_act)
 
 
+# 8 tiles on each of the 32 Quasar cores. The lhs activation helper then runs once per tile, and multiply also calls
+# the SFPU kernel's per-chunk function several times. A DataflowBuffer built inside either function drains at every
+# return and hangs.
+_SCALAR_TALL_SHAPE = [1, 1, 64 * 32, 4 * 32]
+
+
+@pytest.mark.parametrize("op_name", ["add", "multiply"])
+def test_scalar_lhs_activation_several_tiles_per_core(device, op_name):
+    _run_scalar(
+        device, op_name, ttnn.DRAM_MEMORY_CONFIG, ttnn.bfloat16, _SCALAR_TALL_SHAPE, 3.5, lhs_act=ttnn.UnaryOpType.GELU
+    )
+
+
 # --- The packed scalar must participate in the program-cache key ----------------------------------------
 def test_scalar_participates_in_program_cache_key(device):
     # The DFB tensor-scalar path BAKES the packed scalar into the program (the writer's packed_scalar arg,

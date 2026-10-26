@@ -29,6 +29,7 @@ set(TTNN_CORE_SRCS
     core/graph/graph_processor.cpp
     core/graph/graph_trace_utils.cpp
     core/graph/levelized_graph.cpp
+    core/prefetcher_pipe.cpp
     core/up_front_compile.cpp
     core/reports.cpp
     core/tensor/flatbuffer/tensor_file_layout.cpp
@@ -61,6 +62,11 @@ set(TTNN_CORE_SRCS
 
 set(TTNNCPP_SRCS
     # FIXME: Move these out to appropriate sub targets
+    cpp/ttnn/kernel_lib/mcast/host/mcast.cpp
+    cpp/ttnn/kernel_lib/mcast/host/mcast_impl.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_legacy_program_adapter.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_descriptor_adapter.cpp
+    cpp/ttnn/kernel_lib/mcast/host/program_adapters/mcast_spec_adapter.cpp
     cpp/ttnn/operations/compute_throttle_utils.cpp
     cpp/ttnn/operations/trace.cpp
     cpp/ttnn/graph/capture_program_config_registry.cpp
@@ -92,14 +98,10 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/typecast.cpp
-    # Keep these two at the end: TTNNCPP_SRCS order drives the unity-build batching,
+    # Keep this at the end: TTNNCPP_SRCS order drives the unity-build batching,
     # and inserting higher up reshuffles the blobs, which collides same-named
     # anonymous-namespace helpers in unrelated files (e.g. the dit_fused factories).
-    cpp/ttnn/kernel_lib/mcast/host/mcast_host.cpp
     cpp/ttnn/operations/generic/device/generic_op_spec_factory.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_resources.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_descriptor.cpp
-    cpp/ttnn/kernel_lib/mcast/host/mcast_spec.cpp
 )
 
 ####################################################################################################
@@ -130,7 +132,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/d2d_stream_service.cpp
     cpp/ttnn-nanobind/h2d_stream_service.cpp
     cpp/ttnn-nanobind/d2h_stream_service.cpp
-    cpp/ttnn-nanobind/counter_channel.cpp
     cpp/ttnn-nanobind/layer_ack_service.cpp
     cpp/ttnn-nanobind/layer_completion.cpp
     cpp/ttnn-nanobind/mesh_socket.cpp
@@ -150,13 +151,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/mcast_host.cpp
     cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
-
-# tt::tests::prefill_test::LayerCompletionConsumer is a test-only scheduler stand-in; keep it out of
-# the shipped module. The matching nanobind registration is gated on the same flag via
-# TTNN_WITH_LAYER_COMPLETION_CONSUMER.
-if(TTNN_BUILD_TESTS)
-    list(APPEND TTNN_SRC_PYBIND cpp/ttnn-nanobind/layer_completion_consumer.cpp)
-endif()
 
 # experimental/ccl/'s, point_to_point's, and debug/'s own nanobind sources
 # are registered directly on the `ttnn` target from those ops' own
@@ -238,6 +232,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/metal_v2_artifacts.hpp
     api/ttnn/operation.hpp
     api/ttnn/operation_concepts.hpp
+    api/ttnn/prefetcher_pipe.hpp
     api/ttnn/reports.hpp
     api/ttnn/tensor/host_buffer/functions.hpp
     api/ttnn/tensor/layout/alignment.hpp

@@ -168,7 +168,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             STABLE_SORT,
             false /* CLAMP_NEGATIVE */,
             TYPECAST_IN_FORMAT,
-            TYPECAST_OUT_FORMAT>();
+            TYPECAST_OUT_FORMAT>(formats.math);
         PROFILER_SYNC();
     }
     {

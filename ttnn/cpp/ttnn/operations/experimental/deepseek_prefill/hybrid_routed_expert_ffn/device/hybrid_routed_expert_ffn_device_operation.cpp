@@ -5,6 +5,7 @@
 
 #include "hybrid_program_factory.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
 
@@ -20,6 +21,20 @@ void validate_overlap(const HybridRoutedExpertFfnParams& op, const HybridRoutedE
         op.fwd_arrived.has_value() && op.final_arrived.has_value() && op.expert_go.has_value(),
         "hybrid routed expert overlapped with combine needs the caller's fwd_arrived, final_arrived and expert_go "
         "global semaphores, created once and passed on every call");
+    TT_FATAL(
+        op.fwd_arrived->device() == t.x.device() && op.final_arrived->device() == t.x.device() &&
+            op.expert_go->device() == t.x.device(),
+        "hybrid routed expert overlapped with combine: fwd_arrived, final_arrived and expert_go must belong to the "
+        "same mesh device as dispatched_buffer");
+    TT_FATAL(
+        op.fwd_arrived->address() != op.final_arrived->address() &&
+            op.fwd_arrived->address() != op.expert_go->address() &&
+            op.final_arrived->address() != op.expert_go->address(),
+        "hybrid routed expert overlapped with combine: fwd_arrived (0x{:x}), final_arrived (0x{:x}) and expert_go "
+        "(0x{:x}) count independently, so they must be three distinct semaphores",
+        op.fwd_arrived->address(),
+        op.final_arrived->address(),
+        op.expert_go->address());
     // Combine bakes these addresses into its compile-time arguments, so the hashed copies must be the live ones.
     TT_FATAL(
         op.fwd_arrived_addr == op.fwd_arrived->address() && op.final_arrived_addr == op.final_arrived->address() &&
@@ -45,6 +60,20 @@ void validate_overlap(const HybridRoutedExpertFfnParams& op, const HybridRoutedE
     TT_FATAL(
         t.output.buffer() != t.x.buffer(),
         "hybrid routed expert overlapped with combine needs an output distinct from dispatched_buffer");
+    if (t.forwarding_buffer.has_value()) {
+        const auto expected = combine::forwarding_buffer_spec(
+            combine_attributes(op, t),
+            ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::token_size_bytes(combine_inputs(t)));
+        TT_FATAL(
+            t.forwarding_buffer->tensor_spec() == expected,
+            "hybrid routed expert overlapped with combine: forwarding_buffer is {} {} {}, combine needs {} {} {}",
+            t.forwarding_buffer->logical_shape(),
+            t.forwarding_buffer->dtype(),
+            t.forwarding_buffer->memory_config(),
+            expected.logical_shape(),
+            expected.data_type(),
+            expected.memory_config());
+    }
     ::ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::CombineFabric2dDeviceOperation::
         validate_on_program_cache_miss(combine_attributes(op, t), combine_inputs(t));
 }

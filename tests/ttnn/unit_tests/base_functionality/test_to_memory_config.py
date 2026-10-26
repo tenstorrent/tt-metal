@@ -2086,16 +2086,17 @@ def test_to_memory_config_rm_legacy_2d_sharded_to_interleaved(
         ([160, 131072], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 131072], [32, 65536], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 65536], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
+        # Multi-subblock rows (512 KiB pages) with a partial last shard column of 98304 elements (1.5 subblocks).
         (
-            [160, 5210112],
+            [96, 229376],
             [32, 131072],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
         # Test for uneven sharding and unaligned shard width
         (
-            [160, 5210112],
-            [96, 1302529],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [48, 393216],
+            [32, 98305],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
     ],
 )
@@ -2129,10 +2130,11 @@ def test_to_memory_config_rm_interleaved_to_nd_sharded_large_row(
 @pytest.mark.parametrize(
     "tensor_shape, shard_shape, grid",
     [
+        # Width-sharded shards of 1.5 subblocks.
         (
-            [160, 5210112],
-            [160, 434176],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [32, 393216],
+            [32, 98304],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
         ),
     ],
 )
@@ -2169,16 +2171,17 @@ def test_to_memory_config_rm_interleaved_to_legacy_2D_sharded_large_row(
         ([160, 131072], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 131072], [32, 65536], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
         ([160, 65536], [32, 131072], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})),
+        # Multi-subblock rows (512 KiB pages) with a partial last shard column of 98304 elements (1.5 subblocks).
         (
-            [160, 5210112],
+            [96, 229376],
             [32, 131072],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
         # Test for uneven sharding and unaligned shard width
         (
-            [160, 5210112],
-            [96, 1302529],
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+            [48, 393216],
+            [32, 98305],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
         ),
     ],
 )
@@ -2568,6 +2571,47 @@ def test_to_memory_config_rm_preallocated_output(device, tensor_shape, shard_sha
 
     output_torch = ttnn.to_torch(output_tensor)
     assert_equal(torch_input, output_torch)
+
+
+def test_to_memory_config_rm_dram_nd_intra_row_parallel(device):
+    """Round trip a short, wide tensor whose aligned ND pages can be distributed within each logical row."""
+    torch.manual_seed(0)
+    tensor_shape = [1, 3, 3 * 48 * 128]
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    interleaved_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=interleaved_memory_config,
+    )
+
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 3, 64],
+        grid=make_full_dram_core_range_set(device),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard_spec)
+    sharded_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_memory_config)
+    check_mem_config(sharded_tensor, sharded_memory_config, is_nd_sharded=True)
+
+    round_trip_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(tensor_shape),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+        interleaved_memory_config,
+    )
+    ttnn.to_memory_config(
+        sharded_tensor,
+        memory_config=interleaved_memory_config,
+        output_tensor=round_trip_tensor,
+    )
+
+    assert_equal(torch_input, ttnn.to_torch(round_trip_tensor))
 
 
 # ---------------------------------------------------------------------------

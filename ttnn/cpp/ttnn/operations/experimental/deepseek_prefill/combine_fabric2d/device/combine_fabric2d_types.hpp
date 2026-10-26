@@ -25,6 +25,16 @@ struct CombineFabric2dParams {
     uint32_t seq_len_per_chip = 640;
     uint32_t axis = 0;
     uint32_t num_links = 2;
+    // How much smaller than the dense forwarding region to make this op's. A FACTOR rather than a page
+    // count, so it means the same thing for every model, and an op parameter rather than a constant
+    // because where the throughput curve bends is a per-model measurement: the caller is the one who
+    // knows whether DRAM or microseconds is the scarcer thing for the model it is running.
+    //
+    // 16 is what the models routing to many experts over a wide embedding settle on, and so the right
+    // thing for a caller that has not thought about it to inherit. Every caller that reaches the op
+    // through ttnn::prim sets it explicitly, so this initializer is the sibling-style fallback for a
+    // params struct built some other way, not a value the op path falls back to.
+    uint32_t fwd_reduction = 16;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     // Set only when combine runs overlapped inside the routed expert: its threshold decides the order
     // experts are walked, and its writers report completion to the collector.
@@ -32,11 +42,6 @@ struct CombineFabric2dParams {
     uint32_t routed_expert_writers = 0;
     tt::tt_metal::CoreRange routed_expert_cores{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}};
     uint32_t routed_expert_go_addr = 0;
-    // Routed-expert cores outside that rectangle (logical): they get `go` unicast.
-    std::vector<tt::tt_metal::CoreCoord> routed_expert_extra_cores;
-    // "NAME=VALUE" defines of a flat routed expert's dynamic schedule (flat_schedule_defines): set, the readers walk
-    // every chip's experts in the order that schedule finishes them (row-major routed-expert output only).
-    std::vector<std::string> routed_expert_schedule_defines;
     tt::tt_metal::MemoryConfig output_mem_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 };

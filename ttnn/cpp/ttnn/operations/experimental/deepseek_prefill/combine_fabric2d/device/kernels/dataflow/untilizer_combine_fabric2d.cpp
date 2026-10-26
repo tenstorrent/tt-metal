@@ -69,6 +69,7 @@ Dram open_dram() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.control_addr + (ct.dispatch_group_size + 1) * row_bytes),
         ct.num_routed_experts,
         ct.dispatch_group_size,
+        ct.dispatch_capacity,
 #ifdef CMBF2D_OVERLAPPED
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_addr),
         ids_stride / 4,
@@ -170,17 +171,11 @@ void kernel_main() {
     // The compute kernel cannot read the control tensors, so it is told how many batches to expect before
     // the first one arrives. Pushed once and never popped.
     uint32_t mine = 0;
-#ifndef CMBF2D_IDLE
     walk_my_batches(ctl, [](uint32_t) {}, [&](uint32_t, const ::cmbf2d::GroupWalk&) { mine++; });
-#endif
     CircularBuffer cb_batches(::cmbf2d::UNT_CB_BATCHES);
     cb_batches.reserve_back(1);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_batches.get_write_ptr()) = mine;
     cb_batches.push_back(1);
-#ifdef CMBF2D_IDLE
-    // Measurement mode: zero batches announced, so the compute kernel exits at once.
-    return;
-#endif
 
 #ifdef CMBF2D_OVERLAPPED
     // A step's tile-rows are the routed expert's output: wait until it reports them written. Only here,

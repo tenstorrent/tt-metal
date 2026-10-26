@@ -3,6 +3,8 @@
 
 #include "select_final_carry_device_operation.hpp"
 
+#include <utility>
+
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -26,11 +28,12 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
     if (in.actual_end) {
         kda_factory_detail::check_actual_start(in.actual_start, *in.actual_end, operation_name);
     }
-    for (const auto* tensor : {&in.rank_final, &in.prefix_final}) {
-        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, "input");
-        kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, "input");
-        kda_factory_detail::check_dtype(*tensor, tt::tt_metal::DataType::FLOAT32, operation_name, "input");
-        kda_factory_detail::check_interleaved(*tensor, operation_name, "input");
+    for (const auto& [tensor, name] :
+         {std::pair{&in.rank_final, "rank_final"}, std::pair{&in.prefix_final, "prefix_final"}}) {
+        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
+        kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
+        kda_factory_detail::check_dtype(*tensor, tt::tt_metal::DataType::FLOAT32, operation_name, name);
+        kda_factory_detail::check_interleaved(*tensor, operation_name, name);
     }
     kda_factory_detail::check_same_device(in.rank_final, in.prefix_final, operation_name, "prefix_final");
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);

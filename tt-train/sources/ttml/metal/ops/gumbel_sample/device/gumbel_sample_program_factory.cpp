@@ -170,48 +170,10 @@ GumbelSampleLayout compute_layout(const ttnn::Tensor& logits, bool position_awar
     return layout;
 }
 
-// Op-local stand-ins for the shared core-walk helpers PR #56524 adds to program_utils.hpp
-// (ttml::metal::CoreWork / for_each_core_with_work): same walk order, same fields, same call
-// shape. The struct is named GumbelCoreWork so it cannot shadow the shared ttml::metal::CoreWork
-// once that PR lands; migration is then: delete this block and s/GumbelCoreWork/CoreWork/.
-struct GumbelCoreWork {
-    tt::tt_metal::CoreCoord core;
-    uint32_t index;      // position in the walk: core == {index / num_cores_y, index % num_cores_y}
-    uint32_t num_units;  // tiles this core processes
-    uint32_t start;      // tiles handed to the cores before it
-    bool in_group_1;     // which split_work_to_cores group the core is in; picks the compute kernel
-};
-
-template <typename Fn>
-void for_each_core_with_work(
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2,
-    uint32_t num_units_per_core_group_1,
-    uint32_t num_units_per_core_group_2,
-    Fn&& fn) {
-    uint32_t num_units_written = 0U;
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        const bool in_group_1 = core_group_1.contains(core);
-        uint32_t num_units = 0U;
-        if (in_group_1) {
-            num_units = num_units_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_units = num_units_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core {} is in neither work group", core.str());
-        }
-        fn(GumbelCoreWork{core, i, num_units, num_units_written, in_group_1});
-        num_units_written += num_units;
-    }
-}
-
 // Materialized (unlike most ops' walk-and-set) because the merge routing searches backward through
 // earlier cores for a split row's owner.
-std::vector<GumbelCoreWork> core_layout(const GumbelSampleLayout& layout) {
-    std::vector<GumbelCoreWork> work;
+std::vector<CoreWork> core_layout(const GumbelSampleLayout& layout) {
+    std::vector<CoreWork> work;
     work.reserve(layout.num_cores);
     for_each_core_with_work(
         layout.num_cores,
@@ -220,7 +182,7 @@ std::vector<GumbelCoreWork> core_layout(const GumbelSampleLayout& layout) {
         layout.core_group_2,
         layout.tiles_per_core_group_1,
         layout.tiles_per_core_group_2,
-        [&work](const GumbelCoreWork& core_work) { work.push_back(core_work); });
+        [&work](const CoreWork& core_work) { work.push_back(core_work); });
     return work;
 }
 

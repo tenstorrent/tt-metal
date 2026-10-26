@@ -85,7 +85,7 @@ def variants_for(scenario):
 
 _ZONE_MACRO = r"""
 #ifdef CF_MICROBENCH
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 #define CF_PHASE(name) DeviceZoneScopedN(name)
 #else
 #define CF_PHASE(name)
@@ -113,6 +113,7 @@ void kernel_main() {
     constexpr uint32_t method = get_compile_time_arg_val(3);
 
     using namespace compute_kernel_lib;
+    DataflowBuffer out_buf(cb_out), s1_buf(cb_s1), s2_buf(cb_s2), x_buf(cb_x), y_buf(cb_y);
 
     // Sharded inputs are already resident — mark them available once.
     cb_reserve_back(cb_x, n); cb_push_back(cb_x, n);
@@ -126,33 +127,33 @@ void kernel_main() {
             CF_PHASE("CF_FUSED");
             eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{x_buf},
                 Sqrt<>{},
-                CopyTile<input(cb_y, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D1>{},
+                CopyTile<input(cb_y, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D1>{y_buf},
                 AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
                 Exp<>{},
-                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{out_buf});
         } else {
             // UNFUSED: three chains, each packing to / reading from L1.
             { CF_PHASE("CF_SQRT");  // s1 = sqrt(x)
               eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{x_buf},
                 Sqrt<>{},
-                PackTile<output(cb_s1, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
+                PackTile<output(cb_s1, ReservePolicy::Upfront, PushPolicy::AtEnd)>{s1_buf}); }
             { CF_PHASE("CF_ADD");  // s2 = s1 + y
               eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>{},
-                CopyTile<input(cb_y, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D1>{},
+                CopyTile<input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>{s1_buf},
+                CopyTile<input(cb_y, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D1>{y_buf},
                 AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                PackTile<output(cb_s2, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
+                PackTile<output(cb_s2, ReservePolicy::Upfront, PushPolicy::AtEnd)>{s2_buf}); }
             { CF_PHASE("CF_EXP");  // out = exp(s2)
               eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_s2, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>{},
+                CopyTile<input(cb_s2, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block), Dst::D0>{s2_buf},
                 Exp<>{},
-                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{out_buf}); }
         }
         if (iter + 1 < kernel_iters) { cb_wait_front(cb_out, n); cb_pop_front(cb_out, n); }
     }
@@ -186,6 +187,7 @@ void kernel_main() {
     constexpr uint32_t method = get_compile_time_arg_val(3);
 
     using namespace compute_kernel_lib;
+    DataflowBuffer b_buf(cb_b), out_buf(cb_out), s1_buf(cb_s1), x_buf(cb_x);
 
     cb_reserve_back(cb_x, n); cb_push_back(cb_x, n);
     cb_reserve_back(cb_b, n); cb_push_back(cb_b, n);
@@ -197,36 +199,36 @@ void kernel_main() {
             CF_PHASE("CF_FUSED");
             eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{x_buf},
                 Sqrt<>{},
                 DestReuseBinary<BinaryFpuOp::Mul,
                                 input(cb_b, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
-                                DestReuseType::DEST_TO_SRCA, Dst::D0>{},
-                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
+                                DestReuseType::DEST_TO_SRCA, Dst::D0>{b_buf},
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{out_buf});
         } else if constexpr (method == 1) {
             CF_PHASE("CF_FUSED");
             eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{x_buf},
                 Sqrt<>{},
-                CopyTile<input(cb_b, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D1>{},
+                CopyTile<input(cb_b, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D1>{b_buf},
                 MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{out_buf});
         } else {
             { CF_PHASE("CF_SQRT");  // s1 = sqrt(x)
               eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
-                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{},
+                CopyTile<input(cb_x, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block), Dst::D0>{x_buf},
                 Sqrt<>{},
-                PackTile<output(cb_s1, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
+                PackTile<output(cb_s1, ReservePolicy::Upfront, PushPolicy::AtEnd)>{s1_buf}); }
             { CF_PHASE("CF_MUL");  // out = s1 * b (FPU)
               eltwise_chain(
                 IterationShape::tiles(n).block_size(blk),
                 BinaryFpu<BinaryFpuOp::Mul,
                           input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
                           input(cb_b, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
-                          Dst::D0>{},
-                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
+                          Dst::D0>{s1_buf, b_buf},
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{out_buf}); }
         }
         if (iter + 1 < kernel_iters) { cb_wait_front(cb_out, n); cb_pop_front(cb_out, n); }
     }
@@ -260,6 +262,7 @@ void kernel_main() {
     constexpr uint32_t method = get_compile_time_arg_val(3);
 
     using namespace compute_kernel_lib;
+    DataflowBuffer out_buf(cb_out), s1_buf(cb_s1);
 
     cb_reserve_back(cb_x, Wt); cb_push_back(cb_x, Wt);
 
@@ -282,9 +285,9 @@ void kernel_main() {
             { CF_PHASE("CF_RECIP");
               eltwise_chain(
                 IterationShape::tiles(1),
-                CopyTile<input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D0>{},
+                CopyTile<input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd), Dst::D0>{s1_buf},
                 Recip<>{},
-                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{out_buf}); }
         }
         if (iter + 1 < kernel_iters) { cb_wait_front(cb_out, 1); cb_pop_front(cb_out, 1); }
     }

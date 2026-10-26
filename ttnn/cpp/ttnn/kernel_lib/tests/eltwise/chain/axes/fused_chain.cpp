@@ -30,6 +30,11 @@ void kernel_main() {
     constexpr uint32_t life = get_compile_time_arg_val(2);   // 0 = Bulk (batched), 1 = PerBlockSize
     constexpr uint32_t batch = get_compile_time_arg_val(3);  // Bulk batch window (tiles per chain call)
 
+    DataflowBuffer cb_a_obj(cb_a);
+    DataflowBuffer cb_b_obj(cb_b);
+    DataflowBuffer cb_c_obj(cb_c);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);  // one boot covers every batch
 
     using namespace compute_kernel_lib;
@@ -40,13 +45,13 @@ void kernel_main() {
                 BinaryFpu<
                     BinaryFpuOp::Add,
                     input(cb_a, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
-                    input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block)>{},
+                    input(cb_b, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block)>{cb_a_obj, cb_b_obj},
                 Exp<>{},
                 DestReuseBinary<
                     BinaryFpuOp::Mul,
                     input(cb_c, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
-                    DestReuseType::DEST_TO_SRCA>{},
-                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
+                    DestReuseType::DEST_TO_SRCA>{cb_c_obj},
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{cb_out_obj});
         }
     } else {  // PerBlockSize: single call over all N, bounded CB via per-block-size wait/pop
         eltwise_chain(
@@ -54,12 +59,13 @@ void kernel_main() {
             BinaryFpu<
                 BinaryFpuOp::Add,
                 input(cb_a, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block),
-                input(cb_b, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block)>{},
+                input(cb_b, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block)>{
+                cb_a_obj, cb_b_obj},
             Exp<>{},
             DestReuseBinary<
                 BinaryFpuOp::Mul,
                 input(cb_c, WaitPolicy::PerBlockSize, PopPolicy::PerBlockSize, InputTileMapping::Block),
-                DestReuseType::DEST_TO_SRCA>{},
-            PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
+                DestReuseType::DEST_TO_SRCA>{cb_c_obj},
+            PackTile<output(cb_out, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{cb_out_obj});
     }
 }

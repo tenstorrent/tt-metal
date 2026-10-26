@@ -42,12 +42,12 @@
 //   is_receiver_core && act_mcast_num_cores == 0: local self-write (mcast loopback hangs with 0 destinations)
 //   !is_receiver_core:                            standard mcast EXCLUDE_SRC (even when act_mcast_num_cores == 0,
 //                                                 because the sender still needs to send to the output core)
-template <uint32_t act_mcast_num_cores>
+template <uint32_t act_mcast_num_cores, typename SrcDFB>
 void multicast_data(
     Noc noc,
     MulticastEndpoint mcast_ep,
     bool is_receiver_core,
-    DataflowBuffer src_cb,
+    SrcDFB src_cb,
     uint32_t src_offset,
     McastDst& dst,
     uint32_t total_bytes) {
@@ -85,13 +85,15 @@ template <
     uint32_t act_mcast_num_dest_cores,
     uint32_t mcast_noc_burst_size,
     uint32_t block_tile_count,
-    uint32_t tile_size>
+    uint32_t tile_size,
+    typename SrcDFB,
+    typename DstDFB>
 void mcast_block_chunked(
     Noc noc,
     MulticastEndpoint mcast_ep,
-    DataflowBuffer src_cb_obj,
+    SrcDFB src_cb_obj,
     bool is_receiver_core,
-    DataflowBuffer dst_cb_obj,
+    DstDFB dst_cb_obj,
     const McastRect& rect) {
     // Build mcast dst once; only .addr is updated per burst
     // number of full bursts

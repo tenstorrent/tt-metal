@@ -150,6 +150,12 @@ class KimiK3Config:
         return sorted(layer - 1 for layer in cls.FULL_ATTN_LAYERS_1BASED)
 
     @classmethod
+    def kda_layer_ids(cls) -> list[int]:
+        """0-indexed model-layer indices of the KDA (linear-attention) layers: every layer that is not MLA."""
+        mla = set(cls.mla_layer_ids())
+        return [layer for layer in range(cls.NUM_LAYERS) if layer not in mla]
+
+    @classmethod
     def mla_kv_slot(cls, layer_idx: int) -> int:
         """KV-cache slot for a 0-indexed *model* layer index.
 

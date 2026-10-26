@@ -104,6 +104,11 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in_shard, dfb::scaler, dfb::partial);
 
+    DataflowBuffer dfb_in(dfb::in_shard);
+    DataflowBuffer dfb_mean(dfb::mean);
+    DataflowBuffer dfb_centered_sq(dfb::centered_sq);
+    DataflowBuffer dfb_scaler(dfb::scaler);
+
     constexpr auto reduce_shape = ckl::ReduceInputBlockShape::of(Ht, Wt_local, /*NC=*/1);
     constexpr auto block_shape = ckl::IterationShape::grid(Ht, Wt_local);
 
@@ -133,9 +138,10 @@ void kernel_main() {
             ckl::WaitPolicy::Upfront,
             ckl::PopPolicy::None,
             ckl::InputTileMapping::Col),
-        ckl::output(dfb::centered_sq)>(block_shape);
+        ckl::output(dfb::centered_sq)>(block_shape, dfb_in, dfb_mean, dfb_centered_sq);
 
-    ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(block_shape);
+    ckl::square<ckl::input(dfb::centered_sq), ckl::output(dfb::centered_sq)>(
+        block_shape, dfb_centered_sq, dfb_centered_sq);
 
     ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, dfb::centered_sq, dfb::scaler, dfb::partial>(
         reduce_shape);
@@ -154,9 +160,6 @@ void kernel_main() {
     }
 
     // Release what was held across the two rounds.
-    DataflowBuffer dfb_in(dfb::in_shard);
-    DataflowBuffer dfb_mean(dfb::mean);
-    DataflowBuffer dfb_scaler(dfb::scaler);
     dfb_in.pop_front(shard_tiles);
     dfb_mean.pop_front(Ht);
     dfb_scaler.pop_front(1);

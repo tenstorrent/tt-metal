@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
@@ -115,6 +116,16 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(!in.group_entry_states.has_value(), "{}: group_entry_states is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
+        // The summary publishes one tile row of a core's value block per destination-register packet.
+        const auto distribution = kda_factory_detail::distribute_value_blocks(
+            in.v_beta.device()->compute_with_storage_grid_size(), BH, V / tt::constants::TILE_WIDTH);
+        const uint32_t dest_tiles = ttnn::get_dest_reg_count(attrs.compute_kernel_config);
+        TT_FATAL(
+            distribution.value_tiles_per_core <= dest_tiles,
+            "{}: a summary core's {} value tiles exceed the {} destination-register tiles of this compute config",
+            operation_name,
+            distribution.value_tiles_per_core,
+            dest_tiles);
     }
     TT_FATAL(
         !attrs.packed_head || (attrs.mode == RecurrentChunkScanMode::SUMMARY && attrs.groups_per_head == 1),

@@ -4,9 +4,12 @@
 #include "hybrid_half_merge.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <map>
 #include <stdexcept>
 #include <variant>
+
+#include <fmt/format.h>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -161,10 +164,9 @@ uint32_t overlay_circular_buffers(
 // choose, and a wrong choice here is wrong numbers with no error.
 //
 // bfp8_pack_precise is the one field they genuinely differ on: the fused half sets it, the unified
-// half leaves it clear. The merged program keeps it SET -- the more precise packing of the two --
-// which means the unified half's bf8 output in a merged program is not bit-for-bit what the
-// standalone unified op produces. That is a deliberate, accepted difference; grade that half on
-// PCC against the standalone op, not on equality.
+// half leaves it clear. The merged program keeps it SET for the fused half, and
+// mark_unified_pack_precision hands the unified half's circular buffers back their truncated
+// packing, so each half packs bit-for-bit as its standalone op does.
 //
 // Every other field must already agree. Taking a silent majority on math fidelity or the dst
 // accumulator would change one half's arithmetic without any signal.
@@ -344,6 +346,33 @@ KernelDescriptor merge_kernel(
     return merged;
 }
 
+size_t compute_role() { return KernelDescriptor::ConfigDescriptor(tt::tt_metal::ComputeConfigDescriptor{}).index(); }
+
+// The merged compute binary packs block-float the precise way whenever the fused half does (see
+// reconcile_config). Naming the unified half's CB indices lets the kernel give those back the
+// truncated packing the unified half is built with alone (hybrid_pack_precision.hpp), so each half
+// packs exactly as its standalone op does.
+void mark_unified_pack_precision(
+    const ProgramDescriptor& unified, const KernelDescriptor& unified_compute, ProgramDescriptor& merged) {
+    const auto& own = std::get<tt::tt_metal::ComputeConfigDescriptor>(unified_compute.config);
+    for (auto& kernel : merged.kernels) {
+        const auto* config = std::get_if<tt::tt_metal::ComputeConfigDescriptor>(&kernel.config);
+        if (config == nullptr || config->bfp8_pack_precise == own.bfp8_pack_precise) {
+            continue;
+        }
+        TT_FATAL(!own.bfp8_pack_precise, "the merged binary packs less precisely than the unified half asked for");
+        uint64_t mask = 0;
+        for (const auto& cb : unified.cbs) {
+            for (const auto& format : cb.format_descriptors) {
+                TT_FATAL(
+                    format.buffer_index < 64, "CB index {} does not fit the pack-precision mask", format.buffer_index);
+                mask |= uint64_t{1} << format.buffer_index;
+            }
+        }
+        kernel.defines.emplace_back("HYB_APPROX_PACK_CB_MASK", fmt::format("{:#x}ull", mask));
+    }
+}
+
 // The kernels a half emits, keyed by the processor class they run on.
 std::map<size_t, const KernelDescriptor*> index_by_role(const ProgramDescriptor& half, const char* which) {
     std::map<size_t, const KernelDescriptor*> by_role;
@@ -415,6 +444,7 @@ tt::tt_metal::ProgramDescriptor merge_halves(
             /*shared_semaphore_count=*/report.barrier_semaphore_id,
             *bases_it->second));
     }
+    mark_unified_pack_precision(unified, *unified_by_role.at(compute_role()), merged);
     return merged;
 }
 

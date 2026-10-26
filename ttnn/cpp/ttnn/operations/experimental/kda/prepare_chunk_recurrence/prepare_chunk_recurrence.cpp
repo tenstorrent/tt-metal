@@ -22,7 +22,7 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     const std::optional<Tensor>& actual_end,
     uint32_t sequence_parallel_axis,
     float gate_scale,
-    const std::optional<uint32_t>& beta_logits_column_offset) {
+    uint32_t beta_logits_column_offset) {
     using namespace ttnn::experimental::prim::kda_factory_detail;
     constexpr std::string_view operation_name = "prepare_chunk_recurrence";
     check_allocated_device_tensor(q, operation_name, "q");
@@ -41,7 +41,7 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     const auto kernel_config = init_device_compute_kernel_config(
         q.device()->arch(),
         compute_kernel_config,
-        MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);

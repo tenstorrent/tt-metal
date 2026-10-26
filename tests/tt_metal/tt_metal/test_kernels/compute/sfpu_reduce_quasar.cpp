@@ -6,7 +6,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -22,7 +22,8 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
 
-    unary_op_init_common(dfb_in.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb_in.get_id(), dfb_out.get_id());
+    copy_init(dfb_in.get_id());
 
     for (std::uint32_t block = 0; block < num_blocks; ++block) {
         sfpu_reduce_init<REDUCE_POOL_TYPE, REDUCE_FORMAT>();

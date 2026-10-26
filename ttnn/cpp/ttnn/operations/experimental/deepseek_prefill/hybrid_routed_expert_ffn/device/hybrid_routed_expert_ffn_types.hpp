@@ -403,6 +403,9 @@ struct HybridRoutedExpertFfnInputs {
     std::optional<Tensor> dispatched_metadata;
     std::optional<Tensor> expert_offsets;
     std::optional<Tensor> replicated_global_expert_idx_table;
+    // Combine's DRAM forwarding buffer, of combine::forwarding_buffer_spec. Absent: combine allocates its own; see
+    // CombineL1::forwarding. An input, so a cache hit re-patches its address like any other.
+    std::optional<Tensor> forwarding_buffer;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

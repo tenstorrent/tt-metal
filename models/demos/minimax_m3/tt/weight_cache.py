@@ -21,6 +21,10 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
+from models.demos.minimax_m3.utils.general_utils import is_sparse_attention_layer
+
+# Each pipeline rank builds its own layers, so each writes its own cache files.
+CACHE_DUMP_MODE = ttnn.DumpTensorMode.LOCAL
 
 # ttnn's cache_file_name suffix uses these dtype tags (e.g. ..._dtype_BFLOAT8_B_layout_TILE.tensorbin).
 _DTYPE_TAG = {
@@ -34,16 +38,6 @@ def _is_dense_layer(hf_config, layer_idx: int) -> bool:
     """Dense (plain SwiGLU) MLP layer iff moe_layer_freq[idx]==0. Mirrors tt/layer.py."""
     freq = getattr(hf_config, "moe_layer_freq", None)
     return freq is not None and layer_idx < len(freq) and freq[layer_idx] == 0
-
-
-def _is_sparse_layer(hf_config, layer_idx: int) -> bool:
-    """Block-sparse (MSA index branch) attention layer. Mirrors tt/layer.py."""
-    cfg = getattr(hf_config, "sparse_attention_config", None)
-    if isinstance(cfg, dict):
-        freq = cfg.get("sparse_attention_freq") if cfg.get("use_sparse_attention") else None
-    else:
-        freq = getattr(cfg, "sparse_attention_freq", None) if cfg is not None else None
-    return bool(freq[layer_idx]) if freq is not None and layer_idx < len(freq) else False
 
 
 def weight_cache_is_complete(
@@ -111,7 +105,7 @@ def weight_cache_is_complete(
         ]
         if use_qk_norm:
             required += [f"{base}/self_attn/q_norm", f"{base}/self_attn/k_norm"]
-        if _is_sparse_layer(hf_config, L):
+        if is_sparse_attention_layer(hf_config, L):
             required += [f"{base}/self_attn/index_q_proj", f"{base}/self_attn/index_k_proj"]
         if _is_dense_layer(hf_config, L):
             required += [f"{base}/mlp/gate_proj", f"{base}/mlp/up_proj", f"{base}/mlp/down_proj"]

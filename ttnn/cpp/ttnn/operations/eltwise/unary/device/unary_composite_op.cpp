@@ -62,8 +62,10 @@ Tensor _std(
 std::vector<Tensor> split_tensor_for_glu(
     const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
+    // The slices below always split dim 3; callers have already mapped -1 to 3.
+    TT_FATAL(dim == 3, "glu-family ops only support the last dimension, got dim={}", dim);
     ttnn::Shape inshape(input_a.padded_shape());
-    TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
+    TT_FATAL(((inshape[3] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
     ttsl::SmallVector<std::uint32_t> s_a = {0, 0, 0, 0};
     ttsl::SmallVector<std::uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
@@ -253,7 +255,6 @@ Tensor clamp(
 
 // Gated Linear Unit activation: matmul(split[0],sigmoid(split[1]))
 Tensor glu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim GLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
     }
@@ -266,7 +267,6 @@ Tensor glu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryCo
 
 // ReLU Gated Linear Unit activation: matmul(split[0],relu(split[1]))
 Tensor reglu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim REGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
     }
@@ -282,7 +282,6 @@ Tensor geglu(
     std::int32_t dim,
     const std::optional<MemoryConfig>& output_mem_config,
     operations::unary::GeluVariant variant) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim GEGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
     }
@@ -300,7 +299,6 @@ Tensor geglu(const Tensor& input_a, std::int32_t dim, const std::optional<Memory
 
 // Swish Gated Linear Unit activation: matmul(split[0],swish(split[1]))
 Tensor swiglu(const Tensor& input_a, std::int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_ASSERT(dim == -1 || dim == 3, "last dim SWIGLU only supported at this time ");
     if (dim == -1) {
         dim = 3;
     }
@@ -382,20 +380,6 @@ Tensor polygamma(const Tensor& input_a, std::int32_t k, const std::optional<Memo
 Tensor logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     return ttnn::logical_not(x, output_mem_config, x);
 }
-
-}  // namespace ttnn
-
-namespace ttnn::operations::unary {
-
-Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::multiply(input, (1.0f / 2.0f), std::nullopt, output_mem_config);
-    Tensor floor_res = ttnn::floor(result, output_mem_config);
-    return ttnn::ne(result, floor_res, std::nullopt, output_mem_config);
-}
-
-}  // namespace ttnn::operations::unary
-
-namespace ttnn {
 
 // Global Norm
 Tensor normalize_global(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {

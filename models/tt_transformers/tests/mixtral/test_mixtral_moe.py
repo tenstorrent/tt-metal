@@ -40,8 +40,8 @@ def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
     dtype = ttnn.bfloat8_b
     mesh_device.disable_and_clear_program_cache()
     model_args = ModelArgs(mesh_device)
-    state_dict = model_args.load_state_dict()
     model_args.n_layers = 1
+    state_dict = model_args.load_state_dict()
     layer_num = 0
 
     hf_config = load_hf_mixtral_config()

@@ -12,6 +12,7 @@ import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.load_checkpoints import HF_LAYER_NORM_KEYS, load_hf_state_dict_filtered
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
@@ -42,6 +43,7 @@ def test_rms_norm_inference(
     mesh_device,
     reset_seeds,
     ensure_gc,
+    monkeypatch,
 ):
     dtype = ttnn.bfloat16
     # norm_type = "attention"
@@ -49,13 +51,23 @@ def test_rms_norm_inference(
     config_type = "MLP"
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
-    model_args.n_layers = 1
-    state_dict = model_args.load_state_dict()
+    # Read only the one norm weight this test uses. model_args.load_state_dict() would materialise the whole
+    # 93 GB Mixtral-8x7B checkpoint from the network mount (4-5 minutes cold on the T3000 perf hosts) to
+    # hand over an 8 KB gamma, which is what kept tripping the 300 s pytest timeout. The guard turns a
+    # reintroduced full load into an immediate failure instead of a 5-minute timeout.
+    monkeypatch.setattr(
+        ModelArgs,
+        "load_state_dict",
+        lambda self: pytest.fail(
+            "test_rms_norm_inference must not load the full checkpoint; read the norm weight only"
+        ),
+    )
+    hf_norm_prefix = f"model.layers.0.{HF_LAYER_NORM_KEYS[norm_type]}."
+    norm_weight = load_hf_state_dict_filtered(model_args.CKPT_DIR, [hf_norm_prefix])[f"{hf_norm_prefix}weight"]
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
-    first_layer_prefix = state_dict_prefix + f"{norm_type}_norm."
-    partial_state_dict = {k[-6:]: v for k, v in state_dict.items() if (k.startswith(f"layers.0.{norm_type}_norm."))}
+    state_dict = {f"{state_dict_prefix}{norm_type}_norm.weight": norm_weight}
     reference_model = RefRMSNorm(hidden_size=model_args.dim)
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict({"weight": norm_weight})
 
     # Create the inner RMSNormxw
     tt_inner_norm = RMSNorm(

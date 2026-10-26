@@ -4,7 +4,6 @@
 
 #include "topk_large_indices_device_operation.hpp"
 
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
 #include <algorithm>
@@ -27,7 +26,7 @@ void validate_static_args(const operation_attributes_t& attrs, const tensor_args
         "topk_large_indices supports k in [16, {}] in multiples of 16, got {}",
         max_supported_k,
         attrs.k);
-    const tt::ARCH arch = tt::tt_metal::hal::get_arch();
+    const tt::ARCH arch = input.device()->arch();
     TT_FATAL(
         arch == tt::ARCH::BLACKHOLE, "topk_large_indices is only supported on Blackhole architecture, got {}", arch);
     TT_FATAL(input.layout() == Layout::ROW_MAJOR, "topk_large_indices input must be ROW_MAJOR");

@@ -44,7 +44,7 @@ combine::CombineFabric2dInputs combine_inputs(const HybridRoutedExpertFfnInputs&
         .expert_token_counts = t.counts,
         .expert_region_offsets = t.expert_region_offsets.value(),
         .expert_offsets = t.expert_offsets.value(),
-        .global_expert_idx_table = t.replicated_global_expert_idx_table.value(),
+        .global_expert_idx_table = t.replicated_global_expert_idx_table,
     };
 }
 
@@ -55,7 +55,7 @@ namespace {
 // The reader is the merged one when the fused pass runs and the unified half's own when it does not (threshold 0),
 // as for the writer in expert_done_writer_count; both are the unified reader that consumes these arguments.
 void append_far_run(tt::tt_metal::ProgramDescriptor& desc, tt::tt_metal::Buffer* expert_offsets, uint32_t dg_far) {
-    auto reader = std::find_if(desc.kernels.begin(), desc.kernels.end(), [](const auto& k) {
+    auto* reader = std::find_if(desc.kernels.begin(), desc.kernels.end(), [](const auto& k) {
         return k.kernel_source.ends_with("hybrid_reader.cpp") ||
                k.kernel_source.ends_with("unified_routed_expert_ffn_reader.cpp");
     });
@@ -110,7 +110,11 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
         combine_inputs(t),
         output,
         tensor_coords,
-        combine::CombineL1{.fwd_arrived = &*op.fwd_arrived, .final_arrived = &*op.final_arrived, .arena = arena},
+        combine::CombineL1{
+            .fwd_arrived = &*op.fwd_arrived,
+            .final_arrived = &*op.final_arrived,
+            .arena = arena,
+            .forwarding = t.forwarding_buffer.has_value() ? t.forwarding_buffer->buffer() : nullptr},
         &collectors);
 
     for (auto& program : workload.programs) {
@@ -120,13 +124,15 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
             program.range.shape().mesh_size());
         const auto coord = program.range.start_coord();
         const auto& collector = collectors.at(coord);
+        // NOC coordinates, because the writers address the collector with get_noc_addr.
+        const auto collector_noc = combine_args.device->worker_core_from_logical_core(collector.logical);
 
         auto re = re_descriptor;
         append_expert_done_signal(
             re,
             ExpertDoneSignal{
-                .collector_noc_x = static_cast<uint32_t>(collector.worker_virtual.x),
-                .collector_noc_y = static_cast<uint32_t>(collector.worker_virtual.y),
+                .collector_noc_x = static_cast<uint32_t>(collector_noc.x),
+                .collector_noc_y = static_cast<uint32_t>(collector_noc.y),
                 .collector_counts_addr = collector.counts_addr,
                 .go_addr = go_addr});
         {

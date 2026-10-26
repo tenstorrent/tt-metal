@@ -163,15 +163,15 @@ void kernel_main() {
         } else {
             // Re-establish the full accumulate hw config EVERY iteration. The previous iteration's
             // finalize reprogrammed unpack/math/pack; the short inits below (copy_tile_init /
-            // add_tiles_init) do NOT restore that. `ocb` is where the compute-phase pack lands: the
+            // add_init) do NOT restore that. `ocb` is where the compute-phase pack lands: the
             // L1 accumulator/interm for the FPU-finalize methods, or cb_out directly for the SFPU-
             // finalize methods (they pack the finished mean straight out — no interm round-trip).
             if constexpr (method == 1) {
-                binary_op_init_common(cb_in, cb_in, cb_interm);
+                compute_kernel_hw_startup(cb_in, cb_in, cb_interm);
             } else {
                 // dest methods: pairs add (cb_in, cb_in), 1-per-add adds (cb_in, cb_zero). SFPU
                 // finalize packs straight to cb_out; FPU finalize packs the running sum to cb_interm.
-                binary_op_init_common(cb_in, pairs ? cb_in : cb_zero, sfpu_final ? cb_out : cb_interm);
+                compute_kernel_hw_startup(cb_in, pairs ? cb_in : cb_zero, sfpu_final ? cb_out : cb_interm);
             }
 
             cb_wait_front(cb_in, width_tiles);
@@ -206,9 +206,9 @@ void kernel_main() {
                 //      add_tiles(acc_to_dest), then finalize on the FPU or the SFPU.
                 tile_regs_acquire();
                 if constexpr (!pairs) {
-                    add_tiles_init(cb_in, cb_zero, false);   // seed: DEST = cb_in[0] + 0
+                    add_init(cb_in, cb_zero, false);   // seed: DEST = cb_in[0] + 0
                     add_tiles(cb_in, cb_zero, 0, 0, 0);
-                    add_tiles_init(cb_in, cb_zero, true);     // DEST += cb_in[k] + 0
+                    add_init(cb_in, cb_zero, true);     // DEST += cb_in[k] + 0
                     for (uint32_t k = 1; k < width_tiles; ++k) {
                         add_tiles(cb_in, cb_zero, k, 0, 0);
                     }
@@ -224,11 +224,11 @@ void kernel_main() {
                         copy_tile(cb_in, 0, 0);               // odd: DEST = cb_in[0]
                         k = 1;
                     } else {
-                        add_tiles_init(cb_in, cb_in, false);
+                        add_init(cb_in, cb_in, false);
                         add_tiles(cb_in, cb_in, 0, 1, 0);     // even: DEST = cb_in[0] + cb_in[1]
                         k = 2;
                     }
-                    add_tiles_init(cb_in, cb_in, true);
+                    add_init(cb_in, cb_in, true);
                     for (; k < width_tiles; k += 2) {         // even remainder -> exact pairs, no leftover
                         add_tiles(cb_in, cb_in, k, k + 1, 0);
                     }

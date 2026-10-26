@@ -9,7 +9,6 @@ from helpers.llk_params import (
     PERF_RUN_TYPES_QUASAR,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     ReducePool,
 )
 from helpers.param_config import generate_perf_input_dimensions, parametrize
@@ -30,9 +29,10 @@ def perf_input_dimensions(formats):
     generate_perf_input_dimensions() gives (max_tiles, 1) and (1, max_tiles) in tiles: 8 at
     16-bit, 4 at 32-bit, the same ceiling the functional sweep uses per format. The square is the
     one extra row-axis case: both factors of row_base = rt * block_ct_dim * REDUCE_TILE_STRIDE
-    exceed one there. The single tile is the like-for-like point against Blackhole, whose
-    perf_sfpu_reduce runs only single 32x32 ReduceRow tiles ({Float32, Int32} x {Max, Sum}). The
-    column axis reduces tile by tile, so its rows across these shapes are knowingly duplicates.
+    exceed one there. The single tile is the like-for-like point against Wormhole and Blackhole,
+    whose perf_sfpu_reduce runs only single 32x32 tiles ({Float32, Int32} x {ReduceRow,
+    ReduceColumn} x {Max, Sum, Average}, less Int32 row Average). The column axis reduces tile by
+    tile, so its rows across these shapes are knowingly duplicates.
     """
     dest_acc = (
         DestAccumulation.Yes
@@ -72,7 +72,6 @@ PERF_INPUT_BOUNDS = (-100, 100)
     formats=PERF_FORMATS,
     mathop=get_supported_reduce_axes,
     dimension_combinations=perf_input_dimensions,
-    implied_math_format=[ImpliedMathFormat.Yes],
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],
     is_perf=[True],
@@ -83,7 +82,6 @@ def test_perf_sfpu_reduce_quasar(
     formats,
     mathop,
     dimension_combinations,
-    implied_math_format,
     run_types,
     loop_factor,
     is_perf,
@@ -100,7 +98,6 @@ def test_perf_sfpu_reduce_quasar(
         PERF_INPUT_BOUNDS,
         dimension_combinations,
         TILE_DIM,
-        implied_math_format,
         run_types=run_types,
         loop_factor=loop_factor,
         is_perf=is_perf,

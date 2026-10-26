@@ -11,7 +11,7 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.unpack.unpack_a import unpack_a_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.operand import BfdResource, bfd_current
+from fuser.operand import BfdResource
 from helpers.llk_params import (
     DestAccumulation,
     EltwiseBinaryReuseDestType,
@@ -123,9 +123,11 @@ class UnpackerA(Unpacker):
         num_tiles = 1 if per_tile else block.block_cols
 
         return (
-            compute_unit.src_a.bfd_alloc_and_program(engine)
+            "{\n"
+            + compute_unit.src_a.bfd_alloc_and_program(engine, result_name="bfd_id")
             + f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
-            f"({bfd_current(engine)}, {tensor_shape}, {num_tiles});\n"
+            f"(bfd_id, {tensor_shape}, {num_tiles});\n"
+            "}\n"
         )
 
     def unpack(

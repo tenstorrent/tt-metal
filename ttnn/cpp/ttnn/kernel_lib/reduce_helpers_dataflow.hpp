@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "llk_defs.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 namespace dataflow_kernel_lib {
 

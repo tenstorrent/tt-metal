@@ -19,17 +19,16 @@ The perf test times every program replayed from a trace, as the model runs it. E
 chip's program in turn and, on 8x4, issues the overlap slower than the device runs it, so a ring's chips
 start hundreds of microseconds apart and the overlap waits on its late neighbours.
 
-TtMoe runs this overlap in every traced Blackhole prefill, so CI runs the 8x4 accuracy cases on a BH Galaxy
-(Disaggregated prefill op unit tests); the perf cases, the 8x1 cases and dg0-only are run by hand.
+TtMoe runs this overlap in every traced Blackhole prefill, so CI runs the accuracy cases, 8x4 on a BH Galaxy
+and 8x1 on a LoudBox (Disaggregated prefill op unit tests). The perf cases, the 8x1 Galaxy submesh and dg0-only
+are run by hand, so CI never collects them.
 """
 
+import heapq
+import time
 from types import SimpleNamespace
 
-import time
-
 import pytest
-import heapq
-
 import torch
 from loguru import logger
 
@@ -44,15 +43,17 @@ from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
+    create_fabric_router_config,
     extract_mesh_config,
     get_ep_mesh_composer,
     get_ep_mesh_mapper,
     get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
     initialize_test_inputs,
+    moe_fabric_payload_size,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_combine_output
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_combine_output
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
 _FULL_MESH = (8, 4)
@@ -169,8 +170,12 @@ def _scaled_model(mesh, model_id):
 _TRACE_REGION_SIZE = 64 * 1024 * 1024
 
 
-def _device_params(fabric_cfg):
+def _device_params(fabric_cfg, model_id):
     params = dict(fabric_to_device_params(fabric_cfg))
+    # The payload TtMoe opens the mesh with, so combine sends each token in two halves as the model does.
+    params["fabric_router_config"] = create_fabric_router_config(
+        max_payload_size=moe_fabric_payload_size(_MODELS[model_id])
+    )
     params["trace_region_size"] = _TRACE_REGION_SIZE
     return params
 
@@ -188,7 +193,7 @@ def _mesh_params():
                 params.append(
                     pytest.param(
                         mesh,
-                        _device_params(fabric_cfg),
+                        _device_params(fabric_cfg, model_id),
                         threshold_id,
                         model_id,
                         None,  # variant
@@ -204,7 +209,7 @@ def _mesh_params():
             params.append(
                 pytest.param(
                     _FULL_MESH,
-                    _device_params(_MESHES[_FULL_MESH]),
+                    _device_params(_MESHES[_FULL_MESH], model_id),
                     threshold_id,
                     model_id,
                     "8x1-submesh",
@@ -220,7 +225,7 @@ def _mesh_params():
             params.append(
                 pytest.param(
                     _FULL_MESH,
-                    _device_params(_MESHES[_FULL_MESH]),
+                    _device_params(_MESHES[_FULL_MESH], model_id),
                     threshold_id,
                     model_id,
                     "dg0-only",
@@ -582,6 +587,16 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     )
 
 
+def _ci_unsupported_param_combos(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    return on_ci and params["variant"] is not None
+
+
+def _ci_unsupported_perf_combos(**params):
+    return params["is_ci_env"] or params["is_ci_v2_env"]
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
 @pytest.mark.parametrize(
     "mesh_device, device_params, threshold_id, model_id, variant",
@@ -648,6 +663,7 @@ def _replay_us(mesh_device, trace_id, iters):
     return (time.perf_counter() - start) / iters * 1e6
 
 
+@pytest.mark.uncollect_if(pred=_ci_unsupported_perf_combos)
 @pytest.mark.requires_host_iommu
 @pytest.mark.skipif(not is_blackhole(), reason="the routed expert is Blackhole-only")
 @pytest.mark.parametrize(

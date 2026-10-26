@@ -4,7 +4,7 @@
   init_run.py --root /path/to/checkout --out /path/to/run-dir --repo owner/name \
       [--prio 'A=src/kernels/**,src/core/**' --prio 'B=tools/**'] [--default-prio C] \
       [--ext .c,.cc,.cpp,.h,.hpp,.py] [--include 'src/area/**'] [--exclude 'third_party/**'] \
-      [--since <commit>] [--max-files 20] [--max-lines 3500] \
+      [--since <commit>] [--max-files 20] [--max-lines 300] \
       [--knowledge references/classes-universal.md,references/classes-<domain>.md]   # a repo pack only to re-measure it
 
 --knowledge defaults to the universal classes, plus the Tenstorrent classes for a tenstorrent/ repo.
@@ -15,14 +15,15 @@ recorded file:line findings stay valid for the life of the run. The commit is re
 --since limits the scope to files changed between <commit> and the audited commit (diff mode).
 Priorities are glob lists matched in the order given; unmatched files get --default-prio.
 Batches never mix priorities, keep directories contiguous, and hold at most --max-files files and
---max-lines lines (or the --batch-lines budget for their priority; priority A defaults to 1500), so an agent can
-read, and actually analyse, every line of every file it is assigned.
+--max-lines lines (default 300, or the --batch-lines budget for their priority), so an agent can read, and actually
+analyse, every line of every file it is assigned. A file longer than the budget is a batch of its own.
 """
 import argparse
 import datetime
 import fnmatch
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -62,12 +63,12 @@ p.add_argument(
 p.add_argument("--exclude", action="append", default=[])
 p.add_argument("--since", help="diff mode: only files changed since this commit")
 p.add_argument("--max-files", type=int, default=20)
-p.add_argument("--max-lines", type=int, default=3500)
+p.add_argument("--max-lines", type=int, default=300)
 p.add_argument(
     "--batch-lines",
-    default="A=1500",
-    help="per-priority line budget overriding --max-lines, e.g. 'A=1500,B=3500'. Less code per hunter means "
-    "deeper reading; the post-fix miss analysis found skimming, not coverage, was the main cause of misses",
+    default="",
+    help="per-priority line budget overriding --max-lines, e.g. 'C=1500'. Less code per hunter means deeper "
+    "reading: on full-size batches, hunters found real bugs at 300 lines that they missed at 800 and above",
 )
 p.add_argument(
     "--knowledge",
@@ -186,7 +187,59 @@ if submodules and not a.recurse_submodules:
         file=sys.stderr,
     )
 if a.since:
-    changed = set(git("diff", "--name-only", f"{a.since}...{commit}").splitlines())
+    # -z for the same reason as ls-files above
+    changed = {
+        p
+        for p in git("diff", "--name-only", "-z", f"{a.since}...{commit}").split("\0")
+        if p
+    }
+    if a.recurse_submodules:
+        # a diff names a changed submodule only by its path: diff inside it between its two pins, and recurse
+
+        def pin(repo, rev, s):
+            """The commit submodule s (a path inside repo) is pinned to at rev, or None if it is not there."""
+            entry = (
+                git("-C", repo, "ls-tree", "-z", rev, "--", s).split("\0")[0].split()
+            )
+            return entry[2] if entry else None
+
+        def gitlinks(repo, rev):
+            out_ = git("-C", repo, "ls-tree", "-r", "-z", rev)
+            return {
+                e.split("\t", 1)[1] for e in out_.split("\0") if e.startswith("160000 ")
+            }
+
+        def changed_in(path, old, new):
+            """Changed files inside the submodule at path (from the root) between pins old and new."""
+            try:
+                names = (
+                    git("-C", path, "diff", "--name-only", "-z", old, new)
+                    if old
+                    else git("-C", path, "ls-files", "-z")
+                )
+                nested = gitlinks(path, new) if new else set()
+            except subprocess.CalledProcessError:
+                # a pin is not in the submodule's clone: every file in it counts as changed
+                print(
+                    f"WARNING: {path}: cannot diff {(old or 'none')[:11]}..{(new or 'none')[:11]} (not fetched); "
+                    "all its files are in scope",
+                    file=sys.stderr,
+                )
+                return {f for f in files if f.startswith(path + "/")}
+            got = set()
+            for p in filter(None, names.split("\0")):
+                if p in nested:
+                    got |= changed_in(
+                        f"{path}/{p}", old and pin(path, old, p), pin(path, new, p)
+                    )
+                else:
+                    got.add(f"{path}/{p}")
+            return got
+
+        base = git("merge-base", a.since, commit).strip()
+        for s in submodules:
+            if s in changed:
+                changed |= changed_in(s, pin(".", base, s), pin(".", commit, s))
     files = [f for f in files if f in changed]
 # comma lists, like --prio: a whole list taken as one glob matches nothing, silently
 include = [g.strip() for x in a.include for g in x.split(",") if g.strip()]

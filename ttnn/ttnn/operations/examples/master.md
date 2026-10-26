@@ -64,6 +64,27 @@ and size each CB to `2 * block` tiles (double-buffered). Small sweet spot (~4–
 Use the smallest dtype your accuracy allows. Skip all of it if you're already bandwidth-bound (enough
 cores) or compute-bound.
 
+## ⭐⭐ T2 — [`trid_double_issue`](trid_double_issue/README.md)
+**Concept:** barrier **granularity** on a DRAM read stream — a drain-everything
+`noc_async_read_barrier()` vs. a wait scoped to one **transaction id**, so reads stay on the wire
+across the wait.
+**Situation:** your reader batches reads (a block, then ONE barrier) and you cannot widen the block
+— a shard size, a wide tensor, co-resident buffers cap it — but the NoC still goes idle at every
+barrier.
+**Measured win:** **1.11–1.63×** over a properly tuned non-trid reader at equal CB (Blackhole,
+1 core, bf16 interleaved-DRAM copy): 1.54× at block=1 falling to 1.11× at block=16. **Batch your
+barriers first — that is the bigger win:** issuing several blocks before the one barrier takes
+block=8 from 52.1 to 85.1 GB/s, and its optimum is `cb_blocks/2` (a 1/2/4 sweep straddles it). What
+trids add on top is **L1, not peak bandwidth** — everything converges to the same ~122 GB/s
+single-core ceiling, and trids just reach a given bandwidth with ~1.5–2× less L1. At a large CB the
+trivial one-block loop is within 3% of the best number in the study, so don't bother.
+**Gist:** `dataflow_kernel_lib::set_read_trid(noc, id)` before each block, then retire the OLDEST id
+with `::async_read_barrier_with_trid(noc, id)` once `T` are outstanding. Block `k` and `k-T` share an
+id, so one barrier both retires the old block and frees the id — the ring needs no counters. Depth
+3–4 is where it pays; `trid ×2` can merely tie a tuned baseline. **Read the README before writing
+it:** the CB write pointer lags the in-flight blocks, and getting the landing slot wrong silently
+overwrites data still in flight.
+
 ## ⭐⭐ T2 — [`tile_reorder`](tile_reorder/README.md)
 **Concept:** transfer coalescing on a DRAM-bandwidth-bound move.
 **Situation:** a whole-tile relocation (permute / transpose-of-tiles) written the generic way —
@@ -86,6 +107,54 @@ data-movement RISC-V is itself the bottleneck. First confirm you are RISC-V-issu
 role. The example shrinks the NoC transaction size only to *create* that bottleneck and expose the
 effect (up to ~1.7×, Wormhole B0; see [`report.md`](split_reader/report.md)) — transaction size is
 the knob, not the point.
+
+## ⭐⭐ T2 — [`bank_stagger`](bank_stagger/README.md)
+**Concept:** DRAM bank contention — rotate each core's **issue order** so the grid's requests at any
+moment land on different banks instead of all on one.
+**Situation:** every core walks its data in the same order and the data lines up on the banks — e.g.
+a **width-sharded DRAM source** with one shard per bank, where each column block is one bank; or an
+**interleaved DRAM source** split by width (cores share rows) or by height on Blackhole (rows start at
+`32·k`, `32·k % 8 == 0`), where every core starts on the same bank (both measured). Writes into
+width-sharded or bank-aligned outputs are the same pattern (see the README).
+**Measured win (Blackhole, 110 cores):** starting each core at block `core % n_w` is **1.32×** at
+256 B reads and 1.16× at 1024 B with 8 blocks per core: bf16 tensors of shape **3520×1024** and
+**3520×4096** (H×W), respectively. Doubling H to **7040** gives 16 blocks per core; speedups fall to
+**1.19× and 1.13×**, respectively: relative gains and savings per unit of work decrease, even though
+total time saved increases. The measured benefit is stronger for the shorter workloads; do not
+extrapolate the 8-block speedups to workloads with many blocks per core.
+On an interleaved source, starting each core at row `core % 32` (`stagger_rows`), with one block per
+core: width blocking is **1.04×** at 128 B reads (**32×7040**) and **1.07×** at 1024 B (**32×56320**);
+height blocking is **1.05×** at 1024 B (**3520×512**). With four blocks per core (**128×56320**) it
+is 1.01×. The time saved stays at ~0.3–1.3 µs, so the ratio shrinks
+as the work per core grows.
+**Gist:** start each core's walk at a different index and wrap. `stagger_blocks` and `stagger_rows`
+are compile-time switches, so flip them per call to check whether they pay on your shape.
+
+## ⭐⭐ T2 — [`read_coalescing`](read_coalescing/README.md)
+**Concept:** replace many small reads with one wide call over physically contiguous shard rows;
+compare bank-affine work assignment as another approach to the read bottleneck, both alone
+and combined. Gains can overlap or interfere. A plain ROW_MAJOR
+DRAM copy, two data-movement kernels, one double-buffered CB, no compute kernel.
+**Situation:** a width-sharded DRAM source has one full-height shard per bank, but the reader
+issues 32 small calls per row block even though those rows are contiguous in that bank.
+**Measured win (Blackhole, 104 cores):** for bf16 **3328×512** with 128 B rows per shard,
+coalescing alone gives **3.24×** (**88.308 → 27.256 µs**). Adding bank affinity gives another
+**1.20×**, reaching **3.90×** combined (**22.657 µs**). Across six cases coalescing wins
+**1.11–3.66×**. Affinity added after coalescing ranges **0.91–1.28×**: two longer cases
+regress, so enabling both is not universally best. Coalescing alone is the default.
+These use maximum within-timer-cluster spans because the measured board has mismatched core
+timer bases; see the report. Same cores, CB capacity, bytes and output transfers in all arms;
+equal work per core on the benchmark shapes. Baseline has no bank staggering.
+**Gist:** combine all 32 adjacent full shard rows into one wide read API call (`coalesce_reads`);
+the API splits hardware bursts as needed. This requires physical contiguity, no alignment gaps,
+and a read wholly inside the shard and reserved CB window — invalid across interleaved pages.
+Then try assigning each core one bank's column block and splitting that bank's height among its
+cores (`bank_affinity`). Two independent compile-time switches measure all four combinations.
+**Concrete layout:** the 3328×512 bf16 input is eight 3328×64 DRAM shards (one per bank),
+with consecutive 128 B rows. Coalescing turns each 32-row block into one **4 KiB** read call.
+Without affinity a core reads **8 banks × 1 block**; with affinity it reads **1 bank × 8 blocks**
+(13 cores per bank). Both copy **32 KiB/core**, with unchanged storage. Coalescing controls a
+transfer; affinity controls the bank used across transfers. Neither is a subset of the other.
 
 ## ⭐⭐ T2 — [`matmul_output_subblock`](matmul_output_subblock/README.md)
 **Concept:** matmul output-subblock shape → SRC-register operand reuse (via the `matmul_block` helper).
@@ -282,16 +351,16 @@ Coarser fallbacks: a half-tile result → `VectorMode::R`/`::C`; a scalar → `V
 neither exposes `ITERATIONS` or a parity stride, so `r_iter2`/`c_skip` need the underlying calls.
 
 ## ⭐⭐ T2 — [`mcast_topology`](mcast_topology/README.md)
-**Concept:** the multicast topology a **2-D (block-sharded) work split** requires — two **1-D** mcast families (`Mcast1D(PerRow)` + `Mcast1D(PerColumn)`) — vs. every core re-reading its own operand slices from DRAM.
+**Concept:** the multicast topology a **2-D (block-sharded) work split** requires — two **1-D** mcast channels (`Mcast` grouped `RowMajor` + `Mcast` grouped `ColumnMajor`) — vs. every core re-reading its own operand slices from DRAM.
 **Situation:** neither `M` nor `N` alone is long enough to fill the grid, so you split both at once (grid rows carry `M`, grid columns carry `N`). Core `(x=c, y=r)` then needs `A[M_r, :]` and `B[:, N_c]`. Written the obvious way every core fetches its own two slices, which is redundant *by construction* — all `Gc` cores in a row want the same A slice and all `Gr` cores in a column want the same B slice. This is exactly the point where "a 2-D split costs `P×` the operand traffic" gets written down as a reason to reject the 2-D split; it is only true if every core reads for itself.
 **Measured result:** delivering the same operands to the same 64 cores is **1.91× faster** with the two 1-D mcasts (Blackhole, 11×10 grid, 8×8 split, `M=8t N=32t K=4t`; **8512 ns → 4450 ns**). DRAM tile-reads drop `1280 → 160` (**8×**). As in `shared_input_reuse`, the device-time win is *much smaller than the read-count reduction* — each line's sender reads its slice serially and the bytes still cross the NoC.
-**Gist:** broadcast an operand along the axis it does **not** vary with. On a 2-D split that means **two** `Mcast1D` families on the same grid at disjoint `base_sem_id`s (0 and 2) — `PerRow` for the operand that is constant along a row, `PerColumn` for the one constant down a column — with each core a sender on one, both, or neither (four CT-specialized reader kernels, so every core hosts exactly one). **The naming inverts and this is the trap:** a 2-D work split needs **1-D** mcasts, while a 1-D work split (cut `M` only, every core needing all of `B`) is what needs a **2-D** mcast to a whole rectangle. "More sharded" means a *shorter, narrower* path per operand, not a bigger broadcast. Ordering is deadlock-free because every core completes its A phase before any core can block in its B phase.
+**Gist:** broadcast an operand along the axis it does **not** vary with. On a 2-D split that means **two** `Mcast` channels on the same grid at disjoint semaphore ids (the second attaches at the first's `next_semaphore_id()`) — row-major groups for the operand that is constant along a row, column-major groups for the one constant down a column — with each core a sender on one, both, or neither (four CT-specialized reader kernels, so every core hosts exactly one). **The naming inverts and this is the trap:** a 2-D work split needs **1-D** mcasts, while a 1-D work split (cut `M` only, every core needing all of `B`) is what needs a **2-D** mcast to a whole rectangle. "More sharded" means a *shorter, narrower* path per operand, not a bigger broadcast. Ordering is deadlock-free because every core completes its A phase before any core can block in its B phase.
 
 ## ⭐⭐⭐ T3 — [`shared_input_reuse`](shared_input_reuse/README.md)
 **Concept:** redundant-DRAM-read elimination — stream a shared input once and NoC-multicast it (the `mcast_pipe` helper) vs. every core re-reading it from DRAM.
 **Situation:** a grid of cores all need the **same** multi-MB input — a large shared matrix `[R, C]` (~2.4 MB) streamed in fixed-size chunks (larger than L1). Written the obvious way, every core streams the whole input from DRAM — `N×` the unique bytes.
 **Measured result:** reading each chunk once on a top-left injector and `mcast_pipe`-broadcasting it to the other cores is **1.71×** faster than per-core DRAM reads (Blackhole, 22 cores = 2×11, shared input = 19×16×4 = 1216 tiles ≈ 2.4 MB bf16; **135 µs → 79 µs**). The device-time win is *smaller than the ~11× DRAM-read-**count** reduction* forwarding gives, because the single injector reads the input serially and the bytes still cross the NoC.
-**Gist:** for a shared, re-read multi-MB input at grid scale, read each chunk once + `noc_async_write_multicast` to the rest (use the `mcast_pipe` `SenderPipe`/`ReceiverPipe` helper + `ttnn.Mcast2D` host wiring; sender-in-rect self-excludes; double-buffer so the injector prefetches while consumers drain). The win grows with core count and with more concurrent injectors (one per independent stream). Two orthogonal correctness notes it demonstrates: keep output ≪ input (write a tiny per-core reduction, not the block) so you measure the READ not the write; and accumulate bf16 data in **fp32** via `add_tiles(acc_to_dest)` (never `binary_dest_reuse`, which round-trips the sum through a bf16 Src register and saturates at 256).
+**Gist:** for a shared, re-read multi-MB input at grid scale, read each chunk once + `noc_async_write_multicast` to the rest (use the `mcast_pipe` `SenderPipe`/`ReceiverPipe` helper + `ttnn.Mcast` host wiring; sender-in-rect self-excludes; double-buffer so the injector prefetches while consumers drain). The win grows with core count and with more concurrent injectors (one per independent stream). Two orthogonal correctness notes it demonstrates: keep output ≪ input (write a tiny per-core reduction, not the block) so you measure the READ not the write; and accumulate bf16 data in **fp32** via `add_tiles(acc_to_dest)` (never `binary_dest_reuse`, which round-trips the sum through a bf16 Src register and saturates at 256).
 
 ## ⭐⭐⭐ T3 — [`tensix_all_reduce_ring_transport`](tensix_all_reduce_ring_transport/README.md)
 **Concepts:** neighbor semaphore cost and direction-sensitive NoC contention in serpentine rings.

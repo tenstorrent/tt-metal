@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// mcast_pipe helper unit test: RECEIVER kernel. Decodes the ttnn.Mcast2D wire with McastArgs and drives
+// mcast_pipe helper unit test: RECEIVER kernel. Decodes the ttnn.Mcast wire with McastArgs and drives
 // ReceiverPipe::receive() for `num_iters` rounds, then writes the received payload out for verification.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

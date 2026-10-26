@@ -17,6 +17,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -206,11 +207,6 @@ private:
 class [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-22.")]] AnyBuffer {
 public:
     AnyBuffer() = default;
-    [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
-    static AnyBuffer create(
-        const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address = std::nullopt);
-    [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
-    static AnyBuffer create(const tt::tt_metal::BufferConfig& config, std::optional<uint64_t> address = std::nullopt);
 
     Buffer* get_buffer() const;
     bool is_mesh_buffer() const;

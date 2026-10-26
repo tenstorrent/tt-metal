@@ -343,11 +343,13 @@ void kernel_main() {
             {
                 const uint32_t off_page = ::get_arg_val<uint32_t>(URE_FAR_RT_BASE + 1);
                 const uint32_t dg_far = ::get_arg_val<uint32_t>(URE_FAR_RT_BASE + 2);
-                const InterleavedAddrGen<true> off_gen{
-                    .bank_base_address = ::get_arg_val<uint32_t>(URE_FAR_RT_BASE + 0), .page_size = off_page};
+                const auto off_acc = TensorAccessor(
+                    tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+                    ::get_arg_val<uint32_t>(URE_FAR_RT_BASE + 0),
+                    off_page);
                 const uint32_t far_l1 = counts_l1 + URE_FAR_EXT_OFF;
                 const uint32_t start_tmp = cb_start_scratch_obj.get_write_ptr();
-                noc_async_read(get_noc_addr(dg_far, off_gen), far_l1, off_page);
+                noc_async_read(off_acc.get_noc_addr(dg_far), far_l1, off_page);
                 noc_read.async_read(
                     start_acc,
                     CoreLocalMem<uint32_t>(start_tmp),

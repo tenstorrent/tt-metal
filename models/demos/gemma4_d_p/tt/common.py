@@ -58,7 +58,9 @@ def create_tt_model(
         (model_args, model, tt_kv_cache, state_dict)
     """
     mesh_device = mesh_config.device
-    geometry_error = prefill_chunk_geometry_error(prefill_chunk_size, mesh_config.cp_degree, max_seq_len)
+    geometry_error = prefill_chunk_geometry_error(
+        prefill_chunk_size, mesh_config.cp_degree, max_seq_len, tp_degree=mesh_config.tp_degree
+    )
     if geometry_error:
         raise ValueError(geometry_error)
 

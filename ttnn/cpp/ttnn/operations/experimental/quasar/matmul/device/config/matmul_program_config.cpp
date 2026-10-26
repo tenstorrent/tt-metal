@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
 #include <ranges>
+#include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::experimental::quasar::matmul {
 
@@ -993,8 +995,34 @@ MatmulProgramConfig get_program_config(
     const bool transpose_b,
     const uint32_t bias_single_tile_size,
     const ttnn::prim::qsr::MatmulParams& attributes) {
+    // A unified config without cores asks for its placement to be chosen.
+    const MatmulUnifiedProgramConfig* requested =
+        attributes.program_config.has_value() ? std::get_if<MatmulUnifiedProgramConfig>(&*attributes.program_config)
+                                              : nullptr;
+    if (requested != nullptr && requested->cores.num_cores() == 0) {
+        std::optional<MatmulUnifiedProgramConfig> chosen = ttnn::prim::qsr::choose_unified_placement(
+            input_tensor_a, input_tensor_b, bias_single_tile_size, attributes, *requested);
+        TT_FATAL(
+            chosen.has_value(),
+            "MatmulUnifiedProgramConfig: no placement of this matmul fits L1 or the unified matmul does not support it "
+            "(transposed operands, untilized output, tiles other than 32x32)");
+        return chosen.value();
+    }
     if (attributes.program_config.has_value()) {
         return attributes.program_config.value();
+    }
+    // Quasar takes the Quasar-native matmul wherever it runs, fusing user_fused_activation as the legacy auto config
+    // for a user grid does; the legacy picker covers the rest.
+    if (input_tensor_a.device()->arch() == tt::ARCH::QUASAR) {
+        std::optional<MatmulUnifiedProgramConfig> unified = ttnn::prim::qsr::choose_unified_placement(
+            input_tensor_a,
+            input_tensor_b,
+            bias_single_tile_size,
+            attributes,
+            MatmulUnifiedProgramConfig{.fused_activation = attributes.user_fused_activation});
+        if (unified.has_value()) {
+            return unified.value();
+        }
     }
     auto config = generate_matmul_program_config(
         input_tensor_a,
@@ -1137,8 +1165,24 @@ MatmulProgramConfig create_simple_matmul_program_config(
     auto in0_tile = utilities::get_matmul_tile(input_tensor_a, transpose_a);
     auto in1_tile = utilities::get_matmul_tile(input_tensor_b, transpose_b);
 
-    // Parameters for large matmul with reuse
-    const auto Mt = utilities::get_M_dim(a_shape_padded, in0_tile, /*fuse_batch=*/false);
+    // A sharded output needs the batch folded into M (compute_output_specs sizes the output shard grid that way,
+    // and a shard-backed output CB cannot drain an unfused batch loop). Folding is only legal when B is unbatched.
+    // BLOCK_SHARDED outputs whose user shard spec sits on a 1-row/1-column grid take the 1D mcast branches below,
+    // which honour that spec and decide batch fusion themselves (fused when B is unbatched), so they are excluded here.
+    bool block_sharded_output_on_1d_grid = false;
+    if (mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED && mem_config.shard_spec().has_value()) {
+        const auto shard_bbox = mem_config.shard_spec()->grid.bounding_box();
+        const bool is_single_core_grid = shard_bbox.start_coord == shard_bbox.end_coord;
+        block_sharded_output_on_1d_grid = !is_single_core_grid && (shard_bbox.end_coord.x == shard_bbox.start_coord.x ||
+                                                                   shard_bbox.end_coord.y == shard_bbox.start_coord.y);
+    }
+    const bool fuse_batch_for_sharded_output =
+        mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and not block_sharded_output_on_1d_grid and
+        get_batch_size(a_shape_padded) > 1 and get_batch_size(b_shape_padded) == 1;
+
+    // Parameters for large matmul with reuse; Mt includes the batch when it is fused so the grid-fit checks below
+    // see the same M that compute_output_specs uses.
+    const auto Mt = utilities::get_M_dim(a_shape_padded, in0_tile, fuse_batch_for_sharded_output);
     const auto Kt = utilities::get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = utilities::get_N_dim(b_shape_padded, in1_tile);
     uint32_t in0_block_w = 2;
@@ -1350,7 +1394,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 .per_core_N = per_core_N,
                 .transpose_mcast = transpose_mcast,
                 .fused_activation = std::nullopt,
-                .fuse_batch = false,
+                .fuse_batch = fuse_batch_for_sharded_output,
             };
         }
     }

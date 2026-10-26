@@ -284,7 +284,7 @@ ALWI void reduce_accumulate_via_add(
     // reduce() call, so it is not done here. Per call we do only the light format reconfig (gated by
     // reconfig_mode, to adapt SrcA/SrcB/packer formats when this reduce chains after a different-format op —
     // the AccumulateViaAdd analogue of the standard path's reconfig_data_format) plus the light SFPU-macro
-    // (re)load; the per-output add_tiles_init / copy_tile_init below re-arm the MOP. This mirrors how ReduceTile
+    // (re)load; the per-output add_init / copy_tile_init below re-arm the MOP. This mirrors how ReduceTile
     // relies on boot hw_configure + light reduce_init.
     constexpr bool reconfig_in =
         (reconfig_mode == ReduceDataFormatReconfigMode::INPUT ||
@@ -374,7 +374,7 @@ ALWI void reduce_accumulate_via_add(
                 input_dfb.pop_front(1);
                 consumed = 1;
             }
-            add_tiles_init(input_dfb_id, input_dfb_id, true);
+            add_init(input_dfb_id, input_dfb_id, true);
             for (; consumed < full_cnt; consumed += 2) {
                 input_dfb.wait_front(2);
                 add_tiles(input_dfb_id, input_dfb_id, 0, 1, 0);
@@ -408,7 +408,7 @@ ALWI void reduce_accumulate_via_add(
                         copy_tile(input_dfb_id, start, 0);
                         k = 1;
                     }
-                    add_tiles_init(input_dfb_id, input_dfb_id, true);
+                    add_init(input_dfb_id, input_dfb_id, true);
                     for (; k < full_cnt; k += 2) {
                         add_tiles(input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                     }
@@ -425,24 +425,24 @@ ALWI void reduce_accumulate_via_add(
                     if (accumulate.reload == AccumulateReloadMode::FoldViaAdd) {
                         // Fold the accumulator as an add_tiles SRCB operand — no dest reload. Reads acc via
                         // SrcB, so ONLY valid when acc_cb is UnpackToDestMode::Default. Parity of full_cnt
-                        // decides; add_tiles_init does NOT reconfig format, so reconfig SRCB around the acc-add
+                        // decides; add_init does NOT reconfig format, so reconfig SRCB around the acc-add
                         // (acc may be fp32 while the input is bf16) and restore it after.
                         if (full_cnt & 1u) {
                             if (full_cnt == 1u) {
                                 reconfig_data_format_srcb(input_dfb_id, acc_cb);
-                                add_tiles_init(input_dfb_id, acc_cb, true);  // fresh DST reads 0 -> new[0] + acc
+                                add_init(input_dfb_id, acc_cb, true);  // fresh DST reads 0 -> new[0] + acc
                                 add_tiles(input_dfb_id, acc_cb, start, 0, 0);
                                 reconfig_data_format_srcb(acc_cb, input_dfb_id);
                             } else {
-                                add_tiles_init(input_dfb_id, input_dfb_id, true);                 // fresh DST reads 0
+                                add_init(input_dfb_id, input_dfb_id, true);                       // fresh DST reads 0
                                 add_tiles(input_dfb_id, input_dfb_id, start, start + stride, 0);  // seed new pair
-                                add_tiles_init(input_dfb_id, input_dfb_id, true);
+                                add_init(input_dfb_id, input_dfb_id, true);
                                 for (uint32_t k = 2; k + 1 < full_cnt; k += 2) {
                                     add_tiles(
                                         input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                                 }
                                 reconfig_data_format_srcb(input_dfb_id, acc_cb);
-                                add_tiles_init(input_dfb_id, acc_cb, true);  // last new tile + accumulator
+                                add_init(input_dfb_id, acc_cb, true);  // last new tile + accumulator
                                 add_tiles(input_dfb_id, acc_cb, start + (full_cnt - 1u) * stride, 0, 0);
                                 reconfig_data_format_srcb(acc_cb, input_dfb_id);
                             }
@@ -451,7 +451,7 @@ ALWI void reduce_accumulate_via_add(
                             copy_tile_init(acc_cb);
                             copy_tile(acc_cb, 0, 0);  // DST = accumulator (even count reloads as the seed)
                             reconfig_data_format_srca(acc_cb, input_dfb_id);
-                            add_tiles_init(input_dfb_id, input_dfb_id, true);
+                            add_init(input_dfb_id, input_dfb_id, true);
                             for (uint32_t k = 0; k < full_cnt; k += 2) {
                                 add_tiles(input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                             }
@@ -469,7 +469,7 @@ ALWI void reduce_accumulate_via_add(
                                 copy_tile(input_dfb_id, start, 0);  // DST[0] = new[0] (odd seed, fresh)
                                 k = 1;
                             }
-                            add_tiles_init(input_dfb_id, input_dfb_id, true);
+                            add_init(input_dfb_id, input_dfb_id, true);
                             for (; k < full_cnt; k += 2) {
                                 add_tiles(input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                             }
@@ -499,13 +499,9 @@ ALWI void reduce_accumulate_via_add(
                         if (accumulate.reload == AccumulateReloadMode::CopySeedUniform) {
                             // Add every new tile via a DEST-reuse add (new tile -> SrcA, running sum reused
                             // from DST). 1 tile/op; acc stays resident in DST, never an FPU CB operand.
-                            binary_dest_reuse_tiles_init<
-                                ckernel::EltwiseBinaryType::ELWADD,
-                                ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+                            add_reuse_dest_init<ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
                             for (uint32_t k = 0; k < full_cnt; ++k) {
-                                binary_dest_reuse_tiles<
-                                    ckernel::EltwiseBinaryType::ELWADD,
-                                    ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                                add_reuse_dest_tiles<ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
                                     input_dfb_id, start + k * stride, 0);
                             }
                         } else if (accumulate.reload == AccumulateReloadMode::CopySeedZeroPair) {
@@ -514,11 +510,11 @@ ALWI void reduce_accumulate_via_add(
                             // truncation, no SFPU). Bulk in pairs. Aligned only (scaler_dfb is the zero tile).
                             uint32_t k = 0;
                             if (full_cnt & 1u) {
-                                add_tiles_init(input_dfb_id, scaler_dfb_id, true);
+                                add_init(input_dfb_id, scaler_dfb_id, true);
                                 add_tiles(input_dfb_id, scaler_dfb_id, start, 0, 0);  // DST += input[start] + 0
                                 k = 1;
                             }
-                            add_tiles_init(input_dfb_id, input_dfb_id, true);
+                            add_init(input_dfb_id, input_dfb_id, true);
                             for (; k < full_cnt; k += 2) {
                                 add_tiles(input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                             }
@@ -527,15 +523,12 @@ ALWI void reduce_accumulate_via_add(
                             // (2 tiles/op). Ending on add_tiles(input,input) leaves SrcB=input for the fold.
                             uint32_t k = 0;
                             if (full_cnt & 1u) {
-                                binary_dest_reuse_tiles_init<
-                                    ckernel::EltwiseBinaryType::ELWADD,
-                                    ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
-                                binary_dest_reuse_tiles<
-                                    ckernel::EltwiseBinaryType::ELWADD,
-                                    ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id, start, 0);
+                                add_reuse_dest_init<ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(input_dfb_id);
+                                add_reuse_dest_tiles<ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                                    input_dfb_id, start, 0);
                                 k = 1;
                             }
-                            add_tiles_init(input_dfb_id, input_dfb_id, true);
+                            add_init(input_dfb_id, input_dfb_id, true);
                             for (; k < full_cnt; k += 2) {
                                 add_tiles(input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                             }
@@ -555,7 +548,7 @@ ALWI void reduce_accumulate_via_add(
                     copy_tile(input_dfb_id, start, 0);
                     k = 1;
                 }
-                add_tiles_init(input_dfb_id, input_dfb_id, true);
+                add_init(input_dfb_id, input_dfb_id, true);
                 for (; k < full_cnt; k += 2) {
                     add_tiles(input_dfb_id, input_dfb_id, start + k * stride, start + (k + 1) * stride, 0);
                 }
@@ -681,9 +674,9 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
     }
 }
 
-template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false, typename AccumDFB>
 ALWI void reload_accumulator_if_needed(
-    DataflowBuffer& accum_dfb,
+    AccumDFB& accum_dfb,
     uint32_t input_dfb_id,
     uint32_t scaler_dfb_id,
     const AccumulateT& accumulate,
@@ -1164,7 +1157,10 @@ ALWI void reduce(
         const uint32_t stride = (input_memory_layout.row_stride > 0) ? input_memory_layout.row_stride : Wt;
         const uint32_t tiles_per_bulk = Ht * stride;
         const uint32_t total_input_tiles = tiles_per_bulk * num_batches;
-        UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Ht * chunk_size, total_input_tiles)));
+        // Largest bulk wait is Ht * min(chunk_size, Wt): a narrow input (e.g. Wt == 1) never waits
+        // on a full DEST-sized chunk, so don't demand a DFB that deep.
+        const uint32_t max_chunk = (Wt < chunk_size) ? Wt : chunk_size;
+        UNPACK((assert_input_dfb_size<input_policy>(input_dfb_id, Ht * max_chunk, total_input_tiles)));
         PACK((assert_output_dfb_size(output_dfb_id)));
 
         // PersistentPolicy: wait for all tiles upfront

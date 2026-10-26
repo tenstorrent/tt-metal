@@ -69,6 +69,8 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # Dense KV dedup; sparse models always dedup.
+    tp_shard_kv: bool = False
     # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
     # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
     sparse_kv_cache_format: Optional[object] = None
@@ -86,6 +88,8 @@ class PrefillRunParams:
     # rather than re-read from the env downstream so one resolution decides which drafter gets built.
     dflash_checkpoint_path: str = ""
     mtp_levels: int = 0
+    # Decode's MTP level count, 0 = mtp_levels. Levels past mtp_levels reuse its KV: table aliases + acks.
+    mtp_decode_levels: int = 0
 
     @property
     def sp_factor(self) -> int:
@@ -145,10 +149,31 @@ class PrefillModelAdapter(ABC):
     dflash_model_default: str = ""
     dflash_golden_default: str = ""
     supports_mtp: bool = False
-    # Whether this model's MoE can run the routed expert and combine as one overlapped program. On Blackhole
-    # that path uses combine_fabric2d, which carries a whole bf16 token plus a 64 B routing tail in a single
-    # fabric packet, so the mesh is opened with room for it rather than the model's own FABRIC_PAYLOAD_SIZE.
-    moe_overlaps_routed_expert_with_combine: bool = False
+    supports_tp_shard_kv: bool = False
+    tp_shard_kv_default: bool = False
+
+    def fabric_payload_size(self) -> int:
+        """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is
+        built, so a model whose ops need more room than ``model_config.FABRIC_PAYLOAD_SIZE`` returns it here."""
+        return self.model_config.FABRIC_PAYLOAD_SIZE
+
+    def cache_kind(self, config_id: int) -> str:
+        """What migration-table config ``config_id`` holds. Generic consumers understand ``"kvpe"`` and
+        ``"index"`` (a DSA indexer key cache) and treat any other value as an opaque cache they neither
+        decode nor infer a width for; a model may return its own kinds (Kimi-K3: ``"kda_recurrent"``,
+        ``"kda_convolution"``). The default keeps the historical convention (config 1 of a multi-config
+        table is the index cache); a model whose second config is something else overrides this so the
+        producer and the migration driver stop inferring the kind from the config count."""
+        if config_id == 0:
+            return "kvpe"
+        return "index" if config_id == 1 else "other"
+
+    def layer_position_range(self, layer_idx: int, real_len: int) -> tuple[int, int]:
+        """Table positions one /migrate of layer ``layer_idx`` covers after a ``real_len``-token prefill.
+        A token cache migrates ``[0, real_len)``. A model whose layer holds a cache on another axis
+        (Kimi-K3's KDA state: one of decode's eight version windows) overrides this; the migration driver
+        issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
+        return 0, real_len
 
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
@@ -200,11 +225,9 @@ class PrefillModelAdapter(ABC):
 
     def layer_split_boundaries(self, num_layers: int) -> Optional[set]:
         """Layer indices at which a pipeline rank may START (its ``first_layer_idx`` must be one of
-        these). ``None`` => unconstrained (dense models — any split is fine). A DSA cross-layer-reuse
-        model returns its ``full`` layer indices: each rank must begin on a layer that seeds that rank's
-        indexer-reuse chain (a rank starting on a ``shared`` layer has no prior top-k — see
-        ``tt_prefill_transformer``). The runner (``compute_layer_split``) snaps the default even split
-        onto these and rejects any split whose rank starts fall off them."""
+        these). ``None`` => unconstrained (dense models — any split is fine). The runner
+        (``compute_layer_split``) snaps the default even split onto these and rejects any split whose
+        rank starts fall off them."""
         return None
 
     @abstractmethod
@@ -316,6 +339,9 @@ ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
     # ERNIE-4.5-21B-A3B: GQA (20/4) + 64-expert top-6 MoE with 2 shared experts; single rank on a 1x4 BH mesh.
     "ernie45_d_p": "models.demos.ernie45_d_p.tt.runners.adapters.ernie45:Ernie45PrefillAdapter",
+    # DeepSeek-V4: hyper-connection residual, per-layer SWA / HCA / CSA attention; serving is single-rank, eager.
+    "deepseek_v4_flash": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4:DeepSeekV4FlashAdapter",
+    "deepseek_v4_pro": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4:DeepSeekV4ProAdapter",
     "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
     "gemma4_a4b_d_p": "models.demos.gemma4_a4b_d_p.tt.runners.adapter:Gemma4A4BPrefillAdapter",
     # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.

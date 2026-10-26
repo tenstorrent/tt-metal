@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/soc_descriptor.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/soc_descriptor.hpp>
 #include <memory>
 #include <vector>
 

@@ -235,7 +235,7 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
-        overlap_routed_expert_with_combine: Optional[bool] = None,
+        overlap_routed_expert_with_combine: Optional[bool] = False,
     ):
         """
         Initialize TtMoe module.
@@ -321,11 +321,13 @@ class TtMoe(LightweightModule):
                 agnostic, so this never invalidates one.
             overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
                 (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
-                written. Blackhole only. None means on wherever it is supported AND the mesh's fabric payload
-                fits a whole bf16 token plus combine_fabric2d's routing tail -- open the mesh with
-                init_helpers.moe_fabric_payload_size for that; with the model's own EMB_SIZE payload MoE runs
-                the routed expert then combine. Also needs a threshold that leaves the unified half
-                some experts. Even when enabled, a forward only overlaps while a trace controller is
+                written. Blackhole only. Off by default (False): only models that opt in with
+                ROUTED_EXPERT_COMBINE_OVERLAP (Kimi K2.7, GLM 5.3) pass
+                init_helpers.routed_expert_combine_overlap_arg's None, which means on wherever it is
+                supported AND the mesh's fabric payload fits half a bf16 token plus combine_fabric2d's
+                routing tail -- open the mesh with init_helpers.moe_fabric_payload_size for that; with the
+                model's own EMB_SIZE payload MoE runs the routed expert then combine. True demands it.
+                Also needs a threshold that leaves the unified half some experts. Even when enabled, a forward only overlaps while a trace controller is
                 attached (set_trace_controller): eager it runs the routed expert then combine, since the
                 overlapped program is host-bound when dispatched op by op. Its three global semaphores live in the mesh's TT_CCL; everything else it
                 places in L1 is freed when the op returns.
@@ -535,10 +537,11 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
-        # Overlapping is the default wherever the op can run: only Blackhole has it, combine_fabric2d relays tokens
-        # around a ring so the 2D fabric must wrap along mesh axis 0, and each token is one fabric packet so the payload
-        # must fit it. A mesh opened with the model's own payload (EMB_SIZE), or on a fabric that does not wrap,
-        # runs the routed expert then combine instead; moe_fabric_payload_size opens one with room for the overlap.
+        # An opted-in model (None) overlaps wherever the op can run: only Blackhole has it, combine_fabric2d relays tokens
+        # around a ring so the 2D fabric must wrap along mesh axis 0, and each token is at most two fabric packets so
+        # the payload must fit half of one. A mesh opened with the model's own payload (EMB_SIZE), or on a fabric that
+        # does not wrap, runs the routed expert then combine instead; moe_fabric_payload_size opens one with room for
+        # the overlap.
         overlap_payload = combine_overlap_payload_size(self.routed_emb_dim)
         fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes() if is_blackhole() else 0
         ring_axis_wraps = ttnn.get_fabric_config() in (
@@ -552,8 +555,8 @@ class TtMoe(LightweightModule):
             raise ValueError(
                 f"overlap_routed_expert_with_combine needs Blackhole, a 2D fabric that wraps along mesh axis 0 (got "
                 f"{'a ring' if ring_axis_wraps else 'no ring'}), and a fabric payload of at least {overlap_payload} B "
-                f"for a bf16 token plus combine_fabric2d's routing tail (got {fabric_payload} B); open the mesh with "
-                f"moe_fabric_payload_size on a torus"
+                f"for half a bf16 token plus combine_fabric2d's routing tail (got {fabric_payload} B); open the mesh "
+                f"with moe_fabric_payload_size on a torus"
             )
         logger.info(
             f"TtMoe: routed expert overlapped with combine_fabric2d: {overlap_routed_expert_with_combine} when traced, "
@@ -568,6 +571,8 @@ class TtMoe(LightweightModule):
         self.combine_overlap_semaphores = (
             self.tt_ccl.get_combine_overlap_semaphores() if overlap_routed_expert_with_combine else None
         )
+        # Fetched in set_trace_controller: only a traced forward overlaps, and that is the last point before it.
+        self.combine_forwarding_buffer = None
         self.replicated_global_expert_idx_tt = None
         if overlap_routed_expert_with_combine:
             assert (
@@ -664,6 +669,18 @@ class TtMoe(LightweightModule):
         dispatch overlap routes its sub-device load/clear through the controller so a ttnn trace can
         be split at those boundaries (see utils/sub_device_trace.py)."""
         self._trace_controller = controller
+        if (
+            controller is not None
+            and self.overlap_routed_expert_with_combine
+            and self.combine_forwarding_buffer is None
+        ):
+            self.combine_forwarding_buffer = self.tt_ccl.get_combine_forwarding_buffer(
+                self.routed_emb_dim,
+                self.experts_per_chip,
+                self.num_experts_per_tok,
+                self.seq_len_per_chip,
+                self.row_num_links,
+            )
 
     def release_sub_device_manager(self):
         """Remove the overlap sub-device manager this MoE created (no-op if overlap is off). Call
@@ -776,6 +793,7 @@ class TtMoe(LightweightModule):
             num_experts_per_tok=self.num_experts_per_tok,
             seq_len_per_chip=self.seq_len_per_chip,
             combine_semaphores=self.combine_overlap_semaphores,
+            forwarding_buffer=self.combine_forwarding_buffer,
         )
 
     def forward(
@@ -811,7 +829,7 @@ class TtMoe(LightweightModule):
                 (build_padding_config_device) instead of on host — the host builder's from_torch is
                 illegal inside a trace capture, and a config baked in at capture time would be wrong
                 for every later chunk. Ignored unless padding awareness is active (actual_isl set and
-                a DEVICE_FP32 gate).
+                a DEVICE_FP32 or GPT_DEVICE gate).
             input_ids: host token ids for the whole sequence, flat, one per row of x. Required by
                 the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
                 HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
@@ -853,8 +871,8 @@ class TtMoe(LightweightModule):
 
         # Build the per-device [local_real_tokens, pad_side] config once and share the
         # SAME tensor between the gate topk (sentinel-marks padded rows) and the dispatch
-        # op (bounds its token loop). This is only valid in DEVICE_FP32, where the gate
-        # actually sentinel-marks padded tokens so routing_setup/combine stay consistent
+        # op (bounds its token loop). This is only valid in DEVICE_FP32 and GPT_DEVICE, where
+        # the gate sentinel-marks padded tokens so routing_setup/combine stay consistent
         # with a shortened dispatch loop. In other gate modes padded tokens keep real
         # expert indices, so dispatch must process the full range -> padding_config=None.
         #
@@ -870,7 +888,8 @@ class TtMoe(LightweightModule):
         #     on-device. A caller that wanted padding awareness OFF under trace would pass
         #     actual_isl=None and get a capture with no padding-aware path at all.
         padding_config = None
-        if actual_isl is not None and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32:
+        gate_marks_padding = self.gate.fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE)
+        if actual_isl is not None and gate_marks_padding:
             if metadata is not None:
                 # Traced path: the per-chunk scalars live on-device in the metadata tensors, so build
                 # the config with the device op. The host builder's from_torch cannot run inside a

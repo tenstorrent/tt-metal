@@ -116,22 +116,18 @@ UntilizerGroups decide_untilizers(
 }
 
 // Any cell of the sender row or the row after it that nothing of this op holds yet.
-CollectorPlacement decide_collector(
+tt::tt_metal::CoreCoord decide_collector(
     const StreamPlacements& streams,
     std::set<tt::tt_metal::CoreCoord>& taken,
-    tt::tt_metal::IDevice* dev,
     const tt::tt_metal::CoreCoord& grid,
-    const tt::tt_fabric::FabricNodeId& who,
-    bool sender_row_first) {
+    const tt::tt_fabric::FabricNodeId& who) {
     const std::size_t sender_row = streams.begin()->second.worker_logical.y;
-    // With no untilizers the routed expert may use every row past the senders', so the collector joins them: the
-    // whole sender row is tried first.
-    for (std::size_t i = 0; i < 2 * grid.x; i++) {
-        const tt::tt_metal::CoreCoord core = sender_row_first
-                                                 ? tt::tt_metal::CoreCoord{i % grid.x, sender_row + i / grid.x}
-                                                 : tt::tt_metal::CoreCoord{i / 2, sender_row + 1 - i % 2};
-        if (core.y < grid.y && taken.insert(core).second) {
-            return CollectorPlacement{core, dev->virtual_core_from_logical_core(core, tt::CoreType::WORKER)};
+    for (std::size_t column = 0; column < grid.x; column++) {
+        for (std::size_t row : {sender_row + 1, sender_row}) {
+            const tt::tt_metal::CoreCoord core{column, row};
+            if (row < grid.y && taken.insert(core).second) {
+                return core;
+            }
         }
     }
     TT_FATAL(
@@ -173,7 +169,7 @@ DevicePlacement decide_device_placement(
             num_links);
         for (uint32_t k = 0; k < num_links; k++) {
             const auto [worker, noc_hops] = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
-                *dev, tt::tt_fabric::get_forwarding_eth_core(self_node, nbr_node, k), SENDER_NOC);
+                *dev, tt::tt_fabric::get_forwarding_eth_core(*mesh, self_node, nbr_node, k), SENDER_NOC);
             candidates.emplace(make_stream_id(k, delta == 1), WorkerCandidate{worker, noc_hops, *nbr, nbr_node});
         }
     }
@@ -226,9 +222,7 @@ DevicePlacement decide_device_placement(
     // Last, so it can only take a cell the senders and untilizers left: decide_untilizers claims whole
     // columns and refuses one already taken.
     if (with_collector) {
-        placement.collector =
-            decide_collector(
-                placements, taken, dev, mesh->compute_with_storage_grid_size(), self_node, untilizers_per_group == 0);
+        placement.collector = decide_collector(placements, taken, mesh->compute_with_storage_grid_size(), self_node);
     }
     return placement;
 }

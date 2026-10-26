@@ -73,7 +73,7 @@ ZoneMetaRegistry& ZoneMetaRegistry::instance() {
     return inst;
 }
 
-void ZoneMetaRegistry::ingest_elf(const std::string& elf_path) {
+void ZoneMetaRegistry::ingest_elf(const ll_api::ElfFile& elf, const std::string& elf_path) {
     State& s = state();
     {
         std::shared_lock rd(s.mtx);
@@ -85,45 +85,43 @@ void ZoneMetaRegistry::ingest_elf(const std::string& elf_path) {
     std::vector<ZoneMetaEntry> parsed;
     bool skipped_foreign = false;
     try {
-        ll_api::ElfFile elf;
-        elf.ReadImage(elf_path);
         uint64_t meta_vma = 0;
         auto meta = elf.GetSectionContents(".tt_zone_meta", meta_vma);
-        if (!meta.empty()) {
-            uint64_t str_vma = 0;
-            auto strs = elf.GetSectionContents(".tt_zone_str", str_vma);
-            // The JIT cache key does not cover this section's layout, so a stale root can be reused and walking it at
-            // our stride would bind plausible ids to wrong names; either guard failing means the section is not ours.
-            if (strs.empty()) {
-                log_debug(
-                    tt::LogLLRuntime,
-                    "zone-meta: '{}' has .tt_zone_meta but no .tt_zone_str -- foreign/stale record layout, "
-                    "ignoring the section (its zones will render as Zone_<id>)",
-                    elf_path);
-                skipped_foreign = true;
-            } else if (meta.size() % sizeof(ZoneMetaRecord) != 0) {
-                log_warning(
-                    tt::LogLLRuntime,
-                    "zone-meta: '{}' has a .tt_zone_meta of {} bytes, not a multiple of the {}-byte record "
-                    "stride -- foreign/stale record layout, ignoring the section",
-                    elf_path,
-                    meta.size(),
-                    sizeof(ZoneMetaRecord));
-                skipped_foreign = true;
+        if (meta.empty()) {
+            return;  // not a streaming-profiler build: nothing to register
+        }
+        uint64_t str_vma = 0;
+        auto strs = elf.GetSectionContents(".tt_zone_str", str_vma);
+        // The JIT cache key does not cover this section's layout, so a stale root can be reused and walking it at
+        // our stride would bind plausible ids to wrong names; either guard failing means the section is not ours.
+        if (strs.empty()) {
+            log_debug(
+                tt::LogLLRuntime,
+                "zone-meta: '{}' has .tt_zone_meta but no .tt_zone_str -- foreign/stale record layout, "
+                "ignoring the section (its zones will render as Zone_<id>)",
+                elf_path);
+            skipped_foreign = true;
+        } else if (meta.size() % sizeof(ZoneMetaRecord) != 0) {
+            log_warning(
+                tt::LogLLRuntime,
+                "zone-meta: '{}' has a .tt_zone_meta of {} bytes, not a multiple of the {}-byte record "
+                "stride -- foreign/stale record layout, ignoring the section",
+                elf_path,
+                meta.size(),
+                sizeof(ZoneMetaRecord));
+            skipped_foreign = true;
+        }
+        const size_t n = skipped_foreign ? 0 : meta.size() / sizeof(ZoneMetaRecord);
+        parsed.reserve(n);
+        for (size_t i = 0; i < n; i++) {
+            ZoneMetaRecord rec{};
+            std::memcpy(&rec, meta.data() + i * sizeof(ZoneMetaRecord), sizeof(rec));
+            const char* name = resolve(strs, str_vma, rec.name_ptr);
+            const char* file = resolve(strs, str_vma, rec.file_ptr);
+            if (name == nullptr) {
+                continue;
             }
-            const size_t n = skipped_foreign ? 0 : meta.size() / sizeof(ZoneMetaRecord);
-            parsed.reserve(n);
-            for (size_t i = 0; i < n; i++) {
-                ZoneMetaRecord rec{};
-                std::memcpy(&rec, meta.data() + i * sizeof(ZoneMetaRecord), sizeof(rec));
-                const char* name = resolve(strs, str_vma, rec.name_ptr);
-                const char* file = resolve(strs, str_vma, rec.file_ptr);
-                if (name == nullptr) {
-                    continue;
-                }
-                parsed.push_back(
-                    ZoneMetaEntry{rec.zone_id & TT_ZONE_ID_MASK, name, file != nullptr ? file : "", rec.line});
-            }
+            parsed.push_back(ZoneMetaEntry{rec.zone_id & TT_ZONE_ID_MASK, name, file != nullptr ? file : "", rec.line});
         }
     } catch (const std::exception& e) {
         // Non-fatal: a kernel whose zones cannot be named still profiles, rendering as "Zone_<id>".

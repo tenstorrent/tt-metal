@@ -277,12 +277,12 @@ def create_program_artifacts(input_tensor: ttnn.Tensor, output_tensor: ttnn.Tens
 
     # The mean broadcast: root -> the whole shard row. sender_index=0 makes cores[0] the sender,
     # which is the same core the gathers reduce onto.
-    mcast = ttnn.Mcast1D(
+    mcast = ttnn.Mcast(
         device,
+        ttnn.McastConfig(noc=ttnn.NOC.NOC_0),
         grid,
-        ttnn.Mcast1DShape.PerRow,
-        ttnn.Mcast1DFixedSenderConfig(starting_sender_index=0),
-        config=ttnn.McastConfig(noc=ttnn.NOC.NOC_0),
+        num_cores,
+        ttnn.McastFixedSenderConfig(sender_index=0),
     )
     mcast.attach(spec, run_args, MCAST_PREFIX, kernels=[K_READER])
 

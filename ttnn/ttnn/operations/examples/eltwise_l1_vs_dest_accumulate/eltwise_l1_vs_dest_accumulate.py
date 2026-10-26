@@ -69,14 +69,15 @@ void kernel_main() {
     constexpr uint32_t method = get_compile_time_arg_val(1);
     constexpr uint32_t kernel_iters = get_compile_time_arg_val(2);
     constexpr uint32_t cb_in = 0, cb_out = 16;
+    DataflowBuffer in_buf(cb_in), out_buf(cb_out);
 
     compute_kernel_hw_startup(cb_in, cb_out, cb_out);
     if constexpr (method == 1) {
         // Hoist the binary add init once (the pairwise chains below run InitReconfigOwner::Caller).
-        add_tiles_init(cb_in, cb_in);
+        add_init(cb_in, cb_in);
     } else if constexpr (method == 2) {
         // Same hoist, acc_to_dest=true: the DEST-accumulating add folds each pair into sticky D0.
-        add_tiles_init(cb_in, cb_in, true);
+        add_init(cb_in, cb_in, true);
     }
 
     for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
@@ -89,9 +90,9 @@ void kernel_main() {
             // next block into DEST, adds, and packs back to acc. acc round-trips L1 every step (the
             // per-iteration cb_out push/wait both drives the round-trip and syncs PACK->UNPACK); the
             // chain retains nothing in DEST between steps. cb_out is one page (operand A and output).
-            ckl::copy<ckl::input(cb_in), ckl::output(cb_out)>(ckl::IterationShape::one_tile());  // acc = X[0]
+            ckl::copy<ckl::input(cb_in), ckl::output(cb_out)>(ckl::IterationShape::one_tile(), in_buf, out_buf);  // acc = X[0]
             ckl::add<ckl::input(cb_out), ckl::input(cb_in), ckl::output(cb_out)>(
-                ckl::IterationShape::tiles(B - 1));                                              // acc += X[1..B-1]
+                ckl::IterationShape::tiles(B - 1), out_buf, in_buf, out_buf);  // acc += X[1..B-1]
         } else if constexpr (method == 1) {
             // ---- read two tiles per step: DEST = X[2k] + X[2k+1], then L1-accumulate onto acc ----
             // The input is caller-managed (one wait/pop for the whole resident stream) so each add
@@ -108,22 +109,22 @@ void kernel_main() {
             // step 0: seed acc = X[0] + X[1] (plain pack, l1-acc off).
             ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                 ckl::IterationShape::one_tile(),
-                AddPair{0, 1},
+                AddPair{in_buf, in_buf, 0, 1},
                 ckl::PackTile<
                     ckl::output(cb_out, ckl::ReservePolicy::None, ckl::PushPolicy::None,
                                 ckl::DataFormatReconfig::Disabled),
-                    ckl::Dst::D0>{});
+                    ckl::Dst::D0>{out_buf});
             // steps 1..N-1: acc += X[2k] + X[2k+1] (packer folds DEST onto acc in place).
             for (uint32_t k = 1; k < N; ++k) {
                 ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                     ckl::IterationShape::one_tile(),
-                    AddPair{2 * k, 2 * k + 1},
+                    AddPair{in_buf, in_buf, 2 * k, 2 * k + 1},
                     ckl::PackTile<
                         ckl::output(cb_out, ckl::ReservePolicy::None, ckl::PushPolicy::None,
                                     ckl::DataFormatReconfig::Disabled, ckl::TileAddressing::Direct,
                                     ckl::DestAccumulation::Disabled,
                                     ckl::L1Accumulation::AddToExisting),
-                        ckl::Dst::D0>{});
+                        ckl::Dst::D0>{out_buf});
             }
             cb_push_back(cb_out, 1);  // publish acc
             cb_pop_front(cb_in, B);   // release the resident input for this pass
@@ -146,12 +147,12 @@ void kernel_main() {
                     ckl::input(cb_in, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block,
                                ckl::DataFormatReconfig::Disabled, ckl::TileAddressing::Offset),
                     ckl::Dst::D0,
-                    ckl::DestAccumulation::WholeShape>{0, N},
+                    ckl::DestAccumulation::WholeShape>{in_buf, in_buf, 0, N},
                 ckl::PackTile<
                     ckl::output(cb_out, ckl::ReservePolicy::OneUpfront, ckl::PushPolicy::OneAtEnd,
                                 ckl::DataFormatReconfig::Disabled, ckl::TileAddressing::Direct,
                                 ckl::DestAccumulation::WholeShape, ckl::L1Accumulation::Disabled),
-                    ckl::Dst::D0>{});
+                    ckl::Dst::D0>{out_buf});
             cb_pop_front(cb_in, B);   // release the resident input for this pass
         }
         // Drain acc between in-kernel iterations so the next pass starts clean.

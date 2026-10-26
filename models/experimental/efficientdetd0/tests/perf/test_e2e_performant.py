@@ -166,6 +166,9 @@ def test_efficientdet_d0_e2e_performant(
     throughput_fps = num_iterations * batch_size / (end - start)
     logger.info(f"Average model time={1000.0 * inference_time : .2f} ms")
     logger.info(f"Average model performance={throughput_fps : .2f} fps")
+    from models.demos.utils.common_demo_utils import report_vision_fps
+
+    report_vision_fps("efficientdet-d0", throughput_fps, batch_size)
 
     total_num_samples = batch_size
     prep_perf_report(

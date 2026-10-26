@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "context/metal_env_accessor.hpp"
 #include "impl/profiler/profiler_state.hpp"
 #include "impl/profiler/profiler_state_manager.hpp"
 #include "llrt/get_platform_architecture.hpp"
@@ -310,7 +311,7 @@ TEST_F(MockDeviceProfilerFixture, CPU_DeviceProfilerIsNotStartedOnMockDevice) {
 
     // Even though profiling was requested, getDeviceProfilerState() must report it as disabled for
     // a mock/emulated context.
-    EXPECT_FALSE(getDeviceProfilerState(MetalContext::instance().get_context_id()))
+    EXPECT_FALSE(getDeviceProfilerState(MetalEnvAccessor(MetalContext::instance().get_env()).impl()))
         << "getDeviceProfilerState() must be false for a mock context even when profiling is "
            "requested";
 

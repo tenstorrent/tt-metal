@@ -47,6 +47,32 @@ def _gemma4_is_host_weight(key):
     return any(key.endswith(s) for s in _GEMMA4_HOST_WEIGHT_SUFFIXES)
 
 
+def gemma4_env_flag(name, default="0"):
+    return os.environ.get(name, default).lower() in ("1", "true", "yes")
+
+
+# Generator prefill chunk used with CP prefill: 6144 rows per column fill the SDPA grid.
+GEMMA4_CP_PREFILL_CHUNK = 24576
+
+
+def gemma4_cp_prefill_engaged(mesh_device):
+    """True only when ``create_tt_model`` will actually set ``mesh_config.cp_prefill``.
+
+    Prefill-chunk defaults use this so GEMMA4_CP_PREFILL=1 without fracture cannot select the large chunk.
+    """
+    shape = getattr(mesh_device, "shape", None)
+    try:
+        is2d = shape is not None and shape[0] > 1 and shape[1] > 1
+    except (TypeError, IndexError):
+        is2d = False
+    return (
+        gemma4_env_flag("GEMMA4_CP_PREFILL")
+        and gemma4_env_flag("GEMMA4_GALAXY_FRACTURE")
+        and is2d
+        and not gemma4_env_flag("GEMMA4_GALAXY_LANES")
+    )
+
+
 def create_tt_model(
     mesh_device,
     max_batch_size=1,
@@ -85,7 +111,27 @@ def create_tt_model(
     if mesh_config is None:
         is_mesh = hasattr(mesh_device, "shape")
         num_devices = mesh_device.get_num_devices() if is_mesh else 1
-        if is_mesh and num_devices > 1:
+        _fracture = gemma4_env_flag("GEMMA4_GALAXY_FRACTURE")
+        _lanes = gemma4_env_flag("GEMMA4_GALAXY_LANES")
+        if is_mesh and num_devices > 1 and _fracture and mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
+            # Galaxy one-instance: 2D-fractured weights with TP (heads) on the size-8 axis; (8,4) and (4,8)
+            # are both valid, so orientation stays a MESH_DEVICE knob. GEMMA4_GALAXY_LANES=1 lane-shards the batch.
+            _shape = tuple(mesh_device.shape)
+            _tp_axis = 0 if _shape[0] == 8 else (1 if _shape[1] == 8 else 0)
+            mesh_config = MeshConfig(
+                mesh_device.shape,
+                decode=ModeConfig(tp=_shape[_tp_axis]),
+                tp_axis=_tp_axis,
+                weight_fracture=True,
+            )
+            mesh_config.lane_sharded = _lanes
+            mesh_config.cp_prefill = gemma4_env_flag("GEMMA4_CP_PREFILL")
+            if mesh_config.lane_sharded and mesh_config.cp_prefill:
+                # Lane prefill hands the real page table only to the owner column, while CP partitions Q
+                # across every column; lanes win until CP gathers KV to the owner lane first.
+                logger.warning("GEMMA4_CP_PREFILL ignored: incompatible with GEMMA4_GALAXY_LANES (owner-lane KV)")
+                mesh_config.cp_prefill = False
+        elif is_mesh and num_devices > 1:
             mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
         else:
             mesh_config = MeshConfig((1, 1), decode=ModeConfig(tp=1))
@@ -131,6 +177,11 @@ def create_tt_model(
     # whenever a cache filename scheme changes.
     _cache_layout = {
         "layout": "v2-fused-gate-up-ws",
+        # Fractured builds write *_f8x4_* MLP files; a marker seeded by a plain
+        # TP build must not certify them.
+        "weight_layout": (
+            f"fractured-tp_axis{mesh_config.tp_axis}" if bool(getattr(mesh_config, "weight_fracture", False)) else "tp"
+        ),
         "attn_dram_shard": os.environ.get("GEMMA4_ATTN_DRAM_SHARD", "1"),
         "mlp_dram_shard": os.environ.get("GEMMA4_MLP_DRAM_SHARD", "1"),
         "dram_cores": os.environ.get("GEMMA4_DRAM_CORES", "8"),

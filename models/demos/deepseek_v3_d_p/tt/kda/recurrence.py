@@ -10,19 +10,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import torch
 from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
     KDA_CHUNK_SIZE,
+    KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE,
     KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
     KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
+    KDA_HIGH_BW_PREFIX_GATHER_LINKS,
     KDA_LOCAL_PREFIX_MEMORY_CONFIG,
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
     KDA_PREPARATION_L1_BYTES_PER_CORE,
-    KDA_RECURRENT_STATE_DTYPE,
     KDARecurrenceProgramConfig,
     l1_when_it_fits,
     preparation_bytes,
@@ -45,7 +47,7 @@ def _group_summary_memory_config(device: ttnn.Device, group_heads: int, key_dim:
 
 
 @dataclass(frozen=True)
-class _AffineTransform:
+class AffineTransform:
     """State-space affine map ``state -> a @ state + b``."""
 
     a: ttnn.Tensor
@@ -115,10 +117,10 @@ def _prepare_chunk_terms(
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
     gate_scale: float,
-    beta_logits_column_offset: int | None,
+    beta_logits_column_offset: int,
     memory_config: ttnn.MemoryConfig,
 ) -> _PreparedChunks:
-    # Chunk preparation reads each head's column straight from token-major [1, rows, heads] beta.
+    # Chunk preparation reads each head's logit column in place from the token-major projection and activates it.
     outputs = ttnn.experimental.kda.prepare_chunk_recurrence(
         q,
         k,
@@ -175,7 +177,7 @@ def _summarize_chunk_groups(
     groups_per_head: int,
     summary_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
-) -> _AffineTransform:
+) -> AffineTransform:
     """Summarize whole groups for the single-rank path at the BF16 prefix boundary."""
     a, b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
@@ -189,7 +191,7 @@ def _summarize_chunk_groups(
     # A single sequence rank has no split tail, so only the head summaries are needed.
     ttnn.deallocate(tail_a)
     ttnn.deallocate(tail_b)
-    return _AffineTransform(a, b)
+    return AffineTransform(a, b)
 
 
 def _scan_chunks(
@@ -217,7 +219,7 @@ def _scan_chunks(
     return RecurrenceResult(output=output, final_state=final_states)
 
 
-def _pack_transform(transform: _AffineTransform) -> ttnn.Tensor:
+def pack_transform(transform: AffineTransform) -> ttnn.Tensor:
     """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [A | B] that the prefix gathers."""
     transform_a, transform_b = transform.a, transform.b
     batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
@@ -235,7 +237,17 @@ def _pack_transform(transform: _AffineTransform) -> ttnn.Tensor:
     return ttnn.typecast(packed, KDA_AFFINE_SUMMARY_DTYPE, memory_config=KDA_OUTPUT_MEMORY_CONFIG)
 
 
-def _distributed_prefix(
+def _sp_links(device: ttnn.MeshDevice, sequence_parallel_axis: int) -> int:
+    """Ethernet links between neighbours on the SP axis; 0 for a system the link table does not know."""
+    from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links
+
+    try:
+        return get_num_links(device, sequence_parallel_axis)
+    except (KeyError, ValueError):
+        return 0
+
+
+def distributed_prefix(
     packed: ttnn.Tensor,
     initial_state: ttnn.Tensor,
     *,
@@ -243,6 +255,7 @@ def _distributed_prefix(
     compute_config: ttnn.DeviceComputeKernelConfig,
     actual_start: ttnn.Tensor,
     local_rows: int,
+    gather_buffer: ttnn.Tensor | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Compose one affine transform per chip in chronological order.
 
@@ -251,13 +264,31 @@ def _distributed_prefix(
     applies them with FP32 accumulation. Return the local entry state and the replicated final
     carry on each independent TP line.
     """
-    output_memory = KDA_OUTPUT_MEMORY_CONFIG
-    gathered = ttnn.all_gather(
-        packed,
-        dim=0,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=output_memory,
-    )
+    device = packed.device()
+    _, batch_heads, key_dim, row_width = tuple(packed.shape)
+    # The chain's entry state and final carry share initial_state's FP32 [B*H, K, V] shape.
+    chain_output_bytes = 2 * batch_heads * key_dim * (row_width - key_dim) * initial_state.element_size()
+    if gather_buffer is not None:
+        # The gather lands in the persistent DRAM buffer, so only the chain's outputs count against L1.
+        output_memory = l1_when_it_fits(device, chain_output_bytes, KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE)
+        gathered = ttnn.experimental.high_bw_all_gather(
+            packed,
+            dim=0,
+            output_tensor=gather_buffer,
+            cluster_axis=sequence_parallel_axis,
+            num_links=KDA_HIGH_BW_PREFIX_GATHER_LINKS,
+        )
+    else:
+        gathered_bytes = tuple(device.shape)[sequence_parallel_axis] * packed.logical_volume() * packed.element_size()
+        output_memory = l1_when_it_fits(
+            device, gathered_bytes + chain_output_bytes, KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE
+        )
+        gathered = ttnn.all_gather(
+            packed,
+            dim=0,
+            cluster_axis=sequence_parallel_axis,
+            memory_config=output_memory,
+        )
     return ttnn.experimental.kda.chain_affine_transforms(
         gathered,
         initial_state,
@@ -289,7 +320,7 @@ def _last_group_state(
 
 def _ordinary_group_scan(
     grouped: _PreparedChunks,
-    summary: _AffineTransform,
+    summary: AffineTransform,
     initial_state: ttnn.Tensor,
     *,
     actual_start: ttnn.Tensor,
@@ -371,7 +402,7 @@ def _scan_local_grouped_chunks(
 
 
 def _partition_prefix(
-    summary: _AffineTransform,
+    summary: AffineTransform,
     initial_state: ttnn.Tensor,
     *,
     groups_per_head: int,
@@ -392,8 +423,8 @@ def _partition_prefix(
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         compute_kernel_config=compute_config.affine_prefix,
     )
-    return _distributed_prefix(
-        _pack_transform(_AffineTransform(a, b)),
+    return distributed_prefix(
+        pack_transform(AffineTransform(a, b)),
         initial_state,
         sequence_parallel_axis=sequence_parallel_axis,
         compute_config=compute_config.affine_prefix,
@@ -414,6 +445,7 @@ def _scan_sp_grouped_chunks(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
+    gather_buffer: ttnn.Tensor | None = None,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
@@ -431,13 +463,14 @@ def _scan_sp_grouped_chunks(
             compute_kernel_config=compute_config.preparation,
             packed_head=True,
         )
-        group_entry_states, prefix_final_state = _distributed_prefix(
+        group_entry_states, prefix_final_state = distributed_prefix(
             packed,
             initial_state,
             sequence_parallel_axis=sequence_parallel_axis,
             compute_config=compute_config.affine_prefix,
             actual_start=actual_start,
             local_rows=geometry.local_rows,
+            gather_buffer=gather_buffer,
         )
     else:
         head_a, head_b, tail_a, tail_b = ttnn.experimental.kda.summarize_chunk_recurrence(
@@ -450,7 +483,7 @@ def _scan_sp_grouped_chunks(
             compute_kernel_config=compute_config.preparation,
         )
         local_entry_state, prefix_final_state = _partition_prefix(
-            _AffineTransform(head_a, head_b),
+            AffineTransform(head_a, head_b),
             initial_state,
             groups_per_head=groups,
             local_rows=geometry.local_rows,
@@ -575,6 +608,27 @@ class KDARecurrence:
                 raise ValueError("summary_group_chunks must divide the constructed local chunk count")
             self._groups = self._geometry.num_chunks // self._summary_group_chunks
             self._summary_memory = _group_summary_memory_config(device, batch * heads * self._groups, key_dim)
+        # A persistent, replicated output for high_bw_all_gather of the per-rank packed [A | B] summaries; only the
+        # one-group-per-head summary gathers them directly.
+        self._gather_buffer = None
+        if (
+            self._sequence_parallel
+            and program_config.high_bw_prefix_gather
+            and grouped
+            and self._groups == 1
+            and _sp_links(device, sequence_parallel_axis) >= KDA_HIGH_BW_PREFIX_GATHER_LINKS
+        ):
+            self._gather_buffer = ttnn.from_torch(
+                torch.zeros(
+                    (tuple(device.shape)[sequence_parallel_axis], batch * heads, key_dim, key_dim + value_dim),
+                    dtype=torch.bfloat16,
+                ),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
         if self._sequence_parallel:
             self._execute = self._run_sp
         elif grouped:
@@ -593,16 +647,15 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
-        beta_logits_column_offset: int | None,
+        beta_logits_column_offset: int,
         release_gate: bool,
     ) -> tuple[_PreparedChunks, ttnn.Tensor, _RecurrenceGeometry]:
         geometry = self._geometry
-        # Activated beta holds exactly one column per head; logits are a column window of a wider projection.
-        if beta_logits_column_offset is None:
-            beta_width_ok = beta.shape[-1] == geometry.heads
-        else:
-            beta_width_ok = beta.shape[-1] >= beta_logits_column_offset + geometry.heads
-        if tuple(beta.shape)[:2] != (geometry.batch, geometry.local_rows) or not beta_width_ok:
+        # Beta's logits are a column window of a wider projection.
+        if (
+            tuple(beta.shape)[:2] != (geometry.batch, geometry.local_rows)
+            or beta.shape[-1] < beta_logits_column_offset + geometry.heads
+        ):
             raise ValueError("recurrence beta shape does not match constructed geometry")
         for name, tensor, width in (
             ("q", q, geometry.heads * geometry.key_dim),
@@ -656,13 +709,13 @@ class KDARecurrence:
         gate: ttnn.Tensor,
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
-        beta_logits_column_offset: int | None = None,
+        beta_logits_column_offset: int,
         release_gate: bool = False,
     ) -> RecurrenceResult:
         """Execute the constructed graph using caller-owned state and chronology.
 
-        ``beta`` is the activated token-major beta, or with ``beta_logits_column_offset`` a wider BF16 tensor whose
-        columns from that offset hold beta's pre-sigmoid logits; chunk preparation then applies the sigmoid.
+        ``beta`` is a token-major BF16 tensor whose ``heads`` columns from ``beta_logits_column_offset`` hold beta's
+        pre-sigmoid logits, such as the fused input projection; chunk preparation applies the sigmoid.
         With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
         read it.
         """
@@ -739,4 +792,5 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
+            gather_buffer=self._gather_buffer,
         )

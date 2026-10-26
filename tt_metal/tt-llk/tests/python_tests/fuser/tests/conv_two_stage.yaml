@@ -26,7 +26,7 @@ operations:
         in1: "weights_reduce"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     pack:
       - output: "intermediate"
         block_size: [64, 64]
@@ -39,7 +39,7 @@ operations:
         in1: "weights_expand"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     pack:
       - output: "output"
         block_size: [64, 64]

@@ -56,6 +56,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
+from helpers.utils import classify_special
 
 # exp field all ones -> 2 infinities + 254 NaNs, both signs
 POS_SPECIALS = list(range(0x7F80, 0x8000))  # 128 bfloat16 bit patterns
@@ -154,15 +155,6 @@ def _run(values_by_face, out_fmt, dest_acc, in_fmt=DataFormat.Float16_b, floats=
 def test_tanh_specials(out_fmt, dest_acc):
     x, hw = _run({0: POS_SPECIALS, 1: NEG_SPECIALS, 2: ZEROS}, out_fmt, dest_acc)
 
-    def classify(v):
-        if np.isnan(v):
-            return "NaN"
-        if np.isinf(v):
-            return "+inf" if v > 0 else "-inf"
-        if v == 0.0:
-            return "+0.0" if np.signbit(v) == 0 else "-0.0"
-        return "%.9g" % v
-
     groups = {}
     for xv, hv in zip(x, hw):
         if np.isnan(xv):
@@ -173,8 +165,8 @@ def test_tanh_specials(out_fmt, dest_acc):
             key = "-0.0" if np.signbit(xv) else "+0.0"
         else:
             continue
-        groups.setdefault(key, {}).setdefault(classify(hv), 0)
-        groups[key][classify(hv)] += 1
+        groups.setdefault(key, {}).setdefault(classify_special(hv), 0)
+        groups[key][classify_special(hv)] += 1
 
     # What the hardware actually does today, measured on a Wormhole n150 and
     # byte-for-byte identical on main's 3-entry table, so none of it is a property of

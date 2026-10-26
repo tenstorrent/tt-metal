@@ -17,7 +17,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/api/ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include <utility>
 
 namespace ttnn::operations::pool::quasar {

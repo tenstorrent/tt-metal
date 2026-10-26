@@ -4,12 +4,15 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+#include <iterator>
+#include <limits>
 #include <tt-metalium/core_coord.hpp>
 
 #include <vector>
 #include <optional>
 #include <unordered_map>
-#include <array>
 
 namespace tt::tt_metal {
 

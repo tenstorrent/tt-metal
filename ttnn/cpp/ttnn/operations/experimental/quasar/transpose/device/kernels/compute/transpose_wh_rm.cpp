@@ -30,8 +30,8 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
     return 1;
 }
 
-template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_out>
-ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DataflowBuffer& cb_out_buf) {
+template <uint32_t Wt, uint32_t Ht, uint32_t HtWt, uint32_t cb_out, typename DFB>
+ALWI void transpose_with_pack_untilize(uint32_t cb_tilize, DFB& cb_out_buf) {
     uint32_t tile_idx = 0;
 
     transpose_init(cb_tilize);

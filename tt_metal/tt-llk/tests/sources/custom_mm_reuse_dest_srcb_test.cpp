@@ -108,12 +108,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.TILE_SIZE_UNPACK_B,
         params.TILE_SIZE_UNPACK_A);
 
-    _llk_unpack_AB_custom_mm_init_<false /* transpose */>(IN0_TILE_R_DIM, formats.unpack_B_dst /* weights land in SrcA */, REUSE_KT /* producer ct_dim */);
+    _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(
+        IN0_TILE_R_DIM, formats.unpack_B_dst /* weights land in SrcA */, REUSE_KT /* producer ct_dim */);
 
     // Signature: (base_address_a, base_address_b, tile_index_a, tile_index_b,
     //             tile_size_a, tile_size_b, kt_dim, ct_dim) where _a == SrcA
     //             (weights = buffer_B) and _b == SrcB (in0 = buffer_A).
-    _llk_unpack_AB_custom_mm_<false /* read_transposed */, true /* clear_src */>(
+    _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
         L1_ADDRESS(params.buffer_B[0]) /* base_address_a: producer weights -> SrcA */,
         L1_ADDRESS(params.buffer_A[0]) /* base_address_b: in0 -> SrcB */,
         0 /* tile_index_a (weights) */,

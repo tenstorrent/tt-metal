@@ -174,6 +174,7 @@ from ttnn._ttnn.fabric import (
     setup_routing_plane_connection,
     get_fabric_kernel_defines,
     fabric_connection_rt_args,
+    fabric_connection_rt_args_size,
     compute_fabric_connection_rt_args,
 )
 
@@ -214,10 +215,10 @@ from ttnn._ttnn.d2d_stream_service import (
     D2DStreamService,
     D2DStreamServiceSender,
     D2DStreamServiceReceiver,
-)
-
-from ttnn._ttnn.counter_channel import (
-    InterProcessCounterChannel,
+    D2DStageGateConfig,
+    D2DStageGateDescriptor,
+    D2DStageGateMode,
+    D2D_STAGE_GATE_UNGATED_SLOT,
 )
 
 from ttnn._ttnn.layer_ack_service import (
@@ -347,21 +348,16 @@ from ttnn.types import (
     ProgramRunArgs,
     compute_program_spec_hash,
     TensorAccessorArgs,
-    attach_absent,
-    McastFamily,
+    attach_absent_mcast,
     TransferMode,
-    Mcast1D,
-    Mcast1DShape,
-    Mcast1DSenderPlacement,
-    Mcast1DFixedSenderConfig,
-    Mcast1DRotatingSenderConfig,
-    Mcast2D,
-    Mcast2DSenderOrder,
-    Mcast2DFixedSenderConfig,
-    Mcast2DRotatingSenderConfig,
+    Mcast,
+    McastCoreOrder,
+    McastSenderPlacement,
+    McastFixedSenderConfig,
+    McastExplicitFixedSenderConfig,
+    McastRotatingSenderConfig,
     McastConfig,
     McastDataReady,
-    MCAST_ACK_EQUALS_FANOUT,
 )
 
 from ttnn.device import (
@@ -378,6 +374,7 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_allocator_base_address,
+    experimental_get_l1_occupied_ranges,
     get_max_worker_l1_unreserved_size,
     get_dram_alignment,
     get_l1_alignment,
@@ -506,7 +503,9 @@ if "ttnn.experimental" in sys.modules:
                 sub_submodule = importlib.import_module(full_internal_name)
                 sys.modules[full_external_name] = sub_submodule
 
-from ttnn.operations.unary import SigmoidMode, GeluVariant
+# ttnn.operations registers its submodules under bare names, so importing ttnn.operations.unary here
+# would execute unary.py a second time and let its goldens override later registrations.
+from ttnn._ttnn.operations.unary import SigmoidMode, GeluVariant
 
 divide = ttnn.div
 sub = ttnn.subtract
@@ -565,7 +564,6 @@ from ttnn.operations.normalization import (
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
-    create_group_norm_reciprocals,
     create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
     determine_expected_group_norm_dram_grid_size,
@@ -591,6 +589,7 @@ from ttnn.operations.reduction import (
 from ttnn.operations.ccl import (
     Topology,
     get_usable_topology,
+    get_num_links,
     DispatchAlgorithm,
     WorkerMode,
     MMSignalAggregatorMode,
@@ -664,6 +663,7 @@ from ttnn.operations.transformer import (
     ChunkGdnMonoProgramConfig,
     ChunkGdnPhasedProgramConfig,
     ChunkGdnFusedProgramConfig,
+    ChunkGdnWyInverse,
 )
 
 transformer.SparseKVFormat = SparseKVFormat

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_fabric2d_program_factory.hpp"
+#include "combine_fabric2d_collector.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_placement.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_assignments.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
@@ -47,9 +48,13 @@ namespace {
 
 // L1 layout, that is the parts that have to be in same places on every chip (e.g. semaphores)
 constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;
+// The courier's header is its own, not the drain's: a credit can be posted from inside the send loop's wait,
+// where the drain header may already hold a bump the EDM has not taken yet.
+constexpr uint32_t PKT_HDR_CREDIT_OFF = 0x0200;
 constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t PROD_BUF_OFF = 0x1000;
-static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
+static_assert(PKT_HDR_DRAIN_OFF < PKT_HDR_CREDIT_OFF, "credit header overlaps the drain packet header");
+static_assert(PKT_HDR_CREDIT_OFF < DRAIN_SINK_OFF, "drain sink overlaps the credit packet header");
 static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring");
 
 // Forwarding buffer: Sending data farther than to the immediate neighboring chip (e.g. 1 -> 2 -> 3)
@@ -72,11 +77,28 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 // have their whole volume on an origin that splits the run num_links ways, while the farthest is reachable
 // only from the diametrically opposite chip, whose run is split across every stream. One page per chunk
 // covers the integer slicing of each share.
-uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
+// What the DENSE region cost per stream, which args.fwd_reduction divides. Same split by movement class as
+// the standalone op, and for the same reason: every chain of classes ends in one that delivers to the next
+// chip's output and so needs no space anywhere, which is what makes capacity a free parameter here too.
+uint32_t dense_pages_per_stream(const CombineFabric2dParams& args) {
     const uint32_t per_destination = args.seq_len_per_chip * args.num_experts_per_tok;
     const uint32_t half_extent = ring_extent(args) / 2;
     return (half_extent - 2) * (per_destination / args.num_links) + per_destination / stream_count(args.num_links) +
            relay_chunks_per_stream(ring_extent(args)) * args.experts_per_chip;
+}
+
+// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1, and a
+// channel shallower than a read batch spends all its time announcing.
+constexpr uint32_t MIN_VC_PAGES = 4;
+
+uint32_t fwd_vc_pages(const CombineFabric2dParams& args) {
+    const uint32_t per_stream = dense_pages_per_stream(args) / args.fwd_reduction;
+    const uint32_t pages = per_stream / num_vcs(ring_extent(args));
+    return pages < MIN_VC_PAGES ? MIN_VC_PAGES : pages;
+}
+
+uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
+    return num_vcs(ring_extent(args)) * fwd_vc_pages(args);
 }
 
 constexpr uint32_t align_l1(uint32_t addr) { return (addr + 63u) & ~63u; }
@@ -115,12 +137,14 @@ L1Layout compute_l1_layout(
     L1Layout l;
     l.collector_counts = base;
     l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
+    l.pkt_hdr_credit = base + PKT_HDR_CREDIT_OFF;
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.ring = base + PROD_BUF_OFF;
-    // One prebuilt header per ring slot, past the ring itself. A slot is the token plus its metadata tail.
+    // One prebuilt header per packet of each ring slot, past the ring itself. A slot is the token plus its
+    // metadata tail.
     l.pkt_hdr_ring = l.ring + num_l1_slots * (token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE);
-    const uint32_t hdr_ring_bytes =
-        num_l1_slots * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    const uint32_t hdr_ring_bytes = num_l1_slots * cmbf2d::packets_per_token(token_size_bytes) *
+                                    static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     // 64-byte aligned: DRAM reads need a DRAM_ALIGNMENT-aligned L1 destination on Blackhole
     // (LOG_BASE_2_OF_DRAM_ALIGNMENT = 6), and the control region is read straight out of DRAM.
     l.control = align_l1(l.pkt_hdr_ring + hdr_ring_bytes);
@@ -131,10 +155,6 @@ L1Layout compute_l1_layout(
         l.unt_ring = align_l1(base);
         l.unt_control = untilizer_cb_end(base, token_size_bytes, tensor_args);
         end = std::max(end, l.unt_control + control_bytes);
-    }
-    if (std::getenv("CMBF2D_NO_DRAM_READ") || std::getenv("CMBF2D_NO_DRAM_WRITE")) {  // (perf probes)
-        l.probe_sink = align_l1(l.control + control_bytes);
-        end = std::max(end, l.probe_sink + token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE);
     }
     TT_FATAL(
         end <= sem_floor,
@@ -212,6 +232,14 @@ std::vector<uint32_t> ring_chip_ids(ttnn::MeshDevice* mesh, const ttnn::MeshCoor
 struct RingSemaphores {
     tt::tt_metal::GlobalSemaphore fwd_arrived;
     tt::tt_metal::GlobalSemaphore final_arrived;
+    // Arrival is per movement class now, so the single fwd_arrived above no longer serves the kernels; it is
+    // kept because the hybrid op's contract still hands one in and validates it. These are allocated here
+    // rather than taken from that contract: every chip makes them in the same order on the same grid, which
+    // is what keeps their addresses uniform across the mesh -- the only property the upstream sender needs.
+    tt::tt_metal::GlobalSemaphore credit_done;
+    std::vector<tt::tt_metal::GlobalSemaphore> vc_arrived;
+    std::vector<tt::tt_metal::GlobalSemaphore> vc_freed;
+    std::vector<tt::tt_metal::GlobalSemaphore> vc_outbox;
     uint32_t untilizers_per_group = 0;
     uint32_t num_links = 0;
 
@@ -235,10 +263,7 @@ struct RingSemaphores {
 constexpr uint32_t kSemaphoresPerCore = 16;
 
 RingSemaphores allocate_ring_semaphores(
-    ttnn::MeshDevice* mesh,
-    uint32_t num_links,
-    uint32_t untilizers_per_group,
-    const CombineL1& provided) {
+    ttnn::MeshDevice* mesh, uint32_t num_links, uint32_t untilizers_per_group, const CombineL1& provided) {
     // Allocated on the full worker grid so the address is uniform across the mesh. One semaphore of each kind
     // serves every stream: each stream is drained by a different worker core, so the per-core copy at this
     // uniform L1 offset already separates them, and the sender simply targets the right core.
@@ -253,8 +278,23 @@ RingSemaphores allocate_ring_semaphores(
         }
         return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
     };
+    auto make = [&] {
+        return ttnn::global_semaphore::create_global_semaphore(mesh, all_workers, 0, tt::tt_metal::BufferType::L1);
+    };
     RingSemaphores sems{
-        make_or_take(provided.fwd_arrived), make_or_take(provided.final_arrived), untilizers_per_group, num_links};
+        make_or_take(provided.fwd_arrived),
+        make_or_take(provided.final_arrived),
+        make(),
+        {},
+        {},
+        {},
+        untilizers_per_group,
+        num_links};
+    for (uint32_t v = 0; v < cmbf2d::MAX_VCS; v++) {
+        sems.vc_arrived.push_back(make());
+        sems.vc_freed.push_back(make());
+        sems.vc_outbox.push_back(make());
+    }
     TT_FATAL(
         sems.num_program_semaphores() <= kSemaphoresPerCore,
         "combine_fabric2d: {} program semaphores per combine core exceed the {} a core has ({} untilizers per "
@@ -280,23 +320,29 @@ struct ForwardingBuffer {
 // read and a DRAM write per forwarded token.
 //
 ForwardingBuffer allocate_forwarding_buffer(
-    ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
+    ttnn::MeshDevice* mesh,
+    const CombineFabric2dParams& args,
+    const CombineFabric2dInputs& tensor_args,
+    tt::tt_metal::Buffer* provided) {
     ForwardingBuffer fwd;
     fwd.pages_per_stream = fwd_pages_per_stream(args);
     const uint32_t page_bytes = token_size_bytes(tensor_args) + cmbf2d::FORWARDING_METADATA_SIZE;
-    TT_FATAL(
-        page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
-    const uint32_t pages = stream_count(args.num_links) * fwd.pages_per_stream;
-    const tt::tt_metal::TensorSpec spec(
-        ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::UINT32,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
-    // Throws if it does not fit DRAM, which IS the "verify it fits" check.
-    fwd.owner = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
-    fwd.buffer = fwd.owner->buffer();
+    if (provided != nullptr) {
+        fwd.buffer = provided;
+    } else {
+        // Throws if it does not fit DRAM, which IS the "verify it fits" check.
+        fwd.owner = std::make_shared<ttnn::Tensor>(
+            create_device_tensor(forwarding_buffer_spec(args, token_size_bytes(tensor_args)), mesh));
+        fwd.buffer = fwd.owner->buffer();
+    }
     TT_FATAL(fwd.buffer != nullptr, "combine_fabric2d: forwarding buffer has no device buffer");
+    TT_FATAL(
+        fwd.buffer->size() >= uint64_t{stream_count(args.num_links)} * fwd.pages_per_stream * page_bytes,
+        "combine_fabric2d: forwarding buffer is {} B, smaller than the {} streams x {} pages x {} B it stages",
+        fwd.buffer->size(),
+        stream_count(args.num_links),
+        fwd.pages_per_stream,
+        page_bytes);
     TT_FATAL(
         fwd.buffer->aligned_page_size() == page_bytes,
         "combine_fabric2d: forwarding page size is {} B after alignment but the op addresses it as {} B. "
@@ -317,8 +363,14 @@ KernelPlan make_kernel_plan(
     plan.pages_per_stream = pages_per_stream;
     plan.ring_filled_slot = RingSemaphores::FILLED;
     plan.ring_freed_slot = RingSemaphores::FREED;
-    plan.fwd_arrived_addr = static_cast<uint32_t>(sems.fwd_arrived.address());
     plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
+    plan.credit_done_addr = static_cast<uint32_t>(sems.credit_done.address());
+    plan.vc_pages = fwd_vc_pages(args);
+    for (uint32_t v = 0; v < num_vcs(ring_extent(args)); v++) {
+        plan.vc_arrived_addr.push_back(static_cast<uint32_t>(sems.vc_arrived[v].address()));
+        plan.vc_freed_addr.push_back(static_cast<uint32_t>(sems.vc_freed[v].address()));
+        plan.vc_outbox_addr.push_back(static_cast<uint32_t>(sems.vc_outbox[v].address()));
+    }
     // Which of the `num_routed_experts` columns this chip hosts. The dispatch group is this device's position
     // on the OTHER mesh axis; with one group per column of a 2D mesh that is just the other coordinate. Same
     // derivation as the production reader's compile-time `offset`.
@@ -416,19 +468,26 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         generate_assignments(ring_chip_ids(args.device, coord, args.axis), my_dg_index(args, coord), args.num_links);
     const auto& groups = placement.at(coord).untilizers;
 
+    // TT_CMBF2D_IDLE=1 is a measurement mode: only the collector is built, so the routed expert is timed as
+    // overlapped, released and reporting as usual, but with no combine traffic beside it.
+    static const bool idle =
+        std::getenv("TT_CMBF2D_IDLE") != nullptr && std::string(std::getenv("TT_CMBF2D_IDLE")) == "1";
+
     // Every id on every combine core of this chip, stream and untilizer cores alike: a peer's copy is
     // addressed by the id it has on the sender's own core. Declared before the fabric connections, which
     // take the lowest ids still free on a sender core and would otherwise claim these.
     std::set<CoreRange> combine_cores;
-    for (const auto& [stream, self] : placement.at(coord).streams) {
-        combine_cores.insert(CoreRange(self.worker_logical));
-    }
-    for (const auto& group : groups) {
-        for (const auto& untilizer : group) {
-            combine_cores.insert(CoreRange(untilizer.logical));
+    if (!idle) {
+        for (const auto& [stream, self] : placement.at(coord).streams) {
+            combine_cores.insert(CoreRange(self.worker_logical));
+        }
+        for (const auto& group : groups) {
+            for (const auto& untilizer : group) {
+                combine_cores.insert(CoreRange(untilizer.logical));
+            }
         }
     }
-    combine_cores.insert(CoreRange(placement.at(coord).collector.value().logical));
+    combine_cores.insert(CoreRange(placement.at(coord).collector.value()));
     for (uint32_t id = 0; id < sems.num_program_semaphores(); id++) {
         desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = id,
@@ -437,23 +496,33 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             .initial_value = 0});
     }
 
-    // TT_CMBF2D_IDLE=1 is a measurement mode: combine's data-movement kernels exit at once and only the
-    // collector runs, so the routed expert is timed as overlapped but with no combine traffic beside it.
-    static const bool idle =
-        std::getenv("TT_CMBF2D_IDLE") != nullptr && std::string(std::getenv("TT_CMBF2D_IDLE")) == "1";
+    if (idle) {
+        add_collector(
+            desc,
+            args,
+            placement.at(coord),
+            l1.collector_counts,
+            sems.ready(),
+            sems.progress(),
+            /*gate_untilizers=*/false);
+        return desc;
+    }
+
     // combine_fabric2d's own kernels are what get built here; this define is what selects their
     // overlapped form, in place of a second copy of each kernel that only added it.
     const auto add_combine_defines = [&](tt::tt_metal::KernelDescriptor& kernel) {
         kernel.defines.emplace_back("CMBF2D_OVERLAPPED", "1");
-        if (idle) {
-            kernel.defines.emplace_back("CMBF2D_IDLE", "1");
-        }
     };
 
     for (const auto& [stream, self] : placement.at(coord).streams) {
         KernelPlan plan = chip_plan;
         plan.stream = stream;
         const auto& downstream = placement.at(self.downstream_coord).streams.at(stream);
+        // Same link, other direction: its worker on this chip couriers our reader's channel credits, and its
+        // worker on the downstream chip is where our sender posts the ones it carries.
+        const StreamId opposite_stream = reverse_stream(stream);
+        const auto& opposite = placement.at(coord).streams.at(opposite_stream);
+        const auto& downstream_opposite = placement.at(self.downstream_coord).streams.at(opposite_stream);
         const auto& work = work_by_stream.at(stream);
 
         tt::tt_metal::KernelDescriptor snd;
@@ -462,16 +531,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             "sender_combine_fabric2d.cpp";
         snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
-        snd.compile_time_args = cmbf2d::SenderCtArgs(tensor_args, self, downstream, l1, plan).to_ct_word_arr();
-        // perf probe (read at program build): CMBF2D_NO_DRAM_WRITE=1 - packets land in an L1 scratch on the receiving
-        // reader core instead of DRAM (forwarded pages also write their 64 B metadata tail to DRAM); garbage output
-        if (std::getenv("CMBF2D_NO_DRAM_WRITE")) {
-            snd.defines.emplace_back("CMBF2D_NO_DRAM_WRITE", "1");
-            snd.defines.emplace_back("CMBF2D_PROBE_SINK", std::to_string(l1.probe_sink));
-        }
-        if (std::getenv("CMBF2D_WAIT_STATS")) {
-            snd.defines.emplace_back("CMBF2D_WAIT_STATS", "1");
-        }
+        snd.compile_time_args =
+            cmbf2d::SenderCtArgs(tensor_args, self, downstream, downstream_opposite, l1, plan).to_ct_word_arr();
         snd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -489,37 +550,17 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rdr.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
         rdr.defines.emplace_back("TILE", dispatched_is_tiled(tensor_args) ? "1" : "0");
         add_combine_defines(rdr);
-        // The readers' read requests and local writes on VC 0, off the default (1) the routed expert's weight read
-        // requests share: flat_combine_overlap Kimi K2.7 / GLM 5.3 8x1 overlap -1..-6% (any of VC 0, 2, 3 alike).
-        // Perf probes (read at program build): CMBF2D_RD_VC / CMBF2D_WR_VC pick them.
-        // perf probe (read at program build): CMBF2D_NO_DRAM_READ=1 - the reader takes token payloads from an L1 scratch
-        // instead of DRAM (forwarded pages still read their metadata tail from DRAM); garbage output
-        if (std::getenv("CMBF2D_NO_DRAM_READ")) {
-            rdr.defines.emplace_back("CMBF2D_NO_DRAM_READ", "1");
-            rdr.defines.emplace_back("CMBF2D_PROBE_SINK", std::to_string(l1.probe_sink));
-        }
-        for (const char* knob : {"CMBF2D_RD_VC", "CMBF2D_WR_VC"}) {
-            const char* v = std::getenv(knob);
-            rdr.defines.emplace_back(knob, v != nullptr ? v : "0");
-        }
-        if (!args.routed_expert_schedule_defines.empty()) {
-            TT_FATAL(
-                !sems.has_untilizers(),
-                "combine_fabric2d: the flat schedule's walk order needs row-major routed-expert output");
-            rdr.defines.emplace_back("CMBF2D_FLAT_ORDER", "1");
-            for (const auto& kv : args.routed_expert_schedule_defines) {
-                const auto eq = kv.find('=');
-                rdr.defines.emplace_back(kv.substr(0, eq), kv.substr(eq + 1));
-            }
-        }
-        if (!sems.has_untilizers()) {
-            // Row-major routed-expert output: no untilizers, the readers read its rows and wait on `ready` themselves.
-            rdr.defines.emplace_back("CMBF2D_READY_SEM", std::to_string(sems.ready()));
-        }
-        rdr.compile_time_args =
-            cmbf2d::ReaderCtArgs(
-                args, tensor_args, coord, self, work, l1, plan, untilizers_for_stream(groups, stream, sems, l1))
-                .to_ct_word_arr();
+        rdr.compile_time_args = cmbf2d::ReaderCtArgs(
+                                    args,
+                                    tensor_args,
+                                    coord,
+                                    self,
+                                    opposite,
+                                    work,
+                                    l1,
+                                    plan,
+                                    untilizers_for_stream(groups, stream, sems, l1))
+                                    .to_ct_word_arr();
         for (auto* buf :
              {dram.in,
               dram.out,
@@ -530,15 +571,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
               dram.expert_offsets,
               dram.expert_table}) {
             tt::tt_metal::TensorAccessorArgs(buf).append_to(rdr.compile_time_args);
-        }
-        if (std::getenv("CMBF2D_WAIT_STATS")) {  // (perf probe: wait-time totals, DPRINT)
-            rdr.defines.emplace_back("CMBF2D_WAIT_STATS", "1");
-        }
-        if (std::getenv("CMBF2D_NO_TRID")) {  // (debug: global read barriers)
-            rdr.defines.emplace_back("CMBF2D_NO_TRID", "1");
-        }
-        if (cmbf2d::pipelined_reads()) {  // two read batches in flight
-            rdr.defines.emplace_back("CMBF2D_PIPE", "1");
         }
         rdr.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -625,81 +657,24 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
     }
 
-    {
-        const auto& collector = placement.at(coord).collector.value();
-
-        // Only the cores that read routed-expert output from DRAM, so only they can run ahead of it: the
-        // untilizers (the readers consume what they staged in L1 and are ordered behind them), or with row-major
-        // output and no untilizers the readers themselves.
-        std::vector<CoreCoord> waiting;
-        for (const auto& group : groups) {
-            for (const auto& untilizer : group) {
-                waiting.push_back(untilizer.worker_virtual);
-            }
-        }
-        if (!sems.has_untilizers()) {
-            for (const auto& [stream, self] : placement.at(coord).streams) {
-                waiting.push_back(self.worker_virtual);
-            }
-        }
-        // An empty list would leave every DRAM reader ungated, which reads stale rows rather than failing.
-        TT_FATAL(!waiting.empty(), "combine_fabric2d: overlapped with the routed expert but no core gates on it");
-        const uint32_t passes = args.hybrid_token_threshold > 0 ? 2 : 1;
-        // Walking a flat expert's schedule entries: as many steps as the walk (CMBF2D_WALK_STEPS), not experts.
-        uint32_t num_steps = passes * args.experts_per_chip;
-        for (const auto& kv : args.routed_expert_schedule_defines) {
-            if (kv.rfind("CMBF2D_WALK_STEPS=", 0) == 0) {
-                num_steps = static_cast<uint32_t>(std::stoul(kv.substr(kv.find('=') + 1)));
-            }
-        }
-        auto* dev = args.device;
-        const auto re_first = dev->worker_core_from_logical_core(
-            CoreCoord{args.routed_expert_cores.start_coord.x, args.routed_expert_cores.start_coord.y});
-        const auto re_last = dev->worker_core_from_logical_core(
-            CoreCoord{args.routed_expert_cores.end_coord.x, args.routed_expert_cores.end_coord.y});
-
-        tt::tt_metal::KernelDescriptor kernel;
-        kernel.kernel_source =
-            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/"
-            "collector_combine_fabric2d.cpp";
-        kernel.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
-        kernel.defines.emplace_back("CMBF2D_PROGRESS_SEM", std::to_string(sems.progress()));
-        kernel.core_ranges = CoreRangeSet(CoreRange(collector.logical));
-        kernel.compile_time_args = {
-            args.routed_expert_writers,
-            num_steps,
-            l1.collector_counts,
-            sems.ready(),
-            args.routed_expert_go_addr,
-            static_cast<uint32_t>(re_first.x),
-            static_cast<uint32_t>(re_first.y),
-            static_cast<uint32_t>(re_last.x),
-            static_cast<uint32_t>(re_last.y),
-            static_cast<uint32_t>(args.routed_expert_cores.size()),
-            static_cast<uint32_t>(waiting.size())};
-        for (const auto& core : waiting) {
-            kernel.compile_time_args.push_back(static_cast<uint32_t>(core.x));
-            kernel.compile_time_args.push_back(static_cast<uint32_t>(core.y));
-        }
-        kernel.compile_time_args.push_back(static_cast<uint32_t>(args.routed_expert_extra_cores.size()));
-        for (const auto& logical : args.routed_expert_extra_cores) {
-            TT_FATAL(
-                logical != collector.logical,
-                "combine_fabric2d: the collector {} is also a routed-expert core",
-                logical.str());
-            const auto core = dev->worker_core_from_logical_core(logical);
-            kernel.compile_time_args.push_back(static_cast<uint32_t>(core.x));
-            kernel.compile_time_args.push_back(static_cast<uint32_t>(core.y));
-        }
-        kernel.config = tt::tt_metal::DataMovementConfigDescriptor{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::NOC_0,
-        };
-        desc.kernels.push_back(std::move(kernel));
-    }
+    add_collector(
+        desc, args, placement.at(coord), l1.collector_counts, sems.ready(), sems.progress(), /*gate_untilizers=*/true);
     return desc;
 }
 }  // namespace
+
+tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& args, uint32_t token_size_bytes) {
+    const uint32_t page_bytes = token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE;
+    TT_FATAL(
+        page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
+    const uint32_t pages = stream_count(args.num_links) * fwd_pages_per_stream(args);
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
+}
 
 tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_descriptor(
     const CombineFabric2dParams& operation_attributes,
@@ -720,14 +695,12 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
     auto* mesh_device = operation_attributes.device;
     validate_allocations(operation_attributes, tensor_args, tensor_return_value);
 
-    // Row-major routed-expert output needs no untilizers: the readers read its rows directly.
-    const uint32_t per_group = dispatched_is_tiled(tensor_args) ? untilizers_per_group() : 0;
-    const auto sems =
-        allocate_ring_semaphores(mesh_device, operation_attributes.num_links, per_group, l1_resources);
+    const uint32_t per_group = untilizers_per_group();
+    const auto sems = allocate_ring_semaphores(mesh_device, operation_attributes.num_links, per_group, l1_resources);
     const auto l1 = compute_l1_layout(
         mesh_device,
         tensor_args,
-        cmbf2d::num_l1_slots(),
+        cmbf2d::NUM_L1_SLOTS,
         token_size_bytes(tensor_args),
         control_region_bytes(operation_attributes, tensor_args),
         sems.lowest_address(),
@@ -740,7 +713,8 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
         "combine_fabric2d: the number of routed-expert writer cores must be set");
     const auto placement = decide_placement(
         mesh_device, operation_attributes.axis, operation_attributes.num_links, per_group, /*with_collector=*/true);
-    const auto fwd = allocate_forwarding_buffer(mesh_device, operation_attributes, tensor_args);
+    const auto fwd =
+        allocate_forwarding_buffer(mesh_device, operation_attributes, tensor_args, l1_resources.forwarding);
 
     // Every buffer here is interleaved DRAM whose base address is uniform across the mesh, so a sender can
     // address the same buffer on any chip by page index. That is what lets a token carry a final destination
@@ -757,8 +731,16 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
 
     tt::tt_metal::WorkloadDescriptor workload_descriptor;
     workload_descriptor.semaphores.push_back(sems.fwd_arrived);
+    workload_descriptor.semaphores.push_back(sems.credit_done);
+    for (const auto* group : {&sems.vc_arrived, &sems.vc_freed, &sems.vc_outbox}) {
+        for (const auto& sem : *group) {
+            workload_descriptor.semaphores.push_back(sem);
+        }
+    }
     workload_descriptor.semaphores.push_back(sems.final_arrived);
-    workload_descriptor.buffers.push_back({fwd.owner, fwd.buffer});
+    if (fwd.owner != nullptr) {
+        workload_descriptor.buffers.push_back({fwd.owner, fwd.buffer});
+    }
 
     for (const auto& coord : tensor_coords.coords()) {
         workload_descriptor.programs.push_back(
@@ -774,8 +756,7 @@ tt::tt_metal::WorkloadDescriptor create_combine_workload(
                  sems,
                  l1_resources.arena)});
         if (collectors != nullptr) {
-            (*collectors)[coord] =
-                CollectorTarget{placement.at(coord).collector.value().worker_virtual, l1.collector_counts};
+            (*collectors)[coord] = CollectorTarget{placement.at(coord).collector.value(), l1.collector_counts};
         }
     }
     return workload_descriptor;

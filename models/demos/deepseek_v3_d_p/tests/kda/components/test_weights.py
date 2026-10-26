@@ -45,7 +45,7 @@ def _tp_rank(physical_index: int, mesh_columns: int, tensor_parallel_axis: int) 
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-# A bounded gate (Kimi-K3) folds the per-head decay scale into the decay projection and bias.
+# A bounded gate (Kimi-K3) folds the per-head decay scale into the decay projection and bias at load.
 @pytest.mark.parametrize("gate_lower_bound", [None, -5.0], ids=["softplus-gate", "bounded-gate"])
 def test_device_weight_placement(
     mesh_device: ttnn.MeshDevice,
@@ -78,8 +78,10 @@ def test_device_weight_placement(
     decay_bias = state_dict["dt_bias"].reshape(1, 1, config.q_dim)
     decay_output = state_dict["f_b_proj.weight"].T
     if gate_lower_bound is not None:
-        decay_output = decay_output.float() * decay_scale.reshape(1, -1)
-        decay_bias = decay_bias.float() * decay_scale
+        # The fold runs on device after load, from the BF16 tensors: FP32 product, rounded to BF16 once.
+        scale_bf16 = decay_scale.to(torch.bfloat16).float()
+        decay_output = decay_output.to(torch.bfloat16).float() * scale_bf16.reshape(1, -1)
+        decay_bias = decay_bias.to(torch.bfloat16).float() * scale_bf16
 
     assert weights.tensor_parallel_size == tensor_parallel_size
     assert weights.tensor_parallel_axis == tensor_parallel_axis
@@ -207,4 +209,4 @@ def test_tp_layer_with_nonsquare_state_matches_reference(mesh_device: ttnn.MeshD
         ("recurrent state", golden_state.recurrent, actual_recurrent),
         ("convolution state", golden_convolution, actual_convolution),
     ):
-        assert_accurate(golden, actual, name=f"TP=8 {name}", pcc_threshold=0.999)
+        assert_accurate(golden, actual, name=f"TP=8 {name}", pcc_threshold=0.999, nrmse_threshold=0.03)

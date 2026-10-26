@@ -6,13 +6,14 @@
 
 namespace llama_specific {
 
-CoreRangeSet get_custom_cores(uint32_t num_workers, bool row_wise) {
-    CoreRangeSet worker_cores;
-    std::vector<CoreRange> desired_core_range = {CoreRange({5, 3}, {6, 3}), CoreRange({2, 8}, {3, 8})};
+tt::tt_metal::CoreRangeSet get_custom_cores(uint32_t num_workers, bool row_wise) {
+    tt::tt_metal::CoreRangeSet worker_cores;
+    std::vector<tt::tt_metal::CoreRange> desired_core_range = {
+        tt::tt_metal::CoreRange({5, 3}, {6, 3}), tt::tt_metal::CoreRange({2, 8}, {3, 8})};
     for (const auto& cr : desired_core_range) {
         auto cores = corerange_to_cores(cr, std::nullopt, row_wise);
         for (const auto& core : cores) {
-            worker_cores = worker_cores.merge(CoreRangeSet(CoreRange(core, core)));
+            worker_cores = worker_cores.merge(tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(core, core)));
             if (worker_cores.num_cores() == num_workers) {
                 break;
             }
@@ -24,8 +25,9 @@ CoreRangeSet get_custom_cores(uint32_t num_workers, bool row_wise) {
     return worker_cores;
 }
 
-std::tuple<CoreRangeSet, std::vector<tt::tt_metal::CoreCoord>> get_custom_worker_core_placement(uint32_t num_links) {
-    CoreRangeSet cores = get_custom_cores(num_links);
+std::tuple<tt::tt_metal::CoreRangeSet, std::vector<tt::tt_metal::CoreCoord>> get_custom_worker_core_placement(
+    uint32_t num_links) {
+    tt::tt_metal::CoreRangeSet cores = get_custom_cores(num_links);
     return {cores, corerange_to_cores(cores)};
 }
 

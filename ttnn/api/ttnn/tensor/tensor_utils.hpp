@@ -129,20 +129,11 @@ tt::tt_metal::experimental::DataflowBufferSpec dfb_spec_from_sharded_tensor(
     tt::tt_metal::experimental::DFBAdvancedOptions advanced_options = {});
 
 /**
- * @brief Get the L1 byte address of a CB descriptor.
+ * @brief Get the L1 byte address a CB descriptor is programmed at.
  *
- * Returns buffer->address() + address_offset when a buffer is present,
- * or just address_offset when no buffer is set (manually placed CB).
+ * Returns the backing buffer's address on the CB's cores + address_offset, or just address_offset when
+ * no buffer is set. TT_FATALs if a per-core-allocated buffer's address differs across the CB's cores.
  */
-inline uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc) {
-    auto addr_offset = desc.address_offset;
-    if (desc.buffer != nullptr) {
-        return desc.buffer->address() + addr_offset;
-    }
-    if (desc.tensor != nullptr) {
-        return desc.tensor->address() + addr_offset;
-    }
-    return addr_offset;
-}
+uint32_t get_cb_address(const tt::tt_metal::CBDescriptor& desc);
 
 }  // namespace ttnn

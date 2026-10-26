@@ -54,11 +54,10 @@ void kernel_main() {
     const uint64_t w_mask_to_use = MASK_16;
     const uint64_t w_offset_to_use = OFFSET_16;
 
-    uint32_t input_buffer = dfb0.get_base_address();
-    uint32_t alignment_buffer = dfb1.get_base_address();
-
-    alignment_buffer = align_address<w_alignment_requirement>(alignment_buffer, w_mask_to_use);  // aligned for writes
-    input_buffer = align_address<r_alignment_requirement>(input_buffer, r_mask_to_use);          // aligned for reads
+    // aligned for writes
+    const uint32_t alignment_buffer = align_address<w_alignment_requirement>(dfb1.local_mem(), w_mask_to_use);
+    // aligned for reads
+    const uint32_t input_buffer = align_address<r_alignment_requirement>(dfb0.local_mem(), r_mask_to_use);
 
     uint64_t src_noc_addr = 0;
     uint32_t data_location = 0;

@@ -435,7 +435,7 @@ TEST(CclRingSchedule, SliceCursorRestartsEveryBatch) {
     constexpr uint32_t chip = 3;
     for (int dir = 0; dir <= 1; ++dir) {
         std::vector<uint32_t> batch0, batch1;
-        sched::RingRsSchedule schedule(ring, /*batches=*/2, /*channels=*/1, /*gran=*/4, 0, 8, dir);
+        sched::RingRsSchedule schedule(ring, /*batches=*/2, /*channels=*/1, /*tile_granularity=*/4, 0, 8, dir);
         while (schedule.next_batch()) {
             sched::RingSliceCursor cursor(chip, ring, dir);
             auto& sink = schedule.batch_idx() == 0 ? batch0 : batch1;

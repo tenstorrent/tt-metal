@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.reference.kda.ops import sigmoid_gated_rms_norm_reference
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
@@ -49,16 +49,10 @@ _PRODUCTION_INPUT_DTYPE = ttnn.bfloat16
 _PRODUCTION_OUTPUT_DTYPE = ttnn.bfloat16
 _PRODUCTION_PERF_MARGIN = 0.05
 
-# Calibrated 2026-08-17 on bh_loudbox host bh-lb-42, P150b firmware 19.5.0.0,
-# with Fast reduction and x/gate/output double buffering. Seven samples produced ranges
-# 166659-167124 ns, 167176-167524 ns, and 166987-167336 ns respectively; the
-# inline references are their medians. The 5% symmetric margin covers the <1%
-# observed spread plus board/thermal variance while still guarding regressions.
-_PRODUCTION_CASES = (
-    _ProductionCase("sp1-tp8-local", num_heads=12, sequence=5120, expected_duration_ns=153_144),
-    _ProductionCase("sp2-tp4-local", num_heads=24, sequence=2560, expected_duration_ns=154_054),
-    _ProductionCase("sp4-tp2-local", num_heads=48, sequence=1280, expected_duration_ns=153_799),
-)
+# Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads.
+# Calibrated on a P150 with an 11x10 grid, firmware 19.12.0 (51.10-51.25 us over three runs); the 5% symmetric margin
+# covers board and thermal variance while still guarding regressions.
+_PRODUCTION_CASES = (_ProductionCase("h24-s640-local", num_heads=24, sequence=640, expected_duration_ns=51_150),)
 
 
 def _sigmoid_gated_rms_norm_ops(
@@ -275,7 +269,7 @@ def _assert_accurate_and_exact_value_deterministic(
         mismatch_marker,
         name=f"{name} device-side exact-value determinism marker",
     )
-    assert_accurate(expected, actual, name=f"{name} invocation 0", pcc_threshold=0.999)
+    assert_accurate(expected, actual, name=f"{name} invocation 0", pcc_threshold=0.999, nrmse_threshold=0.004)
 
 
 def _assert_inputs_unchanged(
@@ -487,8 +481,8 @@ def test_sigmoid_gated_rms_norm_cache_hit_rebinds_fresh_tensors(
     )
     actual_a = ttnn.to_torch(output_a)
     actual_b = ttnn.to_torch(output_b)
-    assert_accurate(expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999)
-    assert_accurate(expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999)
+    assert_accurate(expected_a, actual_a, name="cache miss tensors", pcc_threshold=0.999, nrmse_threshold=0.0025)
+    assert_accurate(expected_b, actual_b, name="cache hit fresh tensors", pcc_threshold=0.999, nrmse_threshold=0.002)
     assert not torch.equal(actual_a, actual_b)
 
 
@@ -578,19 +572,6 @@ def test_sigmoid_gated_rms_norm_gate_column_offset_matches_sliced_gate(
 
 
 @pytest.mark.parametrize(
-    ("gate_column_offset", "message"),
-    [(16, "gate_column_offset must be tile aligned"), (64, "columns at gate_column_offset")],
-    ids=["unaligned", "past-gate-end"],
-)
-def test_sigmoid_gated_rms_norm_rejects_invalid_gate_column_offset(
-    device: ttnn.Device, expect_error: Callable, gate_column_offset: int, message: str
-) -> None:
-    _, (input_tt, gate_tt, weight_tt) = _device_inputs(device)
-    with expect_error(RuntimeError, message):
-        _run(input_tt, gate_tt, weight_tt, gate_column_offset=gate_column_offset)
-
-
-@pytest.mark.parametrize(
     ("case", "message"),
     [
         ("host_input", "allocated device tensor"),
@@ -646,13 +627,15 @@ def test_sigmoid_gated_rms_norm_rejects_invalid_tensors(
 
 
 @pytest.mark.parametrize(
-    ("num_heads", "epsilon", "output_dtype", "message"),
+    ("num_heads", "epsilon", "output_dtype", "gate_column_offset", "message"),
     [
-        (0, 1e-5, ttnn.float32, "num_heads must be positive"),
-        (5, 1e-5, ttnn.float32, "leading dimension must be divisible"),
-        (12, 0.0, ttnn.float32, "epsilon must be finite and positive"),
-        (12, float("nan"), ttnn.float32, "epsilon must be finite and positive"),
-        (12, 1e-5, ttnn.uint32, "output_dtype must be FLOAT32 or BFLOAT16"),
+        (0, 1e-5, ttnn.float32, 0, "num_heads must be positive"),
+        (5, 1e-5, ttnn.float32, 0, "leading dimension must be divisible"),
+        (12, 0.0, ttnn.float32, 0, "epsilon must be finite and positive"),
+        (12, float("nan"), ttnn.float32, 0, "epsilon must be finite and positive"),
+        (12, 1e-5, ttnn.uint32, 0, "output_dtype must be FLOAT32 or BFLOAT16"),
+        (12, 1e-5, ttnn.float32, 16, "gate_column_offset must be tile aligned"),
+        (12, 1e-5, ttnn.float32, 64, "columns at gate_column_offset"),
     ],
 )
 def test_sigmoid_gated_rms_norm_rejects_invalid_options(
@@ -661,11 +644,20 @@ def test_sigmoid_gated_rms_norm_rejects_invalid_options(
     num_heads: int,
     epsilon: float,
     output_dtype: ttnn.DataType,
+    gate_column_offset: int,
     message: str,
 ) -> None:
     _, (input_tt, gate_tt, weight_tt) = _device_inputs(device)
     with expect_error(RuntimeError, message):
-        _run(input_tt, gate_tt, weight_tt, num_heads=num_heads, epsilon=epsilon, output_dtype=output_dtype)
+        _run(
+            input_tt,
+            gate_tt,
+            weight_tt,
+            num_heads=num_heads,
+            epsilon=epsilon,
+            output_dtype=output_dtype,
+            gate_column_offset=gate_column_offset,
+        )
 
 
 def test_sigmoid_gated_rms_norm_rejects_sharded_output(device: ttnn.Device, expect_error: Callable) -> None:

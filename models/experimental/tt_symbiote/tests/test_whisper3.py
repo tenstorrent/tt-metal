@@ -17,7 +17,10 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.utils.common_demo_utils import get_mesh_mappers
-from models.demos.whisper.tt.ttnn_optimized_functional_whisper import create_custom_mesh_preprocessor, encoder_layer
+from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
+    create_custom_mesh_preprocessor,
+    encoder_layer,
+)
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.activation import TTNNGelu, TTNNSilu

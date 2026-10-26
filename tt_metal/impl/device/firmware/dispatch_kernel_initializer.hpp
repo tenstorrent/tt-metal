@@ -20,7 +20,6 @@ public:
         DeviceManager* device_manager,
         const GetControlPlaneFn& get_control_plane = {},
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
     void init(const std::vector<Device*>& devices, const std::unordered_set<InitializerKey>& init_done) override;
@@ -54,7 +53,6 @@ private:
     DeviceManager* device_manager_ = nullptr;
     GetControlPlaneFn get_control_plane_;
     GetDispatchQueryManagerFn get_dispatch_query_manager_;
-    GetMaxNumEthCoresFn get_max_num_eth_cores_;
     GetReadsDispatchCoresFn get_reads_dispatch_cores_;
 };
 

@@ -23,14 +23,16 @@ The tables below map each aten op to the TTNN op its operator test checks. The m
 call the module code, so they run the program configs chosen per call shape in
 [`../tt/matmul_config.py`](../tt/matmul_config.py):
 - the dense projections through `ttnn.experimental.minimal_matmul` above 32 tile rows of M, and
-  through `ttnn.linear` with a multicast config below. Above, the QKV, out_proj and fc1 outputs go
-  to L1 when they fit;
-- the experts in one of two layouts per pass of tokens. Up to 128 tokens they stay on the rows,
-  with the pass's tensors in L1: w1 through `ttnn.sparse_matmul` with every expert enabled, w2
-  through a 1D `ttnn.matmul` that reads its `(E, H, F)` weight with `transpose_b`. Above, the pass
-  runs transposed, tokens on the columns: w1 as one unbatched `minimal_matmul` of the stacked
-  `(E*F, H)` checkpoint weight and `x^T`, w2 as a batched 2D `ttnn.matmul` writing bfloat8_b, the
-  gate cast to match, and the result transposed back.
+  through `ttnn.linear` with a multicast config below. Their outputs go to L1 when they fit;
+- the experts in one of two layouts per pass of tokens. Up to 320 tokens they run stacked, tokens
+  on the rows and the pass's tensors in L1: w1 as one 1D `ttnn.matmul` of x and every expert's
+  `(H, F)` slab side by side with the GELU fused, the routing weights spread over each expert's
+  columns by a 0/1 `ttnn.matmul` and applied by `ttnn.multiply`, and w2 as one 1D `ttnn.linear`
+  over every expert's `(F, H)` slab stacked, K = E*F, which reads its `(H, E*F)` weight with
+  `transpose_b` and adds the shared bias. Above, the pass runs transposed, tokens on the columns:
+  w1 as one unbatched `minimal_matmul` of the stacked `(E*F, H)` checkpoint weight and `x^T`, w2
+  as a batched 2D `ttnn.matmul` writing bfloat8_b, the gate cast to match, and the result
+  transposed back.
 
 ## 1. Mapping
 
@@ -62,7 +64,7 @@ it lowers from `mm` rather than `addmm`.
 | `mm` | `ttnn.linear`, `mlp.router.layer` 768 to 8, bf16 input, fp32 weight and output, no bias | 1.000000 | 3.24e-03 |
 
 At this size M is 32 tile rows, the last that runs `ttnn.linear`. At `B=4, S=512` the four
-projections run `minimal_matmul`, three of them into L1, and measure 0.999991 to 0.999996, max-abs
+projections run `minimal_matmul`, and measure 0.999991 to 0.999996, max-abs
 7.06e-02 to 1.48e-01.
 
 ### Attention
@@ -85,12 +87,16 @@ projections run `minimal_matmul`, three of them into L1, and measure 0.999991 to
 
 | aten | TTNN | PCC | max-abs |
 |---|---|---|---|
-| `_softmax` | `ttnn.softmax`, HiFi4 + fp32 dest acc | 1.000000 | 1.53e-03 |
-| `topk` | `ttnn.topk`, k=2 over 8, fp32 | exact indices | 0 |
-| dense routing weights | `ttnn.zeros_like` + `ttnn.scatter` | 0.999998 | 1.95e-03 |
+| `_softmax` | `ttnn.softmax`, HiFi4 + fp32 dest acc, over 64 scored columns | 1.000000 | 1.53e-03 |
+| `topk` | `ttnn.topk`, k=2 over the 64, fp32 | exact indices | 0 |
+| dense routing weights | `ttnn.matmul` 0/1 one-hot of the indices, `ttnn.eq`, `ttnn.multiply` | 0.999998 | 1.95e-03 |
 
-The last row has no aten counterpart: it implements `NomicRouter.dense_weights`, which the trace
-never reached because that forward took the ragged path. The inventory's own `zeros_like` and
+The router matmul scores 64 columns, the 8 experts and 56 at -1e30, so that `ttnn.topk` has
+nothing to pad; softmax turns the 56 into exact zeros and leaves the experts' probabilities
+bit-identical to an 8-wide softmax. The dense row is bit-identical to `ttnn.scatter` of the top-k
+values into zeros (`test_one_hot_reproduces_the_scatter`), at 27 against 126 us a MoE layer at
+8x512. It has no aten counterpart: it implements `NomicRouter.dense_weights`, which the trace never
+reached because that forward took the ragged path. The inventory's own `zeros_like` and
 `scatter_` belong to that path and are eliminated (section 2).
 
 ### Experts
@@ -108,9 +114,12 @@ tests isolate their operator.
 | `sum` over experts | `ttnn.experimental.fast_reduce_nc(dims=[1])` | 0.999815 | 1.65e+00 |
 | `add` | `ttnn.add`, shared bias, once after the sum | 0.999814 | 1.64e+00 |
 
-At this size a pass runs transposed, everything before the sum in bfloat8_b. Up to 128 tokens
-it runs token-major, w1 through `ttnn.sparse_matmul` and everything from the w2 output on in bf16:
-at `B=1, S=128` the rows measure 0.999936, 0.999852, 0.999827, 0.999821, 0.999867 and 0.999866.
+At this size a pass runs transposed, everything before the sum in bfloat8_b. Up to 320 tokens
+it runs stacked, the w1 output and the gated product in bfloat8_b, and `test_expert_matmuls`
+chains the whole pass. At `T=128`, against torch on the same input: w1 with its GELU 0.999898
+(max-abs 1.68e-01), the gate spread exact (`test_stacked_gate_spreads_the_routing_weights_exactly`
+asserts it bit for bit), the gated product 0.999962 (6.86e-02), and w2 with the bias, the whole
+chain, 0.999876 (6.76e-01).
 
 ### Pooling and output
 
@@ -150,7 +159,9 @@ All 42 inventory rows are accounted for by this table and section 1, over 41 dis
 | `ttnn.layer_norm` | `residual_input_tensor=` fuses the post-norm residual add. All 24 encoder norms use it. |
 | `ttnn.embedding` | Index tensor must be `uint32` in `ROW_MAJOR`; `layout=` selects the output layout. `padding_idx=` does not zero the row on this path, so it is neither a hazard nor a safeguard. |
 | `ttnn.transformer.scaled_dot_product_attention` | `is_causal` defaults to `True`; torch's defaults to `False`. Omitting it on this encoder applies a decoder mask and drops PCC to 0.44. |
-| `ttnn.topk` | Returns `(values, indices)`; index dtype follows the input, `uint32` from fp32 and `uint16` from bf16. Both feed `ttnn.scatter` directly. |
+| `ttnn.topk` | Returns `(values, indices)`; index dtype follows the input, `uint32` from fp32 and `uint16` from bf16. Widens a last dim under 64 to 64 with -inf before its device op, on one core for fp32: 95 us at 4096 rows of 8. |
+| `ttnn.linear` | A fused bias rounds every fp32 output, not only the biased ones: a zero bias on the router's 8 experts moved their logits by up to 3e-3. The router adds its padding row with its own `ttnn.add`, which is exact. |
+| `ttnn.slice` | A column at a non-tile-aligned offset goes through untilize, a row-major slice and tilize: 49 us for column 1 of a `(4096, 2)` top-k output, against 2 to 5 us at offset 0. |
 | `ttnn.experimental.fast_reduce_nc` | Replaces `sum` over dim 0, 1 or both, keeping the reduced dim at size 1. Left to allocate its output, returns the **tile-padded** row count: `T=74` gives 96 rows, the trailing 22 zero. `tt/experts.py` passes an output of the logical shape instead. `ttnn.sum` reaches the same PCC without the quirk. |
 | `ttnn.experimental.rotary_embedding_hf` | Prefill mode needs a leading batch of 1, so `(B, A, S, D)` is folded to `(1, B*A, S, D)`. cos/sin are `(1, 1, S, D)` and broadcast over heads. |
 | `ttnn.experimental.nlp_create_qkv_heads` | Takes `(B, 1, S, 3H)` and returns all three heads at once. `transpose_k_heads=False`, since SDPA wants K as `(B, A, S, D)`. |
@@ -176,7 +187,7 @@ All 42 inventory rows are accounted for by this table and section 1, over 41 dis
   (`!(input_dtype == DataType::FLOAT32 && input_layout == Layout::TILE)`). Only the destination
   and the scattered values need casting; the index does not.
 - `ttnn.topk` accepts fp32, bf16 and `bfloat8_b`, but is only correct on the first two.
-- The MoE transient is the w1 output, `(1, E, T, F)` or `(1, 1, E*F, T)` transposed, about 27 MB
+- The MoE transient is the w1 output, `(1, 1, T, E*F)` stacked or `(1, 1, E*F, T)` transposed, about 27 MB
   at `T=1024` in bfloat8_b, and the GELU's copy of it. It scales with batch times sequence length,
   not sequence length alone.
 - **`ttnn.matmul` deadlocks on broadcast-batch operands** (`in0_B == 1`, `in1_B > 1`) once the
@@ -186,8 +197,8 @@ All 42 inventory rows are accounted for by this table and section 1, over 41 dis
   At `(1, 1, T, 768) x (1, E, 768, 3072)` on an 11x10 grid, T=3520 passes and T=3552 hangs for
   every E > 1 tried. The bound is joint in M and N: at M=32 tiles, N=3072 passes and N=4096
   hangs. It is a hang rather than an exception, so recovery needs `tt-smi -r`. No program in
-  `tt/experts.py` is broadcast-batch any more: the token-major w1 is a `sparse_matmul` and the
-  transposed one puts the shared input in in1. `tests/hangRepro` reproduces it standalone.
+  `tt/experts.py` is broadcast-batch any more: the stacked w1 is unbatched, every expert's slab
+  side by side, and the transposed one puts the shared input in in1. `tests/hangRepro` reproduces it standalone.
 - **`ttnn.transformer.scaled_dot_product_attention` returns wrong output at some batch shapes.**
   Measured on random q, k, v against float64 attention, masked and not: wrong at 8x264, 8x528,
   8x544, 12x352 and 16x528 (errors up to 1e+38), correct at 8x512, 8x384, 8x256, 4x528, 4x264,

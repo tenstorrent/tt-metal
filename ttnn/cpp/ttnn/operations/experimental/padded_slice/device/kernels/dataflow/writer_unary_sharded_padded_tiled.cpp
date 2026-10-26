@@ -8,7 +8,7 @@
 #include "internal/dataflow/dataflow_api_addrgen.h"
 #include "api/debug/dprint.h"
 #include "ckernel_defs.h"
-#include "tt-metalium/constants.hpp"
+#include "api/tile_constants.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 uint32_t round_down(uint32_t value, uint32_t multiple) {
@@ -66,6 +66,11 @@ void kernel_main() {
             }
         } else if constexpr (output_elem_size == 2) {
             volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
+            for (uint32_t i = 0; i < output_row_size_elems; ++i) {
+                pad_ptr[i] = 0;
+            }
+        } else if constexpr (output_elem_size == 1) {
+            volatile tt_l1_ptr uint8_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(pad_addr);
             for (uint32_t i = 0; i < output_row_size_elems; ++i) {
                 pad_ptr[i] = 0;
             }

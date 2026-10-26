@@ -7,6 +7,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 using namespace tt::tt_metal;
 
@@ -30,16 +31,39 @@ int main() {
         distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
         distributed::MeshWorkload workload;
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-        Program program = CreateProgram();
 
-        constexpr CoreCoord core = {0, 0};
+        const experimental::NodeCoord node{0, 0};
+        const experimental::KernelSpecName DRAM_COPY_KERNEL{"loopback_dram_copy"};
 
         // See kernel cpp code for details on which noc calls are captured
-        KernelHandle dram_copy_kernel_id = CreateKernel(
-            program,
-            "tt_metal/programming_examples/profiler/test_noc_event_profiler/kernels/loopback_dram_copy.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        const experimental::KernelSpec dram_copy_kernel{
+            .unique_id = DRAM_COPY_KERNEL,
+            .source = "tt_metal/programming_examples/profiler/test_noc_event_profiler/kernels/loopback_dram_copy.cpp",
+            .num_threads = 1,
+            // config_1xx pins the kernel to BRISC on Wormhole/Blackhole; Quasar ignores it and uses the defaults
+            .hw_config =
+                experimental::DataMovementHardwareConfig{
+                    .config_1xx =
+                        experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                            .processor = DataMovementProcessor::RISCV_0,
+                            .noc = NOC::RISCV_0_default,
+                        },
+                },
+            // With no named args, vararg i is get_arg_val<uint32_t>(i), so the kernel reads its args unchanged
+            .advanced_options = experimental::KernelAdvancedOptions{.num_runtime_varargs = 6},
+        };
+
+        experimental::WorkUnitSpec wu{
+            .name = "noc_event_profiler",
+            .kernels = {DRAM_COPY_KERNEL},
+            .target_nodes = node,
+        };
+        experimental::ProgramSpec spec{
+            .name = "noc_event_profiler",
+            .kernels = {dram_copy_kernel},
+            .work_units = {wu},
+        };
+        Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
         // boilerplate setup for reading and writing multiple tiles from DRAM
         constexpr uint32_t single_tile_size = 2 * (32 * 32);
@@ -62,14 +86,21 @@ int main() {
         const uint32_t input_bank_id = 0;
         const uint32_t output_bank_id = 0;
 
-        const std::vector<uint32_t> runtime_args = {
-            l1_buffer->address(),
-            input_dram_buffer->address(),
-            input_bank_id,
-            output_dram_buffer->address(),
-            output_bank_id,
-            l1_buffer->size()};
-        SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
+        experimental::ProgramRunArgs params;
+        params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = DRAM_COPY_KERNEL,
+            .advanced_options =
+                experimental::AdvancedKernelRunArgs{
+                    .runtime_varargs =
+                        {{node,
+                          {static_cast<uint32_t>(l1_buffer->address()),
+                           static_cast<uint32_t>(input_dram_buffer->address()),
+                           input_bank_id,
+                           static_cast<uint32_t>(output_dram_buffer->address()),
+                           output_bank_id,
+                           static_cast<uint32_t>(l1_buffer->size())}}}},
+        });
+        experimental::SetProgramRunArgs(program, params);
 
         workload.add_program(device_range, std::move(program));
         distributed::EnqueueMeshWorkload(cq, workload, false);

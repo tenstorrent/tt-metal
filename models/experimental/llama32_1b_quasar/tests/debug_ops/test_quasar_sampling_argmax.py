@@ -83,3 +83,37 @@ def test_argmax_dram_logits(mesh_device):
     assert (
         match == 1.0
     ), f"argmax over DRAM logits mismatched: {match * 100:.1f}% (got {got.tolist()} vs {ref.tolist()})"
+
+
+@pytest.mark.timeout(3600)
+def test_argmax_dram_logits_multicore(mesh_device):
+    """Force the MULTICORE argmax (>1 core, via sub_core_grids) so the reduce-core -> worker MULTICAST runs.
+
+    The reduce core multicasts the `start` semaphore to the workers; on Quasar (single-NOC / non-torus) that
+    rectangle must be ASCENDING [min..max]. With the WH/BH descending (NOC1 end-corner-first) convention the
+    rectangle degenerates to [max..min] and the sender blocks forever (waypoint NMLW) — a HANG. This is the
+    path the e2e device-sampling hit (the full-vocab scan split across >=2 emulator cores); the single-core
+    test_argmax_dram_logits above never exercises the mcast. Fixed by the arch-normalized corners in
+    argmax_multi_core_program_factory.cpp (porting recipe section 11). Pre-fix this HANGS; post-fix it passes
+    with the same token ids."""
+    torch.manual_seed(0)
+    logits = torch.randn(1, 1, ROWS, VOCAB, dtype=torch.bfloat16) * 0.1
+    winners = torch.randint(0, VOCAB, (ROWS,))
+    for r in range(ROWS):
+        logits[0, 0, r, int(winners[r])] = 10.0
+    logits_t = _tile_bf16_dram(logits, mesh_device)
+
+    # Two cores (a 1x2 rectangle) -> the vocab reduction splits across them -> reduce-core multicast. On the
+    # 2-node emulator cores (0,0) and (1,0) are the usable pair.
+    two_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+
+    x_unt = ttnn.untilize(logits_t, use_multicore=True)
+    tok = ttnn.argmax(x_unt, dim=-1, keepdim=False, sub_core_grids=two_cores)  # [1,1,ROWS] token ids
+    ttnn.synchronize_device(mesh_device)
+    got = ttnn.to_torch(tok).reshape(-1).to(torch.int64)
+
+    ref = winners.to(torch.int64)
+    match = (got == ref).float().mean().item()
+    logger.info(f"[argmax-mcast] match={match * 100:.1f}% got[:4]={got[:4].tolist()} ref[:4]={ref[:4].tolist()}")
+    assert got.numel() == ROWS, f"expected {ROWS} tokens, got {got.numel()}"
+    assert match == 1.0, f"multicore argmax mismatched: {match * 100:.1f}% (got {got.tolist()} vs {ref.tolist()})"

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <tuple>
@@ -25,14 +24,17 @@ class MeshDevice;
 
 namespace ttnn::operations::experimental {
 
-// One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, rotation).
-// block_count is the number of K-blocks to divide the tensor's K dimension into. rotation
-// (receiver-contiguous layout only; omitted/empty == batched) is the per-receiver streaming
-// ring-rotation table, indexed by global ring position: it delivers that tensor's K-blocks in
-// host-specified ring-rotated FIFO order for a matching stream_in1 matmul. See
-// TensorPrefetcherInput for the rotation contract.
-using TensorPrefetcherQueueTensor =
-    std::variant<std::pair<ttnn::Tensor, uint32_t>, std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>;
+// One tensor to prefetch: (tensor, block_count), (tensor, block_count, rotation) or
+// (tensor, block_count, rotation, selector). block_count is the number of K-blocks to divide the
+// tensor's K dimension into. rotation (receiver-contiguous layout only; empty == batched) is the
+// per-receiver streaming ring-rotation table, indexed by global ring position: it delivers that
+// tensor's K-blocks in host-specified ring-rotated FIFO order for a matching stream_in1 matmul. See
+// TensorPrefetcherInput for the rotation contract. selector is the mask of a grouped weight's
+// TensorPrefetcherGroupSelector: only the groups whose mask entry is non-zero are streamed.
+using TensorPrefetcherQueueTensor = std::variant<
+    std::pair<ttnn::Tensor, uint32_t>,
+    std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>,
+    std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>, ttnn::Tensor>>;
 
 // Thin ttnn-side wrappers around the queueable
 // tt::tt_metal::experimental::Start/Queue/Stop TensorPrefetcher API.
@@ -99,13 +101,8 @@ void queue_tensor_prefetcher_request(
 // out as shared_ptrs.
 std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>> create_prefetcher_pipes_for_tensor_prefetcher(
     tt::tt_metal::experimental::PrefetcherPipeSpace& space,
-    const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
+    const std::vector<std::pair<uint32_t, tt::tt_metal::CoreRangeSet>>& bank_to_receivers,
     bool support_multi_receiver_shards = false);
-
-// The tt-metal PrefetcherPipe calls borrow the pipes they read, so this is how a ttnn caller lends
-// its shared pipes to one. TT_FATALs on a null pipe.
-std::vector<std::reference_wrapper<const tt::tt_metal::experimental::PrefetcherPipe>> prefetcher_pipe_refs(
-    const std::vector<std::shared_ptr<tt::tt_metal::experimental::PrefetcherPipe>>& prefetcher_pipes);
 
 // Fence the prefetcher against a command queue: every prefetch request queued after this
 // call waits until all work previously enqueued on that queue has completed on device before

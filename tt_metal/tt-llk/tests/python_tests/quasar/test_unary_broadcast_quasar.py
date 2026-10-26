@@ -12,7 +12,6 @@ from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     PerfRunType,
     UnpackerEngine,
     format_dict,
@@ -32,7 +31,6 @@ from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
@@ -73,14 +71,6 @@ def unary_broadcast_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-def unary_broadcast_implied_math_formats(formats, *, is_perf=False):
-    if is_perf:
-        return [ImpliedMathFormat.Yes]
-    if formats.input_format.is_mx_format():
-        return [ImpliedMathFormat.Yes]
-    return [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-
-
 UNARY_BROADCAST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -114,7 +104,6 @@ def get_valid_dest_acc_unary_broadcast(formats):
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
     broadcast_type=BROADCAST_TYPES,
-    implied_math_format=lambda formats: unary_broadcast_implied_math_formats(formats),
     dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
@@ -124,7 +113,6 @@ def test_unary_broadcast_quasar(
     formats,
     dest_acc,
     broadcast_type,
-    implied_math_format,
     dest_sync_mode,
     input_dimensions,
     run_types,
@@ -190,7 +178,6 @@ def test_unary_broadcast_quasar(
         "test_name": "sources/quasar/eltwise_unary_broadcast_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            IMPLIED_MATH_FORMAT(implied_math_format),
             UNPACKER_ENGINE_SEL(unpacker_sel),
             BROADCAST_TYPE(broadcast_type),
             DEST_SYNC(dest_sync_mode),

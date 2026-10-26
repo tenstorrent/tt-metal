@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/update_cache_tile_work.hpp"
 
 void kernel_main() {
     const std::uint32_t Wt = get_arg(args::Wt);
@@ -22,7 +23,6 @@ void kernel_main() {
     const std::uint32_t batch_start_id = get_arg(args::batch_start_id);
 
     constexpr auto granularity = get_arg(args::granularity);
-    constexpr auto u_count = get_arg(args::u_count);
 
     Noc noc;
     // cache = input tensor s0 (read from the cache/output tensor); input = the update source (s1).
@@ -45,6 +45,7 @@ void kernel_main() {
     std::uint32_t b = batch_start_id;
 
     for (std::uint32_t h = 0; h < num_batched_heads; ++h) {
+        const std::uint32_t u_count = ttnn::kv_cache::user_groups_in_batch_tile(B, batch_start_id, h, granularity);
 #ifndef INPUT_SHARDED
         dfb_input.reserve_back(Wt);
         std::uint32_t input_l1_write_offset = 0;

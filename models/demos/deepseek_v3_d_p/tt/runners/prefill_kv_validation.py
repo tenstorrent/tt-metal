@@ -62,6 +62,27 @@ def _load_kv_pt_trace(pt_path: str) -> dict:
     return cached
 
 
+def _load_sharded_rows(layer_dir: Path, key: str, start: int, total_len: int) -> "torch.Tensor":
+    import torch
+    from safetensors import safe_open
+
+    end = start + total_len
+    rows = []
+    for shard in sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1])):
+        first, last = (int(x) for x in shard.stem.split("_")[1:3])
+        if last <= start or first >= end:
+            continue
+        with safe_open(shard, framework="pt") as f:
+            t = f.get_tensor(key)
+        rows.append(t[max(start - first, 0) : min(end - first, t.shape[0])])
+    if not rows:
+        raise FileNotFoundError(f"{layer_dir} holds no shard covering rows [{start},{end})")
+    out = torch.cat(rows, dim=0).to(torch.float32)
+    if out.shape[0] != total_len:
+        raise FileNotFoundError(f"{layer_dir} shards cover only {out.shape[0]} of rows [{start},{end})")
+    return out
+
+
 def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int = 0) -> "torch.Tensor":
     """[total_len, 576] golden kv_post_transform for one layer, format-agnostic:
     - DeepSeek: a single kv_cache/layer_N.safetensors holding the full tensor.
@@ -79,21 +100,7 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int =
     if single.exists():
         with safe_open(single, framework="pt") as f:
             return f.get_slice(key)[start : start + total_len].to(torch.float32)
-    layer_dir = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}"
-    if start:
-        # The sharded layout would need the offset resolved against each shard's row range; no
-        # head+tail capture ships sharded, so refuse rather than silently score the wrong rows.
-        raise NotImplementedError(f"start={start} is not supported for the sharded layout at {layer_dir}")
-    shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
-    rows, have = [], 0
-    for shard in shards:
-        with safe_open(shard, framework="pt") as f:
-            t = f.get_tensor(key)
-        rows.append(t)
-        have += t.shape[0]
-        if have >= total_len:
-            break
-    return torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+    return _load_sharded_rows(Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}", key, start, total_len)
 
 
 def kvpe_golden_present(trace_dir, layer_idx: int) -> bool:
@@ -163,32 +170,31 @@ def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor"
 
 
 def _load_golden_index_k(
-    trace_dir, layer_idx: int, total_len: int, *, rope_layout: str = "interleaved", hf_config=None
+    trace_dir,
+    layer_idx: int,
+    total_len: int,
+    start: int = 0,
+    *,
+    rope_layout: str = "interleaved",
+    hf_config=None,
 ) -> "torch.Tensor":
     """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
     dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
     _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key. ``rope_layout`` is
     the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based."""
-    from pathlib import Path
-
-    from safetensors import safe_open
-
     key = f"indexer_k_layer_{layer_idx}"
-    layer_dir = Path(trace_dir) / "dsa" / key
-    shards = sorted(layer_dir.glob("rows_*.safetensors"), key=lambda p: int(p.stem.split("_")[1]))
-    rows, have = [], 0
-    for shard in shards:
-        with safe_open(shard, framework="pt") as f:
-            t = f.get_tensor(key)
-        rows.append(t)
-        have += t.shape[0]
-        if have >= total_len:
-            break
-    golden = torch.cat(rows, dim=0)[:total_len].to(torch.float32)
+    golden = _load_sharded_rows(Path(trace_dir) / "dsa" / key, key, start, total_len)
     if rope_layout == "interleaved":
         return golden
     if rope_layout != "half_split":
         raise ValueError(f"unknown index rope layout {rope_layout!r} (expected 'interleaved' or 'half_split')")
+    if start:
+        raise NotImplementedError(
+            f"{key}: a {rope_layout!r} golden cannot be read at start={start}. Re-basing rotates by "
+            f"absolute position, and the rope table is built from position 0, so a windowed read would "
+            f"be re-based by the wrong angles. Score this layer from row 0, or capture the trace with "
+            f"the device's interleaved pairing."
+        )
     if hf_config is None:
         hf_config = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL)).load_hf_config()
     return _rebase_index_k_rope(golden, hf_config)
@@ -236,18 +242,19 @@ def kv_cache_pcc_check(
     from tests.ttnn.utils_for_testing import comp_pcc
 
     cfg = pipeline.config
-    # Assumes TP-REPLICATED twice over: `_to_host` keeps one TP column, and blockcyclic_positions
-    # un-rotates with an SP-only period.
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import is_tp_deduped_kv_cache
 
     assert not resolve_has_indexer(pipeline.hf_config), (
-        "kv_cache_pcc_check has no TP-sharded reconstruction: it keeps one TP column and un-rotates with an "
-        "SP-only block-cyclic period, and every sparse/DSA model TP-dedups. Validate such a cache with the "
-        "mock-migration producer read-back (PREFILL_MOCK_MIGRATION=1) instead of PREFILL_STANDALONE_PCC / "
-        "PREFILL_VALIDATE_MIGRATION."
+        "kv_cache_pcc_check checks the KVPE cache only, so a sparse/DSA model's index-key cache would go "
+        "unchecked. Validate such a cache with the producer's device-less read-back instead of "
+        "PREFILL_STANDALONE_PCC / PREFILL_VALIDATE_MIGRATION."
     )
     mesh_device = pipeline.mesh_device
     sp = cfg.sp_factor
+    tp = cfg.tp_factor
+    # Deduped: every (row, col) chip holds a distinct stripe, so reassemble in linear chip order.
+    kv_dedup = is_tp_deduped_kv_cache(kvpe_cache.storage, cfg.mesh_shape)
     chunk_size = cfg.chunk_size
     num_layers = cfg.num_layers
     seq_len_cache = cfg.max_seq_len
@@ -293,11 +300,17 @@ def kv_cache_pcc_check(
     composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
 
     def _to_host(tensor):
-        return ttnn.to_torch(tensor, mesh_composer=composer)[:, :1]
+        host = ttnn.to_torch(tensor, mesh_composer=composer)  # [slots, tp, seq_len_cache / tp, row]
+        if not kv_dedup:
+            return host[:, :1]  # TP-replicated: any one column is a full replica
+        local = host.shape[2] // sp  # rows per chip
+        return torch.cat(
+            [host[:, t : t + 1, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)], dim=2
+        )  # [slots, 1, seq_len_cache, row] in linear chip order
 
     cache_full = kvpe_cache.unpack_host(_to_host(kvpe_cache.storage)).to(torch.float32)
 
-    p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
+    p = blockcyclic_positions(sp * tp if kv_dedup else sp, chunk_size, seq_len_cache)
     logger.info(f"[kv-pcc] device KV cache vs golden kv_post_transform (slot={slot_id}, per layer):")
     min_pcc = 1.0
     failures = []

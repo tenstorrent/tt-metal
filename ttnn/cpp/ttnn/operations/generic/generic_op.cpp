@@ -7,24 +7,34 @@
 
 namespace ttnn {
 
+namespace {
+
+// Runs the same program on every device of the tensors' mesh (SPMD).
+tt::tt_metal::experimental::MeshProgramDescriptor make_spmd_mesh_program_descriptor(
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+    TT_FATAL(!io_tensors.empty(), "io_tensors must not be empty");
+    auto* mesh_device = io_tensors.front().device();
+    TT_FATAL(mesh_device != nullptr, "Tensor must be on a device");
+
+    tt::tt_metal::experimental::MeshProgramDescriptor mesh_program_descriptor;
+    mesh_program_descriptor.mesh_programs.emplace_back(
+        ttnn::MeshCoordinateRange(mesh_device->shape()), program_descriptor);
+    return mesh_program_descriptor;
+}
+
+}  // namespace
+
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
+    // (the caller's descriptor by reference: it holds it for the whole launch - no copy of every kernel's sources and
+    // runtime args a call)
     return ttnn::prim::generic_op(
         io_tensors, ttnn::operations::generic::operation_attributes_t{.mesh_program_ref = &mesh_program_descriptor});
 }
 
 Tensor generic_op(const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
-    TT_FATAL(!io_tensors.empty(), "io_tensors must not be empty");
-    auto* mesh_device = io_tensors.front().device();
-    TT_FATAL(mesh_device != nullptr, "Tensor must be on a device");
-
-    // Create SPMD MeshProgramDescriptor; same program for the entire mesh
-    tt::tt_metal::experimental::MeshProgramDescriptor mesh_program_descriptor;
-    mesh_program_descriptor.mesh_programs.emplace_back(
-        ttnn::MeshCoordinateRange(mesh_device->shape()), program_descriptor);
-
-    return generic_op(io_tensors, mesh_program_descriptor);
+    return generic_op(io_tensors, make_spmd_mesh_program_descriptor(io_tensors, program_descriptor));
 }
 
 Tensor generic_op(
@@ -38,5 +48,21 @@ Tensor generic_op(
             .program = ttnn::operations::generic::SpecProgram{
                 .spec = spec, .run_args = run_args, .tensor_arg_indices = tensor_args}});
 }
+
+namespace experimental {
+
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
+    ttnn::prim::prepare_generic_op(
+        io_tensors, ttnn::operations::generic::operation_attributes_t{.program = mesh_program_descriptor});
+}
+
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+    prepare_generic_op(io_tensors, make_spmd_mesh_program_descriptor(io_tensors, program_descriptor));
+}
+
+}  // namespace experimental
 
 }  // namespace ttnn

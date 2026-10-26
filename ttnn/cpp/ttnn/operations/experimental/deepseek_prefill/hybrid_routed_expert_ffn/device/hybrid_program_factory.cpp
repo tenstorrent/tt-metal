@@ -2291,7 +2291,7 @@ void append_to_descriptor(
         .defines = {compute_defines.begin(), compute_defines.end()},
         .config =
             tt::tt_metal::ComputeConfigDescriptor{
-                .math_fidelity = MathFidelity::LoFi,
+                .math_fidelity = tt::tt_metal::MathFidelity::LoFi,
                 .fp32_dest_acc_en = kFp32DestAccEn,
                 .math_approx_mode = false,
             },
@@ -3165,7 +3165,7 @@ uint32_t expert_done_writer_count(const tt::tt_metal::ProgramDescriptor& desc) {
 }
 
 void append_expert_done_signal(tt::tt_metal::ProgramDescriptor& desc, const ExpertDoneSignal& signal) {
-    auto writer = find_writer(desc);
+    auto* writer = find_writer(desc);
 
     // One base for every core, so it can be a define: the widest core's list decides it.
     uint32_t base = 0;

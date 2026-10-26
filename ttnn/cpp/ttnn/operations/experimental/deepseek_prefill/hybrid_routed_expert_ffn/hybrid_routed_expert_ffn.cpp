@@ -7,6 +7,7 @@
 #include "device/hybrid_routed_expert_ffn_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <algorithm>
 
@@ -46,7 +47,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
     uint32_t seq_len_per_chip,
     const std::optional<GlobalSemaphore>& fwd_arrived_semaphore,
     const std::optional<GlobalSemaphore>& final_arrived_semaphore,
-    const std::optional<GlobalSemaphore>& expert_go_semaphore) {
+    const std::optional<GlobalSemaphore>& expert_go_semaphore,
+    const std::optional<ttnn::Tensor>& forwarding_buffer) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -196,9 +198,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .fwd_arrived_addr = semaphore_addr(fwd_arrived_semaphore),
             .final_arrived_addr = semaphore_addr(final_arrived_semaphore),
             .expert_go_addr = semaphore_addr(expert_go_semaphore),
-            .l1_arena_addr = overlap_combine && l1_arena.has_value()
-                                 ? static_cast<uint32_t>(l1_arena->buffer()->address())
-                                 : 0u},
+            .l1_arena_addr =
+                overlap_combine && l1_arena.has_value() ? static_cast<uint32_t>(l1_arena->buffer()->address()) : 0u},
         OperationType::tensor_args_t{
             .x = dispatched_buffer,
             .gate_projs = gate_projs,
@@ -214,7 +215,29 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .l1_arena = l1_arena,
             .dispatched_metadata = dispatched_metadata,
             .expert_offsets = expert_offsets,
-            .replicated_global_expert_idx_table = replicated_global_expert_idx_table});
+            .replicated_global_expert_idx_table = replicated_global_expert_idx_table,
+            .forwarding_buffer = forwarding_buffer});
+}
+
+ttnn::Tensor hybrid_routed_expert_moe_forwarding_buffer(
+    ttnn::MeshDevice* mesh_device,
+    uint32_t emb_dim,
+    uint32_t experts_per_chip,
+    uint32_t num_experts_per_tok,
+    uint32_t seq_len_per_chip,
+    uint32_t combine_axis,
+    uint32_t combine_num_links) {
+    // The same fields combine_attributes hands combine, so the spec matches what validate_overlap expects.
+    const combine::CombineFabric2dParams params{
+        .device = mesh_device,
+        .experts_per_chip = experts_per_chip,
+        .num_experts_per_tok = num_experts_per_tok,
+        .seq_len_per_chip = seq_len_per_chip,
+        .axis = combine_axis,
+        .num_links = combine_num_links,
+    };
+    return create_device_tensor(
+        combine::forwarding_buffer_spec(params, emb_dim * static_cast<uint32_t>(sizeof(uint16_t))), mesh_device);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

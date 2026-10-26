@@ -60,16 +60,19 @@ def swiglu_activation_spans(config):
     return up_spans, gate_spans
 
 
-def apply_swiglu_fused(gate, up, config, memory_config=None):
+def apply_swiglu_fused(gate, up, config, memory_config=None, sub_core_grids=None):
     """Clamped swigluoai as ONE device op. Numerically equivalent to ``apply_swiglu``
     (tests/unit/test_swiglu_vs_ref.py).
 
     Neither input is consumed: the op writes a fresh output. Callers own freeing gate/up.
+    sub_core_grids: confine the op to these cores (a sub-device's), else the whole grid.
     """
     up_spans, gate_spans = swiglu_activation_spans(config)
     kwargs = {"input_tensor_a_activations": up_spans, "input_tensor_b_activations": gate_spans}
     if memory_config is not None:
         kwargs["memory_config"] = memory_config
+    if sub_core_grids is not None:
+        kwargs["sub_core_grids"] = sub_core_grids
     return ttnn.multiply(up, gate, **kwargs)
 
 

@@ -12,17 +12,29 @@
 
 namespace tt::tt_metal {
 
+class Device;
 class IDevice;
+class MetalContext;
 class Program;
+enum class DispatchCoreAxis;
 
 namespace distributed {
 class MeshDevice;
+class MeshDeviceImpl;
 }  // namespace distributed
 
 namespace experimental {
 
+// Options for a manual fast-dispatch session.
+struct FastDispatchSetupOptions {
+    // Warn and proceed when an L1 allocation is resident on a core that fast
+    // dispatch will claim. The default refuses before any firmware is written.
+    // The conflicting allocation may be corrupted.
+    bool allow_destructive = false;
+};
+
 // This class provides APIs to dynamically enable and teardown Fast Dispatch during runtime.
-// Functionality is currently limited to Galaxy clusters.
+// Functionality is currently limited to Galaxy and Blackhole clusters whose devices are all MMIO-attached.
 // Note: The functionality in this class is extremely application specific, and will likely be
 // removed once we implement a proper weight loading solution for Low Latency Decode.
 // As such its exposed as experimental.
@@ -33,7 +45,22 @@ namespace experimental {
 class DispatchContext {
 public:
     static DispatchContext& get();
+    // Axis of the live dispatch-core configuration: COL (dispatch on the last column, the Blackhole
+    // default) or ROW (last row; Blackhole with fabric tensix enabled, Wormhole). Callers that place
+    // data around a manual Fast Dispatch session use it to find the dispatch edge (tt-blaze's two-phase
+    // upload writes the shards on that edge under Slow Dispatch, after the session).
+    ::tt::tt_metal::DispatchCoreAxis get_dispatch_core_axis(distributed::MeshDevice* mesh_device) const;
+    // Enables Fast Dispatch on a mesh opened in Slow Dispatch. Before any firmware is written, refuses
+    // (throws, with host state back in Slow Dispatch) if an allocator-tracked L1 or L1_SMALL allocation
+    // has data on a core Fast Dispatch claims, unless options.allow_destructive is set. Also refused:
+    //  - any interleaved L1 buffer resident at session time, whatever its size (its pages span every
+    //    L1 bank);
+    //  - a non-default sub-device manager loaded on any view over an active chip, even with
+    //    allow_destructive: the preflight sees only the default manager's allocator. Sub-device
+    //    managers aren't supported with manual Fast Dispatch; loading one during a session throws.
+    // Every active device must be MMIO-attached; otherwise this throws before Fast Dispatch is enabled.
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device);
+    void initialize_fast_dispatch(distributed::MeshDevice* mesh_device, const FastDispatchSetupOptions& options);
     void terminate_fast_dispatch(distributed::MeshDevice* mesh_device);
     void enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
 
@@ -54,6 +81,15 @@ private:
     };
     friend struct Deleter;
 
+    // True between a successful initialize_fast_dispatch and the matching terminate_fast_dispatch.
+    // Not public API: only MeshDeviceImpl reads it, to refuse sub-device manager loads during a session.
+    bool is_fast_dispatch_session_active() const;
+    friend class distributed::MeshDeviceImpl;
+
+    // Drops the host-side fast-dispatch state created before the L1 preflight refused, so the
+    // mesh is back in Slow Dispatch. Touches Device internals, hence a member.
+    void unwind_failed_fd_setup(MetalContext& context, const std::vector<::tt::tt_metal::Device*>& devices);
+
     bool fast_dispatch_enabled_ = false;
     uint32_t num_fd_inits_ = 0;
     // SD command queues stashed during an FD session, restored on terminate.
@@ -72,6 +108,11 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program);
 // back (CaptureKernelConfig) without the program having executed. Safe to repeat on one
 // device; each call overwrites the previous config.
 void ConfigureProgramWithoutLaunch(IDevice* device, Program& program);
+
+// Compile a program's kernels for a device without allocating, configuring or launching it. Builds
+// into the on-disk JIT cache and touches no command-queue state, so distinct programs can compile
+// concurrently. A no-op if the program is already compiled for this device's build key.
+void CompileProgram(IDevice* device, Program& program);
 
 // A relocatable capture of the kernel config a core currently runs. The detailed launch-message
 // layout remains private to Metal; consumers get only the source block's L1 range and an opaque

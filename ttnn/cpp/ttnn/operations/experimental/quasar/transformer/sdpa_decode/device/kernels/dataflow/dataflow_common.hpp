@@ -12,6 +12,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "internal/tensor/transfer_noc_addr.h"
 #include <vector>
 // Vendored prefill dataflow helpers (carry the Metal 2.0 read_page_table_for_batch overload); see
 // sdpa_dataflow_common.hpp.
@@ -371,6 +372,9 @@ void generate_sliding_window_mask(uint32_t k_num_chunks, uint32_t Sk_chunk_t, ui
         }
     }
 
+    // The tile copies above are NoC reads; with PNHt == 1 the last ones are not covered by the loop's
+    // barriers. This DFB uses explicit sync on Quasar, so they must land before the push.
+    noc.async_read_barrier();
     dfb_mask.push_back(total_read_tiles);
 }
 
@@ -494,7 +498,7 @@ uint32_t write_partial_tiles_to_memory(
 // Read Q when it is NOT locally available (the locally-available / MLA-replicated case is handled inline
 // in the reader kernel, where the borrowed DFB just needs a reserve+push). dfb_q_in and dfb_q_rm carry the
 // SAME DFB accessor (the reader binds only the one it uses per tilize_q), so tilize_q selects which local
-// name is active. The Q address is taken from the bound tensor (`get_bank_base_address` bridge on the
+// name is active. The Q address is taken from the bound tensor (raw `TransferAccess::bank_base` on the
 // sharded path; page reads on the DRAM path — the legacy redundant page-size 3rd argument is dropped).
 template <
     uint32_t dfb_q_in,
@@ -520,7 +524,8 @@ void read_q(
     if constexpr (is_q_sharded) {
         // Q is sharded - read from output core's L1. Case 2 binding: pull the clean shard base pointer
         // from the accessor and keep the raw core-to-core L1 walk unchanged.
-        uint32_t q_addr = q_reader.get_bank_base_address();
+        // Raw: same L1 address on the Q output core (no handle form yet).
+        uint32_t q_addr = tensor_accessor::detail::TransferAccess::bank_base(q_reader);
         const uint8_t noc_id = noc.get_noc_id();
         const uint32_t src_noc_x = is_output_core ? my_x[noc_id] : output_core_noc_x;
         const uint32_t src_noc_y = is_output_core ? my_y[noc_id] : output_core_noc_y;
