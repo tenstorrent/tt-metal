@@ -29,11 +29,14 @@ from models.experimental.toto2_forecast.tt.common import (
 from models.experimental.toto2_forecast.tt.weights import LayerWeights, Toto2Config
 
 _MAX_SDPA_CHUNK = 256
+# SDPA with a user mask is wrong at chunk 256 (PLAN section 9 F9, D2 condition 2): cap masked calls at 128.
+_MAX_MASKED_SDPA_CHUNK = 128
 
 
-def sdpa_chunk(padded_len: int) -> int:
-    """Largest tile multiple up to 256 that divides the padded sequence."""
-    return max(c for c in range(32, min(padded_len, _MAX_SDPA_CHUNK) + 1, 32) if padded_len % c == 0)
+def sdpa_chunk(padded_len: int, masked: bool = False) -> int:
+    """Largest tile multiple up to 256 (128 with a user mask) that divides the padded sequence."""
+    cap = _MAX_MASKED_SDPA_CHUNK if masked else _MAX_SDPA_CHUNK
+    return max(c for c in range(32, min(padded_len, cap) + 1, 32) if padded_len % c == 0)
 
 
 @dataclass(frozen=True)
@@ -101,8 +104,8 @@ class TtTimeAttention:
             scale=1.0 / self.head_dim,
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
-                q_chunk_size=sdpa_chunk(sp),
-                k_chunk_size=sdpa_chunk(sp),
+                q_chunk_size=sdpa_chunk(sp, inputs.mask is not None),
+                k_chunk_size=sdpa_chunk(sp, inputs.mask is not None),
                 exp_approx_mode=False,
             ),
             compute_kernel_config=p.sdpa_config(),

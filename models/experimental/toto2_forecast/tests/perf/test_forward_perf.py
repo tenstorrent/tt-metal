@@ -219,5 +219,10 @@ def test_forward_perf(device, shape_name, precision_name):
     if BENCH_LAYERS:
         return
     # The bench records every metric and asserts only the contract floors; the suite asserts the others.
+    if metrics["rows_degenerate"] == metrics["rows"]:
+        # D2 item 4: an all-degenerate case is judged as the suite judges it (abs_err_max plus the degenerate
+        # spread_ratio_p50 range); its pcc_normalized measures bf16 noise.
+        assert not record["below_floors"], record["below_floors"]
+        return
     floor_n, floor_f = FLOORS[precision_name.split("_")[0]]
     assert pcc_normalized >= floor_n and pcc_final >= floor_f, (pcc_normalized, pcc_final)

@@ -6,8 +6,8 @@
     python models/experimental/toto2_forecast/tests/perf/check_gates.py <candidate bench.json> <round-0 bench.json>
 
 Each full-depth record must meet ``floors_for(checkpoint, precision)`` and stay within ``DRIFT`` of the round-0
-record with the same (name, precision); ``DRIFT`` applies on the target and twice it elsewhere. A missing metric
-and a missing round-0 record are failures. ``BENCH_LAYERS`` records are skipped (their metrics mean nothing).
+record with the same (name, precision); ``DRIFT`` applies on the target and twice it elsewhere. A missing metric,
+a missing round-0 record and a round-0 record the candidate lacks are failures (D2). ``BENCH_LAYERS`` records are skipped (their metrics mean nothing).
 Exit status 1 on any failure.
 """
 
@@ -18,7 +18,7 @@ import json
 import sys
 from pathlib import Path
 
-from models.experimental.toto2_forecast.tests.golden.goldens import CEILINGS, DRIFT, below_floors, floors_for
+from models.experimental.toto2_forecast.tests.golden.goldens import CEILINGS, DRIFT, TWO_SIDED, below_floors, floors_for
 
 TARGET = ("paper", "accuracy")
 
@@ -32,7 +32,9 @@ def check(rec: dict, ref: dict | None) -> list[str]:
         if metric not in rec or metric not in ref:
             notes.append(f"{metric} missing")
             continue
-        if metric in CEILINGS:
+        if metric in TWO_SIDED:
+            bad = abs(rec[metric] - ref[metric]) > scale * margin
+        elif metric in CEILINGS:
             bad = rec[metric] > ref[metric] + scale * margin
         else:
             bad = rec[metric] < ref[metric] - scale * margin
@@ -55,6 +57,10 @@ def main(argv=None) -> int:
         notes = check(rec, base.get(key))
         failed |= bool(notes)
         print(("FAIL " if notes else "PASS ") + "-".join(key) + (": " + "; ".join(notes) if notes else ""))
+    seen = {(r["name"], r["precision"]) for r in json.loads(args.candidate.read_text()) if not r.get("bench_layers")}
+    for key in sorted(set(base) - seen):  # D2 item 4: a round-0 record the candidate run lacks is a failure
+        failed = True
+        print("FAIL " + "-".join(key) + ": missing from the candidate run")
     print("gates:", "FAIL" if failed else "PASS")
     return 1 if failed else 0
 

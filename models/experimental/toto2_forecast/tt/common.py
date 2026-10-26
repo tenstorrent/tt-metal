@@ -68,16 +68,17 @@ class Toto2Precision:
         return cls(
             name="performance",
             bf8_weights=True,
-            lofi=True,
+            lofi=False,  # P1, D2 (G1): HiFi2 on every matmul and SDPA; CONTRACT section 2's LoFi is amended
             fp32_acc=True,
             embed_hifi4=True,
             fp32_tokens=True,
             fp32_head_out=True,
         )
 
-    # Performance-policy sweep variants (D1 item 3): P0 = performance; P1 HiFi2 everywhere; P2 LoFi on the FFN
+    # Performance-policy sweep variants (D1 item 3): P0 = the round-0 performance (LoFi); P1 = performance (D2); P1 HiFi2 everywhere; P2 LoFi on the FFN
     # only; P3 = P1 with bf16 FFN weights; P4 = P0 with a bf16 / HiFi2 head; P5 = P2 with a LoFi head.
     VARIANTS = {
+        "P0": dict(lofi=True),
         "P1": dict(lofi=False),
         "P2": dict(lofi=False, ffn_lofi=True),
         "P3": dict(lofi=False, ffn_bf16_weights=True),

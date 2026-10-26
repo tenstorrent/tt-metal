@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from models.experimental.toto2_forecast.tests.golden.goldens import (
+    CEILINGS,
     below_floors,
     collapsed,
     floors_for,
@@ -71,14 +72,18 @@ def test_collapsed_output_fails(ckpt, case):
         data = json.loads(out.read_text()) if out.is_file() else []
         out.write_text(json.dumps([*data, {"ckpt": ckpt, "case": case, **metrics}], indent=2) + "\n")
     print(f"\n[COLLAPSED] {ckpt}/{case}: " + " ".join(f"{k}={v:.5f}" for k, v in metrics.items()))
-    if metrics["rows_degenerate"] == metrics["rows"]:
-        pytest.skip("every series is near-constant: a collapsed output is (almost) the reference")
     floors = floors_for(ckpt, "accuracy")
     caught = below_floors(metrics, floors)
+    if metrics["rows_degenerate"] == metrics["rows"]:
+        # D2 item 3: the degenerate spread_ratio_p50 range catches the collapse (p50 ~ 0) on an all-degenerate case.
+        assert "spread_ratio_p50" in caught, f"a collapsed output passes spread_ratio_p50 {metrics['spread_ratio_p50']:.5f}"
+        return
     # The spread and per-row metrics must catch it everywhere; on the realistic-mix goldens every metric but
     # pcc_final must (on the smooth unit-test goldens per-row offsets carry pcc_normalized to 0.990-0.9986).
     required = {"pcc_spread", "pcc_row_p01_active", "spread_ratio_p01", "pcc_final_spread"}
     if g["case"].get("mix") == "realistic":
-        required |= set(floors) - UNCATCHABLE - {"abs_err_max", "pcc_row_min_active_many", "spread_ratio_p99"}
+        required |= {
+            k for k in set(floors) - UNCATCHABLE - CEILINGS if not k.startswith("spread_ratio_inactive")
+        } - {"pcc_row_min_active_many", "spread_ratio_p50_degenerate"}
     missed = sorted(required - set(caught))
     assert not missed, f"a collapsed output passes these floors: { {k: round(metrics[k], 5) for k in missed} }"

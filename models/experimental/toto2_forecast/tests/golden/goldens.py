@@ -168,8 +168,12 @@ def below_floors(metrics: dict, floors: dict) -> dict:
     for key, floor in floors.items():
         if key == "pcc_row_min_active_many":
             continue
+        if key == "spread_ratio_p50_degenerate":
+            continue
         if all_degenerate != (key in DEGENERATE_GATED) and key != "spread_ratio_p50":
             continue
+        if key == "spread_ratio_p50" and all_degenerate:
+            floor = floors["spread_ratio_p50_degenerate"]
         if key == "pcc_row_min_active" and metrics["rows"] > MANY_ROWS:
             floor = floors["pcc_row_min_active_many"]
         if key not in metrics:
@@ -214,7 +218,7 @@ GATE_FLOORS = {
         "pcc_row_min_active": 0.95,
         "pcc_row_min_active_many": 0.9,
         "spread_ratio_p01": 0.85,
-        "spread_ratio_p99": 3.0,
+        "spread_ratio_p99": 1.25,
         "pcc_final": 0.98,
         "pcc_final_spread": 0.93,
         "abs_err_max": 0.02,
@@ -248,8 +252,32 @@ SMALL_CHECKPOINT_FLOORS = {
 }
 
 
+# Band floors set by D2 (G1 approval, 2026-10-26 13:56). spread_ratio_p50 is two-sided; an all-degenerate case
+# (rows_degenerate == rows) is judged by abs_err_max plus spread_ratio_p50_degenerate. min / max / inactive are
+# floor-only (no drift).
+_BAND_COMMON = dict(
+    spread_ratio_p50_degenerate=(0.5, 2.0),
+    spread_ratio_min=0.6,
+    spread_ratio_inactive_p01=0.4,
+    spread_ratio_inactive_p50=2.0,
+)
+TARGET_BAND = {
+    "accuracy": dict(_BAND_COMMON, spread_ratio_p50=(0.97, 1.03), spread_ratio_max=2.0),
+    "performance": dict(_BAND_COMMON, spread_ratio_p50=(0.95, 1.05), spread_ratio_max=2.0),
+}
+SMALL_BAND = dict(_BAND_COMMON, spread_ratio_p50=(0.95, 1.05), spread_ratio_p99=1.5, spread_ratio_max=2.5)
+for _prec in ("accuracy", "performance"):
+    GATE_FLOORS[_prec].update(TARGET_BAND[_prec])
+    SMALL_CHECKPOINT_FLOORS[_prec].update(SMALL_BAND)
+
+
 def floors_for(ckpt: str, precision: str) -> dict:
-    return (SMALL_CHECKPOINT_FLOORS if ckpt in ("4m", "22m") else GATE_FLOORS)[precision.split("_")[0]]
+    prec = precision.split("_")[0]
+    if ckpt in ("4m", "22m"):
+        return SMALL_CHECKPOINT_FLOORS[prec]
+    if ckpt == "2.5B-FT":
+        return GATE_FLOORS[prec]
+    return {**GATE_FLOORS[prec], **SMALL_BAND}
 
 
 # Drift from round 0 of the same precision (tests/perf/check_gates.py): a candidate may lose at most this much
@@ -263,20 +291,11 @@ DRIFT = {
     "spread_ratio_p99": 0.05,
     "pcc_final": 2e-4,
     "pcc_final_spread": 2e-3,
+    "spread_ratio_p50": 0.01,
 }
+TWO_SIDED = {"spread_ratio_p50"}
 
 
-def _proposed(base: dict, **changes) -> dict:
-    return {**base, **changes}
-
-
-# Proposed at G1 re-raise (D1 item 2), NOT in force: GATE_FLOORS stays as reviewed until the orchestrator rules.
-# Each of the v1.9 broken outputs (a: inactive bands collapsed, b: 1 % of active bands at 0.3x, c / d: every band
-# x0.88 / x1.12) misses at least one of these in each precision on paper_mix, multivariate_mix, long_context_mix
-# and single_sparse (doc/optimize/iter_00/policy_sweep/broken_metrics*.json).
-_BAND = dict(spread_ratio_p50=(0.9, 1.1), spread_ratio_min=0.6, spread_ratio_max=2.0, spread_ratio_inactive_p01=0.4)
-PROPOSED_FLOORS = {
-    "accuracy": _proposed(GATE_FLOORS["accuracy"], **_BAND),
-    "performance": _proposed(GATE_FLOORS["performance"], **_BAND, spread_ratio_p99=1.25),
-}
-CEILINGS.add("spread_ratio_max")
+CEILINGS.update({"spread_ratio_max", "spread_ratio_inactive_p50"})
+# The G1 proposals are in force (D2); score_broken.py --proposed now scores the same floors.
+PROPOSED_FLOORS = GATE_FLOORS
