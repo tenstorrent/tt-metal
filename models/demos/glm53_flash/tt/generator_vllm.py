@@ -8,9 +8,12 @@ device-facing path carries a ``TODO(device)`` where the first server run has to 
 Registration (no plugin edit needed for the first smoke; a ``_register_model_if_missing`` entry in
 ``platform.py::register_tt_models`` is the permanent form)::
 
-    export TT_MODEL_CLASS_OVERRIDES="Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForCausalLM,Glm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForCausalLM"
-    MESH_DEVICE=BH-Galaxy vllm serve zai-org/GLM-5.3-Flash --max-model-len 1048576 --max-num-seqs 4 --block-size 32 \\
-        --no-enable-prefix-caching --additional-config '{"tt": {"trace_region_size": 536870912, "l1_small_size": 32768,
+    # bare + "TT"-prefixed names: the plugin prefixes every checkpoint architecture with "TT" before it resolves
+    # the class (platform.py check_and_update_config), and the override map is consulted for both forms
+    export TT_MODEL_CLASS_OVERRIDES="Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForCausalLM,TTGlm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForCausalLM,Glm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForCausalLM,TTGlm5NextForCausalLM=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForCausalLM"
+    MESH_DEVICE=BH-Galaxy GLM53_MESH_SHAPE=8,4 vllm serve zai-org/GLM-5.3-Flash --max-model-len 1048576 --max-num-seqs 4 \\
+        --block-size 32 --max-num-batched-tokens 16384 --no-enable-prefix-caching \\
+        --additional-config '{"tt": {"trace_region_size": 536870912, "l1_small_size": 32768,
         "sample_on_device_mode": "all", "prefill_chunk_alignment": 256, "decode_interleave_enabled": false}}'
 
 Contract mapping (the plugin's names on the left):
@@ -72,6 +75,7 @@ from models.demos.glm53_flash.tt.vllm_config import (
     TILE,
     DecodeRowMap,
     LogicalBlockTable,
+    PrefillPlan,
     PrefillPlanner,
     ServingGeometry,
     SlotTable,
@@ -111,8 +115,11 @@ def _mesh_shape_from_env() -> tuple[int, int]:
 
 
 def _fabric_capability() -> dict | None:
-    """``model_capabilities["fabric_config"]``: the kwargs of ``ttnn.set_fabric_config`` the mesh model needs (2D
-    torus on the 8x4, relaxed init, the maximum-payload router config), from ``tt/mesh.py::mesh_device_params``.
+    """``model_capabilities["fabric_config"]``: the KEYWORD ARGUMENTS of ``ttnn.set_fabric_config`` the mesh model
+    needs (``config``: 2D torus on the 8x4, ``reliability_mode``: relaxed init, ``router_config``: the maximum-payload
+    router config), from ``tt/mesh.py::mesh_device_params`` (whose ``fabric_router_config`` entry is what the root
+    conftest passes as ``set_fabric_config``'s ``router_config``). The plugin merges this dict into its own
+    ``set_fabric_config(**kwargs)`` call, so the keys must be the call's parameter names.
     Built only in a process that already imported ttnn (the vLLM plugin does before it resolves the model
     class), so importing this module on a host without ttnn stays side-effect free."""
     if "ttnn" not in sys.modules:
@@ -131,12 +138,26 @@ def _fabric_capability() -> dict | None:
     if "reliability_mode" in params:
         out["reliability_mode"] = params["reliability_mode"]
     if "fabric_router_config" in params:
-        out["fabric_router_config"] = params["fabric_router_config"]
+        out["router_config"] = params["fabric_router_config"]
     return out or None
 
 
 def _env_flag(name: str, default: str) -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+DEFAULT_MESH_CACHE = "/home/ttuser/ashai/glm53/_cache/mesh"  # the model tests' tensorbin weight cache
+
+
+def mesh_cache_root() -> Path | None:
+    """The tensorbin weight cache the mesh model loads / writes: ``GLM53_MESH_CACHE`` (``none`` disables it), else
+    ``$TT_CACHE_PATH/glm53_mesh`` when the serving stack sets ``TT_CACHE_PATH`` (tt-inference-server's per-model cache
+    volume, so a served GLM lands its weight cache next to every other model's), else the model tests' default."""
+    spec = os.environ.get("GLM53_MESH_CACHE")
+    if spec is None:
+        tt_cache = os.environ.get("TT_CACHE_PATH")
+        spec = str(Path(tt_cache) / "glm53_mesh") if tt_cache else DEFAULT_MESH_CACHE
+    return None if spec.strip().lower() == "none" else Path(spec)
 
 
 # ------------------------------------------------------------------------------------------- outputs
@@ -292,8 +313,7 @@ class GLM53FlashForCausalLM:
             f"{plan.headroom(int(max_seq_len)) / 2**30:.1f} GiB vs {plan.bytes_for(users_per_row, int(max_seq_len)) / 2**30:.1f} GiB of caches"
         )
         layers = cls._layer_ids(n_layers, cfg.num_hidden_layers)
-        cache_env = os.environ.get("GLM53_MESH_CACHE", "/home/ttuser/ashai/glm53/_cache/mesh")
-        cache_root = None if cache_env.lower() == "none" else Path(cache_env)
+        cache_root = mesh_cache_root()
         t0 = time.perf_counter()
         model = GLM53MeshModel(
             mesh_device,
@@ -331,7 +351,8 @@ class GLM53FlashForCausalLM:
 
     @property
     def cache_path(self):
-        return os.environ.get("GLM53_MESH_CACHE", "")
+        root = mesh_cache_root()
+        return "" if root is None else str(root)
 
     # ================================================================================= KV accounting
     @classmethod
@@ -381,21 +402,28 @@ class GLM53FlashForCausalLM:
     # ================================================================================= warm-up
     def warmup_model_prefill(self, kv_cache=None, enable_trace: bool = True, can_sample_on_device: bool = False, **kw):
         """Eager phase (``enable_trace=False``): the persistent decode inputs + one eager decode step (compiles,
-        must precede every capture) and one eager prefill (compiles the prefill programs). Traced phase: capture
-        the per-length prefill traces (before the decode trace: a persistent tensor allocated after a capture may
-        alias that trace's transient buffers)."""
+        must precede every capture) and the eager prefill ladder (``GLM53_VLLM_WARMUP_PREFILL``: every listed prompt
+        length walked in device chunks into slot 0, so the prefill programs of the short prompt AND of the long-prompt
+        chunk shapes are compiled at boot rather than on the first request of that shape). Traced phase: capture the
+        per-length prefill traces (every supported length, ``GLM53MeshModel.capture_prefill``; before the decode
+        trace: a persistent tensor allocated after a capture may alias that trace's transient buffers)."""
         U = self.geometry.physical_slots
         if not enable_trace:
             self._ensure_decode_inputs(U)
             if not self.already_warmed_up_prefill:
-                n = min(128, self.geometry.max_seq_len)
+                lengths = self._warmup_prefill_lengths()
+                for n in lengths:
+                    dummy = torch.arange(n, dtype=torch.long) % 1000 + 1000
+                    plan = PrefillPlan("eager", PrefillPlanner.walk(0, n, self.geometry.device_prefill_chunk))
+                    t0 = time.perf_counter()
+                    self._prefill_one(dummy, 0, plan, want_logits=False)
+                    self._sync()
+                    logger.info(
+                        f"GLM53 vLLM: eager prefill warm-up ({n} tokens in {len(plan.chunks)} device chunk(s)) in "
+                        f"{time.perf_counter() - t0:.1f} s"
+                    )
+                n = lengths[0]
                 dummy = torch.arange(n, dtype=torch.long) % 1000 + 1000
-                t0 = time.perf_counter()
-                streams, logits, _ = self.model.prefill(dummy, user=0, start=0)
-                self._free(streams)
-                self._free(logits)
-                self._sync()
-                logger.info(f"GLM53 vLLM: eager prefill warm-up ({n} tokens) in {time.perf_counter() - t0:.1f} s")
                 if self.geometry.rows_independent:  # the wave path compiles its own programs: one wave on every row
                     g = self.geometry
                     members = tuple(WaveMember(logical=r, row=r, user=0, start=0, end=n) for r in range(g.rows))
@@ -444,6 +472,22 @@ class GLM53FlashForCausalLM:
             logger.info(f"GLM53 vLLM: decode trace captured in {time.perf_counter() - t0:.1f} s ({U} slots)")
         self.tt_supported_decode_batch_sizes = (self.geometry.request_capacity,)
         self._decode_warmup_complete = True
+
+    def _warmup_prefill_lengths(self) -> list[int]:
+        """``GLM53_VLLM_WARMUP_PREFILL``: comma-separated prompt lengths the eager warm-up walks (default ``128``:
+        the short-prompt programs). The Galaxy catalog sets ``128,32768``: a full 16 K device chunk and its
+        continuation at start 16384 compile at boot, so the first long request does not compile mid-session.
+        Lengths are clamped to ``max_seq_len``; duplicates and empty entries dropped."""
+        raw = os.environ.get("GLM53_VLLM_WARMUP_PREFILL", "128")
+        out: list[int] = []
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            n = min(int(part), self.geometry.max_seq_len)
+            if n >= 1 and n not in out:
+                out.append(n)
+        return out or [min(128, self.geometry.max_seq_len)]
 
     def _ensure_decode_inputs(self, U: int) -> None:
         if self._decode_inputs_ready:
