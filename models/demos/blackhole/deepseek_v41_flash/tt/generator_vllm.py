@@ -880,6 +880,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 sampling_params,
                 mm=mm,
                 prefill_final=kwargs.get("prefill_final"),
+                prefill_total=kwargs.get("prefill_total"),
             )
         if any(self._mm_row(mm, i)[0] is not None for i in range(N)):
             raise ValueError("image input needs the interleaved prefill (DSV41_VLLM_INTERLEAVE=1)")
@@ -981,6 +982,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         sampling_params=None,
         mm=None,
         prefill_final=None,
+        prefill_total=None,
     ):
         """Prefill of the new requests / prompt chunks while other requests keep decoding (``Model.prefill_interleaved``): tokens [N, >= max end] (every prompt from
         position 0), ``ends`` the end position of this chunk of every row (= the prompt length for a whole prompt), ``start_pos`` the start (0 for a new request).
@@ -1102,6 +1104,11 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             prefill_final is not None and len(prefill_final) == N
         ):  # (plugin capability prefill_lookahead: which rows end their sequence in this step)
             final_map = {phys[i]: bool(prefill_final[i]) for i in range(N) if i not in skipped}
+        total_map = None
+        if (
+            prefill_total is not None and len(prefill_total) == N
+        ):  # (plugin capability prefill_lookahead: the whole length of every request's sequence: bounded replay, DSV41_PF_REPLAY)
+            total_map = {phys[i]: int(prefill_total[i]) for i in range(N) if i not in skipped}
         t_call0 = time.perf_counter()
         res = (
             self.m.prefill_interleaved(
@@ -1111,6 +1118,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 want_logits=want_logits,
                 vis=vis or None,
                 **({} if final_map is None else {"final": final_map}),
+                **({} if total_map is None else {"totals": total_map}),
             )
             if run
             else {}

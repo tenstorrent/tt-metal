@@ -114,7 +114,7 @@ class PagedCtx:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=self._m,
             )
-            if os.environ.get("DSV41_PF_REPLAY", "0") != "0"
+            if int(os.environ.get("DSV41_PF_REPLAY", "0")) > 0
             else None
         )
 

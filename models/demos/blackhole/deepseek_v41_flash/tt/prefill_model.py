@@ -28,10 +28,23 @@ DIM = 5120
 REPLAY_BACK = 21  # bounded replay (DSV41_PF_REPLAY): layers 0..REPLAY_BACK-1 run on every chunk (trace A), layers REPLAY_BACK.. only on the chunks of the replay zone (trace B)
 
 
+def split_enabled():
+    """Boot-time switch: DSV41_PF_REPLAY > 0 captures the chunk trace as two halves (A / B) and allocates the first-replay-chunk tensors."""
+    return int(os.environ.get("DSV41_PF_REPLAY", "0")) > 0
+
+
 def replay_tokens():
     """DSV41_PF_REPLAY = R: the last R tokens of a prompt (rounded out to whole chunks) run all 40 layers, the earlier chunks only layers 0..20 (cross-layer KV sharing: layers 21-39 read the
     compressed KV / index keys of layer 20). Exact (bit-identical to R = 0) from R >= 19 * 127 + 1 = 2414 (the window dependency chain of layers 21..39); smaller R is window-clipped. 0 = off.
     """
+    f = os.environ.get(
+        "DSV41_PF_REPLAY_FILE"
+    )  # live switch (a server built with the split traces): a file holding R (0 = every chunk runs every layer, as without the feature)
+    if f:
+        try:
+            return int(open(f).read().strip())
+        except (OSError, ValueError):
+            pass
     return int(os.environ.get("DSV41_PF_REPLAY", "0"))
 
 
@@ -405,7 +418,7 @@ class DSV41PrefillModel:
         for lid, pl in self.layers:
             if (part == "front" and lid >= REPLAY_BACK) or (part == "back" and lid < REPLAY_BACK):
                 continue
-            if dyn and replay_tokens():
+            if dyn and split_enabled():
                 self.dyn.back = lid >= REPLAY_BACK  # (the layers of trace B read the first-replay-chunk window tensors)
             if lid in self.engram:
                 xs, pres = unpack_streams(xs, pres)
@@ -499,7 +512,7 @@ class DSV41PrefillModel:
             if hook is not None:
                 xs, pres = unpack_streams(xs, pres)
                 hook(lid, xs, pres)
-        if dyn and replay_tokens():
+        if dyn and split_enabled():
             self.dyn.back = False
         if part == "front":
             self._bridge_out(xs, pres)
@@ -541,6 +554,8 @@ class DSV41PrefillModel:
         """first replay chunk start of every mesh row (chunk-aligned): the chunk holding position len - R and everything after it; 0 = the whole prompt runs all layers."""
         R = replay_tokens()
         U = self.U
+        if R <= 0:
+            return [0] * self.rows
         out = []
         for r in range(self.rows):
             ps = [max(0, ((int(lens[r * U + u]) - R) // C) * C) for u in range(U)]
@@ -809,7 +824,7 @@ class DSV41PrefillModel:
     _PA_ATTRS = ("dyn", "halo", "lat_buf", "_lat_pre")
     _SP_ATTRS = ("ctx", "dyn_on", "kvt", "ids")
     _IX_ATTRS = ("keys", "keys_rm", "KL", "KL_full", "sh")
-    _PM_ATTRS = ("dyn", "dyn_trace", "dyn_out", "head_out", "_dyn_compiled")
+    _PM_ATTRS = ("dyn", "dyn_trace", "dyn_trace_b", "dyn_out", "head_out", "_dyn_compiled")
     _PA_FRESH = {"dyn": None, "halo": None, "lat_buf": None, "_lat_pre": None}
     _SP_FRESH = {"ctx": None, "dyn_on": False, "kvt": None, "ids": None}
     _IX_FRESH = {"keys": None, "keys_rm": None, "sh": None}
@@ -861,7 +876,14 @@ class DSV41PrefillModel:
         self._put(
             self,
             self._PM_ATTRS,
-            {"dyn": None, "dyn_trace": None, "dyn_out": None, "head_out": [], "_dyn_compiled": None},
+            {
+                "dyn": None,
+                "dyn_trace": None,
+                "dyn_trace_b": None,
+                "dyn_out": None,
+                "head_out": [],
+                "_dyn_compiled": None,
+            },
         )
         for o in pas:
             self._put(o, self._PA_ATTRS, dict(self._PA_FRESH))
@@ -1006,11 +1028,17 @@ class DSV41PrefillModel:
         self.active_mask = torch.zeros(self.rows * self.U)
         self.upload_inputs(self.dummy_inputs(C), bufs)
         self.begin_chunk(0, C)
-        self.forward_device(bufs, C, 0, C, dyn=True)  # compile pass (eager)
-        ttnn.synchronize_device(self.md)
-        xs0, pres0 = self.dyn_out
-        for x in list(xs0) + list(pres0):
-            ttnn.deallocate(x)
+        for part in ("front", "back") if split_enabled() else (None,):
+            self._part = part
+            self.forward_device(
+                bufs, C, 0, C, dyn=True
+            )  # compile pass (eager; bounded replay: trace A's ops, then trace B's)
+            ttnn.synchronize_device(self.md)
+            if part != "front":
+                xs0, pres0 = self.dyn_out
+                for x in list(xs0) + list(pres0):
+                    ttnn.deallocate(x)
+        self._part = None
         for _, pl in self.layers:
             pl.pa.reset_dyn()  # before any capture only
         ttnn.synchronize_device(self.md)
@@ -1023,11 +1051,11 @@ class DSV41PrefillModel:
         except Exception:  # noqa: BLE001
             return float("nan")
 
-    def _log_chunk_trace(self, C, before):
+    def _log_chunk_trace(self, C, before, tag=""):
         """PF_TRACES line: how many prefill chunk traces are held and what this capture added to the trace region (MiB per DRAM bank; x 8 banks... = per chip)."""
         after = self._trace_region_mib()
         print(
-            f"PF_TRACES prefill chunk trace captured: C={C} S_pad={self.dyn.S_pad} single={os.environ.get('DSV41_PF_SINGLE', '0')} -> chunk traces held {len(self.dyn_buckets())} "
+            f"PF_TRACES prefill chunk trace{tag and ' ' + tag} captured: C={C} S_pad={self.dyn.S_pad} single={os.environ.get('DSV41_PF_SINGLE', '0')} -> chunk traces held {len(self.dyn_buckets())} "
             f"(S_pads {self.dyn_buckets()}); this capture +{after - before:.1f} MiB/bank, trace region now {after:.1f} MiB/bank",
             flush=True,
         )
@@ -1048,6 +1076,11 @@ class DSV41PrefillModel:
         assert C_ == C
         from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import corruptible
 
+        if split_enabled():
+            self._capture_dyn_trace_split(C, bufs)
+            self._dyn_compiled = None
+            self.timing["compile_and_capture"] = time.perf_counter() - t0
+            return
         if os.environ.get("DSV41_PF_PRECAPTURE_WARM", "1") == "1":
             # a server compiles the decode programs between ``compile_dyn`` and this capture: a program of the chunk whose hash changed meanwhile (seen with the column-sharded indexer at a 1M
             # context: "Cannot load new binaries during trace capture" in select_dyn_sharded) would be compiled INSIDE the capture. One more eager chunk right before it (same masked dummy
@@ -1113,7 +1146,68 @@ class DSV41PrefillModel:
             prof.disable()
         return ops
 
-    def replay_window(self, tokens, hashes, s0, C, active, vis=None, prepped=None, overlap=None, ops=None, sync=True):
+    def _capture_dyn_trace_split(self, C, bufs):
+        """Bounded replay (DSV41_PF_REPLAY): capture trace A (embedding .. layer 20, ends in the bridge) and trace B (layers 21..39 + head). Each half gets one more eager pass right before ITS capture
+        (same allocation state: no program may be compiled inside a capture, see ``capture_dyn_trace``)."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.decode_buckets import corruptible
+
+        def warm(part):
+            self.begin_chunk(0, C)
+            self._part = part
+            self.forward_device(bufs, C, 0, C, dyn=True)
+            ttnn.synchronize_device(self.md)
+            if part == "back":
+                for x in list(self.dyn_out[0]) + list(self.dyn_out[1]):
+                    ttnn.deallocate(x)
+            self._part = None
+
+        warm("front")
+        tr0 = self._trace_region_mib()
+        self._warm_gather_plans(C)
+        _PS.CAPTURING[0] = True
+        self._part = "front"
+        self.dyn_trace = ttnn.begin_trace_capture(self.md, cq_id=0)
+        with corruptible(self.md):
+            self.forward_device(bufs, C, 0, C, dyn=True)
+        ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
+        self._part = None
+        _PS.CAPTURING[0] = False
+        ttnn.synchronize_device(self.md)
+        self._log_chunk_trace(C, tr0, "A")
+        warm("back")
+        for _, pl in self.layers:
+            pl.pa.reset_dyn()
+        ttnn.synchronize_device(self.md)
+        tr0 = self._trace_region_mib()
+        _PS.CAPTURING[0] = True
+        self._part = "back"
+        self.dyn_trace_b = ttnn.begin_trace_capture(self.md, cq_id=0)
+        with corruptible(self.md):
+            self.forward_device(bufs, C, 0, C, dyn=True)
+        ttnn.end_trace_capture(self.md, self.dyn_trace_b, cq_id=0)
+        self._part = None
+        _PS.CAPTURING[0] = False
+        ttnn.synchronize_device(self.md)
+        self._log_chunk_trace(C, tr0, "B")
+
+    def set_zone(self, p0_by_row):
+        """Bounded replay: first replay chunk start of the mesh rows {row: p0} (rows not named keep their value; a row with an unknown prompt length is 0 = every chunk runs all layers)."""
+        if self.dyn is None or getattr(self, "dyn_trace_b", None) is None:
+            return
+        p0 = self.dyn.p0 or [0] * self.rows
+        for r, v in p0_by_row.items():
+            p0[int(r)] = int(v)
+        self.dyn.p0 = p0
+
+    def zone_start(self, total, C):
+        """p0 of a prompt of ``total`` tokens (None = not known -> 0)."""
+        if replay_tokens() <= 0 or total is None:
+            return 0
+        return max(0, ((int(total) - replay_tokens()) // C) * C)
+
+    def replay_window(
+        self, tokens, hashes, s0, C, active, vis=None, prepped=None, overlap=None, ops=None, sync=True, back=True
+    ):
         """One replay of the captured chunk trace for the window of positions [s0, s0 + C): tokens [B, C] (fillers 0), hashes of the active users only,
         ``active`` bool [B]; ``vis`` (DSV41_VISION=1): (image mask [B, C] bool, embedding override [B, C, dim] bf16) or None. Returns (host seconds, device seconds).
         ``sync=False`` (the demo's asynchronous loop, ``run_traced_chunks``): the copies of the window and its trace are only ENQUEUED (CQ 0 is in order: the copies land after the previous replay,
@@ -1150,6 +1244,14 @@ class DSV41PrefillModel:
 
         check_trace_allocations(self.md, self.dyn_trace, "prefill chunk")
         ttnn.execute_trace(self.md, self.dyn_trace, cq_id=0, blocking=False)
+        if (
+            back and getattr(self, "dyn_trace_b", None) is not None
+        ):  # (bounded replay: A only for a window in which no active row is in its replay zone)
+            ttnn.execute_trace(self.md, self.dyn_trace_b, cq_id=0, blocking=False)
+        else:
+            self.timing["replays_a_only"] = self.timing.get("replays_a_only", 0) + (
+                1 if getattr(self, "dyn_trace_b", None) is not None else 0
+            )
         hist.append(ttnn.record_event(self.md, 0))
         del hist[:-2]
         if w is not None:
@@ -1240,7 +1342,7 @@ class DSV41PrefillModel:
         pad = lambda t: torch.cat([t, t[:, -1:].expand(B, S_pad - S, *t.shape[2:])], dim=1) if S_pad > S else t
         tk, hs = pad(tokens), None if hashes is None else pad(hashes)
         bufs = self.alloc_inputs(C)
-        rep = replay_tokens() > 0
+        rep = split_enabled()
         p0 = None
         if rep:
             assert not moe_overlap.enabled(), "DSV41_PF_REPLAY: no segmented (moe_overlap) trace"

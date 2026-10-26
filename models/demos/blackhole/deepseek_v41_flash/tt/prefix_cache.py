@@ -258,6 +258,9 @@ class PrefixSnapshot:
     carried: dict = field(default_factory=dict)  # name -> [cols] torch (slot dim kept, trimmed rows)
     pool: dict = field(default_factory=dict)  # src -> torch bf16 [n_entries, 512] latents of the kv-source layer
     seconds: float = 0.0
+    # bounded replay (DSV41_PF_REPLAY): False when the user ran only layers 0..20 on the chunks before ``s`` (the halos of layers >= 21 are stale: the snapshot may only be restored when the continuation starts
+    # at or before the first replay chunk of its own prompt, which ignores those halos). True: every layer ran on every chunk (the usual snapshot).
+    full: bool = True
 
     @property
     def nbytes(self):
@@ -661,14 +664,19 @@ class PrefixStore:
     def key(self, tokens, s):
         return self._chain(tokens, s)[s]
 
-    def has(self, tokens, s):
-        return self.key(tokens, s) in self.snaps
+    def has(self, tokens, s, full=True):
+        old = self.snaps.get(self.key(tokens, s))
+        return old is not None and (old.full or not full)
 
     def put(self, snap):
         key = self.key(snap.toks, snap.s)
         if key in self.snaps:
-            self.snaps.move_to_end(key)
-            return False
+            old = self.snaps[key]
+            if old.full or not snap.full:
+                self.snaps.move_to_end(key)
+                return False
+            self.bytes -= old.nbytes  # (a full snapshot replaces a partial one of the same prefix)
+            del self.snaps[key]
         if snap.nbytes > self.budget:
             return False
         self.snaps[key] = snap
@@ -680,13 +688,16 @@ class PrefixStore:
             self.evictions += 1
         return True
 
-    def lookup(self, tokens, start, end, margin=128):
+    def lookup(self, tokens, start, end, margin=128, zone=None):
+        """``zone`` (bounded replay): first replay chunk start of the prompt; a partial snapshot (``full`` False) is only usable at s <= zone."""
         tokens = torch.as_tensor(tokens).long().reshape(-1)
         top = min(int(start), int(end) - int(margin), tokens.numel()) // self.chunk * self.chunk
         if top > 0:
             chain = self._chain(tokens, top)
             for s in range(top, 0, -self.chunk):
                 snap = self.snaps.get(chain[s])
+                if snap is not None and not snap.full and zone is not None and s > zone:
+                    snap = None
                 if snap is not None:
                     self.snaps.move_to_end(chain[s])
                     self.hits += 1
@@ -765,7 +776,7 @@ class PrefixCache:
 
         return os.environ.get("DSV41_APC_DEFER", "1") == "1"
 
-    def begin_snapshot(self, b, B, tokens):
+    def begin_snapshot(self, b, B, tokens, full=True):
         if not self.active() or not self.wants(B):
             return
         if self._has_image(tokens, B):
@@ -773,7 +784,7 @@ class PrefixCache:
             return
         key = self.store.key(tokens, B)
         pend = self.__dict__.setdefault("pending", [])
-        if key in self.store.snaps or any(k == key for _, k, _ in pend):
+        if self.store.has(tokens, B, full) or any(k == key and f_ >= full for _, k, (_, _, _, f_) in pend):
             return
         t0 = time.perf_counter()
         try:
@@ -782,7 +793,7 @@ class PrefixCache:
             self.enabled = False
             self.log(f"prefix caching disabled: {e}")
             return
-        pend.append((p, key, (b, B, time.perf_counter() - t0)))
+        pend.append((p, key, (b, B, time.perf_counter() - t0, bool(full))))
 
     def finish_pending(self):
         """Complete every started snapshot (host copies, store insertion). -> seconds spent."""
@@ -791,8 +802,9 @@ class PrefixCache:
             return 0.0
         t0 = time.perf_counter()
         self.pending = []
-        for p, key, (b, B, t_b) in pend:
+        for p, key, (b, B, t_b, full) in pend:
             snap = snapshot_finish(self.m, p)
+            snap.full = full
             self._store(snap, b, B, t_b, "deferred")
         return time.perf_counter() - t0
 
@@ -813,18 +825,19 @@ class PrefixCache:
             f"prefix cache: snapshot of user {b} at {B} tokens ({snap.nbytes / 2**20:.1f} MiB, {snap.seconds:.2f} s {how} [enqueue {t_dev:.3f}]; store {self.store.bytes / 2**20:.0f} MiB, {len(self.store.snaps)} snapshots)"
         )
 
-    def maybe_snapshot(self, b, B, tokens):
+    def maybe_snapshot(self, b, B, tokens, full=True):
         if not self.active() or not self.wants(B):
             return
         if self._has_image(tokens, B):
             self.stats["skipped_vision"] += 1
             return
         t_h0 = time.perf_counter()
-        if self.store.has(tokens, B):
+        if self.store.has(tokens, B, full):
             return
         t_h1 = time.perf_counter()
         try:
             snap = snapshot_user(self.m, b, B, tokens)
+            snap.full = bool(full)
         except ApcUnsupported as e:
             self.enabled = False
             self.log(f"prefix caching disabled: {e}")
@@ -847,14 +860,14 @@ class PrefixCache:
             f"prefix cache: snapshot of user {b} at {B} tokens ({snap.nbytes / 2**20:.1f} MiB, {snap.seconds:.2f} s [has {t_h1 - t_h0:.3f}, device reads + host copy {t_p0 - t_h1:.3f}, put {t_p1 - t_p0:.3f}]; store {self.store.bytes / 2**20:.0f} MiB, {len(self.store.snaps)} snapshots)"
         )
 
-    def lookup(self, b, tokens, end):
-        """-> the deepest usable snapshot for user b's prompt (end = this call's end position), else None"""
+    def lookup(self, b, tokens, end, zone=None):
+        """-> the deepest usable snapshot for user b's prompt (end = this call's end position), else None. ``zone``: first replay chunk start of the prompt (bounded replay) or None."""
         if not self.active():
             return None
         if self._has_image(tokens, end):
             self.stats["skipped_vision"] += 1
             return None
-        return self.store.lookup(tokens, end, end, margin=self.margin)
+        return self.store.lookup(tokens, end, end, margin=self.margin, zone=zone)
 
     def restore_group(self, snap, bs):
         t = restore_users(self.m, snap, bs)

@@ -1441,13 +1441,13 @@ class Model:
             self.apc.clear()
             self.log("prefix cache reset")
 
-    def _apc_restore_wave(self, wave, apc, vis):
+    def _apc_restore_wave(self, wave, apc, vis, zone=None):
         """The users of ``wave`` that start at 0 (and are no image prompts) take the deepest snapshot of their token prefix (users that take the SAME snapshot are restored together);
         -> the wave with the new start positions."""
         found = {}
         for b, t, st, e in wave:
             if st == 0 and not (vis and b in vis):
-                snap = apc.lookup(b, t, e)
+                snap = apc.lookup(b, t, e, zone=None if zone is None else zone.get(b))
                 if snap is not None:
                     found.setdefault(id(snap), (snap, []))[1].append(b)
         start = {}
@@ -1473,7 +1473,7 @@ class Model:
                 return b
         return buckets[-1]
 
-    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None):
+    def prefill_interleaved(self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None, totals=None):
         """See ``_prefill_interleaved_one``. With several captured S_pad contexts (``warm_serving(extra_spads=...)``) the users of the call are split by the context their carried state lives in
         (``pf_bucket_of``): a new prompt takes the smallest context that holds it when its first call is certainly the whole prompt, otherwise the largest; a continuation stays in its context, a
         prompt that outgrows it is recomputed from position 0 in a larger one (always correct). Each group is one ``_prefill_interleaved_one`` call on its context.
@@ -1481,7 +1481,7 @@ class Model:
         pm = self.prefill_model
         buckets = pm.dyn_buckets() if os.environ.get("DSV41_PF_SMALL_BUCKET", "1") != "0" else []
         if len(buckets) <= 1 or self.Up != self.U:
-            return self._prefill_interleaved_one(items, chunk, s_pad_max, want_logits, vis, final)
+            return self._prefill_interleaved_one(items, chunk, s_pad_max, want_logits, vis, final, totals)
         C = int(chunk)
         of = self.__dict__.setdefault("pf_bucket_of", {})
         resume = self.__dict__.setdefault("pf_resume", {})
@@ -1515,7 +1515,7 @@ class Model:
                 if getattr(self, "apc", None) is not None:
                     self.apc.store.tag = k
                 vg = None if not vis else {b: v for b, v in vis.items() if b in {g[0] for g in grp}}
-                res.update(self._prefill_interleaved_one(grp, C, k, want_logits, vg or None, final))
+                res.update(self._prefill_interleaved_one(grp, C, k, want_logits, vg or None, final, totals))
                 for g in grp:
                     of[g[0]] = k
                 tms.append((k, [g[0] for g in grp], dict(self.timing)))
@@ -1530,7 +1530,9 @@ class Model:
         self.timing = tm
         return res
 
-    def _prefill_interleaved_one(self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None):
+    def _prefill_interleaved_one(
+        self, items, chunk, s_pad_max=None, want_logits=False, vis=None, final=None, totals=None
+    ):
         """Prefill of SOME users (new requests / prompt chunks) through the captured chunk trace while the other users keep their decode state.
 
         ``items``: [(user b, tokens 1-D [>= end], start, end)]: positions [start, end) of user b are computed. ``start`` must be 0 or the position the previous call for
@@ -1637,6 +1639,16 @@ class Model:
             and os.environ.get("DSV41_PF_DEFER_RETURN", "1") == "1"
             and _return_lag() >= 0
         )  # (a call with no final row returns once its windows are enqueued)
+        # bounded replay (DSV41_PF_REPLAY, tt/prefill_model.py): ``zone[b]`` = first chunk start of user b that runs layers 21-39 (the chunks of the last R tokens of its prompt); the total length of the
+        # prompt is ``totals[b]`` (plugin kwarg prefill_total) or, for a row that ends its sequence in this call, its end; unknown -> 0 (every chunk runs every layer)
+        rep = getattr(pm, "dyn_trace_b", None) is not None and masked
+        zone = {}
+        if rep:
+            for b, _, _, e in items:
+                tot = None if totals is None else totals.get(b)
+                if tot is None and fin_users is not None and b in fin_users:
+                    tot = e
+                zone[b] = pm.zone_start(tot, C)
         lookahead = os.environ.get("DSV41_PF_LOOKAHEAD", "1") == "1"
         spec_enq = os.environ.get("DSV41_PF_SPEC_ENQ", "1") == "1"
         t_first = 0.0  # host seconds of window builds that were not overlapped with a replay
@@ -1670,10 +1682,17 @@ class Model:
                 if apc is not None and any(it[2] == 0 for it in wave):
                     t_apc += apc.finish_pending()  # (a lookup must see every snapshot taken so far)
                     new_ = self._apc_restore_wave(
-                        [it for it in wave if it[2] == 0], apc, vis
+                        [it for it in wave if it[2] == 0], apc, vis, zone if rep else None
                     )  # new prompts take the deepest stored snapshot (earlier waves of THIS call may have just stored one)
                     wave = [it for it in wave if it[2] != 0] + new_ if per_row else new_
                 slot_of = self._slot_alloc(wave, resume) if general else {b: b for b, _, _, _ in wave}
+                if (
+                    rep
+                ):  # first replay chunk of the rows of this wave (per row: every row its own; else one value for all rows)
+                    if per_row:
+                        pm.set_zone({slot_of[b] // Up: zone[b] for b, _, _, _ in wave})
+                    else:
+                        pm.set_zone({r_: min(zone[b] for b, _, _, _ in wave) for r_ in range(rows)})
                 if per_row:
                     # window k of user it = positions [start + k * C, ...): every user advances at ITS OWN position in a replay
                     win_keys = list(range(max(-(-(e - st) // C) for _, _, st, e in wave)))
@@ -1786,10 +1805,11 @@ class Model:
                             b, t, st, e = it
                             if s0_of(it, k) + C <= e and not (vis and b in vis):
                                 t_apc0 = time.perf_counter()
+                                full_ = not rep or zone.get(b, 0) == 0
                                 if apc_defer:
-                                    apc.begin_snapshot(b, s0_of(it, k) + C, t)
+                                    apc.begin_snapshot(b, s0_of(it, k) + C, t, full=full_)
                                 else:
-                                    apc.maybe_snapshot(b, s0_of(it, k) + C, t)
+                                    apc.maybe_snapshot(b, s0_of(it, k) + C, t, full=full_)
                                 t_apc += time.perf_counter() - t_apc0
 
                 bk_done = set()
@@ -1947,7 +1967,17 @@ class Model:
                         fin_users,
                     )
                     th, td = pm.replay_window(
-                        tok, hs, s0, C, active, vis=vw, prepped=prepped, overlap=_overlap, ops=rec_ops, sync=sync_k
+                        tok,
+                        hs,
+                        s0,
+                        C,
+                        active,
+                        vis=vw,
+                        prepped=prepped,
+                        overlap=_overlap,
+                        ops=rec_ops,
+                        sync=sync_k,
+                        back=not rep or any(s0_of(it, k) >= zone[it[0]] for it in part),
                     )
                     n_replays, t_host, t_rep = n_replays + 1, t_host + th, t_rep + td
                     t_ret = time.perf_counter()
