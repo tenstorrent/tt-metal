@@ -2,27 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Validates the behavior of the fabric manifest's struct layout helpers (struct_layout.hpp) where the real layouts'
-// static_asserts can't:
-// - The coverage check fails when it should. Each real layout's static_assert only shows that a correct member list
-//   passes it.
-// - Each member gets the right element kind, type name and count. The coverage check only compares offsets and sizes,
-//   so a member described as the wrong kind still passes it, and decode would read it wrong.
-//
-// Layouts built at run time (i.e., go_msg_layout, which depends on the HAL) are also validated here, since no
-// static_assert can check them.
+// Validates the behavior of the fabric manifest's struct layout helpers (struct_layout.hpp), mostly
+// for error cases that we aren't representing in the real layouts.
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <array>
-#include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
-
-#include <llrt/hal.hpp>
-#include <umd/device/types/arch.hpp>
+#include <type_traits>
 
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
@@ -59,21 +47,62 @@ struct Outer {
     uint16_t counts[2];
 };
 
-struct ThreeBitTable {
-    static constexpr uint32_t BITS_PER_COMPRESSED_ENTRY = 3;
-    uint8_t packed[3];
-};
-
-struct WithTable {
-    uint32_t id;
-    ThreeBitTable table;
-    uint8_t tail;
-};
-
 struct WithArrays {
     uint8_t id;
     Color colors[3];
     std::array<Inner, 2> points;
+};
+
+struct WordAndByte {
+    uint32_t word;
+    uint8_t byte;
+};
+
+// WordAndByte with a field added inside its tail padding: sizeof and every other offset stay the same.
+struct WordAndByteThenExtra {
+    uint32_t word;
+    uint8_t byte;
+    uint8_t extra;
+};
+
+// 3 bytes of compiler padding between a and b.
+struct ByteThenWord {
+    uint8_t a;
+    uint32_t b;
+};
+
+// ByteThenWord with a field added inside its padding: sizeof and b's offset stay the same.
+struct ByteThenFlagsThenWord {
+    uint8_t a;
+    uint8_t flags;
+    uint32_t b;
+};
+
+// A non-aggregate, since it declares a constructor, with compiler padding between a and b.
+struct ConstructedByteThenWord {
+    ConstructedByteThenWord() = default;
+    uint8_t a = 0;
+    uint32_t b = 0;
+};
+
+// A non-aggregate with no compiler padding.
+struct ConstructedWords {
+    ConstructedWords() = default;
+    uint32_t a = 0;
+    uint32_t b = 0;
+};
+
+enum class Shape : uint8_t { DOT, LINE, BOX };
+
+union ShapeFields {
+    Inner dot;
+    uint32_t line[2];
+    uint16_t box;
+};
+
+struct Tagged {
+    Shape shape;
+    ShapeFields fields;
 };
 
 }  // namespace tt::tt_fabric::layout_test
@@ -88,43 +117,67 @@ struct StructLayout<layout_test::Inner> {
     };
 };
 
+template <>
+struct TaggedUnionLayout<layout_test::ShapeFields> {
+    using Tag = layout_test::Shape;
+    static constexpr std::array cases = {
+        LAYOUT_TAGGED_UNION_CASE(layout_test::ShapeFields, dot, Tag::DOT),
+        LAYOUT_TAGGED_UNION_CASE(layout_test::ShapeFields, line, Tag::LINE),
+        LAYOUT_TAGGED_UNION_CASE(layout_test::ShapeFields, box, Tag::BOX),
+    };
+};
+
 namespace {
 
+using layout_test::ByteThenFlagsThenWord;
+using layout_test::ByteThenWord;
 using layout_test::Color;
+using layout_test::ConstructedByteThenWord;
+using layout_test::ConstructedWords;
 using layout_test::HalvedWord;
 using layout_test::Inner;
 using layout_test::Outer;
+using layout_test::Shape;
+using layout_test::ShapeFields;
+using layout_test::Tagged;
 using layout_test::ThreeWords;
 using layout_test::WithArrays;
-using layout_test::WithTable;
+using layout_test::WordAndByte;
+using layout_test::WordAndByteThenExtra;
 
 // A member missing from the middle of the list, such as a field added to a device struct but not to its layout, leaves
 // a gap which should cause an error since the next listed member doesn't start where the one before it ended.
 TEST(StructLayout, CoverageRejectsAGap) {
-    EXPECT_FALSE(validate_struct_members<ThreeWords>(std::array{
-        LAYOUT_MEMBER(ThreeWords, a),
-        LAYOUT_MEMBER(ThreeWords, c),
-    }));
+    EXPECT_EQ(
+        find_layout_error<ThreeWords>(std::array{
+            LAYOUT_MEMBER(ThreeWords, a),
+            LAYOUT_MEMBER(ThreeWords, c),
+        }),
+        LayoutError::COVERAGE);
 }
 
 // A member missing from the end of the list should cause an error since the last listed member doesn't end at the end
 // of the actual struct.
 TEST(StructLayout, CoverageRejectsAMissingTail) {
-    EXPECT_FALSE(validate_struct_members<ThreeWords>(std::array{
-        LAYOUT_MEMBER(ThreeWords, a),
-        LAYOUT_MEMBER(ThreeWords, b),
-    }));
+    EXPECT_EQ(
+        find_layout_error<ThreeWords>(std::array{
+            LAYOUT_MEMBER(ThreeWords, a),
+            LAYOUT_MEMBER(ThreeWords, b),
+        }),
+        LayoutError::COVERAGE);
 }
 
 // Listing more than one of a union's members should cause an error since their bytes overlap, so the same bytes are
 // counted twice. Listing just one of them should pass since that one member covers the union's bytes.
 TEST(StructLayout, CoverageRejectsOverlappingUnionMembers) {
-    EXPECT_FALSE(validate_struct_members<HalvedWord>(std::array{
-        LAYOUT_MEMBER(HalvedWord, all),
-        LAYOUT_MEMBER(HalvedWord, lo),
-        LAYOUT_MEMBER(HalvedWord, hi),
-    }));
-    EXPECT_TRUE(validate_struct_members<HalvedWord>(std::array{LAYOUT_MEMBER(HalvedWord, all)}));
+    EXPECT_EQ(
+        find_layout_error<HalvedWord>(std::array{
+            LAYOUT_MEMBER(HalvedWord, all),
+            LAYOUT_MEMBER(HalvedWord, lo),
+            LAYOUT_MEMBER(HalvedWord, hi),
+        }),
+        LayoutError::COVERAGE);
+    EXPECT_EQ(find_layout_error<HalvedWord>(std::array{LAYOUT_MEMBER(HalvedWord, all)}), LayoutError::NONE);
 }
 
 // Each kind of member should get its own element since decode reads each kind differently. A C array member should
@@ -136,7 +189,7 @@ TEST(StructLayout, MemberTypesAndNames) {
         LAYOUT_MEMBER(Outer, delta),
         LAYOUT_MEMBER(Outer, counts),
     };
-    static_assert(validate_struct_members<Outer>(members));
+    static_assert(find_layout_error<Outer>(members) == LayoutError::NONE);
 
     EXPECT_TRUE(members[0].type.element == Element{element::Struct{"Inner"}});
     EXPECT_TRUE(members[1].type.element == Element{element::Enum{"Color"}});
@@ -145,24 +198,6 @@ TEST(StructLayout, MemberTypesAndNames) {
     EXPECT_EQ(members[3].offset, 6u);
     EXPECT_EQ(members[3].type.size, 4u);
     EXPECT_EQ(members[3].type.count, 2u);
-}
-
-// A packed table holds entries smaller than a byte, so its count should be its number of entries rather than bytes
-// since decode reads it entry by entry: 3 bytes of 3-bit entries should count as 8. Its element should carry the table
-// name decode looks up and the entry width from the member type's BITS_PER_COMPRESSED_ENTRY.
-TEST(StructLayout, PackedTableCountsEntries) {
-    constexpr std::array members = {
-        LAYOUT_MEMBER(WithTable, id),
-        LAYOUT_PACKED(WithTable, table, "three_bit"),
-        LAYOUT_MEMBER(WithTable, tail),
-    };
-    static_assert(validate_struct_members<WithTable>(members));
-
-    const Element expected = element::Packed{"three_bit", 3};
-    EXPECT_TRUE(members[1].type.element == expected);
-    EXPECT_EQ(members[1].offset, 4u);
-    EXPECT_EQ(members[1].type.size, 3u);
-    EXPECT_EQ(members[1].type.count, 8u);
 }
 
 // A C array of enums should be an Enum element with the array's length as its count, rather than a scalar, since
@@ -175,7 +210,7 @@ TEST(StructLayout, TypeOfCArray) {
         LAYOUT_MEMBER(WithArrays, colors),
         LAYOUT_MEMBER(WithArrays, points),
     };
-    static_assert(validate_struct_members<WithArrays>(members));
+    static_assert(find_layout_error<WithArrays>(members) == LayoutError::NONE);
     EXPECT_EQ(members[1].offset, 1u);
     EXPECT_TRUE(members[1].type == (Type{element::Enum{"Color"}, 3, 3}));
 }
@@ -199,37 +234,177 @@ TEST(StructLayout, ArrayOfMatchesAFixedLengthArray) {
     EXPECT_TRUE(array_of<uint32_t>(5) == (Type{element::Uint{}, 20, 5}));
 }
 
-// go_msg_layout is built at run time from the HAL, so no static_assert can check it. For each arch, with no device, its
-// members should cover go_msg_t, and a value written through the HAL's accessors should land at the offset the layout
-// gives its member since that is where decode reads it.
-TEST(StructLayout, GoMsgLayoutFromHal) {
-    for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
-        SCOPED_TRACE(tt::arch_to_str(arch));
-        const tt::tt_metal::Hal hal(arch, false, false, 0, false);
-        const auto members = go_msg_layout(hal);
-        const auto& factory = hal.get_dev_msgs_factory(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-        const auto size = factory.size_of<tt::tt_metal::dev_msgs::go_msg_t>();
-        EXPECT_TRUE(validate_members(members, size));
+// The compiler's padding after a struct's last member has no name to list, so LAYOUT_TAIL_PAD should cover it from
+// where the last member ends to the end of the struct, since the coverage check would otherwise fail on the missing
+// tail.
+TEST(StructLayout, TailPadCoversTheBytesAfterTheLastMember) {
+    constexpr std::array members = {
+        LAYOUT_MEMBER(WordAndByte, word),
+        LAYOUT_MEMBER(WordAndByte, byte),
+        LAYOUT_TAIL_PAD(WordAndByte, byte),
+    };
+    static_assert(find_layout_error<WordAndByte>(members) == LayoutError::NONE);
+    EXPECT_EQ(members[2].offset, 5u);
+    EXPECT_TRUE(members[2].type == (Type{element::Pad{}, 3, 0}));
+    EXPECT_EQ(members[2].initializers, 0u);
+}
 
-        // Each member's offset is where the HAL's go_msg_t accessors put its value in the message's one word.
-        ASSERT_EQ(size, sizeof(uint32_t));
-        uint32_t word = 0;
-        auto go_msg = factory.create_view<tt::tt_metal::dev_msgs::go_msg_t>(reinterpret_cast<std::byte*>(&word));
-        go_msg.signal() = 0xAB;
-        go_msg.master_x() = 0x01;
-        go_msg.master_y() = 0x02;
-        go_msg.dispatch_message_offset() = 0x03;
-        const auto bytes = std::bit_cast<std::array<uint8_t, 4>>(word);
-        const auto byte_at = [&](std::string_view name) {
-            const auto it = std::find_if(members.begin(), members.end(), [&](const auto& m) { return m.name == name; });
-            EXPECT_NE(it, members.end()) << name;
-            return it == members.end() ? 0 : bytes.at(it->offset);
-        };
-        EXPECT_EQ(byte_at("signal"), 0xAB);
-        EXPECT_EQ(byte_at("master_x"), 0x01);
-        EXPECT_EQ(byte_at("master_y"), 0x02);
-        EXPECT_EQ(byte_at("dispatch_message_offset"), 0x03);
-    }
+// The compiler's padding between two members has no name to list either, so LAYOUT_PAD should cover it from where the
+// first member ends to where the second starts. It should take no initializers since no field backs it.
+TEST(StructLayout, PadCoversTheBytesBetweenMembers) {
+    constexpr std::array members = {
+        LAYOUT_MEMBER(ByteThenWord, a),
+        LAYOUT_PAD(ByteThenWord, a, b),
+        LAYOUT_MEMBER(ByteThenWord, b),
+    };
+    static_assert(find_layout_error<ByteThenWord>(members) == LayoutError::NONE);
+    EXPECT_EQ(members[1].name, "padding_after_a");
+    EXPECT_EQ(members[1].offset, 1u);
+    EXPECT_TRUE(members[1].type == (Type{element::Pad{}, 3, 0}));
+    EXPECT_EQ(members[1].initializers, 0u);
+}
+
+// Each field should take as many initializers as brace elision gives it in its struct's T{...}, since
+// initializer_count counts a struct's fields that way: one per element of a C array, including an array of arrays, and
+// one for anything else, a struct, a union or a std::array included.
+TEST(StructLayout, InitializersOfFollowsBraceElision) {
+    static_assert(initializers_of<uint32_t>() == 1);
+    static_assert(initializers_of<Color>() == 1);
+    static_assert(initializers_of<uint8_t[12]>() == 12);
+    static_assert(initializers_of<uint8_t[2][3]>() == 6);
+    static_assert(initializers_of<Inner[2]>() == 2);
+    static_assert(initializers_of<Inner>() == 1);
+    static_assert(initializers_of<ShapeFields>() == 1);
+    static_assert(initializers_of<std::array<Inner, 2>>() == 1);
+}
+
+// initializer_count should count a struct's fields the way initializers_of does, since the layout check compares the
+// two: Outer's counts[2] takes 2, WithArrays' colors[3] takes 3 and its std::array takes 1, a named union field takes
+// 1, and an anonymous union takes 1 too, since the dummy value converts to the union's unnamed type.
+TEST(StructLayout, InitializerCountMatchesInitializersOf) {
+    static_assert(initializer_count<Outer> == 5);
+    static_assert(initializer_count<WithArrays> == 5);
+    static_assert(initializer_count<Tagged> == 2);
+    static_assert(initializer_count<HalvedWord> == 1);
+}
+
+// A field added inside compiler padding between members should cause an error. The padding entry still covers the same
+// bytes, so the coverage check passes, but the struct now takes one more initializer than the layout accounts for.
+TEST(StructLayout, CountRejectsAFieldAddedInsidePadding) {
+    constexpr std::array members = {
+        LAYOUT_MEMBER(ByteThenFlagsThenWord, a),
+        LAYOUT_PAD(ByteThenFlagsThenWord, a, b),  // now also covers flags
+        LAYOUT_MEMBER(ByteThenFlagsThenWord, b),
+    };
+    EXPECT_EQ(find_layout_error<ByteThenFlagsThenWord>(members), LayoutError::UNLISTED_FIELD);
+}
+
+// A field added inside tail padding should cause an error for the same reason: the tail padding entry still covers the
+// same bytes, but the struct now takes one more initializer than the layout accounts for.
+TEST(StructLayout, CountRejectsAFieldAddedInsideTailPadding) {
+    constexpr std::array members = {
+        LAYOUT_MEMBER(WordAndByteThenExtra, word),
+        LAYOUT_MEMBER(WordAndByteThenExtra, byte),
+        LAYOUT_TAIL_PAD(WordAndByteThenExtra, byte),  // now also covers extra
+    };
+    EXPECT_EQ(find_layout_error<WordAndByteThenExtra>(members), LayoutError::UNLISTED_FIELD);
+}
+
+constexpr std::array constructed_byte_then_word_members = {
+    LAYOUT_MEMBER(ConstructedByteThenWord, a),
+    LAYOUT_PAD(ConstructedByteThenWord, a, b),
+    LAYOUT_MEMBER(ConstructedByteThenWord, b),
+};
+
+// A non-aggregate's initializers can't be counted, so where its layout lists compiler padding, its fields should be
+// counted with a structured binding instead, since a field added inside that padding would otherwise go unnoticed. This
+// layout lists 2 fields (the padding isn't one) and the struct has 2, so it binds and builds. A layout listing fewer
+// fields than the struct has fails to compile ("decomposes into 3 elements, but only 2 names were provided"), so that
+// case can't be a test here. Without compiler padding, no binding should be needed, since a new field would then have
+// to shift later fields or grow the struct, which coverage catches.
+TEST(StructLayout, NonAggregateWithPaddingIsCountedByBinding) {
+    static_assert(!std::is_aggregate_v<ConstructedByteThenWord>);
+    static_assert(listed_fields(constructed_byte_then_word_members) == 2);
+    static_assert(check_struct_layout<ConstructedByteThenWord, constructed_byte_then_word_members>());
+    EXPECT_EQ(find_layout_error<ConstructedByteThenWord>(constructed_byte_then_word_members), LayoutError::NONE);
+
+    EXPECT_EQ(
+        find_layout_error<ConstructedWords>(std::array{
+            LAYOUT_MEMBER(ConstructedWords, a),
+            LAYOUT_MEMBER(ConstructedWords, b),
+        }),
+        LayoutError::NONE);
+}
+
+// A union whose every tag value picks exactly one member, and whose widest member fills it, should pass since decode
+// can then read it whatever the tag holds.
+TEST(StructLayout, TaggedUnionAcceptsEveryTagPickingOneMember) {
+    EXPECT_TRUE(validate_tagged_union_cases<ShapeFields>(TaggedUnionLayout<ShapeFields>::cases));
+}
+
+// One member picked by several tag values should pass since each tag value still picks exactly one member, so decode
+// knows what to read whatever the tag holds. Here line is picked by both LINE and BOX.
+TEST(StructLayout, TaggedUnionAcceptsAMemberPickedBySeveralTags) {
+    EXPECT_TRUE(validate_tagged_union_cases<ShapeFields>(std::array{
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, dot, Shape::DOT),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, line, Shape::LINE),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, line, Shape::BOX),
+    }));
+}
+
+// Two members listing the same tag value should cause an error since decode can't tell which representation to use.
+TEST(StructLayout, TaggedUnionRejectsATagPickedTwice) {
+    EXPECT_FALSE(validate_tagged_union_cases<ShapeFields>(std::array{
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, dot, Shape::DOT),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, line, Shape::LINE),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, box, Shape::BOX),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, line, Shape::DOT),
+    }));
+}
+
+// A tag value that no member lists should cause an error since decode would have no member to read when the tag holds
+// it. This is also what fails when an enumerator is added to the tag enum, so whoever adds it decides what it picks.
+TEST(StructLayout, TaggedUnionRejectsATagNothingPicks) {
+    EXPECT_FALSE(validate_tagged_union_cases<ShapeFields>(std::array{
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, dot, Shape::DOT),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, line, Shape::LINE),
+        // not listing BOX
+    }));
+}
+
+// A member listed at a nonzero offset should cause an error since every member of a union starts at its first byte.
+TEST(StructLayout, TaggedUnionRejectsAMemberNotAtOffsetZero) {
+    EXPECT_FALSE(validate_tagged_union_cases<ShapeFields>(std::array{
+        TaggedUnionCase{Member{"dot", 2, type_of<Inner>(), initializers_of<Inner>()}, "DOT"},
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, line, Shape::LINE),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, box, Shape::BOX),
+    }));
+}
+
+// A tag value that names no enumerator of the tag enum should cause an error since the tag can never hold it, so the
+// member it should pick would never be read. That covers both a value outside the enum and a misspelled name.
+TEST(StructLayout, TaggedUnionRejectsATagValueThatIsNotAnEnumerator) {
+    EXPECT_FALSE(validate_tagged_union_cases<ShapeFields>(std::array{
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, dot, Shape::DOT),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, line, Shape::LINE),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, box, Shape::BOX),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, box, static_cast<Shape>(7)),
+    }));
+    EXPECT_FALSE(validate_tagged_union_cases<ShapeFields>(std::array{
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, dot, Shape::DOT),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, line, Shape::LINE),
+        LAYOUT_TAGGED_UNION_CASE(ShapeFields, box, Shape::BOX),
+        TaggedUnionCase{LAYOUT_MEMBER(ShapeFields, box), "SQUARE"},
+    }));
+}
+
+// A tagged union member should be a TaggedUnion element that names both the union and the enclosing struct's member
+// holding its tag, since decode reads the tag first to pick which of the union's members to read.
+TEST(StructLayout, TaggedUnionNamesItsTag) {
+    constexpr Member fields = LAYOUT_TAGGED_UNION(Tagged, fields, shape);
+    EXPECT_EQ(fields.name, "fields");
+    EXPECT_EQ(fields.offset, offsetof(Tagged, fields));
+    EXPECT_TRUE(fields.type == (Type{element::TaggedUnion{"ShapeFields", "shape"}, sizeof(ShapeFields), 0}));
 }
 
 }  // namespace

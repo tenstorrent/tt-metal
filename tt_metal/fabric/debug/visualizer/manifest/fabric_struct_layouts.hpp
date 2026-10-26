@@ -6,17 +6,12 @@
 
 #include <array>
 #include <tuple>
-#include <vector>
 
 #include <hostdevcommon/fabric_common.h>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake_types.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
-
-namespace tt::tt_metal {
-class Hal;
-}  // namespace tt::tt_metal
 
 namespace tt::tt_fabric::layout {
 
@@ -29,42 +24,41 @@ struct StructLayout<WorkerXY> {
         LAYOUT_MEMBER(WorkerXY, y),
     };
 };
-static_assert(validate_struct_members<WorkerXY>(StructLayout<WorkerXY>::members));
+static_assert(check_struct_layout<WorkerXY>());
 
 template <>
 struct StructLayout<EDMChannelWorkerLocationInfo> {
     static constexpr std::array members = {
         LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, worker_semaphore_address),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_0),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_1),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_2),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_0),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_1),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_2),
         LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, worker_teardown_semaphore_address),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_3),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_4),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_5),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_3),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_4),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_5),
         LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, worker_xy),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_6),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_7),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_8),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_6),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_7),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_8),
         LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, edm_read_counter),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_9),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_10),
-        LAYOUT_PAD(EDMChannelWorkerLocationInfo, align_pad_11),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_9),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_10),
+        LAYOUT_MEMBER(EDMChannelWorkerLocationInfo, align_pad_11),
     };
 };
-static_assert(
-    validate_struct_members<EDMChannelWorkerLocationInfo>(StructLayout<EDMChannelWorkerLocationInfo>::members));
+static_assert(check_struct_layout<EDMChannelWorkerLocationInfo>());
 
 template <>
 struct StructLayout<SenderChannelProducerCursor> {
     static constexpr std::array members = {
         LAYOUT_MEMBER(SenderChannelProducerCursor, write_counter),
         LAYOUT_MEMBER(SenderChannelProducerCursor, write_index),
-        LAYOUT_PAD(SenderChannelProducerCursor, align_pad_0),
-        LAYOUT_PAD(SenderChannelProducerCursor, align_pad_1),
+        LAYOUT_MEMBER(SenderChannelProducerCursor, align_pad_0),
+        LAYOUT_MEMBER(SenderChannelProducerCursor, align_pad_1),
     };
 };
-static_assert(validate_struct_members<SenderChannelProducerCursor>(StructLayout<SenderChannelProducerCursor>::members));
+static_assert(check_struct_layout<SenderChannelProducerCursor>());
 
 // ============ Handshake ============
 
@@ -75,13 +69,12 @@ struct StructLayout<erisc::datamover::handshake::handshake_info_t> {
         LAYOUT_MEMBER(T, local_value),
         LAYOUT_MEMBER(T, neighbor_mesh_id),
         LAYOUT_MEMBER(T, neighbor_device_id),
-        LAYOUT_PAD(T, padding0),
-        LAYOUT_PAD(T, padding),
+        LAYOUT_MEMBER(T, padding0),
+        LAYOUT_MEMBER(T, padding),
         LAYOUT_MEMBER(T, scratch),
     };
 };
-static_assert(validate_struct_members<erisc::datamover::handshake::handshake_info_t>(
-    StructLayout<erisc::datamover::handshake::handshake_info_t>::members));
+static_assert(check_struct_layout<erisc::datamover::handshake::handshake_info_t>());
 
 // ============ Routing table ============
 
@@ -89,12 +82,12 @@ template <>
 struct StructLayout<RouterStateManager> {
     static constexpr std::array members = {
         LAYOUT_MEMBER(RouterStateManager, state),
-        LAYOUT_PAD(RouterStateManager, padding0),
+        LAYOUT_MEMBER(RouterStateManager, padding0),
         LAYOUT_MEMBER(RouterStateManager, command),
-        LAYOUT_PAD(RouterStateManager, padding1),
+        LAYOUT_MEMBER(RouterStateManager, padding1),
     };
 };
-static_assert(validate_struct_members<RouterStateManager>(StructLayout<RouterStateManager>::members));
+static_assert(check_struct_layout<RouterStateManager>());
 
 template <>
 struct StructLayout<routing_l1_info_t> {
@@ -102,10 +95,11 @@ struct StructLayout<routing_l1_info_t> {
         LAYOUT_MEMBER(routing_l1_info_t, state_manager),
         LAYOUT_MEMBER(routing_l1_info_t, my_mesh_id),
         LAYOUT_MEMBER(routing_l1_info_t, my_device_id),
-        LAYOUT_PACKED(routing_l1_info_t, intra_mesh_direction_table, "direction_table"),
-        LAYOUT_PACKED(routing_l1_info_t, inter_mesh_direction_table, "direction_table"),
-        // The union of the 1D and 2D routing tables, listed by its widest member so the size and offset checks hold.
-        // Decode picks the appropriate union member based on the routing mode, which it gets from is_2d_routing.
+        LAYOUT_BYTES(routing_l1_info_t, intra_mesh_direction_table),
+        LAYOUT_BYTES(routing_l1_info_t, inter_mesh_direction_table),
+        // Although the actual member that is used to represent the route table is determined by whether the run
+        // is in 1D or 2D mode, we just use the 2d route table, which accounts for all the bytes that the union takes
+        // up, and rely on decode to interpret it in the appropriate manner.
         LAYOUT_BYTES(routing_l1_info_t, route_table_2d),
         LAYOUT_BYTES(routing_l1_info_t, exit_node_table),
         LAYOUT_MEMBER(routing_l1_info_t, my_mesh_coord_y),
@@ -114,7 +108,7 @@ struct StructLayout<routing_l1_info_t> {
         LAYOUT_MEMBER(routing_l1_info_t, mesh_x_size),
     };
 };
-static_assert(validate_struct_members<routing_l1_info_t>(StructLayout<routing_l1_info_t>::members));
+static_assert(check_struct_layout<routing_l1_info_t>());
 
 // ============ Fabric telemetry ============
 
@@ -125,7 +119,7 @@ struct StructLayout<RiscTimestampV2> {
         LAYOUT_MEMBER(RiscTimestampV2, full),
     };
 };
-static_assert(validate_struct_members<RiscTimestampV2>(StructLayout<RiscTimestampV2>::members));
+static_assert(check_struct_layout<RiscTimestampV2>());
 
 template <>
 struct StructLayout<BandwidthTelemetry> {
@@ -136,18 +130,18 @@ struct StructLayout<BandwidthTelemetry> {
         LAYOUT_MEMBER(BandwidthTelemetry, num_packets_sent),
     };
 };
-static_assert(validate_struct_members<BandwidthTelemetry>(StructLayout<BandwidthTelemetry>::members));
+static_assert(check_struct_layout<BandwidthTelemetry>());
 
 template <>
 struct StructLayout<EriscDynamicEntry> {
     static constexpr std::array members = {
         LAYOUT_MEMBER(EriscDynamicEntry, router_state),
-        LAYOUT_PAD(EriscDynamicEntry, padding0),
+        LAYOUT_PAD(EriscDynamicEntry, router_state, tx_heartbeat),
         LAYOUT_MEMBER(EriscDynamicEntry, tx_heartbeat),
         LAYOUT_MEMBER(EriscDynamicEntry, rx_heartbeat),
     };
 };
-static_assert(validate_struct_members<EriscDynamicEntry>(StructLayout<EriscDynamicEntry>::members));
+static_assert(check_struct_layout<EriscDynamicEntry>());
 
 template <>
 struct StructLayout<DynamicInfo> {
@@ -157,7 +151,7 @@ struct StructLayout<DynamicInfo> {
         LAYOUT_MEMBER(DynamicInfo, erisc),
     };
 };
-static_assert(validate_struct_members<DynamicInfo>(StructLayout<DynamicInfo>::members));
+static_assert(check_struct_layout<DynamicInfo>());
 
 template <>
 struct StructLayout<StaticInfo> {
@@ -172,7 +166,7 @@ struct StructLayout<StaticInfo> {
         LAYOUT_MEMBER(StaticInfo, fabric_config),
     };
 };
-static_assert(validate_struct_members<StaticInfo>(StructLayout<StaticInfo>::members));
+static_assert(check_struct_layout<StaticInfo>());
 
 template <>
 struct StructLayout<FabricTelemetry> {
@@ -183,7 +177,7 @@ struct StructLayout<FabricTelemetry> {
         LAYOUT_MEMBER(FabricTelemetry, scratch),
     };
 };
-static_assert(validate_struct_members<FabricTelemetry>(StructLayout<FabricTelemetry>::members));
+static_assert(check_struct_layout<FabricTelemetry>());
 
 // ============ All described structs ============
 
@@ -202,12 +196,5 @@ using DescribedStructs = std::tuple<
     DynamicInfo,
     StaticInfo,
     FabricTelemetry>;
-
-// ============ Go message ============
-
-// The layout of go_msg_t on the active Ethernet core, built at run time from the HAL's generated accessors. The host
-// cannot name the raw go_msg_t (dev_msgs.h is compiled only inside the HAL's per-arch files), so this layout is not
-// in DescribedStructs, and instead a gtest checks its coverage for each arch.
-std::vector<Member> go_msg_layout(const tt::tt_metal::Hal& hal);
 
 }  // namespace tt::tt_fabric::layout
