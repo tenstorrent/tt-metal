@@ -114,7 +114,8 @@ uint32_t partial_tiles_per_row(const SDPAForwardShape& shape);  // a sender's ro
 
 struct SDPAForwardSchedule {
     std::vector<CoreUnits> per_core;
-    uint32_t num_slots = 0;  // scratch slots (one per sender)
+    uint32_t num_slots = 0;     // scratch slots (one per sender)
+    double predicted_us = 0.0;  // busiest core as placed, 0 when the lists came from the contiguous fallback
 };
 
 // Work for num_cores cores. Causal: items heavier than a core's fair share are cut into up to

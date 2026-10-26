@@ -311,28 +311,67 @@ SDPAForwardSchedule schedule_pieces(
         }
     }
 
-    // Longest first to the least loaded core; a core holds at most kMaxMergersPerCore mergers.
+    // Longest first. A sender or whole item goes to the least loaded core. A merger runs its own steps,
+    // then waits for its senders' partials, then merges: it goes to the core where it ends earliest, at
+    // most kMaxMergersPerCore per core (one semaphore each). Per core the senders run first, in assignment
+    // order, which fixes when each partial is ready; mergers sort by their own steps so their senders (which
+    // carry at least as many) are placed before them.
+    const double merge = merge_us(shape, chunks, num_cores);
     std::vector<uint32_t> order(pieces.size());
     std::iota(order.begin(), order.end(), 0U);
-    std::stable_sort(
-        order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return pieces[a].cost > pieces[b].cost; });
+    auto sort_cost = [&](uint32_t p) {
+        const Piece& piece = pieces[p];
+        return piece.unit.role == UnitRole::Merger ? piece.cost - piece.unit.num_partials * merge : piece.cost;
+    };
+    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return sort_cost(a) > sort_cost(b); });
     std::vector<double> loads(num_cores, 0.0);
+    std::vector<double> sender_load(num_cores, 0.0);  // the senders' part of the load, they run first
+    std::vector<double> finish(pieces.size(), 0.0);   // senders: when the partial is in scratch
     std::vector<uint32_t> mergers(num_cores, 0U);
+    std::vector<uint32_t> cut_of_piece(pieces.size(), 0U);
+    for (uint32_t c = 0; c < cuts.size(); ++c) {
+        for (uint32_t k = 0; k < cuts[c].n; ++k) {
+            cut_of_piece[cuts[c].first_piece + k] = c;
+        }
+    }
     for (const uint32_t p : order) {
-        const bool is_merger = pieces[p].unit.role == UnitRole::Merger;
+        Piece& piece = pieces[p];
+        if (piece.unit.role != UnitRole::Merger) {
+            const uint32_t best = static_cast<uint32_t>(std::min_element(loads.begin(), loads.end()) - loads.begin());
+            piece.core = best;
+            loads[best] += piece.cost;
+            if (piece.unit.role == UnitRole::Sender) {
+                sender_load[best] += piece.cost;
+                finish[p] = sender_load[best];
+            }
+            continue;
+        }
+        const Cut& cut = cuts[cut_of_piece[p]];
+        double ready = 0.0;
+        for (uint32_t k = 0; k + 1U < cut.n; ++k) {
+            ready = std::max(ready, finish[cut.first_piece + k]);
+        }
+        const double own = sort_cost(p);
         uint32_t best = num_cores;
+        double best_end = 0.0;
         for (uint32_t core = 0; core < num_cores; ++core) {
-            if (is_merger && mergers[core] >= kMaxMergersPerCore) {
+            if (mergers[core] >= kMaxMergersPerCore) {
                 continue;
             }
-            if (best == num_cores || loads[core] < loads[best]) {
+            const double end = std::max(loads[core] + own, ready) + piece.unit.num_partials * merge;
+            if (best == num_cores || end < best_end) {
                 best = core;
+                best_end = end;
             }
         }
         TT_FATAL(best < num_cores, "sdpa schedule: no core can take another merger");
-        pieces[p].core = best;
-        loads[best] += pieces[p].cost;
-        mergers[best] += is_merger ? 1U : 0U;
+        piece.core = best;
+        loads[best] = best_end;
+        ++mergers[best];
+    }
+    double makespan = 0.0;
+    for (const double load : loads) {
+        makespan = std::max(makespan, load);
     }
 
     // Scratch slots (consecutive per item) and semaphores (per merger on its core).
@@ -374,6 +413,7 @@ SDPAForwardSchedule schedule_pieces(
     if (!fits_runtime_args(schedule.per_core)) {
         return {};
     }
+    schedule.predicted_us = makespan;
     return schedule;
 }
 
@@ -402,6 +442,9 @@ double predict_us(
     const SDPAForwardChunks& chunks,
     const SDPAForwardSchedule& schedule,
     uint32_t num_cores) {
+    if (schedule.predicted_us > 0.0) {
+        return schedule.predicted_us;  // from the placement, includes the mergers' waits
+    }
     const double step = step_us(shape, chunks, num_cores);
     const double fixed = item_fixed_us(shape, chunks, num_cores);
     double busiest = 0.0;
