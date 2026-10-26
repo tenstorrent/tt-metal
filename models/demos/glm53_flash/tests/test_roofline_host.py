@@ -227,3 +227,124 @@ def test_chip_numbers_have_sources():
         assert isinstance(src, str) and len(src) > 20, k
     assert rl.chip("tflops_per_core")["HiFi2"] == pytest.approx(2.7)
     assert rl.chip("worker_cores") == 120 and rl.chip("links_per_axis") == 2
+
+
+# ----------------------------------------------------------------------------------------------- speculative decode
+def test_spec_rows_and_plain_reduction():
+    """R = B (K + 1) <= 32 is enforced (one tile row: spec_decode.candidate_rows refuses R > 32, so B = 4, K = 7 = the
+    policy's K is the last allowed point); K = 0 is the plain step; the verify's KDA row is K + 1 launches at B users
+    plus a backup copy, the dense-range DSA rows carry no index work (the verify never scores / selects / gathers: the
+    index maintenance is the commit's), the MoE routes 8 R tokens."""
+    try:  # (try/except: the expect_error fixture lives in conftest, which this host test runs without)
+        Layout(users_per_row=4, spec_k=8).verify_rows  # B (K + 1) = 36 > 32
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised
+    assert Layout(users_per_row=4, spec_k=7).verify_rows == 32  # = the policy's K at B = 4
+    assert Layout(users_per_row=4, spec_k=3).verify_rows == 16 and Layout(users_per_row=1, spec_k=5).verify_rows == 6
+    assert [rl.spec_policy_k(b, 3) for b in (1, 4, 8, 16, 32)] == [3, 3, 3, 1, 0]
+    assert rl.spec_policy_k(4, 10) == 7 and rl.spec_policy_k(1, 10) == 10
+    lay = Layout(users_per_row=4, spec_k=3)
+    keys = {r.key: r for r in layer_rows(CFG, lay, "KDA+MoE")}
+    assert keys["kda.decode"].n_ops == 4 and keys["kda.decode"].measured_us == pytest.approx(4 * (48.6 + 6.6 * 4))
+    assert "kda.spec_backup" in keys and keys["kda.spec_backup"].dram_bytes == pytest.approx(
+        2 * 4 * (16 * 128 * 128 * 4 + 3 * 6144 * 2)
+    )
+    assert "for 128 gathered tokens" in keys["moe.experts"].op
+    assert active_experts(CFG, lay)[0] == pytest.approx(48.0)  # 128 tokens: log-linear between 28 (32) and 58 (256)
+    dsa = {r.key for r in layer_rows(CFG, lay, "DSA+MoE")}
+    assert "dsa.spec_append" in dsa and not dsa & {
+        "dsa.pool_gather",
+        "dsa.index_score",
+        "dsa.idx_query",
+        "dsa.topk_rows",
+    }
+    assert "dsa.state_composite" not in dsa  # the index maintenance is not double counted (commit: spec.index_commit)
+    plain_keys = {r.key for r in layer_rows(CFG, Layout(users_per_row=4), "KDA+MoE")}
+    assert "kda.spec_backup" not in plain_keys and rl.step_table(CFG, Layout(users_per_row=4))[
+        "step_floor_ms"
+    ] == pytest.approx(32.26, abs=0.05)
+    # the stream-op cost model reproduces the measured stream row at the plain point (28 active: 341 + 8 + 2 us)
+    plain_stream = {r.key: r for r in layer_rows(CFG, Layout(users_per_row=4, expert_path="stream"), "KDA+MoE")}
+    model = rl.EXPERT_FIXED_US + 28.0 * 3.34 * 1e6 / (rl.EXPERT_GBS * 1e3) + 10.0
+    assert plain_stream["moe.experts"].measured_us == pytest.approx(351.0, abs=1.0)
+    assert model == pytest.approx(351.0, abs=2.0)
+
+
+def test_spec_iteration_monotone_and_above_plain():
+    prev = None
+    for k in (1, 2, 3, 5):
+        it = rl.spec_iteration(CFG, Layout(users_per_row=4, spec_k=k))
+        assert it["R"] == 4 * (k + 1)
+        v = it["phases_ms"]["V main model (R rows)"]
+        assert (
+            v[0] > it["plain_step_floor_ms"] and v[1] > it["plain_step_model_ms"]
+        )  # the verify costs more than a plain step
+        assert it["iteration_floor_ms"] <= it["iteration_model_ms"]
+        # the design floor (SP1: no replay / blend rows) sits below the current graph's floor; the after-actions time
+        # is not bounded by either (A1 / B8a / HD1 / C12 change the op graph, as in the plain step: floor 32.3 ms,
+        # after 35.1 at 4 users/row but 30.7 before the fused pre-block's cost was carried), only by the model
+        assert it["design_floor_ms"] <= it["iteration_floor_ms"]
+        assert it["iteration_after_ms"] < it["iteration_model_ms"]
+        assert it["verify_ms"][1] == pytest.approx(v[1] + it["phases_ms"]["V MTP level 1 (R rows)"][1]) and it[
+            "verify_ratio_model"
+        ] == pytest.approx(it["verify_ms"][1] / it["plain_step_model_ms"])
+        assert 1.0 < it["verify_ratio_model"] < 2.0  # R rows cost more than B rows but far less than R / B times
+        for tgt, (model, floor, after) in it["tokens_needed"].items():
+            assert model == pytest.approx(tgt * it["iteration_model_ms"] / 1e3) and floor < model and after < model
+        c = it["phases_ms"]["C commit (KDA replay + blends, index)"][1]
+        if prev is not None:
+            assert (
+                it["iteration_model_ms"] > prev["iteration_model_ms"]
+                and c > prev["phases_ms"]["C commit (KDA replay + blends, index)"][1]
+            )
+            assert it["iteration_floor_ms"] > prev["iteration_floor_ms"]
+        prev = it
+    sweep = rl.spec_sweep(CFG, Layout(users_per_row=4))
+    assert [s["K"] for s in sweep] == [1, 2, 3, 5]
+    assert [s["K"] for s in rl.spec_sweep(CFG, Layout(users_per_row=16))] == [1]  # 16 (K + 1) <= 32
+
+
+def test_spec_commit_cost_structure():
+    it = rl.spec_iteration(CFG, Layout(users_per_row=4, spec_k=3))
+    rows = {r.key: r for r in it["commit_rows"]}
+    assert rows["spec.kda_replay"].n_ops == 34 * 4 and rows["spec.kda_blend"].n_ops == 6 * 34 * 4
+    assert rows["spec.kda_replay"].measured_us == pytest.approx(136 * (48.6 + 6.6 * 4))
+    assert rows["spec.kda_blend"].dram_bytes == pytest.approx(136 * 7 * 4 * (16 * 128 * 128 * 4 + 3 * 6144 * 2))
+    assert rows["spec.kda_blend"].after_us == 0.0 and rows["spec.kda_replay"].after_us == 0.0  # SP1 removes both
+    assert rows["spec.index_commit"].measured_us == pytest.approx(11 * 4 * 100.3)
+    fused = {
+        r.key: r for r in rl.spec_iteration(CFG, Layout(users_per_row=4, spec_k=3, dsa_state_fused=True))["commit_rows"]
+    }
+    assert fused["spec.index_commit"].measured_us < rows["spec.index_commit"].measured_us
+    # tokens per iteration and tok/s per user are consistent with the iteration time
+    assert it["tok_s_per_user_model"] == pytest.approx(it["accepted"] * 1e3 / it["iteration_model_ms"])
+    assert it["tokens_needed_for_33"] == pytest.approx(33 * it["iteration_model_ms"] / 1e3)
+
+
+def test_spec_scenarios(capsys):
+    sc = rl.spec_scenarios(CFG, Layout(users_per_row=4, spec_k=3))
+    t = sc["table"]
+    assert set(t) == {80.0, 45.0, 33.0} and set(t[45.0]) == {1.5, 2.0, 2.5}
+    for p in t:
+        assert t[p][1.5] < t[p][2.0] < t[p][2.5]
+    assert t[80.0][2.0] < t[45.0][2.0] < t[33.0][2.0]
+    e = sc["elasticities"]
+    assert e["accepted tokens"] == pytest.approx(1.0, abs=1e-6) and -1.0 < e["plain step"] < -0.5
+    assert abs(e["host overhead"]) < 0.1 and -0.5 < e["commit + chain cost"] < 0
+    assert sc["dominant"] in ("accepted tokens", "plain step")
+    # tokens needed = target x iteration; the SP1 + B5 design needs fewer at every plain step
+    for tgt in (30.0, 50.0):
+        for p in (80.0, 45.0, 33.0):
+            assert sc["tokens_needed"][tgt][p] == pytest.approx(tgt * sc["iteration_at"][p] / 1e3)
+            assert sc["tokens_needed_design"][tgt][p] < sc["tokens_needed"][tgt][p]
+            assert sc["table_design"][p][2.0] > sc["table"][p][2.0]
+    assert sc["tokens_needed"][50.0][80.0] > sc["tokens_needed"][30.0][80.0] > sc["tokens_needed"][30.0][33.0]
+    rl.main(["--users-per-row", "4", "--spec-k", "3", "--markdown"])
+    out = capsys.readouterr().out
+    assert "speculative decode" in out and "| K |" in out and "elasticities" in out
+    assert "tokens for 30 tok/s" in out and "SP1 + B5 design" in out
+    rl.main(["--users-per-row", "1", "--spec-k", "2", "--json"])
+    j = json.loads(capsys.readouterr().out)
+    assert j["spec"]["R"] == 3 and len(j["sweep"]) == 4 and "table" in j["scenarios"]
