@@ -130,7 +130,7 @@ class TtMoEGateConfig:
             "TP_AXIS": 1,
             "NUM_LINKS": 2,
             # CCL topology for the TP-axis gate all-reduce. Ring requires the TP axis to be physically
-            # wrapped (FABRIC_2D_TORUS_X / _XY); set from TtMoe's col_topology. Defaults to Linear.
+            # wrapped (FABRIC_2D_TORUS_X / _XY); set from TtMoe's tp_topology. Defaults to Linear.
             "TOPOLOGY": ttnn.Topology.Linear,
         }
     )

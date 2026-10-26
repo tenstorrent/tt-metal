@@ -63,9 +63,10 @@ class MyModelAdapter(PrefillModelAdapter):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
         hf_model_default). The engine sets `.max_seq_len` on the returned config."""
 
-    def weight_cache_path(self, mesh_shape: tuple):
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0):
         """The TTNN weight-cache dir for this model + mesh (or None if disabled).
-        Mirror the layout the cache-populate run wrote so the runner reads the same files."""
+        Mirror the layout the cache-populate run wrote so the runner reads the same files.
+        `sp_axis` is the mesh axis SP runs on (PREFILL_SP_AXIS); raise if your model does not support it."""
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
         """Allocate (and zero) this model's KV cache(s) on device and return them as a `KvCaches` — your

@@ -6,9 +6,9 @@
 # Run the 4x4-stage test rows on one BH Galaxy tray half: a single [4,4] mesh with SP on the axis-1
 # ring and TP on the axis-0 line, the layout of each 4x4 prefill stage.
 #
-# The rows (ids containing "4x4") skip on a full 32-chip Galaxy. They run only when exactly one tray
-# half is visible and TT_MESH_GRAPH_DESC_PATH names the [LINE, RING] 4x4 descriptor, which is what
-# this script sets up. The half -> device map is per-galaxy, so it comes from
+# The rows (ids containing "4x4") need the Galaxy narrowed to one tray half: TT_VISIBLE_DEVICES set to
+# that half's 16 chips and TT_MESH_GRAPH_DESC_PATH naming the [LINE, RING] 4x4 descriptor, which is what
+# this script sets up. Unnarrowed, the system mesh is 8x4 and those rows skip. The half -> device map is per-galaxy, so it comes from
 # gen_pipeline_binding.py --layout 4x4 (generated once per host, galaxy must be idle).
 #
 # Usage, from TT_METAL_HOME:

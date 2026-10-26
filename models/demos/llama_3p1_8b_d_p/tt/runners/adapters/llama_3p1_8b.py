@@ -76,7 +76,7 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # Weight cache
     # ------------------------------------------------------------------
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """$PREFILL_TTNN_CACHE / {name}_{arch}_{N}dev / {sp}x{tp}. None if explicitly empty.
 
         Use ``sp * tp`` for N — not ``ttnn.get_num_devices()``. The runner calls this from
@@ -86,6 +86,8 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
         ``is_blackhole`` is imported lazily rather than at module level (gpt-oss imports it at the
         top): it pulls in the device stack, which this module's import-light contract forbids.
         """
+        if sp_axis != 0:
+            raise ValueError("Llama 3.1 8B prefill runs SP on mesh axis 0 only")
         env_cache = os.environ.get("PREFILL_TTNN_CACHE", self.ttnn_cache_default)
         if not env_cache:
             return None
