@@ -19,6 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
+
 try:
     from models.common.tt_ccl import get_tt_ccl  # tt-metal main
 except ImportError:
