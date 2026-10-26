@@ -48,6 +48,7 @@ class TextEncoder:
         encoder_parallel_config: EncoderParallelConfig,
         dit_parallel_config: DiTParallelConfig,
         max_sequence_length: int = 512,
+        shard_token_embeddings: bool = False,
     ) -> None:
         self._device = device
         self._ccl_manager = ccl_manager
@@ -79,13 +80,16 @@ class TextEncoder:
             mesh_device=device,
             ccl_manager=ccl_manager,
             parallel_config=encoder_parallel_config,
+            shard_token_embeddings=shard_token_embeddings,
         )
+        # the sharded embedding table is stored differently, so it gets its own cache entry
+        self._cache_subfolder = "text_encoder_sharded_embeddings" if shard_token_embeddings else "text_encoder"
 
     def prepare(self) -> None:
         cache.load_model(
             self._tt_encoder,
             model_name=os.path.basename(self._checkpoint_name),
-            subfolder="text_encoder",
+            subfolder=self._cache_subfolder,
             parallel_config=self._encoder_parallel_config,
             mesh_shape=tuple(self._device.shape),
             mesh_device=self._device,
@@ -118,9 +122,9 @@ class TextEncoder:
             all_input_prompts += negative_prompts_list
             neg_prompt_end_idx = pos_prompt_end_idx + batch_size * num_videos_per_prompt
 
-        # Pad batch list of prompts to ensure proper sharding on batch dimension.
+        # Pad batch list of prompts to ensure proper sharding on batch dimension (the encoder's non-TP axis).
         total_prompts = len(all_input_prompts)
-        num_devices = self._device.shape[1 - self._dit_parallel_config.tensor_parallel.mesh_axis]
+        num_devices = self._device.shape[1 - self._encoder_parallel_config.tensor_parallel.mesh_axis]
         all_input_prompts += [" "] * ((num_devices - (total_prompts % num_devices)) % num_devices)
 
         all_prompt_embeds = self._encode(
@@ -156,9 +160,9 @@ class TextEncoder:
         )
         text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
 
-        # Shard on batch dimension. On non TP axis
+        # Shard on batch dimension. On the encoder's non TP axis
         dims = [None, None]
-        DP_axis = 1 - self._dit_parallel_config.tensor_parallel.mesh_axis
+        DP_axis = 1 - self._encoder_parallel_config.tensor_parallel.mesh_axis
         dims[DP_axis] = 0
         mesh_mapper = ttnn.ShardTensor2dMesh(self._device, mesh_shape=tuple(self._device.shape), dims=dims)
         tt_prompt = ttnn.from_torch(

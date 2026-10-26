@@ -13,7 +13,7 @@ from PIL import Image
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
+from models.tt_dit.parallel.config import DiTParallelConfig, VaeHWParallelConfig
 from models.tt_dit.pipelines.events import profiler_event_callback
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
@@ -171,6 +171,19 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
         ],
         # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
         [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, "all_bf8_lofi"],
+        # WH on 4x8 with the bf8 / LoFi config tuned for it
+        [
+            (4, 8),
+            (4, 8),
+            1,
+            0,
+            4,
+            False,
+            ring_params_req_exact_devices,
+            ttnn.Topology.Ring,
+            True,
+            "wh_galaxy_bf8_lofi",
+        ],
     ],
     ids=[
         "2x2_sp0tp1",
@@ -181,6 +194,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type, topolog
         "line_bh_4x8_sp1tp0",
         "bh_4x32sp1tp0",
         "2x4_sp0tp1_bf8_lofi",
+        "wh_4x8_sp1tp0_bf8_lofi",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -272,7 +286,7 @@ def test_pipeline_performance(
     w_factor = tuple(mesh_device.shape)[sp_axis]
     parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(w_factor, sp_axis), tp=(h_factor, tp_axis))
     vae_parallel_config = VaeHWParallelConfig.from_tuples(height=(h_factor, tp_axis), width=(w_factor, sp_axis))
-    encoder_parallel_config = EncoderParallelConfig.from_tuple((h_factor, tp_axis))
+    # The text encoder placement comes from the mesh preset (WH 4x8 puts it on the SP axis).
 
     pipeline = pipeline_cls(
         device=mesh_device,
@@ -280,7 +294,6 @@ def test_pipeline_performance(
             mesh_shape=mesh_device.shape,
             dit_parallel_config=parallel_config,
             vae_parallel_config=vae_parallel_config,
-            encoder_parallel_config=encoder_parallel_config,
             num_links=num_links,
             dynamic_load=dynamic_load,
             topology=topology,
@@ -299,11 +312,12 @@ def test_pipeline_performance(
         qc = getattr(QuantConfig, quant_config_name)()
         set_quant_config(pipeline, qc)
 
-    # Warmup run (not timed)
+    # Warmup run (not timed). The pipeline's allocation run compiled the programs of the model as built; a quant
+    # config changes them, so it needs a warmup as well.
     logger.info("Running warmup iteration...")
 
     with benchmark_profiler("run", iteration=0):
-        if traced:
+        if traced or quant_config_name is not None:
             with torch.no_grad():
                 pipeline(
                     prompts=[prompts[0]],
