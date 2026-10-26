@@ -48,6 +48,17 @@ uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t channels, const ttnn::distri
     return chunks.empty() ? tw : chunks.front();
 }
 
+bool qkv_causal_conv1d_silu_bw_chunk_fits(
+    uint32_t channels,
+    uint32_t channel_chunk_size,
+    const ttnn::distributed::MeshDevice& device,
+    bool compute_tap_grads) {
+    constexpr uint32_t tw = tt::constants::TILE_WIDTH;
+    return channel_chunk_size > 0 && channel_chunk_size % tw == 0 && channel_chunk_size <= channels &&
+           channels % channel_chunk_size == 0 &&
+           chunk_fits_l1(channel_chunk_size, available_l1_bytes(device), compute_tap_grads);
+}
+
 QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
     uint32_t channels,
     uint32_t row_count,

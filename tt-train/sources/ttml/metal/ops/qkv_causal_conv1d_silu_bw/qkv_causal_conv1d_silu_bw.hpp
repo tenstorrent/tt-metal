@@ -19,6 +19,15 @@ namespace ttml::metal {
 // 2.4x slower than 256 on the backward.
 uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t channels, const ttnn::distributed::MeshDevice& device);
 
+// True when a caller-fixed channel_chunk_size is a tile-aligned divisor of channels whose backward L1 budget fits the
+// device. The forward checks its own budget, which is smaller; the autograd op uses this to reject at forward time a
+// chunk that would only fail in backward().
+bool qkv_causal_conv1d_silu_bw_chunk_fits(
+    uint32_t channels,
+    uint32_t channel_chunk_size,
+    const ttnn::distributed::MeshDevice& device,
+    bool compute_tap_grads = true);
+
 struct QkvCausalConv1dSiluBackwardWorkSplit {
     uint32_t channel_chunk_size;
     uint32_t row_splits;

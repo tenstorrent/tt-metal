@@ -47,29 +47,25 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
         "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V] or [1,1,T,Q+K+V], got {}",
         input_shape);
     auto x = rank3(input->get_value());
-    constexpr uint32_t tile = 32;
     const auto x_shape = x.logical_shape();
+    const uint32_t channels = q_width + k_width + v_width;
+    // The forward validates T, Q, K, V and history itself, but accepts a wider input than Q+K+V.
     TT_FATAL(
-        x_shape[1] % tile == 0 && q_width % tile == 0 && k_width % tile == 0 && v_width % tile == 0,
-        "qkv_causal_conv1d_silu: T, Q, K and V must be multiples of 32, got T={} Q={} K={} V={}",
-        x_shape[1],
-        q_width,
-        k_width,
-        v_width);
+        x_shape[2] == channels, "qkv_causal_conv1d_silu: input has {} channels, Q+K+V is {}", x_shape[2], channels);
+    // What the forward cannot see: a caller-fixed chunk that fits its L1 budget but not the backward's, which would
+    // otherwise fail only in backward().
+    const bool compute_tap_grads = tap0->get_requires_grad() || tap1->get_requires_grad() ||
+                                   tap2->get_requires_grad() || tap3->get_requires_grad();
     TT_FATAL(
-        x_shape[2] == q_width + k_width + v_width,
-        "qkv_causal_conv1d_silu: input has {} channels, Q+K+V is {}",
-        x_shape[2],
-        q_width + k_width + v_width);
-    const auto history_shape = rank3(history).logical_shape();
-    TT_FATAL(
-        history_shape[1] == 3 && history_shape[2] == x_shape[2],
-        "qkv_causal_conv1d_silu: history must be [1,3,Q+K+V], got {}",
-        history.logical_shape());
+        channel_chunk_size == 0 ||
+            metal::qkv_causal_conv1d_silu_bw_chunk_fits(channels, channel_chunk_size, *device, compute_tap_grads),
+        "qkv_causal_conv1d_silu: channel_chunk_size = {} is not a tile-aligned divisor of Q+K+V = {} that fits the "
+        "backward's L1 budget",
+        channel_chunk_size,
+        channels);
     // The backward gets the caller's value: 0 lets it pick its own chunk together with the row split.
     const uint32_t forward_chunk_size =
-        channel_chunk_size != 0 ? channel_chunk_size
-                                : metal::qkv_causal_conv1d_silu_chunk_size(q_width + k_width + v_width, *device);
+        channel_chunk_size != 0 ? channel_chunk_size : metal::qkv_causal_conv1d_silu_chunk_size(channels, *device);
     const ttnn::experimental::kda::QkvCausalConv1dSiluProgramConfig program_config{forward_chunk_size};
     auto history_rm = ttnn::to_layout(rank3(history), ttnn::Layout::ROW_MAJOR);
     // The forward's actual_start is a constant zero, uploaded once per device so forwards do no host writes.
@@ -108,7 +104,8 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
                                    q_width,
                                    k_width,
                                    v_width,
-                                   channel_chunk_size]() {
+                                   channel_chunk_size,
+                                   compute_tap_grads]() {
         // backward() seeds only its root: an output the loss does not use contributes zero.
         for (const auto& out : {out_q, out_k, out_v}) {
             if (!out->is_grad_initialized()) {
@@ -130,8 +127,7 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> qkv_ca
             v_width,
             channel_chunk_size,
             /*row_splits=*/0,
-            /*compute_tap_grads=*/tap0->get_requires_grad() || tap1->get_requires_grad() || tap2->get_requires_grad() ||
-                tap3->get_requires_grad());
+            compute_tap_grads);
         input->add_grad(like_rank(grad_input, input->get_value().logical_shape()));
         if (grad_tap0.has_value()) {
             tap0->add_grad(*grad_tap0);

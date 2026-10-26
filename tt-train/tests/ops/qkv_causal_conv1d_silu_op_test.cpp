@@ -4,6 +4,7 @@
 
 #include "ops/qkv_causal_conv1d_silu_op.hpp"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -19,6 +20,8 @@
 
 namespace {
 
+using ::testing::HasSubstr;
+using ::testing::ThrowsMessage;
 using ttml::autograd::TensorPtr;
 
 struct Shape {
@@ -284,18 +287,30 @@ TEST_F(QkvCausalConv1dSiluTest, RejectsInvalidWorkSplit) {
 TEST_F(QkvCausalConv1dSiluTest, ForwardRejectsInvalidShapes) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
-    const auto run = [&](const Shape& s, uint32_t q_width) {
+    const auto run = [&](const Shape& s, uint32_t q_width, uint32_t chunk = 0, bool taps_trainable = false) {
         const auto p = random_problem(s, 3);
         auto input = autograd::create_tensor(core::from_xtensor(p.x, device), /* requires_grad */ true);
         auto history = core::from_xtensor(p.h, device, ttnn::Layout::ROW_MAJOR);
         std::array<TensorPtr, 4> taps;
         for (size_t j = 0; j < 4; ++j) {
-            taps[j] = autograd::create_tensor(core::from_xtensor(p.taps[j], device), /* requires_grad */ false);
+            taps[j] = autograd::create_tensor(core::from_xtensor(p.taps[j], device), taps_trainable);
         }
-        ops::qkv_causal_conv1d_silu(input, history, taps[0], taps[1], taps[2], taps[3], q_width, s.K, s.V);
+        ops::qkv_causal_conv1d_silu(input, history, taps[0], taps[1], taps[2], taps[3], q_width, s.K, s.V, chunk);
     };
     EXPECT_THROW(run({48, 64, 64, 64}, 64), std::runtime_error);  // T is not tile aligned
     EXPECT_THROW(run({64, 64, 64, 64}, 32), std::runtime_error);  // Q + K + V is not the channel count
+    // A chunk that fits the forward's L1 budget but not the backward's is rejected here, not in backward(). The
+    // backward's budget depends on the taps: chunk 512 at C = 2560 fits with frozen taps and not with trainable ones.
+    const Shape wide{64, 1024, 1024, 512};
+    EXPECT_NO_THROW(run(wide, wide.Q, 512));
+    EXPECT_THAT(
+        [&] { run(wide, wide.Q, 512, /*taps_trainable=*/true); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("fits the backward's L1 budget")));
+    EXPECT_THAT(
+        [&] { run(wide, wide.Q, 640); }, ThrowsMessage<std::runtime_error>(HasSubstr("fits the backward's L1 budget")));
+    EXPECT_THAT(
+        [&] { run(wide, wide.Q, 96); },  // 96 does not divide 2560
+        ThrowsMessage<std::runtime_error>(HasSubstr("fits the backward's L1 budget")));
 }
 
 // Preactivations up to +-16: silu'(x) = s * (1 + x * (1 - s)) is sensitive to the precision of s near 1.
