@@ -356,7 +356,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_fill_cache_artifacts(
         {"valid_seq_len_stick_size", valid_seq_len_stick_size_B},
     };
     KernelSpec::CompilerOptions::Defines writer_defines;
-    Group<std::string> writer_runtime_arg_names = {"start_row_num", "num_rows", "noop"};
+    Group<ArgName> writer_runtime_arg_names = {"start_row_num", "num_rows", "noop"};
 
     if (use_batch_idx_tensor) {
         writer_defines.emplace("USE_BATCH_IDX_TENSOR", "1");

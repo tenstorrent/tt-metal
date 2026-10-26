@@ -16,6 +16,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/metal2_host_api/arg_value_access.hpp"
 
 namespace ttnn::kernel_lib::host::api_test {
 using tt::tt_metal::CoreCoord;
@@ -398,7 +399,8 @@ TEST_F(McastFixture, DescriptorSpecAndDirectAttachmentParity) {
     channel.attach(spec, args, "channel", targets);
     EXPECT_EQ(spec.semaphores.size(), 2u);
     const auto& spec_kernel = spec.kernels.front();
-    const auto spec_ct_base = spec_kernel.compile_time_args.get("channel_mcast_ct_base").value();
+    const auto spec_ct_base =
+        m2::ArgValueAccess::u32(spec_kernel.compile_time_args.get("channel_mcast_ct_base").value());
     EXPECT_EQ(
         wire::decode_compile_time_metadata(
             spec_kernel.advanced_options.compile_time_varargs.data() + spec_ct_base, false)

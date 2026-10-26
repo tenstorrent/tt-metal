@@ -412,7 +412,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
         DFBBinding{.dfb_spec_name = SRC0, .accessor_name = "cb_in0", .endpoint_type = DFBEndpointType::PRODUCER}};
     Group<DFBBinding> writer_dfb = {
         DFBBinding{.dfb_spec_name = OUTPUT_CB, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::CONSUMER}};
-    Group<std::string> writer_rta_names = {"start_tile", "end_tile"};
+    Group<ArgName> writer_rta_names = {"start_tile", "end_tile"};
     if (needs_padding) {
         pad_defines.insert({"NEEDS_PADDING", "1"});
         reader_dfb.push_back(
@@ -800,7 +800,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
         DFBBinding{.dfb_spec_name = SRC_CB, .accessor_name = "cb_in", .endpoint_type = DFBEndpointType::PRODUCER}};
     Group<DFBBinding> writer_dfb = {
         DFBBinding{.dfb_spec_name = OUT_CB, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::CONSUMER}};
-    Group<std::string> writer_rta_names = {"start_block", "end_block"};
+    Group<ArgName> writer_rta_names = {"start_block", "end_block"};
     if (needs_y_padding) {
         pad_defines.insert({"NEEDS_Y_PADDING", "1"});
         reader_dfb.push_back(

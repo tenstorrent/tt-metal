@@ -59,9 +59,9 @@ inline const TensorParamName OUTPUT_PARAM{"output"};
 // Runtime args of the two prefill factories' reader and writer kernels: each core's (batch, sequence tile, head)
 // ranges. The compute kernel only counts heads, so it takes n_heads instead of the head range (the same contract
 // rotary_embedding_indexed uses for this compute source).
-inline const tt::tt_metal::experimental::Group<std::string> kPrefillRangeArgNames{
+inline const tt::tt_metal::experimental::Group<tt::tt_metal::experimental::ArgName> kPrefillRangeArgNames{
     "batch_start", "batch_end", "seq_t_start", "seq_t_end", "head_start", "head_end"};
-inline const tt::tt_metal::experimental::Group<std::string> kPrefillComputeArgNames{
+inline const tt::tt_metal::experimental::Group<tt::tt_metal::experimental::ArgName> kPrefillComputeArgNames{
     "batch_start", "batch_end", "seq_t_start", "seq_t_end", "n_heads"};
 
 // Kernel source paths. Defined once here (uniquely named, inline) rather than in each factory's

@@ -487,7 +487,7 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
         spec.tensor_parameters.push_back(
             TensorParameter{.unique_id = TP_TERNARY_B, .spec = fused_ternary_input_b.value().tensor_spec()});
     }
-    std::vector<std::string> output_accessor_names;
+    std::vector<tt::tt_metal::experimental::AccessorName> output_accessor_names;
     output_accessor_names.reserve(output_tensors.size());
     for (uint32_t chunk = 0; chunk < output_tensors.size(); ++chunk) {
         const std::string name = output_param_name(chunk);
@@ -616,7 +616,8 @@ ttnn::device_operation::ProgramArtifacts MinimalMatmulDeviceOperation::ProgramFa
             bindings.push_back(TensorBinding{.tensor_parameter_name = TP_TERNARY_B, .accessor_name = *TP_TERNARY_B});
         }
         for (const auto& name : output_accessor_names) {
-            bindings.push_back(TensorBinding{.tensor_parameter_name = TensorParamName{name}, .accessor_name = name});
+            bindings.push_back(
+                TensorBinding{.tensor_parameter_name = TensorParamName{name.str()}, .accessor_name = name});
         }
         return bindings;
     };

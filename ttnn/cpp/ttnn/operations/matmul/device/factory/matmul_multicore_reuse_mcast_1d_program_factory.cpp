@@ -37,6 +37,7 @@ using tt::tt_metal::MeshTensor;
 
 using tt::tt_metal::KernelBuildOptLevel;
 using tt::tt_metal::experimental::AddRuntimeArgsForNode;
+using tt::tt_metal::experimental::ArgName;
 using tt::tt_metal::experimental::DataflowBufferSpec;
 using tt::tt_metal::experimental::DataMovementHardwareConfig;
 using tt::tt_metal::experimental::DFBBinding;
@@ -4355,7 +4356,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         }
         add_sparsity_bindings(in1_sender, SPARSITY_IN1_DFB);
 
-        Group<std::string> in1_sender_rta_names = {
+        Group<ArgName> in1_sender_rta_names = {
             "in1_tensor_start_tile_id",
             "in1_mcast_dest_noc_start_x",
             "in1_mcast_dest_noc_start_y",
@@ -5914,7 +5915,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
             .hw_config = in1_writer_hw_config,
         };
 
-        Group<std::string> in1_sender_rta_names = {
+        Group<ArgName> in1_sender_rta_names = {
             "in1_tensor_start_tile_id",
             "in1_mcast_dest_noc_start_x",
             "in1_mcast_dest_noc_start_y",
@@ -6003,7 +6004,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifac
             .hw_config = in1_writer_hw_config,
         };
 
-        Group<std::string> in1_receiver_rta_names = {
+        Group<ArgName> in1_receiver_rta_names = {
             "in1_mcast_sender_noc_x",
             "in1_mcast_sender_noc_y",
             "out_tensor_start_tile_id",

@@ -1133,13 +1133,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                 noc_varargs.insert(noc_varargs.end(), in0_mcast_noc_x.begin(), in0_mcast_noc_x.end());
                 noc_varargs.push_back(in0_mcast_receiver_grid_same_coord);
             }
-            const std::initializer_list<std::pair<std::string, uint32_t>> in0_sender_args = {
-                {"sender_id", sender_id},
-                {"in0_mcast_dest_noc_start_x", mcast_start_x},
-                {"in0_mcast_dest_noc_start_y", mcast_start_y},
-                {"in0_mcast_dest_noc_end_x", mcast_end_x},
-                {"in0_mcast_dest_noc_end_y", mcast_end_y},
-            };
+            const std::initializer_list<
+                std::pair<tt::tt_metal::experimental::ArgName, tt::tt_metal::experimental::ArgValue>>
+                in0_sender_args = {
+                    {"sender_id", sender_id},
+                    {"in0_mcast_dest_noc_start_x", mcast_start_x},
+                    {"in0_mcast_dest_noc_start_y", mcast_start_y},
+                    {"in0_mcast_dest_noc_end_x", mcast_end_x},
+                    {"in0_mcast_dest_noc_end_y", mcast_end_y},
+                };
             if (in1_idx < num_blocks_x) {
                 AddRuntimeArgsForNode(in0_sender_run_args.runtime_arg_values, core, in0_sender_args);
                 in0_sender_run_args.advanced_options.runtime_varargs[core] = std::move(noc_varargs);
@@ -1164,9 +1166,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
 
             // in0 receiver
         } else {
-            const std::initializer_list<std::pair<std::string, uint32_t>> in0_receiver_args = {
-                {"in0_mcast_sender_noc_x", (std::uint32_t)in0_mcast_sender.x},
-                {"in0_mcast_sender_noc_y", (std::uint32_t)in0_mcast_sender.y}};
+            const std::initializer_list<
+                std::pair<tt::tt_metal::experimental::ArgName, tt::tt_metal::experimental::ArgValue>>
+                in0_receiver_args = {
+                    {"in0_mcast_sender_noc_x", (std::uint32_t)in0_mcast_sender.x},
+                    {"in0_mcast_sender_noc_y", (std::uint32_t)in0_mcast_sender.y}};
             // left half
             if ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y)) {
                 AddRuntimeArgsForNode(in0_receiver_run_args.runtime_arg_values, core, in0_receiver_args);
@@ -1517,7 +1521,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             .runtime_arg_schema = {},
             .hw_config = dm_hw_config(tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
         };
-        std::vector<std::string> in1_sender_rtas = {
+        std::vector<tt::tt_metal::experimental::ArgName> in1_sender_rtas = {
             "in1_tensor_start_tile_id",
             "in1_mcast_dest_noc_start_x",
             "in1_mcast_dest_noc_start_y",
@@ -1639,7 +1643,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                 .runtime_arg_schema = {},
                 .hw_config = dm_hw_config(tt_metal::DataMovementProcessor::RISCV_0, noc),
             };
-            std::vector<std::string> rtas = {
+            std::vector<tt::tt_metal::experimental::ArgName> rtas = {
                 "in1_mcast_sender_noc_x",
                 "in1_mcast_sender_noc_y",
                 "out_tensor_start_tile_id",

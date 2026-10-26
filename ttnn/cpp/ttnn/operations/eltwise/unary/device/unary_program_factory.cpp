@@ -605,8 +605,8 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     // --- Reader Kernel ---
     // Readers and writers take {num_pages, start_id} per node; interleaved ones also take the five chunk fields, the
     // same on every node, as common args.
-    Group<std::string> dm_runtime_arg_names = {"num_pages", "start_id"};
-    Group<std::string> dm_common_runtime_arg_names;
+    Group<ArgName> dm_runtime_arg_names = {"num_pages", "start_id"};
+    Group<ArgName> dm_common_runtime_arg_names;
     if (!has_sharding) {
         dm_common_runtime_arg_names.insert(
             dm_common_runtime_arg_names.end(),

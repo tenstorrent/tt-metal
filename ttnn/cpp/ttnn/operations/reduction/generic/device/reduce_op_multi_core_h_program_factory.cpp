@@ -434,7 +434,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     // ---- Reader kernel ----
     std::string reader_source;
     KernelSpec::CompileTimeArgs reader_ct_args;
-    Group<std::string> reader_rta_names;
+    Group<ArgName> reader_rta_names;
     Group<DFBBinding> reader_dfb_bindings;
     Group<TensorBinding> reader_tensor_bindings;
     std::map<std::string, std::string> reader_defines_map = reduce_defines;
@@ -555,7 +555,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     // data_movement/sharded writers; their binding vocabulary is the forks', not this op's.
     std::string writer_source;
     KernelSpec::CompileTimeArgs writer_ct_args;
-    Group<std::string> writer_rta_names;
+    Group<ArgName> writer_rta_names;
     Group<TensorBinding> writer_tensor_bindings;
     KernelSpec::CompilerOptions::Defines writer_defines;
 
@@ -662,7 +662,7 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     auto make_compute = [&](const KernelSpecName& unique_id, uint32_t group_compute_Wt, uint32_t group_compute_NC) {
         Group<DFBBinding> dfb_bindings;
         KernelSpec::CompileTimeArgs ct_args;
-        Group<std::string> rta_names;
+        Group<ArgName> rta_names;
         if (rm_path) {
             // RM kernel takes per-core counts via runtime args, so both groups share compile args.
             // The compute kernel's H loop bound is per-slice: slice_Ht == plan.Ht_rm when unsplit.

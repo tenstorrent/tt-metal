@@ -5922,15 +5922,15 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     // below and the kernel-side get_arg(args::...) reads). The sharded sender + both no-work variants
     // take {sender_id, 4 mcast dest-noc coords}; the interleaved (padding) sender instead takes the in0
     // tensor start tile id, the 4 dest-noc coords, last_block_h and sparsity_addr.
-    const m2::Group<std::string> in0_sender_rta_names =
-        in0_is_sharded ? m2::Group<std::string>{
+    const m2::Group<m2::ArgName> in0_sender_rta_names =
+        in0_is_sharded ? m2::Group<m2::ArgName>{
                              "sender_id",
                              "in0_mcast_dest_noc_start_x",
                              "in0_mcast_dest_noc_start_y",
                              "in0_mcast_dest_noc_end_x",
                              "in0_mcast_dest_noc_end_y",
                          }
-                       : m2::Group<std::string>{
+                       : m2::Group<m2::ArgName>{
                              "in0_tensor_start_tile_id",
                              "in0_mcast_dest_noc_start_x",
                              "in0_mcast_dest_noc_start_y",
@@ -5939,7 +5939,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                              "last_block_h",
                              "sparsity_addr",
                          };
-    const m2::Group<std::string> in0_no_work_rta_names = {
+    const m2::Group<m2::ArgName> in0_no_work_rta_names = {
         "sender_id",
         "in0_mcast_dest_noc_start_x",
         "in0_mcast_dest_noc_start_y",
@@ -6137,7 +6137,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         // Named RTAs. The legacy per-core padding-arg block is modeled as fixed named slots; last-col
         // vs interior cores fill the same slot set (padded to the max). The !output_is_sharded tail
         // adds last_num_blocks_w_dim. Bias RTA is present only with bias.
-        m2::Group<std::string> rta_names = {
+        m2::Group<m2::ArgName> rta_names = {
             "in1_tensor_start_tile_id",
             "in1_mcast_dest_noc_start_x",
             "in1_mcast_dest_noc_start_y",
@@ -7010,7 +7010,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             {"fuse_op_all_gather", 0u},
             {"fuse_op_reduce_scatter", 0u},
         };
-        m2::Group<std::string> rta_names = {
+        m2::Group<m2::ArgName> rta_names = {
             "in1_tensor_start_tile_id",
             "in1_mcast_dest_noc_start_x",
             "in1_mcast_dest_noc_start_y",
@@ -7095,7 +7095,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         // #ifndef OUT_SHARDED, and the run-args below add them only when !output_is_sharded.
         // The schema must match (output_is_sharded == output.is_sharded(), true for
         // height/width/block sharded) or the per-node named-RTA count check fails.
-        m2::Group<std::string> in1_recv_rta_names = {
+        m2::Group<m2::ArgName> in1_recv_rta_names = {
             "in1_mcast_sender_noc_x",
             "in1_mcast_sender_noc_y",
             "out_tensor_start_tile_id",
