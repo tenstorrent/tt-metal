@@ -16,7 +16,6 @@ from models.demos.gemma4.tt.attention.operations import (
     PREFILL_SDPA_MAX_SEQ,
     _paged_fill_cache,
     apply_rope,
-    apply_rope_decode_peruser,
     chunked_prefill_sdpa,
     chunked_prefill_sdpa_sliding,
     prefill_sdpa_program_config,
@@ -27,6 +26,7 @@ from models.demos.muse_glimmer_30b.tt.common import (
     decode_memcfg,
     is_decode,
     matmul_compute_config,
+    norm_compute_config,
     sdpa_compute_config,
     shard_mapper,
 )
@@ -38,6 +38,19 @@ from models.demos.muse_glimmer_30b.tt.weight_packing import pack_o, pack_qkvg
 def heads_memcfg(batch, head_dim):
     """[1, batch, heads, head_dim] height-sharded L1, one user per core (first `batch` cores of an 8x8 grid)."""
     cores = ttnn.num_cores_to_corerangeset(batch, ttnn.CoreCoord(8, 8), row_wise=True)
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores, [32, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+@functools.lru_cache(maxsize=None)
+def kv_memcfg(batch, head_dim):
+    """K layout for the fused cache update: like heads_memcfg on disjoint cores (rows 4+ of an 8x8 grid)."""
+    cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(i % 8, 4 + i // 8), ttnn.CoreCoord(i % 8, 4 + i // 8)) for i in range(batch)}
+    )
     return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -153,6 +166,7 @@ class MuseGlimmerAttention:
         self.sliding_window = args.sliding_window if self.is_sliding else None
         self.matmul_cfg = matmul_compute_config(mesh_device)
         self.sdpa_cfg = sdpa_compute_config(mesh_device)
+        self.rope_cfg = norm_compute_config(mesh_device)
 
         g = lambda k: state_dict[f"self_attn.{k}_proj.weight"]  # noqa: E731
         i = layer_idx
@@ -190,22 +204,22 @@ class MuseGlimmerAttention:
 
     def _gate_oproj(self, attn, gate, out_mem=ttnn.DRAM_MEMORY_CONFIG):
         """attn * sigmoid(gate) -> o_proj (partial sums) -> all_reduce."""
-        # Accurate sigmoid: the gate multiplies every attention output element.
-        sg = ttnn.sigmoid(gate, mode=ttnn.SigmoidMode.Accurate)
-        gate.deallocate(True)
+        # Fused SIGMOID is the accurate one: a bare UnaryOpType::SIGMOID emits sigmoid_tile_init() (unary_op_utils.cpp:815),
+        # whose fast_and_approx template arg defaults to false (compute_kernel_api.h:123).
+        sig = [ttnn.UnaryOpType.SIGMOID]
         if is_decode(attn):
-            attn_m = ttnn.to_memory_config(attn, sg.memory_config())
-            gated = ttnn.mul(attn_m, sg)
+            attn_m = ttnn.to_memory_config(attn, gate.memory_config())
+            gated = ttnn.multiply(gate, attn_m, input_tensor_a_activations=sig)
             attn_m.deallocate(True)
             attn.deallocate(True)
-            sg.deallocate(True)
+            gate.deallocate(True)
             out = self.wo.decode(gated)
             gated.deallocate(True)
             reduced = self.ccl.all_reduce(out, memory_config=out_mem)
         else:
-            gated = ttnn.mul(attn, sg)
+            gated = ttnn.multiply(gate, attn, input_tensor_a_activations=sig)
             attn.deallocate(True)
-            sg.deallocate(True)
+            gate.deallocate(True)
             out = self.wo(gated)
             gated.deallocate(True)
             reduced = self.ccl.all_reduce(out)
@@ -285,7 +299,6 @@ class MuseGlimmerAttention:
             qkv, num_heads=a.q_heads_local, num_kv_heads=a.kv_heads_local, memory_config=heads_mem
         )
         qkv.deallocate(True)
-        kv_sharded_mem = k.memory_config()
 
         # Per-head weightless norm in L1. No fp32 acc for decode (the fp32 config lowered paged-decode PCC).
         q = ttnn.rms_norm(
@@ -300,21 +313,46 @@ class MuseGlimmerAttention:
             if cos_b.shape[1] != batch:  # tables may be padded to 32 users
                 cos_b = cos_b[:, :batch, :, :]
                 sin_b = sin_b[:, :batch, :, :]
-            q = apply_rope_decode_peruser(q, cos_b, sin_b)
-            k = apply_rope_decode_peruser(k, cos_b, sin_b)
+            moved = cos_b.memory_config() != heads_mem
+            if moved:  # temporaries, freed below
+                cos_b = ttnn.to_memory_config(cos_b, heads_mem)
+                sin_b = ttnn.to_memory_config(sin_b, heads_mem)
+            q_i, k_i = q, k
+            q = ttnn.experimental.rotary_embedding_hf(
+                ttnn.to_memory_config(q_i, heads_mem),
+                cos_b,
+                sin_b,
+                is_decode_mode=True,
+                compute_kernel_config=self.rope_cfg,
+            )
+            k = ttnn.experimental.rotary_embedding_hf(
+                ttnn.to_memory_config(k_i, heads_mem),
+                cos_b,
+                sin_b,
+                is_decode_mode=True,
+                compute_kernel_config=self.rope_cfg,
+            )
+            q_i.deallocate(True)
+            k_i.deallocate(True)
+            if moved:
+                cos_b.deallocate(True)
+                sin_b.deallocate(True)
 
-        # paged_update_cache needs height-sharded (one user per core) inputs.
-        k = ttnn.to_memory_config(k, kv_sharded_mem)
-        if page_table is not None:
-            ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=page_table)
-            ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=page_table)
-        else:
-            ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos)
-            ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos)
+        k = ttnn.to_memory_config(k, kv_memcfg(batch, a.head_dim))
+        ttnn.experimental.paged_fused_update_cache(
+            k_cache,
+            k,
+            v_cache,
+            v,
+            update_idxs_tensor=current_pos,
+            **({} if page_table is None else {"page_table": page_table}),
+        )
         k.deallocate(True)
         v.deallocate(True)
 
-        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)  # SDPA decode needs DRAM or sharded q
+        q = ttnn.to_memory_config(
+            q, ttnn.DRAM_MEMORY_CONFIG
+        )  # paged SDPA decode mis-reads height-sharded q past the first core row
         grid = self.mesh_device.compute_with_storage_grid_size()
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),

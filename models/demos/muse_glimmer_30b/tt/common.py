@@ -111,11 +111,15 @@ class RopeTables:
         sin = self.sin_4d[:, :, start:end, :]
         return cos, sin
 
-    def decode(self, rope_idx_tt):
+    def decode(self, rope_idx_tt, memory_config=None):
         """Per-user cos/sin [1, B_pad, 1, head_dim] TILE from uint32 [1, B_pad] positions (trace-safe)."""
         outs = []
         for table in (self.cos_2d, self.sin_2d):
             g = ttnn.embedding(rope_idx_tt, table, layout=ttnn.TILE_LAYOUT)  # [1, B, hd]
             g = ttnn.unsqueeze_to_4D(g)  # [1, 1, B, hd]
-            outs.append(ttnn.transpose(g, 1, 2))  # [1, B, 1, hd]
+            t = ttnn.transpose(g, 1, 2)  # [1, B, 1, hd]
+            if memory_config is not None:
+                t_i, t = t, ttnn.to_memory_config(t, memory_config)
+                ttnn.deallocate(t_i)
+            outs.append(t)
         return outs[0], outs[1]

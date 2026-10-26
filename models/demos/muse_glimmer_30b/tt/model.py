@@ -11,7 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.muse_glimmer_30b.tt.attention import allocate_kv_cache
+from models.demos.muse_glimmer_30b.tt.attention import allocate_kv_cache, heads_memcfg
 from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
 from models.demos.muse_glimmer_30b.tt.common import (
     RopeTables,
@@ -290,7 +290,7 @@ class MuseGlimmerModel:
         """One decode step for the padded batch; returns sharded logits [1,1,32,vocab_local] (no host reads)."""
         a = self.args
         x = self.embed(tokens_tt)
-        rope = self.rope.decode(rope_idx_tt)
+        rope = self.rope.decode(rope_idx_tt, memory_config=heads_memcfg(DECODE_B_PAD, self.args.head_dim))
         for i, layer in enumerate(self.layers):
             nx = layer.forward_decode(
                 x, current_pos_tt, rope if a.uses_rope(i) else None, self.kv_caches[i], page_table_tt
