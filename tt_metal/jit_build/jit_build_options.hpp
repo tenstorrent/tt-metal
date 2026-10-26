@@ -44,6 +44,10 @@ public:
 
     bool dst_full_sync_en{};
 
+    // The kernel names a precompiled header: also write the CB tables split for its PCH
+    // (CB_TABLE_DECLARATIONS_HEADER, CB_TABLE_VALUES_HEADER).
+    bool cb_tables_for_pch{};
+
     JitBuildOptions(const JitBuildEnv& env);
     void set_name(const std::string& name);
 

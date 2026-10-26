@@ -41,8 +41,11 @@ ALWI void deepseek_compute_kernel_init() {
 // Self-guarding + self-seeding compute HW init. chlkc unpack_src_format is a per-core
 // constexpr table (255 = CB absent). Seed HW startup from the first present CB — an
 // identity conversion the LLK allowlist always accepts — or skip if no CB is configured.
+// Templates so that the table is read where they are called: a kernel's precompiled header only
+// declares it (DataMovementConfig::precompiled_header).
 #if defined(COMPILE_FOR_TRISC)
 constexpr std::uint32_t DEEPSEEK_NO_PRESENT_CB = std::numeric_limits<std::uint32_t>::max();
+template <int N = 0>
 constexpr std::uint32_t deepseek_first_present_cb() {
     constexpr std::uint32_t n = (std::uint32_t)(sizeof(unpack_src_format) / sizeof(unpack_src_format[0]));
     for (std::uint32_t i = 0; i < n; ++i) {
@@ -53,8 +56,9 @@ constexpr std::uint32_t deepseek_first_present_cb() {
     return DEEPSEEK_NO_PRESENT_CB;
 }
 
+template <int N = 0>
 ALWI void deepseek_compute_kernel_init_present() {
-    constexpr std::uint32_t seed = deepseek_first_present_cb();
+    constexpr std::uint32_t seed = deepseek_first_present_cb<N>();
     if constexpr (seed != DEEPSEEK_NO_PRESENT_CB) {
         MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
         PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));

@@ -197,15 +197,12 @@ void compile_one(
     // no shell), the same path used by the local compile.
     std::vector<std::string> defines(target.defines.begin(), target.defines.end());
     std::string cflags = target.cflags;
-    // Preprocess-and-ship sends self-contained .ii files whose standard headers
-    // are already expanded, so they cannot benefit from this shared prelude.
+    // Preprocess-and-ship sends self-contained .ii files whose headers are already expanded,
+    // so they cannot benefit from a PCH.
     if (fs::path(target.srcs[src_index]).extension() != ".ii" && !target.pch_umbrella.empty()) {
-        const std::string pch =
-            tt::jit_build::ensure_pch(gpp, target.compiler_opt_level, target.cflags, target.pch_umbrella, pch_root);
-        if (!pch.empty()) {
-            defines.insert(defines.begin(), {"-include", pch});
-            cflags += " -Winvalid-pch -Wno-error=invalid-pch";
-        }
+        const auto pch = tt::jit_build::select_pch(gpp, target, fs::path(out_dir).parent_path().parent_path(), pch_root);
+        defines.insert(defines.begin(), pch.includes.begin(), pch.includes.end());
+        cflags += pch.cflags;
     }
     std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
         gpp,

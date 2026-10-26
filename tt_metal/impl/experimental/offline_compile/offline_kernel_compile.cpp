@@ -230,6 +230,7 @@ void CompileKernelOffline(
 
                 JitBuildOptions build_options(device_build_env.build_env);
                 kernel->set_build_options(build_options);
+                build_options.cb_tables_for_pch = !kernel->get_precompiled_header().empty();
                 apply_cb_compile_configs(build_options, params.cb_compile_configs);
 
                 const std::size_t kernel_hash =

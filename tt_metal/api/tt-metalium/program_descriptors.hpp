@@ -166,6 +166,8 @@ struct KernelDescriptor {
     ConfigDescriptor config;
 
     IncludePaths compiler_include_paths;
+    // See DataMovementConfig::precompiled_header.
+    std::filesystem::path precompiled_header;
 
     // Buffer/MeshTensor args declared via emplace_runtime_args() / emplace_common_runtime_args().
     // The framework resolves these to direct pointers into the cached Program on cache miss,

@@ -70,6 +70,13 @@ std::vector<std::string> build_gpp_argv(
 // the RPC, where an absolute client-side path would not exist on the server.
 inline constexpr std::string_view NAMED_CT_ARG_MAP_HEADER = "named_ct_arg_map_generated.h";
 
+// Filenames, within a kernel's generated-files directory, of chlkc_descriptors.h split for a kernel
+// that names a precompiled header: the CB tables declared without values (and the scalar
+// descriptors), and the table values alone. The PCH is built against the declarations, so kernels
+// with different CB formats share it; each kernel force-includes its values after the PCH.
+inline constexpr std::string_view CB_TABLE_DECLARATIONS_HEADER = "chlkc_descriptors_declarations.h";
+inline constexpr std::string_view CB_TABLE_VALUES_HEADER = "chlkc_descriptors_values.h";
+
 // Render |named_args| as the initializer body of KERNEL_COMPILE_TIME_ARG_MAP:
 //   {"a",1},{"b",2}
 // Empty when |named_args| is empty. Entries are emitted in ascending key order so the text is

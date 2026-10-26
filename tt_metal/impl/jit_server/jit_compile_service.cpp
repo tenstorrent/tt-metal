@@ -175,6 +175,9 @@ std::uint64_t JitCompileService::estimate_compile_request_bytes_in(const Compile
         for (const auto& define : target.defines) {
             bytes += define.size();
         }
+        for (const auto& header : target.kernel_pch_headers) {
+            bytes += header.size();
+        }
         for (const auto& src : target.srcs) {
             bytes += src.size();
         }
@@ -222,6 +225,9 @@ kj::Promise<void> JitCompileService::compile(CompileContext context) {
         }
         t.includes = target.getIncludes().cStr();
         t.pch_umbrella = target.getPchUmbrella().cStr();
+        for (auto header : target.getKernelPchHeaders()) {
+            t.kernel_pch_headers.push_back(header.cStr());
+        }
         t.compiler_opt_level = target.getCompilerOptLevel().cStr();
         for (auto src : target.getSrcs()) {
             t.srcs.push_back(src.cStr());
