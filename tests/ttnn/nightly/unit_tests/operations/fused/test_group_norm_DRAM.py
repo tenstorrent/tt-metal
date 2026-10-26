@@ -204,8 +204,6 @@ def test_group_norm_DRAM_unit_shapes(
     )
 
 
-# The model shapes the sanity suite stopped running (#62486), with the grid the sanity test specifies; the
-# wrapper above still runs them with the auto grid. Derived from base so a shape moved back drops out by itself.
 _GROUP_NORM_DRAM_NIGHTLY_ONLY = [s for s in base.GROUP_NORM_DRAM_SHAPES if s not in base.GROUP_NORM_DRAM_SANITY_SHAPES]
 
 

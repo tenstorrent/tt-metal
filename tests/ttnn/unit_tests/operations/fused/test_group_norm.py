@@ -87,9 +87,6 @@ BLOCK_SHARDED_V2_8X8_SHAPES = [
     # (1, 640, 1, 8192, 32),
 ]
 
-# Sanity runs the short rows and one wide one; the other wide rows run nightly only
-# (tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py), where the full list above is used. On the
-# simulator the wide rows are minutes each (#62486).
 BLOCK_SHARDED_V2_8X8_SANITY_SHAPES = [
     (2, 320, 64, 64, 32),
     (1, 640, 1, 2048, 32),
@@ -142,8 +139,6 @@ NO_INPUT_MASK_SHAPES = [
     (1, 256, 64, 64, 32),
 ]
 
-# Sanity runs the mask synthesis on half the rows (same channels, so the same mask); the shape above runs
-# nightly only (#62486). Not fewer rows: at 32x32 the tile_reduction statistics miss the Frobenius bound.
 NO_INPUT_MASK_SANITY_SHAPES = [
     (1, 256, 64, 32, 32),
 ]
@@ -1036,10 +1031,6 @@ def generate_sdxl_test_inputs():
     return inputs
 
 
-# Sanity runs two small shapes of generate_sdxl_test_inputs(): (1, 320, 32, 32) for the ROW_MAJOR in-place path
-# and (1, 512, 32, 32) for the C == 512 TILE_LAYOUT path. The full list runs nightly only
-# (tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm.py): on the simulator it is ~30 worker-minutes
-# per fused group (#62486).
 SDXL_SANITY_INPUTS = [
     (1, 320, 32, 32),
     (1, 512, 32, 32),
@@ -1228,8 +1219,6 @@ def generate_sdxl_test_inputs_neg_mask():
     return inputs
 
 
-# Sanity runs the negative-mask path on a 32x32 image: the mask depends on the channel split (640 over the grid),
-# not on the image size. The 128x128 model shapes run nightly only; each is 1.5-2.5 min on the simulator (#62486).
 SDXL_NEG_MASK_SANITY_INPUTS = [
     (1, 640, 32, 32),
 ]

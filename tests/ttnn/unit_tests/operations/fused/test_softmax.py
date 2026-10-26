@@ -13,8 +13,6 @@ from tt_py_test_utils_common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
 
-# The large shapes run nightly only (tests/ttnn/nightly/unit_tests/operations/fused/test_softmax.py); sanity keeps the
-# base case and a tiny one. On the simulator the 128000-wide rows are a minute or more each (#62486).
 LARGE_SOFTMAX_NIGHTLY_SHAPES = [
     (1, 128, 128000, -1),
     (1, 32, 128000, -1),
@@ -1344,7 +1342,6 @@ def test_softmax_explicit_fp32_acc_keeps_fp32_intermediates(device):
     assert correctly_rounded >= 0.77, f"only {correctly_rounded:.3f} of outputs are correctly rounded"
 
 
-# The W=2048 row of the test below runs nightly only (a minute on the simulator, #62486).
 ROW_MAJOR_MASK_NIGHTLY_WIDTHS = [2048]
 
 

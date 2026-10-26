@@ -134,11 +134,6 @@ def test_softmax_rows_are_normalised(device, shape, dtype):
     ), f"row sums range [{float(row_sums.min()):.5f}, {float(row_sums.max()):.5f}], expected 1.0"
 
 
-# ---------------------------------------------------------------------------
-# Shapes the sanity suite stopped running (#62486: the model-size rows were
-# minutes each on the simulator), run here with the sanity tests' own bodies.
-# All parametrize data is sourced from base.<CONST> so the two stay in sync.
-# ---------------------------------------------------------------------------
 # The module-scoped device above rules out the sanity test's device_params; the default L1-small size serves.
 @pytest.mark.parametrize("batch_size, h, w, dim", base.LARGE_SOFTMAX_NIGHTLY_SHAPES)
 def test_large_softmax(device, batch_size, h, w, dim):

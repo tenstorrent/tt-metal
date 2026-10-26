@@ -302,13 +302,6 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, s
     base.test_group_norm_no_input_mask(device, N, C, H, W, num_groups, use_welford, specify_grid)
 
 
-# ---------------------------------------------------------------------------
-# Shapes the sanity suite stopped running (#62486: on the simulator they were
-# most of a fused group's hour). The wrappers above still cover them with the
-# auto grid; these run them with the grid the sanity tests specify, so every
-# shape keeps both configurations. Lists are derived from base so a shape moved
-# back into sanity drops out of here by itself.
-# ---------------------------------------------------------------------------
 _BLOCK_SHARDED_V2_8X8_NIGHTLY_ONLY = [
     s for s in base.BLOCK_SHARDED_V2_8X8_SHAPES if s not in base.BLOCK_SHARDED_V2_8X8_SANITY_SHAPES
 ]

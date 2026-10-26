@@ -75,9 +75,6 @@ GROUP_NORM_DRAM_SHAPES = [
     # (21, 128, 480, 848, 32, 140, 8, 8), Failing on single device CI.
 ]
 
-# The shapes of the list above that sanity runs: the functional cases and one modest model shape of each family.
-# The large model shapes run nightly only (tests/ttnn/nightly/unit_tests/operations/fused/test_group_norm_DRAM.py):
-# on the simulator they are 1-3 min each (#62486).
 GROUP_NORM_DRAM_SANITY_SHAPES = [
     shape
     for shape in GROUP_NORM_DRAM_SHAPES
