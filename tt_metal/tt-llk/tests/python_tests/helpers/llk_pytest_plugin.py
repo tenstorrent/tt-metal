@@ -247,8 +247,9 @@ def pytest_addoption(parser):
         "lookup in the same test, on a variant that ran with the dest_acc it names. "
         "The exhaustive sweep records every cell it measures, gated or not and under "
         "--ulp-emit too, plus a non-finite lane count for a tolerance cell it cannot "
-        "measure. PATH is created and truncated at session start. Reporting only: it "
-        "cannot change a verdict.",
+        "measure. PATH is created and truncated at session start; one that cannot be "
+        "is a usage error. Reporting only, except that the sweep's records are "
+        "required: a sweep cell whose record is not written fails.",
     )
     parser.addoption(
         "--ulp-emit",
@@ -526,7 +527,7 @@ def pytest_configure(config):
 
     if config.getoption("--ulp-emit"):
         from . import ulp_sweep
-        from .sfpu_accuracy_budget import MEASURED_ARCH
+        from .ulp_table import MEASURED_ARCH
 
         if TestConfig.CHIP_ARCH != MEASURED_ARCH:
             # finish_emit refuses this too, but only at session end: emit bypasses the
@@ -551,7 +552,12 @@ def pytest_configure(config):
                 "through a UMD simulation server, which needs no port. Drop it from "
                 "your command line; it will be removed."
             )
-        utils_module.prepare_ulp_measure_file()
+        try:
+            utils_module.prepare_ulp_measure_file()
+        except OSError as exc:
+            raise pytest.UsageError(
+                f"--ulp-measure: cannot prepare {config.getoption('--ulp-measure')}: {exc}"
+            ) from exc
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):
@@ -1185,15 +1191,13 @@ def pytest_testnodedown(node, error):
     from . import ulp_sweep
 
     ulp_sweep.merge_measured(
-        getattr(node, "workeroutput", {}).get(ulp_sweep.WORKEROUTPUT_KEY, ())
+        getattr(node, "workeroutput", {}).get(ulp_sweep.WORKEROUTPUT_KEY)
     )
 
 
 def _finish_ulp_emit(session):
     """Under ``--ulp-emit``, write the whole session's measurements into the table once,
     after every cell of an op has been seen. A refusal fails the session."""
-    import yaml
-
     from . import ulp_sweep
 
     if not ulp_sweep.EMIT:
@@ -1220,10 +1224,10 @@ def _finish_ulp_emit(session):
             session.testsfailed,
             exitstatus=session.exitstatus,
         ).summary()
-    except (RuntimeError, ValueError, yaml.YAMLError) as exc:
-        # A ValueError or YAMLError can only come from the first read of the table,
-        # when the one on disk does not load and nothing was written; a rewrite that
-        # would not load is refused before the write, as an `EmitRefused`.
+    except (RuntimeError, ValueError) as exc:
+        # A ValueError is a `TableError`: the table on disk does not load, or the
+        # rewrite would not (`write_table_file` reads its dump back before writing).
+        # Either way nothing was written.
         message = f"--ulp-emit: {exc}"
         # Escalate only a clean session: a refusal *because* the run was interrupted, hit
         # an internal error or called pytest.exit(returncode=N) keeps that status, which a

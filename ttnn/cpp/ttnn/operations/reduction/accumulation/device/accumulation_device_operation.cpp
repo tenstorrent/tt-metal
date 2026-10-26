@@ -77,8 +77,8 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             acc_dim < logical_rank - 2 ||
                 is_tile_axis_accumulation(input_tensor, acc_dim, attributes.dtype, attributes.flip, attributes.op),
-            "Accumulation along tile axis {} of a rank-{} tensor is only supported for forward bf16 cumsum on 32x32 "
-            "tiles",
+            "Accumulation along tile axis {} of a rank-{} tensor is only supported for forward bf16 cumsum and "
+            "forward bf16/fp32 cumprod on 32x32 tiles",
             acc_dim,
             logical_rank);
     }
@@ -91,11 +91,21 @@ bool is_tile_axis_accumulation(
         return false;
     }
     const auto& tile = input_tensor.tensor_spec().tile();
-    // cumsum_tile only adds floats, and only forward. fp32 keeps the permuted path for now so that it
-    // keeps the compensated (Kahan) accumulation from #56811.
-    return op == AccumulationOp::CUMSUM && !flip && input_tensor.layout() == Layout::TILE &&
-           input_tensor.dtype() == DataType::BFLOAT16 && output_dtype == DataType::BFLOAT16 &&
-           tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH;
+    // cumsum_tile and cumprod_tile only scan floats, and only forward.
+    if (flip || input_tensor.layout() != Layout::TILE || input_tensor.dtype() != output_dtype ||
+        tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+        return false;
+    }
+    switch (op) {
+        // fp32 cumsum keeps the permuted path for its compensated (Kahan) sum from #56811.
+        case AccumulationOp::CUMSUM: return output_dtype == DataType::BFLOAT16;
+        // There is no Quasar cumprod_tile. preprocess_input_tensor also calls this on host tensors,
+        // which have no device.
+        case AccumulationOp::CUMPROD:
+            return (output_dtype == DataType::BFLOAT16 || output_dtype == DataType::FLOAT32) &&
+                   input_tensor.device() != nullptr && input_tensor.device()->arch() != tt::ARCH::QUASAR;
+    }
+    return false;
 }
 
 AccumulationDeviceOperation::spec_return_value_t AccumulationDeviceOperation::compute_output_specs(

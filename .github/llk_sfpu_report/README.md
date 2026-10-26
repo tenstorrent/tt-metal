@@ -150,7 +150,8 @@ most 300 files, so a longer diff runs both. `--arch all` runs both regardless.
 
 **Which ops.** `detect.py` compiles every variant of `perf_eltwise_unary_sfpu.py`,
 `perf_eltwise_unary_typecast.py` and `perf_eltwise_binary_sfpu.py` on both sides (no
-device needed) and compares the
+device needed). Unary artifacts come from the shared
+`sources/eltwise_unary_sfpu_test.cpp/` build directory. The detector compares the
 `.text` of each variant's math ELF, matched across sides by its generated `build.h`.
 An op is measured when its code changed, which catches ops that only include a
 changed header, and when its variants build on one side only. Both sides compile
@@ -178,8 +179,9 @@ work out, so a kernel that does it itself (#54080) measures slower here than it 
 ttnn; the report says so beside its rows and its regressions.
 
 **Accuracy.** `test_sfpu_report_accuracy.py` runs each op over every
-finite input of bf16 and fp16 (fp32: every 65,536th value) and over a tile of special
-values (NaN, ±inf, ±0, subnormals, the format's extremes), and saves the raw results.
+normal input of bf16 and fp16, and zero (fp32: every 65,536th value), and over a tile
+of special values (NaN, ±inf, ±0, subnormals, the format's extremes), and saves the
+raw results. Subnormals reach the report only through that tile.
 It lives here, next to the tool; each run copies it into `tt_metal/tt-llk/tests/python_tests/`,
 because the harness's `conftest.py` applies only to files there, and removes it after.
 `accuracy.py` compares the two sides lane by lane with the nightly ULP sweep's helpers
@@ -194,7 +196,7 @@ variants accuracy does not cover.
 
 | family | detected from | perf | accuracy |
 |---|---|---|---|
-| elementwise unary SFPU | `perf_eltwise_unary_sfpu.py` | ✅ | every finite bf16/fp16 input, fp32 strided, special values |
+| elementwise unary SFPU | `perf_eltwise_unary_sfpu.py` | ✅ | every normal bf16/fp16 input, fp32 strided, special values |
 | typecast | `perf_eltwise_unary_typecast.py` | ✅ | – |
 | elementwise binary SFPU (v1.1) | `perf_eltwise_binary_sfpu.py` | ✅ | the functional test's operand pairs (random over its domain, crafted for comparisons), special-value cross product; comparisons and integer ops compared exactly |
 

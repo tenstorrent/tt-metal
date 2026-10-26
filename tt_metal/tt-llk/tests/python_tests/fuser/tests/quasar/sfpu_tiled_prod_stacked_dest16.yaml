@@ -1,0 +1,37 @@
+# tiled_prod on two stacked tiles: the fuser copies both tiles into Dest before the SFPU runs, so
+# tile 0's chain runs with tile 1 already in place. The kernel runs once per tile and carries the
+# product in a register across faces; a per-face kernel with a carry-over store would scale the
+# first rows of tile 1 before tile 1's own chain, and tile 1 would no longer match the golden.
+# Values near 1 in magnitude so 32-long products stay finite; no 0 or denormal point, so every lane's
+# chain runs all 32 steps and the cross-face carry is checked in every lane.
+
+dest_acc: false
+
+operands:
+  - name: "input_A"
+    dims: [64, 32]
+    format: [Float16_b, Float16]
+    stimuli:
+      include:
+        - [-1.25, -1.001]
+        - [-0.999, -0.8]
+        - [0.8, 0.999]
+        - [1.001, 1.25]
+        - -1.0
+        - 0.5
+        - 1.0
+        - 2.0
+  - name: "sfpu_out"
+    dims: [64, 32]
+    format: Float16_b
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: false, block_size: [64, 32]}
+      - type: "UnarySfpu"
+        operation: [TiledProd]
+        approximation_mode: false
+        iterations: 32
+        block_size: [64, 32]
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [64, 32]}

@@ -106,6 +106,7 @@ def test_capabilities_flag_on(monkeypatch):
     assert caps["supports_prefix_caching"] is True
     assert caps["supports_chunked_prefill"] is False  # opt-in (QWEN36_CHUNKED_PREFILL=1)
     assert caps["max_device_top_k"] == 32
+    assert caps["supports_device_grammar"] is True
     assert caps["supports_device_penalties"] is False
     assert Qwen36ForCausalLM.decode_input_update_contract == 1
 
@@ -126,6 +127,8 @@ def test_capabilities_flag_off_is_the_old_dict(monkeypatch):
         "supports_chunked_prefill": False,
         "supports_async_decode": False,
         "supports_sample_on_device": True,
+        "supports_device_grammar": True,
+        "max_device_top_k": 32,
     }
 
 

@@ -81,12 +81,15 @@ def _build_model_capabilities():
         "supports_chunked_prefill": os.environ.get("QWEN36_CHUNKED_PREFILL", "0") == "1",
         "supports_async_decode": False,
         "supports_sample_on_device": True,
+        # Generator's sample_deferred_decode applies the grammar mask; bucketed logits are padded to the sampler width,
+        # and the sampled token takes the same feedback buffer as plain device sampling.
+        "supports_device_grammar": True,
+        # TTSampling.max_top_k: k outside [1, 32] on a sampled row is routed to the host sampler by the plugin.
+        "max_device_top_k": _MAX_DEVICE_TOP_K,
     }
     if serve_device_decode_env_enabled():
         caps.update(
             supports_async_decode=True,
-            # TTSampling.max_top_k: k outside [1, 32] on a sampled row is routed to the host sampler by the plugin.
-            max_device_top_k=_MAX_DEVICE_TOP_K,
             # Penalty bookkeeping (tt_penalties.update_output_tokens) reshapes and deallocates the sampled-token
             # tensor, which is now the persistent decode token input; not validated on device for this model, so
             # penalty requests use the host sampler (which reloads every step).
@@ -983,6 +986,8 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
         "supports_async_spec_decode": False,
         "output_tokens_per_step": 1,
         "supports_sample_on_device": False,
+        # Device grammar masks the device sampler, which the spec path does not use.
+        "supports_device_grammar": False,
     }
 
     @classmethod
