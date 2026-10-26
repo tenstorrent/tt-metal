@@ -99,7 +99,8 @@ class MuseGlimmerModel:
         a.salt_duplicate_seeds = False
         a.model_config = {
             "SAMPLING_AG_CONFIG": {
-                "allow_force_argmax": True,
+                # Greedy runs the top-k path: a local top-k per device and a small gather, not a gather of the full logits.
+                "allow_force_argmax": False,
                 "num_links": self.ccl.num_links,
                 "topology": ttnn.Topology.Linear,  # ring wraparound (D0->D28) is not routable on a 1x8 submesh under FABRIC_1D
             }
