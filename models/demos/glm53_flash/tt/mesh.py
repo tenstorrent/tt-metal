@@ -282,6 +282,11 @@ class GLMMesh:
 
     def _all_gather_async(self, x, dim, axis, memory_config):
         ccl = self.ccl
+        # tt-blaze G53F-0200: GLM53_CCL_GATHER_TOPOLOGY=ring (read per call) gathers over the physical ring of a 2D torus
+        # axis instead of the default Linear chain (a gather moves bytes: same output, fewer hops)
+        topo = self._async_topology()
+        if self.topology is None and os.environ.get("GLM53_CCL_GATHER_TOPOLOGY", "") == "ring":
+            topo = ttnn.Topology.Ring
         return ttnn.experimental.all_gather_async(
             x,
             persistent_output_buffer=None,
@@ -289,7 +294,7 @@ class GLMMesh:
             multi_device_global_semaphore=ccl.get_and_cycle_ag_semaphore_handles(axis),
             num_links=ccl.get_num_links(axis),
             cluster_axis=axis,
-            topology=self._async_topology(),
+            topology=topo,
             memory_config=memory_config,
             barrier_semaphore=ccl.get_and_cycle_barrier_semaphore_handle(axis),
             chunks_per_sync=10,
