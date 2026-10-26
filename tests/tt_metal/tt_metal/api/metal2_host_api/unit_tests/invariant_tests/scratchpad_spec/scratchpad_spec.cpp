@@ -90,7 +90,8 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadTileWithoutFormatFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("no data_format_metadata")));
 }
 
-void CheckSharedScratchpad(distributed::MeshDevice& device, ProgramSpec spec) {
+TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadDMAndComputeFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.scratchpads = {ScratchpadSpec{
         .unique_id = ScratchpadSpecName{"shared"},
         .size_per_node = 1024,
@@ -101,40 +102,8 @@ void CheckSharedScratchpad(distributed::MeshDevice& device, ProgramSpec spec) {
     spec.kernels[1].scratchpad_bindings = {
         {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "b"}};
 
-    Program program = MakeProgramFromSpec(device, spec);
-    auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
-    auto compute = program.impl().get_kernel_by_spec_name("compute_kernel");
-    const auto& a = dm->scratchpad_binding_handles().at(0);
-    const auto& b = compute->scratchpad_binding_handles().at(0);
-    auto check_addresses = [&] {
-        ASSERT_NE(a.allocated_address, 0u);
-        EXPECT_EQ(a.allocated_address, b.allocated_address);
-        EXPECT_EQ(dm->common_runtime_args_data()[a.addr_crta_word], a.allocated_address);
-        EXPECT_EQ(compute->common_runtime_args_data()[b.addr_crta_word], a.allocated_address);
-    };
-    check_addresses();
-    const uint32_t original_address = a.allocated_address;
-
-    // Rebuilding CRTAs for binding-only kernels must preserve both shared addresses.
-    SetProgramRunArgs(program, ProgramRunArgs{});
-    check_addresses();
-
-    // Growing the DFB moves the shared allocation and must refresh every binder's CRTA.
-    ProgramRunArgs args;
-    args.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8});
-    SetProgramRunArgs(program, args);
-    program.impl().prepare_ephemeral_allocation(&device);
-    program.impl().allocate_dataflow_buffers(&device);
-    program.impl().allocate_scratchpads(&device);
-    EXPECT_GT(a.allocated_address, original_address);
-    check_addresses();
-    SetProgramRunArgs(program, ProgramRunArgs{});
-    check_addresses();
-}
-
-TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadDMAndComputeFails) {
     EXPECT_THAT(
-        [&] { CheckSharedScratchpad(*mesh_device_, MakeMinimalValidProgramSpec()); },
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only between DM kernels on Gen2")));
 }
 
@@ -209,11 +178,89 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadGen2RestrictionIsPerNode) {
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadAllocationAndReallocation) {
-    CheckSharedScratchpad(*mesh_device_, MakeMinimalGen1ValidProgramSpec());
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"shared"},
+        .size_per_node = 1024,
+        .advanced_options = {.allow_instance_multi_binding = true},
+    }};
+    spec.kernels[0].scratchpad_bindings = {
+        {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "a"}};
+    spec.kernels[1].scratchpad_bindings = {
+        {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "b"}};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
+    auto compute = program.impl().get_kernel_by_spec_name("compute_kernel");
+    const auto& a = dm->scratchpad_binding_handles().at(0);
+    const auto& b = compute->scratchpad_binding_handles().at(0);
+    auto check_addresses = [&] {
+        ASSERT_NE(a.allocated_address, 0u);
+        EXPECT_EQ(a.allocated_address, b.allocated_address);
+        EXPECT_EQ(dm->common_runtime_args_data()[a.addr_crta_word], a.allocated_address);
+        EXPECT_EQ(compute->common_runtime_args_data()[b.addr_crta_word], a.allocated_address);
+    };
+    check_addresses();
+    const uint32_t original_address = a.allocated_address;
+
+    // Rebuilding CRTAs for binding-only kernels must preserve both shared addresses.
+    SetProgramRunArgs(program, ProgramRunArgs{});
+    check_addresses();
+
+    // Growing the DFB moves the shared allocation and must refresh every binder's CRTA.
+    ProgramRunArgs args;
+    args.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8});
+    SetProgramRunArgs(program, args);
+    program.impl().prepare_ephemeral_allocation(mesh_device_.get());
+    program.impl().allocate_dataflow_buffers(mesh_device_.get());
+    program.impl().allocate_scratchpads(mesh_device_.get());
+    EXPECT_GT(a.allocated_address, original_address);
+    check_addresses();
+    SetProgramRunArgs(program, ProgramRunArgs{});
+    check_addresses();
 }
 
 TEST_F(ProgramSpecTestBlackhole, CPU_SharedScratchpadAllocationAndReallocation) {
-    CheckSharedScratchpad(*mesh_device_, MakeMinimalGen1ValidProgramSpec());
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"shared"},
+        .size_per_node = 1024,
+        .advanced_options = {.allow_instance_multi_binding = true},
+    }};
+    spec.kernels[0].scratchpad_bindings = {
+        {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "a"}};
+    spec.kernels[1].scratchpad_bindings = {
+        {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "b"}};
+
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto dm = program.impl().get_kernel_by_spec_name("dm_kernel");
+    auto compute = program.impl().get_kernel_by_spec_name("compute_kernel");
+    const auto& a = dm->scratchpad_binding_handles().at(0);
+    const auto& b = compute->scratchpad_binding_handles().at(0);
+    auto check_addresses = [&] {
+        ASSERT_NE(a.allocated_address, 0u);
+        EXPECT_EQ(a.allocated_address, b.allocated_address);
+        EXPECT_EQ(dm->common_runtime_args_data()[a.addr_crta_word], a.allocated_address);
+        EXPECT_EQ(compute->common_runtime_args_data()[b.addr_crta_word], a.allocated_address);
+    };
+    check_addresses();
+    const uint32_t original_address = a.allocated_address;
+
+    // Rebuilding CRTAs for binding-only kernels must preserve both shared addresses.
+    SetProgramRunArgs(program, ProgramRunArgs{});
+    check_addresses();
+
+    // Growing the DFB moves the shared allocation and must refresh every binder's CRTA.
+    ProgramRunArgs args;
+    args.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 8});
+    SetProgramRunArgs(program, args);
+    program.impl().prepare_ephemeral_allocation(mesh_device_.get());
+    program.impl().allocate_dataflow_buffers(mesh_device_.get());
+    program.impl().allocate_scratchpads(mesh_device_.get());
+    EXPECT_GT(a.allocated_address, original_address);
+    check_addresses();
+    SetProgramRunArgs(program, ProgramRunArgs{});
+    check_addresses();
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadReallocationWithUnequalPersistentBases) {
