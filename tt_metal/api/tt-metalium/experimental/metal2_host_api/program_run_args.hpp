@@ -14,6 +14,7 @@
 #include <variant>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
@@ -67,7 +68,7 @@ struct ProgramRunArgs {
         // NOTE: If a kernel runtime argument always has the same value for all nodes,
         // passing a common runtime argument would provide better dispatch efficiency.
         //
-        using RuntimeArgValues = Table<std::string, Table<NodeCoord, uint32_t>>;
+        using RuntimeArgValues = Table<std::string, Table<NodeCoord, ArgValue>>;
         RuntimeArgValues runtime_arg_values;
 
         // Common runtime argument values (broadcast to every node).
@@ -79,7 +80,7 @@ struct ProgramRunArgs {
         // When calling UpdateProgramRunArgs (arbitrary partial update):
         //  Any subset of common runtime arguments may be supplied; omitted ones retain their prior value.
         //
-        using CommonRuntimeArgValues = Table<std::string, uint32_t>;
+        using CommonRuntimeArgValues = Table<std::string, ArgValue>;
         CommonRuntimeArgValues common_runtime_arg_values;
 
         // Advanced options (see advanced_options.hpp).
@@ -197,7 +198,7 @@ ProgramRunArgs MergeProgramRunArgs(
 inline void AddRuntimeArgsForNode(
     KernelRunArgs::RuntimeArgValues& runtime_arg_values,                  // existing RTA table
     const NodeCoord& node,                                                // node
-    std::initializer_list<std::pair<std::string, uint32_t>> named_values  // name -> value list
+    std::initializer_list<std::pair<std::string, ArgValue>> named_values  // name -> value list
 ) {
     for (const auto& [name, value] : named_values) {
         runtime_arg_values[name][node] = value;
@@ -206,7 +207,7 @@ inline void AddRuntimeArgsForNode(
 
 // Build a fresh table for a single node
 inline KernelRunArgs::RuntimeArgValues MakeRuntimeArgsForSingleNode(
-    const NodeCoord& node, std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
+    const NodeCoord& node, std::initializer_list<std::pair<std::string, ArgValue>> named_values) {
     KernelRunArgs::RuntimeArgValues runtime_arg_values;
     AddRuntimeArgsForNode(runtime_arg_values, node, named_values);
     return runtime_arg_values;

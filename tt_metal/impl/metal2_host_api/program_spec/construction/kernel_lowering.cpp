@@ -57,7 +57,12 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_i
 // For now, just convert to the map types that the core runtime expects.
 // TODO: Fix this inefficiency eventually.
 std::unordered_map<std::string, uint32_t> to_named_compile_args_map(const KernelSpec::CompileTimeArgs& bindings) {
-    return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    named_compile_args.reserve(bindings.size());
+    for (const auto& [name, value] : bindings) {
+        named_compile_args.emplace(name, value.to_uint32());
+    }
+    return named_compile_args;
 }
 std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
     return std::map<std::string, std::string>(defines.begin(), defines.end());

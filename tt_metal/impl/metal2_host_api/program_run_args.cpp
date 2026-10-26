@@ -736,7 +736,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                         "kernel reports prior runtime args. Internal invariant violation.",
                         kernel_name,
                         node.str());
-                    rta[s->second] = value;
+                    rta[s->second] = value.to_uint32();
                 }
             }
             for (const auto& [node, vals] : kernel_runtime_varargs(kernel_params)) {
@@ -771,7 +771,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                         name,
                         kernel_name,
                         node.str());
-                    named_rtas_by_node[node].emplace_back(s->second, value);
+                    named_rtas_by_node[node].emplace_back(s->second, value.to_uint32());
                 }
             }
             std::unordered_map<NodeCoord, const std::vector<uint32_t>*> varargs_by_node;
@@ -829,7 +829,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                 "Internal error: named CRTA '{}' missing for kernel '{}'.",
                 name,
                 kernel_name);
-            combined_crtas.push_back(v_it->second);
+            combined_crtas.push_back(v_it->second.to_uint32());
         }
         append_binding_crtas(binding_handles, combined_crtas);
         append_scratchpad_crtas(kernel->scratchpad_binding_handles(), combined_crtas);
@@ -1246,7 +1246,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                         kernel_name,
                         node.str());
                     RuntimeArgsData& rta = kernel->runtime_args_data(node);
-                    rta[it->second] = value;
+                    rta[it->second] = value.to_uint32();
                 }
             }
         }
@@ -1288,7 +1288,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                         "Internal error: named CRTA '{}' not in schema for kernel '{}'.",
                         name,
                         kernel_name);
-                    crta[it->second] = value;
+                    crta[it->second] = value.to_uint32();
                 }
             }
             if (!cvarargs.empty()) {
