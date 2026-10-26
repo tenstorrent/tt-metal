@@ -127,6 +127,7 @@ enum class SfpuType : std::uint32_t
     less_than_equal_zero,
     greater_than_equal_zero,
     cumsum,
+    cumprod,
     reduce,
     add1,
     hardsigmoid,
@@ -193,6 +194,7 @@ enum class SfpuType : std::uint32_t
     softcap,
     tanh_derivative,
     abs_int32,
+    reshuffle_rows,
     // Named by compute API init macros for the ported SFPI kernels; Quasar's init wrappers ignore
     // the SfpuType, so these only need to exist.
     acos,
@@ -224,6 +226,7 @@ enum class SfpuType : std::uint32_t
     unary_min,
     unary_max_int32,
     unary_min_int32,
+    dropout,
 };
 
 // Load/store layout selectors shared with the WH/BH SFPI kernels: calculate_logical_not picks its

@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include "distributed/mesh_device_impl.hpp"
 
 /*
  * DISPATCHER MICROBENCHMARK SUITE (Fast Dispatch + Slow Dispatch)
@@ -179,7 +180,7 @@ HostMemDeviceCommand build_dispatch_terminate(MetalContext& metal_ctx, bool incl
     }
     const uint32_t total_cmd_bytes = calc.write_offset_bytes();
     HostMemDeviceCommand cmd(metal_ctx, total_cmd_bytes);
-    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
+    cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
     cmd.add_dispatch_terminate();
     if (dispatch_sub_enabled) {
         cmd.add_dispatch_terminate(DispatcherSelect::DISPATCH_SUBORDINATE);
@@ -206,7 +207,7 @@ HostMemDeviceCommand build_dispatch_prefetch_stall(MetalContext& metal_ctx) {
     HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     cmd.add_dispatch_wait_with_prefetch_stall(
-        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0, 0);
+        CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY, 0, 0, 0);
 
     return cmd;
 }
@@ -696,7 +697,7 @@ public:
         DeviceCommandCalculator wait_calc(metal_ctx);
         wait_calc.add_dispatch_wait();
         HostMemDeviceCommand wait_cmd(metal_ctx, wait_calc.write_offset_bytes());
-        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
+        wait_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
         const uint8_t* wptr = reinterpret_cast<const uint8_t*>(wait_cmd.data());
         exec_buf_data.insert(exec_buf_data.end(), wptr, wptr + wait_cmd.size_bytes());
 
@@ -2064,7 +2065,7 @@ protected:
         const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
         // Identify the MMIO device in the mesh
-        for (auto* dev : mesh_device_->get_devices()) {
+        for (auto* dev : mesh_device_->impl().get_devices()) {
             if (cluster.get_associated_mmio_device(dev->id()) == dev->id()) {
                 mmio_device_ = dev;
                 break;
@@ -2076,7 +2077,7 @@ protected:
         }
 
         // Next, identify a remote device associated with the MMIO device
-        for (auto* dev : mesh_device_->get_devices()) {
+        for (auto* dev : mesh_device_->impl().get_devices()) {
             if (dev != mmio_device_ && (cluster.get_associated_mmio_device(dev->id()) == mmio_device_->id())) {
                 remote_device_ = dev;
                 break;
@@ -2700,7 +2701,7 @@ public:
             GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE";
         }
         this->mesh_device_ = tt_metal::distributed::MeshDevice::create_unit_mesh(0);
-        this->device_ = this->mesh_device_->get_devices()[0];
+        this->device_ = this->mesh_device_->impl().get_devices()[0];
         if (detail::sd_cq_kernel_tests_should_skip(*this->mesh_device_)) {
             GTEST_SKIP() << "Quasar SD cq-kernel tests require dispatch-engine cores in the soc descriptor";
         }
@@ -4045,7 +4046,7 @@ TEST_P(PrefetcherThroughputTestFixture, HostToDRAMPagedWriteThroughput) {
     }
 
     HostMemDeviceCommand barrier_cmd(metal_ctx, barrier_calc.write_offset_bytes());
-    barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U, 0);
+    barrier_cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0U, 0U, 0U);
     dc.add_data(barrier_cmd.data(), barrier_cmd.size_bytes(), barrier_cmd.size_bytes());
     entry_sizes.push_back(barrier_cmd.size_bytes());
 

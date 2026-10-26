@@ -3,12 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation.hpp"
+
+#include <sstream>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include <algorithm>
 
 using namespace tt::tt_metal;
@@ -76,6 +79,53 @@ AllGatherConcatDeviceOperation::tensor_return_value_t AllGatherConcatDeviceOpera
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(spec, tensor_args.input_tensor.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> AllGatherConcatDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
+    // Output [seq, 1, users (padded to 32), num_heads * head_dim]: the users gathered along `dim` on `cluster_axis`,
+    // every head's head_dim block concatenated into the width. The label is the all_gather label (Replicate on the
+    // cluster axis, the input's placements elsewhere) renumbered to that layout: Shard{0} stays, Shard{1} (users)
+    // becomes Shard{2}, Shard{2} (heads) becomes Shard{3} (a device's heads are one contiguous block of the width),
+    // Replicate stays. A Shard of dim 3 (head_dim) would interleave within every head, which no output dim
+    // describes: reported like a helper refusal (an error under strict mode) and the output keeps the input's label,
+    // as it does when the helper has no honest gather label.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    const auto output_topology = ttnn::operations::ccl::common::all_gather_output_topology(
+        tensor_args.input_tensor, args.cluster_axis, static_cast<int32_t>(args.dim));
+    if (!output_topology.has_value()) {
+        return {input_topology};
+    }
+    const auto rank = static_cast<uint32_t>(tensor_args.input_tensor.logical_shape().rank());
+    ttnn::operations::ccl::common::TopologyPlacements placements;
+    placements.reserve(output_topology->placements().size());
+    for (const auto& placement : output_topology->placements()) {
+        const auto* shard = std::get_if<Shard>(&placement);
+        if (shard == nullptr) {
+            placements.push_back(placement);
+            continue;
+        }
+        const auto dim = ttnn::operations::ccl::common::normalize_tensor_dim(shard->dim, rank);
+        if (dim == 0u) {
+            placements.push_back(Shard{0});
+        } else if (dim == 1u) {
+            placements.push_back(Shard{2});
+        } else if (dim == 2u) {
+            placements.push_back(Shard{3});
+        } else {
+            std::ostringstream label;
+            label << input_topology;
+            ttnn::operations::ccl::common::refuse(
+                "all_gather_concat cannot renumber a Shard of head_dim (tensor dim 3) into its [seq, 1, users, "
+                "num_heads * head_dim] output: a device's head_dim piece is interleaved within every head (label " +
+                    label.str() + ")",
+                ttnn::operations::ccl::common::RefusalFamily::Gather);
+            return {input_topology};
+        }
+    }
+    return {tt::tt_metal::TensorTopology(
+        output_topology->distribution_shape(), std::move(placements), output_topology->mesh_coords())};
 }
 
 ttsl::hash::hash_t AllGatherConcatDeviceOperation::compute_program_hash(

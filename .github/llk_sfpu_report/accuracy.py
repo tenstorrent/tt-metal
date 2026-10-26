@@ -141,6 +141,44 @@ def _exact_stats(d):
     }
 
 
+#: How close to an input a float result must be to be that input: the coarsest output
+#: format (bf16, bfp8) keeps 8 significant bits, so rounding an fp32 input to it moves
+#: the value by up to 2**-8 of itself.
+SAME_AS_INPUT = 2.0**-7
+
+#: Fewer compared lanes than this say nothing about a whole tile.
+MIN_LANES = 64
+
+
+def _returns_input(d, lanes=None, exact=False):
+    """``"first"`` or ``"second"``: the operand the result is, unchanged, on every compared
+    lane; None when it is neither. It is what comes back when no kernel ran over the
+    tile: the unpacked input, still in Dest.
+
+    ``lanes`` selects the lanes to compare (all when None); non-finite ones never count.
+    A float result may differ from its input by the output format's rounding, an exact
+    op's (comparisons, integers) not at all.
+    """
+    import torch
+
+    result = d["result"].reshape(-1).to(torch.float64)
+    for name, operand in (("first", "src"), ("second", "src_b")):
+        if operand not in d:
+            continue
+        src = torch.as_tensor(d[operand]).reshape(-1).to(torch.float64)
+        if src.numel() != result.numel():
+            continue
+        keep = torch.isfinite(src) & torch.isfinite(result)
+        if lanes is not None:
+            keep &= lanes.reshape(-1)
+        if int(keep.sum()) < MIN_LANES:
+            continue
+        allowed = 0.0 if exact else SAME_AS_INPUT * src[keep].abs()
+        if bool(((result[keep] - src[keep]).abs() <= allowed).all()):
+            return name
+    return None
+
+
 #: The smallest normal magnitude of a float format: a nonzero input below it is subnormal.
 _MIN_NORMAL = {"Float16": 2.0**-14}
 
@@ -250,7 +288,13 @@ def compare(base_dir, head_dir):
                 rec["kind"] = kind
                 rec["binary"] = bool(h.get("binary"))
                 rec["coverage"] = h.get("coverage")
-                if bs.get("metric") == "exact":
+                # A side that hands back an input unchanged ran no kernel over the tile.
+                exact = bs.get("metric") == "exact"
+                rec["returns_input"] = {
+                    "base": _returns_input(b, bs.get("_measured"), exact),
+                    "head": _returns_input(h, hs.get("_measured"), exact),
+                }
+                if exact:
                     rec["worse"] = int((hs["_wrong"] & ~bs["_wrong"]).sum())
                     rec["better"] = int((~hs["_wrong"] & bs["_wrong"]).sum())
                     bs.pop("_wrong")

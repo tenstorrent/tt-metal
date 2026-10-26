@@ -44,10 +44,10 @@
 // decoded correctly.
 template <typename DFB_IN0, typename DFB_IN1, typename DFB_SCRATCH, typename DFB_OUT>
 inline void mul_and_accumulate_block(
-    DFB_IN0 in0_cb,
-    DFB_IN1 in1_cb,
-    DFB_SCRATCH scratch_cb,
-    DFB_OUT out_cb,
+    DFB_IN0& in0_cb,
+    DFB_IN1& in1_cb,
+    DFB_SCRATCH& scratch_cb,
+    DFB_OUT& out_cb,
     uint32_t block_num_tiles,
     uint32_t idx,
     uint32_t num_taps) {
@@ -108,7 +108,7 @@ template <
     typename DFB_IN0,
     typename DFB_IN1,
     typename DFB_OUT>
-inline void mul_and_accumulate_coalesced_block(DFB_IN0 in0_cb, DFB_IN1 in1_cb, DFB_OUT out_cb) {
+inline void mul_and_accumulate_coalesced_block(DFB_IN0& in0_cb, DFB_IN1& in1_cb, DFB_OUT& out_cb) {
     static_assert(kernel_width > 1);
     static_assert(in0_block_w % kernel_width == 0);
     static_assert(block_num_tiles % in0_block_w == 0);
@@ -166,6 +166,7 @@ void kernel_main() {
     // instead of aliasing out_cb; false for the single-block case, where scratch == out_cb (in-place).
     constexpr bool use_partials_scratch = get_arg(args::use_partials_scratch) == 1;
 
+    DataflowBuffer cb_in0(in0_cb_id);
     DataflowBuffer cb_tilized_in0(tilized_in0_cb_id);
     DataflowBuffer cb_in1(in1_cb_id);
     DataflowBuffer cb_out(out_cb_id);
@@ -175,35 +176,50 @@ void kernel_main() {
     // needed for the lifetime of the kernel.
     compute_kernel_hw_startup(in0_cb_id, in1_cb_id, out_cb_id);
 
-    for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
-        for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
-            // Tilize the full activation block height (in0_block_num_tiles / in0_block_w == act_block_h_ntiles);
-            // must match the tile count mul_and_accumulate_block(_coalesced) consumes below. Using
-            // in0_num_subblocks under-produces by out_subblock_h_ntiles when >1, deadlocking the CB. (Port of
-            // tt-metal 4d884507e22 / PR #47927.)
-            compute_kernel_lib::tilize<in0_block_w, in0_cb_id, tilized_in0_cb_id>(in0_block_num_tiles / in0_block_w);
-            reconfig_data_format_srca(tilized_in0_cb_id);
-            if constexpr (coalesce_kw_reads) {
-                mul_and_accumulate_coalesced_block<in0_block_w, kernel_width, in0_block_num_tiles>(
-                    cb_tilized_in0, cb_in1, cb_out);
-            } else if constexpr (use_partials_scratch) {
-                // Multi height block: accumulate kernel-tap in0_block_w_i of in0_num_blocks_w through a
-                // dedicated MATMUL_PARTIALS scratch, writing only the final tap to out_cb. idx is the
-                // PER-HEIGHT-BLOCK tap index (in0_block_w_i), so it restarts at 0 each height block.
-                //
-                // dfb::matmul_partials is emitted only when the host adds the matmul_partials binding
-                // (multi-block path). Resolve it via get_token_if_present<> so the single-block/coalesced
-                // kernel variants — where the token is absent — still name-lookup and compile: the
-                // deref is only ever reached (codegen'd) in this taken branch, which implies the binding.
-                DataflowBuffer cb_scratch(*dfb::get_token_if_present<"matmul_partials">());
-                mul_and_accumulate_block(
-                    cb_tilized_in0, cb_in1, cb_scratch, cb_out, in0_block_num_tiles, in0_block_w_i, in0_num_blocks_w);
-            } else {
-                // Single height block: scratch == out_cb (in-place accumulate, no extra buffer). idx ==
-                // in0_block_w_i (in0_block_h_i is always 0 here).
-                mul_and_accumulate_block(
-                    cb_tilized_in0, cb_in1, cb_out, cb_out, in0_block_num_tiles, in0_block_w_i, in0_num_blocks_w);
+    // cb_scratch is the MATMUL_PARTIALS scratch when use_partials_scratch, else cb_out. It must outlive the whole
+    // loop: its partials carry across iterations, and an owning DataflowBuffer drains when it leaves scope.
+    auto run_blocks = [&](auto& cb_scratch) {
+        for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
+            for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
+                // Tilize the full activation block height (in0_block_num_tiles / in0_block_w == act_block_h_ntiles);
+                // must match the tile count mul_and_accumulate_block(_coalesced) consumes below. Using
+                // in0_num_subblocks under-produces by out_subblock_h_ntiles when >1, deadlocking the CB. (Port of
+                // tt-metal 4d884507e22 / PR #47927.)
+                compute_kernel_lib::tilize<in0_block_w, in0_cb_id, tilized_in0_cb_id>(
+                    cb_in0, cb_tilized_in0, in0_block_num_tiles / in0_block_w);
+                reconfig_data_format_srca(tilized_in0_cb_id);
+                if constexpr (coalesce_kw_reads) {
+                    mul_and_accumulate_coalesced_block<in0_block_w, kernel_width, in0_block_num_tiles>(
+                        cb_tilized_in0, cb_in1, cb_out);
+                } else if constexpr (use_partials_scratch) {
+                    // Multi height block: accumulate kernel-tap in0_block_w_i of in0_num_blocks_w through a
+                    // dedicated MATMUL_PARTIALS scratch, writing only the final tap to out_cb. idx is the
+                    // PER-HEIGHT-BLOCK tap index (in0_block_w_i), so it restarts at 0 each height block.
+                    mul_and_accumulate_block(
+                        cb_tilized_in0,
+                        cb_in1,
+                        cb_scratch,
+                        cb_out,
+                        in0_block_num_tiles,
+                        in0_block_w_i,
+                        in0_num_blocks_w);
+                } else {
+                    // Single height block: scratch == out_cb (in-place accumulate, no extra buffer). idx ==
+                    // in0_block_w_i (in0_block_h_i is always 0 here).
+                    mul_and_accumulate_block(
+                        cb_tilized_in0, cb_in1, cb_out, cb_out, in0_block_num_tiles, in0_block_w_i, in0_num_blocks_w);
+                }
             }
         }
+    };
+    if constexpr (use_partials_scratch) {
+        // dfb::matmul_partials is emitted only when the host adds the matmul_partials binding
+        // (multi-block path). Resolve it via get_token_if_present<> so the single-block/coalesced
+        // kernel variants — where the token is absent — still name-lookup and compile: the
+        // deref is only ever reached (codegen'd) in this taken branch, which implies the binding.
+        DataflowBuffer cb_scratch(*dfb::get_token_if_present<"matmul_partials">());
+        run_blocks(cb_scratch);
+    } else {
+        run_blocks(cb_out);
     }
 }

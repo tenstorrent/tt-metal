@@ -12,6 +12,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "experimental/llk_custom_mm_common.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -21,7 +22,7 @@ using namespace ckernel::unpacker;
 // in0 tile shape: [{1, 2, 4, 8}, 32]
 // in1 tile shape: [32, 32]
 // rt_dim: 1
-// ct_dim: any integer from 1 to 16
+// ct_dim: any integer from 1 to 34 (DEST capacity also bounds it, see llk_custom_mm_common.h)
 // kt_dim: any integer from 1 to 256 (inclusive)
 // fidelity: LoFi only
 // throttle: not supported
@@ -73,8 +74,13 @@ inline void _llk_unpack_AB_custom_mm_iter_insns(const bool post1)
     }
 }
 
+// TT_MOP has a 7-bit loop count.
+constexpr std::uint32_t CUSTOM_MM_MAX_MOP_ITERATIONS = 128;
+
 inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, const bool post1)
 {
+    LLK_ASSERT(ct_dim >= 1 && ct_dim <= CUSTOM_MM_MAX_CT_DIM, "custom_mm: ct_dim must be 1 to 34");
+
     load_replay_buf(
         0,
         32,
@@ -99,8 +105,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
             TTI_NOP;
         });
 
-    // Mop is configured to cover pairs of inner (kt) iterations. An odd tail
-    // replays one recorded inner iteration directly.
+    // Each mop iteration covers one kt_dim loop: the ct_dim output tiles of one k-tile, all sharing its SrcB tile.
     // To usefully issue up to 128 mop iterations we're limited to only using 0s in zmask
     // (not using SKIP_A/B instructions) since iterations beyond 32 always use 0s for zmask
     //
@@ -112,70 +117,58 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
     //   - reuse = SrcA only + address increment (same k-tile, next c-tile)
     //   - final reuse = uses inner_increment to jump to next k-row instead of block_increment
     //
-    // Instruction sequence per mop iteration (covering 2 kt_dim loops):
-    // Each kt_dim iteration produces ct_dim output tiles, all sharing the same SrcB tile.
-    // ct_dim == 1:
-    //   Sequence: [full] x 2 times
-    //   (block_increment == inner_increment, so no specific full_with_inner_inc needed)
-    // ct_dim == 2:
-    //   Sequence: [full, reuse_with_inner_inc] x 2 times
-    //   (first tile unpacks SrcB, second tile reuses SrcB and uses inner_increment)
-    // ct_dim >= 3:
-    //   Sequence: [full, reuse x (ct_dim-2) times, reuse_with_inner_inc] x 2 times
-    //   Where middle reuses use block_increment, last reuse uses inner_increment
-    //   Examples:
-    //     ct_dim=3: [full, reuse, reuse_with_inner_inc] x 2 times
-    //     ct_dim=4: [full, reuse x 2 times, reuse_with_inner_inc] x 2 times
-    //     ct_dim=5: [full, reuse x 3 times, reuse_with_inner_inc] x 2 times
+    // Sequence per mop iteration: [full, reuse x (ct_dim - 2), final reuse], or [full] for ct_dim == 1
+    // (block_increment == inner_increment then, so no final reuse is needed).
     //
-    // Mop template parameter assignment (selecting replay buffer instruction ranges):
-    // First, tiles per kt_dim iteration are divided between two halves:
-    //   first_half_iterations = ceil(ct_dim/2)   // Rounds up for odd ct_dim
-    //   second_half_iterations = floor(ct_dim/2)  // Rounds down for odd ct_dim
-    //
-    // Division examples:
-    //   ct_dim=1: first_half=1 tile, second_half=0 tiles
-    //   ct_dim=2: first_half=1 tile, second_half=1 tile
-    //   ct_dim=3: first_half=2 tiles, second_half=1 tile
-    //   ct_dim=4: first_half=2 tiles, second_half=2 tiles
-    //   ct_dim=5: first_half=3 tiles, second_half=2 tiles
-    //
-    // These iteration counts are converted to replay buffer instruction ranges:
-    //   first_half: starts at buffer beginning (offset by post1),
-    //       captures full unpack + (first_half_iterations-1) reuses
-    //               Length = (4 or 5 for full) + (first_half_iterations-1) * 3
-    //   second_half: starts from buffer end, counts backwards second_half_iterations * 3 instructions
-    //                Always includes the final reuse with inner_increment
-    //
-    // For ct_dim == 1:
-    //   second_half is empty (0 instructions), so we use unpackB mode (2 template slots per mop iteration)
-    //   Template: A0=first_half (just full unpack), B=first_half
-    //   Sequence: A0, B → [full] x 2 times
-    //
-    // For ct_dim >= 2:
-    //   Both halves have instructions, so we use unpackHalo mode (4 template slots per mop iteration)
-    //   Template: A0=first_half, A1=second_half, A2=first_half, A3=second_half
-    //   Sequence: A0, A1, A2, A3 → first_half, second_half, first_half, second_half
-    //   Where A0+A1 covers first kt_dim iteration (ct_dim tiles), A2+A3 covers second kt_dim iteration
+    // The ct_dim - 1 reuses split over the template slots, each slot a replay range:
+    //   the first slot starts at the buffer beginning (offset by post1) and holds the full unpack plus some reuses,
+    //   the last slot counts backwards from the buffer end so it always ends in the final reuse,
+    //   any slots between replay reuse blocks from the start of the reuse range, since all reuses but the last
+    //   are the same instructions.
+    // Every slot the template issues must replay something, so the configuration follows the reuse count:
+    //   ct_dim == 1:       A0 = full                                       (no reuse for a B slot)
+    //   ct_dim 2 to 3:     A0 = full + a reuses, B = d reuses              (too few reuses for A1..A3)
+    //   ct_dim 4 to 34:    A0 = full + a reuses, A1 = b, A2 = c, A3 = d    (a, b, c <= 8, d <= 9)
+    // The reuses split evenly; the remainder goes to A3, A2 and A1 before A0, which already holds the full unpack,
+    // so A1..A3 get a reuse each from ct_dim 4 on.
+    const std::uint32_t reuses          = ct_dim - 1;
+    const auto full_and                 = [post1](const std::uint32_t n) { return lltt::replay_insn(post1 ? 1 : 0, (post1 ? 1 : 2) + (1 + n) * 3); };
+    const auto final_reuses             = [](const std::uint32_t n) { return lltt::replay_insn(32 - n * 3, n * 3); };
+    constexpr std::uint32_t reuse_start = 5;
 
-    const std::uint32_t first_half_iterations  = (ct_dim + 1) >> 1; // Round up for odd ct_dim
-    const std::uint32_t second_half_iterations = ct_dim >> 1;       // Round down for odd ct_dim
-    // Both halves can take up to 9 iterations, meaning max of 18 tiles in width with full odd dim support
-    // Although 16 is still the practical limit due to size of dst
-    const std::uint32_t first_half = lltt::replay_insn(post1 ? 1 : 0, (post1 ? 1 : 2) + (first_half_iterations) * 3);
-    // Second half has to count backwards to always encompass final iteration which uses inner_increment
-    const std::uint32_t second_half = lltt::replay_insn(32 - second_half_iterations * 3, second_half_iterations * 3);
+    std::uint32_t a0 = 0, a1 = 0, a2 = 0, a3 = 0, b = 0;
+    bool use_b = false, use_halo = false;
+    if (reuses == 0)
+    {
+        a0 = full_and(0);
+    }
+    else if (reuses < 3)
+    {
+        use_b = true;
+        a0    = full_and(reuses >> 1);
+        b     = final_reuses(reuses - (reuses >> 1));
+    }
+    else
+    {
+        use_halo                 = true;
+        const std::uint32_t base = reuses >> 2;
+        const std::uint32_t rem  = reuses & 3;
+        a0                       = full_and(base);
+        a1                       = lltt::replay_insn(reuse_start, (base + (rem > 2 ? 1 : 0)) * 3);
+        a2                       = lltt::replay_insn(reuse_start, (base + (rem > 1 ? 1 : 0)) * 3);
+        a3                       = final_reuses(base + (rem > 0 ? 1 : 0));
+    }
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
-        ct_dim == 1, // Use UNPACR_B and SKIP_B instructions?
-        ct_dim != 1, // Use UNPACR_A1/2/3 instructions?
-        first_half,  // A0
-        second_half, // A1
-        first_half,  // A2
-        second_half, // A3
-        0,           // Skip A
-        first_half,  // B
-        0            // Skip B
+        use_b,    // Use UNPACR_B and SKIP_B instructions?
+        use_halo, // Use UNPACR_A1/2/3 instructions?
+        a0,       // A0
+        a1,       // A1
+        a2,       // A2
+        a3,       // A3
+        0,        // Skip A
+        b,        // B
+        0         // Skip B
     );
 
     tmp.program();
@@ -192,7 +185,7 @@ inline void _llk_unpack_AB_custom_mm_mop_config_(const std::uint32_t ct_dim, con
  *                    SrcB face are unpacked, so zeroing the rest saves FPU power.
  * @param unpB_face_r_dim: Activation rows per face, 1, 2, 4 or 8. Sets unpacker 1's X end.
  * @param unpA_dst_format: Unpack destination format of the weights (SrcA); Bfp4_b selects a tuned sequence.
- * @param ct_dim: Output width in tiles, 1 to 16.
+ * @param ct_dim: Output width in tiles, 1 to 34.
  * @note Call this before @ref _llk_unpack_AB_custom_mm_, and again after any other op has run, in particular one
  *       that writes SrcB: the execute does not reprogram the MOP, and the SrcB clear happens only here.
  * @note On the math thread, pair with @ref _llk_math_custom_mm_init_.
@@ -237,8 +230,9 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t address_b,
     const std::uint32_t block_increment,
     const std::uint32_t inner_increment,
-    const std::uint32_t kt_dim,
-    const std::uint32_t ct_dim) {
+    const std::uint32_t kt_dim)
+{
+    LLK_ASSERT(kt_dim >= 1 && kt_dim <= CUSTOM_MM_MAX_KT_DIM, "custom_mm: kt_dim must be 1 to 256");
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
     // Program SrcA address once, its updated using CFGSHIFTMASK
@@ -254,27 +248,14 @@ inline void _llk_unpack_AB_custom_mm_run_(
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     constexpr std::uint32_t mop_template_0 = 0;
-    constexpr std::uint32_t no_skip_zmask = 0;
-    constexpr std::uint32_t replay_buffer_size = 32;
-    constexpr std::uint32_t full_unpack_instruction_count = 5;
-    constexpr std::uint32_t reuse_instruction_count = 3;
+    constexpr std::uint32_t no_skip_zmask  = 0;
 
-    const std::uint32_t kt_pairs = kt_dim / 2;
-    if (kt_pairs > 0) {
-        TT_MOP(mop_template_0, kt_pairs - 1, no_skip_zmask);
-    }
-    if (kt_dim % 2 != 0) {
-        const std::uint32_t first_half_tiles = (ct_dim + 1) / 2;
-        const std::uint32_t second_half_tiles = ct_dim / 2;
-        // Both tunings occupy five instructions for the full unpack. Post1's first instruction is a padding NOP,
-        // while post0's last instruction is a hazard NOP.
-        const std::uint32_t first_half_instruction_count =
-            full_unpack_instruction_count + (first_half_tiles - 1) * reuse_instruction_count;
-        lltt::replay(0, first_half_instruction_count);
-        if (second_half_tiles > 0) {
-            const std::uint32_t second_half_instruction_count = second_half_tiles * reuse_instruction_count;
-            TT_REPLAY(replay_buffer_size - second_half_instruction_count, second_half_instruction_count, 0, 0);
-        }
+    // One mop iteration per kt_dim loop, at most CUSTOM_MM_MAX_MOP_ITERATIONS per TT_MOP
+    for (std::uint32_t kt_done = 0; kt_done < kt_dim; kt_done += CUSTOM_MM_MAX_MOP_ITERATIONS)
+    {
+        const std::uint32_t kt_left    = kt_dim - kt_done;
+        const std::uint32_t iterations = kt_left < CUSTOM_MM_MAX_MOP_ITERATIONS ? kt_left : CUSTOM_MM_MAX_MOP_ITERATIONS;
+        TT_MOP(mop_template_0, iterations - 1, no_skip_zmask);
     }
 
     t6_semaphore_get(semaphore::UNPACK_SYNC);
@@ -300,7 +281,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
  * @param tile_size_a: Weight tile size, in 16-byte words.
  * @param tile_size_b: Activation tile size, in 16-byte words.
  * @param kt_dim: Inner dimension in tiles, 1 to 256.
- * @param ct_dim: Output width in tiles, 1 to 16.
+ * @param ct_dim: Output width in tiles; must match the init, whose MOP bakes it in.
  * @note Call @ref _llk_unpack_AB_custom_mm_init_ first.
  * @note On the math thread, pair with @ref _llk_math_custom_mm_.
  */
@@ -327,5 +308,5 @@ inline void _llk_unpack_AB_custom_mm_(
     wait_for_next_context(1);
     reset_config_context();
 
-    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim, ct_dim);
+    _llk_unpack_AB_custom_mm_run_(cfg, address_a, address_b, block_increment, inner_increment, kt_dim);
 }

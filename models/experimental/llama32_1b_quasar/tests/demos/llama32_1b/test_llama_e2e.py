@@ -21,13 +21,11 @@ Run:
     MESH_DEVICE=<qsr> TT_METAL_SLOW_DISPATCH_MODE=1 LLAMA32_1B_DEMO_NUM_LAYERS=1 \
         pytest models/experimental/llama32_1b_quasar/tests/demos/llama32_1b/test_llama_e2e.py
 
+On Quasar the model's matmuls call ttnn.experimental.quasar.linear/matmul with no program config (the
+unified matmul), so they need no patching here.
+
 TODO (Quasar enablement — not done here; the model still has WH-only paths the decode/prefill hit):
-  * DRAM-sharded decode matmuls (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig for QKV / attn-out
-    / MLP / LM-head) call get_optimal_dram_bank_to_logical_worker_assignment, which TT_ASSERTs WH/BH.
-    They must be converted to DRAM-interleaved weights + an interleaved/1D matmul config on Quasar.
-  * ttnn.linear (mainline matmul) has no Quasar/Metal-2.0 factory; the interleaved fallback likely needs
-    routing to ttnn.experimental.quasar.matmul on Quasar. Resolve with a 1-layer run first.
-  * prefill SDPA + QKV grids inside attention_1d.py are still hard (8,8); thread the device grid through.
+  * prefill SDPA grid inside attention_1d.py is still hard (8,8); thread the device grid through.
 """
 
 import os
@@ -270,129 +268,6 @@ def _install_quasar_fp32_acc_off(monkeypatch):
             monkeypatch.setattr(ttnn, name, _force_off(orig))
 
 
-def _install_quasar_interleaved_matmul(monkeypatch, mesh_device):
-    """Run the decode + prefill matmuls ON DEVICE on Quasar via the mainline mcast picker.
-
-    The model's QKV / WO / MLP(W1,W2,W3) / LM-head matmuls use DRAM-sharded program configs
-    (ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig, WH/BH-only) that don't run on Quasar. This
-    wrapper de-shards the inputs to DRAM-interleaved and drops that program_config so the mainline picker
-    auto-selects a standard mcast matmul. Both mcast factories are now Gen2-ported (1D:
-    test_quasar_qkv_matmul_dfb.py; 2D: test_quasar_matmul_2d_mcast.py), so small-M decode goes 1D and large-M
-    prefill / wide lm_head go 2D (which streams out_block to fit L1) -- all on device. Output is forced
-    DRAM-interleaved (create_qkv_heads_decode's Interleaved factory is ported, so no width-shard trick is
-    needed; s2i_copy handles the downstream alias) and bf8_b/bf4_b output dtype is coerced to bf16.
-    Requires TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0 in the env.
-    """
-
-    def _to_dram(t):
-        try:
-            if t is None or not (hasattr(t, "is_sharded") and t.is_sharded()):
-                return t
-            q_tmc = getattr(getattr(ttnn.experimental, "quasar", None), "to_memory_config", None)
-            fn = q_tmc or ttnn.to_memory_config
-            return fn(t, ttnn.DRAM_MEMORY_CONFIG)
-        except Exception as e:
-            logger.warning(f"[llama-e2e][quasar] matmul de-shard failed ({e}); passing tensor through")
-            return t
-
-    # Matmul grid for the 2-node emulator.
-    #  - gx capped to 2: 1D mcast FAILS at large grids on Quasar -- the full 8x4 tripped llk_io_unpack.h:45 on
-    #    the decode matmul; <= ~3x2 is the validated regime (test_quasar_qkv_matmul_dfb / _matmul_2d_mcast).
-    #  - gy PINNED to 1: the 2-node emulator is a SINGLE ROW (2x1). compute_with_storage_grid_size can report
-    #    y>1, but those rows are NOT usable in slow dispatch -- a 2-row config addresses row 1 and throws
-    #    "No core at (0,1)". A 1-row grid is fine because we build an EXPLICIT 2D config (not the picker): with
-    #    gy=1 the 2D path sets per_core_M = full M on the one row and out_block_h STREAMS it to L1, so it still
-    #    fits (no full-M-per-core OOM), and N splits across gx. The mainline 2D factory's single-row mcast
-    #    clamp lets grid.y==1 run (matmul_multicore_reuse_mcast_2d_program_factory.cpp; guard test
-    #    debug_ops/test_quasar_matmul_2d_single_row.py).
-    dev = mesh_device.compute_with_storage_grid_size()
-    gx, gy = min(int(dev.x), 2), 1
-    mm_core_grid = ttnn.CoreGrid(y=gy, x=gx)
-
-    def _blk(v, sub, cap):
-        # largest divisor of v that is a multiple of `sub` and <= cap
-        best, d = sub, sub
-        while d <= min(v, cap):
-            if v % d == 0:
-                best = d
-            d += sub
-        return best
-
-    def _wrap(orig):
-        def _mm(input_tensor, weight, *args, **kwargs):
-            # Build the matmul program config EXPLICITLY with a PINNED small in0_block_w (<=4). WHY:
-            # letting the picker auto-select (program_config=None) chose in0_block_w=16 for the decode QKV
-            # matmul, which trips the TEN-4746 bare-wait->pop guard (llk_io_unpack.h:45,
-            # LLK_TDMA_GUARD_ASSERT_DISARMED). in0_block_w=4 is validated: it passed for 1D decode (earlier
-            # e2e device run) AND 2D prefill (test_quasar_matmul_2d_mcast). So pin it here so LLK asserts can
-            # stay ON. (A sub-agent is finding where to add dummy_unpack in the matmul compute kernel -- the
-            # real fix that would let the large-in0_block_w picker config work; until then, pin.)
-            # 1D mcast_in0 for small-M decode; 2D mcast (streamed out_block, fits L1) for large-M prefill /
-            # wide lm_head. DRAM output (create_qkv Interleaved factory is ported; s2i_copy handles the alias).
-            input_tensor = _to_dram(input_tensor)
-            weight = _to_dram(weight)
-            kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
-            try:
-                if kwargs.get("dtype") in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-                    kwargs["dtype"] = ttnn.bfloat16
-            except Exception:
-                pass
-            try:
-                ish = input_tensor.padded_shape  # [.., M, K]
-                wsh = weight.padded_shape  # [.., K, N]
-                mt = max(int(ish[-2]) // 32, 1)
-                kt = max(int(ish[-1]) // 32, 1)
-                nt = max(int(wsh[-1]) // 32, 1)
-                ibw = _blk(kt, 1, 4)  # PINNED <=4 -- avoids the TEN-4746 large-in0_block_w path
-                if mt == 1:
-                    # 1D mcast_in0 (decode): in0 broadcast, each core owns per_core_N of the output.
-                    nc = gx * gy
-                    per_core_n = max((nt + nc - 1) // nc, 1)
-                    osw = _blk(per_core_n, 1, 4)
-                    kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                        compute_with_storage_grid_size=(gx, gy),
-                        in0_block_w=ibw,
-                        out_subblock_h=1,
-                        out_subblock_w=osw,
-                        per_core_M=1,
-                        per_core_N=per_core_n,
-                        fuse_batch=False,
-                        fused_activation=None,
-                        mcast_in0=True,
-                    )
-                else:
-                    # 2D mcast (prefill / lm_head): M across grid.y, N across grid.x; out_block streams to L1.
-                    per_core_m = max((mt + gy - 1) // gy, 1)
-                    per_core_n = max((nt + gx - 1) // gx, 1)
-                    osw = _blk(per_core_n, 1, 4)
-                    kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(gx, gy),
-                        in0_block_w=ibw,
-                        out_subblock_h=1,
-                        out_subblock_w=osw,
-                        out_block_h=_blk(per_core_m, 1, 8),
-                        out_block_w=_blk(per_core_n, osw, 16),
-                        per_core_M=per_core_m,
-                        per_core_N=per_core_n,
-                        transpose_mcast=False,
-                        fused_activation=None,
-                        fuse_batch=False,
-                    )
-                kwargs.pop("core_grid", None)
-            except Exception as e:
-                logger.warning(f"[llama-e2e][quasar] matmul cfg build failed ({e}); auto-select w/ small core_grid")
-                kwargs["program_config"] = None
-                kwargs["core_grid"] = mm_core_grid
-            return orig(input_tensor, weight, *args, **kwargs)
-
-        return _mm
-
-    for name in ("linear", "matmul"):
-        orig = getattr(ttnn, name, None)
-        if orig is not None:
-            monkeypatch.setattr(ttnn, name, _wrap(orig))
-
-
 def _install_quasar_bf16_kv_cache(monkeypatch):
     """Allocate the paged KV cache as bf16 on Quasar (needed for ON-DEVICE decode SDPA).
 
@@ -424,12 +299,10 @@ def _install_quasar_bf16_kv_cache(monkeypatch):
 
 
 def _install_quasar_host_matmul(monkeypatch):
-    """Compute the decode matmuls on the HOST (torch), sidestepping the Quasar 1D-mcast matmul.
+    """Compute the matmuls on the HOST (torch), sidestepping the Quasar device matmul.
 
-    The forced-interleaved decode matmuls (QKV / WO / MLP w1,w3,w2 / lm_head) all route through the mainline
-    1D mcast_in0 matmul, which underflows the in0 DFB tile counter on the Quasar sim (posted=64 acked=65) --
-    a runtime/sim DM<->tensix counter-remapper mis-delivery, not an op bug (craq-sim issue filed). To surface
-    what fails DOWNSTREAM of the matmuls, we gather both operands to host, do a plain torch matmul (+ bias if
+    The model's matmuls (QKV / WO / MLP w1,w3,w2 / lm_head) call ttnn.experimental.quasar.linear/matmul on
+    Quasar. To surface what fails DOWNSTREAM of the matmuls, we gather both operands to host, do a plain torch matmul (+ bias if
     given -- the decode linears have NO fused activation; MLP SiLU is a separate ttnn.mul), and upload the
     result into the caller's requested memory_config. Single-device (N150) only; multi-device falls back to
     the device op. Numerics are exact-ish (fp32 accumulate -> bf16); this is a bring-up sidestep, not perf.
@@ -478,7 +351,7 @@ def _install_quasar_host_matmul(monkeypatch):
                 res = _upload(out, dev, kwargs.get("memory_config"))
                 logger.warning(
                     f"[llama-e2e][quasar] host matmul {tuple(a.shape)} x {tuple(b.shape)} -> {tuple(out.shape)} "
-                    f"(sidestepped device 1D-mcast; out_memcfg={kwargs.get('memory_config')})"
+                    f"(sidestepped device matmul; out_memcfg={kwargs.get('memory_config')})"
                 )
                 return res
             except Exception as e:
@@ -488,9 +361,7 @@ def _install_quasar_host_matmul(monkeypatch):
         return _mm
 
     for name in ("linear", "matmul"):
-        orig = getattr(ttnn, name, None)
-        if orig is not None:
-            monkeypatch.setattr(ttnn, name, _wrap(orig))
+        monkeypatch.setattr(ttnn.experimental.quasar, name, _wrap(getattr(ttnn.experimental.quasar, name)))
 
 
 def _install_quasar_host_embedding(monkeypatch):
@@ -1411,14 +1282,12 @@ def test_llama_e2e(mesh_device, optimizations, monkeypatch):  # noqa: F811 — m
         # table upload is a sim-perf tax, not a device limit; unlike bf8_b which is genuinely unsupported).
         # ON-DEVICE MODE
         # REQUIRES `TTSIM_QSR_TC_LEGACY_TRUNCATION_ALIAS=0` in the pytest env (clears the tile-counter
-        # underflow that forced host matmul); matmul + prefill SDPA device paths are validated standalone
-        # (test_quasar_qkv_matmul_dfb.py, test_quasar_sdpa_prefill.py). bf16 substitutes for bf8_b.
+        # underflow that forced host matmul); the prefill SDPA device path is validated standalone
+        # (test_quasar_sdpa_prefill.py). bf16 substitutes for bf8_b. The matmuls need no patch: the model calls
+        # the unified matmul (ttnn.experimental.quasar.linear, no program config) on Quasar.
         device_attn = os.environ.get("LLAMA_QSR_DEVICE_ATTN", "1") == "1"
 
         if device_attn:
-            # Device matmul: de-shard inputs to DRAM-interleaved + drop the DRAM-sharded program_config so the
-            # picker selects the interleaved 1D-mcast matmul (its in0 DFB underflow is cleared by alias=0).
-            _install_quasar_interleaved_matmul(monkeypatch, mesh_device)
             # KV cache as bf16 so the on-device decode SDPA validate (bf16-only q/k/v on Quasar) passes.
             _install_quasar_bf16_kv_cache(monkeypatch)
         else:

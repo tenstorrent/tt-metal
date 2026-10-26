@@ -1,5 +1,4 @@
 set(TT_METAL_PUBLIC_API
-    api/internal/service/inter_process_counter_channel.hpp
     api/internal/service/service_core_manager.hpp
     api/internal/disaggregation/layer_ack_decoder.hpp
     api/internal/disaggregation/layer_completion_message.hpp
@@ -66,6 +65,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
+    api/tt-metalium/experimental/operation_timeout.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
@@ -95,7 +95,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/noc_estimator/types.hpp
     api/tt-metalium/experimental/offline_kernel_compile.hpp
     api/tt-metalium/experimental/per_core_allocation/allocator_mode.hpp
+    api/tt-metalium/experimental/per_core_allocation/allocator_state.hpp
     api/tt-metalium/experimental/per_core_allocation/buffer.hpp
+    api/tt-metalium/experimental/per_core_allocation/device_memory_span.hpp
     api/tt-metalium/experimental/per_core_allocation/memory_config.hpp
     api/tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp
     api/tt-metalium/experimental/range_lockstep_allocation/buffer.hpp
@@ -207,10 +209,16 @@ set(TT_METAL_SOURCES
     impl/experimental/offline_compile/offline_kernel_compile.cpp
     impl/graph/graph_tracking.cpp
     impl/streaming_profiler/api.cpp
+    impl/streaming_profiler/decode.cpp
     impl/streaming_profiler/device_programs.cpp
     impl/streaming_profiler/ops_csv.cpp
     impl/streaming_profiler/receiver.cpp
     impl/streaming_profiler/service.cpp
+    impl/streaming_profiler/sync/check.cpp
+    impl/streaming_profiler/sync/clock_map.cpp
+    impl/streaming_profiler/sync/clock_solver.cpp
+    impl/streaming_profiler/sync/link_sync.cpp
+    impl/streaming_profiler/sync/tile_sync.cpp
     impl/streaming_profiler/tracy_consumer.cpp
     impl/streaming_profiler/zone_csv.cpp
     hal.cpp
@@ -219,7 +227,6 @@ set(TT_METAL_SOURCES
 set(JITAPI_FILES
     api/tt-metalium/buffer_types.hpp
     api/tt-metalium/circular_buffer_constants.h
-    api/tt-metalium/constants.hpp
     api/tt-metalium/experimental/fabric/fabric_edm_types.hpp
     api/tt-metalium/experimental/fabric/edm_fabric_counters.hpp
     core_descriptors/blackhole_140_arch.yaml
@@ -260,6 +267,15 @@ set(JITAPI_FILES
     soc_descriptors/wormhole_b0_80_arch.yaml
     tools/profiler/cpp_device_analyses.json
     impl/streaming_profiler/kernels/drisc_relay.cpp
+    impl/streaming_profiler/kernels/eth_clock.hpp
+    impl/streaming_profiler/kernels/eth_clock_check.cpp
+    impl/streaming_profiler/kernels/eth_clock_model.cpp
+    impl/streaming_profiler/kernels/eth_clock_sampler.cpp
+    impl/streaming_profiler/kernels/eth_relay.cpp
+    impl/streaming_profiler/kernels/link_sync.cpp
+    impl/streaming_profiler/kernels/link_sync.hpp
+    impl/streaming_profiler/kernels/relay_common.hpp
+    impl/streaming_profiler/kernels/tile_sync.cpp
     impl/dispatch/kernels/cq_dispatch.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate.cpp
     impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp
