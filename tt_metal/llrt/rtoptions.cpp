@@ -407,9 +407,7 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     // acts on the flag). The simulator and emule backends cannot model dual-erisc, so force it off for them.
     // ttsim exits on any access to the ECC registers, so the L1 ECC halt is forced off too.
     if (this->runtime_target_device_ == tt::TargetDevice::Simulator ||
-        this->runtime_target_device_ == tt::TargetDevice::Emule ||
-        this->runtime_target_device_ == tt::TargetDevice::EmuAxi ||
-        this->runtime_target_device_ == tt::TargetDevice::GrendelJtag) {
+        this->runtime_target_device_ == tt::TargetDevice::Emule) {
         log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
         this->enable_2_erisc_mode = false;
         this->disable_l1_ecc_halt = true;
@@ -549,8 +547,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_EMU_SERVER:
             this->emu_server = std::string(value);
             this->runtime_target_device_ = tt::TargetDevice::EmuAxi;
-            this->using_slow_dispatch = true;
-            this->fast_dispatch = false;
             break;
 
         case EnvVarID::TT_METAL_EMU_SOC_DESC: this->emu_soc_desc_path = std::string(value); break;
@@ -568,8 +564,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_GRENDEL_JTAG_SERVER:
             this->grendel_jtag_server = std::string(value);
             this->runtime_target_device_ = tt::TargetDevice::GrendelJtag;
-            this->using_slow_dispatch = true;
-            this->fast_dispatch = false;
             break;
 
         case EnvVarID::TT_METAL_GRENDEL_JTAG_SOC_DESC: this->grendel_jtag_soc_desc_path = value; break;
