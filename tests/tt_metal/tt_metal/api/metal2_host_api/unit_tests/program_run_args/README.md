@@ -21,10 +21,10 @@ struct ProgramRunArgs {
     struct KernelRunArgs {
         KernelSpecName kernel;
 
-        using RuntimeArgValues = Table<std::string, Table<NodeCoord, ArgValue>>;
+        using RuntimeArgValues = Table<ArgName, Table<NodeCoord, ArgValue>>;
         RuntimeArgValues runtime_arg_values;
 
-        using CommonRuntimeArgValues = Table<std::string, ArgValue>;
+        using CommonRuntimeArgValues = Table<ArgName, ArgValue>;
         CommonRuntimeArgValues common_runtime_arg_values;
 
         AdvancedKernelRunArgs advanced_options;

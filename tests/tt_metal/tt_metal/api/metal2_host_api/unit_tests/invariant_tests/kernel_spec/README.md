@@ -50,7 +50,7 @@ struct KernelSpec {
         DFBSpecName dfb_spec_name;
 
         // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
-        std::string accessor_name;
+        AccessorName accessor_name;
 
         EndpointType endpoint_type;
 
@@ -74,7 +74,7 @@ struct KernelSpec {
         SemaphoreSpecName semaphore_spec_name;
 
         // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
-        std::string accessor_name;
+        AccessorName accessor_name;
     };
     // Invariant:
     // - semaphore_spec_name must be unique across all semaphore_bindings.
@@ -86,7 +86,7 @@ struct KernelSpec {
         ScratchpadSpecName scratchpad_spec_name;
 
         // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
-        std::string accessor_name;
+        AccessorName accessor_name;
     };
     // Invariant:
     // - scratchpad_spec_name must be unique across all scratchpad_bindings.
@@ -97,13 +97,13 @@ struct KernelSpec {
         TensorParamName tensor_parameter_name;
 
         // Invariant: A valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
-        std::string accessor_name;
+        AccessorName accessor_name;
     };
     // Invariant:
     // - accessor_name must be unique across all tensor_bindings.
     Group<TensorBinding> tensor_bindings;
 
-    using CompileTimeArgs = Table<std::string, ArgValue>;
+    using CompileTimeArgs = Table<ArgName, ArgValue>;
     // Table key represents the accessor name of the CTA.
     // Invariant:
     // - The key must be a valid C++ identifier.
@@ -114,12 +114,12 @@ struct KernelSpec {
         // Invariant:
         // - Must not have repeated names.
         // - All argument names must be valid C++ identifiers.
-        Group<std::string> runtime_arg_names;
+        Group<ArgName> runtime_arg_names;
 
         // Invariant:
         // - Must not have repeated names.
         // - All argument names must be valid C++ identifiers.
-        Group<std::string> common_runtime_arg_names;
+        Group<ArgName> common_runtime_arg_names;
     };
     // Invariant:
     // - No repeated names across runtime_arg_names and common_runtime_arg_names.

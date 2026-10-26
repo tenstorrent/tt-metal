@@ -12,6 +12,7 @@ Put a test elsewhere when:
 
 | Directory | Test Category |
 |---|---|
+| `accessor_name/` | The `AccessorName` / `ArgName` type, and the naming idioms it must keep compiling |
 | `arg_value/` | The `ArgValue` type, and the argument-value idioms it must keep compiling |
 | `invariant_tests/` | Which specs `MakeProgramFromSpec` accepts or rejects |
 | `kernel_hash/` | Which spec fields feed a kernel's JIT cache key |
