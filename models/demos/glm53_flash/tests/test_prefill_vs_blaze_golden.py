@@ -254,6 +254,8 @@ def test_prefill_vs_blaze_golden(mesh_device):
     runs = [(job, m) for m in modes for job in JOBS]
     for job, mode in runs:
         if mode is not None:
+            if mode == "wrap":  # the composite needs the TtMHCSplit build (G53F-0188 default: fast only)
+                assert mhc_mod.MHC_PREFILL_IMPL == "wrap", "mhc mode wrap needs GLM53_MHC_PREFILL_IMPL=wrap"
             mhc_mod.MHC_PREFILL_RUNTIME = "" if mode == "wrap" else mode
             logger.info(
                 f"[g53f-prefill] ===== prefill mHC mode {mode} (MHC_PREFILL_RUNTIME={mhc_mod.MHC_PREFILL_RUNTIME!r})"

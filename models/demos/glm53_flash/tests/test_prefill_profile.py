@@ -157,9 +157,13 @@ def test_prefill_profile(mesh_device):
             moe_mod.REGIONS_BUF = spec[5]
         if len(spec) > 6 and spec[6]:  # regions row gathers (embedding | row, G53F-0186)
             moe_mod.REGIONS_GATHER = spec[6]
+        if len(spec) > 8 and spec[8]:  # regions combine (reduce | fused, G53F-0190)
+            moe_mod.REGIONS_COMBINE = spec[8]
         if len(spec) > 7 and spec[7]:  # prefill mHC rows (wrap | fast | trace, G53F-0187 / 0188; tt/mhc.py)
             from models.demos.glm53_flash.tt import mhc as mhc_mod
 
+            if spec[7] in ("wrap", "trace"):  # the composite needs the TtMHCSplit build (G53F-0188 default: fast only)
+                assert mhc_mod.MHC_PREFILL_IMPL == "wrap", "mhc mode wrap/trace needs GLM53_MHC_PREFILL_IMPL=wrap"
             mhc_mod.MHC_PREFILL_RUNTIME = "" if spec[7] in ("wrap", "trace") else spec[7]
             os.environ[mhc_mod.MHC_PREFILL_TRACE_ENV] = "1" if spec[7] == "trace" else "0"
         logger.info(
@@ -223,7 +227,9 @@ def test_prefill_profile(mesh_device):
             first_token=first,
             warm_chunk_s=round(sum(r["seconds"] for r in warm) / len(warm), 4),
             **_dram_view(mesh_device),
+            regions=dict(moe_mod.REGIONS_STATS),  # what the regions calls ran (buffer rows, combine path)
         )
+        moe_mod.REGIONS_STATS.clear()
         if instr:
             tot: dict[str, float] = defaultdict(float)
             for r in warm:

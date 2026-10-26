@@ -118,6 +118,24 @@ REGIONS_BUF = os.environ.get("GLM53_REGIONS_BUF", "full")
 # ttnn.embedding (row-major reader: one 8 KB read in flight per core); "row" = custom_ops/row_gather (batches of reads
 # in flight, the same bytes; tt-blaze G53F-0186). Read at call time.
 REGIONS_GATHER = os.environ.get("GLM53_REGIONS_GATHER", "embedding")
+# regions path: the gather back + weighted sum over the picks (tt-blaze G53F-0190): "reduce" = ttnn.embedding of every
+# pick's output row (T*k rows, ~3/4 of them the dummy slot) + post_combine_reduce; "fused" = custom_ops/
+# gather_combine_reduce, post_combine_reduce's own compute + writer kernels behind a reader that fetches the table rows
+# directly and only those the reduce uses (bit-identical). Read at call time.
+REGIONS_COMBINE = os.environ.get("GLM53_REGIONS_COMBINE", "reduce")
+# what the regions calls actually ran (host-side ints, no device sync): the region buffer rows and the combine path,
+# so an A/B can show the knob took effect (G53F-0183: a knob echoed in a summary is not its effect). Reset by the reader.
+REGIONS_STATS: dict = {}
+
+
+def _regions_stat(max_buf: int, combine: str) -> None:
+    st = REGIONS_STATS
+    st["calls"] = st.get("calls", 0) + 1
+    st["buf_rows_min"] = min(st.get("buf_rows_min", max_buf), max_buf)
+    st["buf_rows_max"] = max(st.get("buf_rows_max", 0), max_buf)
+    st["combine_" + combine] = st.get("combine_" + combine, 0) + 1
+
+
 REGIONS_BUF_BUCKET = int(os.environ.get("GLM53_REGIONS_BUF_BUCKET", "2048"))
 PREFILL_BLOCK_GROUP = int(os.environ.get("GLM53_PREFILL_BLOCK_GROUP", "32"))
 
@@ -647,6 +665,9 @@ class TtRoutedExperts(LightweightModule):
         self.prefill_experts = prefill_experts_mode() if not (dense or stream) else "blocks"
         self._dispatch = None
         self._row_gather = None  # custom_ops/row_gather, built on first use (GLM53_REGIONS_GATHER=row)
+        self._gather_combine = (
+            None  # custom_ops/gather_combine_reduce, built on first use (GLM53_REGIONS_COMBINE=fused)
+        )
         if self.prefill_experts in ("dispatch", "regions"):
             self._build_dispatch_path(fabric=self.prefill_experts == "dispatch")
         # column c's expert selector: the [E, E_local] block of the identity for its experts
@@ -985,7 +1006,7 @@ class TtRoutedExperts(LightweightModule):
             ttnn.deallocate(t)
         # region rows = every pick + up to 31 alignment rows per local expert, rounded up to a tile multiple (the
         # kernel wants x_shape[-2] % 32 == 0; decode with 2 gathered tokens x 72 local experts gave 2320)
-        max_buf = max_buf or self.dispatch_max_tokens or (-(-(T * k + E_loc * TILE) // TILE) * TILE)
+        max_buf = self.dispatch_max_tokens or (-(-(T * k + E_loc * TILE) // TILE) * TILE)
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, T, H])
         idx_rm = ttnn.reshape(ttnn.to_layout(idx_u16, ttnn.ROW_MAJOR_LAYOUT), [1, T, k])  # dispatch + reduce ids
         ttnn.deallocate(idx_u16)
@@ -1136,8 +1157,9 @@ class TtRoutedExperts(LightweightModule):
         incl = ttnn.cumsum(aligned, dim=-1)
         offsets_f = ttnn.subtract(incl, aligned)  # [1,1,1,E] exclusive, tile-aligned
         # region rows = every pick + up to 31 alignment rows per local expert, rounded up to a tile multiple (the
-        # kernel wants x_shape[-2] % 32 == 0; decode with 2 gathered tokens x 72 local experts gave 2320)
-        max_buf = self.dispatch_max_tokens or (-(-(T * k + E_loc * TILE) // TILE) * TILE)
+        # kernel wants x_shape[-2] % 32 == 0; decode with 2 gathered tokens x 72 local experts gave 2320); the caller's
+        # max_buf (REGIONS_BUF=fit) wins -- e897fb93841 put this override in the dispatch path instead (G53F-0183)
+        max_buf = max_buf or self.dispatch_max_tokens or (-(-(T * k + E_loc * TILE) // TILE) * TILE)
         # pos[t, e] = offsets[e] + rank[t, e] - 1 at the local picks; the non-local picks go to the dummy slot
         # max_buf - 1, which no region reaches (the tile-aligned regions total at most T*k + E_loc*31 rows), so
         # they never overwrite a region row (slot 0 is the first row of the first local expert's region)
@@ -1182,21 +1204,31 @@ class TtRoutedExperts(LightweightModule):
         ttnn.deallocate(out)
         y_rm = ttnn.to_layout(out16, ttnn.ROW_MAJOR_LAYOUT)  # the gather table [max_buf, H] bf16 rows
         ttnn.deallocate(out16)
-        comb = self._gather_rows(pos_rm, y_rm)  # [1, T*k, H]: every pick's output row
-        ttnn.deallocate(y_rm)
-        ttnn.deallocate(pos_rm)
-        comb5 = ttnn.reshape(comb, [1, 1, T, k, H])
         w_loc = ttnn.multiply(w, loc_tk)  # the routing weights, 0 at the non-local picks (their rows are garbage)
         ttnn.deallocate(loc_tk)
         w16 = ttnn.typecast(w_loc, ttnn.bfloat16)
         w_rm = ttnn.unsqueeze(ttnn.to_layout(w16, ttnn.ROW_MAJOR_LAYOUT), -1)  # [1,1,T,k,1]
         ttnn.deallocate(w_loc)
         ttnn.deallocate(w16)
-        y = ttnn.experimental.deepseek_prefill.post_combine_reduce(
-            comb5, w_rm, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )  # [1,1,T,H] TILE: sum over the picks, zero weights skipped
+        _regions_stat(max_buf, REGIONS_COMBINE)
+        if REGIONS_COMBINE == "fused":  # G53F-0190: the same reduce reading table[pos] directly, local rows only
+            if self._gather_combine is None:
+                from models.demos.glm53_flash.custom_ops.gather_combine_reduce.op import GatherCombineReduce
+
+                self._gather_combine = GatherCombineReduce(self.device)
+            y = self._gather_combine(y_rm, pos_rm, w_rm)  # [1,1,T,H] TILE, bit-identical to the two ops below
+            comb = None
+        else:
+            comb = self._gather_rows(pos_rm, y_rm)  # [1, T*k, H]: every pick's output row
+            comb5 = ttnn.reshape(comb, [1, 1, T, k, H])
+            y = ttnn.experimental.deepseek_prefill.post_combine_reduce(
+                comb5, w_rm, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )  # [1,1,T,H] TILE: sum over the picks, zero weights skipped
+        ttnn.deallocate(y_rm)
+        ttnn.deallocate(pos_rm)
         for t in (comb, w_rm, counts, offsets):
-            ttnn.deallocate(t)
+            if t is not None:
+                ttnn.deallocate(t)
         if y.dtype != self.activation_dtype:
             y = ttnn.typecast(y, self.activation_dtype)
         for t in padded:
