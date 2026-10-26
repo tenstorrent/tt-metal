@@ -5,23 +5,15 @@
 #pragma once
 
 #include "metal/common/const_utils.hpp"
+#include "metal/ops/sdpa_fw/device/sdpa_fw_program_factory.hpp"
 #include "metal/ttnn_all_includes.hpp"
 #include "ring_sdpa_fw_device_operation_types.hpp"
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
-// Forward Program Factory
-struct RingSDPAFwSharedVariables {
-    // SDPA kernel handles for runtime argument updates
-    tt::tt_metal::KernelHandle sdpa_fw_reader_kernel{};
-    tt::tt_metal::KernelHandle sdpa_fw_writer_kernel{};
-    tt::tt_metal::KernelHandle sdpa_fw_compute_kernel{};
-    uint32_t num_cores{};
-    uint32_t num_cores_y{};
-};
-
+// Forward Program Factory: one SDPA forward program per device, so the SDPA shared variables are reused.
 struct RingSDPAFwProgramFactory {
-    using shared_variables_t = RingSDPAFwSharedVariables;
+    using shared_variables_t = sdpa_fw::device::SDPAForwardProgramFactory::shared_variables_t;
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
     static cached_mesh_workload_t create_mesh_workload(
