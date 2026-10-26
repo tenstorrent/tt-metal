@@ -56,8 +56,8 @@
   skus:
     bh_quietbox_2:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
   team: scaleout
   budget_type: sanity
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar

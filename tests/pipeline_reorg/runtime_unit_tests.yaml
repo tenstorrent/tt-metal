@@ -271,8 +271,8 @@
       timeout: 20
     bh_p150b_civ2:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_p100a_civ2_viommu:
       timeout: 15
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -289,8 +289,8 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 8
-    bh_p300:
-      timeout: 10
+    # bh_p300:
+    #   timeout: 10
     bh_p100a_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -315,8 +315,8 @@
       timeout: 17
     bh_p150b_civ2:
       timeout: 17
-    bh_p300:
-      timeout: 17
+    # bh_p300:
+    #   timeout: 17
     bh_p100a_civ2_viommu:
       timeout: 17
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -333,8 +333,8 @@
       timeout: 5
     bh_p150b_civ2:
       timeout: 5
-    bh_p300:
-      timeout: 5
+    # bh_p300:
+    #   timeout: 5
     bh_p100a_civ2_viommu:
       timeout: 5
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
@@ -351,8 +351,8 @@
       timeout: 10
     bh_p150b_civ2:
       timeout: 10
-    bh_p300:
-      timeout: 10
+    # bh_p300:
+    #   timeout: 10
     bh_p100a_civ2_viommu:
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
