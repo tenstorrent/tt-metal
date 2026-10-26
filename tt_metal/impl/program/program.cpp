@@ -582,6 +582,9 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
             is_file
                 ? CreateKernel(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config)
                 : CreateKernelFromString(*this, kernel_descriptor.kernel_source, kernel_descriptor.core_ranges, config);
+        if (!kernel_descriptor.cb_table_core_ranges.empty()) {
+            internal_->get_kernel(kernel_handle)->set_cb_table_core_ranges(kernel_descriptor.cb_table_core_ranges);
+        }
 
         ////////////////////////////////////////////////////////////
         // Blaze-only experimental named args
@@ -2824,8 +2827,10 @@ void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<
 }
 
 void detail::ProgramImpl::set_cb_data_fmt_and_tile(
-    const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const {
+    const std::vector<CoreRange>& crs, JitBuildOptions& build_options, bool one_format_per_index) const {
     TTZoneScopedD(PROGRAM);
+    // With one_format_per_index, the first format, tile and face geometry seen for each CB index.
+    std::map<uint32_t, std::tuple<DataFormat, std::optional<Tile>, std::optional<FaceGeometry>>> formats;
     for (const auto& logical_cr : crs) {
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
@@ -2834,6 +2839,14 @@ void detail::ProgramImpl::set_cb_data_fmt_and_tile(
                 const DataFormat data_format = circular_buffer->data_format(buffer_index);
                 const auto& tile_opt = circular_buffer->tile(buffer_index);
                 const auto& unpack_geom = circular_buffer->unpack_face_geometry(buffer_index);
+                if (one_format_per_index) {
+                    const auto [it, added] = formats.try_emplace(buffer_index, data_format, tile_opt, unpack_geom);
+                    TT_FATAL(
+                        added || it->second == std::tie(data_format, tile_opt, unpack_geom),
+                        "CB index {} has more than one data format, tile or face geometry on the cores of a kernel's "
+                        "CB table",
+                        buffer_index);
+                }
                 build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
             }
         }
@@ -3254,7 +3267,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         if (this->compiled_.empty()) {
             this->set_remote_circular_buffer_init(kernel);
         }
-        this->set_cb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
+        this->set_cb_data_fmt_and_tile(
+            kernel->cb_table_coreranges(), build_options, !kernel->cb_table_core_ranges().empty());
         this->set_dfb_data_fmt_and_tile(kernel->logical_coreranges(), build_options);
 
         // Blackhole and Quasar: Fp8_e4m3 / Lf8 dataformats require fp32_dest_acc_en=true in the associated

@@ -2,6 +2,7 @@
 # Module owners should update this file when adding/removing/renaming source files
 
 set(UNIT_TESTS_JIT_BUILD_SRC
+    test_cb_table_core_ranges.cpp
     test_compile_stress.cpp
     test_compiler_version.cpp
     test_depend.cpp

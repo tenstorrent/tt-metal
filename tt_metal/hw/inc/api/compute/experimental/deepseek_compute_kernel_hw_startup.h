@@ -56,15 +56,21 @@ constexpr std::uint32_t deepseek_first_present_cb() {
     return DEEPSEEK_NO_PRESENT_CB;
 }
 
-template <int N = 0>
-ALWI void deepseek_compute_kernel_init_present() {
-    constexpr std::uint32_t seed = deepseek_first_present_cb<N>();
+// The same, seeded from the given CB (DEEPSEEK_NO_PRESENT_CB skips it): for a kernel whose CB table also lists
+// CBs of other cores (KernelDescriptor::cb_table_core_ranges), so the first one present may not be on this core.
+template <std::uint32_t seed>
+ALWI void deepseek_compute_kernel_init_seeded() {
     if constexpr (seed != DEEPSEEK_NO_PRESENT_CB) {
         MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
         PACK(ckernel::t6_semaphore_init(ckernel::SFPU_FPU, 0, 1));
         compute_kernel_hw_startup(seed, seed, seed);
         MATH((llk_math_reconfig_remap(true)));
     }
+}
+
+template <int N = 0>
+ALWI void deepseek_compute_kernel_init_present() {
+    deepseek_compute_kernel_init_seeded<deepseek_first_present_cb<N>()>();
 }
 #endif
 

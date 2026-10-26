@@ -240,6 +240,12 @@ public:
 
     std::vector<CoreRange> logical_coreranges() const;
 
+    // KernelDescriptor::cb_table_core_ranges; empty when the kernel's CB tables list its own cores.
+    const CoreRangeSet& cb_table_core_ranges() const { return cb_table_core_ranges_; }
+    void set_cb_table_core_ranges(const CoreRangeSet& core_ranges) { cb_table_core_ranges_ = core_ranges; }
+    // The cores whose CBs the kernel's CB tables list.
+    std::vector<CoreRange> cb_table_coreranges() const;
+
     bool is_on_logical_core(const CoreCoord& logical_core) const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
@@ -445,6 +451,7 @@ protected:
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
     CoreRangeSet core_range_set_;
+    CoreRangeSet cb_table_core_ranges_;
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
     // Metal 2.0-only members below. is_metal2_kernel_ leads the group; the others are

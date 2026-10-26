@@ -168,6 +168,11 @@ struct KernelDescriptor {
     IncludePaths compiler_include_paths;
     // See DataMovementConfig::precompiled_header.
     std::filesystem::path precompiled_header;
+    // Cores whose CBs the kernel's compile-time CB tables (chlkc_descriptors.h) list; empty means the kernel's own
+    // cores. Kernels of one source on different cores that name the same cores get the same tables, so a CB that only
+    // some of them have doesn't give each its own build. Each CB index must have one data format, tile and face
+    // geometry on these cores.
+    CoreRangeSet cb_table_core_ranges;
 
     // Buffer/MeshTensor args declared via emplace_runtime_args() / emplace_common_runtime_args().
     // The framework resolves these to direct pointers into the cached Program on cache miss,

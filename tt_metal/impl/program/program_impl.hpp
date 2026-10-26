@@ -830,7 +830,9 @@ private:
 
     // Set data format and tile metadata in `build_options` for every circular buffer
     // intersecting `crs`.
-    void set_cb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
+    // With one_format_per_index, a CB index set to two data formats or tiles on `crs` is an error.
+    void set_cb_data_fmt_and_tile(
+        const std::vector<CoreRange>& crs, JitBuildOptions& build_options, bool one_format_per_index = false) const;
 
     // Same as `set_cb_data_fmt_and_tile`, but for dataflow buffers.
     void set_dfb_data_fmt_and_tile(const std::vector<CoreRange>& crs, JitBuildOptions& build_options) const;
