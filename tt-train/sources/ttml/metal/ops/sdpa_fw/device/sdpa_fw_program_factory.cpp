@@ -587,15 +587,15 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         vWt,            // num tile in inner dim in value (d_v/TILE_W)
         St,             // num_seq_len / TILE_H
         scaler,         // 1/sqrt(d) softmax scale, fp32 bits
+        scaler_bf16,    // BF16 (RNE) scale for the WH fused scale+exp path
         minus_one,      // used to transform mask from 1/0 to 0/-1
         custom_inf,     // used to transform mask from 0/-1 to 0/-1e9F
-        Sk_chunk_t,     // K/V tiles per inner-loop step
-        pv_block_w,     // V feature tiles per PV matmul_block call
-        scaler_bf16,    // BF16 (RNE) scale for the WH fused scale+exp path
         Sq_chunk_t,     // query tile-rows per Q chunk
+        Sk_chunk_t,     // K/V tiles per inner-loop step
         qk_block_h,     // Q rows per QK^T matmul_block call
         qk_block_w,     // K tiles per QK^T matmul_block call
         pv_block_h,     // Q rows per PV matmul_block call
+        pv_block_w,     // V feature tiles per PV matmul_block call
         sm_block_size,  // score tiles of one row per DST pass in the exp step
     };
     kernels.compute = tt::tt_metal::CreateKernel(
