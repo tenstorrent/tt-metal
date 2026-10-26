@@ -208,43 +208,8 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
         reconfig_data_format(cb_query, cb_key);
         pack_reconfig_data_format(cb_attention_weights);
 
-#ifdef USE_ATTN_MASK
-        // Arbitrary mask: one score tile at a time, mask applied while it is still in DST.
-        constexpr uint32_t matmul_accum_reg = 0U;
-        cb_wait_front(cb_attn_mask, mask_tiles);
-        cb_reserve_back(cb_attention_weights, score_tiles);
-        for (uint32_t r = 0; r < rows; ++r) {
-            for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-                // apply_mask_on_reg's SFPU inits clobber the FPU matmul state: re-init per tile.
-                matmul_init(cb_query, cb_key, /* transpose */ 1);
-                tile_regs_acquire();
-                for (uint32_t tile_idx = 0; tile_idx < qWt; ++tile_idx) {
-                    matmul_tiles(
-                        cb_query,
-                        cb_key,
-                        /* Q tile */ r * qWt + tile_idx,
-                        /* K tile, col-major */
-                        tile_idx * Sk_chunk_t + n,
-                        /* dst */ matmul_accum_reg);
-                }
-                apply_mask_on_reg(
-                    matmul_accum_reg,
-                    cb_attn_mask,
-                    minus_one_bits,
-                    custom_inf_bits,
-                    /* mask_tile_idx */ (r % Sq_chunk_t) * Sk_chunk_t + n);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile</* out_of_order */ true>(
-                    matmul_accum_reg, cb_attention_weights, /* offset */ r * Sk_chunk_t + n);
-                tile_regs_release();
-            }
-        }
-        cb_push_back(cb_attention_weights, score_tiles);
-        cb_pop_front(cb_attn_mask, mask_tiles);
-#else
         // S = Q @ K^T, one qk_block_h x qk_block_w rectangle of score tiles per DST pass, packed to its
-        // row-major slot. For a causal mask, the mask is added afterwards by the packer (see below).
+        // row-major slot. A mask is added afterwards by the packer (see below).
         matmul_block_init(
             cb_query,
             cb_key,
@@ -321,6 +286,39 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
             cb_push_back(cb_attention_weights, score_tiles);
         }
 #endif
+#ifdef USE_ATTN_MASK
+        // Arbitrary mask: the step's Sq_chunk_t x Sk_chunk_t mask tiles (1 keep / 0 drop) become 0 / -1e9 in
+        // DST and are added onto the scores in L1 by the packer with L1-accumulate, like the causal stamp.
+        // The stacked heads share the mask, so each DST tile is stamped onto every head's row.
+        cb_wait_front(cb_attn_mask, mask_tiles);
+        cb_wait_front(cb_attention_weights, score_tiles);
+        cb_pop_front(cb_attention_weights, score_tiles);
+        cb_reserve_back(cb_attention_weights, score_tiles);
+        copy_init(cb_attn_mask);
+        for (uint32_t t0 = 0; t0 < mask_tiles; t0 += sm_block_size) {
+            const uint32_t n = (mask_tiles - t0 < sm_block_size) ? (mask_tiles - t0) : sm_block_size;
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < n; ++i) {
+                copy_tile(cb_attn_mask, /* tile_idx */ t0 + i, /* dst */ i);
+            }
+            binop_with_scalar_tile_init();
+            for (uint32_t i = 0; i < n; ++i) {
+                add_unary_tile(i, minus_one_bits);   // 1/0 -> 0/-1
+                mul_unary_tile(i, custom_inf_bits);  // 0/-1 -> 0/-1e9
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_l1_acc(1);
+            for (uint32_t i = 0; i < n; ++i) {
+                for (uint32_t h = 0; h < heads_per_item; ++h) {
+                    pack_tile</* out_of_order */ true>(i, cb_attention_weights, /* offset */ h * mask_tiles + t0 + i);
+                }
+            }
+            pack_reconfig_l1_acc(0);
+            tile_regs_release();
+        }
+        cb_push_back(cb_attention_weights, score_tiles);
+        cb_pop_front(cb_attn_mask, mask_tiles);
 #endif
 
         cb_pop_front(cb_key, k_tiles);
