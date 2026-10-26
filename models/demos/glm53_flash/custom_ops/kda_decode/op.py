@@ -10,6 +10,19 @@ per-head L2 norms, the per-key-channel forget gate ``g = lb * sigmoid(exp(A_log)
 in place) and the gated RMSNorm ``rmsnorm(o) * w * sigmoid(og)``, packed as bf16 TILE output. Work items
 are (head, 32-user tile row, user part); the parts of a (head, row) slot sit in one column of cores: the
 part-0 core reads the slot's inputs once and multicasts them, and sums the parts' output rows for the norm.
+
+Options (``tt/kda.py`` reads them from ``GLM53_KDA_DECODE_*``; every default is the path above). With every option at
+its default the op runs today's kernels (``kernels/{reader,writer,compute}_kda_decode.cpp``) with today's argument
+layouts, byte for byte; any non-default option selects the variant kernels ``reader_kda_decode_v2.cpp`` /
+``compute_kda_decode_v2.cpp`` (compile-time arg 11 ``GATES_ACT``, reader runtime args 15..19 for the second multicast
+column) so a process that imported an older ``op.py`` keeps compiling the unchanged default sources:
+
+* ``gates="act"``: the ``gates`` input already holds ``[sigmoid(a (f + dt)) | sigmoid(og) | sigmoid(b)]`` (the
+  channel constants folded into the g2 projection by ``prearrange_gate_weights`` and the sigmoid fused into that
+  matmul); the program then only forms ``exp(lb * s)`` and ``s_og * w`` and never reads ``chan_consts``.
+* ``placement="rect"``: a slot's parts are a 2-column rectangle (``2 x h`` cores, the part-0 core top-left,
+  multicast as two single-column rectangles) when that gives more parts than the column layout (16 slots on a
+  12x10 grid: 6 parts / 96 cores instead of 5 / 80, i.e. 6 users per part at B = 32 instead of 7).
 """
 
 from __future__ import annotations
@@ -24,6 +37,8 @@ from models.demos.glm53_flash.custom_ops.core_ranges import rect_core_ranges
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
+GATES_MODES = ("pre", "act")
+PLACEMENTS = ("col", "rect")
 
 
 def f32_bits(v: float) -> int:
@@ -53,6 +68,22 @@ def kda_selector_tiles() -> torch.Tensor:
 ONES_PAGE = 32  # selector page of the all-ones tile (identity at 33)
 
 
+def prearrange_gate_weights(
+    w_g2: torch.Tensor, a_exp: torch.Tensor, dt_bias: torch.Tensor, hk: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """The ``gates="act"`` pre-arrangement of one chip's g2 block ``w_g2 [d, N]`` (columns ``[f_b | g_b | I]``, the
+    first ``hk`` = this chip's key channels): ``a (f + dt) = (a w)^T g1 + a dt`` per key channel, so the f columns
+    are scaled by ``a_exp [hk]`` and a bias row ``[a dt_bias | 0 ...] [N]`` is added before the fused sigmoid.
+    Both returned in fp32 (``w`` exact up to fp32 products; the caller rounds ``w`` to the matmul dtype)."""
+    w = w_g2.float().clone()
+    assert a_exp.numel() == hk and dt_bias.numel() == hk and w.shape[1] >= hk, (w.shape, a_exp.shape, hk)
+    a, dt = a_exp.float().reshape(-1), dt_bias.float().reshape(-1)
+    w[:, :hk] = w[:, :hk] * a[None, :]
+    bias = torch.zeros(w.shape[1], dtype=torch.float32)
+    bias[:hk] = a * dt
+    return w, bias
+
+
 class KdaDecode:
     """Builds and launches the fused KDA decode program. All tensors interleaved (DRAM or L1); K = V = 128,
     conv kernel 4 (3 history taps). Call ``__call__`` with a pre-allocated output."""
@@ -66,6 +97,18 @@ class KdaDecode:
     # per-core semaphores: parts -> part-0 "ready", part-0 -> parts "valid" (multicast of the constant "one"),
     # parts -> part-0 "gather" (output blocks delivered)
     SEM_READY, SEM_VALID, SEM_ONE, SEM_GATHER = 0, 1, 2, 3
+    # runtime-arg layout (indices; the kernels read the same): the v1 (default) reader takes the first 15 entries,
+    # the v2 reader all 20
+    READER_RT = dict(
+        item0=0, n_items=1, stride=2, qkv=3, hist=4, taps=5, gates=6, cc=7, onw=8, sel=9, st=10, p0_x=11, p0_y=12,
+        pe_x=13, pe_y=14, rb_x0=15, rb_y0=16, rb_x1=17, rb_y1=18, n_b=19,
+    )  # fmt: skip
+    READER_RT_LEN = {"v1": 15, "v2": 20}
+    # compile-time scalar counts before the accessor block (reader) / in total (compute) per variant
+    READER_CT_SCALARS = {"v1": 11, "v2": 12}
+    COMPUTE_CT_LEN = {"v1": 11, "v2": 12}
+    WRITER_RT = dict(item0=0, n_items=1, stride=2, out=3, st=4, p0_x=5, p0_y=6)
+    COMPUTE_RT = dict(item0=0, n_items=1, stride=2)
 
     def __init__(
         self,
@@ -76,12 +119,31 @@ class KdaDecode:
         l2_eps: float = 1e-6,
         norm_eps: float = 1e-5,
         math_fidelity=ttnn.MathFidelity.HiFi4,
+        gates: str = "pre",
+        placement: str = "col",
     ):
         self.H, self.K = num_heads, head_dim
         self.V = head_dim
         assert head_dim == 128, "the kernels are written for K = V = 128"
+        assert gates in GATES_MODES and placement in PLACEMENTS, (gates, placement)
         self.lb, self.l2_eps, self.norm_eps = gate_lower_bound, l2_eps, norm_eps
         self.fidelity = math_fidelity
+        self.gates, self.placement_mode = gates, placement
+
+    @property
+    def gates_activated(self) -> bool:
+        return self.gates == "act"
+
+    @property
+    def variant(self) -> str:
+        """``"v1"``: every option at its default -> today's kernel sources and argument layouts; ``"v2"``: the knob
+        variant sources (``*_v2.cpp``) with compile-time arg 11 ``GATES_ACT`` and the reader's runtime args 15..19."""
+        return "v1" if (self.gates == "pre" and self.placement_mode == "col") else "v2"
+
+    def kernel_sources(self) -> tuple[str, str, str]:
+        """``(reader, writer, compute)`` kernel file names of this variant (the writer is shared)."""
+        sfx = "" if self.variant == "v1" else "_v2"
+        return f"reader_kda_decode{sfx}.cpp", "writer_kda_decode.cpp", f"compute_kda_decode{sfx}.cpp"
 
     # ------------------------------------------------------------------ reference
     @staticmethod
@@ -99,9 +161,12 @@ class KdaDecode:
         gate_lower_bound=-5.0,
         l2_eps=1e-6,
         norm_eps=1e-5,
+        gates_activated: bool = False,
     ):
         """Torch reference of one step. qkv [B, 3*H*K] (bf16-valued), gates [B, H*K + H*V + Hb] fp32, conv [B, 3, 3*H*K],
-        S [B, H, K, V], taps [4, 3*H*K], dt_bias / a_exp [H*K], onw [V]. Returns (o [B, H*V], new state, new conv)."""
+        S [B, H, K, V], taps [4, 3*H*K], dt_bias / a_exp [H*K], onw [V]. Returns (o [B, H*V], new state, new conv).
+        ``gates_activated``: ``gates`` already holds ``[sigmoid(a (f + dt)) | sigmoid(og) | sigmoid(b)]`` (the
+        ``gates="act"`` contract; ``dt_bias`` / ``a_exp`` are then ignored)."""
         B, H = qkv.shape[0], num_heads
         K = V = taps.shape[-1] // (3 * H)
         rows = torch.cat([conv, qkv[:, None, :]], dim=1)  # [B, 4, W], oldest first
@@ -113,9 +178,13 @@ class KdaDecode:
         f = gates[:, : H * K]
         og = gates[:, H * K : H * K + H * V].reshape(B, H, V)
         b = gates[:, H * K + H * V : H * K + H * V + H]
-        decay = torch.exp(gate_lower_bound * torch.sigmoid(a_exp * (f + dt_bias))).reshape(B, H, K)
-        beta = torch.sigmoid(b)
-        gate = torch.sigmoid(og)
+        if gates_activated:
+            decay = torch.exp(gate_lower_bound * f).reshape(B, H, K)
+            beta, gate = b, og
+        else:
+            decay = torch.exp(gate_lower_bound * torch.sigmoid(a_exp * (f + dt_bias))).reshape(B, H, K)
+            beta = torch.sigmoid(b)
+            gate = torch.sigmoid(og)
         Sd = S * decay[..., None]
         vread = (Sd * k[..., None]).sum(-2)
         u = beta[..., None] * (v - vread)
@@ -125,9 +194,17 @@ class KdaDecode:
         new_conv = torch.cat([conv[:, 1:], qkv[:, None, :]], dim=1)
         return o.reshape(B, H * V), Sn, new_conv
 
-    # ------------------------------------------------------------------ program
     @staticmethod
-    def placement(grid, slots: int):
+    def activate_gates(gates: torch.Tensor, dt_bias: torch.Tensor, a_exp: torch.Tensor, hk: int) -> torch.Tensor:
+        """The ``gates="pre"`` -> ``"act"`` input map in fp32 (what the pre-arranged g2 matmul + fused sigmoid
+        produce): ``[sigmoid(a (f + dt)) | sigmoid(og) | sigmoid(b)]``."""
+        g = gates.float().clone()
+        g[..., :hk] = a_exp * (g[..., :hk] + dt_bias)
+        return torch.sigmoid(g)
+
+    # ------------------------------------------------------------------ placement
+    @staticmethod
+    def placement_col(grid, slots: int):
         """Cores for ``slots`` (head, tile row) items: ``parts`` cores per slot, a vertical run in one column
         (NoC multicast rectangle); the largest ``parts`` that fits, else one core per item round-robin."""
         gx, gy = grid.x, grid.y
@@ -146,6 +223,124 @@ class KdaDecode:
             cores += [ttnn.CoreCoord(x, y0 + p) for p in range(parts)]
         return parts, cores
 
+    @staticmethod
+    def placement_rect(grid, slots: int):
+        """``2 x h`` rectangles per slot (parts ``0 .. h-1`` down the left column from the part-0 core, ``h .. 2h-1``
+        down the right column), the largest ``h`` whose ``(gx // 2) * (gy // h)`` rectangles cover ``slots``.
+        Returns ``(parts, cores, h)`` or ``None`` when no rectangle layout fits (``parts >= 2`` needed)."""
+        gx, gy = grid.x, grid.y
+        per_row = gx // 2
+        for h in range(min(TILE // 2, gy), 0, -1):
+            if per_row * (gy // h) >= slots:
+                cores = []
+                for s in range(slots):
+                    x0, y0 = 2 * (s % per_row), h * (s // per_row)
+                    cores += [ttnn.CoreCoord(x0, y0 + p) for p in range(h)]
+                    cores += [ttnn.CoreCoord(x0 + 1, y0 + p) for p in range(h)]
+                return 2 * h, cores, h
+        return None
+
+    @classmethod
+    def placement(cls, grid, slots: int, mode: str = "col"):
+        """``(parts, cores, rect_h)``: the column layout, or (``mode="rect"``) the rectangle layout when it hands every
+        slot more parts than the column layout; ``rect_h = 0`` for a column layout (no second multicast column)."""
+        parts, cores = cls.placement_col(grid, slots)
+        if mode == "rect":
+            rect = cls.placement_rect(grid, slots)
+            if rect is not None and rect[0] > parts:
+                return rect
+        return parts, cores, 0
+
+    @staticmethod
+    def slot_geometry(core_of, parts: int, rect_h: int, s: int):
+        """Logical cores of slot ``s``: ``(p0, pe, rb0, rb1)`` = the part-0 core, the last core of its column (the
+        first multicast rectangle is ``p0 + 1 .. pe`` down that column), and the second column's top / bottom
+        (``None`` for a column layout)."""
+        base = s * parts
+        p0 = core_of[base]
+        if rect_h:
+            pe = core_of[base + rect_h - 1]
+            rb0, rb1 = core_of[base + rect_h], core_of[base + 2 * rect_h - 1]
+        else:
+            pe = core_of[base + parts - 1]
+            rb0 = rb1 = None
+        return p0, pe, rb0, rb1
+
+    @staticmethod
+    def item_of(core_index: int, parts: int, Bt: int):
+        """The kernels' decode of work item ``core_index`` (one item per core when ``parts > 1``):
+        ``(head, tile row, part)``."""
+        h = core_index // (Bt * parts)
+        rem = core_index % (Bt * parts)
+        return h, rem // parts, rem % parts
+
+    # ------------------------------------------------------------------ program arguments (pure: host-testable)
+    def compile_time_args(self, B: int, parts: int, reader_acc: list, writer_acc: list):
+        """``(reader, writer, compute)`` compile-time vectors; ``reader_acc`` = the concatenated
+        ``TensorAccessorArgs`` words of (qkv, conv_hist, taps, gates, chan_consts, o_norm_w, selectors, recurrent),
+        ``writer_acc`` of (out, recurrent)."""
+        H, K, V = self.H, self.K, self.V
+        Kt, Vt = K // TILE, V // TILE
+        Bt = -(-B // TILE)
+        HK_t, HV_t = H * Kt, H * Vt
+        Wq_t, Wg_t = 3 * HK_t, HK_t + HV_t + (-(-H // TILE))
+        it_half = max(2, -(-min(B, 16) // 2))  # SFPU iterations per face (2 rows each) for tile rows with <= 16 users
+        compute = [Kt, Vt, Bt, B, parts, f32_bits(self.lb), f32_bits(self.l2_eps), f32_bits(self.norm_eps),
+                   f32_bits(K**-0.5), f32_bits(1.0 / V), it_half]  # fmt: skip
+        reader = [Kt, Vt, Bt, B, H, Wq_t, Wg_t, HK_t, HV_t, parts, ONES_PAGE]
+        if self.variant == "v2":  # the variant kernels read GATES_ACT at index 11 (reader accessors from 12)
+            act = 1 if self.gates_activated else 0
+            compute.append(act)
+            reader.append(act)
+        reader += list(reader_acc)
+        writer = [Kt, Vt, Bt, B, H, parts, HV_t] + list(writer_acc)
+        return reader, writer, compute
+
+    def runtime_args_for_core(self, c: int, n_items: int, NC: int, addrs: dict, noc, core_of, parts: int, rect_h: int):
+        """``(reader, writer, compute)`` runtime vectors of core ``c``; ``addrs`` = buffer addresses keyed as
+        ``READER_RT`` / ``WRITER_RT`` name them, ``noc(core) -> (x, y)`` the NoC coordinates of a logical core.
+        The v1 reader vector is today's 15 entries; the v2 one appends the second multicast column (5 entries)."""
+        s = c // parts
+        p0, pe, rb0, rb1 = self.slot_geometry(core_of, parts, rect_h, s)
+        p0x, p0y = noc(p0)
+        pex, pey = noc(pe)
+        reader = [
+            c, n_items, NC, addrs["qkv"], addrs["hist"], addrs["taps"], addrs["gates"], addrs["cc"], addrs["onw"],
+            addrs["sel"], addrs["st"], p0x, p0y, pex, pey,
+        ]  # fmt: skip
+        if self.variant == "v2":
+            if rb0 is not None:
+                bx0, by0 = noc(rb0)
+                bx1, by1 = noc(rb1)
+                reader += [bx0, by0, bx1, by1, rect_h]
+            else:
+                reader += [0, 0, 0, 0, 0]
+        else:
+            assert rect_h == 0, "the v1 kernels know no second multicast column"
+        writer = [c, n_items, NC, addrs["out"], addrs["st"], p0x, p0y]
+        compute = [c, n_items, NC]
+        return reader, writer, compute
+
+    def cb_plan(self, parts: int):
+        """``[(name, dtype, pages)]`` of the per-core circular buffers."""
+        Kt, Vt = self.K // TILE, self.V // TILE
+        kv = Kt * Vt
+        f32, f16 = ttnn.float32, ttnn.bfloat16
+        return [
+            ("hist", f16, 12 * Kt), ("taps", f16, 3 * Kt), ("gf", f32, Kt), ("gog", f32, Vt), ("gb", f32, 1),
+            ("cc", f32, Kt), ("onw", f32, Vt), ("sel", f16, 2), ("selT", f16, 2), ("S", f32, 2 * kv),
+            ("out", f16, Vt), ("state_out", f32, 2 * kv), ("qn", f32, Kt), ("kn", f32, Kt), ("vc", f32, Vt),
+            ("dec", f32, Kt), ("bcol", f32, 1), ("wg", f32, Vt), ("tmp", f32, 2 * Kt), ("col", f32, 2),
+            ("kd", f32, Kt), ("qd", f32, Kt), ("kcol", f32, Kt), ("decT", f32, Kt),
+            ("gather", f32, max(1, parts - 1) * Vt), ("dcol", f32, Kt), ("pq", f32, 4), ("vread", f32, Vt),
+            ("oq", f32, Vt), ("u", f32, Vt), ("oacc", f32, 2 * Vt), ("ofin", f32, Vt),
+        ]  # fmt: skip
+
+    def l1_bytes(self, parts: int) -> int:
+        t32, t16 = TILE * TILE * 4, TILE * TILE * 2
+        return sum((t32 if dt == ttnn.float32 else t16) * pages for _, dt, pages in self.cb_plan(parts))
+
+    # ------------------------------------------------------------------ program
     def _cb(self, idx, dtype, page, pages, cores):
         return ttnn.CBDescriptor(
             total_size=page * pages,
@@ -156,78 +351,69 @@ class KdaDecode:
     def __call__(self, qkv, gates, conv_hist, recurrent, taps, chan_consts, o_norm_w, selectors, out):
         """qkv [1,1,B,3*H*K] bf16 TILE; gates [1,1,B,H*K+H*V+Hb] fp32 TILE; conv_hist [3,B,3*H*K] bf16 TILE
         (tap-major history, tap 0 the oldest; updated in place); recurrent [B,H,K,V] fp32 TILE (updated in place);
-        taps [1,1,4,3*H*K] bf16 TILE; chan_consts [1,1,2,H*K] fp32 TILE (row 0 dt_bias, row 1 exp(A_log)); o_norm_w
-        [1,1,1,V] fp32 TILE; selectors [34*32,32] bf16 TILE (``kda_selector_tiles``); out [1,1,B,H*V] bf16 TILE
-        (pre-allocated). Returns ``out``."""
-        H, K, V = self.H, self.K, self.V
+        taps [1,1,4,3*H*K] bf16 TILE; chan_consts [1,1,2,H*K] fp32 TILE (row 0 dt_bias, row 1 exp(A_log); not read
+        with ``gates="act"``); o_norm_w [1,1,1,V] fp32 TILE; selectors [34*32,32] bf16 TILE (``kda_selector_tiles``);
+        out [1,1,B,H*V] bf16 TILE (pre-allocated). Returns ``out``."""
+        H = self.H
         B = recurrent.shape[0]
-        Kt, Vt = K // TILE, V // TILE
         Bt = -(-B // TILE)
-        HK_t, HV_t = H * Kt, H * Vt
-        Wq_t, Wg_t = 3 * HK_t, HK_t + HV_t + (-(-H // TILE))
-        kv = Kt * Vt
         device = qkv.device()
         grid = device.compute_with_storage_grid_size()
-        parts, core_of = self.placement(grid, H * Bt)
+        parts, core_of, rect_h = self.placement(grid, H * Bt, self.placement_mode)
         NI = H * Bt * parts
         NC = len(core_of)
-        cores = rect_core_ranges(core_of)  # 1-2 rectangles instead of one range per core: < 1 us of dispatch
+        cores = rect_core_ranges(core_of)  # 1-3 rectangles instead of one range per core: < 1 us of dispatch
 
-        f32, f16 = ttnn.float32, ttnn.bfloat16
         t32, t16 = TILE * TILE * 4, TILE * TILE * 2
         cb = self.CB
-        plan = [
-            ("hist", f16, 12 * Kt), ("taps", f16, 3 * Kt), ("gf", f32, Kt), ("gog", f32, Vt), ("gb", f32, 1),
-            ("cc", f32, Kt), ("onw", f32, Vt), ("sel", f16, 2), ("selT", f16, 2), ("S", f32, 2 * kv),
-            ("out", f16, Vt), ("state_out", f32, 2 * kv), ("qn", f32, Kt), ("kn", f32, Kt), ("vc", f32, Vt),
-            ("dec", f32, Kt), ("bcol", f32, 1), ("wg", f32, Vt), ("tmp", f32, 2 * Kt), ("col", f32, 2),
-            ("kd", f32, Kt), ("qd", f32, Kt), ("kcol", f32, Kt), ("decT", f32, Kt),
-            ("gather", f32, max(1, parts - 1) * Vt), ("dcol", f32, Kt), ("pq", f32, 4), ("vread", f32, Vt),
-            ("oq", f32, Vt), ("u", f32, Vt), ("oacc", f32, 2 * Vt), ("ofin", f32, Vt),
-        ]  # fmt: skip
-        cbs = [self._cb(cb[name], dt, t32 if dt == f32 else t16, pages, cores) for name, dt, pages in plan]
+        cbs = [
+            self._cb(cb[name], dt, t32 if dt == ttnn.float32 else t16, pages, cores)
+            for name, dt, pages in self.cb_plan(parts)
+        ]
 
-        it_half = max(2, -(-min(B, 16) // 2))  # SFPU iterations per face (2 rows each) for tile rows with <= 16 users
-        compute_ct = [Kt, Vt, Bt, B, parts, f32_bits(self.lb), f32_bits(self.l2_eps), f32_bits(self.norm_eps),
-                      f32_bits(K**-0.5), f32_bits(1.0 / V), it_half]  # fmt: skip
-        reader_ct = [Kt, Vt, Bt, B, H, Wq_t, Wg_t, HK_t, HV_t, parts, ONES_PAGE]
+        reader_acc, writer_acc = [], []
         for t in (qkv, conv_hist, taps, gates, chan_consts, o_norm_w, selectors, recurrent):
-            reader_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        writer_ct = [Kt, Vt, Bt, B, H, parts, HV_t]
+            reader_acc += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         for t in (out, recurrent):
-            writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+            writer_acc += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        reader_ct, writer_ct, compute_ct = self.compile_time_args(B, parts, reader_acc, writer_acc)
+
+        addrs = dict(
+            qkv=qkv.buffer_address(), hist=conv_hist.buffer_address(), taps=taps.buffer_address(),
+            gates=gates.buffer_address(), cc=chan_consts.buffer_address(), onw=o_norm_w.buffer_address(),
+            sel=selectors.buffer_address(), st=recurrent.buffer_address(), out=out.buffer_address(),
+        )  # fmt: skip
+
+        def noc(core):
+            p = device.worker_core_from_logical_core(core)
+            return p.x, p.y
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for c, core in enumerate(core_of):
             n_items = (NI - c + NC - 1) // NC if parts == 1 else 1
-            s = c // parts
-            p0 = device.worker_core_from_logical_core(core_of[s * parts])
-            pe = device.worker_core_from_logical_core(core_of[s * parts + parts - 1])
-            reader_rt[core.x][core.y] = [
-                c, n_items, NC, qkv.buffer_address(), conv_hist.buffer_address(), taps.buffer_address(),
-                gates.buffer_address(), chan_consts.buffer_address(), o_norm_w.buffer_address(),
-                selectors.buffer_address(), recurrent.buffer_address(), p0.x, p0.y, pe.x, pe.y,
-            ]  # fmt: skip
-            writer_rt[core.x][core.y] = [c, n_items, NC, out.buffer_address(), recurrent.buffer_address(), p0.x, p0.y]
-            compute_rt[core.x][core.y] = [c, n_items, NC]
+            r, w, k = self.runtime_args_for_core(c, n_items, NC, addrs, noc, core_of, parts, rect_h)
+            reader_rt[core.x][core.y] = r
+            writer_rt[core.x][core.y] = w
+            compute_rt[core.x][core.y] = k
 
+        reader_src, writer_src, compute_src = self.kernel_sources()
         kernels = [
             ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "reader_kda_decode.cpp"),
+                kernel_source=str(KERNEL_DIR / reader_src),
                 core_ranges=cores,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "writer_kda_decode.cpp"),
+                kernel_source=str(KERNEL_DIR / writer_src),
                 core_ranges=cores,
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
                 config=ttnn.WriterConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "compute_kda_decode.cpp"),
+                kernel_source=str(KERNEL_DIR / compute_src),
                 core_ranges=cores,
                 compile_time_args=compute_ct,
                 runtime_args=compute_rt,

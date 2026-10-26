@@ -25,6 +25,20 @@ of ttKDA's row-major ``[B, kernel-1, Q+K+V]``: the program reads whole tiles and
 place; ``prefill_forward`` converts at its boundary and ``user_conv_state`` /
 ``write_user_conv_state`` / ``conv_history_torch`` / ``upload_conv_history`` serve the per-user
 prefill hand-offs and the tests.
+
+``kda_decode`` roofline knobs (``_agents/kda_roofline``; every default is the block path above, read once at
+construction so a captured trace bakes them in):
+
+* ``GLM53_KDA_DECODE_V2=1``: the bundle = ``GATES=act`` + ``PLACEMENT=rect``.
+* ``GLM53_KDA_DECODE_GATES=act``: the channel constants (``exp(A_log)``, ``dt_bias``) are folded into the second gate
+  matmul (``prearrange_gate_weights``: f columns scaled per head, an fp32 bias row ``a dt_bias``) and the sigmoid is
+  fused into that matmul, so ``g2 = [sigmoid(a (f + dt)) | sigmoid(og) | sigmoid(b)]`` and the program skips its
+  three sigmoid passes and the two channel-constant broadcasts (``KdaDecode(gates="act")``).
+* ``GLM53_KDA_DECODE_PLACEMENT=rect``: 2-column slot rectangles when they give more parts (96 cores / 6 parts for
+  16 local heads on a 12x10 grid instead of 80 / 5: 6 users per part at B = 32 instead of 7).
+* ``GLM53_KDA_DECODE_FIDELITY=hifi2``: the program's FPU fidelity (default HiFi4; the state matmuls' precision).
+* ``GLM53_KDA_MM_{QKV,G1,G2,O}=cx,cy,per_core_N,in0_block_w``: a 1D mcast program config for that projection
+  (the sweep table of ``tt/matmul_configs.py`` otherwise).
 """
 
 from __future__ import annotations
@@ -41,7 +55,13 @@ from models.demos.deepseek_v3_d_p.reference.kda.weights import normalize_kda_sta
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig, KDARecurrenceProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
-from models.demos.glm53_flash.custom_ops.kda_decode.op import KdaDecode, kda_selector_tiles
+from models.demos.glm53_flash.custom_ops.kda_decode.op import (
+    GATES_MODES,
+    PLACEMENTS,
+    KdaDecode,
+    kda_selector_tiles,
+    prearrange_gate_weights,
+)
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
@@ -50,6 +70,93 @@ L2_NORM_EPS = 1e-6  # FLA l2norm: x / sqrt(sum(x^2) + 1e-6)
 # decode path: "composite" (GLM53_KDA_FUSED=0) | "block" (GLM53_KDA_FUSED=1: one kda_decode program for the whole block)
 _FUSED_MODES = {"0": "composite", "1": "block", "composite": "composite", "block": "block"}
 KDA_FUSED_DEFAULT = _FUSED_MODES.get(os.environ.get("GLM53_KDA_FUSED", "1"), "block")  # block = design 8.1 (6 ops)
+KDA_DECODE_FIDELITIES = {"hifi4": ttnn.MathFidelity.HiFi4, "hifi2": ttnn.MathFidelity.HiFi2}
+KDA_MM_NAMES = ("QKV", "G1", "G2", "O")
+
+
+def kda_decode_options(env=None) -> dict:
+    """The ``kda_decode`` program options from the environment (``gates``, ``placement``, ``fidelity``):
+    ``GLM53_KDA_DECODE_V2=1`` selects the bundle (gates ``act`` + placement ``rect``), the per-option knobs
+    ``GLM53_KDA_DECODE_{GATES,PLACEMENT,FIDELITY}`` override it; unset = today's path."""
+    env = os.environ if env is None else env
+    v2 = env.get("GLM53_KDA_DECODE_V2", "0") == "1"
+    opts = dict(
+        gates=env.get("GLM53_KDA_DECODE_GATES", "act" if v2 else "pre").lower(),
+        placement=env.get("GLM53_KDA_DECODE_PLACEMENT", "rect" if v2 else "col").lower(),
+        fidelity=env.get("GLM53_KDA_DECODE_FIDELITY", "hifi4").lower(),
+    )
+    if opts["gates"] not in GATES_MODES:
+        raise ValueError(f"GLM53_KDA_DECODE_GATES={opts['gates']!r}: expected one of {GATES_MODES}")
+    if opts["placement"] not in PLACEMENTS:
+        raise ValueError(f"GLM53_KDA_DECODE_PLACEMENT={opts['placement']!r}: expected one of {PLACEMENTS}")
+    if opts["fidelity"] not in KDA_DECODE_FIDELITIES:
+        raise ValueError(
+            f"GLM53_KDA_DECODE_FIDELITY={opts['fidelity']!r}: expected one of {tuple(KDA_DECODE_FIDELITIES)}"
+        )
+    return opts
+
+
+def kda_mm_override(name: str, env=None) -> tuple[int, int, int, int] | None:
+    """``GLM53_KDA_MM_<NAME>=cx,cy,per_core_N,in0_block_w`` (NAME in ``KDA_MM_NAMES``) -> the tuple, else ``None``."""
+    env = os.environ if env is None else env
+    assert name in KDA_MM_NAMES, name
+    raw = env.get(f"GLM53_KDA_MM_{name}")
+    if not raw:
+        return None
+    vals = tuple(int(v) for v in raw.split(","))
+    if len(vals) != 4 or min(vals) < 1:
+        raise ValueError(f"GLM53_KDA_MM_{name}={raw!r}: expected cx,cy,per_core_N,in0_block_w (positive)")
+    return vals
+
+
+def mcast1d_config(cx: int, cy: int, pcn: int, ibw: int, activation=None):
+    """A 1D ``mcast_in0`` program config (the shape ``tt/matmul_configs.py`` builds) from the four knob values."""
+    sub_w = max(d for d in (1, 2, 4) if pcn % d == 0)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cx, cy),
+        in0_block_w=ibw,
+        out_subblock_h=1,
+        out_subblock_w=sub_w,
+        out_block_h=1,
+        out_block_w=pcn,
+        per_core_M=1,
+        per_core_N=pcn,
+        fuse_batch=True,
+        fused_activation=activation,
+        mcast_in0=True,
+    )
+
+
+class BiasedDecodeLinear(DecodeLinear):
+    """``DecodeLinear`` with a persistent bias (``[1, 1, 1, N]`` TILE) and the fused activation of its decode
+    config; the default dispatch (M > 32) applies the same activation as a composite."""
+
+    _ACT_NAMES = {ttnn.UnaryOpType.SIGMOID: "sigmoid"}
+
+    def __init__(self, device, weight: ttnn.Tensor, bias: ttnn.Tensor, activation=None):
+        super().__init__(device, weight, activation=activation)
+        self.bias = bias
+        self._act_name = self._ACT_NAMES.get(activation) if activation is not None else None
+
+    def __call__(self, x: ttnn.Tensor, **kw) -> ttnn.Tensor:
+        shape = x.shape
+        if len(shape) == 4 and shape[0] == 1 and shape[1] == 1 and shape[-2] <= 32 and "program_config" not in kw:
+            return ttnn.linear(x, self.w, bias=self.bias, program_config=self.config(), **kw)
+        return ttnn.linear(x, self.w, bias=self.bias, activation=self._act_name, **kw)
+
+
+def decode_linear_for(device, weight: ttnn.Tensor, name: str, *, activation=None, bias=None, env=None):
+    """``DecodeLinear`` (``BiasedDecodeLinear`` with ``bias``) of one projection whose program config honours the
+    ``GLM53_KDA_MM_<name>`` override when set (the cached config of ``DecodeLinear.config``)."""
+    lin = (
+        BiasedDecodeLinear(device, weight, bias, activation=activation)
+        if bias is not None
+        else DecodeLinear(device, weight, activation=activation)
+    )
+    override = kda_mm_override(name, env)
+    if override is not None:
+        lin._cfg = mcast1d_config(*override, activation=activation)
+    return lin
 
 
 def kda_config(cfg: GLM53FlashConfig) -> KDAConfig:
@@ -114,10 +221,12 @@ class TtKDA(LightweightModule):
         weight_dtype=ttnn.bfloat8_b,
         mesh: GLMMesh | None = None,
         fused_decode: str | bool | None = None,
+        decode_opts: dict | None = None,
     ):
         """``attn_state_dict``: the raw checkpoint tensors of ``self_attn.`` (prefix stripped).
         ``fused_decode``: "composite" | "block" (default: the ``GLM53_KDA_FUSED`` environment knob);
-        ``True`` means "block".
+        ``True`` means "block". ``decode_opts``: overrides of ``kda_decode_options()`` (``gates`` /
+        ``placement`` / ``fidelity`` of the block path's program; the environment otherwise).
 
         On a mesh the heads are split over the columns (``mesh.tp``): every projection that is
         per head is column-sharded head-major, the state holds the local heads, the decode output
@@ -172,9 +281,9 @@ class TtKDA(LightweightModule):
         self.w_o = up(raw["o_proj.weight"].t(), weight_dtype, cols=-2)
         self.fp32 = _fp32_compute(device)
         self.hifi2 = _hifi2_compute(device)
-        # decode-shaped (M <= 32) projections use the 1D mcast configs of tt/matmul_configs.py
-        self.lin_qkv = DecodeLinear(device, self.w_qkv)
-        self.lin_o = DecodeLinear(device, self.w_o)
+        # decode-shaped (M <= 32) projections use the 1D mcast configs of tt/matmul_configs.py (GLM53_KDA_MM_* override)
+        self.lin_qkv = decode_linear_for(device, self.w_qkv, "QKV")
+        self.lin_o = decode_linear_for(device, self.w_o, "O")
         self.lin_fa = DecodeLinear(device, self.w_fa)
         self.lin_fb = DecodeLinear(device, self.w_fb)
         self.lin_ga = DecodeLinear(device, self.w_ga)
@@ -189,6 +298,9 @@ class TtKDA(LightweightModule):
             self.fused_decode = "block" if fused_decode else "composite"
         else:
             self.fused_decode = _FUSED_MODES[str(fused_decode)]
+        opts = dict(kda_decode_options())
+        opts.update(decode_opts or {})
+        self.decode_opts = opts
         K, V, H = self.K, self.V, self.H
         if self.fused_decode == "block":
             # the kda_decode program's constants (its tensor contract is in the op's docstring)
@@ -208,6 +320,9 @@ class TtKDA(LightweightModule):
                 gate_lower_bound=self.gate_lower_bound,
                 l2_eps=L2_NORM_EPS,
                 norm_eps=self.kcfg.norm_eps,
+                math_fidelity=KDA_DECODE_FIDELITIES[opts["fidelity"]],
+                gates=opts["gates"],
+                placement=opts["placement"],
             )
             # gates in two matmuls: x -> [f_a | g_a | b_logits] (bf16, as HF), then the block-diagonal
             # [f_b, g_b, I] -> [f | og | b_logits] (fp32 accumulate); the identity block carries the logits
@@ -225,17 +340,32 @@ class TtKDA(LightweightModule):
             # on its b logits; concatenated so the even column split hands every chip its own block
             fb_t = raw["f_b_proj.weight"].t().float()  # [d_a, H_total*K]
             gb_t = raw["g_b_proj.weight"].t().float()  # [d_a, H_total*V]
-            blocks = []
+            gates_act = opts["gates"] == "act"
+            a_flat, dt_flat = a_exp.reshape(-1), raw["dt_bias"].float().reshape(-1)  # [H_total*K] each
+            blocks, biases = [], []
             for c in range(tp):
                 w_g2 = torch.zeros(2 * d_a + Hb, H * K + H * V + Hb)
                 w_g2[:d_a, : H * K] = fb_t[:, c * H * K : (c + 1) * H * K]
                 w_g2[d_a : 2 * d_a, H * K : H * K + H * V] = gb_t[:, c * H * V : (c + 1) * H * V]
                 w_g2[2 * d_a : 2 * d_a + H, H * K + H * V : H * K + H * V + H] = torch.eye(H)
+                if gates_act:
+                    # gates="act": a (f + dt) = (a w_fb)^T f_a + a dt per key channel of this chip's heads, the sigmoid
+                    # fused into the matmul (fp32 bias; the scaled f columns round to bf16 like the checkpoint weight)
+                    sl = slice(c * H * K, (c + 1) * H * K)
+                    w_g2, bias = prearrange_gate_weights(w_g2, a_flat[sl], dt_flat[sl], H * K)
+                    biases.append(bias)
                 blocks.append(w_g2)
             self.w_g2 = up(torch.cat(blocks, dim=1).to(torch.bfloat16), ttnn.bfloat16, cols=-1)
             # decode-shaped (M <= 32) gate matmuls use the 1D mcast configs of tt/matmul_configs.py
-            self.lin_g1 = DecodeLinear(device, self.w_g1)
-            self.lin_g2 = DecodeLinear(device, self.w_g2)
+            self.lin_g1 = decode_linear_for(device, self.w_g1, "G1")
+            if gates_act:
+                self.g2_bias = up(torch.cat(biases).reshape(1, 1, 1, -1), ttnn.float32, cols=-1)
+                self.lin_g2 = decode_linear_for(
+                    device, self.w_g2, "G2", activation=ttnn.UnaryOpType.SIGMOID, bias=self.g2_bias
+                )
+            else:
+                self.g2_bias = None
+                self.lin_g2 = decode_linear_for(device, self.w_g2, "G2")
 
     def scalar(self, value: int) -> ttnn.Tensor:
         """Cached replicated UINT32 device scalar (ttKDA's actual_start / actual_end)."""
@@ -500,7 +630,9 @@ class TtKDA(LightweightModule):
             rec, conv = ttnn.clone(rec), ttnn.clone(conv)
         qkv = self.lin_qkv(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [1,1,B,3*H*K]
         g1 = self.lin_g1(x, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi2)  # [f_a | g_a | b]
-        g2 = self.lin_g2(g1, dtype=ttnn.float32, compute_kernel_config=self.fp32)  # [f | og | b]
+        g2 = self.lin_g2(
+            g1, dtype=ttnn.float32, compute_kernel_config=self.fp32
+        )  # [f | og | b] (gates="act": activated)
         B = x.shape[-2]
         o = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, B, self.H * self.V]),

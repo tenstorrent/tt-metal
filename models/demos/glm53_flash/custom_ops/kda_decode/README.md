@@ -7,6 +7,29 @@ as the bf16 TILE input of `o_proj`. Kernels: `kernels/{reader,writer,compute}_kd
 `op.py::KdaDecode`; torch reference `KdaDecode.golden`; test `tests/custom_ops/test_kda_decode.py`. Used by
 `tt/kda.py` (`GLM53_KDA_FUSED=1`, the default): the block is 5 ops (qkv matmul, two gate matmuls, this program, o_proj).
 
+Options (constructor `gates="pre"|"act"`, `placement="col"|"rect"`; `tt/kda.py` sets them from `GLM53_KDA_DECODE_V2=1`
+or `GLM53_KDA_DECODE_{GATES,PLACEMENT,FIDELITY}`; defaults = the path described below; `_agents/kda_roofline/STATUS.md`).
+With every option at its default (`KdaDecode.variant == "v1"`) the op launches today's sources
+`kernels/{reader,writer,compute}_kda_decode.cpp` with today's argument layouts, byte for byte; any non-default option
+(`variant == "v2"`) launches `kernels/reader_kda_decode_v2.cpp` + `compute_kda_decode_v2.cpp` (the writer is shared) with
+the extended layouts below. The default sources must stay untouched by the variant work: a long-running process that
+imported an older `op.py` compiles whatever is on disk, so an ABI change in the default file breaks it (seen 2026-10-26
+18:52 on the 8x4 queue: `get_ct_arg<11>()` out of range).
+
+* `gates="act"`: `gates` arrives activated, `[sigmoid(a (f + dt)) | sigmoid(og) | sigmoid(b)]` -- the channel constants
+  folded into the g2 matmul weights (`prearrange_gate_weights`: f columns scaled by `exp(A_log)` per head, an fp32 bias
+  row `a dt_bias`) and the sigmoid fused into that matmul. The program forms `decay = exp(lb * s_f)` (copy, scalar
+  multiply, exp instead of two row broadcasts + sigmoid + multiply + exp), `wg = s_og * w` (one row broadcast instead of
+  copy + sigmoid + broadcast) and takes the beta column as is; `chan_consts` is still passed but never read. Reader /
+  compute compile-time arg 11 (`GATES_ACT`) of the `_v2` sources; their reader's accessor block starts at 12.
+* `placement="rect"`: slots as `2 x h` core rectangles (`placement_rect`) whenever that gives more parts than the column
+  layout (16 slots on 12x10: 6 parts / 96 cores vs 5 / 80). Part 0 is the top-left core; parts `1..h-1` go down its
+  column, `h..2h-1` down the next column. The part-0 reader multicasts to two single-column rectangles (its own column
+  below itself, `n_a = parts - 1 - n_b` cores, and the second column, `n_b = h` cores: runtime args 15..19 =
+  `rb_x0, rb_y0, rb_x1, rb_y1, n_b`; the column layout passes zeros and is bit-for-bit today's behaviour). The writer's
+  gather (unicast to the part-0 core) and the compute kernel are placement-agnostic.
+* `KdaDecode(math_fidelity=HiFi2)`: the FPU fidelity of every matmul / broadcast in the program (default HiFi4).
+
 ## Contract (all tensors interleaved DRAM/L1 on the same device; K = V = 128, conv kernel 4)
 
 | tensor | shape | dtype / layout | role |
@@ -59,12 +82,17 @@ to / from ttKDA's row-major `[B, 3, W]` at its boundary and `user_conv_state` / 
 * Writer: each user's state (in place); a part's output block goes to the slot's part-0 core (gather CB +
   semaphore), whose compute sums the parts, applies the gated RMSNorm and packs the head's bf16 output tiles of
   the tile row; the part-0 writer stores them.
-* Compile-time args -- compute: `Kt, Vt, Bt, B, parts, lb, l2_eps, norm_eps, K^-0.5, 1/V, it_half` (floats as
-  uint32 bits); reader: `Kt, Vt, Bt, B, H, Wq_t, Wg_t, HK_t, HV_t, parts, ONES_PAGE` + `TensorAccessorArgs` of qkv,
-  conv_hist, taps, gates, chan_consts, o_norm_w, selectors, recurrent; writer: `Kt, Vt, Bt, B, H, parts, HV_t` +
-  accessors of out, recurrent. Runtime args per core -- reader: `item0, n_items, stride, <8 buffer addresses>,
-  part-0 NoC x/y, last-part NoC x/y`; writer: `item0, n_items, stride, out, recurrent addresses, part-0 NoC x/y`;
-  compute: `item0, n_items, stride`. Semaphores 0..3 (ready, valid, the constant one, gather).
+* Compile-time args, v1 (default sources) -- compute: `Kt, Vt, Bt, B, parts, lb, l2_eps, norm_eps, K^-0.5, 1/V,
+  it_half` (11; floats as uint32 bits); reader: `Kt, Vt, Bt, B, H, Wq_t, Wg_t, HK_t, HV_t, parts, ONES_PAGE` (11) +
+  `TensorAccessorArgs` of qkv, conv_hist, taps, gates, chan_consts, o_norm_w, selectors, recurrent (from index 11);
+  writer: `Kt, Vt, Bt, B, H, parts, HV_t` + accessors of out, recurrent. v2 (`_v2` sources): compute and reader append
+  `GATES_ACT` at index 11 (the reader's accessors from 12); the writer is unchanged. Runtime args per core, v1 --
+  reader: `item0, n_items, stride, <8 buffer addresses>, part-0 NoC x/y, last NoC x/y of the part-0 column` (15);
+  v2 reader: + `second-column NoC x0, y0, x1, y1, n_b` (20; `KdaDecode.READER_RT`, `READER_RT_LEN`); writer: `item0,
+  n_items, stride, out, recurrent addresses, part-0 NoC x/y`; compute: `item0, n_items, stride`. Semaphores 0..3
+  (ready, valid, the constant one, gather). The vectors are built by `compile_time_args` / `runtime_args_for_core`
+  (pure functions; `tests/custom_ops/test_kda_decode_host.py` checks both variants against their kernel sources
+  without a device).
 * CBs (indices 0..31, per core): see `KdaDecode.CB` and the compute kernel header; ~1 MB of L1 per core.
 
 ## Measured (chip 3, real layer-4 weights, traced KDA layer `tests/test_kda_perf.py`, device time per step)
@@ -78,3 +106,8 @@ With 16 heads the four matmuls are 128 us (qkv 77.5 us = 325 GB/s of bfp8 weight
 two gate matmuls 23 us); the tilize is gone (TILE output). At B=32 the program moves the fp32 state twice (64 MB on
 a 16-head shard): 257 us is 250 GB/s, so its floor on this chip is ~200 us (the matmuls' 325 GB/s). Op-level
 correctness vs the torch golden: output / state PCC >= 0.999995 (B = 1/4/32/40, H = 16/64, multi-step, trace replay).
+
+Not yet measured (written device-free, 2026-10-26): `gates="act"` removes ~9 of the ~27 full-tile SFPU transcendental
+passes of the per-item fixed cost (estimate -10 us per item at any B) and `placement="rect"` cuts the B = 32 critical
+path from 7 to 6 users per part (estimate -33 us); `tests/test_kda_decode_v2_mesh.py` is the A/B (chip 0) and carries
+the (2,4) block decoder / e2e commands.
