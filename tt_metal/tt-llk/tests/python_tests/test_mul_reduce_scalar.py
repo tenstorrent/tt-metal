@@ -21,13 +21,8 @@ tile (num_faces=4) and the 16x32 (num_faces=2) / 16x16 (num_faces=1) "tiny
 tiles" (mirroring the on-silicon MulReduceScalarTinyTile gtest suite), plus
 1x32 to 8x32 tiles with short faces, which the gtest does not cover.
 
-Before the measured op, the kernel unpacks POISON_TILES full tiles of 100.0
-into both SrcA and SrcB banks. With a short face, the reduce adds those stale
-rows unless the unpacker zeroes them, so the golden check fails.
-
-The element-wise op is a parameter. ELWADD and ELWSUB pass stale SrcB rows
-through to DEST, so they check that the unpacker also zeroes SrcB. For them,
-B ~ U[0, 0.25], so the sum stays positive and away from cancellation.
+The element-wise op is a parameter. For ELWADD and ELWSUB, B ~ U[0, 0.25],
+so the sum stays positive and away from cancellation.
 """
 
 import pytest
@@ -68,9 +63,10 @@ FORMATS = [
 # The reduce collapses every element to [0] regardless of tile geometry.
 TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16], [1, 32], [2, 32], [4, 32], [8, 32]]
 
-# The kernel unpacks POISON_TILES full 32x32 tiles of 100.0 before the measured op,
-# so the unpackers must zero the SrcA rows that short faces leave stale.
+# Stale-row poison for SrcA and SrcB (see mul_reduce_scalar_test.cpp).
 POISON_TILES = 2
+SRCA_POISON_VALUE = 100.0
+SRCB_POISON_VALUE = 25.0
 
 
 GOLDEN_OPS = {
@@ -139,8 +135,13 @@ def test_mul_reduce_scalar(formats, math_fidelity, num_tiles, tile_dimensions, m
         .item()
     )
 
-    # The poison follows the input tiles in buffer_A; the kernel reads it as full tiles.
-    poison = torch.full((POISON_TILES * MAX_TILE_ELEMENTS,), 100.0, dtype=src_A.dtype)
+    # The SrcA poison, then the SrcB poison, follow the input tiles in buffer_A as full tiles.
+    poison = torch.cat(
+        [
+            torch.full((POISON_TILES * MAX_TILE_ELEMENTS,), value, dtype=src_A.dtype)
+            for value in (SRCA_POISON_VALUE, SRCB_POISON_VALUE)
+        ]
+    )
 
     configuration = TestConfig(
         "sources/mul_reduce_scalar_test.cpp",

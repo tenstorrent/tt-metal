@@ -50,11 +50,8 @@ static constexpr std::uint32_t DST_INDEX = 0;
 // (TEST_FACE_R_DIM rows). Each thread rebuilds the shape from the runtime
 // params, matching the reduce_test.cpp idiom.
 
-// Before the measured op, a poison op unpacks POISON_TILES full 32x32 tiles of
-// 100.0, stored after the input tiles in buffer_A, into every row of both SrcA
-// banks, then releases its DEST section with no reduce. SrcB holds zeros,
-// because unpack A zeroes it. The unpacker must zero the SrcA rows that a
-// short face leaves stale, or the reduce sums the stale rows.
+// Poison op: fills every row of both SrcA banks with 100.0 (unpack A zeroes SrcB), then releases DEST unread.
+// A short-face op that reads those stale rows fails the golden.
 static constexpr std::uint32_t POISON_TILES = 2;
 
 #ifdef LLK_TRISC_UNPACK
