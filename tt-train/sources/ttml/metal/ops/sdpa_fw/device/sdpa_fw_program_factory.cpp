@@ -182,12 +182,15 @@ std::vector<CoreItemRuns> split_items_paired(uint32_t num_seqs, uint32_t q_num_c
     return per_core;
 }
 
-// Runtime args per core: the buffer addresses, num_runs, then two words per run.
+// Runtime args per core: the buffer addresses (the reader has the most), then the work list:
+// num_runs and two words per run.
 constexpr uint32_t kReaderAddressArgs = 5U;
+constexpr uint32_t kWorkListHeaderWords = 1U;
+constexpr uint32_t kWordsPerRun = 2U;
 
 bool fits_runtime_args(const std::vector<CoreItemRuns>& per_core_runs) {
     for (const auto& runs : per_core_runs) {
-        if (kReaderAddressArgs + 1U + 2U * runs.size() > tt::tt_metal::max_runtime_args) {
+        if (kReaderAddressArgs + kWorkListHeaderWords + kWordsPerRun * runs.size() > tt::tt_metal::max_runtime_args) {
             return false;
         }
     }
