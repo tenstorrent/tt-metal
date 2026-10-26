@@ -36,18 +36,32 @@ def generate_source(data_format: DataFormat, gen: torch.Generator) -> torch.Tens
     return torch.randn(TILE_ELEMS, generator=gen).to(format_dict[data_format])
 
 
-def make_gather_indices(elem_cnt: int, gen: torch.Generator):
-    """Random indices in [0, elem_cnt), one per output lane (repeats allowed)."""
-    indices = torch.randint(0, elem_cnt, (elem_cnt,), generator=gen, dtype=torch.uint8)
-    return indices, indices.to(torch.int64)
+def make_gather_indices(elem_cnt: int, num_vectors: int, gen: torch.Generator):
+    """Random indices in [0, elem_cnt), one per output lane (repeats allowed), a fresh set per vector.
+
+    Returns the index bytes laid out one ARG FIFO entry per vector, and each vector's source lanes.
+    """
+    indices = torch.randint(
+        0, elem_cnt, (num_vectors, elem_cnt), generator=gen, dtype=torch.uint8
+    )
+    return indices.flatten(), [row.to(torch.int64) for row in indices]
 
 
-def make_compress_mask(elem_cnt: int, gen: torch.Generator):
-    """Random keep mask packed LSB-first, one bit per element; returns it with the kept lanes."""
-    keep = torch.randint(0, 2, (elem_cnt,), generator=gen, dtype=torch.uint8)
+def make_compress_mask(elem_cnt: int, num_vectors: int, gen: torch.Generator):
+    """Random keep mask packed LSB-first, one bit per element, a fresh mask per vector.
+
+    Returns the mask bytes laid out one ARG FIFO entry per vector, and each vector's kept lanes.
+    """
+    keep = torch.randint(
+        0, 2, (num_vectors, elem_cnt), generator=gen, dtype=torch.uint8
+    )
     weights = torch.tensor([1 << b for b in range(8)], dtype=torch.int32)
-    packed = (keep.view(-1, 8).to(torch.int32) * weights).sum(dim=1).to(torch.uint8)
-    return packed, torch.nonzero(keep, as_tuple=True)[0]
+    packed = (
+        (keep.view(num_vectors, -1, 8).to(torch.int32) * weights)
+        .sum(dim=2)
+        .to(torch.uint8)
+    )
+    return packed.flatten(), [torch.nonzero(row, as_tuple=True)[0] for row in keep]
 
 
 @pytest.mark.quasar
@@ -69,13 +83,13 @@ def test_gather_compress_tile_quasar(data_format, compress):
     gen = torch.Generator().manual_seed(42)
     src_A = generate_source(data_format, gen)
     index_buffer, golden_src_idx = (
-        make_compress_mask(elem_cnt, gen)
+        make_compress_mask(elem_cnt, num_vectors, gen)
         if compress
-        else make_gather_indices(elem_cnt, gen)
+        else make_gather_indices(elem_cnt, num_vectors, gen)
     )
-    golden = src_A.view(num_vectors, elem_cnt)[:, golden_src_idx]
-    # Compress defines only the first popcount(mask) lanes of each vector.
-    checked = golden.shape[1]
+    src_vectors = src_A.view(num_vectors, elem_cnt)
+    # Compress defines only the first popcount(mask) lanes of each vector, so goldens are ragged.
+    golden = [src_vectors[v, golden_src_idx[v]] for v in range(num_vectors)]
 
     formats = InputOutputFormat(input_format=data_format, output_format=data_format)
     configuration = TestConfig(
@@ -101,17 +115,18 @@ def test_gather_compress_tile_quasar(data_format, compress):
 
     res_from_L1 = configuration.run().result
     assert len(res_from_L1) == TILE_ELEMS, "Result does not hold one 32x32 tile"
-    res = torch.tensor(res_from_L1, dtype=golden.dtype).view(num_vectors, elem_cnt)
+    res = torch.tensor(res_from_L1, dtype=src_A.dtype).view(num_vectors, elem_cnt)
 
     mismatches = [
-        (v, i, golden[v, i].item(), res[v, i].item())
+        (v, i, golden[v][i].item(), res[v, i].item())
         for v in range(num_vectors)
-        for i in range(checked)
-        if res[v, i] != golden[v, i]
+        for i in range(len(golden[v]))
+        if res[v, i] != golden[v][i]
     ]
+    checked = sum(len(g) for g in golden)
     op = "compress" if compress else "gather"
     assert not mismatches, (
         f"{data_format.name} tile {op} returned the wrong element for {len(mismatches)} of "
-        f"{num_vectors * checked} elements (vector, lane, expected, actual), first 32: "
+        f"{checked} elements (vector, lane, expected, actual), first 32: "
         + str(mismatches[:32])
     )
