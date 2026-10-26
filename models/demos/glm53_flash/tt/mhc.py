@@ -63,7 +63,8 @@ MHC_PREFILL_EXACT = os.environ.get("GLM53_MHC_PREFILL_EXACT", "1") == "1"
 # Read at call time.
 MHC_PREFILL_HMIX_ENV = "GLM53_MHC_PREFILL_HMIX"
 # prefill projection: 1 = the row sums of squares from custom_ops/row_sumsq (one pass over the streams instead of the
-# x*x tensor and its sum; bit-identical, tt-blaze G53F-0209); read per call, so one built model can A/B it. Default off.
+# x*x tensor and its sum; bit-identical, tt-blaze G53F-0209); read per call, so one built model can A/B it. Default on
+# since 2026-10-26 14:17 (full 256k prefill bitwise, -4.4 % per chunk); 0 = the composite's square + sum.
 MHC_PREFILL_SUMSQ_ENV = "GLM53_MHC_SUMSQ"
 # decode (T <= 32) pre-block: 1 = exact fp32 reductions of the K-split partials (ttnn.sum, SFPU) instead of
 # fast_reduce_nc (bf16 rounding) and h through the post-mix kernel's pre-mix mode + the composite's typecast +
@@ -863,7 +864,7 @@ class TtMHCFast(LightweightModule):
         if Tp != TILE and MHC_PREFILL_EXACT:
             # prefill: the composite's projection, op for op (matmul + sum of squares + rsqrt scale), so
             # mixes is bit-identical to TtMHCWrap.project; [1,1,Tp,24] (one tile wide)
-            if os.environ.get(MHC_PREFILL_SUMSQ_ENV, "0") == "1":
+            if os.environ.get(MHC_PREFILL_SUMSQ_ENV, "1") == "1":
                 return self._project_sumsq(x32)
             return _composite_project(x32, self.fn_T, self.norm_eps, self.ckc)
         if Tp == TILE:
