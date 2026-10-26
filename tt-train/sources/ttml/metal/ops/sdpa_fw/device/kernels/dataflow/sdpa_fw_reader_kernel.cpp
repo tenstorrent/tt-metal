@@ -64,9 +64,9 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
-    // Reads one Q chunk (Sq_chunk_t query tile-rows) and then the K/V tiles it attends to, in steps of
-    // Sk_chunk_t tiles. The push order must match the cb_wait_front order in the compute kernel.
-    auto read_q_chunk = [&](const uint32_t global_q_chunk_idx) {
+    // Reads one Q chunk (Sq_chunk_t query tile-rows) and then K/V steps [k_begin, k_end) of Sk_chunk_t
+    // tiles each. The push order must match the cb_wait_front order in the compute kernel.
+    auto read_q_chunk = [&](const uint32_t global_q_chunk_idx, const uint32_t k_begin, const uint32_t k_end) {
         const uint32_t seq_idx = global_q_chunk_idx / q_num_chunks;  // batch * q_heads + head
         const uint32_t first_row_tile = (global_q_chunk_idx % q_num_chunks) * Sq_chunk_t;
         const uint32_t global_first_row = seq_idx * Ht + first_row_tile;
@@ -80,14 +80,7 @@ void kernel_main() {
         const uint32_t key_offset = (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;
         const uint32_t value_offset = (batch_idx * num_of_groups + kv_group_idx) * vWt * Ht;
 
-#ifdef CAUSAL_MASK
-        const uint32_t num_kv_tiles_to_read = round_up(first_row_tile + Sq_chunk_t, Sk_chunk_t);
-#else
-        const uint32_t num_kv_tiles_to_read = Ht;
-#endif
-        const uint32_t num_kv_steps = num_kv_tiles_to_read / Sk_chunk_t;
-
-        for (uint32_t k_step = 0; k_step < num_kv_steps; ++k_step) {
+        for (uint32_t k_step = k_begin; k_step < k_end; ++k_step) {
             const uint32_t h_start = k_step * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
             // K lands feature-major in cb_key (all Sk_chunk_t tiles of feature 0, then feature 1, ...),
@@ -118,5 +111,8 @@ void kernel_main() {
 #endif
     };
 
-    for_each_work_item(work_list_arg_idx, read_q_chunk);
+    for_each_work_item(work_list_arg_idx, [&](uint32_t item) {
+        const uint32_t first_row_tile = (item % q_num_chunks) * Sq_chunk_t;
+        read_q_chunk(item, /* k_begin */ 0, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
+    });
 }
