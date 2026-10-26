@@ -8,6 +8,9 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/copy/typecast/typecast.hpp>
+#include <ttnn/operations/data_movement/reshape_view/reshape.hpp>
+#include <ttnn/operations/data_movement/slice/slice.hpp>
+#include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <vector>
 
 #include "device/qkv_causal_conv1d_silu_bw_device_operation.hpp"
