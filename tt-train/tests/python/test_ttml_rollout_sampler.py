@@ -263,12 +263,14 @@ MIXED_LENGTH_QUESTIONS = [
 ]
 
 
-def _teacher_forced_logprobs(model, sampler: TTMLRolloutSampler, batch: RolloutBatch):
+def _teacher_forced_logprobs(model, sampler: TTMLRolloutSampler, batch: RolloutBatch, temperature: float):
     inputs, targets, mask, Tp = layout_microbatch(batch.prompts, batch.completions, sampler._pad_token)
     B = inputs.shape[0]
     with run_mode(model, RunMode.EVAL), no_grad():
         x = ttml.autograd.Tensor.from_numpy(inputs.reshape(B, 1, 1, Tp), ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
         logits = model(x, build_causal_mask(Tp, device=True))
+        if temperature > 0:
+            logits = logits * (1.0 / temperature)
         tgt = ttml.autograd.Tensor.from_numpy(targets, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32)
         nlog = ttml.ops.loss.cross_entropy_loss(logits, tgt, ttml.ops.ReduceType.NONE)
         teacher = -np.asarray(nlog.to_numpy(ttnn.DataType.FLOAT32), dtype=np.float32).reshape(B, Tp)
@@ -287,11 +289,12 @@ def _teacher_forced_logprobs(model, sampler: TTMLRolloutSampler, batch: RolloutB
     ],
     ids=["llama", "qwen3"],
 )
+@pytest.mark.parametrize("temperature", [0.0, 0.7])
 def test_rollout_logprobs_match_teacher_forced_for_mixed_prompt_lengths(
-    transformer_config, model_source, template_kwargs
+    transformer_config, model_source, template_kwargs, temperature
 ):
     model, tokenizer = setup_ttml_model(transformer_config, DEVICE_CONFIG, model_source)
-    sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, 0.0, 1)
+    sampler = TTMLRolloutSampler(model, tokenizer, MAX_COMPLETION_LENGTH, temperature, 1)
     prompts = [
         tokenizer.encode(_to_capitals_chat_prompt(tokenizer, q, **template_kwargs), add_special_tokens=False)
         for q in MIXED_LENGTH_QUESTIONS
@@ -300,7 +303,7 @@ def test_rollout_logprobs_match_teacher_forced_for_mixed_prompt_lengths(
     assert gaps.max() >= 32, f"prompts are too close in length to exercise padding: {gaps}"
 
     batch = sampler.generate(prompts)
-    teacher, sampled, mask = _teacher_forced_logprobs(model, sampler, batch)
+    teacher, sampled, mask = _teacher_forced_logprobs(model, sampler, batch, temperature)
 
     for b, completion in enumerate(batch.completions):
         assert len(completion) > 1, f"row {b}: need a multi-token completion, got {completion}"
