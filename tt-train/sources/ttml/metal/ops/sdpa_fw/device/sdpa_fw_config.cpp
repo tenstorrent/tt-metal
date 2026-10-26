@@ -5,6 +5,7 @@
 #include "sdpa_fw_config.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <functional>
 #include <numeric>
 #include <queue>
@@ -58,38 +59,6 @@ std::vector<CoreUnits> split_items_contiguous(uint32_t total_items, uint32_t num
     return per_core;
 }
 
-// Longest-first greedy assignment: items sorted by cost, descending, each to the least loaded core. Within
-// a core the order of items does not change its total work, so they are sorted, which folds consecutive
-// items into one run.
-std::vector<CoreUnits> split_items_longest_first(const std::vector<uint32_t>& item_costs, uint32_t num_cores) {
-    std::vector<uint32_t> order(item_costs.size());
-    std::iota(order.begin(), order.end(), 0U);
-    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return item_costs[a] > item_costs[b]; });
-
-    using Load = std::pair<uint64_t, uint32_t>;  // (load, core), min-heap
-    std::priority_queue<Load, std::vector<Load>, std::greater<>> loads;
-    for (uint32_t core = 0; core < num_cores; ++core) {
-        loads.emplace(0U, core);
-    }
-    std::vector<std::vector<uint32_t>> per_core_items(num_cores);
-    for (const uint32_t item : order) {
-        auto [load, core] = loads.top();
-        loads.pop();
-        per_core_items[core].push_back(item);
-        loads.emplace(load + item_costs[item], core);
-    }
-
-    std::vector<CoreUnits> per_core(num_cores);
-    for (uint32_t core = 0; core < num_cores; ++core) {
-        auto& items = per_core_items[core];
-        std::sort(items.begin(), items.end());
-        for (const uint32_t item : items) {
-            append_item(per_core[core], item);
-        }
-    }
-    return per_core;
-}
-
 // Chunk knob in elements -> tiles. 0 = unset; otherwise it must be a tile multiple that divides S.
 uint32_t chunk_size_to_tiles(uint32_t chunk_size, uint32_t St, const char* name) {
     if (chunk_size == 0U) {
@@ -106,9 +75,59 @@ uint32_t chunk_size_to_tiles(uint32_t chunk_size, uint32_t St, const char* name)
     return chunk_size / tt::constants::TILE_HEIGHT;
 }
 
+// ---- cost model -------------------------------------------------------------------------------------
+// Microseconds on Blackhole, measured by knocking phases out of the kernel one at a time (q=128,
+// k=256, D=64 and D=128, S=2048). The reader's DRAM time and the compute passes did not overlap in
+// those measurements, so the per-step cost is their sum.
+constexpr double kExpUsPerScoreTile = 0.16;    // scaled exp, fp32
+constexpr double kMaxUsPerScoreTile = 0.066;   // row-max reduce
+constexpr double kPassUsPerScoreTile = 0.14;   // pack/unpack traffic of the score block
+constexpr double kQkUsPerTileMatmul = 0.03;    // HiFi4 fp32-dest tile matmul
+constexpr double kPvUsPerTileMatmul = 0.035;   // incl. the rescale of the accumulator
+constexpr double kStatUsPerRow = 0.3;          // alpha + sum fold passes
+constexpr double kStepFixedUs = 3.0;           // per-step inits, CB handshakes, reconfigs
+constexpr double kFinalizeUsPerRow = 0.5;      // row reduce, lse, recip
+constexpr double kFinalizeUsPerOutTile = 0.1;  // normalize (and gate)
+constexpr double kSendUsPerPartialTile = 0.2;  // copy + pack of one partial tile
+constexpr double kMergeUsPerRow = 1.5;         // max, alphas, sum passes per row per partial
+constexpr double kMergeUsPerOutTile = 0.6;     // output tile pass per partial
+constexpr uint32_t kMinStepsPerPiece = 2U;
+constexpr double kDramGBps = 420.0;     // aggregate, all cores reading
+constexpr double kCoreDramGBps = 25.0;  // one core's share can not exceed its NoC link
+
+double dram_us(uint64_t bytes, uint32_t num_cores) {
+    const double per_core_gbps = std::min(kDramGBps / num_cores, kCoreDramGBps);
+    return static_cast<double>(bytes) / (per_core_gbps * 1e3);  // GB/s = 1e3 bytes/us
+}
+
+double step_us(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
+    const double rows = chunks.rows();
+    const double score_tiles = rows * chunks.Sk_chunk_t;
+    const double compute = score_tiles * (kExpUsPerScoreTile + kMaxUsPerScoreTile + kPassUsPerScoreTile) +
+                           score_tiles * shape.qWt * kQkUsPerTileMatmul + score_tiles * shape.vWt * kPvUsPerTileMatmul +
+                           rows * kStatUsPerRow + kStepFixedUs;
+    uint64_t bytes = static_cast<uint64_t>(chunks.Sk_chunk_t) * (shape.qWt + shape.vWt) * kBf16TileBytes;
+    if (shape.mask_type == AttentionMaskType::Arbitrary) {
+        bytes += static_cast<uint64_t>(chunks.Sq_chunk_t) * chunks.Sk_chunk_t * kBf16TileBytes;
+    }
+    return compute + dram_us(bytes, num_cores);
+}
+
+double item_fixed_us(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
+    const double rows = chunks.rows();
+    uint64_t bytes = static_cast<uint64_t>(chunks.rows()) * (shape.qWt + shape.vWt) * kBf16TileBytes;  // Q in, out
+    if (shape.has_gate) {
+        bytes += static_cast<uint64_t>(chunks.rows()) * shape.vWt * kBf16TileBytes;
+    }
+    if (shape.return_intermediates) {
+        bytes += static_cast<uint64_t>(chunks.rows()) * kFp32TileBytes;
+    }
+    return rows * (kFinalizeUsPerRow + shape.vWt * kFinalizeUsPerOutTile) + dram_us(bytes, num_cores);
+}
+
 }  // namespace
 
-SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
+SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, bool with_partials) {
     const uint32_t rows = chunks.rows();
     const uint32_t Sq = chunks.Sq_chunk_t;
     const uint32_t Sk = chunks.Sk_chunk_t;
@@ -133,13 +152,16 @@ SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChun
         .mm_out = rows * shape.vWt,
         .output = rows * shape.vWt,
         .reduction_scaler = 1U,
-        .matmul_reduce = 1U};
+        .matmul_reduce = 1U,
+        .partial = with_partials ? 2U * partial_tiles_per_row(shape) : 0U,  // streamed row by row
+        .alpha = with_partials ? rows : 0U};
 }
 
 uint64_t l1_bytes(const SDPAForwardCbTiles& t) {
     const uint64_t bf16_tiles = t.query + t.key + t.value + t.attn_mask + t.gate + t.reduction_scaler +
                                 t.matmul_reduce + 2U * t.stat + t.output;
-    const uint64_t fp32_tiles = t.intermediate + t.attention_weights + 3U * t.stat + 2U * t.mm_out;
+    const uint64_t fp32_tiles =
+        t.intermediate + t.attention_weights + 3U * t.stat + 2U * t.mm_out + 2U * t.partial + t.alpha;
     return bf16_tiles * kBf16TileBytes + fp32_tiles * kFp32TileBytes;
 }
 
@@ -189,21 +211,208 @@ void append_unit_words(
     words.push_back(unit.slot | (merger_noc_x << 16U) | (merger_noc_y << 24U));
 }
 
-std::vector<CoreUnits> split_work(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
-    const uint32_t total_items = num_work_items(shape, chunks);
-    TT_FATAL(num_cores > 0 && num_cores <= total_items, "split_work: need 1..{} cores, got {}", total_items, num_cores);
-    std::vector<CoreUnits> per_core_units;
-    if (shape.mask_type == AttentionMaskType::Causal) {
-        std::vector<uint32_t> item_costs(total_items);
-        for (uint32_t item = 0; item < total_items; ++item) {
-            item_costs[item] = num_kv_steps(shape, chunks, item);
+uint32_t partial_tiles_per_row(const SDPAForwardShape& shape) {
+    return shape.vWt + 2U;  // running max, unreduced running sum, unnormalized output
+}
+
+uint32_t effective_max_pieces(const SDPAForwardProgramConfig& config) {
+    return config.max_pieces == 0U ? kDefaultMaxPieces : config.max_pieces;
+}
+
+uint32_t effective_num_cores(const SDPAForwardProgramConfig& config, uint32_t grid_cores) {
+    return config.num_cores == 0U ? grid_cores : std::min(config.num_cores, grid_cores);
+}
+
+namespace {
+
+double send_us(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
+    const uint64_t tiles = static_cast<uint64_t>(chunks.rows()) * partial_tiles_per_row(shape);
+    return tiles * kSendUsPerPartialTile + dram_us(tiles * kFp32TileBytes, num_cores);
+}
+
+double merge_us(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
+    const double rows = chunks.rows();
+    const uint64_t tiles = static_cast<uint64_t>(chunks.rows()) * partial_tiles_per_row(shape);
+    return rows * (kMergeUsPerRow + shape.vWt * kMergeUsPerOutTile) + dram_us(tiles * kFp32TileBytes, num_cores);
+}
+
+double unit_us(
+    const SDPAForwardShape& shape,
+    const SDPAForwardChunks& chunks,
+    const WorkUnit& unit,
+    double step,
+    double fixed,
+    uint32_t num_cores) {
+    switch (unit.role) {
+        case UnitRole::Whole: {
+            double us = 0.0;
+            for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
+                us += fixed + step * num_kv_steps(shape, chunks, item);
+            }
+            return us;
         }
-        per_core_units = split_items_longest_first(item_costs, num_cores);
+        case UnitRole::Sender:
+            return fixed + step * (unit.step_end - unit.step_begin) + send_us(shape, chunks, num_cores);
+        case UnitRole::Merger:
+            return fixed + step * (unit.step_end - unit.step_begin) +
+                   unit.num_partials * merge_us(shape, chunks, num_cores);
     }
-    if (per_core_units.empty() || !fits_runtime_args(per_core_units)) {
-        per_core_units = split_items_contiguous(total_items, num_cores);
+    return 0.0;
+}
+
+struct Piece {
+    WorkUnit unit;
+    double cost;
+    uint32_t core = 0;
+};
+
+// Longest first with pieces: see make_schedule. Returns an empty schedule when it does not fit the args.
+SDPAForwardSchedule schedule_pieces(
+    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t max_pieces) {
+    const uint32_t total_items = num_work_items(shape, chunks);
+    const double step = step_us(shape, chunks, num_cores);
+    const double fixed = item_fixed_us(shape, chunks, num_cores);
+
+    double total = 0.0;
+    for (uint32_t item = 0; item < total_items; ++item) {
+        total += fixed + step * num_kv_steps(shape, chunks, item);
     }
-    return per_core_units;
+    const double fair = total / num_cores;
+
+    // Cut the heavy items. Pieces of one item are consecutive in `pieces`, the merger last.
+    std::vector<Piece> pieces;
+    struct Cut {
+        uint32_t first_piece;
+        uint32_t n;
+    };
+    std::vector<Cut> cuts;
+    for (uint32_t item = 0; item < total_items; ++item) {
+        const uint32_t steps = num_kv_steps(shape, chunks, item);
+        const double cost = fixed + step * steps;
+        uint32_t n = 1U;
+        if (max_pieces > 1U && cost > fair && steps >= 2U * kMinStepsPerPiece) {
+            n = std::min({static_cast<uint32_t>(std::ceil(cost / fair)), max_pieces, steps / kMinStepsPerPiece});
+        }
+        if (n <= 1U) {
+            pieces.push_back({WorkUnit{.item = item, .role = UnitRole::Whole, .num_items = 1U}, cost});
+            continue;
+        }
+        cuts.push_back({static_cast<uint32_t>(pieces.size()), n});
+        const uint32_t base = steps / n;
+        const uint32_t extra = steps % n;  // the senders take the leftover steps, the merger pays the merges
+        uint32_t begin = 0;
+        for (uint32_t k = 0; k < n; ++k) {
+            const uint32_t len = base + (k < extra ? 1U : 0U);
+            WorkUnit unit{.item = item, .step_begin = begin, .step_end = begin + len};
+            unit.role = (k + 1U == n) ? UnitRole::Merger : UnitRole::Sender;
+            unit.num_partials = (k + 1U == n) ? n - 1U : 0U;
+            pieces.push_back({unit, unit_us(shape, chunks, unit, step, fixed, num_cores)});
+            begin += len;
+        }
+    }
+
+    // Longest first to the least loaded core; a core holds at most kMaxMergersPerCore mergers.
+    std::vector<uint32_t> order(pieces.size());
+    std::iota(order.begin(), order.end(), 0U);
+    std::stable_sort(
+        order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return pieces[a].cost > pieces[b].cost; });
+    std::vector<double> loads(num_cores, 0.0);
+    std::vector<uint32_t> mergers(num_cores, 0U);
+    for (const uint32_t p : order) {
+        const bool is_merger = pieces[p].unit.role == UnitRole::Merger;
+        uint32_t best = num_cores;
+        for (uint32_t core = 0; core < num_cores; ++core) {
+            if (is_merger && mergers[core] >= kMaxMergersPerCore) {
+                continue;
+            }
+            if (best == num_cores || loads[core] < loads[best]) {
+                best = core;
+            }
+        }
+        TT_FATAL(best < num_cores, "sdpa schedule: no core can take another merger");
+        pieces[p].core = best;
+        loads[best] += pieces[p].cost;
+        mergers[best] += is_merger ? 1U : 0U;
+    }
+
+    // Scratch slots (consecutive per item) and semaphores (per merger on its core).
+    SDPAForwardSchedule schedule;
+    std::vector<uint32_t> sem_on_core(num_cores, 0U);
+    for (const Cut& cut : cuts) {
+        Piece& merger = pieces[cut.first_piece + cut.n - 1U];
+        merger.unit.slot = schedule.num_slots;
+        merger.unit.sem_idx = sem_on_core[merger.core]++;
+        for (uint32_t k = 0; k + 1U < cut.n; ++k) {
+            Piece& sender = pieces[cut.first_piece + k];
+            sender.unit.slot = schedule.num_slots + k;
+            sender.unit.sem_idx = merger.unit.sem_idx;
+            sender.unit.merger_core = merger.core;
+        }
+        schedule.num_slots += cut.n - 1U;
+    }
+
+    // Per core: senders, then whole items folded into runs, then mergers.
+    schedule.per_core.assign(num_cores, {});
+    std::vector<std::vector<uint32_t>> whole_items(num_cores);
+    std::vector<CoreUnits> merger_units(num_cores);
+    for (const Piece& piece : pieces) {
+        switch (piece.unit.role) {
+            case UnitRole::Sender: schedule.per_core[piece.core].push_back(piece.unit); break;
+            case UnitRole::Whole: whole_items[piece.core].push_back(piece.unit.item); break;
+            case UnitRole::Merger: merger_units[piece.core].push_back(piece.unit); break;
+        }
+    }
+    for (uint32_t core = 0; core < num_cores; ++core) {
+        std::sort(whole_items[core].begin(), whole_items[core].end());
+        for (const uint32_t item : whole_items[core]) {
+            append_item(schedule.per_core[core], item);
+        }
+        for (const WorkUnit& unit : merger_units[core]) {
+            schedule.per_core[core].push_back(unit);
+        }
+    }
+    if (!fits_runtime_args(schedule.per_core)) {
+        return {};
+    }
+    return schedule;
+}
+
+}  // namespace
+
+SDPAForwardSchedule make_schedule(
+    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t max_pieces) {
+    const uint32_t total_items = num_work_items(shape, chunks);
+    TT_FATAL(num_cores > 0, "make_schedule: num_cores must be > 0");
+    if (shape.mask_type == AttentionMaskType::Causal) {
+        for (uint32_t pieces = max_pieces; pieces >= 1U; pieces = (pieces > 1U) ? 1U : 0U) {
+            if (pieces == 1U && num_cores > total_items) {
+                break;
+            }
+            SDPAForwardSchedule schedule = schedule_pieces(shape, chunks, num_cores, pieces);
+            if (!schedule.per_core.empty()) {
+                return schedule;
+            }
+        }
+    }
+    return SDPAForwardSchedule{.per_core = split_items_contiguous(total_items, std::min(num_cores, total_items))};
+}
+
+double predict_us(
+    const SDPAForwardShape& shape,
+    const SDPAForwardChunks& chunks,
+    const SDPAForwardSchedule& schedule,
+    uint32_t num_cores) {
+    const double step = step_us(shape, chunks, num_cores);
+    const double fixed = item_fixed_us(shape, chunks, num_cores);
+    double busiest = 0.0;
+    for (const auto& units : schedule.per_core) {
+        double core_us = 0.0;
+        for (const auto& unit : units) {
+            core_us += unit_us(shape, chunks, unit, step, fixed, num_cores);
+        }
+        busiest = std::max(busiest, core_us);
+    }
+    return busiest;
 }
 
 namespace {
@@ -223,8 +432,9 @@ SDPAForwardChunks user_chunks(const SDPAForwardProgramConfig& config, const SDPA
     return user;
 }
 
-void check_l1(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint64_t l1_budget_bytes) {
-    const uint64_t bytes = l1_bytes(cb_tiles(shape, chunks));
+void check_l1(
+    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint64_t l1_budget_bytes, bool with_partials) {
+    const uint64_t bytes = l1_bytes(cb_tiles(shape, chunks, with_partials));
     TT_FATAL(
         bytes <= l1_budget_bytes,
         "SDPA forward circular buffers need {} bytes of L1 per core but only {} are available at q_chunk_size {} "
@@ -238,7 +448,22 @@ void check_l1(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, ui
 
 }  // namespace
 
-void check_chunks(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape, uint64_t l1_budget_bytes) {
+// Split units (and their CBs) only exist for causal masks with max_pieces > 1.
+bool may_split(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape) {
+    return shape.mask_type == AttentionMaskType::Causal && effective_max_pieces(config) > 1U;
+}
+
+void check_chunks(
+    const SDPAForwardProgramConfig& config,
+    const SDPAForwardShape& shape,
+    uint64_t l1_budget_bytes,
+    uint32_t grid_cores) {
+    TT_FATAL(config.max_pieces <= kMaxPieces, "max_pieces ({}) must be at most {}", config.max_pieces, kMaxPieces);
+    TT_FATAL(
+        config.num_cores <= grid_cores,
+        "num_cores ({}) must be at most the compute grid ({})",
+        config.num_cores,
+        grid_cores);
     const SDPAForwardChunks user = user_chunks(config, shape);
     // The pick only shrinks the unset chunk sizes, down to one tile, so the config fits at all iff it fits
     // with every unset chunk size at one tile (heads_per_item 0 = 1). With both chunk sizes pinned this is
@@ -247,17 +472,19 @@ void check_chunks(const SDPAForwardProgramConfig& config, const SDPAForwardShape
         .Sq_chunk_t = std::max(user.Sq_chunk_t, 1U),
         .Sk_chunk_t = std::max(user.Sk_chunk_t, 1U),
         .heads_per_item = std::max(user.heads_per_item, 1U)};
-    check_l1(shape, floor, l1_budget_bytes);
+    check_l1(shape, floor, l1_budget_bytes, may_split(config, shape));
 }
 
 SDPAForwardChunks resolve_chunks(
     const SDPAForwardProgramConfig& config,
     const SDPAForwardShape& shape,
     uint64_t l1_budget_bytes,
-    uint32_t num_available_cores) {
+    uint32_t grid_cores) {
+    check_chunks(config, shape, l1_budget_bytes, grid_cores);
+    const uint32_t num_available_cores = effective_num_cores(config, grid_cores);
+    const bool with_partials = may_split(config, shape);
     const SDPAForwardChunks user = user_chunks(config, shape);
     if (user.Sq_chunk_t != 0U && user.Sk_chunk_t != 0U && user.heads_per_item != 0U) {
-        check_l1(shape, user, l1_budget_bytes);
         return user;
     }
 
@@ -287,7 +514,7 @@ SDPAForwardChunks resolve_chunks(
         }
     }
     // Shrink the picked (not the pinned) chunks until the circular buffers fit.
-    while (l1_bytes(cb_tiles(shape, chunks)) > l1_budget_bytes) {
+    while (l1_bytes(cb_tiles(shape, chunks, with_partials)) > l1_budget_bytes) {
         if (user.Sk_chunk_t == 0U && chunks.Sk_chunk_t > 1U) {
             chunks.Sk_chunk_t /= 2U;
         } else if (user.Sq_chunk_t == 0U && chunks.Sq_chunk_t > 1U) {
@@ -296,7 +523,7 @@ SDPAForwardChunks resolve_chunks(
             break;
         }
     }
-    check_l1(shape, chunks, l1_budget_bytes);
+    check_l1(shape, chunks, l1_budget_bytes, with_partials);
     return chunks;
 }
 

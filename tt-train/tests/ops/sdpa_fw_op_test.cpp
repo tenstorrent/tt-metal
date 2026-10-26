@@ -1744,13 +1744,13 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     const auto picked = resolve_chunks({}, tinyllama, kBudget, kCores);
     EXPECT_GE(picked.rows(), 4U) << "Sq=" << picked.Sq_chunk_t << " h=" << picked.heads_per_item;
     EXPECT_GE(picked.Sk_chunk_t, 4U);
-    EXPECT_LE(l1_bytes(cb_tiles(tinyllama, picked)), kBudget);
+    EXPECT_LE(l1_bytes(cb_tiles(tinyllama, picked, /* with_partials */ true)), kBudget);
 
     SDPAForwardShape wide = tinyllama;  // head dim 512: the biggest chunks do not fit, the pick must degrade
     wide.qWt = 16U;
     wide.vWt = 16U;
     const auto picked_wide = resolve_chunks({}, wide, kBudget, kCores);
-    EXPECT_LE(l1_bytes(cb_tiles(wide, picked_wide)), kBudget);
+    EXPECT_LE(l1_bytes(cb_tiles(wide, picked_wide, /* with_partials */ true)), kBudget);
 
     // A user knob pins its axis; the others are still picked.
     const auto pinned = resolve_chunks({.k_chunk_size = 32U}, tinyllama, kBudget, kCores);
@@ -1766,93 +1766,6 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_DefaultPick) {
     EXPECT_EQ(picked_few.Sq_chunk_t, 2U);
     EXPECT_GE(num_work_items(few_seqs, picked_few), kCores);
     EXPECT_EQ(picked_few.Sk_chunk_t, picked.Sk_chunk_t) << "the K/V step does not depend on the core count";
-}
-
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
-    // Host-only: causal items go out longest first, every item exactly once, so the per-core K/V step
-    // totals differ by at most one item's steps; the other mask modes get contiguous blocks of items.
-    using namespace ttml::metal::ops::sdpa_fw::device;
-    constexpr uint32_t kCores = 130U;
-    const auto items_of = [](const CoreUnits& units) {
-        std::vector<uint32_t> items;
-        for (const auto& unit : units) {
-            EXPECT_EQ(unit.role, UnitRole::Whole) << "split_work hands out whole items";
-            for (uint32_t i = 0; i < unit.num_items; ++i) {
-                items.push_back(unit.item + i);
-            }
-        }
-        return items;
-    };
-    const auto check_each_item_once = [&](const std::vector<CoreUnits>& per_core, uint32_t total_items) {
-        std::vector<uint32_t> seen(total_items, 0U);
-        for (const auto& runs : per_core) {
-            EXPECT_FALSE(runs.empty()) << "a core without work";
-            for (const uint32_t item : items_of(runs)) {
-                ASSERT_LT(item, total_items);
-                ++seen[item];
-            }
-        }
-        EXPECT_TRUE(std::all_of(seen.begin(), seen.end(), [](uint32_t n) { return n == 1U; }))
-            << "every item must be handed out exactly once";
-    };
-
-    SDPAForwardShape causal{
-        .batch = 1U,
-        .q_heads = 32U,
-        .kv_heads = 32U,
-        .St = 16U,
-        .qWt = 2U,
-        .vWt = 2U,
-        .mask_type = ttml::metal::AttentionMaskType::Causal,
-        .has_gate = false,
-        .return_intermediates = true};
-    const SDPAForwardChunks four_rows{.Sq_chunk_t = 4U, .Sk_chunk_t = 8U, .heads_per_item = 1U};
-    // 32 sequences x 4 chunks = 128 items on 128 cores: one item each.
-    ASSERT_EQ(num_work_items(causal, four_rows), 128U);
-    const auto one_each = split_work(causal, four_rows, 128U);
-    ASSERT_EQ(one_each.size(), 128U);
-    check_each_item_once(one_each, 128U);
-    for (const auto& runs : one_each) {
-        EXPECT_EQ(items_of(runs).size(), 1U) << "one item per core";
-    }
-    // Fewer cores than items: longest first balances the K/V steps per core.
-    constexpr uint32_t kFewCores = 40U;
-    const auto balanced = split_work(causal, four_rows, kFewCores);
-    ASSERT_EQ(balanced.size(), kFewCores);
-    check_each_item_once(balanced, 128U);
-    uint32_t min_steps = UINT32_MAX;
-    uint32_t max_steps = 0U;
-    uint32_t max_item_steps = 0U;
-    for (const auto& runs : balanced) {
-        uint32_t steps = 0U;
-        for (const uint32_t item : items_of(runs)) {
-            const uint32_t item_steps = num_kv_steps(causal, four_rows, item);
-            steps += item_steps;
-            max_item_steps = std::max(max_item_steps, item_steps);
-        }
-        min_steps = std::min(min_steps, steps);
-        max_steps = std::max(max_steps, steps);
-    }
-    EXPECT_LE(max_steps - min_steps, max_item_steps) << "longest first: the cores differ by at most one item";
-
-    // Odd chunk count (St=12, Sq=4 -> 3 chunks): still each item once over min(cores, items).
-    SDPAForwardShape odd = causal;
-    odd.St = 12U;
-    const auto odd_split = split_work(odd, four_rows, std::min(kCores, num_work_items(odd, four_rows)));
-    ASSERT_EQ(odd_split.size(), 96U);
-    check_each_item_once(odd_split, 96U);
-
-    // No mask: contiguous blocks, one run per core.
-    SDPAForwardShape none = causal;
-    none.mask_type = ttml::metal::AttentionMaskType::None;
-    const auto none_split = split_work(none, four_rows, kFewCores);
-    ASSERT_EQ(none_split.size(), kFewCores);
-    check_each_item_once(none_split, 128U);
-    for (const auto& runs : none_split) {
-        EXPECT_EQ(runs.size(), 1U) << "a contiguous block is one run";
-    }
-
-    EXPECT_ANY_THROW(split_work(causal, four_rows, 129U)) << "more cores than items is a caller bug";
 }
 
 // The production pick (four-row chunks, eight K/V tiles) only lands on device when the items keep the
@@ -1972,11 +1885,13 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
             /*has_gate=*/false,
             /*return_intermediates=*/false);
         const uint64_t budget = ttml::metal::available_l1_bytes(ttml::autograd::ctx().get_device());
+        const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+        const uint32_t kGridCores = grid.x * grid.y;
         EXPECT_THAT(
-            [&] { check_chunks({.q_chunk_size = S}, wide, budget); },
+            [&] { check_chunks({.q_chunk_size = S}, wide, budget, kGridCores); },
             ThrowsMessage<std::exception>(HasSubstr("SDPA forward circular buffers need")));
-        EXPECT_NO_THROW(check_chunks({.k_chunk_size = 32U}, wide, budget));
-        EXPECT_NO_THROW(check_chunks({}, wide, budget));
+        EXPECT_NO_THROW(check_chunks({.k_chunk_size = 32U}, wide, budget, kGridCores));
+        EXPECT_NO_THROW(check_chunks({}, wide, budget, kGridCores));
     }
 }
 

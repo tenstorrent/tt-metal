@@ -13,12 +13,13 @@
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
-    uint32_t query_address = get_arg_val<uint32_t>(runtime_args_counter++);  // query buffer address
-    uint32_t key_address = get_arg_val<uint32_t>(runtime_args_counter++);    // key buffer address
-    uint32_t value_address = get_arg_val<uint32_t>(runtime_args_counter++);  // value buffer address
-    uint32_t mask_address = get_arg_val<uint32_t>(runtime_args_counter++);   // mask buffer address
-    uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);   // gate buffer address
-    const uint32_t work_list_arg_idx = runtime_args_counter;                 // then the work list
+    uint32_t query_address = get_arg_val<uint32_t>(runtime_args_counter++);    // query buffer address
+    uint32_t key_address = get_arg_val<uint32_t>(runtime_args_counter++);      // key buffer address
+    uint32_t value_address = get_arg_val<uint32_t>(runtime_args_counter++);    // value buffer address
+    uint32_t mask_address = get_arg_val<uint32_t>(runtime_args_counter++);     // mask buffer address
+    uint32_t gate_address = get_arg_val<uint32_t>(runtime_args_counter++);     // gate buffer address
+    uint32_t scratch_address = get_arg_val<uint32_t>(runtime_args_counter++);  // partials scratch (split units)
+    const uint32_t work_list_arg_idx = runtime_args_counter;                   // then the work list
 
     constexpr uint32_t cb_query = tt::CBIndex::c_0;
     constexpr uint32_t cb_key = tt::CBIndex::c_1;
@@ -29,6 +30,9 @@ void kernel_main() {
 #ifdef HAS_GATE
     constexpr uint32_t cb_gate = tt::CBIndex::c_16;
 #endif
+#ifdef SPLIT_UNITS
+    constexpr uint32_t cb_partial_in = tt::CBIndex::c_17;
+#endif
 
     constexpr uint32_t qWt = get_compile_time_arg_val(0);      // num tile in inner dim in query/key (d_qk/TILE_W)
     constexpr uint32_t vWt = get_compile_time_arg_val(1);      // num tile in inner dim in value (d_v/TILE_W)
@@ -38,15 +42,18 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);       // K/V tiles per inner-loop step
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);       // query tile-rows per Q chunk
     constexpr uint32_t heads_per_item = get_compile_time_arg_val(7);   // Q heads stacked in one item
+    // 8..11: the four semaphore ids a merger waits on (sem_idx picks one)
     constexpr uint32_t q_num_chunks = Ht / Sq_chunk_t;
+    constexpr uint32_t rows = Sq_chunk_t * heads_per_item;
     constexpr uint32_t k_tiles = Sk_chunk_t * qWt;                             // K tiles of one step
     constexpr uint32_t v_tiles = Sk_chunk_t * vWt;                             // V tiles of one step
     [[maybe_unused]] constexpr uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;  // arbitrary mask tiles of one step
-    constexpr auto query_args = TensorAccessorArgs<8>();
+    constexpr auto query_args = TensorAccessorArgs<12>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto gate_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto scratch_args = TensorAccessorArgs<gate_args.next_compile_time_args_offset()>();
 
     const uint32_t tile_bytes = get_tile_size(cb_query);
 
@@ -59,6 +66,11 @@ void kernel_main() {
 #endif
 #ifdef HAS_GATE
     const auto gate_address_generator = TensorAccessor(gate_args, gate_address);
+#endif
+#ifdef SPLIT_UNITS
+    constexpr uint32_t partial_row_tiles = vWt + 2U;  // per row: max, sum, vWt output tiles, all fp32
+    const uint32_t partial_tile_bytes = get_tile_size(cb_partial_in);
+    const auto scratch_address_generator = TensorAccessor(scratch_args, scratch_address, partial_tile_bytes);
 #endif
 
     // The constant tiles (reduction scaler, matmul reduce, causal mask) come from the writer, so the
@@ -128,7 +140,11 @@ void kernel_main() {
 #endif
             cb_push_back(cb_value, v_tiles);
         }
+    };
+
+    auto read_gate = [&]([[maybe_unused]] const uint32_t item) {
 #ifdef HAS_GATE
+        const auto w = decode_work_item<q_num_chunks, Sq_chunk_t, q_heads, heads_per_item>(item);
         read_stacked_rows(cb_gate, gate_address_generator, vWt, w);
 #endif
     };
@@ -138,9 +154,36 @@ void kernel_main() {
             for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
                 const uint32_t first_row_tile = sdpa_fw_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
                 read_q_chunk(item, /* k_begin */ 0, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
+                read_gate(item);
             }
-        } else {
-            read_q_chunk(unit.item, unit.step_begin, unit.step_end);
+            return;
         }
+        read_q_chunk(unit.item, unit.step_begin, unit.step_end);
+#ifdef SPLIT_UNITS
+        if (unit.role == kUnitMerger) {
+            // The senders bump this core's semaphore once each after their partial landed in scratch.
+            const uint32_t sem_ids[4] = {
+                get_compile_time_arg_val(8),
+                get_compile_time_arg_val(9),
+                get_compile_time_arg_val(10),
+                get_compile_time_arg_val(11)};
+            volatile tt_l1_ptr uint32_t* sem =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_ids[unit.sem_idx]));
+            noc_semaphore_wait_min(sem, unit.num_partials);
+            noc_semaphore_set(sem, 0);
+            for (uint32_t p = 0; p < unit.num_partials; ++p) {
+                for (uint32_t r = 0; r < rows; ++r) {
+                    read_tiles_by_row(
+                        cb_partial_in,
+                        scratch_address_generator,
+                        ((unit.slot + p) * rows + r) * partial_row_tiles,
+                        partial_row_tiles,
+                        partial_tile_bytes,
+                        partial_row_tiles);
+                }
+            }
+            read_gate(unit.item);
+        }
+#endif
     });
 }
