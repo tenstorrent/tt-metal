@@ -29,14 +29,13 @@ from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     CHUNK_ROW_COUNTS,
     CHUNK_ROWS,
-    DEFAULT_SLAB_ROWS,
     LONG_CHUNK_ROWS,
     MAX_SLAB_ROWS,
     MIN_SLAB_ROWS,
     is_slab_rows,
 )
 
-SLAB = DEFAULT_SLAB_ROWS
+SLAB = MAX_SLAB_ROWS
 BLOCKS = 8192  # the 32k context's compressed blocks
 
 
@@ -44,13 +43,13 @@ BLOCKS = 8192  # the 32k context's compressed blocks
 
 
 def test_slab_row_contract(expect_error) -> None:
-    assert (MIN_SLAB_ROWS, MAX_SLAB_ROWS, DEFAULT_SLAB_ROWS) == (256, 4096, 2048)
+    assert (MIN_SLAB_ROWS, MAX_SLAB_ROWS) == (256, 2048), (MIN_SLAB_ROWS, MAX_SLAB_ROWS)
     assert CHUNK_ROW_COUNTS == (32, 128)  # the chunk forms are untouched
-    for rows in (256, 512, 1024, 2048, 4096):
+    for rows in (256, 512, 1024, 2048):
         assert is_slab_rows(rows) and contracts_module.chunk_row_tiles(rows) == rows // 32
-    for rows in (32, 128, 0, 31, 64, 96, 192, 2000, 8192, True, 2048.0, "2048"):
+    for rows in (32, 128, 0, 31, 64, 96, 192, 2000, 2176, 4096, 8192, True, 2048.0, "2048"):
         assert not is_slab_rows(rows)
-    for rows in (0, 31, 64, 96, 192, 8192):
+    for rows in (0, 31, 64, 96, 192, 4096, 8192):
         with expect_error(ValueError):  # allow-pytest.raises: pure contract test
             contracts_module.chunk_row_tiles(rows)
     assert gdn_module.rows_tile_count(SLAB) == SLAB and gdn_module.rows_tile_count(128) == 128
@@ -68,7 +67,8 @@ def test_slab_row_contract(expect_error) -> None:
 def test_slab_routes_its_rows_in_one_call_and_reduces_in_512_row_blocks() -> None:
     """A slab instance routes its rows in one moe_compute call on the local output path (height shard 1: nothing is
     staged) and reduces in 512-row blocks; the chunk forms are untouched."""
-    assert moe_module.routed_tokens_per_call_for(SLAB) == SLAB and moe_module.routed_tokens_per_call_for(4096) == 4096
+    per_call = (moe_module.routed_tokens_per_call_for(SLAB), moe_module.routed_tokens_per_call_for(256))
+    assert per_call == (SLAB, 256), per_call
     assert moe_module.routed_tokens_per_call_for(128) == 128 and moe_module.routed_tokens_per_call_for(32) == 32
     for ring in (7, 8):
         assert moe_module.moe_compute_output_height_shard_dim(SLAB, matmul_ring_size=ring) == 1
@@ -790,12 +790,13 @@ def test_slab_combine_buffer_admits_the_slab_rows(expect_error, monkeypatch) -> 
     """The one-call slab writes its whole [10, rows, 2560] page: allocate_local_combine_output must admit the slab
     rows the way the slab's layer instances do; the chunk forms keep their rows and every other count stays refused."""
     fakes = _moe_buffer_fakes(monkeypatch)
-    for rows in (CHUNK_ROWS, LONG_CHUNK_ROWS, SLAB, MAX_SLAB_ROWS):
+    for rows in (CHUNK_ROWS, LONG_CHUNK_ROWS, MIN_SLAB_ROWS, MAX_SLAB_ROWS):
         buffer = moe_module.allocate_local_combine_output("mesh", fakes.contract, rows)
         assert buffer.shape == (moe_module.TOP_K, rows, moe_module.HIDDEN_SIZE)
-    assert [shape[1] for shape, _ in fakes.validated] == [CHUNK_ROWS, LONG_CHUNK_ROWS, SLAB, MAX_SLAB_ROWS]
+    validated_rows = [shape[1] for shape, _ in fakes.validated]
+    assert validated_rows == [CHUNK_ROWS, LONG_CHUNK_ROWS, MIN_SLAB_ROWS, MAX_SLAB_ROWS], validated_rows
     # counts no form admits: not a lane count (the lanes lineage admits 1..MAX_LANES), not a chunk, not a slab
-    for rows in (100, LONG_CHUNK_ROWS + 1, 2050):
+    for rows in (100, LONG_CHUNK_ROWS + 1, 2050, 4096):
         with expect_error(ValueError):  # allow-pytest.raises: pure contract test
             moe_module.allocate_local_combine_output("mesh", fakes.contract, rows)
 
@@ -906,7 +907,6 @@ def test_a_slab_record_replays_only_on_a_server_with_a_prefill_slab() -> None:
         "sky",
     ]
     assert chat_server.slab_records_admitted(records, slab_rows=2048) == records
-    assert chat_server.slab_records_admitted(records, slab_rows=4096) == records
 
 
 def test_the_resident_plan_is_the_fused_siblings_of_the_qsa_and_the_moe(expect_error) -> None:

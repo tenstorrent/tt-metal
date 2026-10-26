@@ -113,7 +113,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.builder import (
     RESIDENT_QSA_CACHE_CAPACITIES,
     Qwen38ResidentContext,
 )
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import is_slab_rows
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import SLAB_ROWS_RULE, is_slab_rows
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_rows_scan as gdn_rows_scan_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.vision_residency import (
     PEAK_ACTIVATION_BYTES_PER_ROW_PER_DIE,
@@ -2219,9 +2219,9 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         metavar="ROWS",
-        help="chunked prefill only: also capture a prefill slab of ROWS rows (a multiple of 128 in 256..4096; every "
-        "dense linear as one matmul, the GDN state carried through the slab in one kernel call) and run slabs ahead "
-        "of the 128-row chunks; implies --long-chunks; tolerance-class against the chunk bodies (docs/PREFILL.md)",
+        help=f"chunked prefill only: also capture a prefill slab of ROWS rows, {SLAB_ROWS_RULE}, and run slabs ahead "
+        "of the 128-row chunks (every dense linear as one matmul, the GDN state carried through the slab in one kernel "
+        "call); implies --long-chunks; tolerance-class against the chunk bodies (docs/PREFILL.md)",
     )
     parser.add_argument(
         "--allocated-context",
@@ -2348,7 +2348,7 @@ def main() -> int:
     if args.acceptance_only and args.acceptance_prompts is None:
         raise SystemExit("--acceptance-only needs --acceptance-prompts")
     if args.prefill_slab is not None and not is_slab_rows(args.prefill_slab):
-        raise SystemExit(f"--prefill-slab takes a multiple of 128 in 256..4096, got {args.prefill_slab}")
+        raise SystemExit(f"--prefill-slab takes {SLAB_ROWS_RULE}, got {args.prefill_slab}")
     try:
         hardware_profile = hardware_profiles.resolve_hardware_profile(args.hardware_profile)
     except hardware_profiles.HardwareProfileError as error:

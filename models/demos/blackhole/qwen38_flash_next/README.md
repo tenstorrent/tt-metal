@@ -114,7 +114,7 @@ python "$PLUGIN_ROOT/examples/server_example_tt.py" \
 ```
 
 The adapter serves the chat server's prefill form: 128-row chunks, then 32-row chunks (`QWEN38_LONG_CHUNKS=0`: the
-32-row chunks alone). `QWEN38_PREFILL_SLAB=<rows>`, a multiple of 512 up to 4096, adds a prefill slab ahead of them.
+32-row chunks alone). `QWEN38_PREFILL_SLAB=<rows>`, a multiple of 512 up to 2048, adds a prefill slab ahead of them.
 When the chain opens, the model checks the slab's resident weights against free DRAM and asks `moe_compute` whether
 it takes the slab's rows in one call; a refusal ends start-up and names the knob. The adapter logs the form it opened.
 The two chunk forms are not bitwise alike on every tt-metal: on `44af409050` their greedy streams (32-88 tokens, 32k

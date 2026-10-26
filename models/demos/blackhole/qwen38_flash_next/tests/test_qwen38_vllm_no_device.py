@@ -1078,7 +1078,7 @@ def test_construction_requires_trace_allocation_tracking(construction, monkeypat
         ("0", " 1 ", (True, None)),
         ("1024", None, (True, 1024)),
         (" 256 ", "", (True, 256)),
-        ("4096", "1", (True, 4096)),
+        ("2048", "1", (True, 2048)),
     ),
 )
 def test_construction_opens_the_chain_in_the_prefill_form_the_knobs_name(
@@ -1106,7 +1106,7 @@ def test_construction_opens_the_chain_in_the_prefill_form_the_knobs_name(
 
 
 def test_prefill_form_admits_every_slab_row_count_of_the_contract() -> None:
-    for rows in range(256, 4096 + 1, 128):
+    for rows in range(256, 2048 + 1, 128):
         assert vllm_module.prefill_form({"QWEN38_PREFILL_SLAB": str(rows)}) == (True, rows)
     assert vllm_module.describe_prefill_form(True, 2048) == "2048-row slabs, then 128-row chunks, then 32-row chunks"
     assert vllm_module.describe_prefill_form(True, None) == "128-row chunks, then 32-row chunks"
@@ -1114,13 +1114,16 @@ def test_prefill_form_admits_every_slab_row_count_of_the_contract() -> None:
 
 
 @pytest.mark.parametrize(
-    "value", ("100", "abc", "32", "128", "4224", "-256", "1024.0", "2048 rows", "none", "1", "\uff11\uff10\uff12\uff14")
+    "value",
+    ("100", "abc", "32", "128", "2176", "4096", "-256", "1024.0", "2048 rows", "none", "1", "\uff11\uff10\uff12\uff14"),
 )  # the last: fullwidth digits 1024, str.isdigit() true, not ASCII
 def test_construction_refuses_a_slab_row_count_outside_the_contract(
     construction, monkeypatch, value: str, expect_error
 ) -> None:
     monkeypatch.setenv("QWEN38_PREFILL_SLAB", value)
-    with expect_error(ValueError, "QWEN38_PREFILL_SLAB must be the slab's rows, a multiple of 128 in 256..4096"):
+    with expect_error(
+        ValueError, re.escape("QWEN38_PREFILL_SLAB must be the slab's rows, a multiple of 128 in 256..2048 (")
+    ):
         _initialize(construction)
     assert construction.calls == []  # refused before any library call
     with expect_error(ValueError, "or 0 / off for no slab, got " + re.escape(repr(value))):

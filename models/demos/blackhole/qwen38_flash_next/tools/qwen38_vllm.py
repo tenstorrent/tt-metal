@@ -71,6 +71,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_QSA_C
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     FABRIC_CONFIG,
     MESH_SHAPE,
+    SLAB_ROWS_RULE,
     TP_SIZE,
     Qwen38SlabRefused,
     is_slab_rows,
@@ -248,7 +249,7 @@ def _sample_full_row(scaled: torch.Tensor, top_k: int, top_p: float, generator: 
 
 def prefill_form(environ: Mapping[str, str] | None = None) -> tuple[bool, int | None]:
     """The prefill form the chain is opened with, as ``(long_chunks, slab_rows)``, from the environment (``os.environ``
-    by default).  ``QWEN38_PREFILL_SLAB`` is the slab's row count, a multiple of 128 in 256..4096 (the model serves
+    by default).  ``QWEN38_PREFILL_SLAB`` is the slab's row count, a multiple of 128 in 256..2048 (the model serves
     multiples of 512); unset, ``0`` or ``off`` serves without the slab, as the chat server does.  The 128-row chunks
     run ahead of the 32-row ones, as on the chat server: ``QWEN38_LONG_CHUNKS=0`` turns them off without a slab and
     is refused with one (``1`` or unset: on).  Any other value of either is refused by name."""
@@ -262,8 +263,8 @@ def prefill_form(environ: Mapping[str, str] | None = None) -> tuple[bool, int | 
         rows = int(value) if value.isascii() and value.isdigit() else None
         if rows is None or not is_slab_rows(rows):
             raise ValueError(
-                f"{PREFILL_SLAB_VARIABLE} must be the slab's rows, a multiple of 128 in 256..4096, or 0 / off for no "
-                f"slab, got {raw!r}"
+                f"{PREFILL_SLAB_VARIABLE} must be the slab's rows, {SLAB_ROWS_RULE}, or 0 / off for no slab, "
+                f"got {raw!r}"
             )
         slab_rows = rows
     switch = environ.get(LONG_CHUNKS_VARIABLE, "").strip()

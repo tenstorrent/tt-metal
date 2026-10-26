@@ -31,7 +31,7 @@ from typing import Any, Mapping
 
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.ttnn import decode_matmul
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE, is_slab_rows
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE, SLAB_ROWS_RULE, is_slab_rows
 from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import prefill_matmul_program_config
 
 # Bytes of one 32 x 32 tile: bf16; bfloat8_b (1024 mantissa bytes + 64 shared exponents); bfloat4_b (512 + 64).
@@ -74,17 +74,15 @@ DRAM_MARGIN_BYTES = 512 << 20
 # end less those two: at 32k the admission asks for exactly the measured pass point after the plan (251.27 MB per
 # bank), and the context state's growth at larger contexts adds on top of it.
 SLAB_WORKING_SET_BYTES = 2_010_176_000 - 436_797_440 - DRAM_MARGIN_BYTES  # 1,036,507,648 B (988.5 MiB)
-MEASURED_SLAB_ROWS = 2048
 
 
 def slab_working_set_bytes(rows: int) -> int:
-    """The working-set term for a slab of ``rows``: the measured 2048-row band up to 2048 rows (its constant parts, the
-    traces and the fragmentation, are not separable from the rows-linear ones), scaled by the rows above 2048 (the slab
-    state, the tensors alive through a slab and the layer transients are rows-linear)."""
+    """The working-set term for a slab of ``rows``: the measured 2048-row band for every slab, 2048 rows being the
+    largest (its constant parts, the traces and the fragmentation, are not separable from the rows-linear ones)."""
 
     if not is_slab_rows(rows):
-        raise ValueError(f"a prefill slab takes a multiple of 128 rows in 256..4096, got {rows!r}")
-    return SLAB_WORKING_SET_BYTES * max(rows, MEASURED_SLAB_ROWS) // MEASURED_SLAB_ROWS
+        raise ValueError(f"a prefill slab takes {SLAB_ROWS_RULE}, got {rows!r}")
+    return SLAB_WORKING_SET_BYTES
 
 
 # The fused siblings of the slab path, local [K, N] per device (the shapes the modules' decode weights have).

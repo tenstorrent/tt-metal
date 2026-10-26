@@ -54,7 +54,12 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.bf4 import (
     bf4_converter_source_identity,
     qualify_live_bf4_ring,
 )
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE, Qwen38MeshContract, is_slab_rows
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
+    MESH_SHAPE,
+    SLAB_ROWS_RULE,
+    Qwen38MeshContract,
+    is_slab_rows,
+)
 from models.demos.blackhole.qwen38_flash_next.ttnn.decode_matmul import (  # noqa: E402  (the placement source, READY)
     DEFAULT_WORKERS_PER_DRAM_BANK,
     TWO_READER_QUALIFIED_DTYPES,
@@ -1110,7 +1115,7 @@ class Qwen38TTNNBuilder:
         no slab linear runs, nothing is allocated and nothing is admitted."""
 
         if not is_slab_rows(rows):
-            raise ValueError(f"a prefill slab takes a multiple of 128 rows in 256..4096, got {rows!r}")
+            raise ValueError(f"a prefill slab takes {SLAB_ROWS_RULE}, got {rows!r}")
         if self._target_components is not None or self._built_target:
             raise RuntimeError("the prefill slab must be enabled before the target is built")
         self.prefill_slab_rows = rows

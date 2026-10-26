@@ -15,7 +15,7 @@
 #   --allocated-context N   32768 (default) | 65536 | 131072 | 262144
 #   --mtp K                 multi-token-prediction drafting depth, 3, 4 or 5 (off by default; greedy chunked-mode requests draft)
 #   --long-chunks           accepted for compatibility: the 128-row chunks are the server's default (combines with --mtp)
-#   --prefill-slab ROWS     prefill in slabs of ROWS rows (a multiple of 128, 256..4096; 2048 is the measured form)
+#   --prefill-slab ROWS     prefill in slabs of ROWS rows (a multiple of 128 in 256..2048; the MoE serves the multiples of 512)
 #                           ahead of the 128-row chunks (off by default; implies --long-chunks; combines with --mtp)
 #   --no-sampling           serve greedy requests only (the default server takes --sampling: a request naming no
 #                           sampling field is still the bitwise greedy stream, temperature > 0 samples)
@@ -178,8 +178,8 @@ if [[ -n "$mtp" ]]; then
 fi
 [[ -z "$long_chunks" ]] || args+=(--long-chunks)
 if [[ -n "$prefill_slab" ]]; then
-    [[ "$prefill_slab" =~ ^[0-9]+$ && $((prefill_slab % 128)) == 0 && "$prefill_slab" -ge 256 && "$prefill_slab" -le 4096 ]] \
-        || die "--prefill-slab takes a multiple of 128 in 256..4096, got $prefill_slab"
+    [[ "$prefill_slab" =~ ^[0-9]+$ && $((prefill_slab % 128)) == 0 && "$prefill_slab" -ge 256 && "$prefill_slab" -le 2048 ]] \
+        || die "--prefill-slab takes a multiple of 128 in 256..2048 (the MoE serves the multiples of 512; 2048 rows is the largest slab measured to serve), got $prefill_slab"
     args+=(--prefill-slab "$prefill_slab")
 fi
 [[ -z "$sampling" ]] || args+=(--sampling)

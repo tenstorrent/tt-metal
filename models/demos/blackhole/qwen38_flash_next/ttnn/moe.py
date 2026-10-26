@@ -1456,7 +1456,7 @@ class Qwen38TTNNMoE:
 
     @property
     def slab(self) -> bool:
-        """A prefill-slab instance (256..4096 rows): its dense linears are 2D-multicast matmuls, its routed stream one
+        """A prefill-slab instance (256..2048 rows): its dense linears are 2D-multicast matmuls, its routed stream one
         call on the op's local output path with no zero fill of the rows this device's experts do not own (the buffer
         is zero at allocation and only ever holds finite expert outputs that the weighted reduce multiplies by an
         exact 0 where unowned), the reduce in 512-row blocks."""
