@@ -113,8 +113,10 @@ def chrono_anchor(start: int, local_rows: int, rows: int) -> int:
     chunk at start > 0, which ttKDA then runs ROTATED (a mid-slab first row, a wrapped tail, the last row's padding
     taken as tokens). KDA has no positional encoding: only the chronology reads the start, so anchoring it at the
     largest multiple of rows * local_rows <= start (> 0 for any start > 0, as start >= 16384 >= rows * local_rows)
-    is the contiguous order. Opt-in ``GLM53_KDA_CHRONO_ANCHOR=1`` until validated (read per call)."""
-    if os.environ.get("GLM53_KDA_CHRONO_ANCHOR", "0") != "1" or rows <= 1:
+    is the contiguous order. Default on since 2026-10-26 (validated: one layer state pcc 0.19 -> 0.999996 vs a one-chunk
+    reference; full model 2-chunk logits closer to one-chunk); ``GLM53_KDA_CHRONO_ANCHOR=0`` = the raw start (read per call).
+    """
+    if os.environ.get("GLM53_KDA_CHRONO_ANCHOR", "1") != "1" or rows <= 1:
         return start
     span = rows * local_rows
     return start - start % span
