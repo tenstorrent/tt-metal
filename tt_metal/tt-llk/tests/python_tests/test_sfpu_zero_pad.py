@@ -13,10 +13,10 @@ VALID_ROWS and TOTAL_ROWS have to be even.
 
 import torch
 from conftest import skip_for_wormhole
-from helpers.constraints import get_valid_dest_accumulation_modes
+from helpers.constraints import dest_acc_modes_forcing_32bit_input
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ELEMENTS_PER_TILE
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
@@ -26,12 +26,6 @@ FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
 SFPU_ROW_ELEMENTS = 32
 SFPU_ROWS_PER_TILE = ELEMENTS_PER_TILE // SFPU_ROW_ELEMENTS
-
-
-def _valid_dest_acc(formats):
-    if formats.input.is_32_bit():
-        return [DestAccumulation.Yes]
-    return get_valid_dest_accumulation_modes(formats)
 
 
 def _zero_pad_golden(tile, valid_rows: int, total_rows: int):
@@ -109,7 +103,7 @@ def _run(
 @skip_for_wormhole
 @parametrize(
     formats=FORMATS,
-    dest_acc=lambda formats: _valid_dest_acc(formats),
+    dest_acc=dest_acc_modes_forcing_32bit_input,
     row_range=ROW_RANGES,
 )
 def test_sfpu_zero_pad(formats, dest_acc, row_range):

@@ -75,6 +75,14 @@ def get_valid_dest_accumulation_modes(formats):
     return [DestAccumulation.No, DestAccumulation.Yes]
 
 
+def dest_acc_modes_forcing_32bit_input(formats) -> List[DestAccumulation]:
+    """[Yes] for a 32-bit input (it can't go through a 16-bit Dest), else
+    get_valid_dest_accumulation_modes(formats)."""
+    if formats.input_format.is_32_bit():
+        return [DestAccumulation.Yes]
+    return get_valid_dest_accumulation_modes(formats)
+
+
 def distinct_dest_accumulation_modes(formats, modes):
     """Drop dest_acc modes that TestConfig normalizes onto another requested mode.
 

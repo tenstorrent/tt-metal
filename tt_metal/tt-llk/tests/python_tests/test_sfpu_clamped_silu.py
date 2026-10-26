@@ -24,10 +24,10 @@ provides an init.
 
 import torch
 from conftest import skip_for_wormhole
-from helpers.constraints import get_valid_dest_accumulation_modes
+from helpers.constraints import dest_acc_modes_forcing_32bit_input
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIM, round_to_dest_width
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
@@ -110,12 +110,6 @@ def _clamped_silu_golden(x, op, scalar0, scalar1, dest_acc):
     return round_to_dest_width(y, dest_acc)
 
 
-def _valid_dest_acc(formats):
-    if formats.input.is_32_bit():
-        return [DestAccumulation.Yes]
-    return get_valid_dest_accumulation_modes(formats)
-
-
 def _run(formats, dest_acc, op, scalars, input_range):
     scalar0, scalar1 = scalars
 
@@ -161,7 +155,7 @@ def _run(formats, dest_acc, op, scalars, input_range):
 @skip_for_wormhole
 @parametrize(
     formats=FORMATS,
-    dest_acc=lambda formats: _valid_dest_acc(formats),
+    dest_acc=dest_acc_modes_forcing_32bit_input,
     op=ALL_OPS,
     scalars=lambda op: _op_scalars(op),
     input_range=lambda op: _op_ranges(op),

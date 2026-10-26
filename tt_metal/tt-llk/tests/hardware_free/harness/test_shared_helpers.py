@@ -4,8 +4,12 @@
 
 import pytest
 import torch
-from helpers.constraints import is_valid_quasar_dest_mode_conversion
-from helpers.format_config import DataFormat
+from helpers.constraints import (
+    dest_acc_modes_forcing_32bit_input,
+    get_valid_dest_accumulation_modes,
+    is_valid_quasar_dest_mode_conversion,
+)
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import quasar_dest_sync_modes
 from helpers.test_variant_parameters import fp32_bits
@@ -18,6 +22,34 @@ from helpers.utils import result_tensor
 )
 def test_fp32_bits(value, bits):
     assert fp32_bits(value) == bits
+
+
+@pytest.mark.parametrize(
+    "in_fmt, out_fmt",
+    [
+        (DataFormat.Float32, DataFormat.Float32),
+        (DataFormat.Float32, DataFormat.Float16_b),
+        (DataFormat.Int32, DataFormat.Int32),
+    ],
+)
+def test_dest_acc_modes_forcing_32bit_input_32bit(in_fmt, out_fmt):
+    formats = InputOutputFormat(in_fmt, out_fmt)
+    assert dest_acc_modes_forcing_32bit_input(formats) == [DestAccumulation.Yes]
+
+
+@pytest.mark.parametrize(
+    "in_fmt, out_fmt",
+    [
+        (DataFormat.Float16_b, DataFormat.Float16_b),
+        (DataFormat.Float16_b, DataFormat.Float32),
+        (DataFormat.Bfp8_b, DataFormat.Float16),
+    ],
+)
+def test_dest_acc_modes_forcing_32bit_input_16bit(in_fmt, out_fmt):
+    formats = InputOutputFormat(in_fmt, out_fmt)
+    assert dest_acc_modes_forcing_32bit_input(
+        formats
+    ) == get_valid_dest_accumulation_modes(formats)
 
 
 def test_quasar_dest_sync_modes():
