@@ -269,9 +269,6 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
     log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat dst_dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-
     TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // Real per-row L1 stride is aligned_page_size(), not the compact payload (differs when W·E % 16 != 0).
@@ -283,26 +280,6 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
         "SliceRmShardedProgramFactory: width-begin ({} bytes) must be L1-aligned.",
         begins_bytes);
 
-    // Both DFBs are built on borrowed memory: their backing L1 address resolves from the input /
-    // output TensorArgument each dispatch, so nothing here has to re-point them on a cache hit.
-    // entry_size and num_entries vary with shard shape / element size, so padded_shape is folded
-    // into compute_program_hash() to keep each unique sizing in its own cache entry; DFB sizing is
-    // set once at spec construction and is not re-applied on a hit.
-    DataflowBufferSpec dfb_in{
-        .unique_id = SHARDED_IN,
-        .entry_size = src_stride_bytes,
-        .num_entries = shard_height_padded,
-        .data_format_metadata = dfb_data_format,
-        .borrowed_from = INPUT,
-    };
-    DataflowBufferSpec dfb_out{
-        .unique_id = SHARDED_OUT,
-        .entry_size = dst_stride_bytes,
-        .num_entries = shard_height_unpadded,
-        .data_format_metadata = dst_dfb_data_format,
-        .borrowed_from = OUTPUT,
-    };
-
     auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm_sharded(
         input,
         output,
@@ -313,41 +290,29 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
         shard_height_padded,
         num_padded_sticks);
 
-    // The reader is the only kernel this factory builds, so it is the only toucher of either DFB
-    // and binds both ends of each: a self-loop. Neither DFB carries data between kernels; each is a
-    // window onto a resident shard that the reader addresses through its own cursor.
+    // The reader is the only kernel this factory builds. It reaches both resident shards through its
+    // tensor bindings: it reads rows out of the input shards and writes them into its own output shard.
+    // Each binding takes its address from the input / output TensorArgument on every dispatch, so
+    // nothing here has to re-point the shards on a cache hit.
     KernelSpec reader{
         .unique_id = SHARDED_READER,
         .source =
             "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
             "slice_reader_unary_unpad_dims_rm_sharded.cpp",
-        .dfb_bindings =
+        .tensor_bindings =
             {
-                DFBBinding{
-                    .dfb_spec_name = SHARDED_IN,
-                    .accessor_name = "in",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
+                TensorBinding{
+                    .tensor_parameter_name = INPUT,
+                    .accessor_name = "src",
                 },
-                DFBBinding{
-                    .dfb_spec_name = SHARDED_IN,
-                    .accessor_name = "in",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = SHARDED_OUT,
-                    .accessor_name = "out",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = SHARDED_OUT,
-                    .accessor_name = "out",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
+                TensorBinding{
+                    .tensor_parameter_name = OUTPUT,
+                    .accessor_name = "dst",
                 },
             },
         .compile_time_args =
             {
                 {"stick_size_unpadded", static_cast<uint32_t>(stick_size_unpadded)},
-                {"num_sticks_unpadded", static_cast<uint32_t>(shard_height_unpadded)},
                 {"src_stride_bytes", src_stride_bytes},
                 {"dst_stride_bytes", dst_stride_bytes},
                 {"begins_bytes", begins_bytes},
@@ -379,7 +344,6 @@ ttnn::device_operation::ProgramArtifacts SliceRmShardedProgramFactory::create_pr
     ProgramSpec spec{
         .name = "slice_rm_sharded",
         .kernels = {std::move(reader)},
-        .dataflow_buffers = {std::move(dfb_in), std::move(dfb_out)},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()},

@@ -92,6 +92,24 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
     return start_offset;
 }
 
+tt::DataFormat get_slice_dfb_data_format(tt::tt_metal::DataType dtype, tt::ARCH arch) {
+    const tt::DataFormat format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
+    // A slice DFB only carries bytes from one data-movement kernel to another. No kernel reads its
+    // declared format, and its entry size comes either from tile_size() or from row bytes, both of
+    // which are the same for a raw format of the same element size. Quasar rejects UInt16 and UInt32
+    // as DFB formats, so on Quasar those elements are declared as RawUInt16 and RawUInt32. Wormhole
+    // and Blackhole keep the format of the dtype itself.
+    if (arch == tt::ARCH::QUASAR) {
+        if (format == tt::DataFormat::UInt16) {
+            return tt::DataFormat::RawUInt16;
+        }
+        if (format == tt::DataFormat::UInt32) {
+            return tt::DataFormat::RawUInt32;
+        }
+    }
+    return format;
+}
+
 }  // namespace ttnn::operations::data_movement
 
 namespace ttnn::prim {
