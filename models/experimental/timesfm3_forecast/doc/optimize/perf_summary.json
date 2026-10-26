@@ -14,28 +14,28 @@
  },
  "chip": "blackhole p150, ttq part 0 (61C0BD39B27E9772)",
  "final": {
-  "commit": "c24488beaa6",
-  "bench": "doc/optimize/final/bench.json (job 798, --kind long, git_dirty empty on every record)",
-  "check_gates": "PASS vs iter_00/r1_1/bench.json (the D4 drift reference), doc/optimize/final/check_gates.txt; abs_err_max has no fixed record yet (proposed: job 798)",
+  "commit": "cf982fb4560",
+  "bench": "doc/optimize/final/bench_f9.json (job 820, --kind long, git_dirty empty on every record); job 798 (pre-F9-cap) kept as final/bench.json",
+  "check_gates": "PASS, doc/optimize/final/check_gates_f9.txt; fixed records per D5: r1_1 (D4) for its metrics, r1_4c for spread_ratio_p50, final/r0_abs_err (job 810, r1_1 commit 1d37add317b + HEAD head_metrics) for abs_err_max, job 798 for gift_e2e; inactive_err_max_rel floors 0.15 paper / 0.06 long_context, multivariate, N/A without inactive rows",
   "device_ms": {
    "paper-accuracy": 424.7,
    "paper-performance": 409.0,
-   "long_context-accuracy": 128.9,
+   "long_context-accuracy": 129.2,
    "long_context-performance": 124.8,
-   "multivariate-accuracy": 837.6,
-   "multivariate-performance": 807.1,
+   "multivariate-accuracy": 837.7,
+   "multivariate-performance": 806.7,
    "gift_e2e-accuracy": 68.7,
-   "gift_e2e-performance": 66.7
+   "gift_e2e-performance": 67.1
   },
   "steady_wall_ms": {
-   "paper-accuracy": 619.8,
-   "paper-performance": 560.0,
-   "long_context-accuracy": 167.9,
-   "long_context-performance": 163.3,
-   "multivariate-accuracy": 961.3,
-   "multivariate-performance": 952.4,
-   "gift_e2e-accuracy": 84.3,
-   "gift_e2e-performance": 83.4
+   "paper-accuracy": 621.1,
+   "paper-performance": 609.7,
+   "long_context-accuracy": 167.2,
+   "long_context-performance": 162.6,
+   "multivariate-accuracy": 1034.3,
+   "multivariate-performance": 950.4,
+   "gift_e2e-accuracy": 85.7,
+   "gift_e2e-performance": 85.9
   },
   "pcc_paper_accuracy": {
    "pcc_normalized": 0.999938,
@@ -52,8 +52,10 @@
    "abs_err_max": 0.249522,
    "inactive_err_max_rel": 0.086242
   },
-  "pcc_suite": "87/87 (job 793, 679e5289544; c24488beaa6 changes only tests/perf/test_forward_perf.py)",
-  "watcher": "87/87 under TT_METAL_WATCHER=10, no watcher errors (job 794, 679e5289544)"
+  "pcc_suite": "90/90 (job 817, cf982fb4560)",
+  "watcher": "90/90 under TT_METAL_WATCHER=10, no watcher errors (job 819, cf982fb4560)",
+  "f9_cap": "SDPA q/k chunk capped at 128 with a user mask (D5); test_sdpa_masked_chunk_cap at S=256/512, logit std 3: max|capped - forced-256| 0.058/0.063, positive control 3.4 fails (jobs 808-809); device cost: long_context 128.9 -> 129.2 ms, others unchanged",
+  "abs_err_max_paper": "row 562 (level_shift, active), element 333: golden 1.0395, device 1.2891, err 0.2495 = 0.68 x row std (0.367), 32 bf16 ulps: a real local error, not quantization; identical in both precisions; round-0 value 0.320 / 0.406 (final/abs_err_row_*.json)"
  },
  "rounds": [
   {
@@ -159,8 +161,11 @@
   "kernels": "tt/ops: rope_qk_norm_qkv, post_add_norm (generic_op, model-local)"
  },
  "named_limitations": [
-  "contract exit criterion matmuls > 65 % of FLOPs not reached (~46 % matmul share); remaining non-matmul time needs C++ or new kernels",
-  "trace not used (no wall gain, R2-5)"
+  "contract exit criterion (matmuls > 65 % of FLOPs) not met: matmuls are 46.5 % of device time (iter_03/analysis.md; a device-time share, not FLOPs); reaching the bar needs C++ / new kernels",
+  "trace not used (no wall gain, R2-5)",
+  "spread_ratio_p50 is +0.9-1.3 % on every case: a small systematic band widening (within the 0.97-1.03 gate)",
+  "no test covers the unpacked variate path at V not dividing 32, and no full-model golden has per-variate padding",
+  "PLAN v1.14 population rule not implemented: p01/p99 gated at every row count (stricter)"
  ],
  "not_applicable": {
   "multichip": "single-chip contract",
@@ -178,5 +183,13 @@
    771,
    772
   ]
+ },
+ "shipping": {
+  "accuracy": "ships (D5)",
+  "performance": "non-shipping (PLAN v1.12): 3.7 % faster than accuracy on paper (409.0 vs 424.7 ms), below the 5 % bar"
+ },
+ "vs_d3_rebaseline": {
+  "long_context-accuracy": "232.0 -> 129.2 ms (-44.3 %)",
+  "multivariate-accuracy": "5110.0 -> 837.7 ms (-83.6 %)"
  }
 }
