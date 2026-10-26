@@ -16,6 +16,7 @@
 #include <tt-metalium/math.hpp>
 
 #include <algorithm>
+#include <numeric>
 #include <variant>
 #include <vector>
 using namespace tt::tt_metal;
@@ -337,9 +338,11 @@ bool hits_bh_col_bcast_bf16_to_fp32_hang(
     return arch == tt::ARCH::BLACKHOLE && is_col_bcast && fp32_dest_acc_en && has_bf16_input;
 }
 
-// Row broadcast: widest column group, and the tiles per core that select it.
+// Row broadcast: widest column group, and the tiles per core that select it. A one-column walk whose row stride
+// shares a factor with the DRAM bank count keeps each core on a few banks, so it switches earlier.
 constexpr uint32_t kMaxColGroup = 4;
 constexpr uint32_t kColGroupMinTiles = 128;
+constexpr uint32_t kColGroupFewBanksMinTiles = 48;
 
 bool is_llk_bcast(
     const tt::ARCH arch,
@@ -677,7 +680,10 @@ void for_each_core_runtime_args(
             return 0u;
         }
         const uint32_t tiles_per_core = tt::div_up(rt_c_num_tiles, std::max(num_cores, 1u));
-        return tiles_per_core >= CMAKE_UNIQUE_NAMESPACE::kColGroupMinTiles ? CMAKE_UNIQUE_NAMESPACE::kMaxColGroup : 1u;
+        const uint32_t dram_banks = a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+        const uint32_t min_tiles = std::gcd(cWt, dram_banks) > 1 ? CMAKE_UNIQUE_NAMESPACE::kColGroupFewBanksMinTiles
+                                                                 : CMAKE_UNIQUE_NAMESPACE::kColGroupMinTiles;
+        return tiles_per_core >= min_tiles ? CMAKE_UNIQUE_NAMESPACE::kMaxColGroup : 1u;
     }();
 
     // Noop cores get zero-filled runtime args, sized to match the active kernel variant so unused cores
