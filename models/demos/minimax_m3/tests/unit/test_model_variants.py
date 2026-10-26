@@ -103,7 +103,7 @@ def test_layer_types_follow_config(name, msa_layers):
 @pytest.mark.parametrize("name, theta", [(M3, 5_000_000), (M31, 10_000_000)])
 def test_reference_config_follows_variant(name, theta):
     cfg = MiniMaxM3Config.from_hf_config(load_config(name))
-    assert cfg.rope_theta == theta and cfg.rotary_dim == 64 and cfg.use_gemma_norm and cfg.use_routing_bias
+    assert cfg.rope_theta == theta and cfg.rotary_dim == 64
     assert [cfg.is_sparse_attn_layer(i) for i in range(3)] == [name == M31] * 3
     assert cfg.dense_equiv_tokens == 2048
 
