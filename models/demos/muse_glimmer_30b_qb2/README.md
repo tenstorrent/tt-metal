@@ -19,15 +19,7 @@ by the tt-model-bringup agentic pipeline; tracking: tenstorrent/tt-agentic-bring
 | `tt/readiness_contract.py` | Vendored generator contract from the bring-up runtime |
 | `tt/benchmark_timing.py` | Optional phase timing (`MUSE_PHASE_EVENTS`) |
 | `vllm_metadata.json` | Architecture registration for `EXTRA_MODELS_DIR` |
-| `requirements.txt` | Pinned [tt-transformers](https://github.com/tenstorrent/tt-transformers) (sampler, LM head, lazy weights) |
 | `tests/test_vllm_adapter.py` | Device test of the adapter: resident-input decode vs reload, sync/async readback, host-sampled prefill |
-
-## Setup
-
-Build tt-metal and activate its Python environment, then install the pinned tt-transformers
-package, which provides the sampler and LM head:
-`uv pip install --no-deps -r models/demos/muse_glimmer_30b_qb2/requirements.txt`. `--no-deps` keeps
-the ttnn built from this tree; a resolving install would replace it.
 
 ## Serving
 

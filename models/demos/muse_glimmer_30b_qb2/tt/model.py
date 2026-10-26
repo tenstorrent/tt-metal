@@ -15,10 +15,10 @@ from types import SimpleNamespace
 
 import torch
 from safetensors import safe_open
-from tt_transformers.modules.lazy_weight import LazyWeight
-from tt_transformers.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
 
 import ttnn
+from models.common.modules.lazy_weight import LazyWeight
+from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
 from models.demos.muse_glimmer_30b_qb2.tt.multichip_decoder import MeshCCLManager, MultichipDecoder
 from models.demos.muse_glimmer_30b_qb2.tt.precision import decoder_policy, load_precision_config
 
