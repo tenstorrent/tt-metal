@@ -75,6 +75,53 @@ def op(name: str):
     return getattr(ttnn.experimental.quasar, name) if quasar_forks_enabled() else getattr(ttnn, name)
 
 
+def skip_bfloat8_on_quasar():
+    """Skip a case whose device output is bfloat8_b when running on Quasar.
+
+    Quasar has no block-float formats (Bfp8_b / Bfp4_b / Bfp2_b): ``is_data_format_supported``
+    excludes them and ``ValidateProgramSpec`` rejects any DFB carrying one before a kernel is
+    built (``DFB 'out' has data format 'Bfp8_b' which is not supported on architecture quasar``).
+    The model's bfloat8_b casts (detect-head anchors/strides, the :327 to_layout) therefore need a
+    model-level dtype decision on Quasar (bf16 or the MxFp8 family); the bf16 variants of the same
+    call sites are covered by the sibling tests in each file. Host-side casts (``ttnn.to_dtype``)
+    are unaffected.
+    """
+    if ttnn.get_arch_name() == "quasar":
+        pytest.skip("bfloat8_b is not a Quasar data format (model dtype decision, not an op bug)")
+
+
+# =============================================================================
+# RTL emulator (ZEBU) detection
+# =============================================================================
+#
+# UMD picks the backend from TT_METAL_SIMULATOR (umd/src/simulation/simulation_connector.cpp):
+# a ``.so`` file runs the TTSim shared-library backend (craq-sim), a directory is an RTL
+# emulator session (emu-quasar-1x3 / 2x3 over the NNG socket). The emulator runs ~3 orders of
+# magnitude slower than craq-sim, so a few cases that pass on the functional sim never finish
+# there. ``TTNN_YOLO_OPS_EMULATOR=1|0`` forces the classification either way.
+
+
+def on_emulator() -> bool:
+    v = os.environ.get("TTNN_YOLO_OPS_EMULATOR", "auto").lower()
+    if v in ("1", "true", "yes"):
+        return True
+    if v in ("0", "false", "no"):
+        return False
+    sim = os.environ.get("TT_METAL_SIMULATOR", "")
+    return bool(sim) and os.path.isdir(sim)
+
+
+def skip_on_emulator(reason: str):
+    """Skip a case that cannot complete on the RTL emulator (passes on craq-sim and silicon).
+
+    Only for cases documented in issue #56622 as hanging there: the reason should say why
+    (slow kernel path, host readback volume, emulator-only fault) so the skip can be lifted
+    once the cause is fixed.
+    """
+    if on_emulator():
+        pytest.skip(f"RTL emulator: {reason} (issue #56622)")
+
+
 # =============================================================================
 # YOLOv8 (640x640, batch 1) constants
 # =============================================================================

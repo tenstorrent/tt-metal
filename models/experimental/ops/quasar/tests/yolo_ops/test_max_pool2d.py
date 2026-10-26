@@ -65,6 +65,10 @@ def _torch_max_pool2d(x_nchw: torch.Tensor) -> torch.Tensor:
     ],
 )
 def test_max_pool2d(ttnn_mesh_device, reset_seeds, variant, channels, hw):
+    # The Quasar pool fork gathers each 5x5 window with RISC word-copy loops plus an L2 flush
+    # per window: fast on craq-sim, >15 min without output on emu-quasar-2x3 (readers past
+    # reserve_back, compute waiting on in_cb). Owner: Quasar pool fork.
+    U.skip_on_emulator("pool fork's per-window RISC gather + L2 flush never completes")
     mesh = ttnn_mesh_device
     n, c, h, w = U.BATCH, channels, hw, hw
 
@@ -119,6 +123,7 @@ def _torch_max_pool2d_thrice(x_nchw: torch.Tensor) -> torch.Tensor:
     ],
 )
 def test_max_pool2d_sharded(ttnn_mesh_device, reset_seeds, variant, channels, hw):
+    U.skip_on_emulator("pool fork's per-window RISC gather + L2 flush never completes")  # see test_max_pool2d
     mesh = ttnn_mesh_device
     n, c, h, w = U.BATCH, channels, hw, hw
 

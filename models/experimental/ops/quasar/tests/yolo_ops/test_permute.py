@@ -117,6 +117,10 @@ _PERMUTE_SITES = [
     [pytest.param(*s, id=s[0]) for s in _PERMUTE_SITES],
 )
 def test_permute_detect(ttnn_mesh_device, reset_seeds, name, shape, dims):
+    if name == "dfl_transpose":
+        # Device finishes (watcher: all RISCs idle), but reading back the (1,4,8400,16) ROW_MAJOR
+        # output is 33,600 sticks of 32 B = one UMD transaction each on the emulator (>15 min).
+        U.skip_on_emulator("host readback of 33,600 row-major 32 B sticks exceeds the job budget")
     mesh = ttnn_mesh_device
 
     x_torch = U.torch_rand(shape)
