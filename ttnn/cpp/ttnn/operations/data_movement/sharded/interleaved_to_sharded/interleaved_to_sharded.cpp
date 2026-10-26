@@ -48,6 +48,10 @@ ttnn::Tensor interleaved_to_sharded(
     const std::optional<DataType>& data_type_arg,
     const std::optional<bool>& keep_l1_aligned) {
     validate_shard_shape(shard_shape);
+    TT_FATAL(
+        input_tensor.padded_shape()[-1] > 0,
+        "Input tensor width must be greater than 0, got shape {}",
+        input_tensor.padded_shape());
     bool row_wise = shard_orientation == ShardOrientation::ROW_MAJOR;
     CoreCoord grid_size;
     CoreRangeSet grid_set;
