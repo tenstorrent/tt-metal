@@ -59,27 +59,19 @@ bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
     return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>((*placements)[axis]);
 }
 
-void synchronize_gradients(const serialization::NamedParameters& parameters) {
-    if (!autograd::ctx().is_parallelism_context_initialized()) {
-        return;
-    }
-    const auto& pctx = autograd::ctx().get_parallelism_context();
-    ttsl::SmallVector<uint32_t> cluster_axes;
-    if (pctx.is_cp_enabled()) {
-        cluster_axes.push_back(pctx.get_cp_axis().value());
-    }
-    if (pctx.is_ddp_enabled()) {
-        cluster_axes.push_back(pctx.get_ddp_axis().value());
-    }
+namespace {
+
+// Averages each parameter's gradient along the axes in `cluster_axes` that the parameter is not sharded on. Along an
+// axis it is sharded on, a parameter holds a different piece of the tensor on each device, so averaging there would
+// add those pieces together; FSDP's backward hook has already reduce-scattered such a gradient. The all_reduce result
+// carries its own per-axis label (Replicate on the reduced axis, the other axes as the gradient had them, a collapsed
+// label expanded per axis), so nothing is relabelled here.
+void synchronize_gradients_along(
+    const serialization::NamedParameters& parameters, const ttsl::SmallVector<uint32_t>& cluster_axes) {
     for (auto& [name, tensor] : parameters) {
         if (!tensor->is_grad_initialized()) {
             continue;
         }
-        // Build per-param axes, dropping any axis on which this parameter is
-        // sharded: FSDP already reduce-scattered the grad over the DDP axis in
-        // its backward-post hook. The all_reduce result carries its own per-axis
-        // label (Replicate on the reduced axis, the other axes as the gradient had
-        // them, a collapsed label expanded per axis), so nothing is relabelled here.
         ttsl::SmallVector<uint32_t> axes_for_param;
         for (uint32_t axis : cluster_axes) {
             if (!is_sharded_on_axis(tensor->get_value(), axis)) {
@@ -93,14 +85,26 @@ void synchronize_gradients(const serialization::NamedParameters& parameters) {
     }
 }
 
+}  // namespace
+
+void synchronize_gradients(const serialization::NamedParameters& parameters) {
+    if (!autograd::ctx().is_parallelism_context_initialized()) {
+        return;
+    }
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    ttsl::SmallVector<uint32_t> cluster_axes;
+    if (pctx.is_cp_enabled()) {
+        cluster_axes.push_back(pctx.get_cp_axis().value());
+    }
+    if (pctx.is_ddp_enabled()) {
+        cluster_axes.push_back(pctx.get_ddp_axis().value());
+    }
+    synchronize_gradients_along(parameters, cluster_axes);
+}
+
 void synchronize_gradients(
     const serialization::NamedParameters& parameters, const std::vector<uint32_t>& cluster_axes) {
-    ttsl::SmallVector<uint32_t> axes(cluster_axes.begin(), cluster_axes.end());
-    for (auto& [name, tensor] : parameters) {
-        if (tensor->is_grad_initialized()) {
-            tensor->set_grad(synchronize_tensor(tensor->get_grad(), axes));
-        }
-    }
+    synchronize_gradients_along(parameters, ttsl::SmallVector<uint32_t>(cluster_axes.begin(), cluster_axes.end()));
 }
 
 }  // namespace ttml::core::distributed

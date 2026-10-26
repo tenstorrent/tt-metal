@@ -23,7 +23,11 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
 // Shard would skip a reduction.
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis);
 
+// Averages every parameter's gradient along the mesh axes the parallelism context reduces (context parallel, then
+// data parallel), skipping for each parameter any axis it is sharded on (see is_sharded_on_axis). A no-op when no
+// parallelism context is initialized.
 void synchronize_gradients(const serialization::NamedParameters& parameters);
+// The same along `cluster_axes`: a parameter sharded on one of them is not averaged along it.
 void synchronize_gradients(const serialization::NamedParameters& parameters, const std::vector<uint32_t>& cluster_axes);
 
 }  // namespace ttml::core::distributed

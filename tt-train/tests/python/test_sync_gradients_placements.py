@@ -312,6 +312,33 @@ class TestTP:
         with expect_error(RuntimeError, "cannot tell whether the tensor is sharded"):
             is_sharded_on_axis(forged, tp)
 
+    def test_synchronize_over_tp_leaves_the_tp_shards_alone(self, tp_mesh):
+        """``synchronize_gradients(params, [tp])`` averages only the gradients of parameters replicated on tp. A
+        TP-sharded parameter holds a different piece of the weight on each tp device, so averaging along tp would add
+        those pieces together; its gradient comes back unchanged, bit for bit.
+
+        Negative control: without the per-parameter filter, this call averaged each TP-sharded gradient with the
+        other device's piece."""
+        tp = tp_mesh.axis_index("tp")
+        model = TPBlock()
+        params = model.parameters()
+        _backward(model, _input((1, 1, DIM, DIM)))
+        before = {name: _shards(t.get_grad()) for name, t in params.items()}
+        sharded = [name for name in params if name.endswith(TP_SHARDED_SUFFIXES)]
+        assert sharded and any(
+            not np.array_equal(*before[name]) for name in sharded
+        ), "precondition: the TP shards differ, so averaging them would show"
+
+        ttml.core.distributed.synchronize_gradients(params, [tp])
+
+        for name, t in params.items():
+            after = _shards(t.get_grad())
+            if name in sharded:
+                for device, (b, a) in enumerate(zip(before[name], after)):
+                    np.testing.assert_array_equal(a, b, err_msg=f"{name}: device {device}'s piece was averaged on tp")
+            else:
+                _assert_mean_over_axis(before[name], after, tp_mesh.shape, tp, name)
+
 
 # --- FSDP on [1, 2] ("dp", "fsdp") ------------------------------------------------------------------------------
 
@@ -515,11 +542,18 @@ class TestHSDP:
             assert is_sharded_on_axis(grad, fsdp), name
             _assert_mean_over_axis(before[name], _shards(grad), hsdp_mesh.shape, dp, name)
 
-        head = params["Model/head/weight"]
-        reduced = ttnn.multiply(ttml.core.distributed.all_reduce(head.get_grad(), cluster_axis=fsdp), 1.0 / F)
-        assert not is_sharded_on_axis(reduced, dp)
-        assert not is_sharded_on_axis(reduced, fsdp)
-        _assert_mean_over_axis(_shards(head.get_grad()), _shards(reduced), hsdp_mesh.shape, fsdp, "head over fsdp")
+        # The fsdp reduction goes through the same overload: the managed parameters are Shard on "fsdp", so their
+        # reduce-scattered gradients are left alone, and only the head is averaged there.
+        after_dp = {name: _shards(t.get_grad()) for name, t in params.items()}
+        ttml.core.distributed.synchronize_gradients(params, [fsdp])
+        for name, t in params.items():
+            if ttml.fsdp.is_fsdp_managed(t):
+                for device, (b, a) in enumerate(zip(after_dp[name], _shards(t.get_grad()))):
+                    np.testing.assert_array_equal(a, b, err_msg=f"{name}: device {device}'s piece was averaged on fsdp")
+        head = params["Model/head/weight"].get_grad()
+        assert not is_sharded_on_axis(head, dp)
+        assert not is_sharded_on_axis(head, fsdp)
+        _assert_mean_over_axis(after_dp["Model/head/weight"], _shards(head), hsdp_mesh.shape, fsdp, "head over fsdp")
 
     def test_causal_lm_collate_hsdp(self, hsdp_mesh):
         """``causal_lm_collate_fn`` with the HSDP mapper: the standard per-device shapes, the collapsed whole-mesh
