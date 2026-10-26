@@ -53,4 +53,33 @@ ALWI void cumsum_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(cumsum, sfpu::cumsum_init, (false /* APPROXIMATE */)));
 }
 
+// clang-format off
+/**
+ * *cumsum_tile* with compensated (Kahan) summation: the rounding error of each add is kept next to the running totals
+ * and fed back into the next add, so the error does not grow with the length of the scan. Same tile order, *first*
+ * flag and restrictions as *cumsum_tile*. Only available on Wormhole and Blackhole. Not supported on Quasar (compile
+ * error).
+ *
+ * Return value: None
+ *
+ */
+// clang-format on
+ALWI void cumsum_compensated_tile(uint32_t idst, bool first = true) {
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_cumsum_compensated,
+        (false /* APPROXIMATE */),
+        idst,
+        VectorMode::RC_custom,
+        first));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void cumsum_compensated_tile_init() {
+    MATH(SFPU_UNARY_INIT_FN(cumsum, sfpu::cumsum_compensated_init, (false /* APPROXIMATE */)));
+}
+
 }  // namespace ckernel

@@ -18,7 +18,8 @@
 #include "../accumulation_common.hpp"
 
 // Cumulative sum along one of the two tile axes, without first permuting the scan axis to dim 0.
-// With CUMPROD, a cumulative product: cumprod_tile works like cumsum_tile below.
+// With CUMPROD, a cumulative product: cumprod_tile works like cumsum_tile below. With
+// COMPENSATED_SUM, cumsum_compensated_tile also carries the Kahan compensation in SFPU registers.
 //
 // The reader delivers num_rows runs of tiles_per_row tiles, each run in scan order. cumsum_tile
 // scans every column of a tile top to bottom and carries the column totals into the next tile in
@@ -55,6 +56,9 @@ void kernel_main() {
 #ifdef CUMPROD
             cumprod_tile_init();
             cumprod_tile(DST_TILE, /*first=*/j == 0);
+#elif defined(COMPENSATED_SUM)
+            cumsum_compensated_tile_init();
+            cumsum_compensated_tile(DST_TILE, /*first=*/j == 0);
 #else
             cumsum_tile_init();
             cumsum_tile(DST_TILE, /*first=*/j == 0);

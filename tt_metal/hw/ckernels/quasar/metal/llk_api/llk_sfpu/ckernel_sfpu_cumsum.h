@@ -207,5 +207,20 @@ inline void calculate_cumsum(const bool first) {
     }
 }
 
+// The compensated scan is not ported to Quasar. cumsum.h still compiles there; a kernel that calls
+// cumsum_compensated_tile fails to build.
+[[gnu::error("cumsum_compensated_tile is not supported on Quasar")]] void
+cumsum_compensated_tile_is_not_supported_on_quasar();
+
+template <bool APPROXIMATION_MODE /*unused*/>
+inline void calculate_cumsum_compensated([[maybe_unused]] const bool first) {
+    cumsum_compensated_tile_is_not_supported_on_quasar();
+}
+
+template <bool APPROXIMATION_MODE /*unused*/>
+inline void cumsum_compensated_init() {
+    cumsum_compensated_tile_is_not_supported_on_quasar();
+}
+
 }  // namespace sfpu
 }  // namespace ckernel

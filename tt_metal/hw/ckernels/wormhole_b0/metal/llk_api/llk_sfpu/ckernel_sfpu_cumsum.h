@@ -87,4 +87,71 @@ inline void cumsum_init() {
     TTI_SFPNOP;
 }
 
+// One row of the compensated (Kahan) scan, the steps of the permuted path's calculate_kahan_step:
+// y = x - c, t = s + y, c = (t - s) - y, and c = 0 where t - s is not finite. x, then t, is in
+// LREG<ROW>, s in LREG<S> and c in LREG6; LREG4 and LREG5 hold y and t - s.
+template <std::uint32_t ROW, std::uint32_t S>
+inline void compensated_scan_row() {
+    TTI_SFPMAD(6, p_sfpu::LCONST_neg1, ROW, 4, 0);
+    TTI_SFPNOP;
+    TTI_SFPADD(p_sfpu::LCONST_1, S, 4, ROW, 0);
+    TTI_SFPNOP;
+    TTI_SFPMAD(S, p_sfpu::LCONST_neg1, ROW, 5, 0);
+    TTI_SFPNOP;
+    TTI_SFPMAD(4, p_sfpu::LCONST_neg1, 5, 6, 0);
+    TTI_SFPEXEXP(0, 5, 5, sfpi::SFPEXEXP_MOD1_NODEBIAS);
+    TTI_SFPIADD(-255 & 0xfff, 5, 5, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_GTE0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, 6, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+}
+
+// One pass of the compensated scan: loads 4 rows of each face pair into LREG0-3, transposes them,
+// scans them and stores them back. The two transposes cancel out on LREG4-7, so the sum and the
+// compensation stay in LREG7 and LREG6 between passes.
+template <std::uint32_t PASS>
+inline void compensated_scan_pass() {
+    constexpr std::uint32_t row = (PASS % 4) * 4 + (PASS / 4) * 32;
+    TTI_SFPLOAD(0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, row);
+    TTI_SFPLOAD(1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, row + 2);
+    TTI_SFPLOAD(2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, row + 16);
+    TTI_SFPLOAD(3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, row + 18);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    compensated_scan_row<0, 7>();
+    compensated_scan_row<1, 0>();
+    compensated_scan_row<2, 1>();
+    compensated_scan_row<3, 2>();
+    TTI_SFPMOV(0, 3, 7, 0);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPSTORE(0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, row);
+    TTI_SFPSTORE(1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, row + 2);
+    TTI_SFPSTORE(2, InstrModLoadStore::DEFAULT, ADDR_MOD_3, row + 16);
+    TTI_SFPSTORE(3, InstrModLoadStore::DEFAULT, ADDR_MOD_3, row + 18);
+}
+
+// Like calculate_cumsum, with the compensation carried in LREG6 next to the running sum in LREG7. The
+// passes are inline: the 4 rows of a pass do not fit the SFPU replay slots that scan_tile_columns uses.
+template <bool APPROXIMATION_MODE /*unused*/>
+inline void calculate_cumsum_compensated(const bool first) {
+    if (first) {
+        // The passes transpose LREG4-7 as a block, so all four are cleared.
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, 4, 0);
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, 5, 0);
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, 6, 0);
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, 7, 0);
+    }
+    compensated_scan_pass<0>();
+    compensated_scan_pass<1>();
+    compensated_scan_pass<2>();
+    compensated_scan_pass<3>();
+    compensated_scan_pass<4>();
+    compensated_scan_pass<5>();
+    compensated_scan_pass<6>();
+    compensated_scan_pass<7>();
+}
+
+template <bool APPROXIMATION_MODE /*unused*/>
+inline void cumsum_compensated_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
+
 }  // namespace ckernel::sfpu
