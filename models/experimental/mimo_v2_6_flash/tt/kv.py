@@ -15,6 +15,12 @@ Layers with ``rep == 1`` (SWA: one KV head per chip) use the same table on every
 SWA layers page by absolute position as well, like vLLM's SlidingWindowSpec block tables (``SwaBlockTable``):
 block j of a slot holds positions [j * block_size, (j + 1) * block_size), but only the blocks some sliding window
 can still read are real; the others point at a scratch block.
+
+Under vLLM a global block can be shared by requests in slots of either parity (prefix caching), so the pair cannot
+split the users. With MIMO_KV_PAIR_SPLIT (the default) the pair splits every block instead: vLLM's global table has
+one block per 128 positions, and each chip keeps its 64-position half of it (reference/kv_pair_split.py). A prefill
+chunk's fill table then has one entry per 64 positions, the block on the chip that keeps them and a scratch block on
+the other (``pair_fill_rows``).
 """
 
 import math
@@ -22,6 +28,8 @@ import math
 import torch
 
 import ttnn
+
+from ..reference import kv_pair_split
 
 
 def kv_replication(tp, num_kv_heads):
@@ -92,6 +100,17 @@ def replicated(plan, t, dtype, device=True):
     )
 
 
+def pair_fill_rows(table, slot, start, padded, scratch):
+    """Pair split: table int32 [tp, max_batch, W] (vLLM's global table, one block per 128 positions, the same on every
+    chip) -> [tp, 1, ceil(padded / 64)]: the fill table of ``slot``'s chunk of ``padded`` tokens from ``start`` on
+    each chip (reference.kv_pair_split.fill_table: its own 64-position halves, ``scratch`` elsewhere)."""
+    rows = [
+        kv_pair_split.fill_table(table[chip, slot], start, padded, kv_pair_split.parity(chip), scratch)
+        for chip in range(table.shape[0])
+    ]
+    return torch.tensor(rows, dtype=torch.int32).reshape(table.shape[0], 1, -1)
+
+
 def block_rows(table, slot, first, count, scratch):
     """table int32 [tp, max_batch, W] -> [tp, 1, count]: blocks first .. first + count - 1 of ``slot`` on every chip,
     ``scratch`` past the end of the table (None: the table has no scratch block, so nothing may run past it)."""
@@ -115,19 +134,38 @@ class PrefillTables:
     * ``start`` (a later chunk): int32 [1], the chunk's start position, shared by every table of the chunk.
 
     ``table``: the host copy of the page table, int32 [tp, max_batch, W]. Entries past its width point at ``scratch``
-    (a block nothing reads: the padding of a chunk at the end of the context lands there)."""
+    (a block nothing reads: the padding of a chunk at the end of the context lands there).
+
+    ``pair_split`` (a global table under MIMO_KV_PAIR_SPLIT, one block per 2 * block_size positions): ``fill`` holds
+    each chip's halves (``pair_fill_rows``, still one entry per ``block_size`` positions) and ``context`` the table's
+    blocks from position 0, one per 2 * block_size positions (each chip reads its local halves through it)."""
 
     def __init__(
-        self, plan, table, slot, start, padded, block_size, scratch, context_blocks=None, window=None, start_tensor=None
+        self,
+        plan,
+        table,
+        slot,
+        start,
+        padded,
+        block_size,
+        scratch,
+        context_blocks=None,
+        window=None,
+        start_tensor=None,
+        pair_split=False,
     ):
-        assert start % block_size == 0
+        assert not pair_split or block_size == kv_pair_split.SUB, block_size
+        span = 2 * block_size if pair_split else block_size  # positions per table entry
+        assert start % span == 0, (start, span)
         first = start // block_size
-        self.fill = per_chip(
-            plan, block_rows(table, slot, first, -(-padded // block_size), scratch), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
-        )
+        if pair_split:
+            fill = pair_fill_rows(table, slot, start, padded, scratch)
+        else:
+            fill = block_rows(table, slot, first, -(-padded // block_size), scratch)
+        self.fill = per_chip(plan, fill, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self.context = None
         if context_blocks is not None:
-            assert context_blocks * block_size >= start + padded, (context_blocks, start, padded)
+            assert context_blocks * span >= start + padded, (context_blocks, start, padded)
             self.context = per_chip(
                 plan, block_rows(table, slot, 0, context_blocks, scratch), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
             )
@@ -158,8 +196,11 @@ class BatchFillTables:
         self.fill.deallocate(True)
 
 
-def batch_fill_rows(table, slots, padded, block_size, scratch):
-    """table int32 [tp, max_batch, W] -> [tp, R, ceil(padded / block_size)]: the first blocks of each slot's row."""
+def batch_fill_rows(table, slots, padded, block_size, scratch, pair_split=False):
+    """table int32 [tp, max_batch, W] -> [tp, R, ceil(padded / block_size)]: the first blocks of each slot's row
+    (``pair_split``: each chip's halves of the global table's first blocks, ``pair_fill_rows``)."""
+    if pair_split:
+        return torch.cat([pair_fill_rows(table, slot, 0, padded, scratch) for slot in slots], dim=1)
     count = -(-padded // block_size)
     return torch.cat([block_rows(table, slot, 0, count, scratch) for slot in slots], dim=1)
 

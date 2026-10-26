@@ -10,9 +10,11 @@ slots 0 .. per_lane - 1 of replica ``l``. Each lane has its own vLLM scheduler a
 lane-local and each replica has its own KV storage.
 
 KV cache: vLLM owns the blocks. ``get_kv_cache_spec`` reports a FullAttentionSpec for the global layers and a
-SlidingWindowSpec (window 128) for the SWA layers, both K 192 / V 128 at block size 64. vLLM's hybrid KV manager
-splits them into KV cache groups of equal size (for 9 global and 39 SWA layers: one global group and five SWA
-groups of up to 9 layers), every group with its own block table and all of them drawing block ids from one pool.
+SlidingWindowSpec for the SWA layers (the model attends a window of 128; the spec declares 128 + the chunk start
+alignment - 1, ``swa_spec_window``), both K 192 / V 128 at block size 64 (128 for the global layers with
+MIMO_KV_PAIR_SPLIT, below). vLLM's hybrid KV manager splits them into KV cache groups of equal size (for 9 global
+and 39 SWA layers: one global group and five SWA groups of up to 9 layers), every group with its own block table and
+all of them drawing block ids from one pool.
 The model gets one page table per group (TtMiMoModel.setup_vllm_kv_cache). A SWA group's table is indexed by
 absolute position with the blocks no window can read set to vLLM's null block 0, the layout the model's own
 kv.SwaBlockTable keeps.
@@ -20,9 +22,21 @@ kv.SwaBlockTable keeps.
 Storage follows vLLM's sharing rule: the i-th layer of every group shares one buffer (``tensor_idx``), which is
 safe because a block id belongs to one group at a time. On a chip every layer's K cache is
 [num_blocks, 1, 64, 192] and every layer's V cache [num_blocks, 1, 64, 128] (attention.py keeps V's real dims on
-the SWA layers too), each shared that way: 9 K and 9 V buffers for 9 global and 39 SWA layers. The global layers
-keep both copies of their KV head on a chip pair (setup_vllm_kv_cache): a block can be shared by requests in slots
-of either parity.
+the SWA layers too), each shared that way: 9 K and 9 V buffers for 9 global and 39 SWA layers.
+
+A global layer's KV head is served by a chip pair, and a block can be shared by requests in slots of either parity
+(prefix caching). With MIMO_KV_PAIR_SPLIT (the default) the pair splits every block (reference/kv_pair_split.py): the
+global group's FullAttentionSpec has block size 128, whose page has the SWA page's bytes (4 KV heads x 128 tokens
+against 8 x 64), and each chip keeps its 64-token halves of a block in rows 0..63 of the same physical page, so a
+global token costs half a pool token and a lane holds twice the global context (4 x 1M at MIMO_KV_GB_PER_CHIP=6.7).
+A later prefill chunk must then start on a 128-token block. vLLM's prefix-cache hits land on its scheduler block,
+lcm(64, 128) = 128, and the plugin's TTScheduler ends a partial prefill chunk on its 128-token grid
+(``prefill_chunk_alignment``), except for a running request whose leftover step budget cannot reach the grid: that one
+gets the shorter chunk, so its next chunk starts off the grid. ``prefill_forward`` moves such a start back to the
+block and recomputes the positions in between, which read sliding windows up to 127 positions further back than vLLM
+would keep for the scheduled start, so the SWA specs declare a window that much longer (``swa_spec_window``). With
+MIMO_KV_PAIR_SPLIT=0 the global group keeps 64-token blocks (its page padded to the SWA page), chunk starts move back to
+64-token blocks, and the pair keeps both copies of its KV head (TtMiMoModel.setup_vllm_kv_cache).
 
 Sampling: prefill returns last-token logits [B, 1, vocab] for the host to sample. Decode replays one of two traced
 steps per replica (captured in ``warmup_model_decode``) that also computes each slot's token and writes it, with the
@@ -104,6 +118,7 @@ from loguru import logger
 
 import ttnn
 
+from ..reference import kv_pair_split
 from ..reference.checkpoint import MiMoCheckpoint, default_model_path
 from ..reference.config import MiMoConfig
 from ..reference.sample_verify import commit_pass, pass_inputs
@@ -118,21 +133,25 @@ from ..reference.spec_decode import (
     plan_mtp,
     plan_verify_passes,
 )
-from .attention import page_table_width
+from .attention import PAIR_SPLIT_OPS, page_table_width
 from .device_sampler import CANDIDATES_PER_CHIP, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
 
 TP = 8
 BLOCK_SIZE = 64
-# Per-chip bytes per token of the vLLM KV layout above for MiMo-V2.6-Flash (9 global, 39 SWA layers, so 9 shared K
-# buffers and 9 shared V buffers), BFP8: (9 * 192 + 9 * 128) values * 1088 / 1024 bytes = 3060.
+# MIMO_KV_PAIR_SPLIT=0: the global layers' chip pair keeps both copies of its KV head (64-token global blocks) instead
+# of splitting every 128-token global block between its two chips (module docstring).
+KV_PAIR_SPLIT = os.environ.get("MIMO_KV_PAIR_SPLIT", "1") == "1"
+# Per-chip bytes per pool token (a 64-token page / 64) of the vLLM KV layout above for MiMo-V2.6-Flash (9 global, 39
+# SWA layers, so 9 shared K buffers and 9 shared V buffers), BFP8: (9 * 192 + 9 * 128) values * 1088 / 1024 bytes =
+# 3060. A SWA token takes one pool token per SWA group; a global token one, or half of one with MIMO_KV_PAIR_SPLIT
+# (a page holds 128 global tokens: kv_pair_split.global_pool_tokens).
 KV_BYTES_PER_TOKEN = (9 * 192 + 9 * 128) * 1088 / 1024
 # Per-chip DRAM given to the KV pool when MIMO_KV_GB_PER_CHIP is unset (weights take 23.7 of 34 GB per chip).
 DEFAULT_KV_GB_PER_CHIP = 6.0
-# Blocks vLLM's sliding-window groups can hold per request while a prefill chunk of up to 4096 tokens is in flight
-# (SlidingWindowSpec.max_admission_blocks_per_request), in tokens: 5 SWA groups x (127 + 4096 tokens + 1 block).
-SWA_TOKENS_PER_USER = 5 * (math.ceil((127 + 4096) / BLOCK_SIZE) + 1) * BLOCK_SIZE
+# MiMo-V2.6-Flash's sliding window (config.json): a SWA layer's query attends its last 128 positions.
+SWA_WINDOW = 128
 # MIMO_VLLM_TIMING=1 logs each prefill's host enqueue and total time, decode's host time every 128 steps, and every 128
 # speculative steps where a step's time goes (verify, MTP draft, and the host gap between them; _spec_timing).
 TIMING = os.environ.get("MIMO_VLLM_TIMING") == "1"
@@ -196,6 +215,42 @@ def _untraced_decode(vllm_config):
         f"options trace_mode 'all' or 'decode_only' and enable_model_warmup true (got trace_mode {trace_mode!r}, "
         f"enable_model_warmup {warmup!r})"
     )
+
+
+def chunk_align():
+    """A later prefill chunk's start alignment (``prefill_forward`` moves an unaligned start back to it): the 64-token
+    block, or with MIMO_KV_PAIR_SPLIT the global group's 128-token block."""
+    return kv_pair_split.PAIR if KV_PAIR_SPLIT else BLOCK_SIZE
+
+
+def swa_spec_window(window=SWA_WINDOW):
+    """The sliding window the SWA layers' SlidingWindowSpec declares to vLLM: the model's ``window`` plus
+    ``chunk_align() - 1``. vLLM keeps a request's positions from ``processed - spec window + 1`` on and frees the
+    sliding-window blocks below them (SlidingWindowManager.get_num_skipped_tokens), which is what the window of the
+    next scheduled position reads. But ``prefill_forward`` moves an unaligned chunk start ``s`` back to
+    ``s0 >= s - chunk_align() + 1`` and recomputes from there, and position ``s0`` attends from ``s0 - window + 1``
+    (TtMiMoModel._window_blocks reads from ``s0 - window``, in the same block: ``s0`` and ``window`` are multiples of
+    the block size). With this spec window vLLM keeps every position from ``s - window - chunk_align() + 2``, at or
+    before ``s0 - window + 1``. The margin cannot go into the spec's extra_retained_tokens: vLLM overwrites that field
+    (get_kv_cache_configs sets it from the speculative config). The model still attends over ``window``; the spec only
+    decides what vLLM keeps."""
+    return window + chunk_align() - 1
+
+
+def swa_tokens_per_user():
+    """Pool tokens vLLM's sliding-window groups can hold per request while a prefill chunk of up to 4096 tokens is in
+    flight (SlidingWindowSpec.max_admission_blocks_per_request): 5 SWA groups x (the spec window - 1 + 4096 tokens,
+    plus one block)."""
+    return 5 * (math.ceil((swa_spec_window() - 1 + 4096) / BLOCK_SIZE) + 1) * BLOCK_SIZE
+
+
+def _check_pair_split_ops():
+    """MIMO_KV_PAIR_SPLIT runs the MLA attention ops with ``return_lse`` (attention.PAIR_SPLIT_OPS)."""
+    if KV_PAIR_SPLIT and not PAIR_SPLIT_OPS:
+        raise ValueError(
+            "MIMO_KV_PAIR_SPLIT needs a ttnn build whose MLA attention ops return their LSE (return_lse); "
+            "launch with MIMO_KV_PAIR_SPLIT=0 on this build"
+        )
 
 
 def _model_path(hf_config):
@@ -367,6 +422,10 @@ class MiMoV2ForCausalLM:
         self.layer_groups = None
         self.kv_caches = None
         self.decode_recaptures = 0  # decode traces captured again after a prefill compiled new programs
+        # The KV pair split (allocate_kv_cache_per_layer, from the global group's block size) and each KV cache group's
+        # block size in positions (64; 128 for the global group under the pair split).
+        self.pair_split = False
+        self.group_block_sizes = {}
         # Per lane: int32 [max_batch] positions the next decode step reads (-1: idle slot), set by a reloading step
         # and advanced with every step, as the trace advances its own (a steady step reads no host positions).
         self.decode_positions = [None] * self.dp
@@ -519,14 +578,17 @@ class MiMoV2ForCausalLM:
 
     @classmethod
     def get_max_tokens_all_users(cls, model_name="", num_devices=TP, tt_data_parallel=1, **kwargs):
-        """KV tokens of one lane's pool: enough for ``max_num_seqs`` requests of ``max_model_len`` (plus what vLLM's
-        SWA groups hold per request), capped by MIMO_KV_GB_PER_CHIP of DRAM per chip."""
+        """Pool tokens of one lane (64-token pages x 64: the plugin sizes the pool as this over --block-size 64):
+        enough for ``max_num_seqs`` requests of ``max_model_len`` (their global group's pages, half as many with
+        MIMO_KV_PAIR_SPLIT, plus what vLLM's SWA groups hold per request), capped by MIMO_KV_GB_PER_CHIP of DRAM per
+        chip."""
         budget = float(os.environ.get("MIMO_KV_GB_PER_CHIP", DEFAULT_KV_GB_PER_CHIP)) * 1e9
         capacity = int(budget // KV_BYTES_PER_TOKEN)
         max_model_len, max_num_seqs = kwargs.get("max_model_len"), kwargs.get("max_num_seqs")
         if not max_model_len or not max_num_seqs:
             return capacity
-        return min(capacity, max_num_seqs * (max_model_len + SWA_TOKENS_PER_USER))
+        global_tokens = kv_pair_split.global_pool_tokens(max_model_len) if KV_PAIR_SPLIT else max_model_len
+        return min(capacity, max_num_seqs * (global_tokens + swa_tokens_per_user()))
 
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
@@ -538,12 +600,20 @@ class MiMoV2ForCausalLM:
             raise ValueError(
                 f"MiMo's paged caches use {BLOCK_SIZE}-token blocks; launch with --block-size {BLOCK_SIZE}"
             )
+        _check_pair_split_ops()
         full = dict(num_kv_heads=hf.num_key_value_heads, head_size=hf.head_dim, head_size_v=hf.v_head_dim)
         swa = dict(num_kv_heads=hf.swa_num_key_value_heads, head_size=hf.swa_head_dim, head_size_v=hf.swa_v_head_dim)
         dtype = torch.bfloat16
-        # vLLM's hybrid manager needs one page size for every group; pad the global layers' page to the SWA page.
-        page = max(block_size * d["num_kv_heads"] * (d["head_size"] + d["head_size_v"]) * 2 for d in (full, swa))
-        window = getattr(hf, "sliding_window_size", None) or hf.sliding_window
+        # The pair split's global blocks hold 128 tokens: 64 on each chip of the pair (module docstring).
+        full_block = kv_pair_split.PAIR if KV_PAIR_SPLIT else block_size
+        # vLLM's hybrid manager needs one page size for every group; pad the global layers' page to the SWA page (with
+        # the pair split they are equal).
+        page = max(
+            bs * d["num_kv_heads"] * (d["head_size"] + d["head_size_v"]) * 2
+            for bs, d in ((full_block, full), (block_size, swa))
+        )
+        # vLLM's window keeps the SWA blocks a chunk start moved back by prefill_forward reads (swa_spec_window).
+        window = swa_spec_window(getattr(hf, "sliding_window_size", None) or hf.sliding_window)
         specs = {}
         for i in range(hf.num_hidden_layers):
             name = f"model.layers.{i}.self_attn"
@@ -552,7 +622,7 @@ class MiMoV2ForCausalLM:
                     block_size=block_size, dtype=dtype, sliding_window=window, page_size_padded=page, **swa
                 )
             else:
-                specs[name] = FullAttentionSpec(block_size=block_size, dtype=dtype, page_size_padded=page, **full)
+                specs[name] = FullAttentionSpec(block_size=full_block, dtype=dtype, page_size_padded=page, **full)
         cls._kv_cache_spec_source = (vllm_config, specs)
         return specs
 
@@ -576,20 +646,36 @@ class MiMoV2ForCausalLM:
         return groups
 
     def allocate_kv_cache_per_layer(self, per_layer_specs):
-        """per_layer_specs: (shape, dtype, tensor_idx) per layer, shape[0] the lane's block count. Returns, per lane,
-        [K, V] per layer, with buffers shared as in the module docstring."""
+        """per_layer_specs: (shape, dtype, tensor_idx) per layer, shape[0] the lane's block count and shape[2] its
+        group's block size (64; 128 for the global layers with MIMO_KV_PAIR_SPLIT). Returns, per lane, [K, V] per
+        layer, with buffers shared as in the module docstring (every physical page [1, 64, dim] per chip)."""
         groups = self._vllm_layer_groups()
         if len(groups) != len(per_layer_specs):
             raise RuntimeError(f"{len(per_layer_specs)} layer KV specs but {len(groups)} layer groups")
-        num_blocks, block_size = per_layer_specs[0][0][0], per_layer_specs[0][0][2]
-        assert block_size == BLOCK_SIZE and all(s[0][0] == num_blocks for s in per_layer_specs)
+        _check_pair_split_ops()
+        num_blocks = per_layer_specs[0][0][0]
+        assert all(s[0][0] == num_blocks for s in per_layer_specs)
+        # Each layer's block size is its group's: SWA 64, global 64 or (pair split) 128.
+        block_sizes = {}
+        for layer, g, (shape, _, _) in zip(self.models[0].layers, groups, per_layer_specs):
+            want = kv_pair_split.PAIR if KV_PAIR_SPLIT and not layer.is_swa else BLOCK_SIZE
+            if shape[2] != want or block_sizes.setdefault(g, shape[2]) != shape[2]:
+                raise ValueError(
+                    f"layer {layer.layer_idx} ({'SWA' if layer.is_swa else 'global'}, group {g}): block size "
+                    f"{shape[2]}, expected {want} (MIMO_KV_PAIR_SPLIT={int(KV_PAIR_SPLIT)})"
+                )
         # Layers sharing a buffer must come from different groups: their block ids never overlap.
         seen = set()
         for i, (_, _, t) in enumerate(per_layer_specs):
             assert (groups[i], t) not in seen, f"layer {i}: two layers of group {groups[i]} share buffer {t}"
             seen.add((groups[i], t))
-        # vLLM trims its tables to the pool; the padding entries stay 0 (its null block, set_vllm_page_tables).
-        table_width = page_table_width(min(math.ceil(self.max_seq_len / block_size), num_blocks))
+        # vLLM trims its tables to the pool; the padding entries stay 0 (its null block, set_vllm_page_tables). A
+        # 128-token global group's table is half as wide.
+        table_widths = {
+            g: page_table_width(min(math.ceil(self.max_seq_len / bs), num_blocks)) for g, bs in block_sizes.items()
+        }
+        self.pair_split = KV_PAIR_SPLIT
+        self.group_block_sizes = block_sizes
         self.layer_groups = groups
         compact_rope = self.max_seq_len > ROPE_TABLE_FULL_WIDTH_MAX_LEN
         # The replicas' RoPE tables are equal: computed once on the host (~2.5 s at 1M), uploaded to each.
@@ -605,7 +691,7 @@ class MiMoV2ForCausalLM:
                         self._buffer(model, buffers, ("v", t, attn.v_head_dim), num_blocks, attn.v_head_dim),
                     ]
                 )
-            model.setup_vllm_kv_cache(self.per_lane, caches, groups, table_width)
+            model.setup_vllm_kv_cache(self.per_lane, caches, groups, table_widths, pair_split=self.pair_split)
             if DEVICE_ROPE:
                 model.setup_decode_rope_tables(compact_rope, rope_host)
             if model.mtp is not None:
@@ -614,8 +700,8 @@ class MiMoV2ForCausalLM:
                 model.dflash.setup_cache()
             self.kv_caches.append(caches)
         logger.info(
-            f"MiMo vLLM KV: {num_blocks} blocks of {block_size} per lane, {len(buffers)} buffers per replica, "
-            f"page tables {table_width} wide for groups {sorted(set(groups))}"
+            f"MiMo vLLM KV: {num_blocks} blocks per lane (group block sizes {block_sizes}, pair split "
+            f"{self.pair_split}), {len(buffers)} buffers per replica, page tables {table_widths} wide"
         )
         if rope_host is not None:
             rows, width = rope_host[0].shape
@@ -690,11 +776,15 @@ class MiMoV2ForCausalLM:
         placed = []
         table_rows = [{} for _ in range(self.dp)]
         continues = {}
+        align = self._chunk_align()
         for i in range(rows):
             lane, slot = divmod(slots[i], self.per_lane)
-            # vLLM starts chunks and prefix hits on block boundaries; a chunk that does not is moved back to one and
-            # recomputes the positions in front of it (their K / V are rewritten with the same values).
-            start = int(starts[i]) // BLOCK_SIZE * BLOCK_SIZE
+            # A chunk that starts off the alignment (vLLM's prefix hits land on its scheduler block, but the plugin's
+            # scheduler gives a running request a short chunk when its leftover budget cannot reach its grid) is moved
+            # back to it and recomputes the positions in front of it (their K / V are rewritten with the same values).
+            # The SWA specs' window keeps the sliding-window blocks those positions read (swa_spec_window). With the
+            # pair split the alignment is the global group's 128-token block.
+            start = int(starts[i]) // align * align
             cached = 0
             if (
                 start > 0
@@ -778,6 +868,10 @@ class MiMoV2ForCausalLM:
             )
         self._recapture_after_new_programs(programs)
         return torch.stack(logits).unsqueeze(1)
+
+    def _chunk_align(self):
+        """A prefill chunk's start alignment (``chunk_align``) for this adapter's KV layout."""
+        return kv_pair_split.PAIR if self.pair_split else BLOCK_SIZE
 
     def _batchable(self, placed_row):
         """A first chunk (start 0) whose padded length a prefill batch takes."""
@@ -1222,14 +1316,15 @@ class MiMoV2ForCausalLM:
         runs ahead of the device's real one; a hole is counted (``chain_stats["uncovered"]``) and logged: those
         positions read another block's K / V."""
         window = getattr(self.gen.cfg, "sliding_window", None) or 128
-        first, last = max(low - window + 1, 0) // BLOCK_SIZE, high // BLOCK_SIZE
         for g, t in self._group_rows(tables, row).items():
+            bs = self.group_block_sizes.get(g, BLOCK_SIZE)
+            first, last = max(low - window + 1, 0) // bs, high // bs
             if last >= t.numel() or bool((t[first : last + 1] == 0).any()):
                 self.chain_stats["uncovered"] += 1
                 if self.chain_stats["uncovered"] % 64 == 1:
                     logger.warning(
                         f"MiMo chained verify: row {row}'s group {g} page table has no block for some of positions "
-                        f"{first * BLOCK_SIZE} .. {high} ({self.chain_stats['uncovered']} such rows so far)"
+                        f"{first * bs} .. {high} ({self.chain_stats['uncovered']} such rows so far)"
                     )
                 return
 
@@ -1853,7 +1948,7 @@ class MiMoV2ForCausalLM:
     # ------------------------------------------------------------------ warmup and lifetime
     def _max_prefill_tokens(self):
         """The most tokens one prefill chunk of the model can hold: vLLM's per-step token budget plus the
-        BLOCK_SIZE - 1 positions prefill_forward recomputes in front of an unaligned start, at most the model's
+        ``_chunk_align() - 1`` positions prefill_forward recomputes in front of an unaligned start, at most the model's
         max_prefill_chunk (prefill_enqueue splits longer chunks) and the context."""
         budget = self.prefill_token_budget
         if budget is None and self._kv_cache_spec_source is not None:
@@ -1861,7 +1956,7 @@ class MiMoV2ForCausalLM:
         model = self.models[0]
         if budget is None:
             budget = model.max_prefill_chunk
-        return min(budget + BLOCK_SIZE - 1, model.max_prefill_chunk, self.max_seq_len)
+        return min(budget + self._chunk_align() - 1, model.max_prefill_chunk, self.max_seq_len)
 
     def warmup_model_prefill(self, kv_cache=None, enable_trace=False, can_sample_on_device=False, **kwargs):
         """Compile every prefill program a served chunk can run, on every replica, before any decode trace is
@@ -1882,18 +1977,19 @@ class MiMoV2ForCausalLM:
             m.decode_read(handle)
         model0 = self.models[0]
         groups = sorted(set(self.layer_groups))
-        width = model0.vllm_tables[groups[0]].shape[1]
+        widths = {g: model0.vllm_tables[g].shape[1] for g in groups}  # a pair-split global table is half as wide
+        width = max(widths.values())
         num_blocks = self.kv_caches[0][0][0].shape[0]
         window = next((l.attn.sliding_window for l in model0.layers if l.is_swa), BLOCK_SIZE)
         max_tokens = self._max_prefill_tokens()
-        chunks = prefill_warmup_chunks(max_tokens, self.max_seq_len, BLOCK_SIZE, window)
+        chunks = prefill_warmup_chunks(max_tokens, self.max_seq_len, BLOCK_SIZE, window, self.pair_split)
         layers = model0.prefill_warmup_layers()
         # Slot 0 of every group maps positions from 0 to blocks 1, 2, ..: free while vLLM has not started.
         blocks = torch.arange(1, min(width, num_blocks - 1) + 1, dtype=torch.int32)
         if blocks.numel() * BLOCK_SIZE < max(start for _, start in chunks):  # the later chunks' window blocks
             raise RuntimeError(f"{num_blocks} KV blocks cannot back the prefill warmup's chunks {chunks}")
         for model in self.models:
-            model.set_vllm_page_tables({0: {g: blocks for g in groups}})
+            model.set_vllm_page_tables({0: {g: blocks[: widths[g]] for g in groups}})
         programs = [m.mesh_device.num_program_cache_entries() for m in self.models]
         tokens = torch.arange(max_tokens, dtype=torch.int32) % 1000 + 1000
         for n, start in chunks:
@@ -1908,15 +2004,17 @@ class MiMoV2ForCausalLM:
         if self.per_lane * span > blocks.numel():
             raise RuntimeError(f"{num_blocks} KV blocks cannot back the prefill warmup's batches {batches}")
         for model in self.models:
-            model.set_vllm_page_tables({s: {g: blocks[s * span :] for g in groups} for s in range(self.per_lane)})
+            model.set_vllm_page_tables(
+                {s: {g: blocks[s * span :][: widths[g]] for g in groups} for s in range(self.per_lane)}
+            )
         for users, n in batches:
             chunks_of = [(tokens[:n], s) for s in range(users)]
             handles = [(m, m.prefill_enqueue_batch(chunks_of, layers=layers)) for m in self.models]
             for m, h in handles:
                 m.prefill_read(h)
         for model in self.models:
-            empty = torch.zeros(width, dtype=torch.int32)
-            model.set_vllm_page_tables({s: {g: empty for g in groups} for s in range(self.per_lane)})
+            empty = {g: torch.zeros(widths[g], dtype=torch.int32) for g in groups}
+            model.set_vllm_page_tables({s: dict(empty) for s in range(self.per_lane)})
         # Traced batches: their persistent buffers now, before any capture, and one eager pass each through every
         # layer (compiling whatever the capture will record); warmup_model_decode captures them after the decode trace.
         if PREFILL_TRACE and PREFILL_BATCH:

@@ -26,6 +26,7 @@ from loguru import logger
 
 import ttnn
 
+from ..reference import kv_pair_split
 from ..reference.model import load_layer_weights
 from ..reference.mtp_backfill import HISTORY_ROWS
 from ..reference.spec_decode import SPEC_SLOTS, serial_positions
@@ -38,6 +39,7 @@ from .greedy_head import GreedyHead
 from .moe import expert_quant
 from .moe_stream import ReduceExpand, fabric_row_gather, user_rows, zero_output
 from .mtp import TtMiMoMTP
+from .pair_split import PairSplit
 from .rope import MiMoRotarySetup, partial_rope_table
 from .dflash import TtDFlash
 from .spec_inputs import SpecInputs
@@ -48,36 +50,46 @@ from .verify_sampler import GreedyVerify, VerifySampler
 ROPE_TABLE_MARGIN = 32  # one tile
 
 
-def prefill_padded_len(seq_len):
+def prefill_padded_len(seq_len, start_pos=0, pair_split=False):
     """Tokens are padded so the prefill SDPA chunk (32/128/256) divides the length: 32, 64, 96, then multiples of 128,
     then (from 2048) of 256. Every prefill program keys on one of these lengths (attention.py), so a chunk is padded
     to one even at the end of the context: the padding past the page table lands in a scratch block
-    (kv.PrefillTables)."""
+    (kv.PrefillTables). ``pair_split`` (the KV pair split, a chunk after the first): at least 128, as pair-split
+    chunked MLA prefill reads whole 128-token blocks."""
     n = pad_to(seq_len, TILE)
     if n >= 2048:
         return pad_to(n, 256)
-    if n >= 128:
+    if n >= 128 or (pair_split and start_pos > 0):
         return pad_to(n, 128)
     return n
 
 
-def prefill_warmup_chunks(max_tokens, max_seq_len, block_size, window):
+def prefill_warmup_chunks(max_tokens, max_seq_len, block_size, window, pair_split=False):
     """(tokens, start) of chunks that together run every prefill program a chunk of up to ``max_tokens`` tokens can:
     one per padded length at start 0, and at the later starts that bring something the programs key on (attention.py)
     that an earlier start did not: the number of window blocks a SWA layer reads, or the SDPA chunk size that divides
     the start (TtMiMoAttention._prefill_sdpa_program, which global layers run chunked MLA prefill with). Only chunks
-    that fit in the context are listed."""
+    that fit in the context are listed.
+
+    ``pair_split`` (the KV pair split): later chunks start on 2 * block_size and are padded to at least 128
+    (``prefill_padded_len``); the global layers' pair-split chunked MLA prefill keys on the same SDPA chunk size."""
+    align = 2 * block_size if pair_split else block_size  # a later chunk's start alignment
     shortest = {}  # padded length -> the fewest tokens padded to it
     for n in range(1, max_tokens + 1):
         shortest.setdefault(prefill_padded_len(n), n)
+    later = {}  # a later chunk's padded length -> the fewest tokens padded to it
+    for n in range(1, max_tokens + 1):
+        later.setdefault(prefill_padded_len(n, align, pair_split), n)
     out = []
-    for padded, n in sorted(shortest.items()):
-        if n > max_seq_len:
+    for padded in sorted(set(shortest) | set(later)):
+        if padded in shortest and shortest[padded] <= max_seq_len:
+            out.append((shortest[padded], 0))
+        n = later.get(padded)
+        if n is None or n > max_seq_len:
             continue
-        out.append((n, 0))
         leads, chunks = set(), set()
         # The window blocks stop changing past the window; the SDPA chunk sizes (at most 256) repeat every 256.
-        for start in range(block_size, window + 256 + 1, block_size):
+        for start in range(align, window + 256 + 1, align):
             if start + n > max_seq_len:
                 break
             lead = start - max(0, start - window) // block_size * block_size
@@ -250,6 +262,10 @@ class TtMiMoModel:
         # vLLM-owned KV (setup_vllm_kv_cache): each layer's KV cache group, and the host copy of every group's table.
         self.layer_groups = None
         self.vllm_tables = None
+        # The KV pair split (setup_vllm_kv_cache with pair_split; tt/pair_split.py): its PairSplit, and the KV cache
+        # groups of the global layers, whose tables have one block per 2 * block_size positions.
+        self.pair = None
+        self.pair_groups = set()
         # Chip c's vocab shard starts at c * vocab_local: added to its local top-k ids for the device greedy.
         offsets = (torch.arange(plan.tp, dtype=torch.int32) * self.vocab_local).reshape(plan.tp, 1, 1, 1)
         self.vocab_offset = ttnn.from_torch(
@@ -339,17 +355,21 @@ class TtMiMoModel:
             self.swa_table.dirty = False
         self._setup_fused_norms()
 
-    def setup_vllm_kv_cache(self, num_users, kv_caches, layer_groups, table_width):
+    def setup_vllm_kv_cache(self, num_users, kv_caches, layer_groups, table_width, pair_split=False):
         """Adopt KV caches and page tables that vLLM owns, for ``num_users`` users in decode slots [0, num_users).
 
         ``kv_caches``: [K, V] per layer, allocated by the caller. ``layer_groups``: each layer's vLLM KV cache group;
-        the layers of a group share one page table [max_batch, table_width] (``set_vllm_page_tables``), indexed by
-        absolute position. A SWA group's table is vLLM's SlidingWindowSpec table: the blocks no window can read are
-        vLLM's null block 0, where this model's own tables point at their scratch block (kv.SwaBlockTable).
+        the layers of a group share one page table [max_batch, table_width] (``set_vllm_page_tables``; ``table_width``
+        an int, or {group: width}), indexed by absolute position. A SWA group's table is vLLM's SlidingWindowSpec
+        table: the blocks no window can read are vLLM's null block 0, where this model's own tables point at their
+        scratch block (kv.SwaBlockTable).
 
         Every chip gets the same tables. vLLM can hand one block to requests in slots of either parity (prefix
-        caching), so a global layer's chip pair keeps both copies of its KV head: decode writes every slot's K / V on
-        both chips (``pos_update``) and still splits the attention by slot."""
+        caching), so a global layer's chip pair cannot split the users by slot. ``pair_split`` (MIMO_KV_PAIR_SPLIT,
+        the adapter's default): the global group's blocks hold 2 * block_size positions and each chip of the pair keeps
+        its block_size halves (reference/kv_pair_split.py), every chip attends every slot over its own keys and the
+        pair merges by LSE (tt/pair_split.py). Otherwise the pair keeps both copies of its KV head: decode writes every
+        slot's K / V on both chips (``pos_update``) and still splits the attention by slot."""
         assert num_users <= self.max_batch
         assert self.decode_users in (None, num_users), f"decode users already set to {self.decode_users}"
         assert self.decode_trace is None and self.kv_caches is None, "the KV cache is already set up"
@@ -358,8 +378,26 @@ class TtMiMoModel:
         self._set_decode_users(num_users)
         self.kv_caches = kv_caches
         self.layer_groups = list(layer_groups)
-        empty = torch.zeros(self.max_batch, table_width, dtype=torch.int32)
-        self.vllm_tables = {g: empty.clone() for g in sorted(set(self.layer_groups))}
+        groups = sorted(set(self.layer_groups))
+        widths = table_width if isinstance(table_width, dict) else {g: table_width for g in groups}
+        self.vllm_tables = {g: torch.zeros(self.max_batch, widths[g], dtype=torch.int32) for g in groups}
+        self.pair, self.pair_groups = None, set()
+        if pair_split:
+            global_groups = {g for g, layer in zip(self.layer_groups, self.layers) if not layer.is_swa}
+            swa_groups = {g for g, layer in zip(self.layer_groups, self.layers) if layer.is_swa}
+            assert not global_groups & swa_groups, f"a KV cache group mixes global and SWA layers: {self.layer_groups}"
+            assert all(layer.attn.split_users for layer in self.layers if not layer.is_swa), "no chip pair to split"
+            assert self.block_size == kv_pair_split.SUB, self.block_size
+            assert self.max_prefill_chunk % (2 * self.block_size) == 0, self.max_prefill_chunk
+            spec = self.mtp is not None or self.dflash is not None
+            # Persistent: the positions program's buffers and the merge's per-chip constants, before any capture.
+            self.pair = PairSplit(self.plan, self.max_batch, serial_slots=SPEC_SLOTS if spec else 0)
+            self.pair_groups = global_groups
+            for layer in self.layers:
+                if not layer.is_swa:
+                    layer.attn.pair = self.pair
+        # A later chunk's context table through a pair-split global table: one block per 2 * block_size positions.
+        self.pair_context_blocks = pad_to(-(-(self.max_seq_len + kv_lib.PREFILL_MAX_PAD) // (2 * self.block_size)), 8)
         # Per (group, slot): how far the host row was last written; entries past it are zero (set_vllm_page_tables).
         self.vllm_table_lengths = {(g, s): 0 for g in self.vllm_tables for s in range(self.max_batch)}
         # Decode's device-sampled greedy token and sampled tokens (decode_forward_device); persistent buffers, made
@@ -379,26 +417,35 @@ class TtMiMoModel:
                 self.verify_sampler = GreedyVerify(self.plan, self.max_batch)
         self.page_table_tt = {
             g: ttnn.from_torch(
-                empty,
+                table,
                 device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=self.plan.replicate(),
             )
-            for g in self.vllm_tables
+            for g, table in self.vllm_tables.items()
         }
         self._setup_fused_norms()
 
     def set_vllm_page_tables(self, rows):
-        """rows: {slot: {group: int32 [<= table_width] block ids}} (vLLM's table row of the user in that slot).
-        Copies every group table that changed to the device, in queue order with the work already enqueued."""
+        """rows: {slot: {group: int32 block ids}} (vLLM's table row of the user in that slot). A row wider than its
+        group's table may only carry zeros past it (the plugin pads every group's rows to one width; a pair-split
+        global table is half as wide). Copies every group table that changed to the device, in queue order with the
+        work already enqueued."""
         changed = set()
         lengths = self.vllm_table_lengths
         for slot, tables in rows.items():
             for g, row in tables.items():
                 host = self.vllm_tables[g]
                 n = row.numel()
-                assert n <= host.shape[1], f"group {g}: table row of {n} > {host.shape[1]}"
+                if n > host.shape[1]:
+                    tail = row[host.shape[1] :]
+                    if bool(tail.any()):
+                        raise ValueError(
+                            f"group {g}: slot {slot}'s table row has blocks past the table's {host.shape[1]} entries: "
+                            f"{tail[tail != 0][:8].tolist()}"
+                        )
+                    row, n = row[: host.shape[1]], host.shape[1]
                 row = row.to(torch.int32)
                 # Compare in place, without a full-width padded copy of every row on every step.
                 written = lengths[(g, slot)]
@@ -445,6 +492,10 @@ class TtMiMoModel:
         assert 0 not in blocks, f"slot {slot}: the SWA window before {start_pos} is not in page table {key}"
         return blocks
 
+    def _pair_key(self, key):
+        """Whether the page table ``key`` (``_table_key``) is a pair-split global table."""
+        return self.layer_groups is not None and key in self.pair_groups
+
     def _prefill_tables(self, slot, start_pos, padded, layers):
         """({page table: kv.PrefillTables}, start tensor or None) of one chunk, for the tables ``layers`` read."""
         later = start_pos > 0
@@ -457,7 +508,9 @@ class TtMiMoModel:
             if key in tables:
                 continue
             swa = self.layers[i].is_swa
+            pair = self._pair_key(key)
             table, scratch = self._host_table(key)
+            context = self.pair_context_blocks if pair else self.prefill_context_blocks
             tables[key] = kv_lib.PrefillTables(
                 self.plan,
                 table,
@@ -466,9 +519,10 @@ class TtMiMoModel:
                 padded,
                 self.block_size,
                 scratch,
-                context_blocks=self.prefill_context_blocks if later and not swa else None,
+                context_blocks=context if later and not swa else None,
                 window=self._window_blocks(key, slot, start_pos) if later and swa else None,
                 start_tensor=start,
+                pair_split=pair,
             )
         return tables, start
 
@@ -585,7 +639,7 @@ class TtMiMoModel:
         ``hidden`` when given. With the DFlash drafter the chunk's last rows also go into draft group ``draft_group``'s
         context ring (TtDFlash.prefill_context; a warm-up through a subset of the layers runs the same programs)."""
         n = tokens.numel()
-        padded = prefill_padded_len(n)
+        padded = prefill_padded_len(n, start_pos, self.pair is not None)
         assert start_pos + n <= self.max_seq_len, f"chunk ends at {start_pos + n} > {self.max_seq_len}"
         layers = range(len(self.layers)) if layers is None else layers
         if self.swa_table is not None:
@@ -647,7 +701,8 @@ class TtMiMoModel:
         ``draft_group``: the request's draft group (its DFlash context ring)."""
         n = tokens.numel()
         chunk = chunk_size or self.max_prefill_chunk
-        assert n > 0 and chunk % self.block_size == 0 and start_pos % self.block_size == 0
+        align = self.block_size * (2 if self.pair is not None else 1)  # pair split: 128-token global blocks
+        assert n > 0 and chunk % align == 0 and start_pos % align == 0, (n, chunk, start_pos, align)
         hidden = [[] for _ in (range(len(self.layers)) if layers is None else layers)] if return_hidden else None
         hist = self._history()
         for s in range(0, n, chunk):
@@ -743,7 +798,7 @@ class TtMiMoModel:
         fills = {}
         for key in keys:
             table, scratch = self._host_table(key)
-            fills[key] = kv_lib.batch_fill_rows(table, slots, padded, self.block_size, scratch)
+            fills[key] = kv_lib.batch_fill_rows(table, slots, padded, self.block_size, scratch, self._pair_key(key))
             for r, c in enumerate(chunks):
                 if len(c) > 2 and c[2]:
                     fills[key][:, r, : c[2]] = 0
@@ -1062,7 +1117,15 @@ class TtMiMoModel:
             False: self.rope_setups["full"].decode_rot_mats(cos_full, sin_full),
         }
         positions = {"pos": cur_pos_tt, "pos_owned": pos_owned_tt, "owner_mask": owner_mask_tt}
-        if self.layer_groups is not None:
+        sdpa_pos = pos_owned_tt
+        if self.pair is not None:
+            # The KV pair split: each chip's write and SDPA positions from the global ones (which the trace advances),
+            # on device; the owned positions and owner mask are not read.
+            write, sdpa_pos, serial = self.pair.positions(cur_pos_tt)
+            positions.update(pair_write=write, pair_sdpa=sdpa_pos)
+            if serial_pos:
+                positions["pair_serial"] = serial
+        elif self.layer_groups is not None:
             positions["pos_update"] = cur_pos_tt  # vLLM's blocks: both chips of a pair keep every slot's K / V
         if serial_pos:
             positions["serial"] = serial_pos
@@ -1071,7 +1134,7 @@ class TtMiMoModel:
         compact_sdpa = self.decode_users < self.max_batch and os.environ.get("MIMO_COMPACT_SDPA", "1") == "1"
         sdpa_tables = {}
         if compact_sdpa:
-            positions["pos_sdpa"] = ttnn.slice(pos_owned_tt, (0,), (self.decode_users,))
+            positions["pos_sdpa"] = ttnn.slice(sdpa_pos, (0,), (self.decode_users,))
         h = None
         for i, layer in enumerate(self.layers):
             layer_positions = positions
