@@ -91,6 +91,12 @@ tasks:
       and link constants): derive each from the mesh and the config, never hard-code this box. A failing layer is located
       with its block type''s swap and component tests (the seed''s rendered tests; they read the spec and its goldens) and
       the CPU at the device''s formats (agent rule 14).'
+  frozen:
+    files:
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-s10240.json: 311b050919e517571bcaee18edce7417538b3cc5595e16f9f777efcfaf06ef8d
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
 - id: M.1
   title: Every layer (40) on 8x4 at this run's size, from the ported blocks
   step: assemble
@@ -111,6 +117,12 @@ tasks:
     details: 'Every layer of the model on this box, from the blocks W.1 ported: the layers the seed never ran (more state
       sources and readers, the deep layers, the final norm and LM head) and the whole stack''s depth. Locate a failing layer
       as in W.1.'
+  frozen:
+    files:
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-s10240.json: 311b050919e517571bcaee18edce7417538b3cc5595e16f9f777efcfaf06ef8d
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
 - id: L.s10240
   title: 'Ladder s10240: all chunks of 10240 in 5120'
   step: integrate
@@ -127,6 +139,12 @@ tasks:
       host_transfers_per_layer: == 0
   device: true
   paths: *id001
+  frozen:
+    files:
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-s10240.json: 311b050919e517571bcaee18edce7417538b3cc5595e16f9f777efcfaf06ef8d
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
 - id: L.last
   title: 'Ladder last: last chunk after a golden prefix of 56320 in 5120'
   step: integrate
@@ -142,6 +160,12 @@ tasks:
       top5_overlap: '>= limit'
   device: true
   paths: *id001
+  frozen:
+    files:
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-s10240.json: 311b050919e517571bcaee18edce7417538b3cc5595e16f9f777efcfaf06ef8d
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
 - id: L.s56320
   title: 'Ladder s56320: all chunks of 56320 in 5120'
   step: integrate
@@ -158,6 +182,12 @@ tasks:
       host_transfers_per_layer: == 0
   device: true
   paths: *id001
+  frozen:
+    files:
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-s10240.json: 311b050919e517571bcaee18edce7417538b3cc5595e16f9f777efcfaf06ef8d
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
 - id: L.smoke
   title: 'Intake smoke on the device model: R.1''s prompt, greedy, the expected answer'
   step: integrate
@@ -189,6 +219,12 @@ tasks:
   device: true
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
+  frozen:
+    files:
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-s10240.json: 311b050919e517571bcaee18edce7417538b3cc5595e16f9f777efcfaf06ef8d
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
 - id: X.1
   title: Warm per-section, per-chip profile of one long chunk
   step: perf
@@ -230,6 +266,12 @@ tasks:
       err_final_hidden: <= limit
       top5_overlap: '>= limit'
   device: true
+  frozen:
+    files:
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-s10240.json: 311b050919e517571bcaee18edce7417538b3cc5595e16f9f777efcfaf06ef8d
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
 - id: O.1
   title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
   step: optests
@@ -264,3 +306,9 @@ tasks:
       err_state_*_L*: <= limit
   device: true
   role: settings
+  frozen:
+    files:
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-s10240.json: 311b050919e517571bcaee18edce7417538b3cc5595e16f9f777efcfaf06ef8d
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
+      /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
