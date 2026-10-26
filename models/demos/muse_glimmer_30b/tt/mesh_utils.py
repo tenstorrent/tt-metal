@@ -9,6 +9,7 @@ import os
 import pytest
 
 import ttnn
+from models.demos.muse_glimmer_30b.tt.ccl import fabric_config
 
 MESH_DEVICE_SHAPES = {
     "P300x2": (1, 4),
@@ -75,7 +76,7 @@ def dp_submeshes(mesh_device, dp: int, tp: int) -> list:
 
 def device_params(trace_region_size=None) -> dict:
     params = {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        "fabric_config": fabric_config(),
         "num_command_queues": 1,
         "l1_small_size": 24576,
         "trace_region_size": 256_000_000 if trace_region_size is None else trace_region_size,
