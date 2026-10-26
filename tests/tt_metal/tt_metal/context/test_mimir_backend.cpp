@@ -89,10 +89,7 @@ TEST(MimirEmu, CceSramChannelsDoNotAliasThroughMetalCluster) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    MimirEmu,
-    CceSramRoundTripThroughMetalCluster,
-    ::testing::ValuesIn(cce_indices()),
-    [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Cce{}", info.param); });
+    MimirEmu, CceSramRoundTripThroughMetalCluster, ::testing::ValuesIn(cce_indices()), cce_param_name);
 
 }  // namespace
 }  // namespace tt::tt_metal

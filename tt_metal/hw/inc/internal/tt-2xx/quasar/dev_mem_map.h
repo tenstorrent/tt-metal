@@ -468,8 +468,7 @@
 //     through MEM_L1_UNCACHED_BASE, the same uncached alias worker cores use.
 //   - Host / local AXI: CCE n's SRAM at 0x40000000 + n * MEM_CCE_L1_SIZE. The host path does not
 //     go through the hart cache, so this is not the uncached alias even where a numeric field
-//     happens to match. No define for it here: host code never forms this address, and UMD owns
-//     it (emu_tt_device.cpp takes it from chippy).
+//     happens to match. No define for it here: host code never forms this address, and UMD owns it.
 //   - Package-global SPA: 0x1280000000 + n * 4MB.
 //
 // Firmware is linked against the local CPU view, so MEM_CCE_SRAM_LOCAL_BASE is 0 and the offsets
