@@ -443,6 +443,11 @@ private:
                     } else {
                         const auto& view = xtensor_view->get();
                         using U = std::remove_const_t<T>;
+                        TT_FATAL(
+                            view.size() == shard_spec.logical_shape().volume(),
+                            "Shard view size {} differs from tensor logical volume {}",
+                            view.size(),
+                            shard_spec.logical_shape().volume());
                         // A mesh chunk is a rectangular view of row-major source
                         // storage. Copy its contiguous suffix in blocks, rather
                         // than incrementing a dynamic xtensor iterator per value.
@@ -474,8 +479,10 @@ private:
                                     expected_stride *= view.shape()[axis];
                                 }
                                 if (matrix_view) {
-                                    const auto logical = shard_spec.logical_2d_shape();
-                                    const size_t extent = (logical.height() - 1) * row_stride + logical.width();
+                                    // Bound the span by the source view, independently of the destination spec.
+                                    const size_t width = view.shape().back();
+                                    const size_t height = view.size() / width;
+                                    const size_t extent = (height - 1) * row_stride + width;
                                     packed = tt::tt_metal::experimental::try_create_bfp_host_tensor(
                                         std::span<const U>(source, extent), shard_spec, row_stride);
                                 }

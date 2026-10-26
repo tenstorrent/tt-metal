@@ -19,8 +19,10 @@ def raw_shard(tensor, i=0, j=0):
         (torch.bfloat16, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
         (torch.int32, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
         (torch.float32, ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (torch.float32, ttnn.bfloat4_b, ttnn.TILE_LAYOUT),
         (torch.bfloat16, ttnn.bfloat4_b, ttnn.TILE_LAYOUT),
         (torch.float32, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+        (torch.bfloat16, ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize("shape", [(64, 128), (2, 3, 64, 128), (1, 1, 66, 130)])
@@ -34,6 +36,7 @@ def test_host_mesh_shards(source_dtype, target_dtype, layout, shape, dims, strid
     placements = [ttnn.PlacementReplicate() if d is None else ttnn.PlacementShard(d) for d in dims]
     mapper = ttnn.create_mesh_mapper(ttnn.MeshShape(2, 2), ttnn.MeshMapperConfig(placements))
     actual = ttnn.from_torch(source, dtype=target_dtype, layout=layout, mesh_mapper=mapper)
+    before = {}
     for i in range(2):
         first = source if dims[0] is None else torch.chunk(source, 2, dim=dims[0])[i]
         for j in range(2):
@@ -43,7 +46,13 @@ def test_host_mesh_shards(source_dtype, target_dtype, layout, shape, dims, strid
             assert tuple(actual.padded_shape) == tuple(expected.padded_shape)
             assert actual.dtype == expected.dtype
             assert actual.layout == expected.layout
-            np.testing.assert_array_equal(raw_shard(actual, i, j), raw_shard(expected))
+            before[i, j] = raw_shard(actual, i, j)
+            np.testing.assert_array_equal(before[i, j], raw_shard(expected))
+
+    if target_dtype in (ttnn.bfloat4_b, ttnn.bfloat8_b):
+        source.fill_(7)
+        for (i, j), packed in before.items():
+            np.testing.assert_array_equal(raw_shard(actual, i, j), packed)
 
 
 @pytest.mark.parametrize("dim", [None, 0, 1])

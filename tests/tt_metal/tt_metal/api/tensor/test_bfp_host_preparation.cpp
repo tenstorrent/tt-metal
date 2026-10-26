@@ -155,6 +155,15 @@ TEST_P(BfpHostPreparation, StridedFactoryRejectsUnsupportedViews) {
     const Shape shape{64, 64};
     const auto spec = TensorSpec(shape, TensorLayout(GetParam(), PageConfig(Layout::TILE), MemoryConfig{}));
     std::vector<float> source(shape.volume(), 1.0f);
+    EXPECT_FALSE(
+        experimental::try_create_bfp_host_tensor<float>(std::span<const float>(source).first(source.size() - 1), spec)
+            .has_value());
+    const size_t stride = 96;
+    std::vector<float> pitched(63 * stride + 64, 1.0f);
+    EXPECT_TRUE(experimental::try_create_bfp_host_tensor<float>(pitched, spec, stride).has_value());
+    EXPECT_FALSE(experimental::try_create_bfp_host_tensor<float>(
+                     std::span<const float>(pitched).first(pitched.size() - 1), spec, stride)
+                     .has_value());
     EXPECT_FALSE(experimental::try_create_bfp_host_tensor<float>(source, spec, 63).has_value());
     EXPECT_FALSE(experimental::try_create_bfp_host_tensor<float>(source, spec, 128).has_value());
     EXPECT_FALSE(
