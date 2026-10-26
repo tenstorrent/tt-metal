@@ -91,3 +91,29 @@ def test_moreh_fold_size_arity(device, expect_error, output_size, kernel_size, m
         ttnn.operations.moreh.fold(
             x, None, output_size=output_size, kernel_size=kernel_size, dilation=[1, 1], padding=[1, 1], stride=[1, 1]
         )
+
+
+@pytest.mark.parametrize("op", ["softmax", "softmin", "logsoftmax"])
+@pytest.mark.parametrize("dim", [3, 2], ids=["dim_w", "dim_h"])
+def test_moreh_softmax_rejects_empty_input(device, expect_error, op, dim):
+    """softmax divides the volume by H and W, so an empty input is rejected."""
+    x = _tile(device, (1, 1, 32, 0))
+    with expect_error(RuntimeError, "must be non-empty"):
+        getattr(ttnn.operations.moreh, op)(x, dim)
+
+
+@pytest.mark.parametrize("op", ["softmax_backward", "softmin_backward", "logsoftmax_backward"])
+def test_moreh_softmax_backward_rejects_empty_input(device, expect_error, op):
+    """softmax backward divides the volume by H and W, so an empty output is rejected."""
+    y = _tile(device, (1, 1, 32, 0))
+    dy = _tile(device, (1, 1, 32, 0))
+    with expect_error(RuntimeError, "must be non-empty"):
+        getattr(ttnn.operations.moreh, op)(y, dy, 3)
+
+
+@pytest.mark.parametrize("p", [0.0, float("inf")], ids=["p0", "pinf"])
+def test_moreh_norm_rejects_empty_input(device, expect_error, p):
+    """norm divides the volume by the reduced dim, so an empty input is rejected."""
+    x = _tile(device, (1, 1, 32, 0))
+    with expect_error(RuntimeError, "input must be non-empty"):
+        ttnn.operations.moreh.norm(x, p=p, dim=3)

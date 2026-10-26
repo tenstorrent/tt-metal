@@ -112,6 +112,7 @@ void MorehSoftmaxOperation::validate_inputs(
     const auto rank = input.logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
+    TT_FATAL(input.logical_volume() > 0, "Input to softmax must be non-empty, got shape {}", input.logical_shape());
 }
 
 void MorehSoftmaxOperation::validate_on_program_cache_miss(

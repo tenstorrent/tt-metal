@@ -85,6 +85,10 @@ void MorehSoftmaxBackwardOperation::validate_inputs(
     const auto rank = output_tensor.logical_shape().rank();
     const auto dim = operation_attributes.dim;
     TT_FATAL(dim >= 0 && dim < rank, "dim {} should be less than output tensor rank {}", dim, rank);
+    TT_FATAL(
+        output_tensor.logical_volume() > 0,
+        "Output to softmax backward must be non-empty, got shape {}",
+        output_tensor.logical_shape());
 }
 
 void MorehSoftmaxBackwardOperation::validate_on_program_cache_miss(
