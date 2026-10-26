@@ -54,55 +54,6 @@ void recip_tile_first_column(uint32_t idst) {
 }
 #endif  // TRISC_MATH
 
-// Apply an attention mask to a Q@K^T score tile already sitting in DST register `register_idx`.
-//
-// The input `attn_mask` tile holds 1.0 at valid (keep) positions and 0.0 at masked (drop)
-// positions. The function transforms it to (0.0, -1e9) in-place and adds it to the score
-// tile so that masked positions become large negative values that vanish under softmax.
-//
-// Preconditions:
-//   - The DST register buffer must be in acquired state via *acquire_dst*.
-//   - `cb_attn_mask` must have at least `mask_tile_idx + 1` tiles fronted.
-//
-// `mask_tile_idx` selects which mask tile in `cb_attn_mask` to apply:
-//   - When the writer pre-stages two causal masks in this CB, callers pass 0 for the
-//     diagonal-tile pattern and 1 for the all-masked pattern used past the diagonal.
-//   - When the host provides an arbitrary mask, callers pass the per-chunk tile offset.
-//
-// Scaling by the SDPA scaler factor is NOT done here; it is deferred to after the
-// row-max subtraction for better numerical precision.
-void apply_mask_on_reg(
-    uint32_t register_idx,
-    uint32_t cb_attn_mask,
-    uint32_t minus_one_bits,
-    uint32_t custom_inf_bits,
-    uint32_t mask_tile_idx = 0U) {
-    const uint32_t mask_register = register_idx + 1U;  // mask register should be next to data register
-    copy_init(cb_attn_mask);
-    copy_tile(
-        cb_attn_mask,
-        /* tile_idx */ mask_tile_idx,
-        /* register idx */ mask_register);
-
-    // Apply the attention mask to Q @ K^T scores:
-    // masked positions receive 0.0, unmasked positions remain unchanged
-    mask_tile_init();
-    mask_tile(register_idx, mask_register);
-
-    // Transform mask: 1/0 → 0/-1 → 0/-1e9F, then add to scores.
-    // Scaling is NOT applied here — it is deferred to after max-subtraction
-    // for better numerical precision (avoids scale * large_raw_score in BF16).
-    binop_with_scalar_tile_init();
-    add_unary_tile(mask_register, minus_one_bits);   // subtract 1.0 from mask, so it becomes 0.0 and -1.0
-    mul_unary_tile(mask_register, custom_inf_bits);  // multiply by 1e9F to transform mask to 0.0 and -1e9F
-
-    // Add mask to scaled matmul result:
-    // masked positions receive large negative values (will be 0.0 after softmax),
-    // unmasked positions remain unchanged
-    add_binary_tile_init();
-    add_binary_tile(register_idx, mask_register, register_idx);
-}
-
 // Softmax helpers. Score CB is row-major (row r, K tile n at r * Sk_chunk_t + n); each stat CB is
 // rows deep with row r in slot r. The row-range helpers (row0, n) leave the CB waits/reserves/pushes to
 // the caller; the block-level ones (apply_exp_inplace_and_find_exp_sum, matmul_qk_by_v) do their own.
