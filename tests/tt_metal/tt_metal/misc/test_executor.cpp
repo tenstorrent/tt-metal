@@ -4,8 +4,13 @@
 
 #include <gtest/gtest.h>
 #include <sys/wait.h>
+#include <atomic>
+#include <chrono>
+#include <future>
+#include <stdexcept>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 #include "common/executor.hpp"
 
@@ -16,6 +21,80 @@ TEST(ExecutorTest, AsyncRunsInline) {
     auto fut = detail::async([&value] { value.store(42); });
     fut.get();
     EXPECT_EQ(value.load(), 42);
+}
+
+TEST(ExecutorTest, RunAllLetsWorkersThatFreeUpTakeQueuedJobs) {
+    const size_t workers = detail::GetExecutor().num_workers();
+    constexpr size_t kJobs = 3;
+    if (workers < kJobs) {
+        GTEST_SKIP() << "needs " << kJobs << " executor workers, has " << workers;
+    }
+    // Hold every worker but one, so run_all starts on a worker while the pool counts as full.
+    std::promise<void> gate;
+    std::shared_future<void> released = gate.get_future().share();
+    std::atomic<size_t> held{0};
+    std::vector<std::shared_future<void>> holders;
+    for (size_t i = 0; i + 1 < workers; ++i) {
+        holders.push_back(detail::async([&] {
+            held.fetch_add(1);
+            released.wait();
+        }));
+    }
+    while (held.load() < workers - 1) {
+        std::this_thread::yield();
+    }
+    // The first job frees the held workers, then every job waits until all of them are running at once.
+    std::atomic<size_t> started{0};
+    std::atomic<bool> ran_at_once{true};
+    auto job = [&] {
+        if (started.fetch_add(1) == 0) {
+            gate.set_value();
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (started.load() < kJobs) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                ran_at_once.store(false);
+                return;
+            }
+            std::this_thread::yield();
+        }
+    };
+    detail::async([&] { detail::run_all({job, job, job}); }).get();
+    for (auto& holder : holders) {
+        holder.get();
+    }
+    EXPECT_TRUE(ran_at_once.load());
+}
+
+TEST(ExecutorTest, RunAllFinishesOnEveryWorkerWhenWorkersBusy) {
+    const size_t workers = detail::GetExecutor().num_workers();
+    std::atomic<size_t> started{0};
+    std::atomic<size_t> inner_done{0};
+    std::vector<std::shared_future<void>> outer;
+    for (size_t i = 0; i < workers; ++i) {
+        outer.push_back(detail::async([&] {
+            started.fetch_add(1);
+            while (started.load() < workers) {
+                std::this_thread::yield();
+            }
+            // Every worker is here, so no other worker can run these jobs.
+            detail::run_all({[&] { inner_done.fetch_add(1); }, [&] { inner_done.fetch_add(1); }});
+        }));
+    }
+    for (auto& f : outer) {
+        f.get();
+    }
+    EXPECT_EQ(inner_done.load(), 2 * workers);
+}
+
+TEST(ExecutorTest, RunAllRethrowsAfterEveryJobFinishes) {
+    std::atomic<int> finished{0};
+    auto slow = [&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        finished.fetch_add(1);
+    };
+    EXPECT_THROW(detail::run_all({[] { throw std::runtime_error("build failed"); }, slow, slow}), std::runtime_error);
+    EXPECT_EQ(finished.load(), 2);
 }
 
 TEST(ExecutorTest, ForkSafety) {

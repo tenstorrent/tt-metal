@@ -22,9 +22,14 @@
 #include <sanitizer/lsan_interface.h>
 #endif
 #include <taskflow/taskflow.hpp>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <future>
+#include <memory>
 #include <thread>
+#include <vector>
 
 namespace tt::tt_metal::detail {
 inline static const size_t EXECUTOR_NTHREADS = std::thread::hardware_concurrency() ? std::thread::hardware_concurrency() : 1;
@@ -137,5 +142,43 @@ auto async(F&& func, Args&&... args) {
     GetExecutor().silent_async([task] { (*task)(); });
     GetExecutorMutex().unlock();
     return res;
+}
+
+// Runs every job and returns once all have finished, rethrowing the first exception. Every job but the first is queued
+// for an idle worker, and the calling thread then runs the first and every other job no worker has started. The jobs
+// run in parallel when workers are free, and the caller only waits on jobs already running, so even a worker never
+// waits on a job no one is left to run. A single job runs on the caller without being queued.
+inline void run_all(const std::vector<std::function<void()>>& jobs) {
+    struct Job {
+        std::atomic<bool> started{false};
+        std::packaged_task<void()> run;
+    };
+    // Every job is made before any is queued, so a failure to make one leaves nothing running past this call.
+    std::vector<std::shared_ptr<Job>> tasks;
+    std::vector<std::future<void>> done;
+    for (const auto& job : jobs) {
+        auto task = std::make_shared<Job>();
+        task->run = std::packaged_task<void()>(job);
+        done.push_back(task->run.get_future());
+        tasks.push_back(std::move(task));
+    }
+    for (size_t i = 1; i < tasks.size(); ++i) {
+        GetExecutor().silent_async([task = tasks[i]] {
+            if (!task->started.exchange(true)) {
+                task->run();
+            }
+        });
+    }
+    for (const auto& task : tasks) {
+        if (!task->started.exchange(true)) {
+            task->run();
+        }
+    }
+    for (auto& job_done : done) {
+        job_done.wait();
+    }
+    for (auto& job_done : done) {
+        job_done.get();
+    }
 }
 }  // namespace tt::tt_metal::detail
