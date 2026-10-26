@@ -14,6 +14,7 @@ set(UNIT_TESTS_FABRIC_SRC
     fabric_router/test_2d_route_codec.cpp
     fabric_router/test_axis_topology_sweep.cpp
     fabric_router/test_mcast_reverse_tree.cpp
+    fabric_router/test_packet_header_types.cpp
     fabric_router/test_physical_grouping_descriptor.cpp
     fabric_router/test_topology_mapper.cpp
     fabric_router/test_topology_mapper_utils.cpp
