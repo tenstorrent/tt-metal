@@ -7,31 +7,25 @@
 #include "sfpi.h"
 #include "sfpu_reg.h"
 
-namespace ckernel::sfpu
-{
+namespace ckernel::sfpu {
 
-namespace detail
-{
+namespace detail {
 
-inline constexpr sfpi::UnpackSrcS srcs_reg {};
+inline constexpr sfpi::UnpackSrcS srcs_reg{};
 
 template <SfpuReg REG>
-sfpi_inline auto sfpu_operand_access(int index)
-{
+sfpi_inline auto sfpu_operand_access(int index) {
     static_assert(REG == SfpuReg::Dest || REG == SfpuReg::SrcS, "Unsupported SFPU register space");
-    if constexpr (REG == SfpuReg::Dest)
-    {
+    if constexpr (REG == SfpuReg::Dest) {
         return sfpi::dst_reg[index];
-    }
-    else
-    {
+    } else {
         // SFPI's SrcS builtins select the register file (SFP_SRCSREG_BASE is 0); never add
         // SFPU_SRCS_BASE_ADDR here.
         return srcs_reg[index];
     }
 }
 
-} // namespace detail
+}  // namespace detail
 
 /**
  * @brief Load/store policy using SFPI's layout and vector-type conversions.
@@ -43,21 +37,20 @@ sfpi_inline auto sfpu_operand_access(int index)
  *         caller programs that mode. SrcS stores must use NOINC.
  */
 template <sfpi::DataLayout LAYOUT, typename VALUE, int STORE_ADDR_MODE = sfpi::SFPSTORE_ADDR_MODE_NOINC>
-struct SfpiFormat
-{
-    using value_type                         = VALUE;
+struct SfpiFormat {
+    using value_type = VALUE;
     static constexpr sfpi::DataLayout layout = LAYOUT;
 
     template <SfpuReg REG>
-    sfpi_inline static value_type load(int index)
-    {
+    sfpi_inline static value_type load(int index) {
         return detail::sfpu_operand_access<REG>(index).template mode<LAYOUT>();
     }
 
     template <SfpuReg REG>
-    sfpi_inline static void store(int index, value_type value)
-    {
-        static_assert(REG == SfpuReg::Dest || STORE_ADDR_MODE == sfpi::SFPSTORE_ADDR_MODE_NOINC, "SrcS requires no-increment addressing");
+    sfpi_inline static void store(int index, value_type value) {
+        static_assert(
+            REG == SfpuReg::Dest || STORE_ADDR_MODE == sfpi::SFPSTORE_ADDR_MODE_NOINC,
+            "SrcS requires no-increment addressing");
         detail::sfpu_operand_access<REG>(index).template mode<LAYOUT>(STORE_ADDR_MODE) = value;
     }
 };
@@ -71,24 +64,17 @@ struct SfpiFormat
  * traversal and synchronization.
  */
 template <SfpuReg REG, typename FORMAT>
-class SfpuOperand
-{
+class SfpuOperand {
     static_assert(REG == SfpuReg::Dest || REG == SfpuReg::SrcS, "Unsupported SFPU register space");
 
 public:
     using value_type = typename FORMAT::value_type;
 
-    sfpi_inline constexpr explicit SfpuOperand(int base_offset = 0) : base_offset_(base_offset)
-    {
-    }
+    sfpi_inline constexpr explicit SfpuOperand(int base_offset = 0) : base_offset_(base_offset) {}
 
-    sfpi_inline value_type load(int index) const
-    {
-        return FORMAT::template load<REG>(base_offset_ + index);
-    }
+    sfpi_inline value_type load(int index) const { return FORMAT::template load<REG>(base_offset_ + index); }
 
-    sfpi_inline void store(int index, value_type value) const
-    {
+    sfpi_inline void store(int index, value_type value) const {
         FORMAT::template store<REG>(base_offset_ + index, value);
     }
 
@@ -96,4 +82,4 @@ private:
     int base_offset_;
 };
 
-} // namespace ckernel::sfpu
+}  // namespace ckernel::sfpu
