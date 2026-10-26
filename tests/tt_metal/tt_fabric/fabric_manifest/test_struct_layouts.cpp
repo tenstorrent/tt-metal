@@ -10,10 +10,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <type_traits>
 
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/struct_layout_helpers.hpp"
 
 namespace tt::tt_fabric::layout_test {
 
@@ -51,6 +53,17 @@ struct WithArrays {
     uint8_t id;
     Color colors[3];
     std::array<Inner, 2> points;
+};
+
+// A class template, whose instances enchantum::type_name can't name.
+template <uint32_t N>
+struct ByteRun {
+    uint8_t bytes[N];
+};
+
+struct HoldsByteRun {
+    uint32_t word;
+    ByteRun<4> run;
 };
 
 struct WordAndByte {
@@ -105,6 +118,20 @@ struct Tagged {
     ShapeFields fields;
 };
 
+enum class Width : uint8_t { HALF, WORD };
+
+// A union class template, whose instances enchantum::type_name can't name.
+template <uint32_t N>
+union Words {
+    uint16_t halves[2 * N];
+    uint32_t words[N];
+};
+
+struct HoldsWords {
+    Width width;
+    Words<1> value;
+};
+
 }  // namespace tt::tt_fabric::layout_test
 
 namespace tt::tt_fabric::layout {
@@ -118,6 +145,14 @@ struct StructLayout<layout_test::Inner> {
 };
 
 template <>
+struct StructLayout<layout_test::ByteRun<4>> {
+    static constexpr std::string_view name = template_name<"ByteRun", 4>;
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(layout_test::ByteRun<4>, bytes),
+    };
+};
+
+template <>
 struct TaggedUnionLayout<layout_test::ShapeFields> {
     using Tag = layout_test::Shape;
     static constexpr std::array cases = {
@@ -127,14 +162,27 @@ struct TaggedUnionLayout<layout_test::ShapeFields> {
     };
 };
 
+template <>
+struct TaggedUnionLayout<layout_test::Words<1>> {
+    using Tag = layout_test::Width;
+    static constexpr std::string_view name = "Words<1>";
+    static constexpr std::array cases = {
+        LAYOUT_TAGGED_UNION_CASE(layout_test::Words<1>, halves, Tag::HALF),
+        LAYOUT_TAGGED_UNION_CASE(layout_test::Words<1>, words, Tag::WORD),
+    };
+};
+
 namespace {
 
+using layout_test::ByteRun;
 using layout_test::ByteThenFlagsThenWord;
 using layout_test::ByteThenWord;
 using layout_test::Color;
 using layout_test::ConstructedByteThenWord;
 using layout_test::ConstructedWords;
 using layout_test::HalvedWord;
+using layout_test::HoldsByteRun;
+using layout_test::HoldsWords;
 using layout_test::Inner;
 using layout_test::Outer;
 using layout_test::Shape;
@@ -144,6 +192,7 @@ using layout_test::ThreeWords;
 using layout_test::WithArrays;
 using layout_test::WordAndByte;
 using layout_test::WordAndByteThenExtra;
+using layout_test::Words;
 
 // A member missing from the middle of the list, such as a field added to a device struct but not to its layout, leaves
 // a gap which should cause an error since the next listed member doesn't start where the one before it ended.
@@ -198,6 +247,56 @@ TEST(StructLayout, MemberTypesAndNames) {
     EXPECT_EQ(members[3].offset, 6u);
     EXPECT_EQ(members[3].type.size, 4u);
     EXPECT_EQ(members[3].type.count, 2u);
+}
+
+// A struct whose StructLayout sets a name, such as a class template instance, should be known by that name wherever
+// it's a member, since its type name isn't available.
+TEST(StructLayout, StructLayoutNameNamesTheStruct) {
+    EXPECT_TRUE(type_of<ByteRun<4>>() == (Type{element::Struct{"ByteRun<4>"}, 4, 0}));
+
+    constexpr std::array members = {
+        LAYOUT_MEMBER(HoldsByteRun, word),
+        LAYOUT_MEMBER(HoldsByteRun, run),
+    };
+    static_assert(find_layout_error<HoldsByteRun>(members) == LayoutError::NONE);
+    EXPECT_TRUE(members[1].type.element == Element{element::Struct{"ByteRun<4>"}});
+}
+
+// A template instance's name should be spelled as it is written in code.
+TEST(StructLayout, TemplateNameSpellsTheInstance) {
+    EXPECT_EQ((template_name<"ByteRun", 4>), "ByteRun<4>");
+    EXPECT_EQ((template_name<"ByteRun", 0>), "ByteRun<0>");
+    EXPECT_EQ((template_name<"T", 1, false>), "T<1,false>");
+    EXPECT_EQ((template_name<"T", true, uint64_t{18446744073709551615u}>), "T<true,18446744073709551615>");
+}
+
+// One initializer fills an anonymous union, so listing the union by two of its members counts one more initializer
+// than the struct takes. Marking them as filled by one initializer should make the count match, without changing
+// their offsets or types.
+TEST(StructLayout, FilledByOneInitializerCountsTheGroupOnce) {
+    constexpr std::array halves = {LAYOUT_MEMBER(HalvedWord, lo), LAYOUT_MEMBER(HalvedWord, hi)};
+    static_assert(initializer_count<HalvedWord> == 1);
+    EXPECT_EQ(find_layout_error<HalvedWord>(halves), LayoutError::UNLISTED_FIELD);
+
+    constexpr auto filled = filled_by_one_initializer(halves);
+    EXPECT_EQ(find_layout_error<HalvedWord>(filled), LayoutError::NONE);
+    EXPECT_EQ(filled[0].initializers, 1u);
+    EXPECT_EQ(filled[1].initializers, 0u);
+    EXPECT_TRUE(filled[1].type == halves[1].type);
+    EXPECT_EQ(filled[1].offset, halves[1].offset);
+}
+
+constexpr auto three_words_joined_members = concat_members(
+    std::array{LAYOUT_MEMBER(ThreeWords, a)}, std::array{LAYOUT_MEMBER(ThreeWords, b), LAYOUT_MEMBER(ThreeWords, c)});
+
+// Joined member lists should keep every member in order, so a layout built from shared groups of members passes the
+// same checks as one listed in full.
+TEST(StructLayout, ConcatMembersJoinsListsInOrder) {
+    static_assert(check_struct_layout<ThreeWords, three_words_joined_members>());
+    ASSERT_EQ(three_words_joined_members.size(), 3u);
+    EXPECT_EQ(three_words_joined_members[0].name, "a");
+    EXPECT_EQ(three_words_joined_members[1].name, "b");
+    EXPECT_EQ(three_words_joined_members[2].name, "c");
 }
 
 // A C array of enums should be an Enum element with the array's length as its count, rather than a scalar, since
@@ -405,6 +504,14 @@ TEST(StructLayout, TaggedUnionNamesItsTag) {
     EXPECT_EQ(fields.name, "fields");
     EXPECT_EQ(fields.offset, offsetof(Tagged, fields));
     EXPECT_TRUE(fields.type == (Type{element::TaggedUnion{"ShapeFields", "shape"}, sizeof(ShapeFields), 0}));
+}
+
+// A tagged union whose TaggedUnionLayout sets a name, such as a union class template instance, should be known by
+// that name wherever it's a member, since its type name isn't available.
+TEST(StructLayout, TaggedUnionLayoutNameNamesTheUnion) {
+    static_assert(validate_tagged_union_cases<Words<1>>(TaggedUnionLayout<Words<1>>::cases));
+    constexpr Member value = LAYOUT_TAGGED_UNION(HoldsWords, value, width);
+    EXPECT_TRUE(value.type == (Type{element::TaggedUnion{"Words<1>", "width"}, sizeof(Words<1>), 0}));
 }
 
 }  // namespace

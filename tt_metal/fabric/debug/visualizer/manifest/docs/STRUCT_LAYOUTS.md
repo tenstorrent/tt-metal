@@ -255,6 +255,25 @@ LAYOUT_MEMBER(T, b)    // 1
 
 The fix is to list `flags`. The padding entry then shrinks to the bytes after `flags`, and both sides count 3.
 
+Two things take one value however many members a layout lists for them: a base class, and an anonymous union. The
+packet headers have both. They get `command_fields`, `payload_size_bytes`, `noc_send_type` and `src_ch_id` from
+`PacketHeaderBase`, and the 2D header has two anonymous unions. They're still aggregates, since they declare no
+constructor of their own, so they're counted. Their layouts mark each such group with `filled_by_one_initializer`
+(`struct_layout_helpers.hpp`), which gives the group's first member the one value and the rest none:
+
+```cpp
+filled_by_one_initializer(std::array{
+    LAYOUT_TAGGED_UNION(H, command_fields, noc_send_type),  // 1
+    LAYOUT_MEMBER(H, payload_size_bytes),                   // 0
+    LAYOUT_MEMBER(H, noc_send_type),                        // 0
+    LAYOUT_MEMBER(H, src_ch_id),                            // 0
+})
+```
+
+A field added to the header itself still raises its count. A field added to `PacketHeaderBase` doesn't, since the base
+is still one value, but the base has no compiler padding, so the new field shifts the header's own fields and coverage
+catches it.
+
 #### Structs with constructors: structured bindings
 
 For a struct with a constructor, `T{...}` calls the constructor, which says nothing about the fields, so the
@@ -294,10 +313,7 @@ at all, and the build fails, so it can't pass by accident.
 
 A struct with a constructor whose layout lists no compiler padding needs no count. Every byte is covered by a real
 field, so a new field has nowhere to hide: it has to shift later fields or grow the struct, and coverage catches
-either. That's what makes the packet headers work. They keep their fields partly in a base class (`PacketHeaderBase`)
-and have anonymous unions, so they can't be bound, but they have no compiler padding. They're sized to fixed totals,
-with the spare bytes declared as named fields. The compiler padding is one level down, in the NOC command headers
-inside their command union, and those are counted with bindings.
+either. The NOC scatter command header is one: it has constructors and no compiler padding.
 
 ### Tagged unions
 
@@ -337,21 +353,18 @@ What catches each kind of change:
 **A struct with constructors that can't be bound can't list compiler padding.** Structs with constructors are counted
 with structured bindings, which need public fields declared directly in the struct and no anonymous unions. A struct
 that misses those and also has compiler padding can't be checked for a field hidden in the padding, and its layout
-fails to build. That's the packet headers' situation if one of them ever gains compiler padding. The options are to
-declare the gap as a named field of the struct (listed with `LAYOUT_MEMBER`), or to move the fields so there's no gap.
-Declaring padding can change the code the compiler generates for the struct, so check the kernels that use it.
+fails to build. The options are to declare the gap as a named field of the struct (listed with `LAYOUT_MEMBER`), or to
+move the fields so there's no gap. Declaring padding can change the code the compiler generates for the struct, so
+check the kernels that use it.
 
 **An anonymous union counts as one value.** When the count reaches an anonymous union, one value fills the whole union.
-A layout lists one of the union's members instead. That works as long as the listed member isn't a C array, which
-would count once per element. If it is, the check fails even though nothing is wrong; list a member that isn't a C array
-instead. A named union field is always one value.
+A layout lists the union by the members that span it. If that's a single member that isn't a C array, it already counts
+as one. Otherwise, wrap the members in `filled_by_one_initializer`, as the 2D packet header does for its chip and mesh
+ids and for `mcast_params`. A named union field is always one value.
 
-**Bitfields and base classes would confuse the initializer count.** Two bitfields sharing a byte count as two values,
-but a layout can only describe the byte as a whole. A base class counts as one value however many fields it has. None
-of the described aggregates has either. If one ever does, its layout needs to state its count explicitly.
-
-**Layouts built at run time aren't counted.** Some structs only exist as run-time descriptions from the HAL, with no C++
-type to count. Their layouts get the coverage check only, and fill gaps with padding entries as they're built.
+**Bitfields would confuse the initializer count.** Two bitfields sharing a byte count as two values, but a layout can
+only describe the byte as a whole. None of the described aggregates has bitfields. If one ever does, its layout needs
+to state its count explicitly.
 
 ## From layout to decoded value
 

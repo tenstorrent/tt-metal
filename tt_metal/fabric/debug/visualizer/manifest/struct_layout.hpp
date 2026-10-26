@@ -204,6 +204,13 @@ concept Described = requires { StructLayout<T>::members; };
 template <typename U>
 struct TaggedUnionLayout;
 
+// A union is described if it has a TaggedUnionLayout specialization, with a Tag and a cases list.
+template <typename U>
+concept DescribedTaggedUnion = requires {
+    typename TaggedUnionLayout<U>::Tag;
+    TaggedUnionLayout<U>::cases;
+};
+
 namespace detail {
 
 template <typename T>
@@ -249,6 +256,26 @@ constexpr std::string_view get_tag_value_name(typename TaggedUnionLayout<U>::Tag
     return enchantum::to_string(tag_value);
 }
 
+// A described struct's name: its StructLayout's name if it sets one, or else its type name.
+template <typename T>
+constexpr std::string_view get_struct_name() {
+    if constexpr (requires { StructLayout<T>::name; }) {
+        return StructLayout<T>::name;
+    } else {
+        return enchantum::type_name<T>;
+    }
+}
+
+// A described tagged union's name: its TaggedUnionLayout's name if it sets one, or else its type name.
+template <typename U>
+constexpr std::string_view get_tagged_union_name() {
+    if constexpr (requires { TaggedUnionLayout<U>::name; }) {
+        return TaggedUnionLayout<U>::name;
+    } else {
+        return enchantum::type_name<U>;
+    }
+}
+
 // The Element for one element of type T: an integer, an enum or a described struct.
 template <typename T>
 constexpr Element element_of() {
@@ -265,7 +292,7 @@ constexpr Element element_of() {
     } else if constexpr (std::is_union_v<T>) { /* a union needs its tag, which only the enclosing struct knows */
         static_assert(!sizeof(T*), "a union member needs LAYOUT_TAGGED_UNION, or LAYOUT_BYTES when nothing tags it");
     } else if constexpr (Described<T>) { /* defined struct type, via StructLayout<T> */
-        return element::Struct{enchantum::type_name<T>};
+        return element::Struct{get_struct_name<T>()};
     } else { /* always fails if we get here */
         static_assert(!sizeof(T*), "member type has no StructLayout specialization; describe it or use LAYOUT_BYTES");
     }
@@ -540,17 +567,23 @@ constexpr bool validate_tagged_union_cases(const std::array<TaggedUnionCase, N>&
 //       Kind kind;          // offset 0
 //       Geometry geometry;  // offset 4
 //   };
-#define LAYOUT_TAGGED_UNION(T, member, tag_member)                                                               \
-    [] {                                                                                                         \
-        using U = decltype(T::member);                                                                           \
-        static_assert(                                                                                           \
-            std::is_same_v<                                                                                      \
-                std::remove_cv_t<decltype(T::tag_member)>,                                                       \
-                typename ::tt::tt_fabric::layout::TaggedUnionLayout<U>::Tag>,                                    \
-            "a tagged union's tag member must hold the Tag enum of the union's TaggedUnionLayout");              \
-        return ::tt::tt_fabric::layout::Member{                                                                  \
-            #member,                                                                                             \
-            offsetof(T, member),                                                                                 \
-            {::tt::tt_fabric::layout::element::TaggedUnion{enchantum::type_name<U>, #tag_member}, sizeof(U), 0}, \
-            ::tt::tt_fabric::layout::initializers_of<U>()};                                                      \
+#define LAYOUT_TAGGED_UNION(T, member, tag_member)                                                  \
+    [] {                                                                                            \
+        using U = decltype(T::member);                                                              \
+        static_assert(                                                                              \
+            ::tt::tt_fabric::layout::DescribedTaggedUnion<U>,                                       \
+            "a tagged union member's union needs a TaggedUnionLayout with a Tag and cases");        \
+        static_assert(                                                                              \
+            std::is_same_v<                                                                         \
+                std::remove_cv_t<decltype(T::tag_member)>,                                          \
+                typename ::tt::tt_fabric::layout::TaggedUnionLayout<U>::Tag>,                       \
+            "a tagged union's tag member must hold the Tag enum of the union's TaggedUnionLayout"); \
+        return ::tt::tt_fabric::layout::Member{                                                     \
+            #member,                                                                                \
+            offsetof(T, member),                                                                    \
+            {::tt::tt_fabric::layout::element::TaggedUnion{                                         \
+                 ::tt::tt_fabric::layout::detail::get_tagged_union_name<U>(), #tag_member},         \
+             sizeof(U),                                                                             \
+             0},                                                                                    \
+            ::tt::tt_fabric::layout::initializers_of<U>()};                                         \
     }()
