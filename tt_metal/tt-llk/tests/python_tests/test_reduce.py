@@ -68,8 +68,12 @@ REDUCE_TILE_DIMENSIONS = [
 
 
 def _fidelities_for_format(formats):
-    """LoFi fails for Float16_b/Float32 inputs — exclude at parametrize time."""
-    if formats.input_format in [DataFormat.Float16_b, DataFormat.Float32]:
+    """LoFi fails for Float16/Float16_b/Float32 inputs — exclude at parametrize time."""
+    if formats.input_format in [
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+    ]:
         return [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4]
     return ALL_FIDELITIES
 
@@ -165,6 +169,7 @@ def _run_reduce_test(
     perf_report=None,
     run_types=None,
     loop_factor=1,
+    src_A_transform=None,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
     if input_dimensions is None:
@@ -177,6 +182,8 @@ def _run_reduce_test(
         input_dimensions_B=tile_dimensions,
         tile_dimensions=tile_dimensions,
     )
+    if src_A_transform is not None:
+        src_A = src_A_transform(src_A.float()).to(src_A.dtype)
     # One resident scaler tile, as in production.
     src_B = _scaler_tile(tile_shape, tile_dimensions, reduce_dim, pool_type)
 
@@ -308,16 +315,45 @@ def test_reduce(
     )
 
 
-# REDUCE_SWEEP only feeds exponent-B formats to SrcA; Float16 is exponent-A, so
-# this is the one case where reduce combines an exponent-A SrcA with a 32-bit Dest.
+# Default stimuli are uniform(0.1, 1.1).
+FLOAT16_STIMULI = {
+    "uniform": None,
+    # A 0 fill instead of -inf in the MAX path would win over every input.
+    "negative": lambda x: -x,
+    # Powers of two have a zero low byte, which Src zero substitution would flush.
+    "pow2": lambda x: torch.exp2(torch.round(torch.log2(2 * x))),
+    "wide": lambda x: (x - 0.6) * 2000,
+    "mixed": lambda x: x - 0.6,
+}
+
+
+def _float16_stimuli(pool_type):
+    if pool_type == ReducePool.Max:
+        return ["uniform", "negative", "pow2", "wide"]
+    if pool_type == ReducePool.Sum:
+        return ["uniform", "pow2", "mixed"]
+    return ["uniform"]
+
+
+# Float16 is the only exponent-A SrcA format, and its bug needs a 32-bit Dest, which
+# REDUCE_SWEEP would select only for a Float32 output; force dest_acc for every output.
 @parametrize(
-    formats=[InputOutputFormat(DataFormat.Float16, DataFormat.Float32)],
-    dest_acc=_required_dest_acc_mode,
+    formats=[
+        InputOutputFormat(DataFormat.Float16, output)
+        for output in [
+            DataFormat.Float32,
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+            DataFormat.Bfp8_b,
+        ]
+    ],
+    dest_acc=[DestAccumulation.Yes],
     reduce_dim=REDUCE_DIMS,
     pool_type=POOL_TYPES,
-    math_fidelity=[MathFidelity.HiFi4],
-    is_reduce_to_one=[False, True],
-    tile_dimensions=[[1, 32], [16, 32], [32, 16], [32, 32]],
+    math_fidelity=_fidelities_for_format,
+    is_reduce_to_one=_reduce_to_one_for_format,
+    tile_dimensions=REDUCE_TILE_DIMENSIONS,
+    stimulus=_float16_stimuli,
 )
 def test_reduce_float16_to_float32(
     formats,
@@ -327,6 +363,7 @@ def test_reduce_float16_to_float32(
     math_fidelity,
     is_reduce_to_one,
     tile_dimensions,
+    stimulus,
 ):
     _run_reduce_test(
         formats,
@@ -336,6 +373,7 @@ def test_reduce_float16_to_float32(
         math_fidelity,
         is_reduce_to_one,
         tile_dimensions,
+        src_A_transform=FLOAT16_STIMULI[stimulus],
     )
 
 

@@ -143,12 +143,15 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
     TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
 }
 
-// Exponent-A (FP16-family) SrcA with a 32-bit Dest. GMPOOL forms the TF32 Dest exponent as eA + eB - 127 from the
+// Float16 SrcA and SrcB (scaler) with a 32-bit Dest. GMPOOL forms the TF32 Dest exponent as eA + eB - 127 from the
 // 5-bit FP16 exponents, so its result lands 2^32 too high, and MOVD2B/MOVD2A pass the high 16 bits of an FP32 datum
 // through as FP16. MAX therefore pools each tile in the FP16 domain with argmax set (GMPOOL then writes FP16 into the
 // high 16 bits of Dest), ELWADD converts the pooled rows and the scaler to FP32, and the rest of the reduce runs on
 // TF32 Src data. Wormhole truncates each Src datum by its own format, so SrcB needs the TF32 override as well as SrcA.
-// Dest rows below are relative to the Dest counter; rows 4-15 of a face are scratch, cleared or overwritten before return.
+// The analysis needs both operands in Float16; other combinations keep the base instruction stream.
+// Dest rows below are relative to the Dest counter. GMPOOL writes a 4-row block: with argmax set, rows 1-3 of the
+// block hold index data. Rows 4-15 of a face are scratch, cleared or overwritten before return.
+constexpr std::uint32_t REDUCE_SCALAR_POOL_ROW  = 4;
 constexpr std::uint32_t REDUCE_FP16_POOL_ROW    = 4;
 constexpr std::uint32_t REDUCE_FP16_SCRATCH_ROW = 8;
 
@@ -157,7 +160,8 @@ inline bool reduce_fp16_src_fp32_dest()
 {
     if constexpr (is_fp32_dest_acc_en)
     {
-        return IS_A_FORMAT(math::src_zero_flag_srca_fmt);
+        constexpr std::uint32_t fp16 = to_underlying(DataFormat::Float16);
+        return masked_data_format(math::src_zero_flag_srca_fmt) == fp16 && masked_data_format(math::src_zero_flag_srcb_fmt) == fp16;
     }
     else
     {
@@ -172,7 +176,7 @@ inline void reduce_set_tf32_src_override(const bool enable)
     constexpr std::uint32_t tf32_src_fmt_overrides =
         (to_underlying(DataFormat::Tf32) << ALU_FORMAT_SPEC_REG_SrcA_val_SHAMT) | (1 << ALU_FORMAT_SPEC_REG_SrcA_override_SHAMT) |
         (to_underlying(DataFormat::Tf32) << ALU_FORMAT_SPEC_REG_SrcB_val_SHAMT) | (1 << ALU_FORMAT_SPEC_REG_SrcB_override_SHAMT);
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32, 0, src_fmt_override_mask>(enable ? tf32_src_fmt_overrides : 0);
 }
 
@@ -182,10 +186,15 @@ inline void reduce_set_tf32_src_override(const bool enable)
  * ELWADD through a zeroed SrcA writes SrcB rows 0-7 to Dest rows 8-15: row 8 takes the scaler, row 9 + i the pooled
  * row of column face i (Dest row 4 + 16 * i), staged into SrcB row 1 + i. Clobbers SrcA. Leaves the TF32 override on.
  *
+ * Disables Src zero substitution, which would flush datums with a zero low byte (the scaler 1.0, any power-of-two
+ * max); the caller returns the flag to the default state after its last data move.
+ *
  * @param num_pooled_rows: Number of pooled rows to convert, at most 2.
  */
-inline void reduce_fp16_convert_to_tf32(const std::uint32_t num_pooled_rows)
+inline __attribute__((noinline)) void reduce_fp16_convert_to_tf32(const std::uint32_t num_pooled_rows)
 {
+    math::_configure_preserve_zero_flag_state_();
+
     TTI_ZEROSRC(0, 1, 0, 1);
     for (std::uint32_t i = 0; i < num_pooled_rows; i++)
     {
@@ -222,12 +231,13 @@ inline void reduce_fp16_clear_dest_rows(const std::uint32_t first_row, const std
 }
 
 /**
- * @brief REDUCE_ROW MAX of one face row for an exponent-A SrcA with a 32-bit Dest.
+ * @brief REDUCE_ROW MAX of one face row for a Float16 SrcA with a 32-bit Dest.
  *
- * Dest row 0 keeps the running FP32 max across tiles; the transpose then rewrites rows 0-15, scratch included.
+ * Dest row 0 keeps the running FP32 max across tiles; the transpose then rewrites rows 0-15, scratch included, and
+ * returns the Src zero-substitution flag to the default state.
  */
 template <bool is_int_fpu_en, bool high_fidelity>
-inline void reduce_row_max_fp16_face_row(const std::uint32_t num_faces_c_dim)
+inline __attribute__((noinline)) void reduce_row_max_fp16_face_row(const std::uint32_t num_faces_c_dim)
 {
     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_FP16_POOL_ROW);
     reduce_row_pool_all_faces<PoolType::MAX, high_fidelity, REDUCE_FP16_POOL_ROW, p_gpool::INDEX_EN>(num_faces_c_dim);
@@ -238,12 +248,29 @@ inline void reduce_row_max_fp16_face_row(const std::uint32_t num_faces_c_dim)
 }
 
 /**
- * @brief Finish a REDUCE_COL MAX tile for an exponent-A SrcA with a 32-bit Dest: fold each FP16-domain pooled row into
+ * @brief Pool and transpose one REDUCE_ROW MAX face row.
+ */
+template <bool is_int_fpu_en, bool high_fidelity>
+inline void reduce_row_max_face_row(const bool fp16_max, const std::uint32_t num_faces_c_dim)
+{
+    if (fp16_max)
+    {
+        reduce_row_max_fp16_face_row<is_int_fpu_en, high_fidelity>(num_faces_c_dim);
+    }
+    else
+    {
+        reduce_row_pool_all_faces<PoolType::MAX, high_fidelity>(num_faces_c_dim);
+        reduce_row_perform_transpose<is_int_fpu_en>();
+    }
+}
+
+/**
+ * @brief Finish a REDUCE_COL MAX tile for a Float16 SrcA with a 32-bit Dest: fold each FP16-domain pooled row into
  *        the FP32 result row of its column face, then clear the scratch rows.
  *
  * @param num_faces_c_dim: Number of column faces.
  */
-inline void reduce_col_max_fp16_finish(const std::uint32_t num_faces_c_dim)
+inline __attribute__((noinline)) void reduce_col_max_fp16_finish(const std::uint32_t num_faces_c_dim)
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     reduce_fp16_convert_to_tf32(num_faces_c_dim);
@@ -252,6 +279,7 @@ inline void reduce_col_max_fp16_finish(const std::uint32_t num_faces_c_dim)
         reduce_fp16_max_into(REDUCE_FP16_SCRATCH_ROW + 1 + i, i * FACE_R_DIM);
     }
     reduce_set_tf32_src_override(false);
+    math::_configure_default_zero_flag_state_();
 
     reduce_fp16_clear_dest_rows(REDUCE_FP16_POOL_ROW, FACE_R_DIM);
     for (std::uint32_t i = 1; i < num_faces_c_dim; i++)
@@ -261,18 +289,18 @@ inline void reduce_col_max_fp16_finish(const std::uint32_t num_faces_c_dim)
 }
 
 /**
- * @brief Pool one REDUCE_COL face, into the FP16-domain scratch row when fp16_max is set.
+ * @brief Pool one face into Dest row `index`, or into the FP16-domain pool row with argmax set when fp16_max is set.
  */
-template <PoolType type, bool high_fidelity>
-inline void reduce_col_pool_face(const bool fp16_max)
+template <PoolType type, bool high_fidelity, std::uint32_t clear_mode, std::uint32_t index>
+inline void reduce_pool_face(const bool fp16_max)
 {
     if (fp16_max)
     {
-        reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, REDUCE_FP16_POOL_ROW, p_gpool::INDEX_EN>();
+        reduce_pool_op<type, high_fidelity, clear_mode, REDUCE_FP16_POOL_ROW, p_gpool::INDEX_EN>();
     }
     else
     {
-        reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
+        reduce_pool_op<type, high_fidelity, clear_mode, index>();
     }
 }
 
@@ -400,27 +428,13 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
         if constexpr (type == PoolType::MAX)
         {
-            if (reduce_fp16_src_fp32_dest<is_fp32_dest_acc_en>())
-            {
-                reduce_row_max_fp16_face_row<is_int_fpu_en, high_fidelity>(tensor_shape.num_faces_c_dim);
+            const bool fp16_max = reduce_fp16_src_fp32_dest<is_fp32_dest_acc_en>();
+            reduce_row_max_face_row<is_int_fpu_en, high_fidelity>(fp16_max, tensor_shape.num_faces_c_dim);
 
-                if (tensor_shape.num_faces_r_dim > 1)
-                {
-                    reduce_row_advance_dest(is_narrow_tile);
-                    reduce_row_max_fp16_face_row<is_int_fpu_en, high_fidelity>(tensor_shape.num_faces_c_dim);
-                }
-            }
-            else
+            if (tensor_shape.num_faces_r_dim > 1)
             {
-                reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
-                reduce_row_perform_transpose<is_int_fpu_en>();
-
-                if (tensor_shape.num_faces_r_dim > 1)
-                {
-                    reduce_row_advance_dest(is_narrow_tile);
-                    reduce_row_pool_all_faces<type, high_fidelity>(tensor_shape.num_faces_c_dim);
-                    reduce_row_perform_transpose<is_int_fpu_en>();
-                }
+                reduce_row_advance_dest(is_narrow_tile);
+                reduce_row_max_face_row<is_int_fpu_en, high_fidelity>(fp16_max, tensor_shape.num_faces_c_dim);
             }
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
         }
@@ -437,13 +451,13 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         for (std::uint32_t row_num = 0; row_num < tensor_shape.num_faces_r_dim; row_num++)
         {
             // Just pool
-            reduce_col_pool_face<type, high_fidelity>(fp16_max);
+            reduce_pool_face<type, high_fidelity, p_setrwc::CLR_NONE, 0>(fp16_max);
             if (tensor_shape.num_faces_c_dim > 1)
             {
                 TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
                 TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
 
-                reduce_col_pool_face<type, high_fidelity>(fp16_max);
+                reduce_pool_face<type, high_fidelity, p_setrwc::CLR_NONE, 0>(fp16_max);
             }
             if (fp16_max && row_num == tensor_shape.num_faces_r_dim - 1)
             {
@@ -461,24 +475,10 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         for (std::uint32_t face_num = 0; face_num < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face_num++)
         {
             // Wait and pool
-            if (fp16_max)
-            {
-                reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, REDUCE_FP16_POOL_ROW, p_gpool::INDEX_EN>();
-            }
-            else
-            {
-                reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 4>();
-            }
+            reduce_pool_face<type, high_fidelity, p_setrwc::CLR_AB, REDUCE_SCALAR_POOL_ROW>(fp16_max);
         }
         // Wait and pool
-        if (fp16_max)
-        {
-            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, REDUCE_FP16_POOL_ROW, p_gpool::INDEX_EN>();
-        }
-        else
-        {
-            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 4>();
-        }
+        reduce_pool_face<type, high_fidelity, p_setrwc::CLR_NONE, REDUCE_SCALAR_POOL_ROW>(fp16_max);
 
         // Need row in dest as column in src A
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
@@ -495,7 +495,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         }
         else
         {
-            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 4);
+            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, REDUCE_SCALAR_POOL_ROW);
         }
         TTI_GATESRCRST(0b1, 0b1);
         TTI_TRNSPSRCB;
@@ -512,7 +512,9 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, 4);
         if (fp16_src)
         {
-            reduce_fp16_clear_dest_rows(REDUCE_FP16_POOL_ROW + 1, FACE_R_DIM);
+            math::_configure_default_zero_flag_state_();
+            // Argmax GMPOOL leaves index data in rows 5-7; the TF32 conversion writes rows 8-15.
+            reduce_fp16_clear_dest_rows(fp16_max ? REDUCE_FP16_POOL_ROW + 1 : REDUCE_FP16_SCRATCH_ROW, FACE_R_DIM);
         }
 
         if constexpr (type == PoolType::MAX)
