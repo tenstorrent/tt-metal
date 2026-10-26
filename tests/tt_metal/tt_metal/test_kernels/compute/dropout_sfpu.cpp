@@ -22,14 +22,13 @@ void kernel_main() {
     CircularBuffer cb0(tt::CBIndex::c_0);
     CircularBuffer cb16(tt::CBIndex::c_16);
 
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
 #ifdef DROPOUT_INPUT_FPU_ADD
     // Fused FPU add + dropout: the tile dropout works on is produced in DST by the FPU (c_0 + c_0 = 2x),
     // so the FPU binary init, not a datacopy init, is the last ADDR_MOD_3 programmer before dropout_tile
     // (dropout_kernel_init below programs ADDR_MOD_7, the slot the SFPU op addresses Dest through).
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, tt::CBIndex::c_16);
     add_init(tt::CBIndex::c_0, tt::CBIndex::c_0);
 #else
-    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_init(tt::CBIndex::c_0);
 #endif
     dropout_kernel_init(seed);

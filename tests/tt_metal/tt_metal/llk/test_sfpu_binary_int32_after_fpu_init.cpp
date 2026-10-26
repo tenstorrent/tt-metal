@@ -194,7 +194,7 @@ TEST_P(SfpuBinaryInt32AfterFpuInitFixture, TensixSfpuBinaryInt32AfterFpuInit) {
     if (this->arch_ == ARCH::QUASAR) {
         GTEST_SKIP() << "Int32 copy_tile + FPU binary init path not validated on Quasar";
     }
-    const std::string op_name = GetParam();
+    const std::string& op_name = GetParam();
     EXPECT_TRUE(
         unit_tests::compute::sfpu::binary_int32_after_fpu_init::run(this->devices_.at(0), op_name, 1 /*num_tiles*/));
 }
