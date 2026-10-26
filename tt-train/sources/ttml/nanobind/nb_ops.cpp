@@ -474,20 +474,11 @@ void py_module(nb::module_& m) {
             nb::overload_cast<
                 const autograd::TensorPtr&,
                 const ttml::ops::RotaryEmbeddingParams&,
-                const ttnn::Tensor&,
-                const ttnn::Tensor&>(&ttml::ops::rope),
+                const autograd::TensorPtr&>(&ttml::ops::rope),
             nb::arg("input"),
             nb::arg("rope_params"),
-            nb::arg("cos"),
-            nb::arg("sin"),
-            "RoPE with per-row cos/sin from gather_rows (num_heads = input.shape[1]).");
-        py_rope.def(
-            "gather_rows",
-            &ttml::ops::gather_rows,
-            nb::arg("rope_params"),
             nb::arg("position_ids"),
-            nb::arg("num_heads"),
-            "Returns (cos, sin) of shape [1, B * num_heads, S, head_dim] for position_ids [B, S] UINT32 ROW_MAJOR. "
+            "RoPE with per-row positions. position_ids: [B, S] UINT32 ROW_MAJOR. "
             "Every id must be < rope_params.sequence_length; this is not checked on device.");
         py_rope.def(
             "mla_q_rope",
@@ -538,8 +529,6 @@ void py_module(nb::module_& m) {
             py_rotary_embedding_params.def_rw("sin_cache", &ttml::ops::RotaryEmbeddingParams::sin_cache);
             py_rotary_embedding_params.def_rw("neg_cos_cache", &ttml::ops::RotaryEmbeddingParams::neg_cos_cache);
             py_rotary_embedding_params.def_rw("neg_sin_cache", &ttml::ops::RotaryEmbeddingParams::neg_sin_cache);
-            py_rotary_embedding_params.def_rw("cos_table", &ttml::ops::RotaryEmbeddingParams::cos_table);
-            py_rotary_embedding_params.def_rw("sin_table", &ttml::ops::RotaryEmbeddingParams::sin_table);
             py_rotary_embedding_params.def_rw("trans_mat", &ttml::ops::RotaryEmbeddingParams::trans_mat);
             py_rotary_embedding_params.def_rw("sequence_length", &ttml::ops::RotaryEmbeddingParams::sequence_length);
             py_rotary_embedding_params.def_rw("head_dim", &ttml::ops::RotaryEmbeddingParams::head_dim);

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <memory>
+
 #include "autograd/tensor.hpp"
 
 // Forward declaration to avoid heavy include in files that only need the pointer type
@@ -20,6 +22,8 @@ struct RopeScalingParams {
     float low_freq_factor = 1.0F;
 };
 
+struct RopeRowsCache;
+
 struct RotaryEmbeddingParams {
     ttnn::Tensor cos_cache{};
     ttnn::Tensor sin_cache{};
@@ -29,6 +33,8 @@ struct RotaryEmbeddingParams {
     ttnn::Tensor cos_table{};
     ttnn::Tensor sin_table{};
     ttnn::Tensor trans_mat{};
+    // Per-row cos/sin of the last position_ids passed to rope; shared by copies of these params.
+    std::shared_ptr<RopeRowsCache> rows_cache;
 
     uint32_t sequence_length = 0U;
     uint32_t head_dim = 0U;
@@ -42,16 +48,12 @@ autograd::TensorPtr rope(
 
 // position_ids: [B, S] UINT32 ROW_MAJOR, the absolute position of every query row.
 // Every id must be < rope_params.sequence_length; this is not checked on device.
-// Returns cos and sin of shape [1, B * num_heads, S, head_dim].
-std::pair<ttnn::Tensor, ttnn::Tensor> gather_rows(
-    const RotaryEmbeddingParams& rope_params, const autograd::TensorPtr& position_ids, uint32_t num_heads);
-
-// cos, sin: from gather_rows with num_heads = input.shape[1].
+// cos/sin are reused while the same position_ids tensor and value are passed; new ids written into its buffer in
+// place are not detected.
 autograd::TensorPtr rope(
     const autograd::TensorPtr& input,
     const RotaryEmbeddingParams& rope_params,
-    const ttnn::Tensor& cos,
-    const ttnn::Tensor& sin);
+    const autograd::TensorPtr& position_ids);
 
 std::pair<ttnn::Tensor, ttnn::Tensor> gen_freqs(
     uint32_t head_dim,

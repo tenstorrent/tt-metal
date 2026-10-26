@@ -310,20 +310,12 @@ class Llama(AbstractModuleBase):
             out_val = ttnn.slice(tok_emb_out.get_value(), slice_start, slice_end, step)
             out = ttml.autograd.create_tensor(out_val)
 
-        rope_rows = None
-        if position_ids is not None:
-            attn = self.blocks[0].attention
-            rope_rows = (
-                ttml.ops.rope.gather_rows(attn.rope_params, position_ids, attn.num_heads),
-                ttml.ops.rope.gather_rows(attn.rope_params, position_ids, attn.num_groups),
-            )
-
         for layer_idx, block in enumerate(self.blocks):
             extra_args = () if kv_cache is None else (kv_cache, layer_idx, new_tokens)
             if self.config.runner_type == ttml.models.RunnerType.MemoryEfficient:
-                out = memory_efficient_runner(block, out, mask, *extra_args, rope_rows=rope_rows)
+                out = memory_efficient_runner(block, out, mask, *extra_args, position_ids=position_ids)
             elif self.config.runner_type == ttml.models.RunnerType.Default:
-                out = block(out, mask, *extra_args, rope_rows=rope_rows)
+                out = block(out, mask, *extra_args, position_ids=position_ids)
             else:
                 raise ValueError("Unknown runner type. Supported runner types ['default', 'memory_efficient']")
 
