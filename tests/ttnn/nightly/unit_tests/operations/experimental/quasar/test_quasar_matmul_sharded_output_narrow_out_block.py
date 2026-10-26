@@ -14,7 +14,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc
 
 qsr = ttnn._ttnn.operations.experimental.quasar
 
@@ -102,7 +102,10 @@ def test_quasar_matmul_1d_height_sharded_in0_multi_block(device, out_block_h, ou
     output = ttnn.experimental.quasar.matmul(
         ttnn_input_a, ttnn_input_b, program_config=program_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    assert_with_pcc(torch_output, ttnn.to_torch(output).float(), 0.999)
+    output = ttnn.to_torch(output).float()
+    assert_with_pcc(torch_output, output, 0.999)
+    # A single row read from the wrong row-block barely moves the PCC over 1024 rows, so also bound each element.
+    assert_allclose(torch_output, output, rtol=0, atol=0.1 * torch_output.abs().max().item())
 
 
 @pytest.mark.parametrize("out_block_w", [4, 2, 1])
