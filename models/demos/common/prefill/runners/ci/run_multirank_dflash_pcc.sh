@@ -63,14 +63,15 @@ DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
 #      /tt_prefill_layer_completion_ring_N with a HARD-CODED 30 s timeout, which a rank that finished
 #      weight load minutes earlier blows through whenever the ranks skew (cold vs warm page cache differs
 #      by 10+ min here). The sibling KV leg sets this for the same reason.
-#   PREFILL_PP_D2D_FIFO_BYTES=4096 -- DFlash packs [hidden || drafter-partial] into a 2*H-wide
-#      activation, so the pipeline handoff costs twice the L1 of a plain run and the FIFO has to shrink to
-#      pay for it. Measured on 2 galaxies: 32768 overflows rank 1 by 27136 B ("Statically allocated
-#      circular buffers in program N clash with L1 buffers ... L1 buffer allocated at 1536128 and static
-#      circular buffer region ends at 1563264"), which caps the FIFO at 5632; 4096 is the next power of
-#      two under it and is also the value a plain Kimi 2-galaxy run settled on. It fails on rank 1 at
-#      MLA_START of layer 0, i.e. only once tokens flow -- never at init -- so a too-large value survives
-#      weight load and warmup before killing the run.
+#   PREFILL_PP_D2D_FIFO_BYTES is deliberately NOT pinned; the runner default (256) applies, as in the
+#      plain Kimi legs. The receiver FIFO holds only the metadata blob and a 64 B flow-control page --
+#      payload is fabric-written straight into the receiver's DRAM tensor -- so a larger FIFO buys no
+#      throughput. It is persistent L1 on every rank > 0, allocated top-down beside the combine-overlap
+#      global semaphores, and ring_mla's static CBs at seq_len_local 640 reach within a few KB of that
+#      region; every FIFO byte above the default comes out of that headroom on every core. 4096 already
+#      overruns it: ranks 1-3 fail at the first trace capture with "Statically allocated circular
+#      buffers ... clash with L1 buffers ... L1 buffer allocated at 1563136 and static circular buffer
+#      region ends at 1563648".
 #   PREFILL_NUM_USERS=68   -- the sc4 allocation ceiling, so the leg fails on a capacity regression.
 #      Rank 3 sets it: drafter K+V on top of 15 verifier layers is 398 MB a user, and 69 overruns DRAM
 #      once the 256 MB trace region and the routed expert / combine overlap are carved off. The overlap
