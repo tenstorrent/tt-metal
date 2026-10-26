@@ -9,19 +9,13 @@ Autoregressive feedback and position advance remain entirely on device.
 import time
 from collections import Counter
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 import torch
 from transformers import AutoTokenizer
 
 import ttnn
-
-try:
-    from tt_transformers.modules.sampling.sampling_1d import Sampling1D
-except ModuleNotFoundError as error:
-    if error.name != "tt_transformers":
-        raise
-    # Before the TTTv2 extraction, the sampler shipped inside tt-metal.
-    from models.common.modules.sampling.sampling_1d import Sampling1D
+from models.common.sampling.tt_sampling import TTSampling
 
 from .model import GraniteModel
 from .token_history import append_tokens
@@ -109,24 +103,30 @@ class GraniteGenerator:
             else None
         )
         self.last_index = self.put_int(torch.zeros(1, 1), unsigned=True)
-        self.sampler = Sampling1D(
-            self.model.config.vocab_size,
-            self.mesh,
-            max_batch_size=32,
-            max_top_k=32,
-            pad_to_power_of_2=True,
-            num_gather_links=2,
-            allow_force_argmax=True,
-        )
-        self.sampler.load_device_buffers()
-        self.params = {
-            b: dict(
-                k=self.put_int(torch.ones(b), unsigned=True),
-                p=self.model.put(torch.zeros(b), layout=ttnn.ROW_MAJOR_LAYOUT),
-                temp=self.model.put(torch.ones(b), layout=ttnn.ROW_MAJOR_LAYOUT),
+        # Separate modules keep the greedy and sampling trace paths fixed. Parameters
+        # are refreshed only between requests, into the sampler's persistent buffers.
+        self.samplers = {
+            argmax: TTSampling(
+                self.mesh,
+                self.model.layers[0].ccl,
+                SimpleNamespace(
+                    vocab_size=self.model.config.vocab_size,
+                    cluster_shape=self.mesh.shape,
+                    max_batch_size=32,
+                    max_top_k=32,
+                    pad_logits_to_power_of_2=True,
+                    model_config={
+                        "SAMPLING_AG_CONFIG": {
+                            "allow_force_argmax": argmax,
+                            "num_links": 2,
+                            "topology": ttnn.Topology.Linear,
+                        }
+                    },
+                ),
             )
-            for b in self.buckets
+            for argmax in (False, True)
         }
+        self.sampling_output = self.put_int(torch.zeros(1, 1, 1, 32), unsigned=True)
         for b in self.buckets:
             self.states[b] = DecodeState(
                 b,
@@ -200,12 +200,14 @@ class GraniteGenerator:
         ttnn.copy(logits, self.prefill_output)
 
     def _sample_step(self, s, argmax=False):
-        self.sampler(
-            s.logits,
-            tt_out_tok=s.tokens,
-            seeds=ttnn.typecast(s.seeds, ttnn.uint32),
-            **({} if argmax else self.params[s.batch]),
-        )
+        sampler = self.samplers[argmax]
+        sampler.seeds_tt_tensor = ttnn.typecast(s.seeds, ttnn.uint32)
+        # The common sampler operates on a full tile. Only the live bucket rows
+        # feed back into decode; the remaining rows cannot affect those draws.
+        logits = ttnn.reshape(s.logits, [1, 1, 32, s.logits.shape[-1]])
+        sampler(logits, tt_out_tok=self.sampling_output)
+        tokens = ttnn.slice(self.sampling_output, [0, 0, 0, 0], [1, 1, 1, s.batch])
+        ttnn.copy(tokens, s.tokens)
         # The next non-greedy draw must use new device RNG state without host reseeding.
         ttnn.plus_one(s.seeds, skip_negative_entries=True)
         append_tokens(s.tokens, s.history, s.history_cursor)
@@ -325,7 +327,7 @@ class GraniteGenerator:
         if presence_penalty != 0 or frequency_penalty != 0 or repetition_penalty != 1:
             raise NotImplementedError("This sampler contract does not implement penalty history")
         if enable_log_probs:
-            raise NotImplementedError("Common Sampling1D logprobs do not support TP4")
+            raise NotImplementedError("Granite serving does not implement logprobs")
 
         def rows(value, dtype):
             x = torch.as_tensor(value, dtype=dtype).reshape(-1)
@@ -338,10 +340,7 @@ class GraniteGenerator:
         k, p, temp = rows(top_k, torch.int32), rows(top_p, torch.bfloat16), rows(temperature, torch.bfloat16)
         if (k < 1).any() or (k > 32).any() or (p < 0).any() or (p > 1).any() or (temp <= 0).any():
             raise ValueError("Requires 1<=top_k<=32, 0<=top_p<=1, temperature>0")
-        for b, params in self.params.items():
-            self.refresh(params["k"], k[:b])
-            self.refresh(params["p"], p[:b])
-            self.refresh(params["temp"], temp[:b].float().reciprocal().bfloat16())
+        self.samplers[False].reset_params(k, p, temp.float().reciprocal().bfloat16())
         if reset_seed:
             seeds = rows(seed, torch.int64)
             for state in self.states.values():

@@ -72,7 +72,7 @@ export HF_MODEL
 HF_MODEL=$(python -c 'from models.demos.granite42_30b_qb2.tt.checkpoint import resolve_checkpoint; print(resolve_checkpoint())')
 mark_phase host_tests
 python -m pytest "$model_dir/tests/test_host_contract.py" "$model_dir/tests/test_benchmark.py" \
-    "$model_dir/tests/test_import_compat.py" \
+    "$model_dir/tests/test_sampler_contract.py" \
     --timeout 300 --junitxml "$results/host.xml"
 mark_phase host_tests_complete
 mark_phase device_tests
