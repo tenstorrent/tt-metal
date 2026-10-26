@@ -104,18 +104,24 @@ xt::xarray<double> grad_input_f64(const Shape& s, const Problem& p) {
 // Tolerances relative to the tensor's largest magnitude: inputs and outputs are bf16, and grad_input sums four
 // bf16-rounded products, so an element's error scales with the tensor's range rather than with its own value. The
 // kernel's measured floor is 0.4% of max per element (the bf16 rounding of the output); 1% per element catches a
-// corrupted row or tile, and the mean bound a bias too small to trip the per-element one.
+// corrupted row or tile, and the mean bound a bias too small to trip the per-element one. The forward rounds the
+// preactivation to bf16 before the sigmoid, so its outputs carry about two bf16 ulps of the preactivation: 2%.
 constexpr double max_rel_tolerance = 1e-2;
+constexpr double forward_rel_tolerance = 2e-2;
 constexpr double mean_rel_tolerance = 1e-3;
 
 template <typename T>
-void expect_close(const xt::xarray<T>& expected, const xt::xarray<T>& actual, const std::string& name) {
+void expect_close(
+    const xt::xarray<T>& expected,
+    const xt::xarray<T>& actual,
+    const std::string& name,
+    double max_rel = max_rel_tolerance) {
     ASSERT_EQ(expected.shape(), actual.shape()) << name;
     const double scale = xt::amax(xt::abs(expected))();
     const xt::xarray<double> diff = xt::abs(xt::cast<double>(actual) - xt::cast<double>(expected));
     const double max_diff = xt::amax(diff)();
     const double mean_diff = xt::mean(diff)();
-    EXPECT_LE(max_diff, max_rel_tolerance * scale) << name << " max|diff| = " << max_diff << " of max " << scale;
+    EXPECT_LE(max_diff, max_rel * scale) << name << " max|diff| = " << max_diff << " of max " << scale;
     EXPECT_LE(mean_diff, mean_rel_tolerance * scale) << name << " mean|diff| = " << mean_diff << " of max " << scale;
 }
 
@@ -440,9 +446,11 @@ TEST_P(QkvCausalConv1dSiluOpTest, MatchesReference) {
 
     const auto a = make_autograd_inputs(p, /*taps_trainable=*/true, /*rank=*/4);
     auto [q, k, v] = forward(a, s, channel_chunk_size);
-    expect_close(rank4(slice_cols(ref.y, 0, s.Q)), core::to_xtensor(q->get_value()), "q");
-    expect_close(rank4(slice_cols(ref.y, s.Q, s.Q + s.K)), core::to_xtensor(k->get_value()), "k");
-    expect_close(rank4(slice_cols(ref.y, s.Q + s.K, s.C())), core::to_xtensor(v->get_value()), "v");
+    expect_close(rank4(slice_cols(ref.y, 0, s.Q)), core::to_xtensor(q->get_value()), "q", forward_rel_tolerance);
+    expect_close(
+        rank4(slice_cols(ref.y, s.Q, s.Q + s.K)), core::to_xtensor(k->get_value()), "k", forward_rel_tolerance);
+    expect_close(
+        rank4(slice_cols(ref.y, s.Q + s.K, s.C())), core::to_xtensor(v->get_value()), "v", forward_rel_tolerance);
 
     auto loss = ops::add(ops::mean(q), ops::add(ops::mean(k), ops::mean(v)));
     loss->backward();

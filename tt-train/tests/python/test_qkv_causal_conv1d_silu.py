@@ -19,9 +19,11 @@ pytestmark = pytest.mark.requires_device
 
 BF16 = ttnn.DataType.BFLOAT16
 FP32 = ttnn.DataType.FLOAT32
+# Per element, of max|expected|. The backward's floor is the bf16 rounding of its output, ~0.4%; the forward rounds
+# the preactivation to bf16 before the sigmoid, so its outputs carry about two bf16 ulps of the preactivation.
 REL_OF_MAX = 1e-2
-ABS_FLOOR = 2e-2
-MIN_PCC = 0.999
+FORWARD_REL_OF_MAX = 2e-2
+MEAN_REL_OF_MAX = 1e-3
 
 
 @pytest.fixture(autouse=True)
@@ -34,12 +36,13 @@ def _bf16(array):
     return torch.from_numpy(array).to(torch.bfloat16).to(torch.float32).numpy()
 
 
-def _assert_close(actual, expected, what):
-    tolerance = ABS_FLOOR + REL_OF_MAX * np.abs(expected).max()
-    max_err = np.abs(actual - expected).max()
-    assert max_err <= tolerance, f"{what}: max abs err {max_err} > {tolerance}"
-    pcc = np.corrcoef(actual.ravel(), expected.ravel())[0, 1]
-    assert pcc > MIN_PCC, f"{what}: pcc {pcc} <= {MIN_PCC}"
+def _assert_close(actual, expected, what, rel_of_max=REL_OF_MAX):
+    scale = np.abs(expected).max()
+    err = np.abs(actual - expected)
+    assert err.max() <= rel_of_max * scale, f"{what}: max abs err {err.max()} > {rel_of_max} of max {scale}"
+    assert (
+        err.mean() <= MEAN_REL_OF_MAX * scale
+    ), f"{what}: mean abs err {err.mean()} > {MEAN_REL_OF_MAX} of max {scale}"
 
 
 def _to_ttml(array, layout, requires_grad):
@@ -75,7 +78,10 @@ def test_qkv_causal_conv1d_silu(taps_trainable):
     h = _bf16(rng.uniform(-1, 1, (1, 1, 3, C)).astype(np.float32))
     taps = [_bf16(rng.uniform(-1, 1, (1, 1, 1, C)).astype(np.float32)) for _ in range(4)]
     y, _, _ = _reference(x, h, taps, np.zeros_like(x))
-    grad_y = _bf16(y.astype(np.float32))  # loss = sum(y * y) / 2
+    # loss = mean(q) + mean(k) + mean(v): every output's node runs, and d loss / d out = 1 / out.numel()
+    grad_y = np.zeros_like(x)
+    for lo, hi in ((0, Q), (Q, Q + K), (Q + K, C)):
+        grad_y[..., lo:hi] = 1.0 / (T * (hi - lo))
     _, grad_input, grad_taps = _reference(x, h, taps, grad_y)
 
     x_ttml = _to_ttml(x, ttnn.Layout.TILE, True)
@@ -84,13 +90,12 @@ def test_qkv_causal_conv1d_silu(taps_trainable):
     q, k, v = ttml.ops.conv.qkv_causal_conv1d_silu(x_ttml, h_ttml.get_value(), *taps_ttml, Q, K, V)
 
     assert q.shape() == [1, 1, T, Q]
-    _assert_close(q.to_numpy(FP32), y[..., :Q], "q")
-    _assert_close(k.to_numpy(FP32), y[..., Q : Q + K], "k")
-    _assert_close(v.to_numpy(FP32), y[..., Q + K :], "v")
+    _assert_close(q.to_numpy(FP32), y[..., :Q], "q", FORWARD_REL_OF_MAX)
+    _assert_close(k.to_numpy(FP32), y[..., Q : Q + K], "k", FORWARD_REL_OF_MAX)
+    _assert_close(v.to_numpy(FP32), y[..., Q + K :], "v", FORWARD_REL_OF_MAX)
 
-    for out, lo, hi in ((q, 0, Q), (k, Q, Q + K), (v, Q + K, C)):
-        out.set_grad_from_tensor(_to_ttml(grad_y[..., lo:hi], ttnn.Layout.TILE, False))
-    q.backward(False)
+    loss = ttml.ops.unary.mean(q) + ttml.ops.unary.mean(k) + ttml.ops.unary.mean(v)
+    loss.backward(False)
 
     assert x_ttml.get_grad_tensor().shape() == [1, 1, T, C]
     _assert_close(x_ttml.get_grad_tensor().to_numpy(FP32), grad_input, "grad_input")
