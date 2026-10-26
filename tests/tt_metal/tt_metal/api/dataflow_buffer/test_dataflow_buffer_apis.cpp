@@ -597,15 +597,15 @@ TEST_F(UnitMeshFixture, DataflowBufferExtentApis_2Sx4A_ConsumerEachTC) {
         });
 }
 
-// TRISC3 sanity: DM producer -> dfb_in -> TRISC3 copy -> dfb_out -> DM consumer. The compute
-// kernel is built with DFB_SYNC_ON_TRISC3, so TRISC3 does wait_front/pop_front on dfb_in and
+// SFPU-thread sanity: DM producer -> dfb_in -> SFPU-thread copy -> dfb_out -> DM consumer. The compute
+// kernel is built with DFB_SYNC_ON_SFPU_THREAD, so the SFPU thread does wait_front/pop_front on dfb_in and
 // reserve_back/push_back on dfb_out (and the drain in ~DataflowBuffer). More entries than ring
 // slots, so both rings wrap and stall; param = ring entries (3 does not divide the 8 entries).
-class DataflowBufferTrisc3Copy : public UnitMeshFixture, public ::testing::WithParamInterface<uint32_t> {};
+class DataflowBufferSfpuThreadCopy : public UnitMeshFixture, public ::testing::WithParamInterface<uint32_t> {};
 
-TEST_P(DataflowBufferTrisc3Copy, DmToTrisc3ToDm) {
+TEST_P(DataflowBufferSfpuThreadCopy, DmToSfpuThreadToDm) {
     if (this->device().arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "TRISC3 is Quasar-only";
+        GTEST_SKIP() << "The SFPU thread is Quasar-only";
     }
     constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile
     constexpr uint32_t num_entries = 8;
@@ -638,17 +638,18 @@ TEST_P(DataflowBufferTrisc3Copy, DmToTrisc3ToDm) {
         CONSUMER, DFB_OUT, OUT_TENSOR, num_entries, /*blocked_consumer=*/false, /*implicit_sync=*/false);
     disable_implicit_sync_for(consumer, DFB_OUT);
 
-    auto compute = make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_trisc3_copy_2_0.cpp");
+    auto compute =
+        make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_sfpu_thread_copy_2_0.cpp");
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB_IN, .accessor_name = "in", .endpoint_type = m2::DFBEndpointType::CONSUMER},
         {.dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
     };
     compute.compile_time_args = {{"num_entries", num_entries}};
-    compute.compiler_options.defines = {{"DFB_SYNC_ON_TRISC3", "1"}};
+    compute.compiler_options.defines = {{"DFB_SYNC_ON_SFPU_THREAD", "1"}};
 
     m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
     m2::ProgramSpec spec{
-        .name = "dfb_trisc3_copy",
+        .name = "dfb_sfpu_thread_copy",
         .kernels = {producer, consumer, compute},
         .dataflow_buffers = {dfb_in, dfb_out},
         .tensor_parameters =
@@ -678,9 +679,9 @@ TEST_P(DataflowBufferTrisc3Copy, DmToTrisc3ToDm) {
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
-    EXPECT_EQ(input, output) << "TRISC3 DFB copy mismatch, ring_entries=" << ring_entries;
+    EXPECT_EQ(input, output) << "SFPU-thread DFB copy mismatch, ring_entries=" << ring_entries;
 }
 
-INSTANTIATE_TEST_SUITE_P(RingEntries, DataflowBufferTrisc3Copy, ::testing::Values(2u, 3u));
+INSTANTIATE_TEST_SUITE_P(RingEntries, DataflowBufferSfpuThreadCopy, ::testing::Values(2u, 3u));
 
 }  // namespace tt::tt_metal

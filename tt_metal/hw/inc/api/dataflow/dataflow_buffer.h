@@ -85,12 +85,12 @@ template <bool IsWrite, typename ReleaseFunc>
 }
 
 // Which TRISC syncs a compute kernel's DFBs is fixed per kernel at compile time: UNPACK (consumer
-// side) and PACK (producer side) by default, or TRISC3 (the SFPU thread) for every DFB of a kernel
-// built with the define DFB_SYNC_ON_TRISC3 (KernelSpec compiler_options.defines, so all TRISC
+// side) and PACK (producer side) by default, or the SFPU thread for every DFB of a kernel
+// built with the define DFB_SYNC_ON_SFPU_THREAD (KernelSpec compiler_options.defines, so all TRISC
 // builds of the kernel see it). On the other TRISCs a DataflowBuffer is just an id and the sync
 // calls do nothing.
 #if defined(COMPILE_FOR_TRISC) && \
-    (defined(UCK_CHLKC_MATH) || (defined(DFB_SYNC_ON_TRISC3) != defined(UCK_CHLKC_ISOLATE_SFPU)))
+    (defined(UCK_CHLKC_MATH) || (defined(DFB_SYNC_ON_SFPU_THREAD) != defined(UCK_CHLKC_ISOLATE_SFPU)))
 #define DFB_IS_COMPUTE_MATH 1
 #else
 #define DFB_IS_COMPUTE_MATH 0
@@ -152,9 +152,9 @@ public:
     // For PrefetcherPipe relays on TRISC, construction snaps the borrowed local iface to the
     // durable checkpoint via a launch-msg slot lookup keyed by token.prefetcher_pipe_id()
     DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
-#ifdef DFB_SYNC_ON_TRISC3
-        // TRISC3 does not snap to the PrefetcherPipe checkpoint (see below).
-        static_assert(dfb_dependent_false<Pap>, "Relay DFBs are not supported with DFB_SYNC_ON_TRISC3");
+#ifdef DFB_SYNC_ON_SFPU_THREAD
+        // The SFPU thread does not snap to the PrefetcherPipe checkpoint (see below).
+        static_assert(dfb_dependent_false<Pap>, "Relay DFBs are not supported with DFB_SYNC_ON_SFPU_THREAD");
 #endif
 #if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
         if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// TRISC3 (isolated SFPU TRISC) DFB sanity kernel. Built with DFB_SYNC_ON_TRISC3, so only TRISC3
-// runs the sync calls; on UNPACK, MATH and PACK they do nothing. TRISC3 copies each entry of
+// SFPU-thread DFB sanity kernel. Built with DFB_SYNC_ON_SFPU_THREAD, so only the SFPU
+// thread runs the sync calls; on UNPACK, MATH and PACK they do nothing. The SFPU thread copies each entry of
 // dfb::in into dfb::out with RISC loads and stores.
 
 #include "api/dataflow/dataflow_buffer.h"

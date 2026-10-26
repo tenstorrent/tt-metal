@@ -23,7 +23,7 @@ inline bool dfb_op_is_split(const LocalDFBInterface& intf) {
     }
 }
 
-// Cursor helpers shared by pack, unpack and TRISC3 (cursor_entry_idx is the write or the read cursor).
+// Cursor helpers shared by pack, unpack and the SFPU thread (cursor_entry_idx is the write or the read cursor).
 
 // On a BLOCKED ring one op must cover exactly one block.
 inline bool dfb_op_is_whole_share(const LocalDFBInterface& intf, std::uint32_t num_tiles) {

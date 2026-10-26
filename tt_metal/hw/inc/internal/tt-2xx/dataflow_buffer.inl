@@ -14,7 +14,7 @@
 #ifdef UCK_CHLKC_UNPACK
 #include "llk_io_unpack.h"
 #endif
-#if defined(UCK_CHLKC_ISOLATE_SFPU) && defined(DFB_SYNC_ON_TRISC3)
+#if defined(UCK_CHLKC_ISOLATE_SFPU) && defined(DFB_SYNC_ON_SFPU_THREAD)
 #include "ckernel.h"
 #include "llk_io.h"
 #endif
@@ -237,13 +237,13 @@ constexpr uint32_t DFB_TC_COUNT_MASK = 0xFFFFu;
 #endif
 
 #if defined(UCK_CHLKC_ISOLATE_SFPU)
-// TRISC3 waits poll the tile counter from the RISC (posted reads as tiles available, acked as
+// SFPU-thread waits poll the tile counter from the RISC (posted reads as tiles available, acked as
 // space available) instead of issuing TT_WAIT_TILES / TT_WAIT_FREE, so there is no Tensix-side
 // stall that needs a TDMA op to resolve it (TEN-4746). The caller (reserve_back / wait_front)
 // brackets the spin with its RBW/RBD or WFW/WFD waypoint, as on DM. One counter per op: a
 // BLOCKED split is rejected at compile time by the caller (ASSERT here for UNKNOWN patterns).
 template <bool ForSpace>
-inline void dfb_trisc3_wait(const LocalDFBInterface& intf, uint32_t n) {
+inline void dfb_sfpu_thread_wait(const LocalDFBInterface& intf, uint32_t n) {
     ASSERT(!intf.split_tc);
     const uint8_t tc_id = dfb::get_counter_id(intf.tc_slots[intf.tc_idx].packed_tile_counter);
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= n);
@@ -252,13 +252,13 @@ inline void dfb_trisc3_wait(const LocalDFBInterface& intf, uint32_t n) {
     }
 }
 
-// TRISC3 pop/push. The done-wait mask is 0: TRISC3 moves data with RISC loads/stores, not with
+// SFPU-thread pop/push. The done-wait mask is 0: the SFPU thread moves data with RISC loads/stores, not with
 // an unpacker/packer, so there is no TDMA read/write for the counter update to wait on. RISC L1
 // stores are not ordered against this Tensix instruction (BH MemoryOrdering.md, as cited by
 // Quasar memcpy_blocking), so push_back's caller must first load back its last stored word.
 // tensix_sync() after the update makes it visible to the next RISC-side poll.
 template <bool Push>
-inline void dfb_trisc3_credit(LocalDFBInterface& intf, uint32_t n) {
+inline void dfb_sfpu_thread_credit(LocalDFBInterface& intf, uint32_t n) {
     auto& slot = intf.tc_slots[intf.tc_idx];
     const uint32_t tc_id = dfb::get_counter_id(slot.packed_tile_counter);
     if constexpr (Push) {
@@ -400,8 +400,8 @@ inline void DataflowBuffer<Pap, Cap>::reserve_back_impl(uint16_t num_entries) {
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_for_free_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
 #elif defined(UCK_CHLKC_ISOLATE_SFPU)
-    static_assert(!producer_split, "DFB_SYNC_ON_TRISC3: a BLOCKED split (one op over several counters) is unsupported");
-    dfb_trisc3_wait<true /*for_space*/>(local_dfb_interface_, num_entries);
+    static_assert(!producer_split, "DFB_SYNC_ON_SFPU_THREAD: BLOCKED split (one op, several counters) unsupported");
+    dfb_sfpu_thread_wait<true /*for_space*/>(local_dfb_interface_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (producer_broadcast()) {
         // BROADCAST: every consumer reads every entry, so every counter must have room for all of them.
@@ -429,8 +429,8 @@ inline void DataflowBuffer<Pap, Cap>::push_back_impl(uint16_t num_entries) {
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_push_tiles<0x1, Pap, Cap>(logical_dfb_id_, num_entries);
 #elif defined(UCK_CHLKC_ISOLATE_SFPU)
-    static_assert(!producer_split, "DFB_SYNC_ON_TRISC3: a BLOCKED split (one op over several counters) is unsupported");
-    dfb_trisc3_credit<true /*push*/>(local_dfb_interface_, num_entries);
+    static_assert(!producer_split, "DFB_SYNC_ON_SFPU_THREAD: BLOCKED split (one op, several counters) unsupported");
+    dfb_sfpu_thread_credit<true /*push*/>(local_dfb_interface_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (producer_broadcast()) {
         // BROADCAST: post the full count to every counter (every consumer reads every entry).
@@ -466,8 +466,8 @@ inline void DataflowBuffer<Pap, Cap>::wait_front_impl(uint16_t num_entries) {
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_wait_tiles<Pap, Cap>(logical_dfb_id_, num_entries);
 #elif defined(UCK_CHLKC_ISOLATE_SFPU)
-    static_assert(!consumer_split, "DFB_SYNC_ON_TRISC3: a BLOCKED split (one op over several counters) is unsupported");
-    dfb_trisc3_wait<false /*for_space*/>(local_dfb_interface_, num_entries);
+    static_assert(!consumer_split, "DFB_SYNC_ON_SFPU_THREAD: BLOCKED split (one op, several counters) unsupported");
+    dfb_sfpu_thread_wait<false /*for_space*/>(local_dfb_interface_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (consumer_split) {
         // SPLIT: the block belongs to every counter, wait for each one's share.
@@ -495,8 +495,8 @@ inline void DataflowBuffer<Pap, Cap>::pop_front_impl(uint16_t num_entries) {
     ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= dfb_trisc_per_counter(local_dfb_interface_, num_entries));
     llk_pop_tiles<0x3, Pap, Cap>(logical_dfb_id_, num_entries);
 #elif defined(UCK_CHLKC_ISOLATE_SFPU)
-    static_assert(!consumer_split, "DFB_SYNC_ON_TRISC3: a BLOCKED split (one op over several counters) is unsupported");
-    dfb_trisc3_credit<false /*push*/>(local_dfb_interface_, num_entries);
+    static_assert(!consumer_split, "DFB_SYNC_ON_SFPU_THREAD: BLOCKED split (one op, several counters) unsupported");
+    dfb_sfpu_thread_credit<false /*push*/>(local_dfb_interface_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     if (consumer_split) {
         // SPLIT: ack each counter its share of the block and step every bookmark past it.
@@ -557,7 +557,7 @@ inline void DataflowBuffer<Pap, Cap>::finish_impl() {
             // On TRISC, tile_counters[].f.posted/.acked are live occupancy / free-space
             // (tiles-available / space-available), NOT the cumulative read_posted/read_acked
             // totals used by the DM overlay path below. UNPACK skips TCs it doesn't own
-            // (tensix_trisc_mask); PACK and TRISC3 (DFB_SYNC_ON_TRISC3) drain every TC.
+            // (tensix_trisc_mask); PACK and the SFPU thread (DFB_SYNC_ON_SFPU_THREAD) drain every TC.
 #ifdef UCK_CHLKC_UNPACK
             if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
                 continue;
@@ -633,9 +633,9 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_read_ptr_impl() const {
 #ifdef COMPILE_FOR_TRISC
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
 inline uint32_t DataflowBuffer<Pap, Cap>::get_tile_address(uint32_t tile_index) {
-#ifdef DFB_SYNC_ON_TRISC3
-    // UNPACK computes this from its cursor, which does not move when TRISC3 syncs.
-    static_assert(dfb_dependent_false<Pap>, "get_tile_address: use get_read_ptr() with DFB_SYNC_ON_TRISC3");
+#ifdef DFB_SYNC_ON_SFPU_THREAD
+    // UNPACK computes this from its cursor, which does not move when the SFPU thread syncs.
+    static_assert(dfb_dependent_false<Pap>, "get_tile_address: use get_read_ptr() with DFB_SYNC_ON_SFPU_THREAD");
     return 0;
 #else
     uint32_t address = 0;
@@ -656,7 +656,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_tile_address(uint32_t tile_index) 
     address = mailbox_read(ckernel::ThreadId::UnpackThreadId);
 #endif
     return address;
-#endif  // DFB_SYNC_ON_TRISC3
+#endif  // DFB_SYNC_ON_SFPU_THREAD
 }
 
 template <dfb::AccessPattern Pap, dfb::AccessPattern Cap>
@@ -666,8 +666,8 @@ T DataflowBuffer<Pap, Cap>::read_tile_value(uint32_t tile_index, uint32_t elemen
     static_assert(
         (std::is_integral_v<T> && std::is_unsigned_v<T> && !std::is_same_v<T, bool>),
         "read_tile_value: T must be an unsigned integral type");
-#ifdef DFB_SYNC_ON_TRISC3
-    static_assert(dfb_dependent_false<Pap>, "read_tile_value: use get_read_ptr() with DFB_SYNC_ON_TRISC3");
+#ifdef DFB_SYNC_ON_SFPU_THREAD
+    static_assert(dfb_dependent_false<Pap>, "read_tile_value: use get_read_ptr() with DFB_SYNC_ON_SFPU_THREAD");
     return T{};
 #else
     T value = T{};
@@ -688,7 +688,7 @@ T DataflowBuffer<Pap, Cap>::read_tile_value(uint32_t tile_index, uint32_t elemen
     value = static_cast<T>(mailbox_read(ckernel::ThreadId::UnpackThreadId));
 #endif
     return value;
-#endif  // DFB_SYNC_ON_TRISC3
+#endif  // DFB_SYNC_ON_SFPU_THREAD
 }
 #endif  // COMPILE_FOR_TRISC
 

@@ -221,7 +221,7 @@ FORCE_INLINE void dfb_init_timing_write_slot(
     uint32_t metric_h = 0,
     uint32_t metric_i = 0,
     uint32_t metric_j = 0) {
-// TRISC3 has no timing slot of its own (it would overwrite UNPACK's), so it publishes none.
+// The SFPU thread has no timing slot of its own (it would overwrite UNPACK's), so it publishes none.
 #if defined(DFB_INIT_TIMING_ENABLED) && !defined(UCK_CHLKC_ISOLATE_SFPU)
     volatile uint32_t* words = dfb_init_timing_slot_words(slot);
     // Publish pattern: write payload first, VALID last. Uncached stores land in TL1 directly.
@@ -294,12 +294,11 @@ inline uint32_t rdcycle() {
 // Consumer reads dfb_expected_signal[d] (bitmask), then polls each set bit's byte slot.
 //
 // Runs for DMs unconditionally, and for TRISCs only when compiling for unpack or pack, or for
-// TRISC3 in a DFB_SYNC_ON_TRISC3 kernel. Math (TRISC1) and other TRISC3 kernels compile this to an
-// empty function so they never spin on uninitialised config data and never block DM0's
-// wait_subordinates().
+// the SFPU thread in a DFB_SYNC_ON_SFPU_THREAD kernel. Math and the SFPU thread in other kernels compile this
+// to an empty function so they never spin on uninitialised config data and never block DM0's wait_subordinates().
 FORCE_INLINE void dfb_ensure_ready(uintptr_t config_cached, uint8_t dfb_id) {
 #if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_UNPACK) && !defined(UCK_CHLKC_PACK) && \
-    !(defined(UCK_CHLKC_ISOLATE_SFPU) && defined(DFB_SYNC_ON_TRISC3))
+    !(defined(UCK_CHLKC_ISOLATE_SFPU) && defined(DFB_SYNC_ON_SFPU_THREAD))
     return;
 #endif
     const uint32_t sig_off =
@@ -811,7 +810,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         ASSERT(iface.stride_size_tiles != 0 && iface.block_size != 0);
 #if defined(UCK_CHLKC_PACK)
         iface.wr_entry_ptr = 0;
-#else  // unpack TRISC and TRISC3
+#else  // unpack TRISC and the SFPU thread
         iface.tensix_trisc_mask = static_cast<uint8_t>(eh.flags & DFB_HART_FLAG_TRISC_MASK);
 #endif
         iface.num_entries = eh.num_entries;
@@ -852,7 +851,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
             const uint8_t ptc = static_cast<uint8_t>((t < 4u ? ptc_w0 : ptc_w1) >> ((t & 3u) * 8u));
             iface.tc_slots[t].packed_tile_counter = ptc;
 
-#if defined(COMPILE_FOR_TRISC)  // pack, unpack and TRISC3
+#if defined(COMPILE_FOR_TRISC)  // pack, unpack and the SFPU thread
             iface.tc_slots[t].base_addr = base;
             // ring_size is uint32 L1 units (full Quasar L1). Cursor byte-offset is derived
             // from cursor_entry_idx (not stored).
