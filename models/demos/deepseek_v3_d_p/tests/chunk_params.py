@@ -13,8 +13,13 @@ import pytest
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP, SP4_CHUNK_TOKENS_PER_CHIP
 
 
+def is_4x4(**params) -> bool:
+    """``uncollect_if`` predicate: the row runs on the 4x4 stage mesh."""
+    return tuple(params.get("mesh_device") or ()) == (4, 4)
+
+
 def _not_4x4(**params) -> bool:
-    return tuple(params.get("mesh_device") or ()) != (4, 4)
+    return not is_4x4(**params)
 
 
 def with_sp4_depth(rows, ids=None):
