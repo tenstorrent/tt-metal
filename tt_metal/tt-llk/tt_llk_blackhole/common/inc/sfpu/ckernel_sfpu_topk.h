@@ -345,6 +345,34 @@ inline void _topk_defuse_tile_(const int num_tiles)
 // write to LREG0..3 or a programmable-constant read. The standalone sweeps
 // below run while LREG4..7 are dead, so their load captures are harmless.
 
+// One Dst column vector of the stamp sweep: clear the stale tag field, fold -0.0 into +0.0, tag with the
+// sign-conditioned rank, and step to the next column.
+template <bool largest, std::uint32_t TAG_BITS>
+[[gnu::always_inline]] inline void topk_stamp_rows()
+{
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    if constexpr (TAG_BITS == 16)
+    {
+        TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0); // clear stale lo16 -> [bf16|0]
+    }
+    else
+    {
+        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0); // clear the stale tag field only
+    }
+    // -0.0 -> +0.0: (w << 1) == 0 exactly for the two zero encodings.
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+    TTI_SFPSHFT(1, 0, p_sfpu::LREG1, 1);
+    TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0); // zero lanes -> +0.0
+    TOPK_SFPENCC_ALL_LANES_ON();
+    TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
+    TOPK_SFPENCC_ALL_LANES_ON();
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    TTI_INCRWC(0, 2, 0, 0);
+}
+
 // Stamp one value tile (dst tile 0 or 1) with sign-conditioned rank tags rank_base + [0, 32) in a
 // TAG_BITS-wide field (see topk_tag_mask). rank_base must be a multiple of 32 and rank_base + 31
 // must fit the field. Clobbers LREG0..2 and leaves all lanes enabled.
@@ -379,46 +407,25 @@ inline void _topk_stamp_tile_rank_range_(std::uint32_t dst_tile_index, std::uint
         TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0);
     }
 
-    for (int g = 0; g < 16; g++) // 4-row groups across the tile
-    {
-        for (int parity = 0; parity < 2; parity++) // even / odd Dst columns
+    // One 4-row group and the +4 rank step are a replay; the RISC issues the replay and, at a face pair, the rewind.
+    load_replay_buf<Exec>(
+        0,
+        27,
+        []
         {
-            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-            if constexpr (TAG_BITS == 16)
-            {
-                TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0); // clear stale lo16 -> [bf16|0]
-            }
-            else
-            {
-                TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0); // clear the stale tag field only
-            }
-            // -0.0 -> +0.0: (w << 1) == 0 exactly for the two zero encodings.
-            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-            TTI_SFPSHFT(1, 0, p_sfpu::LREG1, 1);
-            TTI_SFPSETCC(0, p_sfpu::LREG1, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-            TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0); // zero lanes -> +0.0
-            TOPK_SFPENCC_ALL_LANES_ON();
-            // Tag with the sequence position, sign-conditioned.
-            TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, largest ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
-            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
-            TOPK_SFPENCC_ALL_LANES_ON();
-            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
-            TTI_INCRWC(0, 2, 0, 0);
-        }
-        // Advance the rank base to the next 4-row group: +4 within a face;
-        // when the group crosses into the paired face of the SAME sequence
-        // positions (rows 16..31 hold positions 0..15 of the other column
-        // half), rewind by 12 instead.
-        if ((g & 7) == 3)
-        {
-            TTI_SFPIADD((-12) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
-        }
-        else
-        {
+            topk_stamp_rows<largest, TAG_BITS>();
+            topk_stamp_rows<largest, TAG_BITS>();
             TTI_SFPIADD(4, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        });
+    for (int g = 1; g < 16; g++)
+    {
+        if ((g & 7) == 4)
+        {
+            TTI_SFPIADD((-16) & 0xFFF, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
         }
+        lltt::replay(0, 27);
     }
+    topk_replay_init = 0;
 
     set_dst_write_addr(0);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
