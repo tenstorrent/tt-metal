@@ -42,6 +42,7 @@ struct EphemeralAllocationMetadata {
         void reset_available_addresses() { *this = LockstepAllocationRegion(core_range); }
     };
 
+    // Regions may have overlapping core_ranges
     std::vector<LockstepAllocationRegion> regions;
 
     // Per-core L1 is laid out as [persistent L1 arena, program-scope resources, ...], growing upward.
@@ -70,7 +71,9 @@ void register_ephemeral_allocation(EphemeralAllocationMetadata& metadata, const 
 //  - "seal" persistent_l1 to prevent collision between address spaces during allocation.
 void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, PersistentL1Arena& persistent_l1);
 
+// TODO(#62451):
 // The allocation logic should be unified in the future but we unfortunately have different allocation routine for now.
+// The dfb allocation should be fixed before we unify the two.
 
 // Performs lockstep allocation of a circular buffer or dataflow buffer across `cores`.
 //

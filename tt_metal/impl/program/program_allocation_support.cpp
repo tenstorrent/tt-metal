@@ -59,13 +59,14 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
         if (region.l1_regions.empty()) {
             region.l1_regions.emplace_back(base_address, base_address);
         } else {
-            // sanity check, failing means persistent L1 space has grown since last time we checked.
-            TT_ASSERT(
-                base_address <= region.l1_regions.front().first,
-                "Persistent L1 on core range {} grew to {}, above its program-local allocations starting at {}",
-                region.core_range.str(),
-                base_address,
-                region.l1_regions.front().first);
+            // TODO(#62451): The following assertion assumes a bump-only allocator. A DFB recorded into an intersecting
+            // CoreRange with uneven persistent L1 can sit below that range's base. Commented out for now.
+            // TT_ASSERT(
+            //     base_address <= region.l1_regions.front().first,
+            //     "Persistent L1 on core range {} grew to {}, above its program-local allocations starting at {}",
+            //     region.core_range.str(),
+            //     base_address,
+            //     region.l1_regions.front().first);
         }
     }
 }
