@@ -91,7 +91,7 @@ def _regular_path(src_A, input_dimensions, formats, num_faces, torch_format):
     # Int32 unpack_to_dest tilize path in each.
     formats=lambda narrow_tile: (
         input_output_formats(
-            [DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b]
+            [DataFormat.Float32, DataFormat.Float16_b]
             + ([DataFormat.Bfp8_b] if narrow_tile == NarrowTile.No else [])
         )
         + input_output_formats([DataFormat.Int32], same=True)

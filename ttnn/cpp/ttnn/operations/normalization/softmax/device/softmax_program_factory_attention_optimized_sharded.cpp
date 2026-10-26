@@ -78,6 +78,12 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     std::uint32_t num_cores_per_batch = (shape[1] * shape[2] * shape[3]) / (input_tensor.shard_spec().value().shape[0] *
                                                                             input_tensor.shard_spec().value().shape[1]);
 
+    // A last dimension that is not a multiple of the tile width leaves padding columns in the last tile of every
+    // row. The reader pushes a -inf padding tile that the compute adds to that tile, as the interleaved path does.
+    const std::uint32_t W_unpadded = input_tensor.logical_shape()[-1];
+    const bool mask_padded_data = shape[3] > W_unpadded;
+    const std::uint32_t num_datum_padded = shape[3] - W_unpadded;
+
     std::uint32_t mask_H = shape[2];
     if (has_mask) {
         mask_H = tensor_args.mask->padded_shape()[2];
@@ -148,6 +154,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     const DFBSpecName OUT0{"out0"};
     const DFBSpecName MAX{"max"};
     const DFBSpecName X{"x"};
+    const DFBSpecName MASK_PADDED{"mask_padded"};
 
     // ---- DataflowBuffers (mirrors legacy CB allocation; borrowed-memory DFBs for the sharded I/O) ----
     Group<DataflowBufferSpec> dfbs;
@@ -204,6 +211,14 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         .entry_size = im_tile_size,
         .num_entries = 1,
         .data_format_metadata = im_cb_data_format});
+    if (mask_padded_data) {
+        // The reader fills the padding tile with bfloat16 -inf whatever the input and mask dtypes.
+        dfbs.push_back(DataflowBufferSpec{
+            .unique_id = MASK_PADDED,
+            .entry_size = tt::tile_size(tt::DataFormat::Float16_b),
+            .num_entries = 1,
+            .data_format_metadata = tt::DataFormat::Float16_b});
+    }
     if (attributes.numeric_stable) {
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = MAX, .entry_size = im_tile_size, .num_entries = 1, .data_format_metadata = im_cb_data_format});
@@ -227,6 +242,9 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
         if (mask_sharded_resident) {
             reader_defines["SHARDED_CAUSAL_MASK"] = "1";
         }
+    }
+    if (mask_padded_data) {
+        reader_defines["MASK_PADDED_DATA"] = "1";
     }
     KernelSpec::CompilerOptions::Defines compute_defines = reader_defines;
     if (attributes.numeric_stable) {
@@ -257,6 +275,12 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
     Group<TensorBinding> reader_tensor_bindings;
     std::vector<std::string> reader_rta_names;
     KernelSpec::CompileTimeArgs reader_cta;
+    if (mask_padded_data) {
+        reader_bindings.push_back(DFBBinding{
+            .dfb_spec_name = MASK_PADDED, .accessor_name = "mask_padded", .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_cta.insert({"num_datum_padded", num_datum_padded});
+        reader_cta.insert({"tile_hw", tile_hw});
+    }
     if (has_mask) {
         reader_bindings.push_back(DFBBinding{
             .dfb_spec_name = FUSED_SCALE, .accessor_name = "fused_scale", .endpoint_type = DFBEndpointType::PRODUCER});
@@ -333,6 +357,10 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
                 .accessor_name = "fused_attn",
                 .endpoint_type = DFBEndpointType::CONSUMER});
         }
+    }
+    if (mask_padded_data) {
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = MASK_PADDED, .accessor_name = "mask_padded", .endpoint_type = DFBEndpointType::CONSUMER});
     }
     if (attributes.numeric_stable) {
         add_self_loop(MAX, "max");

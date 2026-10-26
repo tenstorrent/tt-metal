@@ -7,7 +7,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>  // FabricType
-#include <umd/device/types/cluster_descriptor_types.hpp>   // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>   // ChipId
 #include <memory>
 #include <map>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
