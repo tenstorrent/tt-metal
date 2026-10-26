@@ -19,6 +19,10 @@ void PostAllGatherDeviceOperation::validate_on_program_cache_miss(
     const auto& gamma = tensor_args.gamma;
     const auto& beta = tensor_args.beta;
 
+    TT_FATAL(
+        a.padded_shape()[-1] > 0 && a.padded_shape()[-2] > 0,
+        "Input must have non-zero height and width, got shape {}",
+        a.padded_shape());
     TT_FATAL(!a.is_sharded(), "DIT layernorm post-all-gather does not support sharded inputs.");
     TT_FATAL(a.layout() == Layout::TILE, "Input tensor must have TILE layout, got: {}", a.layout());
     TT_FATAL(
