@@ -3,7 +3,10 @@
 
 import pytest
 import torch
-from helpers.constraints import get_valid_dest_accumulation_modes
+from helpers.constraints import (
+    get_valid_dest_accumulation_modes,
+    get_valid_eltwise_binary_math_fidelities,
+)
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -247,35 +250,6 @@ def get_dest_reuse_formats(math_op):
     )
 
 
-def _get_valid_math_fidelity(formats, math_op=None):
-    """
-    Filter math fidelity based on input data format:
-    - Bfp8_b: LoFi only
-    - Float16_b: LoFi or HiFi2
-    - Float32: HiFi3 and HiFi4
-
-    Math fidelity > LoFi is only supported for Elwmul (hardware constraint),
-    so non-multiply ops are restricted to LoFi regardless of format.
-    """
-    if math_op is not None and math_op != MathOperation.Elwmul:
-        return [MathFidelity.LoFi]
-    input_format = formats.input_format
-    if input_format == DataFormat.Int8:
-        return [MathFidelity.LoFi]
-    if input_format.is_block_float():
-        return [MathFidelity.LoFi]
-    elif input_format == DataFormat.Float16_b:
-        return [MathFidelity.LoFi, MathFidelity.HiFi2]
-    elif input_format == DataFormat.Float32:
-        return [MathFidelity.HiFi3, MathFidelity.HiFi4]
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
-
-
 def _run_eltwise_binary_test(
     dest_acc,
     dest_sync,
@@ -509,7 +483,9 @@ def _run_eltwise_binary_test(
     unpack_to_dest=[False],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
     math_op=lambda formats: get_eltwise_binary_math_ops(formats),
-    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
+        formats, math_op
+    ),
     transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
         transpose_srca, BroadcastType.None_
@@ -555,7 +531,7 @@ def test_eltwise_binary(
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     formats=get_bfp4_formats(),
-    math_fidelity=lambda formats: _get_valid_math_fidelity(formats),
+    math_fidelity=lambda formats: get_valid_eltwise_binary_math_fidelities(formats),
     transpose_srca=Transpose.No,
     math_op=BFP4_MATH_OPS,
     tile_dimensions=lambda transpose_srca: get_eltwise_binary_tile_dimensions(
@@ -1018,7 +994,9 @@ def _run_eltwise_binary_dest_reuse_test(
     dest_acc=[DestAccumulation.No],
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
-    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
+        formats, math_op
+    ),
     tile_dimensions=DEST_REUSE_TILE_DIMENSIONS,
     input_dimensions=lambda dest_acc, dest_sync, formats, tile_dimensions: get_dest_reuse_input_dimensions(
         dest_acc, dest_sync, formats, tile_dimensions

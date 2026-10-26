@@ -168,6 +168,36 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
     ]
 
 
+def get_valid_eltwise_binary_math_fidelities(formats, math_op=None):
+    """
+    Math fidelities the eltwise binary tests sweep, by input data format:
+    - Int8 and block-float (Bfp*) inputs: LoFi only
+    - Float16_b: LoFi or HiFi2
+    - Float32: HiFi3 and HiFi4
+    - anything else: all four
+
+    Math fidelity > LoFi is only supported for Elwmul (hardware constraint),
+    so non-multiply ops are restricted to LoFi regardless of format.
+    """
+    if math_op is not None and math_op != MathOperation.Elwmul:
+        return [MathFidelity.LoFi]
+    input_format = formats.input_format
+    if input_format == DataFormat.Int8:
+        return [MathFidelity.LoFi]
+    if input_format.is_block_float():
+        return [MathFidelity.LoFi]
+    elif input_format == DataFormat.Float16_b:
+        return [MathFidelity.LoFi, MathFidelity.HiFi2]
+    elif input_format == DataFormat.Float32:
+        return [MathFidelity.HiFi3, MathFidelity.HiFi4]
+    return [
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ]
+
+
 def get_perf_math_operations():
     """Return the elementwise math operations covered by Quasar perf tests."""
     return [MathOperation.Elwadd, MathOperation.Elwmul]
