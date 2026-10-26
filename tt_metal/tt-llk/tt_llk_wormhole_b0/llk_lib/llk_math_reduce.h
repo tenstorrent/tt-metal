@@ -238,7 +238,12 @@ inline void reduce_fp16_clear_dest_rows(const std::uint32_t first_row, const std
 template <bool is_int_fpu_en, bool high_fidelity>
 inline __attribute__((noinline)) void reduce_row_max_fp16_face_row(const std::uint32_t num_faces_c_dim)
 {
-    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_POOL_ROW);
+    // On silicon a single-row ZEROACC with a 32-bit Dest clears a row of another tile, where Row results fill rows
+    // 0-15; the SFPU addresses Dest rows the way GMPOOL does. The two stores zero the GMPOOL block, rows 4-7.
+    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+    TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_POOL_ROW);
+    TTI_SFPSTORE(p_sfpu::LCONST_0, InstrModLoadStore::FP32, ADDR_MOD_0, REDUCE_POOL_ROW + 2);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
     reduce_row_pool_all_faces<PoolType::MAX, high_fidelity, REDUCE_POOL_ROW, p_gpool::INDEX_EN>(num_faces_c_dim);
     reduce_fp16_convert_to_tf32(1);
     reduce_fp16_max_into(REDUCE_FP16_SCRATCH_ROW + 1, 0);
@@ -458,7 +463,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
 
                 reduce_pool_face<type, high_fidelity, p_setrwc::CLR_NONE, 0>(fp16_max);
             }
-            if (fp16_max && row_num == tensor_shape.num_faces_r_dim - 1)
+            if (fp16_max && row_num + 1 == tensor_shape.num_faces_r_dim)
             {
                 reduce_col_max_fp16_finish(tensor_shape.num_faces_c_dim);
             }
