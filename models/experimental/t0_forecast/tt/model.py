@@ -152,16 +152,21 @@ class TtT0:
         return value
 
     def _rope(self, prepared: host.T0HostInputs, padded_seq: int):
-        """The four ``(1, 1, S_pad, hd)`` tables; pad positions rotate by the identity. Cached per S."""
-        s = prepared.num_patches
+        """The four tables tiled over rows and heads, ``(1, 1, R * H * S_pad, hd)``: the fused QK-norm + RoPE
+        reads one table row per token row. Pad positions rotate by the identity. Cached per (R, S)."""
+        s, r, h = prepared.num_patches, prepared.rows, self.config.num_heads
 
         def make(i: int):
-            identity = 1.0 if i % 2 == 0 else 0.0  # cos tables pad with 1, sin tables with 0
-            table = torch.full((padded_seq, self.config.head_dim), identity)
-            table[:s] = prepared.rope[i]
-            return lambda: upload(self.device, table.reshape(1, 1, padded_seq, -1))
+            def build():
+                identity = 1.0 if i % 2 == 0 else 0.0  # cos tables pad with 1, sin tables with 0
+                table = torch.full((padded_seq, self.config.head_dim), identity)
+                table[:s] = prepared.rope[i]
+                tiled = table.to(torch.bfloat16).expand(r * h, -1, -1).reshape(1, 1, r * h * padded_seq, -1)
+                return upload(self.device, tiled)
 
-        return tuple(self._constant(("rope", s, padded_seq, i), make(i)) for i in range(4))
+            return build
+
+        return tuple(self._constant(("rope", r, s, padded_seq, i), make(i)) for i in range(4))
 
     def _upload_small_mask(self, mask: Tensor):
         """A mask whose last dims are not tile-aligned: the tile padding must be -inf, not 0."""

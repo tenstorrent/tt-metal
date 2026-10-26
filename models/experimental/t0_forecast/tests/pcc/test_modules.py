@@ -212,9 +212,7 @@ def test_qk_after_norm_and_rope(device, name, layer):
     from models.experimental.t0_forecast.tt.common import linear
 
     qkv = linear(upload_rows(device, xn), att._wqkv, att.precision, role="qkv", bias=att._bqkv)
-    q, k, v = att._heads(ttnn.reshape(qkv, (1, 1, sp, 3 * att.d)))
-    cq, sq, ck, sk = inputs.attention.rope
-    q, k = att._rope(q, cq, sq), att._rope(k, ck, sk)
+    q, k, v = att._heads(ttnn.reshape(qkv, (1, 1, sp, 3 * att.d)), inputs.attention.rope)
     got_q, got_k = (ttnn.to_torch(t).float()[:, :, :s] for t in (q, k))
     tt.deallocate_inputs(inputs)
     pq, pk = pcc(q_ref, got_q), pcc(k_ref, got_k)

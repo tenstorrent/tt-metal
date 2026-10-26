@@ -50,7 +50,7 @@ class TtAttentionInputs:
     rows: int  # R
     padded_seq: int  # S_pad, the patches of a row padded to a whole tile
     group_size: int  # G
-    rope: tuple  # (cos_q, sin_q, cos_k, sin_k), each (1, 1, S_pad, hd); pad positions rotate by identity
+    rope: tuple  # (cos_q, sin_q, cos_k, sin_k), each (1, 1, R * H * S_pad, hd); pad positions rotate by identity
     time_mask: object | None  # (R, 1, S_pad, S_pad) additive; None = causal
     group_mask: object | None  # (S_pad * R / G, 1, G, G) additive; None = every row of a series visible
     packed_group_mask: object | None = None  # (1 or R / G, 1, G * S_pad, G * S_pad) additive: same slot (+ group_mask)
@@ -81,6 +81,10 @@ class TtAttention:
             self._bvo = upload_bias(device, weights.wo @ bv + weights.bo)
         self._q_norm = upload_norm(device, weights.q_norm)
         self._k_norm = upload_norm(device, weights.k_norm)
+        if weights.kind == TIME:
+            # The fused QK-norm + RoPE (wan_fused_rmsnorm_post_allgather) reads a (1, hd) tile-layout gain.
+            self._q_gain = upload(device, weights.q_norm.reshape(1, -1))
+            self._k_gain = upload(device, weights.k_norm.reshape(1, -1))
         self._wo = upload_linear(device, weights.wo, precision.weight_dtype("wo"))
         self._bo = upload_bias(device, weights.bo)
         self._ones = upload_ones(device, self.d)
@@ -102,9 +106,9 @@ class TtAttention:
         ttnn.deallocate(ctx)
         return y
 
-    def _heads(self, qkv):
+    def _heads(self, qkv, rope=None):
         """``(batch, 1, seq, 3d)`` (tile-aligned seq) or ``(batch, seq, 3d)`` -> q, k, v ``(batch, H, seq, hd)``
-        with q and k RMS-normed per head."""
+        with q and k RMS-normed per head (and rotated with ``rope``, tables tiled over batch and heads)."""
         import ttnn
 
         if len(qkv.shape) == 4:
@@ -116,26 +120,43 @@ class TtAttention:
                 qkv, num_heads=self.num_heads, transpose_key=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
         ttnn.deallocate(qkv)
-        qn = rms_norm(q, self._q_norm, self.eps, self.precision)
-        kn = rms_norm(k, self._k_norm, self.eps, self.precision)
-        ttnn.deallocate(q)
-        ttnn.deallocate(k)
+        if rope is None:
+            qn = rms_norm(q, self._q_norm, self.eps, self.precision)
+            kn = rms_norm(k, self._k_norm, self.eps, self.precision)
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+        else:
+            cos_q, sin_q, cos_k, sin_k = rope
+            qn, kn = self._qk_rope(q, self._q_gain, cos_q, sin_q), self._qk_rope(k, self._k_gain, cos_k, sin_k)
         return qn, kn, v
 
-    def _rope(self, t, cos, sin):
+    def _qk_rope(self, t, gain, cos, sin):
+        """Per-head RMSNorm with a gain, then RoPE, in one pass: the post-all-gather RMSNorm on the
+        ``(1, 1, batch * H * seq, hd)`` view (tile-aligned seq), each of its rows one head of one token.
+        Consumes ``t``. R2-3 micro: 8.19 against 9.76 ms per time layer (doc/optimize/iter_02/r2_3_micro.json)."""
         import ttnn
 
-        out = ttnn.experimental.rotary_embedding_llama(
-            t,
-            cos,
-            sin,
-            self._trans,
-            is_decode_mode=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.precision.exact_kernel_config(),
+        shape = tuple(t.shape)
+        flat = ttnn.reshape(t, (1, 1, shape[0] * shape[1] * shape[2], shape[3]))
+        kernel = self.precision.exact_kernel_config()
+        stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
+            flat, compute_kernel_config=kernel, dtype=ttnn.float32
         )
+        out = ttnn.experimental.wan_fused_rmsnorm_post_allgather(
+            flat,
+            stats,
+            epsilon=self.eps,
+            num_heads_per_device=1,
+            weight=gain,
+            transformation_mat=self._trans,
+            rope_cos=cos,
+            rope_sin=sin,
+            compute_kernel_config=kernel,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(stats)
         ttnn.deallocate(t)
-        return out
+        return ttnn.reshape(out, shape)
 
     def _sdpa(self, q, k, v, *, mask, is_causal: bool, concat_heads: bool = False, chunk_limit=_MAX_SDPA_CHUNK):
         import ttnn
@@ -167,9 +188,7 @@ class TtAttention:
 
         r, s = inputs.rows, inputs.padded_seq
         qkv = linear_minimal(xn, self._wqkv, self.precision, role="qkv", blocks=QKV_BLOCKS, bias=self._bqkv)
-        q, k, v = self._heads(ttnn.reshape(qkv, (r, 1, s, 3 * self.d)))
-        cos_q, sin_q, cos_k, sin_k = inputs.rope
-        q, k = self._rope(q, cos_q, sin_q), self._rope(k, cos_k, sin_k)
+        q, k, v = self._heads(ttnn.reshape(qkv, (r, 1, s, 3 * self.d)), inputs.rope)
         ctx = self._sdpa(q, k, v, mask=inputs.time_mask, is_causal=inputs.time_mask is None, concat_heads=True)
         return ttnn.reshape(ctx, (1, 1, r * s, self.d))
 
