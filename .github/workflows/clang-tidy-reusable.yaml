@@ -296,8 +296,6 @@ jobs:
         run: mkdir -p .build/clang-tidy/fixes
 
       - name: Merge v23 skip-list into .clang-tidy
-        # Makes a non-20 run a plain version bump. Only touches this job's
-        # ephemeral checkout, never the committed .clang-tidy.
         if: ${{ inputs.clang-tidy-version != '20' }}
         run: |
           uv pip install --quiet PyYAML
@@ -434,8 +432,6 @@ jobs:
             echo ""
             # One ::error annotation per violation, so they show up on the PR diff /
             # checks tab, not just as a "there were N violations" summary line.
-            # Opt out for shadow/experimental runs whose findings shouldn't be
-            # confused with the real gate's.
             if [ "${{ inputs.publish-annotations }}" = "true" ]; then
               python3 "$REPORT" "$FIXES_DIR" --format annotations --repo-root "$(pwd)"
             fi

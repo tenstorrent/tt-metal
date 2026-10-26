@@ -510,12 +510,9 @@ jobs:
   # Shadow run: times a clang-tidy 23 full scan (check set matched to v20, see
   # cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml) against real PR
   # traffic. Informational only — left out of workflow-status's `needs:`
-  # below so it can't affect PR Gate Status. PR-gate only, never merge_group.
+  # below so it can't affect PR Gate Status.
   code-analysis-shadow-clang-tidy-23:
     needs: [build-docker-images, find-changed-files]
-    # No draft check needed: workflow_dispatch isn't gated by
-    # pull_request.draft in the first place, so a manual dispatch already
-    # runs the upstream jobs on a draft PR without any bypass here.
     if: >-
       ${{
         needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
