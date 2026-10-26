@@ -11,8 +11,6 @@ and random stash pages, and the relay of every pair of pages into a chained veri
 
 test_spec_chain_groups_dflash_tp8: the chain and drafts steps with DFlash drafting on the same passes."""
 
-import random
-
 import pytest
 import torch
 
@@ -43,6 +41,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_mtp_commits, pack_verify
 from models.experimental.mimo_v2_6_flash.tests.common import dp_submeshes
+from models.experimental.mimo_v2_6_flash.tests.seeded_rng import SeededRng
 from models.experimental.mimo_v2_6_flash.tests.test_spec_inputs_tp8 import (
     DEVICE_PARAMS,
     REP,
@@ -138,7 +137,7 @@ def test_spec_chain_groups_tp8(mesh_device):
     li = make_layer_inputs(plan, B, 64)
     chain = SpecChain(plan, spec, accept, argmax, heads, li)
     chain.warm(ctrl)
-    rng = random.Random(3)
+    rng = SeededRng(3)
 
     def run_chain():
         chain.chain()
@@ -260,7 +259,7 @@ def test_spec_chain_groups_dflash_tp8(mesh_device):
         chain.drafts()
 
     replay = replayed(mesh, run)
-    rng = random.Random(4)
+    rng = SeededRng(4)
     for k, (vp, sources, acc) in enumerate(pass_cases(rng)):
         for limit in (MAX_SEQ_LEN - MAX_DRAFTS, rng.choice([p for p in vp.positions if p >= 0]) + 1):
             tok, pos, chain_t = verify_tensors(vp, sources, limit)

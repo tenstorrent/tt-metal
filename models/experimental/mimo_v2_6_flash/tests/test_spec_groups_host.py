@@ -11,8 +11,6 @@ that commit, declines each group on its own, and the drafts step, the result pag
 back; the plan and tokens steps run plan_mtp_layers / mtp_layer_tokens per group on its own stash slots; the relay
 writes each relayed group's block from its group of the page."""
 
-import random
-
 import pytest
 
 from models.experimental.mimo_v2_6_flash.reference.sample_verify import (
@@ -62,6 +60,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     plan_verify_passes,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_mtp_commits
+from models.experimental.mimo_v2_6_flash.tests.seeded_rng import SeededRng
 from models.experimental.mimo_v2_6_flash.tests.test_spec_chain_host import accept_page, upload
 
 pytestmark = pytest.mark.skipif(
@@ -91,7 +90,7 @@ def committed_positions(p, m):
 
 
 def test_rows_take_their_groups():
-    rng = random.Random(0)
+    rng = SeededRng(0)
     vp, sources = two_rows(rng, 100, 3, 500, 1, groups={5: 1, 6: 0})
     assert sources[5] == DraftSource(row=5, slots=[4, 5, 6, 7], group=1)
     assert sources[6] == DraftSource(row=6, slots=[0, 1], group=0)
@@ -114,7 +113,7 @@ def test_rows_take_their_groups():
 @pytest.mark.parametrize("seed", range(20))
 def test_the_accept_page_commits_each_row(seed):
     """Greedy accept over both groups, through commit_pass: each row commits its own greedy walk."""
-    rng = random.Random(seed)
+    rng = SeededRng(seed)
     import torch
 
     n0, n1 = rng.randrange(4), rng.randrange(4)
@@ -139,7 +138,7 @@ def test_the_accept_page_commits_each_row(seed):
 def test_layers_chain_writes_each_groups_description(bonus):
     """Every pair of commits: the chain step's upload is pack_mtp_commits of both, each group's status its own; a
     group past the limit declines alone; the drafts step and chained_draft read each group back."""
-    rng = random.Random(bonus)
+    rng = SeededRng(bonus)
     b0, b1 = bonus, bonus + 50 if bonus < 1000 else bonus - 50  # the two bonuses, both below LIMIT
     for m0 in range(1, min(GROUP_SLOTS, b0) + 1):
         for m1 in range(1, GROUP_SLOTS + 1):
@@ -184,7 +183,7 @@ def test_plan_and_tokens_steps_run_each_group_on_its_stash(seed):
     """The plan step on two descriptions writes plan_mtp_layers' passes of each group on its own stash slots (the
     other group's rows never re-run), and the new stash is each group's mtp_stash; the tokens step shifts each group's
     window by the layer, its anchor's drafts appended."""
-    rng = random.Random(seed)
+    rng = SeededRng(seed)
     sources, plans, stash_pos, stash_tok, commits = [], [], [-1] * SPEC_SLOTS, [0] * SPEC_SLOTS, []
     for g in range(DRAFT_GROUPS):
         m = rng.randrange(1, GROUP_SLOTS + 1)
@@ -234,7 +233,7 @@ def test_plan_and_tokens_steps_run_each_group_on_its_stash(seed):
 def test_the_relay_writes_each_relayed_group(seed):
     """A verify chained onto a pass of two requests: each relayed group's columns take its last committed token at
     the bonus and its drafts, its control group the drafts; a group whose chain declined goes idle alone."""
-    rng = random.Random(seed)
+    rng = SeededRng(seed)
     m0, m1 = rng.randrange(1, GROUP_SLOTS + 1), rng.randrange(1, GROUP_SLOTS + 1)
     vp, src = two_rows(rng, 2000 - m0, MAX_DRAFTS, 9000 - m1, MAX_DRAFTS, groups={5: 0, 6: 1})
     c0, c1 = [rng.randrange(VOCAB) for _ in range(m0)], [rng.randrange(VOCAB) for _ in range(m1)]
@@ -266,7 +265,7 @@ def test_the_relay_writes_each_relayed_group(seed):
 def test_dflash_chain_writes_each_groups_draft(bonus):
     """The DFlash chain step for two commits: dflash_inputs of both host commits (each group's block at its rows, its
     context rows into its ring); the drafts step reads group g's drafts at rows g * MAX_DRAFTS .. of the head."""
-    rng = random.Random(bonus)
+    rng = SeededRng(bonus)
     for m0 in range(1, GROUP_SLOTS + 1):
         m1 = rng.randrange(1, GROUP_SLOTS + 1)
         if bonus - m0 < 0:
