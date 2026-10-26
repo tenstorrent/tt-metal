@@ -243,12 +243,12 @@ MIXED_LENGTH_QUESTIONS = [
 ]
 
 
-def _teacher_forced_logprobs(model, sampler: TTMLRolloutSampler, batch: RolloutBatch):
+def _teacher_forced_logprobs(model, sampler: TTMLRolloutSampler, batch: RolloutBatch, temperature: float):
     inputs, targets, mask, Tp = layout_microbatch(batch.prompts, batch.completions, sampler._pad_token)
     B = inputs.shape[0]
     layout = sampler._batch_layout
     with run_mode(model, RunMode.EVAL), no_grad():
-        nlog = policy_nlog_probs(model, inputs, targets, mapper=layout.mapper)
+        nlog = policy_nlog_probs(model, inputs, targets, mapper=layout.mapper, temperature=temperature)
         teacher = -np.asarray(nlog.to_numpy(ttnn.DataType.FLOAT32, composer=layout.composer), dtype=np.float32)
         teacher = teacher.reshape(B, Tp)
     ttml.autograd.AutoContext.get_instance().reset_graph()
@@ -271,7 +271,7 @@ def _rollout_vs_teacher_forced(
     assert gaps.max() >= 32, f"prompts are too close in length to exercise padding: {gaps}"
 
     batch = sampler.generate(prompts)
-    teacher, sampled, mask = _teacher_forced_logprobs(model, sampler, batch)
+    teacher, sampled, mask = _teacher_forced_logprobs(model, sampler, batch, temperature)
 
     lengths = np.array([len(p) for p in batch.prompts])
     rows = []
@@ -293,7 +293,7 @@ def _assert_rows_match_teacher_forced(rows):
 
 @pytest.mark.requires_device
 @pytest.mark.slow
-@pytest.mark.parametrize("temperature", [0.0, 1.0], ids=["greedy", "t1"])
+@pytest.mark.parametrize("temperature", [0.0, 1.0, 0.7], ids=["greedy", "t1", "t0.7"])
 @pytest.mark.parametrize(
     "transformer_config, model_source, template_kwargs",
     [
