@@ -58,7 +58,7 @@ def _wx(device, tt_model, b: int, B: int):
 def test_slstm_step_op(device, tt_model, b, B):
     import ttnn
 
-    from models.experimental.tirex2_forecast.ops.slstm_step.op import slstm_steps
+    slstm_steps = pytest.importorskip("models.experimental.tirex2_forecast.ops.slstm_step.op").slstm_steps
     from models.experimental.tirex2_forecast.tt import layers
 
     WxT, cell, steps = _wx(device, tt_model, b, B)
