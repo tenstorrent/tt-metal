@@ -27,16 +27,9 @@ inline void sdpa_bcast_col_srcb_reuse_configure_mop(const std::uint32_t num_face
 
     // Scalar broadcast should not Clear B within a mop.  This is controlled outside of MOP.
     //
-    // The execute runs this MOP twice over the SAME dest rows: pass 1 ends on ADDR_MOD_3 (dest cleared back to row 0,
-    // SrcB advanced to the second column source) and pass 2 restarts at row 0. ELWMUL always accumulates into dest,
-    // so pass 2 adds A1 * bcast(P2) onto pass 1. ELWADD/ELWSUB only accumulate when their dest-accumulate bit is set;
-    // without it pass 2 overwrites pass 1 and the result is A1 +/- bcast(P2) alone. The bit is therefore always set
-    // here so the ADD/SUB paths compute the same two-term sum as MUL. ADD/SUB now read dest exactly as MUL always
-    // did, so the output dest tiles must be zero on entry. The preamble's clear_dest ZEROACC (off by default) is
-    // CLR_HALF under SyncHalf and CLR_ALL under SyncFull: it wipes every tile in that dest section, not only the
-    // output tiles, so it is only usable when the caller holds nothing else there. Otherwise target a freshly
-    // released dest section, which is what sdpa_tail_ms_reduce<normalize = false> relies on for the MUL path. An
-    // in-place call on a non-zero tile adds the old contents into the result.
+    // ADD/SUB: the execute runs this MOP twice over the same dest rows (pass 1 ends on ADDR_MOD_3, which returns dest
+    // to row 0 and advances SrcB to the second column source), so the dest-accumulate bit is always set; without it
+    // pass 2 would overwrite pass 1. The output tiles must therefore be zero on entry, as for MUL (see the init doc).
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD)
     {
         ckernel_template tmp(num_tiles, num_faces, TT_OP_ELWADD(p_setrwc::CLR_A, p_elwise::DEST_ACCUM_EN, broadcast_type, ADDR_MOD_0, 0));
@@ -231,10 +224,9 @@ inline void sdpa_bcast_col_srcb_reuse_configure_addrmod(const std::uint32_t num_
  *       @ref _llk_math_sdpa_bcast_col_srcb_reuse_, and run @ref _llk_math_sdpa_bcast_col_srcb_reuse_postamble_ after.
  * @note On the unpack thread, pair with @ref _llk_unpack_A_sdpa_init_ and issue
  *       @ref _llk_unpack_A_sdpa_set_srcb_dummy_valid_ before the operand unpacks.
- * @note The MOP always accumulates into DEST, for ADD/SUB as well as MUL, so the output tiles must be zero on entry.
- *       clear_dest = true on @ref _llk_math_sdpa_bcast_col_srcb_reuse_preamble_ zeroes the whole dest half (SyncHalf)
- *       or all of dest (SyncFull), not only the output tiles; a caller holding other live tiles in that section must
- *       instead target a freshly released dest section.
+ * @note The MOP accumulates into DEST for every op, so the output tiles must be zero on entry: a freshly released
+ *       dest section, or clear_dest = true on @ref _llk_math_sdpa_bcast_col_srcb_reuse_preamble_ (which zeroes the
+ *       whole dest half under SyncHalf, or all of dest under SyncFull, not only the output tiles).
  */
 template <EltwiseBinaryType eltwise_binary_type, std::uint32_t num_tiles, MathFidelity math_fidelity, bool dense = false>
 inline void _llk_math_sdpa_bcast_col_srcb_reuse_init_(const std::uint32_t num_faces)

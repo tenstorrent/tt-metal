@@ -27,10 +27,8 @@ with everything an 8x32 tile (two 8x16 faces):
   - P1, P2  column sources seeded into DEST[0] / DEST[1]; the math preamble MOVD2Bs DEST rows 0-7
             into SrcB rows 0-7 and DEST rows 64-71 into SrcB rows 8-15
   - bcast_col(P) row r  = P[r, 0] fanned across all 32 columns (SRCB_BCAST_COL)
-  - the MOP's two passes accumulate into DEST (ELWMUL always does; the ADD/SUB MOP sets the
-    dest-accumulate bit so its second pass adds onto the first instead of replacing it), and the
-    kernel passes clear_dest=true so the column-source seed still sitting in DEST[DST_INDEX] is
-    zeroed after the MOVD2Bs latch it
+  - both passes accumulate into DEST for every op, so the kernel passes clear_dest=true to zero the
+    column-source seeds still sitting in the output tiles (P1 in DEST[0]; P2 in DEST[1] when N == 2)
 """
 
 import torch
@@ -67,15 +65,13 @@ SDPA_BCAST_FORMATS = input_output_formats([DataFormat.Float16_b])
 
 # The op's tile: 8 rows x 32 cols == two 8x16 faces. num_faces == 2 is the only value
 # sdpa_bcast_col_srcb_reuse_configure_mop permits, and 8 rows is what the MOP actually writes
-# (one ELWMUL per face, 8 dest rows each).
+# (one eltwise op per face, 8 dest rows each).
 SDPA_NUM_FACES = 2
 SDPA_FACE_R_DIM = 8
 SDPA_TILE_DIMS = [SDPA_FACE_R_DIM, 32]
 # Two operand groups and two column-source tiles per math call.
 SDPA_TILE_PAIRS = 2
-# MOP outer-loop counts to cover. With one tile ckernel_template never issues the MOP's
-# last_inner_loop slot (a one-iteration outer loop substitutes the last_outer_loop slot), so 2 is
-# what exercises the ADDR_MOD_2 tile-to-tile dest step and that slot's dest-accumulate bit.
+# MOP outer-loop counts to cover; 2 is what reaches the MOP's last_inner_loop slot.
 SDPA_BCAST_TILE_COUNTS = [1, 2]
 
 
@@ -114,9 +110,6 @@ def run_sdpa_bcast_col_srcb_reuse(
     outer-loop count (SDPA_BCAST_NUM_TILES template parameter): `num_tiles` output tiles, each fed
     by one operand tile per group.
     """
-    # A single-axis @parametrize passes the value as a 1-tuple; unwrap it.
-    if isinstance(formats, tuple):
-        (formats,) = formats
     assert mathop in (
         MathOperation.Elwmul,
         MathOperation.Elwadd,

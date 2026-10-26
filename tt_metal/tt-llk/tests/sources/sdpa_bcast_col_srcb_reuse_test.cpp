@@ -27,9 +27,7 @@
 //   4. _llk_math_sdpa_bcast_col_srcb_reuse_preamble_ MOVD2Bs DEST rows -> SrcB (P1 and P2), then
 //      _llk_math_sdpa_bcast_col_srcb_reuse_ runs the SRCB_BCAST_COL eltwise MOP and the postamble clears SrcB. With
 //      A_t the t-th operand tile of the first group and A_{N+t} its partner in the second group (N == NUM_TILES):
-//      DEST[DST_INDEX + t] = A_t * broadcast_col(P1) + A_{N+t} * broadcast_col(P2)   (the ELWMULs accumulate).
-//      ADD/SUB walk the same two passes over the same dest rows, so they must accumulate too:
-//      DEST[DST_INDEX + t] = (A_t +/- broadcast_col(P1)) + (A_{N+t} +/- broadcast_col(P2)).
+//      DEST[DST_INDEX + t] = (A_t op broadcast_col(P1)) + (A_{N+t} op broadcast_col(P2))   (both passes accumulate).
 //
 // This kernel covers unpack_A_sdpa as well, because exercising either primitive in isolation is impossible:
 // unpack_A_sdpa is init/mop-config plus the dummy-SrcB-valid helper and has no execute of its own, and the math op
@@ -62,13 +60,12 @@ static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
 //
 // Two column sources are needed, not one: the preamble MOVD2Bs DEST rows 0-7 into SrcB rows 0-7 (P1) and DEST rows
 // 64-71 -- the first 8 rows of the NEXT 32x32 dest tile -- into SrcB rows 8-15 (P2). So P1 lives in DEST[SRC_INDEX]
-// and P2 in DEST[SRC_INDEX + 1]. Reuse-in-place: the output goes back to DEST[DST_INDEX] == DEST[SRC_INDEX], which
-// is safe because both MOVD2Bs run before the first eltwise op.
+// and P2 in DEST[SRC_INDEX + 1]. Reuse-in-place: the output goes back to DEST[DST_INDEX] == DEST[SRC_INDEX] (and,
+// with NUM_TILES == 2, over P2 in DEST[SRC_INDEX + 1]), which is safe because both MOVD2Bs run before the first
+// eltwise op.
 //
 // NUM_TILES is the MOP's outer-loop count (SDPA_BCAST_NUM_TILES from the build header): one llk_unpack_A call walks
-// this many tiles and the math MOP writes them to DEST[DST_INDEX ..]. With one tile the MOP never issues its
-// last_inner_loop slot (ckernel_template substitutes the last_outer_loop slot), so the two-tile variant is what
-// covers the ADDR_MOD_2 tile-to-tile step and that slot's dest-accumulate bit.
+// this many tiles and the math MOP writes them to DEST[DST_INDEX ..]; 2 is what reaches the MOP's last_inner_loop slot.
 static constexpr std::uint32_t NUM_TILES = SDPA_BCAST_NUM_TILES;
 static constexpr std::uint32_t SRC_INDEX = 0;
 static constexpr std::uint32_t DST_INDEX = 0;
@@ -83,12 +80,11 @@ static constexpr std::uint32_t DST_INDEX = 0;
 // The op (ELWMUL / ELWADD / ELWSUB) is SDPA_OP, bound below from the build header's ELTWISE_BINARY_OP; LoFi fidelity.
 static constexpr MathFidelity SDPA_FIDELITY = MathFidelity::LoFi;
 
-// The MOP's two passes ACCUMULATE into DEST (verified on p100a for MUL: with clear_dest == false the packed result
-// is seed + A0*bcast_col(P1) + A1*bcast_col(P2), i.e. the column-source seed still sitting in DEST[DST_INDEX]
-// is added in at column 0). clear_dest == true makes the preamble ZEROACC the dest half *after* its MOVD2Bs
-// have already latched P1/P2 into SrcB, so the op reduces to the clean two-term sum. The demo takes the
-// same branch on its normalize path (sdpa.h: sdpa_bcast_col_reuse_preamble<normalize>()). ADD/SUB rely on the
-// same zero seed: their MOP sets the dest-accumulate bit so pass 2 adds onto pass 1 instead of replacing it.
+// The MOP's two passes accumulate into DEST for every op (ADD/SUB set the dest-accumulate bit; MUL always does), so
+// the output tiles must be zero on entry. clear_dest == true makes the preamble ZEROACC the dest half *after* its
+// MOVD2Bs have latched P1/P2 into SrcB; without it the column-source seeds still sitting in the output tiles (P1 in
+// DEST[0], and P2 in DEST[1] when NUM_TILES == 2) are added in (verified on p100a for MUL). The demo takes the same
+// branch on its normalize path (sdpa.h: sdpa_bcast_col_reuse_preamble<normalize>()).
 static constexpr bool CLEAR_DEST = true;
 
 #ifdef LLK_TRISC_UNPACK
