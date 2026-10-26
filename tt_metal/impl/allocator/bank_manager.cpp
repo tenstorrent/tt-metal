@@ -466,7 +466,8 @@ uint64_t BankManager::allocate_buffer(
     BankManager::AllocatorDependencies::AllocatorID allocator_id,
     const std::vector<std::pair<DeviceAddr, DeviceAddr>>& additional_occupied_ranges,
     const std::optional<std::unordered_set<uint32_t>>& scoped_dependent_allocators,
-    std::optional<DeviceAddr> requested_address) {
+    std::optional<DeviceAddr> requested_address,
+    std::optional<uint32_t> requested_address_alignment) {
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
@@ -535,16 +536,9 @@ uint64_t BankManager::allocate_buffer(
         allocator_id, size_per_bank, address_limit, additional_occupied_ranges, scoped_dependent_allocators);
 
     // Choose an address from the allowed ranges respecting alignment and direction
-    // Addresses should already be aligned to alignment_bytes_
+    // Automatic addresses should already be aligned to alignment_bytes_.
     std::optional<DeviceAddr> chosen;
     if (requested_address.has_value()) {
-        // Legacy L1 and L1_SMALL free lists align to the DRAM alignment, which can exceed alignment_bytes_.
-        const DeviceAddr required_alignment = std::max<DeviceAddr>(alignment_bytes_, alloc->align(1));
-        TT_FATAL(
-            requested_address.value() % required_alignment == 0,
-            "Requested buffer address {} is not aligned to {} B",
-            requested_address.value(),
-            required_alignment);
         for (const auto& [start, end] : available_ranges) {
             // Subtract only after checking the bounds, to avoid unsigned overflow.
             if (requested_address.value() >= start && requested_address.value() <= end &&
@@ -613,11 +607,15 @@ uint64_t BankManager::allocate_buffer(
             largest_placeable,
             l1_small_hint(buffer_type_, bank_size()));
     }
+    // Exact placement uses the buffer's alignment, which can be smaller than the
+    // automatic-placement alignment in HYBRID L1 allocators.
+    const uint32_t address_alignment =
+        requested_address.has_value() ? requested_address_alignment.value_or(alignment_bytes_) : alignment_bytes_;
     TT_FATAL(
-        chosen.value() % alignment_bytes_ == 0,
+        address_alignment != 0 && chosen.value() % address_alignment == 0,
         "Chosen address {} is not aligned to {} B",
         chosen.value(),
-        alignment_bytes_);
+        address_alignment);
 
     auto address = alloc->allocate_at_address(chosen.value(), size_per_bank);
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());

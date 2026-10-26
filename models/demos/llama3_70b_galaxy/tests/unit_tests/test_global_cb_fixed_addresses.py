@@ -169,6 +169,15 @@ def test_global_cb_fixed_addresses_across_trace_mode_switches(
                 model.switch_mode("decode")
             assert not model.is_decode_setup
             assert trace_ids() == captured_ids
+            # The caller can recover through prefill before retrying decode. The
+            # failed constructor left a prefill setup without a GCB installed.
+            model.switch_mode("prefill")
+            assert model._global_cb_addresses == first_addresses
+            with expect_error(RuntimeError, "Requested buffer address"):
+                model.switch_mode("decode")
+            assert not model.is_decode_setup
+            assert model._global_cb_addresses == first_addresses
+            assert trace_ids() == captured_ids
         finally:
             ttnn.synchronize_device(mesh_device)
             blocker.deallocate()
