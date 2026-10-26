@@ -34,7 +34,7 @@ class TtSwiGLU:
         dtype = precision.weight_dtype("ffn")
         self._w_g = upload_linear(device, lw.w_fc1[:f], dtype, pad_out=fp)
         self._w_u = upload_linear(device, lw.w_fc1[f:], dtype, pad_out=fp)
-        self._w_down = upload_linear(device, lw.w_fc2, dtype, pad_in=fp)
+        self._w_down = upload_linear(device, lw.w_fc2, precision.weight_dtype("ffn_out"), pad_in=fp)
 
     def __call__(self, x):
         """Flat ``(1, 1, tokens, d)`` -> same; consumes ``x``."""

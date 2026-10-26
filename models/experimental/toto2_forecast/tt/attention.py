@@ -72,7 +72,7 @@ class TtTimeAttention:
         dtype = precision.weight_dtype()
         self._w_qkv = upload_linear(device, lw.w_qkv, dtype)
         self._b_qkv = upload_bias(device, lw.b_qkv)
-        self._w_o = upload_linear(device, lw.w_o, dtype)
+        self._w_o = upload_linear(device, lw.w_o, precision.weight_dtype("out"))
         self._b_o = upload_bias(device, lw.b_o)
 
     def __call__(self, x, inputs: TimeInputs):
@@ -146,7 +146,7 @@ class TtVariateAttention:
         self._b_v = upload_bias(device, lw.b_qkv[2 * d :])
         self._w_qkv = upload_linear(device, lw.w_qkv, dtype)
         self._b_qkv = upload_bias(device, lw.b_qkv)
-        self._w_o = upload_linear(device, lw.w_o, dtype)
+        self._w_o = upload_linear(device, lw.w_o, precision.weight_dtype("out"))
         self._b_o = upload_bias(device, lw.b_o)
 
     def __call__(self, x, inputs: VariateInputs):

@@ -59,6 +59,7 @@ class Toto2Precision:
     ffn_bf16_weights: bool = False  # bf16 fc1 / fc2 weights under bf8_weights (a per-role exception)
     ffn_lofi: bool = False  # LoFi on the FFN matmuls (fc1 / fc2) only
     head_bf16_hifi2: bool = False  # the quantile head with bf16 weights at HiFi2 under bf8_weights / lofi
+    out_bf16_weights: bool = False  # bf16 wo / w_down under bf8_weights (the residual-epilogue known winner)
 
     @classmethod
     def accuracy(cls) -> "Toto2Precision":
@@ -77,7 +78,8 @@ class Toto2Precision:
         )
 
     # Performance-policy sweep variants (D1 item 3): P0 = the round-0 performance (LoFi); P1 = performance (D2); P1 HiFi2 everywhere; P2 LoFi on the FFN
-    # only; P3 = P1 with bf16 FFN weights; P4 = P0 with a bf16 / HiFi2 head; P5 = P2 with a LoFi head.
+    # only; P3 = P1 with bf16 FFN weights; P4 = P0 with a bf16 / HiFi2 head; P5 = P2 with a LoFi head;
+    # P6 = P1 with a bf16 / HiFi2 head; P7 = P1 with bf16 wo / w_down.
     VARIANTS = {
         "P0": dict(lofi=True),
         "P1": dict(lofi=False),
@@ -85,6 +87,9 @@ class Toto2Precision:
         "P3": dict(lofi=False, ffn_bf16_weights=True),
         "P4": dict(head_bf16_hifi2=True),
         "P5": dict(lofi=False, ffn_lofi=True, head_lofi=True),
+        # D3 ruling 2: P1 variants scored for the 313m band floors.
+        "P6": dict(lofi=False, head_bf16_hifi2=True),
+        "P7": dict(lofi=False, out_bf16_weights=True),
     }
     head_lofi: bool = False  # LoFi on the head under lofi=False (P5)
 
@@ -100,7 +105,10 @@ class Toto2Precision:
     def weight_dtype(self, role: str = ""):
         import ttnn
 
-        if role == "ffn" and self.ffn_bf16_weights:
+        # roles: "ffn" (fc1), "ffn_out" (fc2 = w_down), "out" (attention wo)
+        if role.startswith("ffn") and self.ffn_bf16_weights:
+            return ttnn.bfloat16
+        if role in ("out", "ffn_out") and self.out_bf16_weights:
             return ttnn.bfloat16
         return ttnn.bfloat8_b if self.bf8_weights else ttnn.bfloat16
 

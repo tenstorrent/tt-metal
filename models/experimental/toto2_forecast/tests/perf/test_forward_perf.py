@@ -71,6 +71,7 @@ SHAPES = {
         Shape("long_context", "2.5B-FT", "long_context_mix_32x8192"),
         Shape("multivariate", "2.5B-FT", "multivariate_mix_128x8x2048"),
         Shape("paper_313m", "313m", "paper_mix_1024x2048"),
+        Shape("uni_16_313m", "313m", "uni_16x2048"),  # D3 ruling 2: the 313m P1 band misses
         Shape("single_sparse", "2.5B-FT", "single_sparse_1x2048"),
     )
 }
