@@ -47,6 +47,7 @@ and in the global `~/.claude/CLAUDE.md`).
 - [ops] Never call a shell helper that sets variables inside `$( … )`; the subshell drops them.
 - [ops] `pkill -f` patterns must be anchored (`^python3 …`), or they match your own shell.
 - [ops] `label` is a reserved word in jq.
+- [ops,watcher] A job-name pattern is only as good as its last check against REAL job names: after any CI reorg, list the jobs of the latest run and grep them with the pattern. Pipelines rename and move jobs silently. (`Kimi_K3` never matched the new `Disaggregated prefill Kimi-K3 MLA/KDA perf tests` jobs; `Disaggregated prefill op tests` matched nothing for a month after #56889 moved them to L2 as `... op unit tests`.)
 
 ## Known open gaps
 

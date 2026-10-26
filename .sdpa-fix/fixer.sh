@@ -26,6 +26,9 @@ if [[ ! -t 1 ]]; then
 fi
 ts()  { date -u +'%Y-%m-%dT%H:%M:%SZ'; }
 log() { echo "[$(ts)] $*" >&2; }
+# set -e kills a tick silently; name the line and command that did it.
+set -E
+trap 'rc=$?; log "FATAL: line $LINENO exited $rc: $BASH_COMMAND [TT_METAL_DIR=${TT_METAL_DIR:-} PWD=$PWD host=$(hostname) $(env | grep -E "^GIT_" | tr "\n" " ")]"' ERR
 
 exec 201>"$FIX_HOME/.fix.lock"
 if ! flock -n 201; then
