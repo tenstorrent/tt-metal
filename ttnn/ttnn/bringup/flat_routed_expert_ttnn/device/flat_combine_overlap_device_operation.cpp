@@ -41,7 +41,10 @@ FlatCombineOverlapFactory::cached_mesh_workload_t FlatCombineOverlapFactory::cre
     // (MIMO_FL_CMB_SLOT_ORDER=1, probe: whole experts in slot order)
     std::vector<std::string> schedule_defines;
     if (p.flat.y_row_major && !std::getenv("MIMO_FL_CMB_SLOT_ORDER")) {
-        for (const auto& [k, v] : flat_schedule_defines(p.flat, make_flat_routed_expert_plan(t.x.device(), p.flat))) {
+        const auto plan = make_flat_routed_expert_plan(t.x.device(), p.flat);
+        // combine's readers rebuild one subgrid's schedule (no SE_SG): the overlapped plans have one subgrid
+        TT_FATAL(plan.nsg == 1, "flat_combine_overlap: one subgrid only (the overlapped plans), got {}", plan.nsg);
+        for (const auto& [k, v] : flat_schedule_defines(p.flat, plan)) {
             schedule_defines.push_back(k + "=" + v);
         }
         // steps = the schedule's entries (a pinned expert chunk by chunk), padded to a fixed count on every chip

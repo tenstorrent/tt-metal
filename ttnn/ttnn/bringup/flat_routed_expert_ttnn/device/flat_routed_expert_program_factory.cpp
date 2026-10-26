@@ -88,7 +88,9 @@ uint32_t flat_combine_overlap_walk_steps(uint32_t experts_per_chip) {
 
 std::vector<std::pair<std::string, std::string>> flat_schedule_defines(
     const FlatRoutedExpertConfig& cfg, const FlatRoutedExpertPlan& p) {
-    TT_FATAL(p.nsg == 1, "flat_schedule_defines: one subgrid only (the overlapped plans)");
+    // Any plan, subgrids included: the plain program takes its schedule defines from here too. Only a consumer that
+    // rebuilds the schedule in another op (flat_combine_overlap) needs one subgrid: it checks that itself (the check
+    // used to sit here and refused every 2 / 3 subgrid plan in the plain op: deepseek_v41_flash_d_p FIX.2, DS41-63).
     const uint32_t se_max_e = p.E <= 16 ? 16 : (p.E <= 32 ? 32 : 64);
     std::vector<std::pair<std::string, std::string>> d{
         {"SE_RPS", std::to_string(p.mt * 32)},

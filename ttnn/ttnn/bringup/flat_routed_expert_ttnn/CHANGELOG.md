@@ -273,3 +273,26 @@ shapes, mesh, row-major y).
 - Needed by: deepseek_v41_flash_d_p FIX.2 (overseer: root-cause the flat op's Galaxy hangs, DS41-119)
 - Files: `device/flat_routed_expert_program_factory.cpp`, `device/kernels/se_dyn.hpp`, `flat_expert.py`,
   `tests/unit/test_flat_widths.py`, `README.md`
+
+### Subgrid plans run again in the plain op; perf bands per chip class
+- What: `flat_schedule_defines` (device/flat_routed_expert_program_factory.cpp) no longer asserts `p.nsg == 1`; the
+  check moved to its only consumer that needs it, `flat_combine_overlap` (device/flat_combine_overlap_device_operation.cpp:
+  TT_FATAL "flat_combine_overlap: one subgrid only"). tests/unit/test_flat_expert_indexed_shapes.py: `_PERF_EXPECTED_NS`
+  keyed by chip class `(arch, grid x, grid y)` (`_chip_class`), the old table as `("BLACKHOLE", 11, 10)`, a new
+  `("BLACKHOLE", 12, 10)` table measured on a Galaxy p150b chip.
+- Why: (a) the op side was wrong, not the tests. Upstream c485d15bbae (flat_combine_overlap: combine walks experts in
+  flat's completion order) moved the plain program's SE_RPS / SE_MAX_E / SE_GU_NREG / pin defines into
+  `flat_schedule_defines` so combine could rebuild the schedule, and put the overlap's one-subgrid assert inside it:
+  `FlatRoutedExpertProgramFactory::create` calls it for every plan, so every 2 / 3 subgrid plan (TP4 / TP2 cases, which
+  the planner builds and the kernels support via SE_SG) died at program build. The defines it returns are the ones
+  create set inline before that commit, for any nsg. (b) the bands were QuietBox p150 (11 x 10) timings; the Galaxy chip
+  (12 x 10) runs mimo +3.4 %, k2 +0.9 %, tp2 +4.3 % (flat) at the same plan family; one table cannot hold both.
+- Option-off behaviour: no option. One-subgrid plans (every deepseek_v41_flash_d_p call: DS41-115) get the same defines
+  and the same program; flat_combine_overlap refuses the same plans as before, with its own message.
+- Tests (one Galaxy chip, tests/unit/, --run-all): 34 passed / 0 failed / 7 skipped before the Galaxy table (the 4 perf
+  cases had no baseline on 12 x 10; 3 tests need a 2x2 mesh); with it 38 passed / 0 failed / 3 skipped (2x2-mesh
+  tests), the second run within -0.9 .. +0.6 % of each 12 x 10 baseline. Galaxy RT-CAL (ns, median of 3): mimo flat 1834370, k2 indexed_rm 1578919, tp4 flat 928769, tp2 flat
+  1452958, tp2 indexed_rm 1706179 (+17 % over its flat; on 11 x 10 they were equal). Not run on a QuietBox.
+- Needed by: deepseek_v41_flash_d_p FIX.2 (overseer, reopened: tests/unit/ must pass on a Galaxy chip)
+- Files: `device/flat_routed_expert_program_factory.cpp`, `device/flat_combine_overlap_device_operation.cpp`,
+  `tests/unit/test_flat_expert_indexed_shapes.py`, `README.md`
