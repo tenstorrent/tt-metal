@@ -66,7 +66,9 @@ void kernel_main() {
     constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(35);
     constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
 
-    constexpr auto q_args = TensorAccessorArgs<36>();
+    constexpr uint32_t k_mcast_ready_semaphore_id = get_compile_time_arg_val(36);
+
+    constexpr auto q_args = TensorAccessorArgs<37>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -307,7 +309,8 @@ void kernel_main() {
             .mcast_y0 = mcast_y0,
             .mcast_y1 = mcast_y1,
             .num_dests = num_dests,
-            .mcast_sem_id = k_mcast_semaphore_id};
+            .mcast_sem_id = k_mcast_semaphore_id,
+            .ready_sem_id = k_mcast_ready_semaphore_id};
 
         if constexpr (is_paged_attention) {
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
