@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 
+#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -145,10 +146,10 @@ void kernel_main() {
             held_page[walk.k] = b_page;
             cb_src.reserve_back(onetile);
             cb_src_b.reserve_back(onetile);
-            const uint32_t b_tile = cb_src_b.get_write_ptr();
             noc.async_read(src, cb_src, src_tile_bytes, {.page_id = a_off + walk.th * Wt + tw}, {.offset_bytes = 0});
 #if B_ROW_WORDS
             // Restore row 0 from c_7 while A's read is in flight.
+            const uint32_t b_tile = cb_src_b.get_write_ptr();
             const uint32_t slot = held + walk.k * 2 * kRowBytes;
             if (fetch) {
                 noc.async_read(src_b, cb_src_b, src_tile_bytes_b, {.page_id = b_page}, {.offset_bytes = 0});
@@ -177,7 +178,7 @@ void kernel_main() {
                 FILL_TILE_WITH_FIRST_ROW_B(slot);
 #endif
             }
-            noc_async_read(get_noc_addr(slot), b_tile, src_tile_bytes_b);
+            noc.async_read(CoreLocalMem<uint32_t>(slot), cb_src_b, src_tile_bytes_b, {}, {});
             noc.async_read_barrier();
 #endif
             cb_src.push_back(onetile);
