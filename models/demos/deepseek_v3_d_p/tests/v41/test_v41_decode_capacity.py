@@ -13,6 +13,18 @@ Records (``V41_CAP_RESULT``, ``V41_CAP_OUT``): per step the device time of the r
 DRAM after the build, the join, the fill, the capture and the replays, the trace region's use, and, with
 ``V41_CAP_GRAPH=1``, one eager step under ``ttnn.graph`` capture: every op whose inputs or outputs hold at least
 ``V41_CAP_GRAPH_MB`` (64) MB, so a conversion of the history shows up by name.
+
+Phases: the pool's capacity (``V41_CAP_SEQ``), the live users' context (``V41_CAP_POSITIONS``,
+a comma list of positions; default ``cap - V41_CAP_MARGIN``) and the number of live rows (``V41_CAP_LIVE``, a comma
+list of slot counts; default every slot) are independent. The 32-row step is warmed up and captured with every slot
+stepping (the served order), then for each position and each live count the first ``b`` slots (slot 0 on, no
+rotation: the served c1 shape at ``b = 1``) step ``V41_CAP_STEPS`` replays from that position, every other slot
+idle (a zero row that writes nothing). Each phase records the replays' device time (sorted), the wall and the host
+split (``inputs_s``, ``stage_s``, ``read_s``) as medians, and the capture replayed back to back without host work
+(``replay_device_only_s``), under ``phases``; the first phase's position and live count are the top-level fields.
+A production session is ``V41_CAP_SEQ=1054720 V41_CAP_CHUNK=5120`` (the served ``max_seq_len`` and chunk) with
+the catalog's flags; the prefill traces the server captures at warm-up are not captured here (eager prefills of
+short prompts join the slots), so the trace region holds the decode capture alone.
 """
 
 import json
@@ -85,6 +97,8 @@ def test_v41_decode_capacity(mesh_device, device_params):
     fill = os.environ.get("V41_CAP_FILL", "1") == "1"
     graph = os.environ.get("V41_CAP_GRAPH", "0") == "1"
     graph_mb = int(os.environ.get("V41_CAP_GRAPH_MB", 64))
+    live_counts = [int(b) for b in os.environ.get("V41_CAP_LIVE", "").split(",") if b]  # per phase; [] = all slots
+    position_list = [int(p) for p in os.environ.get("V41_CAP_POSITIONS", "").split(",") if p]  # [] = cap - margin
     ckpt = resolve_checkpoint()
     if ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
@@ -112,7 +126,15 @@ def test_v41_decode_capacity(mesh_device, device_params):
         "fill": fill,
         "mesh": [sp, tp],
         "fabric": str(device_params.get("fabric_config")),
+        "live_counts": live_counts or [n_slots],
+        "position_list": position_list or [cap - margin],
+        "prompt_length": base,
     }
+    assert all(0 < b <= n_slots for b in live_counts), (live_counts, n_slots)
+    assert all(C.SLIDING_WINDOW + n_slots <= p and p + steps + n_slots <= cap for p in position_list), (
+        position_list,
+        cap,
+    )
     spec = orc.real_spec(tuple(layers), max_seq, checkpoint=ckpt.root)
     root = weight_cache_dir(spec, mesh_device.shape)
     tokenizer = AutoTokenizer.from_pretrained(orc.HF_SNAPSHOT)
@@ -174,43 +196,95 @@ def test_v41_decode_capacity(mesh_device, device_params):
         result["fill_writes"] = writes
         # (the compressed KV rows stay as the join left them: zeros past the prompt; the attention reads the same
         # bytes either way)
-    positions = {}
-    for s in range(n_slots):
-        # near the capacity, both parities, distinct; the step writes at position // ratio and must stay below cap
-        positions[s] = cap - margin - s
-        decoder.slots[s].position = positions[s]
+
+    def place(top: int) -> dict:
+        """Every slot ``top - s``: near ``top``, both parities, distinct; the step writes at position // ratio and
+        must stay below cap."""
+        positions = {s: top - s for s in range(n_slots)}
+        for s in range(n_slots):
+            decoder.slots[s].position = positions[s]
+        return positions
+
+    positions = place(result["position_list"][0])
     result["positions"] = {str(s): positions[s] for s in (0, n_slots - 1)}
+    result["live"] = result["live_counts"][0]
+    result["position"] = result["position_list"][0]
     result["dram_after_fill_bytes"] = _dram_bytes(mesh_device)
 
-    # --- the steps: warm-up eager, one capture, replays ---
-    per_step = []
-    for i in range(steps):
-        tokens = {s: int(books[s][i]) for s in range(n_slots)}
-        t0 = time.time()
-        if graph and i == 0:
-            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-        decoder.decode(tokens, {s: (1, 0.0, 0.0) for s in tokens})
-        if graph and i == 0:
-            captured = ttnn.graph.end_graph_capture()
-            result["graph_big_ops"] = _big_ops(captured, graph_mb << 20)
-            result["graph_ops"] = sum(1 for n in captured if n.get("node_type") == "function_start")
-        wall = time.time() - t0
-        entry = {"step": i, "wall_s": round(wall, 3), "mode": decoder.last.get("mode")}
-        entry.update({k: round(v, 4) for k, v in decoder.last.items() if isinstance(v, float)})
-        if i == warmup:
-            result["dram_after_capture_bytes"] = _dram_bytes(mesh_device)
-            result["trace_after_capture_bytes"] = _trace_bytes(mesh_device)
-        per_step.append(entry)
-        logger.info(f"capacity step {i}: {json.dumps(entry)}")
-    result["steps_detail"] = per_step
-    replays = [e for e in per_step if e["mode"] == "replay"]
-    result["replay_steps"] = len(replays)
-    if replays:
-        result["replay_wall_min_s"] = min(e["wall_s"] for e in replays)
-        result["replay_device_s"] = sorted(e["device_s"] for e in replays)
-        result["replay_device_min_s"] = result["replay_device_s"][0]
-        result["replay_device_median_s"] = result["replay_device_s"][len(replays) // 2]
-        result["replay_device_only_s"] = decoder.replay_device_time(repeats=7)
+    # --- the steps: warm-up eager, one capture, replays (every slot stepping: the served capture order) ---
+    graph_pending = [graph]  # the session's first step runs under the graph capture
+
+    def run_steps(n: int, stepping: list, tag: str) -> list:
+        out = []
+        for i in range(n):
+            tokens = {s: int(books[s][i % steps]) for s in stepping}
+            capture_graph, graph_pending[0] = graph_pending[0], False
+            t0 = time.time()
+            if capture_graph:
+                ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            decoder.decode(tokens, {s: (1, 0.0, 0.0) for s in tokens})
+            if capture_graph:
+                captured = ttnn.graph.end_graph_capture()
+                result["graph_big_ops"] = _big_ops(captured, graph_mb << 20)
+                result["graph_ops"] = sum(1 for node in captured if node.get("node_type") == "function_start")
+            wall = time.time() - t0
+            entry = {"step": i, "wall_s": round(wall, 3), "mode": decoder.last.get("mode"), "live": len(stepping)}
+            entry.update({k: round(v, 4) for k, v in decoder.last.items() if isinstance(v, float)})
+            if entry["mode"] == "capture":
+                result["dram_after_capture_bytes"] = _dram_bytes(mesh_device)
+                result["trace_after_capture_bytes"] = _trace_bytes(mesh_device)
+            out.append(entry)
+            logger.info(f"capacity step {i} ({tag}): {json.dumps(entry)}")
+        return out
+
+    def summarise(entries: list) -> dict:
+        replays = [e for e in entries if e["mode"] == "replay"]
+        out = {"replay_steps": len(replays)}
+        if replays:
+            out["replay_wall_min_s"] = min(e["wall_s"] for e in replays)
+            out["replay_wall_median_s"] = sorted(e["wall_s"] for e in replays)[len(replays) // 2]
+            out["replay_device_s"] = sorted(e["device_s"] for e in replays)
+            out["replay_device_min_s"] = out["replay_device_s"][0]
+            out["replay_device_median_s"] = out["replay_device_s"][len(replays) // 2]
+            for key in ("inputs_s", "stage_s", "sync_s", "issue_s", "read_s"):
+                vals = sorted(e[key] for e in replays if key in e)
+                if vals:
+                    out[key + "_median"] = vals[len(vals) // 2]
+        return out
+
+    all_slots = list(range(n_slots))
+
+    def phase(top: int, stepping: list, detail: list) -> dict:
+        out = {"position": top, "live": len(stepping), "slots": [stepping[0], stepping[-1]], "steps_detail": detail}
+        out.update(summarise(detail))
+        if out["replay_steps"]:  # the capture replayed on the phase's last staged inputs, no host work
+            out["replay_device_only_s"] = decoder.replay_device_time(repeats=7)
+        logger.info(
+            f"capacity phase position {top} live {len(stepping)}: "
+            f"{json.dumps({k: v for k, v in out.items() if k != 'steps_detail'})}"
+        )
+        return out
+
+    phases = []
+    if not live_counts and not position_list:  # the original single phase: every slot, from cap - margin
+        phases.append(phase(positions[0], all_slots, run_steps(steps, all_slots, "steps")))
+    else:
+        warm = run_steps(warmup + 1, all_slots, "warmup")  # eager x warmup, then the capture: the served order
+        assert decoder.capture is not None, "the 32-row step was not captured"
+        result["warmup_detail"] = warm
+        for top in result["position_list"]:
+            for b in result["live_counts"]:
+                place(top)
+                stepping = all_slots[:b]
+                phases.append(phase(top, stepping, run_steps(steps, stepping, f"pos {top} live {b}")))
+    result["phases"] = phases
+    result["steps_detail"] = [e for ph in phases for e in ph["steps_detail"]]
+    first = phases[0]
+    result["replay_steps"] = first["replay_steps"]
+    if first["replay_steps"]:
+        for key in ("replay_wall_min_s", "replay_device_s", "replay_device_min_s", "replay_device_median_s"):
+            result[key] = first[key]
+        result["replay_device_only_s"] = first["replay_device_only_s"]
     result["dram_after_decode_bytes"] = _dram_bytes(mesh_device)
     result["trace_after_decode_bytes"] = _trace_bytes(mesh_device)
     decoder.release()
