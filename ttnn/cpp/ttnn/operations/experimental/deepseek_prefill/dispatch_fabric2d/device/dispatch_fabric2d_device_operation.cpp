@@ -23,7 +23,7 @@ constexpr uint32_t MAX_EXPERTS_PER_TOK = 16;
 // chip's copy of a buffer starts at the same address, which interleaved DRAM allocation on a uniform mesh
 // gives.
 void validate_dram_interleaved(const ttnn::Tensor& t, const char* name) {
-    TT_FATAL(t.buffer() != nullptr, "dispatch_fabric2d: {} has no device buffer", name);
+    TT_FATAL(t.is_allocated(), "dispatch_fabric2d: {} has no device buffer", name);
     TT_FATAL(
         t.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM &&
             t.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,

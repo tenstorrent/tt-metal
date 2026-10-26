@@ -248,7 +248,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in buffers on device!");
     validate_external_semaphores(args, input_tensor);
 
     // Constraints on other inputs (args.dim is already normalised to [0, rank))
@@ -304,7 +304,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
         const auto& output_tensor = tensor_args.output_tensor;
 
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor must be on device!");
-        TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
+        TT_FATAL(output_tensor.is_allocated(), "Output tensor must be allocated in buffers on device!");
         TT_FATAL(
             output_tensor.layout() == input_tensor.layout(),
             "Output tensor layout {} should be same as input tensor layout {}",
@@ -415,7 +415,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
     const auto& input_shape = tensor_args.input_tensor.padded_shape();
     validate_external_semaphores(args, tensor_args.input_tensor);
     const auto& output_tensor = tensor_args.output_tensor;
-    TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor must be allocated in buffers on device!");
+    TT_FATAL(output_tensor.is_allocated(), "Output tensor must be allocated in buffers on device!");
     validate_slot_extent_control_mix(args, tensor_args);
     if (args.input_batch_index.has_value()) {
         TT_FATAL(args.dim != 0, "high_bw_all_gather input_batch_index cannot be used when gathering dim 0");

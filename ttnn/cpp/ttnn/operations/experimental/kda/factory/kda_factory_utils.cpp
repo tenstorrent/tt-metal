@@ -18,7 +18,7 @@ namespace ttnn::experimental::prim::kda_factory_detail {
 void check_allocated_device_tensor(
     const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name) {
     TT_FATAL(
-        tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
+        tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated(),
         "{}: {} must be an allocated device tensor",
         operation_name,
         tensor_name);

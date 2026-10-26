@@ -23,7 +23,7 @@ bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& config) {
 
 void validate_input(const Tensor& tensor, const char* name, tt::tt_metal::DataType dtype, uint32_t width) {
     TT_FATAL(tensor.storage_type() == ttnn::StorageType::DEVICE, "{} must be on device", name);
-    TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
+    TT_FATAL(tensor.is_allocated(), "{} must have a buffer", name);
     TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR", name);
     TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
     TT_FATAL(tensor.dtype() == dtype, "{} has the wrong dtype", name);

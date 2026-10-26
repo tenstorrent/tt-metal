@@ -44,7 +44,7 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
 
     const auto& output_shape = output_padded_shape;
 
-    TT_ASSERT(output.buffer() != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);

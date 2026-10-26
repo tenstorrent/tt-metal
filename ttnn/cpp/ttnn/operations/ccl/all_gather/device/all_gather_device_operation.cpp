@@ -29,7 +29,7 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
 
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in buffers on device!");
 
     // Constraints on other inputs
     const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());

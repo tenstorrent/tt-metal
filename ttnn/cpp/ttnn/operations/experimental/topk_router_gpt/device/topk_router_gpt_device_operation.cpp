@@ -31,7 +31,7 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
         input.storage_type() == StorageType::DEVICE,
         "Input tensor must be on device, got storage_type {}",
         input.storage_type());
-    TT_FATAL(input.buffer() != nullptr, "Input tensor must have allocated buffer");
+    TT_FATAL(input.is_allocated(), "Input tensor must have allocated buffer");
     TT_FATAL(input.layout() == Layout::TILE, "Input tensor must have TILE layout, got {}", input.layout());
     TT_FATAL(input.dtype() == DataType::BFLOAT16, "Input tensor must have BFLOAT16 dtype, got {}", input.dtype());
 
@@ -40,7 +40,7 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
         weight.storage_type() == StorageType::DEVICE,
         "Weight tensor must be on device, got storage_type {}",
         weight.storage_type());
-    TT_FATAL(weight.buffer() != nullptr, "Weight tensor must have allocated buffer");
+    TT_FATAL(weight.is_allocated(), "Weight tensor must have allocated buffer");
     TT_FATAL(weight.layout() == Layout::TILE, "Weight tensor must have TILE layout, got {}", weight.layout());
     TT_FATAL(weight.dtype() == DataType::BFLOAT16, "Weight tensor must have BFLOAT16 dtype, got {}", weight.dtype());
 
@@ -49,7 +49,7 @@ void TopkRouterGptDeviceOperation::validate_on_program_cache_miss(
         bias.storage_type() == StorageType::DEVICE,
         "Bias tensor must be on device, got storage_type {}",
         bias.storage_type());
-    TT_FATAL(bias.buffer() != nullptr, "Bias tensor must have allocated buffer");
+    TT_FATAL(bias.is_allocated(), "Bias tensor must have allocated buffer");
     TT_FATAL(bias.layout() == Layout::TILE, "Bias tensor must have TILE layout, got {}", bias.layout());
     TT_FATAL(bias.dtype() == DataType::BFLOAT16, "Bias tensor must have BFLOAT16 dtype, got {}", bias.dtype());
 

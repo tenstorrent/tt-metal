@@ -22,7 +22,7 @@ void NonZeroIndicesDeviceOperation::validate_on_program_cache_miss(
         "non_zero_indices: input must be rank-4, got rank {}",
         input_tensor.logical_shape().rank());
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to Non-zero need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to Non-zero need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to Non-zero need to be allocated in buffers on device!");
 
     const uint32_t elem_size = input_tensor.element_size();
     TT_FATAL(
