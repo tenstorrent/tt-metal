@@ -548,7 +548,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_write_ptr_impl() const {
 #elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
     {
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
-        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.wr_entry_idx);
+        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
     }
 #elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].ptr;
@@ -566,7 +566,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_read_ptr_impl() const {
 #elif defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
     {
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
-        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
+        return slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
     }
 #elif !defined(COMPILE_FOR_TRISC)
     return local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].ptr;
@@ -587,7 +587,7 @@ inline uint32_t DataflowBuffer<Pap, Cap>::get_tile_address(uint32_t tile_index) 
         // Linear (front + tile_index * stride), no wrap. Safe because wait_front(n) must
         // not straddle slot.limit; tile_index is in [0, n).
         const uint32_t base_address =
-            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
+            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
         const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
         address = address_units_to_bytes(base_address + offset_address);
         mailbox_write(ckernel::ThreadId::MathThreadId, address);
@@ -614,7 +614,7 @@ T DataflowBuffer<Pap, Cap>::read_tile_value(uint32_t tile_index, uint32_t elemen
         const auto& slot = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
         // Same linear addressing as get_tile_address: the wait_front window does not wrap.
         const uint32_t base_address =
-            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.rd_entry_idx);
+            slot.base_addr + dfb_slot_cursor_offset_units(local_dfb_interface_, slot, slot.cursor_entry_idx);
         const uint32_t offset_address = static_cast<uint32_t>(local_dfb_interface_.stride_size) * tile_index;
         const uint32_t byte_address = address_units_to_bytes(base_address + offset_address);
         value = reinterpret_cast<volatile T*>(byte_address)[element_offset];

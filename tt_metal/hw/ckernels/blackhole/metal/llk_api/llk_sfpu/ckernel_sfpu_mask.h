@@ -44,10 +44,13 @@ inline void calculate_int_mask() {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_mask_posinf() {
     const int mask_val_idx = 32;
+    // Bound before the loop so the SFPLOADI of +Inf is loop-invariant; as a literal in the
+    // predicated store it is re-materialised on every row.
+    const vFloat pos_inf = std::numeric_limits<float>::infinity();
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat mask = dst_reg[mask_val_idx];
-        v_if(_sfpu_is_fp16_zero_(mask)) { dst_reg[0] = std::numeric_limits<float>::infinity(); }
+        v_if(_sfpu_is_fp16_zero_(mask)) { dst_reg[0] = pos_inf; }
         v_endif;
         dst_reg++;
     }

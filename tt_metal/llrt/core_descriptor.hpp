@@ -4,20 +4,16 @@
 
 #pragma once
 
-#include <stdint.h>
-#include <umd/device/types/arch.hpp>                      // tt::ARCH
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <cstdint>
+#include <tt-umd/types/arch.hpp>                      // tt::ARCH
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include <map>
-#include <optional>
 #include <string>
 #include <tuple>
-#include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include "common/core_coord.hpp"
-#include "impl/context/context_types.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "llrt/core_descriptor_types.hpp"
 

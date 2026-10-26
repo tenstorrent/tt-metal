@@ -79,6 +79,8 @@ case "${MODEL}" in
     # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
     # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
+    # sc1 is sc4's stage 0, so it opens sc4's slots.
+    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
     # The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
@@ -141,6 +143,10 @@ if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
 fi
+# tt-run does not forward PREFILL_*: pass a cache-format override to every rank.
+if [ -n "${PREFILL_SCALED_FP8_KV_CACHE:-}" ]; then
+  RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE};"
+fi
 echo "resolved shape for ${MODEL}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} num_users=${NUM_USERS}"
 
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
@@ -164,6 +170,7 @@ TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
 mkdir -p "${TTRUN_CWD}"
 
 MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${MODEL}_prefill_ci_mr.XXXXXX")
+GATE_LOG="${MR_DIR}/gates.log"
 export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
@@ -228,6 +235,10 @@ cleanup() {
       fi
     fi
   fi
+  # Last in the log, after the rank-log tails, so a failed gate is what a tail reader sees.
+  echo "==================== gate verdicts ===================="
+  echo "producer rc=${PROD_RC:-<unset>} runner rc=${RUNNER_RC:-<unset>} perf gate rc=${PERF_GATE_RC:-<unset>} pcc gate rc=${PCC_GATE_RC:-<unset>}"
+  grep -h "GATE" "${GATE_LOG}" 2>/dev/null || true
   rm -rf "${MR_DIR}"
 }
 trap cleanup EXIT
@@ -369,11 +380,11 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
     "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" \
     --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
-    --require "${REQUIRE_TPS}" || PERF_GATE_RC=$?
+    --require "${REQUIRE_TPS}" 2>&1 | tee -a "${GATE_LOG}" || PERF_GATE_RC=$?
 fi
 
 PCC_GATE_RC=0
-python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" <<'PY' || PCC_GATE_RC=$?
+python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" <<'PY' 2>&1 | tee -a "${GATE_LOG}" || PCC_GATE_RC=$?
 import glob, json, math, os, sys
 
 pcc_dir, expected, threshold = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])

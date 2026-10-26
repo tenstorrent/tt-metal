@@ -22,6 +22,8 @@ format_dict = {
     DataFormat.UInt16: torch.int32,
     DataFormat.Int8: torch.int8,
     DataFormat.UInt8: torch.uint8,
+    DataFormat.Int4: torch.int8,
+    DataFormat.UInt4: torch.uint8,
     DataFormat.MxFp8R: torch.bfloat16,
     DataFormat.MxFp8P: torch.bfloat16,
     DataFormat.MxFp4: torch.bfloat16,
@@ -310,6 +312,7 @@ class MathOperation(Enum):
     SfpuCopyDest = OpSpec("COPY_DEST", MathOpType.SFPU_BINARY)
     SfpuMulInt32 = OpSpec("MUL_INT32", MathOpType.SFPU_BINARY)
     SfpuIsclose = OpSpec("ISCLOSE", MathOpType.SFPU_BINARY)
+    SfpuIscloseEqualNan = OpSpec("ISCLOSE_EQNAN", MathOpType.SFPU_BINARY)
     SfpuLogsigmoid = OpSpec("LOGSIGMOID", MathOpType.SFPU_BINARY)
     SfpuQuant = OpSpec("QUANT", MathOpType.SFPU_BINARY)
     SfpuRequant = OpSpec("REQUANT", MathOpType.SFPU_BINARY)
@@ -571,6 +574,30 @@ class DestSync(Enum):
         return f"DstSync::{self.value}"
 
 
+class CustomMmDestLayout(Enum):
+    """Where custom_mm puts its output tiles in DEST; the values of ckernel::CustomMmDestLayout."""
+
+    Default = 0
+    DefaultSplitAcc = 1
+    Dense = 2
+    DenseSplitAcc = 3
+    Compact = 4
+
+    @property
+    def split_acc(self):
+        return self in (
+            CustomMmDestLayout.DefaultSplitAcc,
+            CustomMmDestLayout.DenseSplitAcc,
+        )
+
+    @property
+    def tile_rows(self):
+        """DEST rows from one output tile to the next, as custom_mm_tile_rows."""
+        if self in (CustomMmDestLayout.Dense, CustomMmDestLayout.DenseSplitAcc):
+            return 32
+        return 16 if self == CustomMmDestLayout.Compact else 64
+
+
 class NarrowTile(Enum):
     Yes = True
     No = False
@@ -724,6 +751,8 @@ format_tile_sizes = {
     DataFormat.UInt16: 2048,
     DataFormat.Int8: 1024,  # 1 byte * 1024 elements
     DataFormat.UInt8: 1024,  # 1 byte * 1024 elements
+    DataFormat.Int4: 512,  # 0.5 byte * 1024 elements
+    DataFormat.UInt4: 512,  # 0.5 byte * 1024 elements
     # MX formats: 1 byte per element + 1 scale (8 bits) per 32 elements
     # 1024 elements = 32 blocks × (1 scale + 32 elements) = 1056 bytes
     DataFormat.MxFp8R: 1056,
@@ -890,6 +919,7 @@ class TopKXLSortMode(Enum):
     Dispatch = 0
     Generic = 1
     EarlyExitK64 = 2
+    Columns = 3
 
 
 class VectorMode(Enum):
