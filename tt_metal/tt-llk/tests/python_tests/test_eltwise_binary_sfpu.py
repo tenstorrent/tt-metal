@@ -1381,10 +1381,8 @@ def _run_quant(mathop, sign_magnitude, **run_kwargs):
         a_float = (torch.rand(n, dtype=torch.float32) - 0.5) * 4000.0
 
     # Dyadic edges, so they do not depend on the random draw. 0.25 and 0.5 are
-    # exact in fp32. Lane 2 is an exact half (4.5 = 3 * 0.5 + zp); 5.5 would
-    # round to 6 under both tie rules. Lane 3 is in (-0.5, 0), which
-    # SFPSTOCHRND flushes to +0 on both Wormhole and Blackhole.
-    # Lane 4 is an exact half for quant (2.5 = 5 * 0.5).
+    # exact in fp32. Lane 2 is an exact half for requant (4.5 = 3 * 0.5 + zp);
+    # 5.5 would round to 6 under both tie rules. Lane 4 is an exact half for quant (2.5 = 5 * 0.5).
     a_float[0], scale[0] = 4000.0, 0.25
     a_float[1], scale[1] = -4000.0, 0.25
     a_float[2], scale[2] = 3.0, 0.5
