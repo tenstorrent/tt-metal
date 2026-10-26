@@ -1904,3 +1904,50 @@ us a call at the Galaxy M (GLM-5.3 160 / GLM-Flash 142 / K3 91 / K2.7 107): old 
   NoC writes share that tile and port with the x reads (the 45 us job-1 lag); 3a's distance fix did not move it, x on
   NOC0 (3b) cost more. The ceiling also drops the forwards' link sharing with the x snake, so it overstates placement.
 Logs: /localdev/mstaletovic/fc_ab/ (nofwd_*, place0_*).
+
+### ttsim-perf vs silicon: DRAM / NoC of the flat op (2026-10-26, bh-lb-09 one chip vs ttsim-perf release_bh)
+Why: check whether the ttsim performance model reproduces the x read interference (+83 us at M 160) and the snake's
+0.54 us a block, and whether it could be used to explore layouts off-silicon. ttsim (ttsim-private, built with
+ENABLE_PERF=1) models each DRAM channel as one 759/16 B/cycle pipe shared by its 3 NoC endpoints, +142 cycles on a read
+to an idle channel: no banks / rows / read-write turnaround. Time = device profiler kernel span (wall clock = sim
+cycles), 1.35 GHz.
+- DRISC does not run on ttsim: the model has no cores in the DRAM tiles, and Metal's BH HAL drops the DRAM core type
+  when TT_METAL_SIMULATOR is set; the default plan (DRISC pure) TT_FATALs. Comparisons below use MIMO_FL_DRISC=0
+  (16 Tensix weight readers), a different traffic mix from the default.
+- The sim has an 11 x 10 grid; silicon ran with MIMO_FL_SKIP_COLS=6 to get the same plan (64 gate/up, 24 down, 16
+  readers, 4 relays). Sim wall ~2-10 min for a GLM-5.3 E 8 call pair (5-12 kHz).
+DRAM microbenchmark (scratch, same kernels both sides; W = 2 Tensix readers a bank, 8 KB reads, NOC0; x = 4 cores, 2 KB
+reads of random 12 KB rows, NOC1), us: silicon / sim
+| case | W | x |
+|---|---|---|
+| W, bank 0 (4 MB) | 66.3 / 66.3 | - |
+| x, bank 0 (3 MB) | - | 63.4 / 60.9 |
+| W + x, bank 0 | 115.1 / 82.4 | 102 / 121 |
+| W, 8 banks (32 MB) | 66.6 / 66.7 (503 GB/s both) | - |
+| x, 8 banks (3 MB) | - | 66.2 / 66.0 |
+| W + x, 8 banks | 73.7 / 68.4 | 78.1 / 111.9 |
+| W + x (1 KB x reads, same count) | 69.7 / 67.2 | 72.8 / 105.5 |
+Single streams match to 0-4%. In a mix silicon shares the channel ~fairly (W pays slightly more than x's bytes: +7.0
+us for 3 MB, +3.2 for 1.5 MB); the sim lets W keep the channel and starves x (x 40 vs 28 GB/s), so W pays +1.7 / +0.6.
+Op, GLM-5.3 E 8, DRISC off, us M 96 / 160 (silicon / sim):
+| case | silicon | ttsim |
+|---|---|---|
+| real | 445 / 500 | 432 / 481 |
+| x only (GU_NOREAD DN_NOREAD W_NOFWD + off) | 232 / 335 | 222 / 320 |
+| x only, XRD_SKIP | 229 / 333 | 219 / 317 |
+| weights read + x (W_NOFWD + off) | 397 / 439 | 398 / 438 |
+| weights read, no x (+XRD_SKIP) | 363 / 390 | 386 / 410 |
+| weight forwards + x, no DRAM reads | 234 / 336 | 231 / 320 |
+- Snake rate (x only, slope M 96 -> 160 = 192 blocks): silicon 0.538, ttsim 0.512 us a block: the sim reproduces the
+  acked-forwarder rate (-5%).
+- x read interference (weights+x minus weights alone): silicon 34 / 49 us, ttsim 12 / 28; but the sim's weight-only
+  floor is 6% above silicon (386 / 410 vs 363 / 390) while its 8-bank W microbench matched exactly. So the sim gets the
+  sum right and the split wrong: it under-charges x, over-charges the bare weight stream.
+- With Tensix readers the silicon interference is 34 / 49 us vs DRISC's 63 / 83 (x bytes ~18 / 31 us at 512 GB/s):
+  the DRISC streams roughly double x's excess cost. The DRISC path cannot be checked on ttsim.
+- Side result: on this one-chip E 8 run the Tensix-reader layout is faster than the DRISC default: 444 / 503 (full
+  12 x 10, 32 down) and 445 / 501 (SKIP_COLS 6) vs 460 / 523. Not followed up here.
+Takeaway: ttsim-perf is good to ~5% for NoC / snake work and single DRAM streams, but its DRAM model has no GDDR
+internals and no DRISC, so it cannot explain the +83 us; the silicon data point it adds is that the excess x cost is
+about twice as large next to DRISC streams as next to Tensix reader streams.
+Logs: /localdev/mstaletovic/ttsim_perf/ (si_*, sim_*, op_*, prof_*; scripts/).
