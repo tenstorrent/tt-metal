@@ -133,6 +133,11 @@ REGIONS_UNTILIZE = os.environ.get("GLM53_REGIONS_UNTILIZE", "direct")
 # the local picks' rows written, slots read from their fp32 TILE layout (with REGIONS_COMBINE=fused the uint32 copy is
 # never made). Bit-identical for every row the output depends on. Read at call time.
 REGIONS_SCATTER = os.environ.get("GLM53_REGIONS_SCATTER", "embedding")
+# regions path: how the routing tables are built (tt-blaze G53F-0195): "composite" = ~27 ttnn ops per sub-chunk (one-hot,
+# triangular-matmul rank, aligned counts + cumsum, the slot formula, gathers at the picks, uint32 row copies); "custom"
+# = custom_ops/route_table (two data-movement programs from the top-k ids and weights; needs REGIONS_SCATTER=custom and
+# REGIONS_COMBINE=fused, which read the fp32 TILE slots). Same values (integers < 2^24). Read at call time.
+REGIONS_ROUTE = os.environ.get("GLM53_REGIONS_ROUTE", "composite")
 # what the regions calls actually ran (host-side ints, no device sync): the region buffer rows and the combine path,
 # so an A/B can show the knob took effect (G53F-0183: a knob echoed in a summary is not its effect). Reset by the reader.
 REGIONS_STATS: dict = {}
@@ -677,6 +682,7 @@ class TtRoutedExperts(LightweightModule):
         self._row_gather = None  # custom_ops/row_gather, built on first use (GLM53_REGIONS_GATHER=row)
         self._gather_combine = None  # custom_ops/gather_combine_reduce (GLM53_REGIONS_COMBINE=fused), on first use
         self._region_scatter = None  # custom_ops/region_scatter (GLM53_REGIONS_SCATTER=custom), on first use
+        self._route_table = None  # custom_ops/route_table (GLM53_REGIONS_ROUTE=custom), on first use
         if self.prefill_experts in ("dispatch", "regions"):
             self._build_dispatch_path(fabric=self.prefill_experts == "dispatch")
         # column c's expert selector: the [E, E_local] block of the identity for its experts
@@ -1156,6 +1162,8 @@ class TtRoutedExperts(LightweightModule):
         if T_pad != T:
             x, dense_w, idx, w = padded = [self._pad_rows(t, T_pad) for t in (x, dense_w, idx, w)]
         T_logical, T = T, T_pad
+        if REGIONS_ROUTE == "custom" and REGIONS_SCATTER == "custom" and REGIONS_COMBINE == "fused":
+            return self._forward_regions_routed(x, idx, w, T_logical, padded, max_buf)
         onehot = ttnn.multiply(ttnn.typecast(ttnn.ne(dense_w, 0.0), ttnn.float32), d["mask"])  # [1,1,T,E] fp32 0/1
         rank = self._rank(onehot)  # [1,1,T,E]: inclusive rank of token t among expert e's tokens
         if REGIONS_RANK == "mm":  # the last inclusive rank is the count (the same exact integers as the sum)
@@ -1258,6 +1266,66 @@ class TtRoutedExperts(LightweightModule):
         for t in (comb, pos_rm, w_rm, counts, offsets):
             if t is not None:
                 ttnn.deallocate(t)
+        if y.dtype != self.activation_dtype:
+            y = ttnn.typecast(y, self.activation_dtype)
+        for t in padded:
+            ttnn.deallocate(t)
+        if T_logical != T:
+            y = ttnn.slice(y, [0, 0, 0, 0], [1, 1, T_logical, H])
+        return y
+
+    def _forward_regions_routed(self, x, idx, w, T_logical: int, padded: list, max_buf: int | None) -> ttnn.Tensor:
+        """``_forward_regions`` with the routing tables from ``custom_ops/route_table`` (G53F-0195): the same region
+        scatter, expert kernel, untilize and fused combine on bit-identical slots / counts / offsets / weights."""
+        d = self._dispatch
+        E_loc, H, k = self.E_local, self.H, idx.shape[-1]
+        T = x.shape[-2]
+        max_buf = max_buf or self.dispatch_max_tokens or (-(-(T * k + E_loc * TILE) // TILE) * TILE)
+        if self._route_table is None:
+            from models.demos.glm53_flash.custom_ops.route_table.op import RouteTable
+
+            self._route_table = RouteTable(self.device, E_loc)
+        if self._region_scatter is None:
+            from models.demos.glm53_flash.custom_ops.region_scatter.op import RegionScatter
+
+            self._region_scatter = RegionScatter(self.device)
+        if self._gather_combine is None:
+            from models.demos.glm53_flash.custom_ops.gather_combine_reduce.op import GatherCombineReduce
+
+            self._gather_combine = GatherCombineReduce(self.device)
+        pos_tk, w_loc, counts, offsets = self._route_table(idx, w, d["table_rm"], max_buf)
+        x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [T, H])
+        buf = self._region_scatter(x_rm, pos_tk, max_buf)
+        ttnn.deallocate(x_rm)
+        out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+            ttnn.reshape(buf, [max_buf, H]),
+            offsets,
+            counts,
+            d["gidx_rm"],
+            d["gate"],
+            d["up"],
+            d["down"],
+            self.dispatch_max_tokens or T,
+            compute_kernel_config=self.compute,
+            activation=ttnn.RoutedExpertActivation.ClampedSiluGlu,
+        )  # [max_buf, H] bf8 TILE
+        ttnn.deallocate(buf)
+        if REGIONS_UNTILIZE == "direct" and out.dtype == ttnn.bfloat8_b:
+            y_rm = ttnn.untilize(out)
+            ttnn.deallocate(out)
+        else:
+            out16 = ttnn.typecast(out, ttnn.bfloat16)
+            ttnn.deallocate(out)
+            y_rm = ttnn.to_layout(out16, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(out16)
+        w16 = ttnn.typecast(w_loc, ttnn.bfloat16)
+        w_rm = ttnn.unsqueeze(ttnn.to_layout(w16, ttnn.ROW_MAJOR_LAYOUT), -1)  # [1,1,T,k,1]
+        ttnn.deallocate(w_loc)
+        ttnn.deallocate(w16)
+        _regions_stat(max_buf, "fused+scatter+route")
+        y = self._gather_combine(y_rm, pos_tk, w_rm)  # [1,1,T,H] TILE
+        for t in (y_rm, pos_tk, w_rm, counts, offsets):
+            ttnn.deallocate(t)
         if y.dtype != self.activation_dtype:
             y = ttnn.typecast(y, self.activation_dtype)
         for t in padded:
