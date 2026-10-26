@@ -4,7 +4,7 @@
 import math
 
 import torch
-from helpers.format_config import DataFormat, is_dest_acc_needed
+from helpers.format_config import DataFormat, InputOutputFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
     BlocksCalculationAlgorithm,
@@ -296,6 +296,37 @@ def test_reduce(
     pool_type,
     math_fidelity,
     is_reduce_to_one,
+):
+    _run_reduce_test(
+        formats,
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        math_fidelity,
+        is_reduce_to_one,
+        tile_dimensions,
+    )
+
+
+# REDUCE_SWEEP only feeds exponent-B formats to SrcA; Float16 is exponent-A, so
+# this is the one case where reduce combines an exponent-A SrcA with a 32-bit Dest.
+@parametrize(
+    formats=[InputOutputFormat(DataFormat.Float16, DataFormat.Float32)],
+    dest_acc=_required_dest_acc_mode,
+    reduce_dim=REDUCE_DIMS,
+    pool_type=POOL_TYPES,
+    math_fidelity=[MathFidelity.HiFi4],
+    is_reduce_to_one=[False, True],
+    tile_dimensions=[[1, 32], [16, 32], [32, 16], [32, 32]],
+)
+def test_reduce_float16_to_float32(
+    formats,
+    dest_acc,
+    reduce_dim,
+    pool_type,
+    math_fidelity,
+    is_reduce_to_one,
+    tile_dimensions,
 ):
     _run_reduce_test(
         formats,
