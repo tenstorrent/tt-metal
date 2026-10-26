@@ -40,9 +40,10 @@ CHUNK_ROWS = ttnn.TILE_SIZE
 # pinned runtime admits one row tile); every other op runs natively on the four tiles.
 LONG_CHUNK_ROWS = 4 * ttnn.TILE_SIZE
 CHUNK_ROW_COUNTS = (CHUNK_ROWS, LONG_CHUNK_ROWS)
-# Rows of one prefill slab (the opt-in layer-major form): a multiple of the long chunk in 256 .. 2048; the MoE serves
-# the multiples of its 512-row reduce block. The 2048-row cap is L1: at 4096 rows the first dense matmul's static
-# circular buffers exceed a core's L1.
+# Rows of one prefill slab (the opt-in layer-major form): the row contract takes a multiple of the long chunk in
+# 256 .. 2048, and the MoE refuses all but multiples of its one-call form's 512-row reduce block (the slab probe is
+# built in that form). The 2048-row cap is L1: at 4096 rows the first dense matmul's static circular buffers exceed
+# a core's L1.
 SLAB_ROW_STEP = LONG_CHUNK_ROWS
 MIN_SLAB_ROWS = 2 * LONG_CHUNK_ROWS
 MAX_SLAB_ROWS = 16 * LONG_CHUNK_ROWS

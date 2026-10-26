@@ -25,9 +25,10 @@ name). `--require-json-96` refuses to serve unless the `json` record matches the
 records leave the CPU stream after a near-tie; each record's first divergence index is written to `acceptance.json`
 in the run directory. The records carry their own system turn in their prompt ids.
 
-The baselines in `tools/ci/baselines/` pin the replay per server form (`*-divergence_index.json`,
-`*-device_token_ids_sha256.json`) and the reference agreement; a replay that leaves the CPU earlier than its pinned
-index is a regression. `tools/ci/q38_ci.py` checks runs against them ([TESTING.md](TESTING.md)).
+The baselines in `tools/ci/baselines/` (`*-divergence_index.json`, `*-device_token_ids_sha256.json` per server
+form, and the reference agreement) are the source fork's unseeded proposals (`todo` in `tools/ci/pins.json`), not
+bitwise targets for this port; `tools/ci/q38_ci.py` checks runs against them and `seed` makes them targets once runs
+of this port agree ([TESTING.md](TESTING.md)).
 
 ## Relations between paths
 

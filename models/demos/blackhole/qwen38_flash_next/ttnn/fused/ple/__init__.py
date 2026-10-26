@@ -33,7 +33,7 @@ CONV_READER = fp.kernel_source(NAME, "conv_reader.cpp")
 CONV_WRITER = fp.kernel_source(NAME, "conv_writer.cpp")
 CONV_STATE_LENGTH = 9
 CONV_TAPS = 4
-MAC_FORM = 0  # 0: mac(row, tap, acc) = row * tap + acc; 1: tap * acc + row
+MAC_FORM = 0  # 0: the SFPU mac(row, tap, acc) = row * tap + acc; 1: the FPU row * tap, then + acc
 GATE_COMPUTE = fp.kernel_source(NAME, "gate_compute.cpp")
 GATE_READER = fp.kernel_source(NAME, "gate_reader.cpp")
 GATE_WRITER = fp.kernel_source(NAME, "gate_writer.cpp")

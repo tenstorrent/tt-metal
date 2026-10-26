@@ -5,10 +5,10 @@
 // [1,1,4,640] tensors into CBs 0-8 in order: conv[0], conv[3], conv[6], normalized, taps 0-3, gated.  Then, with
 // SHIFT, the chain's nine in-place state copies (conv[k] <- conv[k+1] for k = 0..7, conv[8] <- normalized): every
 // input the compute needs is already in its CBs, so the state rows may be overwritten.
-// Compile-time args: 0 T, 1 SHIFT, then TensorAccessorArgs for conv[0], conv[3], conv[6], normalized, taps 0-3,
-// gated, conv[1], conv[2], conv[4], conv[5], conv[7], conv[8], and the branch-major residual [1,4,1,640] (sixteen,
-// chained; the six state rows only for the shift, the residual only with INJECT: its four block tiles b * 20 + first
-// go to CB 19).  Compile-time args 0 T, 1 SHIFT, 2 INJECT.  Runtime args: the sixteen buffer addresses in that order,
+// Compile-time args: 0 T, 1 SHIFT, 2 INJECT, then TensorAccessorArgs for conv[0], conv[3], conv[6], normalized,
+// taps 0-3, gated, conv[1], conv[2], conv[4], conv[5], conv[7], conv[8], and the branch-major residual [1,4,1,640]
+// (sixteen, chained; the six state rows only for the shift, the residual only with INJECT: its four block tiles
+// b * 20 + first go to CB 19).  Runtime args: the sixteen buffer addresses in that order,
 // 16 the first tile of this core's column block, 17 the first tap tile of the block (the column within the lane's
 // 20-tile row-block: the taps are one [1,1,4,640] per tap for every lane; the 1-row form passes the same as 16).
 #include <cstdint>

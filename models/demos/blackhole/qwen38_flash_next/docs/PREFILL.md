@@ -20,9 +20,10 @@ combines with `--mtp`. The vLLM adapter takes the same forms from `QWEN38_PREFIL
 ## The slab
 
 Inside a slab every layer runs all ROWS rows in one pass: the dense linears as one matmul over the rows, the GDN
-recurrence as main's `ttnn.transformer.chunk_gated_delta_rule` over the whole slab with its fp32 state carried inside
-the op, the routed experts on `moe_compute`'s local output path, and the QSA layer's KV writes, block selection and
-sparse attention over all rows.
+recurrence as main's `ttnn.transformer.chunk_gated_delta_rule` over the whole slab, the routed experts on
+`moe_compute`'s local output path, and the QSA layer's KV writes, block selection and sparse attention over all rows.
+The PLE runs the 128-row pass per 128-row block, and so do the routed experts where `moe_compute` refuses the one
+call.
 With `--mtp` the MTP layer's rows run inside the slab body as ROWS / 128 slices of the 128-row form, so its KV rows
 land where the 128-row chunks would write them.
 
@@ -36,7 +37,8 @@ At start, before any slab state:
 - The slab's resident dense-weight copies are allocated after the decode weights and the experts, and refused with
   the numbers when the free DRAM would not also hold the context state, the slab's working set and a margin. A build
   without a slab allocates no copies.
-- Slab rows that are not a multiple of 512 (the weighted reduce's block) are refused.
+- A slab is a multiple of 512 rows up to 2048: the one-call form reduces in 512-row blocks and the probe instance
+  is built in that form, so other row counts are refused before any slab work.
 
 `/health` reports `prefill_slab_rows`.
 

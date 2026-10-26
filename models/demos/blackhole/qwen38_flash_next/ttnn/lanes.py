@@ -310,8 +310,9 @@ class Qwen38LaneMoveTiming:
 class Qwen38TTNNLanePager:
     """Evicts one lane's image into a host slot and re-admits a slot into any lane, bitwise.
 
-    Build after every lane tensor exists: construction warms each lane's pack and unpack and captures the ``B`` pack
-    and ``B`` unpack traces; run ``verify_before_replay`` on them after any later allocation. ``evict`` / ``readmit``
+    Build after every lane tensor exists: construction warms each lane's pack and unpack and, with ``traced=True``,
+    captures the ``B`` pack and ``B`` unpack traces; run ``verify_before_replay`` on them after any later allocation.
+    ``evict`` / ``readmit``
     are synchronous. ``buffers`` lends another pager's pack buffers and KV staging; the borrower never releases them.
     """
 

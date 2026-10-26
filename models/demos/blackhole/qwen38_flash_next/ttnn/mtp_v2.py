@@ -502,7 +502,7 @@ def moe_rows_for(rows: int) -> int:
 
 def resolve_moe_rows(rows: int, moe_rows: int | None) -> int:
     """The verify MoE row count: ``moe_rows_for(rows)``, or an explicit override in ``rows .. 32`` (a runner-level
-    argument, e.g. 6 rows for k = 5 instead of the admitted 32; ``SUPPORTED_ROWS`` and the proof flags are not
+    argument, e.g. 32 rows for k = 5 instead of the admitted 6; ``SUPPORTED_ROWS`` and the proof flags are not
     consulted for an override, so its instance is constructed with its own admitted set)."""
 
     if moe_rows is None:

@@ -4,8 +4,9 @@
 """Fused decode kernels over ``ttnn.generic_op``.
 
 ``program`` builds and runs one program from Python; ``registry`` names each fused kernel with the composed ttnn chain
-it replaces. Each kernel is a sub-package ``<name>/`` with its ``kernels/*.cpp`` and registers itself on import; add
-new ones to the import list below.
+it replaces. Each registered kernel is a sub-package ``<name>/`` with its ``kernels/*.cpp`` and registers itself on
+import; ``gr_fold``, ``gdn_pre_rows``, ``gdn_post_rows`` and ``untilize_rows`` are programs the kernels use and register
+nothing. Add new ones to the import list below.
 """
 
 from . import program

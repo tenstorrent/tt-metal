@@ -258,7 +258,7 @@ class Qwen38TTNNDecoderLayer:
     ``expert_streamer`` is mandatory: each call loads one BF4_B routed-expert layer and releases it after the MoE.
     """
 
-    _fused_apply_ple = None  # QWEN38_FUSED=ple binds ttnn/fused/ple's layer glue per instance; the body is the chain
+    _fused_apply_ple = None  # the ple kernel (a default) binds ttnn/fused/ple's layer glue per instance
 
     def __init__(
         self,
@@ -335,7 +335,7 @@ class Qwen38TTNNDecoderLayer:
         self.mlp_gr = mlp_gr
         self.expert_streamer = expert_streamer
         self.ple = ple
-        # QWEN38_FUSED=ple: the fused PLE body, the layer's output permute + residual add folded into its conv program.
+        # ple (a default): the fused PLE body, the layer's output permute + residual add folded into its conv program.
         from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
 
         if ple is not None and fused_kernels.enabled("ple"):

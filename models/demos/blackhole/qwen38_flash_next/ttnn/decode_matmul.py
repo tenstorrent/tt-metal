@@ -55,7 +55,6 @@ def validate_decode_dram_workers(value) -> int:
 # HiFi4 / HiFi2 / LoFi for BF16 / BFP8 / BFP4 with fp32 accumulation. The embedding, router, norms, GDN conv taps /
 # dt_bias / A_log, PLE tables and GR mixers stay BF16 (the fused gr_read uses BF16 circular buffers). Converted
 # tensorbins carry the dtype tag in their name, so caches of different dtypes never collide.
-# the dtype tag in their name, so caches of different dtypes never collide.
 DENSE_DTYPE_ENV = "QWEN38_DENSE_WEIGHT_DTYPE"
 DEFAULT_DENSE_DTYPE_NAME = "bf8"
 DENSE_MODULES = ("gdn", "qsa", "shared_expert", "lm_head", "final_mixer", "mtp")

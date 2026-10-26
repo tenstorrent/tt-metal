@@ -4,7 +4,9 @@
 
 #pragma once
 
-// The source model's reciprocal: the legacy iteration of ckernel_sfpu_rsqrt_compat.h, kept local to this model.
+// The source model's reciprocal, kept local to this model: the legacy iteration of the source tree's
+// tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_rsqrt_compat.h, verbatim apart from names and
+// formatting.
 // Current upstream's reciprocal rounds differently and owns SFPU constants, LOADMACRO configuration and replay slots;
 // the legacy iteration owns none, so the source's sqrt/reciprocal sequence keeps its sqrt constants.
 

@@ -7,8 +7,9 @@
 
 starts ``tools/qwen38_chat_server.py`` as a child process (this process never touches a device) and forwards every
 request to it byte for byte over the loopback. Startup returns once the server has written its ``READY`` record;
-shutdown sends it SIGTERM and waits for its exit. A server that ends on its own ends this process with the same
-status. Before ``READY`` and after the stop every request is answered HTTP 503 in the server's error shape.
+shutdown sends it SIGTERM and waits for its exit. A server that ends on its own ends this process with its status,
+or 1 when that status is 0. Before ``READY`` and after the stop every request is answered HTTP 503 in the server's error
+shape.
 
 The environment (every value is checked before the server starts):
 
@@ -269,7 +270,7 @@ def spawn_server(server: Qwen38ContainerServer) -> ServerProcess:
 
 
 def _exit_with(status: int) -> None:
-    """The server ended on its own: this process ends with its status so the container exits as the server did."""
+    """The server ended on its own: this process ends with its status, or 1 when that status is 0."""
 
     os._exit(status if status else 1)
 

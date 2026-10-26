@@ -240,7 +240,8 @@ def position_derive_lanes(
     """The lane body's position-derived tensors from the uint32 position row ``[1,1,1,32]``, one core per lane row.
 
     Row u of every row tensor is the 1-row derive at P_u, with lane u's KV region start ``lane_offsets[u]`` in the
-    fill's tail ids; the RoPE tiles hold row u at P_u - S_u. Returned by name (``LANES_OUTPUT_ARGS``)."""
+    fill's tail ids; the RoPE tiles hold row u at P_u - S_u and the block-start RoPE tiles at (P_u & ~3) - S_u.
+    Returned by name (``LANES_OUTPUT_ARGS``)."""
 
     qsa, contracts = _qsa(), _contracts()
     lanes = contracts.require_lane_count(lanes, label="position derive lanes")

@@ -469,7 +469,7 @@ class Qwen38TTNNGatedResidual:
                 fused_kernels.gr_fold.line_semaphores(mesh_device)
             self._read_fused = fused_kernels.kernel(name).fused
             self.read = functools.partial(self._read_fused, self)
-        # QWEN38_FUSED=gr_write: write and write_rows (one tile row) resolve to ttnn/fused/gr_write the same way.
+        # gr_write (a default): write and write_rows (one tile row) resolve to ttnn/fused/gr_write the same way.
         self._write_fused = None
         if fused_kernels.enabled("gr_write"):
             from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gr_write as fused_gr_write

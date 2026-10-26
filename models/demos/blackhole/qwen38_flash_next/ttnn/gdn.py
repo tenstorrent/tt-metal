@@ -854,8 +854,9 @@ class Qwen38TTNNGDNRowsConstants:
     masks: Any
     select_compute_config: Any
     mesh_contract: Qwen38MeshContract
-    # ``[12, 1, 32, 1]`` FP32 row index in the chunk prims' layout, uploaded for the 32-row form when the verify-rows
-    # wrap (``fused.gdn_rows_wrap``) runs; None otherwise. Its commit masks ``beta_c`` / ``g_c`` element for element.
+    # ``[12, 1, 32, 1]`` FP32 row index in the wrap's head-major chunk layout, uploaded for the 32-row form when the
+    # verify-rows wrap (``fused.gdn_rows_wrap``) runs; None otherwise. Its commit masks ``beta_c`` / ``g_c`` element
+    # for element.
     arange_c: Any = None
 
     @property
@@ -987,8 +988,8 @@ class Qwen38TTNNRowsSelectors:
     committed_mask: Any  # [1, 1, CHUNK_SIZE, 1] FP32
     onehot_bf16: tuple[Any, ...]  # rows x [1, 1, 1, 1] BF16
     history_select: Any  # [1, 1, CHUNK_SIZE, CONV_WINDOW_TILE_ROWS] BF16
-    # The same mask in the chunk prims' layout, built only when the constants carry ``arange_c`` (the verify-rows
-    # wrap): its commit multiplies ``beta_c`` / ``g_c`` ``[12, 1, 32, 1]`` element for element.
+    # The same mask in the wrap's head-major chunk layout, built only when the constants carry ``arange_c`` (the
+    # verify-rows wrap): its commit multiplies ``beta_c`` / ``g_c`` ``[12, 1, 32, 1]`` element for element.
     committed_mask_c: Any = None
     # The pass's device accept count itself (fp32 ``[1, 1, 1, 1]``, the caller's tensor: not deallocated here); the
     # verify-rows fold's commit reads it to pick the committed prefix state.
@@ -1083,7 +1084,7 @@ class Qwen38TTNNGDNRowsState:
         True  # False: ``history`` is another rows state's buffer (the long chunk shares the 32-row one)
     )
     # False: the pass buffers (qkv, q, k, v, beta, g, output) are another layer's slab rows state's; the slab's
-    # layers run one after another, so the 35 GDN layers share one set (52 MB at 2048 rows) and keep their histories.
+    # layers run one after another, so a slab's 36 GDN layers share one set and keep their own histories.
     owns_body: bool = True
     # The verify-rows wrap's per-layer buffers (``fused.gdn_rows_wrap.attach`` puts them here when that kernel runs
     # and this is the 32-row form), freed with the state.  While they are here the wrap owns the recurrence: the
@@ -1566,7 +1567,7 @@ class Qwen38TTNNGDNRowsResult:
     never deallocate it) or, for ``forward_rows(full_tile=True)``, the whole ``[1,1,32,640]`` output tile in a new
     buffer the caller deallocates; ``final_state`` is the chunk kernel's state after all ``rows`` rows in a new FP32
     buffer (the committed state is untouched until ``commit_rows``); the caller owns and deallocates it -- or ``None``
-    under the verify-rows fold (``QWEN38_FUSED=gdn_rows_scan``), whose state after all rows is the last of the prefix
+    under the verify-rows fold (``gdn_rows_scan``, a default), whose state after all rows is the last of the prefix
     states the rows state owns (``commit_rows_full`` reads it from there)."""
 
     hidden_rows: Any
@@ -1658,13 +1659,13 @@ class Qwen38TTNNGDN:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        # projection -> gated output: the composed chain, or the fused kernel when QWEN38_FUSED names gdn_step
+        # projection -> gated output: the fused kernel (gdn_step, a default), or the composed chain when it is off
         self._step = fused.resolve("gdn_step")
-        # the rows body between the projection and the out-projection: the wrap's two programs around the two prims
-        # where the rows state carries its buffers, the chain elsewhere (and under QWEN38_FUSED_OFF=gdn_rows_wrap)
+        # the rows body between the projection and the out-projection: the wrap's two programs around the public
+        # recurrence where the rows state carries its buffers, the chain elsewhere (and under QWEN38_FUSED_OFF)
         self._rows_body_call = fused.resolve_admitted("gdn_rows_wrap")
-        # the verify rows' fold (opt-in QWEN38_FUSED=gdn_rows_scan): one serial-recurrence program where the rows state
-        # carries its prefix states, the wrap or the chain (through _rows_body_wrap) elsewhere
+        # the verify rows' fold (gdn_rows_scan, a default): one serial-recurrence program where the rows state carries
+        # its prefix states, the wrap or the chain (through _rows_body_wrap) elsewhere
         self._rows_scan_call = fused.resolve_admitted("gdn_rows_scan")
         # The lane body runs the same program on its B rows (one item per (lane, value head), one state slot per
         # lane); with the kernel off it stays the lane chain, the class attribute.
@@ -1690,7 +1691,7 @@ class Qwen38TTNNGDN:
         return step
 
     def _rows_body_wrap(self):
-        """The rows body from the projection to the out-projection: ``gdn_pre_rows`` + the two chunk prims +
+        """The rows body from the projection to the out-projection: ``gdn_pre_rows`` + the public recurrence +
         ``gdn_post_rows`` (ttnn/fused/gdn_rows_wrap) on a rows state that carries the wrap's buffers, the chain
         elsewhere; resolved once (fakes that skip ``__init__`` resolve here)."""
 
@@ -1701,7 +1702,7 @@ class Qwen38TTNNGDN:
 
     def _rows_body(self):
         """The rows body ``forward_rows`` dispatches to: on a rows state that carries the verify-rows fold's buffers
-        (opt-in QWEN38_FUSED=gdn_rows_scan) the one-program serial recurrence (ttnn/fused/gdn_rows_scan), else
+        (gdn_rows_scan, a default) the one-program serial recurrence (ttnn/fused/gdn_rows_scan), else
         ``_rows_body_wrap``; resolved once (fakes that skip ``__init__`` resolve here)."""
 
         body = self.__dict__.get("_rows_scan_call")
@@ -2338,9 +2339,9 @@ class Qwen38TTNNGDN:
 
     # ------------------------------------------------------------------ rows path (MTP v2 verify)
     # ``forward_rows`` runs R consecutive positions in one pass: ``forward_decode``'s ops on CHUNK_SIZE-row tiles and
-    # the recurrence through ``ttnn.transformer.chunk_gated_delta_rule`` over one full chunk, rows past R zeroed (an
-    # identity update). It never writes the committed state; ``commit_rows`` reruns the kernel over the committed
-    # prefix and moves the FIR history forward by accepted + 1 rows. No per-pass host ints: one program set per R.
+    # the recurrence over one full chunk, rows past R zeroed (an identity update). It never writes the committed state;
+    # ``commit_rows`` takes the state after the committed prefix (the verify-rows fold's prefix state by default, else a
+    # masked rerun) and advances the FIR history by accepted + 1 rows. One program set per R, no per-pass host ints.
 
     def allocate_rows_constants(self, rows: int) -> Qwen38TTNNGDNRowsConstants:
         return Qwen38TTNNGDNRowsConstants.allocate(self.mesh_device, self.mesh_contract, rows=rows)
@@ -2686,11 +2687,11 @@ class Qwen38TTNNGDN:
     def _chunk_rows(
         self, rows_state: Qwen38TTNNGDNRowsState, initial_state, committed_mask=None, committed_mask_c=None
     ):
-        """One full-chunk run of the kernel from ``initial_state`` (read only).
+        """One run of the recurrence over the ``tile_rows`` rows from ``initial_state`` (read only).
 
-        Returns the head-major output ``[VALUE_HEADS_PER_DEVICE, CHUNK_SIZE, HEAD_DIM]`` (TILE, the kernel's own layout
-        and output dtype, FP32) and the FP32 final state ``[1, VALUE_HEADS_PER_DEVICE, HEAD_DIM, HEAD_DIM]`` in a new
-        buffer. With ``committed_mask`` beta and g past the committed prefix are zeroed first (an identity update).
+        Returns the head-major output ``[VALUE_HEADS_PER_DEVICE, tile_rows, HEAD_DIM]`` (TILE, BF16 or FP32) and the
+        FP32 final state ``[1, VALUE_HEADS_PER_DEVICE, HEAD_DIM, HEAD_DIM]`` in a new buffer. With ``committed_mask``
+        beta and g past the committed prefix are zeroed first (an identity update).
         """
 
         constants = rows_state.constants
@@ -2715,8 +2716,8 @@ class Qwen38TTNNGDN:
             g = ttnn.multiply(rows_state.g, committed_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             masked = (beta, g)
         # [1, 1, T, HV] -> [1, T, HV] and [1, 1, T, HV * V] -> [1, T, HV * V]: the tile grid is unchanged, so
-        # these are views of the buffers.  The rank-3 v is the composite's token-major flat form.  T = 128
-        # runs the kernel's four 32-row chunks in one call (the state carried inside the scan in fp32).
+        # these are views of the buffers.  The rank-3 v is the composite's token-major flat form.  All T rows (up to
+        # a 2048-row slab) run in one call.
         beta_rows = ttnn.reshape(beta, (1, tile_rows, VALUE_HEADS_PER_DEVICE))
         g_rows = ttnn.reshape(g, (1, tile_rows, VALUE_HEADS_PER_DEVICE))
         v_rows = ttnn.reshape(rows_state.v, (1, tile_rows, VALUE_WIDTH_PER_DEVICE))
@@ -2949,7 +2950,7 @@ class Qwen38TTNNGDN:
         rows = self._validate_rows_state(rows_state)
         full_hidden = self._all_gather_rows(hidden_rows, rows)
         # The body between the gather and the result: the chain (``rows_body_composed``) or, on a rows state the
-        # verify-rows wrap owns, its two programs around the two chunk prims.
+        # verify-rows wrap owns, its two programs around the public recurrence.
         body = self._rows_body()
         output, final_state = body(self, full_hidden, rows_state, state, full_tile=full_tile)
         return Qwen38TTNNGDNRowsResult(output, final_state, state, rows_state)
@@ -3082,11 +3083,12 @@ class Qwen38TTNNGDN:
     ) -> None:
         """Commit ``accepted + 1`` rows of the last ``forward_rows`` pass into ``state`` in place.
 
-        The catch-up reruns the chunk kernel from the committed state with beta and g past the committed prefix zeroed,
-        lands the state in ``state.recurrent`` and moves the FIR history forward by ``accepted + 1`` rows. Row 0 is
-        always committed, so every commit takes the kernel's state rounding. ``step_on_full_rejection`` (a diagnostic)
-        commits a full rejection through the 1-row FP32 step arithmetic instead; ``step_committed_rows`` (the state
-        re-anchor) steps every committed row through it and does not rerun the kernel.
+        Under the verify-rows fold (the default) the state is the forward pass's prefix state after ``accepted + 1``
+        rows; otherwise the recurrence reruns from the committed state with beta and g past the committed prefix
+        zeroed. The state lands in ``state.recurrent`` and the FIR history moves forward by ``accepted + 1`` rows.
+        ``step_on_full_rejection`` (a diagnostic) commits a full rejection through the 1-row FP32 step arithmetic
+        instead; ``step_committed_rows`` (the state re-anchor) steps every committed row through it. Both need the
+        chain's rows buffers.
         """
 
         self._validate_state(state)
@@ -3501,10 +3503,11 @@ class Qwen38TTNNGDN:
     ) -> None:
         """Commit ``c_u`` rows of the last ``forward_rows_lanes`` pass into lane u's state in place.
 
-        The recurrence reruns from the committed states with every lane's beta and g masked past its prefix; the final
-        states land through the exact select ``recurrent * [c_u == 0] + final * [c_u >= 1]`` (a lane committing nothing
-        keeps its state bitwise; the masked rerun is an identity only to TF32 precision), and each lane's FIR history
-        moves forward by ``c_u`` rows.
+        Under the verify-rows fold (the default) lane u's state is the forward pass's prefix state after ``c_u`` rows.
+        Otherwise the recurrence reruns from the committed states with every lane's beta and g masked past its prefix
+        and the final states land through the exact select ``recurrent * [c_u == 0] + final * [c_u >= 1]`` (a lane
+        committing nothing keeps its state bitwise; the masked rerun is an identity only to TF32 precision). Each
+        lane's FIR history moves forward by ``c_u`` rows.
         """
 
         rows = self._validate_lane_rows_state(rows_state, state)

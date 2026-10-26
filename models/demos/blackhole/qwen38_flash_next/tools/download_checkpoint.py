@@ -28,8 +28,8 @@ from pathlib import Path
 from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION
 
 MODEL = "Qwen/Qwen3.8-Flash-Next"
-# The release's ModelScope commit. Its files are byte-identical to checkpoint.PINNED_CHECKPOINT_REVISION, which
-# ModelScope no longer lists; the server checks the files by digest, not by revision label.
+# The release's ModelScope commit; its files are byte-identical to checkpoint.PINNED_CHECKPOINT_REVISION. The server
+# checks the files by digest, not by revision label.
 RELEASE_REVISION = "2741eec155d03a8ce151b993ccce1a7b1e398d6b"
 SEGMENT_BYTES = 128 << 20
 LISTING_URL = "https://modelscope.cn/api/v1/models/{model}/repo/files?Revision={revision}&Recursive=true"

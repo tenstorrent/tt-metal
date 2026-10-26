@@ -11,9 +11,9 @@
 #   --devices A,B,C,D       run p150-line on these four KMD device nodes (four chips of a larger host)
 #   --checkpoint DIR        the ModelScope checkpoint directory (tools/download_checkpoint.py)
 #   --cache-root DIR        the converted weights, the BF4 expert cache, the model I/O cache, the JIT cache and the run
-#                           directories (about 23 GB for 32k plus 107 GB of BF4 experts on the first start)
+#                           directories (about 23 GB for 32k plus 69 GB of BF4 experts on the first start)
 #   --allocated-context N   32768 (default) | 65536 | 131072 | 262144
-#   --mtp K                 multi-token-prediction drafting depth, 3, 4 or 5 (off by default; greedy chunked-mode requests draft)
+#   --mtp K                 multi-token-prediction drafting depth, 3, 4 or 5 (off by default; greedy chunked-mode requests draft, and with --sampling sampled ones too)
 #   --long-chunks           accepted for compatibility: the 128-row chunks are the server's default (combines with --mtp)
 #   --prefill-slab ROWS     prefill in slabs of ROWS rows (a multiple of 128 in 256..2048; the MoE serves the multiples of 512)
 #                           ahead of the 128-row chunks (off by default; implies --long-chunks; combines with --mtp)
@@ -39,12 +39,12 @@
 #                           teacher-force the reference corpus Q38-REF-v1 through the chain before READY and write
 #                           the agreement records, the device column and its score against F (needs the sampled
 #                           server; see tools/qwen38_reference_corpus.py)
-#   QWEN38_DENSE_WEIGHT_DTYPE=bf8|bf16|bf4 (environment; default bf8; bf16 = the previous production format): the resident dense matmul
+#   QWEN38_DENSE_WEIGHT_DTYPE=bf8|bf16|bf4 (environment; default bf8): the resident dense matmul
 #                           weights' dtype (ttnn/decode_matmul.py); the launcher passes it through and prints it
 #
 # The checkout this script lives in must be built (build_metal.sh, create_venv.sh); the server admits only a ttnn
-# imported from it and records the checkout's commit, tree and extension digest as the runtime identity.  No locks, no
-# archives, no seals.  Start it from any directory, the model directory included: relative path arguments are the
+# imported from it and records the checkout's commit, tree and extension digest as the runtime identity.
+# Start it from any directory, the model directory included: relative path arguments are the
 # caller's, and the interpreter runs from the repository root so the model's own ttnn/ package never shadows ttnn.
 #
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC

@@ -48,7 +48,7 @@ TILE = fp.TILE  # the verify tile: 32 rows
 HT = HEAD_DIM // TILE  # 4 column tiles per head
 HISTORY_ROWS = 3  # the FIR history rows before row 0
 # State column blocks per value head: 1 = one head per core (12 items), 4 = one 32-column block per core (48 items,
-# the faster form on device); ``run(..., split=1)`` keeps the 12-item form for the device test.
+# the faster form on device); ``run(..., split=1)`` gives the 12-item form.
 SPLIT = 4
 # The most verify rows the fold admits (k + 1; the prefix states are rows x 786 KB per layer per device).
 MAX_ROWS = 8

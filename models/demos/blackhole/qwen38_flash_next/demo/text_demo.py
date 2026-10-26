@@ -1,11 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qwen3.8-Flash-Next end-to-end text generation on a 1x4 Blackhole mesh at batch 1: the tiered CI demo.
+"""Qwen3.8-Flash-Next end-to-end text generation on a 1x4 Blackhole mesh at batch 1, run manually.
 
 The vLLM adapter's ``Qwen38ForCausalLM`` prefills a raw-tokenized 128-token prompt and greedily decodes 50 tokens.
-``traced_128`` asserts the token count and emits the benchmark JSON (under ``CI=true``); ``determinism_128`` generates
-twice and asserts identical tokens.
+Both cases assert the token count and write the generation report and, under ``CI=true``, the benchmark JSON;
+``determinism_128`` also generates twice and asserts identical tokens.
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/demo/text_demo.py -v -s -k traced_128
 Env:  MODEL_WEIGHTS_DIR (or HF_MODEL, resolved through the local Hugging Face cache), QWEN38_CACHE_ROOT,

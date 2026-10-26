@@ -108,7 +108,7 @@ TOP_K = 10
 BUILDER_FORMAT_VERSION = 1
 # The resident build allocates one of RESIDENT_QSA_CACHE_CAPACITIES (32,768 by default). The state grows by 1,088 bytes
 # per token per QSA layer, so 262,144 leaves only about 1 GB of DRAM headroom (a single-user configuration).
-# RESIDENT_MAX_QSA_CACHE_CAPACITY is the default under the name demo/production.py and the 32k pins read.
+# RESIDENT_MAX_QSA_CACHE_CAPACITY is the same default under the name the server tools and the 32k pins read.
 RESIDENT_DEFAULT_QSA_CACHE_CAPACITY = 32_768
 RESIDENT_QSA_CACHE_CAPACITIES = (8_192, RESIDENT_DEFAULT_QSA_CACHE_CAPACITY, 65_536, 131_072, 262_144)
 RESIDENT_MAX_QSA_CACHE_CAPACITY = RESIDENT_DEFAULT_QSA_CACHE_CAPACITY
@@ -755,7 +755,8 @@ class Qwen38TTNNBuilder:
             if decode_dram_workers_per_bank is None
             else validate_decode_dram_workers(decode_dram_workers_per_bank)
         )
-        # The resident dense matmul weights' dtype per module (decode_matmul.QWEN38_DENSE_WEIGHT_DTYPE, bf8 unless set).
+        # The resident dense matmul weights' dtype per module (QWEN38_DENSE_WEIGHT_DTYPE, decode_matmul.DENSE_DTYPE_ENV;
+        # bf8 unless set).
         if dense_weight_plan is None:
             dense_weight_plan = default_dense_weight_plan()
         if not isinstance(dense_weight_plan, DenseWeightPlan):

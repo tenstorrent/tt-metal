@@ -517,6 +517,7 @@ class Qwen38TTNNMoE:
                 f"got {routed_tokens_per_call!r}"
             )
         self.routed_calls = self.rows // self.routed_tokens
+        # Every slab form keeps the one-call form's 512-row rule: the probe instance is built in that form.
         if self.slab and self.rows % SLAB_REDUCE_BLOCK_ROWS:
             raise Qwen38SlabRefused(
                 f"the slab reduces in {SLAB_REDUCE_BLOCK_ROWS}-row blocks; {self.rows} rows is not a multiple"
@@ -1212,7 +1213,7 @@ class Qwen38TTNNMoE:
         phase_observer,
         sparse_rows=None,
     ):
-        """The fused post form (``QWEN38_FUSED=moe_post``): ``moe_compute`` on the routing rows (in the drain-core
+        """The fused post form (``moe_post``, a default): ``moe_compute`` on the routing rows (in the drain-core
         shards already when the fused tail wrote them there), then one program for the weighted reduce of the owned
         slots, the shared partial's ``x sigmoid`` (a ``Qwen38TTNNSharedPartial``) and the partial add; no fill, no
         tilize, no copies.  Returns the layer's local sum ``[1, 1, rows, 2560]``."""
@@ -1425,10 +1426,10 @@ class Qwen38TTNNMoE:
 
     @property
     def slab(self) -> bool:
-        """A prefill-slab instance (256..2048 rows): 2D-multicast dense linears, one routed call on the op's local
-        output path with no zero fill (the buffer is zero at allocation and holds only finite expert outputs, which the
-        reduce multiplies by an exact 0 where unowned), the reduce in 512-row blocks; or, at 128 routed tokens per
-        call, one 128-row worker call per 128-row block."""
+        """A prefill-slab instance (a multiple of 512 rows up to 2048): 2D-multicast dense linears, one routed call on
+        the op's local output path with no zero fill (the buffer is zero at allocation and holds only finite expert
+        outputs, which the reduce multiplies by an exact 0 where unowned), the reduce in 512-row blocks; or, at 128
+        routed tokens per call, one 128-row worker call per 128-row block."""
 
         return is_slab_rows(self.rows)
 

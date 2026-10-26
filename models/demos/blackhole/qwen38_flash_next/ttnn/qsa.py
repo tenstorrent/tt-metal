@@ -3041,8 +3041,9 @@ class Qwen38TTNNQSA:
     max_context = MAX_CONTEXT
     allocated_context = MAX_CONTEXT
     allocated_compressed_blocks = MAX_COMPRESSED_BLOCKS
-    # QWEN38_FUSED=<names>: the ttnn/fused/qsa_block programs, resolved at construction and kept through trace capture
-    # (qsa_index_tail, qsa_main_tail (implies qsa_post_attention), qsa_widen_partial, qsa_selection_row).
+    # The ttnn/fused/qsa_block programs (defaults; QWEN38_FUSED_OFF=<names> restores the chains), resolved at
+    # construction and kept through trace capture (qsa_index_tail, qsa_main_tail (implies qsa_post_attention),
+    # qsa_widen_partial, qsa_selection_row).
     _index_tail_fused = None
     _main_tail_fused = None
     _post_attention_fused = None
@@ -3052,7 +3053,7 @@ class Qwen38TTNNQSA:
     _post_attention_rows = None  # qsa_rows program 5: the tile's post-attention glue as one 48-core program
     # its admission predicate, bound with the handle (the fused module is a local import of __init__)
     _post_attention_rows_admits = None
-    _rows_fused = None  # ttnn/fused/qsa_rows: the verify-form glue on the 32-row tile (QWEN38_FUSED=qsa_rows)
+    _rows_fused = None  # ttnn/fused/qsa_rows: the verify-form glue on the 32-row tile (qsa_rows, a default)
     # the lanes' score-row windows: the chain here, ttnn/fused/qsa_block.lane_score_rows_of with qsa_score_merge
     _lane_score_rows_of = staticmethod(_lane_score_rows_of_composed)
     # The prefill slab's dense linears (ttnn/prefill_dense): the query-gate / K / V / output projections; the index
@@ -5137,10 +5138,10 @@ class Qwen38TTNNQSA:
         _deallocate(full_hidden)
         return output
 
-    # ------------------------------------------------------------------ prefill chunk (32 rows)
-    # forward_chunk_generic is forward_decode_generic over the 32 rows P .. P + 31 of one chunk (P % 32 == 0), with the
-    # per-token staging / ring one-hots replaced by whole-slab writes and the per-row selection built from the chunk
-    # inputs.
+    # ------------------------------------------------------------------ prefill chunk (32 or 128 rows, or a slab)
+    # forward_chunk_generic is forward_decode_generic over the rows P .. P + rows - 1 of one chunk or slab
+    # (P % 32 == 0), with the per-token staging / ring one-hots replaced by whole-slab writes and the per-row selection
+    # built from the chunk inputs.
 
     def allocate_chunk_state(self, rows: int = CHUNK_ROWS) -> Qwen38TTNNQSAChunkState:
         chunk_row_tiles(rows)

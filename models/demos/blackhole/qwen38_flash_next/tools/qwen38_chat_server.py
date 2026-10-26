@@ -6,8 +6,9 @@
 Serves ``POST /v1/chat/completions`` (SSE or one JSON document), ``GET /v1/models``, ``GET /v1/models/<id>`` and
 ``GET /health``. With ``--sampling``, a request without sampling fields, with ``temperature 0`` or with ``greedy``
 runs the greedy loop and ``temperature > 0`` samples; without it, sampling fields are refused. The device prompt is
-the reference render of the client's messages. Start it with ``tools/run_qwen38_chat_server.sh``: it replays the
-CPU acceptance records, writes READY and serves until SIGTERM. ``--host`` is loopback unless the profile serves the
+the reference render of the client's messages. Start it with ``tools/run_qwen38_chat_server.sh``: with
+``--acceptance`` it replays the CPU acceptance records, then writes READY and serves until SIGTERM. ``--host`` is
+loopback unless the profile serves the
 LAN or ``--allow-lan`` is given.
 """
 
@@ -121,7 +122,7 @@ HEARTBEAT_SECONDS = 30.0
 # loop ends the request as "disconnected" instead of blocking in sendall with the device held.
 SOCKET_TIMEOUT_SECONDS = 60.0
 # The stop signal waits this long for the request in flight to end at its next poll and release the device before
-# the chain is released; the launchers' timeout --kill-after is 60 s.
+# the chain is released.
 DRAIN_SECONDS = 30.0
 ALLOWED_METHODS = "GET, HEAD, OPTIONS, POST"
 # The template flags a client may send under chat_template_kwargs (the vLLM/SGLang convention the model card uses).

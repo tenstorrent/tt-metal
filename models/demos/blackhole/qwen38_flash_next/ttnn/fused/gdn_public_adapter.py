@@ -28,7 +28,7 @@ def chunk_public(q_c, k_c, v, beta_c, g_c, initial_state, chunk_tiles, *, rows_t
     if tuple(q_c.shape) != (heads, rows_total // chunk, chunk, dim):
         raise ValueError("rows_total does not match the head-major chunks")
     q, k = (_token_major(x, (1, heads, rows_total, dim), (0, 2, 1, 3)) for x in (q_c, k_c))
-    # Invert the composite's headvec_split_tile and per-chunk column reshape.
+    # gdn_pre_rows writes beta and g head-major per chunk ([12, NC, 32, 1]); the op takes them token-major.
     g, beta = (_token_major(x, (1, heads, rows_total), (0, 2, 1)) for x in (g_c, beta_c))
     eye, tril, ones, masks = chunk_tiles
     try:
@@ -38,7 +38,7 @@ def chunk_public(q_c, k_c, v, beta_c, g_c, initial_state, chunk_tiles, *, rows_t
             ttnn.reshape(v, (1, rows_total, heads * dim)),
             g,
             beta,
-            # The source producer has already applied both of its q scale folds.
+            # gdn_pre_rows has already applied both q scale folds.
             scale=1.0,
             initial_state=initial_state,
             output_final_state=True,

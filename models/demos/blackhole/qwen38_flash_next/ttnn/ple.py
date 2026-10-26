@@ -924,7 +924,7 @@ class Qwen38ResidentPLELookup:
 class Qwen38TTNNPLE:
     """Synchronous global-B1 PLE decode for zero-based language layer one."""
 
-    _fused_forward_prepared = None  # QWEN38_FUSED=ple binds ttnn/fused/ple per instance; the body is the chain
+    _fused_forward_prepared = None  # the ple kernel (a default) binds ttnn/fused/ple per instance
     _fused_forward_prepared_lanes = None  # its lane form (forward_prepared_lanes on the B row-blocks)
 
     def __init__(
@@ -954,7 +954,7 @@ class Qwen38TTNNPLE:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        # QWEN38_FUSED=ple binds the fused device body (ttnn/fused/ple) here; forward_prepared's chain stays.
+        # The ple kernel (a default) binds the fused device body (ttnn/fused/ple) here; forward_prepared's chain stays.
         from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
 
         if fused_kernels.enabled("ple"):

@@ -1332,7 +1332,7 @@ def _select_lane_residual_rows(verify: Qwen38TTNNMTPLaneVerifyState, residual) -
             f"lane residual select has shape {_shape(select_branches)}, expected [1,4,{verify.lanes},32]"
         )
     # The matmul's own output, then the copy into the persistent rows: at M = B rows the matmul's
-    # ``optional_output_tensor`` came back under another tensor id on the pinned runtime.
+    # ``optional_output_tensor`` can come back under another tensor id.
     selected = ttnn.matmul(
         select_branches, residual, memory_config=dram, compute_kernel_config=constants.compute_config
     )

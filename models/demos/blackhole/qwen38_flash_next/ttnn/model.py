@@ -959,7 +959,7 @@ class Qwen38TTNNTextModel:
     allocated_context = MAX_CONTEXT
     semantic_max_context = MAX_CONTEXT
 
-    _position_derive = None  # the fused tail derive when QWEN38_FUSED names position_derive (see __init__)
+    _position_derive = None  # the fused tail derive (position_derive, a default; see __init__)
     _position_derive_lanes = None  # its lane form, when the six QSA programs also serve the lane body (see __init__)
 
     def __init__(
@@ -2524,7 +2524,7 @@ class Qwen38TTNNTextModel:
 
         ``rows`` picks the form; the 128-row form and a slab need ``base``, the 32-row chunk state of the same
         generic state, whose per-layer GDN and PLE histories they share (one shared MoE combine buffer for the 48
-        layers).  A slab's 35 GDN layers share one set of pass buffers (the first GDN layer's rows state owns them).
+        layers).  A slab's 36 GDN layers share one set of pass buffers (the first GDN layer's rows state owns them).
         A slab routes its experts in one moe_compute call per layer where the op takes its rows in one call (asked
         before any slab state, on layer 0's experts), else in 128-row blocks.
         """

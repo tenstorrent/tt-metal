@@ -119,8 +119,9 @@ pytest models/demos/blackhole/qwen38_flash_next/demo/text_demo.py -v -s -k trace
 `tests/` holds the no-device tests, the checkpoint-reading component tests (skipped without `QWEN38_CHECKPOINT`)
 and the device tests (`*_device.py`, `*_tp.py`). `tests/test_gdn_public_device.py` checks the public GDN dispatch
 against an independent recurrence; set `QWEN38_FUSED_DEVICE_TEST=1` on the held mesh. `tests/test_model_reuse_tp.py`
-checks fixed generations, prefill-boundary A/B/A requests and program-cache counts. `demo/text_demo.py` is the CI
-end-to-end test ([demo/README.md](demo/README.md)). [docs/TESTING.md](docs/TESTING.md) covers the acceptance gate,
+checks fixed generations, prefill-boundary A/B/A requests and program-cache counts. `demo/text_demo.py` is the
+end-to-end test ([demo/README.md](demo/README.md)). No CI pipeline runs these device tests; run them manually on the
+held mesh. [docs/TESTING.md](docs/TESTING.md) covers the acceptance gate,
 the reference corpus and the regression harness.
 
 `tools/benchmark.py` scores and times GSM8K through a live OpenAI endpoint (the official 1,319-item test file at

@@ -182,7 +182,8 @@ def rows_body_composed(gdn, full_hidden, rows_state, state, *, full_tile: bool =
 
 
 def rows_body_wrap(gdn, full_hidden, rows_state, state, *, full_tile: bool = False):
-    """The fused rows body: projection, qkv landing, pre program, the two prims, cast, gated norm, out-projection.
+    """The fused rows body: projection, qkv landing, pre program, the public recurrence (its fused or phased path,
+    chosen by the op's cost model), cast, gated norm, out-projection.
 
     ``rows_state.q`` / ``k`` / ``beta`` / ``g`` stay untouched; the prim layouts live in the wrap's buffers.
     """

@@ -1768,7 +1768,7 @@ class Qwen38TTNNLMHead:
         )
         self.hidden_act_memory_config = chunk_configs[0][0]
         self.chunk_program_configs = tuple(program_config for _, program_config in chunk_configs)
-        # QWEN38_FUSED=greedy_tail: candidates and the device resolve bind to ttnn/fused/greedy_tail at construction.
+        # greedy_tail (a default): candidates and the device resolve bind to ttnn/fused/greedy_tail at construction.
         from models.demos.blackhole.qwen38_flash_next.ttnn import fused as fused_kernels
 
         if fused_kernels.enabled("greedy_tail"):
@@ -1781,7 +1781,7 @@ class Qwen38TTNNLMHead:
             self.resolve_greedy_lanes_on_device = functools.partial(
                 fused_greedy_tail.resolve_greedy_lanes_on_device_fused, self
             )
-            # QWEN38_FUSED=candidate_row: the sampling server's candidate row from the scan's shard row
+            # candidate_row (a default): the sampling server's candidate row from the scan's shard row
             if fused_kernels.enabled(fused_greedy_tail.CANDIDATE_ROW):
                 self.sampling_candidates = functools.partial(fused_greedy_tail.sampling_candidates_fused, self)
         elif fused_kernels.enabled("candidate_row"):

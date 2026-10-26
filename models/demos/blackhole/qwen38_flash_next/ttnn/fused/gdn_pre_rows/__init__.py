@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``gdn_pre_rows``: the GDN rows chain from the projection to the chunk prims' inputs, one program.
+"""``gdn_pre_rows``: the GDN rows chain from the projection to the recurrence's head-major chunk inputs, one program.
 
 Covers the landing slices, the FIR row shifts, ``_causal_conv_rows``, ``_make_chunk_inputs`` and the composite's q scale
 and head-major relayout, plus the z sigmoid of the gated epilogue. Every arithmetic step is the chain op's own LLK
