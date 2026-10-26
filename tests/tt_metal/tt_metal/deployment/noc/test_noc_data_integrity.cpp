@@ -569,10 +569,89 @@ static vector<failure> run_phase(
     return failures;
 }
 
-static void report(const vector<failure>& failures) {
-    map<string, uint32_t> by_src;
-    map<string, uint32_t> by_dst;
+static void print_failure_summary(const vector<failure>& failures) {
+    using entry = pair<pair<size_t, size_t>, string>;  // (noc0 y, x) for ordering, label
+    struct group {
+        IDevice* device;
+        size_t pairs = 0;
+        map<string, vector<entry>> by_src;
+        map<string, vector<entry>> by_dst;
+    };
+    map<pair<ChipId, uint32_t>, group> groups;
+    for (const auto& f : failures) {
+        auto& g = groups[{f.src.device->id(), f.noc}];
+        g.device = f.src.device;
+        g.pairs++;
+        g.by_src[src_str(f.src)].push_back({{f.dst.noc0.y, f.dst.noc0.x}, dst_str(f.dst)});
+        g.by_dst[dst_str(f.dst)].push_back({{f.src.noc0.y, f.src.noc0.x}, src_str(f.src)});
+    }
 
+    auto recurring = [](const map<string, vector<entry>>& m) {
+        vector<pair<string, vector<entry>>> out;
+        for (const auto& [k, v] : m) {
+            if (v.size() > 1) {
+                out.emplace_back(k, v);
+                sort(out.back().second.begin(), out.back().second.end());
+            }
+        }
+        stable_sort(
+            out.begin(), out.end(), [](const auto& a, const auto& b) { return a.second.size() > b.second.size(); });
+        return out;
+    };
+
+    log_critical(tt::LogTest, "==================== NOC FAILURE SUMMARY ====================");
+    for (const auto& [key, g] : groups) {
+        log_critical(
+            tt::LogTest,
+            "{} noc {}: {} failing pair(s), {} source(s), {} destination(s)",
+            chip_str(g.device),
+            key.second,
+            g.pairs,
+            g.by_src.size(),
+            g.by_dst.size());
+
+        auto srcs = recurring(g.by_src);
+        if (!srcs.empty()) {
+            log_critical(
+                tt::LogTest, "  Recurring sources (one source -> many destinations: suspect the source's path):");
+        }
+        for (const auto& [src, dsts] : srcs) {
+            log_critical(tt::LogTest, "    {} -> {} destinations", src, dsts.size());
+            for (const auto& [_, d] : dsts) {
+                log_critical(tt::LogTest, "        {}", d);
+            }
+        }
+
+        auto dsts = recurring(g.by_dst);
+        if (!dsts.empty()) {
+            log_critical(
+                tt::LogTest,
+                "  Recurring destinations (many sources -> one destination: suspect the destination's path):");
+        }
+        for (const auto& [dst, srcs_of_dst] : dsts) {
+            log_critical(tt::LogTest, "    {} <- {} sources", dst, srcs_of_dst.size());
+            for (const auto& [_, s] : srcs_of_dst) {
+                log_critical(tt::LogTest, "        {}", s);
+            }
+        }
+
+        vector<string> isolated;
+        for (const auto& [src, dsts_of_src] : g.by_src) {
+            if (dsts_of_src.size() == 1 && g.by_dst.at(dsts_of_src[0].second).size() == 1) {
+                isolated.push_back(fmt::format("{} -> {}", src, dsts_of_src[0].second));
+            }
+        }
+        if (!isolated.empty()) {
+            log_critical(tt::LogTest, "  Isolated pairs (no recurring source or destination):");
+            for (const auto& s : isolated) {
+                log_critical(tt::LogTest, "    {}", s);
+            }
+        }
+    }
+    log_critical(tt::LogTest, "=============================================================");
+}
+
+static void report(const vector<failure>& failures) {
     for (const auto& f : failures) {
         const auto& rec = f.record;
         string chip = chip_str(f.src.device);
@@ -606,22 +685,13 @@ static void report(const vector<failure>& failures) {
                     rec[NOC_RESULT_ITERATION]);
                 break;
         }
-        by_src[fmt::format("{} {} noc {}", chip, src_str(f.src), f.noc)]++;
-        by_dst[fmt::format("{} {} noc {}", chip, dst_str(f.dst), f.noc)]++;
     }
 
     if (failures.empty()) {
         return;
     }
-    log_critical(tt::LogTest, "Failing sources:");
-    for (const auto& [k, n] : by_src) {
-        log_critical(tt::LogTest, "\t{}: {} failing destinations", k, n);
-    }
-    log_critical(tt::LogTest, "Failing destinations:");
-    for (const auto& [k, n] : by_dst) {
-        log_critical(tt::LogTest, "\t{}: {} failing sources", k, n);
-    }
     log_critical(tt::LogTest, "{} failing source/destination pairs in total", failures.size());
+    print_failure_summary(failures);
 }
 
 template <typename FIXTURE>

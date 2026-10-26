@@ -38,7 +38,7 @@ Destinations run in batches of up to 64 per source.
 From the repository root:
 
 ```sh
-cmake --build build --target unit_tests_deployment   # or ./build_metal.sh --build-metal-tests
+./build_metal.sh --build-metal-tests
 tt-smi -glx_reset
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_deployment --gtest_filter='*DeploymentNoc*'
 ```
@@ -87,9 +87,24 @@ NOC mismatch: chip 26 (0000:c3:00.0, ubb: 3, chip: 3) src eth ch 2 [noc0 2-1, lo
   source and destination it was on and exits; reset the boards before running
   again.
 
-The `Failing sources:` and `Failing destinations:` summaries show the pattern:
-one source failing to many destinations points at the source core's path, one
-destination failing from many sources points at the destination.
+At the end, a `NOC FAILURE SUMMARY` groups failures per chip and NOC:
+- **Recurring sources**: one source failing to several destinations, listed
+  with those destinations. Points at the source core's NOC path.
+- **Recurring destinations**: one destination failing from several sources,
+  listed with those sources. Points at the destination core's NOC path.
+- **Isolated pairs**: failures whose source and destination both fail only once.
+
+Each section is only printed if it has entries.
+
+```
+chip 26 (0000:c3:00.0, ubb: 3, chip: 3) noc 1: 26 failing pair(s), 1 source(s), 26 destination(s)
+  Recurring sources (one source -> many destinations: suspect the source's path):
+    src eth ch 2 [noc0 2-1, logical 0-2, active] -> 26 destinations
+        dst tensix [noc0 1-2, logical 0-0]
+        dst tensix [noc0 3-2, logical 1-0]
+        ...
+        dst tensix [noc0 16-3, logical 12-1]
+```
 
 Failures on every chip are reported in one run. The exception is a `NOC hang`,
 which ends the run.
