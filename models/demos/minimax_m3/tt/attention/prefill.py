@@ -172,7 +172,7 @@ def _attention_core(
     # QK-norm (MiniMax-M3): per-head RMSNorm over head_dim on the split Q/K
     # ([1, n_heads, S, head_dim]), applied BEFORE RoPE, on Q and K only. The gemma (1+w)
     # fold is baked into the gain at load (weights.py); local per head (no TP reduction).
-    if config.use_qk_norm and weights.q_norm is not None:
+    if weights.q_norm is not None:
         with zone("qk_norm", FINE):
             tt_q_pre, tt_k_pre = tt_q, tt_k
             tt_q = apply_qk_norm_per_head(tt_q, weights.q_norm, config.rms_norm_eps)

@@ -156,8 +156,6 @@ def test_attention_prefill_vs_ref(mesh_device, device_params, seq_len, reset_see
         head_dim=HEAD_DIM,
         rotary_dim=ROTARY_DIM,
         rms_norm_eps=EPS,
-        use_qk_norm=True,
-        use_gemma_norm=True,
         max_seq_len=max(seq_len, 128),
         max_local_batch_size=1,
     )

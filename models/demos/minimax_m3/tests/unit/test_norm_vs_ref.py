@@ -4,9 +4,9 @@
 """
 Tier-1 PCC test for MiniMax-M3 RMSNorm vs a hand-written torch reference.
 
-M3 uses Gemma-style RMSNorm: out = x_normed * (1 + weight) (config use_gemma_norm=true),
-vs a plain RMSNorm: out = x_normed * weight. The tt RMSNorm class folds the +1 into the
-weight at load time; this test verifies both modes against the torch reference.
+M3 uses Gemma-style RMSNorm: out = x_normed * (1 + weight) (config use_gemma_norm=true, the only
+form the model accepts). The tt RMSNorm class folds the +1 into the weight at load time; this test
+verifies it against the torch reference.
 
 Depends ONLY on torch (no HuggingFace / AutoConfig / checkpoint), random weights — runs on a
 single Wormhole/Blackhole card. This is the oracle pattern for M3: self-authored torch
@@ -41,7 +41,6 @@ def _torch_rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float, gemma: bo
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
-@pytest.mark.parametrize("gemma", [True, False], ids=["gemma", "plain"])
 @pytest.mark.parametrize(
     "m, width",
     [
@@ -51,15 +50,15 @@ def _torch_rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float, gemma: bo
     ],
     ids=["h6144", "h128", "m32"],
 )
-def test_rms_norm_vs_ref(mesh_device, device_params, gemma, m, width, reset_seeds):
+def test_rms_norm_vs_ref(mesh_device, device_params, m, width, reset_seeds):
     """tt RMSNorm class (incl. the gemma (1+w) weight fold) vs torch reference, random weights."""
     eps = 1e-6
     x = torch.randn(1, 1, m, width)
     weight = torch.randn(width)
 
-    ref = _torch_rms_norm(x, weight, eps, gemma)
+    ref = _torch_rms_norm(x, weight, eps, gemma=True)
 
-    hf_config = SimpleNamespace(rms_norm_eps=eps, use_gemma_norm=gemma)
+    hf_config = SimpleNamespace(rms_norm_eps=eps)
     norm = RMSNorm(
         mesh_device=mesh_device,
         hf_config=hf_config,
@@ -80,8 +79,8 @@ def test_rms_norm_vs_ref(mesh_device, device_params, gemma, m, width, reset_seed
     out = ttnn.to_torch(ttnn.get_device_tensors(out_tt)[0]).reshape(1, 1, m, width)
 
     passing, pcc = comp_pcc(ref, out, 0.99)
-    logger.info(f"rms_norm gemma={gemma} m={m} width={width}: {pcc}")
-    assert passing, f"PCC fail (gemma={gemma}, width={width}): {pcc}"
+    logger.info(f"rms_norm m={m} width={width}: {pcc}")
+    assert passing, f"PCC fail (width={width}): {pcc}"
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
@@ -99,8 +98,8 @@ def test_rms_norm_fp32_statistics(mesh_device, device_params, reset_seeds, monke
 
     norm = RMSNorm(
         mesh_device=mesh_device,
-        hf_config=SimpleNamespace(rms_norm_eps=eps, use_gemma_norm=False),
-        state_dict={"weight": gain},
+        hf_config=SimpleNamespace(rms_norm_eps=eps),
+        state_dict={"weight": gain - 1.0},  # the gemma fold adds the 1 back in fp32: exactly `gain`
         tensor_cache_path=None,
     )
     x_tt = ttnn.from_torch(
@@ -151,7 +150,7 @@ def test_rms_norm_distributed_interleaved(mesh_device, device_params, m, width, 
     weight = torch.randn(width)
     ref = _torch_rms_norm(x, weight, eps, gemma=True)
 
-    hf_config = SimpleNamespace(rms_norm_eps=eps, use_gemma_norm=True)
+    hf_config = SimpleNamespace(rms_norm_eps=eps)
     mesh_config = MeshConfig(tuple(mesh_device.shape), tp=tp)
     # Linear topology: valid on a ring-configured fabric (it just leaves the wrap link unused) and it is
     # what the single-galaxy FABRIC_1D model run uses.

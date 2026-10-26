@@ -78,8 +78,6 @@ def weight_cache_is_complete(
     def has(prefix: str) -> bool:
         return any(r.startswith(prefix) for r in rels)
 
-    use_qk_norm = bool(hf_config.use_qk_norm)
-
     # Top-level tensors are rank-scoped: embed only on the first rank, final norm + LM head only on the
     # last (a middle rank builds neither and never loads them). The token embedding is the SHARDED parallel
     # table (tt/parallel_embedding.py), cached under a layout-specific key (1D hidden-only vs 2D vocab+hidden;
@@ -100,9 +98,9 @@ def weight_cache_is_complete(
             f"{base}/post_attention_layernorm/weight",
             f"{base}/self_attn/wqkv",
             f"{base}/self_attn/o_proj",
+            f"{base}/self_attn/q_norm",
+            f"{base}/self_attn/k_norm",
         ]
-        if use_qk_norm:
-            required += [f"{base}/self_attn/q_norm", f"{base}/self_attn/k_norm"]
         if is_sparse_attention_layer(hf_config, L):
             required += [f"{base}/self_attn/index_q_proj", f"{base}/self_attn/index_k_proj"]
         if is_dense_mlp_layer(hf_config, L):
@@ -110,9 +108,11 @@ def weight_cache_is_complete(
         else:
             # MoE: top-level router + shared expert, plus the DeepSeek-style EP-MoE's own gate +
             # per-local-expert routed weights (dtype-specific).
-            required += [f"{base}/mlp/router/weight", f"{base}/mlp/shared_expert/gate_proj"]
-            if hf_config.use_routing_bias:
-                required.append(f"{base}/mlp/router/{ROUTER_BIAS_CACHE_NAME}")
+            required += [
+                f"{base}/mlp/router/weight",
+                f"{base}/mlp/router/{ROUTER_BIAS_CACHE_NAME}",
+                f"{base}/mlp/shared_expert/gate_proj",
+            ]
             required += [
                 f"{base}/mlp/experts_ep/layer_0.gate.weight",
                 f"{base}/mlp/experts_ep/layer_0.routed_expert.local_0_gate_dtype_{edt}",

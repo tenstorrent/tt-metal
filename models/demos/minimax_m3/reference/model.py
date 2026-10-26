@@ -85,13 +85,10 @@ class MiniMaxM3Config:
     rope_theta: float
     rms_norm_eps: float
     vocab_size: int
-    use_qk_norm: bool  # per-head QK-norm (qk_norm_type=per_head)
-    use_gemma_norm: bool  # every RMSNorm scales by (1 + w)
     # MoE (sigmoid scoring, one shared expert: check_supported_config)
     num_local_experts: int
     num_experts_per_tok: int
     routed_scaling_factor: float
-    use_routing_bias: bool  # e_score_correction_bias added to the selection scores
     # swigluoai activation
     swiglu_alpha: float
     swiglu_limit: float
@@ -122,12 +119,9 @@ class MiniMaxM3Config:
             rope_theta=tc["rope_theta"],
             rms_norm_eps=tc["rms_norm_eps"],
             vocab_size=tc["vocab_size"],
-            use_qk_norm=tc["use_qk_norm"],
-            use_gemma_norm=tc["use_gemma_norm"],
             num_local_experts=tc["num_local_experts"],
             num_experts_per_tok=tc["num_experts_per_tok"],
             routed_scaling_factor=tc["routed_scaling_factor"],
-            use_routing_bias=tc["use_routing_bias"],
             swiglu_alpha=tc["swiglu_alpha"],
             swiglu_limit=tc["swiglu_limit"],
             moe_layer_freq=list(tc["moe_layer_freq"]),
@@ -343,7 +337,7 @@ class MiniMaxM3TextModel:
         self.w = weights
 
     def _norm(self, x, weight_name):
-        return rms_norm(x, self.w.get(weight_name), self.cfg.rms_norm_eps, self.cfg.use_gemma_norm)
+        return rms_norm(x, self.w.get(weight_name), self.cfg.rms_norm_eps, gemma=True)
 
     # ---- MSA index branch (per-group index_q + one shared index_k) ----
     def _index_branch(self, x, p, cos, sin):
@@ -367,9 +361,8 @@ class MiniMaxM3TextModel:
         k = (x @ self.w.get(p + "self_attn.k_proj.weight").t()).view(B, S, nkv, hd).transpose(1, 2)
         v = (x @ self.w.get(p + "self_attn.v_proj.weight").t()).view(B, S, nkv, hd).transpose(1, 2)
 
-        if cfg.use_qk_norm:
-            q = self._norm(q, p + "self_attn.q_norm.weight")
-            k = self._norm(k, p + "self_attn.k_norm.weight")
+        q = self._norm(q, p + "self_attn.q_norm.weight")
+        k = self._norm(k, p + "self_attn.k_norm.weight")
         q = partial_rope(q, cos, sin, cfg.rotary_dim)
         k = partial_rope(k, cos, sin, cfg.rotary_dim)
 
@@ -433,7 +426,7 @@ class MiniMaxM3TextModel:
             cfg.swiglu_limit,
         )
 
-    # ---- sparse MoE (sigmoid routing [+ correction bias] + shared expert) ----
+    # ---- sparse MoE (sigmoid routing + correction bias + shared expert) ----
     def _moe(self, x, p):
         cfg = self.cfg
         flat = x.reshape(-1, cfg.hidden_size)  # [T, H]
@@ -441,9 +434,7 @@ class MiniMaxM3TextModel:
 
         gate_w = self.w.get(p + "block_sparse_moe.gate.weight")
         scores = torch.sigmoid(flat.float() @ gate_w.float().t())  # [T, E]
-        select = scores
-        if cfg.use_routing_bias:
-            select = scores + self.w.get(p + "block_sparse_moe.e_score_correction_bias").float()
+        select = scores + self.w.get(p + "block_sparse_moe.e_score_correction_bias").float()
         # bias selects only; ties go to the lowest expert id (stable descending sort), as in the vendor router
         sel = torch.sort(select, dim=-1, descending=True, stable=True).indices[:, : cfg.num_experts_per_tok]
         tw = torch.gather(scores, 1, sel)  # un-biased scores weight the combine

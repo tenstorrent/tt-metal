@@ -98,7 +98,6 @@ class TopKRouter:
         self.mesh_config = mesh_config
         # Routed-expert output is scaled by routed_scaling_factor.
         self.routed_scaling_factor = hf_config.routed_scaling_factor
-        self.use_routing_bias = bool(hf_config.use_routing_bias)
         self.tensor_cache_path = tensor_cache_path
 
         # MiniMax-M3 gate Linear has no bias; weight is [num_experts, hidden] -> [hidden, num_experts].
@@ -115,19 +114,19 @@ class TopKRouter:
         )
 
         # e_score_correction_bias [num_experts] -> [1, num_experts] fp32, mean-centered, replicated; added
-        # to selection scores only. Absent in some checkpoints -> no correction.
+        # to selection scores only (use_routing_bias is always set: check_supported_config).
         score_bias_torch = None
-        if self.use_routing_bias and state_dict and "e_score_correction_bias" in state_dict:
+        if state_dict and "e_score_correction_bias" in state_dict:
             score_bias_torch = centered_correction_bias(state_dict["e_score_correction_bias"]).reshape(1, -1)
         bias_cache_file = get_cache_file_name(tensor_cache_path, ROUTER_BIAS_CACHE_NAME)
-        # Cache-only loading (empty state_dict): the bias loads from its cache file. A config that routes
-        # with a bias but has no cached one is a stale or partial cache, not a bias-free model.
-        if self.use_routing_bias and not state_dict and not cache_file_exists(bias_cache_file):
+        # Cache-only loading (empty state_dict): the bias loads from its cache file. A missing one is a
+        # stale or partial cache, not a bias-free model.
+        if not state_dict and not cache_file_exists(bias_cache_file):
             raise RuntimeError(
                 f"[TopKRouter] cache-only load but {bias_cache_file}* is missing. Load from the source weights "
                 f"once (unset M3_WEIGHTS_FROM_CACHE, or M3_FORCE_LOAD_WEIGHTS=1) to write it."
             )
-        build_bias = score_bias_torch is not None or (self.use_routing_bias and not state_dict)
+        build_bias = score_bias_torch is not None or not state_dict
         self.score_bias = (
             ttnn.as_tensor(
                 score_bias_torch,
@@ -148,17 +147,16 @@ class TopKRouter:
         # The fused gate requires bias.logical_shape() == scores.logical_shape(), so the bias is
         # materialized once here at the full [num_tokens, num_experts] width — one ttnn.repeat off the
         # narrow device bias, since the production path is cache-only (empty state_dict, no torch
-        # source to expand on the host). A checkpoint with no correction bias gets a ZERO bias rather
+        # source to expand on the host). A state_dict without the correction bias gets a ZERO bias rather
         # than a different code path: same selection semantics, still one op.
         assert num_tokens, "TopKRouter needs num_tokens: the fused gate's bias is built at that width"
         if self.score_bias is not None:
             self.score_bias_wide = ttnn.repeat(self.score_bias, ttnn.Shape([num_tokens, 1]))
         else:
-            if self.use_routing_bias:
-                logger.warning(
-                    "[TopKRouter] use_routing_bias is set but there is no e_score_correction_bias — routing on "
-                    "unbiased scores. This usually means a weight-loading problem rather than a bias-free model."
-                )
+            logger.warning(
+                "[TopKRouter] no e_score_correction_bias in the state_dict — routing on unbiased scores. This "
+                "usually means a weight-loading problem rather than a bias-free model."
+            )
             self.score_bias_wide = ttnn.zeros(
                 [num_tokens, self.num_experts],
                 dtype=ttnn.float32,

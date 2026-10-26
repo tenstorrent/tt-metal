@@ -169,20 +169,19 @@ def test_bias_cache_name_never_matches_the_bf16_entry(tmp_path):
     assert cache_file_exists(str(router / ROUTER_BIAS_CACHE_NAME))
 
 
-@pytest.mark.parametrize("use_routing_bias", [True, False])
-def test_weight_cache_requires_centered_router_bias(tmp_path, use_routing_bias):
+def test_weight_cache_requires_centered_router_bias(tmp_path):
     import ttnn
     from models.demos.minimax_m3.tt.weight_cache import weight_cache_is_complete
 
-    cfg = SimpleNamespace(
-        use_qk_norm=False, moe_layer_freq=[1], sparse_attention_config=None, use_routing_bias=use_routing_bias
-    )
+    cfg = SimpleNamespace(moe_layer_freq=[1], sparse_attention_config=None)
     base = "model.layers.0"
     for rel in (
         "input_layernorm/weight",
         "post_attention_layernorm/weight",
         "self_attn/wqkv",
         "self_attn/o_proj",
+        "self_attn/q_norm",
+        "self_attn/k_norm",
         "mlp/router/weight",
         "mlp/router/e_score_correction_bias",
         "mlp/shared_expert/gate_proj",
@@ -194,6 +193,6 @@ def test_weight_cache_requires_centered_router_bias(tmp_path, use_routing_bias):
     def complete():
         return weight_cache_is_complete(tmp_path, cfg, 1, ttnn.bfloat4_b, is_first_rank=False, is_last_rank=False)
 
-    assert complete() is (not use_routing_bias)
+    assert not complete(), "a cache with only the stale bf16 bias must not count as complete"
     _touch(tmp_path, f"{base}/mlp/router/{ROUTER_BIAS_CACHE_NAME}")
     assert complete()

@@ -31,7 +31,6 @@ user-major ``slot*num_layers+layer`` fold) matches DeepSeek's ``create_kv_chunk_
 repeated per config with each tensor's own ``buffer_address()`` / ``chunk_size_bytes`` and column set.
 """
 
-import os
 import socket
 
 from loguru import logger
@@ -126,7 +125,11 @@ def build_and_serialize_kv_chunk_table(
     # model/env), so its dtypes and the slot fold generalize to the gathered stages.
     # The migration worker copies raw chunk bytes and blaze's decode index_k is bfp8 (DsaIndexerDirectKCacheUpdate
     # only supports bfp8 tiles): a bf16 source would overrun its rows.
-    if kv_cache.index_k.dtype != ttnn.bfloat8_b and os.getenv("PREFILL_ENABLE_MIGRATION", "0") == "1":
+    from models.demos.common.prefill.runners.migration import migration_file_export_enabled, migration_publish_enabled
+
+    # Both transports hand the table to the KVM (publish, or file export).
+    migrating = migration_publish_enabled() or migration_file_export_enabled()
+    if kv_cache.index_k.dtype != ttnn.bfloat8_b and migrating:
         raise ValueError(
             f"KV migration needs a bfloat8_b index_k (the decode peer's dtype), got {kv_cache.index_k.dtype}; "
             "unset M3_INDEX_CACHE_BF16 for migrating runs"

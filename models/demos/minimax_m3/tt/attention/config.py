@@ -18,8 +18,6 @@ class AttentionConfig:
     max_local_batch_size: int
     rotary_dim: int  # partial rotary width (rotary_dim)
     rms_norm_eps: float  # used by QK-norm
-    use_qk_norm: bool  # per-head RMSNorm on Q/K over head_dim (qk_norm_type=per_head)
-    use_gemma_norm: bool  # QK-norm uses gemma (1+w) RMSNorm (folded into the gain)
 
     users_row_sharded: bool = False
     sliding_window: int | None = None

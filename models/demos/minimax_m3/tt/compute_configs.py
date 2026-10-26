@@ -23,7 +23,7 @@ import functools
 import os
 
 import ttnn
-from models.demos.minimax_m3.utils.model_variant import select_variant
+from models.demos.minimax_m3.utils.model_variant import checkpoint_dir_env, select_variant
 
 PRECISE_MATMULS_ENV = "M3_PRECISE_MATMULS"
 PRECISE_NORMS_ENV = "M3_PRECISE_NORMS"
@@ -31,14 +31,15 @@ PRECISE_NORMS_ENV = "M3_PRECISE_NORMS"
 
 @functools.lru_cache(maxsize=None)
 def _variant_default(hf_model, variant):
-    # Keyed on the env select_variant reads, so the checkpoint config is read once, not on every forward.
+    # Keyed on the env the variant comes from, so the checkpoint config is read once, not on every forward.
     return select_variant(hf_model).precise_prefill
 
 
 def _switch(var):
     value = os.getenv(var)
     if value is None or not value.strip():
-        return _variant_default(os.getenv("HF_MODEL"), os.getenv("M3_MODEL_VARIANT"))
+        # The same checkpoint the prefill adapter resolves (PREFILL_HF_MODEL > HF_MODEL).
+        return _variant_default(checkpoint_dir_env(), os.getenv("M3_MODEL_VARIANT"))
     if value.strip() not in ("0", "1"):
         raise ValueError(f"{var} must be 0 or 1 (got {value!r})")
     return value.strip() == "1"

@@ -38,8 +38,8 @@ CHECKPOINTS = {M3: VARIANTS[M3].weights_dir, M31: VARIANTS[M31].weights_dir}
 @pytest.fixture
 def clean_env(monkeypatch):
     """No checkpoint and no explicit variant unless a test sets one."""
-    monkeypatch.delenv("HF_MODEL", raising=False)
-    monkeypatch.delenv(VARIANT_ENV, raising=False)
+    for var in ("HF_MODEL", "PREFILL_HF_MODEL", "TT_CACHE_PATH", VARIANT_ENV):
+        monkeypatch.delenv(var, raising=False)
     return monkeypatch
 
 
@@ -242,6 +242,9 @@ def _drop(key):
         (_set(moe_layer_freq=[0] * 59), NotImplementedError, "moe_layer_freq"),
         (_drop("rope_theta"), ValueError, "rope_theta missing"),
         (_drop("use_gemma_norm"), ValueError, "use_gemma_norm missing"),
+        (_set(use_qk_norm=False), NotImplementedError, "use_qk_norm"),
+        (_set(use_gemma_norm=False), NotImplementedError, "use_gemma_norm"),
+        (_set(use_routing_bias=False), NotImplementedError, "use_routing_bias"),
         (_sparse(sparse_local_block=2), NotImplementedError, "sparse_local_block"),
         (_sparse(sparse_init_block=1), NotImplementedError, "sparse_init_block"),
         (_sparse(sparse_score_type="mean"), NotImplementedError, "sparse_score_type"),

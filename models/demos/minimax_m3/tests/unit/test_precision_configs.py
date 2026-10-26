@@ -7,6 +7,7 @@ otherwise. The device-side numerics are covered by test_norm_vs_ref.py (test_rms
 *_vs_ref layer tests.
 """
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,7 @@ from models.demos.minimax_m3.tt.compute_configs import (
     rms_norm_compute_config,
 )
 from models.demos.minimax_m3.tt.moe.shared_overlap import cb_tiles, dest_tiles
+from models.demos.minimax_m3.utils.model_variant import load_config
 
 BH = ttnn.device.Arch.BLACKHOLE
 WH = ttnn.device.Arch.WORMHOLE_B0
@@ -73,15 +75,23 @@ def _precise(monkeypatch):
     monkeypatch.setenv(PRECISE_NORMS_ENV, "1")
 
 
-def test_switches_default_to_the_variant(monkeypatch, expect_error):
+def test_switches_default_to_the_variant(monkeypatch, expect_error, tmp_path):
     """Unset: on for MiniMax-M3.1, off for MiniMax-M3. Set: that value, for either variant."""
-    monkeypatch.delenv("HF_MODEL", raising=False)
+    for var in ("HF_MODEL", "PREFILL_HF_MODEL"):
+        monkeypatch.delenv(var, raising=False)
     for variant, default in (("MiniMax-M3", False), ("MiniMax-M3.1", True)):
         monkeypatch.setenv("M3_MODEL_VARIANT", variant)
         for value, expected in (("", default), ("0", False), ("1", True)):
             monkeypatch.setenv(PRECISE_MATMULS_ENV, value)
             monkeypatch.setenv(PRECISE_NORMS_ENV, value)
             assert (precise_matmuls(), precise_norms()) == (expected, expected), (variant, value)
+    # Unset, with the checkpoint named the prefill runner's way: the default follows that checkpoint's variant.
+    (tmp_path / "config.json").write_text(json.dumps(load_config("MiniMax-M3.1")))
+    monkeypatch.delenv("M3_MODEL_VARIANT")
+    monkeypatch.setenv("PREFILL_HF_MODEL", str(tmp_path))
+    monkeypatch.setenv(PRECISE_MATMULS_ENV, "")
+    monkeypatch.setenv(PRECISE_NORMS_ENV, "")
+    assert (precise_matmuls(), precise_norms()) == (True, True)
     monkeypatch.setenv(PRECISE_MATMULS_ENV, "1")
     monkeypatch.setenv(PRECISE_NORMS_ENV, "0")
     assert (precise_matmuls(), precise_norms()) == (True, False)

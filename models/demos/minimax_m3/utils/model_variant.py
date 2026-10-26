@@ -153,6 +153,11 @@ def detect_variant(text_config: dict) -> ModelVariant:
     )
 
 
+def checkpoint_dir_env() -> Optional[str]:
+    """The checkpoint dir the environment names: ``$PREFILL_HF_MODEL`` (the prefill runner's) > ``$HF_MODEL``."""
+    return os.environ.get("PREFILL_HF_MODEL") or os.environ.get("HF_MODEL")
+
+
 def select_variant(hf_model: Optional[str] = None) -> ModelVariant:
     """The run's variant: detected from ``hf_model``'s config.json (default ``$HF_MODEL``) when there is one,
     else ``$M3_MODEL_VARIANT``, else ``MiniMax-M3``. An explicit ``M3_MODEL_VARIANT`` that contradicts the

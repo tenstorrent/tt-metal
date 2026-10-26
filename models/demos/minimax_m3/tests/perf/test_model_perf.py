@@ -51,7 +51,7 @@ def _build_random_model(mesh, layers, experts, seq):
 
     # The selected variant's config, every layer MoE MLP + dense attention (the weights built below).
     c = with_layer_schedule(load_config(), [1] * layers, [0] * layers)
-    c.update(num_local_experts=experts, use_qk_norm=False)
+    c.update(num_local_experts=experts)
     cfg = SimpleNamespace(**c)
     H, I, E, V = cfg.hidden_size, cfg.intermediate_size, experts, cfg.vocab_size
     qd, kvd = cfg.num_attention_heads * cfg.head_dim, cfg.num_key_value_heads * cfg.head_dim
@@ -68,6 +68,9 @@ def _build_random_model(mesh, layers, experts, seq):
         sd[pf + "post_attention_layernorm.weight"] = torch.ones(H, dtype=torch.bfloat16)
         sd[pf + "self_attn.q_proj.weight"], sd[pf + "self_attn.k_proj.weight"] = rn(qd, H), rn(kvd, H)
         sd[pf + "self_attn.v_proj.weight"], sd[pf + "self_attn.o_proj.weight"] = rn(kvd, H), rn(H, qd)
+        hd = cfg.head_dim  # QK-norm gains (gemma: zeros = identity scale)
+        sd[pf + "self_attn.q_norm.weight"] = torch.zeros(hd, dtype=torch.bfloat16)
+        sd[pf + "self_attn.k_norm.weight"] = torch.zeros(hd, dtype=torch.bfloat16)
         sd[pf + "block_sparse_moe.gate.weight"] = rn(E, H)
         sd[pf + "block_sparse_moe.e_score_correction_bias"] = torch.zeros(E, dtype=torch.bfloat16)
         for e in range(E):

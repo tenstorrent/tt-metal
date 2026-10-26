@@ -80,9 +80,8 @@ class MLP:
         self.sharded_residual = use_sharded_residual() and mesh_config is not None and mesh_config.tp > 1
         # Split state dict. MiniMax's SparseMoeBlock has `gate.weight` (no bias) plus a sibling
         # `e_score_correction_bias` buffer; experts live under `experts.*`.
-        # The bias only exists (and is only used) when the config routes with one (use_routing_bias).
         router_state_dict = dict(substate(state_dict, "gate"))
-        if hf_config.use_routing_bias and state_dict and "e_score_correction_bias" in state_dict:
+        if state_dict and "e_score_correction_bias" in state_dict:
             router_state_dict["e_score_correction_bias"] = state_dict["e_score_correction_bias"]
         experts_state_dict = substate(state_dict, "experts")
 

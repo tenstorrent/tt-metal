@@ -271,8 +271,11 @@ def check_supported_config(cfg) -> None:
         f"partial_rotary_factor={factor} disagrees with rotary_dim={rotary_dim} / head_dim={head_dim}",
     )
     expect(not get("rope_scaling"), f"rope_scaling={get('rope_scaling')!r}: only plain RoPE is implemented")
+    # Flags with a single code path: QK-norm on, gemma (1 + w) norms, the routing correction bias.
+    for flag in ("use_qk_norm", "use_gemma_norm", "use_routing_bias"):
+        expect(get(flag) is True, f"{flag}={get(flag)!r}: only {flag}=true is implemented")
     expect(
-        not get("use_qk_norm") or get("qk_norm_type", "per_head") == "per_head",
+        get("qk_norm_type", "per_head") == "per_head",
         f"qk_norm_type={get('qk_norm_type')!r}: only per_head QK-norm is implemented",
     )
     expect(not get("attention_output_gate"), "attention_output_gate is not implemented")

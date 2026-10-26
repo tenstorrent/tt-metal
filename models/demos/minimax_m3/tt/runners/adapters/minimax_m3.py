@@ -50,6 +50,7 @@ from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunP
 from models.demos.minimax_m3.utils.model_variant import (
     DEFAULT_VARIANT,
     VARIANTS,
+    checkpoint_dir_env,
     read_checkpoint_text_config,
     select_variant,
 )
@@ -75,15 +76,11 @@ def model_dims(text_config: dict) -> SimpleNamespace:
     )
 
 
-def _checkpoint_env() -> Optional[str]:
-    return os.environ.get("PREFILL_HF_MODEL") or os.environ.get("HF_MODEL")
-
-
 def _model_path() -> str:
     """Resolve the MiniMax-M3 checkpoint dir: PREFILL_HF_MODEL > HF_MODEL > the selected variant's default dir. This
     is the dir AutoConfig / the weight loader read, and (absent TT_CACHE_PATH) the legacy tilized-cache root; see
     model_config.default_weight_cache_root."""
-    return _checkpoint_env() or select_variant().weights_dir
+    return checkpoint_dir_env() or select_variant().weights_dir
 
 
 class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
@@ -105,7 +102,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
 
     def __init__(self):
         super().__init__()
-        checkpoint = _checkpoint_env()
+        checkpoint = checkpoint_dir_env()
         self.variant = select_variant(checkpoint)
         self.hf_model_default = self.variant.weights_dir + "/"
         self.prefill_trace_default = f"{self.variant.golden_dir}/{DEFAULT_TRACE}"

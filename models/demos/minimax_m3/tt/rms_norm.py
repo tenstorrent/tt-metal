@@ -48,16 +48,11 @@ class RMSNorm(nn.Module):
         False to pin a norm to the single-pass form regardless (the final norm does: its input is
         gathered to full emb for the column-parallel LM head anyway)."""
         super().__init__()
-        # MiniMax-M3 uses Gemma-style RMSNorm: out = x_normed * (1 + weight), whereas
-        # a plain RMSNorm is out = x_normed * weight. ttnn.rms_norm only does the
-        # `* weight` form, so when use_gemma_norm is set we fold the +1 into the weight
-        # at load time (in fp32, before the bf16 cast) — equivalent and free at runtime.
-        self.use_gemma_norm = bool(hf_config.use_gemma_norm)
+        # MiniMax-M3 uses Gemma-style RMSNorm (use_gemma_norm, the only form check_supported_config accepts):
+        # out = x_normed * (1 + weight). ttnn.rms_norm only does the `* weight` form, so the +1 is folded into
+        # the weight at load time (in fp32, before the bf16 cast) — equivalent and free at runtime.
         if state_dict:
-            weight = state_dict["weight"]
-            if self.use_gemma_norm:
-                weight = weight.float() + 1.0
-            torch_weight = weight.reshape((1, 1, -1, ttnn.TILE_SIZE))
+            torch_weight = (state_dict["weight"].float() + 1.0).reshape((1, 1, -1, ttnn.TILE_SIZE))
         else:
             torch_weight = None
 
