@@ -43,13 +43,15 @@ Metal's DRAM firmware load asserts and deasserts `RiscType::ALL_NEO_DMS`. That i
 
 Done in step 7. `cce_gddr_*` and `cce_sram_*` read `CceSpaRoutes` immediately after the CCE bank-to-NOC staging range. The host fills that table per CCE after firmware has copied the staging tables, from the package windows and from `mimir_channels` routes. Local GDDR uses the D2D0 window. A recorded peer route selects the other port. With no topology, Mimir 0 still reaches other instances through D2D1. Tensix kernels still use the NOC/ATT and do not read this table.
 
-### 7. Metal picks behaviour by target type
+### 7. Metal picks behaviour from the descriptor
 
-`tt_metal/llrt/tt_cluster.cpp` special-cases `TargetDevice::EmuAxi` and `TargetDevice::GrendelJtag` (skip the global reset, skip cluster-descriptor discovery, and build the matching `ClusterOptions`). `rtoptions` turns those targets on from `TT_METAL_EMU_*` and `TT_METAL_GRENDEL_JTAG_*`.
+Done in step 8. `TargetDevice::EmuAxi` and `TargetDevice::GrendelJtag` only select the transport. `tt_cluster.cpp` builds the matching `ClusterOptions` from `TT_METAL_EMU_*` and `TT_METAL_GRENDEL_JTAG_*`, including `emu_skip_init` so chippy's bring-up is kept. `rtoptions` turns those targets on from the same variables and leaves dispatch on `TT_METAL_SLOW_DISPATCH_MODE`.
 
-The Quasar choices in `risc_firmware_initializer.cpp` (reset CCE harts, leave the uncore and the remap to bring-up, tear down with the uncore left released) are keyed on the architecture, which is right. They also assume a Mimir-only package: no Tensix, no allocator, slow dispatch only. Full Grendel has workers, an allocator and fast dispatch.
+A global Tensix reset runs for every target except Mock and Emule. UMD skips it when the descriptor has no Tensix cores. After the cluster is open, a descriptor with no Tensix cores disables fast dispatch. `CreateDeviceMinimal` still skips the allocator when that package has no Tensix cores. A package with Tensix cores keeps fast dispatch and builds an allocator.
 
-`Cluster::is_mock_or_emulated()` is Mock and Emule only. EmuAxi and GrendelJtag take the silicon firmware path, with `emu_skip_init` so chippy's bring-up is kept.
+The Quasar choices in `risc_firmware_initializer.cpp` (reset CCE harts, leave the uncore and the remap to bring-up, tear down with the uncore left released) stay keyed on the architecture. Worker firmware init already follows the Tensix grid size, so a full Grendel package initializes workers and a Mimir-only package does not.
+
+`Cluster::is_mock_or_emulated()` is Mock and Emule only. EmuAxi and GrendelJtag take the silicon firmware path.
 
 ### 8. The tests are tied to the backend
 
@@ -140,7 +142,7 @@ Check: the Metal kernel tests on both models, and the Quasar ZeBu regression so 
 
 ### Step 8. Stop keying Metal behaviour on the target type
 
-`TargetDevice` stays a choice of transport. Everything else comes from the descriptor or from HAL capabilities: whether Tensix cores exist, whether there is an allocator, and whether fast dispatch is allowed. Remove the `EmuAxi` and `GrendelJtag` branches in `tt_cluster.cpp` that are not about the transport.
+Done. `TargetDevice` stays a choice of transport. The `EmuAxi` and `GrendelJtag` branches in `tt_cluster.cpp` that skipped the global reset and the Blackhole firmware check are gone. UMD skips the reset when the descriptor has no Tensix cores. Selecting either transport no longer forces slow dispatch or disables multi-erisc. `CreateDeviceMinimal` still builds no allocator on that package.
 
 Check: the contract suite on every target.
 
