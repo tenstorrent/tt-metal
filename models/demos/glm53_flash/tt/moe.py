@@ -97,6 +97,104 @@ W13_DTYPE_ENV = "GLM53_EXPERT_W13_DTYPE"
 # ``cache_complete`` checks the exact file set, but a silent re-layout under the old names would.
 EXPERT_CACHE_LAYOUT = ""
 
+# ``GLM53_STREAM_EXPERTS`` (2026-10-26 rule): the streaming expert op (``custom_ops/expert_stream``, ``TtRoutedExperts(
+# stream=True)``) is the DEFAULT decode expert path of the hybrid layout: measured on the 8x4 at 4 users/row, decode step
+# 69.1 ms with the stream op vs 80.6 ms with the sparse block op, 128-token TTFT 135 vs 266 ms, first token == HF, logits
+# gate PCC 0.9946 / top-1 93.0 % / top-5 93.1 %. Unset -> stream unless the dense layout is selected (``GLM53_DENSE_EXPERTS=1``,
+# the 256-user dense pass, keeps its path); ``0`` -> the sparse block op (today's old default); ``1`` -> stream (an explicit
+# ``1`` next to ``GLM53_DENSE_EXPERTS=1`` is the conflict ``TtRoutedExperts`` asserts on, as before). ``TtMoE.__init__`` and
+# ``TtMoE.expert_cache_complete`` apply the same rule, so a warm block-op cache (``experts_*_mesh8x4.tensorbin``) is never
+# mistaken for a stream one (``experts_*_mesh8x4_stream.tensorbin``: the layout is in the file name, ``cache_files``).
+STREAM_EXPERTS_ENV = "GLM53_STREAM_EXPERTS"
+
+
+def stream_experts_default(dense_experts: bool, env=None) -> bool:
+    """The ``GLM53_STREAM_EXPERTS`` rule: unset -> ``not dense_experts``; ``"1"`` / anything else -> explicit."""
+    env = os.environ if env is None else env
+    value = env.get(STREAM_EXPERTS_ENV)
+    if value is None:
+        return not dense_experts
+    return value == "1"
+
+
+# Hybrid-layout row glue at T < 32 users per row (decode ledger / roofline H1 + H2, 2026-10-26; both default to today's
+# path). On the 8x4 the per-row activations are [1, 1, T, H] TILE tensors whose T = 4 real rows sit in a 32-row tile, so
+# the row all-gather and the row reduce-scatter are not tile-aligned and ttnn expands them into composites: the gather =
+# all_broadcast of the PADDED tile (256 KB per chip) + untilize / concat / tilize (5 ops, ~60 us each for x and the
+# routing), the reduce-scatter = 8 fill_pads + concat to [1, 1, 256, H] + the reduce-scatter + a slice (10 ops, 162 us).
+#   GLM53_HYBRID_GATHER=compact: the T real rows are gathered ROW_MAJOR (32 KB per chip for x, 2.3 KB for the routing:
+#     untilize, the all_broadcast + concat composite on the compact pages, one tilize with zero padding), i.e. 4 ops and 8x
+#     fewer link bytes per gather; the expert op then sees bit-identical inputs.
+#   GLM53_HYBRID_COMBINE=allreduce: the expert op's [1, 1, rows*T, H] output (already compact: row r*T + t = this chip's
+#     contribution to user t of mesh row r) is summed over the rows by a reduce-scatter on the hidden dim (H / rows = 512
+#     columns, tile-aligned) + an all-gather of the chunks (two async ops on 256 KB), and every chip keeps its own T rows
+#     with one exact selector matmul (E_r [T, rows*T] x [rows*T, H], HiFi4 fp32 DST); 3 ops instead of 10, 8x fewer
+#     link bytes. ``allreduce_ccl``: the same through the generic ``ttnn.all_reduce`` composite (A/B). The 8 partials
+#     are the same bf16 values as today's path, summed in the hidden-chunk ring order instead of the row-chunk order:
+#     not bit-identical to the padded reduce-scatter (bf16 ulps), both within ulps of the fp32 sum.
+# Both apply to decode shapes only (T < 32, not inside ``GLMMesh.prefill_scope``: prefill slabs keep today's path) and
+# are read per call like ``GLMMesh.tp_allreduce_gather``: a function of the env and the static shape, so a captured
+# trace replays the mode it was captured in; no host ops, no per-call host state.
+HYBRID_GATHER_ENV = "GLM53_HYBRID_GATHER"
+HYBRID_COMBINE_ENV = "GLM53_HYBRID_COMBINE"
+HYBRID_GATHER_MODES = ("padded", "compact")
+HYBRID_COMBINE_MODES = ("rs", "allreduce", "allreduce_ccl")
+
+
+def hybrid_gather_mode(env=None) -> str:
+    env = os.environ if env is None else env
+    mode = env.get(HYBRID_GATHER_ENV, "padded")
+    if mode not in HYBRID_GATHER_MODES:
+        raise ValueError(f"{HYBRID_GATHER_ENV}={mode!r}: expected one of {HYBRID_GATHER_MODES}")
+    return mode
+
+
+def hybrid_combine_mode(env=None) -> str:
+    env = os.environ if env is None else env
+    mode = env.get(HYBRID_COMBINE_ENV, "rs")
+    if mode not in HYBRID_COMBINE_MODES:
+        raise ValueError(f"{HYBRID_COMBINE_ENV}={mode!r}: expected one of {HYBRID_COMBINE_MODES}")
+    return mode
+
+
+def decode_glue_modes(rows: int, T: int, *, has_idx: bool, in_prefill: bool, env=None) -> tuple[bool, str]:
+    """(compact gather?, combine mode) of one ``TtRoutedExperts.forward`` call: the knobs apply to decode shapes
+    only -- a multi-row mesh, T < 32 users per row, no top-k lists (``idx``: the dispatch / regions prefill paths)
+    and not inside ``GLMMesh.prefill_scope``; everything else keeps today's padded gather and reduce-scatter
+    (``"rs"``). A pure function of the env and the static shape (trace-safe)."""
+    decode_shape = rows > 1 and not has_idx and T < TILE and not in_prefill
+    if not decode_shape:
+        return False, "rs"
+    return hybrid_gather_mode(env) == "compact", hybrid_combine_mode(env)
+
+
+def row_selector_host(rows: int, T: int, T_gathered: int) -> torch.Tensor:
+    """The per-row selector of the compact combine: ``[rows, 1, T, T_gathered]`` with ``sel[r, 0, t, r*T + t] = 1``
+    (row-sharded over the mesh: chip (r, c) gets E_r, which lifts its own T rows out of the row-summed
+    ``[T_gathered, H]`` expert output by one exact matmul). ``T_gathered`` = ``rows * T`` (8x4: 32; the (2,4) block
+    at 4 users per row: 8)."""
+    assert T_gathered >= rows * T, (rows, T, T_gathered)
+    sel = torch.zeros(rows, 1, T, T_gathered)
+    for r in range(rows):
+        for t in range(T):
+            sel[r, 0, t, r * T + t] = 1.0
+    return sel
+
+
+def hybrid_glue_host(x_rows: torch.Tensor, partials: torch.Tensor, rows: int, T: int):
+    """Host model of the two combine forms on the same inputs (the layout goldens of tests/test_hybrid_glue_host.py):
+    ``x_rows`` [rows, T, H] (row r's tokens), ``partials`` [rows, rows*T, H] (chip r's expert output over the gathered
+    tokens, row r'*T + t = its contribution to user t of row r'). Returns (gathered [rows*T, H] = the compact gather =
+    the padded gather's logical rows, padded_rs [rows, T, H] = today's reduce-scatter (row r gets chunk r of the
+    fp32 sum), allreduce_sel [rows, T, H] = the all-reduce + E_r selector form). The two combines are the same sum
+    in fp32; on device they differ by the bf16 rounding order of the 8 partials (ulps)."""
+    gathered = x_rows.reshape(rows * T, -1)
+    total = partials.float().sum(0)  # [rows*T, H]
+    padded_rs = torch.stack([total[r * T : (r + 1) * T] for r in range(rows)])
+    sel = row_selector_host(rows, T, rows * T)  # [rows, 1, T, rows*T]
+    allreduce_sel = torch.stack([sel[r, 0] @ total for r in range(rows)])
+    return gathered, padded_rs, allreduce_sel
+
 
 def routed_w13_dtype(default):
     """The routed gate|up expert format after the ``GLM53_EXPERT_W13_DTYPE`` override (unset = ``default``)."""
@@ -140,14 +238,32 @@ def ep_placement_tag_from_env(D: int) -> str:
     return "_p" + placement_hash(load_placement(spec))
 
 
-def prefill_experts_mode() -> str:
+def prefill_experts_mode(env=None) -> str:
     """The prefill expert path, read at construction time (``GLM53_PREFILL_EXPERTS``, default ``auto``): blocks |
     batched | dispatch | regions | auto. ``auto`` (``GLM53MeshModel``, tt/mesh_model.py): the blocks path up to 4 K
     positions (the traced short-prompt prefill is equally fast either way and a second expert copy costs ~3.5 ms of
     decode at 32 users), above that the regions path (5x the blocks path's prefill rate, exact) with the stacked expert
     copy kept for the decode block op whenever the memory planner says it fits; a bare layer treats it as ``blocks``."""
-    mode = os.environ.get("GLM53_PREFILL_EXPERTS", "auto")
+    env = os.environ if env is None else env
+    mode = env.get("GLM53_PREFILL_EXPERTS", "auto")
     return "blocks" if mode == "auto" else mode  # a bare layer: the short-prompt path; GLM53MeshModel resolves auto
+
+
+# The gathered-token range the stream family serves when the stream tensors are present: the block op at <= 32
+# tokens, the stream dispatch ops (weights read once per active expert) at 33..256; above that the chunked regions
+# path when configured (``prefill_experts_for``), else 32-token stream blocks.
+STREAM_DISPATCH_MAX_T = 256
+
+
+def prefill_experts_for(dense: bool, stream: bool, env=None) -> str:
+    """The prefill expert path of a ``TtRoutedExperts`` layout (2026-10-26 fix): only the dense layout forces
+    ``blocks`` (its one-pass matmuls serve any T); the stream layout takes ``GLM53_PREFILL_EXPERTS`` like the block
+    layout, so ``stream + regions (+ keep_stacked)`` builds the regions' per-expert lists next to the stream
+    tensors: decode and short prompts (<= ``STREAM_DISPATCH_MAX_T`` gathered tokens) on the stream ops, chunked long
+    prefill on the regions kernel. Before the fix the stream flag forced ``blocks`` (a 64 K prefill through 32-token
+    stream blocks: 139-144 s per prompt vs 25.4 s on regions, measured 2026-10-26 on the 8x4)."""
+    del stream  # the stream layout follows the knob exactly as the block layout does
+    return "blocks" if dense else prefill_experts_mode(env)
 
 
 def regions_keep_stacked() -> bool:
@@ -541,14 +657,18 @@ class TtRoutedExperts(LightweightModule):
         expert_down_dtype,
         dense: bool = False,
         stream: bool = False,
+        prefill_experts: str | None = None,
     ) -> bool:
-        """True when both expert tensorbins exist (the constructor then needs no expert host tensors)."""
+        """True when every expert tensorbin the constructor would load exists (it then needs no expert host
+        tensors): the layout's own files, plus the block layout's when the stream layout builds the regions /
+        dispatch per-expert lists from it (``prefill_experts``: default = ``prefill_experts_for(dense, stream)``)."""
         if cache_dir is None:
             return False
-        return all(
-            f.is_file()
-            for f in cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype, dense, stream).values()
-        )
+        files = list(cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype, dense, stream).values())
+        mode = prefill_experts_for(dense, stream) if prefill_experts is None else prefill_experts
+        if stream and not dense and mode in ("dispatch", "regions"):
+            files += list(cls.cache_files(cache_dir, mesh, expert_dtype, expert_down_dtype, False, False).values())
+        return all(f.is_file() for f in files)
 
     def __init__(
         self,
@@ -734,8 +854,22 @@ class TtRoutedExperts(LightweightModule):
             self.w2 = self.mesh.upload_cached(
                 make_w2, expert_down_dtype, files["w2"], rows=2, cols=1, expect_shape=(1, E, I, H)
             )
-        self.prefill_experts = prefill_experts_mode() if not (dense or stream) else "blocks"
+        self.prefill_experts = prefill_experts_for(dense, stream)
         self._dispatch = None
+        # the regions / dispatch per-expert lists are sliced out of the block layout ([1,E,H,2I] / [1,E,I,H]); with
+        # the stream layout that source is loaded from the block-op cache files (or the host tensors), sliced and
+        # released again (``_build_dispatch_path``): the stream tensors stay the stacked decode copy
+        self._block_source = (
+            (
+                make_w13,
+                make_w2,
+                self.cache_files(weight_cache_path, self.mesh, expert_dtype, expert_down_dtype, False, False)
+                if weight_cache_path is not None
+                else {"w13": None, "w2": None},
+            )
+            if stream
+            else None
+        )
         if self.prefill_experts in ("dispatch", "regions"):
             self._build_dispatch_path(fabric=self.prefill_experts == "dispatch")
         # column c's expert selector: the [E, E_local] block of the identity for its experts
@@ -995,14 +1129,27 @@ class TtRoutedExperts(LightweightModule):
         table (``0`` on its experts, ``-1`` elsewhere: a one-chip dispatch group), the local -> global expert ids."""
         E, E_loc, H, I = self.E, self.E_local, self.H, self.I_local
         cols = self.mesh.cols
+        if self._block_source is not None:  # the stream layout: the block layout is loaded as the slicing source
+            make_w13, make_w2, files_block = self._block_source
+            w13_src = self.mesh.upload_cached(
+                make_w13, self.expert_dtype, files_block["w13"], rows=3, cols=1, expect_shape=(1, E, H, 2 * self.I)
+            )
+            w2_src = self.mesh.upload_cached(
+                make_w2, self.expert_down_dtype, files_block["w2"], rows=2, cols=1, expect_shape=(1, E, self.I, H)
+            )
+        else:
+            w13_src, w2_src = self.w13, self.w2
         gate, up, down = [], [], []
         for e in range(E_loc):
-            g = ttnn.slice(self.w13, [0, e, 0, 0], [1, e + 1, H, I])
-            u = ttnn.slice(self.w13, [0, e, 0, I], [1, e + 1, H, 2 * I])
-            d = ttnn.slice(self.w2, [0, e, 0, 0], [1, e + 1, I, H])
+            g = ttnn.slice(w13_src, [0, e, 0, 0], [1, e + 1, H, I])
+            u = ttnn.slice(w13_src, [0, e, 0, I], [1, e + 1, H, 2 * I])
+            d = ttnn.slice(w2_src, [0, e, 0, 0], [1, e + 1, I, H])
             gate.append(ttnn.reshape(g, [H, I]))
             up.append(ttnn.reshape(u, [H, I]))
             down.append(ttnn.reshape(d, [I, H]))
+        if self._block_source is not None:
+            ttnn.deallocate(w13_src)  # the transient block-layout source; the stream tensors are the stacked copy
+            ttnn.deallocate(w2_src)
         if not regions_keep_stacked():
             ttnn.deallocate(self.w13)
             ttnn.deallocate(self.w2)
@@ -1290,10 +1437,22 @@ class TtRoutedExperts(LightweightModule):
         path's routing (``PREFILL_EXPERTS == "dispatch"``, T > 32). Sparse layout: processed in 32-token blocks; a short last block (or T < 32, e.g.
         decode with few users) runs on its padded tile rows. Dense layout: all tokens in one pass. On a
         multi-row mesh the rows' tokens are gathered first and the expert-slice partials
-        reduce-scattered back to each token's row."""
+        reduce-scattered back to each token's row. Decode shapes (T < 32, outside a prefill scope) take the
+        compact row glue when selected: ``GLM53_HYBRID_GATHER=compact`` (``_gather_rows_compact``) and
+        ``GLM53_HYBRID_COMBINE=allreduce`` (``_combine_rows_allreduce``); see the knob notes at the top."""
+        T = x.shape[-2]
+        if idx is not None and self._stream_serves(self.mesh.rows * T):
+            idx = w = None  # the stream ops take the dense routing matrix: the lists would be gathered for nothing
+        compact_gather, combine = decode_glue_modes(
+            self.mesh.rows, T, has_idx=idx is not None, in_prefill=self.mesh.in_prefill
+        )
         if self.mesh.rows > 1:
-            x = self.mesh.all_gather_rows(x, dim=2)
-            dense_w = self.mesh.all_gather_rows(dense_w, dim=2)
+            if compact_gather:
+                x = self._gather_rows_compact(x)
+                dense_w = self._gather_rows_compact(dense_w)
+            else:
+                x = self.mesh.all_gather_rows(x, dim=2)
+                dense_w = self.mesh.all_gather_rows(dense_w, dim=2)
             if idx is not None:
                 idx = self.mesh.all_gather_rows(idx, dim=2)
                 w = self.mesh.all_gather_rows(w, dim=2)
@@ -1304,8 +1463,67 @@ class TtRoutedExperts(LightweightModule):
             if idx is not None:
                 ttnn.deallocate(idx)
                 ttnn.deallocate(w)
-            y = self.mesh.reduce_scatter_rows(y, dim=2)
+            if combine != "rs" and y.shape[-2] == self.mesh.rows * T:
+                y = self._combine_rows_allreduce(y, T, ccl=combine == "allreduce_ccl")
+            else:
+                y = self.mesh.reduce_scatter_rows(y, dim=2)
         return y
+
+    # ------------------------------------------------------- decode row glue at T < 32 (H1 / H2 knobs)
+    def _gather_rows_compact(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """``all_gather_rows(t, dim=2)`` of a [1,1,T,W] bf16 TILE decode tensor (T < 32) on its T real rows only:
+        untilize to ROW_MAJOR (T pages of 2 W bytes: 8 KB for x, 576 B for the [T, 288] routing, both 64 B
+        aligned), gather the pages over the rows (ttnn's composite on a row-major input = one ``all_broadcast`` of
+        the compact pages + one row-major ``concat``, no untilize / tilize per piece), tilize once WITH ZERO PADDING
+        (the expert op multiplies the padded rows: a NaN there would poison the routing-weighted zero). Rows ordered
+        by mesh row (row r's token t at row r*T + t), exactly today's padded gather; 4 device ops per tensor instead
+        of 5 and 8x fewer bytes on the links at T = 4. Trace-safe: device ops on the step's tensors only."""
+        rm = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+        g_rm = self.mesh.all_gather_rows(rm, dim=2)  # [1,1,rows*T,W] ROW_MAJOR
+        ttnn.deallocate(rm)
+        g = ttnn.tilize_with_zero_padding(g_rm, use_multicore=True)
+        ttnn.deallocate(g_rm)
+        return g
+
+    def _row_selector(self, T: int, T_gathered: int) -> ttnn.Tensor:
+        """E_r [1,1,T,T_gathered] bf16 TILE per chip (``row_selector_host``, row-sharded): a model-wide constant per
+        (rows, T, T_gathered) built on the first (eager) use, before any trace capture (persistent DRAM)."""
+        rows = self.mesh.rows
+        return self.mesh.const(
+            ("hybrid_row_sel", rows, T, T_gathered),
+            lambda: self.mesh.upload(row_selector_host(rows, T, T_gathered), ttnn.bfloat16, rows=0),
+        )
+
+    def _combine_rows_allreduce(self, y: ttnn.Tensor, T: int, *, ccl: bool = False) -> ttnn.Tensor:
+        """The row combine of the compact expert output y [1,1,rows*T,H] (row r*T + t = this chip's contribution to
+        user t of mesh row r; rows beyond rows*T, if any, exact zeros) at T < 32: the sum over the rows by
+        ``GLMMesh.all_reduce_rows_rs_ag`` (reduce-scatter on the hidden dim + all-gather, both tile-aligned; ``ccl``:
+        the generic ``ttnn.all_reduce`` composite instead), then this chip's own T rows by one exact selector matmul
+        (0 / 1 weights, HiFi4, fp32 DST: one product per output element, rounded once = the bf16 input). Replaces the
+        padded [1,1,rows*32,H] reduce-scatter composite (8 fill_pads + concat + RS + slice) with 3 ops."""
+        total = self.mesh.all_reduce_rows(y) if ccl else self.mesh.all_reduce_rows_rs_ag(y)  # [1,1,rows*T,H]
+        ttnn.deallocate(y)
+        sel = self._row_selector(T, total.shape[-2])
+        out = ttnn.matmul(
+            sel,
+            total,
+            dtype=self.activation_dtype,
+            compute_kernel_config=self.fp32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1,1,T,H]
+        ttnn.deallocate(total)
+        return out
+
+    def _stream_serves(self, T_gathered: int) -> bool:
+        """Whether the stream family handles ``T_gathered`` tokens: the stream tensors are present (not dropped for
+        the regions lists) and T is a block (<= 32) or a dispatch-op range (33..``STREAM_DISPATCH_MAX_T``, whole
+        tiles); the regions / dispatch lists serve the rest (long prefill chunks, or everything once the stacked copy
+        is dropped: ``GLM53_REGIONS_KEEP_STACKED=0``)."""
+        if not self.stream or self.w13 is None:
+            return False
+        if T_gathered <= TILE:
+            return True
+        return self.stream_dispatch and T_gathered <= STREAM_DISPATCH_MAX_T and T_gathered % TILE == 0
 
     def _local_experts(
         self, x: ttnn.Tensor, dense_w: ttnn.Tensor, idx: ttnn.Tensor | None = None, w: ttnn.Tensor | None = None
@@ -1318,6 +1536,8 @@ class TtRoutedExperts(LightweightModule):
         block = self._block_stream if self.stream else self._block
         if self.dense:
             y = self._block_dense(x, dense_w)
+        elif self._stream_serves(T) and T > TILE:
+            y = self._block_dispatch(x, dense_w)  # 33..256 gathered tokens: the stream dispatch ops
         elif self._dispatch is not None and (T > TILE or self.w13 is None):
             # the per-expert lists serve prefill (and decode too when they replaced the stacked tensors)
             assert (
@@ -1329,8 +1549,6 @@ class TtRoutedExperts(LightweightModule):
                 y = self._forward_regions_chunked(x, dense_w, idx, w)
         elif self.prefill_experts == "batched" and T > TILE and not self.stream:
             y = self._forward_batched(x, dense_w)
-        elif self.stream and self.stream_dispatch and TILE < T <= 256 and T % TILE == 0:
-            y = self._block_dispatch(x, dense_w)
         elif T <= TILE:
             y = block(x, dense_w)
             if self.stream and T < TILE:
@@ -1767,12 +1985,15 @@ class TtMoE(LightweightModule):
         (gate/up) and ``expert_down_dtype`` (down). On a mesh (``tt/mesh.py``) the routed experts
         use the hybrid placement, the shared expert is TP over the columns and the two partials
         share one all-reduce. ``dense_experts`` selects the dense expert layout
-        (``TtRoutedExperts(dense=True)``); ``None`` reads ``GLM53_DENSE_EXPERTS`` (unset / 0 = sparse)."""
+        (``TtRoutedExperts(dense=True)``); ``None`` reads ``GLM53_DENSE_EXPERTS`` (unset / 0 = sparse).
+        ``stream_experts`` selects the streaming expert op (``TtRoutedExperts(stream=True)``, the decode
+        default since 2026-10-26); ``None`` reads ``GLM53_STREAM_EXPERTS`` through ``stream_experts_default``
+        (unset = stream unless the dense layout is selected, ``0`` = the sparse block op, ``1`` = stream)."""
         self.cfg = cfg
         if dense_experts is None:
             dense_experts = os.environ.get("GLM53_DENSE_EXPERTS", "0") == "1"
         if stream_experts is None:
-            stream_experts = os.environ.get("GLM53_STREAM_EXPERTS", "0") == "1"
+            stream_experts = stream_experts_default(dense_experts)
         if layout is None:
             layout = os.environ.get("GLM53_MOE_LAYOUT", "hybrid")
         assert layout in ("hybrid", "ep"), layout
@@ -1856,13 +2077,14 @@ class TtMoE(LightweightModule):
         stream_experts=None,
     ):
         """Whether the routed-expert tensorbins of this configuration exist (the model then skips the host
-        tensors). Applies the same ``GLM53_EXPERT_W13_DTYPE`` override as ``__init__`` so a warm bfp8 cache never
-        passes for the bfp4 one (whose files carry the other dtype name)."""
+        tensors). Applies the same ``GLM53_EXPERT_W13_DTYPE`` override and the same ``GLM53_STREAM_EXPERTS`` rule
+        (``stream_experts_default``) as ``__init__`` so a warm bfp8 cache never passes for the bfp4 one and a warm
+        block-op cache never passes for the stream one (the dtype and the layout are in the file names)."""
         expert_dtype = routed_w13_dtype(expert_dtype)
         if dense_experts is None:
             dense_experts = os.environ.get("GLM53_DENSE_EXPERTS", "0") == "1"
         if stream_experts is None:
-            stream_experts = os.environ.get("GLM53_STREAM_EXPERTS", "0") == "1"
+            stream_experts = stream_experts_default(dense_experts)
         if os.environ.get("GLM53_MOE_LAYOUT", "hybrid") == "ep":
             return TtEPExperts.cache_complete(cache_dir, mesh, expert_dtype, expert_down_dtype)
         return TtRoutedExperts.cache_complete(

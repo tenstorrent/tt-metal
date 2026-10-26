@@ -80,6 +80,22 @@ DSA_FOLD_MODES = ("both", "q", "o", "none")
 #   index state by construction, 19 ops back). Read at construction (``decode_state_default``), so two layers of one
 #   process can A/B it (``TtDSA(decode_state=...)``).
 DSA_DECODE_STATE_MODES = ("0", "1", "latent")
+# GLM53_POOL_GATHER (roofline B8a, 2026-10-26): how the traced multi-user decode (``_decode_unified``) attends when
+# EVERY user slot of the step is in the dense range (position <= ``dense_exact_max_pos`` = 2050, where the dense
+# attention over the paged cache is HF-exact and the compact gathered cache holds the same rows in the same order):
+#   "gather" (default) = today's graph: index query + batched scorer + top-k + ``paged_pool_gather`` (2052 rows per user
+#     copied out of the paged cache, 136 us at 4 users / ~1.3 ms at 32) + flash-MLA over the compact copy;
+#   "dense_skip" = the flash-MLA decode over the REAL paged cache (``cache.cache`` / ``cache.page_table``, ``cur_pos`` =
+#     the position: the same values ``SparseDecodeMeta.cur_pos`` carries for dense users) with no index query, scoring,
+#     top-k or gather (-4 ops; expected bit-identical: same kernel, same logical rows). The index maintenance (ring /
+#     pools) is untouched, so a later sparse step finds its index complete.
+# The regime is a host property of the step's positions (``SparseDecodeMeta.all_dense`` / ``regime``), fixed at graph
+# build time: a captured trace replays the regime it was captured in. ``SparseDecodeMeta.update`` refuses to move a
+# meta whose last graph was built in the dense-skip regime out of it (the replay would attend the whole prefix densely
+# beyond 2050 = not HF semantics): the model keys its decode trace by ``regime`` and re-captures (or runs eagerly) when
+# it changes; ``clear_graph_regime`` is the eager caller's reset. Read at construction (``pool_gather_mode``).
+POOL_GATHER_ENV = "GLM53_POOL_GATHER"
+POOL_GATHER_MODES = ("gather", "dense_skip")
 # prefill stems (q_a, kv_a, q_b, the indexer's q): "fixed" (default: M-independent prefill_linear) | "default"
 PREFILL_STEMS = os.environ.get("GLM53_PREFILL_STEMS", "fixed")
 # The whole-prefix ROW_MAJOR latent copy of the sparse prefill (the sparse_sdpa kv contract), per DSA layer and
@@ -130,6 +146,27 @@ def decode_state_default() -> str:
     if mode not in DSA_DECODE_STATE_MODES:
         raise ValueError(f"GLM53_DSA_DECODE_STATE={mode!r}: expected one of {DSA_DECODE_STATE_MODES}")
     return mode
+
+
+def pool_gather_mode(env=None) -> str:
+    """The ``GLM53_POOL_GATHER`` knob (``POOL_GATHER_MODES``; default "gather" = today's graph)."""
+    env = os.environ if env is None else env
+    mode = env.get(POOL_GATHER_ENV, "gather")
+    if mode not in POOL_GATHER_MODES:
+        raise ValueError(f"{POOL_GATHER_ENV}={mode!r}: expected one of {POOL_GATHER_MODES}")
+    return mode
+
+
+def dense_exact_max_pos(cfg: GLM53FlashConfig) -> int:
+    """The last position the dense attention is HF-exact at: floor((a+1)/4) <= 512 <=> a <= index_topk + kpool - 2."""
+    return cfg.index_topk + cfg.index_kpool - 2
+
+
+def dense_regime(positions, cfg: GLM53FlashConfig) -> bool:
+    """True when every user slot of the step (``positions``, the mesh-wide list) is in the dense range: the dense-skip
+    graph (``GLM53_POOL_GATHER=dense_skip``) is exact for the whole step. A pure function of the host positions."""
+    bound = dense_exact_max_pos(cfg)
+    return all(int(a) <= bound for a in positions)
 
 
 def dsa_folds(mode: str | None = None, *, strict: bool = True) -> tuple[bool, bool]:
@@ -292,6 +329,23 @@ class SparseDecodeMeta:
     # [B, 1] uint32: the same per-user top-k bounds as ``valid_len`` in one tensor (one 4-byte page per user) for
     # the batched ``topk_large_indices`` call over all users' score rows (``GLM53_TOPK_BATCHED``, default on)
     valid_len_rows: ttnn.Tensor | None = None
+    # host regime of the step (``dense_regime``): every slot at a position <= 2050 -> the dense-skip graph
+    # (``GLM53_POOL_GATHER=dense_skip``) is exact; refreshed by ``update``
+    all_dense: bool = False
+    # the regime the last ``_decode_unified`` graph built on this meta used ("dense" = the dense-skip graph, "sparse" =
+    # the gather graph, None = none yet); ``update`` refuses to leave the dense regime while a dense-skip graph is the
+    # last one built (a captured trace would replay it): see ``POOL_GATHER_ENV``
+    graph_regime: str | None = None
+
+    @property
+    def regime(self) -> str:
+        """ "dense" when every slot is in the dense range, else "sparse": the key a decode trace is captured under
+        when ``GLM53_POOL_GATHER=dense_skip`` (the graph differs per regime)."""
+        return "dense" if self.all_dense else "sparse"
+
+    def clear_graph_regime(self):
+        """Eager callers (no captured trace to protect) reset the regime guard before crossing the dense bound."""
+        self.graph_regime = None
 
     @staticmethod
     def host_values(positions: list[int], cfg: GLM53FlashConfig):
@@ -346,13 +400,25 @@ class SparseDecodeMeta:
             host=list(positions),
             users_per_chip=B,
             valid_len_rows=_meta_upload(device, valid.reshape(-1, 1).contiguous(), ttnn.uint32, mesh, partition),
+            all_dense=dense_regime(positions, cfg),
         )
 
     def update(self, positions: list[int], cfg: GLM53FlashConfig, mesh: GLMMesh | None = None, partition: bool = False):
-        """Refresh every tensor in place for the new positions (trace-replay safe)."""
+        """Refresh every tensor in place for the new positions (trace-replay safe). Refuses to leave the dense
+        regime while the last graph built on this meta is the dense-skip one (``graph_regime == "dense"``): the
+        caller must re-capture under the new ``regime`` (or ``clear_graph_regime`` for an eager flow) first."""
         R, C = self._chips(mesh, partition)
         B = self.users_per_chip
         assert len(positions) == R * C * B, (len(positions), R, C, B)
+        all_dense = dense_regime(positions, cfg)
+        if self.graph_regime == "dense" and not all_dense:
+            raise RuntimeError(
+                f"{POOL_GATHER_ENV}=dense_skip: the last decode graph built on this SparseDecodeMeta attends the paged "
+                f"cache directly (every slot <= {dense_exact_max_pos(cfg)}); the new positions "
+                f"{[a for a in positions if a > dense_exact_max_pos(cfg)]} leave the dense regime, which a replay of "
+                "that graph would attend densely (not HF semantics). Re-capture the decode trace under "
+                "SparseDecodeMeta.regime == 'sparse' (or clear_graph_regime() for an eager flow) before updating."
+            )
         valid, tail, cur = self.host_values(positions, cfg)
         mapper = _meta_mapper(mesh, partition)
         vmapper = mesh.shard_2d(0, 1 if C > 1 else None) if mesh is not None and (R > 1 or C > 1) else None
@@ -375,6 +441,7 @@ class SparseDecodeMeta:
             put(valid.reshape(-1, 1).contiguous(), ttnn.uint32, self.valid_len_rows)
         put(cur, ttnn.int32, self.cur_pos)
         self.host = list(positions)
+        self.all_dense = all_dense
 
 
 class TtLatentCache:
@@ -848,6 +915,8 @@ class TtDSA(LightweightModule):
         # the sparse-decode latent gather (model-local generic op) and its persistent compact output per batch size
         self.pool_gather = PagedPoolGather(device, pool_size=cfg.index_kpool)
         self._compact: dict[int, ttnn.Tensor] = {}
+        # GLM53_POOL_GATHER: "gather" (default) | "dense_skip" (B8a: no gather while every slot is <= 2050)
+        self.pool_gather_mode = pool_gather_mode()
         # the per-row-bounded top-k over all users' score rows (model-local generic op) and its persistent output
         self.topk_rows = TopkRows(device, k=cfg.index_select_pools)
         self._top_buf: dict[int, ttnn.Tensor] = {}
@@ -1935,14 +2004,25 @@ class TtDSA(LightweightModule):
         (B <= 32) instead of the reshape copy + transpose."""
         idx = self.indexer
         B = q_lat.shape[-2]
-        Hi, D, P, K = idx.Hi, idx.D, idx.P, self.cfg.index_select_pools
-        q_i, w_i = idx.queries_and_weights(q_resid, q_resid, w=w, free_view=free_q_view)  # [1,Hi,B,D], [1,1,B,Hi]
+        Hi, D, P = idx.Hi, idx.D, idx.P
         # GLM53_SCORER_BATCHED=1 (default): ONE index_score_decode program scores every user's query (its 32 heads
         # as the rows of one query tile row) against its pooled keys -> [B,1,1,W] score rows, no per-user calls,
         # no 32-row score blocks (needs pools_per_user % 256 == 0: TtIndexCache rounds to 256); 0 = one shared
         # indexer_score_dsa call per user
         scorer_batched = os.environ.get("GLM53_SCORER_BATCHED", "1") == "1"
         batched = meta.valid_len_rows is not None and os.environ.get("GLM53_TOPK_BATCHED", "1") == "1"
+        # the persistent generic-op buffers of the gather graph exist from the first call on whatever regime runs it:
+        # a persistent tensor allocated after a trace capture may alias that trace's transient buffers (mesh_model),
+        # and the dense-skip regime (below) must be able to hand over to a later sparse re-capture
+        self._ensure_sparse_buffers(B, cache, scorer_batched=scorer_batched, batched=batched)
+        if self.pool_gather_mode == "dense_skip" and meta.all_dense:
+            # B8a: every slot <= 2050: the dense flash-MLA over the real paged cache is HF-exact and reads the same
+            # rows the gather would copy (dense users' compact slots = their pools in order), so the index query, the
+            # scorer, the top-k and the gather are skipped (-4 ops, -136 us at 4 users / -1.3 ms at 32 per layer)
+            meta.graph_regime = "dense"
+            return self._attend_paged(q_lat, cache, meta.cur_pos, B)
+        meta.graph_regime = "sparse"
+        q_i, w_i = idx.queries_and_weights(q_resid, q_resid, w=w, free_view=free_q_view)  # [1,Hi,B,D], [1,1,B,Hi]
         if scorer_batched:
             assert batched, "GLM53_SCORER_BATCHED needs the batched top-k (GLM53_TOPK_BATCHED=1)"
             q4 = ttnn.transpose(q_i, 1, 2)  # [1,B,Hi,D]
@@ -1951,44 +2031,23 @@ class TtDSA(LightweightModule):
             # GLM53_TOPK_SEGMENTS=1 (default; wide pool caches only, segments_for): the scorer masks the columns beyond
             # each user's bound (-inf) and writes S segment rows per user; the top-k runs in two stages (S cores per
             # user, then the S*512 candidates) instead of one serial row per core (1.26 ms at 262 K pools)
-            S = self.topk_rows.segments_for(W) if os.environ.get("GLM53_TOPK_SEGMENTS", "1") == "1" else 1
-            if B not in self._top_buf:
-                self._top_buf[B] = ttnn.zeros(
-                    (B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                )
+            S = self._score_segments(W)
             if S > 1:
-                key = (B, S)
-                if key not in self._score_buf:
-                    self._score_buf[key] = (
-                        ttnn.zeros(
-                            (B * S, 1, 1, W // S), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                        ),
-                        ttnn.zeros(
-                            (B, 1, 1, S * K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                        ),
-                        ttnn.zeros(
-                            (B, 1, 1, S * K), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                        ),
-                    )
-                seg_buf, ids1, vals1 = self._score_buf[key]
+                seg_buf, ids1, vals1 = self._score_buffers(B, W, S)
                 self.index_scorer(
                     q4, w_i, cache.index.pools_batched(), seg_buf, valid_rows=meta.valid_len_rows, segments=S
                 )
                 ttnn.deallocate(q4)
                 ttnn.deallocate(w_i)
                 self._mark("index_score")
-                top = self.topk_rows.segmented(seg_buf, S, ids1, vals1, self._top_buf[B])  # [B,1,1,K] uint32
+                top = self.topk_rows.segmented(seg_buf, S, ids1, vals1, self._top_buffer(B))  # [B,1,1,K] uint32
                 self._mark("topk")
                 return self._gather_and_attend(top, q_lat, cache, meta, B, P, out_persistent=True)
-            if B not in self._score_buf:
-                self._score_buf[B] = ttnn.zeros(
-                    (B, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                )
-            rows = self.index_scorer(q4, w_i, cache.index.pools_batched(), self._score_buf[B])  # [B,1,1,W] bf16 RM
+            rows = self.index_scorer(q4, w_i, cache.index.pools_batched(), self._score_buffers(B, W, 1))  # [B,1,1,W]
             ttnn.deallocate(q4)
             ttnn.deallocate(w_i)
             self._mark("index_score")
-            top = self.topk_rows(rows, meta.valid_len_rows, self._top_buf[B])  # [B,1,1,K] uint32, per-row bounds
+            top = self.topk_rows(rows, meta.valid_len_rows, self._top_buffer(B))  # [B,1,1,K] uint32, per-row bounds
             self._mark("topk")
             return self._gather_and_attend(top, q_lat, cache, meta, B, P, out_persistent=True)
         # per-user 32-row query blocks with the user's query in row 0: the B rows followed by 31 zero
@@ -2023,11 +2082,7 @@ class TtDSA(LightweightModule):
             if B > 1:
                 for t in rows_or_tops:
                     ttnn.deallocate(t)
-            if B not in self._top_buf:  # persistent output of the generic op
-                self._top_buf[B] = ttnn.zeros(
-                    (B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
-                )
-            top = self.topk_rows(rows, meta.valid_len_rows, self._top_buf[B])  # [B,1,1,K] uint32, per-row bounds
+            top = self.topk_rows(rows, meta.valid_len_rows, self._top_buffer(B))  # [B,1,1,K] uint32, per-row bounds
             ttnn.deallocate(rows)
             self._mark("topk")
         else:
@@ -2043,17 +2098,9 @@ class TtDSA(LightweightModule):
         """The batched tail of ``_decode_unified``: complete the ranked pool lists with the tail pool and the dense
         users' in-order lists, gather the pools into the compact cache, attend. ``top`` [B,1,1,K] uint32
         (``out_persistent``: a persistent generic-op output, not deallocated)."""
-        # the slot -> pool mapping (ranked pools, dense users' pools in order, the tail pool) is done by the gather
-        if (
-            B not in self._compact
-        ):  # persistent output of the gather (the generic op's io tensors keep their addresses under trace)
-            self._compact[B] = ttnn.zeros(
-                self.pool_gather.output_shape(top, self.L),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-            )
-        compact = self.pool_gather(cache.cache, cache.page_table, top, meta.tail_pool, self._compact[B])
+        # the slot -> pool mapping (ranked pools, dense users' pools in order, the tail pool) is done by the gather;
+        # its output is persistent (the generic op's io tensors keep their addresses under trace)
+        compact = self.pool_gather(cache.cache, cache.page_table, top, meta.tail_pool, self._compact_buffer(B))
         if not out_persistent:
             ttnn.deallocate(top)
         out_blocks = compact.shape[0] // B
@@ -2074,6 +2121,87 @@ class TtDSA(LightweightModule):
         oh = ttnn.transpose(o_lat, 1, 2)  # [1,H,B,L]
         ttnn.deallocate(o_lat)
         self._mark("compact_mla_decode")
+        return oh
+
+    # ------------------------------------------------ persistent buffers of the gather graph + the dense-skip graph
+    def _top_buffer(self, B: int) -> ttnn.Tensor:
+        """[B,1,1,K] uint32 ROW_MAJOR: the persistent output of the batched top-k (one per batch size)."""
+        if B not in self._top_buf:
+            K = self.cfg.index_select_pools
+            self._top_buf[B] = ttnn.zeros(
+                (B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+            )
+        return self._top_buf[B]
+
+    def _score_segments(self, W: int) -> int:
+        """Segments per user of the batched scorer (``GLM53_TOPK_SEGMENTS``, default on; 1 = one row per user)."""
+        return self.topk_rows.segments_for(W) if os.environ.get("GLM53_TOPK_SEGMENTS", "1") == "1" else 1
+
+    def _score_buffers(self, B: int, W: int, S: int):
+        """The persistent score buffers of the batched scorer: ``S > 1`` -> (segment rows [B*S,1,1,W/S] bf16, the
+        stage-1 ids [B,1,1,S*K] uint32, their values fp32) keyed by (B, S); ``S == 1`` -> the [B,1,1,W] bf16 rows."""
+        K = self.cfg.index_select_pools
+        if S > 1:
+            key = (B, S)
+            if key not in self._score_buf:
+                self._score_buf[key] = (
+                    ttnn.zeros(
+                        (B * S, 1, 1, W // S), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+                    ),
+                    ttnn.zeros((B, 1, 1, S * K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device),
+                    ttnn.zeros((B, 1, 1, S * K), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device),
+                )
+            return self._score_buf[key]
+        if B not in self._score_buf:
+            self._score_buf[B] = ttnn.zeros(
+                (B, 1, 1, W), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+            )
+        return self._score_buf[B]
+
+    def _compact_buffer(self, B: int) -> ttnn.Tensor:
+        """The persistent compact cache the gather writes: [B * OB, 1, 32, L] bf16 TILE, OB = ceil((K+1) P / 32)."""
+        if B not in self._compact:
+            K = self.cfg.index_select_pools
+            self._compact[B] = ttnn.zeros(
+                [B * self.pool_gather.output_blocks(K, self.pool_gather.P), 1, TILE, self.L],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+        return self._compact[B]
+
+    def _ensure_sparse_buffers(self, B: int, cache: TtLatentCache, *, scorer_batched: bool, batched: bool):
+        """Allocate (once) every persistent buffer the gather graph of batch size B uses, whatever regime the call
+        takes, so that no persistent allocation happens after a trace capture (``_decode_unified``)."""
+        self._compact_buffer(B)
+        if batched:
+            self._top_buffer(B)
+        if scorer_batched:
+            W = cache.index.pools_per_user
+            self._score_buffers(B, W, self._score_segments(W))
+
+    def _attend_paged(self, q_lat: ttnn.Tensor, cache: TtLatentCache, cur_pos: ttnn.Tensor, B: int) -> ttnn.Tensor:
+        """The flash-MLA decode of every slot over the REAL paged latent cache up to ``cur_pos`` (the dense-skip
+        graph, ``GLM53_POOL_GATHER=dense_skip``; the dense path of ``decode_forward`` runs the same op on the same
+        tensors): q_lat [1,H,B,L] -> oh [1,H,B,L]. Same program as the compact attention (``_gather_and_attend``): the
+        page table and the physical pages differ, the logical rows are identical for a dense user, so the result is
+        expected bit-identical."""
+        q_dec = ttnn.transpose(q_lat, 1, 2)  # [1,B,H,L]
+        o_lat = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+            q_dec,
+            cache.cache,
+            head_dim_v=self.L,
+            page_table_tensor=cache.page_table,
+            cur_pos_tensor=cur_pos,
+            scale=self.scale,
+            program_config=self._decode_sdpa_config(B),
+            compute_kernel_config=self.sdpa_compute,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1,B,H,L]
+        ttnn.deallocate(q_dec)
+        oh = ttnn.transpose(o_lat, 1, 2)  # [1,H,B,L]
+        ttnn.deallocate(o_lat)
+        self._mark("paged_mla_decode")
         return oh
 
     def _decode_sparse_rows(

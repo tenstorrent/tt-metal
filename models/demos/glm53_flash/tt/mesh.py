@@ -30,6 +30,18 @@ import ttnn
 TP_AXIS = 1  # columns
 DP_AXIS = 0  # rows (and expert-TP)
 TP_ALLREDUCE_GATHER_ROWS = 32  # gather-mode all-reduce (GLM53_TP_ALLREDUCE=gather): decode activations only
+# Roofline C2 (2026-10-26): the attention TP all-reduce measures 51 us (RS 39 + AG 12, ep_b4 #269-270) where the MoE one
+# on the same [1,1,32,4096] bf16 shape measures 30 (RS 12 + AG 18, #310-311). Code reading of every decode call site
+# (kda.py ``_block_decode`` / ``_output``, dsa.py ``_o_proj`` / ``_decode_state_unified``, mlp.py, moe.py): all hand
+# ``all_reduce_cols`` the output of a ``DecodeLinear`` (``ttnn.linear``, 1D mcast config) or of an ``add`` of two such
+# outputs -- DRAM interleaved, bf16, TILE, [1,1,B,H] -- with the same link count (``ttnn.get_num_links``): the input
+# placement and memory config are IDENTICAL, so nothing on the input side explains the 21 us. The extra time sits in the
+# reduce-scatter phase (39 vs 12 us), which is where a chip waits for the row's other columns: column skew accumulated
+# over the ~600 us of column-independent ops since the previous (synchronizing) MoE all-reduce (the MoE all-reduce follows
+# the row collective of the experts, which lines the column up). ``GLM53_TP_ALLREDUCE_INPUT=l1`` is the only input-side
+# experiment left (one ``to_memory_config`` into L1 interleaved before the composite on decode shapes; default ``dram`` =
+# today's path, no extra op); the decisive measurement is a per-chip tracy of the RS row's start timestamps per column.
+TP_ALLREDUCE_INPUT_ENV = "GLM53_TP_ALLREDUCE_INPUT"
 
 
 def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
@@ -404,7 +416,19 @@ class GLMMesh:
             dim = self._gather_reduce_dim(x)
             if dim is not None:
                 return self._all_reduce_cols_gather(x, dim, memory_config)
+        if self.tp_allreduce_input_l1 and self._gather_reduce_dim(x) is not None:
+            # C2 experiment: the composite reads its input from L1 interleaved instead of DRAM (decode shapes only)
+            x_l1 = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            y = ttnn.all_reduce(x_l1, cluster_axis=TP_AXIS, memory_config=memory_config, **self._ccl_kwargs(num_links))
+            ttnn.deallocate(x_l1)
+            return y
         return ttnn.all_reduce(x, cluster_axis=TP_AXIS, memory_config=memory_config, **self._ccl_kwargs(num_links))
+
+    @property
+    def tp_allreduce_input_l1(self) -> bool:
+        """``GLM53_TP_ALLREDUCE_INPUT=l1`` (C2 experiment; default ``dram`` = today's path): the composite TP all-reduce
+        takes its decode input from L1 interleaved. Read per call like ``tp_allreduce_gather`` (env + static shape)."""
+        return not self.in_prefill and os.environ.get(TP_ALLREDUCE_INPUT_ENV, "dram") == "l1"
 
     @staticmethod
     def _gather_reduce_dim(x: ttnn.Tensor) -> int | None:
@@ -473,11 +497,35 @@ class GLMMesh:
         )
 
     def all_reduce_rows(self, x: ttnn.Tensor, *, memory_config=None, num_links=None) -> ttnn.Tensor:
+        """Sum over the rows, result replicated over the rows: the generic ``ttnn.all_reduce`` composite (its own
+        reduce-scatter + all-gather pair, semaphores allocated by the composite). ``all_reduce_rows_rs_ag`` is the
+        same sum through the model's persistent-semaphore async pair."""
         if self.rows == 1:
             return x
         return ttnn.all_reduce(
             x, cluster_axis=DP_AXIS, memory_config=memory_config or x.memory_config(), **self._ccl_kwargs(num_links)
         )
+
+    def all_reduce_rows_rs_ag(self, x: ttnn.Tensor, *, dim: int = 3, memory_config=None) -> ttnn.Tensor:
+        """Sum over the rows as ``reduce_scatter_rows(x, dim)`` + ``all_gather_rows(., dim)`` (the async ops with the
+        persistent TT_CCL semaphores, Linear topology, as every row collective of the decode step): ``dim`` must split
+        tile-aligned over the rows (the hidden dim of a [1,1,T,4096] bf16 activation: 512 columns per row on the 8x4,
+        2048 on a (2,4) block), so no composite expansion happens whatever T is. The hybrid MoE's compact combine
+        (``TtRoutedExperts._combine_rows_allreduce``, ``GLM53_HYBRID_COMBINE=allreduce``) sums the [1,1,rows*T,H]
+        expert output with it: 2 x (7/8 x 256 KB) on the links instead of the padded [1,1,256,H] reduce-scatter's
+        1.75 MB. Rounding: the chunk of hidden columns owned by row r is reduced in that chunk's ring order (bf16 per
+        hop), the all-gather copies exactly; a different order than the row-chunk reduce-scatter, same partials."""
+        if self.rows == 1:
+            return x
+        d = dim % len(x.shape)
+        assert d >= len(x.shape) - 2, (dim, "the rs + ag form is for the tile dims")
+        tile = ttnn.TILE_SIZE
+        assert (x.shape[d] // tile) % self.rows == 0, (tuple(x.shape), d, self.rows, "chunk must be tile-aligned")
+        memory_config = memory_config or x.memory_config()
+        part = self.reduce_scatter_rows(x, dim=d, memory_config=memory_config)  # [.., H / rows]
+        out = self.all_gather_rows(part, dim=d, memory_config=memory_config)
+        ttnn.deallocate(part)
+        return out
 
 
 def single_chip(device) -> GLMMesh:
