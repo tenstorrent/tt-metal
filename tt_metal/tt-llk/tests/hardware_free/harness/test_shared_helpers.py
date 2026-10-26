@@ -6,8 +6,14 @@ import pytest
 import torch
 from helpers.constraints import is_valid_quasar_dest_mode_conversion
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.param_config import quasar_dest_sync_modes
 from helpers.utils import result_tensor
+
+
+def test_quasar_dest_sync_modes():
+    assert quasar_dest_sync_modes() == [DestSync.Half, DestSync.Full]
+    assert quasar_dest_sync_modes(is_perf=True) == [DestSync.Half]
 
 
 @pytest.mark.parametrize(

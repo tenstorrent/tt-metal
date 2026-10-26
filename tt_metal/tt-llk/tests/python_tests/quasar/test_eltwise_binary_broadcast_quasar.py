@@ -14,7 +14,6 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     BroadcastType,
-    DestSync,
     MathFidelity,
     MathOperation,
     PerfRunType,
@@ -25,6 +24,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
@@ -87,10 +87,6 @@ BROADCAST_TYPES = [
 ]
 
 
-def binary_broadcast_dest_sync_modes(*, is_perf=False):
-    return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
-
-
 def binary_broadcast_tile_dimensions(formats, broadcast_type, *, is_perf=False):
     tile_sizes = (
         select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
@@ -143,7 +139,7 @@ def binary_broadcast_math_fidelities(format, math_op):
     math_fidelity=lambda formats, math_op: binary_broadcast_math_fidelities(
         formats, math_op
     ),
-    dest_sync=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
     unpack_to_dest=[False],
     tile_dimensions=lambda formats, broadcast_type: binary_broadcast_tile_dimensions(
         formats, broadcast_type, is_perf=False
