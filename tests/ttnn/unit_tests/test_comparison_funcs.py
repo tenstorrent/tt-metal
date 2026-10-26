@@ -98,6 +98,12 @@ class TestPccValue:
         golden, calculated = golden * 1e19, calculated * 1e19
         assert _pcc(golden, calculated) == pytest.approx(_reference_pcc(golden, calculated), abs=1e-12)
 
+    def test_large_magnitude_float64(self):
+        # Without the n - 1 normalization, the variance product of 1e76 values overflows float64.
+        golden, calculated = _noisy((4096,), torch.float64)
+        golden, calculated = golden * 1e76, calculated * 1e76
+        assert _pcc(golden, calculated) == pytest.approx(_reference_pcc(golden, calculated), abs=1e-12)
+
     def test_tiny_magnitude_uncorrelated_float32_fails(self):
         # float32 products of 1e-25 values underflow to zero; the float64 PCC must not.
         golden, calculated = _noisy((4096,), torch.float32, noise=100.0)
