@@ -127,6 +127,58 @@ def test_choose_hysteresis_and_ema():
     assert av.k_hist == {5: 1}
 
 
+class _HostAdaptiveSpec(FakeAdaptiveSpec):
+    """FakeAdaptiveSpec with the expected-token rule written out (no import of tt.spec_model: runs without ttnn): E[k] = 1 + sum_{j<=k} mean_rows prod_{i<=j} p_i."""
+
+    def expected_tokens(self, conf, active):
+        S = torch.cumprod(conf[active], dim=1).mean(0)
+        return {k: 1.0 + float(S[:k].sum()) for k in self.ks}
+
+
+def _drive(av, conf, rounds, ms):
+    """``rounds`` rounds of the plugin protocol (choose, then note_round of the chosen k with ms[k]); the chosen k's."""
+    out = []
+    for _ in range(rounds):
+        k = av.choose(conf)
+        av.note_round(k, ms[k])
+        out.append(k)
+    return out
+
+
+def test_stale_estimate_is_probed_and_replaced(monkeypatch):
+    # k=5 was measured once at 120 ms (e.g. during a prefill burst), its real round is 60 ms (k=3: 57 ms): E5 / E3 = 1.2 makes k=5 the better one
+    monkeypatch.setenv("DSV41_SPEC_PROBE_EVERY", "0")
+    old = AdaptiveVerify(_HostAdaptiveSpec(4, times={3: 57.0, 5: 120.0}))
+    conf = torch.full((4, 5), 0.85)
+    assert (
+        old.ad.expected_tokens(conf, torch.ones(4, dtype=torch.bool))[5]
+        / old.ad.expected_tokens(conf, torch.ones(4, dtype=torch.bool))[3]
+        > 60.0 / 57.0
+    )
+    assert set(_drive(old, conf, 2000, {3: 57.0, 5: 60.0})) == {3}  # no probes: k=5 is never retried (the lock-in)
+    monkeypatch.setenv("DSV41_SPEC_PROBE_EVERY", "128")
+    av = AdaptiveVerify(_HostAdaptiveSpec(4, times={3: 57.0, 5: 120.0}))
+    ks = _drive(av, conf, 400, {3: 57.0, 5: 60.0})
+    assert ks.index(5) <= 129  # the first probe comes after at most probe_every rounds
+    i = ks.index(5)
+    assert (
+        ks[i + 1 : i + 100].count(5) >= 98
+    )  # and k=5 then runs as the better k (the stale k=3 gets its own probe round later)
+    assert av.ad.times[5] == pytest.approx(60.0)  # replaced, not blended with the stale 120
+    assert av.probes >= 1
+
+
+def test_probes_are_bounded_where_the_other_k_is_really_slower(monkeypatch):
+    monkeypatch.setenv("DSV41_SPEC_PROBE_EVERY", "128")
+    av = AdaptiveVerify(_HostAdaptiveSpec(4, times={3: 57.0, 5: 63.0}))
+    conf = torch.full((4, 5), 0.4)  # low acceptance: k=3 is the better one
+    ks = _drive(av, conf, 12800, {3: 57.0, 5: 120.0})
+    assert 5 in ks[:200]  # one probe measures k=5
+    assert ks.count(5) <= 12800 // 128 + 1  # at most one probe round in probe_every
+    assert ks.count(5) >= 12800 // 129 - 1 and av.ad.times[5] == pytest.approx(120.0)
+    assert ks[-300:].count(3) >= 297
+
+
 def test_candidates_skip_a_runner_whose_ladder_ends_below_the_positions():
     ad = FakeAdaptiveSpec(4, times={3: 65.0, 5: 108.0})
     ad.runners[3].pos_buckets = [512]  # k=3 ladder is short: beyond 512 it replays its whole-slab traces

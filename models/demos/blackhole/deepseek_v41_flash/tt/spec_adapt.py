@@ -29,6 +29,11 @@ class AdaptiveVerify:
         self.log = log
         self.k_hist = {}
         self.ema = float(os.environ.get("DSV41_SPEC_TIME_EMA", "0.2"))
+        # a k that does not run is not measured: its estimate goes stale (a startup or prefill-contaminated measurement can then pin the choice to the other k for the whole run). ``probe_every`` bounds the
+        # staleness: a k not run for that many rounds is run once (a probe round, one in ``probe_every`` at worst) and its fresh measurement REPLACES the stale estimate. 0 = no probes (the EMA only).
+        self.probe_every = int(os.environ.get("DSV41_SPEC_PROBE_EVERY", "128"))
+        self.since = {k: 0 for k in self.ks}  # rounds since the runner of k last ran
+        self.probes = 0
         self._cur = None
         self._calib_off = False
         self.forced_k = int(
@@ -121,6 +126,11 @@ class AdaptiveVerify:
             active = torch.ones(conf.shape[0], dtype=torch.bool)
         if not bool(active.any()):
             return cands[0]
+        if self.probe_every > 0:
+            stale = [k for k in cands if self.since.get(k, 0) >= self.probe_every]
+            if stale:
+                self.probes += 1
+                return max(stale, key=lambda k: self.since[k])
         E = self.ad.expected_tokens(conf, active)
         score = {k: E[k] / self.ad.times[k] for k in cands}
         best = max(score, key=score.get)
@@ -141,5 +151,8 @@ class AdaptiveVerify:
     def note_round(self, k, ms):
         """measured round time of runner k (ms): EMA into the profile."""
         t = self.ad.times
-        t[k] = (1.0 - self.ema) * t[k] + self.ema * ms if k in t else ms
+        stale = self.probe_every > 0 and self.since.get(k, 0) >= self.probe_every
+        t[k] = (1.0 - self.ema) * t[k] + self.ema * ms if (k in t and not stale) else ms
+        for q in self.ks:
+            self.since[q] = 0 if q == k else self.since.get(q, 0) + 1
         self.k_hist[k] = self.k_hist.get(k, 0) + 1
