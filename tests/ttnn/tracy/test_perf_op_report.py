@@ -13,7 +13,7 @@ from tracy.process_model_log import (
     get_latest_ops_log_filename,
     get_profiler_folder,
 )
-from models.common.utility_functions import skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 from tracy.compare_ops_logs import compare_ops_logs
 from tracy.common import (
     generate_logs_folder,

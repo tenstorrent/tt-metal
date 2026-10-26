@@ -206,7 +206,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     const uint32_t num_groups_per_reset = geometry.num_groups_per_reset;
     const uint32_t block_ht_group_1 = geometry.block_height_tiles_group_1;
     const uint32_t block_ht_group_2 = geometry.block_height_tiles_group_2;
-    uint32_t subblock_wt = get_max_subblock(block_wt, 8);
+    // The statistics loops in the compute kernel fill subblock_wt tiles in one DEST acquire; FP32 DEST
+    // has room for four tiles under half sync (same bound as the sharded factory).
+    uint32_t subblock_wt = get_max_subblock(block_wt, fp32_dest_acc_en && !dst_full_sync_en ? 4 : 8);
     uint32_t num_subblocks_w = block_wt / subblock_wt;
     const uint32_t block_wt_last = geometry.last_block_width_tiles;
     const bool equal_batches_per_core = geometry.equal_batches_per_core;

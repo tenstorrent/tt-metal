@@ -244,6 +244,9 @@ TEST(QuasarAttAddressAether, WorkerAndDramEncodeThroughTheRemoteWindow) {
     static_assert(*Address::worker(0, 1, 0).encode<AETHER>() == 0x1000000000ull);
     // Logical DRAM bank 1 -> selector 3 (aether_utils configure_aether_dram).
     static_assert(*Address::dram(1, 0x2000).encode<AETHER>() == (0x1000000000ull | (3ull << 26) | 0x2000));
+    // The remote window's 26-bit local-address field is 64 MiB: the size of a 2x3 emulator DRAM channel
+    // (higher offsets wrap onto the low 64 MiB), so an encodable DRAM operand is always a real address.
+    static_assert(!Address::dram(0, 64ull << 20).encode<AETHER>().has_value());
     // The UMD-visible dispatch tile (0,2) -> tile selector 4 (endpoint word 0x80).
     static_assert(*Address::dispatch(0, 2, 0).encode<AETHER>() == (0x1000000000ull | (4ull << 26)));
 }

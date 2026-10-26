@@ -584,6 +584,14 @@ inline void configure_pack(
     // Get pointer to registers for current state ID
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
+    // Drain the packer before any of the configuration below is rewritten, whatever the formats. The raw
+    // cfg[] stores in this function and in set_packer_config are RISC MMIO, which no STALLWAIT can hold
+    // back: the STALLWAIT only keeps new packer instructions out, and tensix_sync() blocks this RISC until
+    // the packer has gone idle, which is what orders those stores behind a pack still in flight. Without
+    // it the pack samples the new format/width mid-tile.
+    TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
+    tensix_sync();
+
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
 
     set_packer_strides<pack_mode>(pack_src_format, tile_c_dim);
@@ -641,6 +649,7 @@ inline void configure_pack(
 
     cfg[PCK_EDGE_OFFSET_SEC0_mask_ADDR32]                = pck_edge_offset.val;
     cfg[TILE_ROW_SET_MAPPING_0_row_set_mapping_0_ADDR32] = 0x0; // All packers use row set mapping 0, edge offset 0 mask
+    cfg[PCK_EDGE_TILE_FACE_SET_SELECT_select_ADDR32]     = 0x0;
 
     regfile[p_gpr_pack::TILE_HEADER]     = tile_size;
     regfile[p_gpr_pack::TILE_HEADER + 1] = 0;

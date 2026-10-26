@@ -904,6 +904,12 @@ inline void hyb_hw_startup() {
 }
 #endif
 
+#ifdef URE_FAR_EXT_OFF
+// Overlapped with combine: the chunk each expert's combine walks open on, appended to the counts table.
+#define URE_FIRST_CHUNK(counts_ptr, gid) ((counts_ptr)[URE_FAR_EXT_OFF / sizeof(uint32_t) + (gid)])
+#else
+#define URE_FIRST_CHUNK(counts_ptr, gid) 0u
+#endif
 void kernel_main() {
     // Per-core valid N-subblock counts. per_core_N is the GRID-ceil'd width, so the
     // highest-gx cores own phantom output columns whose weights were never fetched;
@@ -1053,6 +1059,7 @@ void kernel_main() {
         // count -> effective_chunks bounds this expert's chunk loop; count=0 => the
         // loop body is skipped entirely.
         uint32_t count_value = 0;
+        uint32_t first_chunk = 0;
         UNPACK(({
             const uint32_t counts_l1_addr = get_local_cb_interface(cb_counts_scratch).fifo_rd_ptr << 4;
             const uint32_t idx_l1_addr = get_local_cb_interface(cb_idx_scratch).fifo_rd_ptr << 4;
@@ -1065,11 +1072,16 @@ void kernel_main() {
             // routed-expert op and are dropped here exactly like a zero count.
             count_value =
                 adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
+            first_chunk = URE_FIRST_CHUNK(counts_ptr, global_expert_id);
             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, count_value);
             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, count_value);
+            ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, first_chunk);
+            ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, first_chunk);
         }));
         MATH(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
         PACK(count_value = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        MATH(first_chunk = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+        PACK(first_chunk = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId);)
         // count is in TOKEN rows; convert to tile rows (ceil), then let the runtime
         // picker size THIS expert's chunks. The picker derives chunk_M_tiles (hence
         // per_core_M and the chunk count) from this expert's own count, so no
@@ -1089,7 +1101,8 @@ void kernel_main() {
         ASSERT(count_tiles == count_tiles_raw);
         const uint32_t effective_chunks = adaptive_chunk::num_chunks(count_tiles, chunk_M_max);
 
-        for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
+        for (uint32_t chunk_i = 0; chunk_i < effective_chunks; ++chunk_i) {
+            const uint32_t chunk = adaptive_chunk::chunk_at(chunk_i, effective_chunks, first_chunk);
             // Per-chunk per_core_M (per_core_M_max for full chunks, a smaller divisor
             // for the tail). The gate/up + multiply phases do per_core_M rows of real
             // work; the down matmul keeps its full compile-time ring and MAC-skips

@@ -18,10 +18,10 @@
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
-template <typename TensorAccessorType>
+template <typename TensorAccessorType, typename DFB>
 void read_block_from_dram(
     const Noc& noc,
-    DataflowBuffer& dfb,
+    DFB& dfb,
     const TensorAccessorType& s1,
     uint32_t tensor_width_in_tiles,
     uint32_t block_w_idx,
@@ -233,20 +233,22 @@ void kernel_main() {
                 dfb_in1.reserve_back(in1_block_num_tiles);
                 l1_write_addr_in1 = dfb_in1.get_write_ptr();
 
-                const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                const BankView dram_bank(s1);
                 for (uint32_t h = 0; h < in1_block_height_in_tiles; ++h) {
                     uint32_t curr_l1_read_addr_in1 = l1_read_addr_in1;
                     for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {
                         const uint32_t curr_page_size =
                             w == in1_block_width_num_pages - 1 ? in1_block_page_size_last : in1_block_page_size;
                         noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-                            dram_bank, curr_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr},
+                            dram_bank,
+                            curr_page_size,
+                            {.bank_id = dram_bank_id, .offset_bytes = 0},
                             NocOptVals{.vc = vc});
                         noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                             dram_bank,
                             CoreLocalMem<uint32_t>(l1_write_addr_in1),
                             curr_page_size,
-                            {.bank_id = dram_bank_id, .addr = in1_tensor_addr + curr_l1_read_addr_in1},
+                            {.bank_id = dram_bank_id, .offset_bytes = curr_l1_read_addr_in1},
                             {},
                             NocOptVals{.vc = vc});
                         curr_l1_read_addr_in1 += curr_page_size;
@@ -278,4 +280,12 @@ void kernel_main() {
     noc.async_atomic_barrier();
 #endif
     noc.async_write_barrier();
+
+    // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default; a full set_async_read_state
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    if constexpr (in1_is_dram_sharded) {
+        const uint32_t noc_rd_cmd_field =
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+        NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+    }
 }

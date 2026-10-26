@@ -15,9 +15,11 @@
 #include <variant>
 #include <vector>
 
+#include <experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
+#include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -72,12 +74,19 @@ DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
         kernel_spec.unique_id);
     const auto& gen1 = *dm_config.config_1xx;
 
+    auto defines = to_defines_map(kernel_spec.compiler_options.defines);
+    // The watcher's NoC sanitizer checks that the two kernels sharing a dedicated NOC keep to disjoint
+    // command buffers; only kernels built with this define run the check (internal/debug/sanitize.h).
+    if (gen1.dedicated_noc_sharing == DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC) {
+        defines["DEDICATED_NOC_SHARED"] = "1";
+    }
+
     return DataMovementConfig{
         .processor = gen1.processor,
         .noc = gen1.noc,
         .noc_mode = gen1.noc_mode,
         .compile_args = {},  // only named_compile_args is used
-        .defines = to_defines_map(kernel_spec.compiler_options.defines),
+        .defines = std::move(defines),
         .named_compile_args = to_named_compile_args_map(kernel_spec.compile_time_args),
         .opt_level = kernel_spec.compiler_options.opt_level,
         .compiler_include_paths = kernel_spec.compiler_options.include_paths,
@@ -259,6 +268,30 @@ struct LoweredKernel {
     detail::ProgramImpl::KernelRTASchema rta_schema;
 };
 
+// Bake the compute semaphore's capacity into the kernel (Semaphore::wait_not_full and the SEMINITs read
+// COMPUTE_SEMAPHORE_MAX). At most one compute semaphore per program (ValidateComputeSemaphores), so at most
+// one define. The host option is the source of truth and overrides any user-supplied define; max_value 0
+// means the default (the 4-bit hardware ceiling, 15), which is what the kernel assumes when the define is
+// absent.
+void BakeComputeSemaphoreMax(
+    std::map<std::string, std::string>& defines,
+    const KernelSpec& kernel_spec,
+    const ProgramSpec& spec,
+    const SemaphoreNameToScopeMap& scopes) {
+    for (const auto& binding : kernel_spec.semaphore_bindings) {
+        if (scopes.at(binding.semaphore_spec_name) != SemScope::COMPUTE_ATOMIC) {
+            continue;
+        }
+        const auto sem = std::find_if(spec.semaphores.begin(), spec.semaphores.end(), [&](const SemaphoreSpec& s) {
+            return s.unique_id == binding.semaphore_spec_name;
+        });
+        const uint32_t capacity = (sem != spec.semaphores.end() && sem->advanced_options.max_value != 0)
+                                      ? sem->advanced_options.max_value
+                                      : 15u;
+        defines["COMPUTE_SEMAPHORE_MAX"] = std::to_string(capacity);
+    }
+}
+
 LoweredKernel LowerKernel(
     const KernelSpec& kernel_spec,
     const ProgramSpec& spec,
@@ -340,6 +373,7 @@ LoweredKernel LowerKernel(
         } else {
             auto config = MakeGen2ComputeConfig(kernel_spec, resources.dfbs.slot, hal);
             config.compile_args = std::move(compile_args);
+            BakeComputeSemaphoreMax(config.defines, kernel_spec, spec, resources.semaphores.scope);
             auto processors = GetComputeProcessorSet(ComputeEngineMask{static_cast<uint8_t>(risc_mask >> 8)});
             kernel = std::make_shared<experimental::quasar::QuasarComputeKernel>(
                 context_id,
@@ -359,6 +393,11 @@ LoweredKernel LowerKernel(
         if (kernel_spec.is_data_movement_kernel()) {
             auto config = MakeGen1DataMovementConfig(kernel_spec);
             config.compile_args = std::move(compile_args);
+            // As CreateKernel: fabric routing mode and packet-header sizing, for kernels that talk to the fabric.
+            for (const auto& [name, value] :
+                 MetalContext::instance(context_id).get_control_plane().get_fabric_kernel_defines()) {
+                config.defines.emplace(name, value);
+            }
             kernel = std::make_shared<DataMovementKernel>(
                 context_id,
                 kernel_src,
@@ -374,25 +413,7 @@ LoweredKernel LowerKernel(
         } else {
             auto config = MakeGen1ComputeConfig(kernel_spec, resources.dfbs.slot, hal);
             config.compile_args = std::move(compile_args);
-            // Bake the compute semaphore's capacity into the kernel (Semaphore::wait_not_full and the
-            // SEMINITs read COMPUTE_SEMAPHORE_MAX). At most one compute semaphore per program
-            // (ValidateProgramSpec), so at most one define.
-            for (const auto& binding : kernel_spec.semaphore_bindings) {
-                if (resources.semaphores.scope.at(binding.semaphore_spec_name) != SemScope::COMPUTE_ATOMIC) {
-                    continue;
-                }
-                const auto sem =
-                    std::find_if(spec.semaphores.begin(), spec.semaphores.end(), [&](const SemaphoreSpec& s) {
-                        return s.unique_id == binding.semaphore_spec_name;
-                    });
-                // The host option is the source of truth: always bake the resolved capacity, overriding
-                // any user-supplied COMPUTE_SEMAPHORE_MAX define. max_value 0 means the default (the 4-bit
-                // hardware ceiling, 15), which is what the kernel assumes when the define is absent.
-                const uint32_t capacity = (sem != spec.semaphores.end() && sem->advanced_options.max_value != 0)
-                                              ? sem->advanced_options.max_value
-                                              : 15u;
-                config.defines["COMPUTE_SEMAPHORE_MAX"] = std::to_string(capacity);
-            }
+            BakeComputeSemaphoreMax(config.defines, kernel_spec, spec, resources.semaphores.scope);
             kernel = std::make_shared<ComputeKernel>(
                 context_id,
                 kernel_src,

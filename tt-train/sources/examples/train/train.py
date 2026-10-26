@@ -174,6 +174,16 @@ class CausalLMDataset:
         }
 
 
+def _report_fsdp_replicated(model: Any, patterns: list[str]) -> None:
+    """Print how many params `fsdp_replicate_params` kept replicated, and any pattern that matched nothing."""
+    replicated = ttml.fsdp.replicated_parameters(model)
+    if replicated:
+        print(f"FSDP: {len(replicated)} parameter(s) kept replicated", flush=True)
+    unmatched = ttml.fsdp.unmatched_replicate_patterns(model, patterns)
+    if unmatched:
+        print(f"WARNING: fsdp_replicate_params: no parameter matches {unmatched}", flush=True)
+
+
 def build_dataset(data_path: str, seq_len: int, vocab_size: int) -> tuple[CausalLMDataset, CharTokenizer | None]:
     """Build (dataset, tokenizer). `.yaml`/`.yml` paths = pre-tokenized; otherwise plain text + char tokenizer."""
     is_pretokenized = data_path.endswith((".yaml", ".yml"))
@@ -337,7 +347,7 @@ def generate(
     prompt: str,
     max_new_tokens: int,
     sequence_length: int,
-    mask: ttml.autograd.Tensor,
+    mask: ttml.autograd.Tensor | None,
     temperature: float = 1.0,
     top_k: int = 0,
 ) -> tuple[str, float, float]:
@@ -378,7 +388,9 @@ def generate(
     for step in range(max_new_tokens):
         model_input = ttml.autograd.create_tensor(input_ttnn, requires_grad=False)
         # Clone the mask each step; the autograd graph reset below invalidates prior tensors.
-        mask_for_model = ttml.autograd.create_tensor(ttnn.clone(mask.get_value()), requires_grad=False)
+        mask_for_model = (
+            None if mask is None else ttml.autograd.create_tensor(ttnn.clone(mask.get_value()), requires_grad=False)
+        )
         logits = model(model_input, mask_for_model)
 
         last_logits = _extract_last_step_logits(logits)
@@ -481,9 +493,11 @@ def run_training(
     # owns sharding, not the trainer).
     if device_cfg.enable_fsdp:
         print("Sharding model...", flush=True)
+        replicate = device_cfg.fsdp_replicate_params
         for block in model.blocks:
-            ttml.fsdp.fully_shard(block)
-        ttml.fsdp.fully_shard(model)
+            ttml.fsdp.fully_shard(block, replicate=replicate)
+        ttml.fsdp.fully_shard(model, replicate=replicate)
+        _report_fsdp_replicated(model, replicate)
 
     # Materialize after fully_shard rewrote the mappers, so weights allocate already-sharded.
     if lazy_init:
@@ -729,9 +743,12 @@ def run_inference(args: argparse.Namespace, seed: int) -> None:
     model, tokenizer, model_cfg, loaded_step = load_for_inference(args.model_path)
     seq_len = model_cfg.max_sequence_length
 
-    causal_mask = ttml.autograd.Tensor.from_numpy(
-        build_causal_mask(seq_len), layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-    )
+    # As in training: only DeepSeek's composite SDPA needs the mask; the fused SDPA applies it itself.
+    causal_mask = None
+    if model_cfg.model_type == "deepseek":
+        causal_mask = ttml.autograd.Tensor.from_numpy(
+            build_causal_mask(seq_len), layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
+        )
 
     total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
     padded_vocab = round_up_to_tile(model_cfg.vocab_size, 32)

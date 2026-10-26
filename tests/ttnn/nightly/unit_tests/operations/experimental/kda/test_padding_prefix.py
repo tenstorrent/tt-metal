@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
     CHUNK_SIZE,
     device_protocol,

@@ -284,7 +284,7 @@ To facilitate testing different configurations, `simple_text_demo.py` supports a
 An example usage where the `batch-1` test is modified to run with 16 users and keep generating tokens until 1024 are generated:
 
 ```
-pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --batch_size 16 --max_generated_tokens 1024 --stop_at_eos 0
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --batch_size 16 --max_generated_tokens 1024 --stop_at_eos 0 --max_seq_len 2048
 ```
 
 ---

@@ -19,7 +19,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
 // UMD: re-exports CoreType (used in Buffer::core_type return type).
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace ttsl::json {
 template <typename T>
@@ -90,19 +90,17 @@ struct ShardSpecBuffer {
     DeviceAddr num_pages() const;
 };
 
-struct BufferConfig {
+struct [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-11-13.")]] BufferConfig {
     IDevice* device;
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
 };
 
-using InterleavedBufferConfig
-    [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]] = BufferConfig;
-
 // copied from above instead of using inheritance such that we can use
 // designator constructor
-struct ShardedBufferConfig {
+struct [[deprecated(
+    "Use distributed::MeshBuffer instead. This API will be removed after 2026-11-13.")]] ShardedBufferConfig {
     IDevice* device{};
     DeviceAddr size{};       // Size in bytes
     DeviceAddr page_size{};  // Size of unit being interleaved. For non-interleaved buffers: size == page_size

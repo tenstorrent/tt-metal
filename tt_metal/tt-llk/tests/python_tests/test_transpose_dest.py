@@ -4,7 +4,7 @@
 from itertools import product
 
 import torch
-from helpers.format_config import DataFormat, is_dest_acc_needed
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
     DataCopyGolden,
@@ -33,7 +33,6 @@ from helpers.utils import passed_test
 TRANSPOSE_DEST_FLOAT_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
-        DataFormat.Float16,
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
     ]
@@ -55,9 +54,9 @@ def generate_transpose_dest_float_combinations(formats_list):
     1. Lossless transpose of 32-bit values in dest -> input_format=Float32, dest_acc=DestAccumulation.Yes and unpack_to_dest=True.
     2. Transpose of 32-bit values in dest with precision loss (unpacks Float32 to src registers, Float32 truncates to Tf32) ->
        input_format=Float32, dest_acc=DestAccumulation.Yes and unpack_to_dest=False.
-    3. Transpose of 32-bit values in dest with potential precision loss -> input_format=[Bfp8_b, Float16_b], output_format=[Float16]
+    3. Transpose of 32-bit values in dest with potential precision loss -> input_format=[Bfp8_b, Float16_b],
        dest_acc=DestAccumulation.Yes and unpack_to_dest=False (intermediate data is 32-bit in dest).
-    4. Transpose of 16-bit values in dest -> input_format=[Float16, Float16_b, Bfp8_b],
+    4. Transpose of 16-bit values in dest -> input_format=[Float16_b, Bfp8_b],
        dest_acc=DestAccumulation.No and unpack_to_dest=False.
 
     Args:
@@ -70,10 +69,11 @@ def generate_transpose_dest_float_combinations(formats_list):
 
     for fmt in formats_list:
         is_input_32bit = fmt.input_format.is_32_bit()
+        # 16-bit inputs run with both a 16-bit and a 32-bit dest (combinations 3 and 4)
         dest_acc_list = (
             [DestAccumulation.Yes]
-            if is_input_32bit or is_dest_acc_needed(fmt)
-            else [DestAccumulation.No]
+            if is_input_32bit
+            else [DestAccumulation.No, DestAccumulation.Yes]
         )
 
         # Transpose of 16-bit values in dest is supported only for math_transpose_faces = True

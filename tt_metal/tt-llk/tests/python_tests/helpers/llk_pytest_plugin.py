@@ -56,6 +56,8 @@ _SIMULATOR_PATH = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get(
     "TT_UMD_SIMULATOR_PATH"
 )
 _IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
+# Skips ttexalens after setup_build fills the paths, and the session-end perf combine.
+_HARDWARE_FREE = os.environ.get("LLK_HARDWARE_FREE") == "1"
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
     "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
 )
@@ -243,9 +245,11 @@ def pytest_addoption(parser):
         help="Append a JSON row (test, variant, measured max ULP and lane counts) to "
         "PATH for each comparison made right after exactly one accuracy_contract "
         "lookup in the same test, on a variant that ran with the dest_acc it names. "
-        "The exhaustive sweep skips tolerance cells before comparing, and under "
-        "--ulp-emit does not compare at all, so those record nothing. PATH is created "
-        "and truncated at session start. Reporting only: it cannot change a verdict.",
+        "The exhaustive sweep records every cell it measures, gated or not and under "
+        "--ulp-emit too, plus a non-finite lane count for a tolerance cell it cannot "
+        "measure. PATH is created and truncated at session start; one that cannot be "
+        "is a usage error. Reporting only, except that the sweep's records are "
+        "required: a sweep cell whose record is not written fails.",
     )
     parser.addoption(
         "--ulp-emit",
@@ -523,7 +527,7 @@ def pytest_configure(config):
 
     if config.getoption("--ulp-emit"):
         from . import ulp_sweep
-        from .sfpu_accuracy_budget import MEASURED_ARCH
+        from .ulp_table import MEASURED_ARCH
 
         if TestConfig.CHIP_ARCH != MEASURED_ARCH:
             # finish_emit refuses this too, but only at session end: emit bypasses the
@@ -548,7 +552,12 @@ def pytest_configure(config):
                 "through a UMD simulation server, which needs no port. Drop it from "
                 "your command line; it will be removed."
             )
-        utils_module.prepare_ulp_measure_file()
+        try:
+            utils_module.prepare_ulp_measure_file()
+        except OSError as exc:
+            raise pytest.UsageError(
+                f"--ulp-measure: cannot prepare {config.getoption('--ulp-measure')}: {exc}"
+            ) from exc
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):
@@ -564,7 +573,7 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+    if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         if TestConfig.TEST_TARGET.run_simulator:
             if _SIMULATOR_PATH is None:
                 pytest.exit(
@@ -734,10 +743,11 @@ def _select_tests_by_op(config, items):
 def _split_by_cost(config, items):
     """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
-    A test weighs its module's cost from perf_split_costs.json divided by the module's test
-    count. The chunks are contiguous, so a module's tests, and the ELFs they share, stay in one
-    shard except at a cut point. This runs before _collapse_runtime_only_variants, so the
-    compile and run passes cut the same list.
+    A test weighs its module's cost from perf_split_costs.json (perf_split_costs_sol.json with
+    --speed-of-light, which compiles every variant) divided by the module's test count. The
+    chunks are contiguous, so a module's tests, and the ELFs they share, stay in one shard
+    except at a cut point. build_perf_split_costs.py rebuilds both tables. This runs before
+    _collapse_runtime_only_variants, so the compile and run passes cut the same list.
     """
     splits = config.getoption("--perf-splits")
     group = config.getoption("--perf-group")
@@ -749,18 +759,22 @@ def _split_by_cost(config, items):
         )
 
     arch = TestConfig.CHIP_ARCH.value
-    table = json.loads(
-        (Path(__file__).resolve().parents[2] / "perf_split_costs.json").read_text()
+    costs_file = (
+        "perf_split_costs_sol.json"
+        if TestConfig.SPEED_OF_LIGHT
+        else "perf_split_costs.json"
     )
+    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
     module_cost = table.get(arch)
     if module_cost is None:
-        raise pytest.UsageError(f"perf_split_costs.json has no costs for {arch}")
+        raise pytest.UsageError(f"{costs_file} has no costs for {arch}")
 
     modules = [item.path.stem for item in items]
     unknown = sorted(set(modules) - module_cost.keys())
     if unknown:
         logger.warning(
-            f"--perf-splits: no cost for {', '.join(unknown)}; each counts as 1 s"
+            f"--perf-splits: {costs_file} has no cost for {', '.join(unknown)}; "
+            "each counts as 1 s"
         )
     tests_in = collections.Counter(modules)
     weights = [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
@@ -1177,7 +1191,7 @@ def pytest_testnodedown(node, error):
     from . import ulp_sweep
 
     ulp_sweep.merge_measured(
-        getattr(node, "workeroutput", {}).get(ulp_sweep.WORKEROUTPUT_KEY, ())
+        getattr(node, "workeroutput", {}).get(ulp_sweep.WORKEROUTPUT_KEY)
     )
 
 
@@ -1190,8 +1204,8 @@ def _finish_ulp_emit(session):
         return
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE or session.config.option.collectonly:
         # The producer only compiles -- TestConfig.run() skips before the device -- so it
-        # can never measure. It takes --ulp-emit only to collect the wider op set the
-        # consumer will run, and failing it would fail the documented emit workflow.
+        # can never measure. It collects the same op set with or without --ulp-emit,
+        # and failing it would fail the documented emit workflow.
         # `--collect-only --ulp-emit` previews that set, and runs nothing either.
         _ulp_emit_line(
             session, "--ulp-emit: nothing runs in this session; nothing to write"
@@ -1209,8 +1223,11 @@ def _finish_ulp_emit(session):
             get_chip_architecture(),
             session.testsfailed,
             exitstatus=session.exitstatus,
-        )
+        ).summary()
     except (RuntimeError, ValueError) as exc:
+        # A ValueError is a `TableError`: the table on disk does not load, or the
+        # rewrite would not (`write_table_file` reads its dump back before writing).
+        # Either way nothing was written.
         message = f"--ulp-emit: {exc}"
         # Escalate only a clean session: a refusal *because* the run was interrupted, hit
         # an internal error or called pytest.exit(returncode=N) keeps that status, which a
@@ -1244,7 +1261,7 @@ def pytest_sessionfinish(session):
 
     _finish_ulp_emit(session)
 
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+    if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()
 
         # This was set by pytest CLI argument in pytest_configure call

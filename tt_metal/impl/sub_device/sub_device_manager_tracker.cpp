@@ -88,8 +88,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
                 "FDS worker signalling does not support ACTIVE_ETH cores in sub-device {}",
                 i);
         }
-        workers_per_sub_device.push_back(
-            sub_device.impl()->cores(HalProgrammableCoreType::TENSIX).num_cores() + active_ethernet_core_count);
+        workers_per_sub_device.push_back(sub_device.impl()->cores(HalProgrammableCoreType::TENSIX).num_cores());
     }
     // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
     // when MeshCommandQueue + HWCommandQueue are unified under the same API
@@ -166,6 +165,14 @@ SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() cons
 SubDeviceManager* SubDeviceManagerTracker::find_sub_device_manager(SubDeviceManagerId sub_device_manager_id) const {
     auto sub_device_manager = sub_device_managers_.find(sub_device_manager_id);
     return sub_device_manager == sub_device_managers_.end() ? nullptr : sub_device_manager->second.get();
+}
+
+std::size_t SubDeviceManagerTracker::num_traces() const {
+    std::size_t count = 0;
+    for (const auto& entry : sub_device_managers_) {
+        count += entry.second->num_traces();
+    }
+    return count;
 }
 
 DeviceAddr SubDeviceManagerTracker::get_max_trace_high_water_mark() const {

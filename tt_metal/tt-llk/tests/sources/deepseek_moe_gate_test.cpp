@@ -315,7 +315,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (DMG_MODE == MODE_GATE && DMG_SIGMOID)
         {
-            // The op's enable_sigmoid front-end: transpose_wh_tile then sigmoid_tile leave the activated
+            // The op's enable_sigmoid front-end: transpose_tile then sigmoid_tile leave the activated
             // score in the score region, which the RELOAD binary below reads back through MOVD2A.
             _llk_math_eltwise_unary_datacopy_init_wrapper_<
                 DataCopyType::A2D,

@@ -23,10 +23,10 @@
 #include <tt-metalium/core_coord.hpp>
 
 // UMD: re-exports tt::ARCH
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in IDevice::virtual_core_from_logical_core parameter).
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include <tt_stl/span.hpp>
 
@@ -134,10 +134,6 @@ public:
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const = 0;
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         ttsl::Span<const SubDeviceId> sub_device_ids) const = 0;
-
-    [[deprecated(
-        "Storage-only cores do not exist. Cleanup code that calls this API.")]] virtual const std::set<CoreCoord>&
-    storage_only_cores() const = 0;
 
     virtual uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const = 0;
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;

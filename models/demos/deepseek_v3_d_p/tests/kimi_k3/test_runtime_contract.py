@@ -51,13 +51,13 @@ def _call_sites(callee: str, expected: int = 1) -> list[ast.Call]:
     ), f"expected {expected} {callee} call site(s), found {len(calls)}; the test needs updating, not deleting"
     for call in calls:
         assert not any(isinstance(arg, ast.Starred) for arg in call.args) and all(
-            kw.arg for kw in call.keywords
+            kw.arg or ast.unparse(kw.value).startswith("self._seed_kwargs(") for kw in call.keywords
         ), f"{callee} is called with */** expansion, which this test cannot bind; the test needs updating"
     return calls
 
 
 def _bind(func, call: ast.Call, *leading) -> None:
-    inspect.signature(func).bind(*leading, *[None] * len(call.args), **{kw.arg: None for kw in call.keywords})
+    inspect.signature(func).bind(*leading, *[None] * len(call.args), **{kw.arg: None for kw in call.keywords if kw.arg})
 
 
 def _model_cls_kwargs() -> list[str]:
@@ -93,7 +93,13 @@ def test_every_forward_call_binds_to_the_transformer():
 
 @pytest.mark.parametrize(
     "mtp_kwargs",
-    [{"mtp_union": object()}, {"on_mtp_complete": Mock()}, {"input_is_embedded": True}, {"provided_levels": 1}],
+    [
+        {"mtp_union": object()},
+        {"on_mtp_complete": Mock()},
+        {"input_is_embedded": True},
+        {"provided_levels": 1},
+        {"mtp_geometry": object()},
+    ],
 )
 def test_forward_rejects_mtp_arguments_before_device_work(expect_error, mtp_kwargs):
     model = object.__new__(TtKimiK3Transformer)
@@ -194,7 +200,6 @@ def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_star
         states.read.return_value,
         actual_start=scalar,
         actual_end=end_scalar if use_metadata or host_end is not None else None,
-        selections=None,
     )
     states.commit.assert_called_once_with(1, new_state, 2)
     if use_metadata:
@@ -219,14 +224,11 @@ def test_kda_forward_uses_live_metadata_or_eager_position(monkeypatch, host_star
         assert any(call.args == (scalar,) for call in deallocate.call_args_list)
 
 
-def test_kda_chunk_shares_bounds_and_selections_across_layers(monkeypatch):
+def test_kda_chunk_shares_bounds_across_layers(monkeypatch):
     kdas = [create_autospec(ttKDA, instance=True) for _ in range(2)]
     device = object()
     for kda in kdas:
         kda.device = device
-        kda.sequence_parallel_axis = 0
-        kda.active_seq_len_local = 640
-        kda.config = SimpleNamespace(num_heads=24, head_k_dim=128, head_v_dim=128)
         kda.forward.return_value = object(), object()
     start, end = object(), object()
     from_torch = Mock(side_effect=[start, end])
@@ -243,11 +245,8 @@ def test_kda_chunk_shares_bounds_and_selections_across_layers(monkeypatch):
         TtK3KdaAttention(kda, layer_idx, 1, 1, ttnn.Topology.Linear, Mock()).forward(object(), ctx)
 
     assert from_torch.call_count == 2
-    kdas[0].selections.assert_called_once_with(start, end)
-    kdas[1].selections.assert_not_called()
-    shared = kdas[0].selections.return_value
     for kda in kdas:
-        assert kda.forward.call_args.kwargs == {"actual_start": start, "actual_end": end, "selections": shared}
+        assert kda.forward.call_args.kwargs == {"actual_start": start, "actual_end": end}
     # The layers do not free the shared bounds; the transformer releases them once per chunk.
     assert all(call.args not in ((start,), (end,)) for call in deallocate.call_args_list)
     deallocate.reset_mock()

@@ -763,3 +763,66 @@ def test_unary_sharded_reshape_view_on_accessor_path(device, strategy, shard_sha
     assert view.memory_config().is_sharded()
     out = ttnn.relu(view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     assert torch.equal(ttnn.to_torch(out), torch.relu(base.reshape(1, 4, 32, 64)))
+
+
+@pytest.mark.parametrize("shard_width", [4, 12], ids=["width_4", "width_12"])
+@pytest.mark.parametrize(
+    "strategy, grid_x, grid_y, shards_along_height, shards_along_width",
+    [
+        (ttnn.ShardStrategy.HEIGHT, 4, 1, 4, 1),
+        (ttnn.ShardStrategy.WIDTH, 4, 1, 1, 4),
+        (ttnn.ShardStrategy.BLOCK, 2, 2, 2, 2),
+    ],
+    ids=["height", "width", "block"],
+)
+def test_unary_row_major_sharded_unaligned_rows(
+    device, shard_width, strategy, grid_x, grid_y, shards_along_height, shards_along_width
+):
+    """Each row-major shard row is padded to the L1 alignment, so dense tile pages miss the tail rows."""
+    torch.manual_seed(0)
+    shard_height = 256
+    torch_input = torch.randn(
+        (1, 1, shard_height * shards_along_height, shard_width * shards_along_width), dtype=torch.bfloat16
+    )
+    shard_mem_config = ttnn.create_sharded_memory_config(
+        (shard_height, shard_width),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (grid_x - 1, grid_y - 1))}),
+        strategy=strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    # from_torch shards directly, without the alignment check that to_memory_config applies.
+    ttnn_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=shard_mem_config
+    )
+    ttnn_output = ttnn.to_torch(ttnn.abs(ttnn_input, memory_config=shard_mem_config))
+    assert torch.equal(ttnn_output, torch.abs(torch_input))
+
+
+# The in-place sharded path pairs the input and output shard resident on each core with no data
+# movement, and used to be taken whenever the core grids matched. A different layout, orientation or
+# shard shape on the same grid puts different tensor regions on each core, and the output came back
+# permuted (#57356); those now take the interleaved accessor path.
+def _unary_sharded_mc(layout, shard_shape, orientation):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 1))})
+    return ttnn.MemoryConfig(layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, orientation))
+
+
+@pytest.mark.parametrize(
+    "out_layout, out_shard, out_orientation",
+    [
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, [448, 32], ttnn.ShardOrientation.ROW_MAJOR),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 448], ttnn.ShardOrientation.COL_MAJOR),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 448], ttnn.ShardOrientation.ROW_MAJOR),
+    ],
+    ids=["height_to_width", "row_to_col_major", "same_spec"],
+)
+def test_unary_sharded_same_grid_different_spec(device, out_layout, out_shard, out_orientation):
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 448, 448, dtype=torch.bfloat16)
+    in_mc = _unary_sharded_mc(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, [32, 448], ttnn.ShardOrientation.ROW_MAJOR)
+    out_mc = _unary_sharded_mc(out_layout, out_shard, out_orientation)
+    tx = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    out = ttnn.relu(tx, memory_config=out_mc)
+    assert out.memory_config() == out_mc
+    assert torch.equal(ttnn.to_torch(out), torch.relu(x))

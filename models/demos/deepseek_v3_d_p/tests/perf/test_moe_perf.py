@@ -20,10 +20,10 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_m
 
 # `and pad0`/`and pad50` pins the padding parametrize so each command selects
 # exactly one production TorusXY case.
-_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0' --wrapper-invocation"
-_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50' --wrapper-invocation"
+_CMD_8X4_pad0 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad0'"
+_CMD_8X4_pad50 = f"pytest {_TEST_PATH} -k 'perf-device-256 and torus-xy-8x4 and pad50'"
 _CMD_8X1 = f"pytest {_TEST_PATH} -k 'perf-host-64 and torus-y-8x1 and pad0' --wrapper-invocation"
-_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0' --wrapper-invocation"
+_CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and pad0'"
 
 # Mistral Small 4 has its own driver rather than a row in test_ds_moe: its reference stores all 128
 # experts as one fused stacked parameter and its router is bias-free.
@@ -31,18 +31,19 @@ _CMD_2X4 = f"pytest {_TEST_PATH} -k 'perf-device-256 and fabric2d-mesh-2x4 and p
 # fabric2d-8x4 is the only mesh test_mistral4_moe declares, so this number is NOT comparable to the
 # TorusXY deepseek rows above.
 _MISTRAL4_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_mistral4_moe"
-_CMD_MISTRAL4_8X4 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and fabric2d-8x4' --wrapper-invocation"
+_CMD_MISTRAL4_8X4 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and fabric2d-8x4'"
 # SP=8 x TP=1 on a LoudBox: the stage shape PP=4 runs. Blaze builds without Tracy, so this is the
 # only Tracy-capable CI home for it.
-_CMD_MISTRAL4_8X1 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and torus-y-8x1' --wrapper-invocation"
+_CMD_MISTRAL4_8X1 = f"pytest {_MISTRAL4_TEST_PATH} -k 'mistral4-5k-perf and torus-y-8x1'"
 
 # Record-only: one local run on a different fabric from every sibling row, so the margin admits any
 # measurement. Replace both with the first CI result on this fabric.
 _MISTRAL4_MOE_NS_UNCALIBRATED = 2_661_495
-# Single LoudBox run 37547491707 (LoFi SDPA, 8256 B packets, padding-aware gate). Previously the
-# midpoint of runs 35025551183 and 35025541781 (4_781_146). 10% rather than the sibling rows' 3%
-# because this keeps moving while the branch is pre-merge; re-cut it tight once landed.
-_MISTRAL4_MOE_LB_8X1_NS = 4_204_313
+# Mean of 20 CI LoudBox runs, 37862944023 through 38733452366 (3,578,022-3,652,521 ns, sd 0.5%).
+# Previously single run 37547491707 (4_204_313), cut before main stepped down at 496333d8fac.
+# 10% rather than the sibling rows' 3% because this keeps moving while the branch is pre-merge;
+# re-cut it tight once landed.
+_MISTRAL4_MOE_LB_8X1_NS = 3_606_900
 _MISTRAL4_MOE_LB_8X1_MARGIN = 0.10
 
 
@@ -69,19 +70,19 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Re-cut 2026-09-27 on the CI LoudBox (bh_loudbox), run 36356781842. One sample.
-        # ND-sharded routed-expert weights are the whole delta: the op reads 817,335 ns against
-        # 979,850 ns on main run 36360866118, and the remainder moves by under 1%.
-        expected_ns_8x1=3_180_625,
+        # Re-cut 2026-10-15: mean of 23 CI LoudBox (bh_loudbox) runs, 37705811976 through
+        # 38733452366 (3,000,492-3,066,813 ns, sd 0.6%). Main stepped down between
+        # ca3797a3df8 (last pass, run 37648881647) and 496333d8fac (first miss, run 37705811976).
+        expected_ns_8x1=3_031_260,
         model_name_8x1="deepseek_v3_moe_lb_8x1_torus_y_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Re-cut 2026-09-27 on the CI LoudBox (bh_loudbox), run 36356781842. One sample.
-        # ND-sharded routed-expert weights are the whole delta: the op reads 3,110,641 ns against
-        # 3,808,493 ns on main run 36360866118, and the remainder moves by under 0.5%.
+        # Re-cut 2026-10-15 alongside the 8x1 slot: 5 of the same 23 runs read 5,439,456-5,442,690 ns,
+        # just under the old 5,445,465 floor, and the rest passed just above it (passing values are
+        # not logged), so the centre sits at that floor.
         # AVG DEVICE KERNEL DURATION is a SUM, so a truncated capture reads low exactly like a
         # speedup -- diff the Matmul/CCL/Other split against a main run before trusting a miss.
         # This gate has to be cut on the CI runner -- the dev box bh-lb-15 reads it 2.7% slower.
-        expected_ns_2x4=5_613_881,
+        expected_ns_2x4=5_445_000,
         model_name_2x4="deepseek_v3_moe_lb_2x4_fabric2d_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
