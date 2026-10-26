@@ -206,7 +206,11 @@ TEST(KernelPchDeathTest, SecondKernelBuildsPchSharedAcrossCbFormats) {
         ASSERT_FALSE(first.empty());
         ASSERT_FALSE(is_kernel_pch(first)) << "the first kernel of a PCH builds none: " << first;
 
-        const auto shared = brisc.compile(h.make_kernel("fp32", DataFormat::Float32, "Float32"), h.settings);
+        const auto fp32 = h.make_kernel("fp32", DataFormat::Float32, "Float32");
+        const auto second = brisc.compile(fp32, h.settings);
+        ASSERT_FALSE(is_kernel_pch(second)) << "the second kernel starts the build and parses: " << second;
+        jit_build::wait_for_kernel_pch_builds();
+        const auto shared = brisc.compile(fp32, h.settings);
         ASSERT_TRUE(is_kernel_pch(shared)) << shared;
         ASSERT_EQ(brisc.compile(bf16, h.settings), shared);
 
@@ -225,27 +229,29 @@ TEST(KernelPchDeathTest, DefinesOptLevelIncludesAndFlagsSeparatePch) {
     run_in_child([](KernelPchHarness& h) {
         set_dm_defines(h.settings);
         const auto kernel = h.make_kernel("kernel", DataFormat::Float32, "Float32");
-        const auto twice = [&](const KernelCompileProbe& probe) {
+        const auto with_pch = [&](const KernelCompileProbe& probe) {
             probe.compile(kernel, h.settings);
+            probe.compile(kernel, h.settings);
+            jit_build::wait_for_kernel_pch_builds();
             return probe.compile(kernel, h.settings);
         };
         const auto brisc = h.probe(HalProcessorClassType::DM);
-        const auto plain = twice(brisc);
+        const auto plain = with_pch(brisc);
         h.settings.defines["PROBE_DEFINE"] = "1";
-        const auto defined = twice(brisc);
+        const auto defined = with_pch(brisc);
         h.settings.defines.erase("PROBE_DEFINE");
         h.settings.opt_level = "O2";
-        const auto o2 = twice(brisc);
+        const auto o2 = with_pch(brisc);
         h.settings.opt_level = "Os";
         h.settings.include_paths = {h.root.string()};
-        const auto included = twice(brisc);
+        const auto included = with_pch(brisc);
         h.settings.include_paths.clear();
         // Compiler flags without -g.
         llrt::RunTimeOptions no_debug_info;
         no_debug_info.set_riscv_debug_info_enabled(false);
         JitBuildEnv no_debug_env;
         h.init_env(no_debug_env, no_debug_info, 2);
-        const auto no_g = twice(KernelCompileProbe(no_debug_env, h.hal, HalProcessorClassType::DM, 0));
+        const auto no_g = with_pch(KernelCompileProbe(no_debug_env, h.hal, HalProcessorClassType::DM, 0));
 
         const std::set<std::string> pchs = {plain, defined, o2, included, no_g};
         ASSERT_EQ(pchs.size(), 5u);
@@ -264,13 +270,19 @@ TEST(KernelPchDeathTest, TriscThreadsAndComputeConfigSeparatePch) {
         for (int thread = 0; thread < 3; ++thread) {
             const auto trisc = h.probe(HalProcessorClassType::COMPUTE, thread);
             trisc.compile(bf16, h.settings);
+            trisc.compile(fp32, h.settings);
+            jit_build::wait_for_kernel_pch_builds();
             const auto pch = trisc.compile(fp32, h.settings);
             ASSERT_TRUE(is_kernel_pch(pch)) << pch;
             ASSERT_EQ(trisc.compile(bf16, h.settings), pch) << "CB formats must not split a thread's PCH";
             thread_pchs.insert(pch);
             if (thread == 1) {  // The math thread reads the math fidelity.
                 trisc.compile(lofi, h.settings);
-                ASSERT_NE(trisc.compile(lofi, h.settings), pch);
+                trisc.compile(lofi, h.settings);
+                jit_build::wait_for_kernel_pch_builds();
+                const auto lofi_pch = trisc.compile(lofi, h.settings);
+                ASSERT_TRUE(is_kernel_pch(lofi_pch)) << lofi_pch;
+                ASSERT_NE(lofi_pch, pch);
             }
         }
         ASSERT_EQ(thread_pchs.size(), 3u);
@@ -327,6 +339,8 @@ TEST(KernelPchDeathTest, RejectedPchFallsBackToParsing) {
         const auto brisc = h.probe(HalProcessorClassType::DM);
         const auto bf16 = h.make_kernel("bf16", DataFormat::Float16_b, "Float16_b");
         brisc.compile(bf16, h.settings);
+        brisc.compile(bf16, h.settings);
+        jit_build::wait_for_kernel_pch_builds();
         const auto pch = brisc.compile(bf16, h.settings);
         ASSERT_TRUE(is_kernel_pch(pch)) << pch;
         std::ofstream(pch, std::ios::trunc) << "not a precompiled header";
@@ -335,8 +349,8 @@ TEST(KernelPchDeathTest, RejectedPchFallsBackToParsing) {
     });
 }
 
-// Compiles run in parallel, as on a compile server: the second request builds the PCH once, and every
-// later compile that shares it waits for that build and loads it.
+// Compiles run in parallel, as on a compile server: the second request starts the one PCH build, no
+// compile waits for it, and compiles that start once it is ready load it.
 TEST(KernelPchDeathTest, ConcurrentCompilesBuildOnePch) {
     run_in_child([](KernelPchHarness& h) {
         set_dm_defines(h.settings);
@@ -354,8 +368,11 @@ TEST(KernelPchDeathTest, ConcurrentCompilesBuildOnePch) {
         for (auto& thread : threads) {
             thread.join();
         }
-        ASSERT_EQ(std::ranges::count_if(loaded, is_kernel_pch), kernels - 1) << "only the first request builds none";
-        std::set<std::string> pchs;
+        ASSERT_LE(std::ranges::count_if(loaded, is_kernel_pch), kernels - 2) << "the first two requests load none";
+        jit_build::wait_for_kernel_pch_builds();
+        const auto later = brisc.compile(dirs[0], h.settings);
+        ASSERT_TRUE(is_kernel_pch(later)) << later;
+        std::set<std::string> pchs = {later};
         std::ranges::copy_if(loaded, std::inserter(pchs, pchs.end()), is_kernel_pch);
         ASSERT_EQ(pchs.size(), 1u);
         int built = 0;
@@ -374,6 +391,8 @@ TEST(KernelPchDeathTest, ServerCacheReachesLocalPchKey) {
         const auto brisc = h.probe(HalProcessorClassType::DM);
         const auto kernel = h.make_kernel("kernel", DataFormat::Float32, "Float32");
         brisc.compile(kernel, h.settings);
+        brisc.compile(kernel, h.settings);
+        jit_build::wait_for_kernel_pch_builds();
         const auto local = brisc.compile(kernel, h.settings);
         ASSERT_TRUE(is_kernel_pch(local)) << local;
 
@@ -387,6 +406,8 @@ TEST(KernelPchDeathTest, ServerCacheReachesLocalPchKey) {
         const auto recipe = brisc.export_target_recipe(&h.settings);
         const auto server_pch_root = h.root / "server" / "pch";
         jit_build::select_pch(h.env.get_gpp(), recipe, server_kernel, server_pch_root);
+        jit_build::select_pch(h.env.get_gpp(), recipe, server_kernel, server_pch_root);
+        jit_build::wait_for_kernel_pch_builds();
         const auto server = jit_build::select_pch(h.env.get_gpp(), recipe, server_kernel, server_pch_root);
         ASSERT_EQ(server.includes.size(), 4u);
         ASSERT_EQ(fs::path(server.includes[1]).parent_path().filename(), fs::path(local).parent_path().filename());

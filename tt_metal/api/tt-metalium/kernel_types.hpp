@@ -85,7 +85,8 @@ struct DataMovementConfig {
     std::vector<std::filesystem::path> compiler_include_paths;
     // Optional header that the kernel source includes before anything else (absolute, or relative to the
     // current working directory). The JIT precompiles it after the firmware headers that precede every
-    // kernel, once for the kernels that share its inputs, and those kernels skip parsing it:
+    // kernel, once for the kernels that share its inputs, in the background from the second such kernel
+    // on; the kernels compiled once it is ready skip parsing it:
     //  - A PCH is shared only by kernels with the same compiler flags, include paths, defines,
     //    compile_args and (on TRISC) compute config and thread, so the header may depend on all of them.
     //  - The header must have an include guard, and must not read other generated per-kernel headers

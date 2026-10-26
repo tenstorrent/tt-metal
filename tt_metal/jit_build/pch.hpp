@@ -33,8 +33,9 @@ std::string ensure_pch(
 // built. generated maps the names of generated per-kernel headers the prefix includes to the files
 // staged under those names, such as CB_TABLE_DECLARATIONS_HEADER as chlkc_descriptors.h.
 // The PCH is shared by every compile with the same flags, includes, defines, headers and generated
-// contents. It is built only for the second request in a process. Compile with -fpch-deps, so a
-// kernel's dependency hash covers the headers in the PCH.
+// contents. The second request in a process starts building it in the background; that compile and
+// every compile until the PCH is ready get an empty header and parse the headers. Compile with
+// -fpch-deps, so a kernel's dependency hash covers the headers in the PCH.
 std::string ensure_kernel_pch(
     const std::string& gpp,
     const std::string& opt_level,
@@ -44,6 +45,9 @@ std::string ensure_kernel_pch(
     const std::vector<std::filesystem::path>& headers,
     const std::map<std::string, std::filesystem::path>& generated,
     const std::filesystem::path& pch_root);
+
+// Waits for the kernel PCHs being built (ensure_kernel_pch) to be ready.
+void wait_for_kernel_pch_builds();
 
 // How a compile loads its PCH: force-includes to put first among its defines, and flags to append.
 struct PchUse {

@@ -53,4 +53,8 @@ bool dependencies_up_to_date_file(const std::string& hash_file_path);
 // Clears process-local cache of dependency file hashes.
 void clear_file_hash_cache();
 
+// Constructs the process-local cache of dependency file hashes if it doesn't exist yet, so that a static
+// constructed afterwards is destroyed before it.
+void ensure_file_hash_cache();
+
 }  // namespace tt::jit_build

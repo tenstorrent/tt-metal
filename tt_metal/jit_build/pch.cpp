@@ -5,6 +5,7 @@
 #include "pch.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -13,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -159,6 +161,34 @@ bool publish(const fs::path& path, const std::string& contents) {
     return true;
 }
 
+// One entry per kernel PCH directory, checked and built at most once per process; a failed build is
+// cached as an empty header.
+struct KernelPchEntry {
+    std::mutex mutex;
+    bool requested = false;
+    bool building = false;
+    std::atomic<bool> settled = false;
+    std::string header;  // Written once, before `settled`.
+};
+
+struct KernelPchBuild {
+    std::shared_ptr<KernelPchEntry> entry;
+    std::jthread thread;
+};
+
+std::mutex& kernel_pch_builds_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+// Kernel PCH builds not yet joined, joined at exit at the latest. A build hashes the PCH's headers, so the
+// hash cache is constructed first and is destroyed after the builds are joined.
+std::vector<KernelPchBuild>& kernel_pch_builds() {
+    ensure_file_hash_cache();
+    static std::vector<KernelPchBuild> builds;
+    return builds;
+}
+
 }  // namespace
 
 std::string ensure_kernel_pch(
@@ -199,37 +229,41 @@ std::string ensure_kernel_pch(
     }
     const fs::path dir = fs::absolute(pch_root / fmt::format("kernel-{:016x}", hasher.digest()));
 
-    // One entry per PCH directory, checked and built at most once per process; a failed build is
-    // cached as an empty header. Each entry has its own lock, so building one PCH holds up only the
-    // compiles that need it.
-    struct Entry {
-        std::mutex mutex;
-        bool requested = false;
-        bool settled = false;
-        std::string header;
-    };
+    // The second request starts the build on a thread of its own and parses the headers, as does every
+    // compile until the PCH is ready: no compile waits for a PCH, so a PCH that few compiles share never
+    // lengthens a build.
     static std::mutex entries_mutex;
-    static std::unordered_map<std::string, std::shared_ptr<Entry>> entries;
-    std::shared_ptr<Entry> entry;
+    static std::unordered_map<std::string, std::shared_ptr<KernelPchEntry>> entries;
+    std::shared_ptr<KernelPchEntry> entry;
     {
         std::lock_guard lock(entries_mutex);
         auto& slot = entries[dir.string()];
         if (!slot) {
-            slot = std::make_shared<Entry>();
+            slot = std::make_shared<KernelPchEntry>();
         }
         entry = slot;
     }
-    std::lock_guard lock(entry->mutex);
-    if (entry->settled) {
+    if (entry->settled.load(std::memory_order_acquire)) {
         return entry->header;
     }
+    std::lock_guard lock(entry->mutex);
+    if (entry->settled.load(std::memory_order_acquire)) {
+        return entry->header;
+    }
+    if (entry->building) {
+        return {};
+    }
+    const auto settle = [entry](std::string built) {
+        entry->header = std::move(built);
+        entry->settled.store(true, std::memory_order_release);
+        return entry->header;
+    };
 
     const std::string gch_name = "kernel_pch.h.gch";
     const fs::path header = dir / "kernel_pch.h";
     const fs::path gch = dir / gch_name;
     if (fs::exists(gch) && dependencies_up_to_date(dir.string(), gch_name)) {
-        entry->settled = true;
-        return entry->header = header.string();
+        return settle(header.string());
     }
     // Building a PCH costs a few compiles, so build one only when a second kernel needs it. A kernel
     // whose flags and defines no other kernel shares parses the headers as before.
@@ -237,8 +271,6 @@ std::string ensure_kernel_pch(
         entry->requested = true;
         return {};
     }
-    entry->settled = true;
-    std::string& result = entry->header;
 
     // The prefix includes the generated headers by name; "-I<dir>" goes first so it finds the staged copies.
     std::error_code ec;
@@ -249,11 +281,11 @@ std::string ensure_kernel_pch(
     }
     if (!staged_all) {
         log_warning(tt::LogBuildKernels, "Skipping the kernel PCH: cannot stage {}", dir.string());
-        return result;
+        return settle({});
     }
     const fs::path temp = utils::FileRenamer::generate_temp_path(gch);
     const fs::path deps = temp.string() + ".d";
-    const auto args = utils::build_gpp_argv(
+    auto args = utils::build_gpp_argv(
         gpp,
         opt_level,
         cflags + " -x c++-header -MT " + gch_name,
@@ -263,34 +295,58 @@ std::string ensure_kernel_pch(
         utils::GppAction::Compile,
         temp.string(),
         deps.string());
-    const std::string log_path = (dir / "build.log").string();
-    if (!utils::exec_command(args, dir.string(), log_path)) {
-        log_warning(
-            tt::LogBuildKernels,
-            "Skipping the kernel PCH: {} failed, see {}. Kernels will parse the headers as before.",
-            fmt::join(args, " "),
-            log_path);
-        fs::remove(temp, ec);
-        fs::remove(deps, ec);
-        return result;
-    }
+    entry->building = true;
+    auto build = [=, args = std::move(args)] {
+        try {
+            std::error_code error;
+            const std::string log_path = (dir / "build.log").string();
+            if (!utils::exec_command(args, dir.string(), log_path)) {
+                log_warning(
+                    tt::LogBuildKernels,
+                    "Skipping the kernel PCH: {} failed, see {}. Kernels will parse the headers as before.",
+                    fmt::join(args, " "),
+                    log_path);
+                fs::remove(temp, error);
+                fs::remove(deps, error);
+                settle({});
+                return;
+            }
 
-    // Publish the PCH, then the hashes of the headers it was built from. A process that reads the old
-    // hashes beside the new PCH only rebuilds it again.
-    std::ostringstream hashes;
+            // Publish the PCH, then the hashes of the headers it was built from. A process that reads the old
+            // hashes beside the new PCH only rebuilds it again.
+            std::ostringstream hashes;
+            {
+                std::ifstream deps_file(deps);
+                write_dependency_hashes(parse_dependency_file(deps_file), dir.string(), gch_name, hashes);
+            }
+            fs::remove(deps, error);
+            fs::rename(temp, gch, error);
+            if (error || !hashes || !publish(dir / (gch_name + ".dephash"), hashes.str())) {
+                fs::remove(temp, error);
+                log_warning(tt::LogBuildKernels, "Skipping the kernel PCH: cannot publish {}", gch.string());
+                settle({});
+                return;
+            }
+            settle(header.string());
+        } catch (const std::exception& e) {
+            log_warning(tt::LogBuildKernels, "Skipping the kernel PCH in {}: {}", dir.string(), e.what());
+            settle({});
+        }
+    };
+    std::lock_guard builds_lock(kernel_pch_builds_mutex());
+    auto& builds = kernel_pch_builds();
+    // Join the builds that have finished: settling is a build's last step.
+    std::erase_if(builds, [](const KernelPchBuild& b) { return b.entry->settled.load(std::memory_order_acquire); });
+    builds.push_back({entry, std::jthread(std::move(build))});
+    return {};
+}
+
+void wait_for_kernel_pch_builds() {
+    std::vector<KernelPchBuild> builds;
     {
-        std::ifstream deps_file(deps);
-        write_dependency_hashes(parse_dependency_file(deps_file), dir.string(), gch_name, hashes);
+        std::lock_guard lock(kernel_pch_builds_mutex());
+        builds.swap(kernel_pch_builds());
     }
-    fs::remove(deps, ec);
-    fs::rename(temp, gch, ec);
-    if (ec || !hashes || !publish(dir / (gch_name + ".dephash"), hashes.str())) {
-        fs::remove(temp, ec);
-        log_warning(tt::LogBuildKernels, "Skipping the kernel PCH: cannot publish {}", gch.string());
-        return result;
-    }
-    result = header.string();
-    return result;
 }
 
 PchUse select_pch(
