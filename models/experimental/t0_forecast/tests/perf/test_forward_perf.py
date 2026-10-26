@@ -203,3 +203,50 @@ def test_forward_perf(device, case):
     )
     # A sanity bound keeps the harness running; the contract floors are checked from the record.
     assert pcc_norm >= 0.98 and pcc_final >= 0.95, f"{case}: pcc {pcc_norm}, {pcc_final}"
+
+
+GIFT_LEVELS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
+
+
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("precision_name", ["accuracy", "performance"])
+def test_e2e_gift_perf(device, precision_name):
+    """D4 item 1: end-to-end time of ``predict`` at the GIFT-Eval settings (trim, symmetric averaging = two forwards,
+    clip, snap; the 9 GIFT levels) on the paper input. Timing only: the accuracy of these settings is gated by
+    tests/pcc/test_model.py::test_e2e_gift_settings."""
+    file, series, variates, context_len, horizon = SHAPES["paper"]
+    context = golden(file)["context"]
+    tt = _tt(device, precision_name)
+    calls = []
+
+    def network(p):
+        calls.append(1)
+        return tt.network(p)
+
+    settings = dict(trim_leading_missing=True, symmetric_averaging=True, clip_nonnegative=True, snap_integers=True)
+    from models.experimental.t0_forecast.tt import host
+
+    run = lambda: host.predict(tt.config, network, context, horizon, GIFT_LEVELS, **settings)
+    _, cold_s = _sync_time(device, run)
+    calls.clear()
+    steady = [_sync_time(device, run)[1] for _ in range(STEADY_ITERS)]
+    steady_s = statistics.median(steady)
+    forwards = len(calls) // STEADY_ITERS
+    print(f"\n[e2e] paper_gift-{precision_name}: steady {steady_s:.4f} s ({forwards} forwards), cold {cold_s:.4f} s")
+    _record(
+        {
+            "test": "e2e_gift",
+            "name": "paper_gift",
+            "precision": precision_name,
+            "series": series,
+            "context": context_len,
+            "horizon": horizon,
+            "levels": list(GIFT_LEVELS),
+            "settings": settings,
+            "forwards": forwards,
+            "cold_s": cold_s,
+            "steady_s": steady_s,
+            "steady_runs": steady,
+            "chip": os.environ.get("TTQ_CHIP_SERIAL"),
+        }
+    )
