@@ -159,7 +159,8 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
                                  unpack_src_format[operandB_id],
                                  dest_max_tiles,
                                  unpB_face_r_dim,
-                                 MATH_FIDELITY == ckernel::MathFidelity::HiFi4)) {
+                                 MATH_FIDELITY == ckernel::MathFidelity::HiFi4,
+                                 MATH_FIDELITY == ckernel::MathFidelity::LoFi)) {
         llk_unpack_AB_matmul_init_impl<auto_ttsync, true>(
             transpose,
             ct_dim,

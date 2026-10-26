@@ -621,7 +621,7 @@ void kernel_main() {
 #endif
 #if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
     // not with a fused activation: its SFPU init runs once, before the matmul inits that rewrite ADDR_MOD_3, 6 and 7
-    constexpr bool row_mop = !mm_main_cell && mm_forced_form == 0 && subblock_h * subblock_w >= 8 && K_block_tiles > 1;
+    constexpr bool row_mop = !mm_main_cell && (mm_forced_form == 0 || mm_forced_form == 'r') && subblock_h * subblock_w >= 8 && K_block_tiles > 1;
 #else
     constexpr bool row_mop = false;
 #endif

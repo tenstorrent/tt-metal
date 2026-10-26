@@ -89,6 +89,7 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
  *                         at its floor on the default body, which the 8-bit body only delays, and a tile of 8 rows keeps the
  *                         default body, which streams it faster.
  * @param hifi4: A single tile at HiFi4 is bound by the math thread, which the 8-bit body only delays.
+ * @param lofi: A column of tiles streamed through SrcB at LoFi reads 0.2 to 0.6 cycles slower on the 8-bit body than on main's (tt-llk dyn sweep).
  */
 inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
     const std::uint32_t ct_dim,
@@ -97,9 +98,11 @@ inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
     const std::uint32_t unpB_src_format,
     const std::uint32_t dest_max_tiles,
     const std::uint32_t unpB_face_r_dim = 16,
-    const bool hifi4                    = false)
+    const bool hifi4                    = false,
+    const bool lofi                     = false)
 {
     return dest_max_tiles > 8 && (unpB_face_r_dim > 8 || (unpB_face_r_dim <= 4 && ct_dim >= 8)) && !(hifi4 && ct_dim == 1 && rt_dim == 1) &&
+           !(lofi && ct_dim == 1 && rt_dim > 1) &&
            ((ct_dim >= rt_dim) ? _llk_unpack_AB_matmul_narrow_format_(unpA_src_format) : _llk_unpack_AB_matmul_narrow_format_(unpB_src_format));
 }
 

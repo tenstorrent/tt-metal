@@ -272,7 +272,7 @@ void kernel_main() {
     constexpr DataFormat bmm_forced_key = ckernel::matmul_forced_form_key(bmm_forced_form);
 #endif
     constexpr bool row_mop =
-        !bmm_main_cell && bmm_forced_form == 0 && (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
+        !bmm_main_cell && (bmm_forced_form == 0 || bmm_forced_form == 'r') && (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
         (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
                             unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32)) &&
         out_subblock_num_tiles >= 4 && (is_bfp8_b_format(in1_format) || is_bfp4_b_format(in1_format));
