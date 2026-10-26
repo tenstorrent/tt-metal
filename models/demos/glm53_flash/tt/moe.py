@@ -1125,6 +1125,16 @@ class TtRoutedExperts(LightweightModule):
         )
         if T <= REGIONS_T:
             return self._forward_regions(x, dense_w, idx, w, max_buf=bufs[0] if bufs else None)
+        if (
+            os.environ.get("GLM53_REGIONS_SPANS", "0") == "1"
+            and bufs is None
+            and REGIONS_ROUTE == "custom"
+            and REGIONS_SCATTER == "custom"
+            and REGIONS_COMBINE == "fused"
+            and T % TILE == 0
+            and all((t1 - t0) % TILE == 0 for t0, t1 in spans)
+        ):
+            return self._forward_regions_spans(x, idx, w, spans)
         outs = []
         for i, (t0, t1) in enumerate(spans):
             parts = [
@@ -1138,6 +1148,27 @@ class TtRoutedExperts(LightweightModule):
         y = ttnn.concat(outs, dim=-2)
         for o in outs:
             ttnn.deallocate(o)
+        return y
+
+    def _forward_regions_spans(self, x: ttnn.Tensor, idx: ttnn.Tensor, w: ttnn.Tensor, spans) -> ttnn.Tensor:
+        """``_forward_regions_chunked`` on the routed path without the per-sub-chunk copies (tt-blaze G53F-0215): x
+        goes to row-major ONCE for the layer (the region scatter reads each sub-chunk's rows at their offset) and
+        the fused combine writes each sub-chunk's rows into one preallocated output (no ``ttnn.concat``); only the
+        small top-k lists are sliced. The same rows reach the same ops, so the output is bit-identical."""
+        T, H = x.shape[-2], self.H
+        x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [T, H])
+        y = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, T, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, ttnn.DRAM_MEMORY_CONFIG
+        )
+        for t0, t1 in spans:
+            idx_s = ttnn.slice(idx, [0, 0, t0, 0], [1, 1, t1, idx.shape[-1]])
+            w_s = ttnn.slice(w, [0, 0, t0, 0], [1, 1, t1, w.shape[-1]])
+            self._forward_regions_routed(None, idx_s, w_s, t1 - t0, [], None, x_rm=x_rm, row0=t0, y_out=y, out_row0=t0)
+            ttnn.deallocate(idx_s)
+            ttnn.deallocate(w_s)
+        ttnn.deallocate(x_rm)
+        if y.dtype != self.activation_dtype:
+            y = ttnn.typecast(y, self.activation_dtype)
         return y
 
     def _fit_bufs(self, dense_w: ttnn.Tensor, spans: list[tuple[int, int]], k: int) -> list[int]:
@@ -1304,12 +1335,29 @@ class TtRoutedExperts(LightweightModule):
             y = ttnn.slice(y, [0, 0, 0, 0], [1, 1, T_logical, H])
         return y
 
-    def _forward_regions_routed(self, x, idx, w, T_logical: int, padded: list, max_buf: int | None) -> ttnn.Tensor:
+    def _forward_regions_routed(
+        self,
+        x,
+        idx,
+        w,
+        T_logical: int,
+        padded: list,
+        max_buf: int | None,
+        *,
+        x_rm: ttnn.Tensor | None = None,
+        row0: int = 0,
+        y_out: ttnn.Tensor | None = None,
+        out_row0: int = 0,
+    ) -> ttnn.Tensor:
         """``_forward_regions`` with the routing tables from ``custom_ops/route_table`` (G53F-0195): the same region
-        scatter, expert kernel, untilize and fused combine on bit-identical slots / counts / offsets / weights."""
+        scatter, expert kernel, untilize and fused combine on bit-identical slots / counts / offsets / weights.
+        ``x_rm`` / ``row0`` and ``y_out`` / ``out_row0`` (G53F-0215, ``_forward_regions_spans``): this sub-chunk's
+        tokens are rows [row0, row0 + T) of a row-major x shared by the layer's sub-chunks, and its output rows go
+        to rows [out_row0, out_row0 + T) of the layer's preallocated output (no slice / concat copies); returns
+        ``y_out`` then (bf16, untypecast)."""
         d = self._dispatch
         E_loc, H, k = self.E_local, self.H, idx.shape[-1]
-        T = x.shape[-2]
+        T = idx.shape[-2]
         max_buf = max_buf or self.dispatch_max_tokens or (-(-(T * k + E_loc * TILE) // TILE) * TILE)
         if self._route_table is None:
             from models.demos.glm53_flash.custom_ops.route_table.op import RouteTable
@@ -1327,9 +1375,12 @@ class TtRoutedExperts(LightweightModule):
         if nd and d.get("nd") != nd:
             self._weights_to_nd(nd)
         pos_tk, w_loc, counts, offsets = self._route_table(idx, w, d["table_rm"], max_buf)
-        x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [T, H])
-        buf = self._region_scatter(x_rm, pos_tk, max_buf)
-        ttnn.deallocate(x_rm)
+        shared_x = x_rm is not None
+        if not shared_x:
+            x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [T, H])
+        buf = self._region_scatter(x_rm, pos_tk, max_buf, row0=row0)
+        if not shared_x:
+            ttnn.deallocate(x_rm)
         out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
             ttnn.reshape(buf, [max_buf, H]),
             offsets,
@@ -1364,9 +1415,11 @@ class TtRoutedExperts(LightweightModule):
         ttnn.deallocate(w_loc)
         ttnn.deallocate(w16)
         _regions_stat(max_buf, "fused+scatter+route")
-        y = self._gather_combine(y_rm, pos_tk, w_rm)  # [1,1,T,H] TILE
+        y = self._gather_combine(y_rm, pos_tk, w_rm, out=y_out, out_row0=out_row0)  # [1,1,T,H] TILE
         for t in (y_rm, pos_tk, w_rm, counts, offsets):
             ttnn.deallocate(t)
+        if y_out is not None:
+            return y_out
         if y.dtype != self.activation_dtype:
             y = ttnn.typecast(y, self.activation_dtype)
         for t in padded:

@@ -53,6 +53,8 @@ void kernel_main() {
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t pos_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t buf_addr = get_common_arg_val<uint32_t>(2);
+    // token t of this call is x row row0 + t (a sub-chunk of a larger row-major x, tt-blaze G53F-0215)
+    const uint32_t row0 = get_common_arg_val<uint32_t>(3);
     // the core's block span: an even split of TOTAL_BLOCKS over the NCORES cores (row-major, the first TOTAL_BLOCKS %
     // NCORES take one more) from the core's logical position -- no per-core runtime args (G53F-0206)
     const uint32_t core_i = get_absolute_logical_y() * GRID_X + get_absolute_logical_x();
@@ -84,7 +86,11 @@ void kernel_main() {
                 }
                 if (local) {
                     noc.async_read(
-                        s_x, cb_rows, row_bytes, {.page_id = b * TILE_ROWS + t0 + i}, {.offset_bytes = i * row_bytes});
+                        s_x,
+                        cb_rows,
+                        row_bytes,
+                        {.page_id = row0 + b * TILE_ROWS + t0 + i},
+                        {.offset_bytes = i * row_bytes});
                     any = true;
                 }
             }

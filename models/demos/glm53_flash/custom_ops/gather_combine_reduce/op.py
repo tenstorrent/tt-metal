@@ -42,7 +42,16 @@ class GatherCombineReduce:
         self.device = device
         self._parts: dict = {}
 
-    def __call__(self, table: ttnn.Tensor, pos: ttnn.Tensor, weights: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self,
+        table: ttnn.Tensor,
+        pos: ttnn.Tensor,
+        weights: ttnn.Tensor,
+        out: ttnn.Tensor | None = None,
+        out_row0: int = 0,
+    ) -> ttnn.Tensor:
+        """``out`` / ``out_row0`` (tt-blaze G53F-0215): write token t's row into row ``out_row0 + t`` of a preallocated
+        [1, 1, T_out, H] bf16 TILE tensor (a sub-chunk's place in the layer's output, no concat copy)."""
         R, H = int(table.shape[-2]), int(table.shape[-1])
         k = int(weights.shape[-2])
         T = int(weights.shape[-3])
@@ -64,9 +73,12 @@ class GatherCombineReduce:
         emb_dim_bytes = H * 2
         assert table.buffer_aligned_page_size() == emb_dim_bytes, table.buffer_aligned_page_size()
         pos_page = pos.buffer_aligned_page_size()
-        out = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, T, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, ttnn.DRAM_MEMORY_CONFIG
-        )
+        if out is None:
+            out = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, T, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, ttnn.DRAM_MEMORY_CONFIG
+            )
+        assert out.dtype == ttnn.bfloat16 and out.layout == ttnn.TILE_LAYOUT and int(out.shape[-1]) == H, out.shape
+        assert out_row0 % TOKENS_PER_CHUNK == 0 and out_row0 + T <= int(out.shape[-2]), (out_row0, T, out.shape)
         # G53F-0206: per-geometry parts built once; a call sets the addresses (common runtime args) and a preset hash
         key = (R, H, k, T, bool(pos_tile), pos_page)
         cached = os.environ.get("GLM53_CUSTOM_OP_CACHE", "1") == "1"
@@ -78,7 +90,7 @@ class GatherCombineReduce:
             self._parts[key] = parts
         reader, compute, writer, cbs, program_hash = parts
         reader.common_runtime_args = [table.buffer_address(), pos.buffer_address()]
-        writer.common_runtime_args = [weights.buffer_address(), out.buffer_address()]
+        writer.common_runtime_args = [weights.buffer_address(), out.buffer_address(), out_row0 // TOKENS_PER_CHUNK]
         program = ttnn.ProgramDescriptor(kernels=[reader, compute, writer], semaphores=[], cbs=cbs)
         program.custom_program_hash = program_hash
         return ttnn.generic_op([table, pos, weights, out], program)

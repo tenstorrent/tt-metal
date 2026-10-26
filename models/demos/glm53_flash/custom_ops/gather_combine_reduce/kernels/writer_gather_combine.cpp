@@ -51,12 +51,15 @@ void kernel_main() {
     uint32_t output_addr = get_common_arg_val<uint32_t>(1);
     uint32_t dispatch_table_addr;
     uint32_t indices_addr;
+    uint32_t out_row0_tiles;  // the output's first tile row for this call (tt-blaze G53F-0215: a sub-chunk's place)
     if constexpr (use_dispatch_table_skip) {
         dispatch_table_addr = get_common_arg_val<uint32_t>(2);
         indices_addr = get_common_arg_val<uint32_t>(3);
+        out_row0_tiles = get_common_arg_val<uint32_t>(4);
     } else {
         dispatch_table_addr = 0;
         indices_addr = 0;
+        out_row0_tiles = get_common_arg_val<uint32_t>(2);
     }
     // the core's chunk span: an even split of TOTAL_CHUNKS over NCORES cores (row-major, the first TOTAL_CHUNKS %
     // NCORES take one more) from the core's logical position -- no per-core runtime args (tt-blaze G53F-0206)
@@ -179,7 +182,7 @@ void kernel_main() {
         // emb_dim_out_tiles of them hold real data for this 32-token block.
         cb_output.wait_front(cb_output_tiles);
 
-        uint32_t tile_row = token_start_idx / TOKENS_PER_CHUNK;
+        uint32_t tile_row = out_row0_tiles + token_start_idx / TOKENS_PER_CHUNK;
         uint32_t start_tile_idx = tile_row * emb_dim_out_tiles;
 
         for (uint32_t tile_idx = 0; tile_idx < emb_dim_out_tiles; ++tile_idx) {

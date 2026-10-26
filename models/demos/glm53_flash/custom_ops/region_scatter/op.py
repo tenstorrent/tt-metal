@@ -37,12 +37,15 @@ class RegionScatter:
         self.device = device
         self._parts: dict = {}
 
-    def __call__(self, x: ttnn.Tensor, pos: ttnn.Tensor, rows: int) -> ttnn.Tensor:
-        T, H = int(x.shape[-2]), int(x.shape[-1])
+    def __call__(self, x: ttnn.Tensor, pos: ttnn.Tensor, rows: int, row0: int = 0) -> ttnn.Tensor:
+        """``row0`` (tt-blaze G53F-0215): token t of this call is row ``row0 + t`` of ``x`` (a sub-chunk of a larger
+        row-major x without a slice copy); the token count is pos's."""
+        T, H = int(pos.shape[-2]), int(x.shape[-1])
         k = int(pos.shape[-1])
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.ROW_MAJOR_LAYOUT, (x.dtype, x.layout)
         assert pos.dtype == ttnn.float32 and pos.layout == ttnn.TILE_LAYOUT, (pos.dtype, pos.layout)
-        assert int(pos.shape[-2]) == T and T % TILE == 0 and k <= 16, (pos.shape, T, k)
+        assert row0 >= 0 and row0 + T <= int(x.shape[-2]), (row0, T, x.shape)
+        assert T % TILE == 0 and k <= 16, (pos.shape, T, k)
         row_bytes = x.buffer_aligned_page_size()
         assert row_bytes == H * 2, (row_bytes, H)
         buf = ttnn.allocate_tensor_on_device(
@@ -58,7 +61,7 @@ class RegionScatter:
             parts = self._build(x, pos, buf, T, H, k, rows, row_bytes, pos_page)
             self._parts[key] = parts
         kernel, cbs, program_hash = parts
-        kernel.common_runtime_args = [x.buffer_address(), pos.buffer_address(), buf.buffer_address()]
+        kernel.common_runtime_args = [x.buffer_address(), pos.buffer_address(), buf.buffer_address(), int(row0)]
         program = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs)
         program.custom_program_hash = program_hash
         return ttnn.generic_op([x, pos, buf], program)
