@@ -1999,3 +1999,23 @@ time from base; us (% of 512 GB/s on the bytes of that mode):
   DRISC DMA path is not reproduced here (no DRISC kernels in a generic_op), so its NOC1-endpoint interaction with x
   stays the open suspect.
 Logs: /localdev/mstaletovic/dram_xw/ (r03_sweep, r04_combos, r05_batch; results.jsonl).
+
+### Continuous read queues in the op (x relays, down weights): no gain, not kept (2026-10-26, bh-lb-09, GLM-5.3 E 8)
+Why: the DRAM-only benchmark (test_dram_xw_mix.py) reached 99.5% once x reads never drained, and the down pattern
+gained ~3% at 4 in flight. Tried as typed layout options (x_read_depth / dw_depth): each relay's row-major chunks
+(se11_xrd.cpp) and each down core's weight blocks (se6_dw.cpp) as a transaction-id queue, pushed in order as each id
+lands, instead of barrier batches. Note: the op's relays already issue a whole 64 KB chunk (32 rows x 2 KB) at once
+and 2 chunks a barrier, so the benchmark's "3 reads in flight" baseline understated today's x issue.
+us a call M 128 / 160 (base 494 / 522), y vs base:
+| variant | us | y |
+|---|---|---|
+| down queue 2 / 4 / 6 | 495 / 522 ; 495 / 526-527 ; 495 / 525 | bit-exact |
+| x queue 2 (3 runs) | 496 / 518 ; 496 / 520 ; 497 / 518 | bit-exact (after the fix below) |
+| x queue 3 / 4 | 497 / 518 ; 498 / 520-523 | intermittently wrong rows (99-213 of 1024) |
+- Pushing a chunk as soon as its id's outstanding count read 0 put stale rows into the tilizer; checking ids only
+  with the read command buffer idle and the newest chunk by the global issued-vs-received count fixed depth 2 but not
+  3 / 4 (cause not found; not chased: the best clean gain is -4 us at M 160 and +2 at M 128).
+- Reading: the drain between batches is not what x costs in the op (+83 us next to the DRISC weight streams vs +31 for
+  its bytes in the benchmark); the remaining suspects are the DRISC path (tile 1 shared with x's NOC1 reads, and its
+  shallow DMA-then-write loop, which feels every extra DRAM latency). Code reverted; the patch is
+  /localdev/mstaletovic/dram_xw/op/read_queues.patch. Logs: /localdev/mstaletovic/dram_xw/op/.
