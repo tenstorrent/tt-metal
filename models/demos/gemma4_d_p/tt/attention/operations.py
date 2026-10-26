@@ -15,6 +15,7 @@ Handles:
 - scaling=1.0 (no 1/sqrt(d_k))
 """
 
+import functools
 import os
 
 import ttnn
@@ -30,8 +31,10 @@ from models.demos.gemma4_d_p.tt.matmul_config import (
 from .weights import AttentionWeights
 
 
+@functools.cache
 def prefill_short_lived_memcfg() -> ttnn.MemoryConfig:
-    """Some ops improve overall perf by leaving their activations in L1. This function returns L1 interleaved config, unless overriden to DRAM."""
+    """Some ops improve overall perf by leaving their activations in L1. This function returns L1 interleaved config, unless overriden to DRAM.
+    GEMMA4_ACTIVATIONS_DRAM_ONLY is read once per process."""
     if os.environ.get("GEMMA4_ACTIVATIONS_DRAM_ONLY", "0").lower() in ("1", "true", "yes"):
         return ttnn.DRAM_MEMORY_CONFIG
     return ttnn.L1_MEMORY_CONFIG
@@ -51,6 +54,11 @@ def projection_math_fidelity(rows):
     return ttnn.MathFidelity.LoFi if rows >= _LOFI_PROJECTION_MIN_ROWS else ttnn.MathFidelity.HiFi2
 
 
+# (program_config, compute_kernel_config) by projection geometry. Every chunk of a prefill has the same shapes, so the
+# eager forward builds each pair once instead of once per call.
+_PROJECTION_CONFIGS = {}
+
+
 def projection_matmul_configs(hidden_states, weight, max_m_tiles=None):
     """(program_config, compute_kernel_config) for an attention projection: explicit blocking with fp32
     accumulation, or (None, None) for ttnn's defaults.
@@ -62,6 +70,25 @@ def projection_matmul_configs(hidden_states, weight, max_m_tiles=None):
     """
     device = hidden_states.device()
     grid = device.compute_with_storage_grid_size()
+    padded = hidden_states.padded_shape
+    key = (
+        grid.x,
+        grid.y,
+        hidden_states.shape[-2],
+        padded[-2],
+        padded[-1],
+        hidden_states.memory_config().shard_spec.shape[1] if hidden_states.is_sharded() else None,
+        weight.padded_shape[-1],
+        max_m_tiles,
+    )
+    configs = _PROJECTION_CONFIGS.get(key)
+    if configs is None:
+        configs = _build_projection_matmul_configs(hidden_states, weight, device, grid, max_m_tiles)
+        _PROJECTION_CONFIGS[key] = configs
+    return configs
+
+
+def _build_projection_matmul_configs(hidden_states, weight, device, grid, max_m_tiles):
     program_config = prefill_1d_matmul_program_config(
         hidden_states, weight, grid, max_m_tiles=max_m_tiles
     ) or prefill_matmul_program_config(hidden_states, weight, grid.x, grid.y, fp32_dest_acc=True)

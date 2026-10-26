@@ -171,6 +171,43 @@ def write_chunk_to_global_ring_cache(
         chunk.deallocate(True)
 
 
+def global_ring_program_config(tt_q, cache_kv, mesh_config, ccl_manager, num_local_kv_heads):
+    """SDPA program config for global ring attention of tt_q over the packed cache_kv. It depends only on their
+    shapes and dtypes, so a caller may build it once and pass it to every chunk."""
+    sdpa_grid = ccl_manager.compute_grid_size
+
+    # Determine whether to use the tuned configurations for the ring prefill attention.
+    use_tuned_configs = (
+        mesh_config.device.arch() == ttnn.Arch.BLACKHOLE
+        and mesh_config.cp_degree == 8
+        and mesh_config.tp_degree == 4
+        and (sdpa_grid.x - 1, sdpa_grid.y) == (11, 10)
+        and num_local_kv_heads == 1
+        and tt_q.dtype == ttnn.bfloat16
+        and cache_kv.dtype == ttnn.bfloat8_b
+    )
+
+    q_chunk, k_chunk, k_splits, segmented = ring_sdpa_chunk_sizes(
+        tt_q.shape[-2],
+        sliding=False,
+        num_heads=tt_q.shape[1],
+        grid=(sdpa_grid.x - 1, sdpa_grid.y),
+        use_tuned_configs=use_tuned_configs,
+    )
+
+    return ring_prefill_program_config(
+        mesh_config.device,
+        ccl_manager,
+        GLOBAL_HEAD_DIM,
+        q_chunk_size=q_chunk,
+        k_chunk_size=k_chunk,
+        k_splits=k_splits,
+        # Global attention only: sliding attention gains nothing from LoFi, so it keeps HiFi2.
+        matmul_math_fidelity=ttnn.MathFidelity.LoFi,
+        segmented_accumulation=segmented,
+    )
+
+
 def global_ring_prefill_attention(
     tt_q,
     cache_kv,
@@ -187,41 +224,12 @@ def global_ring_prefill_attention(
     layer_idx=0,
     num_layers=1,
 ):
-    """Attend over the packed cache: K is its first GLOBAL_HEAD_DIM columns and V its last GLOBAL_HEAD_DIM."""
+    """Attend over the packed cache: K is its first GLOBAL_HEAD_DIM columns and V its last GLOBAL_HEAD_DIM.
+
+    program_config defaults to global_ring_program_config's."""
     mesh_device = mesh_config.device
     if program_config is None:
-        sdpa_grid = ccl_manager.compute_grid_size
-
-        # Determine whether to use the tuned configurations for the ring prefill attention.
-        use_tuned_configs = (
-            mesh_device.arch() == ttnn.Arch.BLACKHOLE
-            and mesh_config.cp_degree == 8
-            and mesh_config.tp_degree == 4
-            and (sdpa_grid.x - 1, sdpa_grid.y) == (11, 10)
-            and num_local_kv_heads == 1
-            and tt_q.dtype == ttnn.bfloat16
-            and cache_kv.dtype == ttnn.bfloat8_b
-        )
-
-        q_chunk, k_chunk, k_splits, segmented = ring_sdpa_chunk_sizes(
-            tt_q.shape[-2],
-            sliding=False,
-            num_heads=tt_q.shape[1],
-            grid=(sdpa_grid.x - 1, sdpa_grid.y),
-            use_tuned_configs=use_tuned_configs,
-        )
-
-        program_config = ring_prefill_program_config(
-            mesh_device,
-            ccl_manager,
-            GLOBAL_HEAD_DIM,
-            q_chunk_size=q_chunk,
-            k_chunk_size=k_chunk,
-            k_splits=k_splits,
-            # Global attention only: sliding attention gains nothing from LoFi, so it keeps HiFi2.
-            matmul_math_fidelity=ttnn.MathFidelity.LoFi,
-            segmented_accumulation=segmented,
-        )
+        program_config = global_ring_program_config(tt_q, cache_kv, mesh_config, ccl_manager, num_local_kv_heads)
 
     # Dense attention gathers each device's whole shard, so the buffer spans the full cache capacity. Sizing it to
     # logical_n survives a 2-chunk run and then fails "gather dim 2 too small".
@@ -393,6 +401,18 @@ def write_chunk_to_sliding_ring_cache(
             chunk.deallocate(True)
 
 
+def sliding_ring_program_config(tt_q, mesh_config, ccl_manager, head_dim):
+    """SDPA program config for sliding ring attention of tt_q. It depends only on tt_q's shape, so a caller may build
+    it once and pass it to every chunk."""
+    sdpa_grid = ccl_manager.compute_grid_size
+    q_chunk, k_chunk, k_splits, _ = ring_sdpa_chunk_sizes(
+        tt_q.shape[-2], sliding=True, num_heads=tt_q.shape[1], grid=(sdpa_grid.x - 1, sdpa_grid.y)
+    )
+    return ring_prefill_program_config(
+        mesh_config.device, ccl_manager, head_dim, q_chunk_size=q_chunk, k_chunk_size=k_chunk, k_splits=k_splits
+    )
+
+
 def sliding_ring_prefill_attention(
     tt_q,
     cache_k,
@@ -425,13 +445,7 @@ def sliding_ring_prefill_attention(
     """
     mesh_device = mesh_config.device
     if program_config is None:
-        sdpa_grid = ccl_manager.compute_grid_size
-        q_chunk, k_chunk, k_splits, _ = ring_sdpa_chunk_sizes(
-            tt_q.shape[-2], sliding=True, num_heads=tt_q.shape[1], grid=(sdpa_grid.x - 1, sdpa_grid.y)
-        )
-        program_config = ring_prefill_program_config(
-            mesh_device, ccl_manager, head_dim, q_chunk_size=q_chunk, k_chunk_size=k_chunk, k_splits=k_splits
-        )
+        program_config = sliding_ring_program_config(tt_q, mesh_config, ccl_manager, head_dim)
     # Only the predecessor halo is exchanged, and the op requires a compact buffer (gathered rows < cache_seq *
     # ring): a full-capacity one fails "requires a compact halo buffer". The halo is the window rounded up to whole
     # k chunks.

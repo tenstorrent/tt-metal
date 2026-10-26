@@ -21,6 +21,8 @@ own permutations.
 
 from __future__ import annotations
 
+import functools
+
 import torch
 
 import ttnn
@@ -175,6 +177,21 @@ def packed_rope_columns(layer_type: str, head_dim: int) -> tuple[torch.Tensor, .
     return (sliding_kv_indices(head_dim),)
 
 
+@functools.cache
+def _device_pack_orders() -> tuple[torch.Tensor, ...]:
+    """(rotary, value, NeoX-sorted rotary, pair interleave) column orders of pack_global_kv_device: constants, built
+    once rather than on every call."""
+    rotary, _, value_order = global_kv_indices()
+    interleave = torch.stack(
+        (
+            torch.arange(GLOBAL_ROTARY_DIM // 2, dtype=torch.long),
+            torch.arange(GLOBAL_ROTARY_DIM // 2, GLOBAL_ROTARY_DIM, dtype=torch.long),
+        ),
+        dim=1,
+    ).reshape(-1)
+    return rotary, value_order, torch.sort(rotary).values, interleave
+
+
 def pack_global_kv_device(
     value: ttnn.Tensor,
     k_norm_rotary_weight: ttnn.Tensor,
@@ -193,18 +210,10 @@ def pack_global_kv_device(
     paths that still maintain the separate paged cache. cos_cache and sin_cache
     are read only when packed_rope_mats is None.
     """
-    rotary, _, value_order = global_kv_indices()
+    rotary, value_order, rotary_neox, interleave = _device_pack_orders()
     if canonical_k is not None:
         k_rotary = _gather_columns(canonical_k, rotary, memory_config)
     else:
-        rotary_neox = torch.sort(rotary).values
-        interleave = torch.stack(
-            (
-                torch.arange(GLOBAL_ROTARY_DIM // 2, dtype=torch.long),
-                torch.arange(GLOBAL_ROTARY_DIM // 2, GLOBAL_ROTARY_DIM, dtype=torch.long),
-            ),
-            dim=1,
-        ).reshape(-1)
         if value_is_packed:
             active_value = ttnn.slice(
                 value,

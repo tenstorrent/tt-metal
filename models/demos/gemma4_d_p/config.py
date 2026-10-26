@@ -23,20 +23,13 @@ class MeshConfig:
         self.tp_axis = 1
         self.cp_axis = 0
         self.total_devices = 32
-
-    @property
-    def mesh_shape(self):
-        return tuple(self.device.shape)
-
-    @property
-    def cp_degree(self):
-        """Number of context-parallel ranks along the CP mesh axis."""
-        return self.mesh_shape[self.cp_axis]
-
-    @property
-    def tp_degree(self):
-        """Number of tensor-parallel ranks along the TP mesh axis."""
-        return self.mesh_shape[self.tp_axis]
+        # Read once: the eager forward asks for the degrees about a thousand times, and each device.shape is a
+        # binding call.
+        self.mesh_shape = tuple(mesh_device.shape)
+        # Number of context-parallel ranks along the CP mesh axis.
+        self.cp_degree = self.mesh_shape[self.cp_axis]
+        # Number of tensor-parallel ranks along the TP mesh axis.
+        self.tp_degree = self.mesh_shape[self.tp_axis]
 
     def shard_mapper(self, tensor_dim=None, mesh_dims=None):
         if mesh_dims is None:
