@@ -20,9 +20,39 @@ constexpr uint32_t cb_dL_dgamma_components = tt::CBIndex::c_9;
 // CBs with intermediate computations
 constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
 constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
+constexpr uint32_t cb_dgamma_row_idx = tt::CBIndex::c_14;
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
+
+#ifdef DGAMMA_ON_CHIP
+// Writes row 0 of each fp32 tile in cb_dgamma_row into row `dgamma_row` of the [num_cores, C] dgamma partials.
+// A tile row spans two 16x16 faces: faces 0 and 1 hold tile rows 0..15, faces 2 and 3 rows 16..31.
+template <typename AddrGen>
+void write_dgamma_row(const AddrGen& dgamma_addr_generator, const uint32_t dgamma_row) {
+    constexpr uint32_t tile_height = 32U;
+    constexpr uint32_t face_height = 16U;
+    constexpr uint32_t face_row_bytes = face_height * sizeof(float);
+    constexpr uint32_t face_bytes = face_height * face_row_bytes;
+    const uint32_t row_in_tile = dgamma_row % tile_height;
+    const uint32_t dst_offset =
+        (row_in_tile / face_height) * 2U * face_bytes + (row_in_tile % face_height) * face_row_bytes;
+    const uint32_t first_tile = (dgamma_row / tile_height) * Wt;
+    for (uint32_t c = 0; c < Wt; ++c) {
+        cb_wait_front(cb_dgamma_row_idx, onetile);
+        const uint32_t l1_read_addr = get_read_ptr(cb_dgamma_row_idx);
+        for (uint32_t face = 0; face < 2U; ++face) {
+            noc_async_write(
+                l1_read_addr + face * face_bytes,
+                dgamma_addr_generator.get_noc_addr(first_tile + c, dst_offset + face * face_bytes),
+                face_row_bytes);
+        }
+        noc_async_writes_flushed();
+        cb_pop_front(cb_dgamma_row_idx, onetile);
+    }
+    noc_async_write_barrier();
+}
+#endif
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
@@ -30,7 +60,7 @@ void kernel_main() {
     uint32_t dgamma_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
-    [[maybe_unused]] uint32_t dgamma_tile_row = get_arg_val<uint32_t>(runtime_args_counter++);
+    [[maybe_unused]] uint32_t dgamma_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t tile_bytes = get_tile_size(cb_dL_da_idx);
     constexpr auto da_args = TensorAccessorArgs<2>();
@@ -67,13 +97,7 @@ void kernel_main() {
 #endif
     }
 #ifdef DGAMMA_ON_CHIP
-    // The compute kernel accumulates this core's dgamma partials over all of its rows and pushes them once.
-    write_tiles_by_row(
-        cb_dL_dgamma_components,
-        dgamma_output_addr_generator,
-        dgamma_tile_row * Wt,
-        Wt,
-        get_tile_size(cb_dL_dgamma_components),
-        Wt);
+    // The compute kernel accumulates this core's dgamma over all of its rows and sums each tile's rows into one.
+    write_dgamma_row(dgamma_output_addr_generator, dgamma_row);
 #endif
 }

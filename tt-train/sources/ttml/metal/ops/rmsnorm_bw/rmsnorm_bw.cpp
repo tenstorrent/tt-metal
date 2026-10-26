@@ -4,8 +4,8 @@
 
 #include "rmsnorm_bw.hpp"
 
-#include "core/compute_kernel_config.hpp"
 #include "device/rmsnorm_bw_device_operation.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::metal {
 
@@ -13,15 +13,10 @@ namespace {
 
 using ops::rmsnorm_bw::device::RMSNormBackwardMode;
 
-// dL_dgamma requires a sum over batches and rows, which the kernel leaves to one ttnn::sum: either over the
-// per-row components [B,1,S,C] or over the per-core fp32 partials [1,1,num_cores*32,C].
+// dL_dgamma requires a sum over batches and rows, which the kernel leaves to the caller: either over the
+// per-row components [B,1,S,C] or over the per-core fp32 partials [1,1,num_cores,C].
 ttnn::Tensor reduce_dgamma(const ttnn::Tensor& dgamma_parts, const ttnn::Tensor& gamma) {
-    auto dgamma = ttnn::sum(
-        dgamma_parts,
-        /* dim_arg */ ttsl::SmallVector<int>{0, 1, 2},
-        /* keep_dim */ true,
-        /* output_mem_config */ std::nullopt,
-        /*compute_kernel_config */ core::ComputeKernelConfig::precise());  // -> [1,1,1,C]
+    auto dgamma = ttnn_fixed::sum_over_rows(dgamma_parts);  // -> [1,1,1,C]
     if (dgamma.dtype() != gamma.dtype()) {
         dgamma = ttnn::typecast(dgamma, gamma.dtype());
     }
@@ -51,9 +46,7 @@ ttnn::Tensor rmsnorm_bw_local_sum(
         gamma_tensor,
         /* rms */ std::nullopt,
         dL_dout_tensor,
-        /* epsilon */ 1e-6F,
-        /* preallocated_da */ std::nullopt,
-        /* preallocated_dgamma_components */ std::nullopt,
+        /* external_sums */ std::nullopt,
         RMSNormBackwardMode::LocalSum);
     return result[0];
 }
@@ -70,12 +63,9 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw_external_scale(
         gamma_tensor,
         rms_tensor,
         dL_dout_tensor,
-        /* epsilon */ 1e-6F,
-        /* preallocated_da */ std::nullopt,
-        /* preallocated_dgamma_components */ std::nullopt,
+        gathered_local_sums,
         RMSNormBackwardMode::ExternalScale,
-        full_width,
-        gathered_local_sums);
+        full_width);
     return {result[0], reduce_dgamma(result[1], gamma_tensor)};
 }
 

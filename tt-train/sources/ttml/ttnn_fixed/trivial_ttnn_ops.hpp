@@ -11,6 +11,10 @@ namespace ttml::ttnn_fixed {
 
 ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, uint32_t dim);
 ttnn::Tensor sum_over_batch(const ttnn::Tensor& t);
+// Sums [B, N, S, C] over B, N and S into [1, 1, 1, C] with fp32 accumulation. When B * N is 1, or S is
+// tile-aligned so that the [1, 1, B * N * S, C] reshape is a view, this is a single reduce over rows. Otherwise
+// ttnn::sum reduces the three dims one at a time, with a transpose or permute around each of dims 0 and 1.
+ttnn::Tensor sum_over_rows(const ttnn::Tensor& t);
 ttnn::Tensor log_softmax(const ttnn::Tensor& t, int dim);
 ttnn::Tensor softmax(const ttnn::Tensor& t, int dim);
 ttnn::Tensor divide(const ttnn::Tensor& a, const ttnn::Tensor& b);

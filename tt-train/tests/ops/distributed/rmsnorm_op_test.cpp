@@ -7,7 +7,6 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <bit>
 #include <cmath>
 #include <core/xtensor_utils.hpp>
 #include <numeric>
@@ -19,7 +18,10 @@
 #include "autograd/auto_context.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.hpp"
+#include "ops/rmsnorm_op.hpp"
 #include "test_utils/random_data.hpp"
+#include "test_utils/rmsnorm_reference.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
@@ -37,41 +39,19 @@ bool has_at_least_devices(size_t num_devices) {
     return system_mesh_size() >= num_devices;
 }
 
-struct RMSNormReference {
-    xt::xarray<float> out;
-    xt::xarray<float> dx;
-    xt::xarray<float> dgamma;
-};
-
-// Round-to-nearest-even to bfloat16, which is what the device sees after from_xtensor.
-xt::xarray<float> round_to_bf16(const xt::xarray<float>& values) {
-    xt::xarray<float> rounded = values;
-    for (auto& value : rounded) {
-        uint32_t bits = std::bit_cast<uint32_t>(value);
-        bits += 0x7FFFU + ((bits >> 16U) & 1U);
-        value = std::bit_cast<float>(bits & 0xFFFF0000U);
-    }
-    return rounded;
-}
-
-// fp32 formula on bf16-rounded inputs, so the comparison only measures device arithmetic, not input rounding.
-RMSNormReference rmsnorm_reference(
-    const xt::xarray<float>& x_f32,
-    const xt::xarray<float>& gamma_f32,
-    const xt::xarray<float>& dy_f32,
-    float epsilon) {
-    const xt::xarray<float> x = round_to_bf16(x_f32);
-    const xt::xarray<float> gamma = round_to_bf16(gamma_f32);
-    const xt::xarray<float> dy = round_to_bf16(dy_f32);
-    xt::xarray<float> rms = xt::sqrt(xt::mean(x * x, {3}, xt::keep_dims) + epsilon);
-    xt::xarray<float> gained = gamma * dy / rms;
-    xt::xarray<float> scale = xt::mean(x * gained, {3}, xt::keep_dims);
-    return RMSNormReference{
-        .out = gamma * x / rms,
-        .dx = gained - x * scale / (rms * rms),
-        .dgamma = xt::sum(dy * x / rms, {0, 1, 2}, xt::keep_dims),
-    };
-}
+// Outputs and dx are bf16 (relative step 2^-8); the row reductions behind them read fp32 operands through tf32.
+constexpr float kOutRtol = 1e-2F;
+constexpr float kOutAtol = 1e-2F;
+constexpr float kDxRtol = 2e-2F;
+constexpr float kDxAtol = 2e-2F;
+// Per-row absolute error of dgamma; the tolerance grows with sqrt(number of rows).
+constexpr float kDgammaRtol = 2e-2F;
+constexpr float kDgammaRowAtol = 1e-2F;
+// Two device results are each rounded to bf16, so they can differ by two bf16 steps (relative 2^-7). dx from the
+// distributed and the single-device backward differ only in how the row sum is assembled, so its absolute tolerance is
+// tighter than against the fp32 reference; this is what catches a wrong cross-shard term.
+constexpr float kDeviceVsDeviceRtol = 2e-2F;
+constexpr float kDeviceVsDeviceDxAtol = 1e-2F;
 
 // Shards the last dim over `cluster_axis` and replicates over the other mesh axis; std::nullopt shards over all
 // devices as a 1D mesh.
@@ -122,6 +102,7 @@ std::vector<xt::xarray<float>> unshard_last_dim(const ttnn::Tensor& tensor, std:
 }
 
 void expect_all_close(
+    const char* what,
     const ttnn::Tensor& tensor,
     const xt::xarray<float>& expected,
     std::optional<uint32_t> cluster_axis,
@@ -130,7 +111,8 @@ void expect_all_close(
     const auto lines = unshard_last_dim(tensor, cluster_axis);
     for (size_t line = 0; line < lines.size(); ++line) {
         EXPECT_TRUE(xt::allclose(lines[line], expected, rtol, atol))
-            << "mismatch on replica " << line << ", max abs diff " << xt::amax(xt::abs(lines[line] - expected))();
+            << what << " mismatch on replica " << line << ", max abs diff "
+            << xt::amax(xt::abs(lines[line] - expected))();
     }
 }
 
@@ -164,13 +146,80 @@ void run_distributed_rmsnorm(
     ASSERT_TRUE(core::is_tensor_initialized(tensor->get_grad()));
     ASSERT_TRUE(core::is_tensor_initialized(tt_gamma->get_grad()));
 
-    const auto expected = rmsnorm_reference(x, gamma, dy, kEpsilon);
-    // Outputs and dx are bf16 (relative step 2^-8 ~ 4e-3); the row reductions behind them go through tf32.
-    expect_all_close(out->get_value(), expected.out, cluster_axis, /* rtol */ 1e-2F, /* atol */ 1e-2F);
-    expect_all_close(tensor->get_grad(), expected.dx, cluster_axis, /* rtol */ 2e-2F, /* atol */ 2e-2F);
-    // dL/dgamma sums B * S independent per-row errors, so its absolute error grows with sqrt(B * S).
-    const float dgamma_atol = 1e-2F * std::sqrt(static_cast<float>(batch * seq_len));
-    expect_all_close(tt_gamma->get_grad(), expected.dgamma, cluster_axis, /* rtol */ 2e-2F, dgamma_atol);
+    const auto expected = test_utils::rmsnorm_reference(x, gamma, dy, kEpsilon);
+    expect_all_close("out", out->get_value(), expected.out, cluster_axis, kOutRtol, kOutAtol);
+    expect_all_close("dx", tensor->get_grad(), expected.dx, cluster_axis, kDxRtol, kDxAtol);
+    const float dgamma_atol = test_utils::dgamma_atol(batch * seq_len, kDgammaRowAtol);
+    expect_all_close("dgamma", tt_gamma->get_grad(), expected.dgamma, cluster_axis, kDgammaRtol, dgamma_atol);
+}
+
+// Compares the distributed op over the whole mesh (1D) with ops::rmsnorm on the unsharded row, replicated on every
+// device.
+void run_against_single_device_rmsnorm(uint32_t batch, uint32_t seq_len, uint32_t hidden) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    auto& rng = autograd::ctx().get_generator();
+    const xt::xarray<float> x = test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{batch, 1U, seq_len, hidden}, -1.0F, 1.0F, rng());
+    const xt::xarray<float> gamma =
+        test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1U, 1U, 1U, hidden}, 0.5F, 1.5F, rng());
+    const xt::xarray<float> dy = test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{batch, 1U, seq_len, hidden}, -1.0F, 1.0F, rng());
+
+    auto sharded_x = autograd::create_tensor(shard_last_dim(x, std::nullopt), /* requires_grad */ true);
+    auto sharded_gamma = autograd::create_tensor(shard_last_dim(gamma, std::nullopt), /* requires_grad */ true);
+    auto sharded_out = ops::distributed::rmsnorm(sharded_x, sharded_gamma, kEpsilon);
+    sharded_out->set_grad(shard_last_dim(dy, std::nullopt));
+    sharded_out->backward();
+
+    auto replicate = [&](const xt::xarray<float>& values) {
+        auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+        return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(values, device, ttnn::Layout::TILE, mapper.get());
+    };
+    auto full_x = autograd::create_tensor(replicate(x), /* requires_grad */ true);
+    auto full_gamma = autograd::create_tensor(replicate(gamma), /* requires_grad */ true);
+    auto full_out = ops::rmsnorm(full_x, full_gamma, kEpsilon);
+    full_out->set_grad(replicate(dy));
+    full_out->backward();
+
+    auto first_replica = [](const ttnn::Tensor& tensor) {
+        return core::to_xtensor<float>(tensor, core::IdentityComposer{}).front();
+    };
+    expect_all_close(
+        "out",
+        sharded_out->get_value(),
+        first_replica(full_out->get_value()),
+        std::nullopt,
+        kDeviceVsDeviceRtol,
+        kOutAtol);
+    expect_all_close(
+        "dx",
+        sharded_x->get_grad(),
+        first_replica(full_x->get_grad()),
+        std::nullopt,
+        kDeviceVsDeviceRtol,
+        kDeviceVsDeviceDxAtol);
+    expect_all_close(
+        "dgamma",
+        sharded_gamma->get_grad(),
+        first_replica(full_gamma->get_grad()),
+        std::nullopt,
+        kDgammaRtol,
+        test_utils::dgamma_atol(batch * seq_len, kDgammaRowAtol));
+}
+
+// Layout the ExternalScale backward picks for one device's [batch, 1, seq_len, local_width] shard.
+ttml::metal::ops::rmsnorm_bw::device::RMSNormBackwardLayout external_scale_layout(
+    uint32_t batch, uint32_t seq_len, uint32_t local_width, uint32_t num_shards) {
+    using namespace ttml::metal::ops::rmsnorm_bw::device;
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto x = ttml::core::zeros(ttnn::Shape({batch, 1U, seq_len, local_width}), device);
+    const auto gamma = ttml::core::zeros(ttnn::Shape({1U, 1U, 1U, local_width}), device);
+    const auto sums = ttml::core::zeros(
+        ttnn::Shape({batch, 1U, seq_len, num_shards * tt::constants::TILE_WIDTH}), device, ttnn::DataType::FLOAT32);
+    return compute_layout(
+        operation_attributes_t{.mode = RMSNormBackwardMode::ExternalScale, .full_width = num_shards * local_width},
+        tensor_args_t{.input = x, .gamma = gamma, .dL_dout = x, .external_sums = sums});
 }
 
 }  // namespace
@@ -202,17 +251,37 @@ TEST_F(TwoDeviceDistributedRMSNormTest, Batched) {
 }
 
 // A wider row makes the full-row mean depend on the fp32 stats rather than on rounding of a short sum.
-// The streaming path of rmsnorm_bw (above ~7K per device) is not reachable here: the forward's
-// rms_norm_pre_all_gather keeps the whole local row in L1 and overflows first. RMSNormBwShardedModesTest covers it.
+// A local width past the forward's whole-row L1 cap is rejected before the ttnn forward
+// (see RejectsLocalWidthBeyondForwardL1). RMSNormBwShardedModesTest covers the streaming backward.
 TEST_F(TwoDeviceDistributedRMSNormTest, WideHidden) {
     SKIP_FOR_WATCHER();
     run_distributed_rmsnorm(1, 64, 2048);
+}
+
+TEST_F(TwoDeviceDistributedRMSNormTest, BatchedNonTileAlignedMatchesSingleDevice) {
+    SKIP_FOR_WATCHER();
+    run_against_single_device_rmsnorm(2, 33, 1024);
+}
+
+// 4480 per device sits just under the forward's whole-row L1 cap, where the ExternalScale backward already streams.
+TEST_F(TwoDeviceDistributedRMSNormTest, NearForwardWidthCapMatchesSingleDevice) {
+    SKIP_FOR_WATCHER();
+    constexpr uint32_t kSeqLen = 256U;
+    constexpr uint32_t kLocalWidth = 4480U;
+    EXPECT_FALSE(external_scale_layout(1U, kSeqLen, kLocalWidth, 2U).everything_fits_in_l1)
+        << "the ExternalScale backward should stream a " << kLocalWidth << "-wide shard";
+    run_against_single_device_rmsnorm(1U, kSeqLen, 2U * kLocalWidth);
 }
 
 // Wan2.2-14B hidden at a training-length sequence: 256 tile rows per device.
 TEST_F(TwoDeviceDistributedRMSNormTest, LongSequenceWanHidden) {
     SKIP_FOR_WATCHER();
     run_distributed_rmsnorm(1, 8192, 5120);
+}
+
+TEST_F(TwoDeviceDistributedRMSNormTest, LongSequenceWanHiddenMatchesSingleDevice) {
+    SKIP_FOR_WATCHER();
+    run_against_single_device_rmsnorm(1, 8192, 5120);
 }
 
 TEST_F(TwoDeviceDistributedRMSNormTest, ZeroRowStaysFinite) {
@@ -241,6 +310,14 @@ TEST_F(TwoDeviceDistributedRMSNormTest, RejectsOutOfRangeClusterAxis) {
     auto x = ttml::autograd::create_tensor(shard_last_dim(xt::ones<float>({1U, 1U, 32U, 128U}), std::nullopt));
     auto gamma = ttml::autograd::create_tensor(shard_last_dim(xt::ones<float>({1U, 1U, 1U, 128U}), std::nullopt));
     EXPECT_THROW(ttml::ops::distributed::rmsnorm(x, gamma, kEpsilon, /* cluster_axis */ 2U), std::invalid_argument);
+}
+
+// 32768 split over two devices is 16384 per device, past the forward's whole-row L1 cap.
+TEST_F(TwoDeviceDistributedRMSNormTest, RejectsLocalWidthBeyondForwardL1) {
+    constexpr uint32_t kFullWidth = 32768U;
+    auto x = ttml::autograd::create_tensor(shard_last_dim(xt::ones<float>({1U, 1U, 32U, kFullWidth}), std::nullopt));
+    auto gamma = ttml::autograd::create_tensor(shard_last_dim(xt::ones<float>({1U, 1U, 1U, kFullWidth}), std::nullopt));
+    EXPECT_THROW(ttml::ops::distributed::rmsnorm(x, gamma, kEpsilon), std::invalid_argument);
 }
 
 TEST_F(TwoDeviceDistributedRMSNormTest, RejectsNonTileAlignedLocalHidden) {

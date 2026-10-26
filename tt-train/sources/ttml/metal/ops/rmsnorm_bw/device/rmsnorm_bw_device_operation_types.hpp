@@ -14,11 +14,21 @@ enum class RMSNormBackwardMode : uint8_t {
     ExternalScale,  // dx and dgamma, row reduction taken from gathered LocalSum outputs
 };
 
-// Attributes for the backward operation
+// Work split and L1 strategy, computed once per launch from the tensors so that the dgamma output shape and the
+// program always agree.
+struct RMSNormBackwardLayout {
+    uint32_t num_cores{};
+    bool everything_fits_in_l1{};
+    // dgamma is accumulated per core in L1 and written as [1, 1, num_cores, C] fp32 partials instead of
+    // [B, N, S, C] per-row components.
+    bool dgamma_on_chip{};
+};
+
+// Attributes for the backward operation. epsilon is applied when rms is built, not in this op.
 struct RMSNormBackwardParams {
-    float epsilon = 1e-6F;
     RMSNormBackwardMode mode = RMSNormBackwardMode::Full;
     uint32_t full_width = 0U;  // unsharded row width, required by ExternalScale and ignored by the other modes
+    RMSNormBackwardLayout layout{};
 };
 
 // Tensors required for backward
@@ -37,8 +47,9 @@ using tensor_args_t = RMSNormBackwardInputs;
 
 // Output tensor specs and tensors
 // Full / ExternalScale : {dL_da, dgamma}
-//   dgamma is bf16 [B, N, S, C] per-row components or fp32 [1, 1, num_cores * 32, C] per-core partials,
-//   summed over dims {0, 1, 2} by the caller
+//   dgamma is bf16 [B, N, S, C] per-row components or fp32 [1, 1, num_cores, C] per-core partials,
+//   summed over dims {0, 1, 2} by the caller. A preallocated dL_dgamma_components tensor selects the
+//   per-row components layout, including shapes that would otherwise accumulate dgamma on chip.
 // LocalSum             : {sums}
 //   sums is fp32 [B, N, S, 32], row sum in column 0, zeros elsewhere
 using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;

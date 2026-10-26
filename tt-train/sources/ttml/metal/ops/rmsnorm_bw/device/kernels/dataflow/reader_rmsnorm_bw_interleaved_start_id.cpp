@@ -54,7 +54,7 @@ void kernel_main() {
         generate_mask_tile(cb_mask_w_idx, one, zero, mask_w);
     }
 #ifdef DO_MASK_H
-    generate_mask_h_tile(cb_mask_h_idx, one, zero, mask_h);
+    generate_mask_tile(cb_mask_h_idx, one, zero, mask_h, MaskAxis::Height);
 #endif
     // Generate tile with scalar.
     generate_tile_with_packed_bfloat16_value(cb_scaler_idx, packed_scaler);

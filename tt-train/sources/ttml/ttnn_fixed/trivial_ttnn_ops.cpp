@@ -5,6 +5,7 @@
 #include "trivial_ttnn_ops.hpp"
 
 #include <optional>
+#include <tt-metalium/constants.hpp>
 #include <vector>
 
 #include "core/compute_kernel_config.hpp"
@@ -28,6 +29,18 @@ ttnn::Tensor sum_over_dim(const ttnn::Tensor& t, uint32_t dim) {
 
 ttnn::Tensor sum_over_batch(const ttnn::Tensor& t) {
     return sum_over_dim(t, /* dim */ 0);
+}
+
+ttnn::Tensor sum_over_rows(const ttnn::Tensor& t) {
+    const auto& shape = t.logical_shape();
+    TT_FATAL(shape.rank() == 4U, "sum_over_rows expects a rank-4 tensor, got shape {}", shape);
+    const auto compute_kernel_config = core::ComputeKernelConfig::precise();
+    const uint32_t num_outer = shape[0] * shape[1];
+    if (num_outer == 1U || shape[2] % tt::constants::TILE_HEIGHT == 0U) {
+        const auto rows = num_outer == 1U ? t : ttnn::reshape(t, ttnn::Shape({1U, 1U, num_outer * shape[2], shape[3]}));
+        return ttnn::sum(rows, /* dim */ -2, /* keep_dim */ true, std::nullopt, compute_kernel_config);
+    }
+    return ttnn::sum(t, ttsl::SmallVector<int>{0, 1, 2}, /* keep_dim */ true, std::nullopt, compute_kernel_config);
 }
 
 // Stable log-softmax implementation

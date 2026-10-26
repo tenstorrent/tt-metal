@@ -4,6 +4,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/cb_api.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -39,6 +40,7 @@ constexpr uint32_t cb_recip_rms_a_bcasted_idx = tt::CBIndex::c_10;
 constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
 constexpr uint32_t cb_external_sums_idx = tt::CBIndex::c_12;
 constexpr uint32_t cb_mask_h_idx = tt::CBIndex::c_13;
+constexpr uint32_t cb_dgamma_row_idx = tt::CBIndex::c_14;
 
 // LocalSum emits the reduced scale itself, through the dL_da output CB.
 #ifdef LOCAL_SUM
@@ -60,9 +62,59 @@ constexpr bool do_mask_h = false;
 #endif
 
 // With fp32 DEST accumulation one DEST half holds four tiles. The block helpers below keep the block's results in
-// tiles 0..block_size-1 and use the remaining tiles as scratch, so a block is at most two tiles wide.
+// tiles 0..block_size-1 and use the remaining tiles as work and scratch registers, so a block is at most two tiles
+// wide.
 static_assert(block_size <= 2U, "block helpers need two scratch DST tiles");
 static_assert(DST_ACCUM_MODE, "dL_da and ExternalScale sums rely on the FPU multiply accumulating into fp32 DEST");
+
+// Last DEST tile of the half, never part of a block's results.
+constexpr uint32_t scratch_register = 3U;
+
+// ============================================================================
+// Unpacker operand tracking. compute_kernel_hw_startup programs srcA from cb_input and srcB from cb_gamma; every
+// later operand change goes through these helpers, which reprogram an operand only when its data format changes.
+// Most operands are bf16, so most changes cost nothing.
+// ============================================================================
+
+uint32_t srca_cb = cb_input_idx;
+uint32_t srcb_cb = cb_gamma_idx;
+
+inline void use_srca(const uint32_t cb) {
+    reconfig_data_format_srca(srca_cb, cb);
+    srca_cb = cb;
+}
+
+inline void use_srca_srcb(const uint32_t srca, const uint32_t srcb) {
+    reconfig_data_format(srca_cb, srca, srcb_cb, srcb);
+    srca_cb = srca;
+    srcb_cb = srcb;
+}
+
+// ============================================================================
+// Row waits. With EVERYTHING_FITS_IN_L1 the whole row (and gamma, once per core) sits in L1; otherwise the reader
+// streams one block at a time.
+// ============================================================================
+
+inline void wait_full_row(const uint32_t row) {
+    // Gamma is constant among all rows, so it is read once per core.
+    if (row == 0) {
+        cb_wait_front(cb_gamma_idx, Wt);
+    }
+    cb_wait_front(cb_dL_out_idx, Wt);
+    cb_wait_front(cb_input_idx, Wt);
+}
+
+inline void wait_block() {
+    cb_wait_front(cb_gamma_idx, block_size);
+    cb_wait_front(cb_dL_out_idx, block_size);
+    cb_wait_front(cb_input_idx, block_size);
+}
+
+inline void pop_block() {
+    cb_pop_front(cb_gamma_idx, block_size);
+    cb_pop_front(cb_dL_out_idx, block_size);
+    cb_pop_front(cb_input_idx, block_size);
+}
 
 // ============================================================================
 // Register-only helpers. They work on a block of tiles at a time and issue every
@@ -81,41 +133,43 @@ inline uint32_t row_tile_idx(const uint32_t col, const uint32_t block_idx) {
 // The FPU multiply accumulates into DEST in fp32 mode, so every register that collects a product starts from an
 // explicit zero tile.
 inline void zero_registers(const uint32_t first_register, const uint32_t count) {
-    reconfig_data_format_srca(cb_zero_idx);
+    use_srca(cb_zero_idx);
     copy_init(cb_zero_idx);
     for (uint32_t i = 0; i < count; ++i) {
         copy_tile(cb_zero_idx, /* tile_idx */ 0, first_register + i);
     }
 }
 
-// Multiplies DEST tiles 0..count-1 by 1/rms_a, which is copied once into recip_register.
-inline void scale_registers_by_recip(const uint32_t count, const uint32_t recip_register) {
-    reconfig_data_format_srca(cb_recip_rms_a_bcasted_idx);
-    copy_init(cb_recip_rms_a_bcasted_idx);
-    copy_tile(cb_recip_rms_a_bcasted_idx, /* tile_idx */ 0, recip_register);
-    mul_binary_tile_init();
-    for (uint32_t i = 0; i < count; ++i) {
-        mul_binary_tile(i, recip_register, i);
-    }
-}
-
-// Adds sum over the block of a * gamma * dL_dout to acc_register. Work registers are acc_register + 1 .. and the
-// last DEST tile is scratch.
-inline void accumulate_local_sum_block(const uint32_t col, const uint32_t acc_register) {
-    const uint32_t first_work_register = acc_register + 1U;
-    const uint32_t scratch_register = 3U;
-
-    // work_t = dL_dout_t * gamma_t (gamma broadcast over rows)
-    zero_registers(first_work_register, block_size);
-    reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
+// DEST tiles first_register.. = dL_dout_t * gamma_t (gamma broadcast over rows) for the block's tiles.
+inline void dL_dout_times_gamma_block(const uint32_t col, const uint32_t first_register) {
+    zero_registers(first_register, block_size);
+    use_srca_srcb(cb_dL_out_idx, cb_gamma_idx);
     mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
         const uint32_t tile_idx = row_tile_idx(col, block_idx);
-        mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, tile_idx, tile_idx, first_work_register + block_idx);
+        mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, tile_idx, tile_idx, first_register + block_idx);
     }
+}
+
+// Multiplies DEST tiles 0..count-1 by 1/rms_a, which is copied once into the scratch register.
+inline void scale_registers_by_recip(const uint32_t count) {
+    use_srca(cb_recip_rms_a_bcasted_idx);
+    copy_init(cb_recip_rms_a_bcasted_idx);
+    copy_tile(cb_recip_rms_a_bcasted_idx, /* tile_idx */ 0, scratch_register);
+    mul_binary_tile_init();
+    for (uint32_t i = 0; i < count; ++i) {
+        mul_binary_tile(i, scratch_register, i);
+    }
+}
+
+// Adds sum over the block of a * gamma * dL_dout to acc_register. Work registers are acc_register + 1 ...
+inline void accumulate_local_sum_block(const uint32_t col, const uint32_t acc_register) {
+    const uint32_t first_work_register = acc_register + 1U;
+
+    dL_dout_times_gamma_block(col, first_work_register);
 
     // work_t *= a_t
-    reconfig_data_format_srca(cb_input_idx);
+    use_srca(cb_input_idx);
     copy_init(cb_input_idx);
     mul_binary_tile_init();
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -130,6 +184,7 @@ inline void accumulate_local_sum_block(const uint32_t col, const uint32_t acc_re
             // two, the unused second work register for a block of one.
             const uint32_t data_register = first_work_register + block_size - 1U;
             const uint32_t mask_register = data_register + 1U;
+            use_srca(cb_mask_w_idx);
             copy_init(cb_mask_w_idx);
             copy_tile(cb_mask_w_idx, /* tile_idx */ 0, mask_register);
             mask_tile_init();
@@ -150,9 +205,10 @@ inline void accumulate_local_sum_block(const uint32_t col, const uint32_t acc_re
 inline void finish_dL_da_scale(const uint32_t scale_register, const uint32_t num_recip_factors) {
     const uint32_t recip_register = scale_register + 1U;
     const uint32_t scaler_register = scale_register + 2U;
-    reconfig_data_format_srca(cb_recip_rms_a_bcasted_idx);
+    use_srca(cb_recip_rms_a_bcasted_idx);
     copy_init(cb_recip_rms_a_bcasted_idx);
     copy_tile(cb_recip_rms_a_bcasted_idx, /* tile_idx */ 0, recip_register);
+    use_srca(cb_scaler_idx);
     copy_init(cb_scaler_idx);
     copy_tile(cb_scaler_idx, /* tile_idx */ 0, scaler_register);
     mul_binary_tile_init();
@@ -166,19 +222,11 @@ inline void finish_dL_da_scale(const uint32_t scale_register, const uint32_t num
 // Formula: dL_da = gained_dL_dout - (scale * a) / (c * rms_a^2) with gained_dL_dout = (gamma / rms_a) * dL_dout;
 // the whole per-row factor -scale / (c * rms_a^2) is the k tile in cb_scale.
 inline void compute_dL_da_block(const uint32_t col) {
-    const uint32_t recip_register = 3U;
-
-    zero_registers(0, block_size);
-    reconfig_data_format(cb_dL_out_idx, cb_gamma_idx);
-    mul_bcast_rows_init(cb_dL_out_idx, cb_gamma_idx);
-    for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-        const uint32_t tile_idx = row_tile_idx(col, block_idx);
-        mul_tiles_bcast_rows(cb_dL_out_idx, cb_gamma_idx, tile_idx, tile_idx, block_idx);
-    }
-    scale_registers_by_recip(block_size, recip_register);
+    dL_dout_times_gamma_block(col, /* first_register */ 0U);
+    scale_registers_by_recip(block_size);
 
     // The FPU accumulates a_t * k onto the gained gradient; k is negative.
-    reconfig_data_format(cb_input_idx, cb_scale_idx);
+    use_srca_srcb(cb_input_idx, cb_scale_idx);
     mul_bcast_cols_init(cb_input_idx, cb_scale_idx);
     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
         mul_tiles_bcast_cols(cb_input_idx, cb_scale_idx, row_tile_idx(col, block_idx), /* tile_idx */ 0, block_idx);
@@ -188,16 +236,14 @@ inline void compute_dL_da_block(const uint32_t col) {
 // dL_dgamma_components_t = (a_t * dL_dout_t) / rms_a for count tiles starting at first_block_idx, in DEST tiles
 // 0..count-1. The components are reduced over batch and sequence outside the kernel.
 inline void compute_dL_dgamma_block(const uint32_t col, const uint32_t first_block_idx, const uint32_t count) {
-    const uint32_t recip_register = 3U;
-
     zero_registers(0, count);
-    reconfig_data_format(cb_input_idx, cb_dL_out_idx);
+    use_srca_srcb(cb_input_idx, cb_dL_out_idx);
     mul_init(cb_input_idx, cb_dL_out_idx);
     for (uint32_t i = 0; i < count; ++i) {
         const uint32_t tile_idx = row_tile_idx(col, first_block_idx + i);
         mul_tiles(cb_input_idx, cb_dL_out_idx, tile_idx, tile_idx, i);
     }
-    scale_registers_by_recip(count, recip_register);
+    scale_registers_by_recip(count);
 }
 #endif
 
@@ -215,7 +261,7 @@ inline void compute_recip_rms_a_bcasted() {
     const uint32_t reg_rms_a = 0;
     tile_regs_acquire();
     zero_registers(reg_rms_a, 1U);
-    reconfig_data_format(cb_zero_idx, cb_rms_a_idx);
+    use_srca_srcb(cb_zero_idx, cb_rms_a_idx);
     add_bcast_cols_init(cb_zero_idx, cb_rms_a_idx);
     add_tiles_bcast_cols(cb_zero_idx, cb_rms_a_idx, /* tile_idx */ 0, /* tile_idx */ 0, reg_rms_a);
     recip_tile_init();
@@ -231,25 +277,15 @@ inline void compute_scale(const uint32_t row) {
     tile_regs_acquire();
     zero_registers(scale_register, 1U);
 #ifdef EVERYTHING_FITS_IN_L1
-    // Gamma is constant among all rows so if everything fits in L1, we can read it only once.
-    if (row == 0) {
-        cb_wait_front(cb_gamma_idx, Wt);
-    }
-    cb_wait_front(cb_dL_out_idx, Wt);
-    cb_wait_front(cb_input_idx, Wt);
+    wait_full_row(row);
     for (uint32_t col = 0; col < Wt; col += block_size) {
         accumulate_local_sum_block(col, scale_register);
     }
 #else
     for (uint32_t col = 0; col < Wt; col += block_size) {
-        cb_wait_front(cb_gamma_idx, block_size);
-        cb_wait_front(cb_dL_out_idx, block_size);
-        cb_wait_front(cb_input_idx, block_size);
+        wait_block();
         accumulate_local_sum_block(col, scale_register);
-        // Pop tiles that are not needed anymore.
-        cb_pop_front(cb_gamma_idx, block_size);
-        cb_pop_front(cb_dL_out_idx, block_size);
-        cb_pop_front(cb_input_idx, block_size);
+        pop_block();
     }
 #endif
     tile_regs_commit();
@@ -264,8 +300,8 @@ inline void compute_scale(const uint32_t row) {
 
     // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
     // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
-    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA), so reconfig in reversed (in1, in0) order.
-    reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
+    // matmul reverses operands (in0 -> SrcB, in1 -> SrcA).
+    use_srca_srcb(cb_mat_mul_reduce, cb_scale_idx);
     matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
     matmul_tiles(
         cb_scale_idx,
@@ -298,7 +334,7 @@ inline void compute_external_scale() {
     cb_wait_front(cb_external_sums_idx, num_external_tiles);
     tile_regs_acquire();
     zero_registers(scale_register, 1U);
-    reconfig_data_format(cb_recip_rms_a_bcasted_idx, cb_external_sums_idx);
+    use_srca_srcb(cb_recip_rms_a_bcasted_idx, cb_external_sums_idx);
     mul_init(cb_recip_rms_a_bcasted_idx, cb_external_sums_idx);
     for (uint32_t tile_idx = 0U; tile_idx < num_external_tiles; ++tile_idx) {
         mul_tiles(cb_recip_rms_a_bcasted_idx, cb_external_sums_idx, /* tile_idx */ 0, tile_idx, scale_register);
@@ -307,6 +343,26 @@ inline void compute_external_scale() {
     tile_regs_commit();
     pack_and_push(scale_register, cb_scale_idx);
     cb_pop_front(cb_external_sums_idx, num_external_tiles);
+}
+#endif
+
+#ifdef DGAMMA_ON_CHIP
+// Sums the 32 rows of each accumulated dgamma tile into its first row, so the writer stores one row per core. The
+// accumulator is unpacked straight to fp32 DEST (UnpackToDestFp32) and reduced on the SFPU, so the partials keep
+// full fp32 precision.
+inline void reduce_dgamma_rows() {
+    cb_wait_front(cb_dL_dgamma_components, Wt);
+    use_srca(cb_dL_dgamma_components);
+    for (uint32_t col = 0; col < Wt; ++col) {
+        tile_regs_acquire();
+        copy_init(cb_dL_dgamma_components);
+        copy_tile(cb_dL_dgamma_components, col, /* dst_idx */ 0U);
+        sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+        sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_COL>(/* idst */ 0U);
+        tile_regs_commit();
+        pack_and_push(/* reg */ 0U, cb_dgamma_row_idx);
+    }
+    cb_pop_front(cb_dL_dgamma_components, Wt);
 }
 #endif
 
@@ -344,11 +400,7 @@ void kernel_main() {
 #ifdef EXTERNAL_SCALE
         compute_external_scale();
 #ifdef EVERYTHING_FITS_IN_L1
-        if (row == 0) {
-            cb_wait_front(cb_gamma_idx, Wt);
-        }
-        cb_wait_front(cb_dL_out_idx, Wt);
-        cb_wait_front(cb_input_idx, Wt);
+        wait_full_row(row);
 #endif
 #else
         // To compute scale we must iterate over all inner dimension.
@@ -365,9 +417,7 @@ void kernel_main() {
             cb_reserve_back(cb_dL_dgamma_components, block_size);
 #endif
 #ifndef EVERYTHING_FITS_IN_L1
-            cb_wait_front(cb_gamma_idx, block_size);
-            cb_wait_front(cb_dL_out_idx, block_size);
-            cb_wait_front(cb_input_idx, block_size);
+            wait_block();
 #endif
             tile_regs_acquire();
             compute_dL_da_block(col);
@@ -382,6 +432,7 @@ void kernel_main() {
                 for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
                     tile_regs_acquire();
                     compute_dL_dgamma_block(col, block_idx, /* count */ 1U);
+                    use_srca(cb_mask_h_idx);
                     copy_init(cb_mask_h_idx);
                     copy_tile(cb_mask_h_idx, /* tile_idx */ 0, mask_register);
                     mask_tile_init();
@@ -402,9 +453,7 @@ void kernel_main() {
             pack_and_push_block(cb_dL_dgamma_components, block_size);
 #endif
 #ifndef EVERYTHING_FITS_IN_L1
-            cb_pop_front(cb_gamma_idx, block_size);
-            cb_pop_front(cb_dL_out_idx, block_size);
-            cb_pop_front(cb_input_idx, block_size);
+            pop_block();
 #endif
         }
 #ifdef EVERYTHING_FITS_IN_L1
@@ -418,6 +467,7 @@ void kernel_main() {
     }
 #ifdef DGAMMA_ON_CHIP
     cb_push_back(cb_dL_dgamma_components, Wt);
+    reduce_dgamma_rows();
 #endif
 #ifdef EVERYTHING_FITS_IN_L1
     cb_pop_front(cb_gamma_idx, Wt);

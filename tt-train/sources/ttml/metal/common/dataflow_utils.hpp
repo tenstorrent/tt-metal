@@ -83,39 +83,30 @@ inline std::pair<uint32_t, uint32_t> get_page_and_offset(uint32_t tiled_row, uin
 
 // ----- Tile generation functions -----
 
-// Generator the mask tile with horizontal masking.
-// Each tile face is 16x16, and there are 4 faces per tile.
+enum class MaskAxis : uint8_t {
+    Width,   // columns below mask_size hold fill_value
+    Height,  // rows below mask_size hold fill_value
+};
+
+// Generates a bfloat16 mask tile: positions below mask_size along `axis` hold fill_value, the rest mask_fill_value.
+// Each tile face is 16x16, and there are 4 faces per tile: faces 1 and 3 are the right half, faces 2 and 3 the
+// bottom half.
 void generate_mask_tile(
-    const uint32_t cb_id, const uint16_t fill_value, const uint16_t mask_fill_value, const uint32_t mask_width) {
+    const uint32_t cb_id,
+    const uint16_t fill_value,
+    const uint16_t mask_fill_value,
+    const uint32_t mask_size,
+    const MaskAxis axis = MaskAxis::Width) {
     cb_reserve_back(cb_id, onetile);
 
     uint16_t* tile_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
 
     for (uint32_t face = 0; face < 4; ++face) {
-        uint32_t face_offset = (face & 1U) << 4U;
+        const uint32_t face_offset = (axis == MaskAxis::Width ? (face & 1U) : (face >> 1U)) << 4U;
         for (uint32_t h = 0; h < 16; ++h) {
             for (uint32_t w = 0; w < 16; ++w) {
-                *tile_ptr++ = (face_offset + w < mask_width) ? fill_value : mask_fill_value;
-            }
-        }
-    }
-
-    cb_push_back(cb_id, onetile);
-}
-
-// Generates the mask tile with vertical masking: rows below mask_height hold fill_value, the rest mask_fill_value.
-void generate_mask_h_tile(
-    const uint32_t cb_id, const uint16_t fill_value, const uint16_t mask_fill_value, const uint32_t mask_height) {
-    cb_reserve_back(cb_id, onetile);
-
-    uint16_t* tile_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_id));
-
-    for (uint32_t face = 0; face < 4; ++face) {
-        uint32_t face_offset = (face >> 1U) << 4U;
-        for (uint32_t h = 0; h < 16; ++h) {
-            const uint16_t value = (face_offset + h < mask_height) ? fill_value : mask_fill_value;
-            for (uint32_t w = 0; w < 16; ++w) {
-                *tile_ptr++ = value;
+                const uint32_t position = face_offset + (axis == MaskAxis::Width ? w : h);
+                *tile_ptr++ = (position < mask_size) ? fill_value : mask_fill_value;
             }
         }
     }
