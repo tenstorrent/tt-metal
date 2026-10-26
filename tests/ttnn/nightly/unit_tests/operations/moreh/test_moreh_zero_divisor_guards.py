@@ -63,6 +63,23 @@ def test_moreh_fold_kernel_size_zero(device, expect_error, preallocated_output):
 
 
 @pytest.mark.parametrize(
+    "output_size, kernel_size, padding, message",
+    [
+        ([8, 0], [3, 3], [1, 1], "output_size must be greater than 0"),
+        ([8, 2], [7, 7], [0, 0], "dilated kernel size exceeds padded output_size"),
+    ],
+    ids=["zero_output_size", "kernel_exceeds_output"],
+)
+def test_moreh_fold_rejects_bad_output_size(device, expect_error, output_size, kernel_size, padding, message):
+    """fold rejects an output_size the work split would divide by zero on or the window length would underflow."""
+    x = ttnn.from_torch(torch.randn(1, 36, 64).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, message):
+        ttnn.operations.moreh.fold(
+            x, None, output_size=output_size, kernel_size=kernel_size, dilation=[1, 1], padding=padding, stride=[1, 1]
+        )
+
+
+@pytest.mark.parametrize(
     "output_size, kernel_size, message",
     [([8, 8], [3], "kernel_size takes 2 elements"), ([8], [3, 3], "output_size takes 2 elements")],
     ids=["kernel_size", "output_size"],
