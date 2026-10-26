@@ -28,7 +28,7 @@ M=8 with K,N tiles of 8,12 or 16,4 does not fit in L1 (static CB region clashes 
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz (this test uses 1 Tensix core) |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | same as the blocks above: DEVICE KERNEL DURATION [ns] per (A+B)@C evaluation; `test_compute_block_size_device_perf` (N=5 median, kernel-iters 100) and `test_compute_block_size_regimes` (11 interleaved trials, kernel-iters 20) |
 
 ### Sweep (`test_compute_block_size_device_perf`) — M=256 K=128 N=128 (M_tiles=8, K_tiles=4, N_tiles=4), bf16, HiFi2, fp32_dest_acc

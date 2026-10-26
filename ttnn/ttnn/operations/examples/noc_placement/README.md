@@ -1,6 +1,6 @@
 # noc_placement — placement × NoC × operation
 
-**Measured on:** WH B0 n150 (`bgd-lab-t3002-special-dnijemcevic-for-reservation-33181`, 2026-07-17; regimes 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19)
+**Measured on:** WH B0 n150 (`bgd-lab-t3002-special-dnijemcevic-for-reservation-33181`, 2026-07-17; regimes 2026-10-12) · BH p150b (`bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19; write split and full-grid rows: `bh-50-special-adamjanovic-for-reservation-143315`, 13×10 = 130 Tensix cores, 2026-10-26)
 
 Two kernel-level decisions govern how interleaved DRAM traffic contends on the Network-on-Chip,
 and this example lets you switch and measure both:
@@ -11,8 +11,13 @@ and this example lets you switch and measure both:
 2. **Which NoC a stream uses** — **reads want NoC0, writes want NoC1** (the tt-metal default) for the
    spread placements you actually use. It is not that NoC0 is intrinsically faster: NoC0's routing
    *disperses* column-localized DRAM traffic while NoC1's *concentrates* it (mirror-image for writes).
+3. **Splitting one stream across both NoCs** (`write_split=k`: every k-th output page written on the read
+   NoC) — mostly **does not pay**. On the full worker grid at the DRAM ceiling it is flat (1/2: 1.02×,
+   1/4: 1.04×, BH p150b); it lifts a full-grid copy only while the DRAM write stream sits *below* the
+   ceiling (1.08–1.12×); wherever the NoC, not DRAM, is the bound (a few Tensix cores, L1 destinations)
+   it **loses** 3–38%, because the usual pairing already gives each NoC one stream.
 
-**Op:** `noc_placement(t, *, op, noc, placement, num_cores=N, block=B, kernel_iters=K)` — interleaved DRAM
+**Op:** `noc_placement(t, *, op, noc, placement, num_cores=N, block=B, kernel_iters=K, memory_config=None, write_split=0, noc_mode=None)` — interleaved DRAM
 data movement over a line of `N` cores. The kernels are byte-identical across placements; only the
 physical cores and the chosen NoC(s) move, so any measured difference is pure NoC routing.
 
@@ -24,6 +29,8 @@ from ttnn.operations.examples.noc_placement import noc_placement, OPS, NOCS, PLA
 noc_placement(t, op="read",  noc="noc0", placement="row")       # DRAM->L1 read bench on NoC0
 noc_placement(t, op="write", noc="noc1", placement="diagonal")  # L1->DRAM write bench on NoC1
 noc_placement(t, op="copy",  noc="noc0", placement="column")    # identity copy: reads NoC0, writes NoC1
+noc_placement(t, op="copy",  noc="noc0", placement="grid", write_split=4)  # whole grid; every 4th page's write on NoC0
+noc_placement(t, op="copy",  noc="noc0", placement="grid", noc_mode="dynamic")  # the control: dynamic mode, no split
 ```
 - `op="read"` / `op="write"` isolate a **single stream** (one kernel, a fixed L1 scratch, no CB handshake
   and no partner kernel) so the NoC-for-reads vs NoC-for-writes question is answered without cross-contention.
@@ -32,6 +39,13 @@ noc_placement(t, op="copy",  noc="noc0", placement="column")    # identity copy:
 - Reads are issued in **blocks** (`block` pages per NoC barrier) so many transactions are in flight — this
   makes the movement **bandwidth-bound**, which is what exposes link *contention* (at `block=1` it is
   latency-bound and the effect nearly vanishes). `kernel_iters` repeats the range for steady-state throughput.
+- `placement="grid"` = the first `num_cores` Tensix cores of the worker grid, row-major (default: all of them);
+  `memory_config=ttnn.L1_MEMORY_CONFIG` puts the copy's output in Tensix-core L1 (an L1 input works too).
+- `write_split=k` (copy only): every k-th output page is written on the **read** NoC instead of the write NoC —
+  1/k of the write stream moves (k=1: all writes share the read NoC). Reads never change. One RISC-V issuing on
+  both NoCs needs `NOC_MODE::DM_DYNAMIC_NOC` (both copy kernels switch; a Tensix core's DM kernels must share one
+  mode), and the per-block barrier covers both NoCs. `noc_mode="dynamic"` with `write_split=0` is the control that
+  isolates what the mode alone costs. At `write_split=0` the split code compiles out (`if constexpr`).
 
 ## 1. Best placement (op="copy")
 Wormhole B0, `shape=(1024,2048)` = 2048 tiles, 8 cores, `block=16` (see `report.md` for the stamp):
@@ -81,6 +95,46 @@ for the per-cell NoC link-demand heatmaps):
   NoC1 153k vs NoC0 292k (1.9×); write row NoC1 105k vs NoC0 402k (3.8×), write diagonal 111k vs 196k (1.8×), write
   column NoC0 195k vs NoC1 371k (1.9×). Stamped block in [`report.md`](report.md).
 
+## 3. Split one stream's writes across both NoCs (`write_split`)
+Identity copy, reads NoC0 / writes NoC1 as the baseline (`NOC_MODE` dedicated). `dynamic` = same pairing in
+`NOC_MODE::DM_DYNAMIC_NOC`, no split (the control); `1/4`, `1/2`, `all` = that fraction of the output pages written
+on NoC0 instead of NoC1 (dynamic mode); `swapped` = reads NoC1 / writes NoC0 (dedicated). BH p150b
+(`bh-50-special-adamjanovic-for-reservation-143315`, 13×10 = 130 Tensix cores, CHIP_FREQ 1350 MHz), `block=16`
+unless stated, median of 5 rotated trials × 3 launches, `test_noc_placement_write_split_perf`. GB/s = (read +
+write bytes) / device kernel duration. Speedup = baseline / variant (> 1 = faster).
+
+| Copy (2 KB bf16 tile pages) | Tensix cores | baseline ns (GB/s) | dynamic | 1/4 | 1/2 | all | swapped |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| DRAM→DRAM 32 MB, 126 tiles/core | 130 | 172 776 (388) | 1.00× | **1.04×** (403) | **1.02×** (395) | 0.77× | 0.83× |
+| DRAM→DRAM 64 MB, 252 tiles/core | 130 | 373 606 (359) | 1.00× | **1.09×** (393) | **1.09×** (390) | 0.84× | 0.92× |
+| DRAM→DRAM 128 MB, 504 tiles/core | 130 | 755 836 (355) | 1.00× | 1.04× (370) | **1.08×** (385) | 0.85× | 0.94× |
+| DRAM→DRAM 32 MB, 256 tiles/core | 64 | 186 289 (360) | 1.01× | 1.05× (376) | 1.04× (374) | 0.78× | 0.82× |
+| L1→DRAM 16 MB (only the writes touch DRAM) | 130 | 60 321 (556) | 1.00× | **1.12×** (625) | 1.01× | 0.57× | 0.56× |
+| DRAM→L1 16 MB (writes land in L1) | 130 | 42 786 (784) | 1.00× | 0.93× | 0.88× | 0.76× | 0.62× |
+| L1→L1 16 MB (no DRAM) | 130 | 36 337 (923) | 1.02× | 0.78× | 0.75× | 0.67× | 0.86× |
+| DRAM→DRAM 4 MB, row, `kernel_iters=2` | 8 | 54 025 (311) | 1.00× | 0.97× | 0.78× | 0.47× | 0.50× |
+| DRAM→DRAM 4 MB, row, `kernel_iters=2` | 2 | 113 457 (148) | 0.91× | 0.83× | 0.81× | 0.70× | 0.77× |
+| DRAM→DRAM 4 MB, `kernel_iters=2` | 1 | 221 646 (76) | 0.90× | 0.82× | 0.80× | 0.78× | 0.94× |
+| same, `block=64` | 1 | 137 031 (122) | 0.73× | 0.64× | 0.62× | 0.69× | 1.00× |
+
+Grid 32 MB at other block sizes: `block=8` 1/4 0.99×, 1/2 0.97×; `block=32` 1/4 1.03×, 1/2 1.01× (exploratory runs).
+
+- **At the DRAM ceiling it is flat.** Every full-grid DRAM→DRAM variant tops out at ~390–405 GB/s (the full-grid
+  DRAM→L1 copy reads DRAM at 392 GB/s, the same ceiling), so moving writes to the other NoC cannot add DRAM
+  bandwidth: 32 MB, already at 388 GB/s, gains 1–4%; 1/2 ranges 0.97–1.02× over `block` 8–32.
+- **Below the ceiling it lifts the copy to the ceiling, not past it.** The 64 / 128 MB footprints and the 64-core
+  grid run at 355–360 GB/s unsplit; 1/4 or 1/2 brings them to 370–393 GB/s (1.04–1.09×). The write-only DRAM copy
+  (L1→DRAM) writes DRAM at only 278 GB/s on NoC1; a quarter on NoC0 lifts it to 312 GB/s (1.12×), a half
+  overshoots (1.01×). Consistent with the NoC1 write path into the DRAM endpoints, not DRAM, limiting those cases;
+  not isolated.
+- **Where the NoC is the bound it loses.** The usual pairing already spreads the copy as one stream per NoC; moving
+  writes onto NoC0 piles them on the read stream (L1 destinations 0.75–0.93×, an 8-core row 0.78× at 1/2).
+- **On 1–2 Tensix cores `NOC_MODE::DM_DYNAMIC_NOC` itself costs 9–27%** (`dynamic` column), before any split: the
+  copy is RISC-V issue/latency-bound there, and dynamic mode's per-transaction bookkeeping is on that path. On
+  ≥ 8 Tensix cores the mode is free (0.99–1.02×).
+- **Swapping the pairing** (reads NoC1, writes NoC0) costs 0.83× on the full grid at 32 MB (0.92–0.94× at
+  64–128 MB), 0.50× on an 8-core row, 0.56–0.62× when one side is L1, and ~0.95–1.00× on one Tensix core.
+
 ## When it helps / when it does not
 **Rule:** both levers pay once the line of Tensix cores is **bandwidth-bound** — on WH B0 n150 from ≳16 outstanding
 2 KB reads (Tensix cores × `block`); at ≤ 8 they are within ~10%. Same verdicts on BH p150b, with smaller gains
@@ -103,13 +157,21 @@ Tensix core).
 | Sweep: column → row, 2 Tensix cores × `block=16` (32 outstanding) | **1.31×** | not measured |
 | Sweep: column → row, 4 Tensix cores × `block=16` (64 outstanding) | **2.20×** | not measured |
 | **Boundary** | ≳16 outstanding 2 KB reads | between 2 (flat) and 128 (helps) outstanding reads; not swept |
+| **NoC helps (full grid):** reads NoC1 → NoC0, 130 Tensix cores, 32 MB DRAM→DRAM, `kernel_iters=1` | not measured | 208 978 → 173 195 ns **1.21×** (13×10 board) |
+| **Write split helps:** 1/4 of writes on NoC0, 130 Tensix cores, 16 MB L1→DRAM (DRAM write stream below the ceiling) | not measured | 60 141 → 53 772 ns **1.12×** (13×10 board) |
+| **Write split does not help:** 1/2 of writes on NoC0, 130 Tensix cores, 32 MB DRAM→DRAM (at the DRAM ceiling, 388 GB/s) | not measured | 173 706 → 170 239 ns **1.02×** (13×10 board) |
+| **Write split loses:** 1/2 on NoC0, 130 Tensix cores, 16 MB DRAM→L1 (NoC-bound) | not measured | 42 777 → 48 763 ns **0.88×** (13×10 board) |
+| **Write split loses:** 1/2 on NoC0, row of 8 Tensix cores, 4 MB DRAM→DRAM, `kernel_iters=2` | not measured | 54 146 → 68 922 ns **0.79×** (13×10 board) |
 
 **Why the boards differ:**
 - **Smaller gains on BH p150b.** BH's NoC flit is 64 B (WH 32 B), so each link carries twice the bytes and a
   column line's shared links saturate less; the column baseline is ~2.5× faster on BH p150b (97.8 vs 246.8 µs)
   while the row lever is ~1.9× faster. Consistent with the link-width difference, not isolated.
-- **Single Tensix core:** WH B0 n150 loses 6% with reads on NoC0 at (0,0); BH p150b does not (1.02×). The DRAM
-  cores sit in different NoC columns (WH 0 and 5, BH 0 and 9), so the one-core route differs; not investigated.
+- **Single Tensix core:** WH B0 n150 loses 6% with reads on NoC0 at (0,0); BH p150b does not (1.02× on the 12×10
+  board, 1.06× on the 13×10 board — so `noc_flat_1core_block16` asserts ≤ 1.08×). The DRAM cores sit in different
+  NoC columns (WH 0 and 5, BH 0 and 9), so the one-core route differs; not investigated.
+- **Second BH p150b board (13×10 = 130 Tensix cores):** the line regimes keep their verdicts with different sizes —
+  placement 1.80× (12×10 board 2.24×), NoC 1.97× (2.45×), latency-bound placement 1.00×.
 
 - **Placement helps** when the line's outstanding reads contend: a column funnels every Tensix core's DRAM traffic
   through the same column links, a row spreads it across columns, so the row moves the same bytes 2.2–2.9× faster.
@@ -119,18 +181,23 @@ Tensix core).
   turning toward DRAM, while NoC1 (north→west) concentrates it on the DRAM columns.
 - **The NoC choice does not help** without a line to disperse: one Tensix core has nothing to spread — keep the
   default for multi-core lines, but do not expect it to help a single-Tensix-core kernel.
+- **The write split helps** only while the write stream into DRAM is below the DRAM ceiling on a full grid (a
+  quarter of the pages on the read NoC); **it does not help** at the ceiling (flat) and **loses** wherever the NoC is
+  the bound, because the usual pairing already gives each NoC one stream.
 
 Small payloads still benefit on WH B0 n150 if the line is bandwidth-bound: 64 tiles (8 tiles per Tensix core,
 `block=16`, `kernel_iters=1`) measured 2.65×, 16 tiles (2 tiles per Tensix core) 1.51×. The NoC choice for reads is
 likewise flat when latency-bound (`block=1`: 1.04× at 2 Tensix cores, 1.07× at 8 Tensix cores; `op="read"`, row).
 
 *How measured:* `test_noc_placement_regimes`, `DEVICE KERNEL DURATION [ns]`, baseline/lever interleaved
-(A,B,A,B…), median of 12 trials × 3 launches, `kernel_iters=2` unless stated.
+(A,B,A,B…), median of 12 trials × 3 launches, `kernel_iters=2` unless stated (the full-grid rows: `kernel_iters=1`).
 - **WH B0 n150:** commit `adce58258c3` + test, 2026-10-12 (three runs agree within 0.01×); sweep rows from
   tt-probe (`kernel_iters=8`); device_perf row from the 2026-07-17 report ([`report.md`](report.md)).
 - **BH p150b:** the same four cases (the fourth, then named `noc_loses_1core_block16`, is now
   `noc_flat_1core_block16`); device_perf row from `test_noc_placement_device_perf` (20 launches averaged).
   `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19, commit `f74ee7aad64`.
+- **BH p150b, 13×10 board:** full-grid and write-split rows, `bh-50-special-adamjanovic-for-reservation-143315`,
+  2026-10-26, commit `5eac7659e6c` + this example's write-split change, CHIP_FREQ 1350 MHz.
 
 Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_regimes`
 (same regimes on any board; asserts only what held on every measured board, `measure` regimes only log).
@@ -140,6 +207,10 @@ Reproduce: `scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operation
 python -m ttnn.operations.examples.noc_placement --shape 2048,2048 --cores 8 --block 32
 #   --shape H,W   tile-aligned bf16 tensor      --cores  line length (<= min grid dim)
 #   --block N     pages in flight per barrier   --kernel-iters N  in-kernel repeat   --iters N  profiled launches
+
+# write split vs the usual pairing (+ the dynamic-mode control and the swapped pairing) on one copy
+python -m ttnn.operations.examples.noc_placement --write-split --placement grid --shape 8192,4096 --in-mem dram --out-mem dram
+#   --placement grid|row|column|diagonal  --cores N (default: whole grid)  --in-mem/--out-mem dram|l1  --trials N
 ```
 
 ## Regenerate the report (`noc_placement_matrix.html`)
@@ -159,8 +230,12 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_device_perf
 # helps / does-not-help regimes (asserted speedups)
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_regimes
+# write split: bitwise identity copy on every split / pairing, then the measured sweep (section 3's table)
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_write_split_correctness
+scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_noc_placement.py::test_noc_placement_write_split_perf
 ```
 
 ## Code
-`noc_placement.py` (op), `kernels/{copy_reader,copy_writer,read_bench,write_bench}.cpp`, `noc_report.py`
-(report pipeline). Numbers are single-box per arch (WH B0 n150, BH p150b) — illustrative of the mechanism, not a CI bound.
+`noc_placement.py` (op; `_ordered_cores()` placements incl. `grid`, `_dm_config()` NoC + `NOC_MODE`),
+`kernels/{copy_reader,copy_writer,read_bench,write_bench}.cpp` (`copy_writer.cpp` holds the `write_split` page
+routing and the two-NoC barrier), `noc_report.py` (report pipeline). Numbers are single-box per arch (WH B0 n150, BH p150b) — illustrative of the mechanism, not a CI bound.

@@ -124,7 +124,7 @@ gain survives (1.61× vs 1.38×). The issue-bound part of the curve has the same
 
 *How measured:* `test_split_reader_regimes`, `DEVICE KERNEL DURATION [ns]` (plus per-RISC-V kernel lifetimes),
 median of 12 trials per variant (a trial = mean of 5 launches), baseline/lever interleaved.
-- **WH B0 n150:** branch `adamjanovic/perf-example-improvements`, 2026-10-12; sweep cells from that day's
+- **WH B0 n150:** 2026-10-12; sweep cells from that day's
   `test_split_reader_device_perf` search (mean of 20 launches) or, marked †, the 2026-07-16 sweep ([`report.md`](report.md)).
 - **BH p150b:** the same regimes test; sweep from `test_split_reader_device_perf` and probes of the same A/B.
   `bh-qb-15-special-adamjanovic-for-reservation-139410`, 2026-10-19, commit `f74ee7aad64`.

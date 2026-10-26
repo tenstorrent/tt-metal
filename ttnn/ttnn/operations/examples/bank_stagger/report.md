@@ -77,7 +77,7 @@ Interleaved DRAM puts row `r` in bank `r % 8`. Width blocking (`32xW`, all 110 c
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | `test_bank_stagger_device_perf`: same op and metric as above, 5 trials × 10 launches (median of trials; the p300c blocks used 7), variants interleaved per trial, `kernel-iters=1`; shapes sized to 120 tile-rows (`3840`) instead of 110 (`3520`) |
 
 ### Width-sharded (`ws`) and interleaved (`il`) sources — all three variants

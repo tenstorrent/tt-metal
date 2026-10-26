@@ -35,6 +35,10 @@ VARIANTS = (
     "reduce_root_mcast",
     "reduce_scatter_mcast",
     "reduce_scatter_push",
+    # Same as their twins above, but the write that a semaphore increment publishes is
+    # fenced with a flush (writes left this core) instead of a barrier (writes acknowledged).
+    "reduce_scatter_mcast_flush",
+    "reduce_scatter_push_flush",
     "tree_reduce_mcast",
     "unicast_all_gather",
     # --- measured nulls, opt in with `--variant all` -------------------------
@@ -522,7 +526,34 @@ void kernel_main() {
 """
 
 
-_REDUCE_SCATTER_KERNEL = r"""
+# Fence between data writes and the semaphore increment that tells the destination they
+# landed. Default (the barrier twins): wait until every write is ACKNOWLEDGED, i.e. one full
+# round trip to the destination and back. SIGNAL_AFTER_FLUSH (the `_flush` variants): wait
+# only until the writes have LEFT this core, then issue the increment. That is safe because
+# the increment and the writes travel on the same NoC and the same static unicast-write VC
+# (`NOC_UNICAST_WRITE_VC`, the default of both `noc_async_write` and `Semaphore::up`) to the
+# same destination, and writes on the same NoC + VC are delivered in program order even from
+# different command buffers. A flush is not completion, so the flush variants retire the
+# outstanding write acknowledgements once, at kernel exit.
+_SIGNAL_FENCE = r"""
+FORCE_INLINE void fence_before_signal() {
+#if defined(SIGNAL_AFTER_FLUSH)
+    noc_async_writes_flushed();
+#else
+    noc_async_write_barrier();
+#endif
+}
+
+FORCE_INLINE void retire_writes_at_exit() {
+#if defined(SIGNAL_AFTER_FLUSH)
+    noc_async_write_barrier();
+#endif
+}
+"""
+
+
+_REDUCE_SCATTER_KERNEL = (
+    r"""
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -534,6 +565,9 @@ _REDUCE_SCATTER_KERNEL = r"""
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
+"""
+    + _SIGNAL_FENCE
+    + r"""
 
 void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
@@ -602,7 +636,7 @@ void kernel_main() {
                         get_noc_addr(root_x, root_y, output_addr + tile * page_bytes),
                         page_bytes);
                 }
-                noc_async_write_barrier();
+                fence_before_signal();
                 progress.up(noc, root_x, root_y, 1);
                 partial.pop_front(max_assigned);
             }
@@ -621,8 +655,10 @@ void kernel_main() {
             receiver.receive();
         }
     }
+    retire_writes_at_exit();
 }
 """
+)
 
 
 _GRID_REDUCE_COMPUTE_KERNEL = r"""
@@ -726,7 +762,8 @@ void kernel_main() {
 #    has to tell the worker its data landed: every contributor bumps every
 #    worker's gather semaphore after its write barrier, so the gather phase costs
 #    `group_size * num_workers` extra semaphore increments per all-reduce.
-_REDUCE_SCATTER_PUSH_KERNEL = r"""
+_REDUCE_SCATTER_PUSH_KERNEL = (
+    r"""
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -738,6 +775,9 @@ _REDUCE_SCATTER_PUSH_KERNEL = r"""
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
+"""
+    + _SIGNAL_FENCE
+    + r"""
 
 void kernel_main() {
     constexpr uint32_t cb_gather = get_compile_time_arg_val(0);
@@ -790,7 +830,7 @@ void kernel_main() {
                     page_bytes);
             }
         }
-        noc_async_write_barrier();
+        fence_before_signal();
         for (uint32_t worker = 0; worker < num_workers; ++worker) {
             const uint32_t wx = get_arg_val<uint32_t>(coords_base + 2 * worker);
             const uint32_t wy = get_arg_val<uint32_t>(coords_base + 2 * worker + 1);
@@ -812,7 +852,7 @@ void kernel_main() {
                     get_noc_addr(root_x, root_y, output_addr + tile * page_bytes),
                     page_bytes);
             }
-            noc_async_write_barrier();
+            fence_before_signal();
             progress.up(noc, root_x, root_y, 1);
             partial.pop_front(max_assigned);
         }
@@ -830,8 +870,10 @@ void kernel_main() {
             receiver.receive();
         }
     }
+    retire_writes_at_exit();
 }
 """
+)
 
 
 _TREE_REDUCE_KERNEL = r"""
@@ -978,12 +1020,13 @@ def _normal_cb(cb_index, core_ranges, num_pages, page_bytes, dtype):
     )
 
 
-def _inline_kernel(source, core_ranges, compile_time_args, runtime_args, config):
+def _inline_kernel(source, core_ranges, compile_time_args, runtime_args, config, defines=()):
     return ttnn.KernelDescriptor(
         kernel_source=source,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
         core_ranges=core_ranges,
         compile_time_args=compile_time_args,
+        defines=list(defines),
         runtime_args=runtime_args,
         config=config,
     )
@@ -998,7 +1041,7 @@ def _virtual_coords(device, cores):
 
 
 def _mcast_dataflow_kernels(
-    descriptor, device, layout, source, compile_time_args, runtime_by_core, *, rotating, first_root=False
+    descriptor, device, layout, source, compile_time_args, runtime_by_core, *, rotating, first_root=False, defines=()
 ):
     """One dataflow kernel and one multicast channel per group rectangle, attached as `mcast`.
 
@@ -1012,7 +1055,7 @@ def _mcast_dataflow_kernels(
         for x, y in group.cores:
             runtime_args[x][y] = runtime_by_core[(x, y)]
         kernel = _inline_kernel(
-            source, group.core_range_set, compile_time_args, runtime_args, ttnn.ReaderConfigDescriptor()
+            source, group.core_range_set, compile_time_args, runtime_args, ttnn.ReaderConfigDescriptor(), defines
         )
         if rotating:
             sender_config = ttnn.McastRotatingSenderConfig()
@@ -1177,7 +1220,14 @@ def _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tile
     return descriptor
 
 
-def _create_reduce_scatter_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
+def _signal_defines(flush):
+    """`flush=True` builds the `_flush` twin: flush (not barrier) before each publishing semaphore increment."""
+    return [("SIGNAL_AFTER_FLUSH", "1")] if flush else []
+
+
+def _create_reduce_scatter_descriptor(
+    input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters, *, flush=False
+):
     group_size = layout.group_size
     # Every core works, the root included - it takes its share and then multicasts.
     # Reserving a core made num_workers coprime with power-of-two tile counts, which
@@ -1224,12 +1274,15 @@ def _create_reduce_scatter_descriptor(input_tensor, output_tensor, layout, num_t
         [CB_GATHER, CB_PARTIAL] + [num_tiles, page_bytes, group_size, num_workers, kernel_iters, SEM_PROGRESS],
         dataflow_rt,
         rotating=False,
+        defines=_signal_defines(flush),
     )
     descriptor.kernels = [*dataflow, compute]
     return descriptor
 
 
-def _create_reduce_scatter_push_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
+def _create_reduce_scatter_push_descriptor(
+    input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters, *, flush=False
+):
     group_size = layout.group_size
     num_workers = min(num_tiles, group_size)
     max_assigned = (num_tiles + num_workers - 1) // num_workers
@@ -1275,6 +1328,7 @@ def _create_reduce_scatter_push_descriptor(input_tensor, output_tensor, layout, 
         + [num_tiles, page_bytes, group_size, num_workers, kernel_iters, SEM_PROGRESS, SEM_GATHER],
         dataflow_rt,
         rotating=False,
+        defines=_signal_defines(flush),
     )
     descriptor.kernels = [*dataflow, compute]
     return descriptor
@@ -1392,13 +1446,25 @@ def create_program_descriptor(
         )
     if variant == "reduce_root_mcast":
         return _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
-    if variant == "reduce_scatter_mcast":
+    if variant in ("reduce_scatter_mcast", "reduce_scatter_mcast_flush"):
         return _create_reduce_scatter_descriptor(
-            input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters
+            input_tensor,
+            output_tensor,
+            layout,
+            num_tiles,
+            page_bytes,
+            kernel_iters,
+            flush=variant.endswith("_flush"),
         )
-    if variant == "reduce_scatter_push":
+    if variant in ("reduce_scatter_push", "reduce_scatter_push_flush"):
         return _create_reduce_scatter_push_descriptor(
-            input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters
+            input_tensor,
+            output_tensor,
+            layout,
+            num_tiles,
+            page_bytes,
+            kernel_iters,
+            flush=variant.endswith("_flush"),
         )
     return _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
 

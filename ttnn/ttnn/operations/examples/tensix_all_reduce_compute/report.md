@@ -39,7 +39,7 @@ brackets), ns per reduction. Three runs:
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores (1 used), 8 DRAM banks, AICLK 1350 MHz |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | ns per reduction from DEVICE KERNEL DURATION; `test_tensix_all_reduce_compute_device_perf` (N=5 median, kernel-iters 100, 6 tiles) and `test_tensix_all_reduce_compute_regimes` (interleaved A/B, median of 11 retained trials, same as the WH B0 regime check above) |
 
 ### Sweep (`test_tensix_all_reduce_compute_device_perf`)

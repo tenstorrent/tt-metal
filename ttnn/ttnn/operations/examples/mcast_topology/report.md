@@ -56,7 +56,7 @@ Test runs (8x8 / 4x4 / 2x2 speedup): 1.87x / 1.04x / 0.70x; 1.87x / 1.04x / 0.73
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | DEVICE KERNEL DURATION [ns], delivery only (no compute), bf16; `test_mcast_topology_device_perf` (median of 5-launch windows, N=5) and `test_mcast_topology_regimes` (median of 10 interleaved windows × 5 launches, ranges min-max), plus a probe using the regimes test's `_measure_interleaved_ns` |
 
 ### Sweep (`test_mcast_topology_device_perf`)

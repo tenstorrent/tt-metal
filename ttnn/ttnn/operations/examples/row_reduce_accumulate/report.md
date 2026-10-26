@@ -195,7 +195,7 @@ Three runs of the regime test: bf16-fp32 32t 1.34/1.34/1.34x, fp32-fp32 32t 1.57
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores, 8 DRAM banks, AICLK 1350 MHz (this test uses 1 Tensix core) |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | same as the blocks above: `test_row_reduce_accumulate_device_perf` (N=5 median, kernel-iters 200, HiFi4, output fp32, all methods × precisions × distributions) and `test_row_reduce_accumulate_regimes` (11 interleaved trials, median (min-max)) |
 
 ### Overview (`test_row_reduce_accumulate_device_perf`) — perf: bf16 input, ns per row-mean; accuracy: bf16-bf16 at 32 tiles

@@ -68,7 +68,7 @@ Performance remains reported evidence, not a test assertion.
 | stamp | value |
 |---|---|
 | board | Wormhole B0 n150 (8×8 Tensix grid) |
-| branch | `adamjanovic/perf-example-improvements` (base `adce58258c3`) |
+| base commit | `adce58258c3` |
 | test | `test_split_reader_regimes` (8 source Tensix cores × 8 tiles, 8-tile blocks, bf16) |
 | method | 5 warmup launches per variant; then 12 trials per variant, interleaved off/on; a trial = mean per-launch `DEVICE KERNEL DURATION`, `DEVICE NCRISC KERNEL DURATION`, `DEVICE BRISC KERNEL DURATION` over 5 launches; medians compared |
 
@@ -103,7 +103,7 @@ per tile a second issuing RISC-V doubles the tiles in flight. The issue-bound co
 | stamp | value |
 |---|---|
 | arch / board | Blackhole p150b, compute grid 12×10 = 120 Tensix cores (this test uses 8 source + 1 consumer), 8 DRAM banks, AICLK 1350 MHz |
-| commit | `f74ee7aad64` + arch-agnostic regimes tests (branch `adamjanovic/ab-tilize-run-scoreboard-catalog`), Release build |
+| commit | `f74ee7aad64` + arch-agnostic regimes tests, Release build |
 | metric / method | same as the 2026-10-12 WH block: `test_split_reader_regimes` (5 warmup launches; 12 trials per variant interleaved off/on, a trial = mean per-launch `DEVICE KERNEL DURATION`, `DEVICE NCRISC KERNEL DURATION`, `DEVICE BRISC KERNEL DURATION` over 5 launches; medians) and `test_split_reader_device_perf` |
 
 ### Sweep — 8 source Tensix cores × 8 tiles, 8-tile blocks, transaction size

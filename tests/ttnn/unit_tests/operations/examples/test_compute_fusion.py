@@ -13,6 +13,7 @@ import os
 os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
 os.environ.setdefault("TT_METAL_PROFILER_MID_RUN_DUMP", "1")
 os.environ.setdefault("TT_METAL_PROFILER_CPP_POST_PROCESS", "1")
+os.environ.setdefault("TT_METAL_LOGGER_LEVEL", "error")  # silence per-read profiler histograms
 
 import socket
 import statistics
@@ -66,6 +67,16 @@ def _make_case(device, scenario, num_tiles, seed=7):
         b = torch.rand(TILE, w) + 0.5  # [0.5, 1.5]
         expected = torch.sqrt(_quant(x)) * _quant(b)
         return [_to_device(x, device, num_tiles), _to_device(b, device, num_tiles)], expected, "full"
+    if scenario == "fpu_chain":
+        a = torch.rand(TILE, w) * 2 - 1  # [-1, 1]
+        b = torch.rand(TILE, w) * 2 - 1  # [-1, 1]
+        c = torch.rand(TILE, w) + 0.5  # [0.5, 1.5]
+        # Both variants hold the intermediate a+b at bf16 precision: unfused packs it to a bf16 L1 CB;
+        # dstreuse keeps it in a 16-bit DEST (fp32_dest_acc_en=False) and moves it to srcA, which is
+        # no narrower. So the golden rounds the intermediate to bf16 too.
+        expected = _quant(_quant(a) + _quant(b)) * _quant(c)
+        inputs = [_to_device(t, device, num_tiles) for t in (a, b, c)]
+        return inputs, expected, "fpu_chain"
     if scenario == "reduce_recip":
         x = torch.rand(TILE, w) * 0.3 + 0.2  # [0.2, 0.5], positive
         expected = 1.0 / _quant(x).sum(dim=-1, keepdim=True)  # [32, 1]
@@ -78,6 +89,11 @@ def _check(output, expected, kind, label):
     if kind == "reduce_col0":
         actual = actual[..., :TILE, :1]
         rtol, atol = 0.06, 1e-4
+    elif kind == "fpu_chain":
+        # |a+b| <= 2 and c <= 1.5: one bf16 ulp of the intermediate (2^-7 at |a+b| in [1, 2)) times c is
+        # <= 0.012, plus one ulp of the output's rounding (<= 0.0117); 1/64 covers a rounding-mode
+        # difference (truncate vs round) at either step but not a wrong operand.
+        rtol, atol = 1 / 64, 1 / 64
     else:
         rtol, atol = 0.06, 0.5
     torch.testing.assert_close(actual, expected, rtol=rtol, atol=atol, msg=f"{label} mismatch")
@@ -130,7 +146,7 @@ def _int_list(name, default):
 
 
 def _blocks_for(scenario, blocks):
-    return blocks if scenario in ("sfpu_chain", "fpu_sfpu") else (1,)
+    return blocks if scenario in ("sfpu_chain", "fpu_sfpu", "fpu_chain") else (1,)
 
 
 # =============================================================================
@@ -189,6 +205,114 @@ def test_compute_fusion_device_perf(device):
     logger.info("\n" + report)
     if report_path := os.environ.get("CF_REPORT"):
         Path(report_path).write_text(report)
+
+
+# =============================================================================
+# Work per call: the same total tiles per launch, split into calls of n tiles
+#
+# A "call" is one pass of the scenario's expression over n tiles: for `dstreuse` one eltwise_chain
+# call, for `unfused` the two chain calls (pass 1 -> L1 scratch, pass 2) that make the same result.
+# Every call re-runs the per-op init, as a helper call does. The launch makes total/n calls, so every
+# tile count does the same total work and the ns-per-tile column compares directly across rows.
+# =============================================================================
+_PC_SCENARIOS = ("fpu_chain", "fpu_sfpu")
+
+
+def _pc_lever(scenario):
+    """The single-pass variant compared against `unfused` (dstreuse for FPU consumers, else fused)."""
+    names = variants_for(scenario)
+    return f"{scenario}.dstreuse" if f"{scenario}.dstreuse" in names else f"{scenario}.fused"
+
+
+def _chip_freq_mhz():
+    """AICLK the profiler converted cycles with (CSV header, rewritten per device open)."""
+    try:
+        with open(_DEVICE_CSV) as f:
+            header = f.readline()
+    except OSError:
+        return None
+    for part in header.split(","):
+        if "CHIP_FREQ" in part:
+            return int(float(part.split(":")[1]))
+    return None
+
+
+def _max_abs_diff(a, b):
+    return (ttnn.to_torch(a).float() - ttnn.to_torch(b).float()).abs().max().item()
+
+
+def test_compute_fusion_per_call(device):
+    scenarios = tuple(os.environ.get("CF_PC_SCENARIOS", ",".join(_PC_SCENARIOS)).split(","))
+    unknown = set(scenarios) - set(SCENARIOS)
+    if unknown:
+        raise ValueError(f"unknown CF_PC_SCENARIOS: {sorted(unknown)}")
+    tiles = _int_list("CF_PC_TILES", "1,2,4,6,8,16,32,64")
+    blocks = _int_list("CF_PC_BLOCKS", "1,4")
+    total = int(os.environ.get("CF_PC_TOTAL_TILES", "768"))
+    trials = int(os.environ.get("CF_PC_TRIALS", "5"))
+
+    results = []  # (scenario, n, blk, calls, {variant: [ns per call]})
+    for scenario in scenarios:
+        for n in tiles:
+            calls = max(1, total // n)
+            inputs, expected, kind = _make_case(device, scenario, n)
+            for blk in sorted({min(b, n) for b in blocks}):
+                outs = {}
+                for variant in variants_for(scenario):  # correctness gate on the measured build
+                    outs[variant] = run_fusion(inputs, variant=variant, num_tiles=n, block_size=blk, kernel_iters=calls)
+                    _check(outs[variant], expected, kind, f"{variant} n={n} blk={blk} calls={calls}")
+                lever = _pc_lever(scenario)
+                diff = _max_abs_diff(outs[lever], outs[_BASELINE[scenario]])
+                runners = {
+                    variant: (
+                        lambda variant=variant, n=n, blk=blk, calls=calls: run_fusion(
+                            inputs, variant=variant, num_tiles=n, block_size=blk, kernel_iters=calls
+                        )
+                    )
+                    for variant in variants_for(scenario)
+                }
+                results.append((scenario, n, blk, calls, diff, _measure(device, runners, trials, calls)))
+
+    report = _format_per_call(
+        results,
+        box=socket.gethostname(),
+        arch=os.environ.get("ARCH_NAME", str(device.arch())),
+        freq=_chip_freq_mhz(),
+        trials=trials,
+        total=total,
+    )
+    logger.info("\n" + report)
+    if report_path := os.environ.get("CF_PC_REPORT"):
+        Path(report_path).write_text(report)
+
+
+def _format_per_call(results, *, box, arch, freq, trials, total):
+    lines = [
+        "# Compute fusion — work per call (DEST reuse vs a second pass through L1)",
+        "",
+        f"box={box}  arch={arch}  CHIP_FREQ={freq} MHz  cores=1  placement=single-core sharded-L1  "
+        f"N={trials} interleaved trials (median)  total={total} tiles per launch, split into calls of n tiles",
+        "",
+        "Metric: DEVICE KERNEL DURATION [ns] / calls per launch = ns per call; ns/tile = ns per call / n. "
+        "Speedup = unfused / variant. max|lever-unfused| = largest elementwise output difference.",
+        "",
+        "| Scenario | Tiles per call | Block | Calls per launch | Variant | ns per call | ns per tile | "
+        "Std/med | Speedup vs unfused | max abs diff vs unfused |",
+        "|---|---:|---:|---:|---|---:|---:|---:|---:|---:|",
+    ]
+    for scenario, n, blk, calls, diff, samples in results:
+        base = statistics.median(samples[_BASELINE[scenario]])
+        lever = _pc_lever(scenario)
+        for variant, values in samples.items():
+            median = statistics.median(values)
+            std = statistics.pstdev(values) if len(values) > 1 else 0.0
+            method = variant.split(".", 1)[1]
+            d = f"{diff:.4g}" if variant == lever else ""
+            lines.append(
+                f"| {scenario} | {n} | {blk} | {calls} | {method} | {median:.1f} | {median / n:.1f} | "
+                f"{std / median * 100:.1f}% | {base / median:.3f}x | {d} |"
+            )
+    return "\n".join(lines) + "\n"
 
 
 def _format_report(results, *, box, arch, trials, kernel_iters):
@@ -354,13 +478,19 @@ _REGIME_ITERS = 100
 #                   overhead; fused is ~1.1x at 4 tiles (the win shrinks to ~1.05x by 64 tiles).
 #   does_not_help:  fpu_sfpu n=64 blk=1 dstreuse -- the consumer is an FPU multiply, so "fusing" costs a
 #                   DEST->source transfer per tile that exceeds the pack+unpack it saves (~0.93x, a loss).
+#   fpu_chain:      (a + b) * c, two FPU ops. DEST reuse saves the second pass's fixed cost per call (pipeline
+#                   drain + re-init) but pays a DEST->srcA move and a DEST face clear per face of every tile, so it
+#                   wins only at 1-2 tiles per call and loses from 4 tiles per call up (crossover ~2-3 tiles per call).
 # Thresholds hold on every measured board (WH B0 n150, BH p150b); `measure` regimes flip between boards and only log
-# -- numbers per board in README.md.
+# -- numbers per board in README.md. The fpu_chain rows were measured on BH p150b only.
 _REGIMES = [
     pytest.param("sfpu_chain", 4, 4, "fused", "helps", 1.11, id="helps_sfpu_chain_n4_blk4"),  # WH 1.12x, BH 1.11x
     pytest.param(
         "fpu_sfpu", 64, 1, "dstreuse", "loses", 0.93, id="loses_fpu_consumer_dstreuse_n64"
     ),  # WH 0.92-0.94x, BH 0.93x
+    pytest.param("fpu_chain", 1, 1, "dstreuse", "helps", 1.11, id="helps_fpu_chain_dstreuse_n1"),  # BH 1.11x
+    pytest.param("fpu_chain", 4, 4, "dstreuse", "loses", 0.96, id="loses_fpu_chain_dstreuse_n4_blk4"),  # BH 0.96x
+    pytest.param("fpu_chain", 64, 4, "dstreuse", "loses", 0.72, id="loses_fpu_chain_dstreuse_n64_blk4"),  # BH 0.72x
 ]
 
 

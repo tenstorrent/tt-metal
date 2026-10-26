@@ -9,16 +9,22 @@ Everything lives in sharded L1 on one Tensix core — there is no DRAM movement,
 delta is pure compute: the cost of the intermediate pack-to-L1 + CB handshake + unpack-from-L1
 (and the extra per-op init/reconfig) that fusion removes.
 
-Three scenarios, each an A/B (fused vs unfused) with the same math:
+Four scenarios, each an A/B (fused vs unfused) with the same math:
 
   sfpu_chain    out = exp(sqrt(x) + y)     (SFPU sqrt, SFPU add-in-DEST, SFPU exp)
   fpu_sfpu      out = sqrt(x) * b          (SFPU sqrt, then combine with b)
+  fpu_chain     out = (a + b) * c          (two two-operand FPU ops back to back)
   reduce_recip  out = 1 / rowsum(x)        (SUM reduce, then reciprocal)
 
 `fpu_sfpu` carries a third variant so the *combine* step can be compared directly:
   - dstreuse : FPU multiply that reuses the DEST result of sqrt as one operand (no second copy)
   - sfpu     : copy b into a second DEST slot, SFPU multiply
   - unfused  : sqrt -> L1, FPU multiply reads it back
+
+`fpu_chain` is the pure-FPU case: both ops read source registers, so it isolates DEST->SRC reuse
+against a second pass through an L1 scratch CB with nothing else in the chain:
+  - dstreuse : FPU add -> DEST, FPU multiply moves DEST into srcA and c into srcB, pack once
+  - unfused  : FPU add -> L1 scratch (pass 1), FPU multiply reads scratch + c (pass 2)
 
 Micro-benchmark mode: when built with the `CF_MICROBENCH` define, each phase is wrapped in a
 `DeviceZoneScopedN` zone (named CF_*). A compute-kernel zone records on all three TRISCs
@@ -36,6 +42,7 @@ CB_IN1 = 1  # y (sfpu_chain) / b (fpu_sfpu)
 CB_SCALER = 2  # reduce scaler (reduce_recip)
 CB_S1 = 3  # scratch intermediate (unfused)
 CB_S2 = 4  # scratch intermediate (unfused sfpu_chain only)
+CB_IN2 = 5  # c (fpu_chain only)
 CB_OUT = 16
 
 # variant name -> (scenario, method_id). method_id is the `if constexpr` selector in the kernel.
@@ -45,13 +52,15 @@ _VARIANT_SPEC = {
     "fpu_sfpu.dstreuse": ("fpu_sfpu", 0),
     "fpu_sfpu.sfpu": ("fpu_sfpu", 1),
     "fpu_sfpu.unfused": ("fpu_sfpu", 2),
+    "fpu_chain.dstreuse": ("fpu_chain", 0),
+    "fpu_chain.unfused": ("fpu_chain", 1),
     "reduce_recip.fused": ("reduce_recip", 0),
     "reduce_recip.unfused": ("reduce_recip", 1),
 }
 
 VARIANTS = tuple(_VARIANT_SPEC)
 
-SCENARIOS = ("sfpu_chain", "fpu_sfpu", "reduce_recip")
+SCENARIOS = ("sfpu_chain", "fpu_sfpu", "fpu_chain", "reduce_recip")
 
 # Phase-zone names each variant emits under CF_MICROBENCH (in kernel-emission order).
 PHASE_ZONES = {
@@ -60,17 +69,19 @@ PHASE_ZONES = {
     "fpu_sfpu.dstreuse": ("CF_FUSED",),
     "fpu_sfpu.sfpu": ("CF_FUSED",),
     "fpu_sfpu.unfused": ("CF_SQRT", "CF_MUL"),
+    "fpu_chain.dstreuse": ("CF_FUSED",),
+    "fpu_chain.unfused": ("CF_ADD", "CF_MUL"),
     "reduce_recip.fused": ("CF_FUSED",),
     "reduce_recip.unfused": ("CF_REDUCE", "CF_RECIP"),
 }
 
 # variants that round-trip through scratch CBs (host must declare them)
-_USES_S1 = {"sfpu_chain.unfused", "fpu_sfpu.unfused", "reduce_recip.unfused"}
+_USES_S1 = {"sfpu_chain.unfused", "fpu_sfpu.unfused", "fpu_chain.unfused", "reduce_recip.unfused"}
 _USES_S2 = {"sfpu_chain.unfused"}
-_NUM_INPUTS = {"sfpu_chain": 2, "fpu_sfpu": 2, "reduce_recip": 1}
+_NUM_INPUTS = {"sfpu_chain": 2, "fpu_sfpu": 2, "fpu_chain": 3, "reduce_recip": 1}
 
 # scenarios whose fused chains take the DEST-lane block path
-_BLOCK_SCENARIOS = {"sfpu_chain", "fpu_sfpu"}
+_BLOCK_SCENARIOS = {"sfpu_chain", "fpu_sfpu", "fpu_chain"}
 
 
 def variants_for(scenario):
@@ -237,6 +248,75 @@ void kernel_main() {
 )
 
 
+_FPU_CHAIN_KERNEL = (
+    r"""
+#include <cstdint>
+#include "api/compute/common.h"
+#include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
+"""
+    + _ZONE_MACRO
+    + r"""
+// out = (a + b) * c, two two-operand FPU ops. One call = one pass over n tiles; the kernel makes
+// kernel_iters calls, each re-running the per-op init, so n is the work per call.
+//   method 0 dstreuse : FPU add -> DEST, FPU mul with DEST moved into srcA and c unpacked to srcB.
+//   method 1 unfused  : FPU add -> L1 scratch s1 (pass 1), FPU mul reads s1 and c (pass 2).
+void kernel_main() {
+    constexpr uint32_t cb_a = 0, cb_b = 1, cb_s1 = 3, cb_c = 5, cb_out = 16;
+    constexpr uint32_t n = get_compile_time_arg_val(0);
+    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t kernel_iters = get_compile_time_arg_val(2);
+    constexpr uint32_t method = get_compile_time_arg_val(3);
+
+    using namespace compute_kernel_lib;
+
+    cb_reserve_back(cb_a, n); cb_push_back(cb_a, n);
+    cb_reserve_back(cb_b, n); cb_push_back(cb_b, n);
+    cb_reserve_back(cb_c, n); cb_push_back(cb_c, n);
+
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+
+    for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
+        if constexpr (method == 0) {
+            CF_PHASE("CF_FUSED");
+            eltwise_chain(
+                IterationShape::tiles(n).block_size(blk),
+                BinaryFpu<BinaryFpuOp::Add,
+                          input(cb_a, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
+                          input(cb_b, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
+                          Dst::D0>{},
+                DestReuseBinary<BinaryFpuOp::Mul,
+                                input(cb_c, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
+                                DestReuseType::DEST_TO_SRCA, Dst::D0>{},
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
+        } else {
+            { CF_PHASE("CF_ADD");  // s1 = a + b
+              eltwise_chain(
+                IterationShape::tiles(n).block_size(blk),
+                BinaryFpu<BinaryFpuOp::Add,
+                          input(cb_a, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
+                          input(cb_b, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
+                          Dst::D0>{},
+                PackTile<output(cb_s1, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
+            { CF_PHASE("CF_MUL");  // out = s1 * c
+              eltwise_chain(
+                IterationShape::tiles(n).block_size(blk),
+                BinaryFpu<BinaryFpuOp::Mul,
+                          input(cb_s1, WaitPolicy::Upfront, PopPolicy::AtEnd, InputTileMapping::Block),
+                          input(cb_c, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
+                          Dst::D0>{},
+                PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{}); }
+        }
+        if (iter + 1 < kernel_iters) { cb_wait_front(cb_out, n); cb_pop_front(cb_out, n); }
+    }
+    cb_pop_front(cb_a, n);
+    cb_pop_front(cb_b, n);
+    cb_pop_front(cb_c, n);
+}
+"""
+)
+
+
 _REDUCE_RECIP_KERNEL = (
     r"""
 #include <cstdint>
@@ -310,6 +390,7 @@ void kernel_main() {
 _KERNEL_SOURCE = {
     "sfpu_chain": _SFPU_CHAIN_KERNEL,
     "fpu_sfpu": _FPU_SFPU_KERNEL,
+    "fpu_chain": _FPU_CHAIN_KERNEL,
     "reduce_recip": _REDUCE_RECIP_KERNEL,
 }
 
@@ -377,6 +458,8 @@ def create_program_descriptor(
     cbs = [ttnn.cb_descriptor_from_sharded_tensor(CB_IN0, input_tensors[0])]
     if len(input_tensors) > 1:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_IN1, input_tensors[1]))
+    if len(input_tensors) > 2:
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_IN2, input_tensors[2]))
     cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUT, output_tensor))
 
     if scenario == "reduce_recip":

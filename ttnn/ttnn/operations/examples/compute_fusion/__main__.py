@@ -6,14 +6,18 @@
     python -m ttnn.operations.examples.compute_fusion [options]
 
 Options:
-    --scenario {all|sfpu_chain|fpu_sfpu|reduce_recip} ...  which expression(s) to run
-    --tiles N ...          tile counts to sweep (reduce_recip: reduce width in tiles)
+    --scenario {all|sfpu_chain|fpu_sfpu|fpu_chain|reduce_recip} ...  which expression(s) to run
+    --tiles N ...          tile counts to sweep (reduce_recip: reduce width in tiles); with --per-call,
+                           the tiles per call (default 1 2 4 6 8 16 32 64)
     --blocks N ...         DEST-lane block sizes (eltwise scenarios only; init hoisting)
     --trials N             timed passes; median +/- std
     --kernel-iters K       in-kernel loop count (K large = steady-state throughput)
     --report PATH          write the report table to PATH
     --microbench           per-phase DeviceZoneScopedN breakdown (unpack/math/pack ns per phase)
                            instead of the whole-kernel A/B sweep; uses --tiles[0] as the size
+    --per-call             work-per-call sweep: the same --total-tiles per launch split into calls of
+                           --tiles tiles (default scenarios fpu_chain fpu_sfpu)
+    --total-tiles N        tiles per launch for --per-call (default 768)
 """
 
 import argparse
@@ -36,16 +40,33 @@ def _positive(value):
 def main():
     parser = argparse.ArgumentParser(prog="python -m ttnn.operations.examples.compute_fusion")
     parser.add_argument("--scenario", nargs="+", choices=("all",) + SCENARIOS, default=["all"])
-    parser.add_argument("--tiles", nargs="+", type=_positive, default=[4, 16, 64])
+    parser.add_argument("--tiles", nargs="+", type=_positive)
     parser.add_argument("--blocks", nargs="+", type=_positive, default=[1, 4])
     parser.add_argument("--trials", type=_positive, default=5)
     parser.add_argument("--kernel-iters", type=_positive, default=100)
     parser.add_argument("--report")
     parser.add_argument("--microbench", action="store_true")
+    parser.add_argument("--per-call", action="store_true")
+    parser.add_argument("--total-tiles", type=_positive, default=768)
     args = parser.parse_args()
 
     scenarios = list(SCENARIOS) if "all" in args.scenario else list(dict.fromkeys(args.scenario))
     env = dict(os.environ, CF_SCENARIOS=",".join(scenarios))
+    if args.per_call:
+        if "all" not in args.scenario:
+            env["CF_PC_SCENARIOS"] = ",".join(scenarios)
+        env.update(
+            CF_PC_TILES=",".join(str(v) for v in (args.tiles or [1, 2, 4, 6, 8, 16, 32, 64])),
+            CF_PC_BLOCKS=",".join(str(v) for v in args.blocks),
+            CF_PC_TOTAL_TILES=str(args.total_tiles),
+            CF_PC_TRIALS=str(args.trials),
+        )
+        if args.report:
+            env["CF_PC_REPORT"] = args.report
+        return subprocess.call(
+            ["scripts/run_safe_pytest.sh", "--run-all", _TEST_NODE.format("test_compute_fusion_per_call")], env=env
+        )
+    args.tiles = args.tiles or [4, 16, 64]
     if args.microbench:
         env["CF_MB_TILES"] = str(args.tiles[0])
         env["CF_MB_KERNEL_ITERS"] = str(min(args.kernel_iters, 16))
