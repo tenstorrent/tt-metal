@@ -2019,3 +2019,33 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   approvals.yaml, dashboard/). Selftest test_seeded_ledger_overseer_files.py.
 - Not done: a gate whose units all passed, with only an out-of-scope-path problem, still starts a new attempt; it could
   commit and stop for the overseer instead.
+
+## F190: a pass with out-of-scope changes stops for the overseer, not a new attempt (2026-10-26, owner)
+- DeepSeek-V4.1 galaxy_8x4-full W.1 (F189's not-done): every unit passed and the gate committed, the only problem a file
+  outside the paths; attempt 2 started with nothing to do and deleted results/W.1.json, edited state.json.
+- attempt_loop and debug: a PASS whose problems include "changed files outside" now commits (as before), files the
+  problems under `review` and stops the task (reason "gate passed and committed, ..."). The overseer reverts or keeps
+  those files and resumes: the units are reused, no agent starts. A failing gate with such files is unchanged (the
+  next attempt reverts them). Selftest test_orchestrator.py::test_a_pass_with_changes_outside_the_paths_stops_...
+
+## F191: launch preflight: a gate's commit can go through (2026-10-26, owner)
+- DeepSeek-V4.1 galaxy_8x4-full CK.1: a passed gate's commit was refused (no git identity on the node), found only after
+  the gate. `orchestrator run|resume` now runs orchestrator.commit_preflight first: author and committer identity
+  (`git var`), a merge / rebase in progress, a stale index.lock. Any problem prints `PREFLIGHT: ...` and the run does not
+  start (exit STOPPED; the watch reports it at once). Selftest test_launch_preflight.py.
+
+## F192: a run mesh smaller than the box sees only its cards; no subset is reported at launch (2026-10-26, owner)
+- DeepSeek-V4.1: a 2x2 run on a Galaxy opened all 32 chips (gates never applied testing/cards.py, which fork tests use),
+  and nothing said that no 2x2 subset of a Galaxy exists.
+- At `run|resume` (no TT_VISIBLE_DEVICES from the caller): run_mesh_cards(spec.mesh) finds the subset (probed once,
+  cached per box) and sets TT_VISIBLE_DEVICES for every gate and agent of the process; with no subset the launch stops
+  with a PREFLIGHT line (a 2x2 there needs a mesh-graph descriptor or a submesh of the whole box). A miss is cached for
+  this path (a resume would otherwise probe up to 40 subsets again); deleting "2x2:none" from the cache clears
+  it. `gate` (__main__) applies a cached subset to a gate run by hand (no probe). A mesh of every card is unchanged.
+- Placement: commit_preflight, run_mesh_cards, cached_cards live in orchestrator.py, the hand-run gate hook in
+  __main__.py: both stamp-skipped (core/stamps.py), so landing F191 / F192 re-runs no passed unit; core/gate.py and
+  testing/cards.py (measured) are unchanged.
+- Not done: running a smaller mesh on a Galaxy at all (mesh-graph descriptor / submesh of the system mesh).
+- Selftest isolation: the first suite run probed the Galaxy's real cards (test_resume_after_a_fix calls main resume)
+  next to a live run's device work. selftest/conftest.py now hides /dev/tenstorrent and the card cache from every
+  selftest (autouse); test_cards.py::test_no_selftest_sees_the_real_cards.
