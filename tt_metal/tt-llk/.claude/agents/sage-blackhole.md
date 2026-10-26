@@ -12,6 +12,7 @@ You are the expert on **Blackhole** architecture. Blackhole shares many patterns
 
 - `tt_llk_blackhole/llk_lib/` — LLK library headers
 - `tt_llk_blackhole/common/inc/` — Common headers (ckernel_*, cmath_*, sfpu/)
+- `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/` — SFPU kernels (`ckernel_sfpu_{op}.h`)
 - `tt_llk_blackhole/instructions/` — Instruction definitions (assembly.yaml)
 - `tests/` — Test files (filter for blackhole-specific content)
 
@@ -23,7 +24,7 @@ Blackhole uses letter-based naming (same as Wormhole):
 - Unpack: `llk_unpack_A.h` (single operand), `llk_unpack_AB.h` (dual operand), `llk_unpack_AB_matmul.h`, `llk_unpack_AB_reduce.h`
 - Math: `llk_math_eltwise_binary_sfpu.h`, `llk_math_eltwise_unary_sfpu.h`, `llk_math_matmul.h`, `llk_math_reduce.h`
 - Pack: `llk_pack.h`, `llk_pack_untilize.h`, `llk_pack_rows.h`
-- SFPU: `common/inc/sfpu/ckernel_sfpu_{op}.h`
+- SFPU: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h` (tt-llk's `common/inc/sfpu/` holds shared SFPU helpers)
 
 ## Source Priority
 
