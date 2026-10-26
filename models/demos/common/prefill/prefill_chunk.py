@@ -65,6 +65,8 @@ def pad_chunks(chunks, forward_chunks: int) -> list:
 def forward_metadata_words(chunks, forward_chunks: int) -> list:
     """The metadata of a forward of ``chunks`` (empty ones at the tail) as int32 words, as the device tensor
     holds them."""
+    if not chunks:
+        raise ValueError("a forward needs at least one chunk")
     if len(chunks) > forward_chunks:
         raise ValueError(f"{len(chunks)} chunks do not fit a forward of {forward_chunks}")
     c = chunks[0]
@@ -73,6 +75,8 @@ def forward_metadata_words(chunks, forward_chunks: int) -> list:
     if forward_chunks == 1:
         return [c.slot_id, c.actual_start, c.actual_end]
     real = [c for c in chunks if not c.is_empty]
+    if not real:
+        raise ValueError(f"a forward of only empty chunks: {chunks}")
     if chunks[: len(real)] != real:
         raise ValueError(f"empty chunks must come after every non-empty one: {chunks}")
     words = [len(real), 0] + [w for c in real for w in (c.slot_id, c.actual_start, c.actual_end)]
@@ -109,8 +113,16 @@ def decode_forward_metadata(words, forward_chunks: int) -> list:
     num_chunks = words[0]
     if not 1 <= num_chunks <= forward_chunks:
         raise ValueError(f"num_chunks={num_chunks} outside [1, {forward_chunks}]")
-    records = [words[HEADER_WORDS + CHUNK_WORDS * k : HEADER_WORDS + CHUNK_WORDS * (k + 1)] for k in range(num_chunks)]
-    return [PrefillChunk(*r) for r in records] + [EMPTY_CHUNK] * (forward_chunks - num_chunks)
+    # A producer still sending one chunk per forward fails these instead of decoding garbage.
+    if words[1] != 0:
+        raise ValueError(f"reserved header word is {words[1]}, not 0: is the producer sending {forward_chunks} chunks?")
+    records = [
+        words[HEADER_WORDS + CHUNK_WORDS * k : HEADER_WORDS + CHUNK_WORDS * (k + 1)] for k in range(forward_chunks)
+    ]
+    for k in range(num_chunks, forward_chunks):
+        if records[k][0] & 0xFFFFFFFF != INVALID_SLOT or records[k][1:] != [0, 0]:
+            raise ValueError(f"record {k} past num_chunks={num_chunks} is {records[k]}, not an unused record")
+    return [PrefillChunk(*r) for r in records[:num_chunks]] + [EMPTY_CHUNK] * (forward_chunks - num_chunks)
 
 
 def validate_chunks(chunks, *, chunk_size: int, forward_chunks: int, num_users: int, max_seq_len: int) -> None:
@@ -161,6 +173,7 @@ def packed_forward_refusals(
     dflash: bool = False,
     use_trace: bool = False,
     d2h_acks: bool = False,
+    indexer_indices: bool = False,
 ) -> list:
     """Why a configuration cannot run ``forward_chunks`` chunks per forward (empty list: it can)."""
     if forward_chunks == 1:
@@ -176,6 +189,10 @@ def packed_forward_refusals(
         reasons.append("PREFILL_USE_TRACE=1 (per-chunk arguments are not trace inputs)")
     if d2h_acks:
         reasons.append("PREFILL_LAYER_ACK_D2H=1")
+    if indexer_indices:
+        reasons.append(
+            "a multi-rank runtime passes indexer indices between ranks, which a packed forward does not carry"
+        )
     return reasons
 
 

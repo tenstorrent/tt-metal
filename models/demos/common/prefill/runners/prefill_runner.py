@@ -141,6 +141,10 @@ CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
 D2D_METADATA_SIZE_BYTES = CHUNK_METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 # The D2D FIFO must hold the L1-aligned metadata: 256 B, grown in 256 B steps for a wide packed forward.
 D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", -(-D2D_METADATA_SIZE_BYTES // 256) * 256))
+if D2D_FIFO_SIZE_BYTES < -(-D2D_METADATA_SIZE_BYTES // 256) * 256:
+    raise ValueError(
+        f"PREFILL_PP_D2D_FIFO_BYTES={D2D_FIFO_SIZE_BYTES} is smaller than the {D2D_METADATA_SIZE_BYTES} B D2D record"
+    )
 TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default))) == "1"
 assert (
     not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv
@@ -514,7 +518,6 @@ def _forward_shutdown(
 
 def _forward_send_warmup(runtime, d2d_out, rank: int, idx_out=None) -> None:
     """Compile the traced send before this rank's capture; the next rank drops the record."""
-    assert FORWARD_CHUNKS == 1, "the send warm-up record and activation are sized for one chunk per forward"
     get_inputs = getattr(runtime, "send_warmup_inputs", None)
     words = tuple(sentinel_words(WARMUP_METADATA_WORD, FORWARD_CHUNKS)) + ((0,) if MTP_LEVELS else ())
     inputs = get_inputs(words) if get_inputs is not None else None
@@ -652,6 +655,7 @@ def _compute_and_send(
     kv_caches,
     rank: int,
     c: int,
+    forward_idx: int,
     inp,
     meta: Optional[dict],
     d2d_out,
@@ -667,7 +671,7 @@ def _compute_and_send(
     t_perf = time.perf_counter()
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     logger.info(
-        f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where} "
+        f"[pp rank {rank}] CHUNK_START c={forward_idx} compute_start={t_start:.6f} {where} "
         f"provided={meta.get('provided_levels')}{_chunks_str(meta)}"
     )
 
@@ -693,8 +697,8 @@ def _compute_and_send(
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
-        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
-        _record_chunk_timing(rank, c, t_start, compute_ms)
+        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={forward_idx} compute_ms={compute_ms:.3f}")
+        _record_chunk_timing(rank, forward_idx, t_start, compute_ms)
     forward_md = None
     if not runtime.config.is_last_rank:
         if sockets.send_trace is None:
@@ -760,7 +764,8 @@ def run_request_loop(
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
     )
     t0 = time.perf_counter()
-    c = 0  # chunks
+    c = 0  # chunks: the request_id prefill_chunk / prefill_forward see
+    forward_idx = 0  # forwards: the row index of the logs and the timing CSV
     first = None
 
     def forward_shutdown():
@@ -777,6 +782,7 @@ def run_request_loop(
 
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out, idx_in, idx_out)
+        inp = mtp_tokens = None
         try:
             if cfg.is_first_rank:
                 inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
@@ -792,8 +798,15 @@ def run_request_loop(
             else:
                 inp, meta = _d2d_recv(d2d_in, sockets)
                 mtp_tokens = None
-        except ValueError:
-            # A refused forward: release the downstream ranks before failing.
+        except BaseException:
+            # Release the downstream ranks before failing, whatever stopped this one.
+            if inp is not None:
+                if sockets.tokens is None:
+                    ttnn.deallocate(inp)
+                if sockets.persistent_metadata() is None:
+                    ttnn.deallocate(sockets.metadata)
+                if mtp_tokens is not None and sockets.overhang is None:
+                    ttnn.deallocate(mtp_tokens)
             forward_shutdown()
             raise
         indices = _d2d_recv_indices(d2d_in, idx_in) if idx_in is not None else None
@@ -828,6 +841,7 @@ def run_request_loop(
             kv_caches,
             rank,
             c,
+            forward_idx,
             inp,
             meta,
             d2d_out,
@@ -840,6 +854,7 @@ def run_request_loop(
         if first is None:
             first = t
         c += _chunks_in(meta)
+        forward_idx += 1
         if layer_ack_service is not None:
             layer_ack_service.check()  # a lost D2H record is fatal for the run; surface it here, not at exit
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0, idx_out)
@@ -1054,12 +1069,17 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
     d2d_in = d2d_out = idx_in = idx_out = None
     if num_ranks > 1:
+        idx_inbound = getattr(runtime, "receives_indexer_indices", False)
+        idx_outbound = getattr(runtime, "forwards_indexer_indices", False)
+        check_packed_forward_support(
+            FORWARD_CHUNKS,
+            supports_packed_forward=ADAPTER.supports_packed_forward,
+            indexer_indices=idx_inbound or idx_outbound,
+        )
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(
             mesh_device, rank, num_ranks, d2d_activation_rows, d2d_activation_width, d2d_in_planes, d2d_out_planes
         )
-        idx_inbound = getattr(runtime, "receives_indexer_indices", False)
-        idx_outbound = getattr(runtime, "forwards_indexer_indices", False)
         if idx_inbound or idx_outbound:
             idx_in, idx_out = build_d2d_index_endpoints(
                 mesh_device, rank, runtime.indexer_indices_shape(), inbound=idx_inbound, outbound=idx_outbound

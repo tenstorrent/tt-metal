@@ -59,6 +59,25 @@ def test_batched_layout_rejects_bad_counts(expect_error):
         pack_forward_metadata([PrefillChunk(0, 0, C)] * 3, 2)
 
 
+def test_batched_decode_rejects_a_single_chunk_record(expect_error):
+    words = as_int32_words(pack_forward_metadata([PrefillChunk(0, 0, C), EMPTY], 2))
+    with expect_error(ValueError, "reserved header word is 5"):
+        decode_forward_metadata(words[:1] + [5] + words[2:], 2)
+    with expect_error(ValueError, "record 1 past num_chunks=1"):
+        decode_forward_metadata(words[:5] + [2, 0, 0], 2)
+    # The 12 B record of a producer still at one chunk per forward, read by a runner at four.
+    one_chunk = as_int32_words(pack_forward_metadata([PrefillChunk(3, C, 2 * C)], 1))
+    with expect_error(ValueError, "outside|reserved|past num_chunks"):
+        decode_forward_metadata(one_chunk + [0] * 11, 4)
+
+
+def test_encoder_rejects_an_empty_forward(expect_error):
+    with expect_error(ValueError, "at least one chunk"):
+        forward_metadata_words([], 2)
+    with expect_error(ValueError, "only empty chunks"):
+        forward_metadata_words([EMPTY, EMPTY], 2)
+
+
 def test_single_chunk_is_todays_metadata():
     assert pack_forward_metadata([PrefillChunk(3, 2048, 2900)], 1) == struct.pack("<3I", 3, 2048, 2900)
     assert sentinel_metadata(SHUTDOWN_WORD, 1) == struct.pack("<iii", -1, -1, -1)
@@ -210,8 +229,14 @@ def test_packed_forward_refusals():
     assert packed_forward_refusals(1, supports_packed_forward=False, mtp_levels=2, use_trace=True) == []
     assert packed_forward_refusals(4, supports_packed_forward=True) == []
     reasons = packed_forward_refusals(
-        4, supports_packed_forward=False, mtp_levels=1, dflash=True, use_trace=True, d2h_acks=True
+        4,
+        supports_packed_forward=False,
+        mtp_levels=1,
+        dflash=True,
+        use_trace=True,
+        d2h_acks=True,
+        indexer_indices=True,
     )
-    assert len(reasons) == 5
-    for knob in ("supports_packed_forward", "MTP", "DFLASH", "USE_TRACE", "LAYER_ACK_D2H"):
+    assert len(reasons) == 6
+    for knob in ("supports_packed_forward", "MTP", "DFLASH", "USE_TRACE", "LAYER_ACK_D2H", "indexer indices"):
         assert any(knob in r for r in reasons), knob
