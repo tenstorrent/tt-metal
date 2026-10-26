@@ -125,6 +125,70 @@ tasks:
       the shared expert section time before and after (plain profile, chunk 5120, layers of W.1).'
     gate_tasks:
     - W.1
+- id: FIX.2
+  title: Root-cause the flat_routed_expert first-call hangs on a Galaxy (Blackhole p150b, 12x10 grid) found b
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - W.1
+  gate:
+    cmd: BRINGUP_TASK=W.1 BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'Root-cause the flat_routed_expert first-call hangs on a Galaxy (Blackhole p150b, 12x10 grid) found by FIX.1
+      regression: 11 tests hang on first call, e.g. test_flat_expert_indexed_shapes[mimo], the six test_flat_uneven_split
+      cases, glm_e12 (DS41-119: hangs on the code before FIX.1 too). Reproduce each on one Galaxy chip with a short dispatch
+      timeout, find the actual cause (tt-triage / the stuck core and kernel, not a guess), and fix it in the fork so every
+      case runs on the Galaxy and still on the 2x2 QuietBox; no case skipped or special-cased for the box. Also make the 4
+      test-builder asserts that hard-code the p150 11x10 grid derive the grid from the device. Done when tests/unit/ passes
+      on a Galaxy chip except failures shown to be identical on the QuietBox baseline (list them with evidence), plus the
+      W.1 gate. Record the cause in the fork CHANGELOG and known_issues (DS41-119).'
+    gate_tasks:
+    - W.1
+- id: FIX.3
+  title: 'Root-cause the real-time profiler failure on this Galaxy: every 8x4 mesh open logs "Real-time profil'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - B.1
+  - W.1
+  gate:
+    cmd: BRINGUP_TASK=B.1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_box.py && BRINGUP_TASK=W.1
+      BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      chips: == 32
+      all_gather_maxabs: == 0
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'Root-cause the real-time profiler failure on this Galaxy: every 8x4 mesh open logs "Real-time profiler disabled
+      on device 7 / 10: D2H socket construction failed (Failed to pin pages for DMA buffer ... size 0x201000 ... flags 0x4:
+      Invalid argument)", always devices 7 and 10 (B.1, W.1, M.1 logs). Host facts: KMD 2.11.0, iommu=pt (passthrough), 1412
+      x 2 MB hugepages, HugePages_Free 0 while a mesh is open; the buffer is 2 MB + 4 KB. Hypothesis to test, not assume:
+      under iommu=pt the pin needs physically contiguous memory and a 2 MB + 4 KB buffer only pins when it happens to be contiguous
+      (or the hugepages run out by device 7 / 10). Find the actual cause with evidence (pin a buffer of that size per device,
+      hugepage use per device during open, the D2H socket allocation code), fix it at its cause in tt_metal (or the framework
+      if the cause is ours), so the real-time profiler runs on all 32 chips; add a check that reports a profiler that failed
+      to start before a perf task relies on it. Record the cause and fix in known_issues.'
+    gate_tasks:
+    - B.1
+    - W.1
 - id: M.1
   title: Every layer (40) on 8x4 at this run's size, from the ported blocks
   step: assemble

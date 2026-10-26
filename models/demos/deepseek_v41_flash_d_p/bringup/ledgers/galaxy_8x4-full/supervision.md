@@ -74,3 +74,30 @@ HF write token (qb-12 /localdev/dnijemcevic/.hf_write_token, ~/.hf_relay_token h
 /scratch hf_scaled/galaxy_2x2 (272 GB) is unused. Dashboard: https://claude.ai/artifact/TCBJdnmec628NHLQDXJM37 (publishing
 needs a session with the Artifact tool; a node session may not have it: if so, skip and say so).
 Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release only on the owner word.
+
+## 2026-10-26 15:29:53 overseer session on this node (tmux overseer) takes over
+- Watch + heartbeat cron (:07/:37) armed; Stop hook heartbeat_stop.py installed in ~/.claude/settings.json on this node.
+  Node gotcha: plain `python` does not exist; every bringup command needs `source python_env/bin/activate`.
+- 15:25:38 FIX.1 PASS c9217573868 (attempt 2). Diff review: shared-expert padding removed (TP4 576, TP2 1152 at real
+  width); fork plan falls back to one subgrid only where the 2/3-subgrid plan had no gate/up split (old plans unchanged);
+  se6_dcompute static_assert kt_d % 8 dropped (hk is matmul_block kt_dim with rt_dim 1, unused by the LLK: agent cites
+  llk_unpack_AB_matmul.h). New unit test test_flat_widths.py (I 576/1152, glm/full, vs float64 within noise limit).
+  W.1 gate re-ran on the new code (agent check 15:24:42) and passed. Accepted: honest fix, no padding (OV-3 met).
+  KNOWLEDGE CONTRADICTED DS41-76 / DS41-115: the agent's own corrections of the padding rationale; expected.
+  Review items: 2 fork env reads (settings lint) + stale padded fork case -> note for O.1 / Z.1.
+  OV-6 before number missing (agent: after = 0.153 ms/layer shared expert on the model path, MoE block 4.662 ms): I
+  measure the before (I 1280 padded call on the same build; It 40 plans unchanged by FIX.1) at the next boundary.
+  SEED-BOX RE-VERIFY list += FIX.1 (2x2 shared expert now runs I 1152 unpadded).
+- Framework fixes (1)-(3) written in dev worktree /scratch/dnijemcevic/fwdev: F190 (pass + out-of-scope -> stop for
+  overseer), F191 (launch preflight: git identity, merge/rebase, index.lock), F192 (run mesh smaller than the box:
+  cards.py subset at launch, PREFLIGHT stop when none). Land at the FIX.2 boundary.
+- 15:41 heartbeat: orchestrator alive, FIX.2 attempt 1 active (transcript 15:40). INCIDENT (mine): the dev-worktree
+  selftest run (test_resume_after_a_fix -> main resume -> F192 run_mesh_cards) probed this box's REAL cards via
+  run_safe_pytest card_probe.py from ~15:33 to 15:42, next to FIX.2. Killed (no probe left; card cache untouched,
+  dated 11:34). Possible effect on FIX.2: per-card lock waits or a probe-side reset between its runs; read FIX.2's
+  hang findings with that in mind. Framework cause fixed in the dev tree: selftest conftest autouse fixture hides
+  /dev/tenstorrent and the card cache from every selftest (test_no_selftest_sees_the_real_cards).
+- 15:55 dev-tree selftests (F190-F192 + isolation): 594 passed, 9 skipped, 2 xfailed; 1 failure from before these fixes
+  (test_e2e_runtime::test_no_runner_contract_test_takes_a_fixed_threshold flags xing40_a4b_d_p's frozen
+  server_rules.py:393 fixed PCC, a different model's frozen test; not for this run). test_fork_cases::test_a_volatile_cache_key
+  crashed (SIGBUS importing ttnn while FIX.2 rebuilt it); rerun alone after FIX.2. Fixes ready to land at the FIX.2 boundary.

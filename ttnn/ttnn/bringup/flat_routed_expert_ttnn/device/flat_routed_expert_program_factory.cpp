@@ -202,12 +202,17 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     const char* dp_env = std::getenv("MIMO_FL_DYN_PULL");
     const bool dyn_pull = (dp_env == nullptr || std::atoi(dp_env) != 0) && !p.rdown && p.nsg == 1 && cfg.cmb_rt == 0;
     if (dyn_pull) {
-        const CoreCoord lv = phys(p.readers[0]), l0 = flat_worker_noc0(device, p.readers[0]);
+        // The leader knows itself by its logical coordinate (get_absolute_logical_x / _y). It used to compare my_x[0] /
+        // my_y[0] with reader 0's physical NoC0 coordinate, but Blackhole firmware fills my_x from NOC_ID_LOGICAL (the
+        // translated coordinate): the two agree only where no Tensix column west of reader 0 is harvested (the p150s
+        // here), so a chip with physical column 1 harvested (Galaxy cards) had no leader and every core polled the
+        // semaphore forever (deepseek_v41_flash_d_p FIX.2, DS41-119).
+        const CoreCoord lv = phys(p.readers[0]);
         dyn_def["SE_DYN_PULL"] = "1";
         dyn_def["SE_DYN_LX"] = std::to_string(lv.x);
         dyn_def["SE_DYN_LY"] = std::to_string(lv.y);
-        dyn_def["SE_DYN_LPX"] = std::to_string(l0.x);
-        dyn_def["SE_DYN_LPY"] = std::to_string(l0.y);
+        dyn_def["SE_DYN_LLX"] = std::to_string(p.readers[0].x);
+        dyn_def["SE_DYN_LLY"] = std::to_string(p.readers[0].y);
         dyn_def["SE_DYN_LSEM"] = "13";
         dyn_def["SE_DYN_CB"] = "9";
     }

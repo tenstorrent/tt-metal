@@ -3206,3 +3206,35 @@ ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_flat_widths.py`; timin
 --no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_shared_expert.py -k "test_shared_flat and time and L00"`;
 gate `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.1 --spec
 models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## FIX.2 overseer, attempt 1 (2026-10-26): the flat op's Galaxy hangs root-caused (DS41-119)
+What: the fork ttnn/ttnn/bringup/flat_routed_expert_ttnn only (no model code changed; CHANGELOG "The schedule leader
+found by its logical coordinate").
+- Cause (tt-triage, test_flat_uneven_split[glm_e12] on one Galaxy chip, 5 s dispatch timeout): with SE_DYN_PULL (plans
+  with no reader tails and no combine attached) reader 0's BRISC reads the counts and sets semaphore SE_DYN_LSEM; every
+  other core polls it. The leader recognised itself by `my_x[0] == SE_DYN_LPX` with LPX = reader 0's physical NoC0 x
+  (flat_worker_noc0), but BH firmware fills my_x from NOC_ID_LOGICAL (translated). On this card physical column 1 is
+  harvested (triage: logical (0,5) at physical 2-7), so reader 0 (0,9) is physical (2,11) vs translated (1,11): no
+  leader, every core polling (36.9 M completed reads, one in flight). The QuietBox p150s have column 1, so it never hung there.
+- Bisection probes (single chip, glm shape, 64 tokens an expert): MIMO_FL_DRISC=0 hung, MIMO_FL_COLS=11 hung, bfp8
+  weights / bf16 x and h hung, MIMO_FL_DYN_PULL=0 passed. The same shape hung on the full 8x4 FABRIC_2D mesh as well
+  (DS41-119's "mesh runs pass" was wrong; the mesh cases that passed had no SE_DYN_PULL). After the fix: single chip
+  and 8x4 mesh pass.
+- Fix: se_dyn.hpp compares get_absolute_logical_x / _y with SE_DYN_LLX / LLY (reader 0's logical core), set in the
+  program factory. The model's calls never take SE_DYN_PULL (routed: flat_routed_expert_with_program + combine;
+  shared expert I 576 / 1152: reader tails), so W.1's numbers should not move.
+- Builder asserts: flat_expert.py `_layout` (Python parity builder) asserted rcols [0, 1, 6, 7] and an 11 x 10 grid
+  (the 4 test_flat_routed_expert_op failures). Now the C++ plan's rule (readers 0, 1, E, E + 1; east part moved by
+  E - 6; extra columns are down cores). test_flat_widths' I 2304 skip on a 12-column grid removed.
+- Fork tests/unit/ on one Galaxy chip: 24 passed / 14 failed / 3 skipped (2x2-mesh tests skip on one card), no hangs
+  (FIX.1: 11 hangs). 12 x TT_FATAL p.nsg == 1 = the QuietBox baseline's 12 (DS41-63). Not identical to the baseline:
+  the mimo and k2 indexed_perf bands (QuietBox p150 timings): mimo 1843456 / 1838520 ns vs upper 1826488, k2
+  1573274 / 1575501 vs 1572413 (k2 has reader tails, so the change does not reach it; FIX.1 had 1573083). Not
+  adjusted: a Galaxy band would special-case the box; the owner's 2026-10-23 rule puts Galaxy re-tuning in a perf pick.
+- Not run on the 2x2 QuietBox (not on this box). Where the old check found the leader, the new one selects the same core.
+Gotchas: tt-probe.sh saves probes under tests/ttnn/unit_tests/operations/<name>/probes/ (outside the step's paths:
+deleted). A 2x2 sub-mesh of the Galaxy fails the fabric handshake; use the 8x4 mesh and touch every
+/tmp/tt-device-N.dirty after single-card runs (K-57).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --device auto --run-all
+ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/`; gate `PYTHONPATH=$PWD python -m models.demos.common.bringup
+gate FIX.2 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
