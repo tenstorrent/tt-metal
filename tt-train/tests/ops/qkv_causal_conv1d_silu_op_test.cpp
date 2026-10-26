@@ -101,13 +101,22 @@ xt::xarray<double> grad_input_f64(const Shape& s, const Problem& p) {
     return xt::view(grad_window, xt::all(), xt::range(3, 3 + T), xt::all());
 }
 
-// Tolerance relative to the tensor's largest magnitude: inputs and outputs are bf16, and grad_input sums four
-// bf16-rounded products, so an element's error scales with the tensor's range rather than with its own value.
-void expect_close(const xt::xarray<float>& expected, const xt::xarray<float>& actual, const std::string& name) {
+// Tolerances relative to the tensor's largest magnitude: inputs and outputs are bf16, and grad_input sums four
+// bf16-rounded products, so an element's error scales with the tensor's range rather than with its own value. The
+// kernel's measured floor is 0.4% of max per element (the bf16 rounding of the output); 1% per element catches a
+// corrupted row or tile, and the mean bound a bias too small to trip the per-element one.
+constexpr double max_rel_tolerance = 1e-2;
+constexpr double mean_rel_tolerance = 1e-3;
+
+template <typename T>
+void expect_close(const xt::xarray<T>& expected, const xt::xarray<T>& actual, const std::string& name) {
     ASSERT_EQ(expected.shape(), actual.shape()) << name;
-    const float scale = static_cast<float>(xt::amax(xt::abs(expected))());
-    EXPECT_TRUE(xt::allclose(expected, actual, 1e-2, 3e-2 * scale))
-        << name << " max|diff| = " << xt::amax(xt::abs(expected - actual))();
+    const double scale = xt::amax(xt::abs(expected))();
+    const xt::xarray<double> diff = xt::abs(xt::cast<double>(actual) - xt::cast<double>(expected));
+    const double max_diff = xt::amax(diff)();
+    const double mean_diff = xt::mean(diff)();
+    EXPECT_LE(max_diff, max_rel_tolerance * scale) << name << " max|diff| = " << max_diff << " of max " << scale;
+    EXPECT_LE(mean_diff, mean_rel_tolerance * scale) << name << " mean|diff| = " << mean_diff << " of max " << scale;
 }
 
 xt::xarray<float> slice_cols(const xt::xarray<float>& t, size_t begin, size_t end) {
@@ -246,14 +255,25 @@ Reference backward_from_outputs(const Shape& s, Problem& p, const AutogradInputs
     return reference(s, p);
 }
 
-// Checks every gradient against the xtensor reference.
+// Checks every gradient against the reference: grad_input against the double one.
 void check_metal_bw(
-    const Shape& s, uint32_t chunk, uint32_t splits, uint32_t seed, const std::string& tag, float x_scale = 1.0F) {
+    const Shape& s,
+    uint32_t chunk,
+    uint32_t splits,
+    uint32_t seed,
+    const std::string& tag,
+    bool compute_tap_grads = true,
+    float x_scale = 1.0F) {
     using namespace ttml;
     const auto p = random_problem(s, seed, x_scale);
+    auto [grad_input, g0, g1, g2, g3] = run_metal_bw(s, make_inputs(s, p), chunk, splits, compute_tap_grads);
+    expect_close(
+        grad_input_f64(s, p), xt::xarray<double>(xt::cast<double>(core::to_xtensor(grad_input))), tag + " grad_input");
+    if (!compute_tap_grads) {
+        EXPECT_FALSE(g0.has_value() || g1.has_value() || g2.has_value() || g3.has_value()) << tag;
+        return;
+    }
     const auto ref = reference(s, p);
-    auto [grad_input, g0, g1, g2, g3] = run_metal_bw(s, p, chunk, splits);
-    expect_close(ref.grad_input, core::to_xtensor(grad_input), tag + " grad_input");
     const std::array<ttnn::Tensor, 4> grads = {*g0, *g1, *g2, *g3};
     for (size_t j = 0; j < 4; ++j) {
         expect_close(ref.grad_taps[j], core::to_xtensor(grads[j]), tag + " grad_tap" + std::to_string(j));
@@ -264,13 +284,14 @@ struct MetalCase {
     Shape shape;
     uint32_t chunk;
     uint32_t splits;
+    bool tap_grads = true;  // false compiles the frozen-taps program: no partial, a different DFB set and budget
 };
 
 class QkvCausalConv1dSiluMetalTest : public QkvCausalConv1dSiluTest, public ::testing::WithParamInterface<MetalCase> {};
 
 TEST_P(QkvCausalConv1dSiluMetalTest, MatchesReference) {
     const auto& c = GetParam();
-    check_metal_bw(c.shape, c.chunk, c.splits, 7, "case");
+    check_metal_bw(c.shape, c.chunk, c.splits, 7, "case", c.tap_grads);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -294,7 +315,12 @@ INSTANTIATE_TEST_SUITE_P(
         MetalCase{{512, 256, 128, 128}, 32, 0},
         MetalCase{{256, 320, 320, 320}, 32, 5},  // 150 items: cores run two, some across a channel block
         MetalCase{{256, 128, 64, 64}, 0, 0},     // auto chunk and splits
-        MetalCase{{96, 96, 64, 32}, 0, 2}));     // auto chunk at a fixed split
+        MetalCase{{96, 96, 64, 32}, 0, 2},       // auto chunk at a fixed split
+        // Frozen taps, the consumer's mode: two items per core across a block, the widest block with a halo on
+        // every split, a short DST batch.
+        MetalCase{{256, 320, 320, 320}, 32, 5, false},
+        MetalCase{{256, 128, 64, 64}, 256, 8, false},
+        MetalCase{{64, 96, 64, 64}, 224, 2, false}));
 
 // A program-cache hit reads the new run's buffers: the first run's inputs stay alive so the second lands elsewhere.
 TEST_F(QkvCausalConv1dSiluTest, ProgramCacheHitReadsNewBuffers) {
@@ -317,6 +343,9 @@ TEST_F(QkvCausalConv1dSiluTest, ProgramCacheHitReadsNewBuffers) {
     for (size_t j = 0; j < 4; ++j) {
         expect_close(ref.grad_taps[j], core::to_xtensor(grads[j]), "grad_tap" + std::to_string(j));
     }
+    // Frozen taps compile a different program: a must-miss, so the flag stays in the hash.
+    run_metal_bw(s, b, 64, 2, /*compute_tap_grads=*/false);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_first + 1) << "frozen taps must miss the cache";
 }
 
 // Invalid work splits are rejected by validation before anything is launched.
@@ -325,11 +354,14 @@ TEST_F(QkvCausalConv1dSiluTest, RejectsInvalidWorkSplit) {
     const auto run = [&](const Shape& s, uint32_t chunk, uint32_t splits) {
         run_metal_bw(s, random_problem(s, 3), chunk, splits);
     };
-    EXPECT_THROW(run({64, 128, 64, 64}, 96, 1), std::runtime_error);      // 96 does not divide C = 256
-    EXPECT_THROW(run({64, 128, 64, 64}, 64, 3), std::runtime_error);      // T = 64 has only 2 tile rows
-    EXPECT_THROW(run({64, 512, 256, 256}, 1024, 1), std::runtime_error);  // 32 tiles per block exceed L1
-    EXPECT_THROW(run({48, 128, 64, 64}, 64, 1), std::runtime_error);      // T is not tile aligned
-    EXPECT_THROW(run({64, 100, 64, 64}, 32, 1), std::runtime_error);      // Q is not tile aligned
+    const auto rejects = [](const std::string& message) {
+        return ThrowsMessage<std::runtime_error>(HasSubstr(message));
+    };
+    EXPECT_THAT([&] { run({64, 128, 64, 64}, 96, 1); }, rejects("tile-aligned divisor of Q+K+V"));  // 96 vs C = 256
+    EXPECT_THAT([&] { run({64, 128, 64, 64}, 64, 3); }, rejects("row_splits must be in [1, row_count / 32]"));
+    EXPECT_THAT([&] { run({64, 512, 256, 256}, 1024, 1); }, rejects("bytes of L1 per core"));  // 32 tiles per block
+    EXPECT_THAT([&] { run({48, 128, 64, 64}, 64, 1); }, rejects("row_count must be positive and tile aligned"));
+    EXPECT_THAT([&] { run({64, 100, 64, 64}, 32, 1); }, rejects("Q/K/V widths must be tile aligned"));
 }
 
 // The forward rejects what the backward would reject, before any work is done.
@@ -340,8 +372,12 @@ TEST_F(QkvCausalConv1dSiluTest, ForwardRejectsInvalidShapes) {
         ops::qkv_causal_conv1d_silu(
             a.input, a.history, a.taps[0], a.taps[1], a.taps[2], a.taps[3], q_width, s.K, s.V, chunk);
     };
-    EXPECT_THROW(run({48, 64, 64, 64}, 64), std::runtime_error);  // T is not tile aligned
-    EXPECT_THROW(run({64, 64, 64, 64}, 32), std::runtime_error);  // Q + K + V is not the channel count
+    EXPECT_THAT(
+        [&] { run({48, 64, 64, 64}, 64); },  // T is not tile aligned: the forward's own check
+        ThrowsMessage<std::runtime_error>(HasSubstr("sequence must be positive and tile aligned")));
+    EXPECT_THAT(
+        [&] { run({64, 64, 64, 64}, 32); },  // Q + K + V is not the channel count
+        ThrowsMessage<std::runtime_error>(HasSubstr("Q+K+V is")));
     // A chunk that fits the forward's L1 budget but not the backward's is rejected here, not in backward(). The
     // backward's budget depends on the taps: chunk 512 at C = 2560 fits with frozen taps and not with trainable ones.
     const Shape wide{64, 1024, 1024, 512};
@@ -358,18 +394,10 @@ TEST_F(QkvCausalConv1dSiluTest, ForwardRejectsInvalidShapes) {
 
 // Preactivations up to +-16: silu'(x) = s * (1 + x * (1 - s)) is sensitive to the precision of s near 1.
 TEST_F(QkvCausalConv1dSiluTest, LargePreactivations) {
-    using namespace ttml;
-    constexpr double tolerance = 0.01;  // of max|grad_input|, per element; a bf16 sigmoid gives several percent
+    // 1% of max|grad_input| per element against the double reference; a bf16 sigmoid gives several percent.
     for (const auto& [chunk, splits, seed] : {std::tuple{256U, 4U, 7U}, std::tuple{64U, 3U, 8U}}) {
-        const Shape s{256, 128, 64, 64};
-        const auto p = random_problem(s, seed, /*x_scale=*/4.0F);
-        const auto expected = grad_input_f64(s, p);
-        const auto [grad_input, g0, g1, g2, g3] = run_metal_bw(s, p, chunk, splits);
-        const xt::xarray<double> actual = xt::cast<double>(core::to_xtensor(grad_input));
-        const double scale = xt::amax(xt::abs(expected))();
-        const double max_diff = xt::amax(xt::abs(actual - expected))();
-        EXPECT_LE(max_diff, tolerance * scale)
-            << "chunk " << chunk << ": max|diff| = " << max_diff << " of max|grad_input| = " << scale;
+        check_metal_bw(
+            {256, 128, 64, 64}, chunk, splits, seed, "chunk " + std::to_string(chunk), true, /*x_scale=*/4.0F);
     }
 }
 
