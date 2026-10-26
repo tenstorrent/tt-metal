@@ -30,6 +30,35 @@ constexpr auto kComputeKernelPath =
 constexpr uint32_t kOutputBufferIdx = 0;
 constexpr uint32_t kIntermediateBufferIdx = 1U;
 
+constexpr auto kQueryCbIndex = tt::CBIndex::c_0;
+constexpr auto kKeyCbIndex = tt::CBIndex::c_1;
+constexpr auto kValueCbIndex = tt::CBIndex::c_2;
+constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_3;
+constexpr auto kIntermediateCbIndex = tt::CBIndex::c_4;
+constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;
+constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // used for matmul reduction
+constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_7;
+
+// Online-softmax state, one tile per Q row; prev/cur swap roles every K step.
+constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // running row max, previous step
+constexpr auto kCurMaxValueCbIndex = tt::CBIndex::c_9;   // running row max, current step
+constexpr auto kExpMaxDiffCbIndex = tt::CBIndex::c_10;   // exp(scale * (prev max - cur max)), the rescale factor
+constexpr auto kPrevSumExpCbIndex = tt::CBIndex::c_11;   // running row sum of P, previous step
+constexpr auto kCurSumExpCbIndex = tt::CBIndex::c_12;    // running row sum of P, current step
+constexpr auto kPrevMmOutCbIndex = tt::CBIndex::c_13;    // running P @ V accumulator, previous step
+constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;     // running P @ V accumulator, current step
+
+constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
+constexpr auto kGateCbIndex = tt::CBIndex::c_16;
+// Split units: a sender's running state goes out through c_18 to its scratch slot, a merger's partials
+// come in through c_17; c_19 holds the partial's rescale factor while it is folded in.
+constexpr auto kPartialInCbIndex = tt::CBIndex::c_17;
+constexpr auto kPartialOutCbIndex = tt::CBIndex::c_18;
+constexpr auto kPartialAlphaCbIndex = tt::CBIndex::c_19;
+
+const std::string kSplitUnitsDefKey = "SPLIT_UNITS";
+constexpr uint32_t kNumSemaphores = 4U;  // mergers per core, see kMaxMergersPerCore
+
 const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
@@ -59,6 +88,7 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* gate_buffer,
     const tt::tt_metal::Buffer* output_buffer,
     const tt::tt_metal::Buffer* intermediates_buffer,
+    const tt::tt_metal::Buffer* scratch_buffer,
     uint32_t num_cores_y,
     const std::vector<CoreUnits>& per_core_units) {
     for (uint32_t i = 0; i < per_core_units.size(); i++) {
@@ -75,12 +105,16 @@ void assign_per_core_runtime_args(
             query_buffer->address(),
             key_buffer->address(),
             value_buffer->address(),
-            get_address_or_zero(mask_buffer),
-            get_address_or_zero(gate_buffer)};
+            mask_buffer != nullptr ? mask_buffer->address() : 0,
+            gate_buffer != nullptr ? gate_buffer->address() : 0,
+            scratch_buffer != nullptr ? scratch_buffer->address() : 0};
         reader_args.insert(reader_args.end(), work_args.begin(), work_args.end());
         SetRuntimeArgs(program, kernels.reader, core, reader_args);
 
-        std::vector<uint32_t> writer_args = {output_buffer->address(), get_address_or_zero(intermediates_buffer)};
+        std::vector<uint32_t> writer_args = {
+            output_buffer->address(),
+            intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
+            scratch_buffer != nullptr ? scratch_buffer->address() : 0};
         writer_args.insert(writer_args.end(), work_args.begin(), work_args.end());
         SetRuntimeArgs(program, kernels.writer, core, writer_args);
 
@@ -147,9 +181,17 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
     const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
-    const uint32_t num_cores = std::min(num_available_cores, num_work_items(shape, chunks));
+    const uint32_t max_pieces = effective_max_pieces(args.program_config);
+    const SDPAForwardSchedule schedule = make_schedule(
+        shape,
+        chunks,
+        std::min(
+            effective_num_cores(args.program_config, num_available_cores), num_work_items(shape, chunks) * max_pieces),
+        max_pieces);
+    const auto& per_core_units = schedule.per_core;
+    const uint32_t num_cores = static_cast<uint32_t>(per_core_units.size());
     const auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size);
-    const std::vector<CoreUnits> per_core_units = split_work(shape, chunks, num_cores);
+    const bool split_units = schedule.num_slots > 0U;
 
     // DST is the register file the math unit computes in: 4 tiles per half in fp32 mode (8 in bf16);
     // the kernels run half-sync, so one pass gets one half.
@@ -173,13 +215,109 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 2) Create the circular buffers
     // -------------------------------------------------------------------------
 
-    // Depths and formats come from the CB plan in sdpa_fw_config.cpp, the same table l1_bytes summed when
-    // resolve_chunks checked the L1 budget. The mask, gate and intermediates CBs are only created when the
-    // config uses them (depth 0 otherwise).
-    for (const SDPAForwardCb& cb : cb_plan(cb_tiles(shape, chunks))) {
-        if (cb.tiles > 0U) {
-            create_circular_buffer(program, all_cores, cb.index, cb.format, tt::tile_size(cb.format), cb.tiles);
-        }
+    const SDPAForwardCbTiles cb =
+        cb_tiles(shape, chunks, split_units);  // depths; the L1 budget was checked by resolve_chunks
+
+    [[maybe_unused]] auto cb_query = create_circular_buffer(
+        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.query);
+
+    [[maybe_unused]] auto cb_key =
+        create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.key);
+
+    [[maybe_unused]] auto cb_value = create_circular_buffer(
+        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.value);
+
+    // Mask CB: causal = two on-chip tiles ([0] diagonal pattern, [1] all -1e9); arbitrary = Sq x Sk tiles
+    // per step (shared by the stacked heads), double-buffered. None = no CB.
+    if (mask_type != AttentionMaskType::None) {
+        [[maybe_unused]] auto cb_attn_mask = create_circular_buffer(
+            program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.attn_mask);
+    }
+
+    // Create gate buffer if the model has a gating mechanism. Double-buffered to overlap DRAM reads with compute.
+    if (args.has_gate) {
+        [[maybe_unused]] auto cb_gate = create_circular_buffer(
+            program, all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.gate);
+    }
+
+    // create intermediate buffer only if we need to return intermediates
+    // Intermediate shape: (B, H, S, 32) = 1 FP32 tile wide (logsumexp = max + log(sum_exp)) per row
+    if (args.return_intermediates) {
+        [[maybe_unused]] auto cb_intermediate = create_circular_buffer(
+            program,
+            all_cores,
+            kIntermediateCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            cb.intermediate);
+    }
+
+    [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
+        program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.reduction_scaler);
+
+    [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
+        program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.matmul_reduce);
+
+    // Scores of one step, row-major; single-buffered, softmax rewrites in place (see the TODO on the
+    // softmax helpers in sdpa_compute_utils.hpp).
+    [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
+        program,
+        all_cores,
+        kAttentionWeightsCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        cb.attention_weights);
+
+    [[maybe_unused]] auto cb_prev_max_value = create_circular_buffer(
+        program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.stat);
+
+    [[maybe_unused]] auto cb_cur_max_value = create_circular_buffer(
+        program, all_cores, kCurMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.stat);
+
+    // fp32 for the running sums and the rescale factors; the max stays bf16 like the scores it came from.
+    [[maybe_unused]] auto cb_exp_max_diff = create_circular_buffer(
+        program, all_cores, kExpMaxDiffCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.stat);
+
+    [[maybe_unused]] auto cb_prev_exp_sum = create_circular_buffer(
+        program, all_cores, kPrevSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.stat);
+
+    [[maybe_unused]] auto cb_cur_exp_sum = create_circular_buffer(
+        program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.stat);
+
+    [[maybe_unused]] auto cb_prev_mm_out = create_circular_buffer(
+        program, all_cores, kPrevMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.mm_out);
+
+    [[maybe_unused]] auto cb_cur_mm_out = create_circular_buffer(
+        program, all_cores, kCurMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.mm_out);
+
+    [[maybe_unused]] auto cb_output = create_circular_buffer(
+        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, cb.output);
+
+    // Split units: the partials travel through DRAM scratch, one slot per sender, fp32, and the merger
+    // waits on one of its core's semaphores until every sender has bumped it.
+    std::optional<ttnn::Tensor> scratch;
+    if (split_units) {
+        [[maybe_unused]] auto cb_partial_in = create_circular_buffer(
+            program, all_cores, kPartialInCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.partial);
+        [[maybe_unused]] auto cb_partial_out = create_circular_buffer(
+            program, all_cores, kPartialOutCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.partial);
+        [[maybe_unused]] auto cb_partial_alpha = create_circular_buffer(
+            program, all_cores, kPartialAlphaCbIndex, precise_data_format, float32_single_tile_size_bytes, cb.alpha);
+        const uint32_t partial_rows = schedule.num_slots * rows;
+        scratch = ttnn::create_device_tensor(
+            tt::tt_metal::TensorSpec(
+                ttnn::Shape(
+                    {1U,
+                     1U,
+                     partial_rows * tt::constants::TILE_HEIGHT,
+                     partial_tiles_per_row(shape) * tt::constants::TILE_WIDTH}),
+                tt::tt_metal::TensorLayout(
+                    tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, query.memory_config())),
+            device);
+    }
+    std::vector<uint32_t> semaphore_ids;
+    for (uint32_t i = 0; i < kNumSemaphores; ++i) {
+        semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, all_cores, 0));
     }
 
     // -------------------------------------------------------------------------
@@ -227,6 +365,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         enchantum::to_string(output_buffer->buffer_type()));
 
     auto* intermediates_buffer = args.return_intermediates ? output.back().buffer() : nullptr;
+    auto* scratch_buffer = scratch.has_value() ? scratch->buffer() : nullptr;
     if (intermediates_buffer != nullptr) {
         TT_FATAL(
             intermediates_buffer->buffer_type() == ttnn::BufferType::DRAM,
@@ -258,6 +397,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     if (args.has_gate) {
         defines[kHasGateDefKey] = "1";
     }
+    if (split_units) {
+        defines[kSplitUnitsDefKey] = "1";
+    }
 
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
     // corrupts FP32 dest accumulation, so we use HiFi3 there. Blackhole is unaffected and uses HiFi4.
@@ -277,11 +419,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         Sq_chunk_t,       // query tile-rows per Q chunk
         heads_per_item,   // Q heads stacked in one item
     };
+    reader_compile_args.insert(reader_compile_args.end(), semaphore_ids.begin(), semaphore_ids.end());
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(value_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(reader_compile_args);
 
     kernels.reader = create_reader_kernel(
         program,
@@ -297,8 +441,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         Sq_chunk_t,      // query tile-rows per Q chunk
         heads_per_item,  // Q heads stacked in one item
     };
+    writer_compile_args.insert(writer_compile_args.end(), semaphore_ids.begin(), semaphore_ids.end());
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(scratch_buffer).append_to(writer_compile_args);
     kernels.writer = create_writer_kernel(
         program, all_cores, /* writer_compile_args */ writer_compile_args, defines, kWriterKernelPath);
 
@@ -313,6 +459,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         std::vector<tt::tt_metal::UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
         mode[kPrevMmOutCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         mode[kCurMmOutCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        mode[kPartialInCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         return mode;
     };
 
@@ -360,6 +507,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         gate_buffer,
         output_buffer,
         intermediates_buffer,
+        scratch_buffer,
         num_cores_y,
         per_core_units);
 
@@ -372,7 +520,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
          /* sdpa_fw_writer_kernel      = */ kernels.writer,
          /* sdpa_fw_compute_kernel     = */ kernels.compute,
          /* num_cores                  = */ num_cores,
-         /* num_cores_y                = */ num_cores_y}};
+         /* num_cores_y                = */ num_cores_y,
+         /* scratch                    = */ std::move(scratch)}};
 }
 
 void SDPAForwardProgramFactory::override_runtime_arguments(
@@ -397,8 +546,8 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     auto* intermediates_buffer =
         operation_attributes.return_intermediates ? tensor_return_value.back().buffer() : nullptr;
 
-    // Only address arguments need updating here; tile counts remain the same as in create().
-    // No runtime args to update for compute kernels.
+    // Only the input/output addresses change between runs; the scratch tensor is owned by the cached
+    // program, so its address and the work lists stay as create() set them.
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_fw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_fw_writer_kernel);
 
