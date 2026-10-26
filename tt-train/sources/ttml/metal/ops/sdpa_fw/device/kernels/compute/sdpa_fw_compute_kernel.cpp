@@ -28,10 +28,10 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
 #include "sdpa_compute_utils.hpp"
+#include "tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/sdpa_fw_work_list.hpp"
 
-// Work item: one Q chunk = Sq_chunk_t query tile-rows of one batch/head. The chunk walks K/V in
-// steps of Sk_chunk_t tiles; per step it does QK^T, online softmax and P@V for all its rows.
-// Runtime args: num_runs, then (first_item, num_items) per run; same list as the reader and writer.
+// Work item: one Q chunk (see sdpa_fw_work_list.hpp). The chunk walks K/V in steps of Sk_chunk_t
+// tiles; per step it does QK^T, online softmax and P@V for all its rows.
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);        // output tiles per DST pass, element-wise loops
 constexpr uint32_t qWt = get_compile_time_arg_val(1);               // num tile in inner dim in query/key (d_qk/TILE_W)
@@ -406,15 +406,7 @@ void kernel_main() {
     cb_wait_front(cb_attn_mask, kCausalMaskTilesFronted);
 #endif
 
-    uint32_t runtime_args_counter = 0;
-    const uint32_t num_runs = get_arg_val<uint32_t>(runtime_args_counter++);
-    for (uint32_t run = 0; run < num_runs; ++run) {
-        const uint32_t first_item = get_arg_val<uint32_t>(runtime_args_counter++);
-        const uint32_t num_items = get_arg_val<uint32_t>(runtime_args_counter++);
-        for (uint32_t item = first_item; item < first_item + num_items; ++item) {
-            process_q_chunk(item);
-        }
-    }
+    for_each_work_item(/* arg_idx */ 0, [](uint32_t item) { process_q_chunk(item); });
 
 #ifdef CAUSAL_MASK
     cb_pop_front(cb_attn_mask, kCausalMaskTilesFronted);
