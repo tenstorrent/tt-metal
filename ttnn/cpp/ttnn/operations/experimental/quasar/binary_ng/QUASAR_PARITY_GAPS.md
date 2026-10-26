@@ -17,11 +17,10 @@ rather than duplicating per-op LLK status (that duplication is what previously d
 
 ## Framing (why the gate is the boundary)
 
-The descriptor / fallback path (`ProgramFactory`, the non-v2 factory) **does not run on Quasar at
-all**: it emits `DataMovementKernel` / `ComputeKernel`, whose constructors hard-throw on Quasar
-("… is not supported on Quasar", `tt_metal/impl/kernels/kernel.hpp`). So `matches_metal_v2_slice`
-(the DFB/v2 gate in `binary_ng_device_operation.cpp`) **is** the Quasar capability boundary: anything
-it rejects has no working Quasar path (Wormhole runs it via the descriptor). All Quasar DFB runs are
+The op has two factories, the Quasar-native factory and the Metal 2.0 (DFB) factory, and
+`select_program_factory` throws for an op outside both slices, on every arch. So `matches_metal_v2_slice`
+(the DFB/v2 gate in `binary_ng_device_operation.cpp`), with the native gate, **is** the op's capability
+boundary: anything it rejects has no working path, on Quasar or on Wormhole/Blackhole. All Quasar DFB runs are
 also **slow-dispatch-only** (`tt_metal/impl/program/dispatch.cpp`).
 (Line-number citations were dropped on purpose — they rot on rebase; grep the symbol.)
 
@@ -64,7 +63,7 @@ LHS activation fusion (see §7).
 
 ## 1. Structural — gate rejects → no Quasar path via this op  [STRUCTURAL]
 
-Each is a `return false` in `matches_metal_v2_slice`; WH handles it via the descriptor. The **LLK on
+Each is a `return false` in `matches_metal_v2_slice`; the op throws for it on every arch. The **LLK on
 Quasar** column is the key per-request signal: *capable* = Quasar LLK could do it, so closing the gap is
 **op-side work only** (class B); otherwise it also needs an LLK port (A) or is an arch wall.
 
@@ -97,8 +96,8 @@ dangerous ones: run on the DFB compute path they are **silent-wrong** (garbage /
 locus: the factory's `set_unpack_mode`, which emits an SFPU unpack mode only for `Float32`, never `Int32` —
 a compute-path bug, not a gate gap; no no-bcast test exercised int32, so this shipped un-caught). **Both
 gate branches now exclude int32** — the tensor-tensor no-broadcast branch as well as the tensor-scalar
-`is_scalar` branch (§7) — so `int32 == int32` routes to the descriptor and throws a clean "unsupported on
-Quasar" instead of returning garbage. That is a GUARD, not a fix: the compute bug is unfixed and int32 stays
+`is_scalar` branch (§7) — so `int32 == int32` throws a clean "not supported" error instead of returning
+garbage. That is a GUARD, not a fix: the compute bug is unfixed and int32 stays
 off the DFB until `set_unpack_mode` handles `Int32`. **Gate-hygiene idea:** a Quasar-aware `validate` could reject a Quasar-unsupported
 format/op with a clear "unsupported on Quasar" message instead of a deep validator/compile error — or, per
 this finding, a silent-wrong result.
@@ -225,8 +224,8 @@ tensor and a scalar never subtile-broadcasts (`SubtileBroadcastType::NONE` alway
 - **Ops / dtypes:** add/subtract (FPU for bf16, SFPU for fp32) + multiply/divide (SFPU). All four ops are
   SFPU for fp32 on Quasar (`is_binary_sfpu_op` is dtype-aware), so the derived scalar RHS format equals `a`
   for every fp32 op; bf16 add/subtract stay FPU but still derive a bf16 RHS == `a`. The gate additionally
-  requires the derived RHS format to equal `a` (an fp32 FPU-only op would derive a bf16 RHS and correctly
-  fall to the descriptor) and 32×32 tiles.
+  requires the derived RHS format to equal `a` (an fp32 FPU-only op would derive a bf16 RHS and is not
+  supported) and 32×32 tiles.
 - **Layouts:** interleaved and sharded LHS. A scalar never triggers the borrow path — `borrow_shards`
   requires all three operands sharded, and a scalar has no `b`, so `b_shard_volume`/`b_sharded` is
   unconditionally false; a sharded `a` (and output) is read/written over the NoC via its sharding-aware
@@ -241,8 +240,8 @@ tensor and a scalar never subtile-broadcasts (`SubtileBroadcastType::NONE` alway
   - **int32 tensor-scalar** — although the gate's format-derivation rule would admit int32 (int add/mul
     are SFPU, so the derived RHS format is int32 == `a`), the int32 SFPU tile ops do not produce correct
     results on the Quasar DFB compute path (empirically: scalar add/multiply return all-zero output tiles).
-    The `is_scalar` branch explicitly excludes every int32 op regardless of which binary op, keeping it on
-    the descriptor (a clean "unsupported on Quasar" instead of a silent-wrong result) until the int32
+    The `is_scalar` branch explicitly excludes every int32 op regardless of which binary op, so it throws
+    a clean error instead of returning a silent-wrong result until the int32
     DFB-compute path is fixed — see §2 for the matching tensor-tensor finding (int32 `add`/`mul` on the DFB
     are silent-wrong, so the tensor-tensor no-broadcast branch now also excludes int32 → clean throw).
   - **maximum / minimum tensor-scalar** — NOT a `matches_metal_v2_slice` gate rejection: their
@@ -256,8 +255,8 @@ tensor and a scalar never subtile-broadcasts (`SubtileBroadcastType::NONE` alway
     returns true for `MAXIMUM`/`MINIMUM` regardless of dtype, so bf16/fp32 tensor-scalar `maximum`/`minimum`
     would be admitted by the existing gate logic unchanged once rerouted; no new LLK work is implied.
   - **row-major-scalar, where-with-scalar, quantization-scalar** — same disposition as their tensor-tensor
-    counterparts (§1): the `is_scalar` branch's own row-major / `is_where_op` / `is_quant_op` checks send
-    them to the descriptor.
+    counterparts (§1): the `is_scalar` branch's own row-major / `is_where_op` / `is_quant_op` checks make
+    them throw.
 
 ## 8. Scalar as the left operand (`add(5.0, t)`) — not ported  [PORT]
 
@@ -284,7 +283,7 @@ define.
 ## Priorities
 
 1. **Fix the int32 DFB-compute bug** (§2, §7) — int32 `add`/`mul` are silent-wrong on the DFB compute path;
-   both gate branches now exclude int32 (→ descriptor, clean throw) as a GUARD, but the compute bug is
+   both gate branches now exclude int32 (→ clean throw) as a GUARD, but the compute bug is
    unfixed — fixing it would re-enable int32 on the DFB. Suspected locus: the factory's `set_unpack_mode`
    (`Float32`-only). Root-cause analysis captured in the int32-DFB issue draft.
 2. **Remaining class-(C) coverage** (§5) — add tests for `maximum`/`minimum`/int-add-mul/derived ops

@@ -4,9 +4,7 @@
 
 """Format-state regressions for the experimental Quasar API.
 
-Cases named wh_bh_descriptor cover the WH/BH descriptor implementation, not
-Quasar regressions awaiting a fix. Cases named shared_dfb and the sharded tests
-remain enabled for Quasar's supported routing as well as WH/BH. See
+Every case runs on Quasar and on WH/BH. See
 QUASAR_PARITY_GAPS.md for the factory capability boundary. On Quasar, the
 no-broadcast tensor-tensor cases that the native gate admits run on the
 Quasar-native factory, unless TTNN_QSR_NATIVE=0.
@@ -20,11 +18,6 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
-
-_WH_BH_ONLY = pytest.mark.skipif(
-    ttnn.get_arch_name() not in ("wormhole_b0", "blackhole"),
-    reason="WH/BH-only descriptor-kernel coverage; Quasar uses the separate DFB implementation",
-)
 
 _GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
 _FULL = (1, 1, 96, 96)
@@ -43,11 +36,6 @@ _SHAPES = [
 _SHARED_DFB_CASES = [(ttnn.bfloat16, ttnn.bfloat16, shapes) for shapes in _SHAPES] + [
     (dtype, dtype, (_FULL, _FULL)) for dtype in (ttnn.float32, ttnn.bfloat8_b)
 ]
-_WH_BH_DESCRIPTOR_CASES = [
-    (a_dtype, b_dtype, shapes)
-    for a_dtype, b_dtype in [(ttnn.float32, ttnn.bfloat16), (ttnn.bfloat16, ttnn.float32)]
-    for shapes in _SHAPES
-] + [(dtype, dtype, shapes) for dtype in (ttnn.float32, ttnn.bfloat8_b) for shapes in _SHAPES[1:]]
 
 
 def _input(device, shape, dtype, offset, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -67,11 +55,7 @@ def _activations(side):
 @pytest.mark.parametrize("op_name", ["add", "multiply"])
 @pytest.mark.parametrize(
     "a_dtype,b_dtype,shapes",
-    [pytest.param(*case, id=f"shared_dfb-{i}") for i, case in enumerate(_SHARED_DFB_CASES)]
-    + [
-        pytest.param(*case, id=f"wh_bh_descriptor-{i}", marks=_WH_BH_ONLY)
-        for i, case in enumerate(_WH_BH_DESCRIPTOR_CASES)
-    ],
+    [pytest.param(*case, id=f"shared_dfb-{i}") for i, case in enumerate(_SHARED_DFB_CASES)],
 )
 @pytest.mark.parametrize("side", ["none", "lhs", "rhs", "both"])
 def test_fused_activation_formats(device, op_name, a_dtype, b_dtype, shapes, side):
@@ -94,7 +78,6 @@ def test_fused_activation_formats(device, op_name, a_dtype, b_dtype, shapes, sid
     [
         pytest.param(ttnn.bfloat16, id="shared_dfb-bf16"),
         pytest.param(ttnn.float32, id="shared_dfb-fp32"),
-        pytest.param(ttnn.bfloat8_b, id="wh_bh_descriptor-bfp8", marks=_WH_BH_ONLY),
     ],
 )
 @pytest.mark.parametrize("side", ["none", "lhs", "rhs", "both"])
@@ -115,7 +98,7 @@ def test_fused_scalar_activation_formats(device, op_name, dtype, side):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("side", ["none", "lhs", "rhs", "both"])
 def test_fused_activation_sharded_chunks(device, op_name, dtype, side):
-    # Matching dtypes avoid the separate mixed-format FPU batch-capacity bug.
+    # Matching dtypes: mixed a and b dtypes are not supported.
     memory = ttnn.create_sharded_memory_config(
         _FULL, ttnn.CoreGrid(y=1, x=1), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
     )
@@ -137,8 +120,6 @@ def test_fused_activation_sharded_chunks(device, op_name, dtype, side):
     "shapes",
     [
         pytest.param(_SHAPES[0], id="shared_dfb-full"),
-        pytest.param(_SHAPES[1], id="wh_bh_descriptor-lhs-row", marks=_WH_BH_ONLY),
-        pytest.param(_SHAPES[2], id="wh_bh_descriptor-rhs-row", marks=_WH_BH_ONLY),
     ],
 )
 def test_activation_intermediate_format(device, dtype, shapes):
