@@ -61,7 +61,8 @@ AWAITING_MOVE = frozenset(
     }
 )
 # Of those, the ones llk_sfpu already has a same-named header for: a forward to "sfpu/<name>", so
-# the Compute API includes one name on every arch. Both copies resolve to the tt-llk kernel.
+# the Compute API includes one name on every arch. Both copies resolve to the tt-llk kernel, and
+# test_no_header_in_both_trees exempts one only while it is still that plain forward.
 FORWARDED = frozenset(
     {
         "ckernel_sfpu_isinf_isnan.h",
@@ -72,6 +73,8 @@ FORWARDED = frozenset(
 _AWAITING_ARCHES = ("wormhole_b0", "blackhole")
 
 _BARE_INCLUDE = re.compile(r'\s*#\s*include\s*"(ckernel_sfpu_\w+\.h)"')
+_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_LINE_COMMENT = re.compile(r"//[^\n]*")
 
 
 def _tt_llk_sfpu(arch: str) -> Path:
@@ -119,15 +122,33 @@ def _forwarded(arch: str) -> frozenset[str]:
     return FORWARDED if arch in _AWAITING_ARCHES else frozenset()
 
 
+def _is_forward(path: Path) -> bool:
+    """`path` holds only ``#pragma once`` and ``#include "sfpu/<its own name>"``, besides comments.
+
+    Anything more is a second kernel under the tt-llk kernel's name, not a forward to it.
+    """
+    code = _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", path.read_text()))
+    lines = [" ".join(line.split()) for line in code.splitlines() if line.strip()]
+    return lines == ["#pragma once", f'#include "sfpu/{path.name}"']
+
+
 @pytest.mark.parametrize("arch", ARCHES)
 def test_no_header_in_both_trees(arch: str):
-    """A basename may be in tt-llk's sfpu or in llk_sfpu, not in both."""
+    """A basename may be in tt-llk's sfpu or in llk_sfpu, not in both.
+
+    The one exception is a FORWARDED header that still only forwards to its tt-llk namesake.
+    """
     tt_llk, llk_sfpu = _trees(arch)
-    both = sorted((tt_llk & llk_sfpu) - _forwarded(arch))
+    both = sorted(
+        name
+        for name in tt_llk & llk_sfpu
+        if name not in _forwarded(arch) or not _is_forward(_llk_sfpu(arch) / name)
+    )
     assert not both, (
         f"{arch}: {both} exist in both {_rel(_tt_llk_sfpu(arch))} and "
         f"{_rel(_llk_sfpu(arch))}, so which one a bare include compiles depends on the "
-        "build. Keep only the llk_sfpu one."
+        "build. Keep only the llk_sfpu one. (A FORWARDED header is exempt only while it holds "
+        'nothing but #pragma once and #include "sfpu/<its own name>".)'
     )
 
 
