@@ -20,7 +20,7 @@ results, not results for this port.
   `moe_compute`), both merged.
 - Izajasz Wrosz's public GDN operation, [#57440](https://github.com/tenstorrent/tt-metal/pull/57440) (commit
   `96cc4a7937f19ee205717577fcf4d10269d043b4`): `ttnn.transformer.chunk_gated_delta_rule` runs every GDN chunk
-  recurrence (the 32- and 128-row prefill chunks, the verify-rows wrap and the lanes with the fold off). Its
+  recurrence (the 32- and 128-row prefill chunks, the slab, the verify-rows wrap and the lanes with the fold off). Its
   arithmetic differs from the source's in the last bits, so greedy streams are not the source's word for word.
 - vllm-tt-plugin commit `1d87a00e7d91ec246582d07865ec4f8b0a8fb25c`, through its `EXTRA_MODELS_DIR` route.
 

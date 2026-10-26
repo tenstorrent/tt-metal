@@ -187,9 +187,8 @@ def test_slab_reduce_never_frees_what_it_did_not_create(monkeypatch, rows: int) 
 
 @pytest.mark.parametrize("rows", [512, 2048])
 def test_block_slab_routes_each_128_row_block_through_the_128_row_worker(monkeypatch, rows: int) -> None:
-    """A slab whose one call moe_compute refuses routes its rows as 128-row blocks: the 128-row worker's routed
-    partial on each block's rows, scores and indices (whole-tile slices at 0, 128, ...), every slice freed after its
-    block, the block partials concatenated in order and freed, the result marked as the slab's local partial."""
+    """A slab the op refuses in one call routes each 128-row block through the 128-row worker; every slice is freed
+    after its block and the concatenated partial is marked as the slab's local partial."""
     freed, slices, blocks, marked, phases = [], [], [], [], []
     K, H, block = moe_module.TOP_K, moe_module.HIDDEN_SIZE, LONG_CHUNK_ROWS
 

@@ -11,7 +11,7 @@ raw-key ring, the PLE history and the device position.
 |---|---|---|
 | chunked (default) | `--prefill-mode chunked` | 128-row chunks where the prompt allows, then 32-row chunks and a padded tail; fewer than 16 rows after the alignment steps are teacher-forced |
 | teacher-forced | `--prefill-mode teacher_forced` | every prompt token through the decode step |
-| slab | `--prefill-slab ROWS` | slabs of ROWS rows (a multiple of 128 in 256..2048) ahead of the 128-row chunks |
+| slab | `--prefill-slab ROWS` | slabs of ROWS rows (a multiple of 512 up to 2048) ahead of the 128-row chunks |
 
 `--long-chunks` is accepted for compatibility: the 128-row chunks are the default. `--prefill-slab` implies it and
 combines with `--mtp`. The vLLM adapter takes the same forms from `QWEN38_PREFILL_SLAB` and `QWEN38_LONG_CHUNKS`
@@ -20,19 +20,23 @@ combines with `--mtp`. The vLLM adapter takes the same forms from `QWEN38_PREFIL
 ## The slab
 
 Inside a slab every layer runs all ROWS rows in one pass: the dense linears as one matmul over the rows, the GDN
-kernel over the whole slab with its fp32 state carried inside the kernel, the routed experts in one `moe_compute`
-call on its local output path, and the QSA layer's KV writes, block selection and sparse attention over all rows.
+recurrence as main's `ttnn.transformer.chunk_gated_delta_rule` over the whole slab with its fp32 state carried inside
+the op, the routed experts on `moe_compute`'s local output path, and the QSA layer's KV writes, block selection and
+sparse attention over all rows.
 With `--mtp` the MTP layer's rows run inside the slab body as ROWS / 128 slices of the 128-row form, so its KV rows
 land where the 128-row chunks would write them.
 
-The slab is admitted at start:
+At start, before any slab state:
 
-- `moe_compute` must take the slab's rows in one call. Main caps one call at 128 tokens for this model, so there
-  the server refuses `--prefill-slab` and serves the chunked prefill; packed routing
-  ([#60469](https://github.com/tenstorrent/tt-metal/pull/60469)) would lift that cap.
+- `moe_compute` is asked, on a probe instance of layer 0, whether it takes the slab's rows in one call. Where it
+  does, each layer routes the slab's experts in one call; where it refuses, as on main, which caps one call at 128
+  tokens for this model, each layer routes ROWS / 128 calls of 128 tokens (16 for a 2048-row slab) through a 128-row
+  worker. The start-up log names the form and the op's reason. Packed routing
+  ([#60469](https://github.com/tenstorrent/tt-metal/pull/60469), open) would allow the one call.
 - The slab's resident dense-weight copies are allocated after the decode weights and the experts, and refused with
   the numbers when the free DRAM would not also hold the context state, the slab's working set and a margin. A build
   without a slab allocates no copies.
+- Slab rows that are not a multiple of 512 (the weighted reduce's block) are refused.
 
 `/health` reports `prefill_slab_rows`.
 

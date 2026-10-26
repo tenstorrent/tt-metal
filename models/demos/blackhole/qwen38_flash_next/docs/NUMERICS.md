@@ -31,6 +31,9 @@ index is a regression. `tools/ci/q38_ci.py` checks runs against them ([TESTING.m
 
 ## Relations between paths
 
+- **GDN chunk recurrence**: main's `ttnn.transformer.chunk_gated_delta_rule` in every chunked form, the slab, the
+  verify-rows wrap and the lanes with the fold off. Its arithmetic differs from the source's in the last bits, so the
+  source's baselines are not bitwise targets for this port.
 - **Prefill forms**: the slab body is tolerance class against the chunk bodies. A prompt shorter than 128 rows runs
   32-row chunks in every chunked form, so the `json` record is the same in all of them ([PREFILL.md](PREFILL.md)).
 - **MTP**: the verify rows compute the target in a multi-row shape, so the committed stream can part from plain

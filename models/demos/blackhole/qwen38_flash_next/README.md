@@ -74,7 +74,7 @@ Main flags (`run_qwen38_chat_server.sh --help` lists all of them):
 | `--acceptance`, `--require-json-96` | replay the CPU greedy records at start; refuse to serve unless `json` matches 96/96 |
 | `--prepare-only [--bf4-stage-limit N]` | build the BF4 expert cache, at most N layers per run |
 | `--mtp K` | MTP drafting with K = 3, 4 or 5 drafts (off by default) |
-| `--prefill-slab ROWS` | prefill in slabs ahead of the 128-row chunks; refused at start when `moe_compute` cannot take the slab's rows in one call (the case on main) |
+| `--prefill-slab ROWS` | prefill in slabs ahead of the 128-row chunks; where `moe_compute` refuses the slab in one call (as on main), each layer routes it in 128-token calls |
 | `--no-sampling` | greedy requests only (the default server samples when a request asks for it) |
 | `--stall-seconds N` | exit 1 after N seconds without device progress (default 300; 0 disables) |
 | `--host ADDR --port N` | listen address; use `--host 127.0.0.1` for a local endpoint |
@@ -103,7 +103,7 @@ python "$PLUGIN_ROOT/examples/server_example_tt.py" \
 
 The adapter prefills in 128-row chunks, then 32-row chunks (`QWEN38_LONG_CHUNKS=0`: 32-row chunks only).
 `QWEN38_PREFILL_SLAB=<rows>` (a multiple of 512 up to 2048) adds a prefill slab ahead of them; start-up is refused,
-naming the variable, when the slab's resident weights do not fit or `moe_compute` cannot take its rows in one call.
+naming the variable, when the slab's resident weights do not fit.
 `decode_only` samples on the CPU and returns the selected token; requests that need logprobs or host-only
 processors return the full logits row to the plugin's sampler. Scheduler chunked prefill, prefix caching and
 asynchronous decode are disabled. `tools/validate_vllm.py --output "$LIVE_RESULTS"` checks request isolation,

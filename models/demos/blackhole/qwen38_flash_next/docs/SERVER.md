@@ -140,7 +140,7 @@ launch command. Settings come from the environment and are checked before the de
 | `QWEN38_CACHE_ROOT` | required | `caches/<label>/{components,model-io}` and `caches/bf4-experts` |
 | `QWEN38_CACHE_LABEL` | `c<context>-vllm` | the component and model I/O cache label |
 | `QWEN38_BF4_CORPUS`, `QWEN38_BF4_CORPUS_VERIFICATION` | unset | a CPU-staged BF4 corpus; otherwise `caches/bf4-experts` must exist unless `QWEN38_VLLM_ALLOW_BF4_CONVERSION=1` |
-| `QWEN38_PREFILL_SLAB` | unset | slab rows, a multiple of 128 in 256..2048 of which `moe_compute` serves multiples of 512; `0` / `off` or unset: no slab |
+| `QWEN38_PREFILL_SLAB` | unset | slab rows, a multiple of 512 up to 2048; `0` / `off` or unset: no slab |
 | `QWEN38_LONG_CHUNKS` | unset | unset or `1`: 128-row chunks ahead of the 32-row ones; `0`: 32-row chunks only (refused with a slab) |
 | `QWEN38_TT_METAL_SHA` | unset | the cache identity's tt-metal sha; unset, the checkout head or the extension digest |
 

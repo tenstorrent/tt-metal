@@ -15,8 +15,8 @@ is exact and over the full row otherwise.  The distribution is vLLM's; the token
 plugin keeps min_p, logit_bias, bad_words, allowed_token_ids, min_tokens, structured output and logprobs on its own
 host sampler.  Prefill sampling (mode ``"all"``) is refused at warmup.
 
-The prefill form comes from the environment (:func:`prefill_form`); a slab the DRAM admission or ``moe_compute``
-refuses ends the start-up naming the knob, never a silent fallback.
+The prefill form comes from the environment (:func:`prefill_form`); a slab the DRAM admission or the slab MoE refuses
+ends the start-up naming the knob, never a silent fallback.
 
 vLLM imports this module in its registry inspection, frontend, engine and worker processes: no device is opened here
 and ``sys.argv`` is not read.

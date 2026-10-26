@@ -2720,7 +2720,7 @@ class Qwen38TTNNGDN:
         beta_rows = ttnn.reshape(beta, (1, tile_rows, VALUE_HEADS_PER_DEVICE))
         g_rows = ttnn.reshape(g, (1, tile_rows, VALUE_HEADS_PER_DEVICE))
         v_rows = ttnn.reshape(rows_state.v, (1, tile_rows, VALUE_WIDTH_PER_DEVICE))
-        # The public recurrence (#57440) on the normalized rank-four rows; these q still take the HEAD_DIM**-0.5 fold.
+        # Main's chunk_gated_delta_rule on the normalized rank-four rows; q still takes the HEAD_DIM**-0.5 fold.
         output, final_state = ttnn.transformer.chunk_gated_delta_rule(
             rows_state.q,
             rows_state.k,
