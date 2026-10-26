@@ -283,9 +283,7 @@ class TestTP:
                 device, ttnn.MeshMapperConfig([ttnn.PlacementReplicate() for _ in tp_mesh.shape])
             )
         else:
-            # ttnn's own replicate mapper writes the collapsed one-placement label; the ttml binding of the same name
-            # builds one Replicate per mesh axis.
-            replicate = ttnn.replicate_tensor_to_mesh_mapper(device)
+            replicate = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
         rng = np.random.default_rng(0)
         params = ttml.NamedParameters()
         for name in ("weight", "other"):

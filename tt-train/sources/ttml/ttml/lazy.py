@@ -34,12 +34,12 @@ def lazy_init():
         _lazy_init_enabled.reset(token)
 
 
-def _replicate_tensor_to_mesh_mapper() -> Any | None:
-    """Mapper replicating a non-sharded parameter with one Replicate per mesh axis (see ``replicate_to_mesh_mapper``)."""
+def _replicate_to_mesh_mapper() -> Any | None:
+    """Mapper replicating a non-sharded parameter with one Replicate per mesh axis (``replicate_to_mesh_mapper``)."""
     import ttml
 
     device = ttml.autograd.AutoContext.get_instance().get_device()
-    return ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
+    return ttml.core.distributed.replicate_to_mesh_mapper(device)
 
 
 def _collect_lazy_parameter_slots(root: Any) -> list[tuple[Any, str]]:
@@ -101,7 +101,7 @@ def materialize_module(
             if override is not None:
                 mapper = override
         if mapper is None and mesh is not None and mesh.num_devices() > 1:
-            return _replicate_tensor_to_mesh_mapper()
+            return _replicate_to_mesh_mapper()
         return mapper
 
     tensor_by_metadata_id: dict[int, Any] = {}
