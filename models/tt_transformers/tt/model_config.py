@@ -613,7 +613,7 @@ class ModelArgs:
             "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Qwen3.6-27B": "models/tt_transformers/model_params/Qwen3.6-27B",
             "LFM2.5-VL-1.6B": "models/tt_transformers/model_params/LFM2.5-VL-1.6B",
-            "c4ai-command-r7b-12-2024": "models/tt_transformers/model_params/Command-R7B",
+            "c4ai-command-r7b-12-2024": "models/tt_transformers/model_params/c4ai-command-r7b-12-2024",
         }.items()
     }
 
