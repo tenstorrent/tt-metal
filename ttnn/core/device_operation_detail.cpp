@@ -8,12 +8,18 @@
 
 #include <algorithm>
 #include <functional>
+#include <iterator>
+#include <ranges>
+#include <string>
 #include <unordered_map>
 #include <variant>
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/experimental/program_fingerprint.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
@@ -252,6 +258,37 @@ void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_vie
         operation_name,
         input_index,
         tensor.memory_config());
+}
+
+void verify_cached_mesh_workload(
+    std::string_view operation_name,
+    tt::tt_metal::distributed::MeshWorkload& cached,
+    tt::tt_metal::distributed::MeshWorkload& rebuilt) {
+    namespace fingerprint = tt::tt_metal::experimental::program_fingerprint;
+    const auto cached_lines = fingerprint::describe(cached);
+    const auto rebuilt_lines = fingerprint::describe(rebuilt);
+    const auto [cached_it, rebuilt_it] =
+        std::mismatch(cached_lines.begin(), cached_lines.end(), rebuilt_lines.begin(), rebuilt_lines.end());
+    if (cached_it == cached_lines.end() && rebuilt_it == rebuilt_lines.end()) {
+        return;
+    }
+    TT_THROW(
+        "Device operation \"{}\": program cache hit returned a program that differs from the one its factory builds "
+        "for these inputs, so the op's program hash leaves out an input the factory reads. First difference at "
+        "element {}:\n  cached:  {}\n  rebuilt: {}",
+        operation_name,
+        std::distance(cached_lines.begin(), cached_it),
+        cached_it == cached_lines.end() ? std::string{"<none>"} : *cached_it,
+        rebuilt_it == rebuilt_lines.end() ? std::string{"<none>"} : *rebuilt_it);
+}
+
+bool can_verify_cache_hit(tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    if (tt::tt_metal::GraphTracker::instance().is_enabled()) {
+        return false;
+    }
+    const auto queues = std::views::iota(uint8_t{0}, mesh_device.num_hw_cqs());
+    return std::ranges::none_of(
+        queues, [&](uint8_t cq_id) { return mesh_device.mesh_command_queue(cq_id).trace_id().has_value(); });
 }
 
 }  // namespace ttnn::device_operation::detail
