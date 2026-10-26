@@ -52,7 +52,8 @@ def quantile_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
     ``pcc_row_p01``, ``pcc_row_min``  per-row PCC of ``h`` (1st percentile, minimum); ``pcc_row_min_row`` is the row
     ``*_active``        the same over the active rows: golden row std >= 5 % of the golden's global std (the set comes
                         from the golden only; ``rows_excluded`` is fixed per golden)
-    ``spread_ratio_inactive_p01``, ``pcc_spread_inactive``  the same band checks over the inactive rows (reported)
+    ``spread_ratio_inactive_p01`` / ``_p99``, ``pcc_spread_inactive``  the same band checks over the inactive rows
+                        (NaN when the golden has none; D5 floors on the coverage classes, p99 reported only)
     ``spread_ratio_p01`` / ``_p50`` / ``_p99`` / ``_min``  per active row, ``|h_dev - mean_q| / |h_ref - mean_q|`` (band amplitude; 0 for a
                         collapsed output)
     """
@@ -79,8 +80,9 @@ def quantile_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
         "spread_ratio_p50": q(ratio, 0.5),
         "spread_ratio_p99": q(ratio, 0.99),
         "spread_ratio_min": float(ratio.min()) if ratio.numel() else float("nan"),
-        # D4 item 2 (reported, no floor yet): the inactive rows' band, which the floors above never see.
+        # D4 item 2 / D5 item 4: the inactive rows' band, which the floors above never see.
         "spread_ratio_inactive_p01": q(ratio_inactive, 0.01),
+        "spread_ratio_inactive_p99": q(ratio_inactive, 0.99),
         "pcc_spread_inactive": pcc(ce[~active], cg[~active]) if ratio_inactive.numel() else float("nan"),
     }
 
@@ -109,12 +111,17 @@ _BAND_PERFORMANCE = {
     "spread_ratio_min": 0.70,
 }
 _BAND_SINGLE = {"pcc_final_spread": 0.998, "spread_ratio_p99": (0.80, 1.25)}  # one row: p01 = p99 = the row
-_BAND_COVERAGE = {  # e2e and the GIFT-settings cases, both precisions; spread_ratio_min reported only
+_BAND_COVERAGE = {  # e2e, paths and the GIFT-settings cases; spread_ratio_min reported only
     "pcc_final_spread": 0.998,
     "spread_ratio_p01": 0.90,
     "spread_ratio_p50": (0.95, 1.05),
     "spread_ratio_p99": (0.0, 1.5),
+    # D5 item 4: floor only (no drift); NaN (a golden without inactive rows) means not applicable.
+    "spread_ratio_inactive_p01": 0.80,
+    "pcc_spread_inactive": 0.95,
 }
+# Metrics whose NaN means "not applicable" rather than a miss (D5 item 4).
+NAN_NOT_APPLICABLE = frozenset({"spread_ratio_inactive_p01", "pcc_spread_inactive"})
 FLOORS = {
     "accuracy": {
         "pcc_normalized": 0.999,
@@ -124,6 +131,7 @@ FLOORS = {
         "pcc_final": 0.99,
         **_BAND_ACCURACY,
     },
+    # Retired with the performance precision (D5): only the bench records' informational ``floor_ok`` reads it.
     "performance": {
         "pcc_normalized": 0.995,
         "pcc_spread": 0.99,
@@ -136,11 +144,8 @@ FLOORS = {
     # round, not gated: it is ill-conditioned on rows whose quantiles span ~1 % of their level (e2e row 9: std 0.013
     # in asinh space, so a 0.002 absolute error reads 0.979).
     "coverage": {"pcc_normalized": 0.999, "pcc_spread": 0.998, "pcc_final": 0.99, **_BAND_COVERAGE},
-    "coverage_performance": {"pcc_normalized": 0.995, "pcc_spread": 0.99, "pcc_final": 0.98, **_BAND_COVERAGE},
     "single": {"pcc_normalized": 0.999, "pcc_spread": 0.999, "pcc_final": 0.99, **_BAND_SINGLE},
     "single_long": {"pcc_normalized": 0.9975, "pcc_spread": 0.998, "pcc_final": 0.9975, **_BAND_SINGLE},
-    "single_performance": {"pcc_normalized": 0.985, "pcc_final": 0.985, **_BAND_SINGLE},
-    "single_long_performance": {"pcc_normalized": 0.97, "pcc_final": 0.97, **_BAND_SINGLE},
 }
 # Drift margins on the target (paper-accuracy); twice these on every other bench record. D3: against round 0; D4: the
 # band metrics against the round-2 bench (job 614), since round 0 did not record them. Upper-bounded metrics (p99)
@@ -158,13 +163,23 @@ def below(value: float, floor) -> bool:
     return value < floor
 
 
-def misses(metrics: dict, floors: dict) -> list[str]:
-    """The floors ``metrics`` misses, as ``"<metric> <value> outside <floor>"``; metrics absent are skipped."""
-    return [f"{k} {metrics[k]:.6f} outside {f}" for k, f in floors.items() if k in metrics and below(metrics[k], f)]
+def misses(metrics: dict, floors: dict, exempt=()) -> list[str]:
+    """The floors ``metrics`` misses, as ``"<metric> <value> outside <floor>"``. A floored metric the record lacks
+    misses (D5 item 5) unless it is in ``exempt``; NaN in ``NAN_NOT_APPLICABLE`` passes."""
+    out = []
+    for k, f in floors.items():
+        if k not in metrics:
+            if k not in exempt:
+                out.append(f"{k} missing")
+        elif k in NAN_NOT_APPLICABLE and metrics[k] != metrics[k]:
+            continue
+        elif below(metrics[k], f):
+            out.append(f"{k} {metrics[k]:.6f} outside {f}")
+    return out
 
 
-def meets(metrics: dict, floors: dict) -> bool:
-    return not misses(metrics, floors)
+def meets(metrics: dict, floors: dict, exempt=()) -> bool:
+    return not misses(metrics, floors, exempt)
 
 
 def collapsed(t: torch.Tensor) -> torch.Tensor:
