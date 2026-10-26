@@ -1022,8 +1022,16 @@ void kernel_main() {
         }  // end chunk loop
     }  // end per-local-expert loop
 
-    // The last in-flight Semaphore<>::set_multicast (act_valid / in1_valid)
-    // is a posted atomic; without an explicit barrier it can still be in
-    // flight at kernel exit, leading to timing-dependent corruption.
+    // Drain this RISC's NoC before exit. The weight / activation multicasts above
+    // are non-posted and only flushed (request left the NIU), so their acks can
+    // still be landing when the kernel returns. Under kernel preload the next
+    // kernel's _start snapshots NIU_MST_WR_ACK_RECEIVED into its software counter
+    // immediately; a late ack then leaves the hardware counter permanently ahead
+    // and that kernel's first write barrier (an equality test) never completes
+    // (26B Galaxy: the Combine reader on the same core hung in its first
+    // noc_async_write_barrier after this kernel). The last in-flight
+    // Semaphore<>::set_multicast (act_valid / in1_valid) is a posted atomic and
+    // needs its own barrier for the same reason.
+    noc.async_write_barrier();
     noc.async_atomic_barrier();
 }
