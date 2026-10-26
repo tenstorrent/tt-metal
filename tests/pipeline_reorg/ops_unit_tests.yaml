@@ -128,6 +128,7 @@
       tests/ttnn/nightly/unit_tests/operations/experimental \
       --ignore=tests/ttnn/nightly/unit_tests/operations/experimental/fft \
       tests/ttnn/nightly/unit_tests/operations/sdpa \
+      tests/ttnn/nightly/unit_tests/operations/data_movement \
       -m requires_host_iommu -xv --timeout=600
   skus:
     bh_p150b_civ2_viommu:
@@ -325,7 +326,7 @@
   category: sdpa
 
 - name: ttnn nightly data_movement tests
-  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode and not requires_host_iommu" --timeout=600'
   ai_summary:
     authoritative_job_status: true
   skus:
