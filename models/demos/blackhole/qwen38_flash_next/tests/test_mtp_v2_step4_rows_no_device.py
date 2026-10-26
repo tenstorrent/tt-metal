@@ -1018,21 +1018,18 @@ def test_rows_paths_never_upload_or_take_per_pass_host_ints() -> None:
             annotation = ast.unparse(argument.annotation) if argument.annotation is not None else ""
             assert annotation != "int", f"{name} takes a per-call host int {argument.arg}"
     # The owned rows path runs the public recurrence on its rank-four buffers with the original scale.
-    assert calls["_chunk_rows"].count("ttnn.transformer.chunk_gated_delta_rule") == 1
+    public_calls = calls["_chunk_rows"].count("ttnn.transformer.chunk_gated_delta_rule")
+    assert public_calls == 1, calls["_chunk_rows"]
     source_call = next(
         node
         for node in ast.walk(methods["_chunk_rows"])
         if isinstance(node, ast.Call) and ast.unparse(node.func) == "ttnn.transformer.chunk_gated_delta_rule"
     )
-    assert [ast.unparse(argument) for argument in source_call.args[:5]] == [
-        "rows_state.q",
-        "rows_state.k",
-        "v_rows",
-        "g_rows",
-        "beta_rows",
-    ]
+    positional = [ast.unparse(argument) for argument in source_call.args[:5]]
+    assert positional == ["rows_state.q", "rows_state.k", "v_rows", "g_rows", "beta_rows"], positional
     source_keywords = {keyword.arg: ast.unparse(keyword.value) for keyword in source_call.keywords}
-    assert source_keywords["scale"] == "HEAD_DIM ** (-0.5)" and source_keywords["output_head_major"] == "True"
+    scale_and_layout = (source_keywords.get("scale"), source_keywords.get("output_head_major"))
+    assert scale_and_layout == ("HEAD_DIM ** (-0.5)", "True"), source_keywords
     # The forward pass reads the committed state and writes only rows buffers; the commit is the only writer.
     assert "output_tensor=state.recurrent" not in ast.get_source_segment(
         GDN_SOURCE.read_text(), methods["forward_rows"]
