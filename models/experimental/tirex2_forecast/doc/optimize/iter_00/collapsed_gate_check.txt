@@ -1,0 +1,3 @@
+paper accuracy collapsed fails 7 floors: ['pcc_normalized', 'pcc_spread', 'pcc_row_p01_active', 'pcc_row_min_active', 'spread_ratio_p01', 'pcc_final_spread', 'median_err']
+paper performance collapsed fails 7 floors: ['pcc_normalized', 'pcc_spread', 'pcc_row_p01_active', 'pcc_row_min_active', 'spread_ratio_p01', 'pcc_final_spread', 'median_err']
+long_context accuracy collapsed fails 7 floors: ['pcc_normalized', 'pcc_spread', 'pcc_row_p01_active', 'pcc_row_min_active', 'spread_ratio_p01', 'pcc_final', 'pcc_final_spread']

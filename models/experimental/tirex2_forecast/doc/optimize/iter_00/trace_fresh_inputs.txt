@@ -1,0 +1,15 @@
+ttq job 520 (pcc), TT_METAL_TRACE_ALLOC_TRACKING=1, commit 9af4dfc24f7 + working tree (tt/trace.py prepare-then-capture), tests/pcc/test_trace.py
+[TRACE] TT_METAL_TRACE_ALLOC_TRACKING=1
+[TRACE] univariate / B paper rows 0..15: max |replay - eager| 0.000e+00
+[TRACE] univariate / C paper rows 16..31: max |replay - eager| 0.000e+00
+[TRACE] univariate / A model16: max |replay - eager| 0.000e+00
+[TRACE] variate / B multivariate groups 0..3: max |replay - eager| 0.000e+00
+[TRACE] variate / C multivariate groups 4..7: max |replay - eager| 0.000e+00
+[TRACE] variate / A multivar4: max |replay - eager| 0.000e+00
+[TRACE] univariate / B paper rows 0..15: max |replay - eager| 0.000e+00
+[TRACE] univariate / C paper rows 16..31: max |replay - eager| 0.000e+00
+[TRACE] univariate / A model16: max |replay - eager| 0.000e+00
+[TRACE] variate / B multivariate groups 0..3: max |replay - eager| 0.000e+00
+[TRACE] variate / C multivariate groups 4..7: max |replay - eager| 0.000e+00
+[TRACE] variate / A multivar4: max |replay - eager| 0.000e+00
+========================= 1 passed in 83.44s (0:01:23) =========================

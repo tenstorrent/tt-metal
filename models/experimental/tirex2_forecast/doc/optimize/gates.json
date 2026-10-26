@@ -1,0 +1,62 @@
+{
+  "_doc": "Proposed at the G1 re-raise (2026-10-26); binding only once DECISIONS.md sets them. Floors per <shape>/<precision>; drift per metric (D1 item 6 defaults).",
+  "floors": {
+    "*/accuracy": {
+      "pcc_normalized": 0.998,
+      "pcc_spread": 0.999,
+      "pcc_row_p01_active": 0.99,
+      "pcc_row_min_active": 0.98,
+      "spread_ratio_p01": 0.93,
+      "spread_ratio_p99": 1.08,
+      "pcc_final": 0.99,
+      "pcc_final_spread": 0.999,
+      "median_err": 0.15
+    },
+    "*/performance": {
+      "pcc_normalized": 0.998,
+      "pcc_spread": 0.998,
+      "pcc_row_p01_active": 0.95,
+      "pcc_row_min_active": 0.8,
+      "spread_ratio_p01": 0.83,
+      "spread_ratio_p99": 1.3,
+      "pcc_final": 0.99,
+      "pcc_final_spread": 0.998,
+      "median_err": 0.5
+    },
+    "multivariate/accuracy": {
+      "median_err": 0.18
+    }
+  },
+  "drift": {
+    "pcc_normalized": {
+      "abs": 0.0005
+    },
+    "pcc_spread": {
+      "abs": 0.0005
+    },
+    "pcc_final": {
+      "abs": 0.0005
+    },
+    "pcc_final_spread": {
+      "abs": 0.0005
+    },
+    "pcc_row_p01_active": {
+      "abs": 0.01
+    },
+    "pcc_row_min_active": {
+      "abs": 0.01
+    },
+    "spread_ratio_p01": {
+      "abs": 0.02
+    },
+    "spread_ratio_p99": {
+      "abs": 0.02
+    },
+    "flat_max_err": {
+      "abs": 0.01
+    },
+    "median_err": {
+      "rel": 0.1
+    }
+  }
+}

@@ -1,0 +1,89 @@
+{
+  "rows": "550,551,751,948,570,640,171,1013,882,93,312,92,955",
+  "y32": false,
+  "metrics": {
+    "pcc_normalized": 0.9999707820351365,
+    "pcc_spread": 0.9999049498250198,
+    "pcc_row_p01": 0.9956914673224514,
+    "pcc_row_min": 0.9955357655011755,
+    "pcc_row_p01_active": 0.9996995510141798,
+    "pcc_row_min_active": 0.9996933699983693,
+    "active_rows": 10,
+    "excluded_rows": 3,
+    "spread_ratio_p01": 0.9681646087183962,
+    "spread_ratio_p99": 1.0081963635025888,
+    "pcc_row_min_var": 0.9955357655011755,
+    "flat_rows": 0,
+    "flat_max_err": 0.0,
+    "pcc_final": 0.9999499081152742,
+    "pcc_final_spread": 0.9999729585619602,
+    "median_err": 0.07156126946210861
+  },
+  "per_row": [
+    {
+      "row": 640,
+      "kind": "level_shift",
+      "median_err": 0.07156126946210861
+    },
+    {
+      "row": 171,
+      "kind": "level_shift",
+      "median_err": 0.0544852539896965
+    },
+    {
+      "row": 551,
+      "kind": "level_shift",
+      "median_err": 0.05392169579863548
+    },
+    {
+      "row": 948,
+      "kind": "seasonal_walk",
+      "median_err": 0.04043911397457123
+    },
+    {
+      "row": 751,
+      "kind": "level_shift",
+      "median_err": 0.03893973305821419
+    },
+    {
+      "row": 550,
+      "kind": "level_shift",
+      "median_err": 0.037488047033548355
+    },
+    {
+      "row": 312,
+      "kind": "seasonal_walk",
+      "median_err": 0.030904030427336693
+    },
+    {
+      "row": 955,
+      "kind": "smooth_trend",
+      "median_err": 0.027509473264217377
+    },
+    {
+      "row": 570,
+      "kind": "seasonal_walk",
+      "median_err": 0.02657104842364788
+    },
+    {
+      "row": 92,
+      "kind": "smooth_trend",
+      "median_err": 0.02234220691025257
+    },
+    {
+      "row": 882,
+      "kind": "smooth_trend",
+      "median_err": 0.02150166593492031
+    },
+    {
+      "row": 93,
+      "kind": "seasonal_walk",
+      "median_err": 0.016887148842215538
+    },
+    {
+      "row": 1013,
+      "kind": "level_shift",
+      "median_err": 0.010550525039434433
+    }
+  ]
+}
