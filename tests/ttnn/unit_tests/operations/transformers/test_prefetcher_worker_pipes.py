@@ -176,7 +176,9 @@ def test_worker_pipes_completion(device, num_tensors, num_layers):
         ttnn.synchronize_device(device)
 
 
-def _matmul_program_config(layout, per_core_n):
+def _matmul_program_config(layout, per_core_n, gather_in0):
+    """mcast_in0, or gather_in0 with its in0 ring on the matmul grid: worker i, the i-th receiver, holds in0
+    shard i, one K-block wide."""
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=layout.matmul_grid,
         in0_block_w=layout.in0_block_w,
@@ -188,8 +190,19 @@ def _matmul_program_config(layout, per_core_n):
         per_core_N=per_core_n,
         fuse_batch=True,
         fused_activation=None,
-        mcast_in0=True,
-        gather_in0=False,
+        mcast_in0=not gather_in0,
+        gather_in0=gather_in0,
+    )
+
+
+def _width_sharded_on_receivers(layout, width_tiles):
+    """One shard of width_tiles tiles on each receiver, in receiver order."""
+    return ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, width_tiles * ttnn.TILE_SIZE),
+        core_grid=layout.receiver_cores,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
     )
 
 
@@ -207,6 +220,18 @@ def test_worker_pipes_matmul(device, recv_per_reader, num_layers, enable_perform
 
 
 @skip_for_slow_dispatch("sub-device managers need fast dispatch")
+@pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
+@pytest.mark.parametrize("recv_per_reader", [1, 2], ids=["1recv", "2recv"])
+def test_worker_pipes_gather_in0_matmul(device, recv_per_reader, num_layers):
+    """dram_prefetcher over pipes feeding gather_in0 matmuls, as tt_transformers' ring matmuls take their weights.
+
+    Without stream_in1 each worker receives its K-blocks in K order and computes in ring order, so the pipe ring
+    holds a whole tensor's blocks, and the prefetcher runs ahead into the next tensor only once a worker is done.
+    """
+    _check_matmuls(device, _Layout(device, recv_per_reader), num_layers, enable_performance_mode=True, gather_in0=True)
+
+
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
 def test_worker_pipes_readers_follow_pipe_order(device):
     """Reader i drives the i-th pipe given, wherever its sender sits.
 
@@ -217,8 +242,8 @@ def test_worker_pipes_readers_follow_pipe_order(device):
     _check_matmuls(device, layout, num_layers=1, enable_performance_mode=False)
 
 
-def _check_matmuls(device, layout, num_layers, enable_performance_mode):
-    """Runs dram_prefetcher over the layout's pipes into mcast_in0 matmuls and checks every output.
+def _check_matmuls(device, layout, num_layers, enable_performance_mode, gather_in0=False):
+    """Runs dram_prefetcher over the layout's pipes into mcast_in0 (or gather_in0) matmuls and checks every output.
 
     Two weights of different block sizes per layer; run twice, and the second run must reuse every
     cached program. The second run's weights and address tensor are new allocations of the same specs,
@@ -226,16 +251,28 @@ def _check_matmuls(device, layout, num_layers, enable_performance_mode):
     the first run's address tensor bound would read the first run's weights and fail the check.
     """
     entry_sizes = [layout.entry_size(dtype, per_core_n) for dtype, per_core_n in _TWO_TENSORS]
-    _space, pipes = _make_pipes(device, layout, _ring_size(entry_sizes))
+    # gather_in0 keeps every K-block of a tensor until its last in0 shard comes round
+    ring_size = layout.num_blocks * max(entry_sizes) if gather_in0 else _ring_size(entry_sizes)
+    _space, pipes = _make_pipes(device, layout, ring_size)
     runs = [_make_weights(device, layout, _TWO_TENSORS, num_layers, seed=run) for run in range(2)]
 
     M = ttnn.TILE_SIZE
     K = layout.k_tiles * ttnn.TILE_SIZE
     pt_act = torch.randn(1, 1, M, K)
     tt_act = ttnn.from_torch(
-        pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        pt_act,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=(
+            _width_sharded_on_receivers(layout, layout.in0_block_w) if gather_in0 else ttnn.DRAM_MEMORY_CONFIG
+        ),
     )
-    program_configs = [_matmul_program_config(layout, per_core_n) for _, per_core_n in _TWO_TENSORS]
+    program_configs = [_matmul_program_config(layout, per_core_n, gather_in0) for _, per_core_n in _TWO_TENSORS]
+    output_mem_configs = [
+        _width_sharded_on_receivers(layout, per_core_n) if gather_in0 else ttnn.DRAM_MEMORY_CONFIG
+        for _, per_core_n in _TWO_TENSORS
+    ]
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -263,7 +300,7 @@ def _check_matmuls(device, layout, num_layers, enable_performance_mode):
                             tt_act,
                             tt_weights[layer * num_tensors + t],
                             program_config=program_configs[t],
-                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            memory_config=output_mem_configs[t],
                             compute_kernel_config=compute_kernel_config,
                             sub_device_id=worker_sub_device_id,
                             prefetcher_pipes=pipes,

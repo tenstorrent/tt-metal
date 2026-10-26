@@ -63,6 +63,26 @@ def generate_sender_receiver_mapping(num_receivers_per_sender: int = 8) -> dict:
     return mapping
 
 
+TILE_BYTES = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
+
+
+def tiles_per_receiver(k: int, n: int, ring_size: int) -> int:
+    """Tiles of a [k, n] weight that each receiver holds: dram_prefetcher pads both dims to whole tiles per ring position."""
+    k_tiles = math.ceil(math.ceil(k / ttnn.TILE_SIZE) / ring_size) * ring_size
+    n_tiles = math.ceil(math.ceil(n / ttnn.TILE_SIZE) / ring_size) * ring_size
+    return k_tiles * n_tiles // ring_size
+
+
+def max_bytes_per_receiver(model_name: str, num_devices: int, ring_size: int) -> int:
+    """The largest bfloat8_b weight share any receiver holds for a verified model: an MLP weight's, FF1 or FF2."""
+    dims = next(VERIFIED_MODEL_CONFIGS[m] for m in VERIFIED_MODEL_CONFIGS if m in model_name)
+    hidden_per_device = dims["hidden_dim"] // num_devices
+    return TILE_BYTES[ttnn.bfloat8_b] * max(
+        tiles_per_receiver(dims["dim"], hidden_per_device, ring_size),
+        tiles_per_receiver(hidden_per_device, dims["dim"], ring_size),
+    )
+
+
 def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 16) -> bool:
     """
     Check if model can use DRAM prefetcher: CB pages <= 65535, L1 size fits, kv_heads % num_devices == 0.
@@ -76,25 +96,17 @@ def is_prefetcher_supported(model_name: str, num_devices: int, ring_size: int = 
     verified_model_name = next((m for m in VERIFIED_MODEL_CONFIGS if m in model_name), None)
     if not is_blackhole() or verified_model_name is None:
         return False
-    TILE_SIZE, MAX_CB_PAGES = 32, 65535
-    BYTES_PER_TILE_BFP8 = 1088  # bfloat8_b tile size in bytes
+    MAX_CB_PAGES = 65535
     MAX_L1_PER_BANK = {4: 1000000, 8: 1000000}.get(num_devices, 850000)
     kv_heads_divisible = VERIFIED_MODEL_CONFIGS[verified_model_name]["n_kv_heads"] % num_devices == 0
     dim, hidden_dim = (
         VERIFIED_MODEL_CONFIGS[verified_model_name]["dim"],
         VERIFIED_MODEL_CONFIGS[verified_model_name]["hidden_dim"],
     )
-    n_per_device = hidden_dim // num_devices
-    n_per_core = math.ceil(n_per_device / ring_size)
-    n_per_core_padded = ((n_per_core + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
-    n_padded = n_per_core_padded * ring_size
-    h_tiles = math.ceil(dim / TILE_SIZE)
-    w_tiles = n_padded // TILE_SIZE
-    h_tiles_padded = ((h_tiles + ring_size - 1) // ring_size) * ring_size
-    tiles_per_core = (h_tiles_padded * w_tiles) // ring_size
+    tiles_per_core = tiles_per_receiver(dim, hidden_dim // num_devices, ring_size)
     # Check memory constraints and kv heads divisible by num_devices
     pages_ok = tiles_per_core <= MAX_CB_PAGES
-    bytes_per_core = tiles_per_core * BYTES_PER_TILE_BFP8
+    bytes_per_core = tiles_per_core * TILE_BYTES[ttnn.bfloat8_b]
     l1_ok = bytes_per_core <= MAX_L1_PER_BANK
     logger.info(
         f"DRAM Prefetcher support check: tiles_per_core: {tiles_per_core} <= {MAX_CB_PAGES} is {pages_ok}, bytes_per_core: {bytes_per_core} <= {MAX_L1_PER_BANK} is {l1_ok}, kv_heads_divisible: {kv_heads_divisible}"
@@ -188,8 +200,8 @@ class PrefetcherCoreConfig:
     ) -> List[ttnn.CoreRangeSet]:
         """Get receiver ranges per sender. Returns CoreRangeSet of receiver cores for each sender.
 
-        Always creates individual CoreRange for each receiver to ensure consistent
-        CoreRangeSet size across all senders (required by global circular buffer).
+        Always creates individual CoreRange for each receiver, so a sender's receivers are listed in
+        receiver order: the r-th gets column slice r of every block the sender prefetches.
         """
         result = []
         for sender in self.sender_cores(active=sender_active):
@@ -236,22 +248,25 @@ class Prefetcher(LightweightModule):
         """
         Prefetcher class that prefetches tensors from DRAM to L1.
 
+        Each sender core reads one DRAM bank and delivers into its own worker-sender PrefetcherPipe,
+        whose receivers are the matmul ring cores that consume that bank's columns.
+
         Args:
             receiver_mapping_override: If provided, keys become sender cores and values become
                 their receiver cores. This overrides the default column 0/7 sender placement.
         """
-        ### Device, Global CB, Parameters
+        ### Device, PrefetcherPipes, Parameters
         self.pf_config: dict = ARCH_CONFIG["blackhole"]
         self.legal_receiver_cores: List[int] = self.pf_config["legal_receiver_cores"]
         self.mesh_device: ttnn.MeshDevice = mesh_device
         self.enable_performance_mode: bool = True
-        self.global_cb: Optional[ttnn.GlobalCircularBuffer] = None
+        # The pipes' persistent L1 on the sender and receiver cores, and one pipe per sender, in DRAM bank order
+        self.pipe_space: Optional[ttnn.experimental.PrefetcherPipeSpace] = None
+        self.pipes: List[ttnn.experimental.PrefetcherPipe] = []
         self.worker_sub_device_id: Optional[ttnn.SubDeviceId] = None
         self.num_tensors: int = num_tensors
         self.num_layers: int = num_layers
         self.num_senders: int = len(self.pf_config["dram_banks"])
-        self.global_cb_size: int = 0  # Size of the global circular buffer in bytes storing prefetched matmul weights
-        self.max_tensor_block_size: int = 0  # Max tensor block size is the largest block size of a tensor in bytes
         self.receiver_mapping_override: Optional[dict] = None
         self.model_name = os.getenv("HF_MODEL", "")
         assert self.model_name != "", "HF_MODEL is not set. DRAM Prefetcher must be run with a model."
@@ -331,6 +346,30 @@ class Prefetcher(LightweightModule):
         self.init_prefill_done = False
         self.prefetch_done = False
 
+    def _reserve_pipes(self):
+        """Reserve the PrefetcherPipes: one per active sender, whose receivers are that sender's ring cores.
+
+        Each receiver keeps a whole tensor's blocks until its matmul is done with them, so a ring holds the largest
+        weight share. The rings are persistent L1 at the bottom of the sender and receiver cores, which a live
+        program's circular buffers there seal. Called on the first decode: clearing the program cache releases the
+        programs that model construction and prefill left on those cores, and decode compiles its own above the rings.
+        A prefill after that has to fit beside the rings.
+        """
+        ttnn.synchronize_device(self.mesh_device)
+        self.mesh_device.clear_program_cache()
+        senders = self.core_config.sender_cores(active=True)
+        receivers = self.core_config.receiver_cores(sender_active=True, receiver_active=True)
+        ring_size = max_bytes_per_receiver(self.model_name, self.mesh_device.get_num_devices(), self.ring_size)
+        logger.info(f"[DRAM Prefetcher] Creating PrefetcherPipes with ring size: {ring_size}")
+        self.pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
+            self.mesh_device,
+            sender_cores=self.to_core_range_set(senders),
+            receiver_domain=self.to_core_range_set(receivers),
+            ring_size=ring_size,
+            max_receivers_per_pipe=self.num_receiver_cores,
+        )
+        self.pipes = self.pipe_space.create_pipes(list(zip(senders, receivers)))
+
     # NOTE: DRAM prefetched weights are prefetched in the order of the construction of the module
     def register_callback(self, callback: Callable[[], None]):
         self.callbacks.append(callback)
@@ -368,14 +407,10 @@ class Prefetcher(LightweightModule):
         self.mode = mode
         self.sender_cores = self.core_config.sender_cores
         self.receiver_cores = self.core_config.receiver_cores
-        self.sender_receiver_mapping = list(
-            zip(
-                self.sender_cores(),
-                self.to_core_range_set(self.receiver_cores(sender_active=None, receiver_active=True), return_list=True),
-            )
-        )
         match mode:
             case Mode.DECODE:
+                if self.num_tensors > 0 and not self.pipes:
+                    self._reserve_pipes()
                 self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
                 self.prefetcher_sub_device.add_sub_device(self.to_core_range_set(self.sender_cores(active=True)))
                 self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
@@ -437,7 +472,7 @@ class Prefetcher(LightweightModule):
             tensor: The tensor to insert into the prefetcher queue
         """
         assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot insert tensors"
-        bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
+        assert self.pipes, "This prefetcher was created for no tensors. Cannot insert tensors"
         if tensor.volume() % self.ring_size != 0:
             raise ValueError(
                 f"Tensor volume ({tensor.volume()}) must be divisible by ring_size ({self.ring_size}) for prefetcher."
@@ -447,12 +482,14 @@ class Prefetcher(LightweightModule):
                 f"Tensor must be DRAM sharded for prefetcher. Got sharded={tensor.is_sharded()}, "
                 f"buffer_type={tensor.memory_config().buffer_type}"
             )
-        h, w = tensor.shape[-2], tensor.shape[-1]
-        h_tiles, w_tiles = math.ceil(h / ttnn.TILE_SIZE), math.ceil(w / ttnn.TILE_SIZE)
-        h_tiles_padded = math.ceil(h_tiles / self.ring_size) * self.ring_size
-        w_tiles_padded = math.ceil(w_tiles / self.ring_size) * self.ring_size
-        max_tensor_tiles = (h_tiles_padded * w_tiles_padded) // self.ring_size
-        self.max_tensor_block_size = max(max_tensor_tiles * bytes_in_tile[tensor.dtype], self.max_tensor_block_size)
+        bytes_per_receiver = (
+            tiles_per_receiver(tensor.shape[-2], tensor.shape[-1], self.ring_size) * TILE_BYTES[tensor.dtype]
+        )
+        if bytes_per_receiver > self.pipe_space.ring_size():
+            raise ValueError(
+                f"Each receiver holds {bytes_per_receiver} B of the {tensor.dtype} tensor of shape {tensor.shape}, but the "
+                f"prefetcher's pipe rings, sized for this model's bfloat8_b MLP weights, hold {self.pipe_space.ring_size()} B"
+            )
         self.prefetched_tensors.append(tensor)
         self.prefetched_tensor_addr.append(tensor.buffer_address())
         logger.info(
@@ -480,18 +517,9 @@ class Prefetcher(LightweightModule):
 
     def run(self):
         """
-        Start prefetching weights into global CB with dram_prefetcher op
+        Start prefetching weights into the PrefetcherPipes with dram_prefetcher op
         """
         assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot run prefetcher"
-        # Create global cb buffer if it was not yet created.
-        if self.global_cb is None:
-            self.global_cb_size = self.max_tensor_block_size
-            logger.info(f"[DRAM Prefetcher] Creating global CB with size: {self.global_cb_size}")
-            self.global_cb = ttnn.create_global_circular_buffer(
-                self.mesh_device,
-                self.sender_receiver_mapping,
-                self.global_cb_size,
-            )
 
         # Create address tensor if it was not created yet
         if self.prefetched_tt_addr_tensor is None:
@@ -501,8 +529,8 @@ class Prefetcher(LightweightModule):
         self.garbage = ttnn.dram_prefetcher(
             self.prefetched_tensors[: self.num_tensors] + [self.prefetched_tt_addr_tensor],
             num_layers=self.num_layers,
-            global_cb=self.global_cb,
             enable_performance_mode=self.enable_performance_mode,
+            prefetcher_pipes=self.pipes,
         )
         # Set worker sub device stall group
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_sub_device.sub_devices_id[-1]])
