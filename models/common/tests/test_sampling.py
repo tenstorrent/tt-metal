@@ -72,7 +72,7 @@ def test_sampling_precompile_preserves_logits_and_request_state(monkeypatch, all
 
 
 @pytest.mark.parametrize("use_topk_logprobs", [False, True])
-def test_reset_params_scale_logprobs_per_row(monkeypatch, expect_error, use_topk_logprobs):
+def test_ttsampling_reset_params_scale_logprobs_per_row(monkeypatch, expect_error, use_topk_logprobs):
     """log_probs_enable_temperature fills _scale_logprobs per row with temp (1/T) or 1.0; top-k log-probs rejects it."""
     copies = {}
     monkeypatch.setattr(ttnn, "from_torch", lambda tensor, **kwargs: tensor)
@@ -84,7 +84,9 @@ def test_reset_params_scale_logprobs_per_row(monkeypatch, expect_error, use_topk
     for name in ("k_tensor", "p_tensor", "temp_tensor", "_greedy_col", "_scale_logprobs"):
         setattr(sampling, name, name)
     sampling.log_probs_calculator = SimpleNamespace(
-        _use_topk_logprobs=use_topk_logprobs, enable_log_probs=True, set_log_probs_mode=lambda *args, **kwargs: None
+        _use_topk_logprobs=use_topk_logprobs,
+        enable_log_probs=True,
+        set_log_probs_mode=lambda *args, **kwargs: copies.__setitem__("set_log_probs_mode", args),
     )
     params = dict(
         k=[32, 32, 32, 32],
@@ -97,7 +99,12 @@ def test_reset_params_scale_logprobs_per_row(monkeypatch, expect_error, use_topk
     if use_topk_logprobs:
         with expect_error(ValueError, "not supported with top-k log-probs"):
             sampling.reset_params(**params)
+        assert not copies
         return
+
+    with expect_error(ValueError, "log_probs_enable_temperature has shape"):
+        sampling.reset_params(**{**params, "log_probs_enable_temperature": [True]})
+    assert not copies
 
     sampling.reset_params(**params)
     expected = torch.tensor([1 / 0.7, 1.0, 1.0, 1.0]).reshape(1, 1, -1, 1).to(torch.bfloat16)
@@ -1525,6 +1532,61 @@ def test_log_probs_calculation_scale_logprobs(shape, mesh_device):
     passing, pcc = comp_pcc(log_probs_torch[::2], scaled[::2], pcc=0.99)
     assert passing, f"scaled rows PCC below threshold: {pcc}"
     assert torch.equal(scaled[1::2], raw[1::2]), "rows scaled by 1.0 must match calling without scale_logprobs"
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["fabric_ring"]
+)
+def test_log_probs_scale_logprobs_row_sharded_on_galaxy(mesh_device):
+    """sampling_dp=4: each mesh row scales its own users' log-probs by temp (1/T) or 1.0."""
+    _skip_if_not_galaxy(mesh_device)
+    torch.manual_seed(1234)
+    rows, tp = tuple(mesh_device.shape)
+    users_per_row, vocab_size = 32, tp * 4096
+    batch = rows * users_per_row
+    args = SimpleNamespace(
+        vocab_size=vocab_size,
+        padded_vocab_size=vocab_size,
+        max_batch_size=users_per_row,
+        max_top_k=32,
+        cluster_shape=(rows, tp),
+        sampling_all_gather_axis=1,
+        sampling_dp=rows,
+        sub_core_grids=None,
+        model_config={},
+    )
+    sampling = TTSampling(args=args, mesh_device=mesh_device, tt_ccl=None)
+    temp = 1 / 0.7
+    enable_temperature = [(user // users_per_row + user) % 2 == 0 for user in range(batch)]
+    sampling.reset_params(
+        k=[32] * batch,
+        p=[1.0] * batch,
+        temp=[temp] * batch,
+        enable_log_probs=True,
+        log_probs_enable_temperature=enable_temperature,
+    )
+    logits = torch.randn(1, 1, batch, vocab_size).to(torch.bfloat16)
+    tt_logits = ttnn.from_torch(
+        logits,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(2, 3), mesh_shape=(rows, tp)),
+    )
+
+    tt_tokens, tt_log_probs = sampling(tt_logits)
+
+    device_tokens = ttnn.get_device_tensors(tt_tokens)
+    device_log_probs = ttnn.get_device_tensors(tt_log_probs)
+    tokens = torch.cat([ttnn.to_torch(device_tokens[r * tp]).reshape(-1)[:users_per_row] for r in range(rows)]).long()
+    log_probs = torch.cat(
+        [ttnn.to_torch(device_log_probs[r * tp])[:, :, 0, :users_per_row].reshape(-1) for r in range(rows)]
+    ).float()
+    scale = torch.where(torch.tensor(enable_temperature), torch.tensor(temp).to(torch.bfloat16).float(), 1.0)
+    expected = F.log_softmax(logits[0, 0].float() * scale[:, None], dim=-1).gather(-1, tokens[:, None])[:, 0]
+    max_abs = (expected - log_probs).abs().max().item()
+    assert max_abs <= 0.1, f"row-sharded scaled log-probs differ from log_softmax(logits * scale) by {max_abs:.4f}"
 
 
 @pytest.mark.parametrize(
