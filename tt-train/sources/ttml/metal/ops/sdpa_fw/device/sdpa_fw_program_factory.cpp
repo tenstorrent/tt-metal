@@ -413,11 +413,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    // Scores of one step, row-major; single-buffered, softmax rewrites in place.
-    //
-    // TODO: once LLK provides SFPU row-reduce-max and sub_bcast_col, the softmax can run
-    // entirely in DST at FP32 after the QK matmul, eliminating the pack/unpack round-trip
-    // through this CB for the softmax critical path (~20 ms regression).
+    // Scores of one step, row-major; single-buffered, softmax rewrites in place (see the TODO on the
+    // softmax helpers in sdpa_compute_utils.hpp).
     [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
         program,
         all_cores,
