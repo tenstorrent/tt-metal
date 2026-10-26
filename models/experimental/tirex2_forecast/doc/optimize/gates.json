@@ -1,5 +1,5 @@
 {
-  "_doc": "Floors set by D3 (accuracy) and D4 (performance; min/max/p50 both precisions), 2026-10-26. min/max and pcc_row_min_active are floor-only (no drift); p50 has a two-sided drift of 0.01. Range floors are [lo, hi]. Performance is a non-ship class (D4). D6: inactive_max_err floors per shape (accuracy drift rel 0.5 vs iter_01/r1_2f/variance/base.json, performance floor-only); performance spread_ratio_p99 drift abs 0.04 on every shape (fixed round-0 record).",
+  "_doc": "Floors set by D3 (accuracy) and D4 (performance; min/max/p50 both precisions), 2026-10-26. min/max and pcc_row_min_active are floor-only (no drift); p50 has a two-sided drift of 0.01. Range floors are [lo, hi]. Performance is a non-ship class (D4). D6: inactive_max_err floors per shape (accuracy drift rel 0.5 vs iter_01/r1_2f/variance/base.json, performance floor-only); performance spread_ratio_p99 drift abs 0.04 on every shape (fixed round-0 record). D6 (b): abs_err_max drift 1.5x of the fixed record iter_01/d6/bench_ab7868d.json (job 823; tt/ = fd1fd3d04f8), both precisions, all shapes; a gross single-element check, not a band check.",
   "floors": {
     "*/accuracy": {
       "pcc_normalized": 0.998,
@@ -88,6 +88,10 @@
     "spread_ratio_p50": {
       "abs": 0.01,
       "two_sided": true
+    },
+    "abs_err_max": {
+      "rel": 0.5,
+      "ref": "iter_01/d6/bench_ab7868d.json"
     }
   },
   "drift_by": {
