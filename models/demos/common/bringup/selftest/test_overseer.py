@@ -222,7 +222,9 @@ def test_a_resumed_fix_gates_before_an_agent(orch, sandbox):  # noqa: F811
     (sandbox.repo / "src/impl.txt").write_text("0.5")  # the fix's agents never get it right: the fix stops
     assert o.run() != DONE and o.led.status("FIX.1") == "STOPPED"
     (sandbox.repo / "src/impl.txt").write_text("0.9995")  # the work is finished meanwhile
-    o.led.update("FIX.1", status="TODO", history_add={"t": now(), "status": "RESUMED"})  # what `resume` does
+    o.led.update(
+        "FIX.1", status="TODO", history_add={"t": now(), "status": "RESUMED", "from": "STOPPED"}
+    )  # what `resume` does
     before = len(orch.calls())
     assert o.run() == DONE
     assert o.led.status("FIX.1") == "PASS" and not [c for c in orch.calls()[before:] if c.startswith("FIX.1")]
