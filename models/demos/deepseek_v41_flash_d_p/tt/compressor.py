@@ -267,16 +267,14 @@ class TtServedRows:
         self.version += 1
         args = dict(layer_idx=self.slab.row, num_layers=self.slab.layers, cluster_axis=SP_AXIS, tp_axis=self.tp_axis)
         if self.ratio == 1:
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            ttnn.bringup.update_padded_kv_cache(
                 self.slab.tensor, slab, slot_idx=self.slab.slot, kv_actual_global=start, valid_global=end, **args
             )
             return
         slot = self._slot.at(self.slab.slot)
         kv = self._pos.at(start // 32)  # start / r
         valid = self._pos.at(-(-end // 32))  # ceil32(end) / r: the last record's rows (zero past the groups)
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            self.slab.tensor, slab, slot, kv, valid_global=valid, **args
-        )
+        ttnn.bringup.update_padded_kv_cache(self.slab.tensor, slab, slot, kv, valid_global=valid, **args)
         for t in (slot, kv, valid):
             self._slot.release(t) if t is slot else self._pos.release(t)
 
