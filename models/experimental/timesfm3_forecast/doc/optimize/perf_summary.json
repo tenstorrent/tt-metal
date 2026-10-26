@@ -185,11 +185,11 @@
    772
   ],
   "d6_corrections": {
-   "test_sdpa_masked_chunk_cap_causal": "D6 cond. 1: causal + leading padding (fully masked leading query rows, finite; valid rows compared) at S=256/512 passes, capped max|err| 0.108 / 0.152, forced-256 0.142 / 0.152, control 4.09 / 4.20; job JOBID on the committed tree",
+   "test_sdpa_masked_chunk_cap_causal": "D6 cond. 1: causal + leading padding (fully masked leading query rows, finite; valid rows compared) at S=256/512 passes, capped max|err| 0.108 / 0.152, forced-256 0.142 / 0.152, control 4.09 / 4.20; job 826 on the committed tree 9ada17257b2",
    "job_808": "failed: the capped run scored 0.192 against tol 0.1; tol raised to 0.5 after measuring because capped and forced-256 share the same error vs the torch reference (0.14-0.20) and the control scores ~3.4",
    "job_811": "failed: var_norm_fused scored 0.431 against an absolute 0.25; the assert became chain-relative (fused <= chain + 0.125). post_add_norm passed in 811 (GATE wrongly said its control failed)",
    "jobs_808_815": "ran on uncommitted code; suite 817 reran them on cf982fb4560 with identical values",
-   "post_add_norm_control": "now prints max h error / allowed (job 825: 1254 / 1472, must exceed 1)"
+   "post_add_norm_control": "now prints max h error / allowed (jobs 825, 826: 1254 / 1472, must exceed 1)"
   }
  },
  "shipping": {
