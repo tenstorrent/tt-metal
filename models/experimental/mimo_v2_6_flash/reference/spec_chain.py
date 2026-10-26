@@ -77,7 +77,7 @@ the last committed token), so the relay does not depend on the drafter.
 from dataclasses import dataclass
 
 from .sample_verify import GROUP_WORDS, GROUPS, NO_TOKEN, OUT_WORDS, unpack_out
-from .spec_decode import MAX_DRAFTS, SPEC_SLOTS, mtp_cache_position
+from .spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS, mtp_cache_position
 from .spec_inputs import (
     DESC_A,
     DESC_COUNT,
@@ -89,82 +89,138 @@ from .spec_inputs import (
 )
 
 CHAIN_ROW = 2  # the verify upload's row (reference.spec_inputs.pack_verify)
+# Per draft group g, a block of the chain row at g * CHAIN_GROUP_WORDS (one block, the whole pass, without groups).
 CHAIN_SOURCE, CHAIN_COLUMNS, CHAIN_LIMIT, CHAIN_SLOTS = 0, 1, 2, 3
-CHAIN_RELAY = CHAIN_SLOTS + SPEC_SLOTS
-CHAIN_WORDS = CHAIN_RELAY + 1
+CHAIN_RELAY = CHAIN_SLOTS + GROUP_SLOTS
+CHAIN_GROUP_WORDS = CHAIN_RELAY + 1
+CHAIN_WORDS = DRAFT_GROUPS * CHAIN_GROUP_WORDS
 # The history's words: each verify slot's request slot + 1 (0: none; reference/mtp_backfill.py).
 CHAIN_HSLOTS = CHAIN_WORDS
 NO_SLOT = 0xFFFFFFFF
 ACCEPT_WORDS = GROUPS * OUT_WORDS
-ACCEPT_AT, ARGMAX_AT, POSITIONS_AT, STATUS_AT, DRAFTS_AT, RESULT_WORDS = 0, 32, 40, 48, 64, 80
+STATUS_WORDS = 4  # a draft group's status: drafting, anchor, bonus, unused
+DRAFT_WORDS = 1 + MAX_DRAFTS  # a draft group's drafts section: the drafts step's anchor, the drafts
+
+
+def _align16(words):
+    return (words + 15) // 16 * 16
+
+
+# The result page's sections (0, 32, 40, 48, 64, 80 with 4 slots; 0, 128, 136, 144, 160, 176 with 8; 0, 64, 72, 80,
+# 96, 112 with 8 slots in 2 draft groups).
+ACCEPT_AT = 0
+ARGMAX_AT = _align16(ACCEPT_WORDS)
+POSITIONS_AT = ARGMAX_AT + 8 * ((SPEC_SLOTS + 7) // 8)
+STATUS_AT = _align16(POSITIONS_AT + SPEC_SLOTS)
+DRAFTS_AT = _align16(STATUS_AT + DRAFT_GROUPS * STATUS_WORDS)
+RESULT_WORDS = _align16(DRAFTS_AT + DRAFT_GROUPS * DRAFT_WORDS)
 HEADER_WORDS = DRAFTS_AT  # the chain step's sections; the drafts step writes the rest
 CTRL_DRAFTS = 4  # a control page group's first draft word (reference.sample_verify.group_words)
 assert ACCEPT_AT + ACCEPT_WORDS <= ARGMAX_AT and ARGMAX_AT + SPEC_SLOTS <= POSITIONS_AT
-assert POSITIONS_AT + SPEC_SLOTS <= STATUS_AT and STATUS_AT + 4 <= DRAFTS_AT
-assert CTRL_DRAFTS + MAX_DRAFTS <= GROUP_WORDS
-assert DRAFTS_AT + 1 + MAX_DRAFTS <= RESULT_WORDS and all(w % 16 == 0 for w in (ARGMAX_AT, STATUS_AT, DRAFTS_AT))
+assert POSITIONS_AT + SPEC_SLOTS <= STATUS_AT and STATUS_AT + DRAFT_GROUPS * STATUS_WORDS <= DRAFTS_AT
+assert CTRL_DRAFTS + MAX_DRAFTS <= GROUP_WORDS and DRAFT_GROUPS <= GROUPS
+assert DRAFTS_AT + DRAFT_GROUPS * DRAFT_WORDS <= RESULT_WORDS
+assert all(w % 16 == 0 for w in (ARGMAX_AT, STATUS_AT, DRAFTS_AT))
 assert CHAIN_ROW < VERIFY_ROWS
 STASH_POSITIONS, STASH_TOKENS = 0, SPEC_SLOTS
 STASH_WORDS = STASH_TOKENS + SPEC_SLOTS
 
 
+def _sources(source):
+    """``source``: None, a DraftSource, or a list of them."""
+    if source is None:
+        return []
+    return list(source) if isinstance(source, (list, tuple)) else [source]
+
+
 def chain_row(max_batch, source=None, limit=0, relay=False, hslots=None):
     """The verify upload's chain row, int32 values [max_batch]: ``source`` the pass's DraftSource when a draft chains
-    behind it (None: an idle row), ``limit`` the first bonus position the draft is declined at, ``relay`` the relay
-    step writes the source's tokens and positions from the lane's last result page (a chained verify), ``hslots``
-    each verify slot's request slot in the lane (None: no history write) for the history (reference/mtp_backfill.py)."""
+    behind it, or a list of them, one per draft group (None: an idle row), ``limit`` the first bonus position a draft
+    is declined at, ``relay`` the relay step writes the sources' tokens and positions from the lane's last result page
+    (a chained verify), ``hslots`` each verify slot's request slot in the lane (None: no history write) for the history
+    (reference/mtp_backfill.py)."""
     assert max_batch >= CHAIN_HSLOTS + SPEC_SLOTS
-    assert source is not None or not relay, "the relay writes a source's columns"
+    sources = _sources(source)
+    assert sources or not relay, "the relay writes a source's columns"
     row = [0] * max_batch
     for j, h in enumerate(hslots or []):
         row[CHAIN_HSLOTS + j] = 0 if h is None else int(h) + 1
-    if source is not None:
-        assert 1 <= len(source.slots) <= SPEC_SLOTS
-        row[CHAIN_SOURCE], row[CHAIN_COLUMNS], row[CHAIN_LIMIT] = 1, len(source.slots), int(limit)
-        for c in range(SPEC_SLOTS):
-            row[CHAIN_SLOTS + c] = source.slots[c] if c < len(source.slots) else -1
-        row[CHAIN_RELAY] = int(bool(relay))
+    for src in sources:
+        assert 0 <= src.group < DRAFT_GROUPS and 1 <= len(src.slots) <= GROUP_SLOTS, src
+        at = src.group * CHAIN_GROUP_WORDS
+        assert row[at + CHAIN_SOURCE] == 0, f"two sources in draft group {src.group}"
+        row[at + CHAIN_SOURCE], row[at + CHAIN_COLUMNS], row[at + CHAIN_LIMIT] = 1, len(src.slots), int(limit)
+        for c in range(GROUP_SLOTS):
+            row[at + CHAIN_SLOTS + c] = src.slots[c] if c < len(src.slots) else -1
+        row[at + CHAIN_RELAY] = int(bool(relay))
     return row
 
 
 # ---------------------------------------------------------------------- the kernel (spec_chain.cpp)
-def chain_step(verify, accept, argmax, layers=1):
-    """The chain step (mode 0): ``verify`` the verify upload's int32 values [VERIFY_ROWS * B], ``accept`` the accept
-    page's uint32 words [ACCEPT_WORDS], ``argmax`` the verify's greedy tokens [B]. Returns (the draft's packed upload,
-    int32 values [MTP_ROWS * B]; the result header, uint32 words [HEADER_WORDS]). ``layers`` > 1: the upload is the
-    commit's description (pack_mtp_layers) and the anchor the last slot."""
+def _header(verify, accept, argmax):
+    """The chain step's result header with every group idle (the accept page, the argmax ids and positions of the
+    pass's slots), the verify's positions and its chain row."""
     b = len(verify) // VERIFY_ROWS
     pos = verify[b : 2 * b]
-    chain = verify[CHAIN_ROW * b : (CHAIN_ROW + 1) * b]
-    # pack_mtp's idle draft: tokens 0, cache positions -1, RoPE indices 0 (pack_mtp_layers': zeros).
-    mtp = [0] * b + [-1 if layers == 1 else 0] * (3 * b) + [0] * ((MTP_ROWS - 4) * b)
     header = [0] * HEADER_WORDS
     header[ACCEPT_AT : ACCEPT_AT + ACCEPT_WORDS] = [int(w) & 0xFFFFFFFF for w in accept]
     header[ARGMAX_AT : ARGMAX_AT + SPEC_SLOTS] = [int(t) & 0xFFFFFFFF for t in argmax[:SPEC_SLOTS]]
     header[POSITIONS_AT : POSITIONS_AT + SPEC_SLOTS] = [int(p) & 0xFFFFFFFF for p in pos[:SPEC_SLOTS]]
-    status = [0, NO_SLOT, 0, 0]
-    m, columns, limit = int(accept[0]), chain[CHAIN_COLUMNS], chain[CHAIN_LIMIT]
-    if chain[CHAIN_SOURCE] != 0 and 1 <= m <= columns <= SPEC_SLOTS:
-        anchor = chain[CHAIN_SLOTS + m - 1]
-        bonus = pos[anchor] + 1
-        if bonus < limit and layers > 1:
+    for g in range(DRAFT_GROUPS):
+        header[STATUS_AT + g * STATUS_WORDS : STATUS_AT + (g + 1) * STATUS_WORDS] = [0, NO_SLOT, 0, 0]
+    return header, pos, verify[CHAIN_ROW * b : (CHAIN_ROW + 1) * b]
+
+
+def _commits(header, pos, chain, accept):
+    """The draft groups whose draft the chain step writes: [(group, m, slots, committed tokens, bonus)], each with a
+    source, 1 <= m <= its columns, and the bonus P[slots[m - 1]] + 1 below the limit."""
+    out = []
+    for g in range(DRAFT_GROUPS):
+        blk = chain[g * CHAIN_GROUP_WORDS : (g + 1) * CHAIN_GROUP_WORDS]
+        m, columns = int(accept[g * OUT_WORDS]), blk[CHAIN_COLUMNS]
+        if blk[CHAIN_SOURCE] == 0 or not 1 <= m <= columns <= GROUP_SLOTS:
+            continue
+        slots = blk[CHAIN_SLOTS : CHAIN_SLOTS + m]
+        bonus = pos[slots[m - 1]] + 1
+        if bonus < blk[CHAIN_LIMIT]:
+            out.append((g, m, slots, [int(t) for t in accept[g * OUT_WORDS + 1 : g * OUT_WORDS + 1 + m]], bonus))
+    return out
+
+
+def _status(header, g, anchor, bonus):
+    header[STATUS_AT + g * STATUS_WORDS : STATUS_AT + (g + 1) * STATUS_WORDS] = [1, anchor, bonus, 0]
+
+
+def chain_step(verify, accept, argmax, layers=1):
+    """The chain step (mode 0): ``verify`` the verify upload's int32 values [VERIFY_ROWS * B], ``accept`` the accept
+    page's uint32 words [ACCEPT_WORDS], ``argmax`` the verify's greedy tokens [B]. Returns (the draft's packed upload,
+    int32 values [MTP_ROWS * B]; the result header, uint32 words [HEADER_WORDS]). Draft group g's request commits accept
+    group g (its source in chain block g). ``layers`` > 1: the upload holds each group's commit description
+    (pack_mtp_layers, row g) and a group's anchor is its last slot; one layer drafts one group."""
+    header, pos, chain = _header(verify, accept, argmax)
+    b = len(pos)
+    # pack_mtp's idle draft: tokens 0, cache positions -1, RoPE indices 0 (pack_mtp_layers': zeros).
+    mtp = [0] * b + [-1 if layers == 1 else 0] * (3 * b) + [0] * ((MTP_ROWS - 4) * b)
+    assert layers > 1 or DRAFT_GROUPS == 1, "one MTP layer drafts one request per lane"
+    for g, m, slots, tokens, bonus in _commits(header, pos, chain, accept):
+        if layers > 1:
             # pack_mtp_layers of the commit: committed position c at P[slots[c]] + 1, so A = P[slots[0]].
-            mtp[DESC_DRAFTING], mtp[DESC_COUNT], mtp[DESC_A] = 1, m, pos[chain[CHAIN_SLOTS]]
-            for c in range(SPEC_SLOTS):
-                mtp[DESC_SLOTS + c] = chain[CHAIN_SLOTS + c] if c < m else -1
-                mtp[DESC_TOKENS + c] = int(accept[1 + c]) if c < m else 0
-            status = [1, SPEC_SLOTS - 1, bonus, 0]
-        elif bonus < limit:
+            d = g * b
+            mtp[d + DESC_DRAFTING], mtp[d + DESC_COUNT], mtp[d + DESC_A] = 1, m, pos[slots[0]]
+            for c in range(GROUP_SLOTS):
+                mtp[d + DESC_SLOTS + c] = slots[c] if c < m else -1
+                mtp[d + DESC_TOKENS + c] = tokens[c] if c < m else 0
+            _status(header, g, (g + 1) * GROUP_SLOTS - 1, bonus)
+        else:
             # plan_mtp with committed position c at P[slots[c]] + 1: the fill writes column c's hidden at P[slots[c]].
-            for c in range(m):
-                s = chain[CHAIN_SLOTS + c]
-                mtp[s] = int(accept[1 + c])
+            anchor = slots[m - 1]
+            for c, s in enumerate(slots):
+                mtp[s] = tokens[c]
                 mtp[b + s] = mtp_cache_position(pos[s])
                 mtp[4 * b + s] = max(pos[s], 0)
             mtp[2 * b + anchor], mtp[3 * b + anchor] = mtp_cache_position(bonus), mtp_cache_position(bonus + 1)
             mtp[5 * b + anchor], mtp[6 * b + anchor] = bonus, bonus + 1
-            status = [1, anchor, bonus, 0]
-    header[STATUS_AT : STATUS_AT + 4] = status
+            _status(header, g, anchor, bonus)
     return mtp, header
 
 
@@ -172,47 +228,53 @@ def relay_step(verify, result, ctrl):
     """The relay step (mode 2, first in the verify trace): ``verify`` the verify upload's int32 values
     [VERIFY_ROWS * B] as the host copied it, ``result`` the lane's last result page (uint32 words [RESULT_WORDS]),
     ``ctrl`` the accept step's control page as the host staged it (uint32 words [GROUPS * GROUP_WORDS]). Returns the
-    upload and the control page the verify and accept steps then read. Without the chain row's relay both are
-    unchanged; with it the source's columns c = 0 .. n take, at slot slots[c], the last committed token (c = 0) or
-    draft c at position bonus + c, and group 0's drafts are the page's; a page whose chain did not draft idles them
-    instead (position -1, token 0, draft 0) and clears the source."""
+    upload and the control page the verify and accept steps then read. Per draft group whose chain block says relay,
+    the source's columns c = 0 .. n take, at slot slots[c], the last committed token (c = 0) or draft c at position
+    bonus + c, and the control page's group g the drafts, from the page's group g; a group whose chain did not draft
+    idles them instead (position -1, token 0, draft 0) and clears its source. Groups without the relay word are left
+    unchanged."""
     b = len(verify) // VERIFY_ROWS
     verify, ctrl = list(verify), [int(w) & 0xFFFFFFFF for w in ctrl]
-    chain = CHAIN_ROW * b
-    if verify[chain + CHAIN_RELAY] == 0:
-        return verify, ctrl
     page = [int(w) & 0xFFFFFFFF for w in result]
-    columns, m = verify[chain + CHAIN_COLUMNS], page[ACCEPT_AT]
-    ok = page[STATUS_AT] == 1 and page[DRAFTS_AT] == page[STATUS_AT + 1]
-    ok = ok and 1 <= columns <= 1 + MAX_DRAFTS and 1 <= m <= 1 + MAX_DRAFTS
-    bonus = page[STATUS_AT + 2]
-    for c in range(min(max(columns, 0), SPEC_SLOTS)):
-        s = verify[chain + CHAIN_SLOTS + c]
-        if not 0 <= s < SPEC_SLOTS:
+    for g in range(DRAFT_GROUPS):
+        blk = CHAIN_ROW * b + g * CHAIN_GROUP_WORDS
+        if verify[blk + CHAIN_RELAY] == 0:
             continue
-        token = (page[ACCEPT_AT + m] if c == 0 else page[DRAFTS_AT + c]) if ok else 0
-        verify[s] = token - (1 << 32) if token >= 1 << 31 else token
-        verify[b + s] = bonus + c if ok else -1
-        if c > 0:
-            ctrl[CTRL_DRAFTS + c - 1] = page[DRAFTS_AT + c] if ok else 0
-    if not ok:
-        verify[chain + CHAIN_SOURCE] = 0
+        status, drafts, accept = STATUS_AT + g * STATUS_WORDS, DRAFTS_AT + g * DRAFT_WORDS, ACCEPT_AT + g * OUT_WORDS
+        columns, m = verify[blk + CHAIN_COLUMNS], page[accept]
+        ok = page[status] == 1 and page[drafts] == page[status + 1]
+        ok = ok and 1 <= columns <= 1 + MAX_DRAFTS and 1 <= m <= 1 + MAX_DRAFTS
+        bonus = page[status + 2]
+        for c in range(min(max(columns, 0), GROUP_SLOTS)):
+            s = verify[blk + CHAIN_SLOTS + c]
+            if not 0 <= s < SPEC_SLOTS:
+                continue
+            token = (page[accept + m] if c == 0 else page[drafts + c]) if ok else 0
+            verify[s] = token - (1 << 32) if token >= 1 << 31 else token
+            verify[b + s] = bonus + c if ok else -1
+            if c > 0:
+                ctrl[g * GROUP_WORDS + CTRL_DRAFTS + c - 1] = page[drafts + c] if ok else 0
+        if not ok:
+            verify[blk + CHAIN_SOURCE] = 0
     return verify, ctrl
 
 
 def drafts_step(mtp, heads, layers=1):
     """The drafts step (mode 1): ``mtp`` the draft's packed upload [MTP_ROWS * B] (int32 values), ``heads`` each MTP
-    pass's greedy tokens [B]. Returns the result's drafts section, uint32 words [RESULT_WORDS - DRAFTS_AT]. With
-    ``layers`` > 1 the upload is a description, and a draft's anchor the last slot."""
+    pass's greedy tokens [B]. Returns the result's drafts section, uint32 words [RESULT_WORDS - DRAFTS_AT]: per draft
+    group its anchor and the anchor's token of each pass. With ``layers`` > 1 the upload holds descriptions, and a
+    drafting group's anchor is its last slot."""
     b = len(mtp) // MTP_ROWS
-    if layers > 1:
-        anchor = SPEC_SLOTS - 1 if mtp[DESC_DRAFTING] != 0 else None
-    else:
-        anchor = next((s for s in range(SPEC_SLOTS) if mtp[2 * b + s] >= 0), None)
     out = [0] * (RESULT_WORDS - DRAFTS_AT)
-    out[0] = NO_SLOT if anchor is None else anchor
-    for k, head in enumerate(heads[:MAX_DRAFTS]):
-        out[1 + k] = NO_TOKEN if anchor is None else int(head[anchor]) & 0xFFFFFFFF
+    for g in range(DRAFT_GROUPS):
+        if layers > 1:
+            anchor = (g + 1) * GROUP_SLOTS - 1 if mtp[g * b + DESC_DRAFTING] != 0 else None
+        else:
+            anchor = next((s for s in range(SPEC_SLOTS) if mtp[2 * b + s] >= 0), None)
+        at = g * DRAFT_WORDS
+        out[at] = NO_SLOT if anchor is None else anchor
+        for k, head in enumerate(heads[:MAX_DRAFTS]):
+            out[at + 1 + k] = NO_TOKEN if anchor is None else int(head[anchor]) & 0xFFFFFFFF
     return out
 
 
@@ -226,76 +288,199 @@ def stash_page(max_batch, positions=None, tokens=None):
 
 
 def plan_step(mtp, stash, table_rows, layers=MAX_DRAFTS):
-    """The plan step (mode 3): ``mtp`` the description (pack_mtp_layers, int32 values [MTP_ROWS * B]), ``stash`` the
-    stash page [B], ``table_rows`` the row count T of the step's final norm buffer (the hidden table's first part; the
-    stash rows follow it). plan_mtp_layers on device: returns ({"pos": ring cache positions [B], "serial": SPEC_SLOTS
-    lists [B] each keeping slot j's, "rope": RoPE indices [B], "hidden": hidden table rows [B], "tokens0": layer-0
-    tokens [B]}, the new stash page). Idle slots keep position -1, RoPE index 0, token 0 and gather their own stash
-    row (T + j), so the stash copy rewrites it unchanged; an idle description (or a count out of range) leaves the
-    stash page as it was."""
+    """The plan step (mode 3): ``mtp`` the descriptions (pack_mtp_layers: draft group g's in row g, int32 values
+    [MTP_ROWS * B]), ``stash`` the stash page [B], ``table_rows`` the row count T of the step's final norm buffer (the
+    hidden table's first part; the stash rows follow it). plan_mtp_layers on device for each drafting group, in its
+    slots: returns ({"pos": ring cache positions [B], "serial": SPEC_SLOTS lists [B] each keeping slot j's, "rope":
+    RoPE indices [B], "hidden": hidden table rows [B], "tokens0": layer-0 tokens [B]}, the new stash page). Idle slots
+    keep position -1, RoPE index 0, token 0 and gather their own stash row (T + j), so the stash copy rewrites it
+    unchanged; an idle description (or a count out of range) leaves its group's stash as it was."""
     b = len(mtp) // MTP_ROWS
     assert b <= table_rows
     pos, rope, tokens0 = [-1] * b, [0] * b, [0] * b
     hidden = [table_rows + j for j in range(b)]
-    out = {"pos": pos, "rope": rope, "hidden": hidden, "tokens0": tokens0}
-    m = mtp[DESC_COUNT]
-    if mtp[DESC_DRAFTING] == 0 or not 1 <= m <= SPEC_SLOTS:
-        out["serial"] = [[-1] * b for _ in range(SPEC_SLOTS)]
-        return out, list(stash)
-    a = mtp[DESC_A]
-    stashed = stash[STASH_POSITIONS : STASH_POSITIONS + SPEC_SLOTS]
-
-    def find(q):
-        return next((k for k in range(SPEC_SLOTS) if q >= 0 and stashed[k] == q), None)
-
-    found = []
-    while len(found) < max(0, layers - m) and find(a - 1 - len(found)) is not None:
-        found.append(find(a - 1 - len(found)))
-    r = len(found)
-    first = SPEC_SLOTS - (r + m)
     new = list(stash)
-    for j in range(SPEC_SLOTS):
-        new[STASH_POSITIONS + j], new[STASH_TOKENS + j] = -1, 0
-    for t in range(r + m):
-        j, q = first + t, a - r + t
-        if t < r:
-            k = found[r - 1 - t]
-            hidden[j], tokens0[j] = table_rows + k, stash[STASH_TOKENS + k]
-        else:
-            hidden[j], tokens0[j] = mtp[DESC_SLOTS + t - r], mtp[DESC_TOKENS + t - r]
-        pos[j], rope[j] = mtp_cache_position(q), max(q, 0)
-        new[STASH_POSITIONS + j], new[STASH_TOKENS + j] = q, tokens0[j]
-    out["serial"] = [[pos[j] if i == j else -1 for i in range(b)] for j in range(SPEC_SLOTS)]
-    return out, new
+    for g in range(DRAFT_GROUPS):
+        desc = mtp[g * b : (g + 1) * b]
+        m = desc[DESC_COUNT]
+        if desc[DESC_DRAFTING] == 0 or not 1 <= m <= GROUP_SLOTS:
+            continue
+        a, lo = desc[DESC_A], g * GROUP_SLOTS
+
+        def find(q, lo=lo):
+            stashed = stash[STASH_POSITIONS + lo : STASH_POSITIONS + lo + GROUP_SLOTS]
+            return next((lo + k for k in range(GROUP_SLOTS) if q >= 0 and stashed[k] == q), None)
+
+        found = []
+        while len(found) < max(0, layers - m) and find(a - 1 - len(found)) is not None:
+            found.append(find(a - 1 - len(found)))
+        r = len(found)
+        first = lo + GROUP_SLOTS - (r + m)
+        for j in range(lo, lo + GROUP_SLOTS):
+            new[STASH_POSITIONS + j], new[STASH_TOKENS + j] = -1, 0
+        for t in range(r + m):
+            j, q = first + t, a - r + t
+            if t < r:
+                k = found[r - 1 - t]
+                hidden[j], tokens0[j] = table_rows + k, stash[STASH_TOKENS + k]
+            else:
+                hidden[j], tokens0[j] = desc[DESC_SLOTS + t - r], desc[DESC_TOKENS + t - r]
+            pos[j], rope[j] = mtp_cache_position(q), max(q, 0)
+            new[STASH_POSITIONS + j], new[STASH_TOKENS + j] = q, tokens0[j]
+    serial = [[pos[j] if i == j else -1 for i in range(b)] for j in range(SPEC_SLOTS)]
+    return {"pos": pos, "rope": rope, "hidden": hidden, "tokens0": tokens0, "serial": serial}, new
 
 
 def tokens_step(tokens0, heads, layer):
-    """The tokens step (mode 4) before pass ``layer``: its tokens [B], slot j taking the layer-0 token of slot j + layer
-    (the last slot's beyond it: the anchor's greedy token of pass j + layer - SPEC_SLOTS, a draft); 0 past the slots."""
+    """The tokens step (mode 4) before pass ``layer``: its tokens [B], slot j of a draft group taking the layer-0
+    token of the group's slot j + layer (past its last slot: the group anchor's greedy token of pass
+    j + layer - GROUP_SLOTS, a draft); 0 past the slots."""
     b = len(tokens0)
     out = [0] * b
-    for j in range(SPEC_SLOTS):
-        x = j + layer
-        out[j] = tokens0[x] if x < SPEC_SLOTS else heads[x - SPEC_SLOTS][SPEC_SLOTS - 1]
+    for g in range(DRAFT_GROUPS):
+        lo, anchor = g * GROUP_SLOTS, (g + 1) * GROUP_SLOTS - 1
+        for j in range(GROUP_SLOTS):
+            x = j + layer
+            out[lo + j] = tokens0[lo + x] if x < GROUP_SLOTS else heads[x - GROUP_SLOTS][anchor]
+    return out
+
+
+# ---------------------------------------------------------------------- DFlash (tt/dflash.py)
+DFLASH_TILE = 32  # TtDFlash's block tile: the rows of its token, block, context and ring-row sections
+
+
+@dataclass(frozen=True)
+class DFlashLayout:
+    """TtDFlash's packed upload (uint32 words, ``words`` of them) for ``groups`` draft groups, group g's block in rows
+    g * block .. g * block + block - 1 and its context ring in ring rows g * ring .. g * ring + ring - 1: the tokens
+    [TILE] at TOKENS (word g * block group g's anchor token, word g * block + 1 its anchor slot + 1, which the drafts
+    step reads, 0 for an idle group; embedded, only the anchor rows kept), the queries' RoPE rows
+    [groups * block * heads] at QUERY (group g's query r * heads + h: its block row r), the block rows' [TILE] at
+    BLOCK (a padding row past the groups': the last group's last row), the context rows' [TILE] at CONTEXT and their
+    ring rows [TILE] at RING_ROWS (``no_write``: none). A RoPE row past ``last``, the tables' last row, reads it."""
+
+    ring: int
+    block: int
+    heads: int
+    last: int
+    groups: int = 1
+
+    QUERY = DFLASH_TILE
+
+    @property
+    def BLOCK(self):
+        return self.QUERY + self.groups * self.block * self.heads
+
+    @property
+    def CONTEXT(self):
+        return self.BLOCK + DFLASH_TILE
+
+    @property
+    def RING_ROWS(self):
+        return self.CONTEXT + DFLASH_TILE
+
+    @property
+    def words(self):
+        return self.RING_ROWS + DFLASH_TILE
+
+    @property
+    def no_write(self):
+        return self.groups * self.ring
+
+
+def dflash_inputs(layout, drafts=()):
+    """The packed upload of a DFlash draft program (uint32 words): ``drafts`` [(group, context, anchor, start,
+    anchor_slot)], per drafting group ``context`` [(tap row, position)] the committed rows to write into its ring,
+    ``anchor`` the last committed token, at position ``start``, from slot ``anchor_slot`` of the pass (None: its drafts
+    are not reported). Groups not listed are idle (start 0)."""
+    t, last, n = DFLASH_TILE, layout.last, layout.block
+    starts, tokens = [0] * layout.groups, [0] * t
+    ctx, rows = [0] * t, [layout.no_write] * t
+    for g, context, anchor, start, anchor_slot in drafts:
+        assert 0 <= g < layout.groups
+        starts[g] = int(start)
+        tokens[g * n], tokens[g * n + 1] = int(anchor), 0 if anchor_slot is None else int(anchor_slot) + 1
+        for row, pos in context:
+            ctx[row], rows[row] = min(int(pos), last), g * layout.ring + int(pos) % layout.ring
+    block = []
+    for j in range(t):
+        g = min(j // n, layout.groups - 1)
+        block.append(min(starts[g] + min(j - g * n, n - 1), last))
+    query = [block[g * n + r] for g in range(layout.groups) for r in range(n) for _ in range(layout.heads)]
+    return [w & 0xFFFFFFFF for w in tokens + query + block + ctx + rows]
+
+
+def dflash_chain_step(verify, accept, argmax, layout):
+    """The chain step with DFlash drafting (mode 0, ``drafter`` 1): as chain_step, but the upload it writes is the
+    DFlash draft's (dflash_inputs) of each group's commit: the committed columns' slots as context rows at
+    P[slots[c]], the last committed token at the bonus as the anchor, from slot slots[m - 1]; idle groups otherwise."""
+    header, pos, chain = _header(verify, accept, argmax)
+    drafts = []
+    for g, m, slots, tokens, bonus in _commits(header, pos, chain, accept):
+        context = [(s, pos[s]) for s in slots if 0 <= s < DFLASH_TILE and pos[s] >= 0]
+        drafts.append((g, context, tokens[m - 1], bonus, slots[m - 1]))
+        _status(header, g, slots[m - 1], bonus)
+    return dflash_inputs(layout, drafts), header
+
+
+def dflash_drafts_step(packed, head, layout):
+    """The drafts step with DFlash drafting (mode 1, ``drafter`` 1): ``packed`` the draft's upload (dflash_inputs),
+    ``head`` its GreedyHead's tokens [B] (group g's draft k at row g * MAX_DRAFTS + k). Returns the result's drafts
+    section, as drafts_step."""
+    out = [0] * (RESULT_WORDS - DRAFTS_AT)
+    for g in range(DRAFT_GROUPS):
+        flag = int(packed[g * layout.block + 1])
+        anchor = flag - 1 if flag != 0 else None
+        at = g * DRAFT_WORDS
+        out[at] = NO_SLOT if anchor is None else anchor
+        for k in range(MAX_DRAFTS):
+            out[at + 1 + k] = NO_TOKEN if anchor is None else int(head[g * MAX_DRAFTS + k]) & 0xFFFFFFFF
     return out
 
 
 # ---------------------------------------------------------------------- the host side
 @dataclass
-class ChainResult:
-    """One verify pass's result page: ``accept`` per group (count, committed tokens, truncated) (unpack_out),
-    ``argmax`` the greedy tokens of slots 0 .. SPEC_SLOTS - 1 and ``positions`` their positions (-1: idle), the
-    chain's ``drafting`` / ``anchor`` / ``bonus``, and the drafts step's ``draft_anchor`` and ``drafts``
-    [MAX_DRAFTS] (None when it found no anchor)."""
+class GroupChain:
+    """One draft group of a result page: the chain's ``drafting`` / ``anchor`` / ``bonus``, and the drafts step's
+    ``draft_anchor`` and ``drafts`` [MAX_DRAFTS] (None when it found no anchor)."""
 
-    accept: list
-    argmax: list
-    positions: list
     drafting: bool
     anchor: int
     bonus: int
     draft_anchor: int
     drafts: list
+
+
+@dataclass
+class ChainResult:
+    """One verify pass's result page: ``accept`` per group (count, committed tokens, truncated) (unpack_out),
+    ``argmax`` the greedy tokens of slots 0 .. SPEC_SLOTS - 1 and ``positions`` their positions (-1: idle), and per
+    draft group its GroupChain (``groups``; the attributes below read group 0's)."""
+
+    accept: list
+    argmax: list
+    positions: list
+    groups: list
+
+    @property
+    def drafting(self):
+        return self.groups[0].drafting
+
+    @property
+    def anchor(self):
+        return self.groups[0].anchor
+
+    @property
+    def bonus(self):
+        return self.groups[0].bonus
+
+    @property
+    def draft_anchor(self):
+        return self.groups[0].draft_anchor
+
+    @property
+    def drafts(self):
+        return self.groups[0].drafts
 
 
 def unpack_result(words):
@@ -305,15 +490,23 @@ def unpack_result(words):
     def slot(x):
         return None if x == NO_SLOT else x
 
+    groups = []
+    for g in range(DRAFT_GROUPS):
+        status, drafts = STATUS_AT + g * STATUS_WORDS, DRAFTS_AT + g * DRAFT_WORDS
+        groups.append(
+            GroupChain(
+                drafting=bool(w[status]),
+                anchor=slot(w[status + 1]),
+                bonus=w[status + 2],
+                draft_anchor=slot(w[drafts]),
+                drafts=w[drafts + 1 : drafts + 1 + MAX_DRAFTS],
+            )
+        )
     return ChainResult(
         accept=unpack_out(w[ACCEPT_AT : ACCEPT_AT + ACCEPT_WORDS]),
         argmax=w[ARGMAX_AT : ARGMAX_AT + SPEC_SLOTS],
         positions=[p - (1 << 32) if p >= 1 << 31 else p for p in w[POSITIONS_AT : POSITIONS_AT + SPEC_SLOTS]],
-        drafting=bool(w[STATUS_AT]),
-        anchor=slot(w[STATUS_AT + 1]),
-        bonus=w[STATUS_AT + 2],
-        draft_anchor=slot(w[DRAFTS_AT]),
-        drafts=w[DRAFTS_AT + 1 : DRAFTS_AT + 1 + MAX_DRAFTS],
+        groups=groups,
     )
 
 
@@ -337,17 +530,19 @@ class ChainedDraft:
 
 
 def chained_draft(result, source, positions=None, layers=1):
-    """The ChainedDraft of a source pass's ChainResult, or None when the chain declined or its drafts are not the
-    anchor's. ``positions``: the pass's slot positions (VerifyPass.positions; None: the page's, as the verify ran
-    them, which a relayed pass needs). ``layers`` > 1: the anchor is the last slot."""
+    """The ChainedDraft of a source pass's ChainResult (its draft group's), or None when the chain declined or its
+    drafts are not the anchor's. ``positions``: the pass's slot positions (VerifyPass.positions; None: the page's, as
+    the verify ran them, which a relayed pass needs). ``layers`` > 1: the anchor is the group's last slot."""
     positions = result.positions if positions is None else positions
-    if not result.drafting or result.draft_anchor != result.anchor:
+    chain = result.groups[source.group]
+    if not chain.drafting or chain.draft_anchor != chain.anchor:
         return None
-    count, tokens, _ = result.accept[0]
-    anchor = SPEC_SLOTS - 1 if layers > 1 else (source.slots[count - 1] if 1 <= count <= len(source.slots) else None)
-    if not 1 <= count <= len(source.slots) or anchor != result.anchor:
-        raise RuntimeError(f"row {source.row}: the chain drafted at slot {result.anchor} after {count} tokens")
+    count, tokens, _ = result.accept[source.group]
+    last = (source.group + 1) * GROUP_SLOTS - 1
+    anchor = last if layers > 1 else (source.slots[count - 1] if 1 <= count <= len(source.slots) else None)
+    if not 1 <= count <= len(source.slots) or anchor != chain.anchor:
+        raise RuntimeError(f"row {source.row}: the chain drafted at slot {chain.anchor} after {count} tokens")
     committed = [int(positions[s]) + 1 for s in source.slots[:count]]
-    if committed[-1] != result.bonus:
-        raise RuntimeError(f"row {source.row}: the chain's bonus {result.bonus} != {committed[-1]}")
-    return ChainedDraft(row=source.row, tokens=list(tokens), positions=committed, drafts=list(result.drafts))
+    if committed[-1] != chain.bonus:
+        raise RuntimeError(f"row {source.row}: the chain's bonus {chain.bonus} != {committed[-1]}")
+    return ChainedDraft(row=source.row, tokens=list(tokens), positions=committed, drafts=list(chain.drafts))

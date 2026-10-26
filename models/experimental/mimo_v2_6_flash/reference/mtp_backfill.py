@@ -43,14 +43,16 @@ Layouts (int32, one page each):
   [SPEC_SLOTS * HISTORY_ROWS, hidden], row e.
 - write list [4 * n] (prefill): per entry the source row (-1: invalidate the entry, -2: skip), the entry, position,
   token.
-- backfill upload [B]: drafting (0 / 1), the request's slot, A (the draft's first row, a plain step's position).
+- backfill upload [B]: drafting (0 / 1), the request's slot, A (the draft's first row, a plain step's position), the
+  draft group whose ring and stash slots it fills (draft group g's ring: physical blocks g * TABLE_WORDS onward, its
+  first RING_BLOCKS the ring, the rest scratch).
 - chain row (reference/spec_chain.py): words [CHAIN_HSLOTS, +SPEC_SLOTS), each verify slot's request slot + 1 (0:
   none), so that a zero row writes nothing.
 """
 
 import torch
 
-from .spec_decode import MTP_RING_TOKENS, SPEC_SLOTS
+from .spec_decode import GROUP_SLOTS, MTP_RING_TOKENS, SPEC_SLOTS
 
 MTP_WINDOW = 128  # the MTP layers' SWA window
 
@@ -69,7 +71,7 @@ SCRATCH_BLOCK = RING_BLOCKS  # the ring cache's blocks RING_BLOCKS .. 2 RING_BLO
 TABLE_WORDS = 2 * RING_BLOCKS  # the fill's page table row: as wide as the cache (paged_update_cache's limit)
 HIST_POSITIONS, HIST_TOKENS = 0, SPEC_SLOTS * HISTORY_ROWS
 HIST_WORDS = 2 * SPEC_SLOTS * HISTORY_ROWS
-BACKFILL_DRAFTING, BACKFILL_SLOT, BACKFILL_A = 0, 1, 2
+BACKFILL_DRAFTING, BACKFILL_SLOT, BACKFILL_A, BACKFILL_GROUP = 0, 1, 2, 3
 # S0 is at most a block below the window's start, and BACKFILL_ROWS rows from it reach a - 1.
 assert MTP_WINDOW + BLOCK <= BACKFILL_ROWS
 
@@ -148,12 +150,13 @@ def pack_writes(writes, entries):
 
 
 # ---------------------------------------------------------------------- the backfill
-def backfill_row(max_batch, slot=None, a=None):
+def backfill_row(max_batch, slot=None, a=None, group=0):
     """The backfill upload's int32 values [max_batch]: the request in lane slot ``slot``, the draft's first row at
-    ``a``; None: idle."""
+    ``a``, into draft group ``group``'s ring and stash slots; None: idle."""
     row = [0] * max_batch
     if slot is not None:
         row[BACKFILL_DRAFTING], row[BACKFILL_SLOT], row[BACKFILL_A] = 1, int(slot), int(a)
+        row[BACKFILL_GROUP] = int(group)
     return row
 
 
@@ -168,7 +171,8 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, window
     page (every layer; None with one). Returns ({"hidden": history rows [BACKFILL_ROWS], "rope": RoPE indices
     [BACKFILL_ROWS], "tokens": per layer [BACKFILL_ROWS], "table": the fill's page table row [TABLE_WORDS] (the
     ring's blocks, then scratch blocks), "stash_rows": (stash slot, history entry) to copy}, the new stash page). Row
-    r writes position S0 + r. An idle upload fills the scratch blocks and leaves the stash."""
+    r writes position S0 + r. An idle upload fills draft group 0's scratch blocks and leaves the stash; a drafting
+    one fills its group's ring and re-plans that group's stash slots only."""
     assert window + SPEC_SLOTS - 1 <= rows and window + BLOCK <= BACKFILL_ROWS
     n = SPEC_SLOTS * rows
     out = {
@@ -180,8 +184,9 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, window
     }
     if upload[BACKFILL_DRAFTING] == 0:
         return out, stash
-    slot, a = upload[BACKFILL_SLOT], upload[BACKFILL_A]
+    slot, a, group = upload[BACKFILL_SLOT], upload[BACKFILL_A], upload[BACKFILL_GROUP]
     lo, s0 = max(0, a - window + 1), backfill_start(a, window)
+    base = group * TABLE_WORDS
 
     def held(q):  # the history holds position q
         return q >= 0 and history_page[entry(slot, q, rows)] == q
@@ -189,7 +194,8 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, window
     def token(q):
         return history_page[n + entry(slot, q, rows)]
 
-    out["table"][:RING_BLOCKS] = [(s0 % MTP_RING_TOKENS // BLOCK + k) % RING_BLOCKS for k in range(RING_BLOCKS)]
+    out["table"] = [base + (s0 % MTP_RING_TOKENS // BLOCK + k) % RING_BLOCKS for k in range(RING_BLOCKS)]
+    out["table"] += [base + SCRATCH_BLOCK + k % RING_BLOCKS for k in range(RING_BLOCKS, TABLE_WORDS)]
     for r in range(BACKFILL_ROWS):
         q = s0 + r
         out["rope"][r] = min(q, a)  # the garbage rows past a stay inside the RoPE tables
@@ -203,9 +209,10 @@ def backfill_plan(upload, history_page, layers, stash, rows=HISTORY_ROWS, window
     from .spec_chain import STASH_POSITIONS, STASH_TOKENS
 
     new = list(stash)
-    for k in range(SPEC_SLOTS):
+    first, last = group * GROUP_SLOTS, (group + 1) * GROUP_SLOTS - 1
+    for k in range(first, last + 1):
         new[STASH_POSITIONS + k], new[STASH_TOKENS + k] = -1, 0
-    for k, q in ((SPEC_SLOTS - 2, a - 2), (SPEC_SLOTS - 1, a - 1)):
+    for k, q in ((last - 1, a - 2), (last, a - 1)):
         if held(q) and held(q + 1):
             new[STASH_POSITIONS + k], new[STASH_TOKENS + k] = q, token(q + 1)
             out["stash_rows"].append((k, entry(slot, q, rows)))

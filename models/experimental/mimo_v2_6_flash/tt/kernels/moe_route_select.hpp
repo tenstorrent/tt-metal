@@ -3,7 +3,8 @@
 
 // Decode routing on the data-movement RISCs (tt/moe_stream.py): per user, the fp32 top-k over the biased sigmoid
 // scores (ties to the lower expert id, sorted descending like ttnn.topk) and the normalized, scaled, bf16-rounded
-// and token-masked routing weights from the unbiased scores, read from rows 0-3 of the [32, E] fp32 tiles.
+// and token-masked routing weights from the unbiased scores, read from the user rows (0..rows-1, rows 4 or 8) of the
+// [32, E] fp32 tiles.
 #pragma once
 
 #include <cstdint>
@@ -14,18 +15,18 @@ namespace mimo_moe {
 constexpr uint32_t kFp32TileBytes = 4096;
 constexpr uint32_t kFp32FaceBytes = 1024;
 constexpr uint32_t kBf16MaskTileBytes = 2048;
-constexpr uint32_t kStagedRows = 4;
-constexpr uint32_t kStageRowBytes = 16 * 4;                         // one fp32 face row
-constexpr uint32_t kStageFaceBytes = kStagedRows * kStageRowBytes;  // rows 0-3 of one fp32 face: 256 B
-constexpr uint32_t kStageTileBytes = 2 * kStageFaceBytes;           // faces 0 and 1 (tile columns 0-31)
+constexpr uint32_t kStageRowBytes = 16 * 4;  // one fp32 face row
 
-// Staging area: rows 0-3 of every biased tile, then of every score tile, then rows 0-3 of face 0 of the mask
-// tile, then the uint16 expert-id stick.
-template <uint32_t expert_tiles>
+// Staging area: the user rows of every biased tile (faces 0 and 1: tile columns 0-31), then of every score tile,
+// then the user rows of face 0 of the mask tile, then the uint16 expert-id stick ([count, unique expert ids...] with
+// the deduplicated stream).
+template <uint32_t expert_tiles, uint32_t rows = 4>
 struct RouteStage {
-    static constexpr uint32_t scores = expert_tiles * kStageTileBytes;
-    static constexpr uint32_t mask = 2 * expert_tiles * kStageTileBytes;
-    static constexpr uint32_t stick = mask + 256;
+    static constexpr uint32_t face_bytes = rows * kStageRowBytes;
+    static constexpr uint32_t tile_bytes = 2 * face_bytes;
+    static constexpr uint32_t scores = expert_tiles * tile_bytes;
+    static constexpr uint32_t mask = 2 * expert_tiles * tile_bytes;
+    static constexpr uint32_t stick = mask + 512;
 };
 
 union F32Bits {
@@ -48,26 +49,35 @@ inline uint32_t float_to_bits(float f) {
 // fp32 bits -> bf16 bits, round to nearest even.
 inline uint32_t bf16_rne(uint32_t u) { return (u + 0x7fffu + ((u >> 16) & 1u)) >> 16; }
 
-template <uint32_t expert_tiles, bool has_mask>
+template <uint32_t expert_tiles, bool has_mask, uint32_t rows = 4>
 inline void stage_route_rows(uint32_t biased_addr, uint32_t scores_addr, uint32_t mask_addr, uint32_t stage) {
+    using Stage = RouteStage<expert_tiles, rows>;
     const InterleavedAddrGen<true> biased = {.bank_base_address = biased_addr, .page_size = kFp32TileBytes};
     const InterleavedAddrGen<true> scores = {.bank_base_address = scores_addr, .page_size = kFp32TileBytes};
     for (uint32_t t = 0; t < expert_tiles; t++) {
-        const uint32_t dst = stage + t * kStageTileBytes;
-        noc_async_read(biased.get_noc_addr(t, 0), dst, kStageFaceBytes);
-        noc_async_read(biased.get_noc_addr(t, kFp32FaceBytes), dst + kStageFaceBytes, kStageFaceBytes);
-        const uint32_t sdst = dst + RouteStage<expert_tiles>::scores;
-        noc_async_read(scores.get_noc_addr(t, 0), sdst, kStageFaceBytes);
-        noc_async_read(scores.get_noc_addr(t, kFp32FaceBytes), sdst + kStageFaceBytes, kStageFaceBytes);
+        const uint32_t dst = stage + t * Stage::tile_bytes;
+        noc_async_read(biased.get_noc_addr(t, 0), dst, Stage::face_bytes);
+        noc_async_read(biased.get_noc_addr(t, kFp32FaceBytes), dst + Stage::face_bytes, Stage::face_bytes);
+        const uint32_t sdst = dst + Stage::scores;
+        noc_async_read(scores.get_noc_addr(t, 0), sdst, Stage::face_bytes);
+        noc_async_read(scores.get_noc_addr(t, kFp32FaceBytes), sdst + Stage::face_bytes, Stage::face_bytes);
     }
     if constexpr (has_mask) {
         const InterleavedAddrGen<true> mask = {.bank_base_address = mask_addr, .page_size = kBf16MaskTileBytes};
-        noc_async_read(mask.get_noc_addr(0, 0), stage + RouteStage<expert_tiles>::mask, kStagedRows * 16 * 2);
+        noc_async_read(mask.get_noc_addr(0, 0), stage + Stage::mask, rows * 16 * 2);
     }
 }
 
-template <uint32_t topk, uint32_t expert_tiles, bool norm, bool has_scale, uint32_t scale_bits, bool has_mask>
+template <
+    uint32_t topk,
+    uint32_t expert_tiles,
+    bool norm,
+    bool has_scale,
+    uint32_t scale_bits,
+    bool has_mask,
+    uint32_t rows = 4>
 inline void select_user(uint32_t stage, uint32_t u, uint32_t* ids, uint32_t* weight_bits) {
+    using Stage = RouteStage<expert_tiles, rows>;
     // Sign-adjusted keys order exactly like the fp32 values; every finite value has a key > 0.
     uint32_t keys[topk];
     for (uint32_t i = 0; i < topk; i++) {
@@ -77,7 +87,7 @@ inline void select_user(uint32_t stage, uint32_t u, uint32_t* ids, uint32_t* wei
     for (uint32_t t = 0; t < expert_tiles; t++) {
         for (uint32_t f = 0; f < 2; f++) {
             volatile tt_l1_ptr uint32_t* row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                stage + t * kStageTileBytes + f * kStageFaceBytes + u * kStageRowBytes);
+                stage + t * Stage::tile_bytes + f * Stage::face_bytes + u * kStageRowBytes);
             const uint32_t e0 = t * 32 + f * 16;
             for (uint32_t c = 0; c < 16; c++) {
                 const uint32_t b = row[c];
@@ -98,10 +108,11 @@ inline void select_user(uint32_t stage, uint32_t u, uint32_t* ids, uint32_t* wei
     }
 
     float s[topk];
-    const uint32_t scores = stage + RouteStage<expert_tiles>::scores + u * kStageRowBytes;
+    const uint32_t scores = stage + Stage::scores + u * kStageRowBytes;
     for (uint32_t i = 0; i < topk; i++) {
         const uint32_t e = ids[i];
-        const uint32_t addr = scores + (e >> 5) * kStageTileBytes + ((e >> 4) & 1u) * kStageFaceBytes + (e & 15u) * 4;
+        const uint32_t addr =
+            scores + (e >> 5) * Stage::tile_bytes + ((e >> 4) & 1u) * Stage::face_bytes + (e & 15u) * 4;
         s[i] = bits_to_float(*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr));
     }
     if constexpr (norm) {
@@ -116,8 +127,7 @@ inline void select_user(uint32_t stage, uint32_t u, uint32_t* ids, uint32_t* wei
     }
     uint32_t mask_bits = 0;
     if constexpr (has_mask) {
-        volatile tt_l1_ptr uint16_t* mask =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + RouteStage<expert_tiles>::mask);
+        volatile tt_l1_ptr uint16_t* mask = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + Stage::mask);
         mask_bits = static_cast<uint32_t>(mask[u * 16]) << 16;  // element (u, 0) of face 0
     }
     for (uint32_t i = 0; i < topk; i++) {
@@ -131,6 +141,34 @@ inline void select_user(uint32_t stage, uint32_t u, uint32_t* ids, uint32_t* wei
         }
         weight_bits[i] = wb;
     }
+}
+
+// Whether user u decodes this step: its token-mask element (u, 0) is nonzero (every user without a mask).
+template <uint32_t expert_tiles, bool has_mask, uint32_t rows = 4>
+inline bool user_active(uint32_t stage, uint32_t u) {
+    if constexpr (!has_mask) {
+        return true;
+    }
+    volatile tt_l1_ptr uint16_t* mask =
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage + RouteStage<expert_tiles, rows>::mask);
+    return (mask[u * 16] & 0x7fffu) != 0;
+}
+
+// Appends the experts of ``ids`` not yet in ``uniq[0, n)`` (in top-k order); returns the new count. Every RISC that
+// builds the list appends the active users in user order, so they all get the same order.
+template <uint32_t topk>
+inline uint32_t append_unique(uint32_t* uniq, uint32_t n, const uint32_t* ids) {
+    for (uint32_t i = 0; i < topk; i++) {
+        const uint32_t e = ids[i];
+        bool seen = false;
+        for (uint32_t j = 0; j < n; j++) {
+            seen = seen || uniq[j] == e;
+        }
+        if (!seen) {
+            uniq[n++] = e;
+        }
+    }
+    return n;
 }
 
 }  // namespace mimo_moe

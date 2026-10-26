@@ -56,10 +56,10 @@ void kernel_main() {
     constexpr uint32_t vocab_local = get_compile_time_arg_val(3);
     constexpr uint32_t max_batch = get_compile_time_arg_val(4);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(5);
-    static_assert(users >= 1 && users <= 4 && tp <= 32 && max_batch * 4 <= 1024);
+    static_assert(users >= 1 && users <= 8 && tp <= 32 && max_batch * 4 <= 1024 && users * K * 8 <= 2048);
     constexpr uint32_t slot_bytes = K * 8;
-    constexpr uint32_t cand_bytes = users * slot_bytes;  // every user's list of a chip page
-    constexpr uint32_t norm_bytes = 64;                  // every user's normalizer of a chip page
+    constexpr uint32_t cand_bytes = users * slot_bytes;     // every user's list of a chip page
+    constexpr uint32_t norm_bytes = users <= 4 ? 64 : 128;  // every user's normalizer of a chip page
     constexpr uint32_t params_bytes = max_batch * 32;
     constexpr uint32_t rng_bytes = max_batch * 8;
     constexpr uint32_t max_cands = tp * K;

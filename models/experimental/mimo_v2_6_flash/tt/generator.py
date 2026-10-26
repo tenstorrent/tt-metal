@@ -51,12 +51,15 @@ class MiMoGalaxyGenerator:
         setup_kv=True,
         mtp_layers=None,
         mtp_backfill=False,
+        dflash_path=None,
         **model_kwargs,
     ):
         """``setup_kv``: allocate each replica's own paged KV cache (False when vLLM owns the KV blocks: the vLLM
         adapter, generator_vllm.py, hands each replica its caches and page tables). ``mtp_layers``: also load these MTP
         layers (one, or one per draft) on every replica as the speculative drafter (TtMiMoModel.setup_mtp);
-        ``mtp_backfill``: with its target-hidden history and ring backfill (tt/mtp_backfill.py)."""
+        ``mtp_backfill``: with its target-hidden history and ring backfill (tt/mtp_backfill.py). ``dflash_path``: the
+        model directory whose ``dflash/`` draft model every replica loads as the drafter instead (TtMiMoModel.setup_dflash).
+        """
         self.cfg = cfg
         self.dp = dp
         self.users_per_replica = users_per_replica
@@ -75,10 +78,13 @@ class MiMoGalaxyGenerator:
                 max_seq_len=max_seq_len,
                 max_batch=max_batch,
                 block_size=block_size,
+                decode_users=users_per_replica,
                 **model_kwargs,
             )
             if mtp_layers is not None:
                 model.setup_mtp(ckpt if r == 0 else None, cache_dir, mtp_layers, backfill=mtp_backfill)
+            if dflash_path is not None:
+                model.setup_dflash(dflash_path, cache_dir, load=r == 0)
             if setup_kv:
                 model.setup_kv_cache(users_per_replica)
             self.models.append(model)

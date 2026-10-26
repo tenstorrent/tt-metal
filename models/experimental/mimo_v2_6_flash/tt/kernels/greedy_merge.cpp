@@ -4,7 +4,7 @@
 // Greedy decode head, step 2 (tt/greedy_head.py): merge every chip's per-core maxima into each user's token.
 //
 // Input: the row all-gather of the scan partials, [1, 1, 32, 32 * tp] uint32 TILE (interleaved): tile `chip` holds
-// chip `chip`'s partials, row `core` columns 4u, 4u+1 = (key, local index) of user u. Cores cover increasing index
+// chip `chip`'s partials, row `core` columns 2u, 2u+1 = (key, local index) of user u. Cores cover increasing index
 // ranges and chips increasing vocab shards, so taking the first strict maximum in (chip, core) order keeps the lowest
 // global id on ties, like torch.argmax.
 // Output: global token ids (chip * vocab_local + local index) of users 0..users-1 and zeros for the other slots,
@@ -34,7 +34,7 @@ void kernel_main() {
     constexpr uint32_t vocab_local = get_compile_time_arg_val(3);
     constexpr uint32_t max_batch = get_compile_time_arg_val(4);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(5);
-    static_assert(num_cores <= 32 && users <= 4 && max_batch * 4 <= 1024);
+    static_assert(num_cores <= 32 && users <= 8 && max_batch * 4 <= 1024);
 
     cb_reserve_back(cb_scratch, 1);
     const uint32_t scratch = get_write_ptr(cb_scratch);  // tp x (face 0 | face 2), then the token row
@@ -67,11 +67,11 @@ void kernel_main() {
                 // row c lives in face 0 (c < 16) or face 2 (copied right after face 0): 16 uint32 per row
                 const volatile tt_l1_ptr uint32_t* row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                     scratch + ch * 2 * kFaceBytesU32 + (c < 16 ? 0 : kFaceBytesU32) + (c % 16) * 64);
-                const uint32_t key = row[u * 4];
+                const uint32_t key = row[u * 2];
                 if (!found || key > best_key) {
                     found = true;
                     best_key = key;
-                    best_id = ch * vocab_local + row[u * 4 + 1];
+                    best_id = ch * vocab_local + row[u * 2 + 1];
                 }
             }
         }

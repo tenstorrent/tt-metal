@@ -12,11 +12,12 @@ verify upload and control page the host would have built after reading the page 
 bonus and the drafts), for every count of the step it chains onto and every number of drafts verified, around the
 ring's wrap and at the context limit, from a provisional layout above the real position, leaving every other slot
 alone, and idle the pass when the page drafted nothing; with either drafter (one MTP layer, or every layer: the
-description, the plan step on the stash, the anchor in the last slot). SpecChain.warm, at every decode trace capture,
+description, the plan step on the stash, the anchor in the last slot). With DFlash drafting the chain step must write
+exactly the DFlash upload the host built from the plugin's commit (generator_vllm._enqueue_dflash), decline where it
+declines, and its result page relay and round-trip as the MTP's. SpecChain.warm, at every decode trace capture,
 must run its steps on idle uploads, so that the stash a prompt emptied stays empty. test_spec_inputs_tp8.py runs the
 kernel against the same mirror on a Galaxy row."""
 
-import random
 from types import SimpleNamespace
 
 import pytest
@@ -44,9 +45,13 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     POSITIONS_AT,
     RESULT_WORDS,
     STATUS_AT,
+    DFlashLayout,
     chain_row,
     chain_step,
     chained_draft,
+    dflash_chain_step,
+    dflash_drafts_step,
+    dflash_inputs,
     drafts_step,
     relay_step,
     plan_step,
@@ -55,6 +60,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     unpack_result,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
+    DRAFT_GROUPS,
     MAX_DRAFTS,
     SPEC_SLOTS,
     DraftSource,
@@ -79,6 +85,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_inputs import (
     pack_verify,
     slot_caps,
 )
+from models.experimental.mimo_v2_6_flash.tests.seeded_rng import SeededRng
 from models.experimental.mimo_v2_6_flash.tests.test_spec_decode_host import (
     SCHEDULE,
     TinyMiMo,
@@ -86,6 +93,14 @@ from models.experimental.mimo_v2_6_flash.tests.test_spec_decode_host import (
     mtp_drafter,
     tiny_config,
 )
+from models.experimental.mimo_v2_6_flash.reference import spec_decode as spec_layout
+
+# The MTP drafter's 4-slot verify (the draft groups: test_spec_groups_host.py, test_spec_groups_adapter_host.py).
+pytestmark = pytest.mark.skipif(
+    (spec_layout.SPEC_SLOTS, spec_layout.DRAFT_GROUPS) != (4, 1),
+    reason="MTP's 4-slot layouts: run without MIMO_SPEC_SLOTS / MIMO_SPEC_GROUPS",
+)
+
 
 B = 32
 VOCAB = 152576
@@ -137,7 +152,7 @@ def committed_positions(vp, m):
 # ---------------------------------------------------------------------- layouts
 def test_chain_row():
     assert chain_row(B) == [0] * B
-    vp = one_row_pass(40, 2, random.Random(0))
+    vp = one_row_pass(40, 2, SeededRng(0))
     row = chain_row(B, draft_source([vp]), 1000)
     assert row[:CHAIN_WORDS] == [1, 3, 1000, 0, 1, 2, -1, 0] and row[CHAIN_WORDS:] == [0] * (B - CHAIN_WORDS)
     relayed = chain_row(B, draft_source([vp]), 1000, relay=True)
@@ -155,7 +170,7 @@ def test_the_chain_row_leaves_the_verify_inputs_alone():
     tok = torch.randint(0, VOCAB, (B,), generator=g, dtype=torch.int32)
     pos = torch.full((B,), -1, dtype=torch.int32)
     pos[:4] = torch.arange(700, 704, dtype=torch.int32)
-    chain = torch.tensor(chain_row(B, draft_source([one_row_pass(700, 3, random.Random(1))]), 5000))
+    chain = torch.tensor(chain_row(B, draft_source([one_row_pass(700, 3, SeededRng(1))]), 5000))
     caps, own_cap, own_col = slot_caps(B), owned_slot_caps(B, 8, 2), owned_slot_columns(B, 8, 2)
     for chip in range(8):
         a = derive_verify(pack_verify(tok, pos), own_cap[chip], own_col[chip], caps, True)
@@ -170,7 +185,7 @@ def test_the_chain_row_leaves_the_verify_inputs_alone():
 def test_chain_writes_the_host_planned_upload(bonus):
     """Every draft count n and accepted count m: the chain step's upload is pack_mtp(plan_mtp(...)) of the plugin's
     commit, the header carries the accept page, the argmax ids and the anchor."""
-    rng = random.Random(bonus)
+    rng = SeededRng(bonus)
     limit = MAX_SEQ_LEN - MAX_DRAFTS
     for n in range(MAX_DRAFTS + 1):
         for m in range(1, n + 2):
@@ -192,7 +207,7 @@ def test_chain_writes_the_host_planned_upload(bonus):
 
 
 def test_an_idle_chain_row_writes_an_idle_draft():
-    rng = random.Random(3)
+    rng = SeededRng(3)
     vp = one_row_pass(300, 3, rng)
     accept = accept_page([(2, [7, 8])])
     mtp, header = chain_step(upload(vp), accept, list(range(B)))
@@ -206,7 +221,7 @@ def test_the_chain_declines_where_propose_does(k):
     """A verify of width 1 + k: the chain drafts while bonus + k < max_seq_len (the limit max_seq_len - k), what
     propose_draft_tokens allows for num_drafts k, and every RoPE index it writes stays inside the tables."""
     seq = 4096
-    rng = random.Random(k)
+    rng = SeededRng(k)
     for bonus in range(seq - k - 6, seq - k + 1):
         for m in (1, 2):
             vp = one_row_pass(bonus - m, MAX_DRAFTS, rng)
@@ -223,7 +238,7 @@ def test_the_chain_declines_where_propose_does(k):
 
 
 def test_a_count_past_the_source_columns_drafts_nothing():
-    vp = one_row_pass(50, 1, random.Random(4))
+    vp = one_row_pass(50, 1, SeededRng(4))
     chain = chain_row(B, draft_source([vp]), 1000)
     for m in (0, 3):
         mtp, header = chain_step(upload(vp, chain), accept_page([(m, [1] * m)]), [0] * B)
@@ -232,7 +247,7 @@ def test_a_count_past_the_source_columns_drafts_nothing():
 
 # ---------------------------------------------------------------------- the drafts step and the result page
 def test_drafts_step_reads_the_anchor():
-    rng = random.Random(5)
+    rng = SeededRng(5)
     heads = [[rng.randrange(VOCAB) for _ in range(B)] for _ in range(MAX_DRAFTS)]
     for anchor in range(SPEC_SLOTS):
         vp = one_row_pass(100, 3, rng)
@@ -255,7 +270,7 @@ def chain_pass(vp, accept, argmax, heads, limit=MAX_SEQ_LEN - MAX_DRAFTS, source
 
 
 def test_the_result_page_round_trips_into_a_chained_draft():
-    rng = random.Random(6)
+    rng = SeededRng(6)
     heads = [[rng.randrange(VOCAB) for _ in range(B)] for _ in range(MAX_DRAFTS)]
     vp = one_row_pass(1000, 3, rng)
     committed = [rng.randrange(VOCAB) for _ in range(2)]
@@ -275,7 +290,7 @@ def test_the_result_page_round_trips_into_a_chained_draft():
 
 
 def test_no_chained_draft_without_a_source_or_past_the_limit():
-    rng = random.Random(7)
+    rng = SeededRng(7)
     heads = [[0] * B for _ in range(MAX_DRAFTS)]
     vp = one_row_pass(2000, 3, rng)
     accept = accept_page([(4, [1, 2, 3, 4])])
@@ -289,13 +304,100 @@ def test_no_chained_draft_without_a_source_or_past_the_limit():
     assert unpack_result(chain_pass(vp, accept, [0] * B, heads, limit=2005)).drafting
 
 
+# ---------------------------------------------------------------------- with DFlash drafting
+DFLASH = DFlashLayout(ring=1024, block=8, heads=8, last=MAX_SEQ_LEN - 1, groups=DRAFT_GROUPS)
+
+
+def dflash_host_upload(source, committed, positions, m):
+    """What generator_vllm._enqueue_dflash uploads for the plugin's commit of m tokens: the committed columns' slots as
+    context rows at their committed position - 1, the last committed token at its position from slot slots[m - 1]."""
+    context = [(source.slots[c], positions[c] - 1) for c in range(m)]
+    return dflash_inputs(DFLASH, [(source.group, context, committed[m - 1], positions[m - 1], source.slots[m - 1])])
+
+
+@pytest.mark.parametrize("bonus", [1, 2, 1023, 1024, 1025, 4096, MAX_SEQ_LEN - 1 - MAX_DRAFTS])
+def test_dflash_chain_writes_the_host_planned_upload(bonus):
+    """Every draft count n and accepted count m: the DFlash chain step's upload is the host's of the plugin's commit,
+    its header the MTP chain's, and the result page with the drafts step's section round-trips into the chained
+    draft of that commit (the anchor the last committed column's slot, as one MTP layer's)."""
+    rng = SeededRng(bonus)
+    limit = MAX_SEQ_LEN - MAX_DRAFTS
+    for n in range(MAX_DRAFTS + 1):
+        for m in range(1, n + 2):
+            p = bonus - m
+            if p < 0:
+                continue
+            vp = one_row_pass(p, n, rng)
+            source = draft_source([vp])
+            committed = [rng.randrange(VOCAB) for _ in range(m)]
+            accept = accept_page([(m, committed)])
+            argmax = [rng.randrange(VOCAB) for _ in range(B)]
+            verify = upload(vp, chain_row(B, source, limit))
+            packed, header = dflash_chain_step(verify, accept, argmax, DFLASH)
+            positions = committed_positions(vp, m)
+            assert packed == dflash_host_upload(source, committed, positions, m), (n, m)
+            mtp_header = chain_step(verify, accept, argmax)[1]
+            assert header == mtp_header and header[STATUS_AT : STATUS_AT + 4] == [1, source.slots[m - 1], bonus, 0]
+            head = [rng.randrange(VOCAB) for _ in range(B)]
+            result = unpack_result(header + dflash_drafts_step(packed, head, DFLASH))
+            d = chained_draft(result, source, vp.positions)
+            assert d.tokens == committed and d.positions == positions[:m] and d.drafts == head[:MAX_DRAFTS]
+            assert d.matches(committed + [-1] * (1 + MAX_DRAFTS - m), positions, m)
+
+
+@pytest.mark.parametrize("k", [1, 3, MAX_DRAFTS])
+def test_dflash_chain_declines_where_propose_does(k):
+    """The DFlash chain drafts while bonus + k < max_seq_len, and an idle or declined chain writes the idle upload
+    (dflash_inputs with no drafts: no context row written, no drafts reported)."""
+    seq = 4096
+    rng = SeededRng(k)
+    idle = dflash_inputs(DFLASH)
+    for bonus in range(seq - k - 4, seq - k + 1):
+        vp = one_row_pass(bonus - 1, MAX_DRAFTS, rng)
+        accept = accept_page([(1, [11])])
+        packed, header = dflash_chain_step(
+            upload(vp, chain_row(B, draft_source([vp]), seq - k)), accept, [0] * B, DFLASH
+        )
+        drafts = bonus + k < seq
+        assert header[STATUS_AT] == int(drafts)
+        assert (packed == idle) != drafts
+    packed, header = dflash_chain_step(upload(vp), accept, [0] * B, DFLASH)
+    assert packed == idle and header[STATUS_AT : STATUS_AT + 4] == [0, NO_SLOT, 0, 0]
+    assert dflash_drafts_step(idle, list(range(B)), DFLASH)[: 1 + MAX_DRAFTS] == [NO_SLOT] + [NO_TOKEN] * MAX_DRAFTS
+    assert idle[DFLASH.RING_ROWS : DFLASH.words] == [DFLASH.ring] * 32
+
+
+def test_dflash_pages_relay_as_the_mtp_pages():
+    """A verify chained onto a DFlash pass relays its page as an MTP pass's: the last committed token at the bonus,
+    then the DFlash drafts."""
+    rng = SeededRng(9)
+    for m in range(1, MAX_DRAFTS + 2):
+        vp = one_row_pass(5000 - m, MAX_DRAFTS, rng)
+        source = draft_source([vp])
+        committed = [rng.randrange(VOCAB) for _ in range(m)]
+        packed, header = dflash_chain_step(
+            upload(vp, chain_row(B, source, MAX_SEQ_LEN)), accept_page([(m, committed)]), [0] * B, DFLASH
+        )
+        head = [rng.randrange(VOCAB) for _ in range(B)]
+        page = header + dflash_drafts_step(packed, head, DFLASH)
+        nxt = one_row_pass(9000, MAX_DRAFTS, rng)  # provisional positions above the real ones
+        verify, ctrl = relay_step(
+            upload(nxt, chain_row(B, draft_source([nxt]), MAX_SEQ_LEN, relay=True)),
+            page,
+            control_words(pass_inputs(nxt, None)[1]),
+        )
+        assert verify[: 1 + MAX_DRAFTS] == [committed[-1]] + head[:MAX_DRAFTS]
+        assert verify[B : B + 1 + MAX_DRAFTS] == list(range(5000, 5000 + 1 + MAX_DRAFTS))
+        assert ctrl[4 : 4 + MAX_DRAFTS] == head[:MAX_DRAFTS]
+
+
 # ---------------------------------------------------------------------- with the accept kernel's mirror
 @pytest.mark.parametrize("seed", range(40))
 def test_greedy_accept_then_chain(seed):
     """An argmax_ids step through the device path: SampleVerify's greedy walk over the verify's argmax ids commits
     what the plugin's greedy walk commits (the cells argmax_ids answers), and the chain drafts from that commit as the
     host would have after reading it."""
-    rng = random.Random(seed)
+    rng = SeededRng(seed)
     n = rng.randrange(MAX_DRAFTS + 1)
     p = rng.choice([0, 1, 255, 256, 4095, rng.randrange(MAX_SEQ_LEN - 8)])
     vp = one_row_pass(p, n, rng)
@@ -364,7 +466,7 @@ def chained_block(bound, n, limit=MAX_SEQ_LEN - MAX_DRAFTS):
 def test_the_relay_writes_the_block_the_host_would_build(bonus, layers):
     """With either drafter: the relay reads the page the step chained onto left (with every layer the drafts are the
     last slot's, wherever the commit ended)."""
-    rng = random.Random(bonus)
+    rng = SeededRng(bonus)
     for m in range(1, MAX_DRAFTS + 2):
         p = bonus - m
         if p < 0:
@@ -403,7 +505,7 @@ def test_the_relay_writes_the_block_the_host_would_build(bonus, layers):
 
 
 def test_the_relay_leaves_every_other_slot_and_unrelayed_uploads_alone():
-    rng = random.Random(11)
+    rng = SeededRng(11)
     page, committed, heads = pending_page(500, 2, rng)
     # One drafted column relayed into slots 0 .. 1; the host's own content in slots 2 .. 3 and past the pass.
     overlay, ctrl = chained_block(510, 1)
@@ -425,7 +527,7 @@ def test_a_page_that_drafted_nothing_idles_the_relayed_pass(layers):
     """The step chained onto declined its draft at the context limit, or its drafts are not the chain's (a host-planned
     draft ran after it): the relayed columns go idle (no K / V written), the pass drafts nothing, and its page reports
     position -1, which the adapter raises on."""
-    rng = random.Random(12)
+    rng = SeededRng(12)
     limit = 2000
     declined, _, _ = pending_page(limit - 2, 2, rng, limit=limit, layers=layers)  # the bonus reaches the limit
     assert not unpack_result(declined).drafting
@@ -449,7 +551,7 @@ def test_a_chain_of_relays_follows_the_host_built_steps(layers):
     """Steps chained one onto the other on the mirrors (relay, the oracle's argmax, the accept walk, the chain and
     drafts steps; with every layer the draft trace's plan step on its stash and the tokens steps) commit exactly what
     host-built steps over the read pages commit, and with every layer plan the same rows (stash hits included)."""
-    rng = random.Random(13)
+    rng = SeededRng(13)
     seq = [rng.randrange(VOCAB) for _ in range(600)]
 
     def wrong(bonus, k):
@@ -518,7 +620,7 @@ def host_description(source, committed, positions, m):
 def test_layers_chain_writes_the_commits_description(bonus):
     """Every draft count n and accepted count m: the chain step's upload is the description propose_draft_tokens
     builds from the plugin's commit, the anchor the last slot; it declines past the limit as with one layer."""
-    rng = random.Random(100 + bonus)
+    rng = SeededRng(100 + bonus)
     limit = MAX_SEQ_LEN - MAX_DRAFTS
     for n in range(MAX_DRAFTS + 1):
         for m in range(1, n + 2):
@@ -545,7 +647,7 @@ def test_layers_chain_writes_the_commits_description(bonus):
 def stash_cases(a):
     """Stash pages before a draft whose committed rows start at ``a`` (A): the last draft's rows in every layout the
     flows leave (anchor at A - 1 with 1 .. 4 rows), unrelated positions, a hole at A - 2, and empty."""
-    rng = random.Random(a)
+    rng = SeededRng(a)
     cases = []
     for rows in range(1, SPEC_SLOTS + 1):
         positions = [-1] * (SPEC_SLOTS - rows) + [a - rows + j for j in range(rows)]
@@ -564,7 +666,7 @@ def test_plan_step_is_plan_mtp_layers(bonus):
     every stash layout writes plan_mtp_layers' passes: ring cache positions, serial positions, RoPE indices, the
     hidden table rows of its sources (step slot s: s; stash slot k: T + k) and layer-0 tokens; and the new stash is
     mtp_stash(plan) with those tokens. Around the ring's wrap and at the end of the context."""
-    rng = random.Random(bonus)
+    rng = SeededRng(bonus)
     sources = [(DraftSource(row=1, slots=[0, 1, 2, 3]), m) for m in range(1, SPEC_SLOTS + 1)]
     sources += [(DraftSource(row=1, slots=[s]), 1) for s in range(SPEC_SLOTS)]
     for source, m in sources:
@@ -605,7 +707,7 @@ def test_warm_leaves_the_stash_a_prompt_emptied():
     (SpecInputs.reset) before its steps, so the plan step leaves the stash empty instead of re-planning that commit."""
     from models.experimental.mimo_v2_6_flash.tt.spec_chain import SpecChain
 
-    rng = random.Random(9)
+    rng = SeededRng(9)
     vp = one_row_pass(300, MAX_DRAFTS, rng)
     accept = accept_page([(2, [rng.randrange(VOCAB) for _ in range(2)])])
     live = SimpleNamespace(verify=upload(vp, chain_row(B, draft_source([vp]), MAX_SEQ_LEN - MAX_DRAFTS)), mtp=None)
@@ -629,7 +731,7 @@ def test_warm_leaves_the_stash_a_prompt_emptied():
 
 @pytest.mark.parametrize("rows", range(1, SPEC_SLOTS + 1))
 def test_tokens_step_is_mtp_layer_tokens(rows):
-    rng = random.Random(rows)
+    rng = SeededRng(rows)
     tokens0 = [0] * (SPEC_SLOTS - rows) + [rng.randrange(VOCAB) for _ in range(rows)] + [0] * (B - SPEC_SLOTS)
     heads = [[rng.randrange(VOCAB) for _ in range(B)] for _ in range(MAX_DRAFTS)]
     drafts = [h[SPEC_SLOTS - 1] for h in heads]
@@ -641,7 +743,7 @@ def test_tokens_step_is_mtp_layer_tokens(rows):
 
 
 def test_layers_drafts_step_and_chained_draft():
-    rng = random.Random(9)
+    rng = SeededRng(9)
     heads = [[rng.randrange(VOCAB) for _ in range(B)] for _ in range(MAX_DRAFTS)]
     vp = one_row_pass(1000, 3, rng)
     committed = [rng.randrange(VOCAB) for _ in range(2)]

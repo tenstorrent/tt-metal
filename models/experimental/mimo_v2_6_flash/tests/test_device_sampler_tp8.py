@@ -3,8 +3,8 @@
 
 """DeviceSampler on one Galaxy row (TP=8) against the exact full-vocabulary draw, eager and traced.
 
-The decode users (rows 0-3 of a [32, 152576] fp32 logit tile) cycle through sets of temperature / top_k / top_p, each
-drawn several times. The reference is vLLM's rule over the whole vocabulary (softmax(logits / T), or over the top_k
+The decode users (rows 0-3, or 0-7: the scan's 8 user slots, of a [32, 152576] fp32 logit tile) cycle through sets
+of temperature / top_k / top_p (user u takes column u % 4 of a set), each drawn several times. The reference is vLLM's rule over the whole vocabulary (softmax(logits / T), or over the top_k
 logits; keep a token while the mass ranked above it is below top_p) with the same inverse-CDF draw and the uniform
 the device's splitmix64 stream gives (replayed on the host from the seeds), so the device token must equal it on
 every row whose nucleus and top_k lie in the row's CANDIDATES_PER_CHIP most likely tokens, except where the uniform
@@ -31,7 +31,6 @@ from models.experimental.mimo_v2_6_flash.tt.device_sampler import (
 
 VOCAB = 152576
 B = 32
-USERS = 4
 DRAWS = 6
 REPLAYS = 50
 # (temperature, top_k, top_p) of users 0-3; top_k -1 or the vocabulary size is none, as the plugin sends it.
@@ -61,8 +60,13 @@ class Streams:
         return out
 
 
-def make_logits(gen, scales):
-    logits = torch.randn(B, VOCAB, generator=gen) * torch.tensor(list(scales) + [1.0] * (B - USERS))[:, None]
+def per_user(values, users):
+    """A 4-column parameter or scale set for ``users`` rows (user u takes column u % 4)."""
+    return [values[u % 4] for u in range(users)]
+
+
+def make_logits(gen, scales, users):
+    logits = torch.randn(B, VOCAB, generator=gen) * torch.tensor(per_user(scales, users) + [1.0] * (B - users))[:, None]
     # Tied maxima on two chips (the greedy rule takes the lower id) and inside one chip.
     top = logits[0].max() + 1.0
     logits[0, 70000] = logits[0, 3000] = top
@@ -74,7 +78,7 @@ def reference(logits, temperature, top_k, top_p, uniform):
     """Per user: (token, nucleus size, whether the uniform is within rounding of a bucket edge)."""
     return [
         reference_draw(logits[r], float(temperature[r]), int(top_k[r]), float(top_p[r]), float(uniform[r]))
-        for r in range(USERS)
+        for r in range(len(temperature))
     ]
 
 
@@ -86,11 +90,12 @@ def read_tokens(t):
 
 
 def check(tag, tokens, ref, logits, top_k):
-    """Rows 0-3 inside the candidates must match the reference (bar edge rounding), rows past them be 0; returns
-    (bad rows, rows compared exactly)."""
-    assert not tokens[USERS:].any(), f"{tag}: rows past the users hold {tokens[USERS:].tolist()}"
+    """The users' rows inside the candidates must match the reference (bar edge rounding), rows past them be 0;
+    returns (bad rows, rows compared exactly)."""
+    users = len(ref)
+    assert not tokens[users:].any(), f"{tag}: rows past the users hold {tokens[users:].tolist()}"
     bad, exact_rows = [], 0
-    for r in range(USERS):
+    for r in range(users):
         token, nucleus, near = ref[r]
         k = int(top_k[r])
         exact = nucleus <= CANDIDATES_PER_CHIP and not (CANDIDATES_PER_CHIP < k < VOCAB)
@@ -108,11 +113,12 @@ def check(tag, tokens, ref, logits, top_k):
 
 @pytest.mark.parametrize("device_params", [{**GALAXY_DEVICE_PARAMS, "trace_region_size": 64 << 20}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-def test_device_sampler(mesh_device):
+@pytest.mark.parametrize("users", [4, 8])
+def test_device_sampler(mesh_device, users):
     plan = MeshPlan(dp_submeshes(mesh_device)[0])
     vocab_local = VOCAB // plan.tp
     gen = torch.Generator().manual_seed(0)
-    sampler = DeviceSampler(plan, vocab_local, USERS, B)
+    sampler = DeviceSampler(plan, vocab_local, users, B)
     token_input = ttnn.from_torch(
         torch.zeros(1, B, dtype=torch.int32),
         device=plan.mesh_device,
@@ -123,7 +129,7 @@ def test_device_sampler(mesh_device):
     )
     bad, exact_rows, compared = [], 0, 0
     for s, scales in enumerate(SCALES):
-        logits = make_logits(gen, scales)
+        logits = make_logits(gen, scales, users)
         logits_tt = ttnn.from_torch(
             logits.reshape(1, 1, B, VOCAB),
             device=plan.mesh_device,
@@ -133,23 +139,23 @@ def test_device_sampler(mesh_device):
             mesh_mapper=plan.shard(3),
         )
         for i, (temperature, top_k, top_p) in enumerate(PARAM_SETS):
-            temperature, top_k, top_p = torch.tensor(temperature), torch.tensor(top_k), torch.tensor(top_p)
+            temperature, top_k, top_p = (torch.tensor(per_user(x, users)) for x in (temperature, top_k, top_p))
             streams = Streams(gen)
             hosts, _ = sampler.host_params(temperature, top_k, top_p, states=streams.seeds)
             sampler.set_params(hosts)
-            sampled = [r < USERS and float(temperature[r]) != 0 and int(top_k[r]) != 1 for r in range(B)]
+            sampled = [r < users and float(temperature[r]) != 0 and int(top_k[r]) != 1 for r in range(B)]
             for d in range(DRAWS):
                 uniform = streams.draw(sampled)
                 tokens = read_tokens(sampler(logits_tt, token_input=token_input))
                 assert torch.equal(read_tokens(token_input), tokens), "token_input differs from next_tokens"
                 ref = reference(logits, temperature, top_k, top_p, uniform)
-                for r in range(USERS):
+                for r in range(users):
                     if temperature[r] == 0 or top_k[r] == 1:
                         assert int(tokens[r]) == ref[r][0], f"greedy row {r}: {int(tokens[r])} != {ref[r][0]}"
                 b, e = check(f"logits {s} params {i} draw {d}", tokens, ref, logits, top_k)
                 bad += b
                 exact_rows += e
-                compared += USERS
+                compared += users
         if s == 0:
             logger.info(f"nucleus sizes (last draw): {[n for _, n, _ in ref]}")
 
@@ -170,7 +176,7 @@ def test_device_sampler(mesh_device):
                 )
                 bad += b
                 exact_rows += e
-                compared += USERS
+                compared += users
             ttnn.synchronize_device(plan.mesh_device)
             t0 = time.perf_counter()
             for _ in range(REPLAYS):

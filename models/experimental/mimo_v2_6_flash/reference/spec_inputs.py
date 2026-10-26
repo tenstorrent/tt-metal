@@ -45,17 +45,17 @@ inputs from it and the device stash. pack_mtp's idle upload has a zero row 0: it
 
 import torch
 
-from .spec_decode import SPEC_SLOTS, mtp_cache_position
+from .spec_decode import DRAFT_GROUPS, GROUP_SLOTS, SPEC_SLOTS, mtp_cache_position
 
 TILE = 32
 INT32_MAX = 2**31 - 1
 VERIFY_ROWS = 3  # tokens, positions, the chain row (reference/spec_chain.py)
 MTP_ROWS = 7  # tokens; fill, step2, step3 cache positions; fill, step2, step3 RoPE indices
-# pack_mtp_layers' row 0: drafting (0 / 1), m, A, the source's slots [SPEC_SLOTS] (-1 past m), committed tokens
-# [SPEC_SLOTS] (0 past m).
+# pack_mtp_layers' row g, draft group g's commit: drafting (0 / 1), m, A, the source's slots [GROUP_SLOTS] (-1 past m),
+# committed tokens [GROUP_SLOTS] (0 past m).
 DESC_DRAFTING, DESC_COUNT, DESC_A, DESC_SLOTS = 0, 1, 2, 3
-DESC_TOKENS = DESC_SLOTS + SPEC_SLOTS
-DESC_WORDS = DESC_TOKENS + SPEC_SLOTS
+DESC_TOKENS = DESC_SLOTS + GROUP_SLOTS
+DESC_WORDS = DESC_TOKENS + GROUP_SLOTS
 
 
 # ---------------------------------------------------------------------- constants (persistent device tensors)
@@ -113,18 +113,28 @@ def mtp_layers_row(max_batch, source=None, committed_tokens=None, committed_posi
     if source is None:
         return row
     m = int(accepted)
-    assert 1 <= m <= len(source.slots) <= SPEC_SLOTS, (m, source)
+    assert 1 <= m <= len(source.slots) <= GROUP_SLOTS, (m, source)
     row[DESC_DRAFTING], row[DESC_COUNT], row[DESC_A] = 1, m, int(committed_positions[0]) - 1
-    for c in range(SPEC_SLOTS):
+    for c in range(GROUP_SLOTS):
         row[DESC_SLOTS + c] = source.slots[c] if c < m else -1
         row[DESC_TOKENS + c] = int(committed_tokens[c]) if c < m else 0
     return row
 
 
 def pack_mtp_layers(max_batch, source=None, committed_tokens=None, committed_positions=None, accepted=None):
-    """int32 [MTP_ROWS * B] of a multi-layer draft: row 0 ``mtp_layers_row``, the other rows zero."""
+    """int32 [MTP_ROWS * B] of a multi-layer draft for one commit: row ``source.group`` its ``mtp_layers_row``, the
+    other rows zero (idle groups)."""
+    commits = [] if source is None else [(source, committed_tokens, committed_positions, accepted)]
+    return pack_mtp_commits(max_batch, commits)
+
+
+def pack_mtp_commits(max_batch, commits):
+    """int32 [MTP_ROWS * B] of a multi-layer draft for ``commits`` [(source, committed tokens, committed positions,
+    accepted)], one per draft group: row g the description of group g's commit, zero for a group without one."""
     out = torch.zeros(MTP_ROWS, max_batch, dtype=torch.int32)
-    out[0] = torch.tensor(mtp_layers_row(max_batch, source, committed_tokens, committed_positions, accepted))
+    for source, tokens, positions, m in commits:
+        assert 0 <= source.group < DRAFT_GROUPS and not bool(out[source.group].any()), source
+        out[source.group] = torch.tensor(mtp_layers_row(max_batch, source, tokens, positions, m))
     return out.reshape(-1)
 
 

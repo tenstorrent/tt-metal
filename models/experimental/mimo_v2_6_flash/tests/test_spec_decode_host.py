@@ -31,6 +31,14 @@ from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     plan_verify_passes,
     serial_positions,
 )
+from models.experimental.mimo_v2_6_flash.reference import spec_decode as spec_layout
+
+# The MTP drafter's 4-slot verify (the draft groups: test_spec_groups_host.py, test_spec_groups_adapter_host.py).
+pytestmark = pytest.mark.skipif(
+    (spec_layout.SPEC_SLOTS, spec_layout.DRAFT_GROUPS) != (4, 1),
+    reason="MTP's 4-slot layouts: run without MIMO_SPEC_SLOTS / MIMO_SPEC_GROUPS",
+)
+
 
 BLOCK = 64
 

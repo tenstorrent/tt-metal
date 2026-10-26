@@ -48,7 +48,7 @@ import ttnn
 from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import BatchFillTables, kv_replication, per_chip, slot_owner_masks
-from .moe_stream import KERNEL_DIR, zero_output
+from .moe_stream import KERNEL_DIR, user_rows, zero_output
 from .rope import permute_heads_for_rope
 
 # chunked_flash_mla_prefill reads its start position from a device tensor (chunk_start_idx_tensor); builds without
@@ -63,7 +63,7 @@ def page_table_width(blocks):
 
 
 class SwaDecodeQkv:
-    """SWA decode, users in rows 0-3: the fused qkv row [1, 1, 32, (nh + 2) * D] (L1 tiles) -> the RoPE'd query in
+    """SWA decode, users in rows 0-3 (or 0-7: 8 users): the fused qkv row [1, 1, 32, (nh + 2) * D] (L1 tiles) -> the RoPE'd query in
     the height-sharded layout paged SDPA decode reads ([1, 32, nh, D], one [32, D] shard per user) and the RoPE'd key
     and the value written into the users' positions of the BFP8 paged caches, in one launch in place of
     nlp_create_qkv_heads_decode, two rotary_embedding_llama and two paged_update_cache.
@@ -82,6 +82,7 @@ class SwaDecodeQkv:
         device = plan.mesh_device
         self.device = device
         self.nh, self.d, self.users, self.block_size = num_heads, head_dim, users, block_size
+        self.rows = user_rows(users)
         assert head_dim % TILE == 0 and block_size % TILE == 0
         self.d_tiles = head_dim // TILE
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -111,16 +112,21 @@ class SwaDecodeQkv:
         )
         grid = device.compute_with_storage_grid_size()
         row_q, row_kv = 3, 4
-        assert num_heads <= grid.x and 2 * users <= grid.x
+        assert num_heads <= grid.x and users <= grid.x
         self.q_cores = [ttnn.CoreCoord(h, row_q) for h in range(num_heads)]
         self.k_cores = [ttnn.CoreCoord(u, row_kv) for u in range(users)]
-        self.v_cores = [ttnn.CoreCoord(users + u, row_kv) for u in range(users)]
+        if 2 * users <= grid.x:  # K and V cores on one row
+            self.v_cores = [ttnn.CoreCoord(users + u, row_kv) for u in range(users)]
+        else:
+            self.v_cores = [ttnn.CoreCoord(u, row_kv + 1) for u in range(users)]
         self.all_ranges = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(self.q_cores[0], self.q_cores[-1]),
-                ttnn.CoreRange(self.k_cores[0], self.v_cores[-1]),
-            ]
+            [ttnn.CoreRange(self.q_cores[0], self.q_cores[-1])]
+            + [ttnn.CoreRange(c[0], c[-1]) for c in (self.k_cores, self.v_cores)]
         )
+        if self.v_cores[0].y == row_kv:
+            self.all_ranges = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(self.q_cores[0], self.q_cores[-1]), ttnn.CoreRange(self.k_cores[0], self.v_cores[-1])]
+            )
         self.compute_config = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
@@ -220,6 +226,8 @@ class SwaDecodeQkv:
                 pos_page,
                 pt_page,
                 cache_tile,
+                self.rows,
+                self.users,
             ]
             writer_ct = [
                 role,
@@ -529,8 +537,10 @@ class TtMiMoAttention:
             )
 
         # Decode with the users in rows 0-3 (forward_decode(compact=True)): the o stream writes rows 0-3 of its output
-        # into a persistent compact [1, 1, 32, hidden / 8] tensor, so the row reduction moves 1/8 of the tile.
-        self.compact_buf = zero_output(plan, hidden // (TILE // 4))
+        # into a persistent compact [1, 1, 32, hidden / 8] tensor, so the row reduction moves 1/8 of the tile (rows
+        # 0-7 into [1, 1, 32, hidden / 4] with 8 users: set_decode_rows).
+        self.rows = 4
+        self.compact_buf = zero_output(plan, hidden // (TILE // self.rows))
         # Decode: SDPA output -> concatenated heads (V's real dims) in one launch.
         self.concat_heads = ConcatHeads(plan, self.nh_decode if self.split_users else self.nh_local, self.v_head_dim)
 
@@ -660,11 +670,20 @@ class TtMiMoAttention:
         sample.deallocate(True)
         return op
 
+    def set_decode_rows(self, rows):
+        """The compact decode's user rows: 4 (up to 4 decode users) or 8. Before any trace capture (the compact rows
+        buffer is persistent)."""
+        if rows == self.rows:
+            return
+        self.compact_buf.deallocate(True)
+        self.rows = rows
+        self.compact_buf = zero_output(self.plan, self.cfg.hidden_size // (TILE // rows))
+
     def _decode_qkv(self, x, weight, program_config, compact=False):
         # Keep the fused qkv row in L1: the decode head split reads it with many small per-user row reads. The bank
-        # stream computes rows 0-3 only, so it serves the compact (users in rows 0-3) decode.
+        # stream computes the user rows only, so it serves the compact (users in rows 0-3 or 0-7) decode.
         if compact and weight is self.wqkv and self.qkv_stream is not None:
-            return self.qkv_stream(x, self.wqkv_stream)
+            return self.qkv_stream(x, self.wqkv_stream, rows=self.rows)
         return ttnn.linear(
             x,
             weight,
@@ -930,7 +949,7 @@ class TtMiMoAttention:
         """
         if compact:
             assert self.o_stream is not None, "compact decode needs the bank-local o stream"
-            rows = self.o_stream(attn_cat, self.wo_decode, compact_out=self.compact_buf)
+            rows = self.o_stream(attn_cat, self.wo_decode, compact_out=self.compact_buf, rows=self.rows)
             attn_cat.deallocate(True)
             return rows if self.fabric_gather else self.plan.all_gather(rows, dim=3)
         out = ttnn.linear(
@@ -977,10 +996,10 @@ class TtMiMoAttention:
         k_cache, v_cache = kv_cache
         fused_qkv = compact and self.swa_qkv is not None and len(rot_mats) >= 4
         if fused_qkv:
-            # Head split, RoPE and both cache updates in one launch (rot_mats[2:4]: the raw cos / sin rows). Its query
-            # does not depend on the positions, so serial writes repeat it with one slot's position each.
-            for pos in writes:
-                q_rot = self.swa_qkv(xqkv, rot_mats[2], rot_mats[3], pos, page_table, k_cache, v_cache)
+            # Head split, RoPE and both cache updates in one launch (rot_mats[2:4]: the raw cos / sin rows). The users
+            # whose positions share a cache tile row (a verify's slots) are written by one core, so a verify needs no
+            # serial writes here.
+            q_rot = self.swa_qkv(xqkv, rot_mats[2], rot_mats[3], cur_pos, page_table, k_cache, v_cache)
             xqkv.deallocate(True)
         else:
             q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(

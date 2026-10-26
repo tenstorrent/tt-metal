@@ -2,12 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // NCRISC of the SWA decode qkv split + RoPE + KV-cache update (SwaDecodeQkv in tt/attention.py). Every core reads
-// rows 0-3 (the users) of the six [*, 32] tiles of its slice of the fused qkv row (role Q: query head `head`, K: the
-// key head, V: the value head) into cb_x: rows 0-3 of faces 0 and 1 land where they were, so a tile's row u is
-// still user u. Q and K cores also read rows 0-3 of the cos / sin tiles and the RoPE transformation tile. K and V
+// the user rows 0..rows-1 of the six [*, 32] tiles of its slice of the fused qkv row (role Q: query head `head`, K:
+// the key head, V: the value head) into cb_x: those rows of faces 0 and 1 land where they were, so a tile's row u is
+// still user u. Q and K cores also read the user rows of the cos / sin tiles and the RoPE transformation tile. K and V
 // cores then read their user's cache tiles: physical block = page_table[user][pos / block] (the table is indexed by
 // absolute position), the six tiles of the block's tile row holding pos (an inactive user, pos < 0, reads block 0
 // and is flagged so the writer leaves the cache alone).
+//
+// Users whose positions fall in the same cache tile row (a speculative verify's slots: one request at consecutive
+// positions) are written by one core, the lowest such user's: it gets every member's row and user to patch in, the
+// others write nothing. One launch then serves a verify, whose slots the writers would otherwise race on.
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -26,10 +30,12 @@ void kernel_main() {
     constexpr uint32_t pos_page_bytes = get_compile_time_arg_val(9);
     constexpr uint32_t pt_page_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t cache_tile_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t rows = get_compile_time_arg_val(12);   // the user rows: 4 or 8
+    constexpr uint32_t users = get_compile_time_arg_val(13);  // the users with a K / V core
     constexpr uint32_t pt_chunk_bytes = 64;  // the aligned piece of the page table row read for one entry
     constexpr uint32_t tile_bytes = 2048;    // bf16 32x32
     constexpr uint32_t face_bytes = 512;
-    constexpr uint32_t rows_bytes = 128;  // rows 0-3 of a bf16 face
+    constexpr uint32_t rows_bytes = rows * 32;  // the user rows of a bf16 face
     constexpr uint32_t row_tiles = block_size / 32;
 
     const uint32_t qkv_addr = get_arg_val<uint32_t>(0);
@@ -75,28 +81,54 @@ void kernel_main() {
     }
 
     if constexpr (role != kRoleQ) {
-        // This user's position and the cache tiles that hold it.
+        // Every user's position and cache tile row (block * row_tiles + tile row); this user's cache tiles.
         cb_reserve_back(cb_meta, 1);
         const uint32_t meta = get_write_ptr(cb_meta);
         const InterleavedAddrGen<true> pos_gen = {.bank_base_address = pos_addr, .page_size = pos_page_bytes};
         noc_async_read(pos_gen.get_noc_addr(0, 0), meta, pos_page_bytes);
         noc_async_read_barrier();
-        const int32_t pos = reinterpret_cast<volatile tt_l1_ptr int32_t*>(meta)[user];
-        uint32_t block = 0;
-        uint32_t tile_row = 0;
-        if (pos >= 0) {
-            const uint32_t entry = static_cast<uint32_t>(pos) / block_size;
-            const uint32_t chunk = (entry * 4) & ~(pt_chunk_bytes - 1);
-            const InterleavedAddrGen<true> pt_gen = {.bank_base_address = pt_addr, .page_size = pt_page_bytes};
-            noc_async_read(pt_gen.get_noc_addr(user, chunk), meta + pos_page_bytes, pt_chunk_bytes);
-            noc_async_read_barrier();
-            block = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta + pos_page_bytes)[(entry * 4 - chunk) / 4];
-            tile_row = (static_cast<uint32_t>(pos) % block_size) / 32;
+        int32_t pos[users];
+        uint32_t entry_word[users];
+        const InterleavedAddrGen<true> pt_gen = {.bank_base_address = pt_addr, .page_size = pt_page_bytes};
+        const uint32_t chunks = meta + pos_page_bytes;  // one pt_chunk_bytes piece per user
+        for (uint32_t v = 0; v < users; v++) {
+            pos[v] = reinterpret_cast<volatile tt_l1_ptr int32_t*>(meta)[v];
+            entry_word[v] = 0;
+            if (pos[v] >= 0) {
+                const uint32_t entry = static_cast<uint32_t>(pos[v]) / block_size;
+                const uint32_t chunk = (entry * 4) & ~(pt_chunk_bytes - 1);
+                noc_async_read(pt_gen.get_noc_addr(v, chunk), chunks + v * pt_chunk_bytes, pt_chunk_bytes);
+                entry_word[v] = (entry * 4 - chunk) / 4;
+            }
         }
-        // Handed to the writer: [first cache page, row within the tile, active].
+        noc_async_read_barrier();
+        uint32_t tile_key[users];
+        for (uint32_t v = 0; v < users; v++) {
+            tile_key[v] = 0;
+            if (pos[v] >= 0) {
+                const uint32_t block =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunks + v * pt_chunk_bytes)[entry_word[v]];
+                tile_key[v] = block * row_tiles + (static_cast<uint32_t>(pos[v]) % block_size) / 32;
+            }
+        }
+        const bool active = pos[user] >= 0;
+        bool leader = active;
+        for (uint32_t v = 0; v < user; v++) {
+            leader = leader && !(pos[v] >= 0 && tile_key[v] == tile_key[user]);
+        }
+        // Handed to the writer: [first cache page, members (0: write nothing), (row, user) per member].
         volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta);
-        const uint32_t first_page = (block * row_tiles + tile_row) * d_tiles;
-        const uint32_t row = pos >= 0 ? static_cast<uint32_t>(pos) % 32 : 0;
+        const uint32_t first_page = tile_key[user] * d_tiles;
+        uint32_t members = 0;
+        if (leader) {
+            for (uint32_t v = user; v < users; v++) {
+                if (pos[v] >= 0 && tile_key[v] == tile_key[user]) {
+                    out[2 + 2 * members] = static_cast<uint32_t>(pos[v]) % 32;
+                    out[3 + 2 * members] = v;
+                    members++;
+                }
+            }
+        }
         const InterleavedAddrGen<true> cache = {.bank_base_address = cache_addr, .page_size = cache_tile_bytes};
         cb_reserve_back(cb_cache, d_tiles);
         const uint32_t cache_l1 = get_write_ptr(cb_cache);
@@ -104,8 +136,7 @@ void kernel_main() {
             noc_async_read(cache.get_noc_addr(first_page + j, 0), cache_l1 + j * cache_tile_bytes, cache_tile_bytes);
         }
         out[0] = first_page;
-        out[1] = row;
-        out[2] = pos >= 0 ? 1 : 0;
+        out[1] = members;
         noc_async_read_barrier();
         cb_push_back(cb_cache, d_tiles);
         cb_push_back(cb_meta, 1);

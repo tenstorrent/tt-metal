@@ -5,10 +5,10 @@
 // normalizer, from the scan cores' partials. One core per user.
 //
 // Inputs: the top-K partials (sample_scan.cpp, sample_scan_writer.cpp): core c's K (key, local index) pairs of user u,
-// best first, at page c / 4 (4096-byte pages), byte offset (c % 4) * 4 * K * 8 + u * K * 8; the sums partials
-// (sample_scan_writer.cpp): core
-// c's sum of exp((logit - its largest) / T) of user u, uint64 Q30 at byte offset c * 32 + u * 8; params (uint32
-// row-major [1, max_batch * 8], row u's word 0 = log2(e) / T as fp32 bits).
+// best first, in its block of `slots` user slots (block = slots * K * 8 bytes, 4096 / block per 4096-byte page) at
+// byte offset u * K * 8; the sums partials (sample_scan_writer.cpp): core c's sum of exp((logit - its largest) / T) of
+// user u, uint64 Q30 at byte offset (c * slots + u) * 8; params (uint32 row-major [1, max_batch * 8], row u's word 0 =
+// log2(e) / T as fp32 bits).
 // Output, in the chip candidates page (uint32, 4096 bytes): user u's K pairs sorted by key descending, lower index
 // first among equal keys, at byte offset u * K * 8; and the chip's sum of exp((logit - the chip's largest) / T),
 // uint64 Q30, at byte offset 2048 + u * 16.
@@ -29,10 +29,11 @@ void kernel_main() {
     constexpr uint32_t K = get_compile_time_arg_val(1);
     constexpr uint32_t cb_scratch = get_compile_time_arg_val(2);
     constexpr uint32_t max_batch = get_compile_time_arg_val(3);
+    constexpr uint32_t slots = get_compile_time_arg_val(4);  // user slots of a scan core's block: 4, or 8
     constexpr uint32_t slot_bytes = K * 8;
-    constexpr uint32_t block_bytes = 4 * slot_bytes;
+    constexpr uint32_t block_bytes = slots * slot_bytes;
     constexpr uint32_t blocks_per_page = 4096 / block_bytes;
-    constexpr uint32_t sums_bytes = num_cores * 32;
+    constexpr uint32_t sums_bytes = num_cores * slots * 8;
     constexpr uint32_t params_bytes = max_batch * 32;
 
     cb_reserve_back(cb_scratch, 1);
@@ -82,7 +83,7 @@ void kernel_main() {
     const uint64_t* sums = reinterpret_cast<const uint64_t*>(sums_l1);
     uint64_t total = 0;
     for (uint32_t c = 0; c < num_cores; ++c) {
-        total += sample::mul_q30(sums[c * 4 + u], rel(sample::key_bits(in[2 * c * K])));
+        total += sample::mul_q30(sums[c * slots + u], rel(sample::key_bits(in[2 * c * K])));
     }
 
     uint32_t* list = reinterpret_cast<uint32_t*>(list_l1);

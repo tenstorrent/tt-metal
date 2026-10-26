@@ -15,13 +15,18 @@ uniform lies within rounding of a decision.
 """
 
 import math
-import random
 
 import pytest
 import torch
 
 from models.experimental.mimo_v2_6_flash.reference import sample_verify as sv
-from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, plan_verify_passes
+from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
+    GROUP_SLOTS,
+    MAX_DRAFTS,
+    SPEC_SLOTS,
+    plan_verify_passes,
+)
+from models.experimental.mimo_v2_6_flash.tests.seeded_rng import SeededRng
 
 TP = 8
 LOCAL = 64
@@ -166,7 +171,7 @@ def test_param_words_follow_the_sampler_layout():
 # ---------------------------------------------------------------------- acceptance
 @pytest.mark.parametrize("top_k, top_p", [(0, 0.95), (20, 1.0), (20, 0.8), (5, 0.9), (0, 0.5)])
 def test_random_requests_match_the_host_walk(top_k, top_p):
-    rng = random.Random(top_k * 1000 + int(top_p * 100))
+    rng = SeededRng(top_k * 1000 + int(top_p * 100))
     checked = 0
     for trial in range(60):
         n = rng.randrange(0, MAX_DRAFTS + 1)
@@ -179,11 +184,12 @@ def test_random_requests_match_the_host_walk(top_k, top_p):
         checked += not got[2] and not near
         assert 1 <= got[0] <= n + 1 and len(got[1]) == got[0]
         assert got[1][: got[0] - 1] == drafts[: got[0] - 1], "a committed prefix that is not the drafts"
-    assert checked >= 40, f"only {checked} of 60 requests compared exactly"
+    # Longer walks (7 drafts with 8 slots) leave the certified candidates more often.
+    assert checked >= (40 if MAX_DRAFTS <= 3 else 30), f"only {checked} of 60 requests compared exactly"
 
 
 def test_accept_boundary_is_p_of_the_draft():
-    rng = random.Random(1)
+    rng = SeededRng(1)
     row = make_logits(rng, 4.0)
     probs, _, _ = ref_dist(row, 1.0, 0, 0.95)
     draft = sorted(probs, key=lambda i: -probs[i])[1]  # the second most likely token
@@ -194,7 +200,7 @@ def test_accept_boundary_is_p_of_the_draft():
 
 
 def test_a_rejection_draws_from_the_residual_without_the_draft():
-    rng = random.Random(2)
+    rng = SeededRng(2)
     row = make_logits(rng, 6.0)  # a nucleus inside the candidates
     probs, order, cut = ref_dist(row, 1.0, 0, 0.95)
     assert len(order) > 2
@@ -207,7 +213,7 @@ def test_a_rejection_draws_from_the_residual_without_the_draft():
 
 
 def test_a_draft_outside_the_nucleus_is_rejected_even_at_u_zero():
-    rng = random.Random(3)
+    rng = SeededRng(3)
     row = make_logits(rng, 6.0)
     probs, _, _ = ref_dist(row, 1.0, 5, 1.0)
     outside = next(i for i in range(VOCAB) if i not in probs)
@@ -216,7 +222,7 @@ def test_a_draft_outside_the_nucleus_is_rejected_even_at_u_zero():
 
 
 def test_every_draft_accepted_commits_the_bonus_from_the_last_slot():
-    rng = random.Random(4)
+    rng = SeededRng(4)
     slots = [make_logits(rng, 5.0) for _ in range(MAX_DRAFTS + 1)]
     drafts = [argmax_of(slots[j]) for j in range(MAX_DRAFTS)]
     for u_bonus in (0.0, 0.3, 0.97):
@@ -230,7 +236,7 @@ def test_every_draft_accepted_commits_the_bonus_from_the_last_slot():
 def test_top_k_rows_draw_in_logit_order_and_nucleus_rows_in_id_order():
     """The same uniform picks the same token as the host walk, whose top-k table is ordered by logit and whose
     top-p-only table by id: two orders that pick different tokens for one uniform."""
-    rng = random.Random(5)
+    rng = SeededRng(5)
     row = make_logits(rng, 1.0)
     for top_k, top_p in ((30, 1.0), (0, 0.3)):
         probs, order, cut = ref_dist(row, 1.0, top_k, top_p)
@@ -242,7 +248,7 @@ def test_top_k_rows_draw_in_logit_order_and_nucleus_rows_in_id_order():
 
 
 def test_greedy_rows_commit_the_argmax_chain_lowest_id_on_ties():
-    rng = random.Random(6)
+    rng = SeededRng(6)
     slots = [make_logits(rng, 2.0) for _ in range(MAX_DRAFTS + 1)]
     # Tied maxima on two chips: the lower id is the argmax.
     for row, (a, b) in zip(slots, ((70, 3 * LOCAL + 5), (400, 9), (130, 131), (2, LOCAL + 2))):
@@ -261,7 +267,7 @@ def test_greedy_rows_commit_the_argmax_chain_lowest_id_on_ties():
 def test_a_nucleus_past_the_candidates_is_flagged_truncated():
     """One chip holds more than K of the row's largest logits: once its list is spent, the merge can no longer certify
     the next candidate; a wide nucleus also runs out of candidates."""
-    rng = random.Random(7)
+    rng = SeededRng(7)
     row = make_logits(rng, 0.1)
     for i in range(2 * K):
         row[i] = 5.0 - 0.01 * i  # chip 0's 2K largest are the row's largest
@@ -276,8 +282,11 @@ def test_a_nucleus_past_the_candidates_is_flagged_truncated():
 
 
 # ---------------------------------------------------------------------- a pass: layouts and several requests
+@pytest.mark.skipif(
+    GROUP_SLOTS < SPEC_SLOTS, reason="draft groups place each request in a group (test_spec_groups_host)"
+)
 def test_a_pass_with_two_requests_round_trips_through_the_pages():
-    rng = random.Random(8)
+    rng = SeededRng(8)
     rows = [(0, [11, 12, -1, -1], [40, 41, -1, -1], 1), (1, [13, -1, -1, -1], [9, -1, -1, -1], 0)]
     (vp,) = plan_verify_passes(rows)
     slot_logits = [make_logits(rng, 4.0) for _ in range(3)]
@@ -304,14 +313,14 @@ def test_a_pass_with_two_requests_round_trips_through_the_pages():
     probs, order, cut = ref_dist(slot_logits[1], 1.0, 0, 0.9)
     want, near = ref_draw(probs, order, q24(0.3))
     assert near or committed[0, 1] == want
-    assert committed[0, 2:].tolist() == [-1, -1] and committed[1, 1:].tolist() == [-1] * MAX_DRAFTS
+    assert committed[0, 2:].tolist() == [-1] * (MAX_DRAFTS - 1) and committed[1, 1:].tolist() == [-1] * MAX_DRAFTS
 
 
 def test_against_the_plugin_walk_with_the_same_uniforms():
     """When the plugin is installed: its accept_speculated_tokens on the same logits and uniforms commits what the
     mirror commits (rows whose nucleus the candidates hold, away from rounding)."""
     spec_accept = pytest.importorskip("vllm_tt_plugin.spec_accept")
-    rng = random.Random(9)
+    rng = SeededRng(9)
     agree = 0
     for _ in range(30):
         n = MAX_DRAFTS

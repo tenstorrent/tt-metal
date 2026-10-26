@@ -11,9 +11,10 @@ the oracle's tokens, wrong at every third bonus position, ending with drafts_ste
 (vllm_tt_plugin.spec_decode.accept_greedy_drafts) and its committed positions. Checked: the argmax_ids and fused
 answers, which drafts come from the chain and which from the host plan (and that both drafters agree), the fallbacks
 (a commit other than the device's, a logits verify, no decode RoPE tables, the context limit, MIMO_SPEC_CHAIN=0), and
-that speculative greedy decoding reproduces the oracle sequence."""
+that speculative greedy decoding reproduces the oracle sequence. With DFlash drafting (MIMO_SPEC_DECODE=dflash) the
+accept trace ends with reference.spec_chain.dflash_chain_step and the fake drafter checks every context row against
+the taps the last step left and that its ring holds the request's positions without a gap below the anchor."""
 
-import random
 from types import SimpleNamespace
 
 import pytest
@@ -23,16 +24,34 @@ from models.experimental.mimo_v2_6_flash.reference.mtp import MtpProgramMirror
 from models.experimental.mimo_v2_6_flash.reference.sample_verify import control_words, verify_pass
 from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     CHAIN_HSLOTS,
+    DRAFTS_AT,
     RESULT_WORDS,
+    DFlashLayout,
     chain_step,
+    dflash_chain_step,
+    dflash_drafts_step,
+    dflash_inputs,
     drafts_step,
     relay_step,
     unpack_result,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_decode import MAX_DRAFTS, SPEC_SLOTS, DraftSource
-from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_mtp, pack_mtp_layers, pack_verify
+from models.experimental.mimo_v2_6_flash.reference.spec_inputs import (
+    pack_mtp,
+    pack_mtp_commits,
+    pack_verify,
+)
+from models.experimental.mimo_v2_6_flash.tests.seeded_rng import SeededRng
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import MiMoV2ForCausalLM
+from models.experimental.mimo_v2_6_flash.reference import spec_decode as spec_layout
+
+# The MTP drafter's 4-slot verify (the draft groups: test_spec_groups_host.py, test_spec_groups_adapter_host.py).
+pytestmark = pytest.mark.skipif(
+    (spec_layout.SPEC_SLOTS, spec_layout.DRAFT_GROUPS) != (4, 1),
+    reason="MTP's 4-slot layouts: run without MIMO_SPEC_SLOTS / MIMO_SPEC_GROUPS",
+)
+
 
 pytest.importorskip("vllm_tt_plugin")
 from vllm_tt_plugin.spec_decode import accept_greedy_drafts  # noqa: E402
@@ -96,9 +115,9 @@ class FakeMTP:
         self.lane.mtp_words = pack_mtp(B, tokens, plan).tolist()
         self._run()
 
-    def read_drafts(self, anchor):
+    def read_drafts(self, anchor, group=0):
         result = self.lane.chain.read()
-        assert result.draft_anchor == anchor
+        assert group == 0 and result.draft_anchor == anchor
         return result.drafts
 
 
@@ -112,6 +131,7 @@ class FakeLane:
         self.mesh_device = None
         self.chain = self.spec_chain = FakeChain(self)
         self.mtp = FakeMTP(self)
+        self.dflash = None
         self.verify_sampler = SimpleNamespace(tally=lambda out: None, groups=0, truncated=0)
         self.mtp_words = pack_mtp(B).tolist()
         self.verify_words = self.argmax = None
@@ -196,7 +216,7 @@ def propose(model, committed, positions, counts, num_drafts=MAX_DRAFTS):
 
 def start(model, p):
     """As after a plain decode step of the request alone on lane 1 (slot 0), which committed SEQ[p] at p."""
-    model.spec_sources[1] = DraftSource(row=SPEC_ROW, slots=[0])
+    model.spec_sources[1] = [DraftSource(row=SPEC_ROW, slots=[0])]
     rows = DP * PER_LANE
     committed = torch.full((rows, 1 + MAX_DRAFTS), -1, dtype=torch.int32)
     positions = torch.full((rows, 1 + MAX_DRAFTS), -1, dtype=torch.int32)
@@ -323,7 +343,7 @@ def hidden_of(q, token):
 def accepts(q):
     """Whether the fake target takes the draft after position q (60% of positions, pseudo-random): counts of every
     size."""
-    return random.Random(q).random() < 0.6
+    return SeededRng(q).random() < 0.6
 
 
 class LayersMTP:
@@ -344,14 +364,14 @@ class LayersMTP:
         self.chained += 1
         self._run()
 
-    def enqueue_layers(self, source, tokens, positions, m):
+    def enqueue_layers(self, commits):
         self.planned += 1
-        self.lane.mtp_words = pack_mtp_layers(B, source, tokens, positions, m).tolist()
+        self.lane.mtp_words = pack_mtp_commits(B, commits).tolist()
         self._run()
 
-    def read_drafts(self, anchor):
+    def read_drafts(self, anchor, group=0):
         result = self.lane.chain.read()
-        assert result.draft_anchor == anchor == SPEC_SLOTS - 1
+        assert group == 0 and result.draft_anchor == anchor == SPEC_SLOTS - 1
         return result.drafts
 
 
@@ -505,7 +525,7 @@ def test_the_backfill_runs_where_the_rings_do_not_continue(adapter):
     host-planned on a differing commit) do not. Every verify pass's chain row names its slots' request slot."""
     lane = adapter.models[1]
     lane.mtp.history = object()
-    lane.mtp.enqueue_backfill = lambda slot, a: lane.mtp.backfills.append((slot, a))
+    lane.mtp.enqueue_backfill = lambda slot, a, group=0: lane.mtp.backfills.append((slot, a))
     adapter.chain_check = True
     rows_seen = []
     enqueue = lane.verify_enqueue
@@ -532,3 +552,151 @@ def test_the_backfill_runs_where_the_rings_do_not_continue(adapter):
     # A plain step right after a draft continues the rings: no backfill.
     start(adapter, q + 1)
     assert adapter.chain_stats["backfills"] == 2
+
+
+# ---------------------------------------------------------------------- DFlash drafting (MIMO_SPEC_DECODE=dflash)
+DFLASH = DFlashLayout(ring=64, block=8, heads=2, last=MAX_SEQ_LEN - 1)
+
+
+class FakeDFlash:
+    """TtDFlash's surface: the draft trace on the packed upload the lane holds (the chain step's or the host's). Each
+    context row must be a tap row the lane's last step left at that position; the ring keeps the positions written
+    since ``reset``, which must run without a gap up to the anchor's; the drafts are the oracle's tokens after the
+    anchor (wrong at every third bonus), written by the drafts step."""
+
+    def __init__(self, lane):
+        self.lane, self.last_inputs_s = lane, 0.0
+        self.chained = self.planned = self.resets = 0
+        self.ring = []  # the positions the ring holds, sorted
+        self.head = [0] * B
+
+    def reset(self, group=0):
+        assert group == 0
+        self.resets += 1
+        self.ring = []
+
+    def _run(self):
+        lane, w = self.lane, self.lane.dflash_words
+        for row in range(32):
+            if w[DFLASH.RING_ROWS + row] != DFLASH.ring:
+                pos = w[DFLASH.CONTEXT + row]
+                assert lane.tap_positions[row] == pos, f"tap row {row} holds {lane.tap_positions[row]}, not {pos}"
+                assert w[DFLASH.RING_ROWS + row] == pos % DFLASH.ring
+                self.ring = sorted(set(self.ring) | {pos})
+        self.head = [0] * B
+        if w[1] != 0:
+            start = w[DFLASH.BLOCK]
+            assert w[0] == SEQ[start], "the anchor is the bonus token"
+            below = [q for q in self.ring if q < start]
+            assert below and below == list(range(below[0], start)), f"the ring {self.ring} below the anchor {start}"
+            self.head[:MAX_DRAFTS] = [draft_of(start, k) for k in range(MAX_DRAFTS)]
+        lane.chain.words[DRAFTS_AT:] = dflash_drafts_step(w, self.head, DFLASH)
+
+    def enqueue_chained(self):
+        assert self.lane.rope_tables is not None
+        self.chained += 1
+        self._run()
+
+    def enqueue(self, drafts):
+        self.planned += 1
+        self.lane.dflash_words = dflash_inputs(DFLASH, drafts)
+        self._run()
+
+    def read_drafts(self, group=0):
+        assert group == 0
+        return self.head[:MAX_DRAFTS]
+
+
+class DFlashLane(FakeLane):
+    """FakeLane drafting with DFlash: the taps hold each verify slot's row at its position."""
+
+    def __init__(self):
+        super().__init__()
+        self.mtp, self.dflash = None, FakeDFlash(self)
+        self.dflash_words = dflash_inputs(DFLASH)
+        self.tap_positions = [-1] * B
+
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+        out = super().verify_enqueue(tokens, positions, chain, accept)
+        self.tap_positions = list(self.verify_words[B : 2 * B])
+        return out
+
+    def verify_accept_enqueue(self, slots=None, groups=None):
+        if groups is not None:
+            self.verify_accept_stage(slots, groups)
+        self.accepts += 1
+        accept = verify_pass(None, None, self.argmax, self.ctrl, VOCAB)
+        self.dflash_words, self.chain.words[:DRAFTS_AT] = dflash_chain_step(
+            self.verify_words, accept, self.argmax, DFLASH
+        )
+
+
+@pytest.fixture
+def dflash_adapter():
+    gen = SimpleNamespace(
+        models=[DFlashLane() for _ in range(DP)],
+        dp=DP,
+        users_per_replica=PER_LANE,
+        cfg=SimpleNamespace(vocab_size=VOCAB),
+    )
+    model = MiMoV2ForCausalLM(gen, MAX_SEQ_LEN)
+    model.layer_groups = [0]
+    return model
+
+
+def dflash_start(model, p):
+    """``start`` on a DFlash lane: the plain step's tap row 0 holds position p - 1."""
+    model.models[1].tap_positions[0] = p - 1
+    return start(model, p)
+
+
+@pytest.mark.parametrize("mode", ["argmax_ids", "fused_sample"])
+def test_dflash_greedy_follows_the_oracle_on_chained_drafts(dflash_adapter, mode):
+    """The first draft after a plain step is host-planned and resets the ring; every later one chains behind its
+    verify (its context the verify's committed slots), continues the ring, and is what the propose returns."""
+    lane = dflash_adapter.models[1].dflash
+    p = 200
+    drafts = dflash_start(dflash_adapter, p)
+    assert (lane.planned, lane.resets) == (1, 1) and drafts == [draft_of(p, k) for k in range(MAX_DRAFTS)]
+    seq = SEQ[: p + 1]
+    while len(seq) < 400:
+        before = (lane.chained, lane.planned)
+        committed, positions, counts, _ = verify(dflash_adapter, seq[-1], len(seq) - 1, drafts, mode)
+        m = int(counts[SPEC_ROW])
+        assert committed[SPEC_ROW, :m].tolist() == SEQ[len(seq) : len(seq) + m]
+        assert (lane.chained, lane.planned) == (before[0] + 1, before[1])
+        seq += committed[SPEC_ROW, :m].tolist()
+        drafts = propose(dflash_adapter, committed, positions, counts)
+        assert drafts == [draft_of(len(seq) - 1, k) for k in range(MAX_DRAFTS)]
+    assert seq == SEQ[: len(seq)]
+    assert lane.resets == 1 and lane.ring == list(range(p - 1, len(seq) - 1))
+    assert dflash_adapter.chain_stats["host"] == 1 and dflash_adapter.chain_stats["dflash_resets"] == 1
+
+
+def test_dflash_chain_check_and_a_different_commit(dflash_adapter):
+    """MIMO_SPEC_CHAIN_CHECK re-drafts every chained draft from the host plan (the same ring rows, no reset); a commit
+    other than the device's drafts from the host plan; a plain step past a gap resets the ring."""
+    adapter, lane = dflash_adapter, dflash_adapter.models[1].dflash
+    adapter.chain_check = True
+    p = 1000
+    drafts = dflash_start(adapter, p)
+    seq = SEQ[: p + 1]
+    for _ in range(8):
+        committed, positions, counts, _ = verify(adapter, seq[-1], len(seq) - 1, drafts)
+        seq += committed[SPEC_ROW, : int(counts[SPEC_ROW])].tolist()
+        drafts = propose(adapter, committed, positions, counts)
+    stats = adapter.chain_stats
+    assert stats["checked"] == stats["chained"] == 8 and stats["mismatched"] == 0
+    assert (lane.planned, lane.resets) == (9, 1)
+    adapter.chain_check = False
+    committed, positions, counts, _ = verify(adapter, seq[-1], len(seq) - 1, drafts)
+    m = int(counts[SPEC_ROW])
+    assert m >= 2
+    committed[SPEC_ROW, m - 1] = -1
+    counts[SPEC_ROW] = m - 1
+    drafts = propose(adapter, committed, positions, counts)
+    assert lane.planned == 10 and drafts == [draft_of(len(seq) - 1 + m - 1, k) for k in range(MAX_DRAFTS)]
+    assert lane.resets == 1
+    q = len(seq) + 20
+    dflash_start(adapter, q)
+    assert lane.resets == 2 and lane.ring == [q - 1]
