@@ -37,4 +37,15 @@ struct PortUnit {
         entry(w & 0xFF), half_mask((w >> 8) & 0x3), first_half((w >> 10) & 0x1), slot{(w >> 16) & 0xFF, w >> 24} {}
 };
 
+// Tiles core word `cw` sends for a unit: the slot's P, one sub-block column (narrow_tiles) less on a balanced plan's
+// narrow n-lines (the unit's 16-bit mask per half).
+template <uint32_t P, uint32_t narrow_tiles, uint32_t num_lines>
+FORCE_INLINE uint32_t core_tiles(uint32_t cw, uint32_t narrow) {
+    if constexpr (narrow_tiles > 0) {
+        const uint32_t half = (cw >> 16) & 0xF;
+        return ((narrow >> (16 * half + (cw >> 20) % num_lines)) & 1) ? P - narrow_tiles : P;
+    }
+    return P;
+}
+
 }  // namespace mmrs

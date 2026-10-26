@@ -8,9 +8,10 @@
 // operand fill uses 1, since its windows arrive at DRAM pace); subblock-outer / K-inner, each output subblock
 // accumulates a whole super-block in fp32 DEST and is packed once per super-block (plain pack for the first, packer
 // L1-acc after). The entry's tiles are dense at the front of the P-tile slot (row width = cols); the W window keeps
-// its nominal row stride (win_n). The windows of a super-block stay fronted until its last subblock; a wrapped window
-// is addressed by pointing the UNPACK thread's fifo_rd_ptr at it, and the last subblock pops each window right after
-// consuming it, so the read pointer is exact again at the end.
+// its nominal row stride (win_n), so a balanced plan's narrow entry reads and pops the nominal window. The windows of
+// a super-block stay fronted until its last subblock; a wrapped window is addressed by pointing the UNPACK thread's
+// fifo_rd_ptr at it, and the last subblock pops each window right after consuming it, so the read pointer is exact
+// again at the end.
 //
 // Fused finish: an entry's finish folds into the matmul's last super-block. Each output subblock accumulates its
 // last-super-block matmul in fp32 DEST; the earlier super-blocks' fp32 hold is added in DEST (DEST += hold + 0: an FPU
@@ -247,14 +248,18 @@ void kernel_main() {
                             cw.fifo_rd_ptr = pw;
                         }));
                         // The window's kb inner-dim steps: in0 rows are kb tiles wide, in1 rows win_n.
-                        uint32_t in0_index = sr * sb_h * kb;
-                        uint32_t in1_index = sc * sb_w;
-                        for (uint32_t kk = 0; kk < kb; ++kk) {
-                            ckernel::matmul_block(
-                                cb_act_k_window, cb_weight_k_window, in0_index, in1_index, 0, false, sb_w, sb_h, kb);
-                            ++in0_index;
-                            in1_index += win_n;
-                        }
+                        ckernel::matmul_block_k(
+                            cb_act_k_window,
+                            cb_weight_k_window,
+                            sr * sb_h * kb,
+                            sc * sb_w,
+                            0,
+                            false,
+                            sb_w,
+                            sb_h,
+                            kb,
+                            kb,
+                            win_n);
                         if (last_sb) {  // frees each window as soon as it is consumed (fifo_rd_ptr is exact here)
                             act_buf.pop_front(a_win);
                             weight_buf.pop_front(w_win);

@@ -46,6 +46,8 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(8);
     constexpr uint32_t zone_sets = get_compile_time_arg_val(10);
+    constexpr uint32_t num_lines = get_compile_time_arg_val(11);  // n-lines of the matmul grid (core k's: k mod this)
+    constexpr uint32_t narrow_tiles = get_compile_time_arg_val(12);  // 0: no balanced lines
     constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
     constexpr uint32_t num_headers = group;
     constexpr uint32_t slot_bytes = P * tile_bytes;
@@ -71,7 +73,8 @@ void kernel_main() {
     arg += 2;
     const uint32_t cores_idx = arg;  // the port reader's core and unit words
     const uint32_t units_idx = cores_idx + num_cores;
-    arg = units_idx + num_units;  // fabric connection args follow
+    const uint32_t narrow_idx = units_idx + num_units;
+    arg = narrow_idx + (narrow_tiles > 0 ? num_units : 0);  // fabric connection args follow
 
     if (num_units == 0 && !send_ready && fwd_total == 0) {
         return;
@@ -146,6 +149,7 @@ void kernel_main() {
         }
         forward_poll();
         const mmrs::PortUnit unit(get_arg_val<uint32_t>(units_idx + un));
+        const uint32_t narrow = narrow_tiles > 0 ? get_arg_val<uint32_t>(narrow_idx + un) : 0;
         for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // the reader's walk: first_half's cores first
             const uint32_t hh = unit.first_half ^ (walk >= num_cores ? 1u : 0u);
             const uint32_t i = walk >= num_cores ? walk - num_cores : walk;
@@ -154,7 +158,7 @@ void kernel_main() {
                 continue;
             }
             const uint32_t x = cw & 0xFF, y = (cw >> 8) & 0xFF;
-            const uint32_t tiles = P;
+            const uint32_t tiles = mmrs::core_tiles<P, narrow_tiles, num_lines>(cw, narrow);
             const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
             // the downstream core's arrival ordinal (its half, this direction) on the zone ring
             const uint32_t ordinal = chunk * down_per_chunk[hh] + unit.slot[hh];

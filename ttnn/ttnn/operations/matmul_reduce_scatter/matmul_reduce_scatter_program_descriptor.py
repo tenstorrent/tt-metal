@@ -74,6 +74,7 @@ LOOKAHEAD_AFTER_BARRIER = {"resident": 1, "stream": 0}  # look-ahead reads issue
 READ_NOCS = {"resident": (0, 1), "stream": (0, 0)}  # (A, W) NoC of the matmul reader's DRAM reads
 SENDERS_PER_LINE = {"resident": 2, "stream": 1}  # parts of a K-block window, each read + multicast by its own core
 DEST_TILES_FP32_FULL_SYNC = 8  # DEST capacity with fp32 accumulation + full sync (subblock area cap)
+MAX_BALANCED_LINES = 16  # a port unit carries each half's narrow n-lines as a 16-bit mask
 
 TILE = 32
 HOLD_TILE_BYTES = 4096  # Float32 tile
@@ -266,9 +267,29 @@ def plan_mcast_senders(grid_m, grid_n, a_two_parts, w_two_parts, disjoint):
     return plan
 
 
-def choose_grid(gx, gy, block_m, block_n, L):
-    """(strip, orientation, grid_m, grid_n, core_m, core_n, (sb_h, sb_w)) minimizing the tile-entries of the busiest
-    core, then maximizing the subblock area."""
+def balanced_line_columns(block_n, grid_n, b):
+    """[(origin, width)] of each n-line's columns of block b under balanced n-lines: block_n = grid_n * base + extra,
+    and the `extra` lines one column wider start at line b * extra (mod grid_n), so they rotate by `extra` lines per
+    block and over G blocks no line is wide more than ceil(G * extra / grid_n) times. The partition depends only on
+    (line, block), so every chip's core k holds the same tiles of block b (a partial lands on the core that owns the
+    same output tiles downstream)."""
+    base, extra = divmod(block_n, grid_n)
+    first = b * extra % grid_n
+    out, origin = [], 0
+    for gn in range(grid_n):
+        width = base + int((gn - first) % grid_n < extra)
+        out.append((origin, width))
+        origin += width
+    return out
+
+
+def choose_grid(gx, gy, block_m, block_n, L, G=1, balance_lines=False):
+    """(strip, orientation, grid_m, grid_n, core_m, core_n, (sb_h, sb_w), balanced) minimizing the tile-entries of the
+    busiest core over the G-block walk. balance_lines (scatter -1, one chunk): also consider the n-lines as many as the
+    rectangle has (grid_n = min(ext_n, block_n)) with balanced_line_columns widths, so a block_n that does not split
+    evenly costs one column on a rotating `extra` lines instead of a whole ceil-wide line everywhere (e.g. a 12x9
+    rectangle and a 20x56 block: 8 lines of 7 columns, or 9 lines of 7, 7, 6 x 7 rotating). core_n is then the wide
+    width (the nominal slot / window width)."""
     best = None
     for strip in ("row", "col"):
         strip_len = gx if strip == "row" else gy
@@ -279,43 +300,60 @@ def choose_grid(gx, gy, block_m, block_n, L):
             ext_m, ext_n = (rect[0], rect[1]) if orient == "m_on_x" else (rect[1], rect[0])
             core_m = -(-block_m // min(ext_m, block_m))
             grid_m = -(-block_m // core_m)
-            core_n = -(-block_n // min(ext_n, block_n))
-            grid_n = -(-block_n // core_n)
-            sb = _subblock(core_m, core_n)
-            ragged = grid_m * core_m * grid_n * core_n - block_m * block_n
-            key = (
-                PREFER_PORT_ROW_STRIP and strip != "row",
-                core_m * core_n,
-                -sb[0] * sb[1],
-                ragged,
-                grid_m * grid_n,
-                strip != "row",
-            )
-            cand = dict(
-                strip=strip,
-                orient=orient,
-                grid_m=grid_m,
-                grid_n=grid_n,
-                core_m=core_m,
-                core_n=core_n,
-                sb=sb,
-            )
-            if best is None or key < best[0]:
-                best = (key, cand)
+            n_splits = [(-(-block_n // min(ext_n, block_n)), False)]  # (core_n, balanced)
+            n_lines = min(ext_n, block_n)
+            if balance_lines and block_n % n_lines and n_lines <= MAX_BALANCED_LINES:
+                n_splits.append((-(-block_n // n_lines), True))
+            for core_n, balanced in n_splits:
+                if balanced:
+                    grid_n = n_lines
+                    base, extra = divmod(block_n, n_lines)
+                    # the busiest line's columns over the walk, and the narrow width's subblock (the smaller one)
+                    line_entries = G * base + -(-G * extra // n_lines)
+                    sb = min(_subblock(core_m, base), _subblock(core_m, core_n), key=lambda s: s[0] * s[1])
+                    ragged = (grid_m * core_m - block_m) * block_n
+                else:
+                    grid_n = -(-block_n // core_n)
+                    line_entries = G * core_n
+                    sb = _subblock(core_m, core_n)
+                    ragged = grid_m * core_m * grid_n * core_n - block_m * block_n
+                key = (
+                    PREFER_PORT_ROW_STRIP and strip != "row",
+                    core_m * line_entries,
+                    -sb[0] * sb[1],
+                    balanced,  # at equal work, the uniform split
+                    ragged,
+                    grid_m * grid_n,
+                    strip != "row",
+                )
+                cand = dict(
+                    strip=strip,
+                    orient=orient,
+                    grid_m=grid_m,
+                    grid_n=grid_n,
+                    core_m=core_m,
+                    core_n=core_n,
+                    sb=sb,
+                    balanced=balanced,
+                )
+                if best is None or key < best[0]:
+                    best = (key, cand)
     if best is None:
         raise ValueError(f"matmul_reduce_scatter: no transport strip of the {gx}x{gy} grid fits {2 * L} ports")
     return best[1]
 
 
 class _Grid:
-    """The matmul grid of a plan: logical core and half of (gm, gn), and an entry's columns on an n-line."""
+    """The matmul grid of a plan: logical core and half of (gm, gn), and an entry's columns on an n-line. Shared by the
+    program descriptor and the weight prefetch, whose jobs must land where the descriptor's cores read."""
 
-    def __init__(self, gd, half_split):
-        self.gd = gd
+    def __init__(self, gd, half_split, chunk_n):
+        self.gd, self.chunk_n = gd, chunk_n
         self.grid_m, self.grid_n = gd["grid_m"], gd["grid_n"]
         self.x0, self.y0 = (0, 1) if gd["strip"] == "row" else (0, 0)
         self.half_split = half_split
         self.n_cores = self.grid_m * self.grid_n
+        self._line_cols = {}
 
     def core(self, gm, gn):
         if self.gd["orient"] == "m_on_x":
@@ -339,7 +377,11 @@ class _Grid:
         return 0 if gm * self.grid_n + gn < -(-self.n_cores // 2) else 1
 
     def line_columns(self, gn, b):
-        """(chunk-local column, width) of block b on n-line gn."""
+        """(chunk-local column, width) of block b on n-line gn: the balanced columns, else the line's core_n."""
+        if self.gd["balanced"]:
+            if b not in self._line_cols:
+                self._line_cols[b] = balanced_line_columns(self.chunk_n, self.grid_n, b)
+            return self._line_cols[b][gn]
         return gn * self.gd["core_n"], self.gd["core_n"]
 
 
@@ -422,13 +464,17 @@ def chunk_candidates(block_m, block_n, scatter_dim):
             yield n_m, n_n
 
 
-def plan_chunk_geometry(n_m, n_n, *, G, kind, L, Kt, block_m, block_n, gx, gy, tA, tW, scatter_dim, budget):
+def plan_chunk_geometry(
+    n_m, n_n, *, G, kind, L, Kt, block_m, block_n, gx, gy, tA, tW, scatter_dim, budget, balance_lines=False
+):
     """Grid, regime and schedule for one chunk of chunk_m x chunk_n tiles (the whole block when n_m = n_n = 1). Raises
-    NotImplementedError when the chunk's footprint misses the L1 budget."""
+    NotImplementedError when the chunk's footprint misses the L1 budget. balance_lines: let choose_grid balance the
+    n-lines (scatter -1, unchunked only)."""
     chunk_m, chunk_n = -(-block_m // n_m), -(-block_n // n_n)
     n_m, n_n = -(-block_m // chunk_m), -(-block_n // chunk_n)  # no empty trailing chunk
     zone_sets = 1 if n_m * n_n == 1 else max(1, min(ZONE_SETS, n_m * n_n))
-    gd = choose_grid(gx, gy, chunk_m, chunk_n, L)
+    balance = balance_lines and scatter_dim == -1 and n_m * n_n == 1
+    gd = choose_grid(gx, gy, chunk_m, chunk_n, L, G=G, balance_lines=balance)
     core_m, core_n = gd["core_m"], gd["core_n"]
     if kind == "ring_balanced" and gd["grid_m"] * gd["grid_n"] < 2:
         raise ValueError("matmul_reduce_scatter: a balanced ring needs >= 2 matmul cores (two halves)")
@@ -628,6 +674,209 @@ def prepare_mesh(mesh):
     _mesh_resources(mesh, 0)
 
 
+# ======================================================================================================================
+# Weight prefetch: the first W windows landed by the previous program
+# ======================================================================================================================
+#
+# Entry 0 starts with a fill: every W sender reads its part of window 0 from DRAM, then multicasts it along its line.
+# A program that runs just before this op and has an idle data-movement RISC can land those windows instead, straight
+# into the slots of this op's W CB: program CBs are placed in order from the L1 allocator base (local_cb_layout), so
+# the W CB's address is known before this op's program exists. The jobs
+# (kernel_lib/l1_prefetch_dataflow.hpp) are this op's own entry-0 W reads and multicasts, one job per (window, n-line):
+# one core of the line reads the window into its slot and multicasts it along the line (one sender per line: two
+# senders multicasting into one line at once can hang). Nothing stays allocated between the calls, so the region
+# [l1_begin, l1_end) must stay untouched from the host op's program to this op's (see matmul_reduce_scatter_weight_
+# prefetch). The reader credits the landed windows only if its W CB is where the jobs wrote, and run() passes them
+# only when the call's plan is the one the jobs were made for.
+
+_W_PREFETCH_CACHE = {}  # per mesh: (mesh, {plan key: job tables}); the rows depend on the plan only, not W's address
+
+
+def _w_prefetch_plan(mesh, call, scatter_dim, tA, tW, windows):
+    """(key, W CB address, window bytes) of the jobs that land W windows [0, windows) of the call's entry 0, or None
+    when the plan cannot take them: W resident, a chunked walk, more windows than the first entry has K-blocks, more
+    windows than leave one free CB slot ahead of them, or windows other than 1 (each window's job multicasts into the
+    whole n-line, and two senders multicasting into one line at once can hang). The key names everything the job rows
+    depend on."""
+    pl = call["pl"]
+    gd, kb, Kt = pl["gd"], pl["kb"], call["Kt"]
+    if (pl["resident"] and scatter_dim == -2) or pl["n_m"] * pl["n_n"] != 1:
+        return None
+    w_addr, w_pages, _ = local_cb_layout(mesh, pl, scatter_dim, Kt, tA, tW)[CB_WEIGHT_K_WINDOW]
+    w_win = kb * gd["core_n"] * tW
+    if windows != 1 or windows > min(Kt // kb, w_pages * tW // w_win - 1):
+        return None
+    key = (
+        id(mesh),
+        tuple(tuple(map(tuple, grp)) for grp in call["groups"]),
+        call["kind"],
+        Kt,
+        call["Nt"],
+        call["block_n"],
+        scatter_dim,
+        tA,
+        tW,
+        windows,
+        tuple(sorted(gd.items())),
+        pl["resident"],
+        kb,
+        pl["depths"],
+        pl["depth_hold"],
+        pl["half_split"],
+        pl["chunk_n"],
+        w_addr,
+    )
+    return key, w_addr, w_win
+
+
+def _w_prefetch_rows(mesh, call, windows, w_addr, tW):
+    """(cores, {coord: job rows}) of the planned jobs (job j runs on cores[j]), or None when a line's cores start on
+    different blocks."""
+    pl = call["pl"]
+    kb, Nt, core_n = pl["kb"], call["Nt"], pl["gd"]["core_n"]
+    grid = _Grid(pl["gd"], pl["half_split"], pl["chunk_n"])
+    grid_m, grid_n = grid.grid_m, grid.grid_n
+    w_win = kb * core_n * tW
+    w_col_per_block = call["block_n"] if call["scatter_dim"] == -1 else 0
+    virt = mesh.worker_core_from_logical_core
+    # the line's jobs on cores spread along it (rotated per line, so the DRAM readers spread over the grid)
+    stride = grid_m // windows
+    cores = [grid.core((j * stride + gn) % grid_m, gn) for gn in range(grid_n) for j in range(windows)]
+    rows = {}
+    for grp in call["groups"]:
+        for pos, coord in enumerate(grp):
+            sc = pl["sched"][pos]
+            job_rows = []
+            for gn in range(grid_n):
+                firsts = {sc["entries"][grid.half(gm, gn)][0] for gm in range(grid_m)}
+                if len(firsts) != 1:
+                    return None
+                b = firsts.pop()
+                col, cols = grid.line_columns(gn, b)
+                lo, hi = virt(grid.core(0, gn)), virt(grid.core(grid_m - 1, gn))
+                for s in range(windows):
+                    job_rows.append(
+                        [
+                            s * kb * Nt + b * w_col_per_block + col,  # first page
+                            kb,  # rows (K)
+                            cols,  # tiles per row (N)
+                            Nt,  # source pages per row
+                            w_addr + s * w_win,  # destination
+                            core_n * tW,  # destination bytes per row
+                            w_win,  # bytes multicast
+                            min(lo.x, hi.x),
+                            min(lo.y, hi.y),
+                            max(lo.x, hi.x),
+                            max(lo.y, hi.y),
+                            grid_m - 1,  # receivers: the line but the sender
+                            tW,
+                            0,
+                            0,
+                            0,
+                        ]
+                    )
+            rows[tuple(coord)] = job_rows
+    return cores, rows
+
+
+class WeightPrefetch:
+    """A future matmul_reduce_scatter call's first W windows, as a host op lands them (see weight_prefetch): the tensor
+    to read (source), the per-device job table (jobs), the core of each job (cores[j]) and the L1 range the jobs write
+    ([l1_begin, l1_end)). Pass it to exactly one call as w_prefetch, right after the host op that ran its jobs: no
+    program may run and no L1 buffer may be written in [l1_begin, l1_end) in between."""
+
+    def __init__(self, source, jobs, cores, l1_range, windows, key):
+        self.source, self.jobs, self.cores = source, jobs, cores
+        self.l1_begin, self.l1_end = l1_range
+        self.windows = windows
+        self.key = key  # the plan the jobs were made for (_w_prefetch_plan)
+        self.used = False
+
+
+def weight_prefetch(
+    w, *, a_shape, a_dtype, cluster_axis, scatter_dim, topology, num_links, balance_lines=False, windows=1
+):
+    """A WeightPrefetch of W's first `windows` K-block windows for a later call with A of a_shape / a_dtype and this W
+    (same keywords), or None when its plan cannot take one. The jobs assume the call gets its preferred plan (the one
+    an unbounded L1 budget gives); the call credits the landed windows only when its actual plan is that plan, and
+    otherwise reads them itself."""
+    mesh = w.device()
+    _validate(a_shape, a_dtype, list(w.shape), w.dtype, cluster_axis, scatter_dim, topology)
+    _check_interleaved_tile(w, "weight")
+    M, K = list(a_shape)[-2:]
+    N = list(w.shape)[-1]
+    tA, tW = ttnn.tile_size(a_dtype), int(w.buffer_aligned_page_size())
+    call = _plan_call(
+        mesh,
+        M,
+        K,
+        N,
+        tA,
+        tW,
+        cluster_axis=cluster_axis,
+        scatter_dim=scatter_dim,
+        topology=topology,
+        num_links=num_links,
+        balance_lines=balance_lines,
+        budget=1 << 30,
+    )
+    planned = _w_prefetch_plan(mesh, call, scatter_dim, tA, tW, windows)
+    if planned is None:
+        return None
+    key, w_addr, w_win = planned
+    cached = _W_PREFETCH_CACHE.get(id(mesh))
+    if cached is None or cached[0] is not mesh:
+        cached = _W_PREFETCH_CACHE[id(mesh)] = (mesh, {})
+    tables = cached[1]
+    hit = tables.get(key)
+    if hit is None:
+        got = _w_prefetch_rows(mesh, call, windows, w_addr, tW)
+        if got is None:
+            tables[key] = (None, None)
+            return None
+        cores, rows = got
+        import torch
+
+        R, C = tuple(mesh.shape)
+        table = torch.zeros((R, C, len(cores), 16), dtype=torch.int32)
+        for (r, c), job_rows in rows.items():
+            table[r, c] = torch.tensor(job_rows, dtype=torch.int32)
+        jobs = ttnn.from_torch(
+            table,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, dims=(0, 1), mesh_shape=(R, C)),
+        )
+        hit = tables[key] = (jobs, cores)
+    jobs, cores = hit
+    if jobs is None:
+        return None
+    return WeightPrefetch(w, jobs, cores, (w_addr, w_addr + windows * w_win), windows, key)
+
+
+def _prelanded(w_prefetch, mesh, w, call, scatter_dim, tA, tW):
+    """(windows, W CB address) a weight prefetch landed for this call, or None when its plan is not this call's. Raises
+    when the prefetch is for another weight tensor or was already passed to a call."""
+    if w_prefetch is None:
+        return None
+    src = w_prefetch.source
+    if (
+        int(src.buffer_address()) != int(w.buffer_address())
+        or tuple(src.shape) != tuple(w.shape)
+        or src.dtype != w.dtype
+    ):
+        raise ValueError("matmul_reduce_scatter: w_prefetch was made for another weight tensor")
+    if w_prefetch.used:
+        raise ValueError("matmul_reduce_scatter: a WeightPrefetch lands its windows for one call only")
+    w_prefetch.used = True
+    planned = _w_prefetch_plan(mesh, call, scatter_dim, tA, tW, w_prefetch.windows)
+    if planned is None or planned[0] != w_prefetch.key:
+        return None
+    return w_prefetch.windows, w_prefetch.l1_begin
+
+
 def local_cb_layout(mesh, pl, scatter_dim, Kt, tA, tW):
     """{cb: (address, pages, page bytes)} of the matmul cores' CBs that are not backed by the staging tensor, in the
     order create_mesh_program_descriptor places them up from the L1 allocator base (A, hold, zero, W). `pl` is a plan
@@ -724,9 +973,9 @@ def build_groups(mesh_shape, cluster_axis):
 # ======================================================================================================================
 
 
-def _plan_call(mesh, M, K, N, tA, tW, *, cluster_axis, scatter_dim, topology, num_links):
+def _plan_call(mesh, M, K, N, tA, tW, *, cluster_axis, scatter_dim, topology, num_links, balance_lines, budget=None):
     """Group, links, schedule kind and the chunk / grid / K-block plan of a call (A: M x K, W: K x N, page bytes
-    tA / tW), within the L1 that is free now minus L1_HEADROOM."""
+    tA / tW). budget: the L1 bytes per core the plan may use (None: what is free now, minus L1_HEADROOM)."""
     mesh_shape = tuple(mesh.shape)
     G = mesh_shape[cluster_axis]
     if G < 2:
@@ -764,10 +1013,11 @@ def _plan_call(mesh, M, K, N, tA, tW, *, cluster_axis, scatter_dim, topology, nu
     Mt, Kt, Nt = M // TILE, K // TILE, N // TILE
     block_m, block_n = (Mt // G, Nt) if scatter_dim == -2 else (Mt, Nt // G)
     gx, gy = _full_grid(mesh)
-    budget = _l1_budget(mesh)
-    cached = _MESH_CACHE.get(id(mesh))
-    if cached is not None and cached["mesh"] is mesh and cached["staging"] is not None:
-        budget += cached["staging_tiles"] * STAGE_TILE_BYTES  # our own staging is below the other L1 buffers
+    if budget is None:
+        budget = _l1_budget(mesh)
+        cached = _MESH_CACHE.get(id(mesh))
+        if cached is not None and cached["mesh"] is mesh and cached["staging"] is not None:
+            budget += cached["staging_tiles"] * STAGE_TILE_BYTES  # our own staging is below the other L1 buffers
     plan_args = dict(
         G=G,
         kind=kind,
@@ -781,6 +1031,7 @@ def _plan_call(mesh, M, K, N, tA, tW, *, cluster_axis, scatter_dim, topology, nu
         tW=tW,
         scatter_dim=scatter_dim,
         budget=budget,
+        balance_lines=balance_lines,
     )
     try:
         pl = plan_chunk_geometry(1, 1, **plan_args)  # whatever fits unchunked keeps its plan
@@ -836,7 +1087,11 @@ def run(
     num_links,
     compute_kernel_config,
     memory_config,
+    extra_program=None,
+    extra_tensors=(),
     staging=None,
+    balance_lines=False,
+    w_prefetch=None,
 ):
     mesh = a.device()
     staging = staging or "exact"
@@ -865,9 +1120,11 @@ def run(
         scatter_dim=scatter_dim,
         topology=topology,
         num_links=num_links,
+        balance_lines=balance_lines,
     )
     pl = call["pl"]
     gd = pl["gd"]
+    w_prelanded = _prelanded(w_prefetch, mesh, w, call, scatter_dim, tA, tW)
     _LAST_PLAN.clear()
     _LAST_PLAN.update(
         {
@@ -879,12 +1136,14 @@ def run(
             "hold_depth": pl["depth_hold"],
             "grid": (gd["grid_m"], gd["grid_n"]),
             "strip": gd["strip"],
+            "balanced_lines": gd["balanced"],
             "half_split": pl["half_split"],
             "chunks": (pl["n_m"], pl["n_n"]),
             "chunk_tiles": (pl["chunk_m"], pl["chunk_n"]),
             "zone_sets": pl["zone_sets"],
             "P": pl["P"],
             "footprint_kib": pl["footprint"] // 1024,
+            "w_prelanded": w_prelanded[0] if w_prelanded else 0,
         }
     )
 
@@ -908,8 +1167,12 @@ def run(
         output=output,
         res=res,
         compute_kernel_config=compute_kernel_config,
+        w_prelanded=w_prelanded,
     )
-    result = ttnn.generic_op([a, w, output], create_mesh_program_descriptor(ctx))
+    desc = create_mesh_program_descriptor(ctx)
+    if extra_program is not None:
+        desc = _merge_extra_programs(mesh, desc, extra_program)
+    result = ttnn.generic_op([a, w, *extra_tensors, output], desc)
     if staging == "ephemeral":
         # Free the L1 staging once the program is enqueued: later ops reuse it only after this one finishes, and
         # peers write into it only while this program runs. Keeps it from crowding other ops' static CBs.
@@ -918,9 +1181,49 @@ def run(
     return result
 
 
+def _merge_extra_programs(mesh, desc, extra_program):
+    """A new MeshProgramDescriptor with extra_program((r, c), free_cores) merged onto the cores this op leaves idle.
+
+    free_cores are idle on every device, in the same order: ports sit next to each chip's own Ethernet cores, so
+    each device's idle set differs, and an extra program that signals its peers at its own core coordinates (the
+    KDA final carry) would otherwise hit a port or an unused core on the peer."""
+    gx, gy = _full_grid(mesh)
+    rows, cols = tuple(mesh.shape)
+    keys = {
+        (r, c): ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))
+        for r in range(rows)
+        for c in range(cols)
+    }
+    used = {
+        (x, y)
+        for key in keys.values()
+        for kernel in desc[key].kernels
+        for rng in kernel.core_ranges.ranges()
+        for x in range(rng.start.x, rng.end.x + 1)
+        for y in range(rng.start.y, rng.end.y + 1)
+    }
+    free = [ttnn.CoreCoord(x, y) for x in range(gx) for y in range(gy) if (x, y) not in used]
+    merged = ttnn.MeshProgramDescriptor()
+    for coord, key in keys.items():
+        program = desc[key]
+        extra = extra_program(coord, free)
+        merged[key] = program if extra is None else ttnn.merge_program_descriptors([program, extra])
+    return merged
+
+
 # ======================================================================================================================
 # Program descriptors
 # ======================================================================================================================
+
+
+def _row_mop_defines(mesh, a, w):
+    """MM_ROW_MOP on Blackhole with full 32x32 operand tiles (as the C++ matmul factories'
+    add_row_mop_define_if_supported): the math runs one MOP per reuse row of a subblock instead of one per output
+    tile, bit-identical (same MVMULs, order and DEST rows)."""
+    full = all(tuple(t.get_tile().tile_shape) == (ttnn.TILE_SIZE, ttnn.TILE_SIZE) for t in (a, w))
+    if mesh.arch() != ttnn.Arch.BLACKHOLE or not full:
+        return []
+    return [("MM_ROW_MOP", "1")]
 
 
 def _peers(grp, p, ring):
@@ -1005,7 +1308,12 @@ def _port_args(ctx, transport, receivers, grid, p, grp, d, l, ports_of, link_hal
         for k, (gm, gn, c) in enumerate(grid.cores())
         if k % L == l
     ]
-    units = []
+    core_n = ctx["gd"]["core_n"]
+
+    def narrow_mask(b):  # the n-lines sending one column less of block b
+        return sum(1 << gn for gn in range(grid.grid_n) if grid.line_columns(gn, b)[1] < core_n)
+
+    units, narrow = [], []
     for e in range(G):
         blk = {h: sc["entries"][h][e] for h in (0, 1)}
         mask = sum(1 << h for h in link_halves[l] if sc["roles"][(blk[h], h)][0] == d)
@@ -1016,13 +1324,15 @@ def _port_args(ctx, transport, receivers, grid, p, grp, d, l, ports_of, link_hal
         s0 = down["arrivals"][(0, d)].index(blk[0]) if mask & 1 else 0
         s1 = down["arrivals"][(1, d)].index(blk[1]) if mask & 2 else 0
         units.append(e | (mask << 8) | (h1_first << 10) | (s0 << 16) | (s1 << 24))
+        if ctx["gd"]["balanced"]:  # per unit, half 0 / half 1
+            narrow.append(narrow_mask(blk[0]) | (narrow_mask(blk[1]) << 16))
     res = ctx["res"]
     staging_addr = int(res["staging"].buffer_address())
     arr_addr, ready_addr, credit_addr = (
         int(ttnn.get_global_semaphore_address(res["sems"][i])) for i in ((0 if d == "fwd" else 1), 2, 3)
     )
     reader = [staging_addr, int(res["mailbox"].buffer_address()), 0 if d == "fwd" else 1, len(core_words), len(units)]
-    reader += core_words + units
+    reader += core_words + units + narrow
     # ready fence: the peer's opposite port sends into this chip; tell it this chip has started
     opp = "bwd" if d == "fwd" else "fwd"
     send_ready = int(any(down["roles"][(b, h)][0] == opp for b in range(G) for h in link_halves[l]))
@@ -1051,7 +1361,7 @@ def _port_args(ctx, transport, receivers, grid, p, grp, d, l, ports_of, link_hal
         len(down["arrivals"][(0, d)]),  # downstream arrivals per chunk, half 0 / half 1
         len(down["arrivals"][(1, d)]),
     ]
-    sender += core_words + units
+    sender += core_words + units + narrow
     return reader, sender
 
 
@@ -1062,7 +1372,7 @@ def create_mesh_program_descriptor(ctx):
     scatter_dim, resident, slots = ctx["scatter_dim"], ctx["resident"], ctx["slots"]
     a, w, output, res = ctx["a"], ctx["w"], ctx["output"], ctx["res"]
     virt = mesh.worker_core_from_logical_core
-    grid = _Grid(gd, ctx["half_split"])
+    grid = _Grid(gd, ctx["half_split"], ctx["chunk_n"])
     mm_cores = grid.cores()  # k = row-major index
     mm_crs = grid.crs()
 
@@ -1170,9 +1480,18 @@ def create_mesh_program_descriptor(ctx):
         num_chunks,
         G,  # entries per chunk
         zone_sets,
+        grid_n,  # n-lines (core k's: k mod grid_n), which the per-unit narrow masks index
+        core_m if gd["balanced"] else 0,  # tiles a narrow n-line sends less (one sub-block column)
     ]
 
     src = ttnn.KernelDescriptor.SourceType.FILE_PATH
+    reader_defines = []
+    if ctx.get("w_prelanded"):
+        # the first W windows are already in their slots if the W CB is where the weight prefetch wrote them
+        reader_defines += [
+            ("MRS_W_PRELANDED", str(ctx["w_prelanded"][0])),
+            ("MRS_W_PRELANDED_ADDR", str(ctx["w_prelanded"][1])),
+        ]
     dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(
         processor=getattr(ttnn.DataMovementProcessor, risc), noc=noc
     )
@@ -1196,7 +1515,8 @@ def create_mesh_program_descriptor(ctx):
         core_ranges=crs,
         format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=page_bytes)],
     )
-    # placed in local_cb_layout's order up from the allocator base
+    # placed in local_cb_layout's order up from the allocator base: the weight prefetch addresses the W windows from
+    # it, the reader checks it
     local_formats = {
         CB_ACT_K_WINDOW: a.dtype,
         CB_PARTIAL_HOLD: ttnn.float32,
@@ -1243,7 +1563,7 @@ def create_mesh_program_descriptor(ctx):
                 core_ranges=mm_crs,
                 compile_time_args=reader_ct,
                 runtime_args=r_rt,
-                defines=[],
+                defines=reader_defines,
                 config=dm("RISCV_1", NOC0),
             )
             compute = ttnn.KernelDescriptor(
@@ -1252,7 +1572,7 @@ def create_mesh_program_descriptor(ctx):
                 core_ranges=mm_crs,
                 compile_time_args=compute_ct,
                 runtime_args=c_rt,
-                defines=[],
+                defines=_row_mop_defines(mesh, a, w),
                 config=compute_cfg,
             )
             writer = ttnn.KernelDescriptor(

@@ -5,11 +5,12 @@
 //
 // Port (direction d, link l) forwards, in entry order, the units (entry, core halves) whose role on this chip is
 // start(d) or relay(d), restricted to its cores (link(k) == l). Per core of a unit: wait the core's mailbox slot (one
-// increment per (core, unit)), NoC-read its finished sub-block (P tiles, dense at the front of slot entry mod
-// depth_handoff of the core's cb_finished) in chunks of chunk_tiles into cb_port_chunks, then ack the core
-// (consumed_d) once the read barrier covering its last chunk returned. A batch ends at a multiple of `group` chunks in
-// the CB (2 group chunks, so a reservation never wraps), at the end of a unit, and before any blocking mailbox wait (no
-// ack is held while waiting). At the end every mailbox slot is restored to 0 (all increments of this call have landed).
+// increment per (core, unit)), NoC-read its finished sub-block (P tiles, one sub-block column less on a balanced
+// plan's narrow n-lines; dense at the front of slot entry mod depth_handoff of the core's cb_finished) in chunks of
+// chunk_tiles into cb_port_chunks, then ack the core (consumed_d) once the read barrier covering its last chunk
+// returned. A batch ends at a multiple of `group` chunks in the CB (2 group chunks, so a reservation never wraps), at
+// the end of a unit, and before any blocking mailbox wait (no ack is held while waiting). At the end every mailbox
+// slot is restored to 0 (all increments of this call have landed).
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -26,6 +27,8 @@ void kernel_main() {
     constexpr uint32_t max_cores = get_compile_time_arg_val(7);       // matmul cores this port serves (upper bound)
     constexpr uint32_t num_chunks = get_compile_time_arg_val(8);      // the unit walk repeats once per output chunk
     constexpr uint32_t entries_per_chunk = get_compile_time_arg_val(9);
+    constexpr uint32_t num_lines = get_compile_time_arg_val(11);  // n-lines of the matmul grid (core k's: k mod this)
+    constexpr uint32_t narrow_tiles = get_compile_time_arg_val(12);  // 0: no balanced lines
     constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
 
     uint32_t arg = 0;
@@ -34,8 +37,9 @@ void kernel_main() {
     const uint32_t consumed_id = get_arg_val<uint32_t>(arg++);
     const uint32_t num_cores = get_arg_val<uint32_t>(arg++);
     const uint32_t num_units = get_arg_val<uint32_t>(arg++);
-    const uint32_t cores_idx = arg;                    // per core: a core word (matmul_reduce_scatter_common.hpp)
-    const uint32_t units_idx = cores_idx + num_cores;  // per unit: a unit word
+    const uint32_t cores_idx = arg;                     // per core: a core word (matmul_reduce_scatter_common.hpp)
+    const uint32_t units_idx = cores_idx + num_cores;   // per unit: a unit word
+    const uint32_t narrow_idx = units_idx + num_units;  // balanced plans, per unit: half 0 / 1 narrow n-line masks
     const uint32_t consumed_addr = get_semaphore(consumed_id);
     ASSERT(num_cores <= max_cores);
 
@@ -69,6 +73,7 @@ void kernel_main() {
         // the producing core's cb_finished slot: its global entry index (chunk-major) mod the handoff depth
         const uint32_t slot_off =
             (((ug / num_units) * entries_per_chunk + unit.entry) % depth_handoff) * P * tile_bytes;
+        const uint32_t narrow = narrow_tiles > 0 ? get_arg_val<uint32_t>(narrow_idx + u) : 0;
         for (uint32_t walk = 0; walk < 2 * num_cores; ++walk) {  // halves in unit order (first_half first)
             const uint32_t hh = unit.first_half ^ (walk >= num_cores ? 1u : 0u);
             const uint32_t i = walk >= num_cores ? walk - num_cores : walk;
@@ -76,7 +81,7 @@ void kernel_main() {
             if (!((unit.half_mask >> hh) & 1) || ((cw >> 16) & 0xF) != hh) {
                 continue;
             }
-            const uint32_t tiles = P;
+            const uint32_t tiles = mmrs::core_tiles<P, narrow_tiles, num_lines>(cw, narrow);
             const uint32_t chunks_per_core = (tiles + chunk_tiles - 1) / chunk_tiles;
             volatile tt_l1_ptr uint32_t* mbox =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_base + (cw >> 20) * mailbox_stride);

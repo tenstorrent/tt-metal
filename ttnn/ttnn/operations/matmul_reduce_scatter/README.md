@@ -66,7 +66,9 @@ started before sending into it).
   mirrored orders and split along the streamed operand's multicast lines, so each entry sends half a block each way.
   An entry whose arrival is produced at the same index upstream finishes behind the next entry's matmul (lag).
 - **Grid** (`choose_grid`): strip, orientation and `core_m x core_n` minimizing the busiest core's tile-entries over
-  the walk, then subblock area.
+  the walk, then subblock area. With `balance_lines` (`scatter_dim=-1`) a block whose columns do not split evenly may
+  use every n-line with widths that rotate per block (`balanced_line_columns`); the partition depends only on (line,
+  block), so a partial always lands on the core that owns the same tiles.
 - **K-block and regime** (`choose_k_block`, `super_block_plan`): resident with the largest `kb | Kt` that fits (>=
   `min(Kt, 8)`), else stream (the cross-block operand re-read every entry); then the 2-window super-block if its deeper
   windows fit. The footprint counts operand windows, hold slots, the staging slice and the zero tile.
@@ -85,17 +87,34 @@ L1 tensor with the same address on every chip, backing `cb_finished` and the arr
 | CB | Pages | Notes |
 |---|---|---|
 | 0 `cb_act_k_window` | resident A: `core_m Kt`; else depth x `core_m kb` | A dtype |
-| 1 `cb_weight_k_window` | resident W: `Kt core_n`; else depth x `kb core_n` | W dtype |
+| 1 `cb_weight_k_window` | resident W: `Kt core_n`; else depth x `kb core_n` | W dtype; the weight prefetch target |
 | 2 `cb_partial_hold` | `depth_hold P` (`P = core_m core_n`) | fp32; 2 slots only when an entry lags |
 | 3 `cb_finished` | `2 P` | bf16, staging offset 0 (ports read it remotely) |
 | 4 / 5 `cb_arrivals_fwd / _bwd` | zone slots x `P` | bf16, staging; written by the upstream port |
 | 6 `cb_port_chunks` | `2 x 4` chunks | port cores |
 | 7 `cb_zero` | 1 | srcB of the fused finish's `DEST += hold + 0` |
 
-CBs 0, 2, 7 and 1 are placed in that order up from the L1 allocator base (`local_cb_layout`).
+CBs 0, 2, 7 and 1 are placed in that order up from the L1 allocator base (`local_cb_layout`), so the W CB's address is
+known before the program exists.
+
+## Weight prefetch
+
+`matmul_reduce_scatter_weight_prefetch(A shape, A dtype, W, ...)` plans the call ahead (with an unbounded L1 budget)
+and returns a `WeightPrefetch`: per-device jobs that land W's first K-block windows exactly where this op's W CB will
+be (`[l1_begin, l1_end)`), for the program just before it to run on an idle data-movement RISC
+(`kernel_lib/l1_prefetch_dataflow.hpp`). One job per (window, n-line): a core of the line
+reads the window into its slot and multicasts it along the line, one sender per line. The host op's program ends only
+after every multicast landed, so no semaphore is needed.
+
+Contract (on `matmul_reduce_scatter_weight_prefetch`): nothing is allocated for the region, so between the host op
+and this call no other program may run on the mesh and no L1 buffer may be allocated in the region and written. The
+host op checks that the region is free while it runs. This op checks what it can: the prefetch is for its weight
+tensor and is used once (else ValueError); its plan is the one the jobs were made for (else it reads the windows
+itself); and its reader credits the landed windows only if the W CB is at `l1_begin`.
 
 ## Limits
 
 - Sharded inputs or output: not supported (the readers address A and W through TensorAccessor).
 - `2 L` ports must fit the transport strip; a balanced ring needs at least two matmul cores.
 - A shape that misses L1 even split into 256 chunks raises NotImplementedError.
+- `balance_lines` applies to `scatter_dim=-1`, unchunked plans, at most 16 n-lines.
