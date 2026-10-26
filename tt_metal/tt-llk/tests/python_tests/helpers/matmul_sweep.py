@@ -118,7 +118,7 @@ def matmul_pack_form(
     """Output pack form of the Blackhole matmul kernels, the rule ttnn's matmul kernels apply at compile time
     (llk_matmul_block_pack): 0 per tile, 1 one block run, 2 the closed block (block-float outputs and small tiles)."""
     small = in0_tile_r_dim < 32 or in1_tile_c_dim < 32
-    if rt_dim * ct_dim < 2 or (math_fidelity == MathFidelity.LoFi and kt_dim > 1):
+    if rt_dim * ct_dim < 2 or (math_fidelity == MathFidelity.LoFi and kt_dim > 1 and dest_sync != DestSync.Full):
         return 0
     if dest_sync == DestSync.Half and (
         math_fidelity != MathFidelity.LoFi
