@@ -4,10 +4,11 @@
 
 // Sol-Attn block-pooling pre-pass, compute. See sol_pool_reader.cpp for the unit decomposition.
 // Per unit: O[n] = sum over the group's tile rows k of P[k] @ X[k, n] (DT output tiles accumulated in fp32 DST), with
-// P[k] delivered by the reader per row (zero past the valid end); groups without tile rows output zero tiles.
+// P[k] delivered by the reader in batches of 4 rows alongside the data (zero past the valid end); groups without tile
+// rows output zero tiles. Unit order and per-core ranges: sol_pool_units.hpp.
 //
-// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 R. Per-core runtime args: none (unit range from the core's logical
-// coordinates).
+// Compile-time args: 0 H, 1 RT, 2 DT, 3 NBPT, 4 R, 5 NX, 6 NY, 7 UNITS. Per-core runtime args: none (unit range from the
+// core's logical coordinates).
 
 #include <cstdint>
 
@@ -17,14 +18,17 @@
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#include "sol_pool_units.hpp"
 
 namespace {
 constexpr uint32_t cb_x = 0, cb_ps = 2, cb_zero = 3, cb_out = 16;
-constexpr uint32_t BLOCK = 64;
+constexpr uint32_t BLOCK = sol_pool::BLOCK;
+constexpr uint32_t ROWS_PER_BATCH = 4;
 inline uint32_t min_u(uint32_t a, uint32_t b) { return a < b ? a : b; }
 }  // namespace
 
 void kernel_main() {
+    constexpr uint32_t H = get_compile_time_arg_val(0);
     constexpr uint32_t RT = get_compile_time_arg_val(1);
     constexpr uint32_t DT = get_compile_time_arg_val(2);
     constexpr uint32_t NBPT = get_compile_time_arg_val(3);
@@ -33,11 +37,12 @@ void kernel_main() {
     constexpr uint32_t NX = get_compile_time_arg_val(5);
     constexpr uint32_t NY = get_compile_time_arg_val(6);
     constexpr uint32_t UNITS = get_compile_time_arg_val(7);
-    // Unit range of this core from its logical coordinates (no per-core runtime args): units [ci*U/N, (ci+1)*U/N).
     constexpr uint32_t NCORES = NX * NY;
+    using Layout = sol_pool::Layout<H, RT, NBPT>;
+    static_assert(Layout::UNITS == UNITS, "host unit count must match the kernel layout");
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
-    const uint32_t unit_start = ci * UNITS / NCORES;
-    const uint32_t unit_count = (ci + 1) * UNITS / NCORES - unit_start;
+    uint32_t unit_start, unit_count;
+    Layout::range(ci, NCORES, unit_start, unit_count);
     if (unit_count == 0) {
         return;
     }
@@ -47,7 +52,7 @@ void kernel_main() {
     cbz.wait_front(1);
 
     for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
-        const uint32_t g = u % NBPT;
+        const uint32_t g = Layout::decode(u).g;
         const uint32_t k_begin = g * BLOCK;
         const uint32_t k_end = min_u(k_begin + BLOCK, RT);
 
@@ -59,17 +64,17 @@ void kernel_main() {
             }
         } else {
             matmul_init(cb_ps, cb_x);
-            for (uint32_t k0 = k_begin; k0 < k_end; k0 += 4) {
-                const uint32_t nk = min_u(4, k_end - k0);
-                cbx.wait_front(4 * DT);  // full batches, see the reader
+            for (uint32_t k0 = k_begin; k0 < k_end; k0 += ROWS_PER_BATCH) {
+                const uint32_t nk = min_u(ROWS_PER_BATCH, k_end - k0);
+                cbx.wait_front(ROWS_PER_BATCH * DT);  // full batches, see the reader
+                cbps.wait_front(ROWS_PER_BATCH);
                 for (uint32_t kk = 0; kk < nk; ++kk) {
-                    cbps.wait_front(1);
                     for (uint32_t n = 0; n < DT; ++n) {
-                        matmul_tiles(cb_ps, cb_x, 0, kk * DT + n, n);
+                        matmul_tiles(cb_ps, cb_x, kk, kk * DT + n, n);
                     }
-                    cbps.pop_front(1);
                 }
-                cbx.pop_front(4 * DT);
+                cbps.pop_front(ROWS_PER_BATCH);
+                cbx.pop_front(ROWS_PER_BATCH * DT);
             }
         }
         tile_regs_commit();

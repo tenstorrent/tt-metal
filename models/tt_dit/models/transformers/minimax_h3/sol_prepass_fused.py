@@ -363,11 +363,15 @@ class SolPrepassFused:
         acc_in = [a for _ in range(3) for a in ttnn.TensorAccessorArgs(x).get_compile_time_args()]
         acc_in += list(ttnn.TensorAccessorArgs(geo_t).get_compile_time_args())
         acc_out = [a for o in outs for a in ttnn.TensorAccessorArgs(o).get_compile_time_args()]
+        # Reader pipeline (sol_pool_reader.cpp): batches of 4 tile rows, three batches resident in cb 0 (data) and cb 2
+        # (pooling tiles) so two can be in flight on the NoC while compute consumes the third; cb 5 holds the 32
+        # standard pooling tiles built once per core.
         cbs = [
-            self._cb(0, 32, cores),
-            self._cb(2, 8, cores),
+            self._cb(0, 3 * 4 * DT, cores),
+            self._cb(2, 3 * 4, cores),
             self._cb(3, 1, cores),
             self._cb(4, 1, cores, page_size=128, dtype=ttnn.uint32),
+            self._cb(5, 32, cores),
             self._cb(16, 2 * DT, cores),
         ]
         reader = self._kernel(
