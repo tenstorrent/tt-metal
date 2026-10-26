@@ -23,7 +23,7 @@ struct ScratchpadSpec {
     // - When tile_format_metadata is set, the data_format_metadata must also be set.
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
-    // Invariant: allow_instance_multi_binding is supported only on Gen1 (WH/BH).
+    // Invariant: on Gen2 (Quasar), multi-binding on a node is permitted only between DM kernels.
     ScratchpadAdvancedOptions advanced_options;
 };
 ```

@@ -291,6 +291,11 @@ struct ScratchpadAdvancedOptions {
     // Multi-binding a scratchpad instance is UNSAFE in most circumstances.
     // Scratchpad provides no synchronization; kernel logic must explicitly ensure
     // access safety and synchronization.
+    //
+    // Note:
+    // On Gen2 (Quasar), only DM kernel instances may share a node's scratchpad.
+    // DM cores and Compute cores have cache coherency misalignment that currently
+    // lacks ways to synchronize. See: #62551
     bool allow_instance_multi_binding = false;
 };
 

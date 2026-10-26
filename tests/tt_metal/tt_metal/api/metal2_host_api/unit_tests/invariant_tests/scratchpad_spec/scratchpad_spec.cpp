@@ -25,6 +25,8 @@ namespace {
 
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
+using test_helpers::MakeMinimalGen2ComputeKernel;
+using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ProgramSpecTestBlackhole;
@@ -133,21 +135,77 @@ void CheckSharedScratchpad(distributed::MeshDevice& device, ProgramSpec spec) {
 TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadDMAndComputeFails) {
     EXPECT_THAT(
         [&] { CheckSharedScratchpad(*mesh_device_, MakeMinimalValidProgramSpec()); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only supported on Gen1")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only between DM kernels on Gen2")));
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadMultiBindingFlagWithSingleBinderFails) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadMultiBindingFlagWithSingleBinderSucceeds) {
+    for (size_t binder_index : {0u, 1u}) {
+        ProgramSpec spec = MakeMinimalValidProgramSpec();
+        spec.scratchpads = {ScratchpadSpec{
+            .unique_id = ScratchpadSpecName{"pad"},
+            .size_per_node = 1024,
+            .advanced_options = {.allow_instance_multi_binding = true},
+        }};
+        // A single DM or compute binder does not share memory with another kernel.
+        spec.kernels[binder_index].scratchpad_bindings = {
+            {.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
+        EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    }
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadBetweenDMKernelsSucceeds) {
+    ProgramSpec spec;
+    spec.name = "shared_scratchpad_dm_only";
+    spec.kernels = {MakeMinimalGen2DMKernel("dm_a"), MakeMinimalGen2DMKernel("dm_b")};
     spec.scratchpads = {ScratchpadSpec{
         .unique_id = ScratchpadSpecName{"pad"},
         .size_per_node = 1024,
         .advanced_options = {.allow_instance_multi_binding = true},
     }};
-    spec.kernels[0].scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
+    }
+    spec.work_units = {MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_a", "dm_b"})};
 
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    auto dm_a = program.impl().get_kernel_by_spec_name("dm_a");
+    auto dm_b = program.impl().get_kernel_by_spec_name("dm_b");
+    const auto& a = dm_a->scratchpad_binding_handles().at(0);
+    const auto& b = dm_b->scratchpad_binding_handles().at(0);
+    EXPECT_NE(a.allocated_address, 0u);
+    EXPECT_EQ(a.allocated_address, b.allocated_address);
+    EXPECT_EQ(dm_a->common_runtime_args_data()[a.addr_crta_word], a.allocated_address);
+    EXPECT_EQ(dm_b->common_runtime_args_data()[b.addr_crta_word], a.allocated_address);
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadGen2RestrictionIsPerNode) {
+    ProgramSpec spec;
+    spec.name = "shared_scratchpad_per_node";
+    spec.kernels = {
+        MakeMinimalGen2DMKernel("dm_a"),
+        MakeMinimalGen2DMKernel("dm_b"),
+        MakeMinimalGen2ComputeKernel("compute"),
+    };
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+        .advanced_options = {.allow_instance_multi_binding = true},
+    }};
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
+    }
+    spec.work_units = {
+        MakeMinimalWorkUnit("dm_work", NodeCoord{0, 0}, {"dm_a", "dm_b"}),
+        MakeMinimalWorkUnit("compute_work", NodeCoord{1, 0}, {"compute"}),
+    };
+    // Sharing on node 0 is DM-only; the compute kernel has a private instance on node 1.
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+
+    // Extending one DM kernel onto node 1 introduces unsafe DM/compute sharing there.
+    spec.work_units[1].kernels.push_back(KernelSpecName{"dm_a"});
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only supported on Gen1")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only between DM kernels on Gen2")));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadAllocationAndReallocation) {

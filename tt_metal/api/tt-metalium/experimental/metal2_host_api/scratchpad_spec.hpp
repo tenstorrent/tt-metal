@@ -30,8 +30,9 @@ namespace tt::tt_metal::experimental {
 //
 // KERNEL BINDING: By default, a scratchpad instance is private to a single kernel
 //   instance. More than one KernelSpec may bind the same ScratchpadSpec when their
-//   node sets are disjoint. On Gen1 (WH/BH), advanced_options.allow_instance_multi_binding
-//   also permits overlapping node sets; this option is rejected on Gen2 (Quasar).
+//   node sets are disjoint. Setting advanced_options.allow_instance_multi_binding
+//   also permits overlapping node sets. On Gen2 (Quasar), all kernels sharing a node's
+//   scratchpad must be DM kernels; Gen1 (WH/BH) also permits compute kernels to share.
 //
 // LIFETIME: Program-scope. The backing memory is allocated for the Program's
 //   execution lifetime, alongside DFBs (and from the same region of L1).
