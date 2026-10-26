@@ -587,7 +587,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         qWt,            // num tile in inner dim in query/key (d_qk/TILE_W)
         vWt,            // num tile in inner dim in value (d_v/TILE_W)
         St,             // num_seq_len / TILE_H
-        scaler,         // sqrt(Et) - sdpa scaler factor
+        scaler,         // 1/sqrt(d) softmax scale, fp32 bits
         minus_one,      // used to transform mask from 1/0 to 0/-1
         custom_inf,     // used to transform mask from 0/-1 to 0/-1e9F
         Sk_chunk_t,     // K/V tiles per inner-loop step
