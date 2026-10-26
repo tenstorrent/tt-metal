@@ -173,7 +173,9 @@ constexpr bool llk_matmul_block_pack() {
         constexpr bool small_tile = pack_tile_num_faces[output] != 4 || pack_tile_face_r_dim[output] != FACE_R_DIM ||
                                     pack_partial_face[output] != 0;
         constexpr bool float32_out = static_cast<DataFormat>(pack_dst_format[output]) == DataFormat::Float32;
-        return math_fidelity == MathFidelity::LoFi && !(small_tile && float32_out);
+        // HiFi2 with one K tile: the per-tile pack is on the critical path for small tiles and Float32 outputs
+        constexpr bool hifi2_one_k = math_fidelity == MathFidelity::HiFi2 && kt_per_section == 1 && (small_tile || float32_out);
+        return (math_fidelity == MathFidelity::LoFi || hifi2_one_k) && !(small_tile && float32_out);
     }
 }
 
