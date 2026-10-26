@@ -46,6 +46,21 @@ enumeration (expert ascending, 32 routed rows per pass) and the same LPT expert 
 Exactness: the same products (BF16 x BFP8, HiFi2) and fp32 accumulation as the ``sparse_matmul`` block, the expert
 sum in fp32 (the slab path sums BF16 tiles), the routing weight as one BF16 x BF16 product per element (bit-exact
 with the multiply it replaces). ``golden`` is the torch reference on the bfp8-rounded weights.
+
+E1 variants of the block ops (decode roofline action E1, 2026-10-26; every one behind a constructor flag defaulting to
+today's program, selected in ``tt/moe.py`` by ``GLM53_STREAM_FOLD`` / ``GLM53_STREAM_SCAN`` / ``GLM53_STREAM_FUSED``):
+
+* ``routing_fold``: the kernels take the router's FULL ``[1, 1, 32, E_total]`` routing matrix plus a per-chip 32 B
+  uint16 page holding the chip's column base (``fold_base_tensor``) and scan the window of tiles covering their E
+  experts themselves (``kernels/routing_scan.hpp`` ``fold_*``), which removes the per-column selector matmul of
+  ``tt/moe.py`` (a 0/1 identity block at HiFi4: reading the columns is bit-identical to multiplying by it).
+* ``scan_words``: the word-wise active-expert scan (``scan_active_words``: 8 word loads per zero face row instead of
+  16 element loads with index arithmetic) in all four block kernels -- the per-launch prelude before any weight read.
+* ``fused`` (``ExpertStreamFused``): gate|up and down in ONE generic op, the down cores placed first next to their
+  banks and the gate|up cores around them; the gate|up writers count their expert's tile arrivals into 4-bit slots of
+  per-group semaphores on every down core (``fused_semaphores``), the down writer polls the slot of the expert it
+  loads next: the down stream of expert e overlaps the gate|up stream of the later experts and one launch replaces
+  two (the down op's prelude -- routing read, scan, mailbox -- no longer waits for the gate|up op to end).
 """
 
 from __future__ import annotations
@@ -56,6 +71,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.glm53_flash.custom_ops.expert_stream.plan import fused_core_plan, fused_semaphores
 
 KERNEL_DIR = Path(
     os.environ.get("GLM53_STREAM_KERNEL_DIR", "") or Path(__file__).parent / "kernels"
@@ -277,6 +293,32 @@ def ep_base_tensor(base: int, device, mesh_mapper=None):
     return ttnn.from_torch(t, dtype=ttnn.uint16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, mesh_mapper=mesh_mapper)
 
 
+def fold_base_host(cols: int, E_local: int) -> torch.Tensor:
+    """Host: the per-column expert base of the selector fold as a ``[1, cols, 1, 16]`` int32 tensor (column c's
+    page holds ``c * E_local`` at element 0; sharded over the mesh columns by the caller: ``GLMMesh.upload(...,
+    cols=1, layout=ROW_MAJOR)``)."""
+    t = torch.zeros(1, cols, 1, 16, dtype=torch.int32)
+    for c in range(cols):
+        t[0, c, 0, 0] = c * E_local
+    return t
+
+
+def fold_base_tensor(col_base: int, device):
+    """One chip: the ``[1, 1, 1, 16]`` uint16 ROW_MAJOR base page of the selector fold (``routing_fold``)."""
+    return ep_base_tensor(col_base, device)
+
+
+def fold_window(col_base: int, E_local: int) -> tuple[int, int, int]:
+    """(first tile, column offset inside it, tiles read) of the fold window: the kernels' ``fold_first_tile`` /
+    ``fold_col_off`` / ``fold_tiles`` (host mirror for the tests and the planner)."""
+    return col_base >> 5, col_base & 31, ((col_base & 31) + E_local + 31) >> 5
+
+
+def fold_r_tiles(E_local: int) -> int:
+    """The worst-case fold window in tiles (the kernels' compile-time ``R_TILES`` and the routing CB's pages)."""
+    return (E_local + 62) // 32
+
+
 def mesh_rows(device) -> int:
     """Rows of the mesh a device handle spans (1 on a single chip). The EP row-major dispatch delivers
     ``rows * T_users`` rows per chip in mesh-row order, which the reduce-scatter combine's output chunks split back."""
@@ -310,17 +352,20 @@ class _BankStreamOp:
     DRAM bank, from the bank's optimal NOC0 worker core outwards (same row first, then the rows above / below), each
     with a NOC virtual channel distinct from earlier cores on its row; coalesced into core ranges."""
 
-    def __init__(self, device, readers: int):
+    def __init__(self, device, readers: int, exclude: set[tuple[int, int]] | None = None):
+        """``exclude``: logical (x, y) cores another kernel set of the same program occupies (the fused op places
+        its down cores first, then the gate|up cores around them); ``None`` = today's placement exactly."""
         self.device = device
         self.banks = device.dram_grid_size().x
         self.readers = readers
         bank_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
         assert len(bank_workers) == self.banks, (len(bank_workers), self.banks)
         grid = device.compute_with_storage_grid_size()
-        used = {(c.x, c.y) for c in bank_workers}
+        exclude = set(exclude or ())
+        used = {(c.x, c.y) for c in bank_workers} | exclude
         placed = []
         for bank, core in enumerate(bank_workers):
-            cores = [core]
+            cores = [] if (core.x, core.y) in exclude else [core]
             # candidates by distance: same row first, then neighbouring rows
             cands = sorted(
                 ((abs(x - core.x) + 4 * abs(y - core.y), x, y) for y in range(grid.y) for x in range(grid.x)),
@@ -344,6 +389,16 @@ class _BankStreamOp:
         self.cores = ttnn.CoreRangeSet([ttnn.CoreRange(self.assignments[0][0], self.assignments[0][0])])
         for c, *_ in self.assignments[1:]:
             self.cores = self.cores.merge(ttnn.CoreRangeSet([ttnn.CoreRange(c, c)]))
+        self.core_set = {(c.x, c.y) for c, *_ in self.assignments}  # logical coords (the fused op's exclusion set)
+
+    def noc_xy(self) -> list[int]:
+        """The cores' NOC coordinates packed ``x << 16 | y`` (``worker_core_from_logical_core``: the translated
+        coordinates a kernel hands ``get_noc_addr``), in assignment order."""
+        out = []
+        for c, *_ in self.assignments:
+            n = self.device.worker_core_from_logical_core(c)
+            out.append((int(n.x) << 16) | int(n.y))
+        return out
 
     def _cb(self, index: int, dtype, page: int, pages: int) -> ttnn.CBDescriptor:
         return ttnn.CBDescriptor(
@@ -352,25 +407,30 @@ class _BankStreamOp:
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=page)],
         )
 
-    def _program(
+    def _kernels(
         self,
         name: str,
-        cbs,
         reader_ct,
         reader_rt,
         writer_ct,
         writer_rt,
         compute_ct,
         fidelity=ttnn.MathFidelity.HiFi2,
-    ) -> ttnn.ProgramDescriptor:
+        defines=(),
+    ) -> list:
+        """The three kernel descriptors of one streaming program on this placement's cores. ``defines``: the E1
+        preprocessor variants of the data-movement kernels (``("ROUTING_FOLD", "1")`` ...); empty = today's kernels
+        (a kernel descriptor without defines is today's descriptor)."""
         dm = ttnn.DataMovementConfigDescriptor
-        kernels = [
+        extra = {"defines": [tuple(d) for d in defines]} if defines else {}
+        return [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / f"reader_{name}.cpp"),
                 core_ranges=self.cores,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_0),
+                **extra,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / f"writer_{name}.cpp"),
@@ -378,6 +438,7 @@ class _BankStreamOp:
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
                 config=dm(processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_1),
+                **extra,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / f"compute_{name}.cpp"),
@@ -389,6 +450,20 @@ class _BankStreamOp:
                 ),
             ),
         ]
+
+    def _program(
+        self,
+        name: str,
+        cbs,
+        reader_ct,
+        reader_rt,
+        writer_ct,
+        writer_rt,
+        compute_ct,
+        fidelity=ttnn.MathFidelity.HiFi2,
+        defines=(),
+    ) -> ttnn.ProgramDescriptor:
+        kernels = self._kernels(name, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, fidelity, defines)
         return ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
 
 
@@ -402,14 +477,39 @@ def _down_readers(C: int, seg_tiles: int) -> int:
 
 
 # ---------------------------------------------------------------------------------------------------- block ops
+def _e1_defines(routing_fold: bool, scan_words: bool, fused: str | None = None) -> list[tuple[str, str]]:
+    """The preprocessor defines of the E1 kernel variants (empty = today's kernels)."""
+    d = []
+    if routing_fold:
+        d.append(("ROUTING_FOLD", "1"))
+    if scan_words:
+        d.append(("SCAN_WORDS", "1"))
+    if fused:
+        d.append((fused, "1"))
+    return d
+
+
 class ExpertGateUpStream(_BankStreamOp):
     """(x, routing, w13, act) -> act. x [1, 1, 32, K] BF16 TILE (M <= 32 token rows, zero-padded); routing
     [1, 1, 32, E] BF16 TILE; w13: ``upload_stream_weights(gate_up_stream_layout(...))``; act [1, E, 32, I] BF16
     TILE (written at the active experts' tiles). ``groups`` = cores per bank = how many experts stream in
-    parallel; the activation (K / 32 tiles, 256 KB at K = 4096) stays resident on every core."""
+    parallel; the activation (K / 32 tiles, 256 KB at K = 4096) stays resident on every core.
+    ``routing_fold``: routing = the router's full [1, 1, 32, E_total] matrix and ``__call__`` takes the chip's
+    ``base`` page (``fold_base_tensor``); ``scan_words``: the word-wise scan; both default off (today's program)."""
 
-    def __init__(self, device, E: int, K: int, I: int, groups: int = 12, w_dtype=ttnn.bfloat8_b):
-        super().__init__(device, groups)
+    def __init__(
+        self,
+        device,
+        E: int,
+        K: int,
+        I: int,
+        groups: int = 12,
+        w_dtype=ttnn.bfloat8_b,
+        routing_fold: bool = False,
+        scan_words: bool = False,
+        exclude: set[tuple[int, int]] | None = None,
+    ):
+        super().__init__(device, groups, exclude=exclude)
         self.E, self.K, self.I = E, K, I
         self.kt = K // TILE
         self.i_tiles = I // TILE
@@ -422,23 +522,32 @@ class ExpertGateUpStream(_BankStreamOp):
         self.col_bytes = self.kt * self.w_tile
         self.expert_stride = 2 * self.ppb * self.col_bytes
         self.page_bytes = _packet_bytes(self.kt, self.w_tile)
+        self.routing_fold, self.scan_words = bool(routing_fold), bool(scan_words)
 
-    def __call__(self, x, routing, w13, act):
-        cb_x, cb_w, cb_r0, cb_r1, cb_d, cb_h, cb_out = 0, 1, 2, 3, 4, 5, 16
+    def descriptors(self, x, routing, w13, act, base=None, cb=(0, 1, 2, 3, 4, 5, 16), fused_rt=None):
+        """(cbs, kernels) of the gate|up program. ``cb``: the CB indices (x, w, r0, r1, d, h, out); ``fused_rt``:
+        the FUSED_SIGNAL runtime tail of the writer (``ExpertStreamFused``)."""
+        cb_x, cb_w, cb_r0, cb_r1, cb_d, cb_h, cb_out = cb
+        assert (base is not None) == self.routing_fold, "routing_fold takes the chip's base page"
         e_tiles = -(-self.E // TILE)
+        r_pages = fold_r_tiles(self.E) + 1 if self.routing_fold else e_tiles  # + the base page
         cbs = [
             self._cb(cb_x, ttnn.bfloat16, BF16_TILE_BYTES, self.kt),
             self._cb(cb_w, self.w_dtype, self.w_tile, 3 * self.kt),
-            self._cb(cb_r0, ttnn.bfloat16, BF16_TILE_BYTES, e_tiles),
-            self._cb(cb_r1, ttnn.bfloat16, BF16_TILE_BYTES, e_tiles),
+            self._cb(cb_r0, ttnn.bfloat16, BF16_TILE_BYTES, r_pages),
+            self._cb(cb_r1, ttnn.bfloat16, BF16_TILE_BYTES, r_pages),
             self._cb(cb_d, ttnn.bfloat16, BF16_TILE_BYTES, 2),
             self._cb(cb_h, ttnn.bfloat16, BF16_TILE_BYTES, 2),
             self._cb(cb_out, ttnn.bfloat16, BF16_TILE_BYTES, 2),
         ]
+        base_rt = [base.buffer_address()] if self.routing_fold else []
+        tail = list(fused_rt or [])
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
-            reader_rt[core.x][core.y] = [w13.buffer_address(), routing.buffer_address(), bank, vc, r]
-            writer_rt[core.x][core.y] = [x.buffer_address(), routing.buffer_address(), act.buffer_address(), bank, r]
+            reader_rt[core.x][core.y] = [w13.buffer_address(), routing.buffer_address(), bank, vc, r] + base_rt
+            writer_rt[core.x][core.y] = (
+                [x.buffer_address(), routing.buffer_address(), act.buffer_address(), bank, r] + base_rt + tail
+            )
         reader_ct = [
             cb_w,
             cb_r0,
@@ -455,9 +564,18 @@ class ExpertGateUpStream(_BankStreamOp):
         writer_ct = [cb_x, cb_r1, cb_d, cb_out, self.kt, self.E, TILE, self.groups, self.i_tiles, self.ppb]
         for t in (x, routing, act):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        if self.routing_fold:  # the base page accessor, after today's blocks (the kernels index it last)
+            reader_ct += ttnn.TensorAccessorArgs(base).get_compile_time_args()
+            writer_ct += ttnn.TensorAccessorArgs(base).get_compile_time_args()
         compute_ct = [cb_x, cb_w, cb_d, cb_h, cb_out, self.kt, self.ppb]
-        program = self._program("gate_up", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
-        ttnn.generic_op([w13, x, routing, act], program)
+        defines = _e1_defines(self.routing_fold, self.scan_words, "FUSED_SIGNAL" if fused_rt is not None else None)
+        kernels = self._kernels("gate_up", reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, defines=defines)
+        return cbs, kernels
+
+    def __call__(self, x, routing, w13, act, base=None):
+        cbs, kernels = self.descriptors(x, routing, w13, act, base=base)
+        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+        ttnn.generic_op([w13, x, routing, act] + ([base] if base is not None else []), program)
         return act
 
 
@@ -465,15 +583,26 @@ class ExpertDownStream(_BankStreamOp):
     """(act, routing, w2, out) -> out. act [1, E, 32, I] BF16 TILE (the gate|up stream's output), routing as above,
     w2: ``upload_stream_weights(down_stream_layout(...))``, out [1, 1, 32, H] BF16 TILE DRAM (the expert sum).
     ``readers`` cores per bank split the bank's C = H / 32 / banks output columns (cols = C / readers <= 8;
-    None = the fewest readers whose expert block fits, ``_down_readers``)."""
+    None = the fewest readers whose expert block fits, ``_down_readers``). ``routing_fold`` / ``scan_words`` as the
+    gate|up op."""
 
-    def __init__(self, device, E: int, I: int, H: int, readers: int | None = None):
+    def __init__(
+        self,
+        device,
+        E: int,
+        I: int,
+        H: int,
+        readers: int | None = None,
+        routing_fold: bool = False,
+        scan_words: bool = False,
+        exclude: set[tuple[int, int]] | None = None,
+    ):
         banks = device.dram_grid_size().x
         self.seg_tiles = I // TILE
         self.C = H // TILE // banks
         if readers is None:
             readers = _down_readers(self.C, self.seg_tiles)
-        super().__init__(device, readers)
+        super().__init__(device, readers, exclude=exclude)
         self.E, self.I, self.H = E, I, H
         assert self.C % readers == 0, f"{self.C} columns per bank do not split over {readers} readers"
         self.cols = self.C // readers
@@ -482,26 +611,43 @@ class ExpertDownStream(_BankStreamOp):
         self.block_tiles = self.cols * self.seg_tiles
         self.page_bytes = _packet_bytes(self.seg_tiles)
         self.bank_expert_stride = self.C * self.seg_bytes
+        self.routing_fold, self.scan_words = bool(routing_fold), bool(scan_words)
 
-    def __call__(self, act, routing, w2, out):
-        cb_a, cb_w, cb_r0, cb_r1, cb_out = 0, 1, 2, 3, 16
+    def descriptors(self, act, routing, w2, out, base=None, cb=(0, 1, 2, 3, 16), fused_rt=None):
+        """(cbs, kernels) of the down program. ``cb``: (a, w, r0, r1, out); ``fused_rt``: the FUSED_WAIT runtime
+        tail of the writer (``ExpertStreamFused``)."""
+        cb_a, cb_w, cb_r0, cb_r1, cb_out = cb
+        assert (base is not None) == self.routing_fold, "routing_fold takes the chip's base page"
         e_tiles = -(-self.E // TILE)
+        r_pages = fold_r_tiles(self.E) + 1 if self.routing_fold else e_tiles
         cbs = [
             self._cb(cb_a, ttnn.bfloat16, BF16_TILE_BYTES, 2 * self.seg_tiles),
             self._cb(cb_w, ttnn.bfloat8_b, BFP8_TILE_BYTES, 3 * self.block_tiles),
-            self._cb(cb_r0, ttnn.bfloat16, BF16_TILE_BYTES, e_tiles),
-            self._cb(cb_r1, ttnn.bfloat16, BF16_TILE_BYTES, e_tiles),
+            self._cb(cb_r0, ttnn.bfloat16, BF16_TILE_BYTES, r_pages),
+            self._cb(cb_r1, ttnn.bfloat16, BF16_TILE_BYTES, r_pages),
             self._cb(cb_out, ttnn.bfloat16, BF16_TILE_BYTES, self.cols),
         ]
+        base_rt = [base.buffer_address()] if self.routing_fold else []
+        tail = list(fused_rt or [])
         reader_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for core, bank, r, vc in self.assignments:
-            reader_rt[core.x][core.y] = [w2.buffer_address(), routing.buffer_address(), bank, vc, r * self.cols]
-            writer_rt[core.x][core.y] = [
+            reader_rt[core.x][core.y] = [
+                w2.buffer_address(),
                 routing.buffer_address(),
-                act.buffer_address(),
-                out.buffer_address(),
-                bank * self.C + r * self.cols,
-            ]
+                bank,
+                vc,
+                r * self.cols,
+            ] + base_rt
+            writer_rt[core.x][core.y] = (
+                [
+                    routing.buffer_address(),
+                    act.buffer_address(),
+                    out.buffer_address(),
+                    bank * self.C + r * self.cols,
+                ]
+                + base_rt
+                + tail
+            )
         reader_ct = [
             cb_w,
             cb_r0,
@@ -517,14 +663,106 @@ class ExpertDownStream(_BankStreamOp):
         writer_ct = [cb_r1, cb_a, cb_out, self.seg_tiles, self.E, TILE, self.cols]
         for t in (routing, act, out):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        if self.routing_fold:
+            reader_ct += ttnn.TensorAccessorArgs(base).get_compile_time_args()
+            writer_ct += ttnn.TensorAccessorArgs(base).get_compile_time_args()
         compute_ct = [cb_a, cb_w, cb_out, self.seg_tiles, self.cols]
-        program = self._program("down", cbs, reader_ct, reader_rt, writer_ct, writer_rt, compute_ct)
-        ttnn.generic_op([w2, act, routing, out], program)
+        defines = _e1_defines(self.routing_fold, self.scan_words, "FUSED_WAIT" if fused_rt is not None else None)
+        kernels = self._kernels("down", reader_ct, reader_rt, writer_ct, writer_rt, compute_ct, defines=defines)
+        return cbs, kernels
+
+    def __call__(self, act, routing, w2, out, base=None):
+        cbs, kernels = self.descriptors(act, routing, w2, out, base=base)
+        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+        ttnn.generic_op([w2, act, routing, out] + ([base] if base is not None else []), program)
         return out
 
 
+class ExpertStreamFused:
+    """The chip's routed-expert block as ONE generic op (E1 (b)): the gate|up kernels on ``groups`` cores per bank
+    and the down kernels on ``down_readers`` cores per bank (placed first, nearest their banks; disjoint sets),
+    synchronised per expert through the arrival-counter semaphores (``plan.fused_semaphores``: group g's k-th expert
+    = 4-bit slot k % 7 of semaphore ``g * sems_per_group + k // 7``, counted to ``banks`` by the gate|up writers,
+    polled by the down writer: kernels/writer_gate_up.cpp FUSED_SIGNAL, kernels/writer_down.cpp FUSED_WAIT). The
+    gate|up and down core counts come from ``plan.fused_core_plan`` unless given (12 + 2 per bank on the 13x10
+    grid, 6 + 2 on 8x8). Same numerics as ``ExpertStream`` (the same compute kernels, the same per-expert math)."""
+
+    SEM_BASE = 0
+
+    def __init__(
+        self,
+        device,
+        E: int,
+        K: int,
+        I: int,
+        H: int,
+        groups: int | None = None,
+        down_readers: int | None = None,
+        w13_dtype=ttnn.bfloat8_b,
+        routing_fold: bool = False,
+        scan_words: bool = False,
+    ):
+        grid = device.compute_with_storage_grid_size()
+        banks = device.dram_grid_size().x
+        plan = fused_core_plan((grid.x, grid.y), E, I, H, banks=banks, groups=groups, down_readers=down_readers)
+        self.groups, self.down_readers = plan["groups"], plan["down_readers"]
+        self.sems_per_group, self.n_sems = fused_semaphores(self.groups, E)
+        self.down = ExpertDownStream(
+            device, E, I, H, self.down_readers, routing_fold=routing_fold, scan_words=scan_words
+        )
+        self.gate_up = ExpertGateUpStream(
+            device,
+            E,
+            K,
+            I,
+            self.groups,
+            w_dtype=w13_dtype,
+            routing_fold=routing_fold,
+            scan_words=scan_words,
+            exclude=self.down.core_set,
+        )
+        assert not (self.gate_up.core_set & self.down.core_set), "fused placement: the two kernel sets overlap"
+        self.E, self.K, self.I, self.H = E, K, I, H
+        self.banks = banks
+        self.down_xy = self.down.noc_xy()
+
+    alloc = None  # set below (shared with ExpertStream)
+
+    def forward(self, x, routing, w13, w2, act, out, base=None):
+        gu_cbs, gu_kernels = self.gate_up.descriptors(
+            x,
+            routing,
+            w13,
+            act,
+            base=base,
+            cb=(0, 1, 2, 3, 4, 5, 16),
+            fused_rt=[len(self.down_xy), self.SEM_BASE, self.sems_per_group] + self.down_xy,
+        )
+        dn_cbs, dn_kernels = self.down.descriptors(
+            act,
+            routing,
+            w2,
+            out,
+            base=base,
+            cb=(8, 9, 10, 11, 17),
+            fused_rt=[self.groups, self.SEM_BASE, self.sems_per_group, self.banks],
+        )
+        sems = [
+            ttnn.SemaphoreDescriptor(self.SEM_BASE + i, ttnn.CoreType.WORKER, self.down.cores, 0)
+            for i in range(self.n_sems)
+        ]
+        program = ttnn.ProgramDescriptor(kernels=gu_kernels + dn_kernels, semaphores=sems, cbs=gu_cbs + dn_cbs)
+        ttnn.generic_op([w13, w2, x, routing, act, out] + ([base] if base is not None else []), program)
+        return out
+
+    __call__ = forward
+    golden = staticmethod(expert_stream_golden)
+
+
 class ExpertStream:
-    """The chip's routed-expert block as the two streaming ops: ``forward(x, routing, act, out)``."""
+    """The chip's routed-expert block as the two streaming ops: ``forward(x, routing, act, out)``. ``fused`` runs
+    ``ExpertStreamFused`` (one program) instead; ``routing_fold`` / ``scan_words`` select the E1 kernel variants
+    (``forward`` then takes the chip's ``base`` page)."""
 
     def __init__(
         self,
@@ -536,9 +774,36 @@ class ExpertStream:
         groups: int = 12,
         down_readers: int | None = None,
         w13_dtype=ttnn.bfloat8_b,
+        routing_fold: bool = False,
+        scan_words: bool = False,
+        fused: bool = False,
+        fused_groups: int | None = None,
+        fused_down_readers: int | None = None,
     ):
-        self.gate_up = ExpertGateUpStream(device, E, K, I, groups, w_dtype=w13_dtype)
-        self.down = ExpertDownStream(device, E, I, H, down_readers)
+        self.fused = bool(fused)
+        self.routing_fold = bool(routing_fold)
+        if self.fused:
+            self.fused_op = ExpertStreamFused(
+                device,
+                E,
+                K,
+                I,
+                H,
+                groups=fused_groups,
+                down_readers=fused_down_readers,
+                w13_dtype=w13_dtype,
+                routing_fold=routing_fold,
+                scan_words=scan_words,
+            )
+            self.gate_up, self.down = self.fused_op.gate_up, self.fused_op.down
+        else:
+            self.fused_op = None
+            self.gate_up = ExpertGateUpStream(
+                device, E, K, I, groups, w_dtype=w13_dtype, routing_fold=routing_fold, scan_words=scan_words
+            )
+            self.down = ExpertDownStream(
+                device, E, I, H, down_readers, routing_fold=routing_fold, scan_words=scan_words
+            )
         self.E, self.K, self.I, self.H = E, K, I, H
 
     def alloc(self, device, act_l1: bool = False):
@@ -556,13 +821,18 @@ class ExpertStream:
         )
         return act, out
 
-    def forward(self, x, routing, w13, w2, act, out):
-        self.gate_up(x, routing, w13, act)
-        self.down(act, routing, w2, out)
+    def forward(self, x, routing, w13, w2, act, out, base=None):
+        if self.fused_op is not None:
+            return self.fused_op.forward(x, routing, w13, w2, act, out, base=base)
+        self.gate_up(x, routing, w13, act, base=base)
+        self.down(act, routing, w2, out, base=base)
         return out
 
     __call__ = forward
     golden = staticmethod(expert_stream_golden)  # (x [M,K], routing [M,E], w13 [E,K,2I], w2 [E,I,H]) -> (act, y)
+
+
+ExpertStreamFused.alloc = ExpertStream.alloc
 
 
 # ---------------------------------------------------------------------------------------------------- dispatch ops

@@ -51,14 +51,21 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (
     ExpertDispatch,
     ExpertStream,
     down_stream_layout,
+    fold_base_host,
     gate_up_stream_layout,
     stream_memory_config,
 )
 from models.demos.glm53_flash.custom_ops.expert_stream.plan import (
     contiguous_placement,
+    e1_stream_knobs,
+    experts_32row_mode,
+)
+from models.demos.glm53_flash.custom_ops.expert_stream.plan import fmt as _fmt_dtype
+from models.demos.glm53_flash.custom_ops.expert_stream.plan import (
     load_placement,
     placement_hash,
     placement_perm,
+    plan_for_32row,
     plan_from_env,
 )
 from models.demos.glm53_flash.custom_ops.router_topk.op import RouterTopk
@@ -115,6 +122,28 @@ def stream_experts_default(dense_experts: bool, env=None) -> bool:
     if value is None:
         return not dense_experts
     return value == "1"
+
+
+# E1 (c), 2026-10-26: the 32-users/row expert form. ``GLM53_EXPERTS_32ROW=dense`` (default) keeps today's rule
+# (``GLM53_DENSE_EXPERTS=1`` = the dense one-pass layout, 1198 us per layer at 256 users); ``dispatch`` / ``units``
+# select the STREAM layout whatever ``GLM53_DENSE_EXPERTS`` / ``GLM53_STREAM_EXPERTS`` say, so the 256-user
+# configuration runs the stream dispatch ops at 33..256 gathered tokens (every active expert's weights read once,
+# 779 us measured at 58 active on the chip test) with the per-core plan sized by ``plan_for_32row`` (``units``: the
+# pair-unit kernels, a split that exists at ppb > 1 only, i.e. the (2,4) block's 1024-wide slices). Decode at
+# T <= 32 and prefill keep their stream-layout paths (block op; ``prefill_experts_for``).
+def expert_layout_from_env(env=None) -> tuple[bool, bool, str]:
+    """(dense, stream, 32-row mode) of the routed experts from the env (``TtMoE.__init__`` /
+    ``expert_cache_complete``)."""
+    env = os.environ if env is None else env
+    mode = experts_32row_mode(env)
+    if mode == "dense":
+        dense = env.get("GLM53_DENSE_EXPERTS", "0") == "1"
+        return dense, stream_experts_default(dense, env), mode
+    if env.get("GLM53_DENSE_EXPERTS", "0") == "1":
+        logger.info(
+            f"GLM53_EXPERTS_32ROW={mode}: the stream layout replaces GLM53_DENSE_EXPERTS=1 (dispatch ops at 33..256 tokens)"
+        )
+    return False, True, mode
 
 
 # Hybrid-layout row glue at T < 32 users per row (decode ledger / roofline H1 + H2, 2026-10-26; both default to today's
@@ -811,6 +840,21 @@ class TtRoutedExperts(LightweightModule):
             self.stream_dispatch = os.environ.get("GLM53_STREAM_DISPATCH", "1") == "1"
             self.dispatch_ops = {}
             self.dispatch_shapes = (E_loc, H, I_loc, H)
+            # E1 knobs (2026-10-26, custom_ops/expert_stream/plan.py e1_stream_knobs; all default off = today's
+            # programs): GLM53_STREAM_FOLD=1 folds the per-column selector matmul into the kernels (they read the
+            # column window of the router's full routing matrix through the per-chip base page below) and lets the
+            # compact gather tilize x straight into L1 (no copy op); GLM53_STREAM_SCAN=words = the word-wise active
+            # scan; GLM53_STREAM_FUSED=1 = gate|up + down in one program (ExpertStreamFused)
+            e1 = e1_stream_knobs(os.environ)
+            self.stream_fold, self.stream_scan_words, self.stream_fused = (
+                e1["routing_fold"],
+                e1["scan_words"],
+                e1["fused"],
+            )
+            self.experts_32row = experts_32row_mode(os.environ)
+            down_readers = (
+                int(os.environ["GLM53_STREAM_DOWN_READERS"]) if os.environ.get("GLM53_STREAM_DOWN_READERS") else None
+            )  # auto: 2 at I_loc = 256, 4 at 1024, 8 at 2048
             self.stream_op = ExpertStream(
                 device,
                 E_loc,
@@ -818,10 +862,22 @@ class TtRoutedExperts(LightweightModule):
                 I_loc,
                 H,
                 groups=int(os.environ.get("GLM53_STREAM_GROUPS", "12")),
-                down_readers=int(os.environ["GLM53_STREAM_DOWN_READERS"])
-                if os.environ.get("GLM53_STREAM_DOWN_READERS")
-                else None,  # auto: 2 at I_loc = 256, 4 at 1024, 8 at 2048
+                down_readers=down_readers,
                 w13_dtype=expert_dtype,
+                routing_fold=self.stream_fold,
+                scan_words=self.stream_scan_words,
+                fused=self.stream_fused,
+                fused_groups=int(os.environ["GLM53_STREAM_FUSED_GROUPS"])
+                if os.environ.get("GLM53_STREAM_FUSED_GROUPS")
+                else None,
+                fused_down_readers=down_readers,
+            )
+            # the selector fold's per-chip base page: column c's experts start at c * E_local (a 32 B uint16 page,
+            # sharded over the mesh columns, replicated over the rows; 0 on one chip)
+            self.stream_base = (
+                self.mesh.upload(fold_base_host(ep, E_loc), ttnn.uint16, cols=1, layout=ttnn.ROW_MAJOR_LAYOUT)
+                if self.stream_fold
+                else None
             )
         elif dense:
             shape13 = (1, ep, H, tpr * E_loc * I_loc)
@@ -1001,16 +1057,41 @@ class TtRoutedExperts(LightweightModule):
         """One token block (<= 32 rows) through the streaming generic ops: the column selector matmul (on a
         multi-column mesh), the gate|up stream, the down stream. xb [1,1,M,H] bf16 (M = 32: a tile row),
         dense_w [1,1,M,E] -> [1,1,32,H]."""
-        if self.select is not None:
+        base = None
+        if self._fold_serves(dense_w):
+            base = self.stream_base  # E1 (a): the kernels read this column's window of the full routing matrix
+        elif self.select is not None:
             dense_w = ttnn.matmul(dense_w, self.select_bf16, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)
         elif dense_w.dtype != ttnn.bfloat16:
             dense_w = ttnn.typecast(dense_w, ttnn.bfloat16)
         if self.stream_x_l1 and not xb.is_sharded() and xb.memory_config().buffer_type != ttnn.BufferType.L1:
             xb = ttnn.to_memory_config(xb, ttnn.L1_MEMORY_CONFIG)  # the 96 gate|up cores re-read x: L1 is cheaper
         act, out = self.stream_op.alloc(self.device, act_l1=self.stream_act_l1)
-        self.stream_op.forward(xb, dense_w, self.w13, self.w2, act, out)
+        self.stream_op.forward(xb, dense_w, self.w13, self.w2, act, out, base=base)
         ttnn.deallocate(act)
         return out
+
+    def _fold_serves(self, dense_w: ttnn.Tensor) -> bool:
+        """E1 (a): the selector fold applies to a bf16 routing matrix over all E experts (the fused router's decode
+        output; the composite router's fp32 matrix keeps the selector matmul, which also casts it). A function of
+        the knob and the static dtype / shape: trace-safe."""
+        return (
+            self.stream_fold
+            and self.stream_base is not None
+            and dense_w.dtype == ttnn.bfloat16
+            and dense_w.shape[-1] == self.E
+        )
+
+    def _stream_x_into_l1(self, T_gathered: int) -> bool:
+        """E1 (a): with the fold on, the compact row gather tilizes x straight into L1 for the block op (the
+        ``to_memory_config`` copy op disappears: ``_block_stream`` finds x in L1 already)."""
+        return (
+            self.stream
+            and self.stream_fold
+            and self.stream_x_l1
+            and T_gathered <= TILE
+            and self._stream_serves(T_gathered)
+        )
 
     def _dispatch_op(self, T: int):
         """The dispatch ops for T gathered tokens (one program per T, cached). ``GLM53_EXPERT_PLAN`` (item (d),
@@ -1023,9 +1104,26 @@ class TtRoutedExperts(LightweightModule):
                 w13_dtype=self.expert_dtype,
             )
             plan = plan_from_env(os.environ, E_loc, I_loc)
+            mode = getattr(self, "experts_32row", "dense")
+            if plan is None and mode != "dense":
+                # E1 (c): GLM53_EXPERTS_32ROW=dispatch | units without an explicit GLM53_EXPERT_PLAN: the per-core plan
+                # of the 32-users/row point (the roofline planner at T gathered tokens, units when asked)
+                plan = plan_for_32row(
+                    self.grid,
+                    E_loc,
+                    I_loc,
+                    H,
+                    T=T,
+                    w13=_fmt_dtype(self.expert_dtype),
+                    w2=_fmt_dtype(self.expert_down_dtype),
+                    units=mode == "units",
+                    roofline=os.environ.get("GLM53_EXPERT_PLAN", "legacy") == "roofline",
+                )
             if plan is not None:
                 kw.update(plan.op_kwargs())
                 logger.info(f"hybrid dispatch op T={T}: expert plan {plan.op_kwargs()}")
+            if mode == "units":
+                kw["units"] = True
             self.dispatch_ops[T] = ExpertDispatch(self.device, E_loc, K, I_loc, H, T, **kw)
         return self.dispatch_ops[T]
 
@@ -1457,7 +1555,7 @@ class TtRoutedExperts(LightweightModule):
         )
         if self.mesh.rows > 1:
             if compact_gather:
-                x = self._gather_rows_compact(x)
+                x = self._gather_rows_compact(x, l1=self._stream_x_into_l1(self.mesh.rows * T))
                 dense_w = self._gather_rows_compact(dense_w)
             else:
                 x = self.mesh.all_gather_rows(x, dim=2)
@@ -1479,18 +1577,22 @@ class TtRoutedExperts(LightweightModule):
         return y
 
     # ------------------------------------------------------- decode row glue at T < 32 (H1 / H2 knobs)
-    def _gather_rows_compact(self, t: ttnn.Tensor) -> ttnn.Tensor:
+    def _gather_rows_compact(self, t: ttnn.Tensor, l1: bool = False) -> ttnn.Tensor:
         """``all_gather_rows(t, dim=2)`` of a [1,1,T,W] bf16 TILE decode tensor (T < 32) on its T real rows only:
         untilize to ROW_MAJOR (T pages of 2 W bytes: 8 KB for x, 576 B for the [T, 288] routing, both 64 B
         aligned), gather the pages over the rows (ttnn's composite on a row-major input = one ``all_broadcast`` of
         the compact pages + one row-major ``concat``, no untilize / tilize per piece), tilize once WITH ZERO PADDING
         (the expert op multiplies the padded rows: a NaN there would poison the routing-weighted zero). Rows ordered
         by mesh row (row r's token t at row r*T + t), exactly today's padded gather; 4 device ops per tensor instead
-        of 5 and 8x fewer bytes on the links at T = 4. Trace-safe: device ops on the step's tensors only."""
+        of 5 and 8x fewer bytes on the links at T = 4. Trace-safe: device ops on the step's tensors only. ``l1``
+        (E1 (a)): the tilize writes L1 interleaved, the stream block op's input placement, so its copy op goes."""
         rm = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
         g_rm = self.mesh.all_gather_rows(rm, dim=2)  # [1,1,rows*T,W] ROW_MAJOR
         ttnn.deallocate(rm)
-        g = ttnn.tilize_with_zero_padding(g_rm, use_multicore=True)
+        if l1:
+            g = ttnn.tilize_with_zero_padding(g_rm, memory_config=ttnn.L1_MEMORY_CONFIG, use_multicore=True)
+        else:
+            g = ttnn.tilize_with_zero_padding(g_rm, use_multicore=True)
         ttnn.deallocate(g_rm)
         return g
 
@@ -1999,10 +2101,12 @@ class TtMoE(LightweightModule):
         default since 2026-10-26); ``None`` reads ``GLM53_STREAM_EXPERTS`` through ``stream_experts_default``
         (unset = stream unless the dense layout is selected, ``0`` = the sparse block op, ``1`` = stream)."""
         self.cfg = cfg
-        if dense_experts is None:
-            dense_experts = os.environ.get("GLM53_DENSE_EXPERTS", "0") == "1"
-        if stream_experts is None:
-            stream_experts = stream_experts_default(dense_experts)
+        if dense_experts is None or stream_experts is None:
+            env_dense, env_stream, mode32 = expert_layout_from_env()  # GLM53_EXPERTS_32ROW over the two older knobs
+            if dense_experts is None:
+                dense_experts = env_dense
+            if stream_experts is None:
+                stream_experts = env_stream if mode32 != "dense" else stream_experts_default(dense_experts)
         if layout is None:
             layout = os.environ.get("GLM53_MOE_LAYOUT", "hybrid")
         assert layout in ("hybrid", "ep"), layout
@@ -2090,10 +2194,12 @@ class TtMoE(LightweightModule):
         (``stream_experts_default``) as ``__init__`` so a warm bfp8 cache never passes for the bfp4 one and a warm
         block-op cache never passes for the stream one (the dtype and the layout are in the file names)."""
         expert_dtype = routed_w13_dtype(expert_dtype)
-        if dense_experts is None:
-            dense_experts = os.environ.get("GLM53_DENSE_EXPERTS", "0") == "1"
-        if stream_experts is None:
-            stream_experts = stream_experts_default(dense_experts)
+        if dense_experts is None or stream_experts is None:
+            env_dense, env_stream, mode32 = expert_layout_from_env()
+            if dense_experts is None:
+                dense_experts = env_dense
+            if stream_experts is None:
+                stream_experts = env_stream if mode32 != "dense" else stream_experts_default(dense_experts)
         if os.environ.get("GLM53_MOE_LAYOUT", "hybrid") == "ep":
             return TtEPExperts.cache_complete(cache_dir, mesh, expert_dtype, expert_down_dtype)
         return TtRoutedExperts.cache_complete(
