@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import torch
 
 from models.experimental.tirex2_forecast.reference import dataflow as df
-from models.experimental.tirex2_forecast.tt.common import Precision, upload_vector, upload_weight
+from models.experimental.tirex2_forecast.tt.common import TILE, Precision, upload_vector, upload_weight
 
 QK_PAD = 128  # q and k head dim padded from 64 so q | k | v split as three 128-dim sections
 
@@ -27,6 +27,13 @@ QK_PAD = 128  # q and k head dim padded from 64 so q | k | v split as three 128-
 def _rows(gain: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     """``diag(gain) @ w`` for ``w [in, out]``."""
     return gain[:, None] * w
+
+
+def swiglu_pairs(w_silu: torch.Tensor, w_mul: torch.Tensor) -> torch.Tensor:
+    """Two ``[in, n]`` weights -> ``[in, 2n]`` whose column tiles alternate ``silu_t0, mul_t0, silu_t1, ...``."""
+    k, n = w_silu.shape
+    pairs = torch.stack([w_silu.reshape(k, n // TILE, TILE), w_mul.reshape(k, n // TILE, TILE)], dim=2)
+    return pairs.reshape(k, 2 * n)
 
 
 @dataclass
@@ -40,8 +47,7 @@ class TtResidualBlock:
 
 @dataclass
 class TtFFN:
-    w_gate: object
-    w_up: object
+    w_swiglu: object  # [512, 2 x 2048]: column tiles alternate silu(gate) | up (``minimal_matmul(fuse_swiglu)``)
     w_down: object
 
 
@@ -164,8 +170,7 @@ def build(device, host: df.TiRex2W, precision: Precision, variate: bool = True) 
     for b in host.blocks:
         f = b.ffn
         ffn = TtFFN(
-            upload_weight(device, _rows(b.w_norm_ffn, f.w_gate), dt("ffn")),
-            upload_weight(device, _rows(b.w_norm_ffn, f.w_up), dt("ffn")),
+            upload_weight(device, swiglu_pairs(_rows(b.w_norm_ffn, f.w_gate), _rows(b.w_norm_ffn, f.w_up)), dt("ffn")),
             upload_weight(device, f.w_down, dt("ffn")),
         )
         cell = _mlstm(device, b, dt("mlstm")) if df.is_mlstm(b.index) else _slstm(device, b, dt("w_in"))

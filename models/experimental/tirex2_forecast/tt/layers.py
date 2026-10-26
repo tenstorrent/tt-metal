@@ -11,7 +11,7 @@ from __future__ import annotations
 import torch
 
 from models.experimental.tirex2_forecast.reference import dataflow as df
-from models.experimental.tirex2_forecast.tt.common import Precision, bmm, exact_config, upload
+from models.experimental.tirex2_forecast.tt.common import TILE, Precision, bmm, exact_config, upload
 from models.experimental.tirex2_forecast.tt.weights import TtFFN, TtMLSTM, TtResidualBlock, TtSLSTM, TtVariate
 
 MASK_NEG = -1e9
@@ -75,11 +75,28 @@ def free(*tensors):
             ttnn.deallocate(t)
 
 
+def _flat(x):
+    """``[B, 1, T, K]`` -> ``[1, 1, B*T, K]`` (a view): a batched linear does not fold B into M (3-15 % of peak)."""
+    import ttnn
+
+    shape = tuple(x.shape)
+    if shape[0] * shape[1] == 1:
+        return x, None
+    return ttnn.reshape(x, (1, 1, shape[0] * shape[1] * shape[2], shape[3])), shape
+
+
+def _unflat(y, shape):
+    import ttnn
+
+    return y if shape is None else ttnn.reshape(y, (*shape[:3], y.shape[-1]))
+
+
 def linear(x, w, precision: Precision, bias=None, activation=None, dtype=None, config=None, role=None):
     import ttnn
 
-    return ttnn.linear(
-        x,
+    xf, shape = _flat(x)
+    y = ttnn.linear(
+        xf,
         w,
         bias=bias,
         activation=activation,
@@ -87,6 +104,35 @@ def linear(x, w, precision: Precision, bias=None, activation=None, dtype=None, c
         compute_kernel_config=precision.matmul_config(role) if config is None else config,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    return _unflat(y, shape)
+
+
+def swiglu(x, w, precision: Precision):
+    """``silu(x W_gate) * (x W_up)`` in one ``minimal_matmul(fuse_swiglu=True)`` on a ``swiglu_pairs`` weight."""
+    import ttnn
+
+    xf, shape = _flat(x)
+    M, K = xf.padded_shape[-2], w.padded_shape[-2]
+    grid = xf.device().compute_with_storage_grid_size()
+    m_tiles, k_tiles = M // TILE, K // TILE
+    m_block = min(8, m_tiles)
+    config = ttnn.MinimalMatmulConfig(
+        M_block_size=m_block,
+        K_block_size=max(d for d in range(1, min(k_tiles, 8) + 1) if k_tiles % d == 0),
+        N_block_size=2,
+        subblock_h=max(d for d in range(1, min(m_block, 2) + 1) if m_block % d == 0),
+        subblock_w=2,
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+    )
+    y = ttnn.experimental.minimal_matmul(
+        xf,
+        w,
+        config=config,
+        fuse_swiglu=True,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=precision.matmul_config("ffn"),
+    )
+    return _unflat(y, shape)
 
 
 def rms_norm(x, eps: float):
@@ -114,11 +160,8 @@ def ffn_residual(x, w: TtFFN, precision: Precision):
     import ttnn
 
     xn = rms_norm(x, df.NORM_EPS)
-    gate = linear(xn, w.w_gate, precision, activation="silu", role="ffn")
-    up = linear(xn, w.w_up, precision, role="ffn")
+    h = swiglu(xn, w.w_swiglu, precision)
     free(xn)
-    h = ttnn.multiply(gate, up)
-    free(gate, up)
     y = linear(h, w.w_down, precision, role="ffn")
     free(h)
     out = ttnn.add(x, y)
