@@ -18,6 +18,9 @@ they run on a LoudBox.
   MiniMax-M3's packed forwards). A schedule with partial chunks, a partial chunk followed by a real one,
   one user's consecutive chunks in the same forward, users at different depths and empty tail chunks must
   match the same chunks run each alone in its own forward.
+* test_glm_packed_traced_matches_eager: the same schedule through TtPrefillRuntime.prefill_forward with
+  use_trace (one capture, replayed per forward; per-chunk metadata and the MoE padding config read on
+  device) must fill the same KV as the eager packed forward.
 
 Mesh and chunk: each mesh runs the chunk that gives the production per-chip shape, 640 rows per SP row
 (2x4 -> 1,280-token chunks, 8x4 -> 5,120). On 2x4 every chip sees what a galaxy chip sees in attention
@@ -47,6 +50,8 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3 import GLM53Adapter
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
@@ -74,6 +79,10 @@ INTERLEAVED_PCC = 0.9999
 PACKED_PCC = 0.999
 # Two different users must NOT agree; this catches a comparison that reads the same slot twice.
 DISTINCT_USERS_MAX_PCC = 0.99
+# Traced and eager run the same programs (the traced ones read their scalars on device), so the caches
+# should agree exactly.
+TRACED_PCC = 0.9999
+GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 MESH_PARAMS = [
     pytest.param(
@@ -400,3 +409,132 @@ def test_glm_packed_forward_matches_one_chunk_forwards(variant, config_only, mes
         assert not failures, f"[packed] {len(failures)} mismatch(es):\n" + "\n".join(failures)
     finally:
         transformer.release_sub_device_managers()
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=GLM53Adapter.l1_small_size,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=GLM53Adapter.l1_small_size,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm_packed_traced_matches_eager(variant, config_only, mesh_device, device_params, num_links):
+    """Traced packed forwards (slots 0..3) must fill the same KVPE and indexer-K as the eager packed
+    forward of the same chunks on the same model (slots 4..7)."""
+    assert_gate_mode_matches_adapter(variant, GATE_MODE)
+    sp = mesh_device.shape[0]
+    chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
+    lengths, forwards = _packed_schedule(chunk)
+    num_users = len(lengths)
+    seq_cache = N_CHUNKS * chunk
+    config = copy.deepcopy(config_only)
+    config.max_seq_len = seq_cache
+    rt_config = TtPrefillRuntimeConfig(
+        num_layers=NUM_LAYERS,
+        max_seq_len=seq_cache,
+        mesh_shape=tuple(mesh_device.shape),
+        chunk_size=chunk,
+        forward_tokens_budget=FORWARD_CHUNKS * chunk,
+        num_users=2 * num_users,
+        num_links=num_links,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        capacity_factor=8,
+        gate_fallback_mode=GATE_MODE,
+        model_cfg=GLM53Config,
+        routing_use_l1_small_for_semaphores=GLM53Adapter.routing_use_l1_small_for_semaphores,
+        sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
+        use_trace=True,
+        tp_shard_kv=True,
+    )
+    mesh_device.enable_program_cache()
+    state_dict = glm_random_transformer_state_dict(config, GLM53Config, NUM_LAYERS)
+    runtime = TtPrefillRuntime(mesh_device, config, state_dict, rt_config)
+    del state_dict
+    cache_slots = rt_config.cache_num_users  # the users plus the traced forward's scratch slot
+    mesh_shape = list(mesh_device.shape)
+    caches = MlaKvCaches(
+        kvpe=init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BF16_RM,
+            hf_config=config,
+            mesh_device=mesh_device,
+            seq_len=seq_cache,
+            mesh_shape=mesh_shape,
+            sp_axis=0,
+            tp_axis=1,
+            num_kvpe_cache_layers=NUM_LAYERS,
+            num_users=cache_slots,
+        ),
+        index=init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_cache,
+            mesh_shape=mesh_shape,
+            sp_axis=0,
+            tp_axis=1,
+            num_kvpe_cache_layers=full_indexer_rank(config, NUM_LAYERS),
+            num_users=cache_slots,
+            dtype=ttnn.bfloat8_b,
+        ),
+    )
+    try:
+        runtime.compile(caches)
+        runtime.capture_trace(caches)
+        ids = _token_ids(config, num_users, max(lengths))
+
+        def forward_input(chunks, user_of):
+            tokens = []
+            for c in chunks:
+                real = [] if c.is_empty else ids[user_of(c.slot_id)][c.actual_start : c.actual_end].tolist()
+                tokens.append(real + [0] * (chunk - len(real)))
+            return runtime.make_forward_input(tokens, [c.actual_start for c in chunks])
+
+        for f, chunks in enumerate(forwards):
+            logger.info(f"[traced] forward {f}: {chunks}")
+            runtime.prefill_forward(forward_input(chunks, lambda s: s), caches, chunks)
+        ttnn.synchronize_device(mesh_device)
+
+        # Eager reference on the same model: the packed forward called directly, so it runs the host-scalar
+        # programs rather than the captured ones.
+        for chunks in forwards:
+            ref = [
+                c if c.is_empty else PrefillChunk(c.slot_id + num_users, c.actual_start, c.actual_end) for c in chunks
+            ]
+            inp = forward_input(ref, lambda s: s - num_users)
+            runtime.model.forward(inp, caches.kvpe, actual_isl=chunk, chunks=ref, index_kv_cache=caches.index)
+            ttnn.deallocate(inp)
+        ttnn.synchronize_device(mesh_device)
+
+        kv_slots = _read_user_slots(caches.kvpe, mesh_device, NUM_LAYERS, cache_slots)
+        idx_slots = _read_user_slots(caches.index, mesh_device, full_indexer_rank(config, NUM_LAYERS), cache_slots)
+        failures = _compare_slots(
+            "traced", kv_slots, idx_slots, [(u + num_users, u) for u in range(num_users)], TRACED_PCC
+        )
+        cross = _pcc(kv_slots[0][NUM_LAYERS - 1], kv_slots[3][NUM_LAYERS - 1])
+        assert cross < DISTINCT_USERS_MAX_PCC, f"users A and D hold the same KV (PCC {cross:.6f})"
+        assert not failures, f"[traced] {len(failures)} mismatch(es):\n" + "\n".join(failures)
+    finally:
+        runtime.release_trace()
