@@ -149,6 +149,41 @@ def prefill_linear_config(M: int, K: int, N: int, grid, in0_block_w: int = 4):
     )
 
 
+PREFILL_L1_BUDGET = 1_200_000  # CB bytes per core of one prefill_linear call (1.5 MB L1 minus l1_small and headroom)
+
+
+def _tile_bytes(dtype) -> int:
+    return {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}.get(dtype, 4096)
+
+
+def prefill_linear_l1_bytes(M: int, K: int, N: int, grid, in0_block_w: int = 4, w_tile_bytes: int = 2048) -> int:
+    """Per-core circular-buffer bytes of ``prefill_linear_config(M, K, N, grid)``: the double-buffered in0 and in1
+    blocks, the bf16 output block and an fp32 intermediate block of the same tile count (the conservative case)."""
+    cfg = prefill_linear_config(M, K, N, grid, in0_block_w)
+    pcm, pcn = int(cfg.per_core_M), int(cfg.per_core_N)
+    return 2 * pcm * in0_block_w * 2048 + 2 * in0_block_w * pcn * w_tile_bytes + pcm * pcn * (2048 + 4096)
+
+
+def prefill_linear_row_block(
+    M: int,
+    K: int,
+    N: int,
+    grid,
+    row_block: int,
+    w_tile_bytes: int = 2048,
+    in0_block_w: int = 4,
+    budget: int = PREFILL_L1_BUDGET,
+) -> int:
+    """The largest row block <= ``row_block`` (halved down to one tile) whose config fits ``budget``. The TP4 widths
+    keep the requested block (q_b 4096 wide: 16 tiles per core, ~0.9 MB at 2048 rows); a single chip holds the
+    full-width stems (q_b 16384 wide: per_core_N 64 tiles, 2.3 MB at 1024 rows, measured 2026-10-26) and gets 256
+    rows. Every row's result stays bit-identical: the K blocking is fixed and the rows of a call are independent."""
+    rb = max(TILE, (min(row_block, M) // TILE) * TILE)
+    while rb > TILE and prefill_linear_l1_bytes(rb, K, N, grid, in0_block_w, w_tile_bytes) > budget:
+        rb = max(TILE, (rb // 2 // TILE) * TILE)
+    return rb
+
+
 def prefill_linear(x: ttnn.Tensor, w: ttnn.Tensor, grid, *, row_block: int = PREFILL_ROW_BLOCK, **kw) -> ttnn.Tensor:
     """``ttnn.linear(x, w)`` for a prefill-shaped ``x`` [1, 1, M, K] (M % 32 == 0) through
     ``prefill_linear_config`` in row blocks of ``row_block`` rows: every row's result is independent of M and
@@ -157,6 +192,7 @@ def prefill_linear(x: ttnn.Tensor, w: ttnn.Tensor, grid, *, row_block: int = PRE
     M, K, N = int(x.shape[-2]), int(x.shape[-1]), int(w.shape[-1])
     if M <= TILE or "program_config" in kw:
         return ttnn.linear(x, w, **kw)
+    row_block = prefill_linear_row_block(M, K, N, grid, row_block, _tile_bytes(w.dtype))
     parts = []
     for r0 in range(0, M, row_block):
         r1 = min(M, r0 + row_block)
