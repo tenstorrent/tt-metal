@@ -231,7 +231,7 @@ def mesh() -> Mesh:
     return _mesh
 
 
-def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
+def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",), reduce_dtype=None):
     """Average parameter gradients across one or more mesh axes.
 
     For each parameter with an initialized gradient, the grad is all-reduced
@@ -253,7 +253,12 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
     Args:
         parameters: A ``NamedParameters`` mapping (e.g. ``model.parameters()``).
         axis_names: Tuple of mesh axis names to reduce over.
+        reduce_dtype: The dtype the gradients are summed in. ``None`` or ``ttnn.DataType.BFLOAT16`` sums in each
+            gradient's own dtype, as before. ``ttnn.DataType.FLOAT32`` sums in fp32 and casts the mean back to the
+            gradient's dtype (``ttml.core.distributed.synchronize_tensor``), which keeps the low bits a bf16 sum loses.
     """
+    if reduce_dtype not in (None, ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32):
+        raise ValueError(f"reduce_dtype must be None, BFLOAT16 or FLOAT32, got {reduce_dtype}")
     m = maybe_mesh()
     if m is None or not axis_names:
         return
@@ -275,6 +280,15 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",)):
         if scaler == 1:
             continue
         inv_scaler = 1.0 / float(scaler)
+
+        if reduce_dtype == ttnn.DataType.FLOAT32:
+            # The C++ helper picks the cheaper fp32 route for the gradient's size; both routes give the same result.
+            param.set_grad(
+                ttml.core.distributed.synchronize_tensor(
+                    param.get_grad(), list(axes_for_param), reduce_dtype=reduce_dtype
+                )
+            )
+            continue
 
         grad = param.get_grad()
         for axis in axes_for_param:

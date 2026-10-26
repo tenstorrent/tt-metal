@@ -16,7 +16,73 @@
 
 namespace ttml::core::distributed {
 
-ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& cluster_axes) {
+namespace {
+
+// fp32 sums of at least this many elements per device (1 MiB of bf16) go through a reduce-scatter in fp32 and an
+// all-gather in bf16; smaller ones through one fp32 all-reduce. Measured on a Blackhole LoudBox (8x p150b) in 2026-10:
+// below about 1 MiB a call costs host dispatch, and the reduce-scatter route issues more ops; above it, the route moves
+// a quarter fewer bytes because the all-gather carries the bf16 result. Both routes give bit-identical results.
+constexpr uint64_t kFp32ReduceScatterMinElements = 1ULL << 19U;
+
+// The innermost dim that a reduce-scatter can split into `num_devices` whole-tile slices, if any. For a tensor of whole
+// tiles it is the dim all_reduce scatters on internally, so both routes add the same values in the same order.
+std::optional<int> whole_tile_scatter_dim(const ttnn::Tensor& tensor, uint32_t num_devices) {
+    const auto& shape = tensor.logical_shape();
+    const int rank = static_cast<int>(shape.rank());
+    if (tensor.layout() != ttnn::Layout::TILE || rank < 2) {
+        return std::nullopt;
+    }
+    const auto& tile = tensor.tensor_spec().tile();
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
+    // Padded tiles would end up in some devices' slices.
+    if (shape[-1] % tile_width != 0 || shape[-2] % tile_height != 0) {
+        return std::nullopt;
+    }
+    if (shape[-1] % (tile_width * num_devices) == 0) {
+        return rank - 1;
+    }
+    if (shape[-2] % (tile_height * num_devices) == 0) {
+        return rank - 2;
+    }
+    return std::nullopt;
+}
+
+ttnn::Tensor sum_in_fp32(const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& cluster_axes, uint32_t scaler) {
+    const auto dtype = tensor.dtype();
+    const float inv_scaler = 1.0F / static_cast<float>(scaler);
+    const auto to_fp32 = [](const ttnn::Tensor& t) {
+        return t.dtype() == ttnn::DataType::FLOAT32 ? t : ttnn::typecast(t, ttnn::DataType::FLOAT32);
+    };
+    const auto to_dtype = [dtype](const ttnn::Tensor& t) { return t.dtype() == dtype ? t : ttnn::typecast(t, dtype); };
+
+    const auto scatter_dim = cluster_axes.size() == 1U && tensor.logical_volume() >= kFp32ReduceScatterMinElements
+                                 ? whole_tile_scatter_dim(tensor, scaler)
+                                 : std::nullopt;
+    if (scatter_dim.has_value()) {
+        const auto slice = ttnn::multiply(
+            ttml::ttnn_fixed::distributed::reduce_scatter(to_fp32(tensor), *scatter_dim, cluster_axes[0]), inv_scaler);
+        return ttml::ttnn_fixed::distributed::all_gather(to_dtype(slice), *scatter_dim, cluster_axes[0]);
+    }
+
+    auto result = to_fp32(tensor);
+    for (const auto& cluster_axis : cluster_axes) {
+        result = ttml::ttnn_fixed::distributed::all_reduce(result, cluster_axis);
+    }
+    return to_dtype(ttnn::multiply(result, inv_scaler));
+}
+
+}  // namespace
+
+ttnn::Tensor synchronize_tensor(
+    const ttnn::Tensor& tensor,
+    const ttsl::SmallVector<uint32_t>& cluster_axes,
+    std::optional<ttnn::DataType> reduce_dtype) {
+    TT_FATAL(
+        !reduce_dtype.has_value() || *reduce_dtype == ttnn::DataType::BFLOAT16 ||
+            *reduce_dtype == ttnn::DataType::FLOAT32,
+        "reduce_dtype must be BFLOAT16 or FLOAT32, got {}",
+        *reduce_dtype);
     auto* device = &autograd::ctx().get_device();
     if (cluster_axes.size() == 0) {
         return tensor;
@@ -28,6 +94,9 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
     }
     if (scaler == 1U) {
         return tensor;
+    }
+    if (reduce_dtype == ttnn::DataType::FLOAT32) {
+        return sum_in_fp32(tensor, cluster_axes, scaler);
     }
     auto result = tensor;
     for (const auto& cluster_axis : cluster_axes) {
@@ -81,7 +150,8 @@ ttnn::Tensor force_replicate_axes(const ttnn::Tensor& t, const ttsl::SmallVector
 
 }  // namespace
 
-void synchronize_gradients(const serialization::NamedParameters& parameters) {
+void synchronize_gradients(
+    const serialization::NamedParameters& parameters, std::optional<ttnn::DataType> reduce_dtype) {
     if (!autograd::ctx().is_parallelism_context_initialized()) {
         return;
     }
@@ -109,16 +179,19 @@ void synchronize_gradients(const serialization::NamedParameters& parameters) {
         if (axes_for_param.empty()) {
             continue;
         }
-        tensor->set_grad(force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes_for_param), axes_for_param));
+        tensor->set_grad(
+            force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes_for_param, reduce_dtype), axes_for_param));
     }
 }
 
 void synchronize_gradients(
-    const serialization::NamedParameters& parameters, const std::vector<uint32_t>& cluster_axes) {
+    const serialization::NamedParameters& parameters,
+    const std::vector<uint32_t>& cluster_axes,
+    std::optional<ttnn::DataType> reduce_dtype) {
     ttsl::SmallVector<uint32_t> axes(cluster_axes.begin(), cluster_axes.end());
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
-            tensor->set_grad(force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes), axes));
+            tensor->set_grad(force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes, reduce_dtype), axes));
         }
     }
 }
