@@ -77,7 +77,9 @@ def run_reference_moe(
             cfg.routed_expert_hidden_size = routed_expert_weights[0]["gate_proj"].shape[1]
     if hidden_act is not None:
         cfg.hidden_act = hidden_act
-    moe = variant.reference_moe_cls(cfg)
+    # Meta + assign=True skips a throwaway random fp32 init of every expert (36 GiB for GLM).
+    with torch.device("meta"):
+        moe = variant.reference_moe_cls(cfg)
     # The shared expert reads hidden_act off the config object it was handed, so giving it a copy
     # with a different activation retargets that half only.
     if shared_hidden_act is not None and shared_hidden_act != cfg.hidden_act:
@@ -90,7 +92,10 @@ def run_reference_moe(
     moe.load_state_dict(
         _pack_reference_moe_state_dict(moe, gate_weights, routed_expert_weights, shared_expert_weights, latent_weights),
         strict=True,
+        assign=True,
     )
+    unloaded = [n for n, t in [*moe.named_parameters(), *moe.named_buffers()] if t.is_meta]
+    assert not unloaded, f"reference MoE tensors not in the state dict, still on meta: {unloaded}"
     moe = moe.eval().to(torch.bfloat16)
     with torch.no_grad():
         return moe(x.to(torch.bfloat16))
