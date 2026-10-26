@@ -102,6 +102,12 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7) (the same 
 ## Limits
 - Blackhole only; plan needs the BH DRAM-reader layout (TT_FATALs in device/flat_routed_expert_plan.cpp).
 - H % 256 == 0, I % 32 == 0, capacity % 32 == 0 and >= 256, 1..64 local experts (flat_routed_expert_plan.cpp:251-253).
+  Any I / 32 that has a gate/up split: the down K is not tied to a block multiple (FIX.1: I 576 / 1152 at H 5120, K 18 /
+  36 tiles, tests/unit/test_flat_widths.py). Small I at large H (It <= 32, H 5120) plans on one subgrid (the 2 / 3
+  subgrids have no gate/up split there) with the uneven pair split, np 1: one gate/up core per tile column.
+- On a single Galaxy card (the `device` fixture) the op hangs on its first call for most shapes (tests/unit:
+  test_flat_uneven_split, the mimo cases, test_flat_widths I 2304; also on the code before FIX.1); 2x2-mesh runs on
+  the same box pass (test_weights_nk), as does the model's 8x4 mesh (deepseek_v41_flash_d_p DS41-119).
 - x: ROW_MAJOR bf16 DRAM interleaved; page width a multiple of 1 KB (or wide rows with `hidden`). counts / regions:
   [1, NG] uint32 RM DRAM. y_bf16 and y_row_major are exclusive.
 - `x_bf16` / `h_bf16` must match the plan the weights were laid out with.
@@ -125,7 +131,7 @@ y = fe(x_rm_bf16, counts, regions, down_fp32=True)          # y [rows, H] bfp8 T
 (deepseek_v41_flash_d_p/tt/shared_expert.py `_load_flat`; glm53_flash_d_p/tt/experts_ag.py.)
 Model cases (O.1): tests/cases.py + tests/test_flat_routed_expert_ttnn.py (deepseek_v41_flash_d_p's shared-expert
 call and its routed call with the weighted combine fused in, tests/weighted_case.py). Tests: tests/unit/ (test_flat_routed_expert_op.py, test_flat_expert_indexed_shapes.py, test_flat_expert_mesh.py,
-test_flat_expert_yrm.py, test_flat_uneven_split.py, test_weights_nk.py), tests/test_flat_bench.py (perf, fake
+test_flat_expert_yrm.py, test_flat_uneven_split.py, test_weights_nk.py, test_flat_widths.py), tests/test_flat_bench.py (perf, fake
 weights); tests/source.yaml is empty. flat_combine_overlap:
 models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_flat_combine_overlap.py. flat_routed_expert_with_program: deepseek_v41_flash_d_p tt/perf_experts.py::test_weighted /
 test_weighted_combine_routes.
@@ -136,8 +142,8 @@ test_weighted_combine_routes.
   combine_rf's sparse_combine_rf appended, token_index x (the column's gathered q(x)), math_fidelity, weights_nk,
   down_fp32, clamped_silu, bfp4 (EXPERTS_IMPL) / bfp8.
 - deepseek_v41_flash_d_p P.12: tt/shared_expert.py (the only shared-expert path since FIX.9): the shared expert's TP slice as one
-  always-on expert (counts [S], regions [0]; intermediate zero-padded to a multiple of 256, the down kernel's K block:
-  se6_dcompute.cpp `kt_d % 8`), bfp8 weights_nk, token_index into the routed experts' gathered q(x), y_bf16,
+  always-on expert (counts [S], regions [0]; the real width since FIX.1: 576 on TP 4, 1152 on TP 2, no padded lanes;
+  before, zero-padded to 1280), bfp8 weights_nk, token_index into the routed experts' gathered q(x), y_bf16,
   down_fp32, LoFi / bfp8 x / h (EXPERTS_PRECISION=glm) (the official-numerics path routing_weights = 1 +
   fp8_act_quant was deleted in FIX.8). 2x2,
   1024 rows x 1280 x 5120: 250 us a layer vs 1431 us for the ttnn.linear chain.

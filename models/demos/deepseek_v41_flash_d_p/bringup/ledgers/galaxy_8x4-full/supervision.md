@@ -37,3 +37,40 @@
   2x2 run here needs a mesh-graph descriptor or a submesh of the 8x4); real-time profiler D2H pin failure on devices 7/10
   (may affect X.1); plan.md checked 8x4 at chunk 16384, the run uses 5120 (OV-1 on W.1/M.1).
 - 2026-10-26 11:31:07 owner: hand off at 90% context (not the skill default 75%); dashboard republish only at milestones (each costs ~100k tokens of overseer context).
+- 2026-10-26 13:24:03 (restored; attempt 2 removed it) KNOWLEDGE CONTRADICTED DS41-76: 768 = 24 tile columns hits flat_routed_expert_plan.cpp:433 on 8x4; agent pads the shared expert to 1280 at TP 4 (DS41-115). Review: 576 -> 1280 is a 2.2x pad; prefer extending the fork split unless 1280 is a clean derived rule.
+- 2026-10-26 13:44:57 W.1 PASS 9582c9d (attempt 1; gate unit reused). Attempt 2 started only because supervision.md was flagged outside the allowed paths: framework bug (IGNORED / stamps.SKIP did not cover bringup/ledgers/<run>/, F183). Classified framework. Paused, aborted attempt 2 (OV-2), restored state.json and results/W.1.json from 9582c9d, kept attempt 2 BREADCRUMBS notes (honest, no code change). Fix F189: orchestrator.IGNORED and stamps.SKIP cover ledgers/<run>/; selftest test_seeded_ledger_overseer_files.py (2 passed), test_orchestrator + test_stamps 45 passed. Resumed.
+- 2026-10-26 13:46:15 W.1 diff review (9582c9da53d): accept new fork ttnn.bringup.update_padded_kv_cache (80-row stripes per chip on 8x4; stock op refuses non-tile stripes; README/CHANGELOG/unit test); accept derived q_chunk. Shared expert pad max(ipart, 33 tiles): TP4 576 -> 1280 (2.2x): derived from the op one-subgrid plan, stands; PERF CANDIDATE: extend flat_routed_expert gate/up split below 33 tile columns. Fabric setup nconn = len(dirs) (no repeated unused connections) touches the 2x2 path: SEED-BOX RE-VERIFY on a quietbox_2x2 (F-S8 not automated).
+- 2026-10-26 14:06:52 OWNER (strong): no padding / inflated work to get around a kernel limit, ever. My W.1 review wrongly let the shared-expert pad (TP4 576 -> 1280) stand as a perf candidate; corrected: FIX.1 (extend the flat_routed_expert fork, remove all padding incl. TP2 1152 -> 1280, gate W.1), note OV-3 on every task. Pausing during the M.1 pre-check so FIX.1 runs before any M.1 agent attempt.
+- 2026-10-26 14:15:10 Killed the orchestrator mid M.1 pre-check (owner: no waits; FIX.1 invalidates M.1), cleared PAUSE, resumed: FIX.1 started at once, device free, resume clean. Lesson: to reorder, kill + resume (F95) instead of pause-and-wait.
+- 2026-10-26 14:32:04 HF relay repo djordjenTT/ds41-goldens-relay deleted (account has no datasets left). Token kept (owner): bh-qb-12:/localdev/dnijemcevic/.hf_write_token and ~/.hf_relay_token here, for a re-relay if L.s56320 needs golden files left out of the minimal copy; owner revokes it after L.s56320.
+- 2026-10-26 14:36:11 FIX.1 attempt 1 aborted at 21 min (no code change; spent on before-timing, about to use device-profiler per-op mode, which the skill forbids for picks; the RT profiler fails on devices 7/10). My fix-job text asked for before/after timing: my brief caused the detour. OV-4: kernel first, one plain-profile section time after, no per-op device profiler. Attempt 2 started at once.
+- 2026-10-26 15:17:45 OWNER: work autonomously; no lazy shortcuts; fix the framework cause of every bug (not a local patch): the goal is DeepSeek-V4.1 AND a robust framework. Framework causes queued for the next task boundary: (1) all units passed + only a path-scope problem starts a new attempt (F189 not-done); (2) no launch preflight for git identity (CK.1 commit refused); (3) gates do not apply cards.py TT_VISIBLE_DEVICES for a run mesh smaller than the box, no report when no subset exists; (4) RT profiler D2H pin failure on devices 7/10 not surfaced before X.1 (cause unknown: investigate).
+
+## 2026-10-26 15:23:05 HAND-OFF: overseer moves from the owner Mac to this node (tmux session overseer)
+Where the run is: CK.1, G.s10240, G.s56320, B.1, W.1 PASS (W.1 9582c9da53d). FIX.1 running (owner order: no padding; it
+extends ttnn.bringup flat_routed_expert so the shared expert runs unpadded at 18 / 36 tile columns; plan change is
+conditional: only widths with no subgrid split go to the whole-grid one-subgrid plan; the owner accepted that). Queued:
+FIX.2 (root-cause the 11 first-call hangs of the fork tests on a Galaxy chip, fix the 11x10 grid asserts in the fork test
+builder), FIX.3 (root-cause the real-time profiler D2H pin failure on devices 7 / 10; leads: iommu=pt, 2 MB + 4 KB
+buffer, HugePages_Free 0 with a mesh open). Then M.1, the ladder, K.1, X.*, O.1, Z.1. Notes OV-1..OV-6 in overseer.yaml.
+Owner rules (binding, beyond the skill):
+- Work autonomously. Time matters: never wait when a kill + resume (F95) or an abort does the job; no long blind waits:
+  short timeouts on checks, report what runs and its ETA.
+- No lazy shortcuts, ever: no padding, duplicated or inflated work to get around a kernel / fork limit (OV-3). Review every
+  gate commit for that; a shortcut gets a fix job at once and the run is reordered so it lands before dependent steps.
+- Fix the framework cause of every bug (with a selftest and a dev/BREADCRUMBS F-entry), never a local patch: the goal is
+  DeepSeek-V4.1 AND a robust framework. Framework edits only at a task boundary (stop the orchestrator, edit, selftest,
+  commit, resume), never while an agent step runs.
+- Perf numbers: device per-op times come from the real-time profiler with BRINGUP_PROFILE_OPS=1 (as on the 2x2); the device
+  profiler for a single op. FIX.1 must report its op before/after per-call time (OV-6); if its commit lacks it, measure it.
+- Hand off at 90% context (not 75%); republish the dashboard only at milestones (FIX.1, M.1, the ladder).
+- Never push to GitHub without asking; commits are mirrored to /data/dnijemcevic/tt-metal-ds41.git by a post-commit hook.
+Framework fixes due at the next task boundary (owner-approved): (1) a gate whose units all passed with only a path-scope
+problem must commit and stop for the overseer, not start a new attempt (F189 not-done); (2) launch preflight: git identity
+(and any other commit precondition) checked before the first gate; (3) gates apply testing/cards.py TT_VISIBLE_DEVICES when
+the run mesh is smaller than the box, and report when no subset exists (no 2x2 subset on a Galaxy); (4) via FIX.3.
+Open for the owner: FIX.1 op before/after numbers; 2x2 QuietBox re-verify after W.1 fabric-setup change (nconn = len(dirs));
+HF write token (qb-12 /localdev/dnijemcevic/.hf_write_token, ~/.hf_relay_token here) revoked after L.s56320; the
+/scratch hf_scaled/galaxy_2x2 (272 GB) is unused. Dashboard: https://claude.ai/artifact/TCBJdnmec628NHLQDXJM37 (publishing
+needs a session with the Artifact tool; a node session may not have it: if so, skip and say so).
+Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release only on the owner word.
