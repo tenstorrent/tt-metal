@@ -399,10 +399,14 @@ bool use_dram_sharded_multicore(
 // Cores for the multi-core pipeline (num_workers_per_dram_bank >= 2): cores_per_bank logical worker cores
 // per bank for the first num_banks banks, each the nearest free core (Manhattan distance in logical
 // coordinates, ties to the same row first) to that bank's NOC-optimal worker, taken round-robin over
-// the banks so every bank gets its nearest core first. Only the per-bank optimal worker is queried
-// from the device, so the result is the same for every chip of a mesh.
+// the banks so every bank gets its nearest core first. The per-bank optimal worker depends on the
+// chip's harvesting, so the result is specific to the chip at `coord`.
 std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
-    tt::tt_metal::distributed::MeshDevice& device, tt::tt_metal::NOC noc, uint32_t cores_per_bank, uint32_t num_banks);
+    tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshCoordinate& coord,
+    tt::tt_metal::NOC noc,
+    uint32_t cores_per_bank,
+    uint32_t num_banks);
 
 // This type of access pattern cannot be copied.
 // Treat it as a one off patch to restore functionality that
@@ -428,8 +432,10 @@ void get_optimal_dram_bank_to_reader_assignment(
     tt::tt_metal::CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);
 
+// Reader placement for the chip at `coord`; it differs between chips with different harvesting.
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshCoordinate& coord,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
     const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores);

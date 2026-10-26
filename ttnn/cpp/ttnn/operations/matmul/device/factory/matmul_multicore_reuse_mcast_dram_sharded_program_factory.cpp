@@ -66,6 +66,7 @@ using dram_sharded_helpers::validate_num_workers_per_dram_bank;
 
 static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec(
     tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshCoordinate& coord,
     const CoreRangeSet& input_all_storage_cores,
     const CoreRangeSet& output_all_storage_cores,
     ComputeHardwareConfig compute_hw,
@@ -150,7 +151,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
         }
     } else {
         reader_assignments =
-            get_dram_bank_reader_assignments(device, in1_noc, workers_per_bank, input_all_storage_cores);
+            get_dram_bank_reader_assignments(device, coord, in1_noc, workers_per_bank, input_all_storage_cores);
     }
     uint32_t num_dram_banks = reader_assignments.size() / workers_per_bank;
 
@@ -1275,6 +1276,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_spec
 // arguments.
 static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_multicore_spec(
     tt::tt_metal::distributed::MeshDevice& device,
+    const tt::tt_metal::distributed::MeshCoordinate& coord,
     const tt::tt_metal::MeshTensor& in0_tensor,
     const tt::tt_metal::MeshTensor& in1_tensor,
     const tt::tt_metal::MeshTensor& out_tensor,
@@ -1350,7 +1352,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
 
     // Cores and work items: wi = (bank * CN + cn) * CK + kidx; role = wi + 1 (0 = idle).
     const auto cores = dram_sharded_helpers::get_dram_bank_adjacent_workers(
-        device, tt::tt_metal::NOC::NOC_0, CN * CK, num_banks);
+        device, coord, tt::tt_metal::NOC::NOC_0, CN * CK, num_banks);
     const auto grid = device.compute_with_storage_grid_size();
     std::vector<uint32_t> role(grid.x * grid.y, 0);
     std::vector<CoreCoord> work_cores;
@@ -1674,13 +1676,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     };
 }
 
-}  // namespace reuse_dram_sharded_optimized_helpers
-
-ttnn::device_operation::ProgramArtifacts
-MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts(
+static ttnn::device_operation::ProgramArtifacts create_program_artifacts_for_coord(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const tt::tt_metal::distributed::MeshCoordinate& coord) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
     const auto& output_tensors = tensor_return_value;
@@ -1801,8 +1801,9 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
             a.logical_shape()[-1],
             a.memory_config().buffer_type(),
             output.memory_config())) {
-        return reuse_dram_sharded_optimized_helpers::create_program_dram_sharded_multicore_spec(
+        return create_program_dram_sharded_multicore_spec(
             *device,
+            coord,
             a_mesh,
             b,
             output_mesh,
@@ -1822,8 +1823,9 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
 
     TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
-    return reuse_dram_sharded_optimized_helpers::create_program_dram_sharded_spec(
+    return create_program_dram_sharded_spec(
         *device,
+        coord,
         input_all_cores_storage,
         output_all_cores_storage,
         ttnn::to_compute_hardware_config(compute_kernel_config),
@@ -1857,6 +1859,31 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_program_artifacts
         skip_in0_mcast,
         skip_write_back,
         row_broadcast_bias);
+}
+
+}  // namespace reuse_dram_sharded_optimized_helpers
+
+ttnn::device_operation::MeshWorkloadArtifacts
+MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_artifacts(
+    const ttnn::prim::MatmulParams& operation_attributes,
+    const ttnn::prim::MatmulInputs& tensor_args,
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    // One program per coordinate: DRAM reader cores sit next to their DRAM bank, and where that is
+    // depends on each chip's harvesting, so one program replicated across the mesh would put the
+    // readers in the wrong place on every chip whose harvesting differs from the reference chip.
+    ttnn::device_operation::MeshWorkloadArtifacts artifacts;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto per_coord = reuse_dram_sharded_optimized_helpers::create_program_artifacts_for_coord(
+            operation_attributes, tensor_args, tensor_return_value, coord);
+        TT_FATAL(per_coord.op_owned_tensors.empty(), "DRAM-sharded matmul does not allocate op-owned tensors");
+        artifacts.programs.push_back({
+            .range = ttnn::MeshCoordinateRange(coord),
+            .spec = std::move(per_coord.spec),
+            .run_params = std::move(per_coord.run_params),
+        });
+    }
+    return artifacts;
 }
 
 }  // namespace ttnn::prim
