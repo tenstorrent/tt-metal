@@ -11,10 +11,6 @@ from fuser.fuser_config import GlobalConfig
 from fuser.golden.fpu.datacopy import datacopy_golden
 from fuser.indexing import InvocationGranularity
 from fuser.l1_operation import L1Operation
-from fuser.quasar.unpacker.unpack_a import (
-    _uses_upk_to_dest_semaphores,
-    upk_to_dest_math_ack,
-)
 
 
 class DatacopyFpu(Fpu):
@@ -61,9 +57,7 @@ class DatacopyFpu(Fpu):
         block: BlockData,
     ) -> str:
         if compute_unit.unpack_to_dest.value:
-            if not _uses_upk_to_dest_semaphores(config):
-                return ""
-            return upk_to_dest_math_ack()
+            return ""
 
         return f"_llk_math_eltwise_unary_datacopy_({block.tile_id_dest});\n"
 

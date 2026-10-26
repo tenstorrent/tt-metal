@@ -45,6 +45,7 @@ class Unpacker:
     per_block_init: bool = False
     reverse_operands: bool = False
     supports_dest_offset: bool = True
+    dummy_srcb_valid_per_call: int = 0
 
     def physical_order(self, src_a, src_b):
         return (src_b, src_a) if self.reverse_operands else (src_a, src_b)

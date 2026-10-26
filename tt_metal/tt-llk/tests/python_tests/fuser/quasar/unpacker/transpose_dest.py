@@ -14,6 +14,7 @@ from .unpack_a import UnpackerA
 
 class TransposeDestUnpacker(UnpackerA):
     granularity = InvocationGranularity.TILE
+    dummy_srcb_valid_per_call = 1
 
     golden_fn = staticmethod(unpack_transpose_dest_golden)
 
