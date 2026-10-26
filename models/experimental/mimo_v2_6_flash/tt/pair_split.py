@@ -115,3 +115,13 @@ class PairSplit:
         out = ttnn.multiply(o, alpha, dtype=ttnn.bfloat16, memory_config=memory_config)
         alpha.deallocate(True)
         return out
+
+    def merge_heads(self, o, lse, concat_heads):
+        """Decode, from the SDPA's outputs to the o projection's input: ``o`` this chip's normalized partial attention
+        [1, B, 16, 128] (bf16, L1) and ``lse`` its LSE [1, B, 16, 1] (fp32) -> the concatenated heads of ``alpha * o``
+        [1, 1, B, 16 * 128] (bf16, L1; ``concat_heads`` an attention.ConcatHeads). The caller frees ``o`` and
+        ``lse``."""
+        merged = self.merge(o, lse, ttnn.L1_MEMORY_CONFIG)
+        out = concat_heads(merged)
+        merged.deallocate(True)
+        return out

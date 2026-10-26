@@ -1274,9 +1274,7 @@ class TtMiMoAttention:
             table, pos = positions["page_table_sdpa"], positions["pos_sdpa"]
         attn, lse = self._paged_mla_decode_lse(q_rot, kv_cache, table, pos)  # [1, B or n, 16, 128], [.., 16, 1]
         q_rot.deallocate(True)
-        merged = self.pair.merge(attn, lse, ttnn.L1_MEMORY_CONFIG)
+        attn_cat = self.pair.merge_heads(attn, lse, self.concat_heads)
         attn.deallocate(True)
         lse.deallocate(True)
-        attn_cat = self.concat_heads(merged)
-        merged.deallocate(True)
         return self._decode_o(attn_cat, compact)
