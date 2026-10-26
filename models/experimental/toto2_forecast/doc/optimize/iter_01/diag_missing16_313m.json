@@ -1,0 +1,22 @@
+{
+  "ckpt": "313m",
+  "case": "missing_16x2048",
+  "precision": "accuracy",
+  "abs_err_max": 0.07770979404449463,
+  "quantile_index": 0,
+  "series": 4,
+  "variate": 0,
+  "patch": 1,
+  "step": 31,
+  "ref_value": -1.251115322113037,
+  "dev_value": -1.3288251161575317,
+  "row_ref_std": 0.10010961321938863,
+  "row_ref_absmean": 1.0923969246861007,
+  "row_ref_band": 0.03404895216226578,
+  "row_active": true,
+  "row_degenerate": false,
+  "case_ref_std": 1.1194410561681796,
+  "row_err_p99": 0.05322787165641785,
+  "row_mask_observed_frac": 0.9794921875,
+  "other_rows_err_max": 0.02594733238220215
+}

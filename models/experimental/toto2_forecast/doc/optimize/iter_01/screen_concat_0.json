@@ -1,0 +1,254 @@
+[
+  {
+    "test": "forward",
+    "name": "paper_313m",
+    "precision": "accuracy",
+    "checkpoint": "313m",
+    "batch": 1024,
+    "variates": 1,
+    "context": 2048,
+    "horizon": 64,
+    "rows": 1024,
+    "seq_len": 66,
+    "cold_s": 0.5225336677394807,
+    "steady_s": 0.22379489010199904,
+    "steady_runs": [
+      0.22609838005155325,
+      0.22108254116028547,
+      0.22303286101669073,
+      0.22379489010199904,
+      0.22677785996347666
+    ],
+    "prepare_s": 0.07833264581859112,
+    "upload_s": 0.008231848012655973,
+    "device_s": 0.13411183608695865,
+    "postprocess_s": 0.014103987254202366,
+    "split_runs": [
+      {
+        "prepare_s": 0.07177103729918599,
+        "upload_s": 0.008125668857246637,
+        "device_s": 0.1343910270370543,
+        "postprocess_s": 0.010501968208700418
+      },
+      {
+        "prepare_s": 0.06815458787605166,
+        "upload_s": 0.008441827725619078,
+        "device_s": 0.13434008602052927,
+        "postprocess_s": 0.014103987254202366
+      },
+      {
+        "prepare_s": 0.07833264581859112,
+        "upload_s": 0.008097448851913214,
+        "device_s": 0.13381057558581233,
+        "postprocess_s": 0.014024508185684681
+      },
+      {
+        "prepare_s": 0.07900399575009942,
+        "upload_s": 0.008231848012655973,
+        "device_s": 0.13411183608695865,
+        "postprocess_s": 0.014244246762245893
+      },
+      {
+        "prepare_s": 0.08346029510721564,
+        "upload_s": 0.009904257953166962,
+        "device_s": 0.1339236358180642,
+        "postprocess_s": 0.01445876806974411
+      }
+    ],
+    "pcc_normalized": 0.19444827465774123,
+    "pcc_spread": 0.397833765435758,
+    "pcc_row_p01": -0.17228894365628128,
+    "pcc_row_min": -0.34852202988100206,
+    "pcc_row_p01_active": -0.13046332975074143,
+    "pcc_row_min_active": -0.34852202988100206,
+    "spread_ratio_p01": 9.375466912839828,
+    "spread_ratio_p99": 218.62933331451617,
+    "spread_ratio_p50": 14.519915228914279,
+    "spread_ratio_min": 6.675442694491523,
+    "spread_ratio_max": 652.4404863229399,
+    "spread_ratio_inactive_p01": 42.282891994937884,
+    "spread_ratio_inactive_p50": 3993.1007722685968,
+    "spread_ratio_inactive_p99": 6762.434523531267,
+    "pcc_final": 0.1704154404470576,
+    "pcc_final_spread": 0.7257796236186668,
+    "abs_err_max": 34.092833161354065,
+    "rows_active": 969,
+    "rows_degenerate": 36,
+    "cpu_s": 433.0879451474175,
+    "cpu_threads": 8,
+    "chip": "DFDF7FD83D0A1372",
+    "bench_layers": 4,
+    "below_floors": {
+      "pcc_normalized": [
+        0.194448,
+        0.999
+      ],
+      "pcc_spread": [
+        0.397834,
+        0.998
+      ],
+      "pcc_row_p01_active": [
+        -0.130463,
+        0.99
+      ],
+      "pcc_row_min_active": [
+        -0.348522,
+        0.9
+      ],
+      "spread_ratio_p99": [
+        218.629333,
+        1.25
+      ],
+      "pcc_final": [
+        0.170415,
+        0.99
+      ],
+      "pcc_final_spread": [
+        0.72578,
+        0.99
+      ],
+      "spread_ratio_inactive_p50": [
+        3993.100772,
+        2.0
+      ],
+      "spread_ratio_p50": [
+        14.519915,
+        [
+          0.95,
+          1.05
+        ]
+      ],
+      "spread_ratio_max": [
+        652.440486,
+        2.5
+      ]
+    },
+    "info": {}
+  },
+  {
+    "test": "forward",
+    "name": "paper_313m",
+    "precision": "performance",
+    "checkpoint": "313m",
+    "batch": 1024,
+    "variates": 1,
+    "context": 2048,
+    "horizon": 64,
+    "rows": 1024,
+    "seq_len": 66,
+    "cold_s": 0.22548281913623214,
+    "steady_s": 0.22294263867661357,
+    "steady_runs": [
+      0.22294263867661357,
+      0.22222879994660616,
+      0.2218339592218399,
+      0.24071245593950152,
+      0.23900863714516163
+    ],
+    "prepare_s": 0.08339242404326797,
+    "upload_s": 0.009048097766935825,
+    "device_s": 0.13429643493145704,
+    "postprocess_s": 0.013937456998974085,
+    "split_runs": [
+      {
+        "prepare_s": 0.07912368513643742,
+        "upload_s": 0.008788317907601595,
+        "device_s": 0.13386670593172312,
+        "postprocess_s": 0.012540766969323158
+      },
+      {
+        "prepare_s": 0.07803908595815301,
+        "upload_s": 0.009048097766935825,
+        "device_s": 0.13423192501068115,
+        "postprocess_s": 0.014919528272002935
+      },
+      {
+        "prepare_s": 0.08489900408312678,
+        "upload_s": 0.008930437732487917,
+        "device_s": 0.13429643493145704,
+        "postprocess_s": 0.013937456998974085
+      },
+      {
+        "prepare_s": 0.08942466415464878,
+        "upload_s": 0.009887148160487413,
+        "device_s": 0.13443218590691686,
+        "postprocess_s": 0.014430416747927666
+      },
+      {
+        "prepare_s": 0.08339242404326797,
+        "upload_s": 0.009876279160380363,
+        "device_s": 0.13497682521119714,
+        "postprocess_s": 0.013920987024903297
+      }
+    ],
+    "pcc_normalized": 0.19404468645416892,
+    "pcc_spread": 0.397073991767401,
+    "pcc_row_p01": -0.1831370387147267,
+    "pcc_row_min": -0.35426996117280907,
+    "pcc_row_p01_active": -0.13641823698498204,
+    "pcc_row_min_active": -0.35426996117280907,
+    "spread_ratio_p01": 9.313945528338932,
+    "spread_ratio_p99": 218.13878880155562,
+    "spread_ratio_p50": 14.42794940758643,
+    "spread_ratio_min": 6.725031067008622,
+    "spread_ratio_max": 646.4716779378366,
+    "spread_ratio_inactive_p01": 42.8969861029468,
+    "spread_ratio_inactive_p50": 4048.967520700976,
+    "spread_ratio_inactive_p99": 6840.0689275881705,
+    "pcc_final": 0.16996827671035006,
+    "pcc_final_spread": 0.7250272447903667,
+    "abs_err_max": 33.99592077732086,
+    "rows_active": 969,
+    "rows_degenerate": 36,
+    "cpu_s": 433.0879451474175,
+    "cpu_threads": 8,
+    "chip": "DFDF7FD83D0A1372",
+    "bench_layers": 4,
+    "below_floors": {
+      "pcc_normalized": [
+        0.194045,
+        0.995
+      ],
+      "pcc_spread": [
+        0.397074,
+        0.99
+      ],
+      "pcc_row_p01_active": [
+        -0.136418,
+        0.97
+      ],
+      "pcc_row_min_active": [
+        -0.35427,
+        0.9
+      ],
+      "spread_ratio_p99": [
+        218.138789,
+        1.5
+      ],
+      "pcc_final": [
+        0.169968,
+        0.98
+      ],
+      "pcc_final_spread": [
+        0.725027,
+        0.93
+      ],
+      "spread_ratio_inactive_p50": [
+        4048.967521,
+        2.0
+      ],
+      "spread_ratio_p50": [
+        14.427949,
+        [
+          0.95,
+          1.05
+        ]
+      ],
+      "spread_ratio_max": [
+        646.471678,
+        2.5
+      ]
+    },
+    "info": {}
+  }
+]

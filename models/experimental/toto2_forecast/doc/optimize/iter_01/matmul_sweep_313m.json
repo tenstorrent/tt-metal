@@ -1,0 +1,273 @@
+{
+  "ckpt": "313m",
+  "rows": 98304,
+  "precision": "accuracy",
+  "roles": {
+    "qkv": [
+      {
+        "config": "linear (round 0)",
+        "ms": 12.774027697741985
+      },
+      {
+        "config": [
+          8,
+          8,
+          8,
+          2,
+          4
+        ],
+        "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+      },
+      {
+        "config": [
+          8,
+          16,
+          8,
+          2,
+          4
+        ],
+        "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+      },
+      {
+        "config": [
+          8,
+          32,
+          8,
+          2,
+          4
+        ],
+        "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+      },
+      {
+        "config": [
+          8,
+          8,
+          4,
+          2,
+          2
+        ],
+        "ms": 4.744897270575166,
+        "pcc_vs_linear": 0.9999999999992113
+      },
+      {
+        "config": [
+          8,
+          16,
+          4,
+          2,
+          2
+        ],
+        "ms": 4.713072208687663,
+        "pcc_vs_linear": 0.999999999994893
+      },
+      {
+        "config": [
+          8,
+          32,
+          4,
+          2,
+          2
+        ],
+        "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+      },
+      {
+        "config": [
+          16,
+          8,
+          8,
+          4,
+          2
+        ],
+        "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+      },
+      {
+        "config": [
+          16,
+          16,
+          4,
+          4,
+          1
+        ],
+        "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+      },
+      {
+        "config": [
+          8,
+          8,
+          16,
+          1,
+          4
+        ],
+        "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+      },
+      {
+        "config": [
+          4,
+          16,
+          8,
+          1,
+          4
+        ],
+        "ms": 6.586867198348045,
+        "pcc_vs_linear": 0.999999999994893
+      },
+      {
+        "config": [
+          16,
+          8,
+          16,
+          2,
+          4
+        ],
+        "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+      },
+      {
+        "config": [
+          8,
+          32,
+          2,
+          2,
+          2
+        ],
+        "ms": 4.268609080463648,
+        "pcc_vs_linear": 0.9999999999957229
+      }
+    ],
+    "out": [
+      {
+        "config": "linear (round 0)",
+        "ms": 2.4103489704430103
+      },
+      {
+        "config": [
+          8,
+          8,
+          8,
+          2,
+          4
+        ],
+        "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+      },
+      {
+        "config": [
+          8,
+          16,
+          8,
+          2,
+          4
+        ],
+        "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+      },
+      {
+        "config": [
+          8,
+          32,
+          8,
+          2,
+          4
+        ],
+        "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+      },
+      {
+        "config": [
+          8,
+          8,
+          4,
+          2,
+          2
+        ],
+        "ms": 1.7085660248994827,
+        "pcc_vs_linear": 0.9999999999340888
+      },
+      {
+        "config": [
+          8,
+          16,
+          4,
+          2,
+          2
+        ],
+        "ms": 1.6749040223658085,
+        "pcc_vs_linear": 0.9999999999093664
+      },
+      {
+        "config": [
+          8,
+          32,
+          4,
+          2,
+          2
+        ],
+        "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+      },
+      {
+        "config": [
+          16,
+          8,
+          8,
+          4,
+          2
+        ],
+        "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+      },
+      {
+        "config": [
+          16,
+          16,
+          4,
+          4,
+          1
+        ],
+        "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+      },
+      {
+        "config": [
+          8,
+          8,
+          16,
+          1,
+          4
+        ],
+        "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+      },
+      {
+        "config": [
+          4,
+          16,
+          8,
+          1,
+          4
+        ],
+        "ms": 1.9422749988734722,
+        "pcc_vs_linear": 0.9999999999093664
+      },
+      {
+        "config": [
+          16,
+          8,
+          16,
+          2,
+          4
+        ],
+        "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+      },
+      {
+        "config": [
+          8,
+          32,
+          2,
+          2,
+          2
+        ],
+        "ms": 1.6248630359768867,
+        "pcc_vs_linear": 0.999999999865066
+      }
+    ],
+    "down": [
+      {
+        "config": "linear (round 0)",
+        "ms": 3.4623268991708755
+      }
+    ]
+  }
+}
