@@ -241,20 +241,19 @@ void BM_QkvCausalConv1dSilu(benchmark::State& state) {
                 composite_ms / bw_ms);
         }
     }
-    // What the cost model would pick on this grid, next to the best of the rows above (splits 0 = the model's pick).
+    // What the cost model picks on this grid, next to the best of the rows above when they enumerate splits (with
+    // the default splits 0 every row already is the model's pick for its chunk).
     const uint64_t l1 = ttml::metal::available_l1_bytes(*device);
+    const bool enumerated_splits = splits.size() > 1 || splits.front() != 0;
     for (const auto& [name, tap_grads, best] :
          {std::tuple{"bw", true, best_bw}, std::tuple{"frozen taps", false, best_bw_frozen}}) {
         const auto pick =
             ttml::metal::qkv_causal_conv1d_silu_bw_work_split(w.c(), T, grid.x * grid.y, l1, 0, 0, tap_grads);
-        fmt::print(
-            "{}: auto pick chunk={} splits={}; best measured chunk={} splits={} at {:.3f} ms\n",
-            name,
-            pick.channel_chunk_size,
-            pick.row_splits,
-            best.chunk,
-            best.splits,
-            best.ms);
+        fmt::print("{}: auto pick chunk={} splits={}", name, pick.channel_chunk_size, pick.row_splits);
+        if (enumerated_splits) {
+            fmt::print("; best measured chunk={} splits={} at {:.3f} ms", best.chunk, best.splits, best.ms);
+        }
+        fmt::print("\n");
     }
     const double autograd_ms = time_ms([&] { autograd_fw_bw(in, w); }, warmup, measure);
     fmt::print("autograd op, TILE input, frozen taps (fw + bw, auto chunk / splits): {:.3f} ms\n", autograd_ms);
