@@ -11,12 +11,13 @@
 
 namespace ttml::metal {
 
-// Largest tile-aligned divisor of Q+K+V that is <= 256 and fits the per-core L1 budget. Measured on a p300 with a
-// 110-core compute grid at T=4096 with automatic row_splits (fused fw / fused bw, ms):
-//   Q=K=V=2048: chunk 64 -> 1.12 / 1.12, 128 -> 0.82 / 1.00, 256 -> 0.42 / 0.92
-//   Q=K=V=4096: chunk 64 -> 2.24 / 2.26, 128 -> 1.60 / 1.92, 256 -> 0.80 / 1.73
-// 256 is fastest for both directions at both widths. Chunk 32 makes the reader issue 64-byte row reads and is
-// 2.4x slower than 256 on the backward.
+// The forward's channel chunk when the caller fixes none: 32, the narrowest. The forward reads its TILE input in
+// place and gets faster as the chunk narrows at every measured shape (p300, 110-core compute grid, fused fw, ms):
+//   T=1024 Q=K=512 V=1536: chunk 32 -> 0.041, 64 -> 0.045, 128 -> 0.054, 256 -> 0.065
+//   T=4096 Q=K=V=2048:     chunk 32 -> 0.308, 64 -> 0.324, 128 -> 0.402, 256 -> 0.428
+//   T=4096 Q=K=V=4096:     chunk 32 -> 0.596, 64 -> 0.628, 128 -> 0.766, 256 -> 0.837
+// The backward picks its own chunk (qkv_causal_conv1d_silu_bw_work_split); the arguments stay so a device- or
+// width-dependent choice can return without touching the callers.
 uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t channels, const ttnn::distributed::MeshDevice& device);
 
 // True when a caller-fixed channel_chunk_size is a tile-aligned divisor of channels whose backward L1 budget fits the
@@ -35,7 +36,7 @@ struct QkvCausalConv1dSiluBackwardWorkSplit {
 
 // Picks the (channel_chunk_size, row_splits) pair with the lowest modelled cost over `cores` cores; a nonzero
 // argument fixes that dimension. Candidate chunks are the tile-aligned divisors of channels <= 256 that fit
-// l1_bytes. See the cost model in qkv_causal_conv1d_silu_bw.cpp.
+// l1_bytes; the model depends on compute_tap_grads. See the cost model in qkv_causal_conv1d_silu_bw.cpp.
 QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
     uint32_t channels,
     uint32_t row_count,

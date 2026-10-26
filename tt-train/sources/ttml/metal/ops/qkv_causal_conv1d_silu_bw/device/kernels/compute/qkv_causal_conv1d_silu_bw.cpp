@@ -187,7 +187,7 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer output(dfb::output);
     DataflowBuffer ones(dfb::ones);
 
-    // The reader pushes the taps once per channel block (see reader.cpp); they are popped when the block changes.
+    // The reader pushes the taps once per channel block (see the reader); they are popped when the block changes.
     constexpr uint32_t no_block = ~0U;
     uint32_t current_block = no_block;
     for (uint32_t item = 0; item < wi_count; ++item) {

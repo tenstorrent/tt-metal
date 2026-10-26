@@ -119,26 +119,31 @@ xt::xarray<float> rank4(const xt::xarray<float>& a) {
     return xt::reshape_view(a, {size_t{1}, size_t{1}, a.shape()[1], a.shape()[2]});
 }
 
-// The cost model reproduces the choices measured on a 110-core grid (see qkv_causal_conv1d_silu_bw.cpp).
+// The cost model reproduces the choices measured on a 110-core grid (see qkv_causal_conv1d_silu_bw.cpp): the
+// measured best, or one within 3% of it.
 TEST(QkvCausalConv1dSiluWorkSplit, MatchesMeasuredChoices) {
     constexpr uint32_t cores = 110;
     constexpr uint64_t l1 = 1 << 20;
-    const auto pick = [&](uint32_t channels, uint32_t rows, uint32_t chunk = 0, uint32_t splits = 0) {
-        const auto w = ttml::metal::qkv_causal_conv1d_silu_bw_work_split(channels, rows, cores, l1, chunk, splits);
-        return std::pair{w.channel_chunk_size, w.row_splits};
-    };
-    EXPECT_EQ(pick(6144, 4096), (std::pair{256U, 4U}));
-    EXPECT_EQ(pick(12288, 4096), (std::pair{256U, 2U}));
-    // Short sequences fill the grid with narrower chunks instead of more splits.
-    EXPECT_EQ(pick(6144, 512), (std::pair{128U, 2U}));
-    EXPECT_EQ(pick(3072, 1024), (std::pair{128U, 4U}));
+    const auto pick =
+        [&](uint32_t channels, uint32_t rows, bool tap_grads = true, uint32_t chunk = 0, uint32_t splits = 0) {
+            const auto w =
+                ttml::metal::qkv_causal_conv1d_silu_bw_work_split(channels, rows, cores, l1, chunk, splits, tap_grads);
+            return std::pair{w.channel_chunk_size, w.row_splits};
+        };
+    EXPECT_EQ(pick(2560, 1024), (std::pair{32U, 4U}));  // the Qwen3.8 per-chip shape
+    EXPECT_EQ(pick(2560, 1024, false), (std::pair{32U, 4U}));
+    EXPECT_EQ(pick(6144, 4096), (std::pair{32U, 4U}));
+    EXPECT_EQ(pick(6144, 4096, false), (std::pair{32U, 4U}));
+    EXPECT_EQ(pick(12288, 4096), (std::pair{32U, 2U}));  // measured best 64/4, 4% faster
+    EXPECT_EQ(pick(12288, 4096, false), (std::pair{32U, 2U}));
+    EXPECT_EQ(pick(6144, 512), (std::pair{64U, 1U}));
+    EXPECT_EQ(pick(3072, 1024), (std::pair{32U, 1U}));
     // A fixed dimension is kept.
-    EXPECT_EQ(pick(6144, 4096, 64), (std::pair{64U, 1U}));
-    EXPECT_EQ(pick(6144, 4096, 0, 9).second, 9U);
-    EXPECT_EQ(pick(6144, 4096, 128, 3), (std::pair{128U, 3U}));
-    // The chunk divides C, and 32 is only a fallback.
+    EXPECT_EQ(pick(6144, 4096, true, 64), (std::pair{64U, 1U}));
+    EXPECT_EQ(pick(6144, 4096, true, 0, 9).second, 9U);
+    EXPECT_EQ(pick(6144, 4096, true, 128, 3), (std::pair{128U, 3U}));
+    // The chunk divides C.
     EXPECT_EQ(192 % pick(192, 256).first, 0U);
-    EXPECT_NE(pick(192, 256).first, 32U);
     EXPECT_EQ(pick(32, 256).first, 32U);
 }
 
@@ -288,8 +293,8 @@ INSTANTIATE_TEST_SUITE_P(
         MetalCase{{512, 256, 128, 128}, 256, 0},
         MetalCase{{512, 256, 128, 128}, 32, 0},
         MetalCase{{256, 320, 320, 320}, 32, 5},  // 150 items: cores run two, some across a channel block
-        MetalCase{{256, 128, 64, 64}, 0, 0},     // auto chunk: 256
-        MetalCase{{96, 96, 64, 32}, 0, 2}));     // auto chunk: 192 (C = 192 is not a multiple of 256)
+        MetalCase{{256, 128, 64, 64}, 0, 0},     // auto chunk and splits
+        MetalCase{{96, 96, 64, 32}, 0, 2}));     // auto chunk at a fixed split
 
 // A program-cache hit reads the new run's buffers: the first run's inputs stay alive so the second lands elsewhere.
 TEST_F(QkvCausalConv1dSiluTest, ProgramCacheHitReadsNewBuffers) {

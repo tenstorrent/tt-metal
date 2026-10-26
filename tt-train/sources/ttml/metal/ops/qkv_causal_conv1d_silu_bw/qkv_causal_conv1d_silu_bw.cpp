@@ -42,10 +42,8 @@ std::vector<uint32_t> candidate_chunks(
 
 }  // namespace
 
-uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t channels, const ttnn::distributed::MeshDevice& device) {
-    constexpr uint32_t tw = tt::constants::TILE_WIDTH;
-    const auto chunks = candidate_chunks(channels, available_l1_bytes(device), tw);
-    return chunks.empty() ? tw : chunks.front();
+uint32_t qkv_causal_conv1d_silu_chunk_size(uint32_t, const ttnn::distributed::MeshDevice&) {
+    return tt::constants::TILE_WIDTH;
 }
 
 bool qkv_causal_conv1d_silu_bw_chunk_fits(
@@ -69,34 +67,30 @@ QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
     bool compute_tap_grads) {
     constexpr uint32_t tw = tt::constants::TILE_WIDTH;
     const uint32_t tile_rows = row_count / tt::constants::TILE_HEIGHT;
-    // Cost of one (chunk, splits) choice, in tile units: passes over the core grid x (steps per item x cost of a
-    // step + cost of an item). A step handles one 32-row tile row of channel_tiles tile columns and costs
-    // channel_tiles + 2: the per-step NoC barriers and pipeline hand-offs do not shrink with the chunk. An item
-    // does its own steps plus the halo step, and costs 4 * (channel_tiles + 1) on top: loading the taps, filling
-    // and draining the reader-compute-writer pipeline, and writing the grad_tap partial. Fitted on a p300 with a
-    // 110-core compute grid over chunks 32..256 and 1..32 splits at T=512 / 1024 / 4096 (7% mean error); it
-    // picks the measured best at every shape: T=4096 C=6144 -> 256/4 (1 pass; 9 splits, 2 passes, is 2% slower),
-    // T=4096 C=12288 -> 256/2 (16 splits, 7 passes, is 12% slower), T=512 C=6144 -> 128/2 and T=1024 C=3072 ->
-    // 128/4, both 20% faster than 256 with any split. The pass boundaries move with the grid size.
-    constexpr uint64_t step_overhead_tiles = 2;
-    constexpr uint64_t item_overhead_tiles_per_tile = 4;
+    // Cost of one (chunk, splits) choice, in tile units: passes over the core grid x (steps per item x channel tiles
+    // + cost of an item). A step handles one 32-row tile row of channel_tiles tile columns; an item does its own
+    // steps plus the halo step, and with tap gradients costs channel_tiles + 1 on top for the grad_tap partial it
+    // accumulates and writes. With frozen taps no per-item or per-step overhead is measurable. Fitted on a p300
+    // with a 110-core compute grid over 276 (chunk, splits) points, chunks 32..256 and 1..32 splits, at
+    // T=512 / 1024 / 4096 and C=2560 / 3072 / 6144 / 12288: mean error 8.6% (trainable taps) and 6.3% (frozen).
+    // The pick is the measured best at T=1024 C=2560 / 3072 and T=512 C=6144, and within 2.6% / 2.5% at T=4096
+    // C=6144 (32/4 against 128/2 trainable, 64/8 frozen) and 4.1% / 6.3% at T=4096 C=12288 (32/2 against 64/4
+    // and 96/6). The pass boundaries move with the grid.
     const auto cost = [&](uint32_t chunk, uint32_t splits) {
         const uint64_t channel_tiles = chunk / tw;
         const uint64_t items = static_cast<uint64_t>(channels / chunk) * splits;
         const uint64_t rounds = (items + cores - 1) / cores;
         const uint64_t halo_steps = splits > 1 ? 1 : 0;
         const uint64_t steps_per_item = (tile_rows + splits - 1) / splits + halo_steps;
-        return rounds * (steps_per_item * (channel_tiles + step_overhead_tiles) +
-                         item_overhead_tiles_per_tile * (channel_tiles + 1));
+        const uint64_t item_tiles = compute_tap_grads ? channel_tiles + 1 : 0;
+        return rounds * (steps_per_item * channel_tiles + item_tiles);
     };
 
     std::vector<uint32_t> chunks;
     if (channel_chunk_size != 0) {
         chunks.push_back(channel_chunk_size);
     } else {
-        // Chunk 32 makes the reader issue 64-byte row reads and runs 1.5x slower than chunk 64 at the same
-        // split, more than the model predicts, so it is only a fallback.
-        chunks = candidate_chunks(channels, l1_bytes, 2 * tw, compute_tap_grads);
+        chunks = candidate_chunks(channels, l1_bytes, tw, compute_tap_grads);
         if (chunks.empty()) {
             chunks.push_back(tw);
         }

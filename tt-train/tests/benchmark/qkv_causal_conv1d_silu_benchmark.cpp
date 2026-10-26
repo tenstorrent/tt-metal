@@ -8,7 +8,7 @@
 //   autograd  - ops::qkv_causal_conv1d_silu forward + backward from a TILE input with frozen taps: the call the
 //               model makes, layout conversions and tap post-processing included
 // Defaults are the Qwen3.8-27B per-chip shape (TP=4): T=1024, Q=K=512, V=1536. Env: TTML_QKV_CONV_BENCH_T,
-// _WIDTH (sets Q=K=V) or _Q/_K/_V, _CHUNKS (csv, default 64,128,256), _SPLITS (csv, 0 = auto).
+// _WIDTH (sets Q=K=V) or _Q/_K/_V, _CHUNKS (csv, default 32,64,128,256), _SPLITS (csv, 0 = auto).
 
 #include <benchmark/benchmark.h>
 #include <fmt/format.h>
@@ -31,6 +31,7 @@
 #include "autograd/tensor.hpp"
 #include "benchmark_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/common/program_utils.hpp"
 #include "metal/operations.hpp"
 #include "ops/qkv_causal_conv1d_silu_op.hpp"
 #include "test_utils/random_data.hpp"
@@ -195,7 +196,7 @@ void BM_QkvCausalConv1dSilu(benchmark::State& state) {
         env_u32("TTML_QKV_CONV_BENCH_Q", W != 0 ? W : 512),
         env_u32("TTML_QKV_CONV_BENCH_K", W != 0 ? W : 512),
         env_u32("TTML_QKV_CONV_BENCH_V", W != 0 ? W : 1536)};
-    const auto chunks = env_list("TTML_QKV_CONV_BENCH_CHUNKS", {64, 128, 256});
+    const auto chunks = env_list("TTML_QKV_CONV_BENCH_CHUNKS", {32, 64, 128, 256});
     const auto splits = env_list("TTML_QKV_CONV_BENCH_SPLITS", {0});
     const uint32_t warmup = 3;
     const uint32_t measure = 10;
@@ -208,15 +209,27 @@ void BM_QkvCausalConv1dSilu(benchmark::State& state) {
 
     const double composite_ms = time_ms([&] { composite_bw(in, T); }, warmup, measure);
     fmt::print("composite bw (stock ttnn ops): {:.3f} ms\n", composite_ms);
-    double best_fw = 1e9, best_bw = 1e9, best_bw_frozen = 1e9;
+    struct Best {
+        double ms = 1e9;
+        uint32_t chunk = 0, splits = 0;
+        void offer(double candidate_ms, uint32_t candidate_chunk, uint32_t candidate_splits) {
+            if (candidate_ms < ms) {
+                ms = candidate_ms;
+                chunk = candidate_chunk;
+                splits = candidate_splits;
+            }
+        }
+    };
+    double best_fw = 1e9;
+    Best best_bw, best_bw_frozen;
     for (const auto chunk : chunks) {
         const double fw_ms = time_ms([&] { fused_fw(in, w, chunk); }, warmup, measure);
         best_fw = std::min(best_fw, fw_ms);
         for (const auto split : splits) {
             const double bw_ms = time_ms([&] { fused_bw(in, w, chunk, split, true); }, warmup, measure);
             const double bw_frozen_ms = time_ms([&] { fused_bw(in, w, chunk, split, false); }, warmup, measure);
-            best_bw = std::min(best_bw, bw_ms);
-            best_bw_frozen = std::min(best_bw_frozen, bw_frozen_ms);
+            best_bw.offer(bw_ms, chunk, split);
+            best_bw_frozen.offer(bw_frozen_ms, chunk, split);
             fmt::print(
                 "chunk={:4} splits={:3}  fused fw {:.3f} ms  fused bw {:.3f} ms  frozen taps {:.3f} ms  bw speedup vs "
                 "composite {:.2f}x\n",
@@ -228,6 +241,21 @@ void BM_QkvCausalConv1dSilu(benchmark::State& state) {
                 composite_ms / bw_ms);
         }
     }
+    // What the cost model would pick on this grid, next to the best of the rows above (splits 0 = the model's pick).
+    const uint64_t l1 = ttml::metal::available_l1_bytes(*device);
+    for (const auto& [name, tap_grads, best] :
+         {std::tuple{"bw", true, best_bw}, std::tuple{"frozen taps", false, best_bw_frozen}}) {
+        const auto pick =
+            ttml::metal::qkv_causal_conv1d_silu_bw_work_split(w.c(), T, grid.x * grid.y, l1, 0, 0, tap_grads);
+        fmt::print(
+            "{}: auto pick chunk={} splits={}; best measured chunk={} splits={} at {:.3f} ms\n",
+            name,
+            pick.channel_chunk_size,
+            pick.row_splits,
+            best.chunk,
+            best.splits,
+            best.ms);
+    }
     const double autograd_ms = time_ms([&] { autograd_fw_bw(in, w); }, warmup, measure);
     fmt::print("autograd op, TILE input, frozen taps (fw + bw, auto chunk / splits): {:.3f} ms\n", autograd_ms);
 
@@ -236,8 +264,8 @@ void BM_QkvCausalConv1dSilu(benchmark::State& state) {
     }
     state.counters["Composite_bw_ms"] = composite_ms;
     state.counters["Fused_fw_ms"] = best_fw;
-    state.counters["Fused_bw_ms"] = best_bw;
-    state.counters["Fused_bw_frozen_taps_ms"] = best_bw_frozen;
+    state.counters["Fused_bw_ms"] = best_bw.ms;
+    state.counters["Fused_bw_frozen_taps_ms"] = best_bw_frozen.ms;
     state.counters["Autograd_fw_bw_ms"] = autograd_ms;
     ttml::autograd::ctx().reset_graph();
 }
