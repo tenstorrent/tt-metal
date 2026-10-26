@@ -40,34 +40,6 @@ namespace tt::tt_metal {
 
 // ─── MetalEnvImpl core ───────────────────────────────────────────────────────
 
-namespace {
-
-// The launcher (tt-run) assigns each process its mesh through TT_MESH_ID / TT_MESH_HOST_RANK. An explicit
-// non-default value in the descriptor must agree with the environment.
-void apply_local_mesh_binding_from_env(FabricConfigDescriptor& fabric) {
-    const FabricConfigDescriptor defaults{};
-    if (const char* mesh_id_str = std::getenv("TT_MESH_ID")) {
-        const tt_fabric::MeshId env_mesh_id{static_cast<uint32_t>(std::stoul(mesh_id_str))};
-        TT_FATAL(
-            fabric.mesh_id == defaults.mesh_id || fabric.mesh_id == env_mesh_id,
-            "FabricConfigDescriptor.mesh_id {} conflicts with TT_MESH_ID={}",
-            *fabric.mesh_id,
-            mesh_id_str);
-        fabric.mesh_id = env_mesh_id;
-    }
-    if (const char* host_rank_str = std::getenv("TT_MESH_HOST_RANK")) {
-        const tt_fabric::MeshHostRankId env_host_rank{static_cast<uint32_t>(std::stoul(host_rank_str))};
-        TT_FATAL(
-            fabric.host_rank == defaults.host_rank || fabric.host_rank == env_host_rank,
-            "FabricConfigDescriptor.host_rank {} conflicts with TT_MESH_HOST_RANK={}",
-            *fabric.host_rank,
-            host_rank_str);
-        fabric.host_rank = env_host_rank;
-    }
-}
-
-}  // namespace
-
 std::mutex MetalEnvImpl::s_registry_mutex_;
 std::set<MetalEnvImpl*> MetalEnvImpl::s_registry_;
 std::once_flag MetalEnvImpl::s_atfork_registered_;
@@ -88,7 +60,9 @@ MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::mov
         custom_mesh_graph_desc_path_ = rtoptions_->get_custom_fabric_mesh_graph_desc_path();
     }
 
-    apply_local_mesh_binding_from_env(fabric_desc_);
+    // Pick up the launcher's mesh binding (TT_MESH_ID / TT_MESH_HOST_RANK) from env/rtoptions
+    fabric_desc_.mesh_id = rtoptions_->get_fabric_mesh_id();
+    fabric_desc_.host_rank = rtoptions_->get_fabric_mesh_host_rank();
     fabric_mesh_id_ = fabric_desc_.mesh_id;
     fabric_host_rank_ = fabric_desc_.host_rank;
 
@@ -309,9 +283,8 @@ void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
     fabric_udm_mode_ = fabric.fabric_udm_mode;
     fabric_manager_ = fabric.fabric_manager;
     fabric_router_config_ = fabric.router_config;
-    apply_local_mesh_binding_from_env(fabric_desc_);
-    fabric_mesh_id_ = fabric_desc_.mesh_id;
-    fabric_host_rank_ = fabric_desc_.host_rank;
+    fabric_mesh_id_ = fabric.mesh_id;
+    fabric_host_rank_ = fabric.host_rank;
 }
 
 namespace {

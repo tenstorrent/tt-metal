@@ -183,6 +183,8 @@ TEST(MetalEnv, FabricConfigDescriptorDefaults) {
     EXPECT_EQ(desc.fabric_tensix_config, tt_fabric::FabricTensixConfig::DISABLED);
     EXPECT_EQ(desc.fabric_udm_mode, tt_fabric::FabricUDMMode::DISABLED);
     EXPECT_EQ(desc.fabric_manager, tt_fabric::FabricManagerMode::DEFAULT);
+    EXPECT_EQ(desc.mesh_id, tt_fabric::MeshId{0});
+    EXPECT_EQ(desc.host_rank, tt_fabric::MeshHostRankId{0});
 }
 
 MetalEnvDescriptor wormhole_mock_descriptor() {
@@ -195,6 +197,8 @@ TEST(MetalEnv, ConfigureFabricStoresDescriptor) {
     fc.reliability_mode = tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
     fc.num_routing_planes = 4;
     fc.fabric_tensix_config = tt_fabric::FabricTensixConfig::MUX;
+    fc.mesh_id = tt_fabric::MeshId{1};
+    fc.host_rank = tt_fabric::MeshHostRankId{2};
 
     MetalEnv env(wormhole_mock_descriptor());
     env.configure_fabric(fc);
@@ -205,11 +209,38 @@ TEST(MetalEnv, ConfigureFabricStoresDescriptor) {
     EXPECT_TRUE(stored.num_routing_planes.has_value());
     EXPECT_EQ(stored.num_routing_planes.value(), 4);
     EXPECT_EQ(stored.fabric_tensix_config, tt_fabric::FabricTensixConfig::MUX);
+    EXPECT_EQ(stored.mesh_id, tt_fabric::MeshId{1});
+    EXPECT_EQ(stored.host_rank, tt_fabric::MeshHostRankId{2});
 }
 
 TEST(MetalEnv, DefaultFabricConfigIsDisabled) {
     MetalEnv env(wormhole_mock_descriptor());
     EXPECT_EQ(env.get_fabric_config_descriptor().fabric_config, tt_fabric::FabricConfig::DISABLED);
+}
+
+// Without configure_fabric, the mesh binding comes from TT_MESH_ID / TT_MESH_HOST_RANK (mesh 0 / host rank 0 when
+// unset).
+TEST(MetalEnv, DefaultMeshBindingComesFromRtOptions) {
+    MetalEnv env(wormhole_mock_descriptor());
+    const auto& rtoptions = MetalEnvAccessor(env).impl().get_rtoptions();
+    const auto& desc = env.get_fabric_config_descriptor();
+    EXPECT_EQ(desc.mesh_id, rtoptions.get_fabric_mesh_id());
+    EXPECT_EQ(desc.host_rank, rtoptions.get_fabric_mesh_host_rank());
+}
+
+// configure_fabric takes the mesh binding from the descriptor it is given, not from the environment.
+TEST(MetalEnv, ConfigureFabricMeshBindingFromDescriptor) {
+    MetalEnv env(wormhole_mock_descriptor());
+    env.configure_fabric(
+        {.fabric_config = tt_fabric::FabricConfig::FABRIC_1D,
+         .mesh_id = tt_fabric::MeshId{3},
+         .host_rank = tt_fabric::MeshHostRankId{1}});
+    EXPECT_EQ(env.get_fabric_config_descriptor().mesh_id, tt_fabric::MeshId{3});
+    EXPECT_EQ(env.get_fabric_config_descriptor().host_rank, tt_fabric::MeshHostRankId{1});
+
+    env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D});
+    EXPECT_EQ(env.get_fabric_config_descriptor().mesh_id, tt_fabric::MeshId{0});
+    EXPECT_EQ(env.get_fabric_config_descriptor().host_rank, tt_fabric::MeshHostRankId{0});
 }
 
 TEST(MetalEnv, ConfigureFabricLastCallWins) {
