@@ -174,6 +174,8 @@ struct FlatProbes {
     std::optional<std::string> w_after_x;           // MIMO_FL_W_AFTER_X (probe: weights only once x arrived)
     std::optional<std::string> x2;                  // MIMO_FL_X2
     std::optional<std::string> x1_heads;            // MIMO_FL_X1_HEADS
+    std::optional<std::string> x1_rect;             // MIMO_FL_X1_RECT
+    std::optional<std::string> fw_slots;            // MIMO_FL_FW_SLOTS
     std::optional<std::string> xdown;               // MIMO_FL_XDOWN
     std::optional<std::string> xfwd;                // MIMO_FL_XFWD
     std::optional<std::string> xhelp_all;           // MIMO_FL_XHELP_ALL

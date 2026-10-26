@@ -144,6 +144,20 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* fw_credit =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(fw_credit_sem));
     constexpr uint32_t sb_bytes = sb_tiles * tb;
+#ifdef XMC_CHAIN
+    // (chain mode: an own super-block goes to the other primary first, as soon as it is tilized, under its own
+    // transaction id - 15, past the head batches' 1..DEPTH - and its count moves once that write is acknowledged,
+    // polled while this primary feeds its own snake: neither snake waits for the other's progress)
+    constexpr uint32_t fw_trid = 15;
+    bool fw_pending = false;
+    auto fw_poll = [&]() {
+        if (fw_pending && noc_cmd_buf_ready(noc_index, write_cmd_buf) &&
+            ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, fw_trid)) {
+            noc_semaphore_inc(o_data, 1);
+            fw_pending = false;
+        }
+    };
+#endif
 #endif
     for (uint32_t b = 0; b < num_sb; ++b) {
 #ifdef XMC_FWD
@@ -181,6 +195,12 @@ void kernel_main() {
 #ifdef XMC_FWD
         if (!own) {  // the other half: forwarded by the other primary
             ZW("XMC_FW");
+#ifdef XMC_CHAIN
+            while (*fw_data < ob + 1) {
+                invalidate_l1_cache();
+                chain_retire(XMC_CHAIN_DEPTH);  // (waiting: count acknowledged batches into the heads' XARR)
+            }
+#endif
             noc_semaphore_wait_min(fw_data, ob + 1);
             src = fw_ring + (ob % fw_slots) * sb_bytes;
         } else
@@ -221,9 +241,25 @@ void kernel_main() {
         }
         const uint32_t src = get_read_ptr(sb_cb);
 #endif
+#if defined(XMC_FWD) && defined(XMC_CHAIN)
+        if (own) {  // to the other primary first (its slot ob % fw_slots, once freed there)
+            while (ob >= fw_slots && *fw_credit < ob + 1 - fw_slots) {
+                invalidate_l1_cache();
+                chain_retire(XMC_CHAIN_DEPTH);
+            }
+            for (uint32_t o = 0; o < sb_bytes; o += NOC_MAX_BURST_SIZE) {
+                const uint32_t n = sb_bytes - o < NOC_MAX_BURST_SIZE ? sb_bytes - o : NOC_MAX_BURST_SIZE;
+                noc_async_write_one_packet_with_trid(src + o, o_ring + (ob % fw_slots) * sb_bytes + o, n, fw_trid);
+            }
+            fw_pending = true;
+        }
+#endif
         uint32_t i = 0;
         while (i < per_sb) {
             invalidate_l1_cache();
+#if defined(XMC_FWD) && defined(XMC_CHAIN)
+            fw_poll();
+#endif
             const uint32_t lim = min_freed() + x_slots;
             uint32_t n = 0;
             while (i + n < per_sb && gidx(sent + n) < lim) {
@@ -243,6 +279,9 @@ void kernel_main() {
                 while (gidx(sent) >= min_freed() + x_slots) {
                     invalidate_l1_cache();
                     chain_retire(XMC_CHAIN_DEPTH);
+#ifdef XMC_FWD
+                    fw_poll();
+#endif
                 }
                 continue;
 #endif
@@ -316,9 +355,16 @@ void kernel_main() {
             if (ob >= fw_slots) {
                 noc_semaphore_wait_min(fw_credit, ob + 1 - fw_slots);
             }
+#ifdef XMC_CHAIN
+            while (fw_pending) {  // (issued before the snake sends; the source slot is released below)
+                chain_retire(XMC_CHAIN_DEPTH);
+                fw_poll();
+            }
+#else
             noc_async_write(src, o_ring + (ob % fw_slots) * sb_bytes, sb_bytes);
             noc_async_write_barrier();  // (landed before its count moves; and the source slot is released below)
             noc_semaphore_inc(o_data, 1);
+#endif
         } else {
             noc_semaphore_inc(o_credit, 1);  // its forward slot is free again (the multicasts have left: flushed above)
             continue;

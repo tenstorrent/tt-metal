@@ -157,6 +157,15 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         lo.x_once > 0 || (lo.x_once < 0 && once_ok && rects_full && !x_probe2 && (lo.x_path < 0 || lo.x_path == 3) &&
                           p.nh >= 1 && lo.rows_hint > 0 && lo.rows_hint <= 320);
     TT_FATAL(!x_once || once_ok, "flat layout x_once: two rectangles, one subgrid, no M-groups by rectangle only");
+    // Probe MIMO_FL_X1_RECT=k: x_once reads with rectangle k's relays and the snake starts there. With the eastern
+    // rectangle and NOC1 forwarding (MIMO_FL_X_CHAIN_NOC=1 - the gate/up receiver's h writes then go on NOC0, the
+    // NOC0-wedge recipe's ingredient: needs the long soak before it can be a default) the crossing is a few hops west:
+    // GLM-5.3 E 8 M 128 / 160 / 256 466 / 490 / 621 -> 455 / 483 / 597 us, GLM-Flash 142 370 -> 361, K2.7 107 759 ->
+    // 749, K3 91 1197 -> 1199 (FLAT_EXPERT_WORKLOG.md).
+    uint32_t k0 = 0;
+    if (x_once && cstr(pr.x1_rect)) {
+        k0 = static_cast<uint32_t>(std::atoi(cstr(pr.x1_rect))) % NR;
+    }
     // MIMO_FL_X2=1: x read once with both multicasters: rectangle k's relays read and tilize the super-blocks g with
     // g % 2 == k (helpers sharing them as before) and its primary multicasts each into BOTH rectangles, setting its own
     // arrival counter (rectangle 0's XARR, rectangle 1's semaphore 3); the gate/up cores merge the two streams
@@ -189,7 +198,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             full = full && rect_cores[k].size() == (x1 - x0 + 1) * (y1 - y0 + 1);
         }
         // (x_once: rectangle 0's primary feeds every rectangle's snake / column heads - x read and tilized once)
-        const bool can = !x_two && !p.xfwd && p.nh >= 1 && full;
+        const bool can = !x_two && p.nh >= 1 && full;  // (XFWD: each primary feeds its own snake)
         xo.mode = opt(lo.x_path, can ? 3 : 0);
         TT_FATAL(xo.mode <= 3, "layout x_path {}: 0 multicast, 1 tree, 2 column chains, 3 snakes", xo.mode);
         if (xo.mode != 0) {
@@ -230,8 +239,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     std::vector<std::vector<uint32_t>> x_tails(NR);  // snakes: every snake's tail (gate/up index)
     if (x_chain) {
         TT_FATAL(
-            !x_two && !p.xfwd && p.nh >= 1 && (!x_once || x_chain_mode >= 2),
-            "flat x chains: one primary per rectangle, or x_once with snakes / column chains (no X2 / XFWD)");
+            !x_two && p.nh >= 1 && (!x_once || x_chain_mode >= 2) && !(x_once && p.xfwd),
+            "flat x chains: one primary per rectangle, or x_once with snakes / column chains (no X2; XFWD without "
+            "x_once)");
         bool rv_noc1 = true;
         if (lo.x_fwd_noc >= 0 || x_fwd_nc) {  // (the forwarding NoC: no multicast now)
             rv_noc1 = xo.noc1;
@@ -316,13 +326,14 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     std::vector<uint32_t> once_heads;
     if (x_once) {
         const bool join = x_chain_mode == 3 && !cstr(pr.x1_heads);
-        for (uint32_t k = 0; k < (join ? 1u : NR); ++k) {
+        for (uint32_t i = 0; i < (join ? 1u : NR); ++i) {
+            const uint32_t k = (k0 + i) % NR;
             once_heads.insert(once_heads.end(), x_heads[k].begin(), x_heads[k].end());
         }
         if (join) {
             TT_FATAL(NR == 2 && x_heads[0].size() == x_heads[1].size(), "flat x_once snakes: two rectangles alike");
             for (size_t g = 0; g < x_heads[0].size(); ++g) {
-                const uint32_t t = x_tails[0][g], h = x_heads[1][g];
+                const uint32_t t = x_tails[k0][g], h = x_heads[1 - k0][g];
                 xlink[t].succ0 = pk(p.gu[h]);
                 xlink[h].pred = pk(p.gu[t]);
             }
@@ -1026,7 +1037,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         std::vector<CoreCoord> xrel;  // the relays that read x (x1: rectangle 0's only)
         for (uint32_t idx = 0; idx < p.relays.size(); ++idx) {
-            if (!x_once || idx % NR == 0) {
+            if (!x_once || idx % NR == k0) {
                 xrel.push_back(p.relays[idx]);
             }
         }
@@ -1072,7 +1083,8 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             tz_def["TZ_SKIP"] = "1";
         }
         const auto ktz = cp("se11_tz.cpp", xrel, {0, 1, MT}, tz_def);
-        const std::vector<CoreCoord> prim(p.relays.begin(), p.relays.begin() + (x_once ? 1 : NR));
+        const std::vector<CoreCoord> prim = x_once ? std::vector<CoreCoord>{p.relays[k0]}
+                                                   : std::vector<CoreCoord>(p.relays.begin(), p.relays.begin() + NR);
         Defines xmc_def = with(
             dyn_def,
             {{"SE_SBT", sbt},
@@ -1116,8 +1128,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         std::vector<KernelHandle> khl;
         for (uint32_t j = 0; j < p.nh; ++j) {
-            const std::vector<CoreCoord> hl(
-                p.relays.begin() + NR + NR * j, p.relays.begin() + NR + NR * j + (x_once ? 1 : NR));
+            const std::vector<CoreCoord> hl =
+                x_once ? std::vector<CoreCoord>{p.relays[NR + NR * j + k0]}
+                       : std::vector<CoreCoord>(p.relays.begin() + NR + NR * j, p.relays.begin() + NR + NR * j + NR);
             const uint32_t data_sem = std::vector<uint32_t>{4, 7, 8, 10}[j];
             khl.push_back(dm(
                 "se13_xhelp.cpp",
@@ -1132,7 +1145,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         for (uint32_t idx = 0; idx < p.relays.size(); ++idx) {
             const CoreCoord rl = p.relays[idx];
             const uint32_t k = idx % NR;
-            if (x_once && k != 0) {
+            if (x_once && k != k0) {
                 continue;  // rectangle 1's relays: no x work
             }
             const auto [x0, x1, y0, y1] = p.rects[k];
@@ -1384,7 +1397,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     .lit(GATH)
                     .a(AddrSrc::Arena, p.x_off)
                     .lits({0, x_fwd_nc ? 0u : xlink[ci].pred, x_fwd_nc ? 0u : xlink[ci].succ0})  // (x chain links)
-                    .lit(pk(p.relays[x_once || x_two ? 0 : p.rect_of(gc)]))
+                    .lit(pk(p.relays[x_once ? k0 : (x_two ? 0 : p.rect_of(gc))]))
                     .a(AddrSrc::Words, word_rel(ci))
                     .a(AddrSrc::Arena, p.h_off)
                     .lit(j % G)
@@ -1401,7 +1414,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                         .lit(xlink[ci].pred)
                         .lit(xlink[ci].second ? WORD : SFREE)
                         .lit(xlink[ci].succ0)
-                        .lit(pk(p.relays[x_once ? 0 : p.rect_of(gc)]))
+                        .lit(pk(p.relays[x_once ? k0 : p.rect_of(gc)]))
                         .a(AddrSrc::Words, word_rel(ci));
                     add_rt(kxf, gc, f);
                 }

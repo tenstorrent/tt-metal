@@ -2098,3 +2098,15 @@ counts that are not multiples of 32 are never written and hold leftovers).
   half_empty +4..8%, GLM-5.3 random +2..3%): the same x per core in a shorter call - the one snake's x rate is then
   the bound (as above 320 rows), the two read-twice snakes are not.
 Logs: /localdev/mstaletovic/routings/ (go.sh, go.out, routings.json).
+
+### x read once, other layouts tried (2026-10-26, GLM-5.3 E 8, us M 128 / 160 / 512; read twice 495 / 526 / 962)
+- Joined snake, the eastern rectangle's relays + NOC1 forwarding (probes MIMO_FL_X1_RECT=1 MIMO_FL_X_CHAIN_NOC=1):
+  455 / 483 / 1058 (rectangle 0 + NOC1 461 / 497 / 1230, rectangle 1 + NOC0 462 / 542 / 1196). Not the default: the
+  gate/up receiver's h writes move to NOC0 (needs the long wedge soak first).
+- Two snakes, x read once, each primary hands its half to the other (MIMO_FL_XFWD now runs on the snakes; the hand-over
+  under its own transaction id 15, issued before the snake sends and retired in the background): 454 / 587 / 1267,
+  bit-exact (with the old write barrier after the snake sends: 463 / 619 / 1489). A deeper hand-over ring
+  (MIMO_FL_FW_SLOTS=4) does not fit the relay arena. Limit: each primary now sends 1.5x today's bytes, above what
+  one relay NCRISC's acked writes reach (~35 GB/s).
+Next: keep every RISC at <= today's load - the primaries read nothing and feed only their snake; the two helpers read /
+tilize half of x each and write every super-block into both primaries' landing rings.
