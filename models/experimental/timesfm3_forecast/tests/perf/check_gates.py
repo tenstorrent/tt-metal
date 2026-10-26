@@ -8,7 +8,9 @@
 For every record (``test``, ``name``, ``precision``) of the candidate:
 - every metric of ``golden_io.GATES[precision]`` must hold;
 - against the matching round-0 record, a higher-is-better metric may fall by at most ``golden_io.DRIFT`` and
-  ``spread_ratio_p99`` / ``spread_ratio_max`` may rise by at most the default drift.
+  ``spread_ratio_p99`` may rise by at most its drift; metrics without a ``golden_io.DRIFT`` entry (the min/max
+  metrics) are floor-only;
+- every round-0 record must be present in the candidate.
 Device time is judged separately by ``compare_bench.py``. Exits 1 if any check fails.
 """
 
@@ -22,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 from models.experimental.timesfm3_forecast.tests.golden_io import DRIFT, GATES, gate_failures  # noqa: E402
 
-LOWER_IS_BETTER = {"spread_ratio_max", "spread_ratio_p99"}
+LOWER_IS_BETTER = {"spread_ratio_p99"}
 
 
 def _key(r: dict) -> tuple:
@@ -33,6 +35,9 @@ def main(candidate: str, round0: str) -> int:
     cand = {_key(r): r for r in json.loads(Path(candidate).read_text())}
     base = {_key(r): r for r in json.loads(Path(round0).read_text())}
     bad = 0
+    for key in base.keys() - cand.keys():
+        print(f"== {'/'.join(str(k) for k in key)}: round-0 record missing from the candidate")
+        bad += 1
     for key, r in cand.items():
         print(f"== {'/'.join(str(k) for k in key)}")
         for metric, (op, bound) in GATES[r["precision"]].items():
@@ -43,9 +48,9 @@ def main(candidate: str, round0: str) -> int:
             v = r[metric]
             gate_ok = metric not in gate_failures({metric: v}, r["precision"])
             drift_ok, ref = True, None
-            if key in base and metric in base[key]:
+            if key in base and metric in base[key] and metric in DRIFT:
                 ref = base[key][metric]
-                band = DRIFT.get(metric, DRIFT["default"])
+                band = DRIFT[metric]
                 drift_ok = v <= ref + band if metric in LOWER_IS_BETTER else v >= ref - band
             status = "ok" if gate_ok and drift_ok else ("GATE" if not gate_ok else "DRIFT")
             bad += status != "ok"

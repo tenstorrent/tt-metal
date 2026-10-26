@@ -352,9 +352,10 @@ class TtTimesFM3:
 
         p, layer = self.precision, self.layers[i]
         xn = self._pre(h2)
-        hidden = linear(xn, layer["ff0"], p, activation="relu")
+        cfg = p.matmul_config("ffn")
+        hidden = linear(xn, layer["ff0"], p, activation="relu", compute_kernel_config=cfg)
         ttnn.deallocate(xn)
-        o = linear(hidden, layer["ff1"], p)
+        o = linear(hidden, layer["ff1"], p, compute_kernel_config=cfg)
         ttnn.deallocate(hidden)
         return self._post(o, layer["post_ff"], h2)
 
@@ -378,7 +379,9 @@ class TtTimesFM3:
         import ttnn
 
         picked = take_slots(x, inputs.rows, inputs.padded_seq, inputs.readout_start, inputs.readout_count)
-        out = linear(picked, self.head_w, self.precision, bias=self.head_b)
+        out = linear(
+            picked, self.head_w, self.precision, bias=self.head_b, compute_kernel_config=self.precision.matmul_config("head")
+        )
         ttnn.deallocate(picked)
         return out
 

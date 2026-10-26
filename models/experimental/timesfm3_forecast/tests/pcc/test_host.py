@@ -127,13 +127,14 @@ def test_broken_bands_fail_the_gates(name):
     ):
         m = {**head_metrics(head, broken), **final_metrics(ref, torch.from_numpy(host.postprocess(broken, hi)))}
         print(f"[{label}] {name}: " + ", ".join(f"{k} {v:.5f}" for k, v in m.items()))
-        failing = gate_failures(m, "accuracy")
-        must_fail = [
-            k
-            for k, (o, _) in GATES["accuracy"].items()
-            if o == op
-            and k != "pcc_final"
-            and (per_row or not (k.startswith("pcc_row") or k.startswith("spread_ratio")))
-        ]
-        passing = [k for k in must_fail if k not in failing]
-        assert not passing, f"{name}: the {label.lower()} output passes {passing}"
+        for precision in ("accuracy", "performance"):
+            failing = gate_failures(m, precision)
+            must_fail = [
+                k
+                for k, (o, _) in GATES[precision].items()
+                if o == op
+                and k != "pcc_final"
+                and (per_row or not (k.startswith("pcc_row") or k.startswith("spread_ratio")))
+            ]
+            passing = [k for k in must_fail if k not in failing]
+            assert not passing, f"{name}: the {label.lower()} output passes the {precision} {passing}"

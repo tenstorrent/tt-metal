@@ -65,7 +65,7 @@ NUM_QUANTILES = 9
 # smaller than a typical row's, yet it is comparable to their own variation. ``*_active`` skips those rows.
 ACTIVE_ROW_STD = 0.05
 # The gate table: metric -> (">=" or "<=", bound) per precision, used by the PCC suite and the bench records
-# (``floor_ok``) and by ``tests/perf/check_gates.py``. Proposed at the G1 re-raise; they change only through an
+# (``floor_ok``) and by ``tests/perf/check_gates.py``. Set by the orchestrator in D3 (G1); they change only through an
 # orchestrator decision (PLAN section 9).
 GATES = {
     "accuracy": {
@@ -85,20 +85,30 @@ GATES = {
     "performance": {
         "pcc_normalized": (">=", 0.995),
         "pcc_spread": (">=", 0.998),
-        "pcc_row_p01": (">=", 0.1),
-        "pcc_row_min": (">=", 0.05),
-        "pcc_row_p01_active": (">=", 0.95),
-        "pcc_row_min_active": (">=", 0.75),
-        "spread_ratio_p01": (">=", 0.85),
-        "spread_ratio_p99": ("<=", 1.15),
-        "spread_ratio_min": (">=", 0.25),
-        "spread_ratio_max": ("<=", 1.3),
+        "pcc_row_p01": (">=", 0.5),
+        "pcc_row_min": (">=", 0.3),
+        "pcc_row_p01_active": (">=", 0.97),
+        "pcc_row_min_active": (">=", 0.85),
+        "spread_ratio_p01": (">=", 0.9),
+        "spread_ratio_p99": ("<=", 1.1),
+        "spread_ratio_min": (">=", 0.5),
+        "spread_ratio_max": ("<=", 1.25),
         "pcc_final": (">=", 0.98),
         "pcc_final_spread": (">=", 0.998),
     },
 }
-# Allowed drift from round 0 for an accepted candidate (``check_gates.py``): PCC metrics may fall at most this far.
-DRIFT = {"pcc_normalized": 0.0005, "pcc_spread": 0.0005, "pcc_final_spread": 0.0005, "default": 0.01}
+# Allowed drift from round 0 for an accepted candidate (``check_gates.py``), per D3: higher-is-better metrics may fall
+# at most this far, ``spread_ratio_p99`` may rise at most this far. Min/max metrics are floor-only (no drift).
+DRIFT = {
+    "pcc_normalized": 0.0005,
+    "pcc_spread": 0.0005,
+    "pcc_final_spread": 0.0005,
+    "pcc_final": 0.01,
+    "pcc_row_p01": 0.01,
+    "pcc_row_p01_active": 0.01,
+    "spread_ratio_p01": 0.01,
+    "spread_ratio_p99": 0.01,
+}
 
 
 def gate_failures(metrics: dict, precision: str) -> dict:
@@ -106,6 +116,7 @@ def gate_failures(metrics: dict, precision: str) -> dict:
     out = {}
     for k, (op, bound) in GATES[precision].items():
         if k not in metrics:
+            out[k] = (None, op, bound)
             continue
         v = metrics[k]
         if (op == ">=" and not v >= bound) or (op == "<=" and not v <= bound):
@@ -190,6 +201,8 @@ def check_gates(
         flush=True,
     )
     failures = gate_failures(m, precision)
+    if expected_q is None:  # head-only check: the data-space metrics are not computed here
+        failures = {k: v for k, v in failures.items() if not k.startswith("pcc_final")}
     assert not failures, f"{name}: outside the gates: {failures}"
     return m
 

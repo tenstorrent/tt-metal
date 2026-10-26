@@ -122,7 +122,7 @@ def test_bench_shape(device, name, subset):
     check_gates(f"{name}[:{subset}]", g["head_readout"][:rows], head, g["quantiles"][:items], q, active=active)
 
 
-@pytest.mark.parametrize("name", ["bench_paper", "full16_2048_h128", "mv4x8_2048_h64"])
+@pytest.mark.parametrize("name", ["bench_paper", "bench_long_context", "full16_2048_h128", "mv4x8_2048_h64"])
 def test_performance_precision(device, name):
     tt = _model(device, "performance")
     g = load_golden(name)

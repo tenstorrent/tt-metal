@@ -54,6 +54,37 @@ PERF = {
         matmul_fidelity="hifi2", sdpa_fidelity="hifi2", matmul_fp32_acc=True, sdpa_fp32_acc=True
     ),
 }
+# D3 condition 1 (R1-0): the performance-policy candidates, all with fp32 accumulation.
+FP32 = dict(matmul_fp32_acc=True, sdpa_fp32_acc=True)
+PERF_R10 = {
+    "P2a bf8 except ffn + lofi, fp32 acc (interim)": dict(bf16_roles=("ffn",), **FP32),
+    "P5a bf8 except ffn + hifi2, fp32 acc": dict(
+        bf16_roles=("ffn",), matmul_fidelity="hifi2", sdpa_fidelity="hifi2", **FP32
+    ),
+    "P5b bf8 except ffn, lofi on bf8, hifi2 on ffn + sdpa": dict(
+        bf16_roles=("ffn",), matmul_fidelity="lofi", bf16_role_fidelity="hifi2", sdpa_fidelity="hifi2", **FP32
+    ),
+    "P5c bf8 except ffn, lofi on bf8 + sdpa, hifi2 on ffn": dict(
+        bf16_roles=("ffn",), matmul_fidelity="lofi", bf16_role_fidelity="hifi2", sdpa_fidelity="lofi", **FP32
+    ),
+    "P5d bf8 except ffn + head, lofi on bf8, hifi2 on ffn + head + sdpa": dict(
+        bf16_roles=("ffn", "head"), matmul_fidelity="lofi", bf16_role_fidelity="hifi2", sdpa_fidelity="hifi2", **FP32
+    ),
+}
+_ALL = ("tokenizer", "seq_qkv", "seq_wo", "var_qkv", "var_wo", "w_ov", "ffn", "head")
+_but = lambda *bf8: tuple(r for r in _ALL if r not in bf8)  # noqa: E731
+PERF_R10B = {
+    "P6a bf16, lofi except ffn (hifi2), sdpa hifi2": dict(
+        bf8_weights=False, bf16_roles=("ffn",), matmul_fidelity="lofi", bf16_role_fidelity="hifi2",
+        sdpa_fidelity="hifi2", **FP32
+    ),
+    "P6b bf8 qkv only, hifi2": dict(bf16_roles=_but("seq_qkv", "var_qkv"), matmul_fidelity="hifi2", sdpa_fidelity="hifi2", **FP32),
+    "P6c bf8 qkv + wo, hifi2": dict(
+        bf16_roles=_but("seq_qkv", "var_qkv", "seq_wo", "var_wo", "w_ov"), matmul_fidelity="hifi2",
+        sdpa_fidelity="hifi2", **FP32
+    ),
+    "P6d bf16, hifi2, sdpa lofi": dict(bf8_weights=False, matmul_fidelity="hifi2", sdpa_fidelity="lofi", **FP32),
+}
 BENCH = {"paper": "bench_paper", "long_context": "bench_long_context", "multivariate": "bench_multivariate"}
 SUITE = ["full16_2048_h64", "full16_2048_h128", "mv4x8_2048_h64", "gift64_h48"]
 NAMED_ROWS = [458, 483, 806, 226]  # paper rows named in D1
@@ -125,7 +156,7 @@ def main():
 
     ap = argparse.ArgumentParser()
     ap.add_argument("out_dir", type=Path)
-    ap.add_argument("--only", choices=["accuracy", "performance"])
+    ap.add_argument("--only", choices=["accuracy", "performance", "r1-0", "r1-0b"])
     args = ap.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
     out_json = args.out_dir / "accumulation_sweep.json"
@@ -138,6 +169,10 @@ def main():
             plans += [("accuracy", k, v) for k, v in ACC.items()]
         if args.only in (None, "performance"):
             plans += [("performance", k, v) for k, v in PERF.items()]
+        if args.only == "r1-0":
+            plans += [("performance", k, v) for k, v in PERF_R10.items()]
+        if args.only == "r1-0b":
+            plans += [("performance", k, v) for k, v in PERF_R10B.items()]
         for base, label, overrides in plans:
             precision = dataclasses.replace(TtPrecision.by_name(base), **overrides)
             tt = TtTimesFM3(device, weights, precision)

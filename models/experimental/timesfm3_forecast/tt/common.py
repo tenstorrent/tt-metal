@@ -45,6 +45,7 @@ class TtPrecision:
     sdpa_fidelity: str = "hifi2"
     sdpa_fp32_acc: bool = False
     embed_fidelity: str | None = None  # None | "hifi4" | "hifi4_fp32"
+    bf16_role_fidelity: str | None = None  # matmul fidelity of the ``bf16_roles`` (None: as ``matmul_fidelity``)
 
     @classmethod
     def accuracy(cls) -> "TtPrecision":
@@ -55,16 +56,16 @@ class TtPrecision:
 
     @classmethod
     def performance(cls) -> "TtPrecision":
-        """bfloat8_b weights except the FFN (bf16: a documented per-role exception; bf8 FFN weights put a
-        systematic error on every row), LoFi with fp32 dest accumulation (sweep variant P2a). Interim: R1-7 picks
-        the cheapest passing policy after the matmul configs change."""
+        """bfloat8_b weights on the QKV projections only, HiFi2 with fp32 dest accumulation everywhere (R1-0, D3
+        condition 1: variant P6b of ``doc/optimize/iter_00/r1_0/accumulation_sweep.md``, the cheapest variant that
+        passes every performance floor; bf8 on any other role, or LoFi, collapses the intermittent rows)."""
         return cls(
             name="performance",
             bf8_weights=True,
-            bf16_roles=("ffn",),
-            matmul_fidelity="lofi",
+            bf16_roles=tuple(r for r in WEIGHT_ROLES if r not in ("seq_qkv", "var_qkv")),
+            matmul_fidelity="hifi2",
             matmul_fp32_acc=True,
-            sdpa_fidelity="lofi",
+            sdpa_fidelity="hifi2",
             sdpa_fp32_acc=True,
         )
 
@@ -78,6 +79,7 @@ class TtPrecision:
             "weights": "bfloat8_b" if self.bf8_weights else "bf16",
             "bf16_roles": list(self.bf16_roles),
             "matmul": f"{self.matmul_fidelity}, fp32_acc={self.matmul_fp32_acc}",
+            "bf16_role_matmul": self.bf16_role_fidelity or "as matmul",
             "sdpa": f"{self.sdpa_fidelity}, fp32_acc={self.sdpa_fp32_acc}",
             "embed": self.embed_fidelity or "as matmul",
             "norms_rope": "hifi4, fp32_acc=True",
@@ -109,8 +111,11 @@ class TtPrecision:
             packer_l1_acc=True,
         )
 
-    def matmul_config(self):
-        return self._config(self._fidelity(self.matmul_fidelity), self.matmul_fp32_acc)
+    def matmul_config(self, role: str | None = None):
+        fidelity = self.matmul_fidelity
+        if role in self.bf16_roles and self.bf16_role_fidelity is not None:
+            fidelity = self.bf16_role_fidelity
+        return self._config(self._fidelity(fidelity), self.matmul_fp32_acc)
 
     def embed_config(self):
         import ttnn
