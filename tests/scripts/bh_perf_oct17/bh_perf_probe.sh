@@ -78,6 +78,11 @@ for run, sp in sorted(spans.items()):
         f"work_core={longest[0]} start={longest[1][0] - t0} end={longest[1][1] - t0} "
         f"first_start_core={first[0]} last_end_core={last[0]}"
     )
+    if len(core) > 1 and test in ("test_identity", "test_add"):
+        xs = sorted({x for x, _ in core}); ys = sorted({y for _, y in core})
+        print(f"STARTMAP {test} run={run} (rows=y, cols=x {xs}) first kernel start per core, cycles after first core")
+        for y in ys:
+            print(f"STARTMAP {test} y={y:2d} " + " ".join(f"{core[(x, y)][0] - t0:5d}" if (x, y) in core else "    -" for x in xs))
     if len(core) > 1:
         for (x, y, risc), (s, e) in sorted(sp.items()):
             if (x, y) in (longest[0], first[0], last[0]):
