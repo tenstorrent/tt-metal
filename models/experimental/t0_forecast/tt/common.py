@@ -173,6 +173,40 @@ def linear_minimal(x, weight, precision: TtT0Precision, *, role: str, blocks: tu
     )
 
 
+def linear_residual(x, weight, residual, ones, precision: TtT0Precision, *, role: str, blocks: tuple, bias=None):
+    """``residual + x @ weight (+ bias)`` with the add in the ``minimal_matmul`` epilogue
+    (``dit_minimal_matmul_addcmul_fused``, ``ones`` the ``(1, N)`` multiplier) when the weight dtype matches the
+    residual's; otherwise matmul + ADD. ``residual`` is borrowed."""
+    import ttnn
+
+    from models.experimental.t0_forecast.tt import program_configs as pc
+
+    if weight.dtype != residual.dtype:
+        out = linear(x, weight, precision, role=role, bias=bias)
+        y = add(residual, out)
+        ttnn.deallocate(out)
+        return y
+    grid = x.device().compute_with_storage_grid_size()
+    m_tiles = x.padded_shape[-2] // TILE
+    k_tiles, n_tiles = weight.padded_shape[-2] // TILE, weight.padded_shape[-1] // TILE
+    return ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+        x,
+        weight,
+        1.0,
+        residual,
+        ones,
+        bias_tensor=bias,
+        config=pc.minimal_config((grid.x, grid.y), m_tiles, k_tiles, n_tiles, blocks),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=precision.compute_kernel_config(role=role),
+    )
+
+
+def upload_ones(device, n: int):
+    """``(1, 1, 1, n)`` bf16 ones: the multiplier of ``linear_residual``."""
+    return upload_bias(device, torch.ones(n))
+
+
 def rms_norm(x, gain, eps: float, precision: TtT0Precision):
     """RMSNorm with a learned gain; always returns bf16 (an fp32 residual stream is normed into bf16)."""
     import ttnn

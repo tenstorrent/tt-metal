@@ -1,0 +1,56 @@
+{
+  "role": "wvo",
+  "rows": 98304,
+  "k": 1024,
+  "n": 1024,
+  "precision": "accuracy",
+  "results": [
+    {
+      "config": "auto",
+      "ms": 2.40876660682261,
+      "pcc_vs_auto": 0.9999999999980274
+    },
+    {
+      "config": "2d:11x10:12",
+      "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=3,out_block_h=11,out_block_w=3,per_core_M=308,per_core_N=3,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+      "ms": 1.7797594424337149,
+      "pcc_vs_auto": 0.9999999999962449
+    },
+    {
+      "config": "2d:8x10:12",
+      "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=8-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=11,out_block_w=4,per_core_M=308,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+      "ms": 2.042792970314622,
+      "pcc_vs_auto": 0.9999999999962449
+    },
+    {
+      "config": "2d:8x10:8",
+      "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=8-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=7,out_block_w=4,per_core_M=308,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+      "ms": 2.121560089290142,
+      "pcc_vs_auto": 0.9999999999962449
+    },
+    {
+      "config": "mm:16,8,4,4,1",
+      "ms": 1.533016376197338,
+      "pcc_vs_auto": 0.9999999999962449
+    },
+    {
+      "config": "mm:8,8,8,2,2",
+      "ms": 1.7017189878970385,
+      "pcc_vs_auto": 0.9999999999962449
+    },
+    {
+      "config": "mm:8,16,4,2,2",
+      "ms": 1.6775914933532476,
+      "pcc_vs_auto": 0.9999999999876429
+    },
+    {
+      "config": "mm:16,16,4,4,1",
+      "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+    },
+    {
+      "config": "mm:8,8,4,1,4",
+      "ms": 1.7108608968555927,
+      "pcc_vs_auto": 0.9999999999962449
+    }
+  ]
+}

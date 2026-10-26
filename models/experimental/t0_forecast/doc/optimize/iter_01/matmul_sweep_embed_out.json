@@ -1,0 +1,41 @@
+{
+  "role": "embed_out",
+  "rows": 98304,
+  "k": 1024,
+  "n": 1024,
+  "precision": "accuracy",
+  "results": [
+    {
+      "config": "auto",
+      "ms": 2.7535893954336643,
+      "pcc_vs_auto": 0.9999999999994398
+    },
+    {
+      "config": "2d:11x10:12",
+      "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=3,out_block_h=11,out_block_w=3,per_core_M=308,per_core_N=3,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+      "ms": 2.3556756787002087,
+      "pcc_vs_auto": 0.9999999997073669
+    },
+    {
+      "config": "2d:8x10:12",
+      "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=8-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=11,out_block_w=4,per_core_M=308,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+      "ms": 2.934417501091957,
+      "pcc_vs_auto": 0.9999999997073669
+    },
+    {
+      "config": "mm:16,8,4,4,1",
+      "ms": 1.8832463305443525,
+      "pcc_vs_auto": 0.9999999997073669
+    },
+    {
+      "config": "mm:8,8,8,2,2",
+      "ms": 1.9187903963029385,
+      "pcc_vs_auto": 0.9999999997073669
+    },
+    {
+      "config": "mm:8,16,4,2,2",
+      "ms": 1.8820783123373985,
+      "pcc_vs_auto": 0.9999999994140002
+    }
+  ]
+}

@@ -1,0 +1,55 @@
+{
+  "role": "ff2",
+  "rows": 98304,
+  "k": 2048,
+  "n": 1024,
+  "precision": "accuracy",
+  "results": [
+    {
+      "config": "auto",
+      "ms": 3.612180519849062,
+      "pcc_vs_auto": 0.999999999999103
+    },
+    {
+      "config": "2d:11x10:12",
+      "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=3,out_block_h=11,out_block_w=3,per_core_M=308,per_core_N=3,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+      "ms": 2.6680767070502043,
+      "pcc_vs_auto": 0.9999999999792816
+    },
+    {
+      "config": "2d:8x10:12",
+      "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=8-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=11,out_block_w=4,per_core_M=308,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+      "ms": 3.091399697586894,
+      "pcc_vs_auto": 0.9999999999792816
+    },
+    {
+      "config": "2d:8x10:8",
+      "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=8-10,in0_block_w=8,out_subblock_h=1,out_subblock_w=4,out_block_h=7,out_block_w=4,per_core_M=308,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+      "ms": 3.183857537806034,
+      "pcc_vs_auto": 0.9999999999792816
+    },
+    {
+      "config": "mm:16,8,4,4,1",
+      "ms": 2.168424194678664,
+      "pcc_vs_auto": 0.9999999999792816
+    },
+    {
+      "config": "mm:8,8,8,2,2",
+      "ms": 2.212139591574669,
+      "pcc_vs_auto": 0.9999999999792816
+    },
+    {
+      "config": "mm:8,16,4,2,2",
+      "ms": 2.205213624984026,
+      "pcc_vs_auto": 0.999999999971169
+    },
+    {
+      "config": "mm:16,16,4,4,1",
+      "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+    },
+    {
+      "config": "mm:8,32,4,2,2",
+      "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+    }
+  ]
+}

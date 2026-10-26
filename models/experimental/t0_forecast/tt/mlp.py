@@ -17,15 +17,18 @@ from __future__ import annotations
 
 from models.experimental.t0_forecast.tt.common import (
     TtT0Precision,
-    add,
-    linear,
+    linear_residual,
     rms_norm,
     upload,
     upload_bias,
     upload_linear,
     upload_norm,
+    upload_ones,
 )
 from models.experimental.t0_forecast.tt.weights import MlpWeights
+
+# w_down on minimal_matmul with the residual add in its epilogue (R1-6); blocks from iter_01/matmul_sweep_ff2.json.
+FF2_BLOCKS = (16, 8, 4, 4, 1)
 
 
 class TtSwiGLU:
@@ -42,6 +45,7 @@ class TtSwiGLU:
         self._grid = device.compute_with_storage_grid_size()
         self._w_down = upload_linear(device, weights.w2, dtype_down)
         self._b_down = upload_bias(device, weights.b2)
+        self._ones = upload_ones(device, weights.w2.shape[0])
 
     def __call__(self, x):
         """Flat ``(1, 1, tokens, d)`` -> ``x + mlp(x)``; ``x`` is borrowed."""
@@ -68,8 +72,6 @@ class TtSwiGLU:
             compute_kernel_config=p.compute_kernel_config(role="ff1"),
         )
         ttnn.deallocate(xn)
-        out = linear(hidden, self._w_down, p, role="ff2", bias=self._b_down)
+        y = linear_residual(hidden, self._w_down, x, self._ones, p, role="ff2", blocks=FF2_BLOCKS, bias=self._b_down)
         ttnn.deallocate(hidden)
-        y = add(x, out)
-        ttnn.deallocate(out)
         return y

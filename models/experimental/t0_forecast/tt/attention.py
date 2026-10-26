@@ -21,13 +21,13 @@ from dataclasses import dataclass
 
 from models.experimental.t0_forecast.tt.common import (
     TtT0Precision,
-    add,
-    linear,
     linear_minimal,
+    linear_residual,
     rms_norm,
     upload,
     upload_bias,
     upload_linear,
+    upload_ones,
     upload_norm,
 )
 from models.experimental.t0_forecast.tt.host import pair_rotation
@@ -37,6 +37,7 @@ _MAX_SDPA_CHUNK = 256
 # QKV on minimal_matmul: blocks M 16 / K 8 / N 4, subblock 4 x 1 (tests/perf/sweep_matmul.py at M = 98304,
 # doc/optimize/iter_01/matmul_sweep_qkv*.json: 4.24 ms against 12.67 ms for the auto 1D config).
 QKV_BLOCKS = (16, 8, 4, 4, 1)
+WO_BLOCKS = (16, 8, 4, 4, 1)
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,7 @@ class TtAttention:
         self._k_norm = upload_norm(device, weights.k_norm)
         self._wo = upload_linear(device, weights.wo, precision.weight_dtype("wo"))
         self._bo = upload_bias(device, weights.bo)
+        self._ones = upload_ones(device, self.d)
         if weights.kind == TIME:
             self._trans = upload(device, pair_rotation(32).reshape(1, 1, 32, 32))
 
@@ -87,15 +89,13 @@ class TtAttention:
 
         xn = rms_norm(x, self._norm, self.eps, self.precision)
         if self.kind != TIME and inputs.group_size == 1:
-            out = linear(xn, self._wvo, self.precision, role="wo", bias=self._bvo)
-            ttnn.deallocate(xn)
+            w, b, ctx = self._wvo, self._bvo, xn
         else:
+            w, b = self._wo, self._bo
             ctx = self._time(xn, inputs) if self.kind == TIME else self._group(xn, inputs)
             ttnn.deallocate(xn)
-            out = linear(ctx, self._wo, self.precision, role="wo", bias=self._bo)
-            ttnn.deallocate(ctx)
-        y = add(x, out)
-        ttnn.deallocate(out)
+        y = linear_residual(ctx, w, x, self._ones, self.precision, role="wo", blocks=WO_BLOCKS, bias=b)
+        ttnn.deallocate(ctx)
         return y
 
     def _heads(self, qkv):
@@ -166,10 +166,8 @@ class TtAttention:
         q, k, v = self._heads(ttnn.reshape(qkv, (r, 1, s, 3 * self.d)))
         cos_q, sin_q, cos_k, sin_k = inputs.rope
         q, k = self._rope(q, cos_q, sin_q), self._rope(k, cos_k, sin_k)
-        ctx = self._sdpa(q, k, v, mask=inputs.time_mask, is_causal=inputs.time_mask is None)
-        merged = ttnn.experimental.nlp_concat_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(ctx)
-        return ttnn.reshape(merged, (1, 1, r * s, self.d))
+        ctx = self._sdpa(q, k, v, mask=inputs.time_mask, is_causal=inputs.time_mask is None, concat_heads=True)
+        return ttnn.reshape(ctx, (1, 1, r * s, self.d))
 
     def _group(self, xn, inputs: TtAttentionInputs):
         """Attention across the G rows of each series at every patch slot: ``(S_pad * B, H, G, hd)``."""
