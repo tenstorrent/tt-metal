@@ -57,6 +57,9 @@ class SweepsConfig:
     measure_perf_with_cache: bool = False
     measure_device_perf: bool = False
     measure_memory: bool = False
+    # With measure_device_perf, keep building sweep inputs on the device (sweep_utils/tensor_setup.py
+    # otherwise builds them on the host). The setup programs then count toward the op.
+    device_side_setup: bool = False
     dry_run: bool = False
     sweeps_tag: str | None = None
     skip_modules: str | None = None
@@ -91,6 +94,7 @@ def create_config_from_args(args) -> SweepsConfig:
         measure_perf_with_cache=args.perf_with_cache,
         measure_device_perf=args.device_perf,
         measure_memory=args.measure_memory,
+        device_side_setup=args.device_side_setup or os.environ.get("TTNN_SWEEP_DEVICE_SIDE_SETUP") == "1",
         dry_run=args.dry_run,
         sweeps_tag=args.tag,
         skip_modules=args.skip_modules,
@@ -2185,6 +2189,14 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--device-side-setup",
+        required=False,
+        action="store_true",
+        help="With --device-perf, build sweep inputs on the device instead of on the host; the setup programs then "
+        "count toward the op. TTNN_SWEEP_DEVICE_SIDE_SETUP=1 has the same effect.",
+    )
+
+    parser.add_argument(
         "--measure-memory",
         required=False,
         action="store_true",
@@ -2266,6 +2278,16 @@ if __name__ == "__main__":
 
     if config.measure_device_perf and not _should_skip_device_profiler(config):
         enable_profiler()
+        if config.device_side_setup:
+            logger.info(
+                "Device perf: --device-side-setup, sweep inputs are built on the device and their programs "
+                "count toward the op"
+            )
+        elif config.trace_params:
+            logger.warning(
+                "--trace-params with --device-perf records the host-side setup calls (from_torch without a "
+                "device, then to_device) instead of the module's own; use --device-side-setup for a faithful trace"
+            )
     elif config.measure_device_perf:
         logger.info(
             f"Skipping device profiler for {config.module_name!r} "

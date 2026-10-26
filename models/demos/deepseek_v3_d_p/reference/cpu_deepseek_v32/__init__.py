@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""DeepSeek-V3.2 / GLM-5.1 sparse-MLA CPU reference — public API.
+"""DeepSeek-V3.2 / GLM-5.3 sparse-MLA CPU reference — public API.
 
 The only supported entry points are re-exported here. Internals (``ModelArgs``, ``MLACPU``,
 ``IndexerCPU``, weight loaders, RoPE helpers) are implementation detail — import from this package,

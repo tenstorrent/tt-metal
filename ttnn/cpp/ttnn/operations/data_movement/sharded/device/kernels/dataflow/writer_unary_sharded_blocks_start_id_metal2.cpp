@@ -38,7 +38,10 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb::out);
 
     // single-tile ublocks
-    const uint32_t tile_bytes = dfb_out.get_tile_size();
+    // get_entry_size() (DFB interface entry bytes), not get_tile_size() (descriptor array
+    // unpack_tile_size[]): the latter is not arch-portable to Quasar and can be stale on a DM kernel,
+    // giving a wrong NOC write size / L1 stride -> stray write. Byte-identical on WH/BH (entry == tile).
+    const uint32_t tile_bytes = dfb_out.get_entry_size();
 
     uint32_t row_start_tile_id = start_id_base + start_id_offset;
     dfb_out.wait_front(block_width_padded_num_tiles);

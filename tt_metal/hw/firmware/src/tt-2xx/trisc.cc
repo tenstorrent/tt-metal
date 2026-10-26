@@ -10,7 +10,7 @@
 #include <cstdint>
 #include "hostdev/dev_msgs.h"
 
-#include "tools/profiler/kernel_profiler.hpp"
+#include "api/debug/kernel_profiler.hpp"
 
 #include "internal/debug/fw_debug.h"
 #include "internal/hw_thread.h"
@@ -18,12 +18,16 @@
 #include "api/debug/dprint.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
 #include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
 #include "llk_bfd_alloc.h"  // ckernel::trisc::BfdAllocatorState (definition of bfd_state below)
+#if defined(UCK_CHLKC_MATH)
+#include "cmath_common.h"    // ckernel::math::DataFormatConfigSet (definition of data_format_config_set below)
+#endif
 
 // clang-format on
 
@@ -64,13 +68,9 @@ std::uint8_t my_relative_x_ __attribute__((used));
 std::uint8_t my_relative_y_ __attribute__((used));
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-#if defined(UCK_CHLKC_PACK)
-thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_PACK] __attribute__((used));
+thread_local LocalDFBInterface g_dfb_interface[dfb::MAX_ACTIVE_DFBS_TRISC] __attribute__((used));
 thread_local std::uint8_t g_dfb_logical_to_compact[dfb::NUM_DFBS] __attribute__((used));
-thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_PACK_TC_SLOTS] __attribute__((used));
-#else
-thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
-#endif
+thread_local DFBTCSlot g_dfb_tc_slots[dfb::MAX_TRISC_TC_SLOTS] __attribute__((used));
 #endif
 // Defined for all TRISC types (including math) so kernels that include dataflow_buffer headers link cleanly.
 // For math TRISC, setup_local_dfb_interfaces is not called, so this stays 0; dfb_ensure_ready
@@ -117,11 +117,22 @@ thread_local std::uint32_t dest_register_offset __attribute__((used)) = 0;
 // partition base and current[] to BFD_ID_INVALID on the first allocation.
 thread_local BfdAllocatorState bfd_state __attribute__((used)) = {.next = 0, .current = {}, .initialized = false};
 }  // namespace trisc
+namespace pack {
+// Dest bank cleared by the dvalid pack section-done; thread_local per pack TRISC (tt-llk#1678).
+// Declared extern thread_local in cpack_common.h.
+thread_local std::uint32_t clear_dest_bank_id __attribute__((used)) = 0;
+}  // namespace pack
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);
 }  // namespace ckernel
 
 using namespace ckernel;
+
+// Per-Neo ALU-format config state; declared extern thread_local in llk_math_common.h.
+#if defined(UCK_CHLKC_MATH)
+thread_local ckernel::math::DataFormatConfigSet data_format_config_set __attribute__((used)) =
+    ckernel::math::DataFormatConfigSet::UNCONFIGURED;
+#endif
 
 void init_sync_registers() {
     // TODO: check if this is needed with transition to DFBs
@@ -141,6 +152,31 @@ inline void enable_cc_stack() {
     constexpr std::uint32_t SFPENCC_IMM12_BOTH = 3;
     constexpr std::uint32_t SFPENCC_MOD1_EI_RI = 10;
     TTI_SFPENCC(SFPENCC_IMM12_BOTH, SFPENCC_MOD1_EI_RI);  // Enable all the SFPU lanes
+#endif
+}
+
+// Clear ClientL valid for packer remapper pairs in [lo, hi) so pairs from launch N cannot leak into launch N+1.
+// lo==0xFF means nothing was programmed.
+FORCE_INLINE void dfb_clear_packer_remapper_window(
+    uint32_t trisc_id, volatile tt_l1_ptr std::uint8_t* trisc_run, uint8_t lo, uint8_t hi) {
+#if defined(UCK_CHLKC_PACK)
+    if (lo == 0xFFu) {
+        return;
+    }
+    // Drop packer remapper pairs only after the TRISCs that can issue counter updates through them have drained.
+    // Clearing before that lets a Tensix-only counter update alias onto overlay counter id & 0xF.
+    // Math never touches DFB tile counters.
+    using ckernel::trisc::TriscID;
+    volatile tt_l1_ptr std::uint32_t* const neo_sync =
+        reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(trisc_run - trisc_id);
+    constexpr std::uint32_t dfb_trisc_mask = (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Unpack) * 8)) |
+                                             (std::uint32_t{0xFFu} << (static_cast<uint32_t>(TriscID::Sfpu) * 8));
+    while ((*neo_sync & dfb_trisc_mask) != 0u) {
+    }
+    for (uint32_t i = lo; i < hi; i++) {
+        WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(i), 0u);
+    }
+    asm volatile("fence" ::: "memory");
 #endif
 }
 
@@ -208,11 +244,10 @@ extern "C" std::uint32_t _start1() {
             std::uint32_t tt_l1_ptr* dfb_l1_base =
                 (std::uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
             std::uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
-#if defined(UCK_CHLKC_PACK)
             const DfbPackerRemapperRange packer_rmp = setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
 #else
-            setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
-#endif
+            // Math/SFPU TRISCs set up no DFBs, so there is no packer remapper window to clear.
+            const DfbPackerRemapperRange packer_rmp{};
 #endif
 
             // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when PR #38124 is merged
@@ -261,14 +296,11 @@ extern "C" std::uint32_t _start1() {
             WAYPOINT("D");
             DEVICE_PRINT_KERNEL_FINISHED();
 
-#if defined(UCK_CHLKC_PACK)
-            // Tear down packer remapper pairs programmed this launch so they cannot leak into the next.
-            dfb_clear_packer_remapper_window(packer_rmp.lo, packer_rmp.hi);
-#endif
-
             // Signal completion
             DPRINT("SIGNALING COMPLETION {:x}\n", (std::uint32_t)*trisc_run);
             tensix_sync();
+
+            dfb_clear_packer_remapper_window(trisc_id, trisc_run, packer_rmp.lo, packer_rmp.hi);
         }
         *trisc_run = RUN_SYNC_MSG_DONE;
         DPRINT("COMPLETION SIGNED OFF {:x}\n", (std::uint32_t)*trisc_run);

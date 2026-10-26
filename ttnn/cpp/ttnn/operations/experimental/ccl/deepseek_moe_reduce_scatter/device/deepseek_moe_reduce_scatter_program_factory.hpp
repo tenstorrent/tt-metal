@@ -6,38 +6,45 @@
 
 #include "deepseek_moe_reduce_scatter_device_operation_types.hpp"
 
-#include "ttnn/device_operation.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+
+#include <optional>
+#include <vector>
 
 namespace ttnn::experimental::prim {
 
 struct DeepseekMoEReduceScatterMeshWorkloadFactory {
-    struct shared_variables_t {
-        tt::tt_metal::GlobalSemaphore op_semaphore;
-        tt::tt_metal::GlobalSemaphore pre_op_barrier_semaphore;
-        DeepseekMoEReduceScatterProgramArtifacts program_artifacts;
+    // Layout of WorkloadDescriptor::semaphores. Allocated once per cache miss and parked on the
+    // descriptor, so their L1 addresses are stable for the cached workload.
+    struct SemaphoreIndex {
+        static constexpr size_t op = 0;
+        static constexpr size_t pre_op_barrier = 1;
+        static constexpr size_t count = 2;
     };
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
-    static cached_mesh_workload_t create_mesh_workload(
-        const DeepseekMoEReduceScatterParams& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const DeepseekMoEReduceScatterInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+    // build_program_descriptor pushes reader, writer, then reduction.
+    static constexpr uint32_t kReaderKernelIdx = 0;
+    static constexpr uint32_t kWriterKernelIdx = 1;
+    static constexpr uint32_t kReduceKernelIdx = 2;
+    // Writer runtime args start with one address per intermediate slice, then the output.
+    static constexpr uint32_t kWriterIntermediateArg0 = 0;
+    static constexpr uint32_t kWriterOutputArg = 8;
 
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const DeepseekMoEReduceScatterParams& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
         const DeepseekMoEReduceScatterInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value,
-        const tt::tt_metal::GlobalSemaphore& op_semaphore,
-        const tt::tt_metal::GlobalSemaphore& pre_op_barrier_semaphore);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
+        tt::tt_metal::Program& program,
         const DeepseekMoEReduceScatterParams& operation_attributes,
         const DeepseekMoEReduceScatterInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+        std::vector<ttnn::Tensor>& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::experimental::prim

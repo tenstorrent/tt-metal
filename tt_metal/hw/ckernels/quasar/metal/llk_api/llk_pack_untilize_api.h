@@ -43,13 +43,11 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
         "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
 
     if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
-        llk_pack_program_bfd(output_id);
-        _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(
-            ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
+        const std::uint8_t bfd_id = llk_pack_program_bfd(output_id);
+        _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(bfd_id, tensor_shape);
     } else {
-        llk_pack_program_bfd<ckernel::trisc::L1AccessMode::Strided>(output_id);
-        _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(
-            ckernel::trisc::bfd_current<pack_bfd_resource>(), tensor_shape);
+        const std::uint8_t bfd_id = llk_pack_program_bfd<ckernel::trisc::L1AccessMode::Strided>(output_id);
+        _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(bfd_id, tensor_shape);
     }
 }
 
@@ -104,7 +102,7 @@ inline void llk_pack_untilize(
     const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
         entry_size_16B / (face_row_16B * tensor_shape.num_faces_c_dim);
     const std::uint32_t base_l1 =
-        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx * l1_index_per_entry;
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].cursor_entry_idx * l1_index_per_entry;
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         const std::uint32_t dest_idx = block_rt * block_ct_dim + tile_dst_rt_offset;

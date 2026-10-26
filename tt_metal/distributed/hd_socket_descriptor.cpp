@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/distributed/hd_socket_descriptor.hpp"
-#include "tt_metal/distributed/named_shm.hpp"
+#include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
+#include <tt-metalium/experimental/sockets/named_shm.hpp>
 #include "hd_socket_descriptor_generated.h"
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/context/metal_env_impl.hpp"
-#include <umd/device/pcie/pci_device.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
 
 #include <cerrno>
 #include <chrono>

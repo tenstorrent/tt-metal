@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/ccl/shared_with_host/ccl_runtime_args.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -64,17 +65,17 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     uint32_t arg_idx = 0;
-    address_t intermediate_address = get_arg_val<address_t>(arg_idx++);
-    address_t output_address = get_arg_val<address_t>(arg_idx++);
+    address_t intermediate_address = get_common_arg_val<address_t>(ttnn::ccl::ReduceScatterCommonArgs::intermediate);
+    address_t output_address = get_common_arg_val<address_t>(ttnn::ccl::ReduceScatterCommonArgs::output);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t opposite_core_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t opposite_core_y = get_arg_val<uint32_t>(arg_idx++);
-    size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
+    size_t batch_ready_sem = get_common_arg_val<uint32_t>(ttnn::ccl::ReduceScatterCommonArgs::ack);
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    size_t barrier_sem = get_common_arg_val<uint32_t>(ttnn::ccl::ReduceScatterCommonArgs::barrier);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
+    size_t out_ready_sem = get_common_arg_val<uint32_t>(ttnn::ccl::ReduceScatterCommonArgs::semaphore_0 + direction);
     const uint32_t chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);

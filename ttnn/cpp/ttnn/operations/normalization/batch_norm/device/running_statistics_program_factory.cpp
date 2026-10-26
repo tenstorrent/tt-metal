@@ -184,7 +184,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
     const auto& running_mean_tensor = tensor_args.running_mean;
     const auto& running_var_tensor = tensor_args.running_var;
 
-    tt::tt_metal::distributed::MeshDevice& device = batch_mean_tensor.mutable_device();
+    const tt::tt_metal::distributed::MeshDevice& device = batch_mean_tensor.device();
 
     const bool running_mean_has_value = running_mean_tensor.has_value();
     const bool running_var_has_value = running_var_tensor.has_value();

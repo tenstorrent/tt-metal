@@ -14,6 +14,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/pool/upsample/upsample.hpp"
 
 #include "repeat_interleave_force.hpp"
@@ -275,9 +276,11 @@ ttnn::Tensor repeat_interleave_force_codegen(
     TT_FATAL(
         repeat_interleave_codegen::supported_by_codegen(input_a, repeats, dim, output_mem_config),
         "repeat_interleave_force_codegen invoked for a case the codegen path does not support "
-        "(requires a device-resident, unsharded rank-2..4 bfloat16/float32/int32 input, an "
-        "interleaved output, repeats > 1, and a repeated dim outside the pages the layout "
-        "subdivides -- TILE defers the two sub-tile dims and requires the default 32x32 tile, "
+        "(requires a device-resident, unsharded rank-2..4 input of bfloat16/float32/int32, or of "
+        "bfloat8_b in TILE layout, an interleaved output, repeats > 1, and a repeated dim outside "
+        "the pages the layout "
+        "subdivides -- TILE defers the two sub-tile dims and requires the default 32x32 tile and "
+        "a padded shape that is the logical shape rounded up to whole tiles, "
         "ROW_MAJOR defers the within-stick last dim and needs a stick narrow enough for two CB "
         "slots in one core's L1). This entry never "
         "falls back to native, because a forced leg that quietly served native would make any "
@@ -295,7 +298,8 @@ Tensor repeat_interleave(
     namespace detail = operations::data_movement::detail;
     namespace repeat_interleave_codegen = operations::data_movement::repeat_interleave_codegen;
 
-    if (repeat_interleave_codegen::supported_by_codegen(input_a, repeats, dim, output_mem_config) &&
+    if (operations::data_movement::codegen_supported_on_arch(input_a) &&
+        repeat_interleave_codegen::supported_by_codegen(input_a, repeats, dim, output_mem_config) &&
         !repeat_interleave_codegen::is_demoted(input_a, repeats, dim, output_mem_config)) {
         return detail::repeat_interleave_via_codegen(input_a, repeats, dim, output_mem_config);
     }

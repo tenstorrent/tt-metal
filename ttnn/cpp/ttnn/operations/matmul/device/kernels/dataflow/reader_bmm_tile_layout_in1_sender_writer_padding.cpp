@@ -116,6 +116,11 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     // in3 mcast args
     const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+#ifdef BIAS_PER_GROUP
+    constexpr bool bias_per_group = true;
+#else
+    constexpr bool bias_per_group = false;
+#endif
     const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
@@ -289,7 +294,7 @@ void kernel_main() {
         // Compute DRAM bank and offset for this batch
         uint32_t in1_dram_bank_id = b / in1_batches_per_bank;
         uint32_t in1_batch_in_shard = b % in1_batches_per_bank;
-        AllocatorBank<AllocatorBankType::DRAM> dram_src;
+        const BankView dram_src(s1);
         uint32_t in1_dram_batch_offset = in1_batch_in_shard * in1_batch_stride_bytes;
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
@@ -303,10 +308,18 @@ void kernel_main() {
         [[maybe_unused]] const uint32_t out_base_tile_id = out_tensor_start_tile_id;
 
         for (uint32_t bB = 0; bB < batch_loop_lim; ++bB) {
+#ifdef BIAS_PER_GROUP
+            // Per-group fused bias (sparse matmul, indexed mode): tile row `group_id` of the bias tensor,
+            // i.e. out_tensor_stride_h (= Nt) tiles per group.
+            uint32_t in3_group_tile_offset = 0;
+#endif
             if constexpr (use_indices) {
                 // Gather: jump straight to group indices[bB]'s weight block, scatter its result to
                 // compact output slot bB. Every iterated group is active, so nothing is skipped.
                 const uint32_t group_id = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB];
+#ifdef BIAS_PER_GROUP
+                in3_group_tile_offset = group_id * out_tensor_stride_h;
+#endif
                 // The ids are device-resident, so the host can only bound their count, not their
                 // values. An out-of-range id would silently read an unrelated weight block; assert
                 // loudly (under watcher) instead, as the in0 sender does for the exact-nnz contract.
@@ -329,7 +342,11 @@ void kernel_main() {
                 uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_current_h_dim_block_tile_id;
                 uint32_t out_tensor_current_w_dim_block_tile_id = out_tensor_current_h_dim_block_tile_id;
 #ifdef FUSE_BIAS
+#ifdef BIAS_PER_GROUP
+                uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id + in3_group_tile_offset;
+#else
                 uint32_t in3_tensor_current_w_dim_block_tile_id = in3_tensor_start_tile_id;
+#endif  // BIAS_PER_GROUP
 #endif  // FUSE_BIAS
                 for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                     uint32_t in1_tensor_current_inner_dim_block_start_tile_id = in1_tensor_current_w_dim_block_tile_id;
@@ -362,17 +379,17 @@ void kernel_main() {
                         uint32_t l1_write_addr_in1_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
-                        AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                        const BankView dram_bank(s1);
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
                             uint32_t shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
-                            uint32_t shard_base_addr = in1_tensor_addr;
+                            uint32_t shard_base_offset = 0;
                             if (i == 0) {
-                                shard_base_addr += dram_tensor_start_offset;
+                                shard_base_offset += dram_tensor_start_offset;
                             }
                             noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 dram_bank,
                                 in1_single_tile_size_bytes,
-                                {.bank_id = shard_bank_id, .addr = shard_base_addr},
+                                {.bank_id = shard_bank_id, .offset_bytes = shard_base_offset},
                                 NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
@@ -389,7 +406,8 @@ void kernel_main() {
                                         dram_bank,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1_temp),
                                         in1_single_tile_size_bytes,
-                                        {.bank_id = shard_bank_id, .addr = shard_base_addr + l1_read_addr_in1_temp},
+                                        {.bank_id = shard_bank_id,
+                                         .offset_bytes = shard_base_offset + l1_read_addr_in1_temp},
                                         {},
                                         NocOptVals{.vc = vc});
                                     l1_read_addr_in1_temp += in1_single_tile_size_bytes;
@@ -427,7 +445,7 @@ void kernel_main() {
                                         dram_src,
                                         CoreLocalMem<uint32_t>(l1_write_addr_in1),
                                         in1_single_tile_size_bytes,
-                                        {.bank_id = in1_dram_bank_id, .addr = in1_tensor_addr + tile_byte_offset},
+                                        {.bank_id = in1_dram_bank_id, .offset_bytes = tile_byte_offset},
                                         {});
                                 }
                                 l1_write_addr_in1 += in1_single_tile_size_bytes;
@@ -535,8 +553,9 @@ void kernel_main() {
                     }
 #endif
 #ifdef FUSE_BIAS
-                    // Only read bias on first batch, or we have multiple output blocks
-                    if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                    // Only read bias on first batch, or we have multiple output blocks; a per-group bias
+                    // is re-read for every group (the compute kernel pops it after each group).
+                    if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                         // Operand 1
 #ifndef BIAS_SHARDED
                         dfb_in3.reserve_back(in1_block_w);
@@ -550,21 +569,22 @@ void kernel_main() {
                         uint32_t l1_write_addr_in3_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
-                        AllocatorBank<AllocatorBankType::DRAM> bias_dram_bank;
+                        // Bias is read by bank, like in1.
+                        const BankView bias_dram_bank(s3);
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
                             uint32_t bias_shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
-                            uint32_t bias_shard_base_addr = in3_tensor_addr;
+                            uint32_t bias_shard_base_offset = 0;
                             if (i == 0) {
                                 // dram_tensor_start_offset is in in1 tile bytes; convert to
                                 // bias tile bytes since bias_dtype may differ from in1_dtype.
-                                bias_shard_base_addr += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
-                                                        bias_single_tile_size_bytes;
+                                bias_shard_base_offset += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
+                                                          bias_single_tile_size_bytes;
                             }
 
                             noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 bias_dram_bank,
                                 bias_single_tile_size_bytes,
-                                {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr},
+                                {.bank_id = bias_shard_bank_id, .offset_bytes = bias_shard_base_offset},
                                 NocOptVals{.vc = vc});
 
                             uint32_t l1_read_addr_in3 = 0;
@@ -580,7 +600,8 @@ void kernel_main() {
                                     bias_dram_bank,
                                     CoreLocalMem<uint32_t>(l1_write_addr_in3),
                                     bias_single_tile_size_bytes,
-                                    {.bank_id = bias_shard_bank_id, .addr = bias_shard_base_addr + l1_read_addr_in3},
+                                    {.bank_id = bias_shard_bank_id,
+                                     .offset_bytes = bias_shard_base_offset + l1_read_addr_in3},
                                     {},
                                     NocOptVals{.vc = vc});
                                 l1_read_addr_in3 += bias_single_tile_size_bytes;
@@ -757,8 +778,11 @@ void kernel_main() {
     }
 
 #ifdef OUT_SHARDED
-    dfb_out.wait_front(static_cast<uint16_t>(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
+    const uint16_t out_num_tiles = static_cast<uint16_t>(
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    dfb_out.wait_front(out_num_tiles);
+    // Pop the same number of tiles that were waited for.
+    dfb_out.pop_front(out_num_tiles);
 #endif
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
@@ -769,4 +793,19 @@ void kernel_main() {
     // Barrier both, unconditionally, mirroring the CCL reader fix in #53595.
     noc.async_atomic_barrier();
     noc.async_write_barrier();
+
+#ifdef IN1_DRAM_WIDTH_SHARDED
+    // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default; a full set_async_read_state
+    // would also clobber NOC_TARG_ADDR_* / NOC_AT_LEN_BE sticky regs that the next kernel's async_read_*_with_state fast paths read.
+    const uint32_t noc_rd_cmd_field =
+        NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+    NOC_CMD_BUF_WRITE_REG(noc_index, NCRISC_RD_CMD_BUF, NOC_CTRL, noc_rd_cmd_field);
+#endif
+
+    // The sparsity slot is reserved once to take its base address and is re-read by this kernel
+    // alone; it is never handed to a consumer, so complete the handshake here rather than leaving
+    // the reserve dangling. The guard matches the one on the reserve.
+    if constexpr (batchB > 0) {
+        dfb_sparsity.push_back(1);
+    }
 }

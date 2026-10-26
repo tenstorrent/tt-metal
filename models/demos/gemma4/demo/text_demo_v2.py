@@ -388,6 +388,19 @@ def _device_params():
             False,
             True,
         ),
+        (  # long-context-2x256k — TWO users, each with a FULL 256k context
+            "models/tt_transformers/demo/sample_prompts/input_data_long_256k.json",
+            True,
+            256 * 1024,
+            2,
+            200,
+            True,
+            {"page_block_size": 64, "page_max_num_blocks": 8192},
+            {"temperature": 0, "top_p": 0.08},
+            True,
+            False,
+            True,
+        ),
         (  # ci-1 — single user, fixed iteration count for perf tracking
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",
             True,
@@ -411,6 +424,7 @@ def _device_params():
         "long-context-64k",
         "long-context-128k",
         "long-context-256k",
+        "long-context-2x256k",
         "ci-1",
     ],
 )
@@ -699,6 +713,10 @@ def test_demo_text(
             page_table=page_table,
             kv_cache=tt_kv_cache,
             sampling_params=device_sampling_params,
+            reload_inputs=True,
+            reload_page_table=False,
+            reload_sampling_params=False,
+            reset_sampling_state=False,
         )
         if device_sampling_params is not None:
             out_tok = decode_out.long().view(batch_size, 1)

@@ -4,6 +4,8 @@
 
 #include "ring_fusion.hpp"
 
+#include <tt-metalium/mesh_device.hpp>
+
 using namespace tt::tt_metal;
 namespace ttnn::prim {
 
@@ -19,7 +21,7 @@ void RingSDPAFusedOpSignaler::init_all_gather(
 
 void RingSDPAFusedOpSignaler::init_fused_op(
     Program& program,
-    const IDevice* device,
+    const tt::tt_metal::distributed::MeshDevice* device,
     const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
     ttnn::experimental::ccl::FusedOpSignalerMode fused_op_signaler_mode) {
     this->fused_op_signaler_mode = fused_op_signaler_mode;

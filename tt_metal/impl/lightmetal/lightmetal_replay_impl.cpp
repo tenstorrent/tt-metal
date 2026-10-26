@@ -459,7 +459,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDealloc
         cmd->global_id());
 
     log_debug(tt::LogMetalTrace, "LightMetalReplay(BufferDeallocate) global_id: {}", cmd->global_id());
-    DeallocateBuffer(*buffer);  // Buffer& expected.
+    buffer->impl().deallocate(*buffer);
 }
 
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferDeleteCommand* cmd) {
@@ -578,7 +578,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::SetRuntimeArg
         cmd->kernel_global_id());
 
     // API expects a span so create from flatbuffer vector.
-    stl::Span<const uint32_t> args_span(cmd->args()->data(), cmd->args()->size());
+    ttsl::Span<const uint32_t> args_span(cmd->args()->data(), cmd->args()->size());
     auto core_spec = core_spec_from_flatbuffer(cmd);
     SetRuntimeArgs(*program, kernel_id, core_spec, args_span);
 }

@@ -4,8 +4,7 @@
 
 #include "sdpa_fw_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
+#include "metal/common/tensor_validation.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "sdpa_fw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -23,39 +22,13 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
                                  const std::string& name,
                                  const tt::tt_metal::Layout required_layout,
                                  const tt::tt_metal::DataType required_dtype) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "SDPAForward operation requires '{}' to be on DEVICE. Got storage type: '{}'",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-
-        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
+        check_device_tensor(tensor, "SDPAForward", name, {.dtypes = {required_dtype}, .layout = required_layout});
 
         TT_FATAL(
             tensor.padded_shape().rank() == 4U,
             "Tensor '{}' must have rank 4, but got rank {}",
             name,
             tensor.padded_shape().rank());
-
-        TT_FATAL(
-            tensor.layout() == required_layout,
-            "Tensor '{}' must have layout '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_layout),
-            enchantum::to_string(tensor.layout()));
-
-        TT_FATAL(
-            tensor.dtype() == required_dtype,
-            "Tensor '{}' must have data type '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_dtype),
-            enchantum::to_string(tensor.dtype()));
-
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
     check_tensor(query, "Query", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
     check_tensor(key, "Key", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
@@ -155,6 +128,29 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
         "Mask tensor provided but mask_type is not Arbitrary. "
         "Use AttentionMaskType::Arbitrary to apply a custom mask, "
         "or remove the mask tensor for None/Causal modes.");
+
+    // Validate gate input shape if provided
+    if (tensor_args.gate.has_value()) {
+        const auto& gate = tensor_args.gate.value();
+        check_tensor(gate, "Gate", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+        TT_FATAL(gate.device() == query.device(), "Gate must be on the same device as query");
+        const auto gate_shape = gate.logical_shape();
+        // Gate shape (B, H, S, vE) - heads NOT fused, inner dim matches V
+        TT_FATAL(
+            gate_shape[0] == query_shape[0] &&      // B
+                gate_shape[1] == qHt &&             // H (heads NOT fused)
+                gate_shape[2] == query_shape[2] &&  // S
+                gate_shape[3] == vEt,               // D (matches V inner dim)
+            "Invalid gate shape. Expected (B, H, S, vE) = ({}, {}, {}, {}), got {}. "
+            "Query shape={}, Value shape={}",
+            query_shape[0],
+            qHt,
+            query_shape[2],
+            vEt,
+            gate_shape,
+            query_shape,
+            value_shape);
+    }
 
     if (preallocated_output.has_value()) {
         check_tensor(
@@ -282,13 +278,15 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const float dropout_probability,
     const bool return_intermediates,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
-    const std::optional<ttnn::Tensor>& preallocated_output) {
+    const std::optional<ttnn::Tensor>& preallocated_output,
+    const std::optional<ttnn::Tensor>& gate) {
     using OperationType = ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .return_intermediates = return_intermediates,
         .mask_type = mask_type,
-        .dropout_probability = dropout_probability};
+        .dropout_probability = dropout_probability,
+        .has_gate = gate.has_value()};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query_tensor,
         .key = key_tensor,
@@ -296,6 +294,7 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
         .mask = mask,
         .preallocated_intermediate = preallocated_intermediate,
         .preallocated_output = preallocated_output,
+        .gate = gate,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

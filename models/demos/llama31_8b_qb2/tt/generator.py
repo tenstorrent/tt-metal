@@ -214,7 +214,7 @@ class LlamaGenerator:
         if page_table is not None:
             self.refresh_page_table(page_table)
 
-    def set_sampling(self, *, top_k=1, top_p=0.0, temperature=1.0, seed=0, force_argmax=False):
+    def set_sampling(self, *, top_k=1, top_p=0.0, temperature=1.0, seed=0, seed_positions=0, force_argmax=False):
         """Request-boundary parameter refresh; sampling and seed advance are traced."""
 
         def rows(value, dtype):
@@ -237,7 +237,13 @@ class LlamaGenerator:
         # formatter: public temperature T therefore binds inverse temperature.
         self.sampler.reset_params(k=k, p=p, temp=temp.reciprocal())
         if seed is not None:
-            self._copy(rows(seed, torch.int64).to(torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
+            # Narrow before adding positions, including for signed int64 endpoints.
+            # Leave room for a full context and the final traced increment without
+            # reaching int32 overflow or manual_seed's UINT32_MAX skip sentinel.
+            modulus = (1 << 31) - self.model.supported_context - 1
+            seeds = rows(seed, torch.int64).remainder(modulus)
+            seeds += rows(seed_positions, torch.int64).clamp_min(0)
+            self._copy(seeds.to(torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
         self.sampler._force_argmax_sampling = force_argmax
         self.sampling_mode = "argmax" if force_argmax else "split"
 

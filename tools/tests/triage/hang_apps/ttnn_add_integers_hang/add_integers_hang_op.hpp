@@ -9,13 +9,15 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
 
 namespace triage_hang_apps {
 
 struct AddIntegersHangOperation {
-    struct operation_attributes_t {};
+    struct operation_attributes_t {
+        uint32_t incremented_semaphore_address;
+    };
 
     struct tensor_args_t {
         const ttnn::Tensor& input_tensor_a;
@@ -26,7 +28,7 @@ struct AddIntegersHangOperation {
     using tensor_return_value_t = ttnn::Tensor;
 
     struct SingleCore {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
@@ -43,6 +45,7 @@ struct AddIntegersHangOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-ttnn::Tensor add_integers_hang(const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b);
+ttnn::Tensor add_integers_hang(
+    const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b, uint32_t incremented_semaphore_address);
 
 }  // namespace triage_hang_apps

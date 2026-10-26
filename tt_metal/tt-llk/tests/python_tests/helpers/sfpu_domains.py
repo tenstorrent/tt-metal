@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
+from .data_format_inference import _dest_acc_flag, _two_state_flag, unpacks_to_dest
 from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from .llk_params import MathOperation
 from .sfpu_dispatch_constants import (
@@ -113,32 +114,6 @@ def narrowest_range_format(*formats: Optional[DataFormat]) -> DataFormat:
         candidates,
         key=lambda fmt: _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE),
     )
-
-
-def _two_state_flag(value: Union[bool, Enum, None], param: str, enum_name: str) -> bool:
-    """Normalise a two-state Enum-or-bool test flag to a plain bool.
-
-    DestAccumulation and ApproximationMode wrap True and False, so ``bool(member)`` is True
-    for *both* — ``.No`` included, which silently selects the True branch. Read ``.value``
-    for an enum, take a bool as-is, reject anything else.
-
-    *enum_name* is checked too, because both enums' ``.Yes`` wraps True and duck-typing on
-    ``.value`` would accept the wrong one. Matched on class name so this module needs no
-    llk_params import beyond MathOperation.
-    """
-    flag = getattr(value, "value", value)
-    if not isinstance(flag, bool):
-        raise TypeError(
-            f"{param} must be a bool or a {enum_name} member, got "
-            f"{value!r} ({type(value).__name__})"
-        )
-    if isinstance(value, Enum) and type(value).__name__ != enum_name:
-        raise TypeError(
-            f"{param} must be a bool or a {enum_name} member, got the "
-            f"{type(value).__name__} member {value!r} -- both wrap a bool, so this would "
-            f"otherwise select a branch silently"
-        )
-    return flag
 
 
 def _approx_mode_flag(approx_mode: Union[bool, Enum]) -> bool:
@@ -754,8 +729,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     #
     # Bounded by accuracy rather than representable range: a**b evaluates as
     # exp(b * ln a), and the relative error is roughly flat in the operands, so the bounds
-    # pair with the rtol in BINARY_CUSTOM_TOLERANCES. A <= 16 is left out because it drives
-    # |a**b| to Float16's ceiling, which would make this an overflow test.
+    # pair with the rtol SfpuElwpow declares in sfpu_accuracy_budget.yaml. A <= 16 is
+    # left out because it drives |a**b| to Float16's ceiling, which would make this an
+    # overflow test.
     MathOperation.SfpuElwpow: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
         spec_B=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=4.0),
@@ -765,12 +741,40 @@ _OP_DOMAIN_REGISTRY: Dict[
     #
     # x's ceiling is an absolute-accuracy bound: the error is dominated by
     # x * abs_err(ln y) and so grows with x while a fixed atol does not, which is what pairs
-    # it with the atol in BINARY_CUSTOM_TOLERANCES. Most of that error is output
-    # quantization rather than the kernel. y keeps its full log-uniform span.
+    # it with the atol SfpuXlogy declares in sfpu_accuracy_budget.yaml. Most of that error
+    # is output quantization rather than the kernel. y keeps its full log-uniform span.
     MathOperation.SfpuXlogy: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=0.0, high=8.0),
         spec_B=StimuliSpec(
             distribution=DistributionKind.LOG_UNIFORM, low=1e-4, high=10.0
+        ),
+    ),
+    # logaddexp: finite for any finite pair, so the sweep deliberately crosses the
+    # exp() overflow boundary (|x| > 88.7) where the naive log(exp(a) + exp(b))
+    # composition returns +/-inf. Independent +/-200 draws land ~10% of positions
+    # with |a - b| < 20 — the band where the log1p(exp(-|a-b|)) correction is
+    # non-negligible — and the rest exercise the max-dominated path at magnitudes
+    # the composed form cannot survive. +/-200 stays representable in fp16.
+    MathOperation.SfpuLogaddexp: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+    ),
+    # logaddexp2: same shape, tighter boundary. The composed log2(2**a + 2**b) form
+    # overflows past |x| > 127 rather than 88.7, so the same +/-200 draw crosses it
+    # with room to spare: 33.2% of positions have max(a, b) past 127. The
+    # log2(1 + 2**-|a - b|) correction is worth more than half an ulp of the result
+    # on 1.3% of positions, against 0.7% for logaddexp -- a band 1.85x wider,
+    # because 2**-|a - b| decays more slowly than e**-|a - b|.
+    MathOperation.SfpuLogaddexp2: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
         ),
     ),
     MathOperation.SfpuAddTopRow: OperandSpecs(
@@ -1055,6 +1059,8 @@ _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwpow,
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuXlogy,
+        MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLogicalRightShift,
@@ -1404,6 +1410,14 @@ def probe_beside(
 # (log(-eps), sqrt(-eps)). Pass include_undefined=True to probe the far side anyway once
 # the goldens model it.
 SingularitySide = Enum("SingularitySide", "BOTH ABOVE BELOW")
+#: Ops with a pole at every non-positive integer. ``_OP_SINGULARITIES`` names points;
+#: these are a lattice, and ``ulp_sweep.claimed_lanes`` excludes it: digamma and
+#: trigamma are infinite there, lgamma's |gamma| is, and every fp32 value of magnitude
+#: 2**23 or more is an integer, so for these ops the far negative tail is poles only.
+_NONPOSITIVE_INTEGER_POLES = frozenset(
+    {MathOperation.Digamma, MathOperation.Lgamma, MathOperation.Polygamma}
+)
+
 _BOTH, _ABOVE, _BELOW = (
     SingularitySide.BOTH,
     SingularitySide.ABOVE,
@@ -1975,22 +1989,6 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
 # ISA ruling, so the right outcome needs an owner.
 
 
-def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
-    """Normalise a 32-bit-destination flag to a plain bool.
-
-    DestAccumulation is an Enum whose two members wrap True and False, so ``bool(member)``
-    is True for *both* of them -- ``DestAccumulation.No`` included, which would evaluate
-    every triple as the 32-bit-dest case and silently flip specials on and off for whole
-    rows of the matrix.
-
-    Read ``.value`` when handed the enum, take a bool as-is, and reject anything else
-    rather than guessing. The enum itself is not imported here: this module carries no
-    llk_params test-side types beyond MathOperation, and duck-typing on ``.value`` keeps it
-    that way.
-    """
-    return _two_state_flag(dest_acc, "dest_acc", "DestAccumulation")
-
-
 def specials_safe(
     input_format: DataFormat,
     output_format: DataFormat,
@@ -2049,7 +2047,7 @@ def negative_zero_delivered(
     """
     if dest_acc is None:
         return True
-    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
+    return unpacks_to_dest(input_format, dest_acc)
 
 
 def nan_survives_to_l1(
@@ -2191,7 +2189,7 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         # Plain SFPMAD arithmetic, which the ISA specifies as IEEE754 for a non-finite input.
         MathOperation.SfpuElwadd,  # inf+x = inf, inf+(-inf) = NaN, NaN+x = NaN
         MathOperation.SfpuElwsub,  # as SfpuElwadd; inf-inf = NaN is the case worth having
-        MathOperation.SfpuElwmul,  # inf*x = inf, inf*0 = NaN, +/-0 signs multiply
+        MathOperation.SfpuElwmul,  # inf*x = inf; 0*x is +0 on a WH/BH 16-bit Dest
         MathOperation.SfpuElwrsub,  # as SfpuElwsub, operands reversed
         # Total order: the kernel is a bare SFPSWAP(VEC_MIN_MAX) with no NaN guard, so +NaN is
         # the maximum and -NaN the minimum -- unlike the comparisons below, which reject a NaN
@@ -2206,6 +2204,14 @@ BINARY_SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwGt,  # as SfpuElwLt, operands swapped
         MathOperation.SfpuElwLe,  # weak_ordered pre-stores 1, then 0 if either operand is NaN
         MathOperation.SfpuElwGe,  # as SfpuElwLe, operands swapped
+        # Predicate with an explicit non-finite fix-up: the kernel classifies a_abs_bits /
+        # b_abs_bits against the +inf pattern and answers 0 for any NaN (1 for two NaNs with
+        # EQUAL_NAN), 1 for two equal infinities and 0 for an infinity against anything else,
+        # which is torch.isclose. Both EQUAL_NAN instantiations pass the (special, special)
+        # grid on Blackhole now that the harness runs isclose_init (the divergence recorded
+        # earlier was observed with vConstIntPrgm0 unprogrammed).
+        MathOperation.SfpuIsclose,
+        MathOperation.SfpuIscloseEqualNan,
     }
 )
 
@@ -2216,23 +2222,28 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Composition through a reciprocal / log / exp. Each builds its result from a primitive
         # the ISA specifies only inside a stated finite range, so what the composition does with
         # a non-finite input is an LLK decision rather than an ISA one, and one answer decides
-        # all six.
+        # all eight.
         MathOperation.SfpuElwdiv,  # reciprocal + Newton-Raphson
         MathOperation.SfpuXlogy,  # x * log(y)
         MathOperation.SfpuElwpow,  # exp(b * ln a)
         MathOperation.SfpuBinaryFmod,  # quotient via reciprocal
         MathOperation.SfpuBinaryRemainder,  # as fmod
         MathOperation.SfpuAtan2,  # ratio plus a format-specific polynomial; 2 cells, not 4
+        MathOperation.SfpuLogaddexp,  # max(a, b) + log1p(exp(-|a - b|))
+        MathOperation.SfpuLogaddexp2,  # as logaddexp, correction scaled by log2(e)
         # Compare-against-zero on an operand that may be a NaN: calculate_mask lowers to
         # SFPSETCC, which is unspecified for a negative zero or a NaN. The same thing that
         # holds Sign and Heaviside out of the unary gate.
         MathOperation.SfpuMask,
-        # Kernel and golden both claim torch.isclose semantics and disagree at a non-finite
-        # operand; needs a per-cell read-back to say which is wrong before either is touched.
-        MathOperation.SfpuIsclose,
+        # mask_posinf is the same zero test on the mask operand (_sfpu_is_fp16_zero_), so it
+        # waits on the same thing as SfpuMask.
+        MathOperation.SfpuMaskPosinf,
         # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
         # ignores it, so a cat-B probe in B asserts nothing.
         MathOperation.SfpuLogsigmoid,
+        # Bit copy of one operand. A non-finite probe checks the pipeline,
+        # not this kernel.
+        MathOperation.SfpuCopyDest,
     }
 )
 

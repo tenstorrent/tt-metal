@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
@@ -56,6 +58,13 @@ bool verify_multi_core_cost(
     uint32_t tile_width = 32);
 
 bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool uint16_output);
+
+// True when indices into a reduced dim of `padded_width` elements need 32 bits. Indices run
+// 0 .. padded_width - 1, so 16 bits hold every width up to and including 65536 (largest index
+// 65535). The single source of truth for the index width, shared by topk and topk_route_finish.
+constexpr bool padded_width_needs_uint32_indices(uint64_t padded_width) {
+    return padded_width > uint64_t{std::numeric_limits<uint16_t>::max()} + 1;
+}
 
 // True when the op must use 32-bit indices: the padded reduced dim does not fit in 16 bits, or the
 // input is fp32, which sorts with fp32 dest accumulation and loads indices as INT32.

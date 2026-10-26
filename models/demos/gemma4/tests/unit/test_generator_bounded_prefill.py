@@ -21,6 +21,7 @@ def test_activate_sequential_per_layer_row_refreshes_persistent_device_tables():
 
     Host `_active` is sliced per user, but device buffers are keyed by batch=1
     and reused without content update unless ``update_persistent…`` runs.
+    Rows are selected by position; the legacy slice only confirms them.
     """
     generator = object.__new__(ChunkedPrefillPageTableGuardMixin)
     full = torch.tensor([[10, 11, 12], [20, 21, 22], [30, 31, 32]], dtype=torch.int32)
@@ -36,14 +37,16 @@ def test_activate_sequential_per_layer_row_refreshes_persistent_device_tables():
     )
     generator.model = [model]
 
+    generator._activate_sequential_per_layer_row(full[0:1])
     generator._activate_sequential_per_layer_row(full[1:2])
 
     assert model._active_page_tables_per_layer[0].shape == (1, 3)
     assert torch.equal(model._active_page_tables_per_layer[0], full[1:2])
     assert torch.equal(model._active_page_tables_per_layer[1], sliding[1:2])
-    assert len(updates) == 1
-    assert torch.equal(updates[0][0], full[1:2])
-    assert torch.equal(updates[0][1], sliding[1:2])
+    assert len(updates) == 2
+    assert torch.equal(updates[0][0], full[0:1])
+    assert torch.equal(updates[1][0], full[1:2])
+    assert torch.equal(updates[1][1], sliding[1:2])
 
 
 def test_bounded_last_chunk_expansion_preserves_ring_origin():

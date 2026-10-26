@@ -17,6 +17,24 @@ groupings {
 }
 
 groupings {
+  name: "t3k_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 4 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 5 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 6 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 7 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+groupings {
   name: "2x4_Mesh_t3k"
   preset_type: MESH
   instances: [

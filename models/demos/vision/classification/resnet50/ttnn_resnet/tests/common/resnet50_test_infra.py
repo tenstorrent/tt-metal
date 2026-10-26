@@ -26,7 +26,14 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 def load_resnet50_model(model_location_generator):
     # TODO: Can generalize the version to an arg
     torch_resnet50 = None
-    if model_location_generator is not None:
+    if model_location_generator is not None and "TT_GH_CI_INFRA" in os.environ:
+        # CIv2: pull IMAGENET1K_V1 weights from the large file cache instead of download.pytorch.org
+        model_path = (
+            model_location_generator("vision-models/resnet50", model_subdir="", download_if_ci_v2=True) / "resnet50.pth"
+        )
+        torch_resnet50 = torchvision.models.resnet50()
+        torch_resnet50.load_state_dict(torch.load(model_path))
+    elif model_location_generator is not None:
         model_version = "IMAGENET1K_V1.pt"
         model_path = model_location_generator(model_version, model_subdir="ResNet50")
         if os.path.exists(model_path):

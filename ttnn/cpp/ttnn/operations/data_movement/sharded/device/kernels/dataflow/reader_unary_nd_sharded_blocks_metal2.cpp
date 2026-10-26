@@ -28,7 +28,10 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb_in(dfb::in);
-    const uint32_t tile_size_bytes = dfb_in.get_tile_size();
+    // get_entry_size() (DFB interface entry bytes), not get_tile_size() (descriptor array
+    // unpack_tile_size[]): the latter is not arch-portable to Quasar and can be stale on a DM kernel,
+    // giving a wrong NOC read size -> stray/misaligned access. Byte-identical on WH/BH (entry == tile).
+    const uint32_t tile_size_bytes = dfb_in.get_entry_size();
 
     const auto accessor_src = TensorAccessor(tensor::src);
     for (uint32_t shard_id = start_shard_id; shard_id < num_shards; shard_id += num_cores) {

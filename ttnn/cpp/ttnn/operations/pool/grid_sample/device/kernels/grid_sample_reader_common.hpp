@@ -27,10 +27,19 @@ ALWI bool is_coordinate_valid(int32_t coord, uint32_t max_size) {
     return (coord >= 0) && (coord < static_cast<int32_t>(max_size));
 }
 
+template <uint32_t scalar_cb_index>
 ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16_t val2, uint16_t val3) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
-    ptr[0] = (val | (val1 << 16));
-    ptr[1] = (val2 | (val3 << 16));
+    if constexpr (get_dataformat(scalar_cb_index) == DataFormat::Float32) {
+        // BFLOAT16 bits are the high 16 bits of the equivalent FLOAT32 value.
+        ptr[0] = static_cast<uint32_t>(val) << 16;
+        ptr[1] = static_cast<uint32_t>(val1) << 16;
+        ptr[2] = static_cast<uint32_t>(val2) << 16;
+        ptr[3] = static_cast<uint32_t>(val3) << 16;
+    } else {
+        ptr[0] = (val | (val1 << 16));
+        ptr[1] = (val2 | (val3 << 16));
+    }
 }
 
 // Grid coordinate reading functions
@@ -130,7 +139,7 @@ struct GridCoordinateReader {
 // - read_bytes: bytes to copy per corner (chunk width)
 // - write_stride: distance between consecutive corners in the destination CB page
 // - src_byte_offset: byte offset within the source stick (= c_i * input_chunk_nbytes)
-template <typename TensorAccessorT>
+template <typename TensorAccessorT, typename DFB>
 ALWI void read_four_corner_inputs(
     Noc noc,
     const TensorAccessorT& input_tensor_accessor,
@@ -144,7 +153,7 @@ ALWI void read_four_corner_inputs(
     int32_t w0,
     int32_t w1,
     uint32_t input_height,
-    DataflowBuffer input_dfb) {
+    DFB input_dfb) {
     // Boundary checks (recompute for performance)
     const bool h0_valid = is_coordinate_valid(h0, input_height);
     const bool h1_valid = is_coordinate_valid(h1, input_height);
@@ -198,7 +207,7 @@ ALWI void read_four_corner_inputs(
     }
 }
 
-template <typename TensorAccessorT>
+template <typename TensorAccessorT, typename DFB>
 ALWI void read_four_corner_inputs_with_fill(
     Noc noc,
     const TensorAccessorT& input_tensor_accessor,
@@ -210,7 +219,7 @@ ALWI void read_four_corner_inputs_with_fill(
     int32_t w0,
     int32_t w1,
     uint32_t input_height,
-    DataflowBuffer input_dfb,
+    DFB input_dfb,
     uint32_t fill_stick_addr) {
     const bool h0_valid = is_coordinate_valid(h0, input_height);
     const bool h1_valid = is_coordinate_valid(h1, input_height);
@@ -293,11 +302,13 @@ template <
     uint32_t input_cb_index,
     uint32_t scalar_cb_index,
     typename TensorAccessor,
-    typename GridPtrType>
+    typename GridPtrType,
+    typename InputDFB,
+    typename ScalarDFB>
 ALWI void process_grid_point(
     Noc noc,
-    DataflowBuffer input_dfb,
-    DataflowBuffer scalar_dfb,
+    InputDFB input_dfb,
+    ScalarDFB scalar_dfb,
     GridPtrType grid_ptr,
     uint32_t grid_idx,
     const TensorAccessor& input_tensor_accessor,
@@ -369,7 +380,7 @@ ALWI void process_grid_point(
     // channel chunk, so we push the scalar CB only once.
     scalar_dfb.reserve_back(1);
     const uint32_t l1_write_scalar_addr = scalar_dfb.get_write_ptr();
-    fill_four_val(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
+    fill_four_val<scalar_cb_index>(l1_write_scalar_addr, weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
     scalar_dfb.push_back(1);
 
     // Iterate over channel chunks. For the common case in_nblocks_c == 1 the loop runs once and the

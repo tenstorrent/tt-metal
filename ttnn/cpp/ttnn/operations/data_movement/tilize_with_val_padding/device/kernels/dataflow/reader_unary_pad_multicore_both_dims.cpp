@@ -9,10 +9,12 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
@@ -35,12 +37,11 @@ void kernel_main() {
     // each width its own buffers: the raw block write below cannot wrap, so a buffer's size must stay
     // an exact multiple of the block pushed into it.
     DataflowBuffer dfb_in0(dfb::in);
-    DataflowBuffer dfb_in1(dfb::staging);
+    Scratchpad<uint8_t> staging(scratch::staging);
 
-    dfb_in1.reserve_back(1);
-    uint32_t temp_addr_raw = dfb_in1.get_write_ptr();
+    // Raw L1 address needed: rounded up to dram_alignment below and fed to fill_l1_range / tt_memmove arithmetic.
+    uint32_t temp_addr_raw = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(staging.local_mem()));
     uint32_t temp_addr = (temp_addr_raw + dram_alignment - 1) & ~(dram_alignment - 1);
-    dfb_in1.push_back(1);
 
     auto read_block = [&](uint32_t num_rows,
                           uint32_t start_row_id,
@@ -93,10 +94,13 @@ void kernel_main() {
                 uint32_t this_block_size = unpadded_X_size - prev_size;
                 if (this_block_size < width_size) {
                     uint32_t to_pad = width_size - this_block_size;
-                    dataflow_kernel_lib::fill_l1_range<element_size>(
-                        temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) + this_block_size,
-                        to_pad,
-                        pad_value);
+                    uint32_t fill_addr =
+                        temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) + this_block_size;
+                    // fill_l1_range CPU-writes the pad tail into the `staging` Scratchpad; scoped_lock flushes
+                    // those writes out of L2 before tt_memmove NOC-reads the region below. No-op on WH/BH.
+                    CoreLocalMem<uint8_t> fill_mem(fill_addr);
+                    auto fill_lock = fill_mem.scoped_lock(to_pad);
+                    dataflow_kernel_lib::fill_l1_range<element_size>(fill_addr, to_pad, pad_value);
                 }
 
                 tt_memmove<false, false, true, 0>(

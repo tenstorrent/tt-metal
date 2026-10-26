@@ -83,6 +83,9 @@ def main() -> int:
     stages = args.stages or (args.last_rank + 1)
 
     chunk = pp.CHUNK_SIZE
+    # Informational label only: matrix_row.sh forwards LAYER_COUNTS both to the runner's manifest and to this env; the
+    # producer never parses or validates it.
+    layer_counts = os.environ.get("PREFILL_PP_LAYER_COUNTS", "even")
     max_seq = pp.MAX_SEQ_LEN
     C = args.cached
     news = [int(x) for x in args.new.split(",") if x]
@@ -117,7 +120,7 @@ def main() -> int:
 
     def push(actual_start: int, actual_end: int, slot: int = 0) -> float:
         nonlocal next_c
-        arr = pp._chunk_to_host_array(pool[actual_start : actual_start + chunk])
+        arr = pp._h2d_rows(list(pool[actual_start : actual_start + chunk]), actual_start)
         assert arr.nbytes == payload_bytes
         t = time.time()
         service.forward_to_tensor_bytes(arr, metadata=pp._pack_metadata(slot, actual_start, actual_end))
@@ -182,6 +185,8 @@ def main() -> int:
         steady = steady_state(ends, c0, c_end, stages, new_tokens, chunk)
         out = {
             "mode": "loaded",
+            "chunk": chunk,
+            "layer_counts": layer_counts,
             "cached": C,
             "new": N,
             "users": users,
@@ -219,6 +224,8 @@ def main() -> int:
                 b.update(
                     {
                         "mode": "idle",
+                        "chunk": chunk,
+                        "layer_counts": layer_counts,
                         "cached": C,
                         "new": N,
                         "iter": it,

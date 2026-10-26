@@ -50,7 +50,7 @@ uint32_t Nt = N / TILE_WIDTH;
 
 DataFormat cb_data_format = DataFormat::Float16_b;
 uint32_t single_tile_size = detail::TileSize(cb_data_format);
-MathFidelity math_fidelity = MathFidelity::HiFi4;
+tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 
 distributed::DeviceLocalBufferConfig dram_config{ .page_size = single_tile_size, .buffer_type = BufferType::DRAM };
 distributed::ReplicatedBufferConfig buffer_config_A{ .size = single_tile_size * Mt * Kt };
@@ -116,7 +116,7 @@ auto matmul_single_core_kernel_id = tt_metal::CreateKernel(
     program,
     "tt_metal/programming_examples/matmul/matmul_single_core/kernels/compute/mm.cpp",
     core,
-    tt_metal::ComputeConfig{.math_fidelity = MathFidelity::HiFi4, .compile_args = compute_args}
+    tt_metal::ComputeConfig{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4, .compile_args = compute_args}
 );
 ```
 

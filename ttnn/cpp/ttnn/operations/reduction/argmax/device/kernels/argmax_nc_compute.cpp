@@ -41,7 +41,7 @@
  * `where_tile` checks the condition slot with SFPSETCC's LREG_EQ0 modifier —
  * any nonzero bit pattern is true, all-zero is false — so the raw output of
  * `gt_binary_tile` feeds it directly without conversion. Strict `>` keeps the
- * first matching index on ties, matching PyTorch.
+ * first matching index on ties, matching PyTorch. NaN handling does not match PyTorch.
  */
 void kernel_main() {
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);

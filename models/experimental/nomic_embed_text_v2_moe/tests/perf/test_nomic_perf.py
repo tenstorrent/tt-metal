@@ -1,15 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-side performance baseline for the unoptimized port.
+"""Host-side latency of the port, with trace off and one command queue.
 
-Nothing here asserts a target. The port has had no optimization pass, so there is no number to
-regress against yet; these tests record the three latencies every later change is measured
-from. The device-kernel half of the baseline is test_nomic_device_perf.py.
-
-Deliberately measured with trace off, one command queue, DRAM-interleaved everything and the
-bfloat16 / HiFi4 / fp32-accumulate config the correctness phase shipped. A baseline taken with
-any of those already changed cannot attribute the change that follows.
+Nothing here asserts a target: these tests record the three latencies later changes are
+measured against. The device-kernel half is test_nomic_device_perf.py, which does assert.
 """
 
 import time

@@ -55,6 +55,11 @@ void CreateQKVHeadsSeparateTensorsDeviceOperation::validate_on_program_cache_mis
     uint32_t num_w_cores = rm ? bbox.end_coord.x + 1 : bbox.end_coord.y + 1;
 
     TT_FATAL(
+        operation_attributes.num_q_heads > 0 && operation_attributes.num_kv_heads > 0,
+        "num_q_heads ({}) and num_kv_heads ({}) must be greater than 0",
+        operation_attributes.num_q_heads,
+        operation_attributes.num_kv_heads);
+    TT_FATAL(
         operation_attributes.num_q_heads % num_w_cores == 0,
         "Number of q heads {} must fit evenly into cores {}",
         operation_attributes.num_q_heads,

@@ -7,7 +7,6 @@
 #include "generic_op_device_operation_types.hpp"
 
 #include <tt_stl/reflection.hpp>
-#include <unordered_set>
 
 namespace ttnn::operations::generic {
 
@@ -15,11 +14,16 @@ using namespace tt::tt_metal;
 
 void verify_no_duplicate_mesh_coord_ranges(
     const tt::tt_metal::experimental::MeshProgramDescriptor::MeshPrograms& mesh_programs) {
-    std::unordered_set<ttnn::MeshCoordinateRange> seen;
-    seen.reserve(mesh_programs.size());
-    for (const auto& [range, _] : mesh_programs) {
-        auto [it, inserted] = seen.insert(range);
-        TT_FATAL(inserted, "Duplicate MeshCoordinateRange found in MeshProgramDescriptor: {}", range);
+    for (size_t i = 0; i < mesh_programs.size(); ++i) {
+        const auto& range_i = mesh_programs[i].first;
+        for (size_t j = i + 1; j < mesh_programs.size(); ++j) {
+            const auto& range_j = mesh_programs[j].first;
+            TT_FATAL(
+                !range_i.intersects(range_j),
+                "Overlapping MeshCoordinateRange found in MeshProgramDescriptor: {} overlaps {}",
+                range_i,
+                range_j);
+        }
     }
 }
 
@@ -126,17 +130,30 @@ ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
 }  // namespace ttnn::operations::generic
 
 namespace ttnn::prim {
-ttnn::operations::generic::tensor_return_value_t generic_op(
-    const std::vector<Tensor>& io_tensors,
-    const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
-    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
+namespace {
+
+ttnn::operations::generic::GenericOpDeviceOperation::tensor_args_t make_tensor_args(
+    const std::vector<Tensor>& io_tensors) {
     TT_FATAL(
         io_tensors.size() >= 2,
         "io_tensors must contain at least one input tensor and one output tensor, got {} tensors.",
         io_tensors.size());
+    return {.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
+}
 
-    auto tensor_args = OperationType::tensor_args_t{.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
+}  // namespace
 
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+ttnn::operations::generic::tensor_return_value_t generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
+    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, make_tensor_args(io_tensors));
+}
+
+void prepare_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const ttnn::operations::generic::operation_attributes_t& operation_attributes) {
+    using OperationType = ttnn::operations::generic::GenericOpDeviceOperation;
+    ttnn::device_operation::prepare<OperationType>(operation_attributes, make_tensor_args(io_tensors));
 }
 }  // namespace ttnn::prim

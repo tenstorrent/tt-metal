@@ -765,11 +765,13 @@ inline void configure_pack(
     // Get pointer to registers for current state ID
     volatile std::uint32_t* cfg = get_cfg_pointer();
 
-    if (pack_src_format != pack_dst_format)
-    {
-        TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
-        tensix_sync();
-    }
+    // Drain the packer before any of the configuration below is rewritten, whatever the formats. The raw
+    // cfg[] stores in this function and in set_packer_config are RISC MMIO, which no STALLWAIT can hold
+    // back: the STALLWAIT only keeps new packer instructions out, and tensix_sync() blocks this RISC until
+    // the packer has gone idle, which is what orders those stores behind a pack still in flight. Without
+    // it the pack samples the new format/width mid-tile.
+    TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK);
+    tensix_sync();
 
     set_packer_strides(pack_src_format);
 

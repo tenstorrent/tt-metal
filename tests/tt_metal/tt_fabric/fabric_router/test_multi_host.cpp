@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -997,7 +999,8 @@ TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
 
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_router_tests::fabric_config_for_active_mgd(),
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1468,9 +1471,9 @@ TEST(MultiHost, BHDualGalaxyFabricConfigMismatchAcrossRanksFatal) {
 }
 // Negative test: mesh 2 is a single (1x1) exit chip cabled to BOTH mesh 0 and mesh 1, and both boundaries are
 // marked assign_z_direction. They both try to claim mesh 2's one Z lane; the losing boundary is Z-only (never
-// falls back to NESW), so it resolves zero routers -> control-plane initialization must fail. This exercises
-// the assign_z conflict path. See t3k_assign_z_conflict_mesh_graph_descriptor.textproto.
-TEST(MultiHost, T3KAssignZConflictFatal) {
+// falls back to NESW), so it resolves zero routers -> control-plane initialization must fail under STRICT.
+// This exercises the assign_z conflict path. See t3k_assign_z_conflict_mesh_graph_descriptor.textproto.
+TEST(MultiHost, T3KAssignZConflictStrictFatal) {
     const std::filesystem::path conflict_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_assign_z_conflict_mesh_graph_descriptor.textproto";
@@ -1481,6 +1484,34 @@ TEST(MultiHost, T3KAssignZConflictFatal) {
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
         control_plane->configure_routing_tables_for_fabric_ethernet_channels();
     });
+}
+
+// Same conflict under a RELAXED policy (#56762): init succeeds and both boundaries resolve zero (logical-only).
+TEST(MultiHost, T3KAssignZConflictLosingBoundaryResolvesZero) {
+    const std::filesystem::path conflict_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+        "t3k_assign_z_conflict_relaxed_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(
+        conflict_mesh_graph_desc_path.string(),
+        tt::tt_fabric::FabricConfig::FABRIC_2D,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    // Init succeeded and every declared mesh came up.
+    EXPECT_EQ(control_plane->get_mesh_graph().get_mesh_ids().size(), 4u)
+        << "assign_z conflict must no longer fatal control-plane init; all four meshes should initialize";
+
+    const auto pairs_0_to_2 =
+        control_plane->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{0}, MeshId{2});
+    const auto pairs_1_to_2 =
+        control_plane->get_intermesh_exit_peer_fabric_node_id_pairs_between_meshes(MeshId{1}, MeshId{2});
+
+    // Mesh 2's single Z lane cannot serve both boundaries; on this mock neither claims it.
+    EXPECT_TRUE(pairs_0_to_2.empty() && pairs_1_to_2.empty())
+        << "Under mutual assign_z contention for a single Z lane both connections are expected to "
+           "resolve zero (logical-only). Resolved 0->2: "
+        << pairs_0_to_2.size() << ", 1->2: " << pairs_1_to_2.size();
 }
 
 TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
@@ -1725,8 +1756,11 @@ TEST(MultiHost, TestLlama8b1x2PodControlPlaneInit) {
         GTEST_SKIP() << "Requires Blackhole Galaxy mock (single-pod llama 8b decode pod MGDs)";
     }
 
+    // Use the config the pod MGD declares (RING dim -> FABRIC_2D_TORUS_Y) so it matches the
+    // ControlPlaneFixture layout/corner checks sharing this tt-run process (no set-once fabric-config clash).
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_router_tests::fabric_config_for_active_mgd(),
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1817,8 +1851,11 @@ TEST(MultiHost, TestLlama8b2x1PodControlPlaneInit) {
         GTEST_SKIP() << "Requires Blackhole Galaxy mock (single-pod llama 8b decode pod MGDs)";
     }
 
+    // Use the config the pod MGD declares (RING dim -> FABRIC_2D_TORUS_Y) so it matches the
+    // ControlPlaneFixture layout/corner checks sharing this tt-run process (no set-once fabric-config clash).
     tt::tt_metal::MetalContext::instance().set_fabric_config(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        fabric_router_tests::fabric_config_for_active_mgd(),
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1880,6 +1917,96 @@ TEST(MultiHost, TestLlama8b2x1PodControlPlaneInit) {
                                         << "} expected exactly 1 tray on that host";
         }
     }
+}
+
+// MetalContext::initialize pins UMD's remote-transfer cores to these channels. Every chosen MMIO chip must be one of
+// this host's fabric chips, and every chosen channel must link directly to one of that MMIO chip's own remote
+// (non-MMIO) chips on this host, never to another MMIO chip or off-host. Every local MMIO chip with such a remote chip
+// must get exactly one channel per remote chip (the dispatch link).
+void expect_remote_transfer_dispatch_channels_valid(std::optional<size_t> expected_num_mmio_chips = std::nullopt) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto dispatch_chans = get_remote_transfer_dispatch_channels(control_plane, cluster);
+
+    std::set<ChipId> local_fabric_chips;
+    for (const auto& [fabric_node, physical_chip] :
+         control_plane.get_topology_mapper().get_local_logical_mesh_chip_id_to_physical_chip_id_mapping()) {
+        local_fabric_chips.insert(physical_chip);
+    }
+    const auto mmio_chips = cluster.mmio_chip_ids();
+    const auto& eth_connections = cluster.get_ethernet_connections();
+
+    // The remote chips each local MMIO chip reaches over a direct, on-host link.
+    std::map<ChipId, std::set<ChipId>> direct_remote_chips;
+    for (const auto mmio_chip : mmio_chips) {
+        const auto chip_links = eth_connections.find(mmio_chip);
+        if (!local_fabric_chips.contains(mmio_chip) || chip_links == eth_connections.end()) {
+            continue;
+        }
+        const auto& controlled = cluster.get_devices_controlled_by_mmio_device(mmio_chip);
+        for (const auto& [chan, peer] : chip_links->second) {
+            const ChipId peer_chip = std::get<0>(peer);
+            if (peer_chip != mmio_chip && !mmio_chips.contains(peer_chip) && controlled.contains(peer_chip) &&
+                local_fabric_chips.contains(peer_chip)) {
+                direct_remote_chips[mmio_chip].insert(peer_chip);
+            }
+        }
+    }
+
+    if (expected_num_mmio_chips.has_value()) {
+        EXPECT_EQ(dispatch_chans.size(), *expected_num_mmio_chips);
+    }
+    EXPECT_EQ(dispatch_chans.size(), direct_remote_chips.size());
+    for (const auto& [mmio_chip, remote_chips] : direct_remote_chips) {
+        const auto chosen = dispatch_chans.find(mmio_chip);
+        ASSERT_NE(chosen, dispatch_chans.end()) << "MMIO chip " << mmio_chip << " has remote chips but no channel";
+        EXPECT_EQ(chosen->second.size(), remote_chips.size())
+            << "MMIO chip " << mmio_chip << ": expected one dispatch channel per directly connected remote chip";
+    }
+    for (const auto& [mmio_chip, chans] : dispatch_chans) {
+        EXPECT_TRUE(mmio_chips.contains(mmio_chip)) << "chip " << mmio_chip << " is not an MMIO chip";
+        EXPECT_TRUE(local_fabric_chips.contains(mmio_chip)) << "chip " << mmio_chip << " is not in this host's mesh";
+        const auto chip_links = eth_connections.find(mmio_chip);
+        ASSERT_NE(chip_links, eth_connections.end());
+        const auto& remote_chips = direct_remote_chips[mmio_chip];
+        for (const auto chan : chans) {
+            const auto link = chip_links->second.find(chan);
+            ASSERT_NE(link, chip_links->second.end())
+                << "MMIO chip " << mmio_chip << " channel " << +chan << " has no on-host link";
+            EXPECT_TRUE(remote_chips.contains(std::get<0>(link->second)))
+                << "MMIO chip " << mmio_chip << " channel " << +chan << " leads to chip " << std::get<0>(link->second)
+                << ", which is not one of its directly connected remote chips";
+        }
+    }
+}
+
+TEST(MultiHost, TestDual2x4RemoteTransferDispatchChannels) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::T3K) {
+        log_info(tt::LogTest, "This test is only for T3K");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Each host is a full T3K: 4 MMIO chips, each with one remote chip.
+    expect_remote_transfer_dispatch_channels_valid(4);
+}
+
+TEST(MultiHost, TestSplit2x2RemoteTransferDispatchChannels) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    expect_remote_transfer_dispatch_channels_valid();
+}
+
+TEST(MultiHost, TestBigMesh2x4RemoteTransferDispatchChannels) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    expect_remote_transfer_dispatch_channels_valid();
 }
 
 }  // namespace tt::tt_fabric::multi_host_tests

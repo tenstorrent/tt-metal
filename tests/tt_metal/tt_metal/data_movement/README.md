@@ -64,6 +64,7 @@ Both API versions run the same test cases but use different underlying implement
 | NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
 | Quasar Addrgen              | 900-909                         | Quasar-only: example kernels exercising the hardware address generator (1D/2D/face/interleaved). Requires Quasar simulator. |
 | Quasar IDMA                 | 910-911                         | Quasar-only: example kernels exercising the IDMA engine (basic linear copy and 1D strided). Requires Quasar simulator. |
+| Quasar Narrow-Row Untilize  | 918                             | Quasar-only: narrow-row pack-untilize the HW packer cannot express — stock whole-tile untilize followed by an iDMA gather that compacts each row. Verified against the NOC-read-per-row workaround it replaces. Requires Quasar simulator. |
 
 
 ## Running Tests

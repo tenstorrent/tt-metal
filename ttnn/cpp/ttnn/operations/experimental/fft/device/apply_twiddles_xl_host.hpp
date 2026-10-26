@@ -106,7 +106,7 @@ inline std::shared_ptr<DeltaPlan> get_or_create(
     auto [r, i] = build_delta_table(big_modulus, full_N);
     // Vectors are padded to `padded` already.
     using namespace tt::tt_metal;
-    const ttnn::Shape shape{ttnn::SmallVector<uint32_t>{padded / kTileElems, kTileElems}};
+    const ttnn::Shape shape{ttsl::SmallVector<uint32_t>{padded / kTileElems, kTileElems}};
     const TensorSpec spec(shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}));
     plan->dr = Tensor::from_vector(std::move(r), spec, md.get());
     plan->di = Tensor::from_vector(std::move(i), spec, md.get());

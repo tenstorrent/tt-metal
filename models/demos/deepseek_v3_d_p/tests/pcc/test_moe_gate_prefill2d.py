@@ -17,7 +17,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as Refe
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
-from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
@@ -62,7 +62,7 @@ GATE_MODELS = {
     "dsv3": DeepSeekV3Config,
     "kimi_k2_7": KimiK27Config,
     "kimi_k3": KimiK3Config,
-    "glm_5_2": GLM52Config,
+    "glm_5_3": GLM53Config,
     "minimax_m2_7": MiniMaxM27Config,
     "gpt_oss_120b": GptOss120BConfig,
     "dsv4_pro": DeepSeekV4ProConfig,
@@ -141,7 +141,7 @@ _REAL_GATE_SOURCES = {
     # K3's router is the one MoE tensor group the checkpoint leaves unquantized.
     "kimi_k3": _RealGateSource(
         env_var="KIMI_K3_HF_MODEL",
-        fallbacks=("/mnt/models/blaze/moonshotai/Kimi-K3",),
+        fallbacks=("/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e",),
         hf_repo="moonshotai/Kimi-K3",
         key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
     ),
@@ -261,8 +261,8 @@ REGULAR_GATE_CASES = [
     pytest.param("kimi_k2_7", GateComputeMode.DEVICE_FP32, id="kimi_k2_7-device_fp32"),
     pytest.param("kimi_k3", GateComputeMode.HOST_ALL, id="kimi_k3-host_all"),
     pytest.param("kimi_k3", GateComputeMode.DEVICE_FP32, id="kimi_k3-device_fp32"),
-    pytest.param("glm_5_2", GateComputeMode.HOST_ALL, id="glm_5_2-host_all"),
-    pytest.param("glm_5_2", GateComputeMode.DEVICE_FP32, id="glm_5_2-device_fp32"),
+    pytest.param("glm_5_3", GateComputeMode.HOST_ALL, id="glm_5_3-host_all"),
+    pytest.param("glm_5_3", GateComputeMode.DEVICE_FP32, id="glm_5_3-device_fp32"),
     pytest.param("minimax_m2_7", GateComputeMode.HOST_ALL, id="minimax_m2_7-host_all"),
     pytest.param("minimax_m2_7", GateComputeMode.DEVICE_FP32, id="minimax_m2_7-device_fp32"),
     pytest.param("gpt_oss_120b", GateComputeMode.GPT_HOST, id="gpt_oss_120b-gpt_host"),
@@ -591,6 +591,95 @@ def test_forward_pass(
         logits_pcc_threshold,
         scores_pcc_threshold,
     )
+
+
+def _real_rows_per_sp_device(actual_isl: int, n_sp_devices: int, rows_per_device: int) -> list[int]:
+    """Right-padded real-token count on each SP device (sequential layout), as build_padding_config derives it."""
+    return [min(rows_per_device, max(0, actual_isl - d * rows_per_device)) for d in range(n_sp_devices)]
+
+
+@pytest.mark.parametrize(
+    "gate_model, gate_fallback_mode",
+    [case for case in REGULAR_GATE_CASES if case.values[1] == GateComputeMode.GPT_DEVICE],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    MESH_CONFIGS,
+    indirect=["mesh_device", "device_params"],
+)
+def test_gpt_device_gate_padded_rows(
+    gate_model, gate_fallback_mode, mesh_device, device_params, num_links, expect_error
+):
+    """GPT_DEVICE's padding-aware path (_sentinel_padded_rows) against the same gate run unpadded.
+
+    Real rows must be bit-identical to the unpadded run (same input, same program) and every padded
+    row must carry the n_routed_experts sentinel that dispatch/combine key on. The same gate instance
+    then sentinels a second, shorter row count, which a mask cached from the first shape would get
+    wrong, and rejects a left-padded call, which the helper cannot express.
+    """
+    random.seed(42)
+    torch.manual_seed(42)
+
+    config = _gate_config(gate_model)
+    config.ccl_config["NUM_LINKS"] = num_links
+    config.ccl_config["TOPOLOGY"] = per_axis_topology(device_params["fabric_config"])[config.ccl_config["TP_AXIS"]]
+    adjust_shapes_for_testing(config, mesh_device)
+
+    gate_w = _zero_bias_if_bias_free(gate_model, create_gate_weights(config.n_routed_experts, config.dim))
+    n_sp_devices = mesh_device.shape[0]
+    rows = config.sp_dim
+    k = config.n_activated_experts
+    torch_input = _make_gate_input(config, rows * n_sp_devices, allow_real_input=False)
+    tt_input = _shard_gate_input(config, mesh_device, torch_input)
+
+    tt_model = TtMoEGatePrefill(
+        config,
+        mesh_device,
+        weight=gate_w["weight"],
+        bias=gate_w["e_score_correction_bias"],
+        fallback_mode=gate_fallback_mode,
+    )
+    sp_composer = get_sp_mesh_composer(mesh_device)
+
+    def compose(t, n_rows):
+        return ttnn.to_torch(t, mesh_composer=sp_composer).view(n_sp_devices, n_rows, -1).to(torch.int64)
+
+    # Leading SP devices full, one a quarter full (so the half-length check below cuts inside it), the rest padding.
+    actual_isl = rows * (n_sp_devices * 5 // 8) + rows // 4
+    real = _real_rows_per_sp_device(actual_isl, n_sp_devices, rows)
+    assert any(0 < r < rows for r in real), f"test needs a partially padded device, got real rows {real}"
+    padding_config = tt_model.build_padding_config(actual_isl)
+
+    _, tt_full_indices, _ = tt_model(tt_input)
+    full = compose(tt_full_indices, rows)
+    assert (full < config.n_routed_experts).all(), "unpadded gate must never emit the sentinel"
+    _, tt_padded_indices, _ = tt_model(tt_input, actual_isl=actual_isl, padding_config=padding_config)
+    padded = compose(tt_padded_indices, rows)
+
+    sentinel = config.n_routed_experts
+    for d, real_d in enumerate(real):
+        assert torch.equal(padded[d, :real_d], full[d, :real_d]), f"SP device {d}: real rows changed"
+        assert (padded[d, real_d:] == sentinel).all(), f"SP device {d}: padded rows not sentinel-marked"
+
+    # Same gate, shorter row count (a short prompt after a long one): masks must follow the shape.
+    half = rows // 2
+    assert half % ttnn.TILE_SIZE == 0, f"{half} rows per device is not tile aligned"
+    _, tt_full_indices, _ = tt_model(tt_input)
+    tt_half = ttnn.slice(tt_full_indices, [0, 0], [half, k])
+    half_full = compose(tt_half, half)
+    tt_half_padded = tt_model._sentinel_padded_rows(tt_half, padding_config)
+    half_padded = compose(tt_half_padded, half)
+    for d, real_d in enumerate(real):
+        keep = min(real_d, half)
+        assert torch.equal(
+            half_padded[d, :keep], half_full[d, :keep]
+        ), f"SP device {d}: real rows changed at {half} rows"
+        assert (
+            half_padded[d, keep:] == sentinel
+        ).all(), f"SP device {d}: padded rows not sentinel-marked at {half} rows"
+
+    with expect_error(ValueError, "right-padding only"):
+        tt_model(tt_input, actual_isl=actual_isl, padding_side="left", padding_config=padding_config)
 
 
 # Hash gate compute modes: HASH_HOST reuses the reference HashRouter on host and ships results to

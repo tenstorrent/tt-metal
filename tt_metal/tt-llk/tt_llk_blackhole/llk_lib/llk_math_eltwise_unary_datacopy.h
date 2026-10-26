@@ -52,6 +52,17 @@ inline void _llk_math_eltwise_unary_datacopy_(
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
         math::math_unpack_to_dest_tile_ready();
 
+        // Pin the math dest offset to the bank base: hardware adds it to the MOVD2B/MOVB2D immediates
+        // (dst_index * 64 + row) of the broadcast sequences below, and a preceding op may have left another
+        // tile's offset here. A plain copy (NONE) only issues the budabackend#2730 ZEROACC below, whose CLR_16
+        // block index is absolute within the bank: the offset only feeds its bank select, which flips once
+        // offset + index reaches 512 (tt-metal#53693), and a 32-bit bank never gets there (offset <= 240,
+        // index <= 15). So NONE skips the write, as on Wormhole, and keeps its per-tile cost unchanged.
+        if constexpr (src_b_bcast_type != BroadcastType::NONE)
+        {
+            TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
+        }
+
         // Due to bug in Blackhole Tensix (more details in budabackend/#2730) when an event with side effect of clearing DEST zero flags
         // (such as Unpack-to-dest or RISC-to-dest) and a ZEROACC instruction from packer occur in the same cycle,
         // zero flags clearing is dropped.
@@ -79,6 +90,10 @@ inline void _llk_math_eltwise_unary_datacopy_(
 
             // Disable zero flag to prevent mantissa flushing when exponent bits are 0.
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+
+            // UNPACK_TO_DEST covers only unpacker 0 and MOVD2B doesn't wait for SrcB valid, so wait for
+            // _llk_unpack_A_'s SrcB handoff (unpacker 1) before the broadcasts below write the bank.
+            math::srcb_bank_wait();
         }
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
@@ -94,8 +109,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             //   4. Fp32_enabled=0 (BH HW bug: MOVB2D DEST_32B_LOW ignores writes when Fp32 is on)
             //      SrcA=Float32 + MOVB2D(DEST_32B_LOW, MOV_8_ROW_BRCST): broadcast lo16 from B to dest
             //   5. Fp32_enabled=1: restore FP32 dest mode
+            // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
             const std::uint32_t tile_base = dst_index * 64;
-            TTI_SETDVALID(0b10);
 
             // Source row 0 -> faces 0 (rows 0-15) and 2 (rows 32-47)
             TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);   // hi16 to B
@@ -153,8 +168,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // every datum in every row of all 4 faces. Same hi16/lo16 split as ROW broadcast,
             // but uses MOV_8_ROW_BRCST_D0_BRCST which broadcasts both across rows AND across
             // all 16 datums within each row.
+            // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
             const std::uint32_t tile_base = dst_index * 64;
-            TTI_SETDVALID(0b10);
 
             // Extract source scalar from dest row 0 into B register
             TT_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, tile_base + 0);   // hi16 to B
@@ -198,8 +213,8 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // each pair, all 16 source rows are extracted in groups of 4, then broadcast
             // via MOV_4_ROWS_D0_BRCST to both the left face (rows 0-15) and the right
             // face (rows 16-31). Same hi16/lo16 split as ROW/SCALAR broadcasts.
+            // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
             const std::uint32_t tile_base = dst_index * 64;
-            TTI_SETDVALID(0b10);
 
 #pragma GCC unroll 2
             for (int offset = 0; offset < 2; ++offset)
@@ -420,8 +435,6 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool tilize = false, bool is_int_fpu_en = false>
 inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32_t total_rows, const std::uint32_t num_faces, const std::uint32_t dst_format)
 {
-    // always move 32x32 tile, packed as 16x16x4
-
     if constexpr (type == DataCopyType::A2D)
     {
         std::uint32_t innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
@@ -453,7 +466,8 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
     {
         std::uint32_t addr_mod  = (rows_per_inst == p_movb2d::MOV_1_ROW) ? ADDR_MOD_0 : ADDR_MOD_2;
         std::uint32_t innerloop = (rows_per_inst == p_movb2d::MOV_1_ROW) ? total_rows : (total_rows >> 2);
-        std::uint32_t outerloop = 4;
+        // One outer iteration per face: end_op clears a SrcB DVALID each iteration.
+        std::uint32_t outerloop = num_faces;
         auto broadcast_type     = p_movb2d::MOV_1_ROW; // No broadcast;
 
         if constexpr (bcast_type == BroadcastType::COL)

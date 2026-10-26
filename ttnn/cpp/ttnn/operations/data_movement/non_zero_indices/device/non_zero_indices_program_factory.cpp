@@ -42,37 +42,23 @@ uint32_t compute_geometry(
         // TensorAccessor stride, matching the buffer's actual per-page footprint in DRAM/L1.
         const uint32_t aligned_page_size = input.buffer()->aligned_page_size();
 
-        // For WIDTH/BLOCK_SHARDED, TensorAccessor visits pages bank-by-bank, which differs from
-        // logical row-major order. The kernel needs these three values to reconstruct flat_start.
+        // For WIDTH/BLOCK_SHARDED each logical row is split across shards_per_row column shards,
+        // so a row spans that many consecutive logical page ids. This is a page-count, not a core
+        // grid width: under COL_MAJOR the shard grid is transposed onto the core grid, so the two
+        // differ. TensorAccessor maps logical page ids to the physical bank and offset itself, so
+        // neither core geometry nor shard orientation may enter the page-id math.
         const uint32_t logical_last_dim = lshape[3];
-        const uint32_t grid_w = (elements_per_page < logical_last_dim) ? (logical_last_dim / elements_per_page) : 1;
-
-        uint32_t pages_per_bank = 1;
-        uint32_t is_col_major = 0;
-        const auto mem_layout = input.memory_config().memory_layout();
-        if (mem_layout == TensorMemoryLayout::WIDTH_SHARDED || mem_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-            // shard_spec.shape[0] is shard height = number of rows per core; each ROW_MAJOR row is one page.
-            const auto& shard_spec = input.memory_config().shard_spec().value();
-            pages_per_bank = shard_spec.shape[0];
-            is_col_major = (shard_spec.orientation == ShardOrientation::COL_MAJOR) ? 1u : 0u;
-        }
-        // grid_h = number of core rows in the shard grid.
-        // For COL_MAJOR sharding the bank formula is: core_col * grid_h + core_row_idx.
-        // For non-sharded / HEIGHT_SHARDED grid_w=1 so grid_h is never used in the hot path.
-        const uint32_t total_rows = num_pages / grid_w;
-        const uint32_t grid_h = (pages_per_bank > 0) ? (total_rows / pages_per_bank) : 1;
+        const uint32_t shards_per_row =
+            (elements_per_page < logical_last_dim) ? (logical_last_dim / elements_per_page) : 1;
 
         geom_args = {
             aligned_output_bytes,
             num_pages,
             elements_per_page,
             aligned_page_size,
-            pages_per_bank,
-            grid_w,
-            lshape[1],      // logical_N: N-dimension for (b,n,h,c) index decomposition
-            lshape[2],      // logical_H: H-dimension for (b,n,h,c) index decomposition
-            grid_h,         // number of core rows (needed for COL_MAJOR bank ordering)
-            is_col_major};  // 1 if shard orientation is COL_MAJOR, 0 otherwise
+            shards_per_row,
+            lshape[1],   // logical_N: N-dimension for (b,n,h,c) index decomposition
+            lshape[2]};  // logical_H: H-dimension for (b,n,h,c) index decomposition
         return aligned_page_size;
     }
     const uint32_t tile_page_size = input.buffer()->aligned_page_size();

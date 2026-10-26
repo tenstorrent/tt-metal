@@ -40,6 +40,10 @@ jobs:
         env:
           PRE_COMMIT_FROM_REF: ${{ github.event_name == 'pull_request' && format('refs/remotes/origin/{0}', github.event.pull_request.base.ref) || 'HEAD^' }}
           PRE_COMMIT_TO_REF: HEAD
+          # compile-agentic-workflows shells out to `gh release download`. Without a
+          # token, `gh` runs unauthenticated and hits GitHub's 60/hour anonymous rate
+          # limit almost immediately on the shared hosted-runner IP pool.
+          GH_TOKEN: ${{ github.token }}
         with:
           extra_args: |
             --from-ref ${{ env.PRE_COMMIT_FROM_REF }} \

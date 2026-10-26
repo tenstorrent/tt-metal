@@ -82,4 +82,10 @@ def pre_and_post(request):
         yield
 
     ttnn.tracer.disable_tracing()
-    ttnn.CONFIG = original_config
+    # Restore the live config IN PLACE. `ttnn.CONFIG` is a reference to the C++ `ttnn::CONFIG` global that device
+    # operations and the tensor serializer read; rebinding the module attribute to the snapshot would leave every
+    # later test (and `ttnn.manage_config`) mutating a detached Python-owned copy that the C++ side never sees.
+    for key in ttnn.Config.keys():
+        value = getattr(original_config, key)
+        if getattr(ttnn.CONFIG, key) != value:
+            setattr(ttnn.CONFIG, key, value)

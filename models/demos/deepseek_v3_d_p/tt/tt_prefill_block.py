@@ -15,7 +15,11 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    compute_constants,
+    extract_mesh_config,
+    routed_expert_combine_overlap_arg,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
@@ -272,10 +276,12 @@ class TtPrefillBlock(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        tp_shard_kv: Optional[bool] = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -310,8 +316,21 @@ class TtPrefillBlock(LightweightModule):
             f"({'MoE' if self.is_moe else 'dense'}, kv_only={kv_only})"
         )
 
+        # A caller can enable fusion for any model or override its default.
+        # Eager execution and trace capture use the same operator; the op validates shapes.
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole() and is_chunked
+
         # --- Attention norm ---
-        use_glm52_l1_attn_norm = (
+        # Mistral-Small-4 at 640 rows/device: the 2D post-all-gather split (one tile row per core) runs
+        # the normalize on 80 cores instead of 20, 17.9 us vs 33.9 per norm. Bit-identical to the 1D path.
+        use_mistral4_2d_post_norm = (
+            is_blackhole()
+            and seq_len // mesh_device.shape[sp_axis] == 640
+            and config.num_attention_heads == 32
+            and config.q_lora_rank == 1024
+        )
+        use_glm53_l1_attn_norm = (
             is_blackhole()
             and is_chunked
             and seq_len // mesh_device.shape[sp_axis] == 640
@@ -329,7 +348,9 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
-            output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm52_l1_attn_norm else None,
+            use_fused=use_fused_rmsnorm,
+            output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm53_l1_attn_norm else None,
+            post_use_2d_core_grid=use_mistral4_2d_post_norm,
         )
 
         # --- MLA ---
@@ -357,6 +378,7 @@ class TtPrefillBlock(LightweightModule):
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
             llama4_scale_cache=llama4_scale_cache,
+            tp_shard_kv=tp_shard_kv,
         )
 
         if kv_only:
@@ -374,6 +396,8 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+            use_fused=use_fused_rmsnorm,
+            post_use_2d_core_grid=use_mistral4_2d_post_norm,
         )
 
         # --- FFN (MoE or dense) ---
@@ -402,7 +426,7 @@ class TtPrefillBlock(LightweightModule):
             )
         else:
             # emb_dim/hidden_dim default to DSv3/Kimi's 7168/18432 in TtFfn; pass the variant's real dims
-            # so GLM-5.1 (hidden 6144, dense intermediate 12288) doesn't inherit the 7168 default. emb_dim
+            # so GLM-5.3 (hidden 6144, dense intermediate 12288) doesn't inherit the 7168 default. emb_dim
             # is always safe (== default for 7168-dim models); hidden_dim only overrides when the config
             # exposes intermediate_size (GLM does; DSv3/Kimi fall back to the TtFfn default).
             _dense_ffn_kwargs = {}
@@ -490,6 +514,9 @@ class TtPrefillBlock(LightweightModule):
             # Same source as the block's attn_norm and ffn_norm, so the three cannot disagree.
             rms_norm_eps=config.rms_norm_eps,
             max_gate_seq_len_per_chip=getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
+            # Only configs that opt in (Kimi K2.7, GLM 5.3, Mistral Small 4) overlap the routed expert with
+            # combine_fabric2d.
+            overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
@@ -511,6 +538,8 @@ class TtPrefillBlock(LightweightModule):
             # Only DeepSeek-V4 names one; None keeps the gate config's sigmoid default.
             gate_score_func=getattr(model_cfg, "SCORE_FUNC", None),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
+            # DeepSeek-V4 hash layers route via a frozen tid2eid[input_ids] table; None elsewhere.
+            gate_hash_table=state_dict.get("hash_table"),
             gate_fallback_mode=gate_fallback_mode,
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
             n_limited_groups=model_cfg.NUM_LIMITED_GROUPS,
@@ -571,6 +600,7 @@ class TtPrefillBlock(LightweightModule):
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
         ack_layer_idx: Optional[int] = None,
+        ack_alias_layer_ids: tuple = (),
         force_kv_only: bool = False,
     ):
         """
@@ -595,6 +625,8 @@ class TtPrefillBlock(LightweightModule):
                 d2h_service path does not cover.
             ack_layer_idx: global layer id this block acks under, overriding its own. MTP replays one
                 block per level, so each level needs a distinct id on the host-callback path.
+            ack_alias_layer_ids: global layer ids acked right after this block's own, for table rows
+                that alias its KV (decode MTP levels past the ones prefill computes).
             on_layer_hidden: optional tap fired at the END of the block with (GLOBAL layer index, output
                 residual x) — for consumers that need the post-FFN hidden (e.g. the DFlash drafter
                 matching target_layer_ids). NOT fired for kv_only blocks (no output). The callback must
@@ -647,7 +679,7 @@ class TtPrefillBlock(LightweightModule):
             force_kv_only=kv_only,
         )
         kv_intermediates = None
-        mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
+        mla_indices = None  # GLM-5.3 reuse: this layer's top-k indices (full layer) for downstream shared layers
         # A kv_only layer's MLA returns None (it fills the cache and stops before attention/output), so it
         # has nothing to unpack; the kv_only short-circuit below returns the matching (None, ...) arity.
         if not kv_only:
@@ -679,6 +711,8 @@ class TtPrefillBlock(LightweightModule):
             metadata_msg=metadata_msg,
             on_layer_complete=on_layer_complete,
             trace_controller=getattr(self, "_trace_controller", None),
+            tp_axis=self.mla.tp_shard_kv_axis,
+            alias_layer_ids=ack_alias_layer_ids,
         )
 
         if kv_only:

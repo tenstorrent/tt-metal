@@ -17,6 +17,11 @@ from functools import wraps
 from typing import Any, Dict, Optional, Tuple
 from loguru import logger
 import ttnn
+from ttnn.config_serialization import (
+    compute_kernel_config_to_dict,
+    memory_config_to_dict,
+    program_config_to_dict,
+)
 
 
 # Global counter for operation numbering in trace files
@@ -40,30 +45,6 @@ _SWEEP_SOURCE_HASH: Optional[str] = None
 
 # Command-line flag constant
 _TRACE_PARAMS_FLAG = "--trace-params"
-
-
-# Helper function to get serializers from tensor_utils (imported lazily to avoid circular imports)
-def _get_tensor_utils_serializers():
-    """Lazy import of tensor_utils serializers to avoid circular imports."""
-    try:
-        # Import inside function to avoid circular dependency at module load time
-        import importlib.util
-
-        # Check if models.common.tensor_utils exists
-        spec = importlib.util.find_spec("models.common.tensor_utils")
-        if spec is None:
-            return None
-
-        from models.common import tensor_utils
-
-        return {
-            "memory_config_to_dict": tensor_utils.memory_config_to_dict,
-            "compute_kernel_config_to_dict": tensor_utils.compute_kernel_config_to_dict,
-            "program_config_to_dict": tensor_utils.program_config_to_dict,
-        }
-    except (ImportError, AttributeError) as e:
-        logger.debug(f"Could not import tensor_utils serializers: {e}")
-        return None
 
 
 def enable_tracing(enable: bool = True) -> None:
@@ -257,17 +238,11 @@ def _serialize_ttnn_tensor(value: Any, serialize_values: bool) -> Dict[str, Any]
     if hasattr(value, "memory_config"):
         memory_config_value = value.memory_config()
         if memory_config_value is not None:
-            # Try to use tensor_utils serializer first
-            serializers = _get_tensor_utils_serializers()
-            if serializers and "memory_config_to_dict" in serializers:
-                try:
-                    tensor_data["memory_config"] = serializers["memory_config_to_dict"](memory_config_value)
-                except Exception as exc:
-                    # Fallback to repr if serializer fails
-                    logger.debug(f"memory_config_to_dict serializer failed, using repr: {exc}")
-                    tensor_data["memory_config"] = repr(memory_config_value)
-            else:
-                # No serializer available, use repr
+            try:
+                tensor_data["memory_config"] = memory_config_to_dict(memory_config_value)
+            except Exception as exc:
+                # Fallback to repr if serializer fails
+                logger.debug(f"memory_config_to_dict serializer failed, using repr: {exc}")
                 tensor_data["memory_config"] = repr(memory_config_value)
     return tensor_data
 
@@ -392,26 +367,21 @@ def serialize_operation_parameters(
                 # For other types, try specialized serializers
                 type_name = type(value).__name__
 
-                # Try to use tensor_utils serializers first
-                serializers = _get_tensor_utils_serializers()
-
-                # Try tensor_utils serializers for specific types
-                if serializers:
-                    try:
-                        if type_name == "MemoryConfig":
-                            return serializers["memory_config_to_dict"](value)
-                        elif type_name in [
-                            "WormholeComputeKernelConfig",
-                            "BlackholeComputeKernelConfig",
-                            "DeviceComputeKernelConfig",
-                        ]:
-                            return serializers["compute_kernel_config_to_dict"](value)
-                        elif "ProgramConfig" in type_name and "Matmul" in type_name:
-                            # tensor_utils only handles Matmul program configs
-                            return serializers["program_config_to_dict"](value)
-                    except Exception as e:
-                        logger.debug(f"tensor_utils serializer failed for {type_name}: {e}")
-                        # Fall through to use __repr__
+                try:
+                    if type_name == "MemoryConfig":
+                        return memory_config_to_dict(value)
+                    elif type_name in [
+                        "WormholeComputeKernelConfig",
+                        "BlackholeComputeKernelConfig",
+                        "DeviceComputeKernelConfig",
+                    ]:
+                        return compute_kernel_config_to_dict(value)
+                    elif "ProgramConfig" in type_name and "Matmul" in type_name:
+                        # config_serialization only handles Matmul program configs
+                        return program_config_to_dict(value)
+                except Exception as e:
+                    logger.debug(f"config_serialization serializer failed for {type_name}: {e}")
+                    # Fall through to use __repr__
                 # For other types, convert to string or get basic info
                 if hasattr(value, "__dict__"):
                     return {"type": type(value).__name__, "repr": str(value)}

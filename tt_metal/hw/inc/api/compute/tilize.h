@@ -70,6 +70,9 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     // tile-by-tile and have no equivalent concept. Deferred: not on the Quasar critical path.
     UNPACK((llk_unpack_tilize_init(icb, block /*full_ct_dim*/)));  // block_ct_dim defaults to 1
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en>(icb)));
+    // Quasar llk_pack packs through the buffer descriptor programmed by the last llk_pack_init, so
+    // re-point the packer at ocb here; otherwise tilize_block writes into the previous output DFB.
+    PACK((llk_pack_init(ocb)));
 #endif
 }
 
@@ -234,33 +237,6 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
 }
 
 #ifndef ARCH_QUASAR
-// clang-format off
-/**
- * Uninitializes the tilize operation and reconfigures the unpacker with CB data types.
- *
- * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
- * as a part of tt-metal#22904.
- *
- * Return value: None
- *
- * | Param Type | Name     | Description                              | Type     | Valid Range | Required |
- * |----------- |----------|------------------------------------------|----------|-------------|----------|
- * | Function   | old_icb  | Previous input circular buffer identifier| uint32_t | 0 to 31     | True     |
- * | Function   | new_icb  | New input circular buffer identifier     | uint32_t | 0 to 31     | True     |
- * | Function   | ocb      | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
- */
-// clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
-ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb) {
-    UNPACK((llk_unpack_tilize_uninit(old_icb)));
-    UNPACK((llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE>(old_icb, new_icb)));
-    MATH((llk_math_reconfig_data_format_srca<is_fp32_dest_acc_en>(old_icb, new_icb)));
-#ifdef ARCH_BLACKHOLE
-    // BH-only: restore packer from PackMode::Tilize (armed by tilize_init_short_with_dt) to Default (#52175).
-    PACK((llk_pack_init<PackMode::Default>(ocb)));
-#endif
-}
-
 namespace fast_tilize_detail {
 
 template <bool configure_remap, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>

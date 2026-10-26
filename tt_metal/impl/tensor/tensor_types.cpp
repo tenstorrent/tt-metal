@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <tt-metalium/tensor/tensor_types.hpp>
+#include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
 

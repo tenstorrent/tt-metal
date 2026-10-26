@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-# Host resource pane: CPU / DRAM, the 1 GB hugepage pool, and the pinning limits
+# Host resource pane: CPU / DRAM / network, the 1 GB hugepage pool, and the pinning limits
 # of the live pytest process. Deliberately dependency-free (reads /proc and sysfs
 # directly) so it works on a bare node without sysstat/htop installed.
 #
@@ -34,6 +34,15 @@ HP2M=/sys/kernel/mm/hugepages/hugepages-2048kB
 # pins one host DMA buffer per device, so this is the number free_hugepages has to
 # reach before an iteration can start.
 NDEV=$(ls /sys/bus/pci/drivers/tenstorrent/ 2>/dev/null | grep -c '^0000:')
+# Physical NICs that are up, one row each once they have received anything. The weka client drives
+# its SR-IOV VFs from userspace, so their kernel counters stay at 0 and they get no row: weka traffic
+# (the weight load) is the WEKA row, read from the client's own /proc/wekafs/stat, whose per-op rows
+# end in "(N IOPS, M MB/sec)".
+NET_IFS=()
+for d in /sys/class/net/*; do
+  [ -e "$d/device" ] && [ "$(cat "$d/operstate")" = up ] && NET_IFS+=("${d##*/}")
+done
+declare -A prev_rx prev_tx
 
 LOG_NAME="${1:-}"
 SNAP_FILE=""
@@ -53,6 +62,13 @@ cpu_sample() {
   echo "$busy $((busy + idle + iowait))"
 }
 
+# One traffic row: net_row <label> <rx MB/s> <tx MB/s> <line rate MB/s> <name>
+net_row() {
+  local pct=0
+  [ "$4" -gt 0 ] && pct=$((100 * $2 / $4))
+  printf "  %-4s %3d%%  [%s]  rx %5s MB/s  tx %5s MB/s  %s" "$1" "$pct" "$(bar "$pct" 24)" "$2" "$3" "$5"
+}
+
 # Horizontal bar: bar <percent> <width>
 bar() {
   local pct=${1%.*} width="$2" filled i out=""
@@ -65,6 +81,7 @@ bar() {
 }
 
 rd() { cat "$1" 2>/dev/null || echo "-"; }
+num() { cat "$1" 2>/dev/null || echo 0; }
 gib() { awk -v k="$1" 'BEGIN{printf "%.1f", k/1048576}'; }        # from kB
 gib_b() { awk -v b="$1" 'BEGIN{printf "%.1f", b/1073741824}'; }   # from bytes
 
@@ -93,6 +110,9 @@ proc_limit() {
 }
 
 read -r prev_busy prev_total <<<"$(cpu_sample)"
+for n in "${NET_IFS[@]}"; do
+  prev_rx[$n]=$(num /sys/class/net/$n/statistics/rx_bytes); prev_tx[$n]=$(num /sys/class/net/$n/statistics/tx_bytes)
+done
 last_snap=0
 
 while true; do
@@ -104,6 +124,22 @@ while true; do
   prev_total=$total
   cpu_pct=0
   [ "$d_total" -gt 0 ] && cpu_pct=$((100 * d_busy / d_total))
+
+  # speed is in Mb/s; each bar is rx against line rate (8 bits per byte). WEKA's bar uses the fastest NIC.
+  net_rows=()
+  max_mbs=0
+  for n in "${NET_IFS[@]}"; do
+    s=/sys/class/net/$n
+    rx=$(num $s/statistics/rx_bytes); tx=$(num $s/statistics/tx_bytes)
+    link_mbs=$(($(num $s/speed) / 8))
+    [ "$link_mbs" -gt "$max_mbs" ] && max_mbs=$link_mbs
+    [ "$rx" -gt 0 ] && net_rows+=("$(net_row NET "$(((rx - prev_rx[$n]) / REFRESH / 1000000))" \
+      "$(((tx - prev_tx[$n]) / REFRESH / 1000000))" "$link_mbs" "$n")")
+    prev_rx[$n]=$rx; prev_tx[$n]=$tx
+  done
+  weka_mbs() { awk -v op="$1:" '$1 == op && match($0, /[0-9]+ MB\/sec/) {print substr($0, RSTART, RLENGTH) + 0; f = 1}
+    END {if (!f) print 0}' /proc/wekafs/stat 2>/dev/null; }
+  [ -r /proc/wekafs/stat ] && net_rows+=("$(net_row WEKA "$(weka_mbs read)" "$(weka_mbs write)" "$max_mbs" "wekafs client")")
 
   # /proc/meminfo is in kB. MemAvailable is the kernel's own estimate of what a
   # new allocation can get, which is what actually matters here — MemFree alone
@@ -163,6 +199,7 @@ while true; do
     printf "  SWAP %3d%%  [%s]  %s / %s GiB\n" "$swap_pct" "$(bar "$swap_pct" 24)" \
       "$(gib $((swap_total - swap_free)))" "$(gib "$swap_total")"
   fi
+  ((${#net_rows[@]})) && printf '%s\n' "${net_rows[@]}"
   echo "  ─────────────────────────────────────────────────────────────"
   printf "  HUGE 1G  nr=%-4s free=%-4s resv=%-3s surplus=%-3s need=%s/run%s\n" \
     "$hp_nr" "$hp_free" "$hp_resv" "$hp_surp" "$NDEV" "$hp_flag"

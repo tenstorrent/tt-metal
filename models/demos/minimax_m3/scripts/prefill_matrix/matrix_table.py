@@ -20,7 +20,7 @@ CACHED_PCT = {61440: "p25", 143360: "p50", 312320: "p75", 552960: "p90", 860160:
 
 LOADED_TABLES = [  # (title, JSONL key) -- the steady_* keys are absent when a stream had too few chunks
     ("steady-state aggregate NEW tok/s (fill/drain excluded)", "steady_new_tps"),
-    ("steady-state PROCESSED tok/s (5120 per chunk)", "steady_processed_tps"),
+    ("steady-state PROCESSED tok/s (one chunk per period)", "steady_processed_tps"),
     ("aggregate NEW tok/s incl. fill/drain", "aggregate_new_tps"),
     ("per-request TTFT ms median", "ttft_under_load_ms_median"),
     ("per-request TTFT ms p90", "ttft_under_load_ms_p90"),
@@ -49,8 +49,17 @@ def idle_ttfts(rows, iter0):
     return out
 
 
-def _lbl(v, pct):
-    return f"{v} ({pct[v]})" if v in pct else str(v)
+def _lbl(v, pct, tolerance=0):
+    """Percentile label. Exact match, or -- with ``tolerance`` > 0 -- the NEAREST default value within it. Only the
+    cached axis uses a tolerance (one 5120 chunk): cached values are rounded down to the chunk size when
+    CHUNK != 5120 (312320 -> 311296 at 2048) and must keep their label; new-token values are never rounded."""
+    if v in pct:
+        return f"{v} ({pct[v]})"
+    near = min(pct, key=lambda k: abs(k - v)) if pct else None
+    return f"{v} ({pct[near]})" if near is not None and abs(near - v) < tolerance else str(v)
+
+
+CACHED_TOLERANCE = 5120
 
 
 def table(title, cells, cached, news):
@@ -60,7 +69,7 @@ def table(title, cells, cached, news):
     print("-" * (16 + w * len(news)))
     for c in cached:
         print(
-            f"{_lbl(c, CACHED_PCT):>14} |"
+            f"{_lbl(c, CACHED_PCT, CACHED_TOLERANCE):>14} |"
             + "".join(f"{cells[(c, n)]:>{w}.0f}" if (c, n) in cells else f"{'-':>{w}}" for n in news)
         )
 
@@ -109,6 +118,8 @@ def main():
         print(
             f"\n(loaded pass: users={sorted({r['users'] for r in loaded})}, requests per cell {sorted({r['requests'] for r in loaded})})"
         )
+    cfg = sorted({(r.get("chunk", 5120), r.get("layer_counts", "even")) for r in rows})
+    print("(chunk, layer split): " + "; ".join(f"{c} / {lc}" for c, lc in cfg))
     if args.csv:
         write_csv(args.csv, cached, news, med, last)
 

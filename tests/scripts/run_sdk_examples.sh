@@ -13,6 +13,15 @@ ASAN_BUILD="${ASAN_BUILD:-false}"
 
 FAILED_EXAMPLES=""
 
+# #58511: installed TT::Metalium must not export libexec/tt-metalium as an include dir.
+echo "::group::TT::Metalium interface include directories"
+check_dir="$(dirname "$(readlink -f "$0")")/check_metalium_interface_includes"
+if ! LD_PRELOAD="" cmake -G Ninja -S "$check_dir" -B "$(mktemp -d)"; then
+  echo "::error::TT::Metalium exports internal header directories to consumers (see output above)"
+  FAILED_EXAMPLES="${FAILED_EXAMPLES} interface-include-check"
+fi
+echo "::endgroup::"
+
 for example in "/usr/share/${PRODUCT}/examples"/*; do
   [ -e "$example" ] || continue
 

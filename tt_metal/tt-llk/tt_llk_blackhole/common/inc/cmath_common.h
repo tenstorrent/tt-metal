@@ -35,8 +35,8 @@ constexpr std::uint32_t replay_buf_offset = 16; // split replay buffer usage bet
 // The flag is a math-ALU concern: only read by MOVA2D/MOVB2D/MOVB2A/MVMUL/ELWADD/ELWMUL (the math
 // thread), never by the SFPU. Crucially, NO instruction changes it as a side effect -- it moves only
 // on an explicit cfg_reg_rmw. So the math thread owns it and we simply track its real value: each op
-// sets the value it needs, and an already-correct value is a no-op (skip the pipe-draining STALLWAIT +
-// RMW). src_zero_flag_hw caches that physical value (0xff = unknown, only at power-on).
+// sets the value it needs, and an already-correct value is a no-op (skip the RMW). src_zero_flag_hw
+// caches that physical value (0xff = unknown, only at power-on).
 //
 // What each op wants:
 //   FP compute (matmul / eltwise-binary / reduce compute-phase) and format reconfigs -> the
@@ -54,12 +54,14 @@ static std::uint32_t src_zero_flag_hw       = 0xff; // last value written to the
 static std::uint32_t src_zero_flag_srca_fmt = 0xff; // cached operand formats feeding the compute default
 static std::uint32_t src_zero_flag_srcb_fmt = 0xff;
 
-// The one writer. Out-of-line so the STALLWAIT + RMW exist in a single copy (code size — a matmul
-// kernel otherwise overflows its slot).
+// The one writer. Out-of-line so the write exists in a single copy (code size — a matmul kernel
+// otherwise overflows its slot).
+// No STALLWAIT: every reader (SrcB zero-flag generation, the SrcA MOV path) latches this flag when its
+// FPU instruction issues and carries it down the pipe, so the write cannot change an instruction already
+// in flight. The SFPU never reads it.
 inline __attribute__((noinline)) void _apply_src_zero_flag_(const std::uint32_t value)
 {
     src_zero_flag_hw = value;
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(value);
 }
 
@@ -88,7 +90,7 @@ inline void _configure_src_zero_flag_(const bool disable)
 
 // FP compute / format reconfig: the flag follows the operand formats. Reads the cached SrcA/SrcB formats
 // -- maintained by the reconfig sites, the only places the SrcA/SrcB format actually changes -- and applies
-// the operand-driven value, skipping the pipe-draining write when the flag already holds it (the steady
+// the operand-driven value, skipping the write when the flag already holds it (the steady
 // state in hot loops). Takes no format args and stores nothing, so the inlined fast path at every init site
 // stays tiny AND the caches can never diverge (they are refreshed on every format change, independent of
 // whether the resulting flag value changed).

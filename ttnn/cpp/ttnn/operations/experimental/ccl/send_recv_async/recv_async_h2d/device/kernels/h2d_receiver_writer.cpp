@@ -90,6 +90,11 @@ void kernel_main() {
         invalidate_l1_cache();
     }
 
+    if constexpr (pull_from_host) {
+        // The PCIe reads above leave MID routed to host, and firmware does not reset it before the next kernel.
+        noc_async_read_clear_pcie_state(NOC_INDEX, read_cmd_buf);
+    }
+
     update_socket_config(receiver_socket);
     noc_obj.async_write_barrier();
 }

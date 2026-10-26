@@ -421,8 +421,8 @@ At kernel launch DM0 runs `setup_dfb_implicit_sync`:
 1. If no implicit sync: `disable_dfb_tile_isr()`, set `dm0_isr_ready`, return.
 2. Else load the config into DTCM `g_txn_dfb_descriptor[txn_id]` (ISR indexes by trid, not dense slot).
 3. For each txn id in `producer ∪ consumer` masks:
-  - **Producer bit:** clear RD cmdbuf tiles-to-process for that trid, then `SET_TILES_TO_PROCESS_THRES_TR_ACK(txn_id, threshold)` — IRQ when that many **read TR_ACKs** accumulate on the overlay RD cmdbuf for that trid.
-  - **Consumer bit:** clear WR cmdbuf tiles-to-process, then `SET_TILES_TO_PROCESS_THRES_WR_SENT(txn_id, threshold)` — IRQ when that many **writes have been sent** on the WR cmdbuf for that trid.
+  - **Producer bit:** clear RD cmdbuf tiles-to-process for that trid, then `__builtin_riscv_ttrocc_wr_tiles_to_process_thres_tr_ack(txn_id, threshold)` — IRQ when that many **read TR_ACKs** accumulate on the overlay RD cmdbuf for that trid.
+  - **Consumer bit:** clear WR cmdbuf tiles-to-process, then `__builtin_riscv_ttrocc_wr_tiles_to_process_thres_wr_sent(txn_id, threshold)` — IRQ when that many **writes have been sent** on the WR cmdbuf for that trid.
 4. **Arm per-trid interrupt enables (IE):**
   - RD cmdbuf `PER_TR_ID_IE_1` upper 32 bits ← `producer_txn_id_mask` (TR_ACK path)
   - WR cmdbuf `PER_TR_ID_IE_2` lower 32 bits ← `consumer_txn_id_mask` (WR_SENT path)
@@ -510,7 +510,7 @@ producer = POSTED / TR_ACK path; consumer = ACKED / WR_SENT path:
   - `TR_ACK`/`WR_SENT` outstanding > 0 → in flight
   - `TR_ACK`/`WR_SENT` outstanding == 0 and `tiles_to_process` > 0 → completed into tiles-to-process → break
    Early exit if ISR already brought slot 0 to `expected_slot0`.
-4. **Unconditional** `sync_threads` on barrier 0 (producers) or 1 (consumers). Every participating DM on that side must have issued its tail ops and seen NOC pickup before anyone inspects the collective `tiles_to_process`. Skipping the barrier when “already caught up” is racy (ISR can fire between threads’ checks). Separate barriers avoid producer/consumer deadlock when thread counts differ.
+4. **Unconditional** `sync_threads`. Every participating DM on that side must have issued its tail ops and seen NOC pickup before anyone inspects the collective `tiles_to_process`. Skipping the barrier when “already caught up” is racy (ISR can fire between threads’ checks). The producer and consumer sides are separate kernels, and firmware gives each kernel its own barrier slot, so they cannot deadlock against each other when their thread counts differ.
 5. **If ISR already posted/acked to expectation → return.** Nothing left to do.
 6. **Else wait until the tail is a genuine partial** (`0 < tiles_to_process < global_threshold`). The ISR will never fire for that remainder.
 7. **Manual credit top-up.** For each of this DM’s RR TCs, compute that slot’s expected count from `transactions_issued` and `inc_posted` / `inc_acked` by `(expected - actual)`.

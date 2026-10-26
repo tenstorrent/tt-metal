@@ -29,6 +29,9 @@ void validate_roll(const RollParams& operation_attributes, const RollInputs& ten
     TT_FATAL(
         input.shard_spec().value().grid.ranges().size() == 1,
         "Native sharded roll requires a single contiguous rectangular CoreRange");
+    TT_FATAL(
+        !ttnn::prim::sharded_roll_input_has_padding(input),
+        "Native sharded roll does not support tile or shard padding; ttnn::roll routes these through DRAM");
     if (input.layout() == Layout::TILE) {
         // The factory derives cell_h/cell_w/cell_size from the architectural 32x32 constants, and the
         // tile is absent from compute_program_hash, so a non-standard tile would both compile a

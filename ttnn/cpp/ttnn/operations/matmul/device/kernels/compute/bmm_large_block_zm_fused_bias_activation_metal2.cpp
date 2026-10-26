@@ -6,6 +6,7 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/pack.h"  // pack_init: Quasar re-programs the pack BFD on pack-output-operand switch (§7)
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
@@ -47,13 +48,13 @@
  *
  * @tparam in0_block_num_tiles The number of tiles in the block to be transposed.
  * @tparam block_size The number of tiles in each block to be transposed.
- * @param in0_transpose_dfb_id Dataflow buffer to read the original tiles from.
- * @param in0_dfb_id Dataflow buffer to which the transposed tiles are written.
+ * @param in0_transpose_dfb Dataflow buffer to read the original tiles from.
+ * @param in0_dfb Dataflow buffer to which the transposed tiles are written.
  */
-template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
-FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t in0_dfb_id) {
-    DataflowBuffer in0_transpose_dfb(in0_transpose_dfb_id);
-    DataflowBuffer in0_dfb(in0_dfb_id);
+template <uint32_t in0_block_num_tiles, uint32_t block_size = 4, typename In0TransposeDFB, typename In0DFB>
+FORCE_INLINE void transpose_tile_block(In0TransposeDFB& in0_transpose_dfb, In0DFB& in0_dfb) {
+    const uint32_t in0_transpose_dfb_id = in0_transpose_dfb.get_id();
+    const uint32_t in0_dfb_id = in0_dfb.get_id();
     constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
     constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
     // Lets do 2 passes: One loop until last and one last for the left overs
@@ -94,17 +95,19 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
     }
 }
 
+template <typename MmPartialsDFB, typename MmPartialsReloadDFB>
 FORCE_INLINE void reload_from_dfb_to_dst(
+    MmPartialsDFB& mm_partials_dfb,
+    MmPartialsReloadDFB& mm_partials_reload_dfb,
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
-    uint32_t mm_partials_dfb_id,
-    uint32_t mm_partials_reload_dfb_id,
     bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
+    const uint32_t mm_partials_dfb_id = mm_partials_dfb.get_id();
+    const uint32_t mm_partials_reload_dfb_id = mm_partials_reload_dfb.get_id();
     // mm_partials_reload_dfb_id is the buffer view the reload copies through. It equals
     // mm_partials_dfb_id unless the partials buffer is also read as an FPU operand elsewhere (the
     // fused bias add reads it via SrcA), in which case UnpackToDestFp32 cannot be set on it
@@ -119,7 +122,6 @@ FORCE_INLINE void reload_from_dfb_to_dst(
 
 #ifdef MM_PARTIALS_RELOAD_ALIAS
     if (mm_partials_reload_dfb_id != mm_partials_dfb_id) {
-        DataflowBuffer mm_partials_reload_dfb(mm_partials_reload_dfb_id);
         // Only the unpacker owns the FIFO read pointer; keep this off the MATH/PACK threads.
         UNPACK((mm_partials_reload_dfb.evil_set_read_ptr(mm_partials_dfb.get_read_ptr())));
     }
@@ -135,15 +137,15 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename IntermDFB, typename OutDFB>
 inline void reblock_and_untilize(
+    IntermDFB& interm_dfb,
+    OutDFB& out_dfb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
-    uint32_t out_subblock_h,
-    uint32_t interm_dfb_id,
-    uint32_t out_dfb_id) {
-    DataflowBuffer interm_dfb(interm_dfb_id);
-    DataflowBuffer out_dfb(out_dfb_id);
+    uint32_t out_subblock_h) {
+    const uint32_t interm_dfb_id = interm_dfb.get_id();
+    const uint32_t out_dfb_id = out_dfb.get_id();
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     interm_dfb.wait_front(num_tiles_in_row_of_subblocks);
 
@@ -241,21 +243,42 @@ void kernel_main() {
     constexpr uint32_t in0_transpose_dfb_id = dfb::in0;
 
     DataflowBuffer in0_dfb(in0_dfb_id);
-    DataflowBuffer in1_dfb(in1_dfb_id);
+#ifdef IN0_TRANSPOSE_TILE
+    DataflowBuffer in0_transpose_dfb(in0_transpose_dfb_id);
+#else
+    // Same id as in0_dfb here; named only so the if constexpr transpose branch below still compiles.
+    auto& in0_transpose_dfb = in0_dfb;
+#endif
+    // From the binding token, not the bare id: under PrefetcherPipe delivery the host makes in1 a
+    // relay, and only the token constructor re-aligns it to the pipe's durable read cursor (firmware
+    // resets the buffer's pointers at every launch). Identical to the id form on every other path.
+    DataflowBuffer in1_dfb(dfb::in1);
     DataflowBuffer mm_partials_dfb(mm_partials_dfb_id);
-    DataflowBuffer untilize_mode_out_dfb(untilize_mode_out_dfb_id);
+#ifdef MM_PARTIALS_RELOAD_ALIAS
+    DataflowBuffer mm_partials_reload_dfb(mm_partials_reload_dfb_id);
+#else
+    auto& mm_partials_reload_dfb = mm_partials_dfb;
+#endif
+    DataflowBuffer out_dfb(out_dfb_id);
+    auto& untilize_mode_out_dfb = untilize_out ? mm_partials_dfb : out_dfb;
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_dfb_id = dfb::bias;
     constexpr auto bias_ntiles = get_arg(args::bias_ntiles);
+#ifdef BIAS_PER_GROUP
+    constexpr bool bias_per_group = true;
+#else
+    constexpr bool bias_per_group = false;
+#endif
     constexpr uint32_t mm_out_dfb_id = mm_partials_dfb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = (bool)get_arg(args::row_broadcast_bias);
     DataflowBuffer bias_dfb(bias_dfb_id);
+    auto& mm_out_dfb = mm_partials_dfb;
 #else
     constexpr uint32_t mm_out_dfb_id = untilize_mode_out_dfb_id;
+    auto& mm_out_dfb = untilize_mode_out_dfb;
 #endif
-    DataflowBuffer mm_out_dfb(mm_out_dfb_id);
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
     // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
@@ -269,6 +292,12 @@ void kernel_main() {
     constexpr uint32_t last_subblock_w_valid = out_subblock_w;
 #endif
     constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
+#ifdef ARCH_QUASAR
+    // Quasar's matmul LLK bakes ct_dim/rt_dim into the unpack/math MOPs at matmul_block_init; the
+    // narrowed matmul_block call below (effective_subblock_w < out_subblock_w) desynchronizes the
+    // src-register handshake and hangs. The factory must not pad per_core_N_compute on Quasar.
+    static_assert(!last_subblock_padded, "a narrowed last in1 subblock (padded per_core_N) is not supported on Quasar");
+#endif
 
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type = static_cast<KernelActivation>(get_arg(args::activation_type));
@@ -292,10 +321,24 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
+#ifdef ARCH_QUASAR
+            // Quasar has no BRISC->compute mailbox (ckernel::ThreadId::BriscThreadId does not exist), so the
+            // reader-driven batch-skip (is_batch_valid) handoff is not wired here. Batch sparsity is therefore
+            // unsupported on Quasar until that DM->TRISC handoff exists: reject it at compile time so a Quasar
+            // build with get_batch_from_reader=true fails loudly instead of deadlocking compute on input tiles
+            // the reader never pushes (its own !ARCH_QUASAR guard skips them) or consuming stale DFB contents.
+            // Mirrors the experimental Quasar bmm kernel.
+            static_assert(
+                !get_batch_from_reader,
+                "get_batch_from_reader (batch sparsity) is unsupported on Quasar until the DM->TRISC "
+                "is_batch_valid mailbox handoff is implemented; do not enable it on Quasar.");
+            const bool is_batch_valid = true;  // unreachable when the static_assert holds (flag is false)
+#else
             bool is_batch_valid = false;
             UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
             PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
+#endif
             if (!is_batch_valid) {
                 continue;
             }
@@ -314,31 +357,62 @@ void kernel_main() {
 
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
                     PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
+#ifdef ARCH_QUASAR
+                    // Quasar (§7): BFDs live in the pack *init*, not the format reconfig above. A previous
+                    // block-group's tail (last-block pack to mm_out, or the bias / untilize pack to out) left
+                    // the pack BFD on a non-partials DFB; re-init pack for the partials DFB so this group's
+                    // accumulation packs reference the correct BFD. Unconditional (covers non-bias, bias, and
+                    // untilize tails); a redundant re-init is tolerated by the BFD bump-and-wrap contract.
+                    // (reconfig_data_format.h ARCH_QUASAR note: call pack_init on pack-output switch.)
+                    pack_init(mm_partials_dfb_id);
+#endif
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     bool last_out = block == (num_blocks_inner_dim - 1);
-// Configure packer once for pack out without Bias
-#if not defined FUSE_BIAS and defined PACK_RELU
-                    if (last_out) {
-                        // if last block we pack the final result with relu enabled
-                        PACK((llk_pack_relu_config(ReluConfig::zero())));
-                    }
-#endif
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_dfb_id, in0_transpose_dfb_id);
                         transpose_init(in0_transpose_dfb_id);
                         PACK((pack_reconfig_data_format(in0_dfb_id)));
+#ifdef ARCH_QUASAR
+                        // Quasar (§7): transpose_tile_block packs into in0_dfb_id -> re-init pack for it.
+                        pack_init(in0_dfb_id);
+#endif
 #ifdef PACKER_L1_ACC
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
-                        transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb_id, in0_dfb_id);
+                        transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb, in0_dfb);
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
                         matmul_block_init(
                             in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
+#ifdef ARCH_QUASAR
+                        // Quasar (§7): switch the pack BFD back to partials after the transpose pack above.
+                        pack_init(mm_partials_dfb_id);
+#endif
                     }
+
+// Enable packer ReLU only after the in0 transpose pack above, so it governs
+// matmul output packs only (not the transpose stage that packs in0_dfb).
+#if not defined FUSE_BIAS and defined PACK_RELU
+                    if (last_out) {
+                        PACK((llk_pack_relu_config(ReluConfig::zero())));
+                    }
+#endif
+
+#ifdef ARCH_QUASAR
+                    // Quasar (§7): the accumulation blocks pack to mm_partials_dfb_id; the FINAL block packs to
+                    // mm_out_dfb_id (a different DFB when not FUSE_BIAS/untilize). BFDs live in the pack init, so
+                    // re-init pack for mm_out ONCE here on the last block (hoisted out of the per-subblock pack
+                    // loop below to avoid re-initing every subblock). The gated format reconfig before pack_block
+                    // does not reprogram the BFD. No-op when mm_out == mm_partials.
+                    if (last_out) {
+                        if constexpr (mm_out_dfb_id != mm_partials_dfb_id) {
+                            pack_init(mm_out_dfb_id);
+                        }
+                    }
+#endif
 
                     in0_dfb.wait_front(in0_block_num_tiles);
                     in1_dfb.wait_front(in1_block_num_tiles);
@@ -360,10 +434,10 @@ void kernel_main() {
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_dfb_to_dst(
+                                    mm_partials_dfb,
+                                    mm_partials_reload_dfb,
                                     in0_dfb_id,
                                     in1_dfb_id,
-                                    mm_partials_dfb_id,
-                                    mm_partials_reload_dfb_id,
                                     in1_transpose_tile,
                                     out_subblock_num_tiles,
                                     out_subblock_w,
@@ -473,6 +547,15 @@ void kernel_main() {
                         // wait_front increments on a given buffer are identical.
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_dfb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            // TEN-4746 (#48552): this is a BARE wait_front->pop_front drain (mm_partials is
+                            // discarded, not consumed). On Quasar the TDMA engine won't order the POP after the
+                            // WAIT without a real UNPACR between them, tripping LLK_TDMA_GUARD_ASSERT_DISARMED
+                            // (llk_io_unpack.h). dummy_unpack issues an UNPACR_NOP that reads nothing (so
+                            // PACKER_L1_ACC is undisturbed) and disarms the guard. Mirrors the proven
+                            // experimental/quasar matmul kernel. WH/BH have no such requirement.
+                            dummy_unpack(mm_partials_dfb_id);
+#endif
                             mm_partials_dfb.pop_front(out_subblock_num_tiles);
                         }
                     }
@@ -483,6 +566,12 @@ void kernel_main() {
                     if (block < num_blocks_inner_dim - 2) {
                         for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
                             mm_partials_dfb.wait_front(out_subblock_num_tiles);
+#ifdef ARCH_QUASAR
+                            // TEN-4746 (#48552): bare wait_front->pop_front drain -- see the FUSE_BIAS drain
+                            // above. dummy_unpack orders the POP after the WAIT on Quasar (UNPACR_NOP, reads
+                            // nothing). WH/BH unaffected.
+                            dummy_unpack(mm_partials_dfb_id);
+#endif
                             mm_partials_dfb.pop_front(out_subblock_num_tiles);
                         }
                     }
@@ -519,9 +608,18 @@ void kernel_main() {
                 }
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the buffer for reuse across bh/batch iterations.
-                if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
+                // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
+                if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     bias_dfb.wait_front(bias_ntiles);
                 }
+#ifdef ARCH_QUASAR
+                // Quasar (§7): the accumulation above left the pack BFD on mm_partials_dfb_id; the bias pack
+                // below targets untilize_mode_out_dfb_id. Re-init pack for it when it differs (non-untilize
+                // bias -> out). For untilize bias (== partials) this is a no-op.
+                if constexpr (untilize_mode_out_dfb_id != mm_partials_dfb_id) {
+                    pack_init(untilize_mode_out_dfb_id);
+                }
+#endif
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
@@ -598,7 +696,7 @@ void kernel_main() {
                         in1_index_subblock_offset += out_subblock_w;
                     }
                 }
-                if constexpr (num_blocks_w_dim > 1) {
+                if constexpr (bias_per_group || num_blocks_w_dim > 1) {
                     bias_dfb.pop_front(bias_ntiles);
                 }
 #endif  // FUSE_BIAS
@@ -619,7 +717,7 @@ void kernel_main() {
                     copy_init(mm_partials_dfb_id);
                     for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                         reblock_and_untilize<out_subblock_w, out_block_w>(
-                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, mm_partials_dfb_id, out_dfb_id);
+                            mm_partials_dfb, out_dfb, in1_num_subblocks, out_subblock_num_tiles, out_subblock_h);
                     }
                     pack_untilize_uninit(mm_partials_dfb_id);
                 }
@@ -643,7 +741,7 @@ void kernel_main() {
     // reusing it across all batch/bh/block iterations without popping. Pop it once here, after the
     // last use, so the buffer is balanced. (For num_blocks_w_dim > 1 the per-block pop above already
     // balances each re-pushed bias block.)
-    if constexpr (num_blocks_w_dim == 1) {
+    if constexpr (!bias_per_group && num_blocks_w_dim == 1) {
         bias_dfb.pop_front(bias_ntiles);
     }
 #endif

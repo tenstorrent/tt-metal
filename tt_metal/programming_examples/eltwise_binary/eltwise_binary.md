@@ -113,7 +113,7 @@ auto compute = CreateKernel(
     program,
     "tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp",
     core,
-    ComputeConfig{ .math_fidelity = MathFidelity::HiFi4 });
+    ComputeConfig{ .math_fidelity = tt::tt_metal::MathFidelity::HiFi4 });
 
 SetRuntimeArgs(program, reader,  core, { src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles });
 SetRuntimeArgs(program, writer,  core, { dst_dram_buffer->address(), n_tiles });

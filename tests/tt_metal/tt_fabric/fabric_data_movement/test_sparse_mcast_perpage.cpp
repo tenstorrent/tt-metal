@@ -25,7 +25,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
