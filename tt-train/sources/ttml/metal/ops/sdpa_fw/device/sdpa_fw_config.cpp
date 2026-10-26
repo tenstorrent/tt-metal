@@ -22,37 +22,37 @@ constexpr uint32_t kIntermediateTiles = 1U;   // lse: one fp32 tile per row
 const uint32_t kBf16TileBytes = tt::tile_size(tt::DataFormat::Float16_b);
 const uint32_t kFp32TileBytes = tt::tile_size(tt::DataFormat::Float32);
 
-// Runtime args per core: the buffer addresses (the reader has the most), then the work list: num_runs
-// and two words per run.
+// Runtime args per core: the buffer addresses (the reader has the most), then the work list: num_units
+// and three words per unit.
 constexpr uint32_t kWorkListHeaderWords = 1U;
-constexpr uint32_t kWordsPerRun = 2U;
 
-bool fits_runtime_args(const std::vector<CoreItemRuns>& per_core_runs) {
-    for (const auto& runs : per_core_runs) {
-        if (kReaderAddressArgs + kWorkListHeaderWords + kWordsPerRun * runs.size() > tt::tt_metal::max_runtime_args) {
+bool fits_runtime_args(const std::vector<CoreUnits>& per_core_units) {
+    for (const auto& units : per_core_units) {
+        if (kReaderAddressArgs + kWorkListHeaderWords + kWordsPerUnit * units.size() > tt::tt_metal::max_runtime_args) {
             return false;
         }
     }
     return true;
 }
 
-void append_item(CoreItemRuns& runs, uint32_t item) {
-    if (!runs.empty() && runs.back().first_item + runs.back().num_items == item) {
-        ++runs.back().num_items;
+// Appends a whole item, folding it into the previous unit when it is the next consecutive item.
+void append_item(CoreUnits& units, uint32_t item) {
+    if (!units.empty() && units.back().role == UnitRole::Whole && units.back().item + units.back().num_items == item) {
+        ++units.back().num_items;
     } else {
-        runs.push_back({item, 1U});
+        units.push_back(WorkUnit{.item = item, .role = UnitRole::Whole, .num_items = 1U});
     }
 }
 
 // One contiguous block of items per core; the first (total_items % num_cores) cores get one more.
-std::vector<CoreItemRuns> split_items_contiguous(uint32_t total_items, uint32_t num_cores) {
-    std::vector<CoreItemRuns> per_core(num_cores);
+std::vector<CoreUnits> split_items_contiguous(uint32_t total_items, uint32_t num_cores) {
+    std::vector<CoreUnits> per_core(num_cores);
     const uint32_t items_per_core = total_items / num_cores;
     const uint32_t remainder = total_items % num_cores;
     uint32_t item = 0;
     for (uint32_t core = 0; core < num_cores; ++core) {
         const uint32_t num_items = items_per_core + (core < remainder ? 1U : 0U);
-        per_core[core].push_back({item, num_items});
+        per_core[core].push_back(WorkUnit{.item = item, .role = UnitRole::Whole, .num_items = num_items});
         item += num_items;
     }
     return per_core;
@@ -61,7 +61,7 @@ std::vector<CoreItemRuns> split_items_contiguous(uint32_t total_items, uint32_t 
 // Longest-first greedy assignment: items sorted by cost, descending, each to the least loaded core. Within
 // a core the order of items does not change its total work, so they are sorted, which folds consecutive
 // items into one run.
-std::vector<CoreItemRuns> split_items_longest_first(const std::vector<uint32_t>& item_costs, uint32_t num_cores) {
+std::vector<CoreUnits> split_items_longest_first(const std::vector<uint32_t>& item_costs, uint32_t num_cores) {
     std::vector<uint32_t> order(item_costs.size());
     std::iota(order.begin(), order.end(), 0U);
     std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return item_costs[a] > item_costs[b]; });
@@ -79,7 +79,7 @@ std::vector<CoreItemRuns> split_items_longest_first(const std::vector<uint32_t>&
         loads.emplace(load + item_costs[item], core);
     }
 
-    std::vector<CoreItemRuns> per_core(num_cores);
+    std::vector<CoreUnits> per_core(num_cores);
     for (uint32_t core = 0; core < num_cores; ++core) {
         auto& items = per_core_items[core];
         std::sort(items.begin(), items.end());
@@ -178,22 +178,32 @@ uint32_t num_kv_steps(const SDPAForwardShape& shape, const SDPAForwardChunks& ch
         sdpa_fw_items::first_row_tile_of(item, q_num_chunks, chunks.Sq_chunk_t));
 }
 
-std::vector<CoreItemRuns> split_work(
-    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
+void append_unit_words(
+    std::vector<uint32_t>& words, const WorkUnit& unit, uint32_t merger_noc_x, uint32_t merger_noc_y) {
+    TT_FATAL(
+        unit.item < (1U << 20U) && unit.num_partials < 64U && unit.sem_idx < 16U, "work unit does not fit its words");
+    TT_FATAL(unit.step_end < (1U << 16U) && unit.slot < (1U << 16U), "work unit does not fit its words");
+    words.push_back(
+        unit.item | (static_cast<uint32_t>(unit.role) << 20U) | (unit.num_partials << 22U) | (unit.sem_idx << 28U));
+    words.push_back(unit.role == UnitRole::Whole ? unit.num_items : (unit.step_begin | (unit.step_end << 16U)));
+    words.push_back(unit.slot | (merger_noc_x << 16U) | (merger_noc_y << 24U));
+}
+
+std::vector<CoreUnits> split_work(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
     const uint32_t total_items = num_work_items(shape, chunks);
     TT_FATAL(num_cores > 0 && num_cores <= total_items, "split_work: need 1..{} cores, got {}", total_items, num_cores);
-    std::vector<CoreItemRuns> per_core_runs;
+    std::vector<CoreUnits> per_core_units;
     if (shape.mask_type == AttentionMaskType::Causal) {
         std::vector<uint32_t> item_costs(total_items);
         for (uint32_t item = 0; item < total_items; ++item) {
             item_costs[item] = num_kv_steps(shape, chunks, item);
         }
-        per_core_runs = split_items_longest_first(item_costs, num_cores);
+        per_core_units = split_items_longest_first(item_costs, num_cores);
     }
-    if (per_core_runs.empty() || !fits_runtime_args(per_core_runs)) {
-        per_core_runs = split_items_contiguous(num_work_items(shape, chunks), num_cores);
+    if (per_core_units.empty() || !fits_runtime_args(per_core_units)) {
+        per_core_units = split_items_contiguous(total_items, num_cores);
     }
-    return per_core_runs;
+    return per_core_units;
 }
 
 namespace {

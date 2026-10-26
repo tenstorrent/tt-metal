@@ -77,21 +77,34 @@ SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChun
 uint64_t l1_bytes(const SDPAForwardCbTiles& tiles);
 
 // Work item = one Q chunk of one head stack, see kernels/sdpa_fw_work_list.hpp. Each core gets a list
-// of runs of consecutive items.
-struct ItemRun {
-    uint32_t first_item;
-    uint32_t num_items;
+// of units: a run of whole items, or one K/V step range of one item that is sent to / merged on a core.
+enum class UnitRole : uint32_t { Whole = 0, Sender = 1, Merger = 2 };
+
+struct WorkUnit {
+    uint32_t item = 0;
+    UnitRole role = UnitRole::Whole;
+    uint32_t num_items = 1;   // Whole: run length
+    uint32_t step_begin = 0;  // Sender / Merger
+    uint32_t step_end = 0;
+    uint32_t num_partials = 0;  // Merger
+    uint32_t sem_idx = 0;       // Merger: semaphore on its core the senders bump
+    uint32_t slot = 0;          // Sender: scratch slot; Merger: first of its partials' slots
+    uint32_t merger_core = 0;   // Sender: logical core index of its merger
 };
-using CoreItemRuns = std::vector<ItemRun>;
+using CoreUnits = std::vector<WorkUnit>;
+constexpr uint32_t kWordsPerUnit = 3U;
+
+// Runtime-arg words of one unit; merger_noc_x/y = the merger core's NoC coordinates (senders only).
+void append_unit_words(
+    std::vector<uint32_t>& words, const WorkUnit& unit, uint32_t merger_noc_x, uint32_t merger_noc_y);
 
 uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks);
 // K/V steps item attends to: causal up to its diagonal, else all.
 uint32_t num_kv_steps(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t item);
 
-// Per-core item runs for num_cores cores: causal items longest first, otherwise contiguous blocks; falls
+// Per-core units for num_cores cores: causal items longest first, otherwise contiguous blocks; falls
 // back to contiguous blocks when the lists would not fit the runtime args.
-std::vector<CoreItemRuns> split_work(
-    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores);
+std::vector<CoreUnits> split_work(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores);
 
 // Cheap knob checks for validate: each set knob must divide its axis, and the config must fit l1_budget_bytes
 // with every unset chunk size at its one-tile floor (the smallest chunking the pick can reach). Throws otherwise.

@@ -180,8 +180,8 @@ FORCE_INLINE void finalize_chunk(uint32_t cb_mm_out, uint32_t cb_max, uint32_t c
 // Layouts used below. Score CB (cb_attention_weights): the rows x Sk_chunk_t score tiles of one
 // step, row-major: row r, K tile n sits at r * Sk_chunk_t + n. Per-row state CBs (max, sum,
 // exp_max_diff): row r sits in slot r. Output accumulators: row r starts at r * vWt.
-// Runs the chunk's num_kv_steps K/V steps; the softmax state starts fresh at step 0.
-FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
+// Runs K/V steps [k_begin, k_end) of the chunk; the softmax state starts fresh at k_begin.
+FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_end) {
     cb_wait_front(cb_query, q_tiles);
 
     const uint32_t first_row_tile = sdpa_fw_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
@@ -198,8 +198,8 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
     uint32_t alias_cb_prev_mm_out = cb_prev_mm_out;
     uint32_t alias_cb_cur_mm_out = cb_cur_mm_out;
 
-    for (uint32_t k_step = 0; k_step < num_kv_steps; ++k_step) {
-        const bool first_step = (k_step == 0U);
+    for (uint32_t k_step = k_begin; k_step < k_end; ++k_step) {
+        const bool first_step = (k_step == k_begin);
         cb_wait_front(cb_key, k_tiles);
 
         reconfig_data_format(cb_query, cb_key);
@@ -422,9 +422,16 @@ void kernel_main() {
     cb_wait_front(cb_attn_mask, kCausalMaskTilesFronted);
 #endif
 
-    for_each_work_item(/* arg_idx */ 0, [](uint32_t item) {
-        const uint32_t first_row_tile = sdpa_fw_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
-        process_q_chunk(item, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
+    for_each_work_unit(/* arg_idx */ 0, [](const WorkUnit& unit) {
+        if (unit.role == kUnitWhole) {
+            for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
+                const uint32_t first_row_tile = sdpa_fw_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
+                process_q_chunk(
+                    item, /* k_begin */ 0, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
+            }
+        } else {
+            process_q_chunk(unit.item, unit.step_begin, unit.step_end);
+        }
     });
 
 #ifdef CAUSAL_MASK

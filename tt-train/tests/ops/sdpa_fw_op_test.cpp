@@ -1773,16 +1773,17 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
     // totals differ by at most one item's steps; the other mask modes get contiguous blocks of items.
     using namespace ttml::metal::ops::sdpa_fw::device;
     constexpr uint32_t kCores = 130U;
-    const auto items_of = [](const CoreItemRuns& runs) {
+    const auto items_of = [](const CoreUnits& units) {
         std::vector<uint32_t> items;
-        for (const auto& run : runs) {
-            for (uint32_t i = 0; i < run.num_items; ++i) {
-                items.push_back(run.first_item + i);
+        for (const auto& unit : units) {
+            EXPECT_EQ(unit.role, UnitRole::Whole) << "split_work hands out whole items";
+            for (uint32_t i = 0; i < unit.num_items; ++i) {
+                items.push_back(unit.item + i);
             }
         }
         return items;
     };
-    const auto check_each_item_once = [&](const std::vector<CoreItemRuns>& per_core, uint32_t total_items) {
+    const auto check_each_item_once = [&](const std::vector<CoreUnits>& per_core, uint32_t total_items) {
         std::vector<uint32_t> seen(total_items, 0U);
         for (const auto& runs : per_core) {
             EXPECT_FALSE(runs.empty()) << "a core without work";

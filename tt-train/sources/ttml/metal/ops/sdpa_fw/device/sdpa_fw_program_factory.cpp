@@ -96,8 +96,9 @@ struct SDPAForwardKernels {
 };
 
 // Runtime args: the buffer addresses (reader, writer), then the core's item runs for all three kernels:
-// num_runs, (first_item, num_items) per run.
+// num_units, three words per unit (sdpa_fw_config.hpp).
 void assign_per_core_runtime_args(
+    tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,
     const SDPAForwardKernels& kernels,
     const tt::tt_metal::Buffer* query_buffer,
@@ -108,15 +109,16 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* output_buffer,
     const tt::tt_metal::Buffer* intermediates_buffer,
     uint32_t num_cores_y,
-    const std::vector<CoreItemRuns>& per_core_runs) {
-    for (uint32_t i = 0; i < per_core_runs.size(); i++) {
+    const std::vector<CoreUnits>& per_core_units) {
+    for (uint32_t i = 0; i < per_core_units.size(); i++) {
         const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        const auto& runs = per_core_runs[i];
+        const auto& units = per_core_units[i];
 
-        std::vector<uint32_t> work_args{static_cast<uint32_t>(runs.size())};
-        for (const auto& run : runs) {
-            work_args.push_back(run.first_item);
-            work_args.push_back(run.num_items);
+        std::vector<uint32_t> work_args{static_cast<uint32_t>(units.size())};
+        for (const auto& unit : units) {
+            const tt::tt_metal::CoreCoord merger_noc = device->worker_core_from_logical_core(
+                tt::tt_metal::CoreCoord{unit.merger_core / num_cores_y, unit.merger_core % num_cores_y});
+            append_unit_words(work_args, unit, merger_noc.x, merger_noc.y);
         }
         std::vector<uint32_t> reader_args = {
             query_buffer->address(),
@@ -208,7 +210,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     const uint32_t num_cores = std::min(num_available_cores, num_work_items(shape, chunks));
     const auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size);
-    const std::vector<CoreItemRuns> per_core_runs = split_work(shape, chunks, num_cores);
+    const std::vector<CoreUnits> per_core_units = split_work(shape, chunks, num_cores);
 
     // DST is the register file the math unit computes in: 4 tiles per half in fp32 mode (8 in bf16);
     // the kernels run half-sync, so one pass gets one half.
@@ -482,6 +484,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 5) Assign runtime args for each core
     // -------------------------------------------------------------------------
     assign_per_core_runtime_args(
+        device,
         program,
         kernels,
         query_buffer,
@@ -492,7 +495,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         output_buffer,
         intermediates_buffer,
         num_cores_y,
-        per_core_runs);
+        per_core_units);
 
     // -------------------------------------------------------------------------
     // 6) Return the fully configured program & relevant shared variables
