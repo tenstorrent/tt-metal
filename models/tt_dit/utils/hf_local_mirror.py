@@ -43,7 +43,7 @@ def weights_root() -> Path | None:
     return Path(root) if root else None
 
 
-def hub_cache_dir() -> Path:
+def hf_hub_cache_dir() -> Path:
     """The HF hub cache, resolved from the environment the way `huggingface_hub.constants` does.
 
     Read per call rather than from `huggingface_hub.constants`, which freezes it at import.
@@ -130,7 +130,7 @@ def ensure_cached(repo_id: str) -> str:
         return repo_id
 
     commit, etags = _mirror_manifest(mirror)
-    repo_cache = hub_cache_dir() / f"models--{repo_id.replace('/', '--')}"
+    repo_cache = hf_hub_cache_dir() / f"models--{repo_id.replace('/', '--')}"
     ref = repo_cache / "refs" / "main"
     cached_commit = ref.read_text().strip() if ref.is_file() else None
     if cached_commit is not None and cached_commit != commit:

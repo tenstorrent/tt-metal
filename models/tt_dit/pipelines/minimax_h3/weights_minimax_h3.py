@@ -22,7 +22,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from ...utils.hf_local_mirror import ensure_cached, hub_cache_dir
+from ...utils.hf_local_mirror import ensure_cached, hf_hub_cache_dir
 
 MINIMAX_H3_REPO_ID = "MiniMaxAI/MiniMax-H3"
 
@@ -73,7 +73,7 @@ def _cached_snapshot(required: tuple[str, ...]) -> Path | None:
     partial snapshot (weights present, tokenizer absent) is passed over rather than returned, so the
     caller falls through to a download that completes it instead of failing later at the tokenizer.
     """
-    repo_dir = hub_cache_dir() / f"models--{MINIMAX_H3_REPO_ID.replace('/', '--')}"
+    repo_dir = hf_hub_cache_dir() / f"models--{MINIMAX_H3_REPO_ID.replace('/', '--')}"
     snapshots = repo_dir / "snapshots"
     if not snapshots.is_dir():
         return None
@@ -95,7 +95,7 @@ def _download(required: tuple[str, ...]) -> Path:
     estimate = sum(_PARTITION_GB.get(name, 0.0) for name in required)
     logger.info(
         f"Downloading MiniMax-H3 partitions {list(required)} (~{estimate:.0f} GB) from "
-        f"HuggingFace: {MINIMAX_H3_REPO_ID} -> {hub_cache_dir()}"
+        f"HuggingFace: {MINIMAX_H3_REPO_ID} -> {hf_hub_cache_dir()}"
     )
     return Path(snapshot_download(repo_id=MINIMAX_H3_REPO_ID, allow_patterns=allow_patterns))
 
@@ -141,7 +141,7 @@ def resolve_weights_dir(
         raise WeightsNotFoundError(
             f"MiniMax-H3 weights not found (needed partitions: {list(required) or ['<any>']}).\n"
             f"Point {MODEL_PATH_ENV} at a diffusers snapshot, or re-run with {ALLOW_DOWNLOAD_ENV}=1 "
-            f"to fetch {MINIMAX_H3_REPO_ID} into {hub_cache_dir()}."
+            f"to fetch {MINIMAX_H3_REPO_ID} into {hf_hub_cache_dir()}."
         )
 
     snapshot = _download(required)

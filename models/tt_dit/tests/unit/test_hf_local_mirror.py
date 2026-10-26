@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from huggingface_hub import hf_hub_download
 
-from models.tt_dit.utils.hf_local_mirror import WEIGHTS_ROOT_ENV, CheckpointCacheError, ensure_cached, hub_cache_dir
+from models.tt_dit.utils.hf_local_mirror import WEIGHTS_ROOT_ENV, CheckpointCacheError, ensure_cached, hf_hub_cache_dir
 
 REPO_ID = "Org/Model-Diffusers"
 COMMIT = "a" * 40
@@ -204,11 +204,11 @@ def test_mirror_mixing_commits_errors(env, expect_error):
 def test_hub_cache_prefers_hf_hub_cache_over_hf_home(monkeypatch, tmp_path):
     monkeypatch.setenv("HF_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("HF_HUB_CACHE", str(tmp_path / "cache"))
-    assert hub_cache_dir() == tmp_path / "cache"
+    assert hf_hub_cache_dir() == tmp_path / "cache"
 
 
 def test_hub_cache_defaults_to_hf_home_hub(monkeypatch, tmp_path):
     monkeypatch.delenv("HF_HUB_CACHE", raising=False)
     monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
     monkeypatch.setenv("HF_HOME", str(tmp_path / "home"))
-    assert hub_cache_dir() == tmp_path / "home" / "hub"
+    assert hf_hub_cache_dir() == tmp_path / "home" / "hub"
