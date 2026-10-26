@@ -2273,7 +2273,9 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
             }
         }
     }
-    register_ephemeral_allocation(this->dfb_allocation_metadata_, dfb->core_ranges);
+    if (!dfb->borrows_memory()) {  // borrowed dfb does not need to allocate
+        register_ephemeral_allocation(this->dfb_allocation_metadata_, dfb->core_ranges);
+    }
 
     this->local_dataflow_buffer_allocation_needed_ = true;
     this->compile_and_allocate_needed_ = true;

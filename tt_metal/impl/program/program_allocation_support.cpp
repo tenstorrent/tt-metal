@@ -93,7 +93,11 @@ DeviceAddr allocate_dfb(
     for (const CoreRange& core_range : cores.ranges()) {
         for (auto& region : regions) {
             if (region.core_range.intersects(core_range)) {
-                if (region.core_range != core_range and !region.l1_regions.empty() and
+                // If any allocation happened on the region
+                const bool region_has_been_allocated =
+                    !region.l1_regions.empty() and region.l1_regions.back().second > region.l1_regions.front().first;
+
+                if (region.core_range != core_range and region_has_been_allocated and
                     computed_addr < region.l1_regions.back().second) {
                     // Intersecting core range has already been marked to have allocation at this address. This
                     // could have been marked by an allocation on a core range disjoint from current `core_range`

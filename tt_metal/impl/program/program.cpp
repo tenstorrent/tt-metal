@@ -1362,7 +1362,10 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
             }
         }
     }
-    register_ephemeral_allocation(this->cb_allocation_metadata_, circular_buffer->core_ranges());
+    // A globally allocated CB does need l1 allocation
+    if (!circular_buffer->globally_allocated()) {
+        register_ephemeral_allocation(this->cb_allocation_metadata_, circular_buffer->core_ranges());
+    }
 
     this->circular_buffers_.push_back(circular_buffer);
     this->circular_buffer_by_id_.insert({circular_buffer->id(), circular_buffer});
