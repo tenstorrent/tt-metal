@@ -69,7 +69,7 @@ class _kda_l1_budgets:
         import models.demos.deepseek_v3_d_p.tt.kda.recurrence as rec_mod
 
         mods = {"kda": kda_mod, "recurrence": rec_mod}
-        for item in self.knob.split(","):
+        for item in self.knob.replace("+", ",").split(","):  # "+" too: a profile run spec cannot carry ","
             name, _, kib = item.strip().partition("=")
             if not name:
                 continue
@@ -398,7 +398,7 @@ class TtKDA(LightweightModule):
         """ttKDA instance for one physical (32-aligned) chunk length; weights are shared."""
         if active_seq_len % ttnn.TILE_SIZE:
             raise ValueError(f"active_seq_len must be a multiple of {ttnn.TILE_SIZE}, got {active_seq_len}")
-        # tt-blaze G53F-0220: GLM53_KDA_L1_KB="prep=600,qkv=256,decay=96,norm=..,partial=.." raises ttKDA's per-core L1
+        # tt-blaze G53F-0220: GLM53_KDA_L1_KB="prep=600,qkv=256,decay=96,norm=..,partial=.." (or "+"-separated) raises ttKDA's per-core L1
         # budgets (d_p kda/config.py: 320 / 112 / 48 KiB ...) for the instances built under it; at 16 K chunks (2048 rows
         # per device, 16 heads) the 546 KiB chunk terms, the conv Q/K/V and the decay gate fall back to DRAM. Placement
         # only (the same kernels and arithmetic). Read at build time; the knob is part of the cache key.
