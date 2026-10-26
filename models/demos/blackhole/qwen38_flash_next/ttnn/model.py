@@ -2618,6 +2618,8 @@ class Qwen38TTNNTextModel:
         ``rows`` picks the form; the 128-row form and a slab need ``base``, the 32-row chunk state of the same
         generic state, whose per-layer GDN and PLE histories they share (one shared MoE combine buffer for the 48
         layers).  A slab's 35 GDN layers share one set of pass buffers (the first GDN layer's rows state owns them).
+        A slab routes its experts in one moe_compute call per layer where the op takes its rows in one call (asked
+        before any slab state, on layer 0's experts), else in 128-row blocks.
         """
 
         self._validate_generic_state(state)
@@ -2637,6 +2639,7 @@ class Qwen38TTNNTextModel:
         rows_constants = gdn.allocate_rows_constants(rows)
         qsa_chunk_constants = None
         local_combine_output = None
+        routed_tokens = None
         token_row = None
         accepted = None
         ple_rows = None
@@ -2648,9 +2651,13 @@ class Qwen38TTNNTextModel:
                 self.mesh_device, self.mesh_contract, qsa.allocated_compressed_blocks, rows=rows
             )
             if base is not None:
-                # The rows-128 instances' shared combine buffer holds one moe_compute call's rows (128: the whole chunk).
+                # The shared combine buffer holds one moe_compute call's rows: the whole 128-row chunk, a slab's rows
+                # in one call, or a 128-row block of a slab whose one call the op refuses.
+                routed_tokens = moe_module.routed_tokens_per_call_for(rows)
+                if is_slab_rows(rows) and not self.layers[0].admit_slab_call(rows):
+                    routed_tokens = LONG_CHUNK_ROWS
                 local_combine_output = moe_module.allocate_local_combine_output(
-                    self.mesh_device, self.mesh_contract, moe_module.routed_tokens_per_call_for(rows)
+                    self.mesh_device, self.mesh_contract, routed_tokens
                 )
             gdn_body = None
             for index, layer in enumerate(self.layers):
@@ -2660,13 +2667,11 @@ class Qwen38TTNNTextModel:
                         base=None if base is None else base.layers[index],
                         local_combine_output=local_combine_output,
                         gdn_body=gdn_body if layer.layer_type is Qwen38TTNNLayerType.GDN else None,
+                        routed_tokens_per_call=routed_tokens,
                     )
                 )
                 if is_slab_rows(rows) and gdn_body is None and layer.layer_type is Qwen38TTNNLayerType.GDN:
                     gdn_body = allocated[-1].attention
-            if is_slab_rows(rows):
-                # the slab's one moe_compute call, asked of the op before any slab work (every layer's call is alike)
-                self.layers[0].admit_slab_call(allocated[0])
             token_row = self.model_io.embedding.upload_token_rows(rows)
             if rows == CHUNK_ROWS:
                 accepted = ttnn.from_torch(

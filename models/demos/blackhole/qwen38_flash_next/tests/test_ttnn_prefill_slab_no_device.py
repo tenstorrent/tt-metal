@@ -188,15 +188,67 @@ def test_slab_reduce_never_frees_what_it_did_not_create(monkeypatch, rows: int) 
         assert all(f"scores[{s}]" in result.freed and f"indices[{s}]" in result.freed for s in range(0, rows, 512))
 
 
-@pytest.mark.parametrize("case", ["admitted", "refused", "inside a capture", "model error"])
+@pytest.mark.parametrize("rows", [512, 2048])
+def test_block_slab_routes_each_128_row_block_through_the_128_row_worker(monkeypatch, rows: int) -> None:
+    """A slab whose one call moe_compute refuses routes its rows as 128-row blocks: the 128-row worker's routed
+    partial on each block's rows, scores and indices (whole-tile slices at 0, 128, ...), every slice freed after its
+    block, the block partials concatenated in order and freed, the result marked as the slab's local partial."""
+    freed, slices, blocks, marked, phases = [], [], [], [], []
+    K, H, block = moe_module.TOP_K, moe_module.HIDDEN_SIZE, LONG_CHUNK_ROWS
+
+    def slice_(tensor, start, end, memory_config):
+        slices.append((tensor.name, start[2], end[2]))
+        return _AliasingTensor(tuple(e - s for s, e in zip(start, end)), f"{tensor.name}[{start[2]}]")
+
+    def concat(tensors, dim, memory_config):
+        assert dim == 2 and [t.name for t in tensors] == [f"partial[{s}]" for s in range(0, rows, block)]
+        return _AliasingTensor((1, 1, sum(t.shape[2] for t in tensors), H), "concat")
+
+    def block_partial(hidden, routing, packed_w0_w1, packed_w2):
+        assert hidden.shape == (1, 1, block, H) and routing.scores.shape == routing.indices.shape == (1, 1, block, K)
+        assert (packed_w0_w1, packed_w2) == ("w0_w1", "w2") and routing.tiles is None
+        blocks.append((hidden.name, routing.scores.name, routing.indices.name))
+        return _AliasingTensor((1, 1, block, H), f"partial[{hidden.name.partition('[')[2][:-1]}]")
+
+    monkeypatch.setattr(
+        moe_module,
+        "ttnn",
+        SimpleNamespace(
+            DRAM_MEMORY_CONFIG="dram", slice=slice_, concat=concat, deallocate=lambda tensor: freed.append(tensor.name)
+        ),
+    )
+    owner = object.__new__(moe_module.Qwen38TTNNMoE)
+    owner.rows, owner.block_instance = rows, SimpleNamespace(_routed_partial=block_partial)
+    owner.row_contract = SimpleNamespace(full_hidden=(1, 1, rows, H))
+    owner.mesh_contract = SimpleNamespace(
+        validate_tensor=lambda tensor, placement: None,
+        mark_local_partial=lambda tensor, **kwargs: marked.append((tensor.name, kwargs["expected_shape"])),
+    )
+    routing = moe_module.Qwen38TTNNRouting(
+        _AliasingTensor((1, 1, rows, K), "scores"), _AliasingTensor((1, 1, rows, K), "indices")
+    )
+    hidden = _AliasingTensor((1, 1, rows, H), "hidden")
+    partial = owner._routed_partial_blocks(hidden, routing, "w0_w1", "w2", phases.append)
+    starts = range(0, rows, block)
+    assert blocks == [(f"hidden[{s}]", f"scores[{s}]", f"indices[{s}]") for s in starts], blocks
+    assert slices == [(name, s, s + block) for s in starts for name in ("hidden", "scores", "indices")], slices
+    assert freed == [f"{name}[{s}]" for s in starts for name in ("hidden", "scores", "indices")] + [
+        f"partial[{s}]" for s in starts
+    ], freed
+    assert partial.name == "concat" and marked == [("concat", (1, 1, rows, H))], marked
+    assert phases[:2] == ["before-routed-dispatch", "after-routed-dispatch"], phases
+
+
+@pytest.mark.parametrize("case", ["admitted", "refused", "inside a capture", "model error", "128-row blocks"])
 def test_slab_call_admission_asks_the_op_without_dispatching(monkeypatch, expect_error, case: str) -> None:
     """Before any slab work the slab's one moe_compute call is put to the op under a NO_DISPATCH graph capture: the
     call's own arguments on stand-in inputs of the slab's shapes (stamped replicated, as the slab's are), the capture
     ended either way, and nothing freed that the admission did not create. The op's combine output is the slab's
-    buffer under a new tensor id, as ttnn returns outputs during a capture. An op refusal is a Qwen38SlabRefused with
-    the op's reason, chained from the op's error; an error that is not the op's (no TT_FATAL / TT_THROW) stays that
-    error; inside another graph capture the admission does not run."""
-    capture, freed, calls, stamped = [], [], [], []
+    buffer under a new tensor id, as ttnn returns outputs during a capture. The answer is True when the op takes the
+    call and False on an op refusal, each logged with the slab form it selects (the refusal with the op's reason);
+    an error that is not the op's (no TT_FATAL / TT_THROW) stays that error; inside another graph capture, or on an
+    instance that routes 128-row blocks, the admission does not run."""
+    capture, freed, calls, stamped, logged = [], [], [], [], []
     combine = _AliasingTensor((moe_module.TOP_K, SLAB, moe_module.HIDDEN_SIZE), "combine")
     combine.tensor_id, combine.buffer_address = 0, lambda: 4096
     captured_combine = _AliasingTensor(combine.shape, "combine, captured")
@@ -232,13 +284,16 @@ def test_slab_call_admission_asks_the_op_without_dispatching(monkeypatch, expect
     )
     monkeypatch.setattr(moe_module, "ttnn", fake_ttnn)
     monkeypatch.setattr(moe_module.fused.program, "stamp_topology", lambda tensor, reference: stamped.append(reference))
+    monkeypatch.setattr(moe_module, "logger", SimpleNamespace(info=logged.append))
     module = object.__new__(moe_module.Qwen38TTNNMoE)
-    module.rows = SLAB
+    module.rows, module.routed_calls = SLAB, SLAB // LONG_CHUNK_ROWS if case == "128-row blocks" else 1
     module.row_contract = moe_module.Qwen38TTNNMoERowContract(SLAB, moe_module.SUPPORTED_ROWS + (SLAB,))
     module.mesh_device, module.expert_mapping, module.local_combine_output = "mesh", "mapping", combine
     module.routing_l1_memory_config, module.output_height_shard_dim = "drain-shard", 1
-    if case == "inside a capture":
-        with expect_error(RuntimeError, "cannot run inside another graph capture"):
+    if case in ("inside a capture", "128-row blocks"):
+        error = RuntimeError if case == "inside a capture" else ValueError
+        match = "cannot run inside another graph capture" if case == "inside a capture" else "one-call slab instance"
+        with expect_error(error, match):
             module.admit_slab_call("w0_w1", "w2")
         assert capture == [] and calls == [], (capture, calls)
         return
@@ -247,12 +302,8 @@ def test_slab_call_admission_asks_the_op_without_dispatching(monkeypatch, expect
             module.admit_slab_call("w0_w1", "w2")
         assert capture == ["no-dispatch", "end"] and len(calls) == 1, (capture, len(calls))
         return
-    try:
-        module.admit_slab_call("w0_w1", "w2")
-    except contracts_module.Qwen38SlabRefused as error:
-        refusal = error
-    else:
-        refusal = None
+    admitted = module.admit_slab_call("w0_w1", "w2")
+    assert admitted is (case == "admitted"), admitted
     assert capture == ["no-dispatch", "end"], capture
     ((args, kwargs),) = calls
     stand_ins = args[:3]
@@ -267,14 +318,14 @@ def test_slab_call_admission_asks_the_op_without_dispatching(monkeypatch, expect
     assert kwargs["optional_output_tensor"] is combine and kwargs["output_height_shard_dim"] == 1, kwargs
     assert all(stand_in in freed for stand_in in stand_ins), [tensor.name for tensor in freed]
     assert combine not in freed and captured_combine not in freed, [tensor.name for tensor in freed]
+    assert logged[0].startswith(f"asking moe_compute whether it takes the {SLAB}-row slab in one call"), logged
     if case == "refused":
-        assert str(refusal) == (
-            f"the {SLAB}-row prefill slab is refused: moe_compute refuses its one {SLAB}-token call ({fatal}); "
-            "serve without the slab"
-        ), str(refusal)
-        assert refusal.__cause__ is op_error, refusal.__cause__
+        assert logged[1:] == [
+            f"the {SLAB}-row prefill slab routes its experts in 16 moe_compute calls of 128 tokens per layer: "
+            f"moe_compute refuses its one {SLAB}-token call ({fatal})"
+        ], logged
     else:
-        assert refusal is None, refusal
+        assert logged[1:] == [f"the {SLAB}-row prefill slab routes its experts in one moe_compute call per layer"]
         others = [tensor.name for tensor in freed if tensor not in stand_ins]
         assert others == ["out0", "out1", "out2", "out4"], others
 
@@ -791,11 +842,12 @@ def test_slab_combine_buffer_admits_the_slab_rows(expect_error, monkeypatch) -> 
             moe_module.allocate_local_combine_output("mesh", fakes.contract, rows)
 
 
-def _fake_text_model_for_chunk_state(monkeypatch, fakes):
+def _fake_text_model_for_chunk_state(monkeypatch, fakes, *, takes_one_call: bool = True):
     """A stand-in for Qwen38TTNNTextModel with the collaborators allocate_chunk_state touches (two layers: a GDN and
     a QSA, the PLE checkpoint layer at index 1), so the REAL Qwen38TTNNTextModel.allocate_chunk_state runs its own
-    body, including the shared combine buffer allocation through moe.allocate_local_combine_output; each layer
-    state's MoE records the slab call admissions it is asked for in ``admitted``."""
+    body, including the shared combine buffer allocation through moe.allocate_local_combine_output, and the REAL
+    Qwen38TTNNDecoderLayer.admit_slab_call its probe: each probe MoE records its construction, the slab call
+    admissions it is asked for (answering ``takes_one_call``) and its release in ``admitted``."""
 
     releasable = lambda: SimpleNamespace(deallocate=lambda: None, release=lambda: None, active=True)
     monkeypatch.setattr(
@@ -830,12 +882,23 @@ def _fake_text_model_for_chunk_state(monkeypatch, fakes):
             namespace=SimpleNamespace(value="backbone"),
             expert_streamer=streamer,
         )
-        layer.admit_slab_call = lambda state: layer_module.Qwen38TTNNDecoderLayer.admit_slab_call(layer, state)
-        layer.allocate_chunk_state = lambda rows_constants, *, base, local_combine_output, gdn_body: SimpleNamespace(
-            attention=SimpleNamespace(),
-            ple=SimpleNamespace(),
-            local_combine_output=local_combine_output,
-            moe=SimpleNamespace(admit_slab_call=lambda w0_w1, w2: admitted.append((index, w0_w1, w2))),
+        layer.admit_slab_call = lambda rows: layer_module.Qwen38TTNNDecoderLayer.admit_slab_call(layer, rows)
+
+        def chunk_moe(rows, *, local_combine_output, routed_tokens_per_call):
+            admitted.append(("probe", index, rows, local_combine_output, routed_tokens_per_call))
+            return SimpleNamespace(
+                admit_slab_call=lambda w0_w1, w2: admitted.append(("ask", index, w0_w1, w2)) or takes_one_call,
+                release_owned_buffers=lambda: admitted.append(("release", index)),
+            )
+
+        layer._chunk_moe = chunk_moe
+        layer.allocate_chunk_state = (
+            lambda rows_constants, *, base, local_combine_output, gdn_body, routed_tokens_per_call: SimpleNamespace(
+                attention=SimpleNamespace(),
+                ple=SimpleNamespace(),
+                local_combine_output=local_combine_output,
+                routed_tokens_per_call=routed_tokens_per_call,
+            )
         )
         layer.release_chunk_state = lambda state: None
         return layer
@@ -863,21 +926,30 @@ def _fake_text_model_for_chunk_state(monkeypatch, fakes):
     return model, base, admitted
 
 
-def test_slab_chunk_state_allocates_the_combine_buffer_the_slab_writes(monkeypatch) -> None:
-    """The chain opens a slab state through Qwen38TTNNTextModel.allocate_chunk_state(state, rows=slab, base=chunk):
-    the shared MoE combine buffer it allocates is sized by routed_tokens_per_call_for(rows), the whole slab (the one
-    call's page), and the row contract admits it."""
+@pytest.mark.parametrize("takes_one_call", [True, False], ids=["one call", "128-row blocks"])
+def test_slab_chunk_state_routes_in_the_form_moe_compute_takes(monkeypatch, takes_one_call: bool) -> None:
+    """The chain opens a slab state through Qwen38TTNNTextModel.allocate_chunk_state(state, rows=slab, base=chunk).
+    Before any slab state, moe_compute is asked once whether it takes the slab's rows in one call: a one-call probe
+    instance of layer 0 (its own combine buffer, the default routed tokens) on layer 0's experts, released after.
+    Where the op takes the call, the shared combine buffer is the slab's whole page and every layer's MoE routes
+    the slab's rows in one call; where it refuses, the buffer holds one 128-row block and every layer's MoE routes
+    128 tokens per call. The row contract admits the buffer either way."""
     fakes = _moe_buffer_fakes(monkeypatch)
-    model, base, admitted = _fake_text_model_for_chunk_state(monkeypatch, fakes)
+    model, base, admitted = _fake_text_model_for_chunk_state(monkeypatch, fakes, takes_one_call=takes_one_call)
     generic_state = SimpleNamespace(position=SimpleNamespace(read=lambda: 0))
     state = model_module.Qwen38TTNNTextModel.allocate_chunk_state(model, generic_state, rows=SLAB, base=base)
-    assert moe_module.routed_tokens_per_call_for(SLAB) == SLAB
-    assert state.rows == SLAB and state.local_combine_output.shape == (moe_module.TOP_K, SLAB, moe_module.HIDDEN_SIZE)
+    routed = SLAB if takes_one_call else LONG_CHUNK_ROWS
+    assert moe_module.routed_tokens_per_call_for(SLAB) == SLAB  # the default, the probe's form
+    assert state.rows == SLAB and state.local_combine_output.shape == (moe_module.TOP_K, routed, moe_module.HIDDEN_SIZE)
     assert all(layer_state.local_combine_output is state.local_combine_output for layer_state in state.layers)
+    assert [layer_state.routed_tokens_per_call for layer_state in state.layers] == [routed, routed]
     # the combine buffer's validation (the chunk's RoPE rows and feature rows validate their own 4-D shapes too)
-    assert [shape[1] for shape, _ in fakes.validated if len(shape) == 3] == [SLAB]
-    # moe_compute is asked once whether it takes the slab's rows in one call: layer 0's instance, its own experts
-    assert admitted == [(0, "w0_w1[0]", "w2[0]")], admitted
+    assert [shape[1] for shape, _ in fakes.validated if len(shape) == 3] == [routed]
+    assert admitted == [
+        ("probe", 0, SLAB, None, None),
+        ("ask", 0, "w0_w1[0]", "w2[0]"),
+        ("release", 0),
+    ], admitted
 
 
 def test_a_slab_record_replays_only_on_a_server_with_a_prefill_slab() -> None:

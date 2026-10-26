@@ -1250,13 +1250,15 @@ class Qwen38TTNNDecoderLayer:
         base: Qwen38TTNNDecoderLayerChunkState | None = None,
         local_combine_output=None,
         gdn_body: Qwen38TTNNGDNRowsState | None = None,
+        routed_tokens_per_call: int | None = None,
     ) -> Qwen38TTNNDecoderLayerChunkState:
         """Allocate this layer's chunk buffers before any capture: rows state, PLE rows state, the MoE instance.
 
         ``constants.rows`` picks the form.  The 128-row form and a slab need ``base``, this layer's 32-row chunk
         state, whose GDN and PLE histories they share, and ``local_combine_output``, the combine buffer shared by
         every layer's MoE instance of that form.  ``gdn_body`` (slab GDN layers after the first) is the rows state
-        whose pass buffers this layer's rows state reuses.
+        whose pass buffers this layer's rows state reuses.  ``routed_tokens_per_call`` is the MoE instance's (a
+        slab's 128-row blocks where moe_compute refuses its one call; ``Qwen38TTNNMoE``).
         """
 
         rows = constants.rows
@@ -1281,17 +1283,8 @@ class Qwen38TTNNDecoderLayer:
                 ple = self.ple.allocate_rows_state(
                     LONG_CHUNK_ROWS if is_slab_rows(rows) else rows, history=None if base is None else base.ple.history
                 )
-            moe = Qwen38TTNNMoE(
-                self.mlp.mesh_device,
-                self.mlp.mesh_contract,
-                self.mlp.weights,
-                tt_ccl=self.mlp.tt_ccl,
-                collective_topology=self.mlp.collective_topology,
-                rows=rows,
-                synchronization_policy=self.mlp.synchronization_policy,
-                local_combine_output=local_combine_output,
-                admitted_rows=SUPPORTED_ROWS + ((rows,) if is_slab_rows(rows) else ()),
-                prefill_dense=self.mlp.prefill_dense,  # the layer's policy and resident prefill weights, shared
+            moe = self._chunk_moe(
+                rows, local_combine_output=local_combine_output, routed_tokens_per_call=routed_tokens_per_call
             )
             result = Qwen38TTNNDecoderLayerChunkState(self.namespace, self.layer_index, attention, ple, moe, rows)
             self._validate_chunk_state(result)
@@ -1306,12 +1299,32 @@ class Qwen38TTNNDecoderLayer:
             _run_cleanup_actions("decoder-layer chunk state allocation", actions, primary=error)
             raise
 
-    def admit_slab_call(self, state: Qwen38TTNNDecoderLayerChunkState) -> None:
-        """Ask moe_compute whether it takes a slab state's rows in one call (``Qwen38TTNNMoE.admit_slab_call``), on
-        this layer's experts."""
+    def _chunk_moe(self, rows: int, *, local_combine_output, routed_tokens_per_call: int | None) -> Qwen38TTNNMoE:
+        return Qwen38TTNNMoE(
+            self.mlp.mesh_device,
+            self.mlp.mesh_contract,
+            self.mlp.weights,
+            tt_ccl=self.mlp.tt_ccl,
+            collective_topology=self.mlp.collective_topology,
+            rows=rows,
+            synchronization_policy=self.mlp.synchronization_policy,
+            local_combine_output=local_combine_output,
+            routed_tokens_per_call=routed_tokens_per_call,
+            admitted_rows=SUPPORTED_ROWS + ((rows,) if is_slab_rows(rows) else ()),
+            prefill_dense=self.mlp.prefill_dense,  # the layer's policy and resident prefill weights, shared
+        )
 
-        with self.expert_streamer.layer(self.layer_index, namespace=self.namespace.value) as packed_experts:
-            state.moe.admit_slab_call(*packed_experts)
+    def admit_slab_call(self, rows: int) -> bool:
+        """Whether moe_compute takes a slab's rows in one call (``Qwen38TTNNMoE.admit_slab_call``), asked of a
+        one-call slab MoE instance over this layer's weights and experts, before any slab state exists; the probe
+        instance and its combine buffer are released before the answer returns."""
+
+        probe = self._chunk_moe(rows, local_combine_output=None, routed_tokens_per_call=None)  # owns its buffer
+        try:
+            with self.expert_streamer.layer(self.layer_index, namespace=self.namespace.value) as packed_experts:
+                return probe.admit_slab_call(*packed_experts)
+        finally:
+            probe.release_owned_buffers()
 
     def _release_chunk_attention_state(self, attention_state) -> None:
         if isinstance(self.attention, Qwen38TTNNGDN):

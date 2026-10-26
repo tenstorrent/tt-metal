@@ -24,7 +24,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.tests.tp_harness import DEVICE_PARAMS, HIDDEN_SIZE, pcc
 from models.demos.blackhole.qwen38_flash_next.tt.moe import Qwen38MoE, Qwen38MoEWeights
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE, Qwen38SlabRefused
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import MESH_SHAPE
 from models.demos.blackhole.qwen38_flash_next.ttnn.moe import SUPPORTED_ROWS, Qwen38TTNNMoE
 
 pytestmark = pytest.mark.skipif(
@@ -100,11 +100,9 @@ def test_moe_slab_call_admission_allocates_and_caches_nothing(tp_harness, rows: 
     try:
         with builder.expert_streamer.layer(LAYER_INDEX) as (packed_w0_w1, packed_w2):
             before = _allocator_state(harness.mesh_device)
-            try:
-                slab.admit_slab_call(packed_w0_w1, packed_w2)
-            except Qwen38SlabRefused as refusal:
-                logger.debug(f"{rows} rows refused: {refusal}")
+            admitted = slab.admit_slab_call(packed_w0_w1, packed_w2)
             after = _allocator_state(harness.mesh_device)
+            logger.debug(f"{rows} rows in one call: {'admitted' if admitted else 'refused'}")
     finally:
         slab.release_owned_buffers()
     assert after == before, f"{rows} rows: (cache entries, [(allocated, largest free) L1, DRAM]) {before} -> {after}"
