@@ -1029,8 +1029,10 @@ def test_committed_pins_load_and_cover_the_four_metric_families():
     assert pins["default_tolerance"] == 0.15 and pins["idle_loadavg_1min"] == 16 and pins["seed_runs"] == 3
     assert list(pins["pins"]) == sorted(pins["pins"]) and list(pins["configurations"]) == sorted(pins["configurations"])
     active = {pin_id for pin_id, pin in pins["pins"].items() if pin["status"] == "active"}
-    # the hard rules gate from the start; every number stays todo until seeded
-    assert active == {
+    seeded = {pin_id for pin_id, pin in pins["pins"].items() if pin.get("seeded")}
+    # the hard rules gate from the start; every number stays todo until seeded from agreeing runs
+    assert all(len(pins["pins"][pin_id]["seeded"]["runs"]) == pins["seed_runs"] for pin_id in seeded), seeded
+    assert active == seeded | {
         pin_id
         for pin_id in pins["pins"]
         if pin_id.endswith(
@@ -1090,40 +1092,32 @@ def test_committed_baselines_belong_to_baseline_pins_and_carry_their_source():
         }
     )
     assert chunked["json"] is None and forced["json"] is None
-    assert (
-        chunked
-        == {  # the startup replay with gr_recip_last (the GR read's front with the rsqrt applied last) by default
-            "json": None,
-            "chat": 56,
-            "code": None,
-            "fact": 15,
-            "list": 56,
-            "math": 56,
-            "multilingual": 9,
-            "prose": 13,
-            "refactor": 24,
-            "sky": 19,
-            "story": 6,
-            "summary": 75,
-        }
-    )
-    mtp4_table = {
-        m: ci.load_baseline(f"A3/mtp4-32k/{m}")["expected"] for m in ("divergence_index", "device_token_ids_sha256")
+    tables = {
+        (configuration, m): ci.load_baseline(f"A3/{configuration}/{m}")
+        for configuration in ("chunked-32k", "mtp4-32k", "lanes4-mtp4-32k", "slab2048-32k", "slab2048-mtp4-32k")
+        for m in ("divergence_index", "device_token_ids_sha256")
     }
-    mtp4 = mtp4_table["divergence_index"]
+    mtp4 = tables["mtp4-32k", "divergence_index"]["expected"]
     assert set(mtp4) == set(chunked) and mtp4["json"] is None
-    # the same replay through the MTP pass loop: it leaves the reference where plain decode does except on math, where
-    # the MTP path's logits hold the reference's token past plain decode's near-tie
-    assert mtp4 == {**chunked, "math": 61}
-    # the slab tables carry a thirteenth row, the slab record (`document`, the one acceptance record long enough for a
-    # 2048-row slab); no slab fires on the twelve study records, so there the drafting slab table is the --mtp 4 table
+
+    def same_seed(*keys):  # tables seeded from one head, or proposals of one source
+        sources = {(tables[k]["status"], tables[k]["source"]["head"]) for k in keys}
+        return len(sources) == 1
+
     for metric in ("divergence_index", "device_token_ids_sha256"):
-        slab_mtp4 = ci.load_baseline(f"A3/slab2048-mtp4-32k/{metric}")
-        slab = ci.load_baseline(f"A3/slab2048-32k/{metric}")
-        assert set(slab_mtp4["expected"]) == set(slab["expected"]) == set(chunked) | {"document"}, metric
-        assert {k: v for k, v in slab_mtp4["expected"].items() if k != "document"} == mtp4_table[metric], metric
-        assert "the only pin exercising a slab body under MTP" in slab_mtp4["source"]["evidence"], metric
-        assert "slab record" in slab["source"]["evidence"], metric
+        # the slab tables carry a thirteenth row, the slab record (`document`, the one acceptance record long enough
+        # for a 2048-row slab); no slab fires on the twelve study records, so there a slab table is its chunk form's;
+        # the lanes table is the single-stream --mtp 4 table (the lanes gate)
+        for slab_form, chunk_form in (("slab2048-32k", "chunked-32k"), ("slab2048-mtp4-32k", "mtp4-32k")):
+            slab = tables[slab_form, metric]["expected"]
+            assert set(slab) == set(chunked) | {"document"}, (slab_form, metric)
+            if same_seed((slab_form, metric), (chunk_form, metric)):
+                assert {k: v for k, v in slab.items() if k != "document"} == tables[chunk_form, metric]["expected"]
+        if same_seed(("lanes4-mtp4-32k", metric), ("mtp4-32k", metric)):
+            assert tables["lanes4-mtp4-32k", metric]["expected"] == tables["mtp4-32k", metric]["expected"], metric
+        for key, table in tables.items():
+            if key[1] == metric and table["status"] == "proposal":
+                assert table["source"]["evidence"], key
     items = ci.load_baseline("C2/greedy-nothink/item_pass")["expected"]
     per_task = {}
     for key, flag in items.items():

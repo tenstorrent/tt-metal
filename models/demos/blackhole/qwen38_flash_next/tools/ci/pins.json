@@ -44,8 +44,8 @@
    "description": "the served lanes mode: four concurrent greedy requests through the MTP lane chain (--lanes 4 --mtp 4, no sampling; the verify-rows fold off for the process), chunked prefill, 32768 context; the pins read the lanes' startup replay (acceptance-lanes.json)",
    "server": {
     "allocated_context": 32768,
-    "mtp": 4,
     "lanes": 4,
+    "mtp": 4,
     "prefill_mode": "chunked",
     "sampling": false
    }
@@ -115,8 +115,16 @@
     "utc": "2026-09-06T23:09:43Z"
    },
    "rule": "floor",
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.066634Z"
+   },
    "slack": 0.0,
-   "status": "todo",
+   "status": "active",
    "target": 0.9557
   },
   "A1/chunked-32k/corpus_kl_mean": {
@@ -126,8 +134,16 @@
     "utc": "2026-09-06T23:09:43Z"
    },
    "rule": "ceiling",
-   "status": "todo",
-   "target": 0.0543,
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.067044Z"
+   },
+   "status": "active",
+   "target": 0.0528,
    "tolerance": 0.1,
    "warn_tolerance": 0.05
   },
@@ -138,8 +154,16 @@
     "utc": "2026-09-06T23:09:43Z"
    },
    "rule": "floor",
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.067054Z"
+   },
    "slack": 0.01,
-   "status": "todo",
+   "status": "active",
    "target": 0.9518
   },
   "A1/chunked-32k/corpus_top5": {
@@ -149,22 +173,46 @@
     "utc": "2026-09-06T23:09:43Z"
    },
    "rule": "floor",
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.067060Z"
+   },
    "slack": 0.01,
-   "status": "todo",
+   "status": "active",
    "target": 0.9992
   },
   "A1/chunked-32k/first_divergence": {
    "baseline": true,
    "rule": "not_earlier",
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.067117Z"
+   },
    "severity": "info",
-   "status": "todo"
+   "status": "active"
   },
   "A1/chunked-32k/top1": {
    "baseline": true,
    "note": "per item top-1 not more than 2 points under the seeded value",
    "rule": "floor",
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.067542Z"
+   },
    "slack": 0.02,
-   "status": "todo"
+   "status": "active"
   },
   "A1/forced-32k/corpus_clear_top1": {
    "note": "clear-margin top-1 (HF top-2 margin above 0.125 logits) of the first run 0.9444 less half a point; the plan's 0.99 is not reachable with BF4 experts (the BF4-emulated oracle itself sits near 0.96)",
@@ -320,14 +368,30 @@
    "baseline": true,
    "note": "a differing stream without an earlier index is a numerics-class change: A1 full before merge",
    "rule": "exact",
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.067744Z"
+   },
    "severity": "info",
-   "status": "todo"
+   "status": "active"
   },
   "A3/chunked-32k/divergence_index": {
    "baseline": true,
    "note": "per record the first index where the device leaves the CPU greedy stream; null is the largest; never earlier than the baseline",
    "rule": "not_earlier",
-   "status": "todo"
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.067867Z"
+   },
+   "status": "active"
   },
   "A3/chunked-32k/echo_verbatim": {
    "note": "the coherence guard: the sentence echoed verbatim at temperature 0",
@@ -392,14 +456,30 @@
    "baseline": true,
    "note": "the lane streams' sha256 per record (the single stream's fold-off streams: the lanes run the wrap); a differing stream without an earlier index is a numerics-class change",
    "rule": "exact",
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.068020Z"
+   },
    "severity": "info",
-   "status": "todo"
+   "status": "active"
   },
   "A3/lanes4-mtp4-32k/divergence_index": {
    "baseline": true,
    "note": "per record the first index where a lane's stream leaves the CPU greedy stream; null is the largest; never earlier than the baseline",
    "rule": "not_earlier",
-   "status": "todo"
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.068140Z"
+   },
+   "status": "active"
   },
   "A3/lanes4-mtp4-32k/equals_single_stream": {
    "note": "every lane stream equals the single-stream replay of the same process (the same chain form): the lanes' exactness gate",
@@ -422,14 +502,30 @@
    "baseline": true,
    "note": "a differing stream without an earlier index is a numerics-class change: A1 full before merge",
    "rule": "exact",
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.068258Z"
+   },
    "severity": "info",
-   "status": "todo"
+   "status": "active"
   },
   "A3/mtp4-32k/divergence_index": {
    "baseline": true,
    "note": "per record the first index where the device leaves the CPU greedy stream; null is the largest; never earlier than the baseline",
    "rule": "not_earlier",
-   "status": "todo"
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.068369Z"
+   },
+   "status": "active"
   },
   "A3/mtp4-32k/echo_verbatim": {
    "note": "the coherence guard: the sentence echoed verbatim at temperature 0",
@@ -465,14 +561,30 @@
    "baseline": true,
    "note": "a differing stream without an earlier index is a numerics-class change: A1 full before merge",
    "rule": "exact",
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.068485Z"
+   },
    "severity": "info",
-   "status": "todo"
+   "status": "active"
   },
   "A3/slab2048-32k/divergence_index": {
    "baseline": true,
    "note": "per record the first index where the device leaves the CPU greedy stream; null is the largest; never earlier than the baseline",
    "rule": "not_earlier",
-   "status": "todo"
+   "seeded": {
+    "runs": [
+     "2026-10-26/234536Z-cs03B-c1seed1-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed2-aec4d0d678d8",
+     "2026-10-26/234537Z-cs03B-c1seed3-aec4d0d678d8"
+    ],
+    "utc": "2026-10-26T23:47:40.068600Z"
+   },
+   "status": "active"
   },
   "A3/slab2048-32k/echo_verbatim": {
    "note": "the coherence guard: the sentence echoed verbatim at temperature 0",
@@ -558,10 +670,10 @@
    "rule": "exact",
    "status": "active",
    "target": {
-    "grid32": true,
+    "demo": true,
     "grid24x40": true,
-    "grid64": true,
-    "demo": true
+    "grid32": true,
+    "grid64": true
    }
   },
   "A3/vision-chunked-32k/score_max_gap": {
@@ -569,10 +681,10 @@
    "rule": "at_most",
    "status": "active",
    "target": {
-    "grid32": 2.0,
+    "demo": 2.0,
     "grid24x40": 2.0,
-    "grid64": 2.0,
-    "demo": 2.0
+    "grid32": 2.0,
+    "grid64": 2.0
    }
   },
   "C1/thinking-medium/item_pass": {
