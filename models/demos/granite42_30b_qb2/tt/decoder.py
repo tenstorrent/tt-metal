@@ -12,7 +12,13 @@ from dataclasses import dataclass, replace
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.modules.tt_ccl import TT_CCL
+
+try:
+    from models.common.tt_ccl import TT_CCL
+except ModuleNotFoundError as error:
+    if error.name != "models.common.tt_ccl":
+        raise
+    from models.common.modules.tt_ccl import TT_CCL
 
 
 def default_policy():
