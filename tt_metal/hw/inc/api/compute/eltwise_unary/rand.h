@@ -29,8 +29,9 @@ namespace ckernel {
  * valid only while the SFPU control register still holds the state the generic SFPU
  * init leaves (control register cleared). An init that changes SFPU control state
  * (e.g. topk_tile_init, which enables index tracking) must be followed by a clear before
- * rand_tile: any generic SFPU *_tile_init clears it, or the op that enabled it clears it
- * on exit. rand_tile_init also clears it, but reseeds the PRNG stream, so it is not the
+ * rand_tile, and the caller has to issue it: any generic SFPU *_tile_init clears it, or
+ * _init_sfpu_config_reg() directly; the topk ops themselves leave index tracking on at
+ * exit. rand_tile_init also clears it, but reseeds the PRNG stream, so it is not the
  * tool for the seedless case above. Ops relying on ADDR_MOD_6 from
  * their own init (e.g. topk_tile_init, square, sfpu reduce, matmul with THROTTLE_LEVEL)
  * must re-run that init after rand_tile.

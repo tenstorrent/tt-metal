@@ -68,7 +68,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         TILE_NUM_FACES, formats.math);
     // The row mapping the test checks holds only with Dest address remapping off; an earlier pack_untilize
     // test on the same core leaves it on (Blackhole; a no-op on Wormhole).
-    _llk_math_reconfig_remap_wrapper_(false);
+    _llk_math_reconfig_remap_wrapper_(false /*remap_enable*/);
 
     // Seed once, as a host-set seed's kernel does; no rand init follows after this point.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
