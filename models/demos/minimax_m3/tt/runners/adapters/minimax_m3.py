@@ -141,10 +141,12 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # Weight cache
     # ------------------------------------------------------------------
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """The tilized ``.tensorbin`` cache dir, mirroring ``ModelArgs.weight_cache_path(bfloat8_b)`` (the
         layout the cache-populate run wrote): ``{default_weight_cache_root()}/tensor_cache_bfp8_{MeshShape}``.
         The model reads its per-tensor caches from here (on a hit the bf16 source is never touched)."""
+        if sp_axis != 0:
+            raise ValueError("MiniMax M3 prefill runs SP on mesh axis 0 only")
         from models.demos.minimax_m3.tt.model_config import default_weight_cache_root
 
         cache_dir = default_weight_cache_root(_model_path())

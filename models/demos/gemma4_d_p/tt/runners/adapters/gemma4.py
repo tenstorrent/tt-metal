@@ -70,9 +70,11 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     def tt_cache_path(self):
         return os.getenv("PREFILL_TTNN_CACHE") or os.getenv("TT_CACHE_PATH")
 
-    def weight_cache_path(self, mesh_shape):
+    def weight_cache_path(self, mesh_shape, sp_axis=0):
         if tuple(mesh_shape) != Gemma4ServiceConfig.MESH_SHAPE:
             raise ValueError("Gemma4 prefill requires an 8x4 mesh")
+        if sp_axis != 0:
+            raise ValueError("Gemma4 prefill runs SP on mesh axis 0 only")
         import ttnn
         from models.demos.gemma4_d_p.tt.model_config import resolve_cache_dir_from_tt_cache_path
 

@@ -223,9 +223,10 @@ class PrefillModelAdapter(ABC):
         return self.default_sparse_kv_cache_format if requested is None else requested
 
     @abstractmethod
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """The TTNN weight-cache dir for this model + mesh, mirroring the layout
-        the cache-populate run wrote. None only if the cache is explicitly empty."""
+        the cache-populate run wrote. None only if the cache is explicitly empty.
+        ``sp_axis`` is the mesh axis SP runs on; a model that only supports axis 0 raises on any other."""
 
     @abstractmethod
     def allocate_kv_cache(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams) -> KvCaches:

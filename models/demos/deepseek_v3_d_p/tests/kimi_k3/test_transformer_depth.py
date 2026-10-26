@@ -113,8 +113,9 @@ PLACEMENTS = [
         id="fabric2d-8x4",
     ),
     # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
-    # L12 here is exactly one stage of the 8-stage layout. Runs on one tray half via
-    # tests/run_4x4_stage_tests.sh; skips on a full 32-chip Galaxy.
+    # L12 here is exactly one stage of the 8-stage layout. Needs the Galaxy narrowed to one tray half
+    # (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by tests/run_4x4_stage_tests.sh); unnarrowed, the
+    # system mesh is 8x4 and requires_mesh_topology skips it.
     pytest.param(
         (4, 4),
         torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),

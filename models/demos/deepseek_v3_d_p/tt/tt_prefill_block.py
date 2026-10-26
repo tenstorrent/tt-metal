@@ -300,8 +300,9 @@ class TtPrefillBlock(LightweightModule):
         self.mesh_device = mesh_device
         self.num_links = num_links
         # Per-axis CCL topology. A (mesh axis 0, mesh axis 1) tuple configures each mesh axis
-        # independently; a scalar applies to both. FABRIC_2D_TORUS_Y wraps ONLY the SP
-        # axis into a ring, so TP-axis collectives (RMS-norm, MLA, dense-FFN all-gather — all
+        # independently; a scalar applies to both. The single-axis torus fabrics wrap ONLY the SP
+        # axis into a ring (FABRIC_2D_TORUS_Y when SP is on mesh axis 0, FABRIC_2D_TORUS_X on a 4x4
+        # stage where SP is on axis 1), so TP-axis collectives (RMS-norm, MLA, dense-FFN all-gather — all
         # on cluster_axis=tp_axis) must stay Linear even when the SP-axis MoE dispatch/combine
         # run Ring. Applying Ring to the unwrapped TP axis deadlocks: get_usable_topology keeps
         # Ring (the coords span the axis) and the all-gather waits forever on a wrap link that

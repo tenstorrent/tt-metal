@@ -68,8 +68,9 @@ PLACEMENTS = [
         id="fabric2d-8x4",
     ),
     # Two 4x4 stages (SP=4 on the axis-1 ring, TP=4 on the axis-0 line) run back to back on one
-    # tray half: the boundary is the one between a Galaxy's top and bottom stages. Runs via
-    # tests/run_4x4_stage_tests.sh; skips on a full 32-chip Galaxy.
+    # tray half: the boundary is the one between a Galaxy's top and bottom stages. Needs the Galaxy
+    # narrowed to one tray half (TT_VISIBLE_DEVICES and the 4x4 descriptor, set by
+    # tests/run_4x4_stage_tests.sh); unnarrowed, the system mesh is 8x4 and requires_mesh_topology skips it.
     pytest.param(
         (4, 4),
         torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),

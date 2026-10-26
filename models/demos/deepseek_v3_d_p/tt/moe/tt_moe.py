@@ -476,8 +476,9 @@ class TtMoe(LightweightModule):
         )
         gate_config.ccl_config["DISPATCH_AXIS"] = self.sp_axis
         gate_config.ccl_config["TP_AXIS"] = self.tp_axis
-        gate_config.ccl_config["NUM_LINKS"] = self.tp_num_links if isinstance(num_links, tuple) else num_links
-        # The gate all-reduce runs on the TP axis (cluster_axis=TP_AXIS), so it follows tp_topology.
+        # The gate's only collective is its all-reduce on the TP axis (cluster_axis=TP_AXIS), so its one
+        # NUM_LINKS and TOPOLOGY are the TP axis's.
+        gate_config.ccl_config["NUM_LINKS"] = self.tp_num_links
         gate_config.ccl_config["TOPOLOGY"] = self.tp_topology
         if gate_score_func is not None:
             gate_config.score_func = gate_score_func
@@ -506,7 +507,7 @@ class TtMoe(LightweightModule):
         self.routing_setup = TtMoERoutingSetup(
             mesh_device,
             expert_dispatch_table,
-            num_links=gate_config.ccl_config["NUM_LINKS"],
+            num_links=self.sp_num_links,  # offset_cumsum gathers along the SP axis
             experts_per_chip=experts_per_chip,
             use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             sp_axis=self.sp_axis,

@@ -122,13 +122,6 @@ D2D_MAPPER_CONFIG = axis_mapper_config(
 INDEX_MAPPER_CONFIG = axis_mapper_config(ttnn.PlacementShard(2), ttnn.PlacementShard(3), SP_AXIS)
 
 
-def _weight_cache_path():
-    # Only adapters with an SP-axis-keyed cache take sp_axis; the rest have only ever run at SP_AXIS=0.
-    if SP_AXIS == 0:
-        return ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE)
-    return ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE, sp_axis=SP_AXIS)
-
-
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 # Tokens per forward, a multiple of the chunk size: FORWARD_CHUNKS chunks per forward, metadata in prefill_chunk.
@@ -1058,7 +1051,7 @@ def _print_config() -> None:
         ("PREFILL_MODEL", ADAPTER.name),
         ("PREFILL_HF_MODEL", os.environ.get("PREFILL_HF_MODEL", ADAPTER.hf_model_default)),
         ("PREFILL_TTNN_CACHE", os.environ.get("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)),
-        ("resolved weight_cache_path", str(_weight_cache_path())),
+        ("resolved weight_cache_path", str(ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE, sp_axis=SP_AXIS))),
         ("PREFILL_SP", str(_sp)),
         ("PREFILL_TP", str(_tp)),
         ("PREFILL_SP_AXIS", f"{SP_AXIS} (mesh shape {GLOBAL_MESH_SHAPE})"),
@@ -1206,7 +1199,7 @@ def main() -> None:
         mtp_levels=MTP_LEVELS,
         mtp_decode_levels=MTP_DECODE_LEVELS,
         forward_chunks=FORWARD_CHUNKS,
-        weight_cache_path=_weight_cache_path(),
+        weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE, sp_axis=SP_AXIS),
         tp_shard_kv=TP_SHARD_KV,
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,

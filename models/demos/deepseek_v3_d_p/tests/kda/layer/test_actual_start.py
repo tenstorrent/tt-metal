@@ -17,7 +17,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_plain_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     LayerNrmseThresholds,
     assert_matches_reference,
@@ -30,65 +30,93 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
+pytestmark = run_for_blackhole()
 
-def _not_the_4x4_stage_layout(**params):
-    """On the 4x4 stage only TP on axis 0 is the deployed layout; SP's ring is axis 1."""
-    return params["mesh_device"] == (4, 4) and params["tensor_parallel_axis"] != 0
-
-
-pytestmark = [
-    run_for_blackhole(),
-    pytest.mark.parametrize(
-        "mesh_device,device_params",
-        [
-            pytest.param((2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="2x4"),
-            # One 4x4 prefill stage (a Galaxy tray half): SP=4 on the axis-1 ring, TP=4 on the axis-0 line.
-            pytest.param(
-                (4, 4),
-                torus_x_device_params(),
-                marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
-                id="4x4-torus-x",
-            ),
-        ],
-        indirect=True,
-    ),
-    pytest.mark.uncollect_if(pred=_not_the_4x4_stage_layout),
-]
+# One 4x4 prefill stage (a Galaxy tray half) runs only its deployed layout: TP=4 on the axis-0 line, SP=4
+# on the axis-1 ring.
+_ON_4X4_STAGE = pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4")
+_ON_DISTRIBUTED_MESHES = pytest.mark.parametrize(
+    "mesh_device,device_params,tensor_parallel_axis",
+    [
+        pytest.param((2, 4), fabric_1d_plain_device_params(), 0, id="2x4-tp0"),
+        pytest.param((2, 4), fabric_1d_plain_device_params(), 1, id="2x4-tp1"),
+        pytest.param((4, 4), torus_x_device_params(), 0, marks=_ON_4X4_STAGE, id="4x4-torus-x-tp0"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
 
 SEQUENCE = 1280
 
 
+_SP2_EXHAUSTIVE_STARTS = tuple(start for start in range(0, 5120, 32) if start not in (0, 1280, 1312))
+_SP2_SPLITS = tuple(rank * 640 + split for rank in range(2) for split in (0, 32, 320, 608))
+_SP4_SPLITS = tuple(rank * 320 + split for rank in range(4) for split in (0, 32, 160, 288))
+
+
 @pytest.mark.parametrize(
-    "tensor_parallel_axis,sequence,actual_starts,summary_group_chunks,state_peak",
+    "mesh_device,device_params,tensor_parallel_axis,sequence,actual_starts,summary_group_chunks,state_peak",
     [
-        pytest.param(1, 5120, (0, 1280, 1312), 20, 0.65, id="SP2-four-groups-representative"),
         pytest.param(
+            (2, 4),
+            fabric_1d_plain_device_params(),
             1,
             5120,
-            tuple(start for start in range(0, 5120, 32) if start not in (0, 1280, 1312)),
+            (0, 1280, 1312),
+            20,
+            0.65,
+            id="2x4-SP2-four-groups-representative",
+        ),
+        pytest.param(
+            (2, 4),
+            fabric_1d_plain_device_params(),
+            1,
+            5120,
+            _SP2_EXHAUSTIVE_STARTS,
             20,
             0.65,
             marks=pytest.mark.extended_actual_start,
-            id="SP2-four-groups-exhaustive-remainder",
-        ),
-        pytest.param(0, 10240, (0, 2560, 32, 640, 1312, 2528, 6432), 20, 0.65, id="SP4-four-groups"),
-        pytest.param(
-            1,
-            1280,
-            tuple(rank * 640 + split for rank in range(2) for split in (0, 32, 320, 608)),
-            5,
-            0.6,
-            id="SP2-boundaries-and-splits",
+            id="2x4-SP2-four-groups-exhaustive-remainder",
         ),
         pytest.param(
+            (2, 4),
+            fabric_1d_plain_device_params(),
+            0,
+            10240,
+            (0, 2560, 32, 640, 1312, 2528, 6432),
+            20,
+            0.65,
+            id="2x4-SP4-four-groups",
+        ),
+        pytest.param(
+            (2, 4), fabric_1d_plain_device_params(), 1, 1280, _SP2_SPLITS, 5, 0.6, id="2x4-SP2-boundaries-and-splits"
+        ),
+        pytest.param(
+            (2, 4), fabric_1d_plain_device_params(), 0, 1280, _SP4_SPLITS, 5, 0.6, id="2x4-SP4-boundaries-and-splits"
+        ),
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            0,
+            10240,
+            (0, 2560, 32, 640, 1312, 2528, 6432),
+            20,
+            0.65,
+            marks=_ON_4X4_STAGE,
+            id="4x4-SP4-four-groups",
+        ),
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
             0,
             1280,
-            tuple(rank * 320 + split for rank in range(4) for split in (0, 32, 160, 288)),
+            _SP4_SPLITS,
             5,
             0.6,
-            id="SP4-boundaries-and-splits",
+            marks=_ON_4X4_STAGE,
+            id="4x4-SP4-boundaries-and-splits",
         ),
     ],
+    indirect=["mesh_device", "device_params"],
 )
 def test_actual_start_matches_natural_order(
     mesh_device, tensor_parallel_axis, sequence, actual_starts, summary_group_chunks, state_peak
@@ -138,7 +166,7 @@ def test_actual_start_matches_natural_order(
                     ttnn.deallocate(tensor)
 
 
-@pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+@_ON_DISTRIBUTED_MESHES
 @pytest.mark.parametrize("split", [False, True], ids=["baseline", "midpoint-rank1"])
 def test_actual_start_is_deterministic_and_matches_reference(
     mesh_device: ttnn.MeshDevice,
@@ -181,7 +209,7 @@ def test_actual_start_is_deterministic_and_matches_reference(
     )
 
 
-@pytest.mark.parametrize("tensor_parallel_axis", [1, 0])
+@_ON_DISTRIBUTED_MESHES
 def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int) -> None:
     """Two replays of the complete split layer must produce identical outputs and carries."""
     sp_axis = 1 - tensor_parallel_axis
@@ -253,7 +281,7 @@ def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice, tenso
             ttnn.deallocate(hidden_tt)
 
 
-@pytest.mark.parametrize("tensor_parallel_axis", [1, 0])
+@_ON_DISTRIBUTED_MESHES
 def test_split_offset_continuation_preserves_nonzero_caller_carries(
     mesh_device: ttnn.MeshDevice, tensor_parallel_axis: int
 ) -> None:
