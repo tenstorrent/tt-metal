@@ -33,6 +33,14 @@ void ValidateKernelArguments(const KernelSpec& kernel) {
             kernel.unique_id,
             kind,
             name);
+        TT_FATAL(
+            name.size() <= MAX_ACCESSOR_NAME_LENGTH,
+            "KernelSpec '{}' {} name '{}' is {} characters; a name must be at most {} characters.",
+            kernel.unique_id,
+            kind,
+            name,
+            name.size(),
+            MAX_ACCESSOR_NAME_LENGTH);
         auto [it, inserted] = seen.try_emplace(name, kind);
         TT_FATAL(
             inserted,

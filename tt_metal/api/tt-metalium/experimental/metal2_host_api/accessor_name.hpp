@@ -31,6 +31,7 @@ namespace tt::tt_metal::experimental {
 //
 // CONSTRAINTS (validated with the ProgramSpec, not on construction):
 //   - A name must be a valid C++ identifier. (It is used verbatim in generated kernel code.)
+//   - A name must be at most MAX_ACCESSOR_NAME_LENGTH characters long (see kernel_spec.hpp).
 //
 // ============================================================================
 

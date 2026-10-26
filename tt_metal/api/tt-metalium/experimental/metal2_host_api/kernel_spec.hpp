@@ -71,7 +71,9 @@ namespace tt::tt_metal::experimental {
 // A name identifying a KernelSpec within a ProgramSpec.
 using KernelSpecName = ttsl::StrongType<std::string, struct KernelSpecNameTag>;
 
-// Maximum length of a resource binding's accessor_name (DFB, semaphore, scratchpad, tensor).
+// Maximum length of any kernel-visible name (AccessorName / ArgName): a resource binding's
+// accessor_name (DFB, semaphore, scratchpad, tensor, prefetcher pipe), a kernel argument name
+// (CTA, RTA, CRTA), or a tensor binding sequence name.
 //
 // MAINTAINER: This constant is in sync with MAX_TEMPLATE_STRING_LEN on device side.
 inline constexpr std::size_t MAX_ACCESSOR_NAME_LENGTH = 64;

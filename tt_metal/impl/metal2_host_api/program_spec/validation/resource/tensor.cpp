@@ -46,6 +46,14 @@ void ValidateTensorBindings(const KernelSpec& kernel) {
             kernel.unique_id,
             sequence.sequence_name);
         TT_FATAL(
+            sequence.sequence_name.view().size() <= MAX_ACCESSOR_NAME_LENGTH,
+            "Kernel '{}' tensor binding sequence_name '{}' is {} characters; a sequence_name must be at most {} "
+            "characters",
+            kernel.unique_id,
+            sequence.sequence_name,
+            sequence.sequence_name.view().size(),
+            MAX_ACCESSOR_NAME_LENGTH);
+        TT_FATAL(
             !accessor_names.contains(sequence.sequence_name.str()),
             "Kernel '{}' tensor binding sequence_name '{}' collides with a TensorBinding accessor_name",
             kernel.unique_id,
