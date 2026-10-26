@@ -7,6 +7,9 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <functional>
+#include <numeric>
+#include <queue>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <utility>
@@ -158,23 +161,31 @@ std::vector<CoreItemRuns> split_items_contiguous(uint32_t total_items, uint32_t 
     return per_core;
 }
 
-// Causal: Q chunk i of a sequence attends ~(i+1) K/V chunks, so pairing chunk i with chunk
-// (q_num_chunks - 1 - i) gives every pair the same work. The pairs are handed out contiguously like
-// items above. The order of items within a core does not change its total work, so they are sorted,
-// which folds them into the fewest runs (a fully covered sequence is one run).
-std::vector<CoreItemRuns> split_items_paired(uint32_t num_seqs, uint32_t q_num_chunks, uint32_t num_cores) {
-    const uint32_t pairs_per_seq = q_num_chunks / 2U;
-    const auto pair_runs = split_items_contiguous(num_seqs * pairs_per_seq, num_cores);
-    std::vector<CoreItemRuns> per_core(num_cores);
-    std::vector<uint32_t> items;
+// Longest-first greedy assignment: items sorted by cost, descending, each to the least loaded core. Within
+// a core the order of items does not change its total work, so they are sorted, which folds consecutive
+// items into one run. Used for causal masks, where an item's cost grows with its position in the sequence.
+std::vector<CoreItemRuns> split_items_longest_first(const std::vector<uint32_t>& item_costs, uint32_t num_cores) {
+    TT_FATAL(num_cores > 0, "split_items_longest_first: num_cores must be > 0");
+    std::vector<uint32_t> order(item_costs.size());
+    std::iota(order.begin(), order.end(), 0U);
+    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return item_costs[a] > item_costs[b]; });
+
+    using Load = std::pair<uint64_t, uint32_t>;  // (load, core), min-heap
+    std::priority_queue<Load, std::vector<Load>, std::greater<>> loads;
     for (uint32_t core = 0; core < num_cores; ++core) {
-        const auto [first_pair, num_pairs] = pair_runs[core].front();
-        items.clear();
-        for (uint32_t p = first_pair; p < first_pair + num_pairs; ++p) {
-            const uint32_t seq_base = (p / pairs_per_seq) * q_num_chunks;
-            items.push_back(seq_base + p % pairs_per_seq);
-            items.push_back(seq_base + (q_num_chunks - 1U - p % pairs_per_seq));
-        }
+        loads.emplace(0U, core);
+    }
+    std::vector<std::vector<uint32_t>> per_core_items(num_cores);
+    for (const uint32_t item : order) {
+        auto [load, core] = loads.top();
+        loads.pop();
+        per_core_items[core].push_back(item);
+        loads.emplace(load + item_costs[item], core);
+    }
+
+    std::vector<CoreItemRuns> per_core(num_cores);
+    for (uint32_t core = 0; core < num_cores; ++core) {
+        auto& items = per_core_items[core];
         std::sort(items.begin(), items.end());
         for (const uint32_t item : items) {
             append_item(per_core[core], item);
@@ -331,18 +342,19 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     const uint32_t num_available_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-    // Causal with an even chunk count and enough pairs for every core: heavy/light chunk pairs.
-    // Otherwise, or if the pairs would not fit the runtime args, contiguous blocks of Q chunks.
-    const uint32_t pairs_per_seq = q_num_chunks / 2;
-    const uint32_t total_pairs = num_stacks * pairs_per_seq;
-    const bool try_paired_split =
-        (mask_type == AttentionMaskType::Causal) && (q_num_chunks % 2 == 0) && (total_pairs >= num_available_cores);
-
+    // Causal: an item's work is its K/V step count, so items are handed out longest first; every item
+    // costs the same otherwise, and contiguous blocks are balanced with one run per core. If the
+    // longest-first lists would not fit the runtime args, contiguous blocks are used instead.
     const uint32_t num_cores = std::min(num_available_cores, total_q_chunks);
     const auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size);
     std::vector<CoreItemRuns> per_core_runs;
-    if (try_paired_split) {
-        per_core_runs = split_items_paired(num_stacks, q_num_chunks, num_cores);
+    if (mask_type == AttentionMaskType::Causal) {
+        std::vector<uint32_t> item_costs(total_q_chunks);
+        for (uint32_t item = 0; item < total_q_chunks; ++item) {
+            const uint32_t first_row_tile = (item % q_num_chunks) * Sq_chunk_t;
+            item_costs[item] = (first_row_tile + Sq_chunk_t + Sk_chunk_t - 1U) / Sk_chunk_t;  // K/V steps
+        }
+        per_core_runs = split_items_longest_first(item_costs, num_cores);
     }
     if (per_core_runs.empty() || !fits_runtime_args(per_core_runs)) {
         per_core_runs = split_items_contiguous(total_q_chunks, num_cores);
