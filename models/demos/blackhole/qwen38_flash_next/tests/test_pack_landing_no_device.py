@@ -182,7 +182,8 @@ def test_pack_knob_defaults_to_off_and_parses_strictly(expect_error):
 
 
 def test_pack_buckets_knob(expect_error):
-    assert batch.pack_buckets_from_env({}) == (128, 256, 512, 1024)
+    assert batch.pack_buckets_from_env({}) == (128, 256, 512, 1024)  # lanes unknown
+    assert batch.pack_buckets_from_env({}, lanes=8) == (256, 512, 1024)
     assert batch.pack_buckets_from_env({"QWEN38_PACK_BUCKETS": "512, 128,128"}) == (128, 512)
     for bad in ("64", "128,2048", "x", ""):
         with expect_error(ValueError):
@@ -194,9 +195,10 @@ def test_pack_dram_estimate_counts_state_launches_and_traces():
     full = batch.pack_dram_bytes((128, 256, 512, 1024))
     assert 905 * mib < full < 935 * mib  # measured 918.6 MiB: 640.6 state + 18.8 landing buffers + 259.2 of traces
     no_128 = batch.pack_dram_bytes((256, 512, 1024))
+    tail_128 = (32768 // 4 - 128 // 4) * batch.PACK_TAIL_ROW_BYTES
     assert (
-        full - no_128 == batch.PACK_LAUNCH_BYTES + batch.PACK_TRACE_BYTES[128]
-    )  # one GDN launch fewer, one trace fewer
+        full - no_128 == batch.PACK_LAUNCH_BYTES + batch.PACK_TRACE_BYTES[128] + tail_128
+    )  # one GDN launch, one trace and one zero tail fewer
     assert batch.pack_dram_bytes((1024,)) < batch.pack_dram_bytes((512, 1024))
 
 
@@ -218,7 +220,8 @@ def test_the_pool_cap_counts_the_pack_only_when_the_knob_is_on(monkeypatch):
     monkeypatch.setenv("QWEN38_PREFILL_PACK", "1")
     on = vllm.batch_pool_token_cap(32704, 8)
     lost_bytes = (off - on) * vllm.KV_BYTES_PER_TOKEN
-    assert abs(lost_bytes - batch.pack_dram_bytes(batch.pack_buckets_from_env({}))) < 2 * vllm.KV_BYTES_PER_TOKEN
+    want = batch.pack_dram_bytes(batch.pack_buckets_from_env({}, lanes=8), vllm.resident_allocated_context(32704))
+    assert abs(lost_bytes - want) < 2 * vllm.KV_BYTES_PER_TOKEN
 
 
 # --------------------------------------------------------------------------------------------- the scatter kernel option

@@ -23,8 +23,8 @@ the pages are non-contiguous and interleaved across lanes.  Admission writes the
 into the lane's pages (``model.admit_lane_kv_paged``) and moves the other families through the host pager (the pager
 layouts exclude the KV family).
 
-Multi-user pack (P3d-3, ``QWEN38_PREFILL_PACK=1``, default off; ``QWEN38_PACK_BUCKETS`` default ``128,256,512,1024`` rows per
-user): ``prepare`` also allocates the pack state (``ttnn/pack.py``), runs one eager pack per bucket and builds and warms the
+Multi-user pack (P3d-3, ``QWEN38_PREFILL_PACK=1``, default off; ``QWEN38_PACK_BUCKETS`` default ``256,512,1024`` rows per
+user with at most 8 lanes, ``128,256,512,1024`` with more, P3d-4): ``prepare`` also allocates the pack state (``ttnn/pack.py``), runs one eager pack per bucket and builds and warms the
 landing (``ttnn/pack_landing.py``) inside the chain's warm hook, before any capture; ``capture`` captures one pack trace per
 bucket after the lane trace; ``admit_pack(lanes, prompts, rows_per_user)`` prefills the prompts as ONE pack, lands each user
 into its lane (every family, device only; the lane then holds position ``P``) and returns the users' first-token logits.
@@ -45,6 +45,7 @@ from loguru import logger
 from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker, acknowledge_corruptible
 
 import ttnn
+from models.demos.blackhole.qwen38_flash_next.tools import qwen38_pack_plan as pack_plan
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import Qwen38TracedChain
 from models.demos.blackhole.qwen38_flash_next.ttnn import pack as pack_module
@@ -61,16 +62,17 @@ WARM_TOKEN_ID = 1000  # any in-vocabulary id: the warm passes write garbage into
 
 PREFILL_PACK_VARIABLE = "QWEN38_PREFILL_PACK"
 PACK_BUCKETS_VARIABLE = "QWEN38_PACK_BUCKETS"
-PACK_BUCKETS_DEFAULT = "128,256,512,1024"
 PACK_MIB = 1 << 20
 # DRAM per device of the pack (P3d-2 / P3d-3 measurements, 2026-10-26): the persistent state is 187.6 MiB plus 226.5 MiB per
 # GDN prims launch (36 layers x [96,128,128] fp32; a bucket of 128 rows per user runs two launches, the others one), the
-# landing's select and zero-tail buffers 18.8 MiB (the zero tails scale with the allocated context: 8 MiB at 32768); one trace
+# landing's select buffers 10.9 MiB (18.8 MiB measured at context 32768 minus the zero tails below); one trace
 # per enabled bucket (the whole pack body: 74.0 / 63.0 / 61.5 / 60.7 MiB for 128 / 256 / 512 / 1024 rows per user).
-# Total with all four buckets: 918.6 MiB (measured at B=8 and B=32, context 32768).
-PACK_FIXED_BYTES = int((187.6 + 18.8) * PACK_MIB)
+# The landing's compressed zero tail of a bucket scales with the allocated context: (context / 4 - S / 4) rows x 128 x bf16
+# (P3d-4: 7.9 MiB over all four buckets at 32768).  Total with all four buckets: 918.6 MiB (measured at B=8 and B=32, 32768).
+PACK_FIXED_BYTES = int((187.6 + 10.9) * PACK_MIB)
 PACK_LAUNCH_BYTES = int(226.5 * PACK_MIB)
 PACK_TRACE_BYTES = {128: 74 * PACK_MIB, 256: 63 * PACK_MIB, 512: 62 * PACK_MIB, 1024: 61 * PACK_MIB}
+PACK_TAIL_ROW_BYTES = 128 * 2  # one compressed index row: INDEX_HEAD_DIM bf16
 
 
 def prefill_pack_enabled(environ=None) -> bool:
@@ -82,11 +84,14 @@ def prefill_pack_enabled(environ=None) -> bool:
     return value == "1"
 
 
-def pack_buckets_from_env(environ=None) -> tuple[int, ...]:
-    """``QWEN38_PACK_BUCKETS``: comma-separated rows per user, each one of ``pack.PACK_BUCKETS`` (default all four),
-    returned ascending without duplicates."""
+def pack_buckets_from_env(environ=None, lanes: int | None = None) -> tuple[int, ...]:
+    """``QWEN38_PACK_BUCKETS``: comma-separated rows per user, each one of ``pack.PACK_BUCKETS``, returned ascending without
+    duplicates.  Unset: :func:`qwen38_pack_plan.default_pack_buckets` of ``lanes`` (at most 8 lanes: 256, 512, 1024; more
+    or unknown: all four)."""
 
-    text = (os.environ if environ is None else environ).get(PACK_BUCKETS_VARIABLE, PACK_BUCKETS_DEFAULT)
+    text = (os.environ if environ is None else environ).get(PACK_BUCKETS_VARIABLE)
+    if text is None:
+        return pack_plan.default_pack_buckets(lanes)
     try:
         values = [int(part) for part in text.split(",") if part.strip()]
     except ValueError:
@@ -98,11 +103,13 @@ def pack_buckets_from_env(environ=None) -> tuple[int, ...]:
     return tuple(sorted(set(values)))
 
 
-def pack_dram_bytes(buckets: Sequence[int]) -> int:
-    """Per device DRAM the pack holds: its persistent state plus the bucket traces (pool admission counts it)."""
+def pack_dram_bytes(buckets: Sequence[int], context: int = 32768) -> int:
+    """Per device DRAM the pack holds: its persistent state, the bucket traces and the landing's compressed zero tails at
+    the allocated ``context`` (pool admission counts it)."""
 
     launches = max(len(pack_module.pack_bucket(rows).launches) for rows in buckets)
-    return PACK_FIXED_BYTES + launches * PACK_LAUNCH_BYTES + sum(PACK_TRACE_BYTES[rows] for rows in buckets)
+    tails = sum((context // 4 - rows // 4) * PACK_TAIL_ROW_BYTES for rows in buckets)
+    return PACK_FIXED_BYTES + launches * PACK_LAUNCH_BYTES + sum(PACK_TRACE_BYTES[rows] for rows in buckets) + tails
 
 
 def lane_page_count(prompt_len: int, decode_steps: int, page_size: int) -> int:
@@ -220,7 +227,9 @@ class Qwen38PlainLaneDecoder:
         self.warm_logits_gather = False
         # P3d-3: the multi-user packed prefill (QWEN38_PREFILL_PACK=1; default off: serving is unchanged)
         self.pack_enabled = prefill_pack_enabled()
-        self.pack_buckets: tuple[int, ...] = pack_buckets_from_env() if self.pack_enabled else ()
+        self.pack_buckets: tuple[int, ...] = pack_buckets_from_env(lanes=lanes) if self.pack_enabled else ()
+        if self.pack_enabled:
+            pack_plan.pack_force_enabled()  # QWEN38_PACK_FORCE is read per prefill call: refuse a bad value at start
         self.pack_state = None
         self.pack_traces: dict[int, tuple[int, Any]] = {}
         self.lander: Qwen38TTNNPackLander | None = None
@@ -325,7 +334,7 @@ class Qwen38PlainLaneDecoder:
             before_state=before,
             state_bytes=before - after_state,
             lander_bytes=after_state - after_lander,
-            estimate_bytes=pack_dram_bytes(self.pack_buckets),
+            estimate_bytes=pack_dram_bytes(self.pack_buckets, int(model.allocated_context)),
         )
         self.timing["pack_prepare_s"] = time.perf_counter() - started
         logger.info(

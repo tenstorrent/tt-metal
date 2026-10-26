@@ -16,6 +16,11 @@ the landing programs are allocated and compiled in the chain's warm hook, the pa
 ``leak``      (C) lane state and 32 decoded tokens of user A in pack (A, B, ..) against pack (A, B', ..): bitwise equal.
 ``timing``    (D) landing ms per user, pack total per bucket, the single path's TTFT.
 ``dram_*``    (E) free DRAM and pool blocks with the knob off / on at B = 8 and B = 32.
+``mixed_single_after_pack`` (P3d-4) a single-path prefill right after a pack (S = 128 / 256 / 512 / 1024) against the same prefill
+              without it: the lane state a decode reads, the KV rows [0, P) and the first-token logits, bitwise (the dead rows of the
+              single path's compressed cache are history dependent in any order and are reported, not gated).
+``mixed_pack_after_single`` (P3d-4) a pack right after a single prefill against the same pack alone: logits, whole lane state, KV rows.
+``pack_bucket_256_against_128`` (P3d-4) 8 users with P <= 128 in an S = 256 pack against an S = 128 pack: phase costs and logits.
 
 Run:  pytest .../test_pack_landing_device.py -v -s -k land_s128   (one id per process)
 Env:  as ``test_prefill_pack_device`` (QWEN38_HARDWARE_PROFILE, TT_METAL_TRACE_ALLOC_TRACKING=1, MODEL_WEIGHTS_DIR, QWEN38_CACHE_ROOT,
@@ -1001,3 +1006,243 @@ def test_decode_noise_floor_of_the_single_path(mesh_device, landing_factory):
     }
     logger.info(f"RESULT floor: {json.dumps(summary)}")
     save("floor.json", {"rows": rows_out, "summary": summary})
+
+
+# ------------------------------------------------------------------------------- P3d-4: mixed order, bucket 256 against 128
+
+MIXED_SINGLES = (40, 130, 700, 1500)  # a short chunked prompt, one long chunk, a padded slab pass, slab + padded slab
+MIXED_PACKS = (  # (rows per user, lengths): full 16-user S=128, 8-user S=256, 4-user S=512, 2-user S=1024
+    (128, [random.Random(1).randint(1, 128) for _ in range(16)]),
+    (256, [random.Random(2).randint(1, 256) for _ in range(8)]),
+    (512, [random.Random(3).randint(1, 512) for _ in range(4)]),
+    (1024, [1024, 513]),
+)
+SINGLE_LANE = 15
+SINGLE_PAGE_WINDOW = range(120, 159)  # the single request's pages; the packs' lanes use pages below 120
+
+
+def lanes_state_bits(h: Landing, lanes: list[int]) -> list[dict]:
+    """The slice of every family tensor of each lane in ``lanes``, per device (one read of the whole state)."""
+
+    axis = {"recurrent": 0, "conv": 2, "compressed": 0, "staging": 1, "ring": 1, "ple": 1}
+    state = h.lane_bits()
+    return [
+        {
+            name: [[t.select(axis[name], lane).clone() for t in per_device] for per_device in state[name]]
+            for name in FAMILIES
+        }
+        for lane in lanes
+    ]
+
+
+def pool_page_bits(h: Landing, pages: list[int]) -> list:
+    """The pool rows of ``pages`` (every row of every page) per QSA layer and device."""
+
+    top = (max(pages) + 1) * BLOCK
+    full = h.pool_bits(top)
+    rows = torch.tensor([p * BLOCK + r for p in pages for r in range(BLOCK)])
+    return [[dev.reshape(-1, 512)[rows].clone() for dev in layer] for layer in full]
+
+
+def single_with_logits(h: Landing, lane: int, ids: list[int], pages: list[int]) -> torch.Tensor:
+    """The adapter's single path (chain prefill, import into ``lane``) keeping the first-token logits (masked, fp32)."""
+
+    d = h.decoder
+    out = h.model._prefill_one(ids, greedy_token=False)
+    d.import_lane(h.model, lane, len(ids), h.model.slot.ple_context, pages)
+    h.model.slot.committed = []
+    h.model.slot.ple_context = None
+    return out.reshape(-1).clone()
+
+
+def single_snapshot(h: Landing, ids: list[int]) -> dict:
+    h.release_all()
+    pages = [p for p in SINGLE_PAGE_WINDOW][: lane_page_count(len(ids), 32, BLOCK)]
+    logits = single_with_logits(h, SINGLE_LANE, ids, pages)
+    with misses_allowed(h.mesh):
+        (state,) = lanes_state_bits(h, [SINGLE_LANE])
+        pool = pool_page_bits(h, pages)
+    h.decoder.release_lane_external(SINGLE_LANE)
+    return {"logits": logits, "state": state, "pool": pool, "pages": pages}
+
+
+def live_view(name: str, tensor: torch.Tensor, length: int) -> torch.Tensor:
+    """The part of one lane's tensor a decode can read: the QSA compressed rows < P // 4, the staging tile rows up to the row
+    of token P - 1 and the raw-key ring rows of the open block up to it; every other family whole.  The rest is dead data
+    (the single path's import copies whatever pad-derived rows the chain's dense caches held; the landing writes zero).
+    """
+
+    if name == "compressed":
+        return tensor[:, : length // 4]
+    if name == "staging":
+        return tensor[:, : (length - 1) % 32 + 1]
+    if name == "ring":
+        return tensor[:, : (length - 1) % 4 + 1]
+    return tensor
+
+
+def diff_snapshots(a: dict, b: dict, length: int, pool_rows: int | None = None) -> dict:
+    """Bitwise differences of two single-path snapshots of the same prompt: ``live_*`` is the gate (what a decode reads: the
+    live rows of every family, the KV rows [0, P), the logits); ``full_*`` also counts the dead rows (history dependent:
+    a single after a single already differs there)."""
+
+    def mismatches(live: bool):
+        out = []
+        for name in FAMILIES:
+            for i, (ta, tb) in enumerate(zip(a["state"][name], b["state"][name])):
+                for dev in range(4):
+                    x, y = ta[dev], tb[dev]
+                    if live:
+                        x, y = live_view(name, x, length), live_view(name, y, length)
+                    if not torch.equal(x, y):
+                        out.append((name, i, dev))
+        return out
+
+    def pool_mismatches(live: bool):
+        out = []
+        keep = length if pool_rows is None else pool_rows
+        for q, (la, lb) in enumerate(zip(a["pool"], b["pool"])):
+            for dev in range(4):
+                x, y = la[dev], lb[dev]
+                if live:
+                    x, y = x[:keep], y[:keep]
+                if not torch.equal(x, y):
+                    out.append((q, dev))
+        return out
+
+    live_state, full_state = mismatches(True), mismatches(False)
+    return {
+        "live_state_mismatches": len(live_state),
+        "first_live_state": live_state[:5],
+        "full_state_mismatches": len(full_state),
+        "full_state_families": sorted({m[0] for m in full_state}),
+        "first_full_state": full_state[:5],
+        "live_pool_mismatches": len(pool_mismatches(True)),
+        "full_pool_mismatches": len(pool_mismatches(False)),
+        "logits_equal": bool(torch.equal(a["logits"].view(torch.int32), b["logits"].view(torch.int32))),
+    }
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.timeout(7200)
+def test_mixed_single_after_pack(mesh_device, landing_factory):
+    """A single-path prefill right after a pack: lane state (every family, 4 devices), the lane's KV pages and the
+    first-token logits are bitwise equal to the same prefill without the pack before it."""
+
+    h = landing_factory(lanes=16)
+    singles = {n: h.random_prompt(n, seed=4000 + n) for n in MIXED_SINGLES}
+    base = {n: single_snapshot(h, ids) for n, ids in singles.items()}
+    repeat = {n: single_snapshot(h, ids) for n, ids in singles.items()}
+    results = {"repeat": {n: diff_snapshots(base[n], repeat[n], n) for n in singles}, "after_pack": []}
+    logger.info(f"MIXED repeat (single after single): {json.dumps(results['repeat'], default=str)}")
+    for rows, lengths in MIXED_PACKS:
+        for n, ids in singles.items():
+            h.release_all()
+            prompts = [h.random_prompt(m, seed=900 + rows + i) for i, m in enumerate(lengths)]
+            taken = set(SINGLE_PAGE_WINDOW)
+            pages = [h.window_pages(lane_page_count(m, 32, BLOCK), taken) for m in lengths]
+            h.pack_admit(list(range(len(lengths))), prompts, rows, pages=pages)
+            h.release_all()
+            after = single_snapshot(h, ids)
+            diff = {"pack_rows": rows, "pack_users": len(lengths), "single": n, **diff_snapshots(base[n], after, n)}
+            results["after_pack"].append(diff)
+            logger.info(f"MIXED single after pack: {json.dumps(diff, default=str)}")
+    save("mixed_single_after_pack.json", results)
+    for n, diff in results["repeat"].items():
+        assert diff["live_state_mismatches"] == 0 and diff["live_pool_mismatches"] == 0 and diff["logits_equal"], (
+            n,
+            diff,
+        )
+    for diff in results["after_pack"]:
+        assert diff["live_state_mismatches"] == 0 and diff["live_pool_mismatches"] == 0 and diff["logits_equal"], diff
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.timeout(7200)
+def test_mixed_pack_after_single(mesh_device, landing_factory):
+    """A pack right after a single-path prefill equals the same pack alone: first-token logits, lane state of every landed
+    lane, and the landed lanes' KV pages, bitwise."""
+
+    h = landing_factory(lanes=16)
+    singles = {n: h.random_prompt(n, seed=4000 + n) for n in MIXED_SINGLES}
+    results = {"cases": []}
+
+    pages_of: dict = {}
+
+    def run_pack(rows, lengths):
+        h.release_all()
+        prompts = [h.random_prompt(m, seed=900 + rows + i) for i, m in enumerate(lengths)]
+        if rows not in pages_of:  # the same pages in every run of a pack
+            taken = set(SINGLE_PAGE_WINDOW)
+            pages_of[rows] = [h.window_pages(lane_page_count(m, 32, BLOCK), taken) for m in lengths]
+        pages = pages_of[rows]
+        lanes = list(range(len(lengths)))
+        logits = h.pack_admit(lanes, prompts, rows, pages=pages)
+        with misses_allowed(h.mesh):
+            states = lanes_state_bits(h, lanes)
+            pools = [pool_page_bits(h, row) for row in pages]
+        h.release_all()
+        return [{"logits": logits[u].clone(), "state": states[u], "pool": pools[u]} for u in range(len(lengths))]
+
+    for rows, lengths in MIXED_PACKS:
+        alone = run_pack(rows, lengths)
+        for n, ids in singles.items():
+            h.release_all()
+            single_with_logits(h, SINGLE_LANE, ids, list(SINGLE_PAGE_WINDOW)[: lane_page_count(n, 32, BLOCK)])
+            h.release_all()
+            after = run_pack(rows, lengths)
+            diffs = [
+                diff_snapshots(alone[u], after[u], lengths[u], pool_rows=-(-lengths[u] // 32) * 32)
+                for u in range(len(lengths))
+            ]
+            bad = [
+                u
+                for u, df in enumerate(diffs)
+                if df["full_state_mismatches"] or df["live_pool_mismatches"] or not df["logits_equal"]
+            ]
+            case = {
+                "pack_rows": rows,
+                "pack_users": len(lengths),
+                "single_before": n,
+                "bad_users": bad,
+                "detail": {u: {k: v for k, v in diffs[u].items() if "first" in k or "families" in k} for u in bad},
+            }
+            results["cases"].append(case)
+            logger.info(f"MIXED pack after single: {json.dumps(case)}")
+    save("mixed_pack_after_single.json", results)
+    for case in results["cases"]:
+        assert not case["bad_users"], case
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.timeout(5400)
+def test_pack_bucket_256_against_128(mesh_device, landing_factory):
+    """8 users with P <= 128: one S=256 pack against one S=128 pack (8 of 16 slots): cost per phase, and whether the first-token
+    logits agree (the P3d-2 claim: the same prompt in other buckets gives the same logits)."""
+
+    h = landing_factory(lanes=8)
+    d = h.decoder
+    prompts = [h.random_prompt(n, seed=50 + i) for i, n in enumerate([100, 128, 31, 64, 90, 12, 117, 128])]
+    results = {}
+    logits = {}
+    for rows in (128, 256):
+        samples = []
+        for _rep in range(5):
+            h.release_all()
+            taken: set = set()
+            pages = [h.window_pages(lane_page_count(len(p), 32, BLOCK), taken) for p in prompts]
+            started = time.perf_counter()
+            out = h.pack_admit(list(range(8)), prompts, rows, pages=pages)
+            samples.append({**d.last_pack, "wall_ms": (time.perf_counter() - started) * 1e3})
+            logits[rows] = out.clone()
+        med = {k: statistics.median(s[k] for s in samples) for k in samples[0]}
+        results[rows] = {"median": med, "samples": samples}
+        logger.info(f"S{rows} x 8 users: {json.dumps(med)}")
+    results["logits_bitwise_equal"] = bool(torch.equal(logits[128].view(torch.int32), logits[256].view(torch.int32)))
+    save("bucket256_vs_128.json", results)

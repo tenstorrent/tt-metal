@@ -86,6 +86,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
     Qwen38ChatChainError,
     Qwen38TracedChain,
 )
+from models.demos.blackhole.qwen38_flash_next.tools.qwen38_pack_plan import pack_force_enabled, plan_prefill_groups
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_prefill_driver import prefill_plan
 from models.demos.blackhole.qwen38_flash_next.tools.runtime_admission import (
     RuntimeAdmissionError,
@@ -404,7 +405,7 @@ def batch_pool_token_cap(max_model_len: int, max_num_seqs: int) -> int:
     free = DRAM_CHAIN_FREE_32K - extra * CONTEXT_BYTES_PER_TOKEN
     lanes = LANE_FIXED_BASE_32K + max_num_seqs * (LANE_FIXED_PER_LANE_32K + extra * CONTEXT_BYTES_PER_TOKEN_PER_LANE)
     if prefill_pack_enabled():  # QWEN38_PREFILL_PACK=1: the pack's persistent state and bucket traces take DRAM too
-        lanes += pack_dram_bytes(pack_buckets_from_env())
+        lanes += pack_dram_bytes(pack_buckets_from_env(lanes=max_num_seqs), context)
     return max(0, (free - lanes - POOL_MARGIN_BYTES) // KV_BYTES_PER_TOKEN)
 
 
@@ -503,6 +504,7 @@ class Qwen38ForCausalLM:
         self.lane_of_slot: list[int] = list(range(batch_lanes))  # slot -> lane (the lane holding that slot's state)
         self.lane_slots: list[Qwen38VLLMSlot] = [Qwen38VLLMSlot() for _ in range(batch_lanes)]  # per-lane policy/RNG
         self.batch_failed = False
+        self.last_prefill_groups: list = []  # the groups of the last packed-mode prefill call (QWEN38_PREFILL_PACK=1)
         self._pending_note: dict[int, int] | None = None  # the moves decode_forward applied, not yet noted
         self.decode_calls = 0  # batch mode: decode calls so far (the periodic log line)
         self.decode_stats: deque[dict[str, float]] = deque(maxlen=4096)  # per decode call: total/step/gather seconds
@@ -1065,7 +1067,7 @@ class Qwen38ForCausalLM:
             LANE_FIXED_PER_LANE_32K + (self.allocated_context - 32768) * CONTEXT_BYTES_PER_TOKEN_PER_LANE
         )
         if prefill_pack_enabled():  # the pack's persistent state and bucket traces (QWEN38_PREFILL_PACK=1)
-            lanes += pack_dram_bytes(pack_buckets_from_env())
+            lanes += pack_dram_bytes(pack_buckets_from_env(lanes=self.lanes), self.allocated_context)
         logger.info(
             f"batch pool admission: free {free / 2**30:.2f} GiB per device, pool {pool / 2**30:.2f} GiB, lane states "
             f"~{lanes / 2**30:.2f} GiB, margin {POOL_ADMISSION_MARGIN_BYTES / 2**30:.2f} GiB"
@@ -1167,34 +1169,112 @@ class Qwen38ForCausalLM:
                 None if sampling_params is None else Qwen38HostSamplingPolicy.from_contract(sampling_params, i)
             )
         self._require_serviceable(enable_trace, recovering=True)
+        if prefill_pack_enabled():
+            return self._prefill_batch_grouped(prompts, pages, policies, slots), torch.zeros(rows, dtype=torch.long)
         outputs: list[torch.Tensor] = []
         for i in range(rows):
-            lane = self.lane_of_slot[slots[i]]
-            if decoder.positions[lane] is not None:
-                logger.warning(f"prefill into slot {slots[i]} whose lane {lane} still holds a request: released")
-                decoder.release_lane_external(lane)
-            policy = policies[i]
-            device_greedy = policy is not None and policy.greedy and not policy.penalized
-            out = self._prefill_one(prompts[i], greedy_token=device_greedy)
+            outputs.append(self._prefill_row_single(decoder, slots[i], prompts[i], pages[i], policies[i]))
+        return torch.cat(outputs, dim=0), torch.zeros(rows, dtype=torch.long)
+
+    def _prefill_row_single(
+        self,
+        decoder: Qwen38PlainLaneDecoder,
+        slot: int,
+        prompt: list[int],
+        pages: list[int],
+        policy: Qwen38HostSamplingPolicy | None,
+    ) -> torch.Tensor:
+        """One row alone: the B=1 chain prefill, its import into the lane of ``slot`` (a still-live lane is released first)
+        and the row's output (the device greedy token, a host draw, or the host logits ``[1, 1, VOCAB_SIZE]``)."""
+
+        lane = self.lane_of_slot[slot]
+        if decoder.positions[lane] is not None:
+            logger.warning(f"prefill into slot {slot} whose lane {lane} still holds a request: released")
+            decoder.release_lane_external(lane)
+        device_greedy = policy is not None and policy.greedy and not policy.penalized
+        out = self._prefill_one(prompt, greedy_token=device_greedy)
+        try:
+            decoder.import_lane(self, lane, len(prompt), self.slot.ple_context, pages)
+        except BaseException:
+            self.batch_failed = True
+            raise
+        self.slot.committed = []  # the B=1 scratch state is free again
+        self.slot.ple_context = None
+        lane_slot = self.lane_slots[lane] = Qwen38VLLMSlot()
+        if policy is not None:
+            self._adopt_policy(policy, reseed=True, slot=lane_slot)
+        if policy is not None and not device_greedy:
+            row = out[0, 0]
+            if policy.penalized:
+                prompt_ids = torch.tensor(prompt, dtype=torch.long)
+                apply_penalties(row, prompt_ids, torch.zeros(0, dtype=torch.long), policy)
+            generator = position_generator(policy.seed, len(prompt) - 1)
+            out = torch.tensor([[sample_from_row(row, policy, generator)]], dtype=torch.int32)
+        return out
+
+    def _prefill_batch_grouped(
+        self,
+        prompts: list[list[int]],
+        pages: list[list[int]],
+        policies: list[Qwen38HostSamplingPolicy | None],
+        slots: list[int],
+    ) -> torch.Tensor:
+        """``QWEN38_PREFILL_PACK=1`` (P3d-4): plan the rows into packs and single-path rows
+        (:func:`qwen38_pack_plan.plan_prefill_groups`; ``QWEN38_PACK_FORCE=1`` packs every row that fits a bucket), run the
+        groups in plan order and return the outputs in row order.  A packed row lands in its lane from the pack
+        (``admit_pack``, the vLLM blocks as its pages) and takes its first token from the pack's fp32 logits: a plain greedy
+        row is the host argmax (torch.argmax returns the lowest id among equal maxima, the device greedy's tie rule), any other row the
+        single path's host draw (penalties over the prompt, ``position_generator(seed, P - 1)``).  Without sampling params
+        the row's output is its masked logits ``[1, 1, VOCAB_SIZE]``, as in the single path.  A pack's tokens are in the
+        tolerance class of the single path's, not bitwise (docs/PREFILL.md)."""
+
+        decoder = self.decoder
+        rows = len(prompts)
+        lengths = [len(prompt) for prompt in prompts]
+        groups = plan_prefill_groups(
+            lengths, decoder.pack_buckets, self.lanes, force=pack_force_enabled(), context=self.allocated_context
+        )
+        self.last_prefill_groups = groups
+        logger.info(f"prefill groups for lengths {lengths}: {groups}")
+        outputs: dict[int, torch.Tensor] = {}
+        for group in groups:
+            if group[0] == "single":
+                (i,) = group[1]
+                outputs[i] = self._prefill_row_single(decoder, slots[i], prompts[i], pages[i], policies[i])
+                continue
+            _kind, bucket, members = group
+            lanes = [self.lane_of_slot[slots[i]] for i in members]
+            for i, lane in zip(members, lanes):
+                if decoder.positions[lane] is not None:
+                    logger.warning(f"prefill into slot {slots[i]} whose lane {lane} still holds a request: released")
+                    decoder.release_lane_external(lane)
             try:
-                decoder.import_lane(self, lane, len(prompts[i]), self.slot.ple_context, pages[i])
+                logits = decoder.admit_pack(
+                    lanes, [prompts[i] for i in members], bucket, pages=[pages[i] for i in members]
+                )
             except BaseException:
                 self.batch_failed = True
                 raise
-            self.slot.committed = []  # the B=1 scratch state is free again
-            self.slot.ple_context = None
-            lane_slot = self.lane_slots[lane] = Qwen38VLLMSlot()
-            if policy is not None:
+            logger.info(f"prefill pack S={bucket} users={len(members)} rows={members}: {decoder.last_pack}")
+            for u, (i, lane) in enumerate(zip(members, lanes)):
+                policy = policies[i]
+                lane_slot = self.lane_slots[lane] = Qwen38VLLMSlot()
+                row = logits[u].clone()
+                row[TOKENIZER_SIZE:] = float("-inf")
+                if policy is None:
+                    outputs[i] = row.view(1, 1, VOCAB_SIZE)
+                    continue
                 self._adopt_policy(policy, reseed=True, slot=lane_slot)
-            if policy is not None and not device_greedy:
-                row = out[0, 0]
+                if policy.greedy and not policy.penalized:
+                    outputs[i] = torch.tensor([[int(row.argmax())]], dtype=torch.int32)
+                    continue
                 if policy.penalized:
-                    prompt_ids = torch.tensor(prompts[i], dtype=torch.long)
-                    apply_penalties(row, prompt_ids, torch.zeros(0, dtype=torch.long), policy)
+                    apply_penalties(
+                        row, torch.tensor(prompts[i], dtype=torch.long), torch.zeros(0, dtype=torch.long), policy
+                    )
                 generator = position_generator(policy.seed, len(prompts[i]) - 1)
-                out = torch.tensor([[sample_from_row(row, policy, generator)]], dtype=torch.int32)
-            outputs.append(out)
-        return torch.cat(outputs, dim=0), torch.zeros(rows, dtype=torch.long)
+                outputs[i] = torch.tensor([[sample_from_row(row, policy, generator)]], dtype=torch.int32)
+        return torch.cat([outputs[i] for i in range(rows)], dim=0)
 
     def _decode_batch(
         self,

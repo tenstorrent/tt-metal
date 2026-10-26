@@ -563,3 +563,12 @@ The plugin and the adapter add about 1-2 ms per step to the lane trace. The step
 tokens across the users (more routed experts). One user on a B=8 server pays the B=8 step (33.6 ms against 26.5 ms on
 the single-slot server). TTFT grows with concurrency x ISL, because each request is prefilled alone and the prefills
 run one after another. A preempted request is re-prefilled: its greedy tokens can change at a near-tie.
+
+Multi-user prefill pack (opt-in, `QWEN38_PREFILL_PACK=1`, default off): the adapter plans each prefill call into packs (1..16 users
+of up to 128 / 256 / 512 / 1024 prompt tokens in one 0.65 s replay of the 2048-row slab) and single-path rows, and lands each packed
+user into its lane.  Knobs `QWEN38_PREFILL_PACK`, `QWEN38_PACK_BUCKETS` (default `256,512,1024` with 8 lanes or fewer, else all four) and
+`QWEN38_PACK_FORCE` (tests); the planner rule, the DRAM cost (about 620 MiB per device at B = 8, 920 MiB with all four buckets, which
+takes 10 % of the B = 32 KV pool), the numerics class and the measured gains are in `PREFILL.md` ("Packs in serving").  A packed request's tokens are
+tolerance class against its single-path tokens, so a request's output can depend on the load it was scheduled with.  Measured on the
+same server settings (2026-10-26): a burst of 32 requests of 128/128 at B = 32 has TTFT 1.7 s mean instead of 7.0 s and 343 instead of
+235 output tok/s; a burst of 8 requests of 1024/128 at B = 8 has TTFT 3.0 s instead of 5.7 s.

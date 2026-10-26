@@ -184,7 +184,7 @@ PLE snapshot windows.
 Device tests (`tests/test_prefill_pack_device.py`, one id per process): `leak_<S>`, `slot_<S>`, `edge_<S>`, `numerics`,
 `timing`, `pad_content`, `profile`; host-side tests in `tests/test_pack_no_device.py`.
 
-Measured on 4x P150 (QB2, 2026-10-26, context 32768, single slot): user A's logits and every landing source (36 GDN states and
+Measured on QB2 (2x P300c, 4 Blackhole dies, 2026-10-26, context 32768, single slot): user A's logits and every landing source (36 GDN states and
 conv rows, 12 QSA layers' K/V, compressed, kept `[v|k]` and raw-key rows over its whole segment, the PLE snapshot; 484 digests
 on four devices) are bit-identical when the other users' tokens and lengths change, when the other slots are empty or hold other
 tokens, between slots (0 / middle / last, across the two GDN launches of S = 128), and when the pad token changes (real rows only);
@@ -195,6 +195,81 @@ landing sources) and 61-74 MiB per bucket trace (259 MiB for the four).  Against
 are tolerance class: the pack's per-layer K/V, compressed and GDN-state errors equal the cost plan's against the legacy plan
 (relative Frobenius error 0.006 at the first QSA layer to 0.15 at the last), top-1 agrees on 16 of 22 prompts and on 11 of 11
 with a top-2 margin of 0.5 or more; the six flips have margins of 0.0-0.375.
+
+### Packs in serving (P3d-3 landing, P3d-4 grouping; `QWEN38_PREFILL_PACK`, default off)
+
+With `QWEN38_PREFILL_PACK=1` the vLLM batch adapter (`tools/qwen38_vllm.py`, `_prefill_batch`) prefills some rows of a
+prefill call as packs and lands each packed user straight into its decode lane (`ttnn/pack_landing.py`,
+`Qwen38PlainLaneDecoder.admit_pack`; the vLLM block ids are the lane's pages).  With the knob unset the adapter's prefill is the
+single path of before, row by row (the code path is unchanged).
+
+| variable | default | meaning |
+|---|---|---|
+| `QWEN38_PREFILL_PACK` | `0` | `1` builds the pack state, the bucket traces and the landing at start (before the chain captures) and plans every prefill call; any other value is refused |
+| `QWEN38_PACK_BUCKETS` | lanes <= 8: `256,512,1024`; more lanes: `128,256,512,1024` | rows per user of the enabled buckets.  With 8 lanes or fewer `S = 128` (16 users) could never fill above half, and dropping it saves its second GDN launch (226.5 MiB) and its 74 MiB trace.  An explicit value wins |
+| `QWEN38_PACK_FORCE` | `0` | `1` packs every row of at most the largest bucket, even alone (tests and accuracy runs; the planner's cost rule is off) |
+
+The planner (`tools/qwen38_pack_plan.py`, host only, `plan_prefill_groups(lengths, buckets, lanes, force=)`) returns groups
+`("pack", S, [rows])` and `("single", [row])`.  Only a row of at most `max(buckets)` tokens can pack; the bucket of a pack is the
+smallest enabled `S` that holds its longest row; a pack holds at most `2048 / S` users.  The rows are sorted by (length, index),
+a pack takes a contiguous run of that order, and a dynamic program minimizes the estimated total time; ties go to the single
+path, and the same lengths always give the same plan.  The adapter logs `prefill groups for lengths [...]: [...]` per call and
+one `prefill pack S=.. users=..` line per pack with its phases.  Cost model (all constants in one place, `qwen38_pack_plan.py`,
+from the P3d-3 timings on QB2, 2026-10-26):
+
+- pack: `fixed(S) + users * land(S)` ms; `fixed` = host prep + upload + replay + logits = 657.0 / 648.4 / 652.8 / 661.1 for
+  S = 128 / 256 / 512 / 1024, `land` = 5.8 / 6.7 / 8.8 / 12.1 per landed user;
+- single: the cost plan's `PASS_COST_MS` of the cover of the `P - 1` head rows, plus 60 ms per request, plus 58 ms per slab pass (its
+  host preparation does not overlap): 122 / 216 / 766 ms for P = 32 / 128 / 1024, the measured values.
+
+Consequences: 100-token prompts pack from the fourth user on (3 users: 3 single prefills, 4 users: one pack); a lone prompt of
+about 600-1024 tokens already packs (a pack costs about 673 ms, the single slab path 766 ms); a lone prompt under about 500 tokens
+stays single.  An S = 256 pack of 8 users with P <= 128 costs 656 ms against 679 ms for the same users in an S = 128 pack (measured,
+same prompts, logits bit-identical), which is why the 8-lane default does not need S = 128.
+
+DRAM per device (`pack_dram_bytes(buckets, context)`): the persistent state 187.6 MiB, the landing's selects 10.9 MiB, 226.5 MiB per GDN
+launch (S = 128 runs two, the others one), one trace per bucket (74 / 63 / 62 / 61 MiB) and, per bucket, the compressed zero tail
+`(context / 4 - S / 4) x 128 x bf16` (7.9 MiB over all four at context 32768; it grows with the allocated context).  All four
+buckets: 918.6 MiB at B = 8 or 32, context 32768 (measured); the default 8-lane buckets: 622 MiB measured against 617 MiB estimated.
+The pool admission (`batch_pool_token_cap`, `_admit_pool`) counts it: at B = 32 the pool shrinks by 10.2 % (all four buckets); at
+B = 8 the 4096-block pool is not DRAM bound and does not change.
+
+Numerics class: a packed request is tolerance class against the same request on the single path (P3d-3 `semantics` test: GDN
+state and ring relative error 0.03-0.04 median, up to 0.31-0.37 at the deepest layers of a 1000-token prompt; the single path's own
+cost-against-legacy floor is 0.23-0.25 there).  A request's tokens can therefore depend on whether it was packed, which depends on
+the co-scheduled load; the pack itself is bitwise independent of its co-users (a user's logits and lane state do not change with the
+other users' tokens, lengths or slots) and of the bucket (the same prompt in 256 / 512 / 1024 gives identical logits).  The first
+token is drawn from the pack's fp32 logits on the host: a greedy row is `argmax` of the masked row (torch returns the lowest id among equal
+maxima, the device greedy's tie rule), any other row the single path's host draw (penalties over the prompt, `position_generator(seed, P - 1)`).
+Measured (P3d-4, QB2): the 13 acceptance records through the vLLM server, B = 8, every record packed (`QWEN38_PACK_FORCE=1`):
+json 96/96, first divergence against the CPU records chat 39 -> 23, math 61 -> 56, multilingual 9 -> 43, refactor 23 -> 24, every other
+record unchanged (code 32, fact 15, list 46, prose 13, sky 19, story 6, summary 1, document 12 is a single-path record).  The contract
+test with packs: every first token equals the B = 1 reference (no miss), later tokens diverge on 6 of 8 packed rows (forced run) and 14 of 25 (B = 32 run), first
+divergence at token 7-31, the pass key is found in every request.
+
+Mixed order: a pack overwrites the chain's dense KV rows 0..2047 and the PLE history; the next single-path prefill resets both.
+Measured (4 packs of S = 128 / 256 / 512 / 1024 against single prompts of 40 / 130 / 700 / 1500 tokens, all four devices): a single
+prefill after a pack has the same lane state in the rows a decode reads (every family; the compressed rows below `P // 4`, the staging
+and raw-ring rows up to the last token), the same KV rows `[0, P)` and the same first-token logits, bit for bit, as without the pack
+(the rows past them hold the chain's previous pad-derived data in the single path in any order: a single after a single already differs
+there); a pack after a single is bitwise the same pack alone (logits, whole lane state, KV rows).  A pack must not run while a chain
+prefill is in progress (the adapter never does).
+
+Gains, `vllm bench serve` against the real server (2026-10-26, `--max-model-len 32704`, block 64, greedy, `--ignore-eos`):
+
+| B | load | knob | output tok/s | TTFT mean / p50 / p99 | TPOT mean |
+|---|---|---|---|---|---|
+| 32 | burst 32 x 128/128 | off | 235.1 | 6990 / 7207 / 7208 ms | 82.1 ms |
+| 32 | burst 32 x 128/128 | on | 343.3 | 1726 / 1773 / 1774 ms | 80.3 ms |
+| 32 | c32 128/1024, 64 requests | off | 359.4 | 7002 / 7186 / 7257 ms | 82.3 ms |
+| 32 | c32 128/1024, 64 requests | on | 387.8 | 1688 / 1733 / 1739 ms | 80.9 ms |
+| 8 | burst 8 x 1024/128 | off | 86.2 | 5711 / 6409 / 6410 ms | 48.6 ms |
+| 8 | burst 8 x 1024/128 | on | 115.0 | 3044 / 3383 / 3384 ms | 46.1 ms |
+| 8 | c8 128/1024, 16 requests | off | 177.8 | 1586 / 1766 / 1792 ms | 43.5 ms |
+| 8 | c8 128/1024, 16 requests | on | 184.3 | 818 / 891 / 910 ms | 42.6 ms |
+
+The adapter's plans: B = 32 burst: the first request alone, then one pack of 16 and one of 15 users (S = 128); B = 8 burst of 1024: the first
+request alone in a pack (S = 1024), then packs of 2, 2, 2 and 1 users; B = 8 c8 128-token requests: the first alone, then a pack of 7 (S = 256).
 
 ## Numerics class
 

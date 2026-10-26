@@ -22,6 +22,13 @@ device after the batch build (context 32768, a small pool) for the token budget;
 ``get_max_tokens_all_users`` gives (the DRAM budget's cap), warms up and serves a 30000-token prompt, an 8000-token one
 and a short one (the cap's margin holds under the prefill's transients).
 
+P3d-4 (``QWEN38_PREFILL_PACK=1``, optionally ``QWEN38_PACK_FORCE=1``): the same ids run with the pack on.  A row that the planner
+put in a pack (recorded from ``decoder.admit_pack``) is gated on its FIRST token only: equal to the B=1 reference, or the
+reference token is the pack's top-2 and the top-1 / top-2 logit margin is under ``PACK_MARGIN`` (a pack is the tolerance class of the
+single path, not bitwise); its later tokens may diverge (reported).  Every other row keeps the exact-prefix gate.  Ids
+``ref_pack32`` (B=1 references of the B=32 scenario into ``p3d4-pack32-refs.json``; knob off) and ``contract_b32_pack`` (B=32, 24 short
+prompts and two long ones arrive in ONE prefill call, so S=128 packs of 16 and 8 users run and lanes 16..31 decode; pack on).
+
 Run:  pytest models/demos/blackhole/qwen38_flash_next/tests/test_vllm_batch_contract_device.py -v -s -k ref_b1
 Env:  QWEN38_HARDWARE_PROFILE=tt-quietbox-2, TT_METAL_TRACE_ALLOC_TRACKING=1, MODEL_WEIGHTS_DIR, QWEN38_CACHE_ROOT,
       TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0; ``QWEN38_VLLM_BATCH_REFS`` names the reference fixture (default
@@ -43,7 +50,7 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen38_flash_next.chat import Qwen38OfficialChatTemplate
+from models.demos.blackhole.qwen38_flash_next.chat import TOKENIZER_SIZE, Qwen38OfficialChatTemplate
 from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import build_prompt_ids, load_context_text
 from models.demos.blackhole.qwen38_flash_next.demo.text_demo import (  # noqa: F401  (device_params is a fixture)
     DEVICE_PARAMS,
@@ -60,6 +67,14 @@ EXACT_PREFIX = 8
 PASS_KEY_MIN_TOKENS = 32
 MAX_PREFILL_ROWS = 3
 FORCED_SHUFFLE_EVERY = 5  # decode steps between the extra row shuffles (on top of the condense a finish causes)
+PACK_MARGIN = (
+    0.5  # a packed row's first token may differ from the reference when the reference is its top-2 within this margin
+)
+
+# P3d-4 B=32 scenario: 24 short prompts (120..128 tokens, a distinct book excerpt and pass key each) and two long ones, all in one call
+PACK32_LENS = [120 + (i % 9) for i in range(24)] + [700, 1500]
+PACK32_NEWS = [32] * 26
+PACK32_LANES = 32
 
 # 16 requests: prompt length (the chat prefix and needle need >= 120), new tokens (16..64) and arrival iteration.
 PROMPT_LENS = [130, 8000, 230, 1500, 640, 3100, 120, 5200, 400, 2300, 900, 7000, 180, 1200, 4100, 350]
@@ -118,6 +133,63 @@ def refs_path() -> Path:
     return Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context" / "p2a-vllm-batch-refs.json"
 
 
+def pack32_refs_path() -> Path:
+    override = os.environ.get("QWEN38_PACK32_REFS")
+    if override:
+        return Path(override)
+    return Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context" / "p3d4-pack32-refs.json"
+
+
+def build_pack32_requests(checkpoint: Path):
+    from models.demos.blackhole.qwen38_flash_next.demo.long_prompt import build_user_prompt_ids, user_pass_key
+
+    template = Qwen38OfficialChatTemplate(checkpoint)
+    config = json.loads(PROMPT_FILE.read_text(encoding="utf-8"))
+    context_text = load_context_text(config, Path(os.environ["QWEN38_CACHE_ROOT"]) / "demo-context")
+    render = lambda content: template.render(
+        [{"role": "user", "content": content}], enable_thinking=False
+    ).text  # noqa: E731
+    prompts, keys = [], []
+    for user, length in enumerate(PACK32_LENS):
+        ids, _info = build_user_prompt_ids(template.tokenizer, render, config, context_text, length, user)
+        assert len(ids) == length
+        prompts.append(ids)
+        keys.append(user_pass_key(config, user))
+    return template.tokenizer, keys, prompts
+
+
+class PackRecorder:
+    """Wraps ``decoder.admit_pack``: keeps each packed user's first-token logits (top-2 and margin) by prompt."""
+
+    def __init__(self, decoder) -> None:
+        self.by_prompt: dict[tuple, dict] = {}
+        self.calls: list[dict] = []
+        self._admit = decoder.admit_pack
+        decoder.admit_pack = self.admit
+
+    def admit(self, lanes, prompts, rows_per_user, pages=None, users=None):
+        logits = self._admit(lanes, prompts, rows_per_user, pages=pages, users=users)
+        self.calls.append({"rows_per_user": rows_per_user, "users": len(lanes), "lengths": [len(p) for p in prompts]})
+        for u, prompt in enumerate(prompts):
+            row = logits[u].clone()
+            row[TOKENIZER_SIZE:] = float("-inf")
+            top = torch.topk(row, 2)
+            self.by_prompt[tuple(prompt)] = {
+                "top1": int(top.indices[0]),
+                "top2": int(top.indices[1]),
+                "margin": float(top.values[0] - top.values[1]),
+            }
+        return logits
+
+
+def pack_first_token_gate(first: int, ref_first: int, info: dict) -> tuple[bool, float | None]:
+    """A packed row's gate: equal, or the reference is the pack's top-2 with a margin under ``PACK_MARGIN``."""
+
+    if first == ref_first:
+        return True, info["margin"]
+    return (ref_first == info["top2"] and info["margin"] < PACK_MARGIN), info["margin"]
+
+
 def prompts_digest(prompts) -> str:
     return hashlib.sha256(json.dumps(prompts).encode()).hexdigest()
 
@@ -154,6 +226,7 @@ class PluginHost:
 
     def __init__(self, model, lanes: int, block_size: int, num_blocks: int, seed: int) -> None:
         self.model, self.lanes, self.block_size, self.num_blocks = model, lanes, block_size, num_blocks
+        self.max_prefill_rows = MAX_PREFILL_ROWS
         self.width = -(-MAX_SEQ_LEN // block_size)
         self.rng = random.Random(seed)
         self.free_blocks = list(range(1, num_blocks))  # vLLM never hands out block 0 (its null block)
@@ -307,7 +380,7 @@ class PluginHost:
             while (
                 waiting
                 and waiting[0].arrival <= iteration
-                and len(batch) < MAX_PREFILL_ROWS
+                and len(batch) < self.max_prefill_rows
                 and len(self.running) + len(batch) < self.lanes
                 and len(self.free_blocks) - reserved >= self.budget(waiting[0])
             ):
@@ -373,6 +446,8 @@ def single_slot_reference(model, prompt: list[int], max_new: int) -> list[int]:
         pytest.param("m1", 8, 64, id="m1_b8", marks=pytest.mark.timeout(5400)),
         pytest.param("m1", 32, 64, id="m1_b32", marks=pytest.mark.timeout(5400)),
         pytest.param("cap", 32, 64, id="cap_b32", marks=pytest.mark.timeout(7200)),
+        pytest.param("ref32", 1, 64, id="ref_pack32", marks=pytest.mark.timeout(7200)),
+        pytest.param("contract32", PACK32_LANES, 64, id="contract_b32_pack", marks=pytest.mark.timeout(10800)),
     ],
 )
 def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, record_property):
@@ -391,15 +466,22 @@ def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, rec
         serve_at_the_cap(mesh_device, checkpoint, lanes, block_size, tmp_path, record_property)
         return
 
-    tokenizer, config, prompts = build_requests(checkpoint)
+    pack32 = kind in ("ref32", "contract32")
+    if pack32:
+        tokenizer, pass_keys, prompts = build_pack32_requests(checkpoint)
+        news, arrivals, path = PACK32_NEWS, [0] * len(PACK32_LENS), pack32_refs_path()
+    else:
+        tokenizer, config, prompts = build_requests(checkpoint)
+        news, arrivals, path = MAX_NEWS, ARRIVALS, refs_path()
+        pass_keys = [config["pass_key"]] * len(prompts)
     digest = prompts_digest(prompts)
 
-    if kind == "ref":
+    if kind in ("ref", "ref32"):
         model = initialize(mesh_device, checkpoint, 1)
         try:
             model.allocate_kv_cache((1, 1, block_size, 128), None, 12)
             references = []
-            for i, (prompt, max_new) in enumerate(zip(prompts, MAX_NEWS)):
+            for i, (prompt, max_new) in enumerate(zip(prompts, news)):
                 started = time.perf_counter()
                 references.append(single_slot_reference(model, prompt, max_new))
                 logger.info(
@@ -408,22 +490,20 @@ def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, rec
                 )
         finally:
             model.release_persistent_capture()
-        path = refs_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"prompts_sha256": digest, "tokens": references}) + "\n", encoding="utf-8")
         logger.info(f"references written to {path}")
         return
 
-    path = refs_path()
     if not path.is_file():
-        pytest.fail(f"run the id ref_b1 first: it writes the B=1 references to {path}")
+        pytest.fail(f"run the id {'ref_pack32' if pack32 else 'ref_b1'} first: it writes the B=1 references to {path}")
     fixture = json.loads(path.read_text(encoding="utf-8"))
     assert fixture["prompts_sha256"] == digest, "the reference fixture was made for other prompts: rerun ref_b1"
     references = fixture["tokens"]
-    assert [len(r) for r in references] == MAX_NEWS
+    assert [len(r) for r in references] == news
 
     num_blocks = plugin_num_blocks(lanes, block_size)
-    needed = max(-(-(len(p) + n + 1) // block_size) for p, n in zip(prompts, MAX_NEWS))
+    needed = max(-(-(len(p) + n + 1) // block_size) for p, n in zip(prompts, news))
     logger.info(
         f"B={lanes}, block size {block_size}: pool {num_blocks} blocks = {num_blocks * block_size} tokens "
         f"(the largest request needs {needed} blocks)"
@@ -448,8 +528,11 @@ def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, rec
         assert model.decoder.positions == [None] * lanes and model.lane_of_slot == list(
             range(lanes)
         )  # warmup left nothing
-        requests = [Req(i, prompts[i], MAX_NEWS[i], ARRIVALS[i]) for i in range(len(prompts))]
+        recorder = PackRecorder(model.decoder) if model.decoder.pack_enabled else None
+        requests = [Req(i, prompts[i], news[i], arrivals[i]) for i in range(len(prompts))]
         host = PluginHost(model, lanes, block_size, num_blocks, seed=20261024 + block_size)
+        if pack32:
+            host.max_prefill_rows = lanes
         started = time.perf_counter()
         host.run(requests)
         wall_s = time.perf_counter() - started
@@ -465,7 +548,12 @@ def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, rec
         diffs = [k for k in range(n) if out[k] != ref[k]]
         decoded = tokenizer.decode(out, skip_special_tokens=True)
         needs_key = n >= PASS_KEY_MIN_TOKENS
-        found = config["pass_key"] in decoded
+        found = pass_keys[request.index] in decoded
+        info = None if recorder is None else recorder.by_prompt.get(tuple(request.prompt))
+        if info is None:
+            gate_ok, first_margin = out[:gate] == ref[:gate], None
+        else:
+            gate_ok, first_margin = pack_first_token_gate(out[0], ref[0], info)
         results.append(
             {
                 "request": request.index,
@@ -477,7 +565,10 @@ def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, rec
                 "prefill_s": request.prefill_s,
                 "exact_match": not diffs,
                 "first_diff_index": diffs[0] if diffs else None,
-                "gate_prefix_match": out[:gate] == ref[:gate],
+                "gate_prefix_match": gate_ok,
+                "packed": info is not None,
+                "pack_first_token_margin": first_margin,
+                "pack_first_token_equal": None if info is None else out[0] == ref[0],
                 "pass_key_required": needs_key,
                 "pass_key_found": found,
                 "tokens": out,
@@ -488,6 +579,7 @@ def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, rec
         logger.info(
             f"req {request.index} P={len(request.prompt)} n={n} iterations {request.admit_iteration}.."
             f"{request.finish_iteration}: exact={'yes' if not diffs else 'no'} first_diff={results[-1]['first_diff_index']} "
+            f"packed={info is not None} margin={first_margin} "
             f"gate={'ok' if results[-1]['gate_prefix_match'] else 'FAIL'} "
             f"pass_key={'found' if found else ('MISSING' if needs_key else 'n/a')}"
         )
@@ -499,6 +591,16 @@ def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, rec
         "block_size": block_size,
         "num_blocks": num_blocks,
         "requests_exact": sum(r["exact_match"] for r in results),
+        "packed_requests": sum(r["packed"] for r in results),
+        "packed_exact": sum(r["exact_match"] for r in results if r["packed"]),
+        "packed_first_token_misses": [
+            {"request": r["request"], "margin": r["pack_first_token_margin"], "gate": r["gate_prefix_match"]}
+            for r in results
+            if r["packed"] and not r["pack_first_token_equal"]
+        ],
+        "first_divergence": {r["request"]: r["first_diff_index"] for r in results},
+        "pack_calls": None if recorder is None else recorder.calls,
+        "prefill_groups_last": [list(map(str, g)) for g in model.last_prefill_groups],
         "requests": len(results),
         "gate_ok": sum(r["gate_prefix_match"] for r in results),
         "pass_key_ok": sum(r["pass_key_found"] for r in results if r["pass_key_required"]),
@@ -526,6 +628,9 @@ def test_vllm_batch_contract(mesh_device, kind, lanes, block_size, tmp_path, rec
 
     assert host.stats["remaps"] > 0 and host.stats["notes"] == host.stats["remaps"], "the run must exercise slot_remap"
     assert host.stats["max_running"] >= 4, "the arrivals must overlap"
+    if pack32:
+        assert host.stats["prefill_calls"] == 1 and host.stats["max_running"] >= 24
+        assert recorder is not None and sum(c["users"] for c in recorder.calls) >= 16, recorder and recorder.calls
     for r in results:
         assert r["gate_prefix_match"], f"request {r['request']}: first tokens differ from the B=1 reference"
         if r["pass_key_required"]:
