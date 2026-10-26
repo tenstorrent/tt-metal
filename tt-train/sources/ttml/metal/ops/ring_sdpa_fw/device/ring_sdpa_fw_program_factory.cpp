@@ -78,19 +78,10 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
         auto cached_program =
             sdpa_fw::device::SDPAForwardProgramFactory::create(sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
 
-        // Store SDPA shared variables for runtime argument override
-        const auto& sdpa_vars = cached_program.shared_variables;
-        shared_variables_t ring_vars{
-            .sdpa_fw_reader_kernel = sdpa_vars.sdpa_fw_reader_kernel,
-            .sdpa_fw_writer_kernel = sdpa_vars.sdpa_fw_writer_kernel,
-            .sdpa_fw_compute_kernel = sdpa_vars.sdpa_fw_compute_kernel,
-            .num_cores = sdpa_vars.num_cores,
-            .num_cores_y = sdpa_vars.num_cores_y};
-
         // Add program to mesh workload
         ttnn::MeshCoordinateRange single_coord_range{mesh_coord};
         mesh_workload.add_program(single_coord_range, std::move(cached_program.program));
-        shared_vars[single_coord_range] = std::move(ring_vars);
+        shared_vars[single_coord_range] = std::move(cached_program.shared_variables);
     }
 
     return cached_mesh_workload_t(std::move(mesh_workload), std::move(shared_vars));
@@ -150,16 +141,8 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
 
         sdpa_fw::tensor_return_value_t sdpa_return_value{output, intermediates};
 
-        // Convert our shared_variables to SDPA's shared_variables type
-        sdpa_fw::SDPAForwardProgramFactory::shared_variables_t sdpa_shared_vars{
-            .sdpa_fw_reader_kernel = shared_vars.sdpa_fw_reader_kernel,
-            .sdpa_fw_writer_kernel = shared_vars.sdpa_fw_writer_kernel,
-            .sdpa_fw_compute_kernel = shared_vars.sdpa_fw_compute_kernel,
-            .num_cores = shared_vars.num_cores,
-            .num_cores_y = shared_vars.num_cores_y};
-
         // Create a proxy CachedProgram and call SDPA's override_runtime_arguments
-        auto cached_program = sdpa_fw::SDPAForwardProgramFactory::cached_program_t::proxy(program, sdpa_shared_vars);
+        auto cached_program = sdpa_fw::SDPAForwardProgramFactory::cached_program_t::proxy(program, shared_vars);
 
         sdpa_fw::SDPAForwardProgramFactory::override_runtime_arguments(
             cached_program, sdpa_attrs, sdpa_tensor_args, sdpa_return_value);
