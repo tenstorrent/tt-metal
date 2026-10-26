@@ -40,9 +40,12 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
 }
 
 bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
-    // The tensor's own mesh when it is on a device; the context's device otherwise (a host tensor).
     const auto* device = value.device();
-    const auto mesh_shape = device != nullptr ? device->shape() : autograd::ctx().get_device().shape();
+    TT_FATAL(
+        device != nullptr,
+        "is_sharded_on_axis: the tensor is not allocated on a device mesh (a host tensor, or a deallocated one); its "
+        "label is read against the mesh it is on");
+    const auto mesh_shape = device->shape();
     TT_FATAL(
         axis < mesh_shape.dims(),
         "is_sharded_on_axis: mesh axis {} is out of range for the {} device mesh",
@@ -63,9 +66,7 @@ namespace {
 
 // Averages each parameter's gradient along the axes in `cluster_axes` that the parameter is not sharded on. Along an
 // axis it is sharded on, a parameter holds a different piece of the tensor on each device, so averaging there would
-// add those pieces together; FSDP's backward hook has already reduce-scattered such a gradient. The all_reduce result
-// carries its own per-axis label (Replicate on the reduced axis, the other axes as the gradient had them, a collapsed
-// label expanded per axis), so nothing is relabelled here.
+// add those pieces together; FSDP's backward hook has already reduce-scattered such a gradient.
 void synchronize_gradients_along(
     const serialization::NamedParameters& parameters, const ttsl::SmallVector<uint32_t>& cluster_axes) {
     for (auto& [name, tensor] : parameters) {
@@ -81,6 +82,7 @@ void synchronize_gradients_along(
         if (axes_for_param.empty()) {
             continue;
         }
+        // all_reduce labels its own result.
         tensor->set_grad(synchronize_tensor(tensor->get_grad(), axes_for_param));
     }
 }

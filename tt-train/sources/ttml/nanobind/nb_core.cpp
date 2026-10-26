@@ -233,10 +233,10 @@ void py_module(nb::module_& m) {
             &ttml::core::distributed::is_sharded_on_axis,
             nb::arg("tensor"),
             nb::arg("axis"),
-            "True when `tensor`'s TensorTopology is Shard (not Replicate) on mesh axis `axis` of the device mesh. A "
-            "collapsed 1-D label is expanded first: Replicate is Replicate on every axis, a Shard over the whole mesh "
-            "is Shard on every axis of size > 1. Raises for a label that is neither one placement per mesh axis nor "
-            "a collapsed label covering the mesh.");
+            "True when `tensor`'s TensorTopology is Shard (not Replicate) on mesh axis `axis` of the mesh `tensor` is "
+            "on. A collapsed 1-D label is expanded first: Replicate is Replicate on every axis, a Shard over the whole "
+            "mesh is Shard on every axis of size > 1. Raises for a host tensor, and for a label that is neither one "
+            "placement per mesh axis nor a collapsed label covering the mesh.");
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
