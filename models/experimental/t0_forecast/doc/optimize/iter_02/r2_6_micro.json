@@ -1,0 +1,14 @@
+{
+  "qkv_to_padded": {
+    "ms": 12.95849485322833
+  },
+  "ctx_to_compact": {
+    "ms": 4.793880227953196
+  },
+  "qkv_matmul_compact": {
+    "ms": 2.929564192891121
+  },
+  "qkv_matmul_padded": {
+    "ms": 4.278782196342945
+  }
+}
