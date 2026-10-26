@@ -15,7 +15,8 @@ using namespace qkv_conv_bw;
 static_assert(read_alignment % DRAM_ALIGNMENT == 0 && read_alignment % L1_ALIGNMENT == 0);
 
 // Per work item (channel_block, split): weights, then for every tile row the TILE input's faces staged as strips (3
-// halo rows + 32 rows), the 4 shifted tiles copied out of the strips, and the matching grad_q/k/v tiles.
+// halo rows + 32 rows), the 4 shifted tiles copied out of the strips, and the matching grad_q/k/v tiles. The strip
+// staging is the forward reader's (reader_qkv_causal_conv1d_silu.cpp), face loops unrolled like there.
 template <
     uint32_t channel_tiles_per_block,
     uint32_t channel_tiles,
@@ -160,6 +161,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             // The tile's faces, into strip rows [3, 35).
             for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
                 const uint32_t page = tile_row * channel_tiles + first_tile_column + ct;
+#pragma GCC unroll 4
                 for (uint32_t face = 0; face < 4; ++face) {
                     noc.async_read(
                         input,
@@ -175,6 +177,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             // Strip rows [0, 3).
             constexpr uint32_t carried_bytes = halo_rows * face_row_bytes;
             for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
+#pragma GCC unroll 2
                 for (uint32_t side = 0; side < 2; ++side) {
                     const uint32_t dst = strip(parity, ct, side);
                     if (from_history) {
@@ -206,6 +209,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             x_shifted.reserve_back(tap_count * channel_tiles_per_block);
             for (uint32_t tap = 0; tap < tap_count; ++tap) {
                 for (uint32_t ct = 0; ct < channel_tiles_per_block; ++ct) {
+#pragma GCC unroll 4
                     for (uint32_t face = 0; face < 4; ++face) {
                         noc.async_read(
                             scratch,

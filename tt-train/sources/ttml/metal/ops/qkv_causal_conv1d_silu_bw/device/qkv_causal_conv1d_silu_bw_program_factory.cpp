@@ -20,6 +20,12 @@
 
 namespace m2 = tt::tt_metal::experimental;
 
+// The shared layout header spells the tile geometry out so the kernel toolchain can compile it.
+static_assert(qkv_conv_bw::tile_height == tt::constants::TILE_HEIGHT);
+static_assert(qkv_conv_bw::tile_width == tt::constants::TILE_WIDTH);
+static_assert(qkv_conv_bw::face_height == tt::constants::FACE_HEIGHT);
+static_assert(qkv_conv_bw::face_width == tt::constants::FACE_WIDTH);
+
 namespace ttml::metal::ops::qkv_causal_conv1d_silu_bw::device {
 
 namespace {

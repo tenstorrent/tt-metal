@@ -12,6 +12,7 @@
 using qkv_conv_bw::halo_rows;
 using qkv_conv_bw::tap_count;
 using qkv_conv_bw::tile_height;
+using qkv_conv_bw::tile_row_bytes;
 
 // Keeps the previous grad_preact tile as rows in a 35-row window. When the next grad_preact tile arrives, its first 3
 // rows complete the window, 4 shifted copies are pushed for the grad_input conv of the previous tile, then grad_input
@@ -30,7 +31,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
     Scratchpad<uint16_t> window(scratch::grad_preact_window);
     Noc noc;
 
-    constexpr uint32_t row_bytes = channel_tiles_per_block * tt::constants::TILE_WIDTH * sizeof(uint16_t);
+    constexpr uint32_t row_bytes = channel_tiles_per_block * tile_row_bytes;
     constexpr uint32_t view_bytes = tile_height * row_bytes;
     const uint32_t tile_bytes = output.get_entry_size();
 
