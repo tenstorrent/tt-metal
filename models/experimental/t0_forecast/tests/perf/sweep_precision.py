@@ -37,6 +37,12 @@ VARIANTS = {
     "perf": {"base": "performance"},
     "perf_ff_bf16": {"base": "performance", "bf16_roles": ("ff1", "ff2")},
     "perf_attn_bf16": {"base": "performance", "bf16_roles": ("qkv", "wv", "wo")},
+    # D4 item 3: bf16 wo + w_down (the residual epilogue folds), bf16 w1/w2, HiFi2 per role.
+    "perf_wo_down_bf16": {"base": "performance", "bf16_roles": ("wo", "wv", "ff2")},
+    "perf_hifi2_ff": {"base": "performance", "hifi2_roles": ("ff1", "ff2")},
+    "perf_hifi2_attn": {"base": "performance", "hifi2_roles": ("qkv", "wv", "wo")},
+    "perf_hifi2_all": {"base": "performance", "hifi2_roles": ROLES_ALL},
+    "perf_wo_down_bf16_hifi2": {"base": "performance", "bf16_roles": ("wo", "wv", "ff2"), "hifi2_roles": ROLES_ALL},
 }
 
 
@@ -51,6 +57,7 @@ def precision_for(name: str):
         hifi4_roles=roles,
         fp32_residual=spec.get("fp32_residual", False),
         bf16_roles=frozenset(spec.get("bf16_roles", ())),
+        hifi2_roles=frozenset(spec.get("hifi2_roles", ())),
     )
 
 

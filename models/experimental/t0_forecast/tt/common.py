@@ -49,6 +49,7 @@ class TtT0Precision:
     hifi4_roles: frozenset = frozenset()  # matmul roles at HiFi4: embed, qkv, wv, wo, ff1, ff2, decoder
     fp32_residual: bool = False  # keep the residual stream in fp32 (norms emit bf16 for the matmuls)
     bf16_roles: frozenset = frozenset()  # matmul roles whose weights stay bf16 when ``bf8_weights`` (sweep variant)
+    hifi2_roles: frozenset = frozenset()  # matmul roles at HiFi2 when ``lofi`` (sweep variant)
 
     @classmethod
     def accuracy(cls) -> "TtT0Precision":
@@ -83,7 +84,9 @@ class TtT0Precision:
         import ttnn
 
         if math_fidelity is None:
-            math_fidelity = ttnn.MathFidelity.LoFi if self.lofi else ttnn.MathFidelity.HiFi2
+            math_fidelity = (
+                ttnn.MathFidelity.LoFi if self.lofi and role not in self.hifi2_roles else ttnn.MathFidelity.HiFi2
+            )
             if self.hifi4 or role in self.hifi4_roles:
                 math_fidelity = ttnn.MathFidelity.HiFi4
             fp32_acc = fp32_acc or self.fp32_acc
