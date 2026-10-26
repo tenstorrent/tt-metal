@@ -40,16 +40,16 @@ Tensor moreh_matmul(
         return ttnn::matmul(
             input,
             other,
-            false,
+            /*transpose_a=*/false,
             /*transpose_b=*/true,
             memory_config,
-            input.dtype(),
-            std::nullopt,
-            std::nullopt,
+            /*dtype=*/input.dtype(),
+            /*program_config=*/std::nullopt,
+            /*activation=*/std::nullopt,
             compute_kernel_config,
-            std::nullopt,
-            std::nullopt,
-            output);
+            /*core_grid=*/std::nullopt,
+            /*output_tile=*/std::nullopt,
+            /*optional_output_tensor=*/output);
     }
     return ttnn::prim::moreh_matmul(
         input, other, transpose_input, transpose_other, output, bias, memory_config, compute_kernel_config);
