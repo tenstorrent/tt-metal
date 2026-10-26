@@ -3250,7 +3250,7 @@ gate FIX.2 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4
   IsProgramRealtimeProfilerActive() True. Saved outside the repo: runs/galaxy_8x4-full/run1/probes/FIX.3_rt_profiler_check.py.
 - Not fixed at the cause: it needs root (`sudo systemctl restart tt-iommu-domains`; sudo asks a password here) and
   tt_metal (per-chip IOMMU state) is outside this step's paths. Owner / host action.
-- Added: tt/rt_profiler_check.py; hooks.device_params logs the host mismatch (sysfs) before every mesh open;
+- (Reverted by the overseer, 17:35: the check moved to the framework, F194; nothing below is in the model.) Added: tt/rt_profiler_check.py; hooks.device_params logs the host mismatch (sysfs) before every mesh open;
   hooks.device_model runs the device check at build (one 32x32 add, <= 3 s settle when chips are missing) and warns
   (Setting RT_PROFILER_CHECK warn / raise / off; DS41_RT_PROFILER_CHECK=raise for a perf run that must have all chips).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.3 --spec
