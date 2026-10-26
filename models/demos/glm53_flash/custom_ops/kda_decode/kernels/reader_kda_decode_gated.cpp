@@ -39,7 +39,7 @@
 constexpr uint32_t cb_hist = 0, cb_taps = 1, cb_gf = 2, cb_gog = 3, cb_gb = 4, cb_cc = 5, cb_onw = 6, cb_sel = 7;
 constexpr uint32_t cb_selT = 8, cb_S = 9, cb_gather = 24;
 constexpr uint32_t SEM_READY = 0, SEM_VALID = 1, SEM_ONE = 2, SEM_GATHER = 3;
-constexpr uint32_t GATE_BYTES = 32 * 4;  // one gate page: 32 int32 write gates (op.py GATE_BYTES)
+constexpr uint32_t GATE_BYTES = 32 * 4;       // one gate page: 32 int32 write gates (op.py GATE_BYTES)
 constexpr uint32_t FACE_BYTES = 16 * 16 * 2;  // a 16x16 bf16 face of a 32x32 tile (four faces, row-major)
 
 // row u of a 32x32 bf16 tile: 16 values in face (u / 16) * 2 and 16 in the face next to it, each run at byte offset
@@ -98,8 +98,8 @@ void kernel_main() {
     const uint32_t rb_y0 = get_arg_val<uint32_t>(16);
     const uint32_t rb_x1 = get_arg_val<uint32_t>(17);
     const uint32_t rb_y1 = get_arg_val<uint32_t>(18);
-    const uint32_t n_b = get_arg_val<uint32_t>(19);  // ... and its core count (0: column layout)
-    const uint32_t n_a = (parts - 1) - n_b;          // parts below the sender in its own column
+    const uint32_t n_b = get_arg_val<uint32_t>(19);        // ... and its core count (0: column layout)
+    const uint32_t n_a = (parts - 1) - n_b;                // parts below the sender in its own column
     const uint32_t gate_addr = get_arg_val<uint32_t>(20);  // the write gate pages ([Bt, 32] int32)
 
     const uint32_t t32 = get_tile_size(cb_S);
