@@ -8,6 +8,8 @@ Shapes: ``B`` device rows (multiple of 32), ``T`` padded sequence (320), ``T_rea
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 from models.experimental.tirex2_forecast.reference import dataflow as df
@@ -102,11 +104,15 @@ MM_BLOCKS = {
     (512, 288): (8, 8, 4, 1, 4),
 }
 MM_MIN_M_TILES = 64  # below this the default linear
+# variance table (D5 c): roles listed here (comma separated) go back to ttnn.linear; measurement only
+MM_REVERT = frozenset(r for r in os.environ.get("TIREX2_MM_REVERT", "").split(",") if r)
 
 
-def _mm_config(xf, w):
+def _mm_config(xf, w, role=None):
     import ttnn
 
+    if role in MM_REVERT:
+        return None
     m_tiles = xf.padded_shape[-2] // TILE
     K, N = w.padded_shape[-2], w.padded_shape[-1]
     if m_tiles < MM_MIN_M_TILES or (K, N) not in MM_BLOCKS or w.dtype == ttnn.float32:
@@ -129,7 +135,7 @@ def linear(x, w, precision: Precision, bias=None, activation=None, dtype=None, c
     import ttnn
 
     xf, shape = _flat(x)
-    mm = _mm_config(xf, w)
+    mm = _mm_config(xf, w, role)
     if mm is not None:
         acts = {"silu": ttnn.UnaryOpType.SILU}
         y = ttnn.experimental.minimal_matmul(
@@ -516,7 +522,7 @@ def slstm_prepare(x, w: TtSLSTM, precision: Precision):
     xn = rms_norm(x, df.NORM_EPS)
     xT = ttnn.transpose(xn, 0, 2)  # [T, 1, B, 512]
     free(xn)
-    WxT = linear(xT, w.w_in, precision, bias=w.bias, dtype=ttnn.float32, config=precision.gate_config())
+    WxT = linear(xT, w.w_in, precision, bias=w.bias, dtype=ttnn.float32, config=precision.gate_config(), role="w_in")
     free(xT)
     return WxT
 
