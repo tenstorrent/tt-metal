@@ -10,8 +10,9 @@
 // Translated from matmul's legacy process_gather_in0_program_and_create_override_variables (still used by matmul's
 // own MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory): same CBs (the GCB-backed remote CB included), kernels,
 // compile-time and runtime args; tensor-backed CBs carry their tensors and the in1 address is a buffer binding, so a
-// WorkloadDescriptor op built from it needs no matmul-specific cache-hit refresh. Binds ccl_fusion copies of the three
-// gather kernels. Delete once llama_reduce_scatter_matmul is on Metal 2.0.
+// WorkloadDescriptor op built from it needs no matmul-specific cache-hit refresh. Binds matmul's legacy gather kernels
+// in ttnn/operations/matmul/device/kernels/ (not their _metal2 forks), as matmul's legacy 1D builder does. Delete once
+// llama_reduce_scatter_matmul is on Metal 2.0.
 
 #include "ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_gather_in0.hpp"
 #include <tt-metalium/program_descriptors.hpp>
@@ -27,8 +28,6 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/experimental/prefetcher_pipe.hpp>
-#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -714,8 +713,6 @@ void create_program_gather_in0_descriptor(
     }
 
     uint32_t bank_id = 0;
-    std::vector<uint32_t> bank_ids;
-    bank_ids.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
@@ -758,31 +755,19 @@ void create_program_gather_in0_descriptor(
             // Look up bank_id based on core.y and which column group core.x belongs to
             if (core.x <= first_col_max_x) {
                 auto it = worker_y_to_dram_bank_first_col.find(core.y);
-                if (it == worker_y_to_dram_bank_first_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in first-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_first_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_first_col.end(),
+                    "gather_in0: worker core ({}, {}) has no DRAM bank in the first-column map",
+                    core.x,
+                    core.y);
                 bank_id = it->second;
             } else {
                 auto it = worker_y_to_dram_bank_second_col.find(core.y);
-                if (it == worker_y_to_dram_bank_second_col.end()) {
-                    log_info(
-                        tt::LogOp,
-                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in second-col map! Available y values:",
-                        core.x,
-                        core.y,
-                        core.y);
-                    for (const auto& [y, bank] : worker_y_to_dram_bank_second_col) {
-                        log_info(tt::LogOp, "  y={}", y);
-                    }
-                }
+                TT_FATAL(
+                    it != worker_y_to_dram_bank_second_col.end(),
+                    "gather_in0: worker core ({}, {}) has no DRAM bank in the second-column map",
+                    core.x,
+                    core.y);
                 bank_id = it->second;
             }
 
@@ -803,7 +788,6 @@ void create_program_gather_in0_descriptor(
                 dram_read_offset = i % num_receiver_cores_per_dram;
             }
 
-            bank_ids.push_back(bank_id);
             uint32_t vc = 0;
             for (uint32_t j = 0; j < i; ++j) {
                 auto core_prev = worker_cores_vec[j];
@@ -936,20 +920,8 @@ static void matmul_multi_core_reuse_mcast_1d_gather_in0_descriptor_(
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(in1_tensor.dtype());  // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());   // output
 
-    ttsl::optional_reference<const MeshTensor> bias_mesh_tensor;
-    [[maybe_unused]] tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
-    if (bias.has_value()) {
-        const auto& c = bias.value();
-        TT_FATAL(
-            c.storage_type() == StorageType::DEVICE,
-            "Bias tensor must be on device, got storage type: {}",
-            c.storage_type());
-        TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
-
-        bias_mesh_tensor = c.mesh_tensor();
-
-        bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
-    }
+    // The gather_in0 program has no bias CB, so a bias tensor could only be ignored.
+    TT_FATAL(!bias.has_value(), "gather_in0 does not support a bias tensor");
 
     const tt_metal::distributed::MeshDevice& device = a.mesh_tensor().device();
 
@@ -1000,7 +972,6 @@ static void matmul_multi_core_reuse_mcast_1d_gather_in0_descriptor_(
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     const auto in0_B = fuse_batch ? 1 : get_batch_size(ashape);
-    [[maybe_unused]] const auto in1_B = fuse_batch ? 1 : get_batch_size(bshape);
     const auto Mt = operations::matmul::utilities::get_M_dim(ashape, in0_tile, fuse_batch);
     const auto Kt = operations::matmul::utilities::get_K_dim(ashape, in0_tile);
     const auto Nt = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
