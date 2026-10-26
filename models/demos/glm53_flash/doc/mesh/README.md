@@ -1004,6 +1004,40 @@ resolved by the mesh model as blocks up to 4 K positions and regions (+ stacked 
 README row's configuration is the default one; a bare layer treats auto as blocks. The chain of 2026-10-21/22 is
 complete: AUTO 8X4 DONE.
 
+## 2026-10-26 device validation of the device-free work (chain `sched_validate_devicefree_work.sh`, 29 stages, 15:08-17:52)
+
+One run per stage; traced numbers; every e2e reports TTFT and decode from the same run; first token == HF unless noted.
+
+| stage | result |
+|---|---|
+| mHC A3 chip 0 | sharded norm vs single: wrap output PCC 0.999998 (T = 4 and 32), traced replay == eager; traced wrap 246 -> 210 us (sharded), 206 us (sharded_cast); the A4 batched reference graph differs from the fused Sinkhorn by 5e-4 (SFPU approximations; bar widened to 1e-2) |
+| mHC units chip 0 | 3 pre-existing failures: `build_mhc(impl="fast")` returned the split pair since eeb7010f222; fixed (explicit impl = that class); decode-trace tests pass |
+| C1 rs remap | chip-0 row chunks 3/3, block remap vs op 2/2 |
+| MTP block chip 0 | 1/1 after the steps 3-5 edits |
+| DSA state op chip 0 | 9/9; the chip-0 A/B of the wiring failed in its setup: the single-chip full-width q_b stem overflowed L1 (2.3 MB of CBs) -> `prefill_linear` picks an L1-aware row block (TP4 widths unchanged) |
+| pre-block watcher chip 27 | unit 8/8 and one decoder layer 5/5 under the NOC sanitizer: no violation (hang exclusion) |
+| pre-block A/B chip 27 + block | 12/12 and 4/4: hn PCC 0.999996, post / comb lanes bit-identical, two instances, trace replay, bit-identical on all 8 block chips |
+| B7 gather all-reduce block | 7/7 |
+| prefill selection block | `untilize_with_unpadding` rejected the ROW_MAJOR scorer output -> every sparse prefill on the branch was broken since c1e1b46f679; fixed (tile-major only); re-run queued |
+| prefix arena block | same failure; re-run queued |
+| decoder block, both knobs | 3/3 vs HF |
+| block e2e, 4 users/row | decode 78.4 ms with the knobs vs 80.7 ms without; TTFT part overflowed the 256 MB trace region (the block needs 512 MB with the traced prefill ladder); re-runs queued |
+| MTP spec decode block | step 3 (traced draft == eager) passed; the verify test hung: the plain decode trace was captured before the spec graphs compiled their 8-row collectives (late-compile trap, second instance) -> host spin, SIGTERM, FW init failure, one `tt-smi -r`; tests now warm up before any capture; re-run queued |
+| B5 block A/B (partitioned) | output PCC 0.99953 (bar 0.9998): rings, selected ids (2 near-tie flips) and latent agree, but one whole 32-row pool block differs per sparse user (dense user fine); row-level diagnostic + `latent` fallback queued |
+| batch independence, B5 knob | 2/2 |
+| 22-layer EP chain, pre-block on / off | 33.3 vs 37.7 ms decode, identical first token and prefill PCC |
+| block logits gate, pre-block | OOM at model build (the 45-layer bfp4 block has no headroom for the 512 MB trace region) -> gate moved to the 8x4 (queued) |
+| 8x4 e2e, 32 users, knobs | decode 80.55 ms = 12.4 tok/s/u, 397 agg (ref 83.1-86.6); TTFT 314 ms vs 266: the 16-row prefill slabs passed the gather all-reduce's <= 32-row gate and the mHC split's one-tile test -> `GLMMesh.prefill_scope()`; validation queued |
+| 8x4 e2e EP, rs remap | decode 67.68 ms = 14.8 tok/s/u, 473 agg (ref 71.2); TTFT 152 ms (unchanged); first token != HF (the known EP prefill gap) |
+| 8x4 e2e, 256 users, knobs | SIGKILLed at layer 37 by the host OOM killer (594 GB box, 134 GB hugepages, ~390 GB page cache, 3.6 GB free); re-run queued |
+| 8x4 logits gate, knobs | PCC 0.9948, top-1 95.3 %, top-5 93.4 % (ref 0.9942 / 90.6 / 94.1) |
+| 8x4 64 K needle, knobs | 32/32, rows and users agree; TTFT 25.4 s per prompt (ref 27.3), 2580 tok/s prefill, decode 92.1 ms = 10.9 tok/s/u |
+| 8x4 64 K needle, DSA state knob | 32/32; decode 90.9 ms = 11.0 tok/s/u (-1.2 ms, the ledger's 11 x 145 us) |
+
+Defaults flipped: `GLM53_MHC_NORM=sharded`. Pending their re-runs: `GLM53_TP_ALLREDUCE=gather` (TTFT with the prefill
+scope), `GLM53_PREFILL_ABLOCK=2048` (selection bit-identity), `GLM53_DSA_DECODE_STATE=1` (the pool-block diagnostic),
+`GLM53_MHC_PRE_BLOCK=1` (the 8x4 logits gate). Follow-up runner: `sched_validate_followups.sh` + `followups.queue`.
+
 ## 2026-10-22 device-free deliveries (machine in use elsewhere; nothing run on chips)
 
 | track | delivered | default | device validation (`_logs/mesh/sched_validate_devicefree_work.sh`, starts only on `touch GO_VALIDATE`) |
