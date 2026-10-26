@@ -885,7 +885,7 @@ void CommandListBuilderImpl::resolve_parameters(
             TT_FATAL(!info.nodes.empty(), "Command list runtime parameter '{}' must name at least one node", *name);
             auto& captured = find_captured_program(info.program.get());
             const auto* schema = rta_schema_of(captured, info.kernel_name);
-            const auto slot = schema->runtime_arg_name_to_slot.find(info.arg_name.str());
+            const auto slot = schema->runtime_arg_name_to_slot.find(info.arg_name);
             TT_FATAL(
                 slot != schema->runtime_arg_name_to_slot.end(),
                 "Runtime argument '{}' is not declared by kernel '{}'",
@@ -905,7 +905,7 @@ void CommandListBuilderImpl::resolve_parameters(
         for (const auto& info : infos) {
             auto& captured = find_captured_program(info.program.get());
             const auto* schema = rta_schema_of(captured, info.kernel_name);
-            const auto slot = schema->common_runtime_arg_name_to_slot.find(info.arg_name.str());
+            const auto slot = schema->common_runtime_arg_name_to_slot.find(info.arg_name);
             TT_FATAL(
                 slot != schema->common_runtime_arg_name_to_slot.end(),
                 "Common runtime argument '{}' is not declared by kernel '{}'",

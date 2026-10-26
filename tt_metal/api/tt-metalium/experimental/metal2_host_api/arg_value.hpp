@@ -21,7 +21,7 @@ namespace tt::tt_metal::experimental {
 // The value of a kernel argument.
 //
 // An ArgValue is implicitly constructible from any value that converts implicitly to
-// uint32_t, with exactly the result of that conversion (integers wrap, floating point
+// uint32_t, with exactly the result of that conversion (integers wrap, in-range floating point
 // values truncate, bools and unscoped enums convert):
 //   KernelSpec{.compile_time_args = {{"Ht", Ht}}}
 //   run_args.runtime_arg_values["num_tiles"][node] = n;
@@ -49,8 +49,10 @@ public:
 
 private:
     // MAINTAINER: Keep the representation private, and don't add a public way to read it as
-    // a uint32_t. The stored value will change when typed (and possibly 64-bit) arguments
-    // are supported; the constructor's overload set must stay as it is.
+    // a uint32_t. Typed (and possibly 64-bit) arguments will change what is stored, not how
+    // values are written: every construction that compiles today must keep compiling and, for a
+    // uint32_t argument, keep producing the same argument word. So keep the single constructor
+    // template; an added overload (e.g. for float) would silently change what existing calls store.
     friend struct ArgValueAccess;  // Implementation-only reader (defined in tt_metal/impl)
     friend struct std::hash<ArgValue>;
     friend struct fmt::formatter<ArgValue>;

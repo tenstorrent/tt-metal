@@ -539,8 +539,8 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         params.kernel_run_args.push_back({.kernel = PRODUCER});
     }
     // Tensix consumer: hand it the L1 region it reports per-entry digests into (see the
-    // verification block after LaunchProgram). Size it from the CTA compiled into the
-    // kernel so the host region and dfb_t6_consumer_2_0.cpp indexing cannot drift.
+    // verification block after LaunchProgram). Size it from the value the CTA compiled into the
+    // kernel is asserted to equal, so the host region and dfb_t6_consumer_2_0.cpp indexing cannot drift.
     uint32_t digest_region_bytes = 0;
     if (p.consumer_type == M2PorCType::TENSIX) {
         const auto cta_num_entries_per_consumer = consumer.compile_time_args.get("num_entries_per_consumer");

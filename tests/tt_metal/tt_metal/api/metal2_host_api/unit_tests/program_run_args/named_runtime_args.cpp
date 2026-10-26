@@ -238,7 +238,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_NamedPlusVarargs_FastPathLayout) {
     }
 }
 
-enum ArgSourceEnum { kArgSourceEnum = 7 };
+enum ArgSourceEnum { kFirstEnumerator = 7, kSecondEnumerator = 8 };
 
 // An ArgValue reaches the dispatch buffer as the implicit conversion of its source to uint32_t
 // (negative values wrap, floating point truncates, bools and unscoped enums convert), for per-node
@@ -256,12 +256,13 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_ArgValuesSerializeAsUint32Conversi
         const std::uint64_t wide = 0x1'0000'0005 + call;
         const bool flag = call == 0;
         const double real = 2.9 + call;
+        const ArgSourceEnum enumerator = call == 0 ? kFirstEnumerator : kSecondEnumerator;
 
         ProgramRunArgs params;
         params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"dm_kernel"},
             .runtime_arg_values = MakeRuntimeArgsForSingleNode(
-                node, {{"neg", neg}, {"wide", wide}, {"flag", flag}, {"real", real}, {"enumerator", kArgSourceEnum}}),
+                node, {{"neg", neg}, {"wide", wide}, {"flag", flag}, {"real", real}, {"enumerator", enumerator}}),
             .common_runtime_arg_values = {{"common_neg", neg}, {"common_real", real}},
         });
         params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
@@ -272,7 +273,7 @@ TEST_F(ProgramRunArgsTestGen1, CPU_SetRunArgs_ArgValuesSerializeAsUint32Conversi
             static_cast<uint32_t>(wide),
             static_cast<uint32_t>(flag),
             static_cast<uint32_t>(real),
-            static_cast<uint32_t>(kArgSourceEnum),
+            static_cast<uint32_t>(enumerator),
         };
         const auto& rta = dm->runtime_args_data(node);
         ASSERT_GE(rta.size(), expected_rtas.size());

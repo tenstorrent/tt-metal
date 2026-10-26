@@ -722,7 +722,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             // (This is the per-node fixed cost that made Set ~5us/call slower than the otherwise
             // identical Update path, flat in N.)
             for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
-                const auto s = slot_of.find(name.str());
+                const auto s = slot_of.find(name);
                 for (const auto& [node, value] : per_node) {
                     TT_FATAL(
                         s != slot_of.end(),
@@ -764,7 +764,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             // runs once; every subsequent call takes the fast path above.
             std::unordered_map<NodeCoord, std::vector<std::pair<size_t, uint32_t>>> named_rtas_by_node;
             for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
-                const auto s = slot_of.find(name.str());
+                const auto s = slot_of.find(name);
                 for (const auto& [node, value] : per_node) {
                     TT_FATAL(
                         s != slot_of.end(),
@@ -1233,7 +1233,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         if (!kernel_params.runtime_arg_values.empty()) {
             const auto& rta_index = schema->runtime_arg_name_to_slot;
             for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
-                const auto it = rta_index.find(name.str());
+                const auto it = rta_index.find(name);
                 TT_FATAL(
                     it != rta_index.end(),
                     "Internal error: named RTA '{}' not in schema for kernel '{}'.",
@@ -1283,7 +1283,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
             if (!kernel_params.common_runtime_arg_values.empty()) {
                 const auto& crta_index = schema->common_runtime_arg_name_to_slot;
                 for (const auto& [name, value] : kernel_params.common_runtime_arg_values) {
-                    const auto it = crta_index.find(name.str());
+                    const auto it = crta_index.find(name);
                     TT_FATAL(
                         it != crta_index.end(),
                         "Internal error: named CRTA '{}' not in schema for kernel '{}'.",

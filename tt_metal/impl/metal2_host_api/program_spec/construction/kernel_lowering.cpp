@@ -328,8 +328,7 @@ LoweredKernel LowerKernel(
     //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
     //    (after the user CTA-vararg prefix)
     //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
-    const std::vector<std::string> user_named_crtas =
-        to_strings(kernel_spec.runtime_arg_schema.common_runtime_arg_names);
+    const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
     const auto& cta_varargs = kernel_spec.advanced_options.compile_time_varargs;
     const uint32_t vararg_cta_count = static_cast<uint32_t>(cta_varargs.size());
     TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
@@ -352,11 +351,12 @@ LoweredKernel LowerKernel(
     ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
     ta_bindings.crta_layout.vararg_section_offset += sp_bindings.section_words;
 
-    // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time to
-    // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
-    // address section is tracked separately (via tensor_binding_handles), so we pass the user
-    // CRTA list through unchanged.
+    // Named-args schema fields passed to the Kernel ctor, which stores the names as std::string.
+    // The names are used at JIT time to emit kernel_args_generated.h and factor into the kernel
+    // cache key. The TensorBinding address section is tracked separately (via
+    // tensor_binding_handles), so the CRTA list is just the user's named CRTAs.
     const std::vector<std::string> named_rtas = to_strings(kernel_spec.runtime_arg_schema.runtime_arg_names);
+    const std::vector<std::string> named_crtas = to_strings(user_named_crtas);
 
     // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
     std::vector<uint32_t> compile_args = cta_varargs;
@@ -384,7 +384,7 @@ LoweredKernel LowerKernel(
                 dfb_handles,
                 semaphore_handles,
                 named_rtas,
-                user_named_crtas,
+                named_crtas,
                 tensor_binding_handles,
                 ta_bindings.crta_layout);
         } else {
@@ -402,7 +402,7 @@ LoweredKernel LowerKernel(
                 dfb_handles,
                 semaphore_handles,
                 named_rtas,
-                user_named_crtas,
+                named_crtas,
                 tensor_binding_handles,
                 ta_bindings.crta_layout);
         }
@@ -424,7 +424,7 @@ LoweredKernel LowerKernel(
                 dfb_handles,
                 semaphore_handles,
                 named_rtas,
-                user_named_crtas,
+                named_crtas,
                 tensor_binding_handles,
                 ta_bindings.crta_layout);
         } else {
@@ -440,7 +440,7 @@ LoweredKernel LowerKernel(
                 dfb_handles,
                 semaphore_handles,
                 named_rtas,
-                user_named_crtas,
+                named_crtas,
                 tensor_binding_handles,
                 ta_bindings.crta_layout);
         }
@@ -492,10 +492,10 @@ LoweredKernel LowerKernel(
     // Precompute the name -> slot-index maps so the hot UpdateProgramRunArgs path does O(1)
     // lookups rather than rebuilding a map per call.
     for (size_t i = 0; i < runtime_schema.runtime_arg_names.size(); ++i) {
-        runtime_schema.runtime_arg_name_to_slot.emplace(runtime_schema.runtime_arg_names[i].str(), i);
+        runtime_schema.runtime_arg_name_to_slot.emplace(runtime_schema.runtime_arg_names[i], i);
     }
     for (size_t i = 0; i < runtime_schema.common_runtime_arg_names.size(); ++i) {
-        runtime_schema.common_runtime_arg_name_to_slot.emplace(runtime_schema.common_runtime_arg_names[i].str(), i);
+        runtime_schema.common_runtime_arg_name_to_slot.emplace(runtime_schema.common_runtime_arg_names[i], i);
     }
 
     // Varargs schema now lives on KernelAdvancedOptions.

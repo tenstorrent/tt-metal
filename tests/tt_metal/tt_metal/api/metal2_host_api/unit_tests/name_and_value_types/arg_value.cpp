@@ -67,20 +67,20 @@ std::uint32_t stored(T source) {
 TEST(ArgValueTest, CPU_DefaultConstructedIsZero) { EXPECT_EQ(ArgValueAccess::u32(ArgValue()), 0u); }
 
 TEST(ArgValueTest, CPU_StoresTheImplicitConversionToUint32) {
-    // Each result must be exactly what assigning the source to a uint32_t produces.
-    EXPECT_EQ(stored(5), static_cast<std::uint32_t>(5));
-    EXPECT_EQ(stored(-1), static_cast<std::uint32_t>(-1));  // wraps to 0xFFFFFFFF
-    EXPECT_EQ(stored(std::size_t{12}), static_cast<std::uint32_t>(std::size_t{12}));
-    EXPECT_EQ(stored(std::uint64_t{0x1'0000'0005}), static_cast<std::uint32_t>(std::uint64_t{0x1'0000'0005}));
-    EXPECT_EQ(stored(std::int64_t{-2}), static_cast<std::uint32_t>(std::int64_t{-2}));
-    EXPECT_EQ(stored(std::int16_t{-3}), static_cast<std::uint32_t>(std::int16_t{-3}));
-    EXPECT_EQ(stored(std::uint8_t{200}), static_cast<std::uint32_t>(std::uint8_t{200}));
-    EXPECT_EQ(stored('A'), static_cast<std::uint32_t>('A'));
-    EXPECT_EQ(stored(true), static_cast<std::uint32_t>(true));
-    EXPECT_EQ(stored(false), static_cast<std::uint32_t>(false));
-    EXPECT_EQ(stored(2.9), static_cast<std::uint32_t>(2.9));  // truncates
-    EXPECT_EQ(stored(2.9f), static_cast<std::uint32_t>(2.9f));
-    EXPECT_EQ(stored(kUnscoped), static_cast<std::uint32_t>(kUnscoped));
+    // Each result is what assigning the source to a uint32_t produces.
+    EXPECT_EQ(stored(5), 5u);
+    EXPECT_EQ(stored(-1), 0xFFFFFFFFu);  // wraps
+    EXPECT_EQ(stored(std::size_t{12}), 12u);
+    EXPECT_EQ(stored(std::uint64_t{0x1'0000'0005}), 5u);  // keeps the low 32 bits
+    EXPECT_EQ(stored(std::int64_t{-2}), 0xFFFFFFFEu);
+    EXPECT_EQ(stored(std::int16_t{-3}), 0xFFFFFFFDu);
+    EXPECT_EQ(stored(std::uint8_t{200}), 200u);
+    EXPECT_EQ(stored('A'), 65u);
+    EXPECT_EQ(stored(true), 1u);
+    EXPECT_EQ(stored(false), 0u);
+    EXPECT_EQ(stored(2.9), 2u);  // truncates
+    EXPECT_EQ(stored(2.9f), 2u);
+    EXPECT_EQ(stored(kUnscoped), 7u);
 }
 
 // ---- comparison --------------------------------------------------------------

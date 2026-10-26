@@ -27,7 +27,8 @@ namespace tt::tt_metal::experimental {
 //   run_args.runtime_arg_values["num_tiles"][node] = n;
 //
 // It compares equal to a string with the same characters (name == "num_tiles").
-// To read the characters back, use view() or str().
+// To read the characters back, use view() or str(). (There is deliberately no implicit conversion
+// back to a string: it would make comparisons such as name == str ambiguous.)
 //
 // CONSTRAINTS (validated with the ProgramSpec, not on construction):
 //   - A name must be a valid C++ identifier. (It is used verbatim in generated kernel code.)
@@ -54,8 +55,9 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const AccessorName& name) { return os << name.view(); }
 
 private:
-    // MAINTAINER: Keep the representation private. It may change later (e.g. to inline storage,
-    // or to carry a scope); view() and str() must keep meaning the name as written.
+    // MAINTAINER: Keep the representation private. It may change later (e.g. to carry a scope, or
+    // to inline storage, in which case str() would have to return by value); view() and str()
+    // must keep meaning the name as written.
     std::string name_;
 };
 

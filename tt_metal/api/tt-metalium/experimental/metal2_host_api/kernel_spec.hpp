@@ -75,7 +75,9 @@ using KernelSpecName = ttsl::StrongType<std::string, struct KernelSpecNameTag>;
 // accessor_name (DFB, semaphore, scratchpad, tensor, prefetcher pipe), a kernel argument name
 // (CTA, RTA, CRTA), or a tensor binding sequence name.
 //
-// MAINTAINER: This constant is in sync with MAX_TEMPLATE_STRING_LEN on device side.
+// MAINTAINER: This constant is in sync with MAX_TEMPLATE_STRING_LEN on device side, which limits
+//             binding accessor names. Argument and sequence names share the cap so that every
+//             AccessorName has the same limit.
 inline constexpr std::size_t MAX_ACCESSOR_NAME_LENGTH = 64;
 
 //------------------------------------------------
@@ -196,6 +198,7 @@ struct KernelSpec {
     //----------------------------------------------------------------------------
     // Compile time arguments
     // (Bound argument values cannot be changed between Program executions)
+    // Keys are argument names: valid C++ identifiers, at most MAX_ACCESSOR_NAME_LENGTH characters.
     using CompileTimeArgs = Table<ArgName, ArgValue>;
     CompileTimeArgs compile_time_args;
 
@@ -207,10 +210,12 @@ struct KernelSpec {
     // Currently, only arguments of uint32_t are supported.
 
     struct RuntimeArgSchema {
-        // Runtime argument names (must be unique, valid C++ identifiers.)
+        // Runtime argument names (must be unique, valid C++ identifiers, at most
+        // MAX_ACCESSOR_NAME_LENGTH characters.)
         Group<ArgName> runtime_arg_names;
 
-        // Common runtime argument names (must be unique, valid C++ identifiers.)
+        // Common runtime argument names (must be unique, valid C++ identifiers, at most
+        // MAX_ACCESSOR_NAME_LENGTH characters.)
         Group<ArgName> common_runtime_arg_names;
     };
     RuntimeArgSchema runtime_arg_schema{};

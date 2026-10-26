@@ -629,6 +629,8 @@ public:
     struct KernelRTASchema {
         // Named arg names, in declaration order. Used to serialize ProgramRunArgs values
         // into the dispatch buffer and to validate that every declared name is supplied.
+        // (Typed ArgName, like the ProgramRunArgs tables they are matched against, so the
+        // per-enqueue lookups never build a temporary name from a std::string.)
         std::vector<experimental::ArgName> runtime_arg_names;
         std::vector<experimental::ArgName> common_runtime_arg_names;
 
@@ -637,8 +639,8 @@ public:
         // hot UpdateProgramRunArgs path does O(1) lookups instead of rebuilding a map per call —
         // that path is not bypassable via skip_validation, so per-call construction would be pure
         // host overhead on the inner re-enqueue loop.
-        std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
-        std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
+        std::unordered_map<experimental::ArgName, size_t> runtime_arg_name_to_slot;
+        std::unordered_map<experimental::ArgName, size_t> common_runtime_arg_name_to_slot;
 
         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
