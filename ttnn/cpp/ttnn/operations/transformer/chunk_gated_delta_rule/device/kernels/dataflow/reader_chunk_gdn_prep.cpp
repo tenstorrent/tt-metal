@@ -15,6 +15,7 @@
 #include "api/tensor/noc_traits.h"
 #if defined(GDN_FUSED_PRODUCER)
 #include "chunk_gdn_fused_map.hpp"
+#include "chunk_gdn_fused_rt_args.hpp"
 #endif
 #include "chunk_gdn_handoff.hpp"
 #include "chunk_gdn_gate_read.hpp"
@@ -88,9 +89,11 @@ void kernel_main() {
         get_arg_val<uint32_t>(13),
         get_arg_val<uint32_t>(14),
         get_arg_val<uint32_t>(15)};
+    // The DRAM row of this program's head 0: the map's heads start at 0, the tensors' at head_offset.
+    const uint32_t head_offset = get_arg_val<uint32_t>(fused_rt::kPrepReaderHeadOffsetArg);
     auto item_wi = [&](uint32_t n) {
         const GdnFusedItem it = gdn_fused_item(map, p, n);
-        return it.h * NC + it.c;
+        return (head_offset + it.h) * NC + it.c;
     };
 #else
     // Work-item stride: 1 for a contiguous slice (phased prep).

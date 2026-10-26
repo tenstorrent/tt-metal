@@ -129,6 +129,7 @@ enum class SfpuType {
     reshuffle_rows,
     triangle_solve,
     cumsum,
+    cumprod,
     fill,
     prelu,
     alt_complex_rotate90,
