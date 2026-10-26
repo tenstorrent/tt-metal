@@ -353,6 +353,15 @@ class TtTalkerCachedDecoder:
         self._tables[row, : blocks.numel()] = blocks
         ttnn.copy_host_to_device_tensor(ttnn.from_torch(self._tables, dtype=ttnn.int32), self._page_table)
 
+    def set_page_tables(self, tables):
+        """Every row's blocks at once: `tables` [batch, blocks], each row in position order."""
+        tables = torch.as_tensor(tables, dtype=torch.int32)
+        if tables.shape[0] != self.batch or tables.shape[1] > self.max_blocks:
+            raise ValueError(f"page tables of shape {tuple(tables.shape)} for {self.batch} rows of {self.max_blocks}")
+        self._tables.zero_()
+        self._tables[:, : tables.shape[1]] = tables
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(self._tables, dtype=ttnn.int32), self._page_table)
+
     # ── shared pieces ───────────────────────────────────────────────────────
 
     def _rotate(self, x, cos, sin, decode=False):

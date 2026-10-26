@@ -116,7 +116,7 @@ def test_the_stage_reproduces_the_pipelines_frames(device, expect_error):
         assert frame.tolist() == expected_frames[step], f"frame {step} differs"
     print(f"{STEPS} frames through the stage, identical to the pipeline's; prompt {prompt_len} positions")
 
-    with expect_error(ValueError, "decode at position"):
+    with expect_error(ValueError, "decodes at position"):
         stage.decode_forward(
             tokens=torch.tensor([[firsts[0]]], dtype=torch.int32),
             start_pos=torch.tensor([prompt_len], dtype=torch.int32),
@@ -125,3 +125,95 @@ def test_the_stage_reproduces_the_pipelines_frames(device, expect_error):
         )
     stage.release_request(0)
     stage.release_persistent_capture()
+
+
+SECOND_TEXT = "A second request joins while the first one is still speaking."
+# Frames the first request decodes before the second one's prefill lands.
+JOIN_AT = 3
+
+
+def _stage(device, batch, num_blocks):
+    stage = Qwen3TTSTalkerForConditionalGeneration.initialize_vllm_model(
+        SimpleNamespace(_name_or_path=""), device, batch, max_seq_len=MAX_MODEL_LEN
+    )
+    kv_cache = stage.allocate_kv_cache((num_blocks, 8, BLOCK_SIZE, 128), torch.bfloat16, 28)
+    # Greedy code predictor: a batch draws its sampling noise in another order than one row.
+    stage.pipeline.predictor.sample_on_device(1.0, 1)
+    return stage, kv_cache
+
+
+def _prefill(stage, kv_cache, info, length, table, slot):
+    logits, _ = stage.prefill_forward(
+        tokens=torch.ones(1, length, dtype=torch.int32),
+        start_pos=torch.zeros(1, dtype=torch.int32),
+        prompt_lens=torch.tensor([length]),
+        page_table=table.reshape(1, -1),
+        kv_cache=kv_cache,
+        empty_slots=[slot],
+        stage_inputs=[info],
+    )
+    return logits[0]
+
+
+@pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
+def test_requests_decoding_together_get_the_frames_they_get_alone(device):
+    """Two requests in two slots, the second prefilled while the first is mid-decode: each
+    gets, frame for frame, what it gets as the only request."""
+    infos = [_payload(), dict(_payload(), text=[SECOND_TEXT])]
+    per_request = MAX_MODEL_LEN // BLOCK_SIZE
+    num_blocks = 1 + 2 * per_request
+    tables = [torch.arange(1 + i * per_request, 1 + (i + 1) * per_request, dtype=torch.int32) for i in range(2)]
+
+    stage, kv_cache = _stage(device, 1, num_blocks)
+    lengths = []
+    for info in infos:  # the encoders are eager, so before any trace exists
+        reference = stage_inputs.clone_reference(info, device)
+        text = info["text"][0]
+        lengths.append(build_streaming_clone_prefill(text, reference, "English", stage.pipeline.tables)[0].shape[1])
+    expected = []
+    for info, length, table in zip(infos, lengths, tables):
+        logits = _prefill(stage, kv_cache, info, length, table, 0)
+        frames = []
+        for step in range(STEPS):
+            logits = stage.decode_forward(
+                tokens=torch.tensor([[_top(logits)]], dtype=torch.int32),
+                start_pos=torch.tensor([length + step], dtype=torch.int32),
+                page_table=table.reshape(1, -1),
+                kv_cache=kv_cache,
+            )[0]
+            frames.append(stage.pop_stage_outputs()[0].tolist())
+        expected.append(frames)
+        stage.release_request(0)
+    stage.release_persistent_capture()
+    del stage, kv_cache
+
+    stage, kv_cache = _stage(device, 2, num_blocks)
+    got, logits = [[], []], [None, None]
+
+    def decode(live):
+        out = stage.decode_forward(
+            tokens=torch.tensor([[_top(logits[s])] if s in live else [0] for s in range(2)], dtype=torch.int32),
+            start_pos=torch.tensor([lengths[s] + len(got[s]) if s in live else -1 for s in range(2)]),
+            page_table=torch.stack([tables[s] if s in live else torch.zeros_like(tables[s]) for s in range(2)]),
+            kv_cache=kv_cache,
+        )
+        frames = stage.pop_stage_outputs()
+        for s in range(2):
+            if s in live:
+                got[s].append(frames[s].tolist())
+                logits[s] = out[s]
+            else:
+                assert frames[s] is None, f"inactive slot {s} published a frame"
+
+    logits[0] = _prefill(stage, kv_cache, infos[0], lengths[0], tables[0], 0)
+    for _ in range(JOIN_AT):
+        decode([0])
+    logits[1] = _prefill(stage, kv_cache, infos[1], lengths[1], tables[1], 1)
+    while any(len(frames) < STEPS for frames in got):
+        decode([s for s in range(2) if len(got[s]) < STEPS])
+    stage.release_persistent_capture()
+
+    for s in range(2):
+        for step, (left, right) in enumerate(zip(got[s], expected[s])):
+            assert left == right, f"request {s}, frame {step}: {left} together, {right} alone"
+    print(f"\n  2 requests, the second joining at frame {JOIN_AT}: {STEPS} frames each, identical to alone")
