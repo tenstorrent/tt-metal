@@ -750,6 +750,8 @@ class TtPrefillBlock(LightweightModule):
         indexer_indices: Optional[list] = None,
         return_indexer_indices: bool = False,
         index_kv_cache: Optional[ttnn.Tensor] = None,
+        metadata: Optional[list] = None,
+        padding_config: Optional[ttnn.Tensor] = None,
     ):
         """One packed forward: ``chunks`` (PrefillChunk) back to back, ``x.shape[2] // len(chunks)`` rows each.
 
@@ -762,15 +764,21 @@ class TtPrefillBlock(LightweightModule):
             chunk after that chunk's KV is written, so a consumer can retire each chunk separately.
         indexer_indices: GLM-5.3 reuse, one entry per chunk (None for an empty chunk) from the last "full"
             layer; None when this layer computes its own.
+        metadata: the traced form. One ChunkMetadata per chunk position, read on device; ``chunks`` is then
+            unused (None). Every position runs its attention half, so the caller points an empty chunk at
+            a scratch slot. Requires ``padding_config``, the persistent MoE padding config, and no ack.
 
         Returns:
             (x, kv_cache=None) or, with return_indexer_indices, (x, None, per-chunk indices list). x is None
             for a kv_only block.
         """
-        assert len(chunks) == self.forward_chunks, f"{len(chunks)} chunks for a block built for {self.forward_chunks}"
-        assert indexer_indices is None or len(indexer_indices) == len(chunks)
-        rows = x.shape[2] // len(chunks)
-        assert rows * len(chunks) == x.shape[2], f"{x.shape[2]} rows do not split into {len(chunks)} chunks"
+        traced = metadata is not None
+        n = len(metadata) if traced else len(chunks)
+        assert n == self.forward_chunks, f"{n} chunks for a block built for {self.forward_chunks}"
+        assert not traced or (padding_config is not None and on_layer_complete is None)
+        assert indexer_indices is None or len(indexer_indices) == n
+        rows = x.shape[2] // n
+        assert rows * n == x.shape[2], f"{x.shape[2]} rows do not split into {n} chunks"
         # Same TT_PREFILL_BLOCK_TIMING split as forward(): "mla" covers every chunk's attention half, "ffn"
         # the one FFN half over all rows.
         _timing = _BLOCK_TIMING_ENABLED and not self.kv_only
@@ -779,9 +787,10 @@ class TtPrefillBlock(LightweightModule):
             _t_start = time.perf_counter()
 
         outs, chunk_indices = [], []
-        for k, chunk in enumerate(chunks):
+        for k in range(n):
+            chunk = None if traced else chunks[k]
             x_k = ttnn.slice(x, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, x.shape[-1]))
-            if chunk.is_empty:
+            if not traced and chunk.is_empty:
                 outs.append(x_k)
                 chunk_indices.append(None)
                 continue
@@ -793,12 +802,13 @@ class TtPrefillBlock(LightweightModule):
                 on_layer_complete=(
                     None if on_layer_complete is None else (lambda layer, c=chunk: on_layer_complete(layer, c))
                 ),
-                actual_start=chunk.actual_start,
-                actual_end=chunk.actual_end,
-                cache_user_id=chunk.slot_id,
+                actual_start=None if traced else chunk.actual_start,
+                actual_end=None if traced else chunk.actual_end,
+                cache_user_id=0 if traced else chunk.slot_id,
                 indexer_indices=None if indexer_indices is None else indexer_indices[k],
                 return_indexer_indices=return_indexer_indices,
                 index_kv_cache=index_kv_cache,
+                metadata=metadata[k] if traced else None,
                 kv_only=self.kv_only,
             )
             ttnn.deallocate(x_k)
@@ -818,7 +828,8 @@ class TtPrefillBlock(LightweightModule):
         x = self._ffn_half(
             x,
             return_intermediates=return_intermediates,
-            padding_real_rows=packed_real_rows(chunks, self.mla.sp_factor, rows),
+            padding_real_rows=None if traced else packed_real_rows(chunks, self.mla.sp_factor, rows),
+            packed_padding_config=padding_config,
         )
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
@@ -926,6 +937,7 @@ class TtPrefillBlock(LightweightModule):
         metadata: Optional[ttnn.Tensor] = None,
         cache_user_id: int = 0,
         padding_real_rows: Optional[tuple] = None,
+        packed_padding_config: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """ffn_norm -> MoE | dense FFN -> residual."""
         ffn_norm_out = self.ffn_norm(x)
@@ -943,6 +955,7 @@ class TtPrefillBlock(LightweightModule):
                 metadata=metadata,
                 cache_user_id=cache_user_id,
                 padding_real_rows=padding_real_rows,
+                packed_padding_config=packed_padding_config,
             )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
@@ -962,6 +975,7 @@ class TtPrefillBlock(LightweightModule):
         metadata: Optional[ttnn.Tensor] = None,
         cache_user_id: int = 0,
         padding_real_rows: Optional[tuple] = None,
+        packed_padding_config: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE.
 
@@ -979,6 +993,7 @@ class TtPrefillBlock(LightweightModule):
             # Only consumed by the env-gated routing dump, which names its files by KV slot.
             cache_user_id=cache_user_id,
             padding_real_rows=padding_real_rows,
+            packed_padding_config=packed_padding_config,
         )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)

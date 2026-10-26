@@ -807,6 +807,7 @@ class TtMoe(LightweightModule):
         input_ids: Optional[torch.Tensor] = None,
         cache_user_id: int = 0,
         padding_real_rows: Optional[tuple] = None,
+        packed_padding_config: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -838,6 +839,8 @@ class TtMoe(LightweightModule):
             padding_real_rows: a packed forward's per-SP-chip count of leading real rows (packed_real_rows),
                 used instead of actual_isl / actual_start, which describe a single chunk. Eager only: the
                 config is built on host. Requires right padding.
+            packed_padding_config: the traced packed forward's padding config, a persistent caller-owned
+                [sp, 2] (local_real_tokens, pad_side) tensor refreshed before every replay. Used as is.
 
         Returns:
             Tuple of (final_output, intermediates):
@@ -893,7 +896,11 @@ class TtMoe(LightweightModule):
         #     actual_isl=None and get a capture with no padding-aware path at all.
         padding_config = None
         gate_marks_padding = self.gate.fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.GPT_DEVICE)
-        if padding_real_rows is not None:
+        if packed_padding_config is not None:
+            assert padding_real_rows is None and actual_isl is None and metadata is None
+            if gate_marks_padding:
+                padding_config = packed_padding_config
+        elif padding_real_rows is not None:
             assert actual_isl is None and metadata is None, "padding_real_rows replaces actual_isl and metadata"
             assert padding_side == "right", "a packed forward is right-padded per chunk"
             if gate_marks_padding:

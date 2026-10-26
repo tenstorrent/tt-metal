@@ -14,6 +14,7 @@ pass, capture, then ``GLM_MOE_SWEEP_REPLAYS`` timed replays, median reported). R
 Select with ``-k loudbox`` / ``-k galaxy`` and ``-k x1`` / ``x2`` / ``x4``.
 """
 
+import copy
 import os
 import statistics
 import time
@@ -74,11 +75,19 @@ def _replay_ns(mesh_device, copy_tid, controller):
     ],
     indirect=["mesh_device", "device_params"],
 )
-# The DSv3 variant, as test_glm_moe: it supplies only the generic gate config; the MoE dims are GLM's.
-@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["ds-ref"])
+# The GLM variant, unlike test_glm_moe (which borrows DSv3's for its CPU reference): routing and the
+# routed-expert kernel choice must be production GLM's for the timing to mean anything. GLM's variant gives
+# GLM53Config as model_config (ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320, as TtPrefillBlock uses).
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 def test_glm_moe_rows_sweep(variant, config_only, mesh_device, device_params, num_links, chunks_per_call, request):
     """One traced GLM MoE forward at chunks_per_call x 640 rows per chip; logs the replay time."""
     seq_len_per_chip = chunks_per_call * PREFILL_CHUNK_TOKENS_PER_CHIP
+    # run_model reads the gate grouping off the HF config; GLM's hand-built one does not carry it, so set it
+    # from the same constants TtPrefillBlock._build_moe passes (one group: a plain top-8 of 256).
+    config = copy.deepcopy(config_only)
+    config.n_group = GLM53Config.NUM_EXPERT_GROUPS
+    config.topk_group = GLM53Config.NUM_LIMITED_GROUPS
+    config.routed_scaling_factor = GLM53Config.ROUTE_SCALE
     replays_ns = []
 
     def measure(forward, tt_moe, tt_x):
@@ -115,7 +124,7 @@ def test_glm_moe_rows_sweep(variant, config_only, mesh_device, device_params, nu
 
     run_model(
         variant,
-        config_only,
+        config,
         mesh_device,
         device_params,
         seq_len_per_chip,
