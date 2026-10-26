@@ -368,6 +368,10 @@ class TtMTPBlock(LightweightModule):
             raise ValueError(f"start {start} + seq_len {seq_len} > max_seq_len {self.max_seq_len}")
         if start and start != self.next_start[user]:
             raise ValueError(f"user {user}: chunk start {start} is not contiguous (expected {self.next_start[user]})")
+        with self.mesh.prefill_scope():
+            return self._prefill_rows_impl(x, user=user, seq_len=seq_len, start=start, rows=rows)
+
+    def _prefill_rows_impl(self, x: ttnn.Tensor, *, user: int, seq_len: int, start: int, rows: int) -> ttnn.Tensor:
         if rows == 1:
             attention = lambda h: self.attn.prefill_forward(h, self.cache, user, seq_len, start=start)
         else:

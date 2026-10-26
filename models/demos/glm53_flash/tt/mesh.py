@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -76,6 +77,7 @@ class GLMMesh:
     _reduce_ckc: object = field(default=None, repr=False, compare=False)  # lazy fp32 config (all-reduce gather mode)
     # device constants shared by every module of the model (``const``): one tensor per key instead of one per layer
     _consts: dict = field(default_factory=dict, repr=False, compare=False)
+    _prefill_depth: list = field(default_factory=lambda: [0], repr=False, compare=False)  # prefill_scope nesting
 
     @classmethod
     def from_device(cls, mesh_device, topology=None) -> "GLMMesh":
@@ -245,6 +247,24 @@ class GLMMesh:
         composites expand to all_broadcast + 8 untilizes + concat + tilize / 8 fill_pads + concat + rs)."""
         return os.environ.get("GLM53_CCL", "async") == "async"
 
+    @contextmanager
+    def prefill_scope(self):
+        """Marks a prefill in flight: ``all_reduce_cols`` keeps the composite all-reduce inside it whatever the
+        shape (a 128-token prompt on 8 rows is 16-row slabs, one tile: the shape gate alone cannot tell a prefill
+        slab from a decode batch, and the gather mode moves 3 partials per chip where the composite moves 1.5;
+        measured 2026-10-26 on the 8x4: 128-token TTFT 266 -> 314 ms with the gather mode in the slabs). Host
+        state read per call; a captured trace replays the mode it was captured in (decoder prefill_forward and the
+        MTP prefill enter it, so every prefill path is covered)."""
+        self._prefill_depth[0] += 1
+        try:
+            yield
+        finally:
+            self._prefill_depth[0] -= 1
+
+    @property
+    def in_prefill(self) -> bool:
+        return self._prefill_depth[0] > 0
+
     @property
     def tp_allreduce_gather(self) -> bool:
         """``GLM53_TP_ALLREDUCE=ccl`` (default): ``all_reduce_cols`` is the generic ``ttnn.all_reduce`` composite
@@ -255,7 +275,7 @@ class GLMMesh:
         bit-identical. Read per call like ``async_ccl``; the choice is a function of the env and the (static)
         shape, so a captured trace replays the mode it was captured in. Decode shapes only (<= 32 rows: at
         prefill widths the gather moves 3 partials per chip where the composite moves 1.5)."""
-        return os.environ.get("GLM53_TP_ALLREDUCE", "ccl") == "gather"
+        return not self.in_prefill and os.environ.get("GLM53_TP_ALLREDUCE", "ccl") == "gather"
 
     @property
     def reduce_ckc(self):

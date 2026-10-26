@@ -223,6 +223,34 @@ class TtDecoderLayer(LightweightModule):
         slot=None,
         ring_sel: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, LayerState]:
+        """``_prefill_forward_impl`` inside ``mesh.prefill_scope()`` (the composite TP all-reduce for every prefill
+        shape, see ``GLMMesh.prefill_scope``)."""
+        with self.mesh.prefill_scope():
+            return self._prefill_forward_impl(
+                streams,
+                state,
+                user=user,
+                seq_len=seq_len,
+                start=start,
+                actual_start=actual_start,
+                actual_end=actual_end,
+                slot=slot,
+                ring_sel=ring_sel,
+            )
+
+    def _prefill_forward_impl(
+        self,
+        streams: ttnn.Tensor,
+        state: LayerState,
+        *,
+        user: int,
+        seq_len: int,
+        start: int = 0,
+        actual_start: ttnn.Tensor | None = None,
+        actual_end: ttnn.Tensor | None = None,
+        slot=None,
+        ring_sel: ttnn.Tensor | None = None,
+    ) -> tuple[ttnn.Tensor, LayerState]:
         """streams [1,1,T_pad,4*hidden] fp32 for one user: row i is the token at absolute position
         ``start + i`` (``start % 32 == 0``), T_pad % 32 == 0 and rows past ``seq_len`` are padding.
         KDA: ``state.kda`` is the carry after position ``start`` (zeros for a new prompt); DSA: the
