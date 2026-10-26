@@ -296,10 +296,19 @@ def info_keys(ckpt: str, precision: str) -> set:
     return INFO.get((ckpt, precision.split("_")[0]), set())
 
 
-def floors_for(ckpt: str, precision: str) -> dict:
-    """The gated floors (D3: the INFO metrics are left out)."""
+# D6 ruling 2: named limits for two 313m performance cases (accumulation-order variance of R1-4/R1-6). Their budgets
+# are spent; the next trip on either is an X with a variance table, not another named limit.
+NAMED_FLOORS = {("313m/missing_16x2048", "performance"): dict(spread_ratio_p50=(0.95, 1.055))}
+# Upper drift on spread_ratio_p50 against the fixed record (performance 768 suite / 767 bench); lower stays -0.02.
+NAMED_P50_UPPER_DRIFT = {("313m/uni_16x2048", "performance"): 0.025, ("uni_16_313m", "performance"): 0.025}
+
+
+def floors_for(ckpt: str, precision: str, name: str | None = None) -> dict:
+    """The gated floors (D3: the INFO metrics are left out), with D6's named overrides for ``name``."""
     info = info_keys(ckpt, precision)
-    return {k: v for k, v in _all_floors(ckpt, precision.split("_")[0]).items() if k not in info}
+    prec = precision.split("_")[0]
+    floors = {**_all_floors(ckpt, prec), **NAMED_FLOORS.get((name, prec), {})}
+    return {k: v for k, v in floors.items() if k not in info}
 
 
 def info_misses(metrics: dict, ckpt: str, precision: str) -> dict:

@@ -56,6 +56,11 @@ STEADY_ITERS = 5
 # Back-to-back forwards slow the device down, so device_s would follow host-side speedups; the split idles
 # this long before each timed forward.
 DEVICE_SETTLE_S = 0.3
+# D6 condition 4: small cases (device time under SMALL_DEVICE_S) are bimodal over 5 runs (about 19/37 ms vs 40/60 ms),
+# so their median picks a mode. They get SMALL_ITERS split runs; ``device_s_min`` is the figure to compare and
+# ``device_s_modes`` lists both modes (split at the largest gap, when it is over 25 % of the minimum).
+SMALL_DEVICE_S = 0.2
+SMALL_ITERS = 21
 
 
 @dataclass(frozen=True)
@@ -140,6 +145,16 @@ def _record(entry: dict) -> None:
     out.write_text(json.dumps(records, indent=2) + "\n")
 
 
+def _modes(times: list) -> list:
+    """D6 condition 4: [[median, count], ...] of each mode, split at the largest gap if it is over 25 % of the min."""
+    t = sorted(times)
+    gaps = [(b - a, i) for i, (a, b) in enumerate(zip(t, t[1:]))]
+    if not gaps or max(gaps)[0] < 0.25 * t[0]:
+        return [[statistics.median(t), len(t)]]
+    i = max(gaps)[1] + 1
+    return [[statistics.median(t[:i]), i], [statistics.median(t[i:]), len(t) - i]]
+
+
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("shape_name,precision_name", CASES, ids=[f"{s}-{p}" for s, p in CASES])
 def test_forward_perf(device, shape_name, precision_name):
@@ -160,7 +175,8 @@ def test_forward_perf(device, shape_name, precision_name):
     steady = [_sync_time(device, run)[1] for _ in range(STEADY_ITERS)]
 
     splits = []
-    for _ in range(STEADY_ITERS):
+    iters = STEADY_ITERS
+    while len(splits) < iters:
         start = time.perf_counter()
         host = model.prepare_inputs(*args)
         prepare_s = time.perf_counter() - start
@@ -173,6 +189,8 @@ def test_forward_perf(device, shape_name, precision_name):
         ttnn.deallocate(out)
         model.deallocate_inputs(inputs)
         splits.append((prepare_s, upload_s, device_s, postprocess_s))
+        if len(splits) == 1 and device_s < SMALL_DEVICE_S:
+            iters = SMALL_ITERS
     prepare_s, upload_s, device_s, postprocess_s = (statistics.median(col) for col in zip(*splits))
 
     cap = golden["captures"]
@@ -197,6 +215,8 @@ def test_forward_perf(device, shape_name, precision_name):
         "upload_s": upload_s,
         "device_s": device_s,
         "postprocess_s": postprocess_s,
+        "device_s_min": min(s[2] for s in splits),
+        "device_s_modes": _modes([s[2] for s in splits]),
         "split_runs": [dict(zip(("prepare_s", "upload_s", "device_s", "postprocess_s"), s)) for s in splits],
         **metrics,
         "cpu_s": golden["cpu_s"],
@@ -213,7 +233,7 @@ def test_forward_perf(device, shape_name, precision_name):
         f"\n  cpu_s {golden['cpu_s']:.1f} ({golden.get('threads')} threads)  speedup {golden['cpu_s'] / record['steady_s']:.1f}x"
         f"\n  " + "  ".join(f"{k} {v:.6f}" for k, v in metrics.items())
     )
-    record["below_floors"] = below_floors(metrics, floors_for(shape.checkpoint, precision_name))
+    record["below_floors"] = below_floors(metrics, floors_for(shape.checkpoint, precision_name, shape.name))
     record["info"] = info_misses(metrics, shape.checkpoint, precision_name)  # D3 ruling 2: recorded, not gated
     if record["info"]:
         print(f"  info (not gated, D3): {record['info']}")

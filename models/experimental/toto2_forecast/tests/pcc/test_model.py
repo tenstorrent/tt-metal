@@ -117,5 +117,5 @@ def test_model(device, ckpt, case, precision_name):
     info = info_misses(metrics, ckpt, precision_name)
     if info:
         print(f"[MODEL] info (not gated, D3): {info}")
-    below = below_floors(metrics, floors_for(ckpt, precision_name))
+    below = below_floors(metrics, floors_for(ckpt, precision_name, f"{ckpt}/{case}"))
     assert not below, f"below floor: {below}"

@@ -199,8 +199,9 @@ def test_variate_attention(device, variates, masked):
     assert p >= 0.9995 and rel < 0.02, (p, rel)
 
 
+@pytest.mark.parametrize("concat", [False, True], ids=["heads", "concat"])
 @pytest.mark.parametrize("s", [256, 768], ids=["s256", "s768"])
-def test_masked_time_sdpa_256(device, s):
+def test_masked_time_sdpa_256(device, s, concat):
     """F9 (PLAN section 9 v1.10/v1.13, D2 condition 2, D3 condition 2): the time-attention SDPA call with a user mask
     at a padded length of 256 (and t0-gamma's repro length 768), against torch, on the attention output alone (no
     residual). Logits have a std of about 2.5. The mask is built like the model's: ``_pad_time_mask`` over
@@ -209,7 +210,8 @@ def test_masked_time_sdpa_256(device, s):
 
     Three runs: the capped chunk (must pass), a negative control forced to chunk 256 (reported: max |diff| against
     the capped run and whether it fails), and a positive control with the mask dropped on one 128-key block (must
-    fail, so the comparison can fail)."""
+    fail, so the comparison can fail). ``concat`` (D6 condition 3): the model's call, ``output_concat_heads=True``
+    (R1-6), compared against torch with the heads concatenated."""
     import ttnn
 
     from models.experimental.toto2_forecast.tt.attention import sdpa_chunk
@@ -230,6 +232,8 @@ def test_masked_time_sdpa_256(device, s):
     live = torch.ones(2, 1, s, 1, dtype=torch.bool)
     live[1, 0, :real][dead] = False
     ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, scale=1.0 / dh)
+    if concat:
+        ref = ref.transpose(1, 2).reshape(2, 1, s, h * dh)
     p = Toto2Precision.named("accuracy")
     dev = [upload(device, t) for t in (q, k, v)]
 
@@ -247,6 +251,7 @@ def test_masked_time_sdpa_256(device, s):
             ),
             compute_kernel_config=p.sdpa_config(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_concat_heads=concat,
         )
         return ttnn.to_torch(out).float()
 
@@ -265,8 +270,9 @@ def test_masked_time_sdpa_256(device, s):
     res = {name: score(t) for name, t in (("capped", capped), ("forced256", forced), ("positive", leak))}
     diff = (capped - forced).masked_select(live).abs().max().item()
     dead_finite = bool(torch.isfinite(capped[1, :, :real][:, dead]).all())
+    tag = f"s {s} {'concat' if concat else 'heads'}"
     for name, (pc, rel, ok) in res.items():
-        print(f"\n[F9] s {s} {name}: pcc {pc:.6f} rel err {rel:.2e} pass {ok}")
-    print(f"[F9] s {s}: max |capped - forced256| {diff:.3e}; dead query rows finite on device: {dead_finite}")
+        print(f"\n[F9] {tag} {name}: pcc {pc:.6f} rel err {rel:.2e} pass {ok}")
+    print(f"[F9] {tag}: max |capped - forced256| {diff:.3e}; dead query rows finite on device: {dead_finite}")
     assert res["capped"][2], res["capped"]
     assert not res["positive"][2], f"positive control passed: the comparison cannot fail {res['positive']}"

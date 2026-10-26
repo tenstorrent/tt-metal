@@ -11,7 +11,8 @@ suite records (``pcc_metrics.json``); only 313m and 2.5B-FT are checked there (D
 floor-only, D3 ruling 1). An all-degenerate case gets no drift except abs_err_max (D4 ruling 1). A missing metric,
 a missing round-0 record and a round-0 record the candidate lacks are failures (D2). ``BENCH_LAYERS`` records are skipped (their metrics mean nothing).
 A non-degenerate 313m / 2.5B-FT record's abs_err_max may be at most 1.5x the fixed record (D5 ruling 2), and a
-record without ``git_dirty: false`` fails (PLAN v1.16).
+record without ``git_dirty: false`` fails (PLAN v1.16). D6: named limits on two 313m performance cases, and the
+uni_16_313m accuracy bench record is checked against suite job 683's record (``SUITE_REFERENCE``).
 Exit status 1 on any failure.
 """
 
@@ -30,6 +31,7 @@ from models.experimental.toto2_forecast.tests.golden.goldens import (
     DRIFT,
     DEGENERATE_ABS_ERR_GROWTH,
     DRIFT_EXTRA,
+    NAMED_P50_UPPER_DRIFT,
     TWO_SIDED,
     all_degenerate,
     below_floors,
@@ -38,6 +40,18 @@ from models.experimental.toto2_forecast.tests.golden.goldens import (
 )
 
 TARGET = ("paper", "accuracy")
+# D6 ruling 3: bench records with no bench fixed record take a suite record (same golden) as their reference.
+SUITE_REFERENCE = {
+    ("uni_16_313m", "accuracy"): (Path(__file__).parents[2] / "doc/optimize/iter_00/pcc_metrics.json", "313m", "uni_16x2048"),
+}
+
+
+def suite_reference(key):
+    if key not in SUITE_REFERENCE:
+        return None
+    path, ckpt, case = SUITE_REFERENCE[key]
+    hits = [r for r in json.loads(path.read_text()) if (r["ckpt"], r["case"], r["precision"]) == (ckpt, case, key[1])]
+    return {**hits[-1], "name": key[0], "checkpoint": ckpt} if hits else None
 
 
 def check(rec: dict, ref: dict | None) -> list[str]:
@@ -47,7 +61,7 @@ def check(rec: dict, ref: dict | None) -> list[str]:
         return [f"tree dirty or unrecorded (git_dirty={rec.get('git_dirty')})"]
     notes = [
         f"{k} {v[0]} misses floor {v[1]}"
-        for k, v in below_floors(rec, floors_for(rec["checkpoint"], rec["precision"])).items()
+        for k, v in below_floors(rec, floors_for(rec["checkpoint"], rec["precision"], rec["name"])).items()
     ]
     if all_degenerate(rec):  # D4 ruling 1: floors only, plus a gross-error ceiling on abs_err_max
         ceiling = ref["abs_err_max"] * (1 + DEGENERATE_ABS_ERR_GROWTH)
@@ -66,7 +80,11 @@ def check(rec: dict, ref: dict | None) -> list[str]:
         if metric not in rec or metric not in ref:
             notes.append(f"{metric} missing")
             continue
-        if metric in TWO_SIDED:
+        upper = NAMED_P50_UPPER_DRIFT.get((rec["name"], rec["precision"])) if metric == "spread_ratio_p50" else None
+        if upper is not None:  # D6 ruling 2: asymmetric drift on two named 313m performance cases
+            d = rec[metric] - ref[metric]
+            bad = d > upper or d < -scale * margin
+        elif metric in TWO_SIDED:
             bad = abs(rec[metric] - ref[metric]) > scale * margin
         elif metric in CEILINGS:
             bad = rec[metric] > ref[metric] + scale * margin
@@ -102,7 +120,8 @@ def main(argv=None) -> int:
     cand = records(args.candidate)
     for rec in cand:
         key = (rec["name"], rec["precision"])
-        notes = check(rec, base.get(key))
+        ref = base.get(key) or (None if args.suite else suite_reference(key))  # missing either way: FAIL
+        notes = check(rec, ref)
         failed |= bool(notes)
         info = info_misses(rec, rec["checkpoint"], rec["precision"])  # D3: printed, not gated
         print(
