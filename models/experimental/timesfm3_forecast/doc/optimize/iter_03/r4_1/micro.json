@@ -1,0 +1,52 @@
+{
+ "split_fused@1024x64": {
+  "ms_per_call": 5.1356148440390825
+ },
+ "from_qkv@1024x64": {
+  "ms_per_call": 4.205280868336558,
+  "max_diff_vs_split": 0.0
+ },
+ "chain@1024x64": {
+  "ms_per_call": 4.937622789293528,
+  "pcc_ref_q": 1.0,
+  "max_diff_ref_q": 0.09330558776855469,
+  "pcc_ref_k": 1.0,
+  "max_diff_ref_k": 0.07906436920166016
+ },
+ "fused@1024x64": {
+  "ms_per_call": 2.076616883277893,
+  "pcc_ref_q": 1.0,
+  "max_diff_ref_q": 0.07246971130371094,
+  "pcc_chain_q": 1.0,
+  "max_diff_chain_q": 0.0625,
+  "pcc_ref_k": 1.0,
+  "max_diff_ref_k": 0.055029869079589844,
+  "pcc_chain_k": 1.0,
+  "max_diff_chain_k": 0.0625
+ },
+ "split_fused@37x96": {
+  "ms_per_call": 2.160560409538448
+ },
+ "from_qkv@37x96": {
+  "ms_per_call": 1.7081369180232286,
+  "max_diff_vs_split": 0.0
+ },
+ "chain@37x96": {
+  "ms_per_call": 0.3325709840282798,
+  "pcc_ref_q": 1.0,
+  "max_diff_ref_q": 0.08139324188232422,
+  "pcc_ref_k": 0.9999789595603943,
+  "max_diff_ref_k": 0.07403039932250977
+ },
+ "fused@37x96": {
+  "ms_per_call": 0.7883039535954595,
+  "pcc_ref_q": 1.0,
+  "max_diff_ref_q": 0.06090736389160156,
+  "pcc_chain_q": 0.99998939037323,
+  "max_diff_chain_q": 0.0625,
+  "pcc_ref_k": 0.9999819993972778,
+  "max_diff_ref_k": 0.055425167083740234,
+  "pcc_chain_k": 0.9999738335609436,
+  "max_diff_chain_k": 0.0625
+ }
+}

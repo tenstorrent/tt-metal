@@ -187,6 +187,7 @@ class TtTimesFM3:
         self.cut_last_layer = True
         self.pack_variates = True  # R2-2
         self.fuse_rope_norm = True  # R3-2
+        self.fuse_var_norm = True  # R4-2
         self._mask_cache = {}
         self.fuse_post_norm = True  # R2-4
         self._pending_norm = None
@@ -481,20 +482,41 @@ class TtTimesFM3:
         qkv = linear(to_flat(slot_major), w["wqkv"], p)
         ttnn.deallocate(slot_major)
         tiles = s * r // TILE
-        q, k, val = ttnn.transformer.split_query_key_value_and_split_heads(
-            ttnn.reshape(qkv, (tiles, TILE, qkv.shape[-1])),
-            num_heads=NUM_HEADS,
-            transpose_key=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(qkv)
-        q, k = self._qk_norm(q, k, w)
+        if self.fuse_var_norm:
+            # R4-2: head split + QK norm in one pass from QKV: the R3-5 kernel with an identity RoPE (cos 1, sin 0:
+            # x * 1 + rot * 0 is exact), one 32-row tile per row.
+            from models.experimental.timesfm3_forecast.tt.ops.rope_qk_norm.op import rope_qk_norm_qkv
+
+            cos, sin = self._identity_rope()
+            q, k, val = rope_qk_norm_qkv(
+                qkv, tiles, NUM_HEADS, cos, sin, self.rope_trans, w["q_gain"], w["k_gain"], epsilon=QK_EPS
+            )
+            ttnn.deallocate(qkv)
+        else:
+            q, k, val = ttnn.transformer.split_query_key_value_and_split_heads(
+                ttnn.reshape(qkv, (tiles, TILE, qkv.shape[-1])),
+                num_heads=NUM_HEADS,
+                transpose_key=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(qkv)
+            q, k = self._qk_norm(q, k, w)
         merged = self._sdpa(q, k, val, mask, causal=False)  # (tiles, 32, 1536)
         o = linear(to_flat(merged), w["wo"], p)  # slot-major (S * R, D)
         ttnn.deallocate(merged)
         o_rows = ttnn.permute(ttnn.reshape(o, (s, r, o.shape[-1])), (1, 0, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(o)
         return self._post(to_flat(o_rows), w["post"], h1)
+
+    def _identity_rope(self):
+        """(cos, sin) = (1, 0) over one (32, 96) tile row, cached and kept alive."""
+        key = "identity_rope"
+        if key not in self._mask_cache:
+            self._mask_cache[key] = (
+                upload(self.device, torch.ones(1, 1, TILE, HEAD_DIM_PAD)),
+                upload(self.device, torch.zeros(1, 1, TILE, HEAD_DIM_PAD)),
+            )
+        return self._mask_cache[key]
 
     def _block_mask(self, v: int, tiles: int):
         """(tiles, 1, 32, 32) additive block-diagonal mask (V x V blocks), cached per shape and kept alive."""

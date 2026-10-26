@@ -1,0 +1,1573 @@
+{
+ "precision": "accuracy",
+ "results": [
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "auto",
+   "ms": 19.029081566259265,
+   "pcc_vs_auto": 1.00000000012503
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,8,4,1",
+   "ms": 4.71956511028111,
+   "pcc_vs_auto": 1.000000000098939
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,4,4,1",
+   "ms": 5.006579123437405,
+   "pcc_vs_auto": 1.0000000000980211
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,8,2,2",
+   "ms": 5.9388435911387205,
+   "pcc_vs_auto": 1.0000000000975902
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,16,1,4",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:12,8,8,4,1",
+   "ms": 5.127339996397495,
+   "pcc_vs_auto": 1.0000000000975902
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,16,2,2",
+   "ms": 5.896281311288476,
+   "pcc_vs_auto": 1.0000000001054894
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=2,out_block_h=5,out_block_w=14,per_core_M=205,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 5.066642723977566,
+   "pcc_vs_auto": 1.0000000000977596
+  },
+  {
+   "role": "qkv",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=5,out_subblock_h=3,out_subblock_w=1,out_block_h=9,out_block_w=14,per_core_M=207,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 5.280238715931773,
+   "pcc_vs_auto": 1.0000000001020175
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "auto",
+   "ms": 2.0817631389945745,
+   "pcc_vs_auto": 1.0000000000121345
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,8,4,1",
+   "ms": 1.2579717207700014,
+   "pcc_vs_auto": 0.9999999999865447
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,4,4,1",
+   "ms": 1.2384675908833742,
+   "pcc_vs_auto": 0.9999999999740073
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,8,2,2",
+   "ms": 1.396317733451724,
+   "pcc_vs_auto": 0.9999999999546838
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,16,1,4",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:12,8,8,4,1",
+   "ms": 1.2246946338564157,
+   "pcc_vs_auto": 0.9999999999546838
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,16,2,2",
+   "ms": 1.452044676989317,
+   "pcc_vs_auto": 1.0000000000001215
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=10,out_subblock_h=2,out_subblock_w=2,out_block_h=4,out_block_w=14,per_core_M=52,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 1.3198786415159702,
+   "pcc_vs_auto": 0.9999999999780576
+  },
+  {
+   "role": "qkv",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=5,out_subblock_h=3,out_subblock_w=1,out_block_h=9,out_block_w=14,per_core_M=54,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 1.3683636207133532,
+   "pcc_vs_auto": 0.999999999993711
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "auto",
+   "ms": 19.114731531590223,
+   "pcc_vs_auto": 1.0000000001490674
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,8,4,1",
+   "ms": 3.946836711838842,
+   "pcc_vs_auto": 1.0000000001392442
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,4,4,1",
+   "ms": 4.388885805383325,
+   "pcc_vs_auto": 1.0000000001403777
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,8,2,2",
+   "ms": 4.172461712732911,
+   "pcc_vs_auto": 1.0000000001422675
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,16,1,4",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:12,8,8,4,1",
+   "ms": 4.015631601214409,
+   "pcc_vs_auto": 1.0000000001422675
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,16,2,2",
+   "ms": 4.875052813440561,
+   "pcc_vs_auto": 1.0000000001447802
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=2,out_block_h=5,out_block_w=14,per_core_M=205,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 4.9806807190179825,
+   "pcc_vs_auto": 1.0000000001471023
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 65536,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=5,out_subblock_h=3,out_subblock_w=1,out_block_h=9,out_block_w=14,per_core_M=207,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 5.249686818569899,
+   "pcc_vs_auto": 1.0000000001461293
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "auto",
+   "ms": 2.164985705167055,
+   "pcc_vs_auto": 1.0000000000116334
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,8,4,1",
+   "ms": 1.0359922889620066,
+   "pcc_vs_auto": 1.000000000002319
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,4,4,1",
+   "ms": 1.1237193830311298,
+   "pcc_vs_auto": 1.000000000006784
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,8,2,2",
+   "ms": 1.0734553914517164,
+   "pcc_vs_auto": 1.000000000006077
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,8,16,1,4",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:12,8,8,4,1",
+   "ms": 1.0468814056366682,
+   "pcc_vs_auto": 1.000000000006077
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:8,4,16,2,2",
+   "ms": 1.2410013936460018,
+   "pcc_vs_auto": 1.0000000000077744
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=10,out_subblock_h=2,out_subblock_w=2,out_block_h=4,out_block_w=14,per_core_M=52,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 1.2983803171664476,
+   "pcc_vs_auto": 1.000000000006398
+  },
+  {
+   "role": "qkv_bf8",
+   "rows": 16384,
+   "k": 1280,
+   "n": 4608,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=5,out_subblock_h=3,out_subblock_w=1,out_block_h=9,out_block_w=14,per_core_M=54,per_core_N=14,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 1.3605103828012943,
+   "pcc_vs_auto": 1.0000000000059246
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "auto",
+   "ms": 5.502037610858679,
+   "pcc_vs_auto": 0.999999999999024
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,4,8,4,1",
+   "ms": 1.419645408168435,
+   "pcc_vs_auto": 0.9999999999956123
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 1.4978014398366213,
+   "pcc_vs_auto": 0.999999999986713
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 1.674776477739215,
+   "pcc_vs_auto": 0.999999999986713
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:8,8,16,1,4",
+   "ms": 1.6612794250249863,
+   "pcc_vs_auto": 0.999999999986713
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:12,8,8,4,1",
+   "ms": 1.587655395269394,
+   "pcc_vs_auto": 0.999999999986713
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:8,4,16,2,2",
+   "ms": 1.6319944057613611,
+   "pcc_vs_auto": 0.9999999999956123
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=12,out_subblock_h=1,out_subblock_w=4,out_block_h=5,out_block_w=4,per_core_M=205,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 1.8566794227808714,
+   "pcc_vs_auto": 0.9999999999801877
+  },
+  {
+   "role": "wo",
+   "rows": 65536,
+   "k": 1536,
+   "n": 1280,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=12,out_subblock_h=1,out_subblock_w=4,out_block_h=9,out_block_w=4,per_core_M=207,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 1.7138594295829535,
+   "pcc_vs_auto": 0.9999999999801877
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "auto",
+   "ms": 0.8546042256057262,
+   "pcc_vs_auto": 1.0000000000002782
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,4,8,4,1",
+   "ms": 0.372840091586113,
+   "pcc_vs_auto": 0.9999999999907705
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 0.38034706376492977,
+   "pcc_vs_auto": 0.9999999999910482
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 0.4300260916352272,
+   "pcc_vs_auto": 0.9999999999910482
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:8,8,16,1,4",
+   "ms": 0.431843101978302,
+   "pcc_vs_auto": 0.9999999999910482
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:12,8,8,4,1",
+   "ms": 0.399917084723711,
+   "pcc_vs_auto": 0.9999999999910482
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:8,4,16,2,2",
+   "ms": 0.4142311401665211,
+   "pcc_vs_auto": 0.9999999999907705
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=12,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=4,per_core_M=52,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 0.4861751105636358,
+   "pcc_vs_auto": 0.9999999999700783
+  },
+  {
+   "role": "wo",
+   "rows": 16384,
+   "k": 1536,
+   "n": 1280,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=12,out_subblock_h=1,out_subblock_w=4,out_block_h=9,out_block_w=4,per_core_M=54,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 0.4501360934227705,
+   "pcc_vs_auto": 0.9999999999700783
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "auto",
+   "ms": 4.780385922640562,
+   "pcc_vs_auto": 1.0000000000000129
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,8,4,1",
+   "ms": 1.3126262929290533,
+   "pcc_vs_auto": 0.9999999999809156
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 1.3594802934676409,
+   "pcc_vs_auto": 0.9999999999500367
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 1.5038473065942526,
+   "pcc_vs_auto": 0.9999999999500367
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,16,1,4",
+   "ms": 1.4872402884066105,
+   "pcc_vs_auto": 0.9999999999500367
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,8,8,4,1",
+   "ms": 1.3707293197512627,
+   "pcc_vs_auto": 0.9999999999500367
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,4,16,2,2",
+   "ms": 1.450882200151682,
+   "pcc_vs_auto": 0.9999999999809156
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=5,out_block_w=4,per_core_M=205,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 1.737584313377738,
+   "pcc_vs_auto": 0.9999999999682293
+  },
+  {
+   "role": "w_ov",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=9,out_block_w=4,per_core_M=207,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 1.5829453244805336,
+   "pcc_vs_auto": 0.9999999999682293
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "auto",
+   "ms": 0.7582111284136772,
+   "pcc_vs_auto": 0.999999999999846
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,8,4,1",
+   "ms": 0.33815810456871986,
+   "pcc_vs_auto": 0.9999999999930864
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 0.3362590912729502,
+   "pcc_vs_auto": 0.9999999999771648
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 0.38989302702248096,
+   "pcc_vs_auto": 0.9999999999771648
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,16,1,4",
+   "ms": 0.39035710506141186,
+   "pcc_vs_auto": 0.9999999999771648
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,8,8,4,1",
+   "ms": 0.3478680271655321,
+   "pcc_vs_auto": 0.9999999999771648
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,4,16,2,2",
+   "ms": 0.38093901239335537,
+   "pcc_vs_auto": 0.9999999999930864
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=4,per_core_M=52,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 0.4505540244281292,
+   "pcc_vs_auto": 0.9999999999757122
+  },
+  {
+   "role": "w_ov",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=9,out_block_w=4,per_core_M=54,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 0.4062189720571041,
+   "pcc_vs_auto": 0.9999999999757122
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "auto",
+   "ms": 5.62860369682312,
+   "pcc_vs_auto": 0.9999999999800647
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,8,4,1",
+   "ms": 1.3247292023152113,
+   "pcc_vs_auto": 0.9999999998909872
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 1.312783220782876,
+   "pcc_vs_auto": 0.999999999880923
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 1.4207492116838694,
+   "pcc_vs_auto": 0.999999999880923
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,16,1,4",
+   "ms": 1.44928521476686,
+   "pcc_vs_auto": 0.999999999880923
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,8,8,4,1",
+   "ms": 1.3739410787820816,
+   "pcc_vs_auto": 0.999999999880923
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,4,16,2,2",
+   "ms": 1.3622451107949018,
+   "pcc_vs_auto": 0.9999999998909872
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=5,out_block_w=4,per_core_M=205,per_core_N=4,transpose_mcast=0,fused_activation=UnaryWithParam(op_type=UnaryOpType::RELU),fuse_batch=1,allowed_worker_cores=std:",
+   "ms": 1.7378380987793207,
+   "pcc_vs_auto": 1.0000000000190254
+  },
+  {
+   "role": "ff0",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=9,out_block_w=4,per_core_M=207,per_core_N=4,transpose_mcast=0,fused_activation=UnaryWithParam(op_type=UnaryOpType::RELU),fuse_batch=1,allowed_worker_cores=std:",
+   "ms": 1.5818960964679718,
+   "pcc_vs_auto": 1.0000000000190254
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "auto",
+   "ms": 0.9809699840843678,
+   "pcc_vs_auto": 1.000000000027276
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,8,4,1",
+   "ms": 0.34710196778178215,
+   "pcc_vs_auto": 0.9999999999939237
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 0.3571719862520695,
+   "pcc_vs_auto": 1.0000000000144242
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 0.3948589786887169,
+   "pcc_vs_auto": 1.0000000000144242
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,16,1,4",
+   "ms": 0.4040990024805069,
+   "pcc_vs_auto": 1.0000000000144242
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,8,8,4,1",
+   "ms": 0.3916541114449501,
+   "pcc_vs_auto": 1.0000000000144242
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,4,16,2,2",
+   "ms": 0.37279510870575905,
+   "pcc_vs_auto": 0.9999999999939237
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=4,per_core_M=52,per_core_N=4,transpose_mcast=0,fused_activation=UnaryWithParam(op_type=UnaryOpType::RELU),fuse_batch=1,allowed_worker_cores=std::",
+   "ms": 0.45065898448228836,
+   "pcc_vs_auto": 0.999999999988922
+  },
+  {
+   "role": "ff0",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=9,out_block_w=4,per_core_M=54,per_core_N=4,transpose_mcast=0,fused_activation=UnaryWithParam(op_type=UnaryOpType::RELU),fuse_batch=1,allowed_worker_cores=std::",
+   "ms": 0.40729702450335026,
+   "pcc_vs_auto": 0.999999999988922
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "auto",
+   "ms": 4.769138293340802,
+   "pcc_vs_auto": 1.0000000000013982
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,8,4,1",
+   "ms": 1.312546106055379,
+   "pcc_vs_auto": 0.9999999999983965
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 1.3751280028373003,
+   "pcc_vs_auto": 0.9999999999970186
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 1.5017820987850428,
+   "pcc_vs_auto": 0.9999999999970186
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,16,1,4",
+   "ms": 1.4797020703554153,
+   "pcc_vs_auto": 0.9999999999970186
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,8,8,4,1",
+   "ms": 1.3624831102788448,
+   "pcc_vs_auto": 0.9999999999970186
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,4,16,2,2",
+   "ms": 1.4498180244117975,
+   "pcc_vs_auto": 0.9999999999983965
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=5,out_block_w=4,per_core_M=205,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 1.7365470994263887,
+   "pcc_vs_auto": 0.9999999999926424
+  },
+  {
+   "role": "ff1",
+   "rows": 65536,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=9,out_block_w=4,per_core_M=207,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 1.5834910795092583,
+   "pcc_vs_auto": 0.9999999999926424
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "auto",
+   "ms": 0.7567750755697489,
+   "pcc_vs_auto": 0.9999999999996815
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,8,4,1",
+   "ms": 0.33925999887287617,
+   "pcc_vs_auto": 0.9999999999865821
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,4,4,1",
+   "ms": 0.33670999109745026,
+   "pcc_vs_auto": 0.9999999999936448
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,8,2,2",
+   "ms": 0.38928198628127575,
+   "pcc_vs_auto": 0.9999999999936448
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,8,16,1,4",
+   "ms": 0.3897460177540779,
+   "pcc_vs_auto": 0.9999999999936448
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,8,4,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:12,8,8,4,1",
+   "ms": 0.34501813352108,
+   "pcc_vs_auto": 0.9999999999936448
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,8,2,2",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,4,16,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:8,4,16,2,2",
+   "ms": 0.3805960062891245,
+   "pcc_vs_auto": 0.9999999999865821
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:32,4,8,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "mm:16,8,12,4,1",
+   "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:8",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=4,out_block_w=4,per_core_M=52,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 0.4514560103416443,
+   "pcc_vs_auto": 0.9999999999868139
+  },
+  {
+   "role": "ff1",
+   "rows": 16384,
+   "k": 1280,
+   "n": 1280,
+   "config": "2d:11x10:12",
+   "program_config": "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size=10-10,in0_block_w=10,out_subblock_h=1,out_subblock_w=4,out_block_h=9,out_block_w=4,per_core_M=54,per_core_N=4,transpose_mcast=0,fused_activation=std::nullopt,fuse_batch=1,allowed_worker_cores=std::nullopt)",
+   "ms": 0.4075841046869755,
+   "pcc_vs_auto": 0.9999999999868139
+  }
+ ]
+}

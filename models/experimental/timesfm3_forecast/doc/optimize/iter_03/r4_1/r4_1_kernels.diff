@@ -1,0 +1,164 @@
+diff --git a/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/kernels/reader_rope_qk_norm.cpp b/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/kernels/reader_rope_qk_norm.cpp
+index c90d9d3ca0f..55dc321289e 100644
+--- a/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/kernels/reader_rope_qk_norm.cpp
++++ b/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/kernels/reader_rope_qk_norm.cpp
+@@ -90,36 +90,52 @@ void kernel_main() {
+     noc.async_read_barrier();
+     cb_g.push_back(2 * Wt);
+ 
++    // R4-1: consecutive units of one seq tile and one part (q, k or v) are read as one batch with one barrier.
++    // A batch never wraps its CB (sizes NB_X * 3 * Wt and NB_V * 2 * Wt pages): it ends at the CB end at the latest.
++    constexpr uint32_t NB_X = 2, NB_V = 4;
++    constexpr uint32_t CAP_X = NB_X * 3, CAP_V = NB_V * 2;  // in units
++    uint32_t pos_x = 0, pos_v = 0;
++    const uint32_t end_unit = start_unit + num_units;
+     uint32_t cur_st = 0xFFFFFFFF;
+-    for (uint32_t u = start_unit; u < start_unit + num_units; ++u) {
++    for (uint32_t u = start_unit; u < end_unit;) {
+         const uint32_t st = u / (G * RH);
+         const uint32_t bh = u % (G * RH);
+         const uint32_t part = bh / RH;
+-        if (from_qkv) {
+-            const uint32_t rh = bh % RH;
+-            const uint32_t page = ((rh / H) * St + st) * (3 * H * Wt) + (part * H + rh % H) * Wt;
+-            if (part == 2) {
+-                read_tiles(noc, cb_v, q, bytes, page, Wt);
+-                continue;
+-            }
+-            if (st != cur_st) {
+-                read_tiles(noc, cb_cos, cos, bytes, st * Wt, Wt);
+-                read_tiles(noc, cb_sin, sin, bytes, st * Wt, Wt);
+-                cur_st = st;
+-            }
+-            read_tiles(noc, cb_x, q, bytes, page, Wt);
+-            continue;
++        uint32_t& pos = part == 2 ? pos_v : pos_x;
++        const uint32_t cap = part == 2 ? CAP_V : CAP_X;
++        const uint32_t nb = (part == 2 ? NB_V : NB_X) < cap - pos ? (part == 2 ? NB_V : NB_X) : cap - pos;
++        uint32_t n = 1;
++        while (n < nb && u + n < end_unit && (bh + n) < G * RH && (bh + n) / RH == part) {
++            ++n;
+         }
+-        if (st != cur_st) {
++        if (part != 2 && st != cur_st) {
+             read_tiles(noc, cb_cos, cos, bytes, st * Wt, Wt);
+             read_tiles(noc, cb_sin, sin, bytes, st * Wt, Wt);
+             cur_st = st;
+         }
+-        const uint32_t page = ((bh % RH) * St + st) * Wt;
+-        if (bh < RH) {
+-            read_tiles(noc, cb_x, q, bytes, page, Wt);
+-        } else {
+-            read_tiles(noc, cb_x, k, bytes, page, Wt);
++        CircularBuffer& cb = part == 2 ? cb_v : cb_x;
++        cb.reserve_back(n * Wt);
++        for (uint32_t i = 0; i < n; ++i) {
++            const uint32_t rh = (bh + i) % RH;
++            if (from_qkv) {
++                const uint32_t page = ((rh / H) * St + st) * (3 * H * Wt) + (part * H + rh % H) * Wt;
++                for (uint32_t j = 0; j < Wt; ++j) {
++                    noc.async_read(q, cb, bytes, {.page_id = page + j}, {.offset_bytes = (i * Wt + j) * bytes});
++                }
++            } else {
++                const uint32_t page = (rh * St + st) * Wt;
++                for (uint32_t j = 0; j < Wt; ++j) {
++                    if (part == 0) {
++                        noc.async_read(q, cb, bytes, {.page_id = page + j}, {.offset_bytes = (i * Wt + j) * bytes});
++                    } else {
++                        noc.async_read(k, cb, bytes, {.page_id = page + j}, {.offset_bytes = (i * Wt + j) * bytes});
++                    }
++                }
++            }
+         }
++        noc.async_read_barrier();
++        cb.push_back(n * Wt);
++        pos = (pos + n) % cap;
++        u += n;
+     }
+ }
+diff --git a/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/kernels/writer_rope_qk_norm.cpp b/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/kernels/writer_rope_qk_norm.cpp
+index cb52986b5c2..d0c5dfcd854 100644
+--- a/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/kernels/writer_rope_qk_norm.cpp
++++ b/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/kernels/writer_rope_qk_norm.cpp
+@@ -39,29 +39,42 @@ void kernel_main() {
+     const auto k = TensorAccessor(k_args, k_addr);
+     const auto v = TensorAccessor(v_args, v_addr);
+ 
+-    for (uint32_t u = start_unit; u < start_unit + num_units; ++u) {
++    // R4-1: the reader's batches (same seq tile and part, up to NB_X / NB_V units) are written with one flush.
++    // As in the reader, a batch never wraps its CB (out: NB_X * 3 * Wt pages, v: NB_V * 2 * Wt).
++    constexpr uint32_t NB_X = 2, NB_V = 4;
++    constexpr uint32_t CAP_X = NB_X * 3, CAP_V = NB_V * 2;  // in units
++    uint32_t pos_x = 0, pos_v = 0;
++    const uint32_t end_unit = start_unit + num_units;
++    for (uint32_t u = start_unit; u < end_unit;) {
+         const uint32_t st = u / (G * RH);
+         const uint32_t bh = u % (G * RH);
+-        const uint32_t page = ((bh % RH) * St + st) * Wt;
+-        if (bh >= 2 * RH) {
+-            cb_v.wait_front(Wt);
+-            for (uint32_t j = 0; j < Wt; ++j) {
+-                noc.async_write(cb_v, v, bytes, {.offset_bytes = j * bytes}, {.page_id = page + j});
+-            }
+-            noc.async_writes_flushed();
+-            cb_v.pop_front(Wt);
+-            continue;
++        const uint32_t part = bh / RH;
++        uint32_t& pos = part == 2 ? pos_v : pos_x;
++        const uint32_t cap = part == 2 ? CAP_V : CAP_X;
++        const uint32_t nb = (part == 2 ? NB_V : NB_X) < cap - pos ? (part == 2 ? NB_V : NB_X) : cap - pos;
++        uint32_t n = 1;
++        while (n < nb && u + n < end_unit && (bh + n) < G * RH && (bh + n) / RH == part) {
++            ++n;
+         }
+-        cb_out.wait_front(Wt);
+-        for (uint32_t j = 0; j < Wt; ++j) {
+-            if (bh < RH) {
+-                noc.async_write(cb_out, q, bytes, {.offset_bytes = j * bytes}, {.page_id = page + j});
+-            } else {
+-                noc.async_write(cb_out, k, bytes, {.offset_bytes = j * bytes}, {.page_id = page + j});
++        CircularBuffer& cb = part == 2 ? cb_v : cb_out;
++        cb.wait_front(n * Wt);
++        for (uint32_t i = 0; i < n; ++i) {
++            const uint32_t page = (((bh + i) % RH) * St + st) * Wt;
++            for (uint32_t j = 0; j < Wt; ++j) {
++                const uint32_t off = (i * Wt + j) * bytes;
++                if (part == 0) {
++                    noc.async_write(cb, q, bytes, {.offset_bytes = off}, {.page_id = page + j});
++                } else if (part == 1) {
++                    noc.async_write(cb, k, bytes, {.offset_bytes = off}, {.page_id = page + j});
++                } else {
++                    noc.async_write(cb, v, bytes, {.offset_bytes = off}, {.page_id = page + j});
++                }
+             }
+         }
+         noc.async_writes_flushed();
+-        cb_out.pop_front(Wt);
++        cb.pop_front(n * Wt);
++        pos = (pos + n) % cap;
++        u += n;
+     }
+     noc.async_write_barrier();
+ }
+diff --git a/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/op.py b/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/op.py
+index a0be3f85950..d91ca187ecd 100644
+--- a/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/op.py
++++ b/models/experimental/timesfm3_forecast/tt/ops/rope_qk_norm/op.py
+@@ -101,14 +101,14 @@ def _launch(srcs, r, h, s, width, cos, sin, trans, q_gain, k_gain, epsilon, math
+     cores, work = _split(device, st * groups * rh)
+     bf, f32 = ttnn.bfloat16, ttnn.float32
+     cbs = [
+-        _cb(X_CB, 2 * wt, bf, cores),
++        _cb(X_CB, 6 * wt, bf, cores),
+         _cb(COS_CB, 2 * wt, bf, cores),
+         _cb(SIN_CB, 2 * wt, bf, cores),
+         _cb(TRANS_CB, 1, bf, cores),
+         _cb(SCALER_CB, 1, bf, cores),
+         _cb(G_CB, 2 * wt, bf, cores),
+-        _cb(V_CB, 2 * wt, bf, cores),
+-        _cb(OUT_CB, 2 * wt, bf, cores),
++        _cb(V_CB, 8 * wt, bf, cores),
++        _cb(OUT_CB, 6 * wt, bf, cores),
+         _cb(ROT_CB, wt, bf, cores),
+         _cb(Y_CB, wt, f32, cores),
+         _cb(SQ_CB, wt, f32, cores),

@@ -12,7 +12,7 @@ and layer 0. Signposts (``tt-perf-report --start-signpost/--end-signpost``):
     cut_start / cut_end         the last layer with the read-out cut (R1-5), when the model runs it
     head_start / head_end       read-out slice and output head
 
-The full-model device time is estimated as embed + 19 x layer + cut + head (R3-4; 20 x layer without the cut); ``layer_counts.json`` (written to
+The full-model device time is estimated as embed + first layer + 18 x layer + cut + head (R3-4, R4-6; 19 x layer without the cut); ``layer_counts.json`` (written to
 ``$MODEL_PROFILE_OUT``) carries the counts. Run under ``python -m tracy -r -p -m pytest`` (``perf_iteration.sh``).
 
     MODEL_PROFILE_SHAPE      paper (default) | long_context | multivariate
@@ -58,6 +58,11 @@ def test_profile_forward(device):
         mark("embed_start")
         x = tt.embed(inputs)
         mark("embed_end")
+        # R4-6: the first layer runs the standalone pre-norm; the later ones take the pending post_add_norm output,
+        # so the first layer is its own section and the steady-state layer is profiled second.
+        mark("first_start")
+        x = tt.layer(0, x, inputs)
+        mark("first_end")
         mark("layer_start")
         x = tt.layer(0, x, inputs)
         mark("layer_end")
@@ -97,11 +102,13 @@ def test_profile_forward(device):
         "tokens": prepared.num_patches,
         "padded_seq": inputs.padded_seq,
         "window": ["MODEL_START", "MODEL_END"],
-        "sections": ["embed", "layer", "cut", "head"] if tt.cut_last_layer else ["embed", "layer", "head"],
+        "sections": ["embed", "first", "layer", "cut", "head"]
+        if tt.cut_last_layer
+        else ["embed", "first", "layer", "head"],
         "counts": (
-            {"embed": 1, "layer": NUM_LAYERS - 1, "cut": 1, "head": 1}
+            {"embed": 1, "first": 1, "layer": NUM_LAYERS - 2, "cut": 1, "head": 1}
             if tt.cut_last_layer
-            else {"embed": 1, "layer": NUM_LAYERS, "head": 1}
+            else {"embed": 1, "first": 1, "layer": NUM_LAYERS - 1, "head": 1}
         ),
     }
     print(f"\n[PROFILE] {json.dumps(meta)}")

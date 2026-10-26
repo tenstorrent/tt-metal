@@ -224,6 +224,37 @@ def test_var_attention_packed(device, variates):
     assert (outs[0][valid] - outs[1][valid]).abs().max() < 0.25
 
 
+@pytest.mark.parametrize("variates", [2, 8])
+def test_var_norm_fused(device, variates):
+    """R4-2: the packed variate attention with the head split + QK norm fused (rope_qk_norm_qkv, identity RoPE)
+    against the split + two rms_norm chain on the same input."""
+    import ttnn
+
+    tt = _model(device)
+    items, n = 64 // variates, 40
+    nfm = torch.full((items, 1), 3, dtype=torch.long).expand(-1, variates).reshape(-1)
+    inputs = _inputs(tt, nfm, variates, n)
+    h1 = torch.randn(items * variates, n, 1280, generator=torch.Generator().manual_seed(6)) * 4.0
+    outs = []
+    saved = tt.fuse_var_norm
+    try:
+        for fused in (False, True):
+            tt.fuse_var_norm = fused
+            x = _upload_rows(tt, h1, inputs)
+            out = tt.var_attention(0, x, inputs)
+            outs.append(tt.rows_to_torch(out, inputs))
+            for t in (x, out):
+                ttnn.deallocate(t)
+    finally:
+        tt.fuse_var_norm = saved
+        tt.deallocate_inputs(inputs)
+    valid = (torch.arange(n)[None, :] >= nfm[:, None])[..., None].expand(-1, -1, 1280)
+    diff = float((outs[0][valid] - outs[1][valid]).abs().max())
+    print(f"[var norm fused] V={variates} max diff vs chain {diff:.5f}")
+    check_pcc(f"fused vs chain V={variates}", outs[0], outs[1], 0.99999, where=valid)
+    assert diff < 0.25  # one bf16 rounding at |out| >= 16, as test_var_attention_packed
+
+
 def test_var_attention_packed_mask_control(device):
     """Positive control for ``test_var_attention_packed``: with the block-diagonal mask dropped (items attend
     across each other), the packed output must differ clearly from the unpacked one."""
