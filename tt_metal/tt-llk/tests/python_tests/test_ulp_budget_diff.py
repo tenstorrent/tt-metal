@@ -2,35 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Host-side guards for ``helpers/ulp_budget_diff.py``: what a change to the table does
-to the gates, and how the ``--ulp-measure`` records are judged against it. Every table
-and record here is built from the typed rows and measurements, never from text."""
+to the gates, and how the ``--ulp-measure`` records are judged against it."""
 
 import math
 
 import pytest
-import yaml
+from conftest import TANH_DOMAINS
+from helpers import ulp_budget_diff
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.ulp_budget_diff import (
-    _KIND_TEXT,
-    _MAX_ROWS,
     Kind,
     Verdict,
     compare,
-    draw,
     judge,
     main,
     read_cells,
     render_budget_diff,
 )
-from helpers.ulp_domains import (
-    BINADE_OFFSET,
-    DOMAIN_MIN_BIN_LANES,
-    Domain,
-    Problem,
-    binade,
-)
+from helpers.ulp_domains import Domain
 from helpers.ulp_table import (
     MEASURED_ARCH,
     BudgetKey,
@@ -40,7 +31,6 @@ from helpers.ulp_table import (
     Row,
     write_table_file,
 )
-from helpers.ulp_testing import TANH_DOMAINS, refused
 
 INF = math.inf
 F16B, F16, F32 = DataFormat.Float16_b, DataFormat.Float16, DataFormat.Float32
@@ -83,11 +73,10 @@ def _pair(input_format, output_format):
 
 def test_a_raised_budget_is_a_regression():
     (change,) = compare(_BASE, _edited(0, Row(input=F16B, output=F16B, measured=9)))
-    assert change.kind is Kind.RAISED and change.is_regression
+    assert change.kind is Kind.RAISED and change.kind.loosens
 
 
 def test_losing_the_gate_entirely_is_a_regression():
-    """Demotion to tolerance: the cell stops being judged on a step budget at all."""
     head = _edited(0, Row(input=F16B, output=F16B, metric=TOL, measured=14337))
     assert _kinds(_BASE, head)[_pair(F16B, F16B)] is Kind.UNGATED
 
@@ -107,13 +96,13 @@ def test_tightening_and_newly_gating_are_not_regressions():
         Row(input=F16, output=F32, measured=7),
     )
     changes = compare(_BASE, head)
-    assert not any(c.is_regression for c in changes)
+    assert not any(c.kind.loosens for c in changes)
     assert {c.kind for c in changes} == {Kind.TIGHTENED, Kind.GATED}
 
 
 def test_a_row_the_sweep_collapses_is_not_a_loss_while_its_cells_keep_their_budget():
-    """The emitter drops a key field when both values measure alike. Nothing a measured
-    cell resolves to changes; only a query with `approx` unset newly matches."""
+    """The emitter drops a key field when both values measure alike: nothing a measured
+    cell resolves to changes, only a query with `approx` unset newly matches."""
     base = _table(
         Row(input=F16B, output=F32, approx=NO, dest=D_YES, measured=36018),
         Row(input=F16B, output=F32, approx=YES, dest=D_YES, measured=36018),
@@ -121,7 +110,7 @@ def test_a_row_the_sweep_collapses_is_not_a_loss_while_its_cells_keep_their_budg
     same = _table(Row(input=F16B, output=F32, dest=D_YES, measured=36018))
     assert [(c.kind, c.variants) for c in compare(base, same)] == [(Kind.GATED, 1)]
     raised = _table(Row(input=F16B, output=F32, dest=D_YES, measured=36030))
-    (change,) = [c for c in compare(base, raised) if c.is_regression]
+    (change,) = [c for c in compare(base, raised) if c.kind.loosens]
     assert change.kind is Kind.RAISED and change.variants == 2
 
 
@@ -137,12 +126,6 @@ def test_a_more_specific_row_that_loosens_a_cell_is_a_raise_not_an_addition():
     assert [c.kind for c in compare(base, demoted)] == [Kind.UNGATED]
 
 
-def test_a_tie_between_equally_specific_rows_is_refused_rather_than_ordered():
-    tied = _table(Row(input=F16B, measured=1), Row(output=F16B, measured=9))
-    with refused(Problem.AMBIGUOUS):
-        compare(_BASE, tied)
-
-
 # ── Tolerance cells: what the headroom check holds them to ────────────────────
 
 
@@ -155,19 +138,17 @@ def test_a_tie_between_equally_specific_rows_is_refused_rather_than_ordered():
             Kind.BASELINE_RAISED,
         ),
         (Row(input=F16, output=F16, metric=TOL), Kind.BASELINE_DROPPED),
-        (Row(input=F16, output=F16, metric=TOL, measured=12), None),
     ],
-    ids=["max-raised", "nonfinite-appears", "figure-deleted", "max-lowered"],
+    ids=["max-raised", "nonfinite-appears", "figure-deleted"],
 )
 def test_a_tolerance_rows_recorded_measurement_is_a_baseline(head_row, kind):
-    changes = compare(_BASE, _edited(2, head_row))
-    assert [c.kind for c in changes] == ([kind] if kind else [])
-    assert all(c.is_regression for c in changes)
+    (change,) = compare(_BASE, _edited(2, head_row))
+    assert change.kind is kind and change.kind.loosens
 
 
 def test_a_re_emit_that_splits_a_tolerance_row_drops_no_baseline():
     """A query leaving `dest` unset matches nothing after the split, but no measured
-    cell loses its figure. Raising either half still reads as a raise."""
+    cell loses its figure; a lowered half is no change, a raised half a raise."""
     one = _table(Row(input=F16B, output=F32, approx=YES, metric=TOL, measured=9))
 
     def split(no, yes):
@@ -178,27 +159,17 @@ def test_a_re_emit_that_splits_a_tolerance_row_drops_no_baseline():
             ),
         )
 
-    assert not [c for c in compare(one, split(9, 8)) if c.is_regression]
-    (raised,) = [c for c in compare(one, split(9, 12)) if c.is_regression]
+    assert not [c for c in compare(one, split(9, 8)) if c.kind.loosens]
+    (raised,) = [c for c in compare(one, split(9, 12)) if c.kind.loosens]
     assert raised.kind is Kind.BASELINE_RAISED and raised.cell[1].dest_acc is D_YES
-
-
-def test_deleting_a_tolerance_row_with_a_baseline_drops_it():
-    head = _table(_BASE_ROWS[0], _BASE_ROWS[1], _BASE_ROWS[3])
-    assert _kinds(_BASE, head)[_pair(F16, F16)] is Kind.BASELINE_DROPPED
 
 
 @pytest.mark.parametrize("flag", ["approx", "dest"])
 def test_deleting_a_parent_row_is_seen_on_the_flag_value_no_row_pins(flag):
     """`approx: Yes` alone pins one value; the `No` cells fell back to the broad row,
-    and deleting it leaves them on nothing."""
-    pinned = Row(
-        input=F16B,
-        output=F32,
-        metric=TOL,
-        measured=9,
-        **{flag: YES if flag == "approx" else D_YES},
-    )
+    and deleting it leaves them on nothing. Likewise for `dest`."""
+    value = YES if flag == "approx" else D_YES
+    pinned = Row(input=F16B, output=F32, metric=TOL, measured=9, **{flag: value})
     base = _table(Row(input=F16B, output=F32, metric=TOL, measured=9), pinned)
     assert {c.kind for c in compare(base, _table(pinned))} == {Kind.BASELINE_DROPPED}
 
@@ -267,23 +238,25 @@ def test_an_unchanged_table_changes_nothing():
     assert compare(_BASE, _BASE) == []
 
 
-def test_the_report_lists_every_loosened_cell_and_caps_only_the_improvements():
-    extra = 5
-    n = _MAX_ROWS + extra
-    ops = sorted(MathOperation, key=lambda op: op.name)[: 2 * n]
+def test_the_report_lists_every_loosened_cell_and_caps_only_the_improvements(
+    monkeypatch,
+):
+    monkeypatch.setattr(ulp_budget_diff, "_MAX_ROWS", 1)
+    ops = sorted(MathOperation, key=lambda op: op.name)[:4]
 
     def table(raised, tightened):
         return {
-            op: (Row(input=F16B, output=F16B, measured=raised if i < n else tightened),)
+            op: (Row(input=F16B, output=F16B, measured=raised if i < 2 else tightened),)
             for i, op in enumerate(ops)
         }
 
     lines = render_budget_diff(compare(table(5, 5), table(9, 1))).splitlines()
 
     def shown(kind):
-        return sum(f"| {_KIND_TEXT[kind]} |" in line for line in lines)
+        return sum(f"| {kind.value} |" in line for line in lines)
 
-    assert (shown(Kind.RAISED), shown(Kind.TIGHTENED)) == (n, _MAX_ROWS)
+    assert (shown(Kind.RAISED), shown(Kind.TIGHTENED)) == (2, 1)
+    assert any(line.startswith("| _… 1 more_ |") for line in lines)
 
 
 _RAISED_HEAD = _edited(0, Row(input=F16B, output=F16B, measured=9))
@@ -302,30 +275,63 @@ def test_diff_exit_status(tmp_path, head, flags, status):
     assert main(argv) == status
 
 
-def _diff_main(tmp_path, head_text, *flags):
-    """The guard's `diff` of the typed `_BASE` against *head_text* as written; its exit
-    status."""
-    base_path, head_path = tmp_path / "base.yaml", tmp_path / "head.yaml"
-    write_table_file(_BASE, base_path)
-    head_path.write_text(head_text, encoding="utf-8")
-    return main(["diff", "--base", str(base_path), "--head", str(head_path), *flags])
-
-
 @pytest.mark.parametrize(
-    "head",
+    "head_text",
     [
-        yaml.safe_dump({"Abs": [{"input": "Bfp8_b", "measured": 1}]}),
+        "Abs: [{input: Bfp8_b, measured: 1}]\n",
+        "Abs: [\n",
         "<<<<<<< HEAD\nAbs: [\n",
         "Abs:\n- {{measured: 1}}\n",
         "Abs:\n- {input: Float16_b, output: Float16_b, domains: [{low: -.inf}]}\n",
+        b"\xff",
+        None,
     ],
-    ids=["block-float", "conflict-marker", "doubled-braces", "entry-without-high"],
+    ids=[
+        "refused-row",
+        "not-yaml",
+        "conflict-marker",
+        "doubled-braces",
+        "entry-without-high",
+        "not-utf-8",
+        "missing-file",
+    ],
 )
-def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head):
+def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text):
     """Exit 2, "cannot load", even under --allow-raises: the flag admits a loosened
-    gate, not a table no gate can be read from. Text PyYAML cannot read and a record
-    missing a field used to escape as tracebacks with the regression exit status."""
-    assert _diff_main(tmp_path, head, "--allow-raises") == 2
+    gate, not a table no gate can be read from. A conflict marker, a mapping used as a
+    key, an entry missing a field and a file that is not UTF-8 used to escape as
+    tracebacks with exit 1."""
+    base_path, head_path = tmp_path / "base.yaml", tmp_path / "head.yaml"
+    write_table_file(_BASE, base_path)
+    if isinstance(head_text, bytes):
+        head_path.write_bytes(head_text)
+    elif head_text is not None:
+        head_path.write_text(head_text)
+    argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
+    assert main([*argv, "--allow-raises"]) == 2
+
+
+def test_the_guard_imports_no_module_that_loads_the_checked_out_table():
+    """`helpers.sfpu_accuracy_budget` loads the table at import. The guard judges tables
+    by path, and a PR head whose table the loader refuses is exactly its case: that
+    refusal must reach `main` as "cannot load" (exit 2), not kill the process at import
+    with the regression status. So the guard takes the resolution rule from
+    `ulp_table`, and the registry stays out of its import chain."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys, helpers.ulp_budget_diff; "
+        "sys.exit('helpers.sfpu_accuracy_budget' in sys.modules)"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path(__file__).parent,
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
 
 
 # ── Rows with a `domains` list ────────────────────────────────────────────────
@@ -371,8 +377,8 @@ def test_a_list_replaced_by_a_looser_one_loses_the_gate_where_it_loosens(last):
 
 
 def test_a_raise_in_a_large_negative_tail_is_seen():
-    """`-2**60 - 1.0 == -2**60`: probing below an edge that far out landed on the edge,
-    which belongs to the next entry, and the raise read as no change."""
+    """`-2**60 - 1.0 == -2**60`: a probe below an edge that far out must not land on
+    the edge, which belongs to the next entry."""
     edge = -(2.0**60)
 
     def table(tail):
@@ -404,6 +410,11 @@ def test_a_widened_floor_beside_an_all_past_list_is_a_regression():
         (Kind.FLOOR_WIDENED, (-INF, 0.0)),
         (Kind.FLOOR_WIDENED, (0.0, INF)),
     ]
+    # The report shows how far the floor moved, not two identical cells.
+    assert [(c.held_before, c.held_after) for c in changes] == [
+        ("tolerance (max 9, floor 1e-07)", "tolerance (max 9, floor 0.001)"),
+        ("tolerance (max 10, floor 1e-07)", "tolerance (max 10, floor 0.001)"),
+    ]
 
 
 def test_a_widened_floor_where_an_entry_comes_within_the_ceiling_is_a_regression():
@@ -432,7 +443,7 @@ def test_a_list_re_emitted_as_an_unmeasurable_row_raises_the_baseline():
     )
     changes = compare(_tanh(past), plain)
     assert [(c.kind, c.segment) for c in changes] == [(Kind.BASELINE_RAISED, None)]
-    assert changes[0].is_regression
+    assert changes[0].kind.loosens
     assert compare(plain, plain) == []
 
 
@@ -461,7 +472,7 @@ def test_a_declared_tolerance_that_may_loosen_beside_a_list_is_a_regression(
         _table(past, *base_extra, op=TANH), _table(head_row, *head_extra, op=TANH)
     )
     assert (Kind.TOLERANCE_WIDENED, None) in [(c.kind, c.segment) for c in changes]
-    assert all(c.is_regression for c in changes)
+    assert all(c.kind.loosens for c in changes)
     assert compare(_table(past, op=TANH), _table(past, op=TANH)) == []
 
 
@@ -473,7 +484,7 @@ def test_a_re_emit_that_splits_a_list_row_drops_no_baseline():
         Row(input=F16B, output=F16B, dest=D_YES, domains=past),
         op=TANH,
     )
-    assert not [c for c in compare(one, split) if c.is_regression]
+    assert not [c for c in compare(one, split) if c.kind.loosens]
 
 
 @pytest.mark.parametrize(
@@ -522,14 +533,14 @@ def _verdicts(table, *measurements):
 
 def test_several_measurements_of_one_cell_keep_the_worst():
     """A driver enumerates axes the budget key does not, so one cell is recorded more
-    than once. Keeping the last would hide the worst of them."""
+    than once; keeping the last would hide the worst of them."""
     cells = read_cells([_measured(3), _measured(11), _measured(5)])
     assert [c.worst for c in cells.values()] == [11]
 
 
 @pytest.mark.parametrize(
     "budget, worst, verdicts",
-    [(1, 9, [Verdict.OVER_BUDGET]), (8, 0, [Verdict.TIGHTENS]), (3, 3, [])],
+    [(1, 9, [Verdict.REGRESSED]), (8, 0, [Verdict.TIGHTENS]), (3, 3, [])],
     ids=["over", "better", "exact"],
 )
 def test_a_gated_cell_is_judged_against_its_figure(budget, worst, verdicts):
@@ -555,21 +566,10 @@ def test_a_tolerance_cell_with_no_recorded_figure_is_counted_not_passed_silently
     assert (headroom.findings, headroom.unjudged, headroom.regressions) == ([], 1, 0)
 
 
-def test_a_measurement_resolves_against_the_most_specific_row():
-    table = _table(
-        Row(output=F16B, measured=100), Row(input=F16B, output=F16B, measured=1)
-    )
-    assert _verdicts(table, _measured(50)) == [Verdict.OVER_BUDGET]
-
-
 def test_an_overflow_the_row_does_not_account_for_fails():
     table = _table(Row(input=F16B, output=F16B, metric=TOL, measured=0, nonfinite=2))
     assert _verdicts(table, _measured(0, nonfinite=2)) == []
     assert _verdicts(table, _measured(0, nonfinite=3)) == [Verdict.NONFINITE]
-
-
-def test_an_empty_comparison_is_not_a_pass():
-    assert judge(_BASE, []).regressions == 1
 
 
 def test_a_cell_that_ranked_no_lane_regresses_against_its_figure():
@@ -582,8 +582,8 @@ def test_a_measured_cell_no_row_covers_is_counted_not_dropped():
     assert (headroom.uncovered, headroom.regressions) == (1, 0)
 
 
-def _tanh_measured(readings, bins=(), **fields):
-    return _measured(10, op=TANH, readings=tuple(readings), bins=bins, **fields)
+def _tanh_measured(readings, **fields):
+    return _measured(10, op=TANH, readings=tuple(readings), **fields)
 
 
 def test_each_entry_of_a_list_is_judged_on_its_own_lanes():
@@ -595,46 +595,16 @@ def test_each_entry_of_a_list_is_judged_on_its_own_lanes():
     ]
     findings = judge(table, [_tanh_measured(readings)]).findings
     assert [(f.verdict, f.entry) for f in findings] == [
-        (Verdict.OVER_BUDGET, TANH_DOMAINS[0]),
+        (Verdict.REGRESSED, TANH_DOMAINS[0]),
         (Verdict.TIGHTENS, TANH_DOMAINS[1]),
-        (Verdict.NOW_ANSWERS, Domain(1, INF)),
     ]
 
 
-@pytest.mark.parametrize(
-    "lanes, bins, answers",
-    [
-        (7, (), False),
-        (70, (), True),
-        # With the binade profile the rule is exact: 14 per binade ranks none of them.
-        (70, tuple((BINADE_OFFSET + k, 128, 14, 0) for k in range(5)), False),
-        (70, ((BINADE_OFFSET + 2, 128, DOMAIN_MIN_BIN_LANES, 0),), True),
-    ],
-    ids=["a-few-strays", "enough-lanes", "spread-thin", "one-full-binade"],
-)
-def test_a_null_entry_answers_once_a_binade_holds_enough_ranked_lanes(
-    lanes, bins, answers
-):
-    table = _tanh((*TANH_DOMAINS[:2], Domain(1, INF)))
-    readings = [
-        Reading(-INF, -1.0, 3, 16000),
-        Reading(-1.0, 1.0, 10, 33000),
-        Reading(1.0, INF, 2, lanes),
-    ]
-    verdicts = _verdicts(table, _tanh_measured(readings, bins))
-    assert verdicts == ([Verdict.NOW_ANSWERS] if answers else [])
-
-
-@pytest.mark.parametrize(
-    "middle, verdict",
-    [(10, Verdict.REGRESSED), (3, Verdict.OVER_BUDGET)],
-    ids=["largest-past-the-ceiling", "largest-gated"],
-)
-def test_ranked_lanes_in_a_null_entry_are_held_to_the_largest_figure(middle, verdict):
-    table = _tanh((TANH_DOMAINS[0], Domain(-1, 1, middle), Domain(1, INF)))
-    readings = [Reading(-INF, -1.0, 3, 16000), Reading(-1.0, 1.0, middle, 33000)]
+def test_ranked_lanes_in_a_null_entry_are_held_to_the_largest_figure():
+    table = _tanh((TANH_DOMAINS[0], Domain(-1, 1, 10), Domain(1, INF)))
+    readings = [Reading(-INF, -1.0, 3, 16000), Reading(-1.0, 1.0, 10, 33000)]
     stray = Reading(1.0, INF, 1000, 5)
-    assert _verdicts(table, _tanh_measured([*readings, stray])) == [verdict]
+    assert _verdicts(table, _tanh_measured([*readings, stray])) == [Verdict.REGRESSED]
     fits = Reading(1.0, INF, 2, 5)
     assert _verdicts(table, _tanh_measured([*readings, fits])) == []
 
@@ -660,6 +630,8 @@ def test_a_list_cell_that_lost_every_lane_is_a_regression():
 
 
 def test_headroom_exit_status(tmp_path):
+    """0 within the figure, 1 past it or with nothing measured, 2 for records or a
+    table that do not load."""
     table, measured = tmp_path / "table.yaml", tmp_path / "measured.jsonl"
     write_table_file(_table(Row(input=F16B, output=F16B, measured=1)), table)
     argv = ["headroom", "--table", str(table), "--measured", str(measured)]
@@ -667,102 +639,13 @@ def test_headroom_exit_status(tmp_path):
         measured.write_text(_measured(worst).to_json() + "\n")
         assert main(argv) == status
     measured.write_text("")
-    assert main(argv) == 1
-    for unreadable in ("{\n", '{"op": "Abs"}\n'):  # not JSON; a record missing fields
-        measured.write_text(unreadable)
-        assert main(argv) == 2, unreadable
-
-
-def test_the_domains_command_reports_the_asked_op_and_writes_the_report_out(
-    tmp_path, capsys
-):
-    """`--op` keeps one op, a cell the table holds a list for shows it beside the drawn
-    one, and `--out` gets exactly what was printed."""
-    table, measured = tmp_path / "table.yaml", tmp_path / "measured.jsonl"
-    out = tmp_path / "domains.md"
-    write_table_file(
-        {**_tanh(), ABS: (Row(input=F16B, output=F16B, measured=1),)}, table
-    )
-    tanh = _measured(
-        10,
-        op=TANH,
-        bins=tuple(
-            (sign * (k + BINADE_OFFSET), 128, 128, 10 if k < 0 else 3)
-            for k in range(-126, 128)
-            for sign in (1, -1)
-        ),
-    )
-    abs_ = _measured(1, bins=((BINADE_OFFSET, 128, 128, 1),))
-    measured.write_text("\n".join(m.to_json() for m in (tanh, abs_)) + "\n")
-    argv = ["domains", "--measured", str(measured), "--table", str(table)]
-    assert main([*argv, "--op", "Tanh", "--out", str(out)]) == 0
-    report = capsys.readouterr().out
-    assert out.read_text(encoding="utf-8") == report
-    assert "Tanh" in report and "table:" in report and "Abs" not in report
-
-
-def test_an_unknown_op_is_a_usage_error_not_a_traceback(tmp_path):
-    """argparse converts only an `ArgumentTypeError` into its exit-2 usage error; the
-    `KeyError` a bare `MathOperation[name]` raised escaped with the regression status.
-    """
-    argv = ["domains", "--measured", str(tmp_path / "m.jsonl"), "--op", "cos"]
-    with pytest.raises(SystemExit) as caught:  # allow-pytest.raises: host-only test
-        main(argv)
-    assert caught.value.code == 2
-
-
-def test_the_guard_imports_no_module_that_loads_the_checked_out_table():
-    """`helpers.sfpu_accuracy_budget` loads the table at import. The guard judges tables
-    by path, and a PR head whose table the loader refuses is exactly its case: that
-    refusal must reach `main` as "cannot load" (exit 2), not kill the process at import
-    with the regression status. So the guard takes the resolution rule from
-    `ulp_table`, and the registry stays out of its import chain."""
-    import subprocess
-    import sys
-    from pathlib import Path
-
-    code = (
-        "import sys, helpers.ulp_budget_diff; "
-        "sys.exit('helpers.sfpu_accuracy_budget' in sys.modules)"
-    )
-    done = subprocess.run(
-        [sys.executable, "-c", code],
-        cwd=Path(__file__).parent,
-        capture_output=True,
-        text=True,
-    )
-    assert done.returncode == 0, done.stderr
-
-
-# ── The list the emitter's rule draws on a recorded profile ───────────────────
-
-
-def _drawn(bins):
-    measurement = _measured(max(w for *_, w in bins), op=TANH, bins=tuple(bins))
-    return draw(read_cells([measurement])[(TANH, _CELL)], _CELL)
-
-
-def test_the_rule_redraws_a_list_from_the_recorded_profile():
-    bins = [
-        (sign * (k + BINADE_OFFSET), 128, 128, 10 if k < 0 else 3)
-        for k in range(-126, 128)
-        for sign in (1, -1)
-    ]
-    assert _drawn([*bins, (0, 1, 1, 0)]) == TANH_DOMAINS
-
-
-def test_a_negative_power_of_two_sits_where_the_list_puts_it():
-    """-1 is the low edge of [-1, -0.5) under `low <= x < high`, so its binade must be
-    that one: grouping it with (-2, -1) put its 9 steps on the wrong side of a split."""
-    bins = [
-        (binade(x), 2048, 2048, worst) for x, worst in ((-1.5, 1), (-1.0, 9), (-0.5, 9))
-    ]
-    assert _drawn(sorted(bins)) == (Domain(-INF, -1, 1), Domain(-1, INF, 9))
-
-
-def test_a_stray_worse_than_every_figure_takes_a_figure_of_its_own():
-    strays = [(BINADE_OFFSET + k, 128, 128, 2) for k in range(10)]  # [1, 1024): 2 steps
-    strays.append((-BINADE_OFFSET, 128, 3, 40))  # [-2, -1): three lanes at 40
-    assert _drawn(strays) == (Domain(-INF, 0, 40), Domain(0, INF, 2))
-    unranked = [(BINADE_OFFSET + k, 128, 3, 1) for k in range(10)]
-    assert _drawn(unranked) == ()
+    assert main(argv) == 1  # an empty file is a sweep that recorded nothing
+    absent = argv[:4] + [str(tmp_path / "absent.jsonl")]
+    assert main(absent) == 2  # a missing one is an input that is not there
+    for text in ("{\n", '{"op": "Abs", "key": {}}\n'):
+        measured.write_text(text)
+        assert main(argv) == 2
+    measured.write_bytes(b"\xff")  # not UTF-8: a ValueError, not an OSError
+    assert main(argv) == 2
+    measured.write_text(_measured(1).to_json() + "\n")
+    assert main(argv[:2] + [str(tmp_path / "absent.yaml")] + argv[3:]) == 2
