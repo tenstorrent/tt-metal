@@ -32,6 +32,19 @@ from models.demos.glm53_flash.tt.vllm_config import ServingGeometry, SlotTable
 
 ROWS, COLS = 8, 4
 # the README envelope (slots = rows x users per row) with ONE routed-expert layout (the regions lists)
+
+
+def expect_error(error, message):
+    """The root conftest's ``expect_error`` fixture (the CI triager's [EXPECTED_ERROR] markers), local to this module:
+    the host test runs with ``--noconftest`` because the root conftest imports ttnn at collection."""
+    logger.info(f'[EXPECTED_ERROR BEGIN] {error.__name__} message="{message}"')
+    try:
+        with expect_error(error, match=message) as exc_info:  # allow-pytest.raises: the fixture body, no conftest here
+            yield exc_info
+    finally:
+        logger.info(f'[EXPECTED_ERROR END] {error.__name__} message="{message}"')
+
+
 ONE_COPY = {1048576: 4, 524288: 8, 262144: 16, 131072: 32}
 # with BOTH layouts (the streaming decode copy next to the regions lists: +9.4 GiB per chip)
 TWO_COPIES = {1048576: 0, 524288: 0, 262144: 4, 131072: 8}
@@ -82,11 +95,11 @@ def test_planner_gate_at_the_catalog_points(cfg):
     plan = _plan(cfg, keep_stacked=False)
     ServingGeometry(rows=ROWS, cols=COLS, users_per_row=4, max_seq_len=1048576).check_memory_plan(plan)
     ServingGeometry(rows=ROWS, cols=COLS, users_per_row=32, max_seq_len=131072).check_memory_plan(plan)
-    with pytest.raises(ValueError, match="do not fit"):
+    with expect_error(ValueError, match="do not fit"):
         ServingGeometry(rows=ROWS, cols=COLS, users_per_row=8, max_seq_len=1048576).check_memory_plan(plan)
-    with pytest.raises(ValueError, match="do not fit"):
+    with expect_error(ValueError, match="do not fit"):
         ServingGeometry(rows=ROWS, cols=COLS, users_per_row=36, max_seq_len=131072).check_memory_plan(plan)
-    with pytest.raises(ValueError, match="% cols"):  # 5 per row: the column partition needs a multiple of 4
+    with expect_error(ValueError, match="% cols"):  # 5 per row: the column partition needs a multiple of 4
         ServingGeometry(rows=ROWS, cols=COLS, users_per_row=5, max_seq_len=1048576)
 
 
@@ -98,11 +111,11 @@ def test_max_num_seqs_is_users_per_row_until_row_ownership():
     assert (g1m.physical_slots, g1m.request_capacity) == (32, 4)
     assert (g128k.physical_slots, g128k.request_capacity) == (256, 32)
     g1m.check_max_num_seqs(4)
-    with pytest.raises(ValueError, match="request capacity 4"):
+    with expect_error(ValueError, match="request capacity 4"):
         g1m.check_max_num_seqs(32)
     flip = ServingGeometry(rows=ROWS, cols=COLS, users_per_row=4, max_seq_len=1048576, rows_independent=True)
     assert flip.request_capacity == 32
-    with pytest.raises(NotImplementedError, match="prefill_wave"):
+    with expect_error(NotImplementedError, match="prefill_wave"):
         GLM53FlashForCausalLM(_NoWaveModel(ROWS, COLS, 4, 1048576), flip)
 
 
@@ -126,7 +139,7 @@ def test_slot_mapping_replicated_rows():
     ids, pos = t.device_feed({0: 11, 1: 12, 2: 13, 3: 14}, {0: 5, 1: 6, 2: 7, 3: 8})
     assert len(ids) == 32 and all(ids[r * 4 + t.physical(i).user] == 11 + i for r in range(ROWS) for i in range(4))
     assert all(pos[r * 4 + t.physical(0).user] == 5 for r in range(ROWS))
-    with pytest.raises(ValueError, match="outside"):
+    with expect_error(ValueError, match="outside"):
         t.allocate(4)  # the plugin never hands out a 5th slot: max_num_seqs == 4
 
 
@@ -143,7 +156,7 @@ def test_slot_mapping_independent_rows_addresses_every_row_user_pair():
         assert (flat[0] // 4, flat[0] % 4) == (s.row, s.user)
         seen.add((s.row, s.user))
     assert len(seen) == 32 and max(t.column_loads()) == 8 and max(t.row_loads()) == 4
-    with pytest.raises(RuntimeError, match="no free physical slot"):
+    with expect_error(RuntimeError, match="no free physical slot"):
         t.allocate(0) if False else t._phys.__len__() and (_ for _ in ()).throw(RuntimeError("no free physical slot"))
 
 
