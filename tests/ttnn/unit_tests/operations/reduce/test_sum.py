@@ -264,3 +264,19 @@ def test_sum_hw_bf16(device):
     output_tensor = ttnn.sum(input_tensor, dim=[2, 3], keepdim=True)
 
     assert torch.equal(ttnn.to_torch(output_tensor), torch_output)
+
+
+@pytest.mark.parametrize("dim, n", [(-1, 288), (-1, 544), (-1, 2048), (-2, 288), (-2, 416), (-2, 480)])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
+def test_sum_fp32_row_major_multi_chunk(device, dim, n, fast_and_approximate_mode):
+    shape = (1, 2, 32, n) if dim == -1 else (1, 2, n, 32)
+    torch_input = torch.ones(shape, dtype=torch.float32)
+    index = [slice(None)] * 4
+    index[dim] = 16
+    torch_input[tuple(index)] = 33.0
+    torch_output = torch.sum(torch_input.double(), dim=dim, keepdim=True).float()
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32)
+    output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=True, fast_and_approximate_mode=fast_and_approximate_mode)
+
+    assert torch.equal(ttnn.to_torch(output_tensor), torch_output)
