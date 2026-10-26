@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
 #include "ckernel.h"
 #include "llk_assert.h"
@@ -13,7 +14,7 @@ namespace hal::mop
 {
 
 /**
- * @brief Select a MOP Expander configuration template.
+ * @brief Select a MOP Expander template.
  */
 enum class MopTemplate : std::uint8_t
 {
@@ -21,522 +22,529 @@ enum class MopTemplate : std::uint8_t
     Template1
 };
 
-/**
- * @brief Select one Template 0 MOP configuration field for an individual write.
- */
-enum class Template0Field : std::uint8_t
+namespace detail
 {
-    EndOp         = 2, // ISA name: InsnB
-    StartOp       = 3, // ISA name: InsnA0
-    MidOpA        = 4, // ISA name: InsnA1
-    MidOpB        = 5, // ISA name: InsnA2
-    MidOpC        = 6, // ISA name: InsnA3
-    StartOpShadow = 7, // ISA name: SkipA0
-    EndOpShadow   = 8, // ISA name: SkipB
+inline constexpr std::uint32_t COUNT_WIDTH = 10;
+
+constexpr bool is_nop(const std::uint32_t instruction)
+{
+    return (instruction >> 24) == (TT_OP_NOP >> 24);
+}
+
+constexpr bool is_valid_count(const std::uint32_t count)
+{
+    return ckernel::is_valid(count, COUNT_WIDTH);
+}
+
+// The Blackhole expander adds to OuterCount when the outer loop has no start op, the inner loop is
+// empty, and an end op exists: +1024 if EndOp1 is set and OuterCount is 1, +1 for any OuterCount otherwise.
+constexpr bool triggers_count_anomaly(
+    const std::uint32_t outer_count,
+    const std::uint32_t inner_count,
+    const std::uint32_t start_op,
+    const std::uint32_t end_op,
+    const std::uint32_t second_end_op)
+{
+    return is_nop(start_op) && inner_count == 0 && !is_nop(end_op) && (is_nop(second_end_op) || outer_count == 1);
+}
+
+inline __attribute__((always_inline)) void assert_valid_count(const bool valid)
+{
+    LLK_ASSERT(valid, "Template 1 MOP loop count must fit in 10 bits");
+}
+
+inline __attribute__((always_inline)) void assert_no_count_anomaly(const bool valid)
+{
+    LLK_ASSERT(valid, "Template 1 MOP configuration triggers the no-start/zero-inner/end-op outer count anomaly");
+}
+
+inline __attribute__((always_inline)) void assert_patch_reachable(const bool valid)
+{
+    LLK_ASSERT(valid, "Template 1 MOP last-iteration ops are never issued with an empty inner loop");
+}
+
+inline __attribute__((always_inline)) void assert_valid_run_count(const bool valid)
+{
+    LLK_ASSERT(valid, "MOP encoded count must fit in 7 bits");
+}
+
+inline __attribute__((always_inline)) void assert_mask_high_unused(const bool valid)
+{
+    LLK_ASSERT(valid, "Template 0 MOP operation cannot write the high mask bits; write them with configure_mask_high and set mask_high to MaskHigh::Preset");
+}
+
+// Fails constant evaluation of a constexpr configuration, or reports through Assert when built at runtime.
+template <void (*Assert)(bool)>
+constexpr void check(const bool valid)
+{
+    if (__builtin_is_constant_evaluated())
+    {
+        if (!valid)
+        {
+            __builtin_trap();
+        }
+    }
+    else
+    {
+        Assert(valid);
+    }
+}
+
+template <bool HasA123, bool HasB>
+struct Template0Plan
+{
 };
 
-/**
- * @brief Select one Template 1 MOP configuration field for an individual write.
- */
-enum class Template1Field : std::uint8_t
+template <bool HasEndOp>
+struct Template1Plan
 {
-    OuterLoopCount                 = 0, // ISA name: OuterCount
-    InnerLoopCount                 = 1, // ISA name: InnerCount
-    OuterLoopStartOp               = 2, // ISA name: StartOp
-    OuterLoopEndOp                 = 3, // ISA name: EndOp0
-    OuterLoopSecondEndOp           = 4, // ISA name: EndOp1
-    InnerLoopBodyOp                = 5, // ISA name: LoopOp
-    InnerLoopAlternatingOp         = 6, // ISA name: LoopOp1
-    LastOpOnFinalOuterIteration    = 7, // ISA name: Loop0Last
-    LastOpOnNonfinalOuterIteration = 8, // ISA name: Loop1Last
 };
+} // namespace detail
 
 /**
- * @brief Hold one runtime count replacement for a compile-time Template 1 configuration.
+ * @brief Hold a complete MOP Expander configuration built by @ref foreach_mask_bit or @ref loop.
  *
- * @tparam Field: Template 1 count field replaced by value.
+ * @tparam Plan: Compile-time shape that selects which MopCfg words @ref program writes.
+ * @note Spell the type as `mop::cfg`; class template argument deduction recovers the plan.
  */
-template <Template1Field Field>
-struct RuntimeField
+template <typename Plan>
+struct cfg;
+
+// ---------------- Template 0 ----------------
+
+/**
+ * @brief Hold the ops issued for a clear mask bit.
+ *
+ * @tparam HasA123: Whether InsnA1-3 are issued after InsnA0.
+ * @tparam HasB: Whether InsnB is issued last.
+ */
+template <bool HasA123, bool HasB>
+struct IfClear
+{
+    std::uint32_t a0;
+    std::uint32_t a1;
+    std::uint32_t a2;
+    std::uint32_t a3;
+    std::uint32_t b;
+};
+
+/**
+ * @brief Hold the ops issued for a set mask bit.
+ *
+ * @tparam HasSkipB: Whether SkipB is issued after SkipA0.
+ */
+template <bool HasSkipB>
+struct Otherwise
+{
+    std::uint32_t skip_a0;
+    std::uint32_t skip_b;
+};
+
+/**
+ * @brief Describe the ops issued, in order, for a clear mask bit.
+ *
+ * The instruction count selects the shape: 1 = {a0}, 2 = {a0, b}, 4 = {a0, a1, a2, a3},
+ * 5 = {a0, a1, a2, a3, b}.
+ *
+ * @param a0: First op of every clear-bit iteration (InsnA0).
+ * @param rest: Remaining encoded instructions, InsnA1-3 and/or InsnB.
+ * @note The expander issues InsnA1-3 as a group, NOPs included.
+ */
+template <typename... Instructions>
+constexpr auto if_clear(const std::uint32_t a0, const Instructions... rest)
+{
+    constexpr std::uint32_t count = 1 + sizeof...(Instructions);
+    static_assert(count == 1 || count == 2 || count == 4 || count == 5, "Template 0 MOP if_clear takes {a0}, {a0, b}, {a0, a1, a2, a3} or {a0, a1, a2, a3, b}");
+    static_assert((std::is_convertible_v<Instructions, std::uint32_t> && ...), "Template 0 MOP if_clear takes encoded instructions");
+
+    constexpr bool has_a123            = count >= 4;
+    constexpr bool has_b               = count == 2 || count == 5;
+    const std::uint32_t instructions[] = {a0, static_cast<std::uint32_t>(rest)...};
+
+    IfClear<has_a123, has_b> clear = {a0, TT_OP_NOP, TT_OP_NOP, TT_OP_NOP, TT_OP_NOP};
+    if constexpr (has_a123)
+    {
+        clear.a1 = instructions[1];
+        clear.a2 = instructions[2];
+        clear.a3 = instructions[3];
+    }
+    if constexpr (has_b)
+    {
+        clear.b = instructions[count - 1];
+    }
+    return clear;
+}
+
+/** @brief Issue skip_a0 on a set mask bit. */
+constexpr Otherwise<false> otherwise(const std::uint32_t skip_a0)
+{
+    return {skip_a0, TT_OP_NOP};
+}
+
+/**
+ * @brief Issue skip_a0, then skip_b, on a set mask bit.
+ *
+ * @note Pair with an @ref if_clear that has a b op; the expander issues both or neither.
+ */
+constexpr Otherwise<true> otherwise(const std::uint32_t skip_a0, const std::uint32_t skip_b)
+{
+    return {skip_a0, skip_b};
+}
+
+template <bool HasA123, bool HasB>
+struct cfg<detail::Template0Plan<HasA123, HasB>>
+{
+    std::uint32_t a0;
+    std::uint32_t a1;
+    std::uint32_t a2;
+    std::uint32_t a3;
+    std::uint32_t b;
+    std::uint32_t skip_a0;
+    std::uint32_t skip_b;
+};
+
+/**
+ * @brief Build a Template 0 configuration that issues only clear-bit ops.
+ *
+ * @param clear: Ops issued for each clear mask bit.
+ * @note A set mask bit issues NOPs; run with a mask whose iterated bits are clear.
+ */
+template <bool HasA123, bool HasB>
+constexpr cfg<detail::Template0Plan<HasA123, HasB>> foreach_mask_bit(const IfClear<HasA123, HasB> clear)
+{
+    return {clear.a0, clear.a1, clear.a2, clear.a3, clear.b, TT_OP_NOP, TT_OP_NOP};
+}
+
+/**
+ * @brief Build a Template 0 configuration that selects ops per mask bit.
+ *
+ * @param clear: Ops issued for each clear mask bit.
+ * @param set: Ops issued for each set mask bit.
+ */
+template <bool HasA123, bool HasB, bool HasSkipB>
+constexpr cfg<detail::Template0Plan<HasA123, HasB>> foreach_mask_bit(const IfClear<HasA123, HasB> clear, const Otherwise<HasSkipB> set)
+{
+    static_assert(HasB == HasSkipB, "Template 0 MOP issues InsnB and SkipB under one flag; give if_clear a b op exactly when otherwise has a skip_b op");
+
+    return {clear.a0, clear.a1, clear.a2, clear.a3, clear.b, set.skip_a0, set.skip_b};
+}
+
+// ---------------- Template 1 ----------------
+
+/**
+ * @brief Hold the inner loop of a Template 1 configuration.
+ */
+struct InnerLoop
+{
+    std::uint32_t count;
+    std::uint32_t op;           // LoopOp
+    std::uint32_t alternate_op; // LoopOp1
+};
+
+/**
+ * @brief Hold one Template 1 MopCfg word written by @ref update.
+ *
+ * @tparam Word: MopCfg word, values = <0 (outer count)/1 (inner count)/7 (last outer op)/8 (last inner op)>.
+ */
+template <std::uint32_t Word>
+struct Update
 {
     std::uint32_t value;
 };
 
 /**
- * @brief Override Blackhole Template 1 loop counts in one MOP instruction.
+ * @brief Name one Template 1 MopCfg word; call it with a value to build an @ref Update.
  *
- * A zero field preserves the corresponding count programmed in MopCfg. Nonzero values
- * replace that count for this expansion only.
+ * @tparam Word: MopCfg word, values = <0 (outer count)/1 (inner count)/7 (last outer op)/8 (last inner op)>.
  */
-struct Template1CountOverrides
+template <std::uint32_t Word>
+struct Field
 {
-    std::uint32_t outer_loop_count = 0;
-    std::uint32_t inner_loop_count = 0;
-};
-
-/**
- * @brief Select one Template 1 count field whose value is supplied at runtime.
- *
- * @tparam Field: Template 1 count field replaced by value.
- * @param value: Final resolved MopCfg word written for Field.
- */
-template <Template1Field Field>
-constexpr RuntimeField<Field> runtime_field(const std::uint32_t value)
-{
-    static_assert(
-        Field == Template1Field::OuterLoopCount || Field == Template1Field::InnerLoopCount, "Only Template 1 loop counts may be supplied with runtime_field");
-    return {.value = value};
-}
-
-namespace detail
-{
-struct OptionalMopInstruction
-{
-    bool is_set         = false;
-    std::uint32_t value = 0;
-
-    constexpr OptionalMopInstruction() = default;
-
-    constexpr OptionalMopInstruction(std::uint32_t instruction) : is_set(true), value(instruction)
+    constexpr Update<Word> operator()(const std::uint32_t value) const
     {
-    }
-
-    constexpr std::uint32_t value_or(const std::uint32_t fallback) const
-    {
-        return is_set ? value : fallback;
-    }
-};
-} // namespace detail
-
-/**
- * @brief Hold the three optional Template 0 middle operations.
- */
-struct MidOps
-{
-    detail::OptionalMopInstruction op_a; // ISA name: InsnA1
-    detail::OptionalMopInstruction op_b; // ISA name: InsnA2
-    detail::OptionalMopInstruction op_c; // ISA name: InsnA3
-
-    /**
-     * @brief Report whether at least one middle operation was supplied.
-     */
-    constexpr bool any_set() const
-    {
-        return op_a.is_set || op_b.is_set || op_c.is_set;
-    }
-
-    /**
-     * @brief Report whether all three middle operations were supplied.
-     */
-    constexpr bool all_set() const
-    {
-        return op_a.is_set && op_b.is_set && op_c.is_set;
+        return {value};
     }
 };
 
-/**
- * @brief Describe one MOP Expander configuration.
- *
- * @tparam tmpl: MOP template to configure, values = <Template0/Template1>.
- * @note A constexpr configuration is structural and can be passed directly to @ref program
- *       as a non-type template argument.
- */
-template <MopTemplate tmpl>
-struct MopConfig;
+inline constexpr Field<0> outer_count {};
+inline constexpr Field<1> inner_count {};
+inline constexpr Field<7> last_outer {}; // Loop0Last: last inner iteration of the last outer iteration
+inline constexpr Field<8> last_inner {}; // Loop1Last: last inner iteration of every other outer iteration
 
-template <>
-struct MopConfig<MopTemplate::Template0>
-{
-    detail::OptionalMopInstruction start_op; // ISA name: InsnA0
-    MidOps mid_ops;
-    detail::OptionalMopInstruction end_op;          // ISA name: InsnB
-    detail::OptionalMopInstruction start_op_shadow; // ISA name: SkipA0
-    detail::OptionalMopInstruction end_op_shadow;   // ISA name: SkipB
-};
-
-/**
- * @brief Describe operations placed around each Template 1 outer-loop iteration.
- */
-struct OuterLoop
-{
-    std::uint32_t count;                          // ISA name: OuterCount
-    detail::OptionalMopInstruction start_op;      // ISA name: StartOp
-    detail::OptionalMopInstruction end_op;        // ISA name: EndOp0
-    detail::OptionalMopInstruction second_end_op; // ISA name: EndOp1
-};
-
-/**
- * @brief Describe operations placed in each Template 1 inner-loop iteration.
- */
-struct InnerLoop
-{
-    std::uint32_t count;                                                // ISA name: InnerCount
-    detail::OptionalMopInstruction body_op;                             // ISA name: LoopOp
-    detail::OptionalMopInstruction alternating_op;                      // ISA name: LoopOp1
-    detail::OptionalMopInstruction last_op_on_final_outer_iteration;    // ISA name: Loop0Last
-    detail::OptionalMopInstruction last_op_on_nonfinal_outer_iteration; // ISA name: Loop1Last
-};
-
-/**
- * @brief Describe a Template 1 nested-loop expansion.
- *
- * @note Omit an instruction field to use its functional-model default. Counts are written as
- *       32-bit MopCfg values; the Blackhole Template 1 functional model consumes their low ten bits.
- */
-template <>
-struct MopConfig<MopTemplate::Template1>
-{
-    OuterLoop outer_loop;
-    InnerLoop inner_loop;
-};
-
-namespace detail
-{
-inline constexpr std::uint32_t TEMPLATE1_COUNT_WIDTH = 10;
-inline constexpr std::uint32_t TEMPLATE1_COUNT_MASK  = (1u << TEMPLATE1_COUNT_WIDTH) - 1;
-
-struct ResolvedTemplate1Config
+template <bool HasEndOp>
+struct cfg<detail::Template1Plan<HasEndOp>>
 {
     std::uint32_t outer_count;
     std::uint32_t inner_count;
     std::uint32_t start_op;
-    std::uint32_t end_op0;
-    std::uint32_t end_op1;
-    std::uint32_t loop_op;
-    std::uint32_t loop_op1;
-    std::uint32_t loop0_last;
-    std::uint32_t loop1_last;
-};
+    std::uint32_t end_op;
+    std::uint32_t second_end_op;
+    std::uint32_t op;
+    std::uint32_t alternate_op;
+    std::uint32_t last_outer_op;
+    std::uint32_t last_inner_op;
 
-constexpr bool is_plain_nop(const std::uint32_t instruction)
-{
-    return (instruction >> 24) == (TT_OP_NOP >> 24);
-}
-
-constexpr std::uint32_t effective_template1_count(const std::uint32_t count)
-{
-    return count & TEMPLATE1_COUNT_MASK;
-}
-
-constexpr ResolvedTemplate1Config resolve(const MopConfig<MopTemplate::Template1> &config)
-{
-    const std::uint32_t start_op        = config.outer_loop.start_op.value_or(TT_OP_NOP);
-    const std::uint32_t end_op0         = config.outer_loop.end_op.value_or(TT_OP_NOP);
-    const std::uint32_t end_op1         = is_plain_nop(end_op0) ? TT_OP_NOP : config.outer_loop.second_end_op.value_or(TT_OP_NOP);
-    const std::uint32_t loop_op         = config.inner_loop.body_op.value_or(TT_OP_NOP);
-    const std::uint32_t loop_op1        = config.inner_loop.alternating_op.value_or(TT_OP_NOP);
-    const std::uint32_t default_last_op = is_plain_nop(loop_op1) ? loop_op : loop_op1;
-    const std::uint32_t loop0_last      = config.inner_loop.last_op_on_final_outer_iteration.value_or(default_last_op);
-    const std::uint32_t loop1_last      = config.inner_loop.last_op_on_nonfinal_outer_iteration.value_or(default_last_op);
-
-    return {
-        config.outer_loop.count,
-        config.inner_loop.count,
-        start_op,
-        end_op0,
-        end_op1,
-        loop_op,
-        loop_op1,
-        loop0_last,
-        loop1_last,
-    };
-}
-
-constexpr bool triggers_template1_count_anomaly(const ResolvedTemplate1Config &config)
-{
-    return is_plain_nop(config.start_op) && effective_template1_count(config.inner_count) == 0 && !is_plain_nop(config.end_op0);
-}
-
-constexpr bool is_valid(const Template1CountOverrides overrides)
-{
-    return ckernel::is_valid(overrides.outer_loop_count, TEMPLATE1_COUNT_WIDTH) && ckernel::is_valid(overrides.inner_loop_count, TEMPLATE1_COUNT_WIDTH);
-}
-
-constexpr std::uint32_t template1_override_low(const Template1CountOverrides overrides)
-{
-    return ((overrides.outer_loop_count & 0x3fu) << 10) | (overrides.inner_loop_count & TEMPLATE1_COUNT_MASK);
-}
-
-constexpr std::uint32_t template1_override_high(const Template1CountOverrides overrides)
-{
-    return (overrides.outer_loop_count & TEMPLATE1_COUNT_MASK) >> 6;
-}
-
-constexpr std::uint32_t get_operation(const Template1CountOverrides overrides)
-{
-    return TT_OP_MOP(1, template1_override_high(overrides), template1_override_low(overrides));
-}
-
-template <Template1Field... Fields>
-struct RuntimeFieldsAreUnique;
-
-template <>
-struct RuntimeFieldsAreUnique<>
-{
-    static constexpr bool value = true;
-};
-
-template <Template1Field First, Template1Field... Rest>
-struct RuntimeFieldsAreUnique<First, Rest...>
-{
-    static constexpr bool value = ((First != Rest) && ...) && RuntimeFieldsAreUnique<Rest...>::value;
-};
-
-template <Template1Field Target>
-inline __attribute__((always_inline)) std::uint32_t select_runtime_field(const std::uint32_t fallback)
-{
-    return fallback;
-}
-
-template <Template1Field Target, Template1Field First, Template1Field... Rest>
-inline __attribute__((always_inline)) std::uint32_t select_runtime_field(
-    const std::uint32_t fallback, const RuntimeField<First> first, const RuntimeField<Rest>... rest)
-{
-    if constexpr (Target == First)
+    /**
+     * @brief Return a copy that issues instruction in place of the selected last-iteration op.
+     *
+     * @param last: Iteration whose final inner op is replaced, values = <last_outer/last_inner>.
+     * @param instruction: Encoded instruction issued instead.
+     * @note Without a patch, both last-iteration ops repeat the last op of the inner loop body.
+     */
+    template <std::uint32_t Word>
+    [[nodiscard]] constexpr cfg patch(const Field<Word> last, const std::uint32_t instruction) const
     {
-        return first.value;
+        static_assert(Word == 7 || Word == 8, "Template 1 MOP patch replaces last_outer or last_inner");
+        detail::check<detail::assert_patch_reachable>(inner_count != 0);
+
+        cfg patched = *this;
+        if constexpr (Word == 7)
+        {
+            patched.last_outer_op = last(instruction).value;
+        }
+        else
+        {
+            patched.last_inner_op = last(instruction).value;
+        }
+        return patched;
     }
-    else
+};
+
+/**
+ * @brief Build a Template 1 inner loop that issues op count times.
+ *
+ * @param count: Inner iteration count, valid values = <0-1023>.
+ * @param op: Op issued every iteration (LoopOp).
+ */
+constexpr InnerLoop loop(const std::uint32_t count, const std::uint32_t op)
+{
+    return {count, op, TT_OP_NOP};
+}
+
+/**
+ * @brief Build a Template 1 inner loop that issues op, then alternate_op, count times.
+ *
+ * @param count: Inner iteration count, valid values = <0-1023>.
+ * @param op: First op of every iteration (LoopOp).
+ * @param alternate_op: Second op of every iteration (LoopOp1); a NOP disables it.
+ */
+constexpr InnerLoop loop(const std::uint32_t count, const std::uint32_t op, const std::uint32_t alternate_op)
+{
+    return {count, op, alternate_op};
+}
+
+namespace detail
+{
+template <bool HasEndOp>
+constexpr cfg<Template1Plan<HasEndOp>> make_loop(
+    const std::uint32_t outer_count, const std::uint32_t start_op, const InnerLoop inner, const std::uint32_t end_op, const std::uint32_t second_end_op)
+{
+    check<assert_valid_count>(is_valid_count(outer_count));
+    check<assert_valid_count>(is_valid_count(inner.count));
+    check<assert_no_count_anomaly>(!triggers_count_anomaly(outer_count, inner.count, start_op, end_op, second_end_op));
+
+    // The expander replaces the last op of the body, so repeating it keeps the issued sequence unchanged.
+    const std::uint32_t last_op = is_nop(inner.alternate_op) ? inner.op : inner.alternate_op;
+
+    return {outer_count, inner.count, start_op, end_op, second_end_op, inner.op, inner.alternate_op, last_op, last_op};
+}
+} // namespace detail
+
+/**
+ * @brief Build a Template 1 configuration around an inner loop.
+ *
+ * @param count: Outer iteration count, valid values = <0-1023>.
+ * @param inner: Inner loop built by the two- or three-argument @ref loop.
+ * @note Overloads add a start op before the inner loop and up to two end ops after it.
+ */
+constexpr cfg<detail::Template1Plan<false>> loop(const std::uint32_t count, const InnerLoop inner)
+{
+    return detail::make_loop<false>(count, TT_OP_NOP, inner, TT_OP_NOP, TT_OP_NOP);
+}
+
+/** @brief Build a Template 1 configuration that issues start_op before each inner loop. */
+constexpr cfg<detail::Template1Plan<false>> loop(const std::uint32_t count, const std::uint32_t start_op, const InnerLoop inner)
+{
+    return detail::make_loop<false>(count, start_op, inner, TT_OP_NOP, TT_OP_NOP);
+}
+
+/** @brief Build a Template 1 configuration that issues end_op after each inner loop. */
+constexpr cfg<detail::Template1Plan<true>> loop(const std::uint32_t count, const InnerLoop inner, const std::uint32_t end_op)
+{
+    return detail::make_loop<true>(count, TT_OP_NOP, inner, end_op, TT_OP_NOP);
+}
+
+/** @brief Build a Template 1 configuration that issues end_op, then second_end_op, after each inner loop. */
+constexpr cfg<detail::Template1Plan<true>> loop(const std::uint32_t count, const InnerLoop inner, const std::uint32_t end_op, const std::uint32_t second_end_op)
+{
+    return detail::make_loop<true>(count, TT_OP_NOP, inner, end_op, second_end_op);
+}
+
+/** @brief Build a Template 1 configuration that issues start_op before and end_op after each inner loop. */
+constexpr cfg<detail::Template1Plan<true>> loop(const std::uint32_t count, const std::uint32_t start_op, const InnerLoop inner, const std::uint32_t end_op)
+{
+    return detail::make_loop<true>(count, start_op, inner, end_op, TT_OP_NOP);
+}
+
+/** @brief Build a Template 1 configuration that issues start_op before and two end ops after each inner loop. */
+constexpr cfg<detail::Template1Plan<true>> loop(
+    const std::uint32_t count, const std::uint32_t start_op, const InnerLoop inner, const std::uint32_t end_op, const std::uint32_t second_end_op)
+{
+    return detail::make_loop<true>(count, start_op, inner, end_op, second_end_op);
+}
+
+// ---------------- Programming ----------------
+
+/**
+ * @brief Program this thread's MopCfg with a Template 0 configuration.
+ *
+ * Writes the flags, InsnA0 and SkipA0 always; InsnA1-3 only when @ref if_clear has them, and
+ * InsnB/SkipB only with a b op. Skipped words keep their previous values, which the
+ * expander does not read.
+ *
+ * @param config: Configuration built by @ref foreach_mask_bit.
+ * @note Waits for the preceding MOP expansion before writing. Run it with
+ *       @ref Runner<MopTemplate::Template0>.
+ */
+template <bool HasA123, bool HasB>
+inline __attribute__((always_inline)) void program(const cfg<detail::Template0Plan<HasA123, HasB>> &config)
+{
+    volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+    constexpr std::uint32_t flags   = static_cast<std::uint32_t>(HasB) | (static_cast<std::uint32_t>(HasA123) << 1);
+
+    // Copy the configuration into scalars before the sync; reading the aggregate between the
+    // volatile MopCfg accesses forces it onto the stack instead of into registers.
+    const std::uint32_t b       = config.b;
+    const std::uint32_t a0      = config.a0;
+    const std::uint32_t a1      = config.a1;
+    const std::uint32_t a2      = config.a2;
+    const std::uint32_t a3      = config.a3;
+    const std::uint32_t skip_a0 = config.skip_a0;
+    const std::uint32_t skip_b  = config.skip_b;
+
+    ckernel::mop_sync();
+
+    mop_cfg[1] = flags;
+    if constexpr (HasB)
     {
-        return select_runtime_field<Target>(fallback, rest...);
+        mop_cfg[2] = b;
+    }
+    mop_cfg[3] = a0;
+    if constexpr (HasA123)
+    {
+        mop_cfg[4] = a1;
+        mop_cfg[5] = a2;
+        mop_cfg[6] = a3;
+    }
+    mop_cfg[7] = skip_a0;
+    if constexpr (HasB)
+    {
+        mop_cfg[8] = skip_b;
     }
 }
 
-inline __attribute__((always_inline)) void program(const ResolvedTemplate1Config &config)
+/**
+ * @brief Program this thread's MopCfg with a Template 1 configuration.
+ *
+ * Writes the counts, StartOp and EndOp0 always; EndOp1 only when the configuration has end
+ * ops, and the inner-loop and last-iteration ops only when the inner count is nonzero.
+ * Skipped words keep their previous values, which the expander does not read.
+ *
+ * @param config: Configuration built by @ref loop, optionally patched with @ref cfg::patch.
+ * @note Waits for the preceding MOP expansion before writing. Run it with
+ *       @ref Runner<MopTemplate::Template1>.
+ */
+template <bool HasEndOp>
+inline __attribute__((always_inline)) void program(const cfg<detail::Template1Plan<HasEndOp>> &config)
 {
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
     // Copy the configuration into scalars before the sync; reading the aggregate between the
     // volatile MopCfg accesses forces it onto the stack instead of into registers.
-    const std::uint32_t outer_count = config.outer_count;
-    const std::uint32_t inner_count = config.inner_count;
-    const std::uint32_t start_op    = config.start_op;
-    const std::uint32_t end_op0     = config.end_op0;
-    const std::uint32_t end_op1     = config.end_op1;
-    const std::uint32_t loop_op     = config.loop_op;
-    const std::uint32_t loop_op1    = config.loop_op1;
-    const std::uint32_t loop0_last  = config.loop0_last;
-    const std::uint32_t loop1_last  = config.loop1_last;
-
-    // Checked here, on the scalar copies, so the diagnostic adds no stack traffic around ebreak.
-    LLK_ASSERT(
-        !(is_plain_nop(start_op) && effective_template1_count(inner_count) == 0 && !is_plain_nop(end_op0)),
-        "Template 1 MOP configuration triggers the no-start/zero-inner/active-end count anomaly");
+    const std::uint32_t outer_count   = config.outer_count;
+    const std::uint32_t inner_count   = config.inner_count;
+    const std::uint32_t start_op      = config.start_op;
+    const std::uint32_t end_op        = config.end_op;
+    const std::uint32_t second_end_op = config.second_end_op;
+    const std::uint32_t op            = config.op;
+    const std::uint32_t alternate_op  = config.alternate_op;
+    const std::uint32_t last_outer_op = config.last_outer_op;
+    const std::uint32_t last_inner_op = config.last_inner_op;
 
     ckernel::mop_sync();
 
     mop_cfg[0] = outer_count;
     mop_cfg[1] = inner_count;
     mop_cfg[2] = start_op;
-    mop_cfg[3] = end_op0;
-    mop_cfg[4] = end_op1;
-    mop_cfg[5] = loop_op;
-    mop_cfg[6] = loop_op1;
-    mop_cfg[7] = loop0_last;
-    mop_cfg[8] = loop1_last;
+    mop_cfg[3] = end_op;
+    if constexpr (HasEndOp)
+    {
+        mop_cfg[4] = second_end_op;
+    }
+    if (inner_count != 0)
+    {
+        mop_cfg[5] = op;
+        mop_cfg[6] = alternate_op;
+        mop_cfg[7] = last_outer_op;
+        mop_cfg[8] = last_inner_op;
+    }
 }
 
-inline __attribute__((always_inline)) void program(const MopConfig<MopTemplate::Template0> &config)
+// ---------------- Updates ----------------
+
+namespace detail
 {
-    volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
-
-    // Copy the configuration into scalars before the sync; reading the aggregate between the
-    // volatile MopCfg accesses forces it onto the stack instead of into registers.
-    const bool has_end_ops              = config.end_op.is_set;
-    const bool has_mid_ops              = config.mid_ops.all_set();
-    const std::uint32_t end_op          = config.end_op.value_or(TT_OP_NOP);
-    const std::uint32_t start_op        = config.start_op.value;
-    const std::uint32_t mid_op_a        = config.mid_ops.op_a.value_or(TT_OP_NOP);
-    const std::uint32_t mid_op_b        = config.mid_ops.op_b.value_or(TT_OP_NOP);
-    const std::uint32_t mid_op_c        = config.mid_ops.op_c.value_or(TT_OP_NOP);
-    const std::uint32_t start_op_shadow = config.start_op_shadow.value;
-    const std::uint32_t end_op_shadow   = config.end_op_shadow.value_or(TT_OP_NOP);
-
-    ckernel::mop_sync();
-
-    mop_cfg[1] = static_cast<std::uint32_t>(has_end_ops) | (static_cast<std::uint32_t>(has_mid_ops) << 1);
-    mop_cfg[2] = end_op;
-    mop_cfg[3] = start_op;
-    mop_cfg[4] = mid_op_a;
-    mop_cfg[5] = mid_op_b;
-    mop_cfg[6] = mid_op_c;
-    mop_cfg[7] = start_op_shadow;
-    mop_cfg[8] = end_op_shadow;
-}
+template <std::uint32_t Word, std::uint32_t... Words>
+inline constexpr std::uint32_t occurrences = (0u + ... + static_cast<std::uint32_t>(Word == Words));
 } // namespace detail
 
 /**
- * @brief Validate and program this thread's compile-time Template 0 MOP configuration.
+ * @brief Replace Template 1 MopCfg words in this thread's MopCfg, waiting for the preceding expansion once.
  *
- * @tparam Config: Structural Template 0 configuration value.
- * @note Call only after the preceding MOP expansion has completed; this function waits for
- *       that condition before replacing the write-only configuration.
+ * @param updates: Distinct words built with @ref outer_count, @ref inner_count, @ref last_outer or @ref last_inner.
+ * @note Program a Template 1 configuration with @ref program first. MopCfg is write-only, so
+ *       the new words are not checked against it: keep the inner count nonzero when the
+ *       programmed one was nonzero (and vice versa, since an empty inner loop leaves its op
+ *       words unwritten), and keep the result clear of the count anomaly rejected by @ref loop.
  */
-template <MopConfig<MopTemplate::Template0> Config>
-inline __attribute__((always_inline)) void program()
+template <std::uint32_t... Words>
+inline __attribute__((always_inline)) void update(const Update<Words>... updates)
 {
-    static_assert(Config.start_op.is_set, "Template 0 MOP requires start_op");
-    static_assert(Config.start_op_shadow.is_set, "Template 0 MOP requires start_op_shadow");
+    static_assert(sizeof...(Words) >= 1, "Template 1 MOP update takes at least one word");
+    static_assert(((detail::occurrences<Words, Words...> == 1) && ...), "Template 1 MOP update takes each word at most once");
 
-    constexpr bool has_any_mid_op  = Config.mid_ops.any_set();
-    constexpr bool has_all_mid_ops = Config.mid_ops.all_set();
-    static_assert(!has_any_mid_op || has_all_mid_ops, "Template 0 MOP requires either all three mid ops or none");
-
-    constexpr bool has_end_op        = Config.end_op.is_set;
-    constexpr bool has_end_op_shadow = Config.end_op_shadow.is_set;
-    static_assert(has_end_op == has_end_op_shadow, "Template 0 MOP requires end_op and end_op_shadow to be set together");
-
-    detail::program(Config);
-}
-
-/**
- * @brief Validate and program this thread's runtime Template 0 MOP configuration.
- *
- * @param config: Runtime normal and shadow operation groups to program.
- * @note Call only after the preceding MOP expansion has completed; this function waits for
- *       that condition before replacing the write-only configuration.
- */
-inline __attribute__((always_inline)) void program(const MopConfig<MopTemplate::Template0> &config)
-{
-    LLK_ASSERT(config.start_op.is_set, "Template 0 MOP requires start_op");
-    LLK_ASSERT(config.start_op_shadow.is_set, "Template 0 MOP requires start_op_shadow");
-
-    const bool has_any_mid_op  = config.mid_ops.any_set();
-    const bool has_all_mid_ops = config.mid_ops.all_set();
-    LLK_ASSERT(!has_any_mid_op || has_all_mid_ops, "Template 0 MOP requires either all three mid ops or none");
-    LLK_ASSERT(config.end_op.is_set == config.end_op_shadow.is_set, "Template 0 MOP requires end_op and end_op_shadow to be set together");
-
-    detail::program(config);
-}
-
-/**
- * @brief Program this thread's compile-time Template 1 MOP configuration.
- *
- * @tparam Config: Structural Template 1 configuration value.
- * @note Call only after the preceding MOP expansion has completed; this function waits for
- *       that condition before replacing the write-only configuration.
- * @note Configurations that trigger the Blackhole no-start, zero-inner, active-end
- *       count anomaly are rejected.
- */
-template <MopConfig<MopTemplate::Template1> Config>
-inline __attribute__((always_inline)) void program()
-{
-    constexpr detail::ResolvedTemplate1Config resolved_config = detail::resolve(Config);
-    static_assert(
-        !detail::triggers_template1_count_anomaly(resolved_config), "Template 1 MOP configuration triggers the no-start/zero-inner/active-end count anomaly");
-
-    detail::program(resolved_config);
-}
-
-/**
- * @brief Program a compile-time Template 1 configuration with selected runtime counts.
- *
- * @tparam Config: Structural Template 1 configuration providing all operations and default counts.
- * @tparam FirstField: First Template 1 count field replaced at runtime.
- * @tparam RestFields: Additional Template 1 count fields replaced at runtime.
- * @param first: Runtime replacement for FirstField.
- * @param rest: Runtime replacements for RestFields.
- * @note Call only after the preceding MOP expansion has completed; this function waits for
- *       that condition before replacing the write-only configuration.
- */
-template <MopConfig<MopTemplate::Template1> Config, Template1Field FirstField, Template1Field... RestFields>
-inline __attribute__((always_inline)) void program(const RuntimeField<FirstField> first, const RuntimeField<RestFields>... rest)
-{
-    constexpr detail::ResolvedTemplate1Config resolved_config = detail::resolve(Config);
-    static_assert(detail::RuntimeFieldsAreUnique<FirstField, RestFields...>::value, "Template 1 runtime fields must be unique");
-    static_assert(
-        ((FirstField == Template1Field::OuterLoopCount || FirstField == Template1Field::InnerLoopCount) && ... &&
-         (RestFields == Template1Field::OuterLoopCount || RestFields == Template1Field::InnerLoopCount)),
-        "Only Template 1 loop counts may be supplied at runtime");
-
-    detail::ResolvedTemplate1Config runtime_config = resolved_config;
-    runtime_config.outer_count                     = detail::select_runtime_field<Template1Field::OuterLoopCount>(resolved_config.outer_count, first, rest...);
-    runtime_config.inner_count                     = detail::select_runtime_field<Template1Field::InnerLoopCount>(resolved_config.inner_count, first, rest...);
-
-    detail::program(runtime_config);
-}
-
-/**
- * @brief Program this thread's runtime Template 1 MOP configuration.
- *
- * @param config: Template 1 configuration to resolve and program.
- * @note Call only after the preceding MOP expansion has completed; this function waits for
- *       that condition before replacing the write-only configuration.
- * @note Configurations that trigger the Blackhole no-start, zero-inner, active-end
- *       count anomaly assert at runtime.
- */
-inline __attribute__((always_inline)) void program(const MopConfig<MopTemplate::Template1> &config)
-{
-    detail::program(detail::resolve(config));
-}
-
-/**
- * @brief Write one value into the selected Template 0 MOP configuration field.
- *
- * @tparam Field: Template 0 field to replace.
- * @param value: Raw encoded instruction value.
- * @note Call @ref program with a complete Template 0 configuration before patching individual
- *       fields. Patch only slots already enabled by that configuration; use @ref program to
- *       enable or disable the middle and end groups. This function waits for a preceding MOP
- *       expansion before writing the field.
- */
-template <Template0Field Field>
-inline __attribute__((always_inline)) void write(const std::uint32_t value)
-{
     volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
 
-    ckernel::mop_sync();
-    mop_cfg[static_cast<std::uint32_t>(Field)] = value;
-}
-
-/**
- * @brief Write one value into the selected Template 1 MOP configuration field.
- *
- * @tparam Field: Template 1 field to replace.
- * @param value: Raw 32-bit count or encoded instruction value.
- * @note Call @ref program with a complete Template 1 configuration before patching individual
- *       fields. This function waits for a preceding MOP expansion before writing the field.
- * @note Ensure the resulting complete configuration does not trigger the Template 1
- *       no-start, zero-inner, active-end count anomaly; write-only MOP state prevents
- *       validating it here.
- */
-template <Template1Field Field>
-inline __attribute__((always_inline)) void write(const std::uint32_t value)
-{
-    volatile std::uint32_t *mop_cfg = reinterpret_cast<volatile std::uint32_t *>(TENSIX_MOP_CFG_BASE);
+    (detail::assert_valid_count(Words > 1 || detail::is_valid_count(updates.value)), ...);
 
     ckernel::mop_sync();
-    mop_cfg[static_cast<std::uint32_t>(Field)] = value;
+
+    ((mop_cfg[Words] = updates.value), ...);
 }
 
 /**
- * @brief Encode a compile-time Blackhole Template 1 MOP operation without issuing it.
+ * @brief Replace one Template 1 MopCfg word in this thread's MopCfg.
  *
- * @tparam Overrides: Per-expansion outer and inner count overrides; zero fields use MopCfg.
- * @note Use the result where an encoded MOP operation is required. The Blackhole ISA marks
- *       nonzero count overrides as functionality requiring hardware validation.
+ * @param field: Word to replace, values = <outer_count/inner_count/last_outer/last_inner>.
+ * @param value: New count (valid values = <0-1023>) or encoded instruction.
+ * @note See the variadic overload for the caller's obligations.
  */
-template <Template1CountOverrides Overrides>
-constexpr std::uint32_t get_operation()
+template <std::uint32_t Word>
+inline __attribute__((always_inline)) void update(const Field<Word> field, const std::uint32_t value)
 {
-    static_assert(detail::is_valid(Overrides), "Template 1 MOP count overrides must fit in 10 bits");
-
-    return detail::get_operation(Overrides);
+    update(field(value));
 }
+
+// ---------------- Running ----------------
 
 /**
- * @brief Encode a runtime Blackhole Template 1 MOP operation without issuing it.
- *
- * @param overrides: Per-expansion outer and inner count overrides; zero fields use MopCfg.
- * @note Use the result where an encoded MOP operation is required. The Blackhole ISA marks
- *       nonzero count overrides as functionality requiring hardware validation.
+ * @brief Select who writes the high 16 bits of a Template 0 mask, which runs of more than 16 iterations read.
  */
-inline __attribute__((always_inline)) std::uint32_t get_operation(const Template1CountOverrides overrides)
+enum class MaskHigh : std::uint8_t
 {
-    LLK_ASSERT(detail::is_valid(overrides), "Template 1 MOP count overrides must fit in 10 bits");
-
-    return detail::get_operation(overrides);
-}
+    Auto,   // run writes them with MOP_CFG when it may read them; operation rejects a run that reads them
+    Preset, // the caller wrote them with configure_mask_high; nothing writes or checks them
+};
 
 /**
  * @brief Issue a MOP expansion for the selected template.
@@ -547,7 +555,10 @@ template <MopTemplate tmpl>
 struct Runner;
 
 /**
- * @brief Issue a Template 0 MOP expansion with compile-time or runtime arguments.
+ * @brief Issue a Template 0 MOP expansion, or describe one and encode it with @ref operation.
+ *
+ * `Runner<MopTemplate::Template0> {.count = 3, .mask = faces}.operation()` returns the MOP instruction
+ * the matching run would issue, for issuing later with TT_INSN.
  */
 template <>
 struct Runner<MopTemplate::Template0>
@@ -562,33 +573,69 @@ private:
         return ckernel::is_valid(count - 1, COUNT_WIDTH);
     }
 
+    static constexpr bool reads_mask_high(const std::uint32_t count, const std::uint32_t mask)
+    {
+        return count > MASK_LO_WIDTH || !ckernel::is_valid(mask, MASK_LO_WIDTH);
+    }
+
+public:
+    std::uint32_t count;    // number of expansion iterations, valid values = <1-128>
+    std::uint32_t mask = 0; // per-iteration selector mask, consumed least-significant bit first
+    MaskHigh mask_high = MaskHigh::Auto;
+
+    /**
+     * @brief Encode this run as a MOP instruction.
+     *
+     * @note With @ref MaskHigh::Auto, count must be at most 16 and mask must fit in 16 bits, since the
+     *       encoding cannot carry the MOP_CFG that writes the high mask bits.
+     */
+    [[nodiscard]] constexpr std::uint32_t operation() const
+    {
+        detail::check<detail::assert_valid_run_count>(is_valid_count(count));
+        if (mask_high == MaskHigh::Auto)
+        {
+            detail::check<detail::assert_mask_high_unused>(!reads_mask_high(count, mask));
+        }
+        return TT_OP_MOP(0 /*mop_type*/, count - 1, mask & MASK_LO);
+    }
+
+    /**
+     * @brief Write the high 16 bits of a compile-time mask for later runs with @ref MaskHigh::Preset.
+     *
+     * @tparam Mask: Full per-iteration selector mask; only bits 16-31 are written.
+     */
     template <std::uint32_t Mask>
-    inline __attribute__((always_inline)) static void configure_mask()
+    inline __attribute__((always_inline)) static void configure_mask_high()
     {
         TTI_MOP_CFG(Mask >> MASK_LO_WIDTH);
     }
 
-    inline __attribute__((always_inline)) static void configure_mask(const std::uint32_t mask)
+    /**
+     * @brief Write the high 16 bits of a runtime mask for later runs with @ref MaskHigh::Preset.
+     *
+     * @param mask: Full per-iteration selector mask; only bits 16-31 are written.
+     */
+    inline __attribute__((always_inline)) static void configure_mask_high(const std::uint32_t mask)
     {
         TT_MOP_CFG(mask >> MASK_LO_WIDTH);
     }
 
-public:
     /**
      * @brief Run the programmed Template 0 configuration with compile-time arguments.
      *
      * @tparam Count: Number of expansion iterations, valid values = <1-128>.
      * @tparam Mask: Per-iteration selector mask, consumed least-significant bit first.
+     * @tparam High: Who writes the high mask bits, values = <Auto/Preset>.
      * @note Call @ref program with a Template 0 configuration before this function.
      */
-    template <std::uint32_t Count, std::uint32_t Mask>
+    template <std::uint32_t Count, std::uint32_t Mask, MaskHigh High = MaskHigh::Auto>
     inline __attribute__((always_inline)) static void run()
     {
         static_assert(is_valid_count(Count), "MOP encoded count must fit in 7 bits");
 
-        if constexpr (!ckernel::is_valid(Mask, MASK_LO_WIDTH) || Count > MASK_LO_WIDTH)
+        if constexpr (High == MaskHigh::Auto && reads_mask_high(Count, Mask))
         {
-            configure_mask<Mask>();
+            configure_mask_high<Mask>();
         }
         TTI_MOP(0, Count - 1, Mask & MASK_LO);
     }
@@ -597,15 +644,19 @@ public:
      * @brief Run the programmed Template 0 configuration with runtime count.
      *
      * @tparam Mask: Compile-time per-iteration selector mask, consumed least-significant bit first.
+     * @tparam High: Who writes the high mask bits, values = <Auto/Preset>.
      * @param count: Number of expansion iterations, valid values = <1-128>.
      * @note Call @ref program with a Template 0 configuration before this function.
      */
-    template <std::uint32_t Mask>
+    template <std::uint32_t Mask, MaskHigh High = MaskHigh::Auto>
     inline __attribute__((always_inline)) static void run(const std::uint32_t count)
     {
         LLK_ASSERT(is_valid_count(count), "MOP encoded count must fit in 7 bits");
 
-        configure_mask<Mask>();
+        if constexpr (High == MaskHigh::Auto)
+        {
+            configure_mask_high<Mask>();
+        }
         TT_MOP(0, count - 1, Mask & MASK_LO);
     }
 
@@ -613,36 +664,45 @@ public:
      * @brief Run the programmed Template 0 configuration with runtime mask.
      *
      * @tparam Count: Compile-time number of expansion iterations, valid values = <1-128>.
+     * @tparam High: Who writes the high mask bits, values = <Auto/Preset>.
      * @param mask: Per-iteration selector mask, consumed least-significant bit first.
      * @note Call @ref program with a Template 0 configuration before this function.
      */
-    template <std::uint32_t Count>
+    template <std::uint32_t Count, MaskHigh High = MaskHigh::Auto>
     inline __attribute__((always_inline)) static void run_with_runtime_mask(const std::uint32_t mask)
     {
         static_assert(is_valid_count(Count), "MOP encoded count must fit in 7 bits");
 
-        configure_mask(mask);
+        if constexpr (High == MaskHigh::Auto)
+        {
+            configure_mask_high(mask);
+        }
         TT_MOP(0, Count - 1, mask & MASK_LO);
     }
 
     /**
      * @brief Run the programmed Template 0 configuration with runtime arguments.
      *
+     * @tparam High: Who writes the high mask bits, values = <Auto/Preset>.
      * @param count: Number of expansion iterations, valid values = <1-128>.
      * @param mask: Per-iteration selector mask, consumed least-significant bit first.
      * @note Call @ref program with a Template 0 configuration before this function.
      */
+    template <MaskHigh High = MaskHigh::Auto>
     inline __attribute__((always_inline)) static void run(const std::uint32_t count, const std::uint32_t mask)
     {
         LLK_ASSERT(is_valid_count(count), "MOP encoded count must fit in 7 bits");
 
-        configure_mask(mask);
+        if constexpr (High == MaskHigh::Auto)
+        {
+            configure_mask_high(mask);
+        }
         TT_MOP(0, count - 1, mask & MASK_LO);
     }
 };
 
 /**
- * @brief Issue a Template 1 MOP expansion using its programmed loop counts.
+ * @brief Issue or encode a Template 1 MOP expansion using the programmed loop counts.
  */
 template <>
 struct Runner<MopTemplate::Template1>
@@ -651,38 +711,16 @@ struct Runner<MopTemplate::Template1>
      * @brief Run the programmed Template 1 configuration.
      *
      * @note Call @ref program with a Template 1 configuration before this function.
-     *       This function uses zero instruction-level count overrides.
      */
     inline __attribute__((always_inline)) static void run()
     {
         TTI_MOP(1, 0, 0);
     }
 
-    /**
-     * @brief Run the programmed Template 1 configuration with compile-time count overrides.
-     *
-     * @tparam Overrides: Per-expansion outer and inner count overrides; zero fields use MopCfg.
-     * @note Call @ref program with a Template 1 configuration before this function. The
-     *       Blackhole ISA marks nonzero count overrides as functionality requiring hardware validation.
-     */
-    template <Template1CountOverrides Overrides>
-    inline __attribute__((always_inline)) static void run()
+    /** @brief Encode @ref run as a MOP instruction. */
+    [[nodiscard]] constexpr std::uint32_t operation() const
     {
-        static_assert(detail::is_valid(Overrides), "Template 1 MOP count overrides must fit in 10 bits");
-
-        TTI_MOP(1, detail::template1_override_high(Overrides), detail::template1_override_low(Overrides));
-    }
-
-    /**
-     * @brief Run the programmed Template 1 configuration with runtime count overrides.
-     *
-     * @param overrides: Per-expansion outer and inner count overrides; zero fields use MopCfg.
-     * @note Call @ref program with a Template 1 configuration before this function. The
-     *       Blackhole ISA marks nonzero count overrides as functionality requiring hardware validation.
-     */
-    inline __attribute__((always_inline)) static void run(const Template1CountOverrides overrides)
-    {
-        TT_INSN(get_operation(overrides));
+        return TT_OP_MOP(1 /*mop_type*/, 0 /*loop_count*/, 0 /*zmask_lo16_or_loop_count*/);
     }
 };
 
