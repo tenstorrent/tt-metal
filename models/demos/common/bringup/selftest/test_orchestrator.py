@@ -517,3 +517,29 @@ def test_a_refused_commit_stops_the_run_and_resume_commits_without_a_rerun(orch,
     assert o.run() == DONE
     assert runs.read_text().count("run") == 2 and orch.calls() == ["C.1.implement.1.md bringup-engineer"]
     assert o.led.status("C.1") == "PASS" and sandbox.git("log", "-1", "--format=%s") == "[toy][C.1] component"
+
+
+def test_a_fix_job_cut_off_mid_agent_restarts_its_agent_not_a_passing_gate(orch):
+    """F193 (DeepSeek-V4.1 8x4 FIX.3): the overseer killed the run as a fix job's agent started; on resume the job's
+    gate (tests that passed before the change it asks for) passed at once and committed the job with no agent."""
+    import json
+
+    from models.demos.common.bringup import overseer as OV
+    from models.demos.common.bringup.orchestrator import main
+
+    fix = impl_task(id="FIX.1", step=OV.FIX_STEP, role=OV.FIX_ROLE, precheck=False)
+    o = orch([fix], {f"FIX.1.{OV.FIX_ROLE}.2.md": {"write": {"src/impl.txt": "0.999"}}})
+    (o.spec.repo / "src/impl.txt").write_text("0.999")  # the gate already passes before the job
+    real = o.run_agent
+
+    def killed(task, role, attempt, brief, **kw):
+        o.led.update(task["id"], status="RUNNING", attempt=attempt, role=role)
+        (o.run_dir / OV.AGENT_FILE).write_text(json.dumps({"pid": 1, "pgid": 1, "task": task["id"], "role": role}))
+        raise KeyboardInterrupt
+
+    o.run_agent = killed
+    with pytest.raises(KeyboardInterrupt):
+        o.run()
+    o.run_agent = real
+    assert main(["resume", "--spec", str(o.spec.path)]) == DONE
+    assert [c for c in orch.calls() if f".{OV.FIX_ROLE}." in c]  # the job's agent ran; no passing gate stood in

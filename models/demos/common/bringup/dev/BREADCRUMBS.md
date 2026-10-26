@@ -2049,3 +2049,12 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - Selftest isolation: the first suite run probed the Galaxy's real cards (test_resume_after_a_fix calls main resume)
   next to a live run's device work. selftest/conftest.py now hides /dev/tenstorrent and the card cache from every
   selftest (autouse); test_cards.py::test_no_selftest_sees_the_real_cards.
+
+## F193: a fix job cut off mid-agent restarts its agent; only a STOP resumes into a gate first (2026-10-26)
+- DeepSeek-V4.1 galaxy_8x4-full FIX.3 (root-cause the RT profiler failure): the overseer killed the run as its agent
+  started (to land F190-F192, kill + resume per F95); on resume F87's "a resumed task gates first" ran the job's gate
+  (B.1 + W.1, both passed before the job was queued), it passed on reused units and committed FIX.3 with no agent.
+- A task with `precheck: False` (fix jobs) now gates first on resume only when it resumed from STOPPED (its agents
+  failed; the work may be done meanwhile, F87); from RUNNING (cut off) its agent starts again. Tasks with a precheck
+  are unchanged. Selftest test_orchestrator.py::test_a_fix_job_cut_off_mid_agent_restarts_its_agent_not_a_passing_gate
+  (fails without the fix); test_overseer.py's F87 test now writes the resume entry's `from` as `resume` does.
