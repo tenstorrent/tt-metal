@@ -67,8 +67,8 @@ using CoreItemRuns = std::vector<ItemRun>;
 uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks);
 uint32_t num_kv_steps(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t item);
 
-// Per-core item runs for num_cores cores: causal items longest first, otherwise contiguous blocks; falls
-// back to contiguous blocks when the lists would not fit the runtime args.
+// Per-core item runs for num_cores cores: causal chunks as light/heavy pairs when there are enough pairs,
+// otherwise contiguous blocks; falls back to contiguous blocks when the lists would not fit the runtime args.
 std::vector<CoreItemRuns> split_work(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores);
 
