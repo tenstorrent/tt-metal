@@ -30,7 +30,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/program.hpp>
 
-// Access to internal API: ProgramImpl::finalize_offsets, get_sem_base_addr, MetalEnvImpl, MetalEnvImpl
+// Access to internal API: ProgramImpl::finalize_offsets, get_sem_base_addr, MeshDeviceImpl, MetalEnvImpl
 #include "impl/program/program_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/program/dispatch.hpp"
