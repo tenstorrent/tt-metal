@@ -6,9 +6,6 @@ name: "Trial blaze tests"
 # is tagged, packaged, or published.
 
 on:
-  push:
-    branches:
-      - jvega/blaze_workflow
   workflow_dispatch:
     inputs:
       blaze-ref:
@@ -61,4 +58,4 @@ jobs:
       # match the libraries it links against.
       metal-ref: ${{ github.sha }}
       dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      blaze-ref: ${{ inputs.blaze-ref || 'jvega/uplift_oct_26' }}
+      blaze-ref: ${{ inputs.blaze-ref }}
