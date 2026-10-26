@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <stdexcept>
+#include <string>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -48,6 +49,37 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidNamedCrtaIdentifierFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("named CRTA name 'has-dash' is not a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_TooLongNamedArgFails) {
+    // Argument names share the accessor-name length cap with resource binding names.
+    const std::string too_long(MAX_ACCESSOR_NAME_LENGTH + 1, 'a');
+    const std::string expected = "must be at most " + std::to_string(MAX_ACCESSOR_NAME_LENGTH) + " characters";
+
+    ProgramSpec rta_spec = MakeMinimalValidProgramSpec();
+    rta_spec.kernels[0].runtime_arg_schema.runtime_arg_names = {too_long};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, rta_spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(expected)));
+
+    ProgramSpec crta_spec = MakeMinimalValidProgramSpec();
+    crta_spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {too_long};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, crta_spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(expected)));
+
+    ProgramSpec cta_spec = MakeMinimalValidProgramSpec();
+    cta_spec.kernels[0].compile_time_args = {{too_long, 1}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, cta_spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(expected)));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_MaxLengthNamedArgSucceeds) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {std::string(MAX_ACCESSOR_NAME_LENGTH, 'a')};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_NamedRtaCrtaCollisionFails) {

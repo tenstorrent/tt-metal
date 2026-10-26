@@ -106,19 +106,19 @@ struct KernelSpec {
     using CompileTimeArgs = Table<ArgName, ArgValue>;
     // Table key represents the accessor name of the CTA.
     // Invariant:
-    // - The key must be a valid C++ identifier.
+    // - The key must be a valid C++ identifier shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
     // - Must not have repeated name with runtime_arg_schema.
     CompileTimeArgs compile_time_args;
 
     struct RuntimeArgSchema {
         // Invariant:
         // - Must not have repeated names.
-        // - All argument names must be valid C++ identifiers.
+        // - All argument names must be valid C++ identifiers shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
         Group<ArgName> runtime_arg_names;
 
         // Invariant:
         // - Must not have repeated names.
-        // - All argument names must be valid C++ identifiers.
+        // - All argument names must be valid C++ identifiers shorter than (or equal to) MAX_ACCESSOR_NAME_LENGTH.
         Group<ArgName> common_runtime_arg_names;
     };
     // Invariant:

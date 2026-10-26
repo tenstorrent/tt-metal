@@ -9,6 +9,7 @@
 #include <gmock/gmock.h>
 #include <cstdint>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -123,6 +124,21 @@ TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceInvalidIdentifierFails) {
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("tensor binding sequence_name 'has-dash' must be a valid C++ identifier")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceTooLongNameFails) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.tensor_parameters = {MakeMinimalTensorParameter("t0")};
+    BindTensorParameterToKernel(spec.kernels[0], "t0", "in0");
+    const std::string too_long(MAX_ACCESSOR_NAME_LENGTH + 1, 'a');
+    spec.kernels[0].advanced_options.tensor_binding_sequences = {
+        KernelAdvancedOptions::TensorBindingSequence{.sequence_name = too_long, .members = {"in0"}},
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
+            "sequence_name must be at most " + std::to_string(MAX_ACCESSOR_NAME_LENGTH) + " characters")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_VarargPerNodeOverlapFails) {
