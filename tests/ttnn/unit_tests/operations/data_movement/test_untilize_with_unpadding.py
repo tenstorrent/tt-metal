@@ -1030,6 +1030,46 @@ def test_untilize_with_unpadding_block_per_node_cb_size(
 
 
 @pytest.mark.parametrize(
+    "padded_shape, output_shape",
+    [
+        # The tile row at row 32 starts exactly at the end of the 32-row output.
+        ((1, 1, 64, 2048), (1, 1, 32, 2048)),
+        # The same tile row in each of two batch slices.
+        ((2, 1, 64, 2048), (2, 1, 32, 2048)),
+        # The tile row at row 32 starts exactly at the output end; the one at row 64 starts past it.
+        ((1, 1, 96, 2048), (1, 1, 32, 2048)),
+        # The tile row at row 32 starts past the end of the 30-row output.
+        ((1, 1, 64, 2048), (1, 1, 30, 2048)),
+        # Height and width cropped together, so some sub-blocks also lie entirely in the width padding.
+        ((2, 1, 96, 2048), (2, 1, 32, 1000)),
+    ],
+)
+def test_untilize_with_unpadding_block_crops_whole_tile_rows(device, padded_shape, output_shape):
+    """Untilize a wide tensor while cropping away one or more whole tile rows of its padded height.
+
+    A row of 64 tiles selects the block-interleaved factory, whose work split walks the input padded
+    height. In every case at least one tile row starts at or past the end of the output, so none of
+    its rows belong to the output, and the rows before it must still come out intact.
+    """
+    torch.manual_seed(0)
+    torch_input = torch.rand(padded_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_end = [d - 1 for d in output_shape]
+    tt_output = ttnn.untilize_with_unpadding(tt_input, output_tensor_end=output_end, use_multicore=True)
+
+    assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
+    torch_golden = torch_input[: output_shape[0], : output_shape[1], : output_shape[2], : output_shape[3]]
+    assert_equal(torch_golden, ttnn.to_torch(tt_output))
+
+
+@pytest.mark.parametrize(
     "factory", ["single_core", "multi_core_interleaved", "multi_core_sharded", "multi_core_nd_sharded"]
 )
 def test_untilize_with_unpadding_spec_factories_program_cache_addr_change(device, factory, isolate_program_cache):
