@@ -215,10 +215,16 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
     // Transform to z = (m - 1) / (m + 1)
     sfpi::vFloat m_plus_1 = m + 1.0f;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
+    sfpi::vFloat m_minus_1 = m - 1.0f;
     sfpi::vFloat recip = sfpi::approx_recip(m_plus_1);
-    recip = recip * (1.0f - m_plus_1 * recip) + recip;
-    recip = recip * (1.0f - m_plus_1 * recip) + recip;
-    recip = recip * (1.0f - m_plus_1 * recip) + recip;
+    sfpi::vFloat t = 1.0f - m_plus_1 * recip;
+    auto exp_sm = sfpi::convert<sfpi::vSMag>(exp);
+    recip = recip * t + recip;
+    t = 1.0f - m_plus_1 * recip;
+    sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(exp_sm, sfpi::RoundMode::Nearest);
+    recip = recip * t + recip;
+    t = 1.0f - m_plus_1 * recip;
+    recip = recip * t + recip;
     // z = (m-1)*recip. The subtract is kept separate rather than folded into a multiply-add:
     // the range reduction above leaves m in [sqrt(2)/2, sqrt(2)], which is inside [0.5, 2], so
     // Sterbenz's lemma makes m - 1 exact for every representable m and the only rounding left is
@@ -227,7 +233,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // is only partially fused -- the product keeps four bits beyond fp32, not the exact product a
     // true FMA would give -- so those four bits are all that survives the cancellation. The error
     // is then scaled by pow in pow*log2(base): 250 ULP at pow = 1000, 4.4% relative at 3e6.
-    sfpi::vFloat z = (m - 1.0f) * recip;
+    sfpi::vFloat z = m_minus_1 * recip;
 
     // Compute z**2 for polynomial evaluation
     sfpi::vFloat z2 = z * z;
@@ -236,7 +242,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
         z2, 1.0f, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f);
     sfpi::vFloat ln_m = 2.0f * (z * p);
 
-    sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::Nearest);
 
     // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2). Keep the two contributions
     // separate: exp_f32 is the large integer part, ln_m*ln2inv the small fractional
@@ -295,7 +300,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
-    sfpi::vFloat abs_pow = sfpi::abs(pow);
+    sfpi::vFloat abs_pow = sfpi::abs(sfpi::setsgn(pow, 1));
 
     // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
     // Check valid base range
