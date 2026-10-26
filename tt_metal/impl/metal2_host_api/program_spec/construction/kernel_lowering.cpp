@@ -20,6 +20,7 @@
 #include <tt_stl/fmt.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/metal2_host_api/arg_value_access.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -57,10 +58,25 @@ KernelSource MakeKernelSource(const KernelSpec& kernel_spec, ContextId context_i
 // For now, just convert to the map types that the core runtime expects.
 // TODO: Fix this inefficiency eventually.
 std::unordered_map<std::string, uint32_t> to_named_compile_args_map(const KernelSpec::CompileTimeArgs& bindings) {
-    return std::unordered_map<std::string, uint32_t>(bindings.begin(), bindings.end());
+    std::unordered_map<std::string, uint32_t> named_compile_args;
+    named_compile_args.reserve(bindings.size());
+    for (const auto& [name, value] : bindings) {
+        named_compile_args.emplace(name.str(), ArgValueAccess::u32(value));
+    }
+    return named_compile_args;
 }
 std::map<std::string, std::string> to_defines_map(const KernelSpec::CompilerOptions::Defines& defines) {
     return std::map<std::string, std::string>(defines.begin(), defines.end());
+}
+
+// The core runtime stores kernel-visible names as std::string.
+std::vector<std::string> to_strings(const std::vector<AccessorName>& names) {
+    std::vector<std::string> strings;
+    strings.reserve(names.size());
+    for (const auto& name : names) {
+        strings.push_back(name.str());
+    }
+    return strings;
 }
 
 DataMovementConfig MakeGen1DataMovementConfig(const KernelSpec& kernel_spec) {
@@ -312,7 +328,8 @@ LoweredKernel LowerKernel(
     //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer
     //    (after the user CTA-vararg prefix)
     //  - assign each binding a slot in the kernel's CRTA buffer (TensorBinding address section)
-    const auto& user_named_crtas = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
+    const std::vector<std::string> user_named_crtas =
+        to_strings(kernel_spec.runtime_arg_schema.common_runtime_arg_names);
     const auto& cta_varargs = kernel_spec.advanced_options.compile_time_varargs;
     const uint32_t vararg_cta_count = static_cast<uint32_t>(cta_varargs.size());
     TensorBindingsForKernel ta_bindings = ResolveTensorBindingsForKernel(
@@ -339,7 +356,7 @@ LoweredKernel LowerKernel(
     // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
     // address section is tracked separately (via tensor_binding_handles), so we pass the user
     // CRTA list through unchanged.
-    const auto& named_rtas = kernel_spec.runtime_arg_schema.runtime_arg_names;
+    const std::vector<std::string> named_rtas = to_strings(kernel_spec.runtime_arg_schema.runtime_arg_names);
 
     // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
     std::vector<uint32_t> compile_args = cta_varargs;
@@ -442,8 +459,8 @@ LoweredKernel LowerKernel(
     std::vector<TensorBindingSequenceHandle> tensor_binding_sequences;
     tensor_binding_sequences.reserve(kernel_spec.advanced_options.tensor_binding_sequences.size());
     for (const auto& sequence : kernel_spec.advanced_options.tensor_binding_sequences) {
-        tensor_binding_sequences.push_back(
-            TensorBindingSequenceHandle{.sequence_name = sequence.sequence_name, .members = sequence.members});
+        tensor_binding_sequences.push_back(TensorBindingSequenceHandle{
+            .sequence_name = sequence.sequence_name.str(), .members = to_strings(sequence.members)});
     }
     kernel->set_tensor_binding_sequences(std::move(tensor_binding_sequences));
 
@@ -463,23 +480,22 @@ LoweredKernel LowerKernel(
     // An explicit override of 0 erases the scalar-default entry so run-params treats
     // that node as having no varargs (rather than requiring an "empty" value list).
     // Overlapping override entries (two entries covering the same node) are an error.
-    const auto& user_schema = kernel_spec.runtime_arg_schema;
     detail::ProgramImpl::KernelRTASchema runtime_schema;
-    runtime_schema.runtime_arg_names = user_schema.runtime_arg_names;
+    runtime_schema.runtime_arg_names = kernel_spec.runtime_arg_schema.runtime_arg_names;
 
     // Pass the user CRTA list through.
     // NOTE: The TensorBinding address section is tracked separately on the Kernel
     // (via tensor_binding_handles) and its slot offsets are baked into each binding handle's
     // addr_crta_offset; SetProgramRunArgs uses BOTH to assemble the per-enqueue CRTA buffer.
-    runtime_schema.common_runtime_arg_names = user_named_crtas;
+    runtime_schema.common_runtime_arg_names = kernel_spec.runtime_arg_schema.common_runtime_arg_names;
 
     // Precompute the name -> slot-index maps so the hot UpdateProgramRunArgs path does O(1)
     // lookups rather than rebuilding a map per call.
     for (size_t i = 0; i < runtime_schema.runtime_arg_names.size(); ++i) {
-        runtime_schema.runtime_arg_name_to_slot.emplace(runtime_schema.runtime_arg_names[i], i);
+        runtime_schema.runtime_arg_name_to_slot.emplace(runtime_schema.runtime_arg_names[i].str(), i);
     }
     for (size_t i = 0; i < runtime_schema.common_runtime_arg_names.size(); ++i) {
-        runtime_schema.common_runtime_arg_name_to_slot.emplace(runtime_schema.common_runtime_arg_names[i], i);
+        runtime_schema.common_runtime_arg_name_to_slot.emplace(runtime_schema.common_runtime_arg_names[i].str(), i);
     }
 
     // Varargs schema now lives on KernelAdvancedOptions.

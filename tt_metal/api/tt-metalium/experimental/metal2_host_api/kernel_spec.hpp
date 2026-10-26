@@ -12,7 +12,9 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/accessor_name.hpp>
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
 #include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
@@ -143,7 +145,7 @@ struct KernelSpec {
         enum class AccessPattern { STRIDED, ALL, BLOCKED };
 
         DFBSpecName dfb_spec_name;   // identify the DFB within the ProgramSpec
-        std::string accessor_name;   // DFB accessor name (used in the kernel source code)
+        AccessorName accessor_name;  // DFB accessor name (used in the kernel source code)
         EndpointType endpoint_type;  // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
         uint32_t block_size = 0;  // number of DFB entries per block
@@ -157,7 +159,7 @@ struct KernelSpec {
     // The kernel constructs a Semaphore from the binding token: Semaphore(sem::<accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
-        std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
+        AccessorName accessor_name;             // semaphore accessor name (used in the kernel source code)
     };
     Group<SemaphoreBinding> semaphore_bindings;
 
@@ -167,7 +169,7 @@ struct KernelSpec {
     //   Scratchpad<uint32_t>(scratch::<accessor_name>)
     struct ScratchpadBinding {
         ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
-        std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
+        AccessorName accessor_name;               // scratchpad accessor name (used in the kernel source code)
     };
     Group<ScratchpadBinding> scratchpad_bindings;
 
@@ -181,7 +183,7 @@ struct KernelSpec {
     //   TensorAccessor(tensor::<accessor_name>)
     struct TensorBinding {
         TensorParamName tensor_parameter_name;  // identify the TensorParameter within the ProgramSpec
-        std::string accessor_name;              // tensor accessor name (used in the kernel source code)
+        AccessorName accessor_name;             // tensor accessor name (used in the kernel source code)
     };
     Group<TensorBinding> tensor_bindings;
 
@@ -192,7 +194,7 @@ struct KernelSpec {
     //----------------------------------------------------------------------------
     // Compile time arguments
     // (Bound argument values cannot be changed between Program executions)
-    using CompileTimeArgs = Table<std::string, uint32_t>;
+    using CompileTimeArgs = Table<ArgName, ArgValue>;
     CompileTimeArgs compile_time_args;
 
     //----------------------------------------------------------------------------
@@ -204,10 +206,10 @@ struct KernelSpec {
 
     struct RuntimeArgSchema {
         // Runtime argument names (must be unique, valid C++ identifiers.)
-        Group<std::string> runtime_arg_names;
+        Group<ArgName> runtime_arg_names;
 
         // Common runtime argument names (must be unique, valid C++ identifiers.)
-        Group<std::string> common_runtime_arg_names;
+        Group<ArgName> common_runtime_arg_names;
     };
     RuntimeArgSchema runtime_arg_schema{};
 
@@ -246,7 +248,7 @@ using ScratchpadBinding = KernelSpec::ScratchpadBinding;
 
 // Creates a DFB producer binding with a STRIDED access pattern
 // (All DFB producers are STRIDED)
-inline DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+inline DFBBinding ProducerOf(DFBSpecName dfb_spec_name, AccessorName accessor_name) {
     return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
@@ -257,7 +259,7 @@ inline DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string accessor_nam
 // Creates a DFB producer binding with a BLOCKED access pattern.
 // block_size is the number of contiguous entries a thread accesses before striding
 // by block_size * num_threads; it must be > 0.
-inline DFBBinding BlockedProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name, uint32_t block_size) {
+inline DFBBinding BlockedProducerOf(DFBSpecName dfb_spec_name, AccessorName accessor_name, uint32_t block_size) {
     return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
@@ -271,7 +273,7 @@ inline DFBBinding BlockedProducerOf(DFBSpecName dfb_spec_name, std::string acces
 // Use this for single-threaded kernels, where the access pattern doesn't matter.
 // For multi-threaded kernels (Quasar), prefer the explicit access pattern
 // helper factories below.
-inline DFBBinding ConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+inline DFBBinding ConsumerOf(DFBSpecName dfb_spec_name, AccessorName accessor_name) {
     return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
@@ -282,7 +284,7 @@ inline DFBBinding ConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_nam
 
 // Creates a DFB consumer binding with a STRIDED access pattern
 // (The common case for multi-threaded DFB consumers)
-inline DFBBinding StridedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+inline DFBBinding StridedConsumerOf(DFBSpecName dfb_spec_name, AccessorName accessor_name) {
     return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
@@ -292,7 +294,7 @@ inline DFBBinding StridedConsumerOf(DFBSpecName dfb_spec_name, std::string acces
 }
 
 // Creates a DFB consumer binding with an ALL access pattern
-inline DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
+inline DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, AccessorName accessor_name) {
     return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
@@ -304,7 +306,7 @@ inline DFBBinding AllConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_
 // Creates a DFB consumer binding with a BLOCKED access pattern.
 // block_size is the number of contiguous entries a thread accesses before striding
 // by block_size * num_threads; it must be > 0.
-inline DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, std::string accessor_name, uint32_t block_size) {
+inline DFBBinding BlockedConsumerOf(DFBSpecName dfb_spec_name, AccessorName accessor_name, uint32_t block_size) {
     return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),

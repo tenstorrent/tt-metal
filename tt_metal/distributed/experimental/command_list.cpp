@@ -35,6 +35,7 @@
 #include "tt_metal/impl/dispatch/simple_trace_allocator.hpp"
 #include "tt_metal/impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
+#include "tt_metal/impl/metal2_host_api/arg_value_access.hpp"
 #include "tt_metal/impl/metal2_host_api/tensor_binding_crtas.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
@@ -507,16 +508,18 @@ void CommandList::Impl::update_args(const CmdListArgPatch& patch, bool blocking)
     for (const auto& [name, value] : patch.runtime_args) {
         const auto it = registry.runtime_targets.find(name);
         TT_FATAL(it != registry.runtime_targets.end(), "Unknown command-list runtime parameter '{}'", *name);
+        const uint32_t word = ArgValueAccess::u32(value);
         for (const auto& target : it->second) {
-            stage(target, ttsl::Span<const uint32_t>(&value, 1));
+            stage(target, ttsl::Span<const uint32_t>(&word, 1));
         }
     }
     for (const auto& [name, value] : patch.common_runtime_args) {
         const auto it = registry.common_runtime_targets.find(name);
         TT_FATAL(
             it != registry.common_runtime_targets.end(), "Unknown command-list common-runtime parameter '{}'", *name);
+        const uint32_t word = ArgValueAccess::u32(value);
         for (const auto& target : it->second) {
-            stage(target, ttsl::Span<const uint32_t>(&value, 1));
+            stage(target, ttsl::Span<const uint32_t>(&word, 1));
         }
     }
     std::vector<uint32_t> tensor_words;
@@ -882,7 +885,7 @@ void CommandListBuilderImpl::resolve_parameters(
             TT_FATAL(!info.nodes.empty(), "Command list runtime parameter '{}' must name at least one node", *name);
             auto& captured = find_captured_program(info.program.get());
             const auto* schema = rta_schema_of(captured, info.kernel_name);
-            const auto slot = schema->runtime_arg_name_to_slot.find(info.arg_name);
+            const auto slot = schema->runtime_arg_name_to_slot.find(info.arg_name.str());
             TT_FATAL(
                 slot != schema->runtime_arg_name_to_slot.end(),
                 "Runtime argument '{}' is not declared by kernel '{}'",
@@ -902,7 +905,7 @@ void CommandListBuilderImpl::resolve_parameters(
         for (const auto& info : infos) {
             auto& captured = find_captured_program(info.program.get());
             const auto* schema = rta_schema_of(captured, info.kernel_name);
-            const auto slot = schema->common_runtime_arg_name_to_slot.find(info.arg_name);
+            const auto slot = schema->common_runtime_arg_name_to_slot.find(info.arg_name.str());
             TT_FATAL(
                 slot != schema->common_runtime_arg_name_to_slot.end(),
                 "Common runtime argument '{}' is not declared by kernel '{}'",

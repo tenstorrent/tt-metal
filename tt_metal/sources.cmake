@@ -72,7 +72,9 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/mesh_program_descriptor.hpp
     api/tt-metalium/experimental/blaze/named_kernel_args.hpp
     api/tt-metalium/experimental/command_list.hpp
+    api/tt-metalium/experimental/metal2_host_api/accessor_name.hpp
     api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
+    api/tt-metalium/experimental/metal2_host_api/arg_value.hpp
     api/tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp
     api/tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp
     api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp

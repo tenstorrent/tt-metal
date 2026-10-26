@@ -22,6 +22,7 @@
 #include "impl/allocator/persistent_l1_arena.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
+#include "tt-metalium/experimental/metal2_host_api/accessor_name.hpp"            // Metal 2.0 ArgName
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
@@ -628,8 +629,8 @@ public:
     struct KernelRTASchema {
         // Named arg names, in declaration order. Used to serialize ProgramRunArgs values
         // into the dispatch buffer and to validate that every declared name is supplied.
-        std::vector<std::string> runtime_arg_names;
-        std::vector<std::string> common_runtime_arg_names;
+        std::vector<experimental::ArgName> runtime_arg_names;
+        std::vector<experimental::ArgName> common_runtime_arg_names;
 
         // Precomputed name -> slot-index maps mirroring the *_names vectors above (slot = the arg's
         // position within its dispatch-buffer section). Built once at Program construction so the

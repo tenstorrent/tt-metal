@@ -39,18 +39,18 @@ void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, tt::ARCH arch) {
 void ValidateScratchpadBindings(const KernelSpec& kernel) {
     std::unordered_set<std::string> accessor_names;
     for (const auto& binding : kernel.scratchpad_bindings) {
-        auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+        auto [it, inserted] = accessor_names.insert(binding.accessor_name.str());
         TT_FATAL(
             inserted,
             "Kernel '{}' has duplicate scratchpad accessor_name '{}'",
             kernel.unique_id,
             binding.accessor_name);
         TT_FATAL(
-            IsValidCppIdentifier(binding.accessor_name),
+            IsValidCppIdentifier(binding.accessor_name.view()),
             "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
             kernel.unique_id,
             binding.accessor_name);
-        ValidateAccessorNameLength(kernel.unique_id, "scratchpad", binding.accessor_name);
+        ValidateAccessorNameLength(kernel.unique_id, "scratchpad", binding.accessor_name.view());
     }
 }
 

@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/accessor_name.hpp>
+#include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -55,7 +57,7 @@ struct CmdListRuntimeArgInfo {
     // Program in the workload passed to CommandListBuilder::add(). Only needs to outlive that call.
     std::reference_wrapper<const Program> program;
     KernelSpecName kernel_name;
-    std::string arg_name;
+    ArgName arg_name;
     // Nodes whose copy of the argument is patched. Must not be empty.
     std::vector<NodeCoord> nodes;
 };
@@ -67,7 +69,7 @@ struct CmdListCommonRuntimeArgInfo {
     // Program in the workload passed to CommandListBuilder::add(). Only needs to outlive that call.
     std::reference_wrapper<const Program> program;
     KernelSpecName kernel_name;
-    std::string arg_name;
+    ArgName arg_name;
 };
 
 /**
@@ -85,8 +87,8 @@ struct CmdListParameters {
  */
 struct CmdListArgPatch {
     Table<CmdListTensorArgName, ProgramRunArgs::TensorArgument> tensor_args;
-    Table<CmdListRuntimeArgName, uint32_t> runtime_args;
-    Table<CmdListCommonRuntimeArgName, uint32_t> common_runtime_args;
+    Table<CmdListRuntimeArgName, ArgValue> runtime_args;
+    Table<CmdListCommonRuntimeArgName, ArgValue> common_runtime_args;
 };
 
 /**

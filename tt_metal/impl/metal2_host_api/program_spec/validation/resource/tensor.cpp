@@ -21,15 +21,15 @@ void ValidateTensorBindings(const KernelSpec& kernel) {
 
     std::unordered_set<std::string> accessor_names;
     for (const auto& binding : kernel.tensor_bindings) {
-        auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+        auto [it, inserted] = accessor_names.insert(binding.accessor_name.str());
         TT_FATAL(
             inserted, "Kernel '{}' has duplicate tensor accessor_name '{}'", kernel.unique_id, binding.accessor_name);
         TT_FATAL(
-            IsValidCppIdentifier(binding.accessor_name),
+            IsValidCppIdentifier(binding.accessor_name.view()),
             "Kernel '{}' tensor accessor_name '{}' must be a valid C++ identifier",
             kernel.unique_id,
             binding.accessor_name);
-        ValidateAccessorNameLength(kernel.unique_id, "tensor", binding.accessor_name);
+        ValidateAccessorNameLength(kernel.unique_id, "tensor", binding.accessor_name.view());
     }
 
     std::unordered_set<std::string> reserved_type_aliases;
@@ -41,22 +41,22 @@ void ValidateTensorBindings(const KernelSpec& kernel) {
     std::unordered_set<std::string> sequence_names;
     for (const auto& sequence : kernel.advanced_options.tensor_binding_sequences) {
         TT_FATAL(
-            IsValidCppIdentifier(sequence.sequence_name),
+            IsValidCppIdentifier(sequence.sequence_name.view()),
             "Kernel '{}' tensor binding sequence_name '{}' must be a valid C++ identifier",
             kernel.unique_id,
             sequence.sequence_name);
         TT_FATAL(
-            !accessor_names.contains(sequence.sequence_name),
+            !accessor_names.contains(sequence.sequence_name.str()),
             "Kernel '{}' tensor binding sequence_name '{}' collides with a TensorBinding accessor_name",
             kernel.unique_id,
             sequence.sequence_name);
         TT_FATAL(
-            !reserved_type_aliases.contains(sequence.sequence_name),
+            !reserved_type_aliases.contains(sequence.sequence_name.str()),
             "Kernel '{}' tensor binding sequence_name '{}' collides with generated type alias '{}'",
             kernel.unique_id,
             sequence.sequence_name,
             sequence.sequence_name);
-        auto [sit, sinserted] = sequence_names.insert(sequence.sequence_name);
+        auto [sit, sinserted] = sequence_names.insert(sequence.sequence_name.str());
         TT_FATAL(
             sinserted,
             "Kernel '{}' has duplicate tensor binding sequence_name '{}'",
@@ -66,12 +66,12 @@ void ValidateTensorBindings(const KernelSpec& kernel) {
         std::unordered_set<std::string> member_names;
         for (const auto& member : sequence.members) {
             TT_FATAL(
-                accessor_names.contains(member),
+                accessor_names.contains(member.str()),
                 "Kernel '{}' tensor binding sequence '{}' references unknown tensor accessor_name '{}'",
                 kernel.unique_id,
                 sequence.sequence_name,
                 member);
-            auto [mit, minserted] = member_names.insert(member);
+            auto [mit, minserted] = member_names.insert(member.str());
             TT_FATAL(
                 minserted,
                 "Kernel '{}' tensor binding sequence '{}' has duplicate member '{}'",

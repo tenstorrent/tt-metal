@@ -43,14 +43,14 @@ void ValidateKernelArguments(const KernelSpec& kernel) {
             kind);
     };
     for (const auto& name : kernel.runtime_arg_schema.runtime_arg_names) {
-        check_name(name, "named RTA");
+        check_name(name.str(), "named RTA");
     }
     for (const auto& name : kernel.runtime_arg_schema.common_runtime_arg_names) {
-        check_name(name, "named CRTA");
+        check_name(name.str(), "named CRTA");
     }
     for (const auto& [name, value] : kernel.compile_time_args) {
         (void)value;
-        check_name(name, "named CTA");
+        check_name(name.str(), "named CTA");
     }
 }
 
