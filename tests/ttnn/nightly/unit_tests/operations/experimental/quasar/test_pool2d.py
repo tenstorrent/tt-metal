@@ -535,7 +535,16 @@ DRAM_SLICED_CASES = [
     ("max_k3x3_s2_w2_tile", dict(channels=32, in_h=16, in_w=16, dram_slice=("width", 2))),
     (
         "avg_k2x2_s2_h2_tile",
-        dict(pool="avg", channels=32, in_h=16, in_w=16, kernel=(2, 2), padding=(0, 0), dram_slice=("height", 2)),
+        dict(
+            pool="avg",
+            channels=32,
+            in_h=16,
+            in_w=16,
+            kernel=(2, 2),
+            padding=(0, 0),
+            dram_slice=("height", 2),
+            sim_skip="Quasar pool bug, windows <= 8 rows (see k2x2_s2): the same 2x2 avg pool mismatches on craq-sim unsliced too -- not a slicing issue; passes on ttsim Blackhole",
+        ),
     ),
 ]
 
