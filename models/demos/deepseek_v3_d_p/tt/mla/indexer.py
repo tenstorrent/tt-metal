@@ -1373,13 +1373,25 @@ class TtCsaIndexer(TtIndexerBase):
         self._idx_position_bias = weights["position_bias"]
         self._idx_knorm = weights["kv_norm"]
 
-    def reset_overlap_state(self) -> None:
-        """Start over from no predecessor window, independently for every cache-user slot. The inner
-        compressor owns the layout, since it is the one that consumes and emits these. TtCSA.alloc_state
-        resets this alongside the block compressor so both states begin at the same token position.
+    def reset_overlap_state(self, cache_user_id: int | None = None) -> None:
+        """Start over from no predecessor window, for slot ``cache_user_id`` or, when None, for every
+        cache-user slot. The inner compressor owns the layout, since it is the one that consumes and emits
+        these. TtCSA.new_state resets a slot alongside the block compressor so both states begin at the
+        same token position.
 
         One pair per slot: two users sharing this instance must not share the overlap state, or the
-        second user's first chunk would consume the first user's terminal state (see __init__)."""
+        second user's first chunk would consume the first user's terminal state (see __init__). Resetting
+        one slot leaves the others where they are, since their users may be mid-prefill."""
+        if cache_user_id is not None:
+            assert (
+                0 <= cache_user_id < self._slot_num
+            ), f"cache_user_id {cache_user_id} is outside [0, {self._slot_num})"
+            ttnn.deallocate(self._overlap_kv_state[cache_user_id])
+            ttnn.deallocate(self._overlap_score_state[cache_user_id])
+            kv_state, score_state = self._compressor.alloc_overlap_state()
+            self._overlap_kv_state[cache_user_id] = kv_state
+            self._overlap_score_state[cache_user_id] = score_state
+            return
         if hasattr(self, "_overlap_kv_state"):
             for state in (*self._overlap_kv_state, *self._overlap_score_state):
                 ttnn.deallocate(state)

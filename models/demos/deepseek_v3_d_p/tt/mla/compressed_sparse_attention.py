@@ -21,7 +21,7 @@ sources share one persistent ROW_MAJOR table:
     [capacity + W, capacity + W + chunk)           this chunk's raw keys, SP-gathered
 
 with ``W`` the sliding window. A query's row ids into that layout are affine in its position (see
-``_build_index_consts``), so the list is built once in ``alloc_state`` and each chunk overwrites only its
+``_build_index_consts``), so the list is built once in ``build_tables`` and each chunk overwrites only its
 top-k columns. Attention costs O(S * (W + index_topk)) rather than the mask route's O(S * S/4), and the
 mask, its scratch, and the pad rows that existed only to keep the mask honest are all gone.
 
@@ -111,9 +111,13 @@ class TtCSAState:
 
     One piece of per-prefill state is deliberately NOT here: the indexer runs its own compressor and so
     carries its own overlap state, at ``index_head_dim``, which it keeps privately and advances inside
-    ``write_k``. ``alloc_state`` resets it alongside the two below, so both begin at the same position."""
+    ``write_k``. ``new_state`` resets that user slot's indexer overlap state alongside the two below, so both
+    begin at the same position.
 
-    def __init__(self, joint_kv, kv_state, score_state, index_kv_cache, max_seq_len):
+    One tensor here is not this state's own: ``index_kv_cache`` is the layer's user-major key cache, shared by
+    every slot's state, and ``cache_user_id`` picks this state's rows in it. ``release`` leaves it alone."""
+
+    def __init__(self, joint_kv, kv_state, score_state, index_kv_cache, max_seq_len, cache_user_id=0):
         # The single ROW_MAJOR table sparse_sdpa reads, laid out as the module docstring describes. The
         # carry lives in it too, at a fixed row range, so there is no separate carry tensor: forward
         # writes the next chunk's carry there once this chunk's attention has already read it.
@@ -122,10 +126,16 @@ class TtCSAState:
         # decode-compatible Blaze layout the compressor op emits and consumes.
         self.kv_state = kv_state  # [B, 1, CSA_STATE_ROWS, head_dim]
         self.score_state = score_state  # [B, 1, CSA_STATE_ROWS, head_dim]
-        self.index_kv_cache = index_kv_cache  # block-cyclic indexer key cache, written in place
+        self.index_kv_cache = index_kv_cache  # block-cyclic indexer key cache, shared by every slot
+        self.cache_user_id = int(cache_user_id)  # this state's user slot in it, and in the indexer
         self.max_seq_len = int(max_seq_len)
         self.entry_count = 0
         self.kv_actual = 0
+
+    def release(self) -> None:
+        """Free the tensors this state owns; the shared index key cache stays with the layer."""
+        for tensor in (self.joint_kv, self.kv_state, self.score_state):
+            ttnn.deallocate(tensor)
 
 
 class TtCSA(TtV4AttentionBase):
@@ -135,16 +145,19 @@ class TtCSA(TtV4AttentionBase):
 
     def __init__(self, device, *, indexer_reference, indexer_settings, **kwargs):
         super().__init__(device, **kwargs)
-        # The indexer is sized by max_seq_len and the slab width, which only alloc_state knows, so it is
+        # The indexer is sized by max_seq_len and the slab width, which only build_tables knows, so it is
         # built there; these hold what it needs until then.
         self._indexer_reference = indexer_reference
         self._indexer_settings = self._resolve_indexer_settings(indexer_settings)
         self._indexer = None
-        # Everything below comes from alloc_state, which every caller has to run before forward.
+        # Everything below comes from build_tables, which every caller has to run (directly or through
+        # alloc_state) before forward.
         self._index_source = None  # persistent [sliding ids | top-k | sentinel] the gather reads
         self._index_perm = None  # (first-chunk compacting permutation, later-chunk one)
         self._carry_row = None  # where the carry starts in the joint table
         self._raw_row = None  # and where this chunk's raw keys do
+        self._index_kv_cache = None  # the user-major indexer key cache every state shares
+        self._state_dims = None  # (max_seq_len, chunk) the tables were built for
 
     @staticmethod
     def _resolve_indexer_settings(settings: dict) -> dict:
@@ -175,7 +188,7 @@ class TtCSA(TtV4AttentionBase):
 
     @property
     def indexer(self) -> TtCsaIndexer:
-        assert self._indexer is not None, "call alloc_state before touching the indexer"
+        assert self._indexer is not None, "call build_tables before touching the indexer"
         return self._indexer
 
     def alloc_state(
@@ -198,6 +211,17 @@ class TtCSA(TtV4AttentionBase):
         layers and users and describe it with a KV chunk address table. Left None, this allocates a
         private one sized to the same ``slot_num``/``layer_num`` layout, so the shape a migration table
         expects holds either way; it is just not shared."""
+        self.build_tables(max_seq_len, chunk_tokens=chunk_tokens, index_kv_cache=index_kv_cache)
+        return self.new_state(batch)
+
+    def build_tables(
+        self,
+        max_seq_len: int,
+        chunk_tokens: int | None = None,
+        index_kv_cache: ttnn.Tensor | None = None,
+    ) -> None:
+        """The half of ``alloc_state`` every user shares: the constant tables, the indexer and its
+        user-major key cache. Run once; ``new_state`` then allocates each user's state over them."""
         rate = self.compressor.compress_rate
         chunk = chunk_tokens or max_seq_len
         align = csa_slab_align(rate, self.sp_factor, self.tp_factor)
@@ -224,16 +248,22 @@ class TtCSA(TtV4AttentionBase):
         self._slab_rope = self.ops.build_rope_table(rope_table_tokens(max_seq_len, chunk), 1)
         self._slab_index = self.ops.rope_index_base(chunk // self.sp_factor)
 
-        index_kv_cache = self._build_indexer(max_seq_len, chunk, index_kv_cache)
+        self._index_kv_cache = self._build_indexer(max_seq_len, chunk, index_kv_cache)
         self._build_index_consts(chunk, capacity)
+        self._state_dims = (int(max_seq_len), chunk)
 
+    def new_state(self, batch: int = 1, cache_user_id: int = 0) -> TtCSAState:
+        """A fresh state at position 0 for user slot ``cache_user_id``, over the tables ``build_tables``
+        made. Every user's state shares the one user-major index key cache; the slot picks its rows."""
+        assert self._state_dims is not None, "call build_tables before new_state"
+        max_seq_len, chunk = self._state_dims
         # Two overlap states advance through a prefill, one per compressor: the block's, which lives in
         # the returned TtCSAState and is advanced by forward, and the indexer's, which the indexer keeps
-        # privately and advances inside write_k. They describe the same token positions, so they have to
-        # start from the same "no predecessor window" -- reset the indexer's here, next to the block's
-        # allocation, rather than leave the pairing to the fact that _build_indexer happens to make a
-        # fresh indexer.
-        self._indexer.reset_overlap_state()
+        # privately per slot and advances inside write_k. They describe the same token positions, so they
+        # have to start from the same "no predecessor window" -- reset the slot's here, next to the
+        # block's allocation, rather than leave the pairing to the fact that _build_indexer happens to
+        # make a fresh indexer.
+        self._indexer.reset_overlap_state(cache_user_id)
         kv_state, score_state = self.compressor.alloc_overlap_state(batch)
         # ROW_MAJOR and unpadded because sparse_sdpa reads it by row; replicated because any query may
         # name any row. The carry region starts out zero and the first chunk's index list never points
@@ -245,8 +275,9 @@ class TtCSA(TtV4AttentionBase):
             joint_kv=joint_kv,
             kv_state=kv_state,
             score_state=score_state,
-            index_kv_cache=index_kv_cache,
+            index_kv_cache=self._index_kv_cache,
             max_seq_len=max_seq_len,
+            cache_user_id=cache_user_id,
         )
 
     def _build_indexer(self, max_seq_len: int, chunk: int, index_kv_cache):
@@ -445,7 +476,9 @@ class TtCSA(TtV4AttentionBase):
 
         The gather is what compacts; see ``index_tables`` for why only the first chunk needs it. Both
         operands are persistent and ``ttnn.gather`` is out-of-place, so neither is written through --
-        which is also why this can be called again after a chunk to get that chunk's list back.
+        which is also why this can be called again after a chunk to get that chunk's list back. The source
+        buffer is the layer's, not a user slot's, so that is the last chunk run on this layer, whichever slot
+        it belonged to.
 
         Public because the list is the one intermediate a caller cannot otherwise see: ``forward``
         deallocates its copy, while the source buffer keeps the top-k it gathered from. ``first_chunk``
@@ -493,16 +526,21 @@ class TtCSA(TtV4AttentionBase):
         seq_len_actual: int | None = None,
         *,
         state: TtCSAState,
-        cache_user_id: int = 0,
+        cache_user_id: int | None = None,
     ):
         """One chunk: [B, 1, S_pad/sp, hidden/tp] in and out; the caller keeps the first S_real rows.
 
         ``seq_len_actual`` is the chunk's real pre-pad length. Where the chunk sits in the sequence comes
-        from ``state``, which ``alloc_state`` builds and this advances in place -- a prefill of one chunk
-        passes a state too, so there is no second path through here.
+        from ``state``, which ``new_state`` (or ``alloc_state``) builds and this advances in place -- a prefill
+        of one chunk passes a state too, so there is no second path through here.
 
-        ``cache_user_id`` picks this prompt's user slot in the index key cache. It is a per-call property
-        (one layer serves many users), unlike the layer slot, which is fixed at construction."""
+        The user slot in the index key cache and the indexer's overlap state is the state's own
+        ``cache_user_id``: one layer serves many users, and a state paired with another slot's rows would
+        corrupt both. ``cache_user_id``, when given, must agree with it."""
+        assert (
+            cache_user_id is None or cache_user_id == state.cache_user_id
+        ), f"cache_user_id {cache_user_id} does not match the state's slot {state.cache_user_id}"
+        cache_user_id = state.cache_user_id
         batch = hidden_states.shape[0]
         seq_local = hidden_states.shape[2]
         seq_pad_global = seq_local * self.sp_factor
