@@ -8,6 +8,7 @@ Op sequences adapted from models/demos/gemma4/tt/attention/{decode,prefill}.py.
 """
 
 import functools
+import math
 
 import torch
 
@@ -73,7 +74,19 @@ class MuseLinear:
     """
 
     def __init__(
-        self, weight_torch, mesh_device, *, shard_dim, k, n, dtype, cache_file_name, sharded=None, group="attn"
+        self,
+        weight_torch,
+        mesh_device,
+        *,
+        shard_dim,
+        k,
+        n,
+        dtype,
+        cache_file_name,
+        sharded=None,
+        group="attn",
+        readers=2,
+        block=2,
     ):
         self.k, self.n = k, n
         self.hifi_cfg = matmul_compute_config(mesh_device)
@@ -83,6 +96,16 @@ class MuseLinear:
         if self.sharded:
             self.linear = DramShardedLinear(weight_torch, mesh_device, mapper, k, n, dtype, cache_file_name)
             self.weight = self.linear.weight
+            self._decode_mem = decode_memcfg(k)
+            # Multi-core DRAM-sharded pipeline; readers/block tuned per shape on QB2.
+            self._decode_pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=block,
+                per_core_M=1,
+                per_core_N=math.ceil((n // 32) / 52),
+                fused_activation=None,
+                num_workers_per_dram_bank=readers,
+                use_multicore_pipeline=True,
+            )
         else:
             self.linear = None
             self.weight = as_tt(
@@ -121,13 +144,12 @@ class MuseLinear:
         """Decode matmul (M = 32): L1 width-sharded output; falls back to __call__ when not DRAM-sharded."""
         if not self.sharded:
             return self(x)
-        lin = self.linear
-        own = not (x.is_sharded() and x.memory_config() == lin._act_memcfg)
-        x_sh = ttnn.to_memory_config(x, lin._act_memcfg) if own else x
+        own = not (x.is_sharded() and x.memory_config() == self._decode_mem)
+        x_sh = ttnn.to_memory_config(x, self._decode_mem) if own else x
         out = ttnn.linear(
             x_sh,
             self.weight,
-            program_config=lin._decode_pc,
+            program_config=self._decode_pc,
             compute_kernel_config=self.decode_cfg,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
@@ -181,6 +203,8 @@ class MuseGlimmerAttention:
             n=args.qkvg_width_local,
             dtype=dt,
             cache_file_name=args.cache_file(f"layers.{i}.self_attn.wqkvg", dt, tag=tag) if use_weight_cache else None,
+            readers=2,
+            block=2,
         )
         tag_o = "v1ws" if dram_sharded_enabled(args.q_width_local, args.hidden_size, dt) else "v1"
         self.wo = MuseLinear(
@@ -191,6 +215,8 @@ class MuseGlimmerAttention:
             n=args.hidden_size,
             dtype=dt,
             cache_file_name=args.cache_file(f"layers.{i}.self_attn.wo", dt, tag=tag_o) if use_weight_cache else None,
+            readers=3,
+            block=2,
         )
 
     def _split_qkv_gate(self, xqkvg):

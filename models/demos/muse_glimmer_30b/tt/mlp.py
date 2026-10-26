@@ -7,7 +7,7 @@
 import ttnn
 from models.demos.muse_glimmer_30b.tt.attention import MuseLinear, dram_sharded_enabled
 from models.demos.muse_glimmer_30b.tt.common import decode_memcfg, is_decode
-from models.demos.muse_glimmer_30b.tt.weight_packing import pack_column_parallel, pack_down
+from models.demos.muse_glimmer_30b.tt.weight_packing import pack_down, pack_gate_up
 
 PREFILL_CHUNK = 2048
 
@@ -25,7 +25,7 @@ class MuseGlimmerMLP:
         self.i_pad = args.intermediate_local_padded  # zero-padded per-rank intermediate (gate/up/down use it)
         dtype = args.mlp_weight_dtype
         hid = args.hidden_size
-        sharded = dram_sharded_enabled(hid, self.i_pad, dtype) and dram_sharded_enabled(self.i_pad, hid, dtype)
+        sharded = dram_sharded_enabled(hid, 2 * self.i_pad, dtype) and dram_sharded_enabled(self.i_pad, hid, dtype)
         tag = "v3ws" if sharded else "v3"
         tag_down = "v2ws" if sharded else "v2"
 
@@ -34,29 +34,19 @@ class MuseGlimmerMLP:
                 return None
             return args.cache_file(f"layers.{layer_idx}.mlp.{name}", dtype, t)
 
-        # Separate gate / up weights (each [H, I_pad] per rank) so each matmul is a small DRAM-sharded kernel.
-        # All three share the same path so caches never mix; if either shape is ineligible, all fall back.
-        self.w_gate = MuseLinear(
-            pack_column_parallel(state_dict["mlp.gate_proj.weight"], tp, pad_to=self.i_pad),
+        # Fused per-rank [gate | up] weight [H, 2*I_pad]; both MLP matmuls share one path so caches never mix.
+        self.w_gate_up = MuseLinear(
+            pack_gate_up(state_dict["mlp.gate_proj.weight"], state_dict["mlp.up_proj.weight"], tp, pad_to=self.i_pad),
             mesh_device,
             shard_dim=-1,
             k=hid,
-            n=self.i_pad,
+            n=2 * self.i_pad,
             dtype=dtype,
-            cache_file_name=cache("w_gate", tag),
+            cache_file_name=cache("w_gate_up", tag),
             sharded=sharded,
             group="mlp",
-        )
-        self.w_up = MuseLinear(
-            pack_column_parallel(state_dict["mlp.up_proj.weight"], tp, pad_to=self.i_pad),
-            mesh_device,
-            shard_dim=-1,
-            k=hid,
-            n=self.i_pad,
-            dtype=dtype,
-            cache_file_name=cache("w_up", tag),
-            sharded=sharded,
-            group="mlp",
+            readers=3,
+            block=1,
         )
         self.w_down = MuseLinear(
             pack_down(state_dict["mlp.down_proj.weight"], tp, pad_to=self.i_pad),
@@ -68,16 +58,21 @@ class MuseGlimmerMLP:
             cache_file_name=cache("w_down", tag_down),
             sharded=sharded,
             group="mlp",
+            readers=2,
+            block=2,
         )
 
     def _forward_chunk(self, x):
         decode = is_decode(x)
         silu = [ttnn.UnaryOpType.SILU]
+        gu = self.w_gate_up.decode(x) if decode else self.w_gate_up(x)
+        s = gu.shape
+        gate = ttnn.slice(gu, [0, 0, 0, 0], [s[0], s[1], s[2], self.i_pad])
+        up = ttnn.slice(gu, [0, 0, 0, self.i_pad], [s[0], s[1], s[2], 2 * self.i_pad])
+        ttnn.deallocate(gu)
         if decode:
-            gate, up = self.w_gate.decode(x), self.w_up.decode(x)
             h = ttnn.mul(gate, up, input_tensor_a_activations=silu)
         else:
-            gate, up = self.w_gate(x), self.w_up(x)
             h = ttnn.mul(gate, up, input_tensor_a_activations=silu, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)

@@ -11,16 +11,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.muse_glimmer_30b.tt.attention import allocate_kv_cache, heads_memcfg
+from models.demos.muse_glimmer_30b.tt.attention import MuseLinear, allocate_kv_cache, heads_memcfg
 from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
-from models.demos.muse_glimmer_30b.tt.common import (
-    RopeTables,
-    as_tt,
-    decode_memcfg,
-    matmul_compute_config,
-    replicate_mapper,
-    shard_mapper,
-)
+from models.demos.muse_glimmer_30b.tt.common import RopeTables, as_tt, decode_memcfg, replicate_mapper, shard_mapper
 from models.demos.muse_glimmer_30b.tt.decoder import MuseGlimmerDecoderLayer
 from models.demos.muse_glimmer_30b.tt.rms_norm import RMSNorm
 from models.demos.muse_glimmer_30b.tt.weight_packing import pack_lm_head
@@ -33,7 +26,6 @@ class MuseGlimmerModel:
         self.args = args
         self.mesh_device = mesh_device
         self.ccl = ccl if ccl is not None else MuseCCL(mesh_device)
-        self.matmul_cfg = matmul_compute_config(mesh_device)
         self.tp = args.tp
 
         def cache(name, dtype, tag="v1"):
@@ -64,13 +56,18 @@ class MuseGlimmerModel:
 
         self.norm = RMSNorm(mesh_device, args.load_final_norm_weight(), args.rms_norm_eps, add_unit_offset=False)
         lm = pack_lm_head(args.load_lm_head_weight(), args.padded_vocab_size)
-        self.lm_head = as_tt(
+        self.lm_head = MuseLinear(
             lm,
             mesh_device,
+            shard_dim=-1,
+            k=args.hidden_size,
+            n=args.vocab_local,
             dtype=args.lm_head_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=shard_mapper(mesh_device, -1),
-            cache_file_name=cache("lm_head", args.lm_head_dtype),
+            cache_file_name=cache("lm_head", args.lm_head_dtype, "v2ws"),
+            sharded=True,
+            group="attn",
+            readers=3,
+            block=1,
         )
         del lm
         gc.collect()
@@ -153,19 +150,30 @@ class MuseGlimmerModel:
         return out
 
     def head(self, h):
-        """h [1,1,M,H] -> softcapped logits [1,1,M,vocab_local] (sharded per rank). Does not free h."""
+        """h [1,1,M,H] -> softcapped logits [1,1,M,vocab_local] (DRAM, sharded per rank). Does not free h."""
         a = self.args
-        n = self.norm(h)
-        logits = ttnn.linear(
-            n, self.lm_head, compute_kernel_config=self.matmul_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        ttnn.deallocate(n)
-        x = ttnn.mul(logits, a.output_multiplier / a.final_logit_softcapping)
-        ttnn.deallocate(logits)
-        t = ttnn.tanh(x, fast_and_approximate_mode=False)
-        ttnn.deallocate(x)
-        out = ttnn.mul(t, a.final_logit_softcapping)
-        ttnn.deallocate(t)
+        rows = int(h.shape[2])
+        outs = []
+        for r in range(0, rows, 32):
+            hs = h if rows <= 32 else ttnn.slice(h, [0, 0, r, 0], [1, 1, min(r + 32, rows), int(h.shape[3])])
+            n = self.norm(hs, memory_config=decode_memcfg(a.hidden_size))
+            if hs is not h:
+                ttnn.deallocate(hs)
+            lg = self.lm_head.decode(n)
+            ttnn.deallocate(n)
+            lg_d = ttnn.sharded_to_interleaved(lg, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(lg)
+            x = ttnn.mul(lg_d, a.output_multiplier / a.final_logit_softcapping)
+            ttnn.deallocate(lg_d)
+            t = ttnn.tanh(x, fast_and_approximate_mode=False)
+            ttnn.deallocate(x)
+            outs.append(ttnn.mul(t, a.final_logit_softcapping))
+            ttnn.deallocate(t)
+        if len(outs) == 1:
+            return outs[0]
+        out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for o in outs:
+            ttnn.deallocate(o)
         return out
 
     def logits_to_torch(self, logits_tt, num_rows: int) -> torch.Tensor:
