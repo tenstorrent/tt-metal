@@ -9,7 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include <yaml-cpp/yaml.h>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 
 namespace {
 // NOCs a DRAM view names a preferred endpoint for. Matches the `noc < 2` contract both

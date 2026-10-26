@@ -23,6 +23,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "dram_read.hpp"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg(args::num_tiles);
@@ -32,26 +33,28 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
     copy_init(dfb::in);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
+    dram_read::for_each_chunk(num_tiles, [&](uint32_t count) {
+        for (uint32_t i = 0; i < count; ++i) {
+            tile_regs_acquire();
 
-        dfb_in.wait_front(1);
-        dfb_out.reserve_back(1);
+            dfb_in.wait_front(1);
+            dfb_out.reserve_back(1);
 
-        copy_tile(dfb::in, 0, 0);
+            copy_tile(dfb::in, 0, 0);
 
 #ifdef SFPU_OP_CHAIN_0
-        SFPU_OP_CHAIN_0
+            SFPU_OP_CHAIN_0
 #endif
 
-        tile_regs_commit();
-        tile_regs_wait();
+            tile_regs_commit();
+            tile_regs_wait();
 
-        pack_tile(0, dfb::out);
+            pack_tile(0, dfb::out);
 
-        dfb_in.pop_front(1);
-        dfb_out.push_back(1);
+            dfb_in.pop_front(1);
+            dfb_out.push_back(1);
 
-        tile_regs_release();
-    }
+            tile_regs_release();
+        }
+    });
 }

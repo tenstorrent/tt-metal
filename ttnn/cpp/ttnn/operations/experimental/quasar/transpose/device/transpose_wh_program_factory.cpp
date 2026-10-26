@@ -224,9 +224,6 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .runtime_arg_schema = {.runtime_arg_names = {"num_hw_blocks"}},
             .hw_config = compute_hw,
         };
-        if (input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32) {
-            compute_spec.compiler_options.defines = {{"DST_ACCUM_MODE", "1"}};
-        }
 
         kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)};
 

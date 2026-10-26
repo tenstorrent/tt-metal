@@ -79,7 +79,7 @@ DecodedMcast decoded_args(const McastType& mcast, CoreCoord core, const std::vec
 
 using Coordinates = std::set<std::pair<uint32_t, uint32_t>>;
 
-Coordinates worker_coordinates(tt::tt_metal::IDevice* device) {
+Coordinates worker_coordinates(tt::tt_metal::distributed::MeshDevice* device) {
     Coordinates result;
     const auto size = device->compute_with_storage_grid_size();
     for (uint32_t y = 0; y < size.y; ++y) {
@@ -95,7 +95,7 @@ Coordinates worker_coordinates(tt::tt_metal::IDevice* device) {
 // receiver, without using the helper's decomposition or a bounding-box reference.
 template <typename McastType>
 void check_group(
-    tt::tt_metal::IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     const McastType& mcast,
     const GroupInput& group,
     const std::vector<uint32_t>& existing = {}) {

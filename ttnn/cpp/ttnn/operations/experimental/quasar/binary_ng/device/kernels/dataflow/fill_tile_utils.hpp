@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include "api/core_local_mem.h"
 #include "api/dataflow/dataflow_api.h"
+#include "internal/local_mem/address_access.h"
 
 // Fills one full tile of bfloat16 with a scalar value
 // Scalar is assumed to be a 16-bit value double packed into a u32
@@ -491,4 +493,44 @@ FORCE_INLINE void fill_tile_with_first_row_rm_bfloat16(uint32_t ptr_arg, uint32_
             ptr16[i * row_width + last_elem] = ptr16[last_elem];
         }
     }
+}
+
+// CoreLocalMem overloads of the tile fill helpers (e.g. for a DFB scoped lock's get_ptr()), so DFB kernels pass the
+// handle instead of unwrapping its address. Each forwards the handle's address unchanged (including any uncached
+// alias it carries) to the raw-address helper above.
+namespace fill_tile_utils::detail {
+template <typename T, typename AddressType>
+FORCE_INLINE uint32_t l1_address(const CoreLocalMem<T, AddressType>& mem) {
+    return static_cast<uint32_t>(local_mem::detail::AddressAccess::address(mem));
+}
+}  // namespace fill_tile_utils::detail
+
+template <typename T, typename AddressType>
+FORCE_INLINE void fill_with_val_bfloat16(const CoreLocalMem<T, AddressType>& mem, uint32_t packed_scalar) {
+    fill_with_val_bfloat16(fill_tile_utils::detail::l1_address(mem), packed_scalar);
+}
+
+template <uint32_t ElementsV, class ScalarT, typename T, typename AddressType>
+FORCE_INLINE void fill_with_val(const CoreLocalMem<T, AddressType>& mem, ScalarT scalar) {
+    fill_with_val<ElementsV, ScalarT>(fill_tile_utils::detail::l1_address(mem), scalar);
+}
+
+template <typename T, typename AddressType>
+FORCE_INLINE void fill_tile_with_first_column(const CoreLocalMem<T, AddressType>& mem) {
+    fill_tile_with_first_column(fill_tile_utils::detail::l1_address(mem));
+}
+
+template <typename T, typename AddressType>
+FORCE_INLINE void fill_tile_with_first_column_bfloat16(const CoreLocalMem<T, AddressType>& mem) {
+    fill_tile_with_first_column_bfloat16(fill_tile_utils::detail::l1_address(mem));
+}
+
+template <typename T, typename AddressType>
+FORCE_INLINE void fill_tile_with_first_column_bfp8(const CoreLocalMem<T, AddressType>& mem) {
+    fill_tile_with_first_column_bfp8(fill_tile_utils::detail::l1_address(mem));
+}
+
+template <typename T, typename AddressType>
+FORCE_INLINE void fill_tile_with_first_column_bfp4(const CoreLocalMem<T, AddressType>& mem) {
+    fill_tile_with_first_column_bfp4(fill_tile_utils::detail::l1_address(mem));
 }

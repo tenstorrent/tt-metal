@@ -29,6 +29,8 @@ Usage (capture once, replay many) — the forward runs ONCE during capture; this
 
 Boundary tensors (produced in one segment, read by the next) stay valid because the forward keeps them
 referenced across the end/begin split; trace replay reproduces them at the same addresses.
+
+`CapturedCall` below applies the same idea to a single call: one region, one trace id.
 """
 
 import ttnn
@@ -54,7 +56,7 @@ class SubDeviceTraceController:
     def __init__(self, mesh_device, cq_id=0):
         self.mesh_device = mesh_device
         self.cq_id = cq_id
-        # ordered (kind, payload): (_TRACE, tid)|(_LOAD, mgr_id)|(_CLEAR, None)|(_ACK, layer_idx)|(_VARIANTS, dict)
+        # ordered (kind, payload): (_TRACE, tid)|(_LOAD, mgr_id)|(_CLEAR, None)|(_ACK, layer_ids)|(_VARIANTS, dict)
         self._program = []
         self._current_tid = None
         self._capturing = False
@@ -104,21 +106,25 @@ class SubDeviceTraceController:
         else:
             self.mesh_device.clear_loaded_sub_device_manager()
 
-    def layer_ack(self, layer_idx):
+    def layer_ack(self, *layer_ids):
         """MLA finished this layer's KV write (post zero-pad). Capturing -> split + record the ack
         boundary (NO host action during capture: the capture pass is not a real chunk, so we must not
         bump the ack counter). Eager (not capturing) -> call the callback directly (matches the
         non-trace runner). At replay the ack callback fires between the two trace segments. No-op if no
-        callback is registered."""
+        callback is registered.
+
+        Several ids ack together at one boundary, in order: back-to-back splits would capture an empty
+        segment, which end_trace_capture does not support."""
         if self._on_layer_complete is None:
             return
         if self._capturing:
-            self._split(self._ACK, layer_idx)
+            self._split(self._ACK, layer_ids)
         else:
             # Eager (idle controller): flush this layer's KV before the ack, same as the non-trace path —
             # the migration worker reads it out-of-band from the CQ.
             ttnn.synchronize_device(self.mesh_device)
-            self._on_layer_complete(layer_idx)
+            for layer_idx in layer_ids:
+                self._on_layer_complete(layer_idx)
 
     def capture_variants(self, variants):
         """Record each ``variants`` callable as an alternative capture of the same region; ``replay(variant=)``
@@ -197,7 +203,8 @@ class SubDeviceTraceController:
             else:  # _ACK: per-layer migration ack (callback set => non-None here). Flush the preceding
                 # segment(s) so the out-of-band migration worker sees post-write KV, THEN fire the ack.
                 ttnn.synchronize_device(self.mesh_device)
-                self._on_layer_complete(payload)
+                for layer_idx in payload:
+                    self._on_layer_complete(layer_idx)
 
     # ------------------------------------------------------------------ stats / cleanup
     @property
@@ -246,3 +253,39 @@ class SubDeviceTraceController:
             if manager_loaded:
                 self.mesh_device.clear_loaded_sub_device_manager()
             self._program = []
+
+
+class CapturedCall:
+    """A single device call recorded as its own ttnn trace, so it can be replayed instead of
+    dispatched again."""
+
+    def __init__(self, mesh_device, cq_id=0):
+        self.mesh_device = mesh_device
+        self.cq_id = cq_id
+        self._tid = None
+
+    def capture(self, fn):
+        """Record `fn`'s device work as a trace instead of running it now."""
+        assert self._tid is None, "already captured"
+        tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
+        try:
+            try:
+                fn()
+            finally:
+                ttnn.end_trace_capture(self.mesh_device, tid, cq_id=self.cq_id)
+        except BaseException:
+            # Nothing owns `tid` once this propagates -- self._tid stays None, so release() would not
+            # reach it and the trace would sit on the device until teardown.
+            ttnn.release_trace(self.mesh_device, tid)
+            raise
+        self._tid = tid
+
+    def replay(self):
+        assert self._tid is not None, "nothing captured"
+        ttnn.execute_trace(self.mesh_device, self._tid, cq_id=self.cq_id, blocking=False)
+
+    def release(self):
+        """Release the captured trace. Safe to call repeatedly."""
+        if self._tid is not None:
+            ttnn.release_trace(self.mesh_device, self._tid)
+            self._tid = None
