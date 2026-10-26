@@ -418,6 +418,99 @@ candidate cables), run the SAT engine on the slice graph first and hand its cros
 the resolver; and keep the colour pre-check in front of both, since none of the three proves the
 same-colour cable cases on 8x8 or 4x8 meshes within 60 s.
 
+### Plugging the resolver into C2 as it is
+
+The benchmark harness is also the answer to "how much of the resolver has to change for C2".
+It changed nothing. `topo/resolver_same_cases.cpp` calls `detail::resolve_pipeline_placement`
+with the signature the public header already declares
+(`tt-metalium/experimental/fabric/pipeline_builder.hpp`, namespace `detail`), on a copy of the
+search taken out of `pipeline_builder.cpp` at build time. Every number in the three tables above
+is the unmodified search: `PlacementSearch` (stage-to-submesh backtracking with the chip-count,
+core-capacity, neighbour-count, connectivity and lookahead checks), `LinkSearch` (one link per
+edge, core slots per chip, the failed-state memo, the shared-chip fallback) and the host
+endpoint placement.
+
+What the harness bypassed is the public wrapper, `detail::resolve_graph_layout_with_connections`.
+That wrapper validates the inputs, runs Kahn's sort on the non-loopback edges, converts
+`ChipTuple` to the internal chip type, and then calls the same search. Its only control-plane
+use is `discover_submesh_links`, and that runs only when `direct_links` is null. C2 passes its
+own links, so the call never reaches the control plane. The harness skipped the wrapper only
+because the stub build had no `FabricNodeId`; in the tree, C2 should call the wrapper, not the
+search, and get the validation and the sort for free.
+
+| Harness | Real call from C2 | Same? |
+|---|---|---|
+| `resolve_pipeline_placement(order, edges, links, counts, chips, {})` | `resolve_graph_layout_with_connections(nodes, edges, submesh_chips, node_chip_counts, node_pipeline_core_counts, nullopt, &links)` | same search; the wrapper adds validation and the topological sort |
+| stage order given by the caller | Kahn's sort over the non-loopback edges | equivalent for a DAG plus loopbacks |
+| chips as `InternalChip{FabricNodeId, row, col}` | chips as `ChipTuple(mesh_id, chip_id, row, col)`, converted by the wrapper | same |
+| `DirectLinks` built by hand, both directions per physical link | `DirectLinks` built by C1 from the candidate cables and the routed intra-mesh links | same type; C1 must insert both directions (see below) |
+| core-count overrides empty: 1 slot per chip on submeshes of 8 or more chips, 2 on smaller | blaze's `_pipeline_core_defaults` per node, or empty for the same defaults | an input, not a resolver change |
+| cap by `fork` + `alarm` outside the search | none exists inside the search | the one thing to add if open question 13 keeps a cap |
+
+**Both library and header are already in place.** `pipeline_builder.cpp` is in
+`tt_metal/fabric/sources.cmake`, the same library as `topology_mapper_utils.cpp` where
+`MultiMeshSolutionEnumerator::next()` lives, and the header includes only `fabric_types.hpp`
+and `mesh_graph.hpp`. The P8 hook can include the header and call the wrapper directly.
+
+**The input contract C1 has to meet.** These are the things the harness had to get right for
+the search to accept anything, so they are what C1's slot builder has to produce:
+
+- *Slot-local coordinates.* Each slot's chips carry `(row, col)` relative to the slot's own
+  origin, and every `LinkPair` uses those coordinates. The slot harness recomputes them from the
+  slice's position inside the slot (`local()` in `timed_slots`), and so must C1 when a slot
+  spans several host slices.
+- *Links are directed per key.* `place_stages` looks up `{src_slot, dst_slot}` for the edge's
+  direction, and `search_links` reads `submesh_links.at({src, dst})`. A physical cable that can
+  carry traffic both ways has to appear under both keys, each with its own exit and entry
+  chips. `discover_submesh_links` does this because it iterates ordered pairs; a hand-built
+  table must too.
+- *Chip counts pin a stage to a slot shape.* `node_chip_counts[stage] = rows x cols x chips per
+  slice` makes the shape filter exact: a 2x4-slice stage can only land on a 2x4 slot. That is
+  how the mixed tilings in the slots table were decided in milliseconds. Leaving a stage out of
+  the map lets it bind to any slot.
+- *Stage 0 needs room for host I/O.* Stage 0 asks for its edge links plus 2 slots for H2D and
+  D2H, on distinct chips in the first pass and shared chips only as a fallback for other
+  stages. A single-chip stage 0 (a 1x1 host slice of 1 chip) has 2 slots and needs 4, so it
+  fails on capacity before any search. The existing test skips all-1x1 rings for this reason.
+  C1 should never produce a 1-chip slot for stage 0; with 4x2-chip slices (8 chips, 1 slot
+  each) stage 0 has 8 slots and needs 4, which is what every row above used.
+- *One loopback per cycle, marked.* The closing edge carries `is_loopback = true`; the sort
+  ignores it and the link search still places it. Open chains pass no loopback.
+
+**What the result already gives C2 and C3.** `GraphLayoutResult.node_to_submesh` is the stage
+to slot map, `resolved_edges` carries each edge's exit and entry chip in slot-local
+coordinates, and the H2D and D2H chips are separate fields. `R` for P9 is read straight off
+`resolved_edges`: for every edge whose two slots are on different meshes, map the exit and
+entry coordinates back through C1's slot table to the two `FabricNodeId`s, and that pair is the
+cable the layout crosses on. The demand check is a count per mesh pair over that list. Neither
+needs a resolver change.
+
+**What does have to change, and when.**
+
+| Change | Needed by | Where | Size |
+|---|---|---|---|
+| none | P8 first version: accept or reject a seating, `exclude_mapping` on reject | | 0 lines |
+| structured failure (stage, edge, capacity conflict) next to the message string | P15's exit-node retry, which needs to know which crossing failed; P8 only needs the string for `error_message` | `resolve_pipeline_placement` already records the first capacity conflict in `search.failure`; add the failing stage index and edge from `place_stages` and `search_links` | P4's first step; small |
+| a deadline the search checks in `place_stages` | only if open question 13 keeps the hard-fail cap; the harness capped from outside with `alarm` | one optional argument, one check per recursion | about 10 lines |
+| the colour test in `remaining_stages_can_connect` when a mesh's unused slots equal its remaining stages | the per-rank tiling path at full occupancy on several meshes (the multi2 rows the resolver caps on) | the lookahead already walks components; add the parity test on the open path ends | design 4.2, small |
+| a per-pair link budget inside `LinkSearch` | only if the demand check fires in practice | `search_links`, skip links whose pair is at budget | later, design 4.2 |
+
+P4's second step, splitting `discover_submesh_links` behind a link-query callback, is not
+needed by C2 at all: C2 never discovers links, it supplies them. It is a Tier D refactor and
+can be dropped from P4 or deferred.
+
+**Where plugging it in straight is enough, and where it is not.** The slots table is the
+planned carve path and the single-mesh tiling path: slots already pinned to one stage shape,
+cables as single links. There the unmodified resolver answers every case, feasible or not, in
+at most 1.1 s, including the heterogeneous tilings and the 4-mesh chains. That path can call
+the resolver as it is. The multi2 table is the per-rank tiling path at full occupancy: every
+rank its own one-slice stage, the pipeline a Hamiltonian cycle through every slot of every
+mesh. There the resolver finishes the 2-mesh rings with 4 cables per pair and the 2-mesh chains,
+and caps on 4-mesh rings and on 1-cable 2-mesh rings. That path needs the pre-check in front of
+the resolver (the colour and segment test from design 4.2), or the topology solver's SAT engine
+on the slice graph to choose the crossings first, and the resolver after it for links and
+slots. Neither changes what the resolver is; both are callers.
+
 ## 4. What was rerun and how it compares
 
 | Experiment | Setting | Matches the recorded run |
