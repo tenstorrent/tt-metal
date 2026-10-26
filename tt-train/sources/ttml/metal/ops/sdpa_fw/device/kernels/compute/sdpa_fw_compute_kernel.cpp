@@ -82,20 +82,15 @@ constexpr uint32_t cb_gate = tt::CBIndex::c_16;
 // Layouts used below. Score CB (cb_attention_weights): the Sq_chunk_t x Sk_chunk_t score tiles of one
 // step, row-major: row r, K tile n sits at r * Sk_chunk_t + n. Per-row state CBs (max, sum,
 // exp_max_diff): row r sits in slot r. Output accumulators: row r starts at r * vWt.
-FORCE_INLINE void process_q_chunk(uint32_t item) {
+// Runs K/V steps [k_begin, k_end) of the chunk; the softmax state starts fresh at k_begin.
+FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_end) {
     cb_wait_front(cb_query, q_tiles);
 
     const uint32_t first_row_tile = (item % q_num_chunks) * Sq_chunk_t;
-
 #ifdef CAUSAL_MASK
-    // Causal: only K/V tiles up to the chunk's last diagonal tile, rounded up to whole steps.
     // Steps before first_masked_step lie entirely left of the diagonal and need no masking.
-    const uint32_t num_kv_tiles_to_process = round_up(first_row_tile + Sq_chunk_t, Sk_chunk_t);
     const uint32_t first_masked_step = first_row_tile / Sk_chunk_t;
-#else
-    const uint32_t num_kv_tiles_to_process = Ht;
 #endif
-    const uint32_t num_kv_steps = num_kv_tiles_to_process / Sk_chunk_t;
 
     // prev/cur state CBs swap roles after every step
     uint32_t alias_cb_prev_max = cb_prev_max;
@@ -105,7 +100,8 @@ FORCE_INLINE void process_q_chunk(uint32_t item) {
     uint32_t alias_cb_prev_mm_out = cb_prev_mm_out;
     uint32_t alias_cb_cur_mm_out = cb_cur_mm_out;
 
-    for (uint32_t k_step = 0; k_step < num_kv_steps; ++k_step) {
+    for (uint32_t k_step = k_begin; k_step < k_end; ++k_step) {
+        const bool first_step = (k_step == k_begin);
         cb_wait_front(cb_key, k_tiles);
 
         reconfig_data_format(cb_query, cb_key);
@@ -231,7 +227,7 @@ FORCE_INLINE void process_q_chunk(uint32_t item) {
         // Online softmax, row by row.
         // (1) running max per row: max(previous max, max of this step's scores)
         cb_wait_front(cb_attention_weights, score_tiles);
-        if (k_step > 0) {
+        if (!first_step) {
             cb_wait_front(alias_cb_prev_max, Sq_chunk_t);
         }
         cb_reserve_back(alias_cb_cur_max, Sq_chunk_t);
@@ -241,7 +237,7 @@ FORCE_INLINE void process_q_chunk(uint32_t item) {
                 cb_reduction_scaler,
                 alias_cb_cur_max,
                 alias_cb_prev_max,
-                /* do_eltwise_max */ k_step > 0,
+                /* do_eltwise_max */ !first_step,
                 r);
         }
         cb_push_back(alias_cb_cur_max, Sq_chunk_t);
@@ -268,7 +264,7 @@ FORCE_INLINE void process_q_chunk(uint32_t item) {
 
         // (4) fold into the running sum and output: both from previous steps were computed against the
         //     old max, so scale them by exp(scale * (old max - new max)) before adding this step's.
-        if (k_step > 0) {
+        if (!first_step) {
             cb_reserve_back(cb_exp_max_diff, Sq_chunk_t);
             for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
                 update_exp_max_diff<scaler_bits, scaler_bf16_bits>(
@@ -406,7 +402,10 @@ void kernel_main() {
     cb_wait_front(cb_attn_mask, kCausalMaskTilesFronted);
 #endif
 
-    for_each_work_item(/* arg_idx */ 0, [](uint32_t item) { process_q_chunk(item); });
+    for_each_work_item(/* arg_idx */ 0, [](uint32_t item) {
+        const uint32_t first_row_tile = (item % q_num_chunks) * Sq_chunk_t;
+        process_q_chunk(item, /* k_begin */ 0, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
+    });
 
 #ifdef CAUSAL_MASK
     cb_pop_front(cb_attn_mask, kCausalMaskTilesFronted);
