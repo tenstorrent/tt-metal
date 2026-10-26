@@ -1522,26 +1522,24 @@ inline void transpose_dest_face_32b()
 //   * `ALU_ACC_CTRL_Zero_Flag_disabled_src = 1` so the SrcB → SrcA copy
 //     preserves the upper half-word during the two-pass transpose.
 //
+// They do NOT need `ALU_ACC_CTRL_Zero_Flag_disabled_dst`. `alu.h` scopes that
+// bit broadly -- "disables zero flag reads in DEST" -- but the only Dst reads
+// in this block are the transposes' MOVD2B, and every row they read has just
+// been written, so none is flagged. Leaving it clear is also the safer
+// reading: a flagged row yields zeros rather than whatever it last held.
+//
 // The bitonic work that runs between transposes does not touch either bit,
 // so wrapping the whole batch saves 4 CFG ops per transpose call.
 inline void enter_transpose_cfg_block()
 {
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
     math::_configure_src_zero_flag_(true);
-    if constexpr (!topk_xl_blaze_compat)
-    {
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(1);
-    }
 }
 
 inline void leave_transpose_cfg_block()
 {
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
     math::_configure_src_zero_flag_(false);
-    if constexpr (!topk_xl_blaze_compat)
-    {
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(0);
-    }
 }
 
 // Transpose all 8 value faces (and, for the unfused path, all 8 index
