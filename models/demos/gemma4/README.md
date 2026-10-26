@@ -2,66 +2,101 @@
 
 # Gemma-4
 
-Gemma 4 is the next-generation open-weights model family from Google, extending the Gemma line with mixed sliding-window/global attention, partial RoPE on global layers, per-layer-input embeddings on the smaller variants, and a sparse mixture-of-experts block on the larger ones. This directory implements text-only inference for five checkpoints — E2B and E4B (dense, with per-layer-input embeddings), 12B, 26B-A4B, and 31B — running on TT-NN with tensor parallelism across Tenstorrent meshes.
+Gemma 4 is the next-generation open-weights model family from Google, extending the Gemma line with mixed sliding-window/global attention, partial RoPE on global layers, per-layer-input embeddings on the smaller variants, and a sparse mixture-of-experts block on the larger ones. This directory implements inference for five checkpoints — E2B and E4B (dense, with per-layer-input embeddings), 12B, 26B-A4B, and 31B — running on TT-NN with tensor parallelism across Tenstorrent meshes, plus the vision tower, the 12B audio embedder and image/video/audio prefill for the served multimodal variants.
 
 ## Variants
 
-| Variant | HuggingFace card |
+| Variant | HuggingFace card | Modalities served |
+|---|---|---|
+| E2B | [google/gemma-4-E2B-it](https://huggingface.co/google/gemma-4-E2B-it) | text |
+| E4B | [google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it) | text |
+| 12B | [google/gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it) | text, image, video, audio |
+| 26B-A4B | [google/gemma-4-26B-A4B-it](https://huggingface.co/google/gemma-4-26B-A4B-it) | text, image, video |
+| 31B | [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) | text, image, video |
+
+## Served Performance
+
+Release-flow benchmarks (tt-inference-server `--workflow release` on the tt-shield runners, vLLM serving, 128 output tokens, prefix caching off per request). Single-user TTFT at 128 / 2048 / 8192 / 32768 input tokens, single-user decode at 128/128, and the full-concurrency 128/128 point. The 31B and 12B numbers are the measured blocks in the [benchmark reference](https://github.com/tenstorrent/tt-inference-server/blob/main/reference_config/benchmarking/benchmark_targets/model_performance_reference.json); every run linked below passed its release gates.
+
+| Variant | System | Layout | TTFT 128 / 2K / 8K / 32K (ms) | Tokens/s/user (1 user) | Max users | TTFT / tokens/s/user at max users | Source (tt-shield run ids) |
+|---|---|---|---|---:|---:|---|---|
+| 31B | Blackhole Galaxy | DP=4 x TP=8 | 118 / 547 / 2351 / 10728 | 25.4 | 128 | 2286 ms / 18.7 | release 39420209538, benchmark 37769772176 |
+| 31B | QB2 (P300x2) | TP=4 | 130 / 582 / 2726 / 14420 | 26.7 | 32 | 3112 ms / 20.2 | release 39427665515, benchmark 37769767325 |
+| 12B | Blackhole Galaxy | DP=4 x TP=8 | 72 / 297 / 1261 / 5573 | 44.2 | 128 | 1219 ms / 30.0 | release 39427589570, benchmark 37720096956 |
+| 12B | QB2 (P300x2) | TP=4 | 76 / 332 / 1403 / 6737 | 45.2 | 32 | 1689 ms / 31.6 | release 39427740462, benchmark 37769777681 |
+| 26B-A4B | Blackhole Galaxy | one engine, TP=8 x EP=4 (4 lanes x 32 slots) | 450 / 477 / 1320 / 5455 | 22.1 | 128 | 2526 ms / 6.5 | release 39894754540 |
+| 26B-A4B | QB2 (P300x2) | column mesh (4,1), TP=4, token-dispatch prefill | 144 / 389 / 1169 / 5467 | 46.2 | 32 | 3198 ms / 34.7 | local serving on this branch (release CI at this head pending; the fused decode set is opt-in) |
+
+Release-flow evaluations (thinking on, temperature 1.0; MMMU-Pro thinking off, greedy; each within tolerance of the same-protocol GPU reference):
+
+| Variant | System | GPQA Diamond | LiveCodeBench | MMMU-Pro | Terminal-Bench 2 | FLEURS (en) | tt-shield run id |
+|---|---|---:|---:|---:|---:|---:|---|
+| 31B | Blackhole Galaxy | 83.33 | 78.63 | 66.13 | 58.33 | n/a | 39420209538 |
+| 31B | QB2 | 83.33 | 79.39 | 64.97 | 62.50 | n/a | 39427665515 |
+| 12B | Blackhole Galaxy | 77.78 | 71.76 | 60.46 | 20.83 | 93.34 | 39427589570 |
+| 12B | QB2 | 74.75 | 74.05 | 59.77 | 33.33 | 93.44 | 39427740462 |
+| 26B-A4B | Blackhole Galaxy | 79.80 | 74.81 | 65.32 | 50.00 | n/a | 39894754540 |
+
+## Metal Demo Performance (CI)
+
+Batch-1 `text_demo.py` runs from the branch's e2e CI (128-token prompt, 128 generated tokens, warm decode after the one-time compile; TTFT includes the first-token prefill of the warmed server). The 26B-A4B job also runs the image demo (`vision_demo.py`): image TTFT 14.2 s, 16.1 tokens/s/user.
+
+| Variant | System | Mesh | TTFT (ms) | Tokens/s/user | CI leg (run 39925769041) |
+|---|---|---|---:|---:|---|
+| E2B | N150 | 1x1 | 389 | 14.6 | wh_n150, job 120326719435 |
+| E2B | P150 | 1x1 | 111 | 19.7 | bh_p150, job 120326719361 |
+| E4B | P300 | 1x2 | 150 | 17.9 | bh_p300, job 120326719270 |
+| 12B | P150 | 1x1 | 91 | 16.9 | bh_p150, job 120326719372 |
+| 12B | QB2 (P150x4) | 1x4 | 54 | 39.0 | bh_quietbox_2, job 120326719248 |
+| 26B-A4B | T3K | 1x8 | 398 | 19.9 | wh_llmbox, job 120326719319 |
+| 31B | T3K | 1x8 | 186 | 16.0 | wh_llmbox, job 120326719397 |
+
+## Serving knobs and defaults per build
+
+`tt/mesh_orientation.py` is the source of truth: a model build records its profile (`set_decode_fusion_profile`) and
+every fusion flag is read through `decode_flag` (an env var, when set, wins). The profiles:
+
+| Build | Fused decode / prefill programs on by default |
 |---|---|
-| E2B | [google/gemma-4-E2B-it](https://huggingface.co/google/gemma-4-E2B-it) |
-| E4B | [google/gemma-4-E4B-it](https://huggingface.co/google/gemma-4-E4B-it) |
-| 12B | [google/gemma-4-12B-it](https://huggingface.co/google/gemma-4-12B-it) |
-| 26B-A4B | [google/gemma-4-26B-A4B-it](https://huggingface.co/google/gemma-4-26B-A4B-it) |
-| 31B | [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) |
+| 26B-A4B on the 4-chip Blackhole meshes ((1,4) row, (4,1) column) | `GEMMA4_MOE_FUSED`, `GEMMA4_MLP_GEGLU_FUSED`, `GEMMA4_QKV_NORM_ROPE_FUSED`, `GEMMA4_NORM_FUSED=2`, `GEMMA4_LAYER_NORM_FUSED`, `GEMMA4_SOFTCAP_FUSED`, `GEMMA4_CONCAT_HEADS_FUSED`, `GEMMA4_QKV_L1_OUT`, `GEMMA4_HEAD_NORM_4D`, `GEMMA4_MLP/ATTN/ROUTER_DECODE_1D`, `GEMMA4_SMALL_ROW_EXPERTS` |
+| 31B / 12B on the 4-chip Blackhole meshes | `GEMMA4_DRAM_SHARD_ROW_VIEW`, `GEMMA4_QKV_L1_OUT`, `GEMMA4_QKV_HEADS_FUSED`, `GEMMA4_CONCAT_HEADS_FUSED`, `GEMMA4_CONCAT_HEADS_SHARDED`, `GEMMA4_MLP_GEGLU_SHARDED`, `GEMMA4_NORM_SHARDED_OUT`, `GEMMA4_SOFTCAP_FUSED`, `GEMMA4_QKV_NORM_ROPE_PREFILL` (the fused per-head norm + RoPE prefill program; refused on Wormhole whatever the env) |
+| Wormhole, one chip, the (1,8) line, the Galaxy lane engine | none: the composite ttnn paths (`GEMMA4_<flag>=1` opts a program in where its kernels are validated) |
 
-## Tested Configurations
+The other knob families, with the code defaults (unset = the code's own choice):
 
-Wormhole rows are from CI (cold-start TTFT, including one-time program compile). Blackhole rows are measured metal demos on this branch (batch-1, warm, ISL=4k) — e2e CI exercises the same SKUs (`bh_p150` / `bh_quietbox_2`) but does not yet publish the same perf table.
-
-| Variant | System | Mesh | Tokens/s | Tokens/s/user | TTFT (ms) | Source |
-|---|---|---|---:|---:|---:|---|
-| E2B     | N150 | 1×1 | 12.24 | 12.24 | 38714.7 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762105) |
-| E4B     | N150 | 1×1 |  7.95 |  7.95 | 36832.1 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762123) |
-| 26B-A4B | T3K  | 1×8 | 11.68 | 11.68 | 64186.5 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762080) |
-| 31B     | T3K  | 1×8 |  9.48 |  9.48 | 44772.1 [^ttft] | [CI](https://github.com/tenstorrent/tt-metal/actions/runs/25099500256/job/73545762120) |
-| E2B     | P150 | 1×1 | 22.82 | 22.82 | 580 [^bh-perf] | measured |
-| E4B     | P150 | 1×1 | 13.97 | 13.97 | 950 [^bh-perf] | measured |
-| 12B     | P150 | 1×1 | 15.57 | 15.57 | 1190 [^bh-perf] | measured |
-| 12B     | LoudBox | 1×8 | 47.59 | 47.59 | 380 [^bh-perf] | measured |
-| 31B     | LoudBox | 1×8 | 31.69 | 31.69 | 660 [^bh-perf] | measured |
-| 31B     | QB2 | 1×4 | 22.68 | 22.68 | 1060 [^bh-perf] | measured |
-
-[^ttft]: CI TTFT is cold-start, including one-time device program compile.
-[^bh-perf]: Steady-state metal demo decode (batch-1 @ ISL=4k) from `isl_sweep_logs/defaults_scoreboard` (LoudBox) and `isl_sweep_logs/full_matrix_20260722` (QB2 / single-chip P150 aliased as N150 in that sweep). Long-context decode is lower (e.g. ~26–27 tok/s for 31B / P150x8 @ 128k; ~13–15 tok/s for 12B / P150 @ 128k–256k bounded).
-
-E4B on N300 (1×2) is currently disabled in CI due to reduced N300 runner availability — see the Code Support Matrix below. Galaxy e2e entries are temporarily disabled (fabric / ethernet bring-up hang).
+| Family | Knob = default | Meaning |
+|---|---|---|
+| Decode-trace guard | `GEMMA4_TRACE_ALLOC_GUARD=1`, `_ARM=alloc`, `_PERIOD=32`, `_MAX=8`, `_MIN_INTERVAL_S=30` | re-capture the decode trace when a device allocation appears after a capture (rate-limited) |
+| Prefill trace / warmup | `GEMMA4_TRACE_SHORT_PREFILL_MAX=128`, `GEMMA4_TRACE_PREFILL_SEQ_LENS`, `GEMMA4_WARMUP_PREFILL_BATCHES`, `GEMMA4_WARMUP_PREFILL_ISLS` (unset = the model's ladder) | which prefill shapes are traced / warmed at boot |
+| Prefill SDPA | `GEMMA4_PREFILL_SDPA_PROGCFG` (unset = auto: fixed configs for >= 8 Q heads per chip on Blackhole, the op defaults below that; `1` fixed, `0` op defaults), `_WIDE=1`, `_QCHUNK` / `_KCHUNK` / `_GRID` (explicit chunks and grid, clamped to the device grid) | the prefill SDPA program config; every grid derives from `compute_with_storage_grid_size` |
+| Prefill matmul slabs | `GEMMA4_PREFILL_L1_HEADROOM_KB=64` | the per-core L1 headroom the row-slab rule leaves (`tt/dram_sharded.py`) |
+| KV cache / pools | `GEMMA4_KV_BFP8` (catalog default bfp8 for the dense 4-chip builds), `GEMMA4_BOUNDED_SLIDING_KV_CACHE` (unset = the plugin's choice), `GEMMA4_SPEC_RING_HEADROOM_BLOCKS` (unset = sized from the verify width), `GEMMA4_PACKED_PREFILL=0`, `GEMMA4_LONG_CONTEXT_POLICY` (unset = the per-mesh cutover table) | paged-KV dtype, the bounded sliding ring, the packed multi-prompt prefill, the long-context cutovers |
+| Lane engine (Galaxy) | `GEMMA4_LANE_PREFILL_PROMPTS=1`, `GEMMA4_LANE_PREFILL_CAPABILITY=1`, `GEMMA4_LANE_CCL_ASYNC=0`, `GEMMA4_LANE_CCL_SYNC=0`, `GEMMA4_LANE_PREFILL_TABLE_UPLOAD=1` | the k-prompts-per-lane gathered prefill, the capability the plugin reads, the lane collectives |
+| Collectives | `GEMMA4_CCL_TOPOLOGY` (unset = auto), `GEMMA4_CCL_ASYNC=0`, `GEMMA4_CCL_PERSISTENT_BUF=1`, `GEMMA4_CCL_NUM_WORKERS=2`, `GEMMA4_CCL_NUM_BUFFERS=2`, `GEMMA4_CCL_NUM_LINKS` (unset = the mesh's) | the CCL manager's topology, async mode and buffers |
+| dFlash / MTP speculation | `GEMMA4_DFLASH_VERIFY=5`, `_SERVE_HORIZON=2048`, `_CTX_CAP=2048`, `_WIDTH_SET=1`, `_WARMUP_DECODE=1`, `_PACKED=1`, `_SDPA=1`, `_CTX_CACHE=1`, `_DECODER_REUSE=0`, `_MAX_SPEC_ISL=0`, `GEMMA4_DFLASH_DRAFTER` (unset = resolved from the HF cache) | the speculative serving contract's widths, horizon and drafter |
+| Accuracy gates (tests) | `GEMMA4_MIN_TOP1` / `GEMMA4_MIN_TOP5` (unset = reference minus the band; `0` = a report-only row), `GEMMA4_TOKACC_TAG`, `GEMMA4_PROSE_REPORT_ONLY`, `GEMMA4_PROSE_TAG`, `GEMMA4_PROSE_LENGTH=2048`, `GEMMA4_HF_REF_CACHE` (unset = `TT_CACHE_PATH/hf_reference`), `GEMMA4_TEST_PROMPT_TOKENS`, `GEMMA4_TEST_LAST_GATE`, `GEMMA4_TEST_GRID` (test-only cap of the compute grid) | the token-accuracy and prose gates and their report-only rows |
 
 ## Code Support Matrix
 
-What the *code* in this directory supports, independent of what CI exercises.
+What the code in this directory supports, independent of what CI exercises.
 
-Legend: 🟢 fully supported · 🟡 supported with known issues / limitations · 🔴 not supported · — not applicable
+Legend: 🟢 fully supported · 🟡 supported with limitations · 🔴 not supported · — not applicable
 
-| Variant | N150 (1×1) | N300 (1×2) | T3K (1×8) | P150 (1×1) | QB2 / P150x4 (1×4) | LoudBox / P150x8 (1×8) | Galaxy (4×8) |
+| Variant | N150 (1x1) | N300 (1x2) | T3K (1x8) | P150 (1x1) | QB2 / P150x4 (1x4) | LoudBox / P150x8 (1x8) | Blackhole Galaxy (8x4) |
 |---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| E2B     | 🟢 | 🟢 | 🟢 | 🟢 [^gemma4-p150] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
-| E4B     | 🟢 | 🟡 [^e4b-n300] | 🟢 | 🟢 [^gemma4-p150] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
-| 12B     | 🟡 [^gemma4-12b-wh] | 🟢 [^gemma4-wh-lc] | 🟢 [^gemma4-wh-lc] | 🟢 [^gemma4-p150-12b] | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
-| 26B-A4B | 🔴 | 🔴 [^gemma4-wh-nofit] | 🟡 [^gemma4-wh-lc] | 🔴 | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
-| 31B     | 🔴 | 🔴 [^gemma4-wh-nofit] | 🟢 [^gemma4-wh-lc] | 🔴 | 🟢 [^gemma4-lc] | 🟢 [^gemma4-lc] | 🔴 [^galaxy] |
+| E2B     | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | — |
+| E4B     | 🟢 | 🟡 | 🟢 | 🟢 | 🟢 | 🟢 | — |
+| 12B     | 🟡 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 | 🟢 |
+| 26B-A4B | 🔴 | 🔴 | 🟡 | 🔴 | 🟢 | 🟢 | 🟢 |
+| 31B     | 🔴 | 🔴 | 🟢 | 🔴 | 🟢 | 🟢 | 🟢 |
 
-[^e4b-n300]: E4B on N300 is exercised by the test suite locally but the CI entry is commented out due to runner availability. See `tests/pipeline_reorg/models_{unit,e2e}_tests.yaml`.
-[^gemma4-12b-wh]: 12B on Wormhole N150 is short-context only (does not fit long-context KV).
-[^gemma4-p150]: Single Blackhole P150 — **E2B / E4B fully supported through HF 256k** with default multi-chunk prefill (4096), unbounded KV (`text_demo_v2.py -k long-context-{4k,…,256k}`). CI: `bh_p150` e2e for E2B/E4B.
-[^gemma4-p150-12b]: Single Blackhole P150 — **12B through full ISL 256k** with auto **bounded sliding + chunked prefill (4096)** above 32k (unbounded KV OOMs). Measured PASS + coherent gen at 64k/128k/256k (`isl_sweep_logs/full_matrix`). CI short-demo e2e on `bh_p150`; long-context via `MESH_DEVICE=P150 … text_demo_v2.py -k long-context-256k` (reports TTFT + decode tok/s). Prefill at 256k is slow (~6 min TTFT).
-[^gemma4-lc]: Long-context via `models/demos/gemma4/demo/text_demo_v2.py` (`-k long-context-{4k,32k,64k,128k,256k}`) — reports **TTFT and decode tok/s** (long-context `text_demo.py` only logs TTFT). Same `GEMMA4_LONG_CONTEXT_POLICY` in both demos. **Coherence target on QB2 + LoudBox for 12B and 31B: 4k–128k** (256k may allocate; 31B/26B quality not a target). QB2 — E2B/E4B unbounded through 256k; 12B/26B-A4B unbounded through 128k, bounded(+chunked) at 256k; 31B bounded from 64k (chunk=2048 at ≥128k). LoudBox / P150x8 — E2B/E4B/12B unbounded through 256k; **31B/26B-A4B auto-bounded at 128k** with chunk=2048. Defaults: `GEMMA4_HOST_SAMPLE=1`; do not set `GEMMA4_DEMO_SINGLE_CHUNK=1`.
-[^galaxy]: Galaxy (4×8) is not wired for Gemma4 yet; BH Galaxy e2e is disabled pending fabric / ethernet bring-up.
+Notes on the matrix:
 
-[^gemma4-wh-lc]: Wormhole long context, measured batch-1 on a real T3K with `text_demo_v2.py` (`GEMMA4_LONG_CONTEXT_POLICY` T3K/N300 entries; bounded sliding + multi-chunk prefill **2048** above 8–32k — WH carries 12 GB per ASIC vs Blackhole P150's 32 GB). **12B**: N300 (1×2, 24 GB) through **128k** (4k 11.4 s / 12.0 tok/s → 128k 171 s / 11.7 tok/s; 256k OOMs), T3K (1×8) through the **full 256k** (4k 9.9 s / 24.0 tok/s → 256k 468 s / 14.3 tok/s). **31B**: T3K through the **full 256k** (4k 8.5 s / 15.7 tok/s, 32k 55 s / 14.8 tok/s, 128k 188 s / 12.9 tok/s, 256k 564 s / 10.1 tok/s). **26B-A4B**: T3K functional through 128k but marked 🟡 — MoE prefill on WH is far slower than the dense 31B (TTFT 449 s @32k and 1506 s @128k), so ~32k is the practical serving ceiling.
-
-[^gemma4-wh-nofit]: 26B-A4B and 31B do not fit a single N300 (1×2, 24 GB) at any ISL — both OOM during weight/KV allocation even at 4k. Use T3K (1×8) on Wormhole.
-
-The 26B-A4B and 31B variants are too large for single-device N150/P150 or N300. Prefer Blackhole QB2 (TP=4, 128 GB GDDR) or LoudBox (TP=8, 256 GB GDDR) for long-context serve; Wormhole T3K (TP=8, ~12 GB/ASIC) remains the supported WH multi-chip path — metal Direct reaches the full 256k ISL for 12B and 31B there with bounded sliding + chunked prefill=2048, though TTFT is long (~8–9 min at 256k). **12B is the only variant that fits a single N300** (1×2, 24 GB), and only through 128k. Server specs stay well below the Blackhole 256k / 32-user shape: `workflows/model_specs/dev/llm.yaml` serves WH at `max_concurrency: 1` (12B T3K 256k, 12B N300 128k, 31B T3K 128k, 26B-A4B T3K 32k). On single **P150**, run E2B / E4B / 12B through 256k (12B uses bounded+chunked automatically).
+- E4B on N300 runs locally; its CI entry is disabled for runner availability (`tests/pipeline_reorg/models_{unit,e2e}_tests.yaml`).
+- 12B on N150 is short-context only (the long-context KV does not fit). On a single P150, E2B and E4B run the full 256k context unbounded with 4096-token prefill chunks; 12B reaches 256k with bounded sliding attention and 4096-token chunks above 32k (unbounded KV runs out of DRAM).
+- Wormhole T3K carries 12 GB per ASIC (Blackhole P150: 32 GB): 12B and 31B reach 256k with bounded sliding attention and 2048-token prefill chunks above 8k to 32k; 26B-A4B on T3K is short-context only. 26B-A4B and 31B do not fit N150, N300 or a single P150 at any input length.
+- QB2 (TP=4, 128 GB) and LoudBox (TP=8, 256 GB) are the long-context serving targets for 12B, 26B-A4B and 31B: `text_demo_v2.py` covers 4k to 256k with the per-device bounded-sliding and chunking policy in `tt/generator_trace.py`; the 26B-A4B 4-chip build opens the column mesh (4,1) with token-dispatch prefill by default.
+- Blackhole Galaxy: 12B and 31B serve as four data-parallel TP=8 engines folded into in-process lanes; 26B-A4B serves as one engine over all 32 chips (TP=8 x EP=4 with four lanes of 32 slots). Long-context coherence on the Galaxy is checked with needle retrieval at 256k (single user and 4 x 11 users at 230k).
 
 ## Prerequisites
 

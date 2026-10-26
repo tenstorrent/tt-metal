@@ -719,7 +719,8 @@ def test_demo_text(
             reset_sampling_state=False,
         )
         if device_sampling_params is not None:
-            out_tok = decode_out.long().view(batch_size, 1)
+            # Lane-sharded meshes return the full lane-major frame; the demo's users occupy its first rows.
+            out_tok = decode_out.long().reshape(-1)[:batch_size].view(batch_size, 1)
         else:
             out_tok = _host_sample(decode_out, temperature, top_p)
         profiler.end(f"inference_decode_time_{iteration}")
