@@ -164,10 +164,12 @@ def test_a_re_emit_that_splits_a_tolerance_row_drops_no_baseline():
     assert raised.kind is Kind.BASELINE_RAISED and raised.cell[1].dest_acc is D_YES
 
 
-def test_deleting_a_parent_row_is_seen_on_the_flag_value_no_row_pins():
+@pytest.mark.parametrize("flag", ["approx", "dest"])
+def test_deleting_a_parent_row_is_seen_on_the_flag_value_no_row_pins(flag):
     """`approx: Yes` alone pins one value; the `No` cells fell back to the broad row,
-    and deleting it leaves them on nothing."""
-    pinned = Row(input=F16B, output=F32, approx=YES, metric=TOL, measured=9)
+    and deleting it leaves them on nothing. Likewise for `dest`."""
+    value = YES if flag == "approx" else D_YES
+    pinned = Row(input=F16B, output=F32, metric=TOL, measured=9, **{flag: value})
     base = _table(Row(input=F16B, output=F32, metric=TOL, measured=9), pinned)
     assert {c.kind for c in compare(base, _table(pinned))} == {Kind.BASELINE_DROPPED}
 
@@ -213,11 +215,12 @@ def test_an_unkeyed_budget_binds_only_on_the_measured_arch():
     "base_floor, base_figure, head_floor, kind",
     [
         (1e-7, 2, 5e-5, Kind.FLOOR_WIDENED),
+        (None, 2, 5e-5, Kind.FLOOR_WIDENED),
         # A smaller budget must not mask a wider floor: it can more than pay for it.
         (1e-7, 8, 5e-2, Kind.FLOOR_WIDENED),
         (5e-5, 2, 1e-7, None),
     ],
-    ids=["widened", "masked-by-a-smaller-budget", "narrowed"],
+    ids=["widened", "appears", "masked-by-a-smaller-budget", "narrowed"],
 )
 def test_the_near_zero_floor_is_part_of_the_gate(
     base_floor, base_figure, head_floor, kind
@@ -406,6 +409,11 @@ def test_a_widened_floor_beside_an_all_past_list_is_a_regression():
     assert [(c.kind, c.segment) for c in changes] == [
         (Kind.FLOOR_WIDENED, (-INF, 0.0)),
         (Kind.FLOOR_WIDENED, (0.0, INF)),
+    ]
+    # The report shows how far the floor moved, not two identical cells.
+    assert [(c.held_before, c.held_after) for c in changes] == [
+        ("tolerance (max 9, floor 1e-07)", "tolerance (max 9, floor 0.001)"),
+        ("tolerance (max 10, floor 1e-07)", "tolerance (max 10, floor 0.001)"),
     ]
 
 
@@ -631,7 +639,9 @@ def test_headroom_exit_status(tmp_path):
         measured.write_text(_measured(worst).to_json() + "\n")
         assert main(argv) == status
     measured.write_text("")
-    assert main(argv) == 1
+    assert main(argv) == 1  # an empty file is a sweep that recorded nothing
+    absent = argv[:4] + [str(tmp_path / "absent.jsonl")]
+    assert main(absent) == 2  # a missing one is an input that is not there
     for text in ("{\n", '{"op": "Abs", "key": {}}\n'):
         measured.write_text(text)
         assert main(argv) == 2

@@ -146,7 +146,13 @@ def test_a_budget_alongside_multiple_l1_passes_raises():
     it."""
     golden = _tile(1.0, DataFormat.Float16_b)
     with refuses("L1_to_L1_iterations"):
-        passed_test(golden, golden.clone(), DataFormat.Float16_b, 2, max_ulp=1)
+        passed_test(
+            golden,
+            golden.clone(),
+            DataFormat.Float16_b,
+            L1_to_L1_iterations=2,
+            max_ulp=1,
+        )
 
 
 def test_an_empty_tensor_is_refused_before_any_verdict_is_logged(captured_logs):

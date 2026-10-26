@@ -426,6 +426,43 @@ def test_an_emit_refusal_fails_only_a_clean_session(monkeypatch, exitstatus, exp
     assert session.exitstatus == expected
 
 
+@pytest.mark.parametrize(
+    "testsfailed, exitstatus",
+    [
+        (3, pytest.ExitCode.TESTS_FAILED),
+        # The hook can see the count before pytest has set the status from it.
+        (3, pytest.ExitCode.OK),
+        (0, pytest.ExitCode.INTERRUPTED),
+        (0, 17),  # pytest.exit(returncode=17)
+    ],
+    ids=[
+        "failed",
+        "failed-status-not-yet-set",
+        "interrupted",
+        "pytest-exit-returncode",
+    ],
+)
+def test_a_session_that_measured_its_grids_but_did_not_end_clean_writes_nothing(
+    table, monkeypatch, testsfailed, exitstatus
+):
+    """Every grid complete, so only the session's own status stands between it and
+    the checked-in table: a failure elsewhere, a Ctrl-C or a `pytest.exit` refuses the
+    write, and the session ends non-zero."""
+    monkeypatch.setattr(ulp_sweep, "EMIT", True)
+    monkeypatch.setattr("helpers.ulp_table.TABLE_PATH", table)
+    monkeypatch.setattr(
+        llk_pytest_plugin, "get_chip_architecture", lambda: ChipArchitecture.WORMHOLE
+    )
+    _record_grid(GELU, F16, F16, 5)
+    before = table.read_text()
+    session = _session(exitstatus, testsfailed)
+    llk_pytest_plugin._finish_ulp_emit(session)
+    assert table.read_text() == before
+    assert session.exitstatus != pytest.ExitCode.OK
+    if exitstatus != pytest.ExitCode.OK:
+        assert session.exitstatus == exitstatus
+
+
 def test_a_not_measurable_verdict_is_written_with_both_figures_and_why(table):
     """The lanes that park the cell, the worst of the rest, and why as the row's note;
     a cell with no rankable lane at all records no figure."""
@@ -1021,8 +1058,9 @@ def test_effective_dest_acc_asks_for_the_chip_only_for_an_outlier(monkeypatch):
     for dest_acc in DestAccumulation:
         assert inference.effective_dest_acc(F16, F16, dest_acc) == dest_acc
     assert inference.effective_dest_acc(F16B, F16, D_YES) == D_YES
-    with pytest.raises(AssertionError):  # allow-pytest.raises: host-only test
+    with pytest.raises(AssertionError) as caught:  # allow-pytest.raises: host-only test
         inference.effective_dest_acc(F16B, F16, D_NO)
+    assert "looked up the chip" in str(caught.value)
 
 
 @pytest.mark.parametrize(

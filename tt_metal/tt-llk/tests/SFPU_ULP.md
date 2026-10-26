@@ -129,8 +129,13 @@ fp16 subnormals the pack does not reproduce.
 5. **Gate on it.** Re-run without `--ulp-emit`, then the host guards:
 
    ```bash
-   pytest test_ulp_budget_diff.py ../hardware_free/accuracy -q  # from python_tests
+   ../run_hardware_free.sh                                # tests/hardware_free, accuracy included
+   CHIP_ARCH=wormhole pytest test_ulp_budget_diff.py -q   # the guard's command-line tests
    ```
+
+   Both from `python_tests`. Run `hardware_free/` through the script: pytest started
+   on it directly finds the tt-metal root's `pytest.ini` instead of this suite's, and
+   without `LLK_HARDWARE_FREE` the plugin opens a device.
 
 ## The rules the table enforces
 

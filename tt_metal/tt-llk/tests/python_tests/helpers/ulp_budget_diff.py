@@ -116,9 +116,11 @@ def _held_text(
     """What a span is held to, for the report."""
     if state is State.NONE:
         return "—"
+    floor = row.near_zero_atol if row is not None else None
     if state is State.GATED:
-        floor = row.near_zero_atol if row is not None else None
         text = f"{figure} (floor {floor:g})" if floor else str(figure)
+    elif floor:
+        text = f"tolerance (max {figure}, floor {floor:g})"
     else:
         text = f"tolerance (max {figure})"
     return f"unranked, strays held to {text}" if strays else text
@@ -701,6 +703,9 @@ def main(argv: list[str] | None = None) -> int:
             loosened = any(c.kind.loosens for c in changes)
             status = 1 if loosened and not args.allow_raises else 0
         else:
+            # The reader takes a missing file as no records (a sweep that died before its
+            # first cell); here it is an input that is not there, so it cannot load.
+            args.measured.stat()
             headroom = judge(load_table(args.table), read_measurements(args.measured))
             report = render_headroom(headroom)
             status = 1 if headroom.regressions else 0

@@ -6,7 +6,9 @@ zero survives the pipeline, the probe spacing that keeps an edge probe distinct 
 16-bit Dest, and the exp family's two ceilings. Pure metadata, no device."""
 
 import math
+import re
 import struct
+from pathlib import Path
 
 import pytest
 import test_eltwise_binary_sfpu
@@ -99,15 +101,18 @@ def test_specials_safe_is_the_measured_matrix():
 
 
 def test_a_flag_is_read_by_its_value_and_only_its_own_enum_is_accepted():
-    """`bool(DestAccumulation.No)` is True, so a truthiness read would flip whole rows;
-    a bool, an int or the other two-state enum is refused rather than guessed."""
+    """`bool(DestAccumulation.No)` is True, so a truthiness read would flip whole rows.
+    One normaliser (`data_format_inference._two_state_flag`) serves every predicate: a
+    member or a bool is read by its value; an int or the other two-state enum is
+    refused rather than guessed."""
     assert specials_safe(F16B, F16B, D_NO)
     assert not specials_safe(F16B, F16B, D_YES)
+    assert specials_safe(F16B, F16B, False) and not specials_safe(F16B, F16B, True)
     assert for_op(MathOperation.Exp, F32, approx_mode=YES).spec_A.high == 16.0
-    for bad in (True, 1, 0, None, "Yes", ApproximationMode.Yes):
+    for bad in (1, 0, None, "Yes", ApproximationMode.Yes):
         with pytest.raises(TypeError):  # allow-pytest.raises: host-only test
             specials_safe(F32, F32, bad)
-    for bad in (True, 1, DestAccumulation.Yes):
+    for bad in (1, DestAccumulation.Yes):
         with pytest.raises(TypeError):  # allow-pytest.raises: host-only test
             for_op(MathOperation.Exp, F32, approx_mode=bad)
     with pytest.raises(TypeError):  # allow-pytest.raises: host-only test
@@ -154,6 +159,30 @@ def test_nan_sign_gate_ignores_ops_that_forward_a_nan():
         assert op not in GENERATED_NAN_SIGN_OPS
         for cell in _EDGE_SWEEP_CELLS:
             assert not nan_sign_is_unspecified(op, *cell)
+
+
+def test_nan_sign_gate_skips_only_the_narrowing_cells_of_ops_that_invent_a_nan():
+    """The positive side: every op that invents its NaN is gated on exactly the cells
+    that narrow a NaN to +/-inf, and keeps Float32->Float32 at dest_acc=Yes, where the
+    sign is readable. A gate that grew would switch off specials probes silently."""
+    assert {op.name for op in GENERATED_NAN_SIGN_OPS} == {
+        "Cos",
+        "Fmod",
+        "GeluAppx",
+        "Hardmish",
+        "Mish",
+        "Rsqrt",
+        "ScalarRsub",
+        "Silu",
+        "Sin",
+        "Softsign",
+        "Tan",
+    }
+    carrying = [c for c in _EDGE_SWEEP_CELLS if specials_safe(*c)]
+    narrowing = [c for c in carrying if c != (F32, F32, D_YES)]
+    for op in GENERATED_NAN_SIGN_OPS:
+        gated = [c for c in carrying if nan_sign_is_unspecified(op, *c)]
+        assert gated == narrowing, op.name
 
 
 def test_every_float_binary_op_is_classified_for_cat_b():
@@ -289,7 +318,10 @@ def test_exp_family_ceiling_follows_the_approximation_mode():
             assert for_op(MathOperation.Exp, fmt, approx_mode=mode).spec_A.high == high
 
 
-# ── Golden rules parked here (see the P13 plan, decision 14) ──────────────────
+# ── Golden-generator rules ────────────────────────────────────────────────────
+
+# The goldens' model of the datapath (Dest format, NaN sign, the SFPU total order) has
+# no host test file of its own; these sit beside the pipeline rules they mirror.
 
 
 def test_binary_golden_dest_format_matches_the_domains_rule():
@@ -413,6 +445,73 @@ def test_binary_comparison_family_splits_on_the_kernel_nan_guard():
             f"{op.name}({a}, {b}) = {got} on the Int32 axis, expected {want}: "
             "calculate_binary_comp_int32 is a plain two's-complement compare"
         )
+
+
+def _binary_op_enumerators(arch_dir: str) -> set:
+    """The BinaryOp enumerator names one architecture declares, parsed from its
+    ckernel_defs.h: a copy of the enum here would keep agreeing with itself after the
+    header changed, which is the failure this guard exists to catch."""
+    header = (
+        Path(__file__).resolve().parents[3] / arch_dir / "common/inc/ckernel_defs.h"
+    )
+    assert header.is_file(), (
+        f"{header} not found. This guard pins the WH/BH BinaryOp enum; if the layout "
+        "moved, repoint it rather than deleting it."
+    )
+    body = re.search(
+        r"enum class BinaryOp\s*:\s*[^{]*\{(.*?)\}", header.read_text(), re.S
+    )
+    assert body, f"no `enum class BinaryOp` found in {header}"
+    return set(re.findall(r"^\s*([A-Z][A-Z0-9_]*)\s*(?:=|,)", body.group(1), re.M))
+
+
+# These carry MathOpType.SFPU_BINARY_INT, which only the Quasar dispatch implements; on
+# WH/BH the same kernels are reached through the SFPU_BINARY members they map to, at
+# DataFormat.Int32. The int multiply is MUL on Quasar (_mul_int32_) and MUL_INT32 on
+# WH/BH, which SfpuMulInt32 drives.
+_QUASAR_INT_BINARY_ALIASES = {
+    MathOperation.SfpuGtInt: MathOperation.SfpuElwGt,
+    MathOperation.SfpuLtInt: MathOperation.SfpuElwLt,
+    MathOperation.SfpuLeInt: MathOperation.SfpuElwLe,
+    MathOperation.SfpuGeInt: MathOperation.SfpuElwGe,
+    MathOperation.SfpuElwmulInt: MathOperation.SfpuMulInt32,
+}
+
+
+@pytest.mark.parametrize("arch_dir", ["tt_llk_wormhole_b0", "tt_llk_blackhole"])
+def test_quasar_int_binary_members_alias_covered_kernels(arch_dir):
+    """The SFPU_BINARY_INT members are unreachable on WH/BH; their kernels are not. A
+    member that became dispatchable needs a test of its own; an alias that left the
+    header leaves the kernel uncovered."""
+    declared = _binary_op_enumerators(arch_dir)
+    for member, alias in _QUASAR_INT_BINARY_ALIASES.items():
+        spec = member.value
+        if member is MathOperation.SfpuElwmulInt:
+            # "MUL" is declared as the float multiply: dispatch follows MathOpType.
+            assert spec.operation_type.name == "SFPU_BINARY_INT"
+        else:
+            assert spec.cpp_enum_value not in declared, (
+                f"{member.name} names BinaryOp::{spec.cpp_enum_value}, now declared in "
+                f"{arch_dir}: it is reachable there and needs a test of its own"
+            )
+        assert alias.value.cpp_enum_value in declared, (
+            f"{member.name}'s kernel is covered on WH/BH only through {alias.name}, whose "
+            f"BinaryOp::{alias.value.cpp_enum_value} is no longer declared in {arch_dir}"
+        )
+
+
+def test_int_comparison_ops_are_the_ordered_elw_compares():
+    driven = set(test_eltwise_binary_sfpu._INT_COMPARISON_OPS)
+    assert driven == {
+        MathOperation.SfpuElwLt,
+        MathOperation.SfpuElwGt,
+        MathOperation.SfpuElwLe,
+        MathOperation.SfpuElwGe,
+    }
+    assert (
+        set(_QUASAR_INT_BINARY_ALIASES.values()) - {MathOperation.SfpuMulInt32}
+        == driven
+    ), "the alias table and the driven set disagree"
 
 
 def test_total_order_key_matches_the_isa_remap():

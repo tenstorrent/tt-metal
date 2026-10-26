@@ -248,8 +248,9 @@ def ulp_elementwise_valid(
     """Per-element verdict: a lane is valid when the two sides agree about being
     non-finite and are within *max_ulp* steps, or both NaN, or it lies in the near-zero
     band with an absolute error within *near_zero_atol*. Returns ``(valid, distance,
-    covered)``: *covered* is every lane the floor judges, in budget or not, which a
-    reporting caller keeps out of its ranking."""
+    covered)``: *covered* is every lane the floor rescues -- in the band and within
+    *near_zero_atol* -- in step budget or not, which a reporting caller keeps out of its
+    ranking."""
     distance = ulp_distance(golden, result, flush_subnormals=flush_subnormals)
     both_nan = torch.isnan(golden) & torch.isnan(result)
     valid = ((distance >= 0) & (distance <= max_ulp)) | both_nan

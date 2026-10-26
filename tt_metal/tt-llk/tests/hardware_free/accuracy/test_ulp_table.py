@@ -149,8 +149,9 @@ def test_a_repeated_yaml_key_is_refused_not_overwritten():
     ["Abs:\n- {{measured: 1}}\n", "Abs: &rows\n- *rows\n"],
     ids=["doubled-braces", "self-containing-anchor"],
 )
-def test_a_key_that_is_not_a_name_is_refused_not_a_type_error(text):
-    """A mapping used as a key (doubled braces pasted from an f-string) raised a bare
+def test_a_row_that_is_not_a_mapping_of_names_is_refused_not_a_type_error(text):
+    """A mapping used as a key (doubled braces pasted from an f-string), or a row that
+    is the op's own row list (an anchor that contains itself), raised a bare
     ``TypeError`` from the loader, past the guard's "cannot load" handling."""
     with refused(Problem.WRONG_SHAPE):
         read_table(text)

@@ -147,11 +147,26 @@ def test_the_metric_is_a_closed_set():
 
 
 # One contract of each shape the table can hold.
-_CONTRACTS = [
-    AccuracyContract(max_ulp=3),
-    AccuracyContract(max_ulp=3, near_zero_atol=1e-7),
-    AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
-    TOLERANCE_CONTRACT,
+#: ``(contract, passed_test_kwargs(), tolerance_kwargs())``, exact: on identical tensors
+#: passed_test passes for any bounds, so only these catch `custom_atol` and `custom_rtol`
+#: swapped or `near_zero_atol` dropped.
+_TRANSLATIONS = [
+    (AccuracyContract(max_ulp=3), {"max_ulp": 3, "near_zero_atol": None}, {}),
+    (
+        AccuracyContract(max_ulp=3, near_zero_atol=1e-7),
+        {"max_ulp": 3, "near_zero_atol": 1e-7},
+        {},
+    ),
+    (
+        AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
+        {"custom_atol": 0.13, "custom_rtol": 0.05},
+        {"custom_atol": 0.13, "custom_rtol": 0.05},
+    ),
+    (
+        TOLERANCE_CONTRACT,
+        {"custom_atol": None, "custom_rtol": None},
+        {"custom_atol": None, "custom_rtol": None},
+    ),
 ]
 
 
@@ -199,14 +214,15 @@ def test_every_contract_is_accepted_by_passed_test():
     without a budget), and `tolerance_kwargs` never gates on ULP: if it did, passed_test
     would accept it and silently switch every enrolled op to a step budget."""
     golden = torch.ones(_LANES, dtype=torch.bfloat16)
-    for contract in _CONTRACTS:
+    for contract, expected_ulp, expected_tolerance in _TRANSLATIONS:
         by_tolerance = contract.tolerance_kwargs()
-        assert "max_ulp" not in by_tolerance
+        assert by_tolerance == expected_tolerance
         assert passed_test(golden, golden.clone(), DataFormat.Float16_b, **by_tolerance)
         for flush in (None, True, False):
             by_ulp = contract.passed_test_kwargs(flush_subnormals=flush)
-            assert ("flush_subnormals" in by_ulp) == (
-                flush is not None and contract.metric is Metric.ULP
+            flushes = flush is not None and contract.metric is Metric.ULP
+            assert by_ulp == (
+                {**expected_ulp, "flush_subnormals": flush} if flushes else expected_ulp
             )
             assert passed_test(golden, golden.clone(), DataFormat.Float16_b, **by_ulp)
 
@@ -1102,15 +1118,26 @@ def _not_measurable_cells():
     ]
 
 
+#: Rows whose every claimed lane disagreed with the golden about being finite: there
+#: is no rest of the cell to measure, so `nonfinite_verdict` records no `measured` (a 0
+#: would claim it bit-exact) and a re-emit writes the same row. The table cannot tell
+#: such a row from one that lost its figure, so each is listed by hand after reading
+#: the emit. Empty today.
+_EVERY_CLAIMED_LANE_NONFINITE: frozenset = frozenset()
+
+
 def test_a_row_parked_by_disagreeing_lanes_records_the_rest_of_its_cell():
     """`nonfinite_verdict` keeps the step count over the measurable lanes beside the
     lanes that park a cell, so the headroom report has a figure to hold it to; a row
-    without one was written before the emitter kept it, so its op needs a re-emit."""
+    without one was written before the emitter kept it, so its op needs a re-emit. A
+    cell with no measurable lane left is listed in `_EVERY_CLAIMED_LANE_NONFINITE`."""
     bare = [
         (op, row)
         for op, rows in load_table().items()
         for row in rows
-        if row.unmeasurable and row.measured is None
+        if row.unmeasurable
+        and row.measured is None
+        and (op, row.key) not in _EVERY_CLAIMED_LANE_NONFINITE
     ]
     assert not bare, (
         f"{len(bare)} row(s) name the lanes that park their cell but not the maximum "
@@ -1175,15 +1202,15 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
 
 def test_every_unary_op_is_enrolled_or_excused():
     """ "Never measured" and "deliberately left on tolerance" both read as absent from
-    the table, so every unary op either has a row or `_UNARY_OPS_NOT_SWEPT` says why
-    not."""
+    the table, so every unary op either has a row or is listed in
+    `_UNARY_OPS_NOT_SWEPT`, whose comment gives the reason."""
     unaccounted = sorted(
         set(swept_unary_ops()) - set(enrolled_ops()),
         key=lambda op: op.name,
     )
     assert (
         not unaccounted
-    ), "no accuracy contract and no reason given for: " + ", ".join(
+    ), "no accuracy contract and not listed in _UNARY_OPS_NOT_SWEPT: " + ", ".join(
         op.name for op in unaccounted
     )
 

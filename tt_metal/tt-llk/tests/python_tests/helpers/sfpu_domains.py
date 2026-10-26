@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Callable
 
-from .data_format_inference import unpacks_to_dest
+from .data_format_inference import _dest_acc_flag, _two_state_flag, unpacks_to_dest
 from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from .llk_params import ApproximationMode, DestAccumulation, MathOperation
 from .sfpu_dispatch_constants import (
@@ -88,17 +88,6 @@ def narrowest_range_format(
         (input_format, output_format),
         key=lambda fmt: _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE),
     )
-
-
-def _flag(value, member_of: type, param: str) -> bool:
-    """The member's value: `bool(DestAccumulation.No)` is True, like any member's."""
-    if not isinstance(value, member_of):
-        raise TypeError(f"{param} must be a {member_of.__name__} member, got {value!r}")
-    return value.value
-
-
-def _dest_acc_flag(dest_acc: DestAccumulation) -> bool:
-    return _flag(dest_acc, DestAccumulation, "dest_acc")
 
 
 # ── The domain registry ───────────────────────────────────────────────────────
@@ -326,7 +315,9 @@ def _apply_approx_ceiling(
 ) -> None:
     """Lower every operand's upper bound to *op*'s approximation ceiling, in place, at
     ApproximationMode.Yes; a format branch already tighter is left alone."""
-    if approx_mode is None or not _flag(approx_mode, ApproximationMode, "approx_mode"):
+    if approx_mode is None or not _two_state_flag(
+        approx_mode, "approx_mode", "ApproximationMode"
+    ):
         return
     ceiling = _APPROX_ACCURACY_MAX.get(op)
     if ceiling is None:
@@ -725,24 +716,16 @@ def boundary_probes(
     op: MathOperation, operand: Operand, fmt: DataFormat, step_fmt: DataFormat
 ) -> list[float]:
     """Values straddling every boundary of *op*'s defined region for *operand*: each
-    singularity with a probe on its defined side(s), or, for an op with a guard band but
-    no singularity entry, each finite band edge and a probe beyond it. Not clipped to
-    *fmt*; that is the caller's job against the pipeline's narrowest format."""
+    singularity with a probe on its defined side(s). (Every guard band is built around
+    a singularity, so the singularities are every boundary.) Not clipped to *fmt*;
+    that is the caller's job against the pipeline's narrowest format."""
     probes: list[float] = []
-    singularities = _OP_SINGULARITIES.get(op, {}).get(operand, ())
-    if singularities:
-        for point, side in singularities:
-            probes.append(point)
-            if side in (_BOTH, _BELOW):
-                probes.append(probe_beside(point, -1, fmt, step_fmt))
-            if side in (_BOTH, _ABOVE):
-                probes.append(probe_beside(point, +1, fmt, step_fmt))
-    else:
-        for lo, hi in _SFPU_UNDEFINED_RANGES.get(op, {}).get(operand, ()):
-            if math.isfinite(lo):
-                probes += [probe_beside(lo, -1, fmt, step_fmt), lo]
-            if math.isfinite(hi):
-                probes += [hi, probe_beside(hi, +1, fmt, step_fmt)]
+    for point, side in _OP_SINGULARITIES.get(op, {}).get(operand, ()):
+        probes.append(point)
+        if side in (_BOTH, _BELOW):
+            probes.append(probe_beside(point, -1, fmt, step_fmt))
+        if side in (_BOTH, _ABOVE):
+            probes.append(probe_beside(point, +1, fmt, step_fmt))
     # Against *fmt*, not *step_fmt*: probe_beside already kept every probe distinct, and
     # a step_fmt dedup would drop the tight below-boundary ones.
     return _dedup_representable(probes, fmt)

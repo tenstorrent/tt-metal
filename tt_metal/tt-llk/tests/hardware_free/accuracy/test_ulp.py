@@ -579,7 +579,11 @@ def test_a_wrong_shaped_or_non_boolean_mask_is_refused():
         ulp_stats(distance, torch.full((2, 6), 2, dtype=torch.int64))
 
 
-@pytest.mark.parametrize("dtype", [torch.float64, torch.int32, torch.bool], ids=str)
+@pytest.mark.parametrize(
+    "dtype",
+    [torch.float64, torch.int16, torch.int32, torch.int64, torch.bool],
+    ids=str,
+)
 def test_every_entry_point_refuses_an_unmeasured_dtype(dtype):
     """Including the bit containers: reading a bfloat16 through int16 must not make an
     int16 tensor measurable. `local_step` guards on its own, since an explicit
