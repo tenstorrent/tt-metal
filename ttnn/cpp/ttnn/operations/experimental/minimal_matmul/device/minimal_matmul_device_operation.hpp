@@ -8,6 +8,7 @@
 #include <variant>
 
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
@@ -30,9 +31,24 @@ struct MinimalMatmulDeviceOperation {
             const MinimalMatmulParams& operation_attributes,
             const MinimalMatmulInputs& tensor_args,
             std::vector<Tensor>& tensor_return_value);
+
+        // Cache hit: the row count (common runtime arg M_tiles) and the tensor bindings.
+        static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+            const MinimalMatmulParams& operation_attributes,
+            const MinimalMatmulInputs& tensor_args,
+            std::vector<Tensor>& tensor_return_value,
+            const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;
+
+    // Keys on everything that shapes the program except the row count, which the kernels take as a
+    // common runtime arg.
+    static ttsl::hash::hash_t compute_program_hash(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static void validate_on_program_cache_hit(
+        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

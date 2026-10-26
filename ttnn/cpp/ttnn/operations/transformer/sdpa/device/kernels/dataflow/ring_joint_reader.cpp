@@ -237,15 +237,17 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
-    constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(7);
-    constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
+    // Slots 7/8/11/13/15/23 carry the per-chip length geometry. With dynamic_local_n they are 0 and the live
+    // values come from one common runtime word (see local_n below); otherwise they are the constants.
+    constexpr uint32_t q_local_padded_Nt_ct = get_compile_time_arg_val(7);
+    constexpr uint32_t kv_local_padded_Nt_ct = get_compile_time_arg_val(8);
     constexpr uint32_t Lt = get_compile_time_arg_val(9);
     constexpr uint32_t L = get_compile_time_arg_val(10);
-    constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(11);
+    constexpr uint32_t num_local_q_chunks_ct = get_compile_time_arg_val(11);
     constexpr uint32_t num_joint_q_chunks = get_compile_time_arg_val(12);
-    constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_local_k_chunks_ct = get_compile_time_arg_val(13);
     constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(14);
-    constexpr uint32_t num_q_chunks = get_compile_time_arg_val(15);
+    constexpr uint32_t num_q_chunks_ct = get_compile_time_arg_val(15);
     constexpr uint32_t ring_size = get_compile_time_arg_val(16);
     constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(17);
     constexpr uint32_t is_causal = get_compile_time_arg_val(18);
@@ -254,12 +256,13 @@ void kernel_main() {
     // Reader's slot-21 carries chunked_enabled.
     constexpr bool chunked_enabled = get_compile_time_arg_val(21) == 1;
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(22);
-    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(23);
+    constexpr uint32_t chunk_size_t_ct = get_compile_time_arg_val(23);
     constexpr uint32_t kv_stripe_split = get_named_compile_time_arg_val("kv_stripe_split");
+    constexpr bool dynamic_local_n = get_named_compile_time_arg_val("dynamic_local_n") == 1;
     static_assert(
-        kv_stripe_split > 0 && q_local_padded_Nt % kv_stripe_split == 0, "Q slab must split into whole KV regions");
-    constexpr uint32_t kv_region_Nt = q_local_padded_Nt / kv_stripe_split;
-    static_assert(kv_region_Nt * ring_size == chunk_size_t, "chunk_size_t must span one KV region per ring rank");
+        kv_stripe_split > 0 && q_local_padded_Nt_ct % kv_stripe_split == 0, "Q slab must split into whole KV regions");
+    constexpr uint32_t kv_region_Nt_ct = q_local_padded_Nt_ct / kv_stripe_split;
+    static_assert(kv_region_Nt_ct * ring_size == chunk_size_t_ct, "chunk_size_t must span one KV region per ring rank");
     constexpr uint32_t q_ring_size = ring_size / kv_stripe_split;
     constexpr bool indexed_kv_cache = get_compile_time_arg_val(24) == 1;
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(25) == 1;
@@ -371,6 +374,32 @@ void kernel_main() {
     constexpr auto logical_l_args = TensorAccessorArgs<logical_l_args_offset>();
     constexpr uint32_t chains_base_offset =
         has_logical_length_tensor ? logical_l_args.next_compile_time_args_offset() : post_meta_args_offset;
+
+    const ring_joint::LocalNGeometry local_n =
+        dynamic_local_n
+            ? ring_joint::derive_local_n_geometry(
+                  get_common_arg_val<uint32_t>(ring_joint::dynamic_local_n_reader_common_arg(
+                      slot_from_metadata, has_logical_length_tensor, has_kv_valid_end)),
+                  Sq_chunk_t,
+                  Sk_chunk_t,
+                  kv_stripe_split,
+                  ring_size,
+                  num_joint_q_chunks)
+            : ring_joint::LocalNGeometry{
+                  q_local_padded_Nt_ct,
+                  kv_local_padded_Nt_ct,
+                  num_local_q_chunks_ct,
+                  num_local_k_chunks_ct,
+                  num_q_chunks_ct,
+                  kv_region_Nt_ct,
+                  chunk_size_t_ct};
+    const uint32_t q_local_padded_Nt = local_n.q_local_padded_Nt;
+    const uint32_t kv_local_padded_Nt = local_n.kv_local_padded_Nt;
+    const uint32_t num_local_q_chunks = local_n.num_local_q_chunks;
+    const uint32_t num_local_k_chunks = local_n.num_local_k_chunks;
+    const uint32_t num_q_chunks = local_n.num_q_chunks;
+    const uint32_t kv_region_Nt = local_n.kv_region_Nt;
+    const uint32_t chunk_size_t = local_n.q_chunk_group_tile_count;
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -836,7 +865,7 @@ void kernel_main() {
     };
     // K chunks past this device's last Q row are fully masked; compute skips the same ones.
     const uint32_t causal_end_nt = dense_causal_skip
-                                       ? chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt>(
+                                       ? chunked_q_global_end_tile<kv_pad_rotation_enabled, q_local_padded_Nt_ct>(
                                              logical_nt,
                                              ring_index,
                                              ring_size,
@@ -930,9 +959,9 @@ void kernel_main() {
             const uint32_t num_valid = ring_joint::ksplit_valid_local_k_chunks<
                 kv_pad_rotation_enabled,
                 chunked_enabled,
-                kv_local_padded_Nt,
-                chunk_size_t,
-                q_local_padded_Nt,
+                kv_local_padded_Nt_ct,
+                chunk_size_t_ct,
+                q_local_padded_Nt_ct,
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
             ksplit_k_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count);
         }
@@ -951,7 +980,7 @@ void kernel_main() {
                 iter_num_kv_chunks /= 2;
                 // Mirror compute's K-loop extension: include the straddle chunk so K/V tiles
                 // for it get loaded. Compute -inf-masks its late-half columns via lw_mask.
-                using Straddle = KCausalStraddleInfo<kv_local_padded_Nt, Sk_chunk_t>;
+                using Straddle = KCausalStraddleInfo<kv_local_padded_Nt_ct, Sk_chunk_t>;
                 if constexpr (Straddle::has_straddle) {
                     iter_num_kv_chunks = Straddle::straddle_chunk_id + 1;
                 }
@@ -1134,12 +1163,15 @@ void kernel_main() {
                         return true;
                     }
                     // causal_end_nt is logical_nt when the causal skip is off.
-                    return !chunked_kv_chunk_is_live<
-                        kv_pad_rotation_enabled,
-                        chunked_enabled,
+                    return !chunked_kv_chunk_is_live<kv_pad_rotation_enabled, chunked_enabled>(
+                        source_ring_id,
+                        source_k_chunk,
+                        Sk_chunk_t,
+                        logical_nt,
+                        causal_end_nt,
                         kv_local_padded_Nt,
                         chunk_size_t,
-                        kv_region_Nt>(source_ring_id, source_k_chunk, Sk_chunk_t, logical_nt, causal_end_nt);
+                        kv_region_Nt);
                 }();
 
                 // Sharded joint: this ring iteration serves shard `ring_id`, whose global joint tile

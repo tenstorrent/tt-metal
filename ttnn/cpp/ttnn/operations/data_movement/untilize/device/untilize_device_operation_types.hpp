@@ -28,6 +28,9 @@ struct UntilizeOperationAttributes {
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids;
     bool enough_space_height{};
     uint32_t pf_type{};
+    // Multi-core factory with interleaved input and output: derive the per-core rows on device so one
+    // program serves every height. Default: main's host split.
+    bool runtime_rows{};
 };
 
 using UntilizeTensorReturnValue = Tensor;

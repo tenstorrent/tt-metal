@@ -45,6 +45,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 // Writer always populates compute's reduce-scalar / epsilon / trans_mat CBs
 // (shared helper, used by both writers) so the reader starts input reads ASAP.
 #include "dit_rmsnorm_scalar_setup.hpp"
@@ -69,7 +70,7 @@ void kernel_main() {
     // map (tile_row, col_tile) → (head, t_row, t_col_in_head) to address the
     // right page in the 4D output.
     constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(11);
-    constexpr uint32_t total_num_tile_rows = get_compile_time_arg_val(12);
+    constexpr uint32_t num_workers = get_compile_time_arg_val(12);
     constexpr auto output_args = TensorAccessorArgs<13>();
 
     // Scalar/eps/trans_mat population args (appended after the output accessor).
@@ -90,11 +91,16 @@ void kernel_main() {
     // which takes the index by reference and advances it past the fabric rt args.
     size_t arg_idx = 0;
     const uint32_t output_addr = get_common_arg_val<uint32_t>(0);
-    const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
     // trans_mat base address for the writer-side scalar/trans_mat population
     // (only read when fuse_rope). 0 when no RoPE.
     const uint32_t transformation_mat_addr = get_common_arg_val<uint32_t>(1);
+    // Live folded tile-row count: the head-split output stride and this worker's row range.
+    const uint32_t total_num_tile_rows = get_common_arg_val<uint32_t>(2);
+    const uint32_t worker_index = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t rows_per_worker = ttnn::runtime_length::tiles_per_core(total_num_tile_rows, num_workers);
+    const uint32_t tile_row_start =
+        ttnn::runtime_length::core_start(worker_index, rows_per_worker, total_num_tile_rows);
+    const uint32_t tile_row_end = ttnn::runtime_length::core_end(worker_index, rows_per_worker, total_num_tile_rows);
 
     Noc noc;
     CircularBuffer cb_output(output_cb);

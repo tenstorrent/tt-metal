@@ -365,6 +365,97 @@ app context only, so it reaches rank 0 and no one else. Anything the model branc
 identical on every rank -- a rank that takes a cache hit its peers miss skips collectives they are
 still waiting in, and the run deadlocks rather than failing.
 
+### Dynamic length on the 4x8
+
+The Blackhole 4x8 preset serves the packed length dynamically (`"dynamic_length": True`; optional
+`max_sequence_length=`, default the ladder's top rung, 120320 for t2va): a request is padded only to the SP
+alignment (256 rows), and the DiT ops that used to key a program on the padded length
+(`all_gather_minimal_matmul_async`, the fused ff2 MM+reduce-scatter, the ring SDPA, the standalone
+`minimal_matmul` heads, the fused distributed RMS/LayerNorm, `nlp_create_qkv_heads`, `nlp_concat_heads`,
+`all_gather_async`, `embedding` and its `untilize`) take the per-device row count as a runtime word
+instead; the norms' worker split (`row_capacity`) and the ring attention's K/V gather pair are sized once
+at `max_sequence_length / 8` rows per device. Eager only: a trace freezes the length, so the quad preset
+stays bucketed and traced, and the Wormhole 4x8 preset stays bucketed (dynamic length is unmeasured there).
+A dynamic-length `task="ref2va"` pipeline also defaults to `dit_fsdp=True` when its preset has no `dit_fsdp`
+key (the Blackhole 4x8): that gather pair is sized at the ref2va cap (326656 rows against t2va's 120320), and
+beside unsharded resident weights the 880 MB allocation does not fit at construction, while bucketed ref2va and
+dynamic t2va stay unsharded; `dit_fsdp=False` or `MINIMAX_H3_DIT_FSDP=0` turns it off. The measured ref2va
+numbers were taken with FSDP on (`test_performance_minimax_h3.py` passes `dit_fsdp=True`), and the construction
+log records the choice (`dit_fsdp: on (dynamic ref2va)`).
+
+**Backup.** The 4x8 ladder path is kept behind a flag for a few weeks and then removed. It is selected by
+`create_pipeline(..., dynamic_length=False)`, by `MINIMAX_H3_DYNAMIC_LENGTH=0` in the environment, or by
+pinning any of its own kwargs (`trace_denoise=True`, `bucket_denoise=True`, `bucket_ladder=`), which the
+preset's dynamic default yields to. Precedence for `dynamic_length` is kwarg > env > preset: an explicit
+kwarg cannot be flipped by the shell, so a test that pins a path stays pinned (the audio T-shard factor
+follows the same order; `MINIMAX_H3_DIT_FSDP` is the odd one out). The env takes `0` or `1` and nothing
+else; `=1` on the quad raises, since its trace cannot take a dynamic length, as does `dynamic_length=True`
+beside `trace_denoise=True` or `bucket_denoise=True`. A `bucket_ladder=` beside a dynamic request is
+allowed: it only supplies the default `max_sequence_length` and the ref2va warm-up's full-duration point.
+The construction log says which path was taken (`denoise path: dynamic length` / `bucketed`).
+
+**Removal plan** (a follow-up PR once the dynamic default has run without complaint): delete the 4x8
+ladders (`MINIMAX_H3_*_BUCKET_LADDER_4X8`), the `bucket_denoise` and `bucket_ladder` keys of both 4x8
+presets (which then carry `max_sequence_length`, 120320 t2va / 326656 ref2va, instead), the env switch and
+the yielding rule in `_resolve_denoise_path`, so that `bucket_denoise` collapses to `trace_denoise`.
+`_select_bucket`, `_warm_denoise_buckets`, `_capture_denoise`, `validate_bucket_ladder` and the quad
+ladders stay: the quad's traced path uses them until it moves to a device-scalar length. The encoder-side
+presentation and vision-patch ladders are unrelated to denoise bucketing and stay regardless.
+
+Every program choice is frozen at construction into **length classes** keyed on rows per device
+(padded length / 8), `models/transformers/minimax_h3/length_classes.py`:
+
+| class | rows/device | served points | ring SDPA chunks | ff1 blocking | to_qkv | to_out |
+|---|---|---|---|---|---|---|
+| short | <= 6144 | 4 s (2368), 5 s (4736) | (320, 384) | 6/3/16 | 4/6/16, 11x10 non-transposed | 6/8/6, 12x9 transposed |
+| long | > 6144 | 10 s (9184), 15 s (13664), capacity (15040) | (256, 512) | 4/3/16 | same | same |
+
+The fused ff2 MM+RS keeps one blocking (12x8, 6/4/8) for every length, and the blocks' adaLN gathers stay
+one-hot matmuls, run through the row-free `minimal_matmul` with one frozen blocking (gathering the
+`[rows, 1344]` modulations with `ttnn.embedding` instead measured 3-4 % per block slower). A class value
+reaches the op as a config object, never as a shape, so a length inside a class never compiles anything; a
+new class costs one more program set. The warm-up runs one two-step generation at `max_sequence_length` (the capacity
+point), one at the shortest served request (4 s at 1:1, padded 18944) and one inside every class neither
+of those falls in, then the usual VAE / audio / prompt-encoder warms. The measured gate is
+`test_pipeline_minimax_h3.py::test_t2va_dynamic_length_zero_misses`, which runs by default on the Blackhole
+4x8 (`MINIMAX_H3_DYNAMIC_GATE=0` opts out): no init warm-up, audio untraced, and per length class one quiet
+request then a measured one at a new padded length (4 s -> 5 s, 10 s -> 15 s at 16:9), each with zero
+denoising cache misses. `MINIMAX_H3_DYNAMIC_GATE=1` adds `..._zero_misses_full_warm`, the served
+configuration (init warm-up, quiet 5 s, measured 10 s across the class boundary), which takes about an
+hour. The block-level flat-cache test in `test_transformer_minimax_h3.py` covers the ops alone, not the
+pipeline-level hashes.
+
+#### Rules for a length-dependent op on the dynamic path
+
+- The row count reaches the op only through an input tensor's logical shape (or a `[1, 1, 1, 1]` device
+  scalar such as the ring SDPA's `logical_n`), never as a Python int: a trace bakes Python values in.
+- `compute_program_hash` drops the rows (`hash_spec_without_rows`) and hashes everything else that changes
+  the program (dtype, layout, sharding, grid, which optional tensors are present); blockings and core grids
+  come from a config object pinned at construction (`length_classes.py`), never from the shape.
+- A converted op is opt-in: the runtime-row program is selected by a hashed bool attribute
+  (`runtime_rows`, `dynamic_local_n`, a pinned config), default off, and the model passes
+  `runtime_rows=self.dynamic_length` (`nlp_create_qkv_heads`, `concatenate_heads`, `ttnn.embedding`, which
+  forwards it to the TILE table's untilize). Without the flag the op is main's: main's work split, kernels,
+  hash and cache-hit validation, so every other model's programs are byte-identical to main's.
+- One common runtime word per kernel carries the per-device row count, and every per-core range is derived
+  from it on device with `ttnn/operations/common/shared_with_host/runtime_length.hpp`, so a reader and its
+  writer can never disagree on the split; `validate_on_program_cache_hit` checks the capacity and the
+  alignment on every call.
+- Every compile-time value of the program is a function of the capacity and the config, never of the first
+  call's split: the ring SDPA keeps its K/V chains unicast under `dynamic_local_n` (the reader's multicast
+  flag is compile-time; create and every cache hit assert it) and rejects one K head per chip, whose
+  shared-K chain is host-built per length.
+- Eager only. Runtime arguments are frozen in a captured trace, so a replay serves the captured length
+  whatever the buffers hold. Three guards: the pipeline refuses `dynamic_length` with `trace_denoise`, the
+  transformer's `forward` raises while a trace capture is active, and the `Tracer` rejects a replay input
+  whose shape differs from the captured one.
+- Device state. Sized once and written in place, true rows leading: the assembly source table, the ring
+  attention's K/V gather pair and the prompt arena (at the arena caps / `max_sequence_length`); the fused
+  norms' worker split is likewise fixed at `max_sequence_length / SP` rows. Per request: the hidden stream,
+  the rope and adaLN tables, the timestep / one-hot state tensors and, on the 4x8, the CCL ping-pong pairs
+  (allocated for the step loop and freed after it). No op reads a capacity-sized buffer past the rows the
+  current request wrote.
+
 ## Fully-warm latency
 
 Measured by `pipelines/ltx`'s method so the two are comparable: warmup pass first, prepares and

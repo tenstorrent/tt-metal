@@ -174,12 +174,47 @@ inline uint32_t chunked_kv_global_tile_for_local(uint32_t ring_id, uint32_t loca
     return chunked_kv_global_tile_for_local(ring_id, local_tile_idx, chunk_size_t, kv_region_Nt);
 }
 
-template <bool chunked_enabled, uint32_t kv_local_padded_Nt = 0, uint32_t chunk_size_t = 0, uint32_t kv_region_Nt = 0>
-inline uint32_t kv_global_tile_for_local(uint32_t ring_id, uint32_t local_tile_idx) {
+// The per-chip geometry is a runtime value on the dynamic-length path and a compile-time constant elsewhere;
+// the template forms below forward to these so both share one formula.
+template <bool chunked_enabled>
+inline uint32_t kv_global_tile_for_local(
+    uint32_t ring_id,
+    uint32_t local_tile_idx,
+    uint32_t kv_local_padded_Nt,
+    uint32_t chunk_size_t,
+    uint32_t kv_region_Nt) {
     if constexpr (chunked_enabled) {
-        return chunked_kv_global_tile_for_local<chunk_size_t, kv_region_Nt>(ring_id, local_tile_idx);
+        return chunked_kv_global_tile_for_local(ring_id, local_tile_idx, chunk_size_t, kv_region_Nt);
     } else {
         return ring_id * kv_local_padded_Nt + local_tile_idx;
+    }
+}
+
+template <bool chunked_enabled, uint32_t kv_local_padded_Nt = 0, uint32_t chunk_size_t = 0, uint32_t kv_region_Nt = 0>
+inline uint32_t kv_global_tile_for_local(uint32_t ring_id, uint32_t local_tile_idx) {
+    return kv_global_tile_for_local<chunked_enabled>(
+        ring_id, local_tile_idx, kv_local_padded_Nt, chunk_size_t, kv_region_Nt);
+}
+
+template <bool kv_pad_rotation_enabled, bool chunked_enabled>
+inline bool kv_chunk_starts_before_logical_end(
+    uint32_t ring_id,
+    uint32_t local_k_chunk_start_tile,
+    uint32_t logical_tile_count,
+    uint32_t kv_local_padded_Nt,
+    uint32_t chunk_size_t,
+    uint32_t kv_region_Nt) {
+    if (local_k_chunk_start_tile >= kv_local_padded_Nt) {
+        return false;
+    }
+    // A partial trailing K chunk still returns true here; mask logic handles invalid columns inside it.
+    if constexpr (kv_pad_rotation_enabled) {
+        return chunked_kv_global_tile_for_local(ring_id, local_k_chunk_start_tile, chunk_size_t, kv_region_Nt) <
+               logical_tile_count;
+    } else {
+        return kv_global_tile_for_local<chunked_enabled>(
+                   ring_id, local_k_chunk_start_tile, kv_local_padded_Nt, chunk_size_t, kv_region_Nt) <
+               logical_tile_count;
     }
 }
 
@@ -191,17 +226,8 @@ template <
     uint32_t kv_region_Nt = 0>
 inline bool kv_chunk_starts_before_logical_end(
     uint32_t ring_id, uint32_t local_k_chunk_start_tile, uint32_t logical_tile_count) {
-    if (local_k_chunk_start_tile >= kv_local_padded_Nt) {
-        return false;
-    }
-    // A partial trailing K chunk still returns true here; mask logic handles invalid columns inside it.
-    if constexpr (kv_pad_rotation_enabled) {
-        return chunked_kv_global_tile_for_local<chunk_size_t, kv_region_Nt>(ring_id, local_k_chunk_start_tile) <
-               logical_tile_count;
-    } else {
-        return kv_global_tile_for_local<chunked_enabled, kv_local_padded_Nt, chunk_size_t, kv_region_Nt>(
-                   ring_id, local_k_chunk_start_tile) < logical_tile_count;
-    }
+    return kv_chunk_starts_before_logical_end<kv_pad_rotation_enabled, chunked_enabled>(
+        ring_id, local_k_chunk_start_tile, logical_tile_count, kv_local_padded_Nt, chunk_size_t, kv_region_Nt);
 }
 
 // One past the last global tile of this device's Q rows in the current chunk. A K chunk starting at or past it is
@@ -229,6 +255,25 @@ inline uint32_t chunked_q_global_end_tile(
 
 // Whether a dense chunked K chunk has any visible key for this device's Q rows. The causal skip never drops chunk 0,
 // so every ring iteration processes a chunk and the last one still normalizes.
+template <bool kv_pad_rotation_enabled, bool chunked_enabled>
+inline bool chunked_kv_chunk_is_live(
+    uint32_t ring_id,
+    uint32_t k_chunk,
+    uint32_t k_chunk_tiles,
+    uint32_t logical_nt,
+    uint32_t causal_end_nt,
+    uint32_t kv_local_padded_Nt,
+    uint32_t chunk_size_t,
+    uint32_t q_local_padded_Nt) {
+    return kv_chunk_starts_before_logical_end<kv_pad_rotation_enabled, chunked_enabled>(
+        ring_id,
+        k_chunk * k_chunk_tiles,
+        k_chunk == 0 ? logical_nt : causal_end_nt,
+        kv_local_padded_Nt,
+        chunk_size_t,
+        q_local_padded_Nt);
+}
+
 template <
     bool kv_pad_rotation_enabled,
     bool chunked_enabled,
@@ -237,12 +282,8 @@ template <
     uint32_t q_local_padded_Nt>
 inline bool chunked_kv_chunk_is_live(
     uint32_t ring_id, uint32_t k_chunk, uint32_t k_chunk_tiles, uint32_t logical_nt, uint32_t causal_end_nt) {
-    return kv_chunk_starts_before_logical_end<
-        kv_pad_rotation_enabled,
-        chunked_enabled,
-        kv_local_padded_Nt,
-        chunk_size_t,
-        q_local_padded_Nt>(ring_id, k_chunk * k_chunk_tiles, k_chunk == 0 ? logical_nt : causal_end_nt);
+    return chunked_kv_chunk_is_live<kv_pad_rotation_enabled, chunked_enabled>(
+        ring_id, k_chunk, k_chunk_tiles, logical_nt, causal_end_nt, kv_local_padded_Nt, chunk_size_t, q_local_padded_Nt);
 }
 
 constexpr uint32_t KV_PAD_ROTATION_INVALID_TILE = 0xFFFFFFFFu;
