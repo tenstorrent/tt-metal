@@ -7,10 +7,14 @@ reference : toto2/toto2/model.py @ 9213d2c, folded by ``tt/weights.py``
     TtSwiGLU (``GatedLinearUnitFeedForwardNetwork`` + tau residual):
         xn = RMSNorm(x);  g, u = xn Wg, xn Wu;  x <- beta * x + (g * silu(u)) Wfc2      (SiLU on the second half)
         d_ff is zero-padded to whole tiles (5464 -> 5472): the padded g, u columns are 0 and so is their product
+        g * silu(u) runs as one ``minimal_matmul(fuse_swiglu=True)`` (round 1, R1-3; blocks from
+        doc/optimize/iter_01/swiglu_sweep_*.json, job 720)
     TtResidualMLP (``InputResidualMLP`` / ``OutputResidualMLP``):  silu(x W1 + b1) W2 + x Ws + b
 """
 
 from __future__ import annotations
+
+import torch
 
 from models.experimental.toto2_forecast.tt.common import (
     Toto2Precision,
@@ -18,10 +22,42 @@ from models.experimental.toto2_forecast.tt.common import (
     pad_to_tile,
     rms_norm,
     scaled_residual,
+    upload,
     upload_bias,
     upload_linear,
 )
 from models.experimental.toto2_forecast.tt.weights import LayerWeights, ResidualMLPWeights, Toto2Config
+
+# Fused-SwiGLU blocks (M, K, N, subblock_h, subblock_w) in tiles, by d_model; the fastest of job 720's sweep at the
+# paper M (98304 tokens): 2.5B-FT 69.98 -> 19.21 ms, 313m 18.00 -> 5.69 ms per call (accuracy). K_block is cut to a
+# divisor of the K tiles for the small checkpoints.
+_SWIGLU_BLOCKS = {2048: (8, 32, 2, 2, 2), 1024: (8, 16, 4, 1, 4)}
+
+
+def packed_fc1(w_fc1: torch.Tensor, f: int, fp: int) -> torch.Tensor:
+    """``(2f, d)`` [g | u] -> the ``(d, 2fp)`` fused-SwiGLU weight: silu(u) * g per tile pair, zero d_ff padding."""
+    from models.tt_dit.utils.tensor import prepare_for_fused_swiglu
+
+    pad = lambda w: torch.nn.functional.pad(w, (0, 0, 0, fp - f))
+    stacked = torch.cat([pad(w_fc1[:f]), pad(w_fc1[f:])]).T.contiguous()  # [g (mult) | u (silu)]
+    return prepare_for_fused_swiglu(stacked, 1, gate_is_first=False)
+
+
+def swiglu_config(device, d_model: int):
+    import ttnn
+
+    mb, kb, nb, sh, sw = _SWIGLU_BLOCKS.get(d_model, _SWIGLU_BLOCKS[1024])
+    k_tiles = d_model // 32
+    kb = max(b for b in range(1, min(kb, k_tiles) + 1) if k_tiles % b == 0)
+    grid = device.compute_with_storage_grid_size()
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=mb,
+        K_block_size=kb,
+        N_block_size=nb,
+        subblock_h=sh,
+        subblock_w=sw,
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+    )
 
 
 class TtSwiGLU:
@@ -32,8 +68,8 @@ class TtSwiGLU:
         f = config.d_ff
         fp = pad_to_tile(f)
         dtype = precision.weight_dtype("ffn")
-        self._w_g = upload_linear(device, lw.w_fc1[:f], dtype, pad_out=fp)
-        self._w_u = upload_linear(device, lw.w_fc1[f:], dtype, pad_out=fp)
+        self._w_gu = upload(device, packed_fc1(lw.w_fc1, f, fp), dtype=dtype)
+        self._swiglu_config = swiglu_config(device, config.d_model)
         self._w_down = upload_linear(device, lw.w_fc2, precision.weight_dtype("ffn_out"), pad_in=fp)
 
     def __call__(self, x):
@@ -42,12 +78,15 @@ class TtSwiGLU:
 
         p = self.precision
         xn = rms_norm(x, self.eps, p)
-        g = linear(xn, self._w_g, p)
-        u = linear(xn, self._w_u, p, activation="silu")
+        hidden = ttnn.experimental.minimal_matmul(
+            xn,
+            self._w_gu,
+            config=self._swiglu_config,
+            fuse_swiglu=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=p.matmul_config(),
+        )
         ttnn.deallocate(xn)
-        hidden = ttnn.mul(g, u, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(g)
-        ttnn.deallocate(u)
         out = linear(hidden, self._w_down, p)
         ttnn.deallocate(hidden)
         y = scaled_residual(out, x, self.beta)
