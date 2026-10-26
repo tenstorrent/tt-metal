@@ -112,6 +112,8 @@ class PendingFinalCarry:
     CarryProjection in its dispatch when given, and returns the final state and the projection's output."""
 
     run: object
+    # The carry's inputs, for a caller merging it into its own program (the fused output projection).
+    inputs: dict
 
 
 @dataclass(frozen=True)
@@ -587,7 +589,14 @@ def _scan_sp_grouped_chunks(
             PendingFinalCarry(
                 lambda projection=None: final_carry(
                     rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows, projection
-                )
+                ),
+                inputs=dict(
+                    rank_final=rank_final,
+                    prefix_final=prefix_final_state,
+                    actual_start=actual_start,
+                    actual_end=actual_end,
+                    local_rows=geometry.local_rows,
+                ),
             ),
             output_gate,
         )
@@ -632,6 +641,23 @@ class _RelayFinalCarry:
         self._num_links = num_links
         # The line barrier and arrival counters persist across calls.
         self._semaphores = persistent_semaphores(device, 2)
+
+    @property
+    def cores(self) -> list[ttnn.CoreCoord]:
+        return list(self._cores)
+
+    @property
+    def axis(self) -> int:
+        return self._axis
+
+    @property
+    def num_links(self) -> int:
+        return self._num_links
+
+    @property
+    def semaphores(self) -> list:
+        """The line barrier and arrival counters: whichever program runs the carry's kernels on this mesh uses them."""
+        return list(self._semaphores)
 
     def __call__(self, rank_final, prefix_final, actual_start, actual_end, local_rows, projection=None):
         """Return the final carry and, with ``projection`` (on the worker cores above the carry's, run in its
@@ -877,7 +903,8 @@ class KDARecurrence:
                 final_state, projected = pending.run(projection)
                 return ttnn.reshape(final_state, shape), projected
 
-            return RecurrenceResult(output, PendingFinalCarry(run), scan.output_gate)
+            inputs = dict(pending.inputs, final_shape=shape)
+            return RecurrenceResult(output, PendingFinalCarry(run, inputs), scan.output_gate)
         return RecurrenceResult(output, ttnn.reshape(scan.final_state, shape), scan.output_gate)
 
     def __call__(
@@ -974,7 +1001,12 @@ class KDARecurrence:
     @property
     def final_carry_cores(self) -> list[ttnn.CoreCoord]:
         """Worker cores the relay's final carry runs on."""
-        return list(self._relay_final_carry._cores)
+        return self._relay_final_carry.cores
+
+    @property
+    def relay_final_carry(self) -> _RelayFinalCarry | None:
+        """The relay's final carry (None without the relay)."""
+        return self._relay_final_carry
 
     @property
     def affine_relay_head_cores(self) -> list[ttnn.CoreCoord]:

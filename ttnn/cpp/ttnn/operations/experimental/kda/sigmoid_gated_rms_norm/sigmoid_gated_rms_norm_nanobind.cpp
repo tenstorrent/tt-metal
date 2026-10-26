@@ -5,6 +5,8 @@
 #include "sigmoid_gated_rms_norm.hpp"
 
 #include "ttnn-nanobind/bind_function.hpp"
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 namespace ttnn::operations::experimental::kda::sigmoid_gated_rms_norm::detail {
 
@@ -43,6 +45,14 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
             gate_column_offset (int): Tile-aligned first gate column; the gate is read from
                 columns ``[offset, offset + H*V)``, so a fused projection's gate columns need not
                 be sliced out first. Defaults to 0.
+            prefetch_source (ttnn.Tensor, optional): With ``prefetch_jobs`` and ``prefetch_cores``, an L1 prefetch for
+                a later op rides along: once its reads are done, the reader of ``prefetch_cores[j]`` moves job ``j`` of
+                the per-device job table (``ttnn/cpp/ttnn/kernel_lib/l1_prefetch_dataflow.hpp``) from this tensor
+                into L1 and multicasts it. Every job writes inside ``[prefetch_l1_begin, prefetch_l1_end)``, which
+                must be free while the norm runs (checked: above its circular buffers, below every L1 buffer).
+            prefetch_jobs (ttnn.Tensor, optional): ROW_MAJOR UINT32 ``[..., jobs, 16]`` job table, one row per job.
+            prefetch_cores (List[ttnn.CoreCoord]): norm cores that run a job, in job order.
+            prefetch_l1_begin (int), prefetch_l1_end (int): the L1 region the jobs write.
 
         Returns:
             ttnn.Tensor: A new TILE-layout tensor with shape ``[B, T, H*V]``.
@@ -61,7 +71,12 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output_dtype") = ttnn::DataType::FLOAT32,
-        nb::arg("gate_column_offset") = 0);
+        nb::arg("gate_column_offset") = 0,
+        nb::arg("prefetch_source") = nb::none(),
+        nb::arg("prefetch_jobs") = nb::none(),
+        nb::arg("prefetch_cores") = std::vector<tt::tt_metal::CoreCoord>{},
+        nb::arg("prefetch_l1_begin") = 0,
+        nb::arg("prefetch_l1_end") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::sigmoid_gated_rms_norm::detail

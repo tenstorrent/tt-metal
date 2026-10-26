@@ -679,9 +679,9 @@ def prepare_mesh(mesh):
 # ======================================================================================================================
 #
 # Entry 0 starts with a fill: every W sender reads its part of window 0 from DRAM, then multicasts it along its line.
-# A program that runs just before this op and has an idle data-movement RISC can land those windows instead, straight
-# into the slots of this op's W CB: program CBs are placed in order from the L1 allocator base (local_cb_layout), so
-# the W CB's address is known before this op's program exists. The jobs
+# A program that runs just before this op and has an idle data-movement RISC (the KDA gated norm's reader) can land
+# those windows instead, straight into the slots of this op's W CB: program CBs are placed in order from the L1
+# allocator base (local_cb_layout), so the W CB's address is known before this op's program exists. The jobs
 # (kernel_lib/l1_prefetch_dataflow.hpp) are this op's own entry-0 W reads and multicasts, one job per (window, n-line):
 # one core of the line reads the window into its slot and multicasts it along the line (one sender per line: two
 # senders multicasting into one line at once can hang). Nothing stays allocated between the calls, so the region

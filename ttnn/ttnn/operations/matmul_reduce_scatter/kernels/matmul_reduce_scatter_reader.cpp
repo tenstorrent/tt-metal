@@ -239,8 +239,8 @@ void kernel_main() {
         const uint32_t eg = step / num_k_blocks;
         return eg % num_entries == 0 && (eg / num_entries) % n_inner == 0;
     };
-    // W's first w_pre windows were landed in their CB slots by the previous program's prefetch jobs (written where the
-    // host placed this CB); they are only credited. Every core of the grid has the same CB
+    // W's first w_pre windows were landed in their CB slots by an earlier program (weight prefetch: the gated norm's
+    // reader wrote them where the host placed this CB); they are only credited. Every core of the grid has the same CB
     // layout, so all cores agree on w_pre.
 #ifdef MRS_W_PRELANDED
     const uint32_t w_pre = get_write_ptr(cb_weight_k_window) == MRS_W_PRELANDED_ADDR ? MRS_W_PRELANDED : 0;

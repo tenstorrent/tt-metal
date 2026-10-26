@@ -677,3 +677,54 @@ def test_sigmoid_gated_rms_norm_rejects_sharded_output(device: ttnn.Device, expe
     sharded_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     with expect_error(RuntimeError, "output memory configuration must be interleaved"):
         _run(input_tt, gate_tt, weight_tt, memory_config=sharded_config)
+
+
+def test_sigmoid_gated_rms_norm_checks_prefetch_region_on_cache_hit(
+    device: ttnn.Device, isolated_program_cache: None, expect_error: Callable
+) -> None:
+    """The prefetch region must lie below every L1 buffer on every call: a cache hit whose region now overlaps a live
+    L1 buffer is rejected. No core runs a job here, so nothing is written to the region."""
+    _, (input_tt, gate_tt, weight_tt) = _device_inputs(device)
+    jobs = ttnn.from_torch(
+        torch.zeros(1, 16, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    info = ttnn._ttnn.reports.get_device_info(device)
+    # Something in L1 to sit under, then a region 32 KiB below it.
+    guard = ttnn.from_torch(
+        torch.zeros(32, 32 * info.l1_num_banks),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    lowest = int(ttnn._ttnn.device.GetLowestOccupiedComputeL1Address(device))
+    region = dict(
+        prefetch_source=weight_tt,
+        prefetch_jobs=jobs,
+        prefetch_cores=[],
+        prefetch_l1_begin=lowest - 64 * 1024,
+        prefetch_l1_end=lowest - 32 * 1024,
+    )
+
+    def run():
+        return ttnn.experimental.kda.sigmoid_gated_rms_norm(
+            input_tt, gate_tt, weight_tt, _NUM_HEADS, epsilon=_EPSILON, memory_config=ttnn.DRAM_MEMORY_CONFIG, **region
+        )
+
+    ttnn.deallocate(run())
+    entries = device.num_program_cache_entries()
+    # 64 KiB per bank below the guard: the region is no longer free.
+    filler = ttnn.from_torch(
+        torch.zeros(32, 32 * 16 * info.l1_num_banks),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    assert int(ttnn._ttnn.device.GetLowestOccupiedComputeL1Address(device)) < region["prefetch_l1_end"]
+    with expect_error(RuntimeError, "prefetch region"):
+        run()
+    assert device.num_program_cache_entries() == entries
+    ttnn.deallocate(filler)
+    ttnn.deallocate(run())
+    ttnn.deallocate(guard)

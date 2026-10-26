@@ -102,7 +102,7 @@ known before the program exists.
 `matmul_reduce_scatter_weight_prefetch(A shape, A dtype, W, ...)` plans the call ahead (with an unbounded L1 budget)
 and returns a `WeightPrefetch`: per-device jobs that land W's first K-block windows exactly where this op's W CB will
 be (`[l1_begin, l1_end)`), for the program just before it to run on an idle data-movement RISC
-(`kernel_lib/l1_prefetch_dataflow.hpp`). One job per (window, n-line): a core of the line
+(`kernel_lib/l1_prefetch_dataflow.hpp`; the KDA gated norm's reader). One job per (window, n-line): a core of the line
 reads the window into its slot and multicasts it along the line, one sender per line. The host op's program ends only
 after every multicast landed, so no semaphore is needed.
 
@@ -110,7 +110,8 @@ Contract (on `matmul_reduce_scatter_weight_prefetch`): nothing is allocated for 
 and this call no other program may run on the mesh and no L1 buffer may be allocated in the region and written. The
 host op checks that the region is free while it runs. This op checks what it can: the prefetch is for its weight
 tensor and is used once (else ValueError); its plan is the one the jobs were made for (else it reads the windows
-itself); and its reader credits the landed windows only if the W CB is at `l1_begin`.
+itself); and its reader credits the landed windows only if the W CB is at `l1_begin`. KDA runs the norm, frees L1 and
+allocates the final carry in DRAM, then calls this op.
 
 ## Limits
 

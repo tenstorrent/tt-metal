@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -23,12 +24,24 @@ struct SigmoidGatedRmsNormParams {
     DeviceComputeKernelConfig compute_kernel_config;
     // Gate columns start at this element offset within each row of the gate tensor.
     uint32_t gate_column_offset = 0;
+    // L1 prefetch ride-along (kernel_lib/l1_prefetch_dataflow.hpp): prefetch_cores[j] runs job j of the job table once
+    // its reads are done. Every job writes inside [prefetch_l1_begin, prefetch_l1_end), which must be free while the
+    // norm runs: above its circular buffers and below every L1 buffer.
+    std::vector<tt::tt_metal::CoreCoord> prefetch_cores;
+    uint32_t prefetch_l1_begin = 0;
+    uint32_t prefetch_l1_end = 0;
 };
+
+// Words per prefetch job row (l1_prefetch::JOB_WORDS, which the host cannot include).
+inline constexpr uint32_t l1_prefetch_job_words = 16;
 
 struct SigmoidGatedRmsNormInputs {
     Tensor input;
     Tensor gate;
     Tensor weight;
+    // The tensor the prefetch reads, and its per-device job table (ROW_MAJOR UINT32, one 16-word row per job).
+    std::optional<Tensor> prefetch_source;
+    std::optional<Tensor> prefetch_jobs;
 };
 
 }  // namespace ttnn::experimental::prim

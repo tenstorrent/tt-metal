@@ -9,6 +9,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import torch
+from ttnn.operations.matmul_reduce_scatter import matmul_reduce_scatter, matmul_reduce_scatter_weight_prefetch
+from ttnn.operations.matmul_reduce_scatter.matmul_reduce_scatter_program_descriptor import (
+    prepare_mesh as prepare_matmul_reduce_scatter_mesh,
+)
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
@@ -30,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     matmul_grid,
     tuned_projection_matmul_configs,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.final_carry_program import FinalCarryProgram
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import CarryProjection, KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayOutputGate
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
@@ -81,8 +86,8 @@ class _HistoryExchange:
     """Persistent state of the convolution's fabric history exchange.
 
     Peers write this rank's buffer and bump its semaphores, possibly before this rank's call starts, so both outlive
-    every call. The semaphores live on the exchange core (``qkv_causal_conv1d_silu_exchange_core``), and in L1_SMALL when
-    the device has one: their counts carry across calls, and a fabric mux may overwrite raw L1 below it.
+    every call. The semaphores live on the exchange core (``qkv_causal_conv1d_silu_exchange_core``), and in L1_SMALL
+    when the device has one: their counts carry across calls, and a fabric mux may overwrite raw L1 below it.
 
     Every KDA layer on a mesh shares one exchange. The entry barrier orders calls, not layers, so layers taking turns
     are no different from one layer called repeatedly, and per-layer copies would exhaust a small L1_SMALL at depth.
@@ -392,6 +397,25 @@ class ttKDA:
         self._history_exchange = _HistoryExchange.shared(mesh_device, self._convolution_width)
         # The norm weight is a few tiles that every norm core reads before its first item: L1 spares that DRAM read.
         self._norm_weight_l1 = ttnn.to_memory_config(self.weights.norm, ttnn.L1_MEMORY_CONFIG)
+        self.fused_output_reduce_scatter = program_config.fused_output_reduce_scatter and self.tensor_parallel_size > 1
+        if self.fused_output_reduce_scatter and self.carry_with_output_projection:
+            self._mmrs_carry = FinalCarryProgram(mesh_device, self.recurrence.relay_final_carry)
+        if self.fused_output_reduce_scatter:
+            # Its persistent mailbox and semaphores now, beside the layer's other long-lived L1; its staging is
+            # allocated per call (staging="ephemeral"), so neither sits under the next call's input projection.
+            prepare_matmul_reduce_scatter_mesh(mesh_device)
+            # The fused op reads its activation through a TensorAccessor, from DRAM or L1, and always accumulates in
+            # FP32 DEST. With the output gate beside the relay, forward() frees the input projection (L1) before the
+            # norm, so the norm output takes that L1 and the op's first entry streams only its weights from DRAM;
+            # otherwise the norm reads the projection's gate columns and its output stays in DRAM.
+            if not self.overlap_output_gate:
+                self.norm_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            self.fused_output_compute_config = ttnn.ComputeConfigDescriptor(
+                math_fidelity=program_config.output_projection_math_fidelity, fp32_dest_acc_en=True
+            )
+        self.output_weight_prefetch_windows = (
+            program_config.output_weight_prefetch_windows if self.fused_output_reduce_scatter else 0
+        )
 
     def _input_projection_gate_tiles(self, grid: ttnn.CoreCoord, program_config, width: int) -> int:
         """Output-gate tile columns the input projection keeps: its per-core width without the gate's columns plus
@@ -550,9 +574,20 @@ class ttKDA:
         output: ttnn.Tensor,
         output_gate: ttnn.Tensor,
         output_gate_offset: int,
+        prefetch=None,
     ) -> ttnn.Tensor:
-        """Apply the KDA gated RMSNorm epilogue."""
+        """Apply the KDA gated RMSNorm epilogue. ``prefetch``: a WeightPrefetch whose jobs the norm's reader runs once
+        the norm's inputs are read."""
         config, weights = self.config, self.weights
+        landing = {}
+        if prefetch is not None:
+            landing = dict(
+                prefetch_source=prefetch.source,
+                prefetch_jobs=prefetch.jobs,
+                prefetch_cores=prefetch.cores,
+                prefetch_l1_begin=prefetch.l1_begin,
+                prefetch_l1_end=prefetch.l1_end,
+            )
         return ttnn.experimental.kda.sigmoid_gated_rms_norm(
             output,
             output_gate,
@@ -563,7 +598,47 @@ class ttKDA:
             compute_kernel_config=self.norm_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
+            **landing,
         )
+
+    def _output_weight_prefetch(self, normed_shape: list[int]):
+        """The fused output projection's first W windows, for the gated norm to land (None: not taken). The jobs
+        write where the projection's W circular buffer will be, which must be free L1 while the norm runs: below the
+        lowest L1 buffer once the norm output is allocated (the norm checks its own circular buffers)."""
+        if not self.output_weight_prefetch_windows:
+            return None
+        prefetch = matmul_reduce_scatter_weight_prefetch(
+            normed_shape,
+            self.gated_rms_output_dtype,
+            self.weights.output_projection,
+            cluster_axis=self._tp_cluster_axis,
+            scatter_dim=-1,
+            topology=self.tp_ccl_topology,
+            num_links=self.tt_ccl.get_num_links(self._tp_cluster_axis),
+            balance_lines=True,
+            windows=self.output_weight_prefetch_windows,
+        )
+        if prefetch is None:
+            return None
+        # Every job runs on a norm core: the norm uses the fewest row-major cores that keep its all-core maximum items
+        # per core (distribute_prep), which can leave out a sender at short sequences.
+        grid = self.device.compute_with_storage_grid_size()
+        items = normed_shape[0] * self.config.num_heads * (normed_shape[-2] // ttnn.TILE_SIZE)
+        norm_cores = min(items, -(-items // -(-items // (grid.x * grid.y))))
+        if any(core.y * grid.x + core.x >= norm_cores for core in prefetch.cores):
+            return None
+        lowest = ttnn._ttnn.device.GetLowestOccupiedComputeL1Address(self.device)
+        # The norm output's per-bank L1 footprint. Exact for interleaved tile pages: one L1 bank per worker core, pages
+        # a multiple of the allocator alignment; the norm's own TT_FATAL is the backstop.
+        output_bytes = 0
+        if self.norm_output_memory_config.buffer_type == ttnn.BufferType.L1:
+            grid = self.device.compute_with_storage_grid_size()
+            tiles = normed_shape[-2] // ttnn.TILE_SIZE * (normed_shape[-1] // ttnn.TILE_SIZE)
+            element_bytes = 4 if self.gated_rms_output_dtype == ttnn.float32 else 2
+            output_bytes = -(-tiles // (grid.x * grid.y)) * ttnn.TILE_SIZE * ttnn.TILE_SIZE * element_bytes
+        if lowest is not None and prefetch.l1_end + output_bytes > int(lowest):
+            return None
+        return prefetch
 
     def _project_output(
         self,
@@ -571,6 +646,8 @@ class ttKDA:
     ) -> ttnn.Tensor:
         """Project normalized heads and perform the required TP reduction."""
         weights = self.weights
+        if self.fused_output_reduce_scatter:
+            return self._fused_output_projection(output)
         output = ttnn.linear(
             output,
             weights.output_projection,
@@ -580,6 +657,25 @@ class ttKDA:
             compute_kernel_config=self.output_projection_compute_config,
         )
         return self._reduce_scatter(output)
+
+    def _fused_output_projection(self, normed: ttnn.Tensor, **extra) -> ttnn.Tensor:
+        """The output projection fused with its TP reduce-scatter (matmul_reduce_scatter); ``extra``: the op's
+        weight prefetch and carried-program arguments."""
+        return matmul_reduce_scatter(
+            normed,
+            self.weights.output_projection,
+            cluster_axis=self._tp_cluster_axis,
+            scatter_dim=-1,
+            topology=self.tp_ccl_topology,
+            num_links=self.tt_ccl.get_num_links(self._tp_cluster_axis),
+            compute_kernel_config=self.fused_output_compute_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            staging="ephemeral",
+            # Every n-line of the matmul rectangle, with per-block rotating widths, so the busiest core computes
+            # fewer tiles. With the final carry, it keeps the idle columns.
+            balance_lines=True,
+            **extra,
+        )
 
     def _reduce_scatter(self, output: ttnn.Tensor) -> ttnn.Tensor:
         """The TP reduction of the output projection's partial sums."""
@@ -666,15 +762,59 @@ class ttKDA:
             output_gate=output_gate,
             defer_final_carry=self.carry_with_output_projection,
         )
+        # Chunk preparation was q, k and v's last reader. Freeing them before the norm and the output projection
+        # removes the lowest L1 buffers at the projection's call, so matmul_reduce_scatter's larger CB budget plans
+        # K-block 16 with a 2-window DEST super-block (Galaxy SP8xTP4) instead of K-block 12 without one.
+        for tensor in (q, k, v):
+            ttnn.deallocate(tensor)
+        # The fused projection's first W window, landed by the norm's reader (idle once the norm's inputs are read).
+        prefetch = None
         if self.overlap_output_gate:
-            output = self._kda_rms_norm(result.output, result.output_gate, 0)
+            # The norm reads the relay's output gate: the projection's last readers (chunk preparation's beta and the
+            # relay's gate copy) ran inside the recurrence, so its L1 is freed first and the norm output can take it.
+            ttnn.deallocate(inputs.projected)
+            heads_batch, tokens, value = tuple(result.output.shape)
+            heads = self.config.num_heads
+            prefetch = self._output_weight_prefetch([heads_batch // heads, tokens, heads * value])
+            output = self._kda_rms_norm(result.output, result.output_gate, 0, prefetch=prefetch)
             ttnn.deallocate(result.output_gate)
         else:
             output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
+            # The norm read the output gate, the projection's last columns in use.
+            ttnn.deallocate(inputs.projected)
         ttnn.deallocate(result.output)
-        # The norm read the output gate, the projection's last columns in use.
-        ttnn.deallocate(inputs.projected)
-        if self.carry_with_output_projection:
+        if self.carry_with_output_projection and self.fused_output_reduce_scatter:
+            carry = result.final_state.inputs
+            final_state = self._mmrs_carry.allocate_output(carry["prefix_final"])
+            output = self._fused_output_projection(
+                output,
+                # The first W window, landed by the norm's reader.
+                w_prefetch=prefetch,
+                extra_program=lambda coord, cores: self._mmrs_carry.program(
+                    coord,
+                    cores,
+                    rank_final=carry["rank_final"],
+                    prefix_final=carry["prefix_final"],
+                    output=final_state,
+                    actual_start=carry["actual_start"],
+                    actual_end=carry["actual_end"],
+                    local_rows=carry["local_rows"],
+                    prefix_on_last_rank=True,
+                ),
+                extra_tensors=[
+                    t
+                    for t in (
+                        carry["rank_final"],
+                        carry["prefix_final"],
+                        carry["actual_start"],
+                        carry["actual_end"],
+                        final_state,
+                    )
+                    if t is not None
+                ],
+            )
+            final_state = ttnn.reshape(final_state, carry["final_shape"])
+        elif self.carry_with_output_projection:
             normed = output
             # The output projection on the cores the final carry leaves (and max_matmul_cores allows).
             final_state, output = result.final_state.run(

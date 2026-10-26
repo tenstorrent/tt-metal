@@ -95,6 +95,43 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         make_dfb(EPS_DFB, 1, tt::DataFormat::Float16_b),
     };
 
+    m2::Table<std::string, std::string> defines;
+    const bool has_prefetch = in.prefetch_jobs.has_value();
+    std::vector<uint32_t> prefetch_job(dist.cores.size(), 0);
+    const m2::DFBSpecName JOB_ROW_DFB{"job_row"};
+    if (has_prefetch) {
+        defines.emplace("L1_PREFETCH", "1");
+        // The reader's copy of its job row: below the prefetch region, so no job's multicast can land on it.
+        dfbs.push_back(m2::DataflowBufferSpec{
+            .unique_id = JOB_ROW_DFB, .entry_size = l1_prefetch_job_words * sizeof(uint32_t), .num_entries = 1});
+        for (uint32_t j = 0; j < attrs.prefetch_cores.size(); j++) {
+            const auto it = std::find(dist.cores.begin(), dist.cores.end(), attrs.prefetch_cores[j]);
+            TT_FATAL(
+                it != dist.cores.end(),
+                "sigmoid_gated_rms_norm: prefetch core {} is not a norm core",
+                attrs.prefetch_cores[j].str());
+            TT_FATAL(prefetch_job[it - dist.cores.begin()] == 0, "sigmoid_gated_rms_norm: one prefetch job per core");
+            prefetch_job[it - dist.cores.begin()] = j + 1;
+        }
+        // The jobs write above the norm's circular buffers, which depend only on the attributes, so this program
+        // checks them once; the bound below every L1 buffer is checked per call (validate_on_program_cache_miss,
+        // which also runs on cache hits). The walk mirrors ProgramImpl::allocate_dataflow_buffers: in DFB order from
+        // the L1 allocator base, each start aligned to the allocator's DRAM alignment, entry_size * num_entries
+        // (DataflowBuffer::total_size()) long.
+        const uint32_t cb_alignment = device.allocator()->get_alignment(BufferType::DRAM);
+        uint32_t dfb_end = device.allocator()->get_base_allocator_addr(HalMemType::L1);
+        for (const auto& dfb : dfbs) {
+            dfb_end = tt::round_up(dfb_end, cb_alignment) + (dfb.entry_size * dfb.num_entries);
+        }
+        dfb_end = tt::round_up(dfb_end, cb_alignment);
+        TT_FATAL(
+            attrs.prefetch_l1_begin >= dfb_end,
+            "sigmoid_gated_rms_norm: prefetch region [{}, {}) overlaps the norm's circular buffers, which end at {}",
+            attrs.prefetch_l1_begin,
+            attrs.prefetch_l1_end,
+            dfb_end);
+    }
+
     uint32_t eps_bits = 0;
     std::memcpy(&eps_bits, &attrs.epsilon, sizeof(float));
 
@@ -103,6 +140,7 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         .source =
             "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/dataflow/"
             "reader_sigmoid_gated_rms_norm.cpp",
+        .compiler_options = {.defines = defines},
         .dfb_bindings =
             {
                 m2::DFBBinding{X_DFB, "x", m2::DFBEndpointType::PRODUCER},
@@ -116,9 +154,18 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
                 m2::TensorBinding{WEIGHT, "weight"},
             },
         .compile_time_args = {{"Vt", Vt}, {"epsilon_bits", eps_bits}, {"G", group_items}},
-        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count", "prefetch_job"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
+    const m2::TensorParamName PREFETCH_SOURCE{"prefetch_source"};
+    const m2::TensorParamName PREFETCH_JOBS{"prefetch_jobs"};
+    if (has_prefetch) {
+        reader.tensor_bindings.push_back(m2::TensorBinding{PREFETCH_SOURCE, "prefetch_source"});
+        reader.tensor_bindings.push_back(m2::TensorBinding{PREFETCH_JOBS, "prefetch_jobs"});
+        reader.dfb_bindings.push_back(m2::DFBBinding{JOB_ROW_DFB, "job_row", m2::DFBEndpointType::PRODUCER});
+        reader.dfb_bindings.push_back(m2::DFBBinding{JOB_ROW_DFB, "job_row", m2::DFBEndpointType::CONSUMER});
+    }
+
     m2::KernelSpec writer{
         .unique_id = WRITER,
         .source =
@@ -189,7 +236,9 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
     for (uint32_t i = 0; i < dist.cores.size(); i++) {
         const auto& core = dist.cores[i];
         m2::AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}, {"prefetch_job", prefetch_job[i]}});
         m2::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
         m2::AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
@@ -227,6 +276,15 @@ ttnn::device_operation::ProgramArtifacts SigmoidGatedRmsNormProgramFactory::crea
         {WEIGHT, weight},
         {OUTPUT, output},
     };
+    if (has_prefetch) {
+        for (const auto& [name, tensor] :
+             {std::pair{PREFETCH_SOURCE, &*in.prefetch_source}, std::pair{PREFETCH_JOBS, &*in.prefetch_jobs}}) {
+            spec.tensor_parameters.push_back(
+                m2::TensorParameter{.unique_id = name, .spec = tensor->mesh_tensor().tensor_spec()});
+            run_args.tensor_args.emplace(name, tensor->mesh_tensor());
+        }
+    }
+
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_args),

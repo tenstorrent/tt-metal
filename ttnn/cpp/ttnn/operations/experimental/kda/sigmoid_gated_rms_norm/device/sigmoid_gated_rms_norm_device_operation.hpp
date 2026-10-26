@@ -33,6 +33,11 @@ Tensor sigmoid_gated_rms_norm(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     tt::tt_metal::DataType output_dtype,
-    uint32_t gate_column_offset);
+    uint32_t gate_column_offset,
+    const std::optional<Tensor>& prefetch_source = std::nullopt,
+    const std::optional<Tensor>& prefetch_jobs = std::nullopt,
+    const std::vector<tt::tt_metal::CoreCoord>& prefetch_cores = {},
+    uint32_t prefetch_l1_begin = 0,
+    uint32_t prefetch_l1_end = 0);
 
 }  // namespace ttnn::experimental::prim

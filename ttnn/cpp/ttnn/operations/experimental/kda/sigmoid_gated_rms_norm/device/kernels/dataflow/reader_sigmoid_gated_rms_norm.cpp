@@ -8,10 +8,15 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel/dataflow/generate_bcast_scalar_metal2.hpp"
+#ifdef L1_PREFETCH
+#include "ttnn/cpp/ttnn/kernel_lib/l1_prefetch_dataflow.hpp"
+#endif
 
 // Reads each group's inputs (the writer reads the gate on the other NoC), then the weight after the first group.
+// With L1_PREFETCH a core whose prefetch_job is nonzero then runs job prefetch_job - 1 of a later op's L1 prefetch
+// (l1_prefetch_dataflow.hpp): this RISC is idle for the rest of the norm, which the compute bounds.
 template <uint32_t Vt, uint32_t epsilon_bits, uint32_t G>
-TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
+TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t prefetch_job) {
     const auto x_acc = TensorAccessor(tensor::input);
     const auto w_acc = TensorAccessor(tensor::weight);
     DataflowBuffer x(dfb::x);
@@ -55,4 +60,15 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
             weight.push_back(Vt);
         }
     }
+#ifdef L1_PREFETCH
+    if (prefetch_job != 0) {
+        dataflow_kernel_lib::l1_prefetch::run_job(
+            TensorAccessor(tensor::prefetch_jobs),
+            TensorAccessor(tensor::prefetch_source),
+            prefetch_job - 1,
+            DataflowBuffer(dfb::job_row).get_write_ptr());
+    }
+#else
+    (void)prefetch_job;
+#endif
 }

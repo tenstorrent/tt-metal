@@ -93,7 +93,7 @@ def matmul_reduce_scatter_weight_prefetch(
 ):
     """The jobs that land W's first `windows` K-block windows of a later matmul_reduce_scatter(A, weight, ...) call
     (A of input_shape / input_dtype, the same keywords) in L1, for the program just before it to run
-    (kernel_lib/l1_prefetch_dataflow.hpp).
+    (kernel_lib/l1_prefetch_dataflow.hpp; e.g. ttnn.experimental.kda.sigmoid_gated_rms_norm's prefetch_* arguments).
     Returns a WeightPrefetch to pass to that call as w_prefetch, or None when its plan cannot take one (windows other
     than 1 included: each window's job multicasts into a whole n-line, and two at once into one line can hang).
 
