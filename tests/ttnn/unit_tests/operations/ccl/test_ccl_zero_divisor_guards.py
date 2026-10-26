@@ -2,8 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Checks that the fused distributed DiT norms reject arguments their output-spec sizing divides by.
-On a single device the cluster width is 1, so the ops take the local path without a stats buffer."""
+"""Checks that experimental CCL ops reject arguments their host-side sizing divides by. On a single
+device the cluster width is 1, so the DiT norms take the local path without a stats buffer, and the
+argument checks run before any check that needs more than one device."""
 
 import pytest
 import torch
@@ -50,4 +51,32 @@ def test_dit_fused_distributed_norm_rejects_zero_heads(device, expect_error, op)
             multi_device_global_semaphore=_semaphores(device),
             topology=ttnn.Topology.Linear,
             num_heads_per_device=0,
+        )
+
+
+@pytest.mark.parametrize(
+    "num_links, pad2_num_links, message",
+    [(0, 1, "np_num_links must be > 0"), (1, 0, "np_pad2_num_links must be > 0")],
+    ids=["zero_h_links", "zero_w_links"],
+)
+def test_neighbor_pad_halo_rejects_zero_links(device, expect_error, num_links, pad2_num_links, message):
+    x = ttnn.from_torch(torch.randn(1, 1, 8, 8, 32).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    sems = [_semaphores(device)[0] for _ in range(3)]
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.neighbor_pad_halo(
+            x,
+            x,
+            np_padding_h=1,
+            np_padding_w=1,
+            np_cluster_axis=0,
+            np_num_links=num_links,
+            np_topology=ttnn.Topology.Linear,
+            h_neighbor_semaphore=sems[0],
+            barrier_semaphore=sems[1],
+            w_neighbor_semaphore=sems[2],
+            np_pad_dim2=3,
+            np_pad2_left=1,
+            np_pad2_right=1,
+            np_pad2_cluster_axis=1,
+            np_pad2_num_links=pad2_num_links,
         )

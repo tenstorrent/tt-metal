@@ -157,6 +157,13 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     bool fuse_swiglu) {
     using OperationType = ttnn::experimental::prim::StridedAllGatherMinimalMatmulAsync;
 
+    TT_FATAL(chunks >= 1, "StridedAllGatherMinimalMatmulAsync requires chunks >= 1, got chunks={}", chunks);
+    if (config.has_value()) {
+        TT_FATAL(
+            config->M_block_size > 0 && config->K_block_size > 0 && config->N_block_size > 0,
+            "StridedAllGatherMinimalMatmulAsync requires block sizes > 0");
+    }
+
     // addcmul uses value=1 (torch default) when ternary inputs are given without an explicit scalar
     if (fused_ternary_input_a.has_value() && !fused_ternary_scalar.has_value()) {
         fused_ternary_scalar = 1.0f;
