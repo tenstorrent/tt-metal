@@ -32,8 +32,10 @@ add/sub/mul/div — fp32 add/sub now route the ported SFPU primitives, see _run)
 import itertools
 
 import pytest
+import torch
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
     _DIVIDE_NOT_NAN,
     _SPECIAL,
@@ -441,3 +443,44 @@ def test_no_bcast_mixed_interleaved_out(device, op_name, a_mem, b_mem, out_mem, 
     # count grows. bf16 add => FPU compute kernel; bf16 multiply => SFPU kernel. Grids fit the Quasar 8x4.
     pcc = 0.99 if op_name == "multiply" else None
     _run_mixed(device, op_name, a_mem, b_mem, out_mem, ttnn.bfloat16, shape=shape, pcc=pcc)
+
+
+@pytest.mark.skipif(
+    ttnn.get_arch_name() not in ("wormhole_b0", "blackhole"),
+    reason=(
+        "Mixed fp32/bf16 operands are rejected by both the Quasar-native and Metal-v2/DFB slices (they require "
+        "matching dtypes), so the op uses the descriptor factory, whose ComputeKernel/DataMovementKernel TT_FATAL "
+        "on Quasar. Wormhole/Blackhole-only regression for https://github.com/tenstorrent/tt-metal/issues/61796"
+    ),
+)
+@pytest.mark.parametrize("tiles_per_core", [9, 12, 16], ids=lambda t: f"{t}tiles_per_core")
+@pytest.mark.parametrize(
+    "a_dtype, b_dtype",
+    [(ttnn.float32, ttnn.bfloat16), (ttnn.bfloat16, ttnn.float32)],
+    ids=["fp32_bf16", "bf16_fp32"],
+)
+def test_no_bcast_sharded_mixed_fp32_bf16_add(device, a_dtype, b_dtype, tiles_per_core):
+    # Every case has > 8 tiles per core so the compute kernel needs 2+ DST acquires. With the old batch of 8, a shard
+    # of <= 8 tiles fits one acquire and passes even with the bug (verified on Wormhole), so it would not be
+    # regression coverage. 9 = 8+1, 12 = 8+4 (remainder equals the fp32 capacity), 16 = 8+8.
+    num_cores = 4
+    shard = [tiles_per_core * 32, 32]
+    shape = (num_cores * shard[0], shard[1])
+    mem_config = _height_sharded_config(shard, ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, num_cores - 1))}))
+
+    torch.manual_seed(0)
+    a = torch.randn(shape, dtype=torch.float32)
+    b = torch.randn(shape, dtype=torch.float32)
+    a_tt = ttnn.from_torch(a, dtype=a_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
+    b_tt = ttnn.from_torch(b, dtype=b_dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem_config)
+
+    # Golden from the values the device holds (bf16 operands are rounded on upload).
+    golden = ttnn.to_torch(a_tt).float() + ttnn.to_torch(b_tt).float()
+    out = ttnn.to_torch(ttnn.experimental.quasar.add(a_tt, b_tt, memory_config=mem_config, dtype=ttnn.float32)).float()
+
+    assert_with_pcc(out, golden, 0.9999)
+    # Per-tile check so a failure names the corrupted tile rather than just a low PCC.
+    out_tiles = out.reshape(num_cores * tiles_per_core, 32, 32)
+    golden_tiles = golden.reshape(num_cores * tiles_per_core, 32, 32)
+    bad = [i for i in range(out_tiles.shape[0]) if not torch.allclose(out_tiles[i], golden_tiles[i], atol=1e-2)]
+    assert not bad, f"wrong tiles (global index): {bad}"

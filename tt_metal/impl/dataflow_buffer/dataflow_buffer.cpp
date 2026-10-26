@@ -2272,18 +2272,9 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                 per_core_num_dfbs_[logical_core]++;
             }
         }
-
-        // There is one DataflowBufferAllocator per unique core range, create one if it does not already exist for
-        // current core range
-        auto val = std::find_if(
-            dfb_allocators_.begin(),
-            dfb_allocators_.end(),
-            [&core_range](const CircularBufferAllocator& dfb_allocator) {
-                return dfb_allocator.core_range == core_range;
-            });
-        if (val == dfb_allocators_.end()) {
-            this->dfb_allocators_.emplace_back(core_range);
-        }
+    }
+    if (!dfb->borrows_memory()) {  // borrowed dfb does not need to allocate
+        register_ephemeral_allocation(this->dfb_allocation_metadata_, dfb->core_ranges);
     }
 
     this->local_dataflow_buffer_allocation_needed_ = true;
@@ -2979,9 +2970,7 @@ void ProgramImpl::invalidate_dataflow_buffer_allocation() {
     if (this->local_dataflow_buffer_allocation_needed_) {
         return;
     }
-    for (CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
-        dfb_allocator.reset_available_addresses();
-    }
+    invalidate_ephemeral_allocation_metadata(this->dfb_allocation_metadata_);
     this->local_dataflow_buffer_allocation_needed_ = true;
 }
 
@@ -2991,9 +2980,6 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
         return;
     }
 
-    for (const auto& dfb : this->dataflow_buffers_) {
-        reserve_program_local_l1(device, dfb->core_ranges);
-    }
     for (auto& dfb : this->dataflow_buffers_) {
         // Alias secondaries share the primary's L1 address; skip allocation here
         // and propagate the address inline after the primary is processed below.
@@ -3006,33 +2992,11 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
             // Use the address latched by set_borrowed_memory_base_addr()
             alloc_addr = dfb->borrowed_addr_;
         } else {
-            uint64_t computed_addr = reserve_program_local_l1(device, dfb->core_ranges);
-            for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
-                // Need the max available address across all cores dataflow buffer is placed on
-                for (const CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
-                    if (dfb_allocator.core_range == core_range) {
-                        computed_addr = std::max(computed_addr, dfb_allocator.get_cb_region_end());
-                        break;
-                    }
-                }
-            }
-            computed_addr = align(computed_addr, device->allocator()->get_alignment(BufferType::DRAM));
-            for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
-                for (CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
-                    if (dfb_allocator.core_range.intersects(core_range)) {
-                        if (dfb_allocator.core_range != core_range and
-                            computed_addr < dfb_allocator.get_cb_region_end()) {
-                            // Intersecting core range has already been marked to have allocation at this address. This
-                            // could have been marked by a dataflow buffer on a core range disjoint from current
-                            // `core_range` but also intersecting `dfb_allocator.core_range`
-                            continue;
-                        }
-                        const uint64_t allocator_base =
-                            reserve_program_local_l1(device, CoreRangeSet(dfb_allocator.core_range));
-                        dfb_allocator.mark_address(computed_addr, dfb->total_size(), allocator_base);
-                    }
-                }
-            }
+            const uint64_t computed_addr = allocate_dfb(
+                this->dfb_allocation_metadata_,
+                dfb->core_ranges,
+                dfb->total_size(),
+                device->allocator()->get_alignment(BufferType::DRAM));
             alloc_addr = static_cast<uint32_t>(computed_addr);
         }
         // Fill alloc_addr per core in each group.  All cores of a DFB get the same alloc_addr so the L1 buffer is at a
@@ -3073,7 +3037,7 @@ void ProgramImpl::validate_dataflow_buffer_region(const IDevice* device) {
         device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
     uint32_t max_l1_size = device->l1_size_per_core();
 
-    for (const CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
+    for (const auto& dfb_allocator : this->dfb_allocation_metadata_.regions) {
         if (dfb_allocator.l1_regions.empty()) {
             continue;
         }
