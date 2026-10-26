@@ -80,3 +80,33 @@ def test_neighbor_pad_halo_rejects_zero_links(device, expect_error, num_links, p
             np_pad2_cluster_axis=1,
             np_pad2_num_links=pad2_num_links,
         )
+
+
+# With more than one virtual column the factory wraps the gamma/beta and mask tile offsets modulo their tile counts.
+@pytest.mark.parametrize(
+    "mask_shape, weight_shape, message",
+    [
+        ((0, 2, 32, 32), None, "input_mask must be non-empty"),
+        ((1, 2, 32, 32), (1, 1, 0, 32), "Weight must be non-empty"),
+    ],
+    ids=["empty_mask", "empty_weight"],
+)
+def test_dit_fused_distributed_groupnorm_rejects_empty_mask_and_affine(
+    device, expect_error, mask_shape, weight_shape, message
+):
+    x = _tile(device, (1, 1, 32, 64))
+    mask = _tile(device, mask_shape)
+    weight = None
+    if weight_shape is not None:
+        weight = ttnn.from_torch(torch.ones(weight_shape).bfloat16(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.dit_fused_distributed_groupnorm(
+            x,
+            num_groups=2,
+            cluster_axis=1,
+            mesh_device=device,
+            multi_device_global_semaphore=_semaphores(device),
+            topology=ttnn.Topology.Linear,
+            input_mask=mask,
+            weight=weight,
+        )
