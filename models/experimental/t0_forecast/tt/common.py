@@ -152,6 +152,27 @@ def linear(x, weight, precision: TtT0Precision, *, role: str, bias=None, activat
     )
 
 
+def linear_minimal(x, weight, precision: TtT0Precision, *, role: str, blocks: tuple, bias=None, activation=None):
+    """``x @ weight (+ bias)`` on ``ttnn.experimental.minimal_matmul`` with ``blocks`` = (M, K, N, subblock_h,
+    subblock_w) caps (``program_configs.minimal_config``); ``x`` is flat ``(1, 1, M, K)`` in DRAM."""
+    import ttnn
+
+    from models.experimental.t0_forecast.tt import program_configs as pc
+
+    grid = x.device().compute_with_storage_grid_size()
+    m_tiles = x.padded_shape[-2] // TILE
+    k_tiles, n_tiles = weight.padded_shape[-2] // TILE, weight.padded_shape[-1] // TILE
+    return ttnn.experimental.minimal_matmul(
+        x,
+        weight,
+        bias_tensor=bias,
+        fused_activation=pc.fused_activation(activation),
+        config=pc.minimal_config((grid.x, grid.y), m_tiles, k_tiles, n_tiles, blocks),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=precision.compute_kernel_config(role=role),
+    )
+
+
 def rms_norm(x, gain, eps: float, precision: TtT0Precision):
     """RMSNorm with a learned gain; always returns bf16 (an fp32 residual stream is normed into bf16)."""
     import ttnn

@@ -23,6 +23,7 @@ from models.experimental.t0_forecast.tt.common import (
     TtT0Precision,
     add,
     linear,
+    linear_minimal,
     rms_norm,
     upload,
     upload_bias,
@@ -33,6 +34,9 @@ from models.experimental.t0_forecast.tt.host import pair_rotation
 from models.experimental.t0_forecast.tt.weights import TIME, AttentionWeights
 
 _MAX_SDPA_CHUNK = 256
+# QKV on minimal_matmul: blocks M 16 / K 8 / N 4, subblock 4 x 1 (tests/perf/sweep_matmul.py at M = 98304,
+# doc/optimize/iter_01/matmul_sweep_qkv*.json: 4.24 ms against 12.67 ms for the auto 1D config).
+QKV_BLOCKS = (16, 8, 4, 4, 1)
 
 
 @dataclass(frozen=True)
@@ -158,7 +162,7 @@ class TtAttention:
         import ttnn
 
         r, s = inputs.rows, inputs.padded_seq
-        qkv = linear(xn, self._wqkv, self.precision, role="qkv", bias=self._bqkv)
+        qkv = linear_minimal(xn, self._wqkv, self.precision, role="qkv", blocks=QKV_BLOCKS, bias=self._bqkv)
         q, k, v = self._heads(ttnn.reshape(qkv, (r, 1, s, 3 * self.d)))
         cos_q, sin_q, cos_k, sin_k = inputs.rope
         q, k = self._rope(q, cos_q, sin_q), self._rope(k, cos_k, sin_k)
@@ -172,7 +176,8 @@ class TtAttention:
         import ttnn
 
         r, s, g, d = inputs.rows, inputs.padded_seq, inputs.group_size, self.d
-        qkv = ttnn.reshape(linear(xn, self._wqkv, self.precision, role="qkv", bias=self._bqkv), (r, s, 3 * d))
+        qkv = linear_minimal(xn, self._wqkv, self.precision, role="qkv", blocks=QKV_BLOCKS, bias=self._bqkv)
+        qkv = ttnn.reshape(qkv, (r, s, 3 * d))
         slot_major = ttnn.permute(qkv, (1, 0, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(qkv)
         blocks = ttnn.reshape(slot_major, (s * r // g, g, 3 * d))

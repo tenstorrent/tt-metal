@@ -1,0 +1,65 @@
+{
+  "role": "qkv",
+  "rows": 98304,
+  "k": 1024,
+  "n": 3072,
+  "precision": "accuracy",
+  "results": [
+    {
+      "config": "auto",
+      "ms": 12.66470062546432,
+      "pcc_vs_auto": 0.999999999990296
+    },
+    {
+      "config": "mm:16,8,4,4,1",
+      "ms": 4.238964663818479,
+      "pcc_vs_auto": 0.999999999982986
+    },
+    {
+      "config": "mm:16,4,4,4,1",
+      "ms": 4.537353198975325,
+      "pcc_vs_auto": 0.9999999999851269
+    },
+    {
+      "config": "mm:16,16,4,4,1",
+      "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+    },
+    {
+      "config": "mm:8,8,4,4,1",
+      "ms": 4.730081697925925,
+      "pcc_vs_auto": 0.999999999982986
+    },
+    {
+      "config": "mm:16,8,2,4,1",
+      "ms": 4.8847060184925795,
+      "pcc_vs_auto": 0.9999999999837166
+    },
+    {
+      "config": "mm:12,8,4,4,1",
+      "ms": 4.488709010183811,
+      "pcc_vs_auto": 0.999999999982986
+    },
+    {
+      "config": "mm:24,8,4,4,1",
+      "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+    },
+    {
+      "config": "mm:16,8,4,2,2",
+      "ms": 4.248303500935435,
+      "pcc_vs_auto": 0.999999999982986
+    },
+    {
+      "config": "mm:16,8,6,2,2",
+      "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+    },
+    {
+      "config": "mm:32,8,2,4,1",
+      "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+    },
+    {
+      "config": "mm:16,8,3,4,1",
+      "ms": 4.63062790222466,
+      "pcc_vs_auto": 0.9999999999831075
+    }
+  ]
+}
