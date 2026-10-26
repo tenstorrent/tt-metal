@@ -1225,8 +1225,8 @@ def _streaming_gather_in0_setup(
         tt_weight = ttnn.to_memory_config(weight_source, weight_mem_config)
         tt_act = ttnn.to_memory_config(act_source, act_mem_config)
         assert (tt_weight.buffer_address(), tt_act.buffer_address()) == poison_addrs, "NaN padding did not land"
-        # The copies' cached programs hold the receiver cores, and pipe rings come from the persistent
-        # L1 arena, which refuses a core a live Program holds; the caller makes the pipes next.
+        # The copies' cached programs hold the receiver cores. Dropping them means the space the
+        # caller creates next does not have to move them and wait for the device to finish.
         device.clear_program_cache()
     else:
         tt_weight = make_weight(pt_weight)

@@ -53,53 +53,57 @@ size_t PersistentL1Arena::seal_index(const CoreCoord& core) const {
 
 PersistentL1Arena::Allocation PersistentL1Arena::allocate(
     const CoreRangeSet& cores, DeviceAddr size, DeviceAddr alignment) {
-    // Holders to relocate once the region is placed. Collected under the lock, relocated after
-    // it is released: relocating releases the holder's Seals, which takes the lock again.
-    std::vector<std::shared_ptr<Relocatable>> holders_to_relocate;
-    Allocation allocation;
-    {
-        std::lock_guard lock(mutex_);
-        allocation = allocate_locked(cores, size, alignment, holders_to_relocate);
-    }
-    for (const auto& holder : holders_to_relocate) {
-        holder->relocate_persistent_l1(*this);
-    }
-    return allocation;
-}
-
-PersistentL1Arena::Allocation PersistentL1Arena::allocate_locked(
-    const CoreRangeSet& cores,
-    DeviceAddr size,
-    DeviceAddr alignment,
-    std::vector<std::shared_ptr<Relocatable>>& holders_to_relocate) {
     TT_FATAL(!cores.empty(), "Persistent L1 allocation requires at least one core");
     TT_FATAL(size > 0, "Persistent L1 allocation size must be non-zero");
     TT_FATAL(alignment > 0, "Persistent L1 allocation alignment must be non-zero");
 
     const auto core_list = corerange_to_cores(cores);
-    // Check every core before anything moves, so a fixed seal on any core leaves every
-    // relocatable holder where it is.
-    std::unordered_set<const Relocatable*> sealed_by;
-    for (const CoreCoord& core : core_list) {
-        const CoreSeals& core_seals = seals_[seal_index(core)];
+    SealScan scan;
+    Allocation allocation;
+    {
+        std::lock_guard lock(mutex_);
+        // Check every core before anything moves, so a fixed seal on any core leaves every
+        // relocatable holder where it is.
+        scan = scan_seals_locked(core_list);
         TT_FATAL(
-            core_seals.num_fixed == 0,
+            !scan.fixed_core.has_value(),
             "Cannot allocate persistent L1 on core {} after program-local L1 placement: a sub-device local L1 slab "
             "is sealed there until its SubDeviceManager is removed",
-            core.str());
-        sealed_by.insert(core_seals.relocatable.begin(), core_seals.relocatable.end());
+            scan.fixed_core->str());
+        allocation = place_locked(cores, core_list, size, alignment);
     }
-    holders_to_relocate.reserve(sealed_by.size());
-    for (const Relocatable* key : sealed_by) {
-        auto holder_it = holders_.find(key);
-        TT_FATAL(holder_it != holders_.end(), "Persistent L1 seal registry has no record for a sealing holder");
+    // Relocated after the lock is released: relocating releases the holder's Seals, which takes
+    // the lock again.
+    for (const auto& weak_holder : scan.holders) {
         // Expired: the holder is being destroyed and will never launch again; its destructor
         // releases its Seals.
-        if (auto holder = holder_it->second.holder.lock()) {
-            holders_to_relocate.push_back(std::move(holder));
+        if (const auto holder = weak_holder.lock()) {
+            holder->relocate_persistent_l1(*this);
         }
     }
+    return allocation;
+}
 
+PersistentL1Arena::SealScan PersistentL1Arena::scan_seals_locked(const std::vector<CoreCoord>& core_list) const {
+    SealScan scan;
+    std::unordered_set<const Relocatable*> seen;
+    for (const CoreCoord& core : core_list) {
+        const CoreSeals& core_seals = seals_[seal_index(core)];
+        if (core_seals.num_fixed > 0) {
+            scan.fixed_core = core;
+            return scan;
+        }
+        for (const auto& [key, entry] : core_seals.relocatable) {
+            if (seen.insert(key).second) {
+                scan.holders.push_back(entry.holder);
+            }
+        }
+    }
+    return scan;
+}
+
+PersistentL1Arena::Allocation PersistentL1Arena::place_locked(
+    const CoreRangeSet& cores, const std::vector<CoreCoord>& core_list, DeviceAddr size, DeviceAddr alignment) {
     DeviceAddr candidate = tt::align(base_, alignment);
     while (true) {
         TT_FATAL(
@@ -174,16 +178,10 @@ void PersistentL1Arena::deallocate(uint64_t allocation_id) {
 }
 
 bool PersistentL1Arena::would_relocate(const CoreRangeSet& cores) const {
+    const auto core_list = corerange_to_cores(cores);
     std::lock_guard lock(mutex_);
-    bool any_relocatable = false;
-    for (const CoreCoord& core : corerange_to_cores(cores)) {
-        const CoreSeals& core_seals = seals_[seal_index(core)];
-        if (core_seals.num_fixed > 0) {
-            return false;
-        }
-        any_relocatable = any_relocatable || !core_seals.relocatable.empty();
-    }
-    return any_relocatable;
+    const SealScan scan = scan_seals_locked(core_list);
+    return !scan.fixed_core.has_value() && !scan.holders.empty();
 }
 
 DeviceAddr PersistentL1Arena::high_water_mark(const CoreRangeSet& cores) const {
@@ -235,65 +233,50 @@ PersistentL1Arena::Seal PersistentL1Arena::seal(const CoreRangeSet& cores) {
 PersistentL1Arena::Seal PersistentL1Arena::seal(const CoreRangeSet& cores, const std::weak_ptr<Relocatable>& holder) {
     const std::shared_ptr<Relocatable> live_holder = holder.lock();
     TT_FATAL(live_holder != nullptr, "A relocatable persistent L1 seal needs a holder owned by a shared_ptr");
-    const Relocatable* key = live_holder.get();
     std::lock_guard lock(mutex_);
-    const uint64_t num_core_seals = add_seal_locked(cores, key);
-    // The record holds a weak reference, so a make_shared holder's storage (and thus this key)
-    // cannot be reused until its last Seal is released and the record erased.
-    HolderRecord& record = holders_.try_emplace(key, HolderRecord{.holder = holder}).first->second;
-    record.num_core_seals += num_core_seals;
-    return Seal(liveness_, cores, key);
+    add_seal_locked(cores, live_holder);
+    return Seal(liveness_, cores, live_holder.get());
 }
 
-uint64_t PersistentL1Arena::add_seal_locked(const CoreRangeSet& cores, const Relocatable* holder) {
+void PersistentL1Arena::add_seal_locked(const CoreRangeSet& cores, const std::shared_ptr<Relocatable>& holder) {
     const auto core_list = corerange_to_cores(cores);
-    std::vector<size_t> indices;
-    indices.reserve(core_list.size());
-    // Resolve every core before changing any, so an off-grid core leaves the registry untouched.
+    // Check every core before changing any, so an off-grid core leaves the registry untouched.
     for (const CoreCoord& core : core_list) {
-        indices.push_back(seal_index(core));
+        const CoreSeals& core_seals = seals_[seal_index(core)];
         TT_FATAL(
-            holder != nullptr || seals_[indices.back()].num_fixed < std::numeric_limits<uint32_t>::max(),
+            holder != nullptr || core_seals.num_fixed < std::numeric_limits<uint32_t>::max(),
             "Persistent L1 seal refcount overflow on {}",
             core.str());
     }
-    for (const size_t index : indices) {
+    for (const CoreCoord& core : core_list) {
+        CoreSeals& core_seals = seals_[seal_index(core)];
         if (holder == nullptr) {
-            ++seals_[index].num_fixed;
-        } else {
-            seals_[index].relocatable.push_back(holder);
+            ++core_seals.num_fixed;
+            continue;
         }
+        auto [entry_it, inserted] = core_seals.relocatable.try_emplace(holder.get());
+        if (inserted) {
+            entry_it->second.holder = holder;
+        }
+        ++entry_it->second.count;
     }
-    return indices.size();
 }
 
 void PersistentL1Arena::release_seal(const CoreRangeSet& cores, const Relocatable* holder) {
     std::lock_guard lock(mutex_);
-    uint64_t num_core_seals = 0;
     for (const CoreCoord& core : corerange_to_cores(cores)) {
         CoreSeals& core_seals = seals_[seal_index(core)];
-        ++num_core_seals;
         if (holder == nullptr) {
             TT_FATAL(core_seals.num_fixed > 0, "Persistent L1 core {} has no fixed seal to release", core.str());
             --core_seals.num_fixed;
             continue;
         }
-        auto& entries = core_seals.relocatable;
-        auto entry_it = std::find(entries.begin(), entries.end(), holder);
-        TT_FATAL(entry_it != entries.end(), "Persistent L1 core {} is not sealed by this holder", core.str());
-        *entry_it = entries.back();
-        entries.pop_back();
-    }
-    if (holder == nullptr) {
-        return;
-    }
-    auto holder_it = holders_.find(holder);
-    TT_FATAL(
-        holder_it != holders_.end() && holder_it->second.num_core_seals >= num_core_seals,
-        "Persistent L1 seal registry is missing seals for a releasing holder");
-    holder_it->second.num_core_seals -= num_core_seals;
-    if (holder_it->second.num_core_seals == 0) {
-        holders_.erase(holder_it);
+        auto entry_it = core_seals.relocatable.find(holder);
+        TT_FATAL(
+            entry_it != core_seals.relocatable.end(), "Persistent L1 core {} is not sealed by this holder", core.str());
+        if (--entry_it->second.count == 0) {
+            core_seals.relocatable.erase(entry_it);
+        }
     }
 }
 

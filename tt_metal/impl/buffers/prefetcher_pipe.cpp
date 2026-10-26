@@ -178,7 +178,7 @@ PrefetcherPipeSpaceImpl::PrefetcherPipeSpaceImpl(
     }
 }
 
-void PrefetcherPipeSpaceImpl::drain_before_relocation() const {
+void PrefetcherPipeSpaceImpl::prepare_for_relocation() const {
     // The arena moves every Program whose program-local L1 sits on the reservation cores above the
     // new allocation. A recorded trace or CommandList would still replay the old addresses.
     TT_FATAL(
@@ -200,7 +200,7 @@ void PrefetcherPipeSpaceImpl::setup_reservation() {
     const uint32_t l1_alignment = l1_alignment_for(device_);
     auto& arena = device_->allocator_impl()->persistent_l1();
     if (arena.would_relocate(reservation_cores_)) {
-        drain_before_relocation();
+        prepare_for_relocation();
     }
 
     // One ring allocation and one page allocation over the whole domain: every domain core gets

@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <thread>
@@ -1100,12 +1101,12 @@ TEST_F(PrefetcherPipeFixture, PersistentArenaSerializesOverlappingSpacesAndReuse
 namespace {
 
 // Stands in for a Program: holds relocatable seals and records each relocation.
-struct CountingRelocatable final : PersistentL1Arena::Relocatable {
+struct CountingRelocatable final : PersistentL1Arena::Relocatable, std::enable_shared_from_this<CountingRelocatable> {
     std::vector<PersistentL1Arena::Seal> seals;
     uint32_t relocations = 0;
 
     void seal_each(PersistentL1Arena& arena, const std::vector<CoreCoord>& cores) {
-        const std::weak_ptr<PersistentL1Arena::Relocatable> self = weak_self;
+        const std::weak_ptr<PersistentL1Arena::Relocatable> self = weak_from_this();
         for (const CoreCoord& core : cores) {
             seals.push_back(arena.seal(CoreRangeSet(CoreRange(core)), self));
         }
@@ -1114,17 +1115,10 @@ struct CountingRelocatable final : PersistentL1Arena::Relocatable {
         ++relocations;
         seals.clear();
     }
-
-    std::weak_ptr<CountingRelocatable> weak_self;
 };
 
-std::shared_ptr<CountingRelocatable> make_counting_relocatable() {
-    auto holder = std::make_shared<CountingRelocatable>();
-    holder->weak_self = holder;
-    return holder;
-}
-
-// A small standalone arena over a 4x1 worker grid.
+// A small standalone arena over a 4x1 worker grid. The bounds are arbitrary: the arena only keeps
+// books here, nothing is placed on a device.
 PersistentL1Arena make_test_arena() {
     constexpr DeviceAddr base = 0x1000;
     constexpr DeviceAddr limit = 0x10000;
@@ -1137,9 +1131,9 @@ TEST(PersistentL1ArenaTest, CPU_AllocationRelocatesEachSealedHolderOnce) {
     PersistentL1Arena arena = make_test_arena();
     const CoreRangeSet allocation_cores(CoreRange({0, 0}, {2, 0}));
     // `program` is sealed on two of the allocation's cores; `bystander` only on a core outside it.
-    auto program = make_counting_relocatable();
+    auto program = std::make_shared<CountingRelocatable>();
     program->seal_each(arena, {CoreCoord(0, 0), CoreCoord(1, 0)});
-    auto bystander = make_counting_relocatable();
+    auto bystander = std::make_shared<CountingRelocatable>();
     bystander->seal_each(arena, {CoreCoord(3, 0)});
 
     EXPECT_TRUE(arena.would_relocate(allocation_cores));
@@ -1164,7 +1158,7 @@ TEST(PersistentL1ArenaTest, CPU_AllocationRelocatesEachSealedHolderOnce) {
 TEST(PersistentL1ArenaTest, CPU_FixedSealRejectsAllocationAndRelocatesNothing) {
     PersistentL1Arena arena = make_test_arena();
     const CoreRangeSet allocation_cores(CoreRange({0, 0}, {1, 0}));
-    auto program = make_counting_relocatable();
+    auto program = std::make_shared<CountingRelocatable>();
     program->seal_each(arena, {CoreCoord(0, 0)});
     // A sub-device local L1 slab seals its cores this way.
     std::optional<PersistentL1Arena::Seal> slab_seal = arena.seal(CoreRangeSet(CoreRange({1, 0})));
@@ -1185,7 +1179,7 @@ TEST(PersistentL1ArenaTest, CPU_FixedSealRejectsAllocationAndRelocatesNothing) {
 }
 
 TEST(PersistentL1ArenaTest, CPU_RelocatableSealsOutliveArena) {
-    auto program = make_counting_relocatable();
+    auto program = std::make_shared<CountingRelocatable>();
     {
         PersistentL1Arena arena = make_test_arena();
         program->seal_each(arena, {CoreCoord(0, 0), CoreCoord(1, 0)});
@@ -1202,6 +1196,9 @@ struct CbFillProgram {
     static constexpr uint32_t num_pages = 2;
     static constexpr uint32_t page_size = 2048;
     static constexpr uint32_t cb_size = num_pages * page_size;
+    // Larger than the CB region, so a ring of this size created afterwards covers all of the L1 the
+    // CBs start in.
+    static constexpr uint32_t covering_ring_size = 4 * cb_size;
 
     Program program;
     CBHandle cb = 0;
@@ -1226,25 +1223,16 @@ CbFillProgram make_cb_fill_program(const CoreRangeSet& cores, uint32_t report_ad
     return p;
 }
 
-// An L1 address above anything these tests place (CBs, scratchpads, a pipe space and its sender
-// staging all sit within a few KiB of the arena base); nothing else allocates L1 here.
-uint32_t relocation_report_address(const distributed::MeshDevice& device) {
-    constexpr uint32_t clearance = 128 * 1024;
-    return static_cast<uint32_t>(device.allocator()->get_base_allocator_addr(HalMemType::L1)) + clearance;
+// L1 buffers are allocated top-down, so a report word in one stays clear of the arena and of the
+// program-local L1 stacked on it.
+std::shared_ptr<Buffer> make_report_buffer(distributed::MeshDevice& device, const CoreRangeSet& cores) {
+    return cross_node_dfb_test::make_cross_node_data_buffer(device, cores, /*entry_size=*/32, /*num_entries=*/1);
 }
 
 std::vector<uint32_t> counting_words(uint32_t first, uint32_t num_words) {
     std::vector<uint32_t> words(num_words);
-    for (uint32_t i = 0; i < num_words; i++) {
-        words[i] = first + i;
-    }
+    std::iota(words.begin(), words.end(), first);
     return words;
-}
-
-uint32_t read_l1_word(distributed::MeshDevice& device, const CoreCoord& core, uint32_t address) {
-    std::vector<uint32_t> word;
-    slow_dispatch::ReadFromL1(device, core, address, sizeof(uint32_t), word);
-    return word.empty() ? 0 : word[0];
 }
 
 std::vector<uint32_t> read_l1_words(
@@ -1254,13 +1242,13 @@ std::vector<uint32_t> read_l1_words(
     return words;
 }
 
+uint32_t read_l1_word(distributed::MeshDevice& device, const CoreCoord& core, uint32_t address) {
+    return read_l1_words(device, core, address, sizeof(uint32_t))[0];
+}
+
 void write_l1_word(distributed::MeshDevice& device, const CoreCoord& core, uint32_t address, uint32_t value) {
     std::vector<uint32_t> word{value};
     slow_dispatch::WriteToL1(device, core, address, word);
-}
-
-uint32_t space_end(const m2::PrefetcherPipeSpace& space) {
-    return std::max(space.buffer_address() + space.ring_size(), space.config_address() + space.config_page_size());
 }
 
 }  // namespace
@@ -1280,11 +1268,11 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_RelocatesCachedProgramCircular
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
     const CoreRangeSet program_cores(CoreRange(sender, receiver));
-    // Larger than the CB region, so the ring covers all of the L1 the CBs start in.
-    constexpr uint32_t ring_size = 4 * CbFillProgram::cb_size;
+    constexpr uint32_t ring_size = CbFillProgram::covering_ring_size;
     constexpr uint32_t first_pattern = 0x10000000;
     constexpr uint32_t second_pattern = 0x20000000;
-    const uint32_t report_addr = relocation_report_address(device);
+    const auto report_buffer = make_report_buffer(device, program_cores);
+    const auto report_addr = static_cast<uint32_t>(report_buffer->address());
 
     CbFillProgram cb_fill = make_cb_fill_program(program_cores, report_addr, first_pattern);
     const auto device_range = persistent_unit_mesh_device_range();
@@ -1326,7 +1314,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_RelocatesCachedProgramCircular
 
     SetRuntimeArgs(placed, cb_fill.kernel, program_cores, {report_addr, second_pattern});
     const uint32_t second_cb_address = run_and_check(second_pattern);
-    EXPECT_GE(second_cb_address, space_end(space));
+    EXPECT_GE(second_cb_address, device.allocator_impl()->persistent_l1().high_water_mark(program_cores));
     for (const CoreCoord& core : corerange_to_cores(program_cores)) {
         EXPECT_EQ(read_l1_words(device, core, space.buffer_address(), ring_size), ring_marker) << core.str();
     }
@@ -1351,7 +1339,8 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_RelocatesCachedProgramScratchp
     // scratchpad_write_pattern.cpp writes 0xC0DE0000 + i over the whole scratchpad.
     constexpr uint32_t scratchpad_pattern = 0xC0DE0000;
     constexpr uint32_t ring_size = 4096;
-    const uint32_t report_addr = relocation_report_address(device);
+    const auto report_buffer = make_report_buffer(device, CoreRangeSet(node));
+    const auto report_addr = static_cast<uint32_t>(report_buffer->address());
 
     m2::KernelSpec kernel = make_dm_kernel("scratch_kernel", scratchpad_kernel_path);
     kernel.runtime_arg_schema.runtime_arg_names = {"report_addr"};
@@ -1395,7 +1384,7 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_RelocatesCachedProgramScratchp
     std::vector<uint32_t> ring_marker = counting_words(0xA0000000, ring_size / sizeof(uint32_t));
     slow_dispatch::WriteToL1(device, node, space.buffer_address(), ring_marker);
 
-    EXPECT_GE(run_and_check(), space_end(space));
+    EXPECT_GE(run_and_check(), device.allocator_impl()->persistent_l1().high_water_mark(CoreRangeSet(node)));
     EXPECT_EQ(read_l1_words(device, node, space.buffer_address(), ring_size), ring_marker);
 }
 
@@ -1416,14 +1405,14 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_RefusesRelocationWhileTraceExi
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
     const CoreRangeSet program_cores(CoreRange(sender, receiver));
-    const auto config = one_pipe_space_config(sender, CoreRangeSet(receiver), 4 * CbFillProgram::cb_size);
+    const auto config = one_pipe_space_config(sender, CoreRangeSet(receiver), CbFillProgram::covering_ring_size);
+    const auto report_buffer = make_report_buffer(device, program_cores);
 
-    CbFillProgram cb_fill = make_cb_fill_program(program_cores, relocation_report_address(device), 0);
-    const auto device_range = persistent_unit_mesh_device_range();
+    CbFillProgram cb_fill =
+        make_cb_fill_program(program_cores, static_cast<uint32_t>(report_buffer->address()), /*pattern=*/0);
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, std::move(cb_fill.program));
+    persistent_run_on_mesh_device(mesh_device, std::move(cb_fill.program), workload);
     auto& cq = mesh_device->mesh_command_queue();
-    distributed::EnqueueMeshWorkload(cq, workload, false);
     const auto trace_id = device.begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     device.end_mesh_trace(cq, trace_id);
@@ -1458,16 +1447,16 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipeSpace_SubDeviceSlabStillRejects) {
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
     const CoreRangeSet program_cores{CoreRange(sender)};
-    const auto config = one_pipe_space_config(sender, CoreRangeSet(receiver), 4 * CbFillProgram::cb_size);
+    const auto config = one_pipe_space_config(sender, CoreRangeSet(receiver), CbFillProgram::covering_ring_size);
+    // Any non-zero slab seals the sub-device's cores.
     constexpr DeviceAddr local_l1_size = 3200;
     auto& arena = device.allocator_impl()->persistent_l1();
+    const auto report_buffer = make_report_buffer(device, program_cores);
 
-    CbFillProgram cb_fill = make_cb_fill_program(program_cores, relocation_report_address(device), 0);
-    const auto device_range = persistent_unit_mesh_device_range();
+    CbFillProgram cb_fill =
+        make_cb_fill_program(program_cores, static_cast<uint32_t>(report_buffer->address()), /*pattern=*/0);
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, std::move(cb_fill.program));
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
-    distributed::Finish(mesh_device->mesh_command_queue());
+    persistent_run_on_mesh_device(mesh_device, std::move(cb_fill.program), workload);
 
     SubDevice sub_device(std::array{CoreRangeSet(CoreRange(receiver))});
     const auto manager = device.create_sub_device_manager({sub_device}, local_l1_size);

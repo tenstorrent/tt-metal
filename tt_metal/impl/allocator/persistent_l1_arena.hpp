@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -137,27 +138,34 @@ private:
         DeviceAddr size;
     };
 
-    struct CoreSeals {
-        uint32_t num_fixed = 0;
-        // One entry per relocatable Seal covering this core (a holder may repeat).
-        std::vector<const Relocatable*> relocatable;
+    struct RelocatableSeals {
+        // Weak, so a make_shared holder's storage (and thus its key) is not reused while this
+        // entry exists.
+        std::weak_ptr<Relocatable> holder;
+        // Relocatable Seals of this holder that cover the core.
+        uint32_t count = 0;
     };
 
-    struct HolderRecord {
-        std::weak_ptr<Relocatable> holder;
-        // Core entries this holder has across all of its Seals on this arena.
-        uint64_t num_core_seals = 0;
+    struct CoreSeals {
+        uint32_t num_fixed = 0;
+        std::unordered_map<const Relocatable*, RelocatableSeals> relocatable;
+    };
+
+    struct SealScan {
+        // The first scanned core that holds a fixed seal; the scan stops there.
+        std::optional<CoreCoord> fixed_core;
+        // Each relocatable holder sealed on the scanned cores, once, including expired ones.
+        std::vector<std::weak_ptr<Relocatable>> holders;
     };
 
     size_t seal_index(const CoreCoord& core) const;
-    // Places the region and collects the live holders sealed on `cores`; caller holds mutex_.
-    Allocation allocate_locked(
-        const CoreRangeSet& cores,
-        DeviceAddr size,
-        DeviceAddr alignment,
-        std::vector<std::shared_ptr<Relocatable>>& holders_to_relocate);
-    // Caller holds mutex_. A null holder adds a fixed seal. Returns the number of core entries added.
-    uint64_t add_seal_locked(const CoreRangeSet& cores, const Relocatable* holder);
+    // Caller holds mutex_.
+    SealScan scan_seals_locked(const std::vector<CoreCoord>& core_list) const;
+    // Places the region; caller holds mutex_.
+    Allocation place_locked(
+        const CoreRangeSet& cores, const std::vector<CoreCoord>& core_list, DeviceAddr size, DeviceAddr alignment);
+    // Caller holds mutex_. A null holder adds a fixed seal.
+    void add_seal_locked(const CoreRangeSet& cores, const std::shared_ptr<Relocatable>& holder);
     void release_seal(const CoreRangeSet& cores, const Relocatable* holder);
 
     // Liveness token handed to every Seal. Nulled and released in the destructor so a
@@ -174,7 +182,6 @@ private:
     std::unordered_map<uint64_t, AllocationRecord> allocations_;
     // Indexed by seal_index().
     std::vector<CoreSeals> seals_;
-    std::unordered_map<const Relocatable*, HolderRecord> holders_;
 };
 
 }  // namespace tt::tt_metal
