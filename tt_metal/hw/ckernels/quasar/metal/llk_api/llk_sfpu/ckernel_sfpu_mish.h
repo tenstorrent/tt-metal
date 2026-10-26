@@ -35,6 +35,9 @@ namespace ckernel::sfpu {
  *
  * Saturation: For x >= 8.0, mish(x) is approximated as x.
  */
+// Whether BF16 DEST runs the generated mish kernel as one call over the whole tile.
+inline constexpr bool mish_bf16_whole_tile = false;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_mish() {
     constexpr float SAT_HI = 8.0f;
@@ -88,7 +91,7 @@ inline void calculate_mish() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void mish_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     // exp does not need an init.
