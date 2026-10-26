@@ -292,6 +292,22 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const ttnn::Shape& shape,
                DataType dtype,
                Layout layout,
+               const MemoryConfig& memory_config,
+               const std::optional<Tile>& tile) {
+                new (t) tt::tt_metal::TensorSpec(shape, TensorLayout(dtype, PageConfig(layout, tile), memory_config));
+            },
+            nb::arg("shape"),
+            nb::arg("dtype"),
+            nb::arg("layout"),
+            nb::arg("memory_config"),
+            nb::arg("tile") = nb::none(),
+            R"doc(Create a tensor specification preserving the complete memory configuration, including per-core placement.)doc")
+        .def(
+            "__init__",
+            [](tt::tt_metal::TensorSpec* t,
+               const ttnn::Shape& shape,
+               DataType dtype,
+               Layout layout,
                BufferType buffer_type,
                const std::optional<Tile>& tile) {
                 new (t) tt::tt_metal::TensorSpec(
@@ -466,6 +482,20 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def_prop_ro("dtype", &tt::tt_metal::TensorSpec::data_type, "Dtype of a tensor")
         .def_prop_ro("tile", &tt::tt_metal::TensorSpec::tile, "Tile of a tensor")
         .def_prop_ro("memory_config", &tt::tt_metal::TensorSpec::memory_config, "Memory config of a tensor")
+        .def(
+            "compute_page_size_bytes",
+            &tt::tt_metal::TensorSpec::compute_page_size_bytes,
+            "Return the unaligned transfer page size.")
+        .def(
+            "compute_packed_buffer_size_bytes",
+            &tt::tt_metal::TensorSpec::compute_packed_buffer_size_bytes,
+            "Return the packed tensor size before device page alignment.")
+        .def(
+            "compute_consumed_memory_bytes_per_bank",
+            &tt::tt_metal::TensorSpec::compute_consumed_memory_bytes_per_bank,
+            nb::arg("page_alignment"),
+            nb::arg("num_banks"),
+            "Return the padded storage footprint per bank using the existing tensor layout calculation.")
         .def(nb::self == nb::self)
         .def(nb::self != nb::self);
 
@@ -524,6 +554,13 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             },
             nb::arg("enable"),
             "Enable or disable experimental per-core L1 allocation on this MemoryConfig.")
+        .def(
+            "experimental_is_per_core_allocation",
+            [](const MemoryConfig& self) {
+                // Read the placement policy without constructing a tensor.
+                return experimental::per_core_allocation::is_per_core_allocation(self);
+            },
+            "Return whether this MemoryConfig requests per-core SRAM allocation.")
         .def(
             "experimental_set_range_lockstep_allocation",
             [](MemoryConfig& self, bool enable) {
