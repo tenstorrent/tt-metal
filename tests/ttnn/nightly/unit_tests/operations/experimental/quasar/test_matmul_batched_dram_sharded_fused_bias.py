@@ -94,8 +94,9 @@ def test_quasar_batched_dram_sharded_matmul_fused_bias_multi_batch(device, n_til
     assert_with_pcc(ref, got, pcc=0.999)
 
 
+@pytest.mark.parametrize("use_bias", [False, True], ids=["no_bias", "fused_bias"])
 @pytest.mark.parametrize("fill", ["ones", "rand"])
-def test_quasar_batched_dram_sharded_matmul_packer_l1_acc_multi_batch(device, fill):
+def test_quasar_batched_dram_sharded_matmul_packer_l1_acc_multi_batch(device, fill, use_bias):
     """Packer L1 acc with batches_per_core > 1 must not alias the partials CB onto the full output shard."""
     workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     num_banks = len(workers)
@@ -130,8 +131,16 @@ def test_quasar_batched_dram_sharded_matmul_packer_l1_acc_multi_batch(device, fi
     make = torch.ones if fill == "ones" else torch.rand
     in0 = make([1, batch, m, k], dtype=torch.bfloat16)
     in1 = make([1, batch, k, n], dtype=torch.bfloat16)
+    bias = make([1, 1, 1, n], dtype=torch.bfloat16)
     in0_t = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in0_mc)
     in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in1_mc)
+    bias_t = (
+        ttnn.from_torch(
+            bias, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        if use_bias
+        else None
+    )
 
     params = qsr.MatmulParams()
     params.program_config = qsr.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
@@ -142,11 +151,19 @@ def test_quasar_batched_dram_sharded_matmul_packer_l1_acc_multi_batch(device, fi
     )
     params.output_mem_config = out_mc
     params.output_dtype = ttnn.bfloat16
+    # fp32_dest_acc_en=False keeps the partials format equal to the bf16 output, the case that shared the CB.
+    params.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
 
     attributes = qsr.create_matmul_attributes(in0_t, in1_t, params, [])
     tensor_args = qsr.MatmulInputs()
     tensor_args.input_tensors = [in0_t, in1_t]
-    tensor_args.optional_input_tensors = [None]
+    tensor_args.optional_input_tensors = [bias_t]
 
     factory = qsr.matmul_select_program_factory(attributes, tensor_args)
     assert isinstance(
@@ -159,11 +176,18 @@ def test_quasar_batched_dram_sharded_matmul_packer_l1_acc_multi_batch(device, fi
     )
     defines = {(name, val) for kernel in descriptor.kernels for name, val in kernel.defines}
     assert ("PACKER_L1_ACC", "1") in defines, f"Expected PACKER_L1_ACC=1, got {defines}"
+    assert (("FUSE_BIAS", "1") in defines) == use_bias, f"FUSE_BIAS mismatch for use_bias={use_bias}: {defines}"
 
-    result = ttnn.generic_op([in0_t, in1_t, output[0]], descriptor)
-    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    ref = torch.matmul(in0, in1)
+    io_tensors = [in0_t, in1_t, bias_t, output[0]] if use_bias else [in0_t, in1_t, output[0]]
+    result = ttnn.generic_op(io_tensors, descriptor)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT)).float()
+    ref = torch.matmul(in0.float(), in1.float())
+    if use_bias:
+        ref = ref + bias.float()
     if fill == "ones":
-        assert torch.equal(got, ref), f"Expected all {k}, got unique values {torch.unique(got).tolist()}"
+        assert torch.equal(got, ref), f"Expected all {ref.flatten()[0].item()}, got {torch.unique(got).tolist()}"
     else:
-        assert_with_pcc(ref, got, pcc=0.998)
+        # Partials are rounded to bf16 after each of the k // tile blocks.
+        bf16_ulp = torch.exp2(torch.floor(torch.log2(ref.abs())) - 7)
+        ulp_err = ((got - ref).abs() / bf16_ulp).max().item()
+        assert ulp_err <= 4, f"Max per-element error {ulp_err} bf16 ULPs exceeds 4"
