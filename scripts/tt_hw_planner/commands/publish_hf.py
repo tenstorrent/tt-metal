@@ -95,35 +95,6 @@ def _validate_mesh_device(mesh_device: str) -> None:
     )
 
 
-# Chips per board, keyed by the base of a serve.hardware label ("p300x2" = two p300 boards = 4 chips).
-# Mirrors tt-model's _BOARD_CHIPS: its manifest check refuses a mesh_device that opens a different
-# number of chips than the hardware label implies.
-_BOARD_CHIPS = {"p100": 1, "p150": 1, "n150": 1, "p300": 2, "n300": 2}
-_SINGLE_CHIP_BOARD = {"blackhole": "p150", "wormhole_b0": "n150"}
-
-
-def _hardware_for_chips(hardware: str, arch: str | None, chips: int) -> str:
-    """The serve.hardware label for a model that opens `chips` chips of the box `hardware` names: the
-    box's own board when the chips fill whole boards (2 chips of a p300x2 -> p300), else the arch's
-    single-chip board (1 chip of a p300x2 -> p150). Unchanged when the label already matches or is not
-    a <board>[xN] label."""
-    import re as _re
-
-    m = _re.fullmatch(r"([a-z]+\d+)[a-z]?(?:x(\d+))?", str(hardware).lower())
-    if not m or m.group(1) not in _BOARD_CHIPS or chips < 1:
-        return hardware
-    base, per = m.group(1), _BOARD_CHIPS[m.group(1)]
-    if per * int(m.group(2) or 1) == chips:
-        return hardware
-    if chips % per:
-        single = _SINGLE_CHIP_BOARD.get(str(arch or "").lower())
-        if not single:
-            return hardware
-        base, per = single, 1
-    n = chips // per
-    return base if n == 1 else f"{base}x{n}"
-
-
 def _box_from_env(env: dict | None) -> str | None:
     """The planner box the run's DETECTED hardware is (its manifest env: arch family + chip count), or
     None when that matches no box or more than one -- never a guess."""
@@ -200,7 +171,6 @@ def _write_tt_model_yaml(
     _serve_args = ["--trust-remote-code"]
     if serve_hf_override:
         _serve_args += ["--hf-overrides", json.dumps({"architectures": [serve_hf_override]})]
-    hardware_given = hardware
     hardware = hardware or hw
     mesh_device = mesh_device or mesh
     if not (arch and hardware and mesh_device):
@@ -209,21 +179,6 @@ def _write_tt_model_yaml(
             "--arch / --hardware / --mesh was given" % (state.get("env") or {}).get("arch")
         )
     _validate_mesh_device(mesh_device)
-    # A run that opened fewer chips than its box (1 chip of a QB2) serves on that smaller mesh, and
-    # tt-model refuses a hardware label naming more chips than the mesh opens. So the label names the
-    # chips opened, and the card says which box they are on.
-    import re as _re
-
-    hw_phrase, perf_hw = _hardware_phrase(state, hardware), hardware
-    _mt = _re.fullmatch(r"\(\s*(\d+)\s*,\s*(\d+)\s*\)", str(mesh_device))
-    if _mt and not hardware_given:
-        opened = int(_mt.group(1)) * int(_mt.group(2))
-        fitted = _hardware_for_chips(hardware, arch, opened)
-        if fitted != hardware:
-            unit = "chip" if opened == 1 else "chips"
-            hw_phrase = f"{opened} Tenstorrent {_arch_name({'env': {'arch': arch}})} {unit} of a {hardware}"
-            perf_hw = f"{opened} {unit} of a {hardware}"
-            hardware = fitted
     thr = state.get("throughput") or {}
     sv = state.get("serving") or {}
     pt = sv.get("per_token") or {}
@@ -238,7 +193,7 @@ def _write_tt_model_yaml(
     if batch:
         perf_bits.append(f"at batch {batch}")
     if hardware:
-        perf_bits.append(f"on {perf_hw}")
+        perf_bits.append(f"on {hardware}")
     perf = " ".join(perf_bits) or "measured on Tenstorrent; see the dashboard."
     lines = [
         'schema: "5.1"',
@@ -288,12 +243,12 @@ def _write_tt_model_yaml(
         "",
         "card:",
         f"  description: >",
-        f"    {slug}, brought up and optimized on {hw_phrase}",
+        f"    {slug}, brought up and optimized on {_hardware_phrase(state, hardware)}",
         f"    (kernel/lever autotuning against a PCC-gated end-to-end pipeline).",
         f"  performance: >",
         f"    {perf}.",
         f"  limitations: >",
-        f"    Validated on {hw_phrase}.",
+        f"    Validated on {_hardware_phrase(state, hardware)}.",
         f"  architecture: autoport ({slug})",
         f"  status: Experimental community bring-up",
         "  license:",
@@ -2083,11 +2038,10 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
         print("  [publish-hf] " + val.stdout.strip())
     if val.returncode != 0:
         print("  [publish-hf] manifest validation failed:\n" + (val.stderr.strip()[-800:] or "(no detail)"))
-        if any(k in val.stderr for k in ("extra_models_dir", "vllm_metadata", "source.code")):
-            print(
-                "  [publish-hf] The vLLM adapter dir (runtime.extra_models_dir) with a "
-                "vllm_metadata.json must exist and be under source.code. Author it, then re-run."
-            )
+        print(
+            "  [publish-hf] Most commonly: the vLLM adapter dir (runtime.extra_models_dir) with a "
+            "vllm_metadata.json must exist and be under source.code. Author it, then re-run."
+        )
         return 3
 
     if getattr(args, "dry_run", False):
