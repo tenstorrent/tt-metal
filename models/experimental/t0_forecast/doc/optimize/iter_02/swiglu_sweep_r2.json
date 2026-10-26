@@ -1,0 +1,145 @@
+{
+  "rows": 98304,
+  "precision": "accuracy",
+  "results": [
+    {
+      "config": "unfused (round 0)",
+      "ms": 15.06203687749803,
+      "pcc_vs_torch": 0.9999818707404536
+    },
+    {
+      "config": [
+        8,
+        16,
+        2,
+        2,
+        2
+      ],
+      "ms": 6.339672766625881,
+      "pcc_vs_unfused": 0.9999934704198773,
+      "pcc_vs_torch": 0.9999856441479823
+    },
+    {
+      "config": [
+        8,
+        16,
+        8,
+        1,
+        4
+      ],
+      "ms": 7.132348697632551,
+      "pcc_vs_unfused": 0.9999934704198773,
+      "pcc_vs_torch": 0.9999856441479823
+    },
+    {
+      "config": [
+        8,
+        16,
+        8,
+        2,
+        4
+      ],
+      "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+    },
+    {
+      "config": [
+        16,
+        16,
+        8,
+        2,
+        4
+      ],
+      "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+    },
+    {
+      "config": [
+        8,
+        8,
+        8,
+        2,
+        4
+      ],
+      "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+    },
+    {
+      "config": [
+        4,
+        16,
+        8,
+        1,
+        8
+      ],
+      "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+    },
+    {
+      "config": [
+        8,
+        16,
+        4,
+        2,
+        4
+      ],
+      "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+    },
+    {
+      "config": [
+        16,
+        16,
+        4,
+        4,
+        2
+      ],
+      "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+    },
+    {
+      "config": [
+        16,
+        8,
+        8,
+        4,
+        2
+      ],
+      "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+    },
+    {
+      "config": [
+        32,
+        8,
+        2,
+        4,
+        2
+      ],
+      "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+    },
+    {
+      "config": [
+        8,
+        32,
+        4,
+        2,
+        4
+      ],
+      "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+    },
+    {
+      "config": [
+        12,
+        16,
+        4,
+        2,
+        4
+      ],
+      "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+    },
+    {
+      "config": [
+        8,
+        16,
+        16,
+        1,
+        8
+      ],
+      "error": "TT_FATAL @ /home/andy/tt-metal/ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.cpp:288: cfg.subblock_h * cfg.subblock_w <= max_dest_volume"
+    }
+  ]
+}

@@ -72,6 +72,7 @@ def main():
     ap.add_argument("--rows", type=int, default=98304)
     ap.add_argument("--precision", default="accuracy")
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--configs", type=json.loads, default=CONFIGS, help="JSON list of [M, K, N, sub_h, sub_w]")
     args = ap.parse_args()
     p = TtT0Precision.named(args.precision)
     m = weights().layers[0].mlp
@@ -105,7 +106,7 @@ def main():
         b_packed = upload(device, prepare_for_fused_swiglu(m.b1.reshape(1, -1), 1, gate_is_first=True))
         grid = device.compute_with_storage_grid_size()
         kernel = p.compute_kernel_config(role="ff1")
-        for mb, kb, nb, sh, sw in CONFIGS:
+        for mb, kb, nb, sh, sw in args.configs:
             cfg = ttnn.MinimalMatmulConfig(
                 M_block_size=mb,
                 K_block_size=kb,

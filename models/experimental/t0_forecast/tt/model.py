@@ -74,6 +74,19 @@ def _pad_group_mask(mask: Tensor, padded_seq: int) -> Tensor:
     return full.reshape(padded_seq * b, 1, g, g)
 
 
+def _packed_group_mask(mask: Tensor | None, padded_seq: int, rows: int, group_size: int) -> Tensor:
+    """Group attention over a series' ``G * S_pad`` tokens as they lie (row-major ``(g, s)``): token ``(g1, s1)``
+    reads ``(g2, s2)`` iff ``s1 == s2`` and ``mask[s, b, g1, g2]`` (pad slots see their whole series).
+    ``(1, 1, G S_pad, G S_pad)`` without a mask, else ``(B, 1, G S_pad, G S_pad)``."""
+    g, sp = group_size, padded_seq
+    if mask is None:
+        full = torch.ones(sp, 1, g, g, dtype=torch.bool)
+    else:
+        full = _pad_group_mask(mask, sp).reshape(sp, rows // g, g, g)
+    blocks = torch.diag_embed(full.permute(1, 2, 3, 0))  # (B, G1, G2, S1, S2), true only on S1 == S2
+    return blocks.permute(0, 1, 3, 2, 4).reshape(-1, 1, g * sp, g * sp)
+
+
 class TtT0:
     """Device t0 model (single chip). Weights move host -> device once in ``__init__``."""
 
@@ -177,25 +190,29 @@ class TtT0:
             delta[:, :s] = self._type_embeddings[prepared.patch_type] - self._type_embeddings[0]
             type_delta = upload(self.device, delta.reshape(1, 1, r * sp, d))
             owned.append(type_delta)
-        time_mask = group_mask = None
+        time_mask = None
         if prepared.time_mask is not None:
             time_mask = upload(self.device, _additive(_pad_time_mask(prepared.time_mask, sp)))
             owned.append(time_mask)
-        readout_group_mask = None
+        readout_group_mask = packed_group_mask = None
+        if prepared.group_size > 1:
+            packed = _packed_group_mask(prepared.group_mask, sp, r, prepared.group_size)
+            packed_group_mask = upload(self.device, _additive(packed))
+            owned.append(packed_group_mask)
         if prepared.group_mask is not None:
-            group_mask = self._upload_small_mask(_additive(_pad_group_mask(prepared.group_mask, sp)))
             lo, n = prepared.readout_start, prepared.readout_count
             readout_group_mask = self._upload_small_mask(
                 _additive(_pad_group_mask(prepared.group_mask[lo : lo + n], n))
             )
-            owned += [group_mask, readout_group_mask]
+            owned.append(readout_group_mask)
         attention = TtAttentionInputs(
             rows=r,
             padded_seq=sp,
             group_size=prepared.group_size,
             rope=self._rope(prepared, sp),
             time_mask=time_mask,
-            group_mask=group_mask,
+            group_mask=None,
+            packed_group_mask=packed_group_mask,
         )
         readout_attention = TtAttentionInputs(
             rows=r,
