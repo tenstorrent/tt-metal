@@ -1,0 +1,76 @@
+{
+ "used": [
+  {
+   "id": "DS41-76",
+   "how": "located the down-K limit (se6_dcompute.cpp static_assert kt_d % hk) to remove instead of padding",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-115",
+   "how": "located the subgrid plan with no gate/up split at Ht 160; planner falls back to the one-subgrid uneven split",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-76",
+   "evidence": "the 8-tile K block is not a kernel limit: se6_dcompute.cpp passes hk only as matmul_block's kt_dim with rt_dim 1, which llk_unpack_AB_matmul.h:350-361 never uses (reuse_a, t = 0). With the assert term removed, I 576 / 1152 (K 18 / 36 tiles) pass tests/unit/test_flat_widths.py (rel 0.040 vs limit 0.099 glm, 0.0104 vs 0.021 full)",
+   "cited": true
+  },
+  {
+   "id": "DS41-115",
+   "evidence": "the fix (pad 576 -> 1280) is no longer needed: flat_routed_expert_plan.cpp now falls back to one subgrid when the subgrids have no split; It 18 plans uneven np 1 on 18 gate/up cores (test_flat_widths.py se_tp4_*)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the flat op's single-card unit suite hangs on a Galaxy card for most shapes, before FIX.1 too (now DS41-119)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.1",
+   "answer": "done",
+   "evidence": "shared-expert pad removed (tt/shared_expert.py); fork planner + se6_dcompute extended; tests/unit/test_flat_widths.py at 18 / 36 / 72 columns; gate FIX.1 --check passed (W.1: 8 layers at 'x 576', metrics equal to W.1's); shared expert 0.153 ms a layer on 8x4 at chunk 5120 (tt/perf_shared_expert.py, one run after the change)"
+  },
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding left in tt/shared_expert.py (I = the real per-chip width); the kernel / fork was extended instead"
+  },
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "kernel change first, fork unit tests, then W.1; timing: one run after the change, no device-profiler per-op mode"
+  }
+ ],
+ "cited_only": [
+  "DS41-116",
+  "DS41-119"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.1",
+  "role": "overseer",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-26T15:25:34",
+  "head": "63c3233b05f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.1.overseer.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/README.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/se6_dcompute.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_flat_widths.py"
+  ]
+ }
+}
