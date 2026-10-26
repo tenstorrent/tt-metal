@@ -53,7 +53,9 @@ class _DeepSeekV4Adapter(MLAPrefillAdapter):
         """The full-depth config from the model constants; the runner overwrites ``max_seq_len``."""
         return self.config_builder()
 
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
+        if sp_axis != 0:
+            raise ValueError("DeepSeek-V4 prefill runs SP on mesh axis 0 only")
         return None
 
     def checkpoint_path(self) -> Path:
