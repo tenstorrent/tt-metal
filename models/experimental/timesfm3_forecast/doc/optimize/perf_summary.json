@@ -1,0 +1,182 @@
+{
+ "workload": {
+  "profile": "forecast_forward",
+  "target": "paper:accuracy",
+  "series": 1024,
+  "context": 2048,
+  "horizon": 64,
+  "guards": [
+   "long_context-accuracy (32 x 15360 -> 1024)",
+   "multivariate-accuracy (128 x 8 x 2048 -> 64)"
+  ],
+  "e2e": "gift_e2e (gift64_h48: 64 series, U[256,2048] -> 48, symmetric averaging + make_positive), both precisions",
+  "precision_performance": "non-shipping under PLAN v1.12: P6b (bf8 QKV, HiFi2, fp32 acc) is 3.7 % faster on paper (409.0 vs 424.7 ms, job 798), below the 5 % bar; passes every performance floor; kept for timing only"
+ },
+ "chip": "blackhole p150, ttq part 0 (61C0BD39B27E9772)",
+ "final": {
+  "commit": "c24488beaa6",
+  "bench": "doc/optimize/final/bench.json (job 798, --kind long, git_dirty empty on every record)",
+  "check_gates": "PASS vs iter_00/r1_1/bench.json (the D4 drift reference), doc/optimize/final/check_gates.txt; abs_err_max has no fixed record yet (proposed: job 798)",
+  "device_ms": {
+   "paper-accuracy": 424.7,
+   "paper-performance": 409.0,
+   "long_context-accuracy": 128.9,
+   "long_context-performance": 124.8,
+   "multivariate-accuracy": 837.6,
+   "multivariate-performance": 807.1,
+   "gift_e2e-accuracy": 68.7,
+   "gift_e2e-performance": 66.7
+  },
+  "steady_wall_ms": {
+   "paper-accuracy": 619.8,
+   "paper-performance": 560.0,
+   "long_context-accuracy": 167.9,
+   "long_context-performance": 163.3,
+   "multivariate-accuracy": 961.3,
+   "multivariate-performance": 952.4,
+   "gift_e2e-accuracy": 84.3,
+   "gift_e2e-performance": 83.4
+  },
+  "pcc_paper_accuracy": {
+   "pcc_normalized": 0.999938,
+   "pcc_spread": 0.999916,
+   "pcc_row_p01": 0.825163,
+   "pcc_row_min": 0.555583,
+   "pcc_row_p01_active": 0.998536,
+   "pcc_row_min_active": 0.991422,
+   "spread_ratio_p01": 0.925107,
+   "spread_ratio_p50": 1.008749,
+   "spread_ratio_p99": 1.031274,
+   "pcc_final": 0.999997,
+   "pcc_final_spread": 0.999932,
+   "abs_err_max": 0.249522,
+   "inactive_err_max_rel": 0.086242
+  },
+  "pcc_suite": "87/87 (job 793, 679e5289544; c24488beaa6 changes only tests/perf/test_forward_perf.py)",
+  "watcher": "87/87 under TT_METAL_WATCHER=10, no watcher errors (job 794, 679e5289544)"
+ },
+ "rounds": [
+  {
+   "round": 0,
+   "paper_accuracy_device_ms": 1370.5,
+   "job": 497,
+   "rebaseline": "1371.3 ms after D3 policy work (job 578)"
+  },
+  {
+   "round": 1,
+   "paper_accuracy_device_ms": 607.0,
+   "delta": "-55.7 %",
+   "jobs": [
+    594,
+    637,
+    687,
+    716
+   ],
+   "accepted": [
+    "R1-1 drop 2 trailing horizon tokens (-11.6 %)",
+    "R1-3 SDPA output_concat_heads + R1-4 per-role matmul configs (-49.9 %, X5/D4)",
+    "R1-7 performance policy P6b"
+   ],
+   "rejected": [
+    "R1-2 pre-norm drop (spread_ratio_p01 drift, jobs 611/625)",
+    "R1-5 -1.5 % alone (carried to R2-1 bundle)",
+    "R1-5b +7.4 %",
+    "R1-6 2.56 ms/call (re-proposed r2)"
+   ]
+  },
+  {
+   "round": 2,
+   "paper_accuracy_device_ms": 501.6,
+   "delta": "-17.3 %",
+   "jobs": [
+    729,
+    733,
+    740,
+    742,
+    746
+   ],
+   "accepted": [
+    "R2-1 RoPE view + R1-5 bundle",
+    "R2-2",
+    "R2-3 fused SwiGLU sweep",
+    "R2-4 post_add_norm generic_op kernel"
+   ],
+   "rejected": [
+    "R2-5 trace (no wall gain, job 742)",
+    "R2-6 (L1 capacity)"
+   ]
+  },
+  {
+   "round": 3,
+   "paper_accuracy_device_ms": 423.6,
+   "delta": "-15.5 %",
+   "jobs": [
+    764,
+    765,
+    771
+   ],
+   "accepted": [
+    "R3-2+R3-5 fused RoPE/QK-norm/head split from QKV",
+    "R3-1 padded multivariate path (guard only)"
+   ],
+   "rejected": [
+    "R3-3 K block retune (<2 %, broke all-row pcc_row_min, job 758)"
+   ]
+  },
+  {
+   "round": 4,
+   "paper_accuracy_device_ms": 425.3,
+   "delta": "+0.4 % (noise)",
+   "jobs": [
+    774,
+    779,
+    788,
+    789
+   ],
+   "accepted": [
+    "R4-2 fused variate QK norm (multivariate -2.3 %)",
+    "R4-6 profile accounting"
+   ],
+   "rejected": [
+    "R4-1 rope kernel I/O batching (micro -2 %, model 0 %)",
+    "R4-5 matmul retune (configs within 5 % of best, job 774)"
+   ],
+   "not_done": [
+    "R4-3 variate permute kernel (guard only)",
+    "R4-4 cut-layer slot writes (~-1 %)"
+   ],
+   "exit": "round under 5 % (skill 5.6 / contract U4)"
+  }
+ ],
+ "total_improvement": {
+  "paper_accuracy_device_ms": "1370.5 -> 424.7 (-69.0 %, 3.23x)",
+  "long_context": "180.8 -> 128.9",
+  "multivariate": "4998.1 -> 837.6 (5.97x)"
+ },
+ "configs": {
+  "accuracy": "bf16 activations/weights, HiFi2 matmuls with fp32_dest_acc_en, HiFi4 norms/RoPE/patch encoder, fp32 head (tt/common.py)",
+  "matmuls": "per-role table in tt/program_configs.py (minimal_matmul 16,8,4,4,1 on 1280/1536-wide linears, fused SwiGLU, 2D config with byte L1 budget)",
+  "kernels": "tt/ops: rope_qk_norm_qkv, post_add_norm (generic_op, model-local)"
+ },
+ "named_limitations": [
+  "contract exit criterion matmuls > 65 % of FLOPs not reached (~46 % matmul share); remaining non-matmul time needs C++ or new kernels",
+  "trace not used (no wall gain, R2-5)"
+ ],
+ "not_applicable": {
+  "multichip": "single-chip contract",
+  "vllm/serving": "forecaster, no serving stage",
+  "trace_evidence": "trace rejected R2-5; no traced path ships"
+ },
+ "evidence": {
+  "final_bench": 798,
+  "suite": 793,
+  "watcher": 794,
+  "profiles": [
+   497,
+   716,
+   746,
+   771,
+   772
+  ]
+ }
+}
