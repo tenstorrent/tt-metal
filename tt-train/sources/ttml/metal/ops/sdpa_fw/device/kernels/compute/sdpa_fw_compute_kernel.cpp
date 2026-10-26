@@ -33,22 +33,21 @@
 // steps of Sk_chunk_t tiles; per step it does QK^T, online softmax and P@V for all its rows.
 // Runtime args: num_runs, then (first_item, num_items) per run; same list as the reader and writer.
 
-constexpr uint32_t block_size = get_compile_time_arg_val(0);       // output tiles per DST pass, element-wise loops
-constexpr uint32_t qWt = get_compile_time_arg_val(1);              // num tile in inner dim in query/key (d_qk/TILE_W)
-constexpr uint32_t vWt = get_compile_time_arg_val(2);              // num tile in inner dim in value (d_v/TILE_W)
-constexpr uint32_t Ht = get_compile_time_arg_val(3);               // num_seq_len / TILE_H
-constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);      // 1/sqrt(d) softmax scale, fp32 bits
-constexpr uint32_t minus_one_bits = get_compile_time_arg_val(5);   // used to transform mask from 1/0 to 0/-1
-constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(6);  // used to transform mask from 0/-1 to 0/-1e9F
-constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(7);       // K/V tiles per step
-constexpr uint32_t pv_block_w = get_compile_time_arg_val(8);       // V feature tiles per PV matmul_block call
-constexpr uint32_t scaler_bf16_bits =
-    get_compile_time_arg_val(9);  // host-side RNE BF16 of scaler_bits, for the WH fused scale+exp
-constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(10);     // query tile-rows per Q chunk
-constexpr uint32_t qk_block_h = get_compile_time_arg_val(11);     // Q rows per QK^T matmul_block call
-constexpr uint32_t qk_block_w = get_compile_time_arg_val(12);     // K tiles per QK^T matmul_block call
-constexpr uint32_t pv_block_h = get_compile_time_arg_val(13);     // Q rows per PV matmul_block call
-constexpr uint32_t sm_block_size = get_compile_time_arg_val(14);  // score tiles of one row per DST pass, exp step
+constexpr uint32_t block_size = get_compile_time_arg_val(0);        // output tiles per DST pass, element-wise loops
+constexpr uint32_t qWt = get_compile_time_arg_val(1);               // num tile in inner dim in query/key (d_qk/TILE_W)
+constexpr uint32_t vWt = get_compile_time_arg_val(2);               // num tile in inner dim in value (d_v/TILE_W)
+constexpr uint32_t Ht = get_compile_time_arg_val(3);                // num_seq_len / TILE_H
+constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);       // 1/sqrt(d) softmax scale, fp32 bits
+constexpr uint32_t scaler_bf16_bits = get_compile_time_arg_val(5);  // host-side RNE BF16 of it, WH fused scale+exp
+constexpr uint32_t minus_one_bits = get_compile_time_arg_val(6);    // used to transform mask from 1/0 to 0/-1
+constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);   // used to transform mask from 0/-1 to 0/-1e9F
+constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(8);        // query tile-rows per Q chunk
+constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(9);        // K/V tiles per step
+constexpr uint32_t qk_block_h = get_compile_time_arg_val(10);       // Q rows per QK^T matmul_block call
+constexpr uint32_t qk_block_w = get_compile_time_arg_val(11);       // K tiles per QK^T matmul_block call
+constexpr uint32_t pv_block_h = get_compile_time_arg_val(12);       // Q rows per PV matmul_block call
+constexpr uint32_t pv_block_w = get_compile_time_arg_val(13);       // V feature tiles per PV matmul_block call
+constexpr uint32_t sm_block_size = get_compile_time_arg_val(14);    // score tiles of one row per DST pass, exp step
 
 constexpr uint32_t q_num_chunks = Ht / Sq_chunk_t;
 constexpr uint32_t q_tiles = Sq_chunk_t * qWt;             // Q tiles of one chunk
