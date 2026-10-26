@@ -12,6 +12,9 @@
 
 namespace ckernel::sfpu {
 
+// Whether BF16 DEST runs the generated tanhshrink kernel as one call over the whole tile.
+inline constexpr bool tanhshrink_bf16_whole_tile = false;
+
 // tanhshrink(x) = x - tanh(x).
 // For small |x|, tanh(x) ~= x, so the subtractive form x - tanh(x) suffers catastrophic
 // cancellation in bf16 (both operands round to the same value -> result 0). Instead, for
