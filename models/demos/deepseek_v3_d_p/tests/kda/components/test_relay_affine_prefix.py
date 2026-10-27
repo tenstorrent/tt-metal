@@ -326,10 +326,9 @@ def _perf_case(shape: tuple[int, int], case_id: str, reference_us: float | None)
     return pytest.param(*ring.values, reference_us, marks=ring.marks, id=case_id)
 
 
-# TODO: calibrate on the dedicated QuietBox runner.
 _PERF_CASES = [
     _perf_case((8, 1), "loudbox-SP8xTP1-ring", 110.3),
-    _perf_case((4, 1), "quietbox-SP4xTP1-ring", None),
+    _perf_case((4, 1), "quietbox-SP4xTP1-ring", 80.3),
 ]
 
 

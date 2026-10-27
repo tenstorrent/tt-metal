@@ -38,8 +38,7 @@ _CHUNKS = _ROWS // _CHUNK
 _MAX_CORES = 110
 
 _PERF_MARGIN = 0.05
-# TODO: calibrate on a single P150 (viommu runner); the test fails with the measured duration until this is set.
-_PRODUCTION_DURATION_NS: int | None = None
+_PRODUCTION_DURATION_NS: int | None = 19_685
 
 
 @dataclass(frozen=True)
