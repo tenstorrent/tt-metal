@@ -264,3 +264,23 @@ def test_sum_hw_bf16(device):
     output_tensor = ttnn.sum(input_tensor, dim=[2, 3], keepdim=True)
 
     assert torch.equal(ttnn.to_torch(output_tensor), torch_output)
+
+
+@pytest.mark.parametrize("op", ["sum", "mean"])
+@pytest.mark.parametrize("w, fill", [(262144, "ones"), (32768, "pos"), (65543, "pos")])
+def test_sum_row_major_long_w_fp32_dest_acc(device, w, fill, op):
+    torch.manual_seed(0)
+    shape = (1, 1, 32, w)
+    if fill == "ones":
+        torch_input = torch.ones(shape, dtype=torch.bfloat16)
+    else:
+        torch_input = (torch.randn(shape).abs() + 1).to(torch.bfloat16)
+    expected = torch.sum(torch_input.double(), dim=-1)
+    if op == "mean":
+        expected = expected / w
+    config = ttnn.init_device_compute_kernel_config(
+        device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True
+    )
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output = ttnn.to_torch(getattr(ttnn, op)(input_tensor, dim=-1, compute_kernel_config=config)).double()
+    torch.testing.assert_close(output.reshape(-1)[:32], expected.reshape(-1), rtol=2e-2, atol=0)
