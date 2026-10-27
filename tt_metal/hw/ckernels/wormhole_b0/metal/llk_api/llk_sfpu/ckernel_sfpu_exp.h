@@ -325,15 +325,15 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // TTI_ instructions emitted between the TTI_REPLAY/record call and the
     // replay loop, or the replay buffer will misalign.
     //
-    //   Base body:                                                17
-    //     SFPLOAD, SFPMAD, SFPNOP, SFPSWAP, SFPNOP,
+    //   Base body:                                                15
+    //     SFPLOAD, SFPMAD, SFPSWAP,
     //     SFPEXEXP, SFPEXMAN8, SFPSHFT, SFPEXMAN9, SFPCAST,
     //     SFPMAD poly1, SFPNOP, SFPMAD poly2,
-    //     SFPLOADI, SFPSETEXP, SFPSTORE. INCRWC
-    //   + SCALE_EN ? 1 : 0                  (SFPMULI scale + SFPNOP)
+    //     SFPLOADI, SFPSETEXP, SFPSTORE, INCRWC
+    //   + SCALE_EN ? 2 : 0                  (SFPMULI scale + SFPNOP)
     //   + is_fp32_dest_acc_en ? 0 : 1       (SFP_STOCH_RND fp32→bf16)
-    //   + CLAMP_NEGATIVE ? 2 : 0            (SFPSWAP + SFPNOP)
-    constexpr unsigned BODY_LEN = 17 + (SCALE_EN ? 2 : 0) + (is_fp32_dest_acc_en ? 0 : 1) + (CLAMP_NEGATIVE ? 2 : 0);
+    //   + CLAMP_NEGATIVE ? 2 : 1            (SFPMOV + SFPSWAP, else the SFPNOP covering the SFPMAD)
+    constexpr unsigned BODY_LEN = 15 + (SCALE_EN ? 2 : 0) + (is_fp32_dest_acc_en ? 0 : 1) + (CLAMP_NEGATIVE ? 2 : 1);
 
     // Record the loop body into replay buffer slot 0 the first time
     // through. Subsequent iterations replay the recorded sequence, which
@@ -374,12 +374,18 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
         // LREG1 first. Mode VEC_MIN_MAX puts max(a, b) into the dest LReg.
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
         TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+    } else {
+        // Cover the SFPMAD latency before the upper clamp reads LREG0 (the
+        // SFPMOV above does that in the CLAMP_NEGATIVE branch).
+        TTI_SFPNOP;
     }
-    TTI_SFPNOP;
 
     // Upper clamp: xlog2 <- min(xlog2, 255). LREG2 holds 255.
+    // No SFPNOP after either SFPSWAP: the hardware serialises a dependent
+    // read of a SFPSWAP result itself (sfpi emits back-to-back dependent
+    // SFPSWAPs for clamp()), so the gap is neither needed nor a cycle saved;
+    // dropping it only shortens the replay body.
     TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-    TTI_SFPNOP;
 
     // _float_to_int32_for_exp_21f_: shift mantissa left by exp-bias bits.
     TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);  // LREG1 = exexp(xlog2)
