@@ -9,8 +9,8 @@ dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6
 ```
 
 - Built locally from the commits listed in `RELEASE_NOTES.md`; not pushed to ghcr.io (a ghcr tag is TODO until the image is pushed). No weights or caches inside.
-- Size on disk: TODO (docker images, after the build). Offline copy: TODO (tar path and size, `docker load -i <tar>`).
-- Loaded in the default docker of hosts: TODO (list after the tar is distributed).
+- Image id `de6952f6f477`. Offline copy (5.38 GB tar): `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_afb78699c8b.tar` (`docker load -i <tar>`). Size on disk: TODO (read `docker images` on a host that has it loaded).
+- Verified on hosts .34, .45 and .33 (load the tar on any other host first).
 
 ## Configurations
 
@@ -104,9 +104,9 @@ From `docker run` to `/health` 200, with the weight and kernel caches populated:
 
 | Configuration | Time |
 |---|---|
-| B=16 (262,144 tokens) | about 25 minutes (previous release; TODO: not part of the image verification, measure or keep this label) |
-| B=4 (1,048,576 tokens) | TODO: boot rows of `image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md` (the two previous images booted in 1230-1839 s on hosts with a warm kernel cache; the previous release took about 31 minutes) |
+| B=16 (262,144 tokens) | not measured on this image (about 25 minutes on the previous release) |
+| B=4 (1,048,576 tokens) | 20 to 30 minutes: 1,217 / 1,526 / 1,773 / 1,787 s on four boots with the weight and kernel caches populated (the previous release: about 31 minutes) |
 
-<!-- sources: B=16 25 min and B=4 31 min = previous GETTING_STARTED.md; image_tests/74727b7f7ee-5b6f9268-15bcbd6/results.md lane boots 1839/1370/1791/1298 s; image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md lane boots 1810/1230/1798 s -->
+<!-- sources: B=4 boots: image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md lane A / B / C / G boot rows; B=16 25 min and B=4 31 min = previous GETTING_STARTED.md; image_tests/74727b7f7ee-5b6f9268-15bcbd6/results.md lane boots 1839/1370/1791/1298 s; image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md lane boots 1810/1230/1798 s -->
 
 The first start with empty caches takes much longer (60-90 minutes on earlier images, not re-measured); it writes the weight cache (about 610 GB) and the kernel cache (about 43 GB).

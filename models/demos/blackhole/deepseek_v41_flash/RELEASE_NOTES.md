@@ -1,10 +1,10 @@
 # DeepSeek-V4.1-Flash on Blackhole Galaxy: release notes
 
-Release `afb78699c8b-5b6f9268-dd4fbc6` (vLLM stack as in the previous release; TODO confirm the versions from the image), previous release `0.24.0-0655530-4743e01`. Start-up commands: `GETTING_STARTED.md`. Test logs, switches and long-form findings: `RELEASE_DETAILS.md`.
+Release `afb78699c8b-5b6f9268-dd4fbc6` (vLLM stack as in the previous release: the Python environment is reused; versions not re-read from this image), previous release `0.24.0-0655530-4743e01`. Start-up commands: `GETTING_STARTED.md`. Test logs, switches and long-form findings: `RELEASE_DETAILS.md`.
 
 | | |
 |---|---|
-| Image | `dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6` (local build; not on ghcr.io yet) |
+| Image | `dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6` (local build, image id `de6952f6f477`; not on ghcr.io yet; offline copy `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_afb78699c8b.tar`, 5.38 GB) |
 | Commits | tt-metal `afb78699c8b` (branch `ssinghal/dsv4p1-rebase-1017-v3`), tt-inference-server `5b6f9268` (branch `ssinghal/dsv4p1-rebase-1017`), vllm-tt-plugin `dd4fbc6` (branch `ssinghal/dsv4p1-replay-v3`) |
 | Checkpoint | `deepseek-ai/DeepSeek-V4.1-Flash-1017` |
 
@@ -19,7 +19,7 @@ Release `afb78699c8b-5b6f9268-dd4fbc6` (vLLM stack as in the previous release; T
 | Image input | up to 16 images per prompt (1,024 tokens each at most) | same |
 | Speculative decoding | up to k = 5 (3 or 5 drafts per round, chosen by measured round time), lossless, at every prompt length | same |
 | Runtime spec (`assets/`) | `runtime_spec_b16_k5_262144_vision.json` | `runtime_spec_b4_k5_1048576_vision.json` |
-| Start-up | TODO (see `GETTING_STARTED.md`) | TODO (see `GETTING_STARTED.md`) |
+| Start-up | not measured on this image | 20 to 30 minutes (1,217 to 1,787 s on four boots, depending on the host cache) |
 
 <!-- sources: spec file names checked to exist in dsv4-docker-ctx/afb78699c8b-5b6f9268-dd4fbc6/tt-metal-models/demos/blackhole/deepseek_v41_flash/assets/ (identical to the repo assets/); users, context, budget from those JSONs; k=3 and k=5 runners: image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md "runners built" -->
 
@@ -40,10 +40,14 @@ Short prompts, batched, B=4 (`vllm bench serve`, random prompts, 128 output toke
 
 | | Previous release | v2.1 image | This release | Change against the previous release |
 |---|---|---|---|---|
-| B=4, 4 requests, ISL 1,024 | 1590 / 67.5 / 48.0 | 1659 / 29.9 / 90.1 | TODO (lane C `bench` row of results.md; tok/s from `laneC/bench.log`) | TODO |
-| B=4, 4 requests, ISL 8,192 | 9059 / 120.9 / 20.2 | 6701 / 31.7 / 45.2 | TODO | TODO |
-| B=16, 16 requests, ISL 1,024 | 3626 / 162.8 / 82.1 | not measured | TODO (the verification lanes boot the B=4 1M spec only; measure or drop the rows) | TODO |
-| B=16, 16 requests, ISL 8,192 | 26208 / 522.7 / 21.8 | not measured | TODO | TODO |
+| B=4, 4 requests, ISL 1,024 | 1590 / 67.5 / 48.0 | 1659 / 29.9 / 90.1 | 1649 / 27.2 / 94.4 | +4 % / -60 % / +97 % |
+| B=4, 4 requests, ISL 8,192 | 9059 / 120.9 / 20.2 | 6701 / 31.7 / 45.2 | 5342 / 28.2 / 56.2 | -41 % / -77 % / +178 % |
+| B=16, 16 requests, ISL 1,024 | 3626 / 162.8 / 82.1 | not measured | not measured | |
+| B=16, 16 requests, ISL 8,192 | 26208 / 522.7 / 21.8 | not measured | not measured | |
+
+Against the v2.1 image (v2.1 measured on another host): ISL 1,024 TTFT -1 %, TPOT -9 %; ISL 8,192 TTFT -20 %, TPOT -11 %. ISL 1,024 TTFT is not better than the previous release (+4 %): a short prompt needs several windows. B=16 was not part of the verification of this image.
+
+<!-- sources: this release: image_tests/afb78699c8b-5b6f9268-dd4fbc6/laneC/bench.log (1649 / 27.2 / 94.4 and 5342 / 28.2 / 56.2, lane C ran on host .34); changes computed from the columns -->
 
 <!-- sources: previous release: previous RELEASE_NOTES.md (same harness: OPTIMIZATIONS.md section 0 names dsv4-logs/image_tests/new_text/bench.log for the same 1590 / 67.5 and 9059 / 120.9 reference); v2.1: dsv4-logs/image_tests/7ca53f64776-5b6f9268-15bcbd6/laneC/bench.log; for context: production a58ff4b5c2b image 1559 / 30.9 / 85.9 and 6512 / 33.6 / 44.5 (image_tests/merged_image/bench.log), v2 image 1660 / 30.5 / 89.5 and 6822 / 31.7 / 46.3 (image_tests/74727b7f7ee-5b6f9268-15bcbd6/laneC/bench.log) -->
 
@@ -70,20 +74,24 @@ Prompt processing, 4 concurrent cold prompts on the 1M build (server, speculatio
 | 64k | 64.24 s | 37.94 s | -41 % |
 | 128k | 129.60 s | 75.02 s | -42 % |
 
-Batch TTFT (every user has its first token). When the scheduler starts the first request alone, the first batch is slower; this run is the same case on both sides (the best runs, 4.64 / 13.55 / 25.86 / 50.43 s with replay, against 5.76 / 21.08 / 42.05 / 84.80 s for the image without it, are -19 / -36 / -38 / -41 %). A single cold request: 8k 3.99 s against 5.44 s, 16k 7.08 against 10.83, 32k 12.96 against 21.23, 64k 25.13 against 42.83 (-27 to -41 %). Needle prompts of 64k / 131k / 600k tokens: 25.8 / 50.7 / 231.1 s against 44.1 / 89.0 s / 430-445 s (production image). TODO: replace or confirm with the verification of this image (`4-concurrent cold TTFT` rows of results.md; production reference 21.76 / 43.41 / 87.5 s at 32,766 / 65,535 / 131,071 tokens, v2.1 21.25 / 42.3 / 86.05 s).
+Batch TTFT (every user has its first token). When the scheduler starts the first request alone, the first batch is slower; this run is the same case on both sides. A single cold request: 8k 3.99 s against 5.44 s, 16k 7.08 against 10.83, 32k 12.96 against 21.23, 64k 25.13 against 42.83 (-27 to -41 %). Needle prompts of 64k / 131k / 600k tokens: 25.8 / 50.7 / 231.1 s against 44.1 / 89.0 s / 430-445 s (production image).
 
-<!-- sources: dsv4-logs/replay_study/RESULTS_phase3.md (table "Numbers": run 2 row 6.66 / 19.65 / 37.94 / 75.02 vs 8.41 / 32.07 / 64.24 / 129.60 s = -21 / -39 / -41 / -42 %; good-run row; one cold request row; needle row); image_tests/merged_image/results (production 21.8 / 43.4 / 87.5) via memory production image and image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md (v2.1 4-concurrent rows) -->
+Verification of this image, same host (.45), fresh server each, 4 concurrent cold prompts, batch TTFT: 8k 4.95 s against 6.2 s on the v2.1 image (-20 %), 32k 14.47 against 21.74 (-33 %), 64k 26.89 against 43.0 (-37 %), 128k 51.97 against 86.03 (-40 %). Longest decode gap while 3 x 32k prompts prefill: 3.95 s against 5.35 s. Replay is active in the server (the per-call prefill statistics carry `replays_a_only`).
 
-Speculation share of the adaptive scheduler (GSM8K eval, full 8-shot set, same server settings): the scheduler ran 5-draft rounds in 95.5 % of the rounds on the v2.1 image against 0.5 % on the v2 image; mean acceptance length 4.18 against 3.32; client decode at 4 concurrent greedy requests +11.5 % (46.8 against 42.0 tok/s per request), one request +0.1 to +1.3 %. These are included in this release.
+Needles on this image: 64k / 128k / 600k / 1M tokens 33 / 55 / 240 / 396 s (v2.1 image 54 / 104 / 431 / 718 s). Prefix cache, cold / hit: 8k 4.01 / 2.65 s, 16k 7.11 / 4.27 s, 32k 12.96 / 7.18 s, 64k 25.11 / 13.43 s (v2.1: 5.43 / 2.91, 10.76 / 5.66, 21.09 / 10.75, 42.5 / 21.66 s); cold and hit text are equal. Multi-turn, turn 2 against cold: 32k 7.16 / 12.94 s, 64k 13.44 / 25.07 s.
 
-<!-- source: image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md, section "v2.1 specific checks" a and b -->
+<!-- sources: image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md ("v3b vs v2.1: same-host A/B results", APC, needle, stall rows); dsv4-logs/replay_study/RESULTS_phase3.md (table "Numbers": run 2 row 6.66 / 19.65 / 37.94 / 75.02 vs 8.41 / 32.07 / 64.24 / 129.60 s = -21 / -39 / -41 / -42 %; good-run row; one cold request row; needle row); image_tests/merged_image/results (production 21.8 / 43.4 / 87.5) via memory production image and image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md (v2.1 4-concurrent rows) -->
+
+Speculation share of the adaptive scheduler (GSM8K eval, full 8-shot set, same server settings): the scheduler ran 5-draft rounds in 95.5 % of the rounds on the v2.1 image (96.3 % on this image, acceptance length 4.20) against 0.5 % on the v2 image (acceptance length 3.32); client decode at 4 concurrent greedy requests +11.5 % (46.8 against 42.0 tok/s per request), one request +0.1 to +1.3 %. These are included in this release.
+
+<!-- sources: image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md, section "v2.1 specific checks" a and b; this image: results.md "Server facts" (k_hist {3: 359, 5: 9369}, acceptance length 4.20) -->
 
 Model maximum, one request, 128 output tokens (previous release):
 
 | | Previous release | This release |
 |---|---|---|
-| B=16, 250,028-token prompt | TTFT 283 s, TPOT 31.6 ms | TODO |
-| B=4, 1,000,028-token prompt | TTFT 1694 s, TPOT 36.7 ms | TODO (needle 1,000,000: 718 s on the v2.1 image, 727 s on the production image; replay not in those images) |
+| B=16, 250,028-token prompt | TTFT 283 s, TPOT 31.6 ms | not measured on this image |
+| B=4, 1,000,028-token prompt | TTFT 1694 s, TPOT 36.7 ms | TODO (grid, running); a 1,000,000-token needle request takes 396 s (718 s on the v2.1 image, 727 s on the production image) |
 
 Benchmark tables, ISL x OSL up to 1,048,576 tokens, B=4 / 1M (`GETTING_STARTED_DETAILED.md`, section Performance): speculation on TODO; plain decode (speculation off) TODO. The runs finished so far were measured on the v2.1 image and are not this release's numbers.
 
@@ -103,14 +111,15 @@ Since the previous release `0.24.0-0655530-4743e01`:
 
 ## Known issues
 
-- B=16 at 262,144 tokens scored about 2 points lower on GSM8K than at 131,072 on the previous release (about 93.5-95 % against 95.2-95.4 %); cause not identified. Not re-measured on this image (TODO: the verification lanes do not cover B=16).
-- B=16 with budget 67,584: a long prompt stalls the other users' decoding while it prefills (32k prompt: 32.9 s on the previous release; 9.1 s with budget 4,096). At B=4 with the 16,384 / 4,096 scheduler the longest decode gap during 3 concurrent 32k prompts is 5.34 s (v2.1 image; TODO this image, stall row of results.md).
+- B=16 at 262,144 tokens scored about 2 points lower on GSM8K than at 131,072 on the previous release (about 93.5-95 % against 95.2-95.4 %); cause not identified. Not re-measured on this image (B=16 is not part of its verification).
+- B=16 with budget 67,584: a long prompt stalls the other users' decoding while it prefills (32k prompt: 32.9 s on the previous release; 9.1 s with budget 4,096). At B=4 with the 16,384 / 4,096 scheduler the longest decode gap during 3 concurrent 32k prompts is 3.95 s on this image (5.35 s on the v2.1 image).
 - At B=16 concurrent long prompts are prefilled one after another (16 prompts of 250,000 tokens: 5,035 s in total on the previous release; not re-measured).
 - Requests that cannot speculate (frequency / presence / repetition penalty) lose accuracy on the B=4 1M spec (GSM8K about 52 %, against 97 % with speculation); send them to B=16. Not re-measured on this image.
 - APC must not be enabled with the 131,072-token specs (they keep `DSV41_APC=0`, `DSV41_PF_PAGED=0`).
 - Prompt replay is exact only for `DSV41_PF_REPLAY` of 2,414 tokens or more (19 layers x 127 + 1); smaller values are clipped and not bit-exact (the default is 2,560). The B=16 / 262,144 build was not measured with replay.
-- With replay on, a prefix-cache hit on an 8k prompt takes longer than without it (3.84 s against 2.91 s): partial snapshots above the 5,632-token cutoff are not used. Hits at 16k and longer are faster (4.67 / 7.17 / 13.46 s against 5.69 / 10.83 / 21.82 s at 16k / 32k / 64k).
+- With replay on, a prefix-cache hit on an 8k prompt is slower than a hit with replay switched off in the same server (3.84 s against 2.91 s in the phase-3 study): partial snapshots above the 5,632-token cutoff are not used. Against the v2.1 image all hits are faster (8k 2.65 against 2.91 s, 16k 4.27 against 5.66 s, 32k 7.18 against 10.75 s, 64k 13.43 against 21.66 s). A cold request is faster than before as well, so the hit is no longer 0.6 x the cold time at 8k and 16k (2.65 / 4.01 s and 4.27 / 7.11 s); cold and hit text are equal.
+- Greedy text is reproducible on this image (identical across three servers on two hosts and across repeated requests) but is not bit-identical to the previous images: on three 8k / 32k / 64k test prompts it diverges from the v2.1 image at tokens 103 / 12 / 26 (near-ties), and the v2.1 image itself differed between servers. The cause was not attributed (switching off replay, lean CCLs, the fused indexer, the attention front or the drafter sample path does not change this image's output). Speculative output matches plain greedy decoding in the 4-user demos.
 
-<!-- sources: carried items: previous RELEASE_NOTES.md Known issues (carried unchanged where marked not re-measured; 131,072 specs checked in assets/); stall 5.34 s: image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md; replay limits and APC hit numbers: RESULTS_phase3.md "Design notes / limits" and the APC hit row -->
+<!-- sources: greedy and APC rows: image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md (Greedy completions table, Server facts); carried items: previous RELEASE_NOTES.md Known issues (carried unchanged where marked not re-measured; 131,072 specs checked in assets/); stall 5.34 s: image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md; replay limits and APC hit numbers: RESULTS_phase3.md "Design notes / limits" and the APC hit row -->
 
 Next release: cheaper APC, host-tiered prefix cache on paged prefill (`PAGED_PREFILL_APC_DESIGN.md`), more in `FUTURE_WORK.md`.

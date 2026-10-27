@@ -4,12 +4,12 @@
 
 | | |
 |---|---|
-| Image | `dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6` (local build, not pushed to ghcr.io; TODO tar path, size, hosts it is loaded on) |
+| Image | `dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6` (local build, id `de6952f6f477`, not pushed to ghcr.io; offline copy `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_afb78699c8b.tar`, 5.38 GB; size on disk TODO; verified on hosts .34, .45, .33) |
 | tt-metal | `afb78699c8b15104e8e9239d2bd1545a882091d9` (branch `ssinghal/dsv4p1-rebase-1017-v3`; the image is built from this commit, the documentation commits of branch `ssinghal/dsv4p1-rebase-1017-v3-docs` come after it and change documentation only) |
 | tt-inference-server | `5b6f9268ac7a36a19766425c6cc721503efe7646` (branch `ssinghal/dsv4p1-rebase-1017`) |
 | vllm-tt-plugin | `dd4fbc6230610c4d12a436eaa29d45f7d2bc6c29` (branch `ssinghal/dsv4p1-replay-v3`: `15bcbd6` prefill_final plus `dd4fbc6` prefill_total) |
 | Checkpoint | `deepseek-ai/DeepSeek-V4.1-Flash-1017` |
-| Stack | TODO: vLLM, torch, transformers versions of this image (previous release: vLLM 0.31.0, torch 2.11.0+cpu, transformers 5.12.1) |
+| Stack | the Python environment is reused from the previous build (previous release: vLLM 0.31.0, torch 2.11.0+cpu, transformers 5.12.1); not re-read from this image |
 | Previous release | `0.24.0-0655530-4743e01` (section "Previous release" below). Images in between, not released: `a58ff4b5c2b-acf66ceb-6066a1e` (production image of the earlier checkpoint), `81284183e99-*` (1017 checkpoint), `74727b7f7ee-5b6f9268-15bcbd6` (v2, mHC and ids sort), `7ca53f64776-5b6f9268-15bcbd6` (v2.1, adaptive-k probe fix) |
 | Build | `scripts/build_local_dsv41_image.sh` with the three commits above; the compiled tt-metal is reused, `models/`, the plugin and the tt-inference-server tree are replaced. Verification started on the image built without the documentation commits. |
 
@@ -59,9 +59,30 @@ All switches are environment variables of the server (`-e NAME=value` in the `do
 
 ### Testing done on this image
 
-TODO: fill from `dsv4-logs/image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md` when the verification finishes (lane A: boot, GSM8K, GPQA; lane B: needles 64k / 128k / 600k / 1M, determinism, 4-concurrent cold TTFT, stall; lane C: API, overload, APC, multi-turn, vision, tools, sampling, bench). Reference rows of the previous images are in `dsv4-logs/image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md` (v2.1: GSM8K 96.21, bench B=4 ISL 1,024 1659 ms / 29.9 ms and ISL 8,192 6701 ms / 31.7 ms, needles 54 / 104 / 431 / 718 s, 4-concurrent cold TTFT 21.25 / 42.3 / 86.05 s, stall 5.34 s, API and vision suites pass; GPQA and tau3 not run on v2.1; v2: GPQA 80.81, tau3 72.0 %).
+Verification of `afb78699c8b-5b6f9268-dd4fbc6` (results: `dsv4-logs/image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md`; same-host baselines of the v2.1 image: `image_tests/v21_ab_for_v3b/`; switch bisect: `image_tests/bisect_v3b/`). Lanes: A (GSM8K, GPQA), B (needles, determinism, cold TTFT, stall, 1M needle), C (API, overload, APC, multi-turn, vision, tools, bench), G (tau3), R and Y (decode and greedy-completion comparisons). All lanes boot the B=4 / 1,048,576-token catalog default (`lane.sh`); B=16 / 262,144 is not part of them.
 
-The verification lanes boot the B=4 / 1,048,576-token catalog default (`lane.sh`); the B=16 / 262,144 configuration is not part of them. TODO: say here whether a B=16 boot was added.
+| Test | Result |
+|---|---|
+| Boot, catalog default (four lanes) | 1,773 / 1,217 / 1,526 / 1,787 s; verify runners k = 3 and k = 5 built; DRAM free 417.7 MiB per bank after warm-up, 416.0 MiB at the end of the build (largest free block 210.1 MiB; trace region 76.8 MiB per bank allocated, 66.2 free); 0 server errors |
+| API suites (smoke, sanity, serving_api, overload, multi-turn, tools, api_again), vision (client_img, client_many, client_stress, vis_apc, repeat_image) | all pass |
+| GSM8K 8-shot | 96.21 (v2.1 96.21; gate 94.9); k = 5 in 96.3 % of the eval rounds (k_hist {3: 359, 5: 9369}), acceptance length 4.20, 3.07 accepted drafts per row-round, wall 23:48 |
+| GPQA | 80.30 (gate 76.8) |
+| tau3 airline | 74.0 % (gate 72 %; one 50-task run, binomial sd about 6 points) |
+| Needles 64k / 128k / 600k / 1M | 33 / 55 / 240 / 396 s (v2.1 54 / 104 / 431 / 718 s), all found |
+| Determinism 32k / 64k late question / 128k needle, 200 tokens | cold = APC hit = repeat, 3 of 3 |
+| 4 concurrent cold prompts, batch TTFT 8k / 32k / 64k / 128k (host .45) | 4.95 / 14.47 / 26.89 / 51.97 s (v2.1 6.2 / 21.74 / 43.0 / 86.03 s) |
+| Stall, 3 x 32k prompts arriving while users decode, longest gap | 3.95 s (v2.1 5.35 s; gate 6.2 s) |
+| APC cold / hit, 8k / 16k / 32k / 64k | 4.01 / 2.65, 7.11 / 4.27, 12.96 / 7.18, 25.11 / 13.43 s (v2.1 5.43 / 2.91, 10.76 / 5.66, 21.09 / 10.75, 42.5 / 21.66 s); hit text = cold text. The 8k and 16k rows do not meet the old gate hit <= 0.6 x cold only because the cold request is faster; every hit is faster than on v2.1 |
+| Multi-turn, turn 2 against cold, 32k / 64k | 7.16 / 12.94 and 13.44 / 25.07 s |
+| Bench B=4, 4 requests, ISL 1,024 / 8,192 | 1649 ms / 27.2 ms / 94.4 tok/s and 5342 ms / 28.2 ms / 56.2 tok/s |
+| GSM8K-prompt decode (c = 1 / 4, sampled and greedy, host .33, same-host v2.1) | +3.6 / +3.8 / +6.2 / +0.9 % |
+| Long-context decode, 768 forced tokens, high-acceptance prompts (host .33) | 64k 96.19 against 78.99 tok/s per user (+22 %), 128k 91.4 against 76.7 (+19 %); the low-acceptance prompts (forced tokens after EOS) depend on the text the model emits and are not a speed comparison |
+| Greedy completions, 8k / 32k / 64k prompts, 200 tokens | identical on three v3b servers on two hosts and across repeated requests; identical with `DSV41_PF_REPLAY`, `DSV41_CCL_LEAN`, `DSV41_IDX_FUSED`, `DSV41_ATTN_QKNORM` or `DSV41_SAMPLE_V2` set to 0; not identical to the v2.1 image (diverges at tokens 103 / 12 / 26 for 8k / 32k / 64k), which itself differed between its servers |
+| Replay in the server | active: the per-call prefill statistics carry `replays_a_only` (32 for a 16k-token window group, 8 for 4k) and `replay_per_chunk`. The log line `REPLAY: R=2560 ...` is printed by the demo only and does not appear in the server log |
+
+Not run: B=16 / 262,144, full eval workflows beyond GSM8K / GPQA / tau3.
+
+<!-- sources: image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md, tables and "Server facts" -->
 
 ### Benchmark tables of this image
 

@@ -10,7 +10,7 @@ What changed in this release is in `RELEASE_NOTES.md`.
 | | |
 |---|---|
 | Image | `dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6` (local build, not pushed to ghcr.io) |
-| Size | TODO (docker images), built 2026-10-27 |
+| Image id / offline copy | `de6952f6f477`; `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_afb78699c8b.tar` (5.38 GB); size on disk TODO; built 2026-10-27 |
 | tt-metal | `afb78699c8b15104e8e9239d2bd1545a882091d9` (branch `ssinghal/dsv4p1-rebase-1017-v3`) |
 | tt-inference-server | `5b6f9268ac7a36a19766425c6cc721503efe7646` (branch `ssinghal/dsv4p1-rebase-1017`) |
 | vllm-tt-plugin | `dd4fbc6230610c4d12a436eaa29d45f7d2bc6c29` (branch `ssinghal/dsv4p1-replay-v3`) |
@@ -45,7 +45,7 @@ Everything else in the launch stays the same.
 
 The 262,144-token and 1,048,576-token specs run with prefix caching and paged prefill on (`DSV41_APC=1`, `DSV41_PF_PAGED=read`) and the bounded prefill replay (`DSV41_PF_REPLAY`, default 2,560). The chunked-prefill token budget (`max_num_batched_tokens`) is 16,384 with `long-prefill-token-threshold` 4,096 at 4 users and 1,048,576 tokens, 67,584 at 16 users and 262,144 tokens. The `_apc` copies differ only at 16 users (budget 4,096). The 131,072-token specs keep prefix caching and paged prefill off (`DSV41_APC=0`, `DSV41_PF_PAGED=0`).
 
-The image's own catalog (tt-inference-server `5b6f9268`) has four entries, all with prefix caching on, paged prefill on and image input: `deepseek-v41-flash` and `deepseek-v41-flash-vlm` (16 users, 262,144 tokens, budget 67,584) and `deepseek-v41-flash-1m` and `deepseek-v41-flash-vlm-1m` (4 users, 1,048,576 tokens, budget 16,384). A launch without a runtime spec (`--model deepseek-ai/DeepSeek-V4.1-Flash --tt-device blackhole_galaxy`) serves the 4-user 1,048,576-token entry (`deepseek-v41-flash-1m` is the default implementation); `--impl deepseek-v41-flash` selects the 16-user entry. The catalog entries do not set `long-prefill-token-threshold` 4,096 in `vllm_args` the way the runtime specs do (TODO: check against the server log of the catalog launch whether the threshold is applied; the verification of this image booted the catalog default).
+The image's own catalog (tt-inference-server `5b6f9268`) has four entries, all with prefix caching on, paged prefill on and image input: `deepseek-v41-flash` and `deepseek-v41-flash-vlm` (16 users, 262,144 tokens, budget 67,584) and `deepseek-v41-flash-1m` and `deepseek-v41-flash-vlm-1m` (4 users, 1,048,576 tokens, budget 16,384). A launch without a runtime spec (`--model deepseek-ai/DeepSeek-V4.1-Flash --tt-device blackhole_galaxy`) serves the 4-user 1,048,576-token entry (`deepseek-v41-flash-1m` is the default implementation); `--impl deepseek-v41-flash` selects the 16-user entry. The catalog entries do not set `long-prefill-token-threshold` 4,096 in `vllm_args` the way the runtime specs do (the verification of this image booted the catalog default; whether the threshold is applied was not checked in its server log).
 
 Shared settings:
 - Speculative decoding: 5 draft tokens per round, lossless.
@@ -72,11 +72,11 @@ It is 131,584 by default and 262,144 in the 16-user long-context spec.
 
 ### 2. Load the image
 
-The image is a local build: load the offline copy (TODO: tar path in GETTING_STARTED.md). It is not on ghcr.io yet.
+The image is a local build: load the offline copy (`/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_afb78699c8b.tar`). It is not on ghcr.io yet.
 
 ```bash
-export IMAGE=dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6   # local image: load the offline copy (TODO: tar path), there is nothing to pull
-docker load -i <tar>
+export IMAGE=dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6   # local image: load the offline copy, there is nothing to pull
+docker load -i /mnt/tt-data/ssinghal/dsv4-docker-ctx/img_afb78699c8b.tar
 ```
 
 ### 3. Prepare checkpoint, caches and spec
@@ -169,7 +169,7 @@ Time from `docker run` to `/health` 200, with both caches populated:
 | 16 users, 131,072 tokens | 23.7 min |
 | 16 users, 262,144 tokens, images | 24.7 min |
 | 4 users, 524,288 tokens, images | 26.4 min |
-| 4 users, 1,048,576 tokens | 30.9 min |
+| 4 users, 1,048,576 tokens | 30.9 min on the previous release; this image: 20 to 30 min (1,217 / 1,526 / 1,773 / 1,787 s on four boots) |
 
 The 1M start splits into about 20 min for the model (layers and Engram tables), 7 min for the speculative runner and 2 min for warm-up.
 A first start with nothing cached takes much longer (60-90 min on earlier images, not re-measured).
