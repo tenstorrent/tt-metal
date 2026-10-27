@@ -137,9 +137,9 @@ class TtSharedExpert:
             h_bf16=h_bf16,
             weights_nk=True,
             check_exact=False,  # (bfp8 is the chosen format: it may round fp8 values, P.12)
-            # the flat op's plan before its DRISC-only / even-split defaults (2026-10-22): the plan, the cached
-            # weight layout (FIX.4) and the numbers this model was validated on; the new defaults wait for an A/B
-            layout=LEGACY,
+            # EXPERTS_LAYOUT (as the routed experts): legacy = the plan before the op's new defaults; marko = his
+            # defaults, every row of the chip's buffer an expert's (one always-on expert), one x helper
+            layout=LEGACY if settings.get("EXPERTS_LAYOUT") == "legacy" else dict(rows_hint=self.S, x_helpers=1),
         )
         lay = dict(self.fe.plan)
         key = (id(mesh), tuple(map(tuple, lay["coords"])))

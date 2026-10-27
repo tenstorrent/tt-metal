@@ -297,6 +297,14 @@ TABLE = {
         "= every baked address in the key: a new xg address a call is a miss (+20..40 programs a 40-layer chunk, ~0.5 "
         "s of host each, never warm under F196). Bit-identical outputs (tt/perf_flat_program_key.py)",
     ),
+    "EXPERTS_LAYOUT": Setting(
+        "marko",
+        ("legacy", "marko"),
+        "the flat expert op's work layout (owner 2026-10-27: Marko's by default after the 2x2 A/B, device 65.74 vs 68.10 ms / chunk on our layout, experts 15.88 vs 17.85, L.last within limits): legacy = the plan before "
+        "his DRISC-only / even-split defaults (the cached weights and numbers so far); marko = his defaults plus what his "
+        "MoE block passes per model (rows_hint = expected rows an expert, one x helper; moe_block.layout_of). marko "
+        "re-lays out the cached weights (new cache files)",
+    ),
     "EXPERTS_WEIGHT_CACHE": Setting(
         "on",
         ("on", "off"),
