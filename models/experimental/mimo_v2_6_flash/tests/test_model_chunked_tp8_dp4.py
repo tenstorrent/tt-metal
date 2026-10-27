@@ -15,6 +15,10 @@ All three must give near-identical next-token logits and pick the same next toke
 step apart). Then every slot decodes greedily from the one-shot slot's first token for a few steps, which
 reads the KV the chunks wrote; the generated text is logged and the first tokens must agree. Later chunks of the SWA layers read only the window before them from the cache; those of the
 global layers read the whole context through chunked MLA prefill on the chip that owns the slot.
+
+``pair_split``: the global layers' KV pair split (TtMiMoModel(kv_pair_split=True), vLLM's default layout): each chip
+of a pair keeps half of every 128-token block, a later chunk runs pair-split chunked MLA prefill on both chips and
+merges by LSE, and decode attends each chip's half and merges (tt/pair_split.py).
 """
 
 import math
@@ -33,6 +37,7 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
     model_path,
     pcc,
 )
+from models.experimental.mimo_v2_6_flash.tt.attention import PAIR_SPLIT_OPS
 from models.experimental.mimo_v2_6_flash.tt.generator import MiMoGalaxyGenerator
 
 PROMPT_TOKENS = 1500
@@ -63,7 +68,10 @@ def long_prompt(tok):
 
 @pytest.mark.parametrize("device_params", [GALAXY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
-def test_model_chunked_tp8_dp4(mesh_device):
+@pytest.mark.parametrize("kv_pair_split", [False, True], ids=["users", "pair_split"])
+def test_model_chunked_tp8_dp4(mesh_device, kv_pair_split):
+    if kv_pair_split and not PAIR_SPLIT_OPS:
+        pytest.skip("needs the MLA attention ops with return_lse (the KV pair split)")
     cfg, ckpt = load_config_and_ckpt()
     tok = AutoTokenizer.from_pretrained(model_path())
     gen = MiMoGalaxyGenerator(
@@ -75,6 +83,7 @@ def test_model_chunked_tp8_dp4(mesh_device):
         users_per_replica=4,
         max_seq_len=4096,
         max_prefill_chunk=MAX_PREFILL_CHUNK,
+        kv_pair_split=kv_pair_split,
     )
     ids = long_prompt(tok)
     n = ids.numel()

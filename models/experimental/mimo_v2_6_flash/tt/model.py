@@ -149,18 +149,23 @@ class TtMiMoModel:
         logits_dtype=None,
         num_links=2,
         replicate_global_kv=False,
+        kv_pair_split=False,
         decode_users=None,
     ):
         """``ckpt`` may be None when ``cache_dir`` already holds every tensor (a later DP replica).
         ``max_prefill_chunk``: the default prefill chunk (a multiple of ``block_size``).
         ``replicate_global_kv``: ``setup_kv_cache`` keeps every user's global-layer K / V on both chips of a pair, as
         vLLM's caches do (twice the global KV memory), so a later prefill chunk splits its heads over the pair.
+        ``kv_pair_split``: ``setup_kv_cache`` splits every 128-position global block over the pair instead, each chip
+        keeping its 64-position halves, as vLLM's caches do with MIMO_KV_PAIR_SPLIT (tt/pair_split.py): the global
+        layers run the vLLM adapter's pair-split prefill, decode and merge on the model's own tables.
         ``logits_dtype``: fp32 keeps near-tied logits apart; in bf16 (a step of 0.125 at the usual top logit of
         16-32) they often tie exactly and the lowest token id wins. Default fp32 (MIMO_LOGITS_FP32=0: bf16).
         ``decode_users``: the decode users the caller will set up (setup_kv_cache / setup_vllm_kv_cache), known now so
         that the fused reductions' fabric gather buffer is made before anything else takes L1 (``_set_decode_users``).
         """
         assert max_prefill_chunk % block_size == 0
+        assert not (replicate_global_kv and kv_pair_split), "the pair either keeps both KV copies or splits them"
         self.mesh_device = mesh_device
         self.cfg = cfg
         self.plan = plan = MeshPlan(mesh_device, num_links=num_links)
@@ -173,6 +178,8 @@ class TtMiMoModel:
         # Width of the context table a later prefill chunk of a global layer reads (kv.PrefillTables.context): every
         # block up to the context end plus the most padding a chunk gets, as whole 32-byte rows of the page table.
         self.prefill_context_blocks = pad_to(-(-(max_seq_len + kv_lib.PREFILL_MAX_PAD) // block_size), 8)
+        # The same through a pair-split global table: one block per 2 * block_size positions.
+        self.pair_context_blocks = pad_to(-(-(max_seq_len + kv_lib.PREFILL_MAX_PAD) // (2 * block_size)), 8)
         if cache_dir is not None:
             os.makedirs(cache_dir, exist_ok=True)
         if decode_users is not None and decode_users <= 8 and self._fabric_gather_enabled():
@@ -273,10 +280,12 @@ class TtMiMoModel:
         # vLLM-owned KV (setup_vllm_kv_cache): each layer's KV cache group, and the host copy of every group's table.
         self.layer_groups = None
         self.replicate_global_kv = replicate_global_kv
+        self.kv_pair_split = kv_pair_split
         self.global_kv_both = False  # both chips of a global layer's pair keep every slot's K / V
         self.vllm_tables = None
-        # The KV pair split (setup_vllm_kv_cache with pair_split; tt/pair_split.py): its PairSplit, and the KV cache
-        # groups of the global layers, whose tables have one block per 2 * block_size positions.
+        # The KV pair split (tt/pair_split.py; setup_vllm_kv_cache with pair_split, or setup_kv_cache with
+        # kv_pair_split): its PairSplit, and the page tables of the global layers (``_table_key``: their vLLM KV cache
+        # groups, or False for the model's own global table), which have one block per 2 * block_size positions.
         self.pair = None
         self.pair_groups = set()
         # Chip c's vocab shard starts at c * vocab_local: added to its local top-k ids for the device greedy.
@@ -318,7 +327,11 @@ class TtMiMoModel:
         Every page table is indexed by absolute position over ``max_seq_len``. Global layers back every block; on
         TP=8 a global layer's chip pair splits the users (kv.py), so that page table differs per chip. SWA layers
         back only the blocks a sliding window can still read (kv.SwaBlockTable, shared by the SWA layers and
-        updated before each prefill and decode step). Slots past ``num_users`` are never written (position -1)."""
+        updated before each prefill and decode step). Slots past ``num_users`` are never written (position -1).
+
+        ``replicate_global_kv`` / ``kv_pair_split`` (__init__): every chip gets every user's global blocks instead (one
+        table for the row), each a block_size positions or, under the pair split, 2 * block_size positions of which
+        each chip keeps its block_size halves."""
         assert num_users <= self.max_batch
         assert self.max_seq_len % self.block_size == 0
         # The MoE streams, GreedyHead, SwaDecodeQkv and the SWA block pools are sized for the decode users once; a new
@@ -332,6 +345,7 @@ class TtMiMoModel:
         self.decode_users = num_users
         self._set_decode_users(num_users)
         self.kv_caches, tables = [], {}
+        self.pair, self.pair_groups = None, set()
         max_blocks = page_table_width(self.max_seq_len // self.block_size)
         swa_layers = [layer for layer in self.layers if layer.is_swa]
         self.swa_table = None
@@ -354,12 +368,15 @@ class TtMiMoModel:
                 table, num_blocks = self.swa_table.host_table(self.plan.tp), self.swa_table.num_blocks
                 scratch = 0
             else:
-                rep = 1 if self.replicate_global_kv else layer.attn.rep
-                table, num_blocks = kv_lib.page_tables(num_users, self.max_batch, max_blocks, self.plan.tp, rep)
+                both = self.replicate_global_kv or self.kv_pair_split
+                rep = 1 if both else layer.attn.rep
+                span = 2 * self.block_size if self.kv_pair_split else self.block_size  # positions per table entry
+                blocks = page_table_width(-(-self.max_seq_len // span))
+                table, num_blocks = kv_lib.page_tables(num_users, self.max_batch, blocks, self.plan.tp, rep)
                 # kv.page_tables adds one scratch block (the last) when a chip pair splits the users; with rep 1 every
                 # block is a user's, so nothing may land past the table.
                 scratch = num_blocks - 1 if rep > 1 else None
-                if self.replicate_global_kv:  # a scratch block for a later chunk's context table past the width
+                if both:  # a scratch block for a later chunk's context table past the width
                     scratch, num_blocks = num_blocks, num_blocks + 1
             self.kv_caches.append(layer.attn.allocate_kv_cache(num_blocks, self.block_size, self.kv_dtype))
             tables.setdefault(layer.is_swa, table)
@@ -369,7 +386,23 @@ class TtMiMoModel:
             self.swa_table.dirty = False
         if self.replicate_global_kv:
             self._keep_global_kv_on_both_chips()
+        if self.kv_pair_split:
+            self._setup_pair_split({False})
         self._setup_fused_norms()
+
+    def _setup_pair_split(self, keys):
+        """The KV pair split on the global layers, whose page tables ``keys`` (``_table_key``) have one block per
+        2 * block_size positions: the PairSplit (persistent: the positions program's buffers and the merge's per-chip
+        constants, before any capture) on every global layer."""
+        assert all(layer.attn.split_users for layer in self.layers if not layer.is_swa), "no chip pair to split"
+        assert self.block_size == kv_pair_split.SUB, self.block_size
+        assert self.max_prefill_chunk % (2 * self.block_size) == 0, self.max_prefill_chunk
+        spec = self.mtp is not None or self.dflash is not None
+        self.pair = PairSplit(self.plan, self.max_batch, serial_slots=SPEC_SLOTS if spec else 0)
+        self.pair_groups = set(keys)
+        for layer in self.layers:
+            if not layer.is_swa:
+                layer.attn.pair = self.pair
 
     def _keep_global_kv_on_both_chips(self):
         """Both chips of a global layer's pair keep every slot's K / V: decode writes it on both, and a later prefill
@@ -411,20 +444,9 @@ class TtMiMoModel:
             global_groups = {g for g, layer in zip(self.layer_groups, self.layers) if not layer.is_swa}
             swa_groups = {g for g, layer in zip(self.layer_groups, self.layers) if layer.is_swa}
             assert not global_groups & swa_groups, f"a KV cache group mixes global and SWA layers: {self.layer_groups}"
-            assert all(layer.attn.split_users for layer in self.layers if not layer.is_swa), "no chip pair to split"
-            assert self.block_size == kv_pair_split.SUB, self.block_size
-            assert self.max_prefill_chunk % (2 * self.block_size) == 0, self.max_prefill_chunk
-            spec = self.mtp is not None or self.dflash is not None
-            # Persistent: the positions program's buffers and the merge's per-chip constants, before any capture.
-            self.pair = PairSplit(self.plan, self.max_batch, serial_slots=SPEC_SLOTS if spec else 0)
-            self.pair_groups = global_groups
-            for layer in self.layers:
-                if not layer.is_swa:
-                    layer.attn.pair = self.pair
+            self._setup_pair_split(global_groups)
         else:
             self._keep_global_kv_on_both_chips()
-        # A later chunk's context table through a pair-split global table: one block per 2 * block_size positions.
-        self.pair_context_blocks = pad_to(-(-(self.max_seq_len + kv_lib.PREFILL_MAX_PAD) // (2 * self.block_size)), 8)
         # Per (group, slot): how far the host row was last written; entries past it are zero (set_vllm_page_tables).
         self.vllm_table_lengths = {(g, s): 0 for g in self.vllm_tables for s in range(self.max_batch)}
         # Decode's device-sampled greedy token and sampled tokens (decode_forward_device); persistent buffers, made
@@ -520,8 +542,9 @@ class TtMiMoModel:
         return blocks
 
     def _pair_key(self, key):
-        """Whether the page table ``key`` (``_table_key``) is a pair-split global table."""
-        return self.layer_groups is not None and key in self.pair_groups
+        """Whether the page table ``key`` (``_table_key``: a vLLM group, or is_swa for the model's own tables) is a
+        pair-split global table."""
+        return key in self.pair_groups
 
     def _prefill_tables(self, slot, start_pos, padded, layers):
         """({page table: kv.PrefillTables}, start tensor or None) of one chunk, for the tables ``layers`` read."""

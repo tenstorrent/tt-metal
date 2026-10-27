@@ -262,6 +262,24 @@ def test_pair_warmup_covers_every_chunk(max_tokens, max_seq):
 
 
 # ---------------------------------------------------------------------- the adapter
+def test_default_pool_holds_4x1m_and_a_short_cap_warns(monkeypatch):
+    """With the pair split and MIMO_KV_GB_PER_CHIP unset the pool holds 4 x 1M per lane; at 6.6 (3.95 requests) the
+    adapter warns and names the least cap that holds them."""
+    from models.experimental.mimo_v2_6_flash.tt import generator_vllm as gv
+
+    monkeypatch.setattr(gv, "KV_PAIR_SPLIT", True)
+    warnings = []
+    monkeypatch.setattr(gv.logger, "warning", warnings.append)
+    monkeypatch.delenv("MIMO_KV_GB_PER_CHIP", raising=False)
+    demand = 4 * (kps.global_pool_tokens(MAX_1M) + gv.swa_tokens_per_user())
+    assert gv.MiMoV2ForCausalLM.get_max_tokens_all_users(max_model_len=MAX_1M, max_num_seqs=4) == demand
+    assert not warnings
+    monkeypatch.setenv("MIMO_KV_GB_PER_CHIP", "6.6")
+    tokens = gv.MiMoV2ForCausalLM.get_max_tokens_all_users(max_model_len=MAX_1M, max_num_seqs=4)
+    assert tokens < demand and len(warnings) == 1
+    assert "holds 3.95 requests" in warnings[0] and "MIMO_KV_GB_PER_CHIP >= 6.69" in warnings[0], warnings[0]
+
+
 def test_capacity_4x1m_at_6p7_gb(monkeypatch):
     """The model's share of the pool (get_max_tokens_all_users) holds 4 x 1M per lane within MIMO_KV_GB_PER_CHIP=6.7;
     the plugin's sizing on top of it is test_plugin_pool_admits_4x1m."""

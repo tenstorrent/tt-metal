@@ -119,9 +119,11 @@ vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.
 - vLLM starts one API server per DP rank (4) by default; that needs plugin 11dc5a9 or later (before it, every
   extra API server rejected the plugin's structured-output setting and `--api-server-count 1` was required).
   Checked: 24 concurrent completions, a chat and 4 JSON-schema requests over the 4 API servers all succeed.
-- `MIMO_KV_GB_PER_CHIP` (default 6) caps the KV pool per lane; `MIMO_MODEL_PATH` / `MIMO_TT_CACHE` as for the tests.
+- `MIMO_KV_GB_PER_CHIP` caps the KV pool per lane (default 6.7 with the pair split, else 6); the adapter warns when
+  the cap holds fewer than `--max-num-seqs` requests of `--max-model-len` (vLLM then queues the rest).
+  `MIMO_MODEL_PATH` / `MIMO_TT_CACHE` as for the tests.
 - `MIMO_KV_PAIR_SPLIT` (default 1; "Global KV pair split" below) halves the global layers' KV: 4 x 1M per lane fits at
-  `MIMO_KV_GB_PER_CHIP=6.7`. It needs a ttnn build whose MLA attention ops return their LSE; `MIMO_KV_PAIR_SPLIT=0`
+  `MIMO_KV_GB_PER_CHIP=6.7` (6.69 GB: 4 x 546,368 pool tokens; 6.6 holds 3.95), the default. It needs a ttnn build whose MLA attention ops return their LSE; `MIMO_KV_PAIR_SPLIT=0`
   restores the duplicated layout (and serves on builds without those ops).
 - Clients on this host should use `127.0.0.1`: it has no `localhost` entry in /etc/hosts, and the async OpenAI
   client times out resolving it.

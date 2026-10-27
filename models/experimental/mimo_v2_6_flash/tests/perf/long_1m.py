@@ -16,7 +16,10 @@ round-robin, chunk by chunk, so every row has work in flight: ``prefill_enqueue`
 row's command queue is full. Logs each user's TTFT from the start of the run (the first chunk's compile included),
 then greedy-decodes ``--decode`` tokens of every user from that cache (untraced) and checks each key is in the text.
 
-``--replicate-global-kv`` keeps the global layers' K / V on both chips of a pair, as vLLM's caches do.
+``--replicate-global-kv`` keeps the global layers' K / V on both chips of a pair, as vLLM's caches do with
+MIMO_KV_PAIR_SPLIT=0 (a later chunk splits the heads over the pair). ``--kv-pair-split`` splits every 128-position
+global block over the pair instead, each chip keeping its halves, as vLLM's caches do by default (a later chunk runs
+all 16 heads over the chip's half of the keys and merges by LSE: tt/pair_split.py).
 
     python models/experimental/mimo_v2_6_flash/tests/perf/long_1m.py --mode passkey --rows 4 --users 2 \\
         --replicate-global-kv
@@ -70,6 +73,7 @@ def build(mesh, args):
             users_per_replica=args.users,
             max_seq_len=args.context + DECODE_ROOM,
             replicate_global_kv=args.replicate_global_kv,
+            kv_pair_split=args.kv_pair_split,
         )
     finally:
         TtMiMoModel.setup_kv_cache = setup_kv
@@ -184,8 +188,14 @@ def main():
     parser.add_argument("--chunk", type=int, default=4096)
     parser.add_argument("--users", type=int, default=1, help="users per row the caches are sized for")
     parser.add_argument("--rows", type=int, default=1, help="rows that run (all 4 are built)")
-    parser.add_argument(
-        "--replicate-global-kv", action="store_true", help="both chips of a global layer's pair keep the K / V (vLLM)"
+    kv = parser.add_mutually_exclusive_group()
+    kv.add_argument(
+        "--replicate-global-kv",
+        action="store_true",
+        help="both chips of a global layer's pair keep the K / V (vLLM with MIMO_KV_PAIR_SPLIT=0)",
+    )
+    kv.add_argument(
+        "--kv-pair-split", action="store_true", help="each chip of the pair keeps half of every 128-token block (vLLM)"
     )
     parser.add_argument("--decode", type=int, default=12, help="passkey: greedy tokens")
     args = parser.parse_args()

@@ -148,8 +148,10 @@ KV_PAIR_SPLIT = os.environ.get("MIMO_KV_PAIR_SPLIT", "1") == "1"
 # 3060. A SWA token takes one pool token per SWA group; a global token one, or half of one with MIMO_KV_PAIR_SPLIT
 # (a page holds 128 global tokens: kv_pair_split.global_pool_tokens).
 KV_BYTES_PER_TOKEN = (9 * 192 + 9 * 128) * 1088 / 1024
-# Per-chip DRAM given to the KV pool when MIMO_KV_GB_PER_CHIP is unset (weights take 23.7 of 34 GB per chip).
+# Per-chip DRAM given to the KV pool when MIMO_KV_GB_PER_CHIP is unset (weights take 23.7 of 34 GB per chip): with the
+# pair split 6.7, the least that holds 4 requests of 1M per lane (4 x 546,368 pool tokens x 3060 B = 6.69 GB), else 6.
 DEFAULT_KV_GB_PER_CHIP = 6.0
+PAIR_SPLIT_KV_GB_PER_CHIP = 6.7
 # MiMo-V2.6-Flash's sliding window (config.json): a SWA layer's query attends its last 128 positions.
 SWA_WINDOW = 128
 # MIMO_VLLM_TIMING=1 logs each prefill's host enqueue and total time, decode's host time every 128 steps, and every 128
@@ -581,14 +583,24 @@ class MiMoV2ForCausalLM:
         """Pool tokens of one lane (64-token pages x 64: the plugin sizes the pool as this over --block-size 64):
         enough for ``max_num_seqs`` requests of ``max_model_len`` (their global group's pages, half as many with
         MIMO_KV_PAIR_SPLIT, plus what vLLM's SWA groups hold per request), capped by MIMO_KV_GB_PER_CHIP of DRAM per
-        chip."""
-        budget = float(os.environ.get("MIMO_KV_GB_PER_CHIP", DEFAULT_KV_GB_PER_CHIP)) * 1e9
-        capacity = int(budget // KV_BYTES_PER_TOKEN)
+        chip (default 6.7 with the pair split: 4 x 1M per lane; else 6). Warns when the cap holds fewer requests."""
+        default = PAIR_SPLIT_KV_GB_PER_CHIP if KV_PAIR_SPLIT else DEFAULT_KV_GB_PER_CHIP
+        gb = float(os.environ.get("MIMO_KV_GB_PER_CHIP", default))
+        capacity = int(gb * 1e9 // KV_BYTES_PER_TOKEN)
         max_model_len, max_num_seqs = kwargs.get("max_model_len"), kwargs.get("max_num_seqs")
         if not max_model_len or not max_num_seqs:
             return capacity
         global_tokens = kv_pair_split.global_pool_tokens(max_model_len) if KV_PAIR_SPLIT else max_model_len
-        return min(capacity, max_num_seqs * (global_tokens + swa_tokens_per_user()))
+        per_request = global_tokens + swa_tokens_per_user()
+        if capacity < max_num_seqs * per_request:
+            # vLLM still starts (one request fits) but queues what does not: say so instead of serving fewer users.
+            need = math.ceil(max_num_seqs * per_request * KV_BYTES_PER_TOKEN / 1e7) / 100
+            logger.warning(
+                f"MiMo vLLM KV: MIMO_KV_GB_PER_CHIP={gb:g} holds {capacity / per_request:.2f} requests of "
+                f"--max-model-len {max_model_len} per lane, fewer than --max-num-seqs {max_num_seqs}; the rest wait "
+                f"for blocks. {max_num_seqs} need MIMO_KV_GB_PER_CHIP >= {need:.2f}"
+            )
+        return min(capacity, max_num_seqs * per_request)
 
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
