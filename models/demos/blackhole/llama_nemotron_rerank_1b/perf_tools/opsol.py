@@ -34,6 +34,11 @@ for r in ops:
     c = float(r["DEVICE KERNEL DURATION [ns]"] or 0) * (fw_c / ns if ns else 1.35)
     name, ideal = r["OP CODE"], 0.0
     f = PASSES.get(r["MATH FIDELITY"], 2)
+    # The model's fused matmuls run as generic ops with the weight as input 1: x's width equals the
+    # weight's K (fused_add_rmsnorm's two inputs are both [rows, 2048]).
+    k1, n1 = dim(r, "INPUT_1_Y_PAD[LOGICAL]"), dim(r, "INPUT_1_X_PAD[LOGICAL]")
+    if name.startswith("GenericOp") and k1 == dim(r, "INPUT_0_X_PAD[LOGICAL]") and k1 >= 2048:
+        name = "Matmul(fused) " + ("QKV+RoPE" if n1 == 3072 else "+add+RMSNorm")
     if "Matmul" in name:
         M = dim(r, "INPUT_0_Y_PAD[LOGICAL]") * dim(r, "INPUT_0_Z_PAD[LOGICAL]") * dim(r, "INPUT_0_W_PAD[LOGICAL]")
         K, N = dim(r, "INPUT_1_Y_PAD[LOGICAL]"), dim(r, "INPUT_1_X_PAD[LOGICAL]")

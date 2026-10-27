@@ -23,8 +23,14 @@ import torch
 import ttnn
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_add_rmsnorm import fused_add_rmsnorm
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_heads_rope import fused_heads_rope
+from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_qkv_rope import (
+    make_rope_table,
+    matmul_qkv_rope,
+)
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.model_config import (
+    MM_CONFIGS,
     PAD_TOKEN_ID,
+    QKV_ROPE_CONFIGS,
     SEQ_BUCKETS,
     RerankConfig,
     mm_block_config,
@@ -47,11 +53,13 @@ class Layer:
         if cfg.fuse_add_norm:
             self.attn_norm_consts = loader.norm_consts(p + "input_layernorm.weight")
             self.ffn_norm_consts = loader.norm_consts(p + "post_attention_layernorm.weight")
+        # matmul_qkv_rope rotates HF's half-split head layout; the stock RoPE ops want Meta's
+        # interleaved pairs, so Q / K rows are permuted for them.
         self.wqkv = loader.linear(
-            f"l{i}_wqkv_qscaled",
+            f"l{i}_wqkv_hf_qscaled" if cfg.fuse_qkv_rope else f"l{i}_wqkv_qscaled",
             [p + "self_attn.q_proj.weight", p + "self_attn.k_proj.weight", p + "self_attn.v_proj.weight"],
             cfg.wqkv_dtype,
-            permute_heads=[cfg.n_heads, cfg.n_kv_heads, None],
+            permute_heads=None if cfg.fuse_qkv_rope else [cfg.n_heads, cfg.n_kv_heads, None],
             # softmax(Q K^T / sqrt(d)): 1/sqrt(64) = 1/8 is a power of two, so folding it into Wq is exact
             # and SDPA runs at scale 1. At any other scale ttnn's SDPA wrapper multiplies the mask by
             # 1/scale on every call (one extra [B, 1, S, S] pass per layer).
@@ -83,6 +91,9 @@ class NemotronReranker:
         self.mm_ckc = cfg.compute_config(cfg.mm_fidelity)
         self.mm_ckc_lofi = cfg.compute_config(ttnn.MathFidelity.LoFi)
         self.lofi_kinds = {k for k in cfg.lofi_kinds.split(",") if k}
+        self.bf16_acc_kinds = {k for k in cfg.bf16_acc_kinds.split(",") if k}
+        self.mm_ckc_lofi_bf16acc = cfg.compute_config(ttnn.MathFidelity.LoFi, fp32_acc=False)
+        self.mm_ckc_bf16acc = cfg.compute_config(cfg.mm_fidelity, fp32_acc=False)
         # packer_l1_acc off: SDPA accumulates in its own CBs; with it on, 32x512 SDPA took 2.5 vs 1.6 M cycles.
         self.sdpa_ckc = cfg.compute_config(cfg.sdpa_fidelity, fp32_acc=False, packer_l1_acc=False)
         self.norm_ckc = cfg.compute_config(ttnn.MathFidelity.HiFi4)
@@ -92,17 +103,23 @@ class NemotronReranker:
         cos, sin = precompute_freqs(
             cfg.head_dim, cfg.max_seq_len * 2, cfg.rope_theta, cfg.rope_scale_factor, cfg.rope_orig_context_len
         )
+        self._freq_cos, self._freq_sin = cos[: cfg.max_seq_len].float(), sin[: cfg.max_seq_len].float()
         self._cos_host, self._sin_host = gather_cos_sin(torch.arange(cfg.max_seq_len), cos, sin)
         self._rot = {}
         self._norm_cfgs = {}
 
     # ------------------------------------------------------------------ inputs
     def rot_mats(self, seq_len):
+        """Per sequence length: one [1, 1, S, 64] table for matmul_qkv_rope (cos and sin tiles of the
+        32 frequencies), or [cos, sin] in rotary_embedding_llama's layout."""
         if seq_len not in self._rot:
-            self._rot[seq_len] = [
-                ttnn.from_torch(t[:, :, :seq_len], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
-                for t in (self._cos_host, self._sin_host)
-            ]
+            if self.cfg.fuse_qkv_rope:
+                self._rot[seq_len] = make_rope_table(self._freq_cos[:seq_len], self._freq_sin[:seq_len], self.device)
+            else:
+                self._rot[seq_len] = [
+                    ttnn.from_torch(t[:, :, :seq_len], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+                    for t in (self._cos_host, self._sin_host)
+                ]
         return self._rot[seq_len]
 
     @staticmethod
@@ -153,7 +170,12 @@ class NemotronReranker:
     def _linear(self, x, w, kind, activation=None, dtype=None, fuse_swiglu=False):
         rows = x.shape[-2] * x.shape[-3]
         if self.cfg.use_minimal_matmul:
-            mb, kb, nb, sh, sw = mm_block_config(kind, rows, self.cfg.residual_l1)
+            bf16_acc = (
+                kind in self.bf16_acc_kinds
+                and f"{kind}_bf16acc" in MM_CONFIGS
+                and rows >= min(MM_CONFIGS[f"{kind}_bf16acc"])
+            )
+            mb, kb, nb, sh, sw = mm_block_config(f"{kind}_bf16acc" if bf16_acc else kind, rows, self.cfg.residual_l1)
             if (x.dtype == ttnn.bfloat16 or self.cfg.residual_l1) and kb > 16:
                 # The table is swept with bfp8 activations; bf16 in0 blocks of 32 K tiles overflow L1,
                 # and so do bfp8 ones next to an L1-resident residual stream.
@@ -170,7 +192,11 @@ class NemotronReranker:
                     compute_with_storage_grid_size=self.grid,
                 ),
                 fused_activation=None if activation is None else ttnn.UnaryWithParam(activation),
-                compute_kernel_config=self.mm_ckc_lofi if kind in self.lofi_kinds else self.mm_ckc,
+                compute_kernel_config=(
+                    (self.mm_ckc_lofi_bf16acc if bf16_acc else self.mm_ckc_lofi)
+                    if kind in self.lofi_kinds
+                    else (self.mm_ckc_bf16acc if bf16_acc else self.mm_ckc)
+                ),
                 dtype=dtype or self.cfg.act_dtype,
                 memory_config=self._mem(rows, w.shape[-1] // (2 if fuse_swiglu else 1)),
                 fuse_swiglu=fuse_swiglu,
@@ -261,38 +287,29 @@ class NemotronReranker:
             memory_config=self._mem(rows, width),
         )
 
-    def _attention(self, layer, xn, B, S, mask, block_map, cos, sin):
+    def _attention(self, layer, xn, B, S, mask, block_map, rope):
         """xn: the attention-normed residual [1, 1, B * S, dim]."""
         cfg = self.cfg
         qc, kc = sdpa_chunks(B, S)
-        qkv = self._linear(xn, layer.wqkv, "qkv", dtype=cfg.qkv_out_dtype)
-        if cfg.fuse_heads_rope:
-            q_r, k_r, v = fused_heads_rope(
-                qkv,
-                cos,
-                sin,
-                self.trans_mat,
+        if cfg.fuse_qkv_rope:
+            rows = B * S
+            keys = [m for m in sorted(QKV_ROPE_CONFIGS) if m <= rows] or [min(QKV_ROPE_CONFIGS)]
+            q_r, k_r, v = matmul_qkv_rope(
+                xn,
+                layer.wqkv,
+                rope,
+                batch=B,
                 n_heads=cfg.n_heads,
                 n_kv_heads=cfg.n_kv_heads,
-                batch=B,
-                memory_config=self._mem(B * S, qkv.shape[-1]),
+                head_dim=cfg.head_dim,
+                block=QKV_ROPE_CONFIGS[keys[-1]],
+                grid=self.grid,
+                fidelity=cfg.mm_fidelity,
                 out_dtype=cfg.heads_out_dtype,
+                memory_config=self._mem(rows, (cfg.n_heads + 2 * cfg.n_kv_heads) * cfg.head_dim),
             )
-            ttnn.deallocate(qkv)
         else:
-            qkv = ttnn.reshape(qkv, [B, 1, S, qkv.shape[-1]])
-            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-                qkv,
-                num_heads=cfg.n_heads,
-                num_kv_heads=cfg.n_kv_heads,
-                transpose_k_heads=False,
-                memory_config=self._mem(B * S, qkv.shape[-1]),
-            )
-            ttnn.deallocate(qkv)
-            q_r = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_mat, is_decode_mode=False)
-            k_r = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.trans_mat, is_decode_mode=False)
-            ttnn.deallocate(q)
-            ttnn.deallocate(k)
+            q_r, k_r, v = self._qkv_heads(layer, xn, B, S, *rope)
         attn = ttnn.transformer.scaled_dot_product_attention(
             q_r,
             k_r,
@@ -322,6 +339,39 @@ class NemotronReranker:
         out = self._linear(o, layer.wo, "wo", dtype=cfg.wo_out_dtype)
         ttnn.deallocate(o)
         return out
+
+    def _qkv_heads(self, layer, xn, B, S, cos, sin):
+        """QKV matmul, then head split + RoPE as separate ops (the path before matmul_qkv_rope)."""
+        cfg = self.cfg
+        qkv = self._linear(xn, layer.wqkv, "qkv", dtype=cfg.qkv_out_dtype)
+        if cfg.fuse_heads_rope:
+            q_r, k_r, v = fused_heads_rope(
+                qkv,
+                cos,
+                sin,
+                self.trans_mat,
+                n_heads=cfg.n_heads,
+                n_kv_heads=cfg.n_kv_heads,
+                batch=B,
+                memory_config=self._mem(B * S, qkv.shape[-1]),
+                out_dtype=cfg.heads_out_dtype,
+            )
+            ttnn.deallocate(qkv)
+        else:
+            qkv = ttnn.reshape(qkv, [B, 1, S, qkv.shape[-1]])
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                qkv,
+                num_heads=cfg.n_heads,
+                num_kv_heads=cfg.n_kv_heads,
+                transpose_k_heads=False,
+                memory_config=self._mem(B * S, qkv.shape[-1]),
+            )
+            ttnn.deallocate(qkv)
+            q_r = ttnn.experimental.rotary_embedding_llama(q, cos, sin, self.trans_mat, is_decode_mode=False)
+            k_r = ttnn.experimental.rotary_embedding_llama(k, cos, sin, self.trans_mat, is_decode_mode=False)
+            ttnn.deallocate(q)
+            ttnn.deallocate(k)
+        return q_r, k_r, v
 
     def _mlp(self, layer, h):
         """h: the ffn-normed residual [1, 1, rows, dim]."""
@@ -355,7 +405,7 @@ class NemotronReranker:
     def forward(self, tokens, valid, block_map):
         """Device inputs from ``prepare_host_inputs`` -> [B, 1, 32, 32] fp32 tile, score sum at [b, 0, 0, 0]."""
         B, S = tokens.shape[0], tokens.shape[1]
-        cos, sin = self.rot_mats(S)
+        rope = self.rot_mats(S)
         mask = self._padding_mask(valid, S)
         fused = self.cfg.fuse_add_norm and B * S >= self.cfg.fuse_add_norm_min_rows
         resid_l1 = fused and self.cfg.residual_l1
@@ -370,7 +420,7 @@ class NemotronReranker:
         if fused:
             xn = self._norm(x, self.layers[0].attn_norm, self.cfg.norm_out_dtype)
             for i, layer in enumerate(self.layers):
-                a = self._attention(layer, xn, B, S, mask, block_map, cos, sin)
+                a = self._attention(layer, xn, B, S, mask, block_map, rope)
                 ttnn.deallocate(xn)
                 x_new, h = self._add_norm(x, a, layer.ffn_norm_consts)
                 if not resid_l1:
@@ -388,7 +438,7 @@ class NemotronReranker:
         else:
             for layer in self.layers:
                 xn = self._norm(x, layer.attn_norm, self.cfg.norm_out_dtype)
-                a = self._attention(layer, xn, B, S, mask, block_map, cos, sin)
+                a = self._attention(layer, xn, B, S, mask, block_map, rope)
                 ttnn.deallocate(xn)
                 x_new = ttnn.add(x, a, memory_config=self._mem(B * S, self.cfg.dim))
                 ttnn.deallocate(x)

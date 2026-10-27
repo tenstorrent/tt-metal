@@ -45,6 +45,11 @@ MM_CONFIGS = {
 }
 
 
+# matmul_qkv_rope blocks (M_block, K_block, N_block, subblock_h, subblock_w) per rows, from
+# perf_tools/probe_qkv_rope.py; N_block must be even (whole heads).
+QKV_ROPE_CONFIGS = {512: (2, 8, 2, 1, 2), 2048: (4, 8, 4, 1, 4), 4096: (8, 8, 4, 1, 4), 16384: (8, 16, 4, 1, 4)}
+
+
 def sdpa_chunks(batch, seq_len):
     """(q_chunk, k_chunk) per shape, from perf_tools/sweep_sdpa.py and probe_mask.py on a P150."""
     if seq_len <= 512:
@@ -115,6 +120,8 @@ class RerankConfig:
     # Matmul kinds (qkv, wo, ff13s, ff13, ff2) that run at LoFi instead of mm_fidelity, comma separated.
     # MIRACL Pearson vs fp32: ff2 0.99959 (baseline 0.99962), ff13s 0.99928, qkv+wo 0.99920, all 0.99918.
     lofi_kinds: str = "ff2"
+    # Matmul kinds that accumulate in bf16 DST (8-tile subblocks) instead of fp32 (4-tile), comma separated.
+    bf16_acc_kinds: str = ""
     # HiFi2 SDPA raised the MIRACL mean score error 0.23 -> 0.30 at no measurable speed gain.
     sdpa_fidelity: object = ttnn.MathFidelity.HiFi4
     # Padding mask dtype. The mask holds only 0 and a large negative value, which bfp4 stores exactly;
@@ -130,6 +137,9 @@ class RerankConfig:
     fuse_add_norm: bool = True
     # Head split + RoPE on Q and K as one op (tt/custom_ops/fused_heads_rope) instead of three.
     fuse_heads_rope: bool = True
+    # QKV matmul + head split + RoPE as one program (tt/custom_ops/matmul_qkv_rope); supersedes
+    # fuse_heads_rope. 32x512: 1406 -> 924 us per layer (perf_tools/probe_qkv_rope.py).
+    fuse_qkv_rope: bool = True
     # The fused op gives each core whole tile-rows, so below one row per core (4096 rows on 128 cores)
     # the stock add + rms_norm spread wider and win (1x512: 8.8 vs 9.7 ms; 1x2048: 33.4 vs 42.2 ms).
     # 8x512: 49.9 -> 50.9 % of SoL with the fused op; 32x512: 238 -> 226 ms.

@@ -31,12 +31,12 @@ def test_decoder_layer(device, hf_model, state_dict, batch, seq_len, n_real):
     host, _ = model.prepare_host_inputs([[0] * n_real] * batch, seq_len=seq_len)
     _, valid, block_map = model.to_device(host)
     mask = model._padding_mask(valid, seq_len)
-    cos, sin = model.rot_mats(seq_len)
+    rope = model.rot_mats(seq_len)
     tt_x = ttnn.from_torch(
         x.reshape(1, 1, batch * seq_len, cfg.dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
     layer = model.layers[0]
-    a = model._attention(layer, model._norm(tt_x, layer.attn_norm), batch, seq_len, mask, block_map, cos, sin)
+    a = model._attention(layer, model._norm(tt_x, layer.attn_norm), batch, seq_len, mask, block_map, rope)
     h = ttnn.add(tt_x, a)
     out = ttnn.add(h, model._mlp(layer, model._norm(h, layer.ffn_norm)))
     got = ttnn.to_torch(out).float().reshape(batch, seq_len, cfg.dim)
