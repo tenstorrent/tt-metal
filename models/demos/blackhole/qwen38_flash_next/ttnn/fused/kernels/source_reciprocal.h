@@ -28,13 +28,13 @@ sfpi_inline sfpi::vFloat qwen38_reciprocal_scalar(const sfpi::vFloat in) {
     // Use 1.44 as first guess at x, ideal value would be 1.33.
     // Grayskull has hardwired 1.44 and uses it to avoid a load.
     // We use it here for consistency.
-    sfpi::vFloat vConstLn2Recip = 1.442695f;
+    sfpi::vFloat inverse_ln2 = 1.442695f;
     // Keep SFPMUL + SFPADDI explicit: a plain vector addition contracts into SFPMAD and loses the source's
     // rounding boundary between them.
     auto add_two = [](sfpi::vFloat product) -> sfpi::vFloat {
         return __builtin_rvtt_sfpaddi(ckernel::instrn_buffer, product.get(), 0x4000, 0, 0, 0);
     };
-    sfpi::vFloat result = vConstLn2Recip * add_two(val * vConstLn2Recip);
+    sfpi::vFloat result = inverse_ln2 * add_two(val * inverse_ln2);
 
     for (int s_iter = 0; s_iter < (max_iter - 1); s_iter++) {
         result = result * add_two(val * result);

@@ -21,28 +21,28 @@ namespace ckernel::sfpu {
 //        so the expensive exp tail is unnecessary at bf16 precision)
 // ======================================================================
 
-constexpr float QWEN38_SOFTPLUS_POLY_BOUNDARY = 5.0f;
+constexpr float qwen38_softplus_polynomial_domain_end = 5.0f;
 
 // FP32 residual polynomial: f(a) = ln(1+exp(-a)) on [0, 5], degree 8
-constexpr float QWEN38_SOFTPLUS_POLY_C0 = 6.9310557842e-01f;
-constexpr float QWEN38_SOFTPLUS_POLY_C1 = -4.9926245213e-01f;
-constexpr float QWEN38_SOFTPLUS_POLY_C2 = 1.2186349183e-01f;
-constexpr float QWEN38_SOFTPLUS_POLY_C3 = 5.6753782555e-03f;
-constexpr float QWEN38_SOFTPLUS_POLY_C4 = -1.0528374463e-02f;
-constexpr float QWEN38_SOFTPLUS_POLY_C5 = 2.7290175203e-03f;
-constexpr float QWEN38_SOFTPLUS_POLY_C6 = -3.4358495031e-04f;
-constexpr float QWEN38_SOFTPLUS_POLY_C7 = 2.1285692128e-05f;
-constexpr float QWEN38_SOFTPLUS_POLY_C8 = -4.8245715334e-07f;
+constexpr float qwen38_softplus_fp32_residual_c0 = 6.9310557842e-01f;
+constexpr float qwen38_softplus_fp32_residual_c1 = -4.9926245213e-01f;
+constexpr float qwen38_softplus_fp32_residual_c2 = 1.2186349183e-01f;
+constexpr float qwen38_softplus_fp32_residual_c3 = 5.6753782555e-03f;
+constexpr float qwen38_softplus_fp32_residual_c4 = -1.0528374463e-02f;
+constexpr float qwen38_softplus_fp32_residual_c5 = 2.7290175203e-03f;
+constexpr float qwen38_softplus_fp32_residual_c6 = -3.4358495031e-04f;
+constexpr float qwen38_softplus_fp32_residual_c7 = 2.1285692128e-05f;
+constexpr float qwen38_softplus_fp32_residual_c8 = -4.8245715334e-07f;
 
 // BF16 residual polynomial: f(a) = ln(1+exp(-a)) on [0, 5], degree 6
 // (ULP-weighted minimax fit; max error < 0.28 bf16 ULP over the domain)
-constexpr float QWEN38_SOFTPLUS_BF16_POLY_C0 = 6.9423984729e-01f;
-constexpr float QWEN38_SOFTPLUS_BF16_POLY_C1 = -5.0932420424e-01f;
-constexpr float QWEN38_SOFTPLUS_BF16_POLY_C2 = 1.4279095486e-01f;
-constexpr float QWEN38_SOFTPLUS_BF16_POLY_C3 = -1.3000584069e-02f;
-constexpr float QWEN38_SOFTPLUS_BF16_POLY_C4 = -1.8627923291e-03f;
-constexpr float QWEN38_SOFTPLUS_BF16_POLY_C5 = 5.0152968088e-04f;
-constexpr float QWEN38_SOFTPLUS_BF16_POLY_C6 = -3.1273466851e-05f;
+constexpr float qwen38_softplus_bf16_residual_c0 = 6.9423984729e-01f;
+constexpr float qwen38_softplus_bf16_residual_c1 = -5.0932420424e-01f;
+constexpr float qwen38_softplus_bf16_residual_c2 = 1.4279095486e-01f;
+constexpr float qwen38_softplus_bf16_residual_c3 = -1.3000584069e-02f;
+constexpr float qwen38_softplus_bf16_residual_c4 = -1.8627923291e-03f;
+constexpr float qwen38_softplus_bf16_residual_c5 = 5.0152968088e-04f;
+constexpr float qwen38_softplus_bf16_residual_c6 = -3.1273466851e-05f;
 
 // ======================================================================
 // Lightweight inline exp(x) for negative x (tail region).
@@ -51,12 +51,12 @@ constexpr float QWEN38_SOFTPLUS_BF16_POLY_C6 = -3.1273466851e-05f;
 // BF16: degree 5 (~15 ops), FP32: degree 7 (~19 ops).
 // ======================================================================
 sfpi_inline sfpi::vFloat qwen38_softplus_exp_negative(sfpi::vFloat x) {
-    constexpr float INV_LN2 = 1.4426950408889634f;
-    constexpr float LN2_HI = -0.6931152343750000f;
-    constexpr float LN2_LO = -3.19461832987e-05f;
+    constexpr float inverse_ln2 = 1.4426950408889634f;
+    constexpr float ln2_high = -0.6931152343750000f;
+    constexpr float ln2_low = -3.19461832987e-05f;
 
     // Range reduction: x = k*ln(2) + r
-    sfpi::vFloat z = x * INV_LN2;
+    sfpi::vFloat z = x * inverse_ln2;
     sfpi::vInt k_int;
     // Source 7.74 rounds the range product before the immediate bias add.
     const sfpi::vFloat bias = Converter::as_float(0x4B400000U);
@@ -65,8 +65,8 @@ sfpi_inline sfpi::vFloat qwen38_softplus_exp_negative(sfpi::vFloat x) {
     k_int = sfpi::as<sfpi::vInt>(rounded) - sfpi::as<sfpi::vInt>(bias);
 
     // Cody-Waite: r = x - k*ln(2) in extended precision
-    sfpi::vFloat r = k * LN2_HI + x;
-    r = k * LN2_LO + r;
+    sfpi::vFloat r = k * ln2_high + x;
+    r = k * ln2_low + r;
 
     // exp(r) via Taylor polynomial, |r| < 0.5
 #ifdef INP_FLOAT32
@@ -108,20 +108,20 @@ inline void qwen38_calculate_softplus_body(const float beta, const float beta_re
         // FP32: f(a) via degree-8 Horner on [0, 5]
         sfpi::vFloat residual = PolynomialEvaluator::eval(
             a,
-            QWEN38_SOFTPLUS_POLY_C0,
-            QWEN38_SOFTPLUS_POLY_C1,
-            QWEN38_SOFTPLUS_POLY_C2,
-            QWEN38_SOFTPLUS_POLY_C3,
-            QWEN38_SOFTPLUS_POLY_C4,
-            QWEN38_SOFTPLUS_POLY_C5,
-            QWEN38_SOFTPLUS_POLY_C6,
-            QWEN38_SOFTPLUS_POLY_C7,
-            QWEN38_SOFTPLUS_POLY_C8);
+            qwen38_softplus_fp32_residual_c0,
+            qwen38_softplus_fp32_residual_c1,
+            qwen38_softplus_fp32_residual_c2,
+            qwen38_softplus_fp32_residual_c3,
+            qwen38_softplus_fp32_residual_c4,
+            qwen38_softplus_fp32_residual_c5,
+            qwen38_softplus_fp32_residual_c6,
+            qwen38_softplus_fp32_residual_c7,
+            qwen38_softplus_fp32_residual_c8);
 
         // Tail: f(a) ≈ exp(-a) for a > 5, via inline Cody-Waite exp +
         // 3-term Taylor ln(1+e) = e*(1 + e*(-1/2 + e/3))
         sfpi::vFloat neg_a = sfpi::setsgn(a, 1);
-        v_if(a > QWEN38_SOFTPLUS_POLY_BOUNDARY) {
+        v_if(a > qwen38_softplus_polynomial_domain_end) {
             sfpi::vFloat e = qwen38_softplus_exp_negative(neg_a);
             sfpi::vFloat tail_product = e * 0.333333343f;
             sfpi::vFloat tail = __builtin_rvtt_sfpaddi(ckernel::instrn_buffer, tail_product.get(), 0xbf00, 0, 0, 0);
@@ -132,18 +132,18 @@ inline void qwen38_calculate_softplus_body(const float beta, const float beta_re
         // BF16: f(a) via degree-6 Horner on [0, 5]
         sfpi::vFloat residual = PolynomialEvaluator::eval(
             a,
-            QWEN38_SOFTPLUS_BF16_POLY_C0,
-            QWEN38_SOFTPLUS_BF16_POLY_C1,
-            QWEN38_SOFTPLUS_BF16_POLY_C2,
-            QWEN38_SOFTPLUS_BF16_POLY_C3,
-            QWEN38_SOFTPLUS_BF16_POLY_C4,
-            QWEN38_SOFTPLUS_BF16_POLY_C5,
-            QWEN38_SOFTPLUS_BF16_POLY_C6);
+            qwen38_softplus_bf16_residual_c0,
+            qwen38_softplus_bf16_residual_c1,
+            qwen38_softplus_bf16_residual_c2,
+            qwen38_softplus_bf16_residual_c3,
+            qwen38_softplus_bf16_residual_c4,
+            qwen38_softplus_bf16_residual_c5,
+            qwen38_softplus_bf16_residual_c6);
 
         // Tail: the degree-6 poly diverges past its [0, 5] fit domain, while the true
         // residual < exp(-5) = 0.0067 there. Clamping to 0 keeps softplus(t>0) = t within
         // bf16 rounding and avoids the ~8-op exp tail on every element.
-        v_if(a > QWEN38_SOFTPLUS_POLY_BOUNDARY) { residual = 0.0f; }
+        v_if(a > qwen38_softplus_polynomial_domain_end) { residual = 0.0f; }
         v_endif;
 #endif
 
