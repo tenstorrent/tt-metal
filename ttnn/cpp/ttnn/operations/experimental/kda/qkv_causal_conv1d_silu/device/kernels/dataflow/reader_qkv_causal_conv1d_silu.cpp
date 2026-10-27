@@ -75,7 +75,8 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const uint32_t local_split_row = topology.local_split ? topology.head_rows : 0;
     const bool initial_from_predecessor = topology.rank != topology.first_rank;
 
-    // Read history_rows rows of this channel block's columns into the rows staging area.
+    // Read history_rows rows of this channel block's columns into the rows staging area, from full-row pages (the
+    // exchange buffer).
     const auto read_rows = [&](const auto& source, uint32_t first_row, uint32_t ct_start) {
         for (uint32_t row = 0; row < history_rows; ++row) {
             noc.async_read(
@@ -84,6 +85,25 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                 block_row_bytes,
                 {.page_id = first_row + row, .offset_bytes = ct_start * tile_row_bytes},
                 {.offset_bytes = offset_of(rows) + row * block_row_bytes});
+        }
+    };
+    // The same, from a convolution tail stored per 64-channel segment (`history`, or the bare predecessor carry):
+    // page `c / segment_channels`, row `r` at byte `r * segment_row_bytes`. One read per (row, touched segment).
+    const auto read_tail = [&](const auto& source, uint32_t ct_start) {
+        const uint32_t ct_end = ct_start + block_ct;
+        for (uint32_t row = 0; row < history_rows; ++row) {
+            for (uint32_t ct = ct_start; ct < ct_end;) {
+                const uint32_t first = ct % tiles_per_segment;
+                const uint32_t remaining = ct_end - ct;
+                const uint32_t count = tiles_per_segment - first < remaining ? tiles_per_segment - first : remaining;
+                noc.async_read(
+                    source,
+                    scratch,
+                    count * tile_row_bytes,
+                    {.page_id = ct / tiles_per_segment, .offset_bytes = row * segment_row_bytes + first * tile_row_bytes},
+                    {.offset_bytes = offset_of(rows) + row * block_row_bytes + (ct - ct_start) * tile_row_bytes});
+                ct += count;
+            }
         }
     };
 
@@ -148,11 +168,14 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
                 predecessor_ready.wait_min(1);
                 predecessor_arrived = true;
             }
-            // Without the exchange, predecessor is the bare three-row carry, read at the same pages.
-            static_assert(predecessor_page == 0);
-            read_rows(predecessor, predecessor_page, ct_start);
+            if constexpr (exchange) {
+                read_rows(predecessor, predecessor_page, ct_start);
+            } else {
+                // Without the exchange, predecessor is a bare carry in the history's segment-page layout.
+                read_tail(predecessor, ct_start);
+            }
         } else if (segment_start) {
-            read_rows(history, 0, ct_start);
+            read_tail(history, ct_start);
         } else if (!from_previous_strip) {
             // The previous tile's bottom faces.
             for (uint32_t ct = 0; ct < block_ct; ++ct) {

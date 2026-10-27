@@ -26,7 +26,11 @@ pytestmark = run_for_blackhole()
 
 
 @pytest.mark.parametrize(
-    "mesh_device,sp_axis,tp_axis", [((1, 8), 0, 1), ((2, 4), 0, 1), ((2, 4), 1, 0)], indirect=["mesh_device"]
+    # No TP8 case: the compact reference's 96 channels per chip cannot form whole 64-channel segments, the native
+    # convolution tail's page (`kda.convolution_tail_shape`); TP8 is covered at the K3 shape by test_kda_padding.
+    "mesh_device,sp_axis,tp_axis",
+    [((2, 4), 0, 1), ((2, 4), 1, 0)],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize(
     "device_params",

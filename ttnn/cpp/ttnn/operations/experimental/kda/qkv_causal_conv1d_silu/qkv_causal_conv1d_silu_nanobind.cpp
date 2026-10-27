@@ -38,9 +38,11 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 channels from ``input_column_offset`` are the convolution input,
                 read in place (such as a fused projection). A ROW_MAJOR input is
                 tilized first.
-            history (ttnn.Tensor): Interleaved ROW_MAJOR BFLOAT16 history.
-                Shape ``[1,3,Q+K+V]``. SP calls supply the predecessor's three-row
-                history separately. The kernel derives when each history is needed
+            history (ttnn.Tensor): Interleaved ROW_MAJOR BFLOAT16 history, stored
+                per 64-channel segment: shape ``[1, (Q+K+V)/64, 192]``, page ``c``
+                holding the three history rows of channels ``[64c, 64c+64)``, row
+                ``r`` at element ``64r``; ``Q+K+V`` must be a multiple of 64. SP
+                calls supply the predecessor's three-row history separately. The kernel derives when each history is needed
                 from actual_start and its mesh coordinate.
             tap0, tap1, tap2, tap3 (ttnn.Tensor): Per-channel convolution taps.
                 Each must have logical volume ``Q+K+V`` and be an interleaved
@@ -58,7 +60,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
             predecessor_carry (ttnn.Tensor): Three-row history from the
-                preceding rank, matching history. For local execution, alias history.
+                preceding rank, in history's layout and shape. For local execution, alias history.
             program_config (QkvCausalConv1dSiluProgramConfig): Required program tuning;
                 ``channel_chunk_size`` is expressed in logical channels.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
@@ -124,8 +126,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: ``q``, ``k``,
-                ``v`` as ``qkv_causal_conv1d_silu``, and the ROW_MAJOR BFLOAT16
-                ``[1, 3, Q+K+V]`` replacement carry, replicated across SP.
+                ``v`` as ``qkv_causal_conv1d_silu``, and the replacement carry in
+                ``history``'s layout and shape, replicated across SP.
         )doc",
         &ttnn::experimental::kda::qkv_causal_conv1d_silu_with_carry,
         nb::arg("input").noconvert(),

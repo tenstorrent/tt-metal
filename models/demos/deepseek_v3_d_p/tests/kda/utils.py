@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDARecurrenceProgramConfig,
     kimi_k3_program_config,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, convolution_tail_from_device_layout, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, allocate_native_state, device_scalar
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
@@ -168,8 +168,8 @@ def reconstruct_convolution_at_sp_rank(
     sp_rank: int,
     local_width: int,
 ) -> torch.Tensor:
-    """Reconstruct grouped Q/K/V convolution state at one sequence rank."""
-    shards = _device_shards(tensor)
+    """Reconstruct grouped Q/K/V convolution state at one sequence rank, as ``[1, K-1, W]`` rows."""
+    shards = [convolution_tail_from_device_layout(shard) for shard in _device_shards(tensor)]
     columns = tuple(mesh_device.shape)[1]
     tp_size = tuple(mesh_device.shape)[tp_axis]
     physical = []

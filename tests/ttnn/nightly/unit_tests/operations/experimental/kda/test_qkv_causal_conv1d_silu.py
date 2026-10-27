@@ -13,6 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.kda import convolution_tail_from_device_layout, convolution_tail_shape
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_HISTORY_EXCHANGE_ROWS, KDA_HISTORY_EXCHANGE_SEMAPHORES
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
@@ -56,6 +57,11 @@ _PRODUCTION_CASES = (
 )
 
 
+def _history_shape(batch: int, width: int) -> tuple[int, int, int]:
+    """The tail on device: one 64-channel segment of three rows per page."""
+    return (batch, *convolution_tail_shape(3, width)[1:])
+
+
 def _qkv_causal_conv1d_silu_ops(
     input_tensor: torch.Tensor | ttnn.Tensor,
     history: torch.Tensor | ttnn.Tensor,
@@ -77,7 +83,7 @@ def _qkv_causal_conv1d_silu_ops(
 
     batch, sequence, width = input_tensor.shape
     if (
-        history.shape != (batch, 3, width)
+        tuple(history.shape) != _history_shape(batch, width)
         or any(tap.shape[-1] != width or math.prod(tap.shape) != width for tap in taps)
         or any(output.shape != (batch, sequence, output.shape[-1]) for output in outputs)
         or sum(output.shape[-1] for output in outputs) != width
@@ -113,14 +119,15 @@ def _qkv_causal_conv1d_silu_performance(
 
 def test_qkv_causal_conv1d_silu_work_golden() -> None:
     fpu, sfpu = _qkv_causal_conv1d_silu_ops(
-        torch.empty((1, 2, 4)),
-        torch.empty((1, 3, 4)),
-        tuple(torch.empty((1, 1, 4)) for _ in range(4)),
-        (torch.empty((1, 2, 1)), torch.empty((1, 2, 2)), torch.empty((1, 2, 1))),
+        torch.empty((1, 2, 64)),
+        torch.empty(convolution_tail_shape(3, 64)),
+        tuple(torch.empty((1, 1, 64)) for _ in range(4)),
+        (torch.empty((1, 2, 16)), torch.empty((1, 2, 32)), torch.empty((1, 2, 16))),
     )
 
-    assert fpu == perf_model.FpuOps(multiply_ops=32, add_ops=24)
-    assert sfpu == perf_model.SfpuOps(silu_ops=8)
+    # 2 rows x 64 channels = 128 outputs; four taps are 4 multiplies and 3 adds each, then one SiLU.
+    assert fpu == perf_model.FpuOps(multiply_ops=512, add_ops=384)
+    assert sfpu == perf_model.SfpuOps(silu_ops=128)
 
 
 def _run(
@@ -551,7 +558,9 @@ def test_qkv_causal_conv1d_silu_kimi_k3_performance(zero_actual_start, device: t
         assert_accurate(
             golden, ttnn.to_torch(output), name=f"Kimi-K3 {name}", pcc_threshold=0.999, nrmse_threshold=0.008
         )
-    assert_bit_identical(inputs[:, -3:, :], ttnn.to_torch(carry), name="Kimi-K3 replacement carry")
+    assert_bit_identical(
+        inputs[:, -3:, :], convolution_tail_from_device_layout(ttnn.to_torch(carry)), name="Kimi-K3 replacement carry"
+    )
     logger.info(f"QKV causal Conv1D plus SiLU kimi-k3: measured_ns={duration_ns:.0f}, runtime_id={runtime_id}")
     lower = _K3_EXPECTED_DURATION_NS * (1 - _PRODUCTION_PERF_MARGIN)
     upper = _K3_EXPECTED_DURATION_NS * (1 + _PRODUCTION_PERF_MARGIN)
@@ -633,7 +642,7 @@ def test_qkv_causal_conv1d_silu_rejects_channel_chunk_size_over_l1(
     [
         ("host_input", "allocated device tensor"),
         ("batch", r"input must be \[1,T,W\]"),
-        ("history_shape", r"history must be \[1,3,Q\+K\+V\]"),
+        ("history_shape", r"history must be \[1,\(Q\+K\+V\)/64,192\]"),
         ("tap_last_dimension", r"tap2 last dimension must equal Q\+K\+V"),
         ("tap_volume", "tap2 logical volume must equal"),
         ("history_layout", "history must use ROW_MAJOR layout, got Layout::TILE"),
@@ -815,4 +824,4 @@ def test_qkv_causal_conv1d_silu_tiled_input(
         )
     # One rank: the carry is the last three tokens.
     last_rows = inputs[:, -3:, :]
-    assert_bit_identical(last_rows, ttnn.to_torch(carry), name="replacement carry")
+    assert_bit_identical(last_rows, convolution_tail_from_device_layout(ttnn.to_torch(carry)), name="replacement carry")

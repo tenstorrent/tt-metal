@@ -16,7 +16,12 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     random_weights,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.kda import (
+    KdaState,
+    convolution_tail_from_device_layout,
+    convolution_tail_shape,
+    ttKDA,
+)
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -46,10 +51,8 @@ def _assert_state_metadata(state: KdaState, config) -> None:
     assert state.recurrent.dtype == ttnn.float32
     assert state.recurrent.layout == ttnn.TILE_LAYOUT
     assert state.recurrent.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-    assert tuple(state.convolution.shape) == (
-        1,
-        config.conv_kernel_size - 1,
-        config.q_dim + config.k_dim + config.v_dim,
+    assert tuple(state.convolution.shape) == convolution_tail_shape(
+        config.conv_kernel_size - 1, config.q_dim + config.k_dim + config.v_dim
     )
     assert state.convolution.dtype == ttnn.bfloat16
     assert state.convolution.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -88,7 +91,7 @@ def test_layer_matches_reference_and_is_deterministic(device: ttnn.Device) -> No
     )
     assert_accurate(
         golden_convolution,
-        ttnn.to_torch(convolution_tt),
+        convolution_tail_from_device_layout(ttnn.to_torch(convolution_tt)),
         name="layer convolution state",
         pcc_threshold=0.999,
         nrmse_threshold=0.003,
@@ -152,7 +155,7 @@ def test_forward_contract(device: ttnn.Device) -> None:
     )
     assert_accurate(
         golden_convolution,
-        ttnn.to_torch(final_state.convolution),
+        convolution_tail_from_device_layout(ttnn.to_torch(final_state.convolution)),
         name="segmented convolution state",
         pcc_threshold=0.999,
         nrmse_threshold=0.004,
