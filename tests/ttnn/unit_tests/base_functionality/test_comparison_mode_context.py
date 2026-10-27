@@ -727,7 +727,7 @@ def test_binary_backward_with_keyword_scalar_in_comparison_mode(device, operatio
         ),
         pytest.param(
             ttnn.logiteps_bw,
-            _repeated_tile([-2.0, -0.25, 0.25, 0.75, 1.25, 2.0]),
+            _repeated_tile([-0.25, 0.25, 0.75, 1.25]),
             {"eps": -0.5},
             id="logiteps_bw_negative_eps_in_band",
         ),

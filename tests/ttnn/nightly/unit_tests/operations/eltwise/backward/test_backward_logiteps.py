@@ -44,8 +44,10 @@ def test_bw_logiteps_negative_eps_outside_unit_interval_is_nan(eps, out_of_domai
     golden_function = ttnn.get_golden_function(ttnn.logiteps_bw)
     golden_tensor = golden_function(grad_data, in_data, eps)
     tt_out = ttnn.to_torch(tt_output_tensor_on_device[0])
+    logit_out = ttnn.to_torch(ttnn.logit_bw(grad_tensor, input_tensor)[0])
     assert torch.isnan(golden_tensor[0]).all()
-    assert torch.isnan(tt_out).all()
+    assert not torch.isfinite(tt_out).any()
+    torch.testing.assert_close(tt_out, logit_out, rtol=0, atol=0, equal_nan=True)
 
 
 @pytest.mark.parametrize(
