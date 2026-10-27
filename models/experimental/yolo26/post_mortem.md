@@ -52,6 +52,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0030 | Batch > 4 on one chip using DRAM (8 / 16 / 20); does 20 streams x 30 FPS hold at batch 20? | 2026-10-27 | DONE (branch yolov26_dram_batch): hybrid grouped forward, model-only b8 731.3 / b16 729.8 / b20 716.4 FPS vs b4 683.1, PCC intact; demo at b20 29.9 FPS but 108 ms latency (b4: 30.0 FPS, 39 ms) |
 | YOLO26-0031 | Cut end-to-end latency of the 1-chip 20-stream demo further | 2026-10-27 | DONE: capture-to-results 10.9 ms for every camera (was 17-40 ms by group), on screen 23.2 ms (was 43.4), 30.0 FPS kept; staggered capture, earlier hand-over, event-driven render |
 | YOLO26-0032 | Batch 20 (all 20 cameras in one pass) on 1 chip: minimize its latency | 2026-10-27 | DONE: capture-to-results 61.7 → 44.0 ms (all cameras alike), on screen 66.0 → 52.4 ms with live view, 30.0 FPS; batch 4 also 10.9 → 9.4 ms / 23.2 → 20.7 ms |
+| YOLO26-0033 | How did batch 4 reach ~9.4 ms per camera group? Is it async? (summary of 0026-0032) | 2026-10-27 | ANSWERED: pipelined across processes and both command queues; no group queues behind another; chip work unchanged (~6 ms per batch of 4) |
 
 ## Entries
 
@@ -1017,3 +1018,54 @@ Final (MEASURED, 60 s, live MJPEG on, no recording):
 Snapshot (batch 20) checked: tile counts equal panel rows, 30.0 FPS on every tile.
 Remaining for batch 20 (INFERRED): upload (5/8 of the 8-channel input is padding) and the ~31 ms pass; going lower
 would need a smaller input or splitting the trace so groups start before the whole batch has been uploaded.
+
+### YOLO26-0033 — how batch 4 reached ~9.4 ms per camera group (appended 2026-10-27; summary of YOLO26-0026..0032)
+
+Question: how did capture-to-results for every camera group at batch 4 get to ~9.4 ms, and are the groups run
+asynchronously?
+
+Answer: the host side is an asynchronous pipeline, but the chip still runs one batch of 4 at a time. Device work is
+unchanged (~6 ms per batch of 4, ~30 ms of each 33.3 ms tick, YOLO26-0027). The latency fell because a group no
+longer waits behind other groups or behind host work.
+
+What one group's ~9.4 ms consists of (INFERRED from the timelines of YOLO26-0029 / 0031 / 0032): a group of 4
+cameras captures at its own phase of the tick; letterboxing in 4 worker processes ~1 ms; upload ~1 ms (on CQ1,
+overlapping the previous group's trace); trace ~6 ms; read-back + decode ~1 ms. The next group arrives 6.7 ms later,
+about when the chip finishes, so nothing queues and every group sees the same latency.
+
+What runs concurrently (READ, `demo/multistream_demo.py`):
+| unit | does |
+|---|---|
+| 4 prep worker processes | letterbox frames into a shared-memory ring, each a share of every pass |
+| main process | feeds ring slots (aliased, no copy) to the device loop; device loop; decode of the packed outputs |
+| CQ1 | uploads the next batch |
+| CQ0 | copy to the trace input, trace, while CQ1 uploads |
+| render process | draws tiles per pass, composes / publishes the live view, records on a fixed 30 FPS clock |
+
+Steps, in order (MEASURED, 1 chip, 20 × 30 FPS, capture-to-results by camera group; on screen):
+| step | change | entry | CAM 01-04 | CAM 17-20 | on screen |
+|---|---|---|---|---|---|
+| start | one process: prep, decode, drawing and device loop share the GIL | 0029 baseline | 19.7 | 46.9 | 50.9 |
+| 1 | prep in worker processes over a shared-memory ring; outputs packed on device (decode ~7 → ~0.1 ms); render process | 0029 | 17.3 | 39.6 | 43.4 |
+| 2 | staggered capture: each group at its own phase (0 / 6.7 / 13.3 / 20 / 26.7 ms) instead of all 20 at once | 0031 | 16.4 | 16.4 | — |
+| 3 | bounded wait for the next batch, so its upload is queued before the current read (keeps 30.0 FPS) | 0031 | 16.4 | 16.4 | — |
+| 4 | early hand-over: a group is handed over once read, not after the next group arrived and was uploaded | 0031 | 10.8 | 11.1 | — |
+| 5 | tiles update per group as results arrive; mosaic composed on arrival; recording on a 30 FPS clock | 0031 | — | — | 23.2 |
+| 6 | `from_torch` aliases the ring slot (mesh mapper) instead of copying 13 MB per batch under the GIL | 0032 | 9.5 | 9.4 | 12.6 (no live view) |
+| 7 | each batch's letterboxing split across 4 workers | 0032 | 9.4 | 9.6 | 21.4 (live view on) |
+Throughput stayed at 600 images/s (30.0 FPS per stream) throughout. Latest figures are from the 60 s recording
+`yolo26_demo_outputs/multistream/yolo26s_20streams_1chip_batch4_lowlatency.mp4` (CAM 01-04 9.5, 05-08 9.4, 09-12
+9.8, 13-16 9.9, 17-20 9.6 ms; on screen 21.4 ms; 600.0 images/s).
+
+The two largest effects: staggered capture (step 2) removed queueing between groups (all 20 captured together put
+5 batches on the chip at once, the fifth waiting ~24 ms); early hand-over (step 4) stopped finished results waiting
+in the loop for the next group's input.
+
+Caveats:
+- Staggered capture changes the scenario to free-running cameras (the realistic case). With truly synchronized
+  cameras (`--synchronized-capture`) groups queue again: 16.9 → 36.3 ms by group (MEASURED in 0031 after step 4,
+  before steps 6-7).
+- On-screen latency was measured differently before step 5 (before the JPEG encode, from the last group's capture),
+  which made the old figure lower than it would be now, so 50.9 → 21.4 ms is not overstated.
+- The ~12 ms between results and screen are the transfer to the render process, tile / panel drawing and the ~6 ms
+  JPEG encode of the 2340×1152 mosaic.
