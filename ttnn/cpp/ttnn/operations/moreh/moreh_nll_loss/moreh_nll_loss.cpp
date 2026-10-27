@@ -39,7 +39,8 @@ Tensor moreh_nll_loss(
             memory_config,
             compute_kernel_config_val);
 
-        moreh_sum(step1_result, std::nullopt, false, divisor_tensor, memory_config, compute_kernel_config_val);
+        operations::moreh::moreh_sum::moreh_sum(
+            step1_result, std::nullopt, false, divisor_tensor, memory_config, compute_kernel_config_val);
 
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
             input_tensor,
@@ -51,7 +52,8 @@ Tensor moreh_nll_loss(
             ignore_index,
             memory_config,
             compute_kernel_config_val);
-        return moreh_sum(step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
+        return operations::moreh::moreh_sum::moreh_sum(
+            step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
     }
     if (reduction == SUM) {
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
@@ -64,7 +66,8 @@ Tensor moreh_nll_loss(
             ignore_index,
             memory_config,
             compute_kernel_config_val);
-        return moreh_sum(step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
+        return operations::moreh::moreh_sum::moreh_sum(
+            step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
     }
 
     return prim::moreh_nll_loss_step2(

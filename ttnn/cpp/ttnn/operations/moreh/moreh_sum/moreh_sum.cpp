@@ -4,11 +4,13 @@
 
 #include "moreh_sum.hpp"
 
+#include <mutex>
+
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_sum/device/moreh_sum_device_operation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
-namespace ttnn {
+namespace ttnn::operations::moreh::moreh_sum {
 
 Tensor moreh_sum(
     const Tensor& input,
@@ -37,6 +39,22 @@ Tensor moreh_sum(
     }
     log_debug(tt::LogOp, "{}:{} dim {} keepdim {}", __func__, __LINE__, dims.front(), keepdim);
     return ttnn::prim::moreh_sum(temp_input, dims.front(), keepdim, output, memory_config, compute_kernel_config);
+}
+
+}  // namespace ttnn::operations::moreh::moreh_sum
+
+namespace ttnn {
+
+Tensor moreh_sum(
+    const Tensor& input,
+    const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim,
+    const bool keepdim,
+    const std::optional<Tensor>& output,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    static std::once_flag deprecation_warned;
+    std::call_once(deprecation_warned, [] { log_warning(tt::LogOp, "ttnn.moreh_sum is deprecated; use ttnn.sum."); });
+    return operations::moreh::moreh_sum::moreh_sum(input, dim, keepdim, output, memory_config, compute_kernel_config);
 }
 
 }  // namespace ttnn
