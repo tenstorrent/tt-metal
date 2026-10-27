@@ -33,3 +33,16 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   device/kernels/dataflow/reader_prepare_chunk_recurrence.cpp (fill_precise_gate_tiles),
   device/kernels/compute/prepare_chunk_recurrence.cpp (prepare_gate_factors_precise); sources.cmake drops the
   source's ../kda_nanobind.cpp (main builds it).
+
+### Decay complement output (prototype, 2026-10-27)
+- What: `decay_complement=True` (needs `precise_gate_factors` and an FP32 final_decay, `output_bf16_mask` bit 5
+  clear): `final_decay` holds d = 1 - exp(G_last) instead of exp(G_last), formed in DST from the exact G_last (a fourth
+  mask-matmul pass: gate_half @ g, x2, exp, 1 - x) and transposed to the [K, 1] column. Default off = the source.
+- Why: exp(G_last) of a slow channel is ~0.9995; the source squares exp(G_last/2) after a TF32 copy and transposes
+  it through srcA (TF32), and ttKDA stores it in bf16 (rounds to 1.0): either moves the channel's decay by up to its
+  whole size. d keeps its relative precision through the TF32 transpose. Consumed by
+  `ttnn.bringup.recurrent_chunk_scan(decay_complement=True)`.
+- Needed by: glm53_flash_d_p_lb kda-exact-decay
+- Files: device/*_types.hpp, device/*_device_operation.{hpp,cpp}, device/*_program_factory.cpp
+  (decay_complement_rows DFB, DECAY_COMPLEMENT define), device/kernels/compute/prepare_chunk_recurrence.cpp,
+  prepare_chunk_recurrence.{hpp,cpp}, prepare_chunk_recurrence_nanobind.cpp.

@@ -97,6 +97,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
     const m2::DFBSpecName gate_center_dfb{"gate_center"};
     const m2::DFBSpecName gate_center_neg_dfb{"gate_center_neg"};
     const m2::DFBSpecName gate_half_dfb{"gate_half"};
+    // decay_complement: the rows of d = 1 - exp(G_last), transposed into final_decay
+    const m2::DFBSpecName decay_complement_rows_dfb{"decay_complement_rows"};
     const m2::TensorParamName Q_TENSOR{"q"};
     const m2::TensorParamName K_TENSOR{"k"};
     const m2::TensorParamName V_TENSOR{"v"};
@@ -166,6 +168,9 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         dfb_specs.push_back(make_dfb(gate_center_dfb, cc, fp32));
         dfb_specs.push_back(make_dfb(gate_center_neg_dfb, cc, fp32));
         dfb_specs.push_back(make_dfb(gate_half_dfb, cc, fp32));
+    }
+    if (attrs.decay_complement) {
+        dfb_specs.push_back(make_dfb(decay_complement_rows_dfb, ck, fp32));
     }
     m2::KernelSpec reader{
         .unique_id = READER,
@@ -273,6 +278,9 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         unpack_modes[gate_center_dfb] = UnpackMode::UnpackToSrc;
         unpack_modes[gate_center_neg_dfb] = UnpackMode::UnpackToSrc;
         unpack_modes[gate_half_dfb] = UnpackMode::UnpackToSrc;
+    }
+    if (attrs.decay_complement) {
+        unpack_modes[decay_complement_rows_dfb] = UnpackMode::UnpackToSrc;
     }
     m2::KernelSpec compute{
         .unique_id = COMPUTE,
@@ -419,6 +427,13 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         // (-O3 re-inlined the matmul init into the remaining matmul_blocks and overflowed the kernel config buffer
         // on the source this was first built on: -O2 keeps it out of line)
         compute.compiler_options.opt_level = KernelBuildOptLevel::O2;
+    }
+    if (attrs.decay_complement) {
+        compute.dfb_bindings.push_back(
+            m2::DFBBinding{decay_complement_rows_dfb, "decay_complement_rows", m2::DFBEndpointType::PRODUCER});
+        compute.dfb_bindings.push_back(
+            m2::DFBBinding{decay_complement_rows_dfb, "decay_complement_rows", m2::DFBEndpointType::CONSUMER});
+        compute.compiler_options.defines.insert({"DECAY_COMPLEMENT", "1"});
     }
     reader.compile_time_args.insert({"has_actual_start", uint32_t(in.actual_start.has_value())});
     kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, reader, compute);

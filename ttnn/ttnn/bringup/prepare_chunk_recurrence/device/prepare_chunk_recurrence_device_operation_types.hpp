@@ -26,6 +26,9 @@ struct PrepareChunkRecurrenceParams {
     // The anchored gate exponents as exact matmuls of the BF16 gate with constant masks, exponentiated in DST (no
     // FP32 G read back at TF32 precision; CHANGELOG.md precise_gate_factors).
     bool precise_gate_factors = false;
+    // final_decay holds the decay complement d = 1 - exp(G_last) (FP32), from the exact G_last in DST, instead of
+    // exp(G_last); requires precise_gate_factors (CHANGELOG.md decay_complement).
+    bool decay_complement = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };

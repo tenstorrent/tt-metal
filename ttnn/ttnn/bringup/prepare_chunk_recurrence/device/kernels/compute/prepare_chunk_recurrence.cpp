@@ -559,17 +559,30 @@ void prepare_gate_factors_precise(
     DataflowBuffer& gate_half,
     DataflowBuffer& centered_decay,
     DataflowBuffer& centered_inverse_decay,
-    DataflowBuffer& anchor_decay) {
+    DataflowBuffer& anchor_decay
+#ifdef DECAY_COMPLEMENT
+    ,
+    DataflowBuffer& decay_complement_rows
+#endif
+) {
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
     static_assert(Ct == 1, "precise gate factors assume one-tile chunks");
     static_assert(Kt <= max_dst_tiles, "one DST acquire holds a chunk's key row");
-    DataflowBuffer* masks[3] = {&gate_center, &gate_center_neg, &gate_half};
-    DataflowBuffer* outs[3] = {&centered_decay, &centered_inverse_decay, &anchor_decay};
+#ifdef DECAY_COMPLEMENT
+    // pass 3: d = 1 - exp(2 (gate_half @ g)) = 1 - exp(G_last), all in DST (FP32): the scan's decay complement
+    constexpr uint32_t passes = 4;
+    DataflowBuffer* masks[passes] = {&gate_center, &gate_center_neg, &gate_half, &gate_half};
+    DataflowBuffer* outs[passes] = {&centered_decay, &centered_inverse_decay, &anchor_decay, &decay_complement_rows};
+#else
+    constexpr uint32_t passes = 3;
+    DataflowBuffer* masks[passes] = {&gate_center, &gate_center_neg, &gate_half};
+    DataflowBuffer* outs[passes] = {&centered_decay, &centered_inverse_decay, &anchor_decay};
+#endif
     const uint32_t g_id = g.get_id();
 
     reconfig_data_format(g_id, gate_center.get_id());  // in0 = mask -> srcB, in1 = g -> srcA (as matmul_blocks)
 #pragma GCC unroll 1
-    for (uint32_t pass = 0; pass < 3; ++pass) {
+    for (uint32_t pass = 0; pass < passes; ++pass) {
         const uint32_t m_id = masks[pass]->get_id();
         const uint32_t o_id = outs[pass]->get_id();
         outs[pass]->reserve_back(chunk_key_tiles);
@@ -579,11 +592,29 @@ void prepare_gate_factors_precise(
         for (uint32_t n = 0; n < Kt; ++n) {
             matmul_block(m_id, g_id, 0, n, n, false, 1, 1, 1);
         }
+#ifdef DECAY_COMPLEMENT
+        if (pass == 3) {
+            binop_with_scalar_tile_init();
+#pragma GCC unroll 1
+            for (uint32_t n = 0; n < Kt; ++n) {
+                mul_unary_tile(n, 0x40000000u);  // x 2.0f: G_last
+            }
+        }
+#endif
         exp_tile_init();
 #pragma GCC unroll 1
         for (uint32_t n = 0; n < Kt; ++n) {
             exp_tile<false, false, InputClamping::ClampToNegative, 8>(n, VectorMode::RC);
         }
+#ifdef DECAY_COMPLEMENT
+        if (pass == 3) {
+            binop_with_scalar_tile_init();
+#pragma GCC unroll 1
+            for (uint32_t n = 0; n < Kt; ++n) {
+                rsub_unary_tile(n, 0x3f800000u);  // 1.0f - exp(G_last)
+            }
+        }
+#endif
         tile_regs_commit();
         tile_regs_wait();
 #pragma GCC unroll 1
@@ -832,6 +863,9 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
     DataflowBuffer gate_center(dfb::gate_center);  // reader-filled constants
     DataflowBuffer gate_center_neg(dfb::gate_center_neg);
     DataflowBuffer gate_half(dfb::gate_half);
+#ifdef DECAY_COMPLEMENT
+    DataflowBuffer decay_complement_rows(dfb::decay_complement_rows);
+#endif
     gate_center.wait_front(chunk_matrix_tiles);
     gate_center_neg.wait_front(chunk_matrix_tiles);
     gate_half.wait_front(chunk_matrix_tiles);
@@ -874,7 +908,18 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         auto& g_last = workspace_3;
 #ifdef PRECISE_GATE_FACTORS
         prepare_gate_factors_precise<Ct, Kt>(
-            g, gate_center, gate_center_neg, gate_half, centered_decay, centered_inverse_decay, anchor_decay);
+            g,
+            gate_center,
+            gate_center_neg,
+            gate_half,
+            centered_decay,
+            centered_inverse_decay,
+            anchor_decay
+#ifdef DECAY_COMPLEMENT
+            ,
+            decay_complement_rows
+#endif
+        );
 #else
         prepare_gate_factors<Ct, Kt>(
             g,
@@ -893,7 +938,9 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             normalized_q, normalized_k, beta, anchor_decay, centered_decay, q_decay, kd, k_beta_pairwise, q_pairwise);
 
         auto& final_decay_rows = workspace_0;
+#ifndef DECAY_COMPLEMENT
         prepare_final_decay_rows<Ct, Kt>(g_last, anchor_decay, final_decay_rows);
+#endif
 
         auto& k_pairwise = workspace_3;
         prepare_k_pairwise<Ct, Kt>(normalized_k, centered_inverse_decay, k_pairwise);
@@ -914,7 +961,13 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
             /*product=*/tile_workspace_2);
 
         pack_reconfig_data_format(t_inv.get_id(), final_decay.get_id());
+#ifdef DECAY_COMPLEMENT
+        // dl holds d = 1 - exp(G_last): the transpose reads it through srcA at TF32, a relative 2^-10 on d (on
+        // exp(G_last) near 1 that read moved the slow channels' decay by up to its whole size)
+        prepare_decay_outputs<Ct, Kt>(k_pairwise, anchor_decay, decay_complement_rows, k_decay_transposed, final_decay);
+#else
         prepare_decay_outputs<Ct, Kt>(k_pairwise, anchor_decay, final_decay_rows, k_decay_transposed, final_decay);
+#endif
         pack_reconfig_data_format(k_decay_transposed.get_id(), workspace_3.get_id());
         // v_beta, kd, q_decay, intra, k_dec_t, dl, T_inv stay pushed for the writer.
     }

@@ -27,6 +27,7 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     uint32_t sequence_parallel_axis = 0,
     float gate_scale = 1.0F,
     uint32_t beta_logits_column_offset = 0,
-    bool precise_gate_factors = false);
+    bool precise_gate_factors = false,
+    bool decay_complement = false);
 
 }  // namespace ttnn::experimental::kda::bringup

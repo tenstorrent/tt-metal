@@ -23,7 +23,8 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
     uint32_t sequence_parallel_axis,
     float gate_scale,
     uint32_t beta_logits_column_offset,
-    bool precise_gate_factors) {
+    bool precise_gate_factors,
+    bool decay_complement) {
     using namespace ttnn::experimental::prim::kda_factory_detail;
     constexpr std::string_view operation_name = "prepare_chunk_recurrence";
     check_allocated_device_tensor(q, operation_name, "q");
@@ -61,7 +62,8 @@ std::vector<ttnn::Tensor> prepare_chunk_recurrence(
         sequence_parallel_axis,
         gate_scale,
         beta_logits_column_offset,
-        precise_gate_factors);
+        precise_gate_factors,
+        decay_complement);
 }
 
 }  // namespace ttnn::experimental::kda::bringup

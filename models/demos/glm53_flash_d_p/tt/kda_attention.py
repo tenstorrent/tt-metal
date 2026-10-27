@@ -47,12 +47,15 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.glm53_flash_d_p.tt import mm_configs
 
 SP_AXIS, TP_AXIS = 0, 1
-# GLM_KDA_DECAY: "fork" (default) ttnn.bringup.prepare_chunk_recurrence(precise_gate_factors=True), the anchored gate
+# GLM_KDA_DECAY: "exact" (default since 2026-10-27: 56k last-chunk top1 0.86-0.87 vs fork 0.69-0.71, +4% prefill - see
+# below); "fork" ttnn.bringup.prepare_chunk_recurrence(precise_gate_factors=True), the anchored gate
 # exponents formed exactly inside chunk preparation; "precise" k_dec_t recomputed by ttnn ops after the source op
 # (_PreciseDecayRecurrence, +1.4 ms per layer); "kernel" the source op's own terms (TF32-biased near the -5 bound:
-# fails the layer-0 KDA state check, worst head 0.0548 > 0.05)
-KDA_DECAY = os.environ.get("GLM_KDA_DECAY", "fork")
-assert KDA_DECAY in ("fork", "precise", "kernel"), KDA_DECAY
+# fails the layer-0 KDA state check, worst head 0.0548 > 0.05); "exact" the fork plus the forked
+# recurrent_chunk_scan with decay_complement: the per-chunk decay as d = 1 - exp(G_last) in fp32 and the state update
+# S - S d + U with the state and the sums in fp32 in DST (_ExactDecayRecurrence)
+KDA_DECAY = os.environ.get("GLM_KDA_DECAY", "exact")
+assert KDA_DECAY in ("fork", "precise", "kernel", "exact"), KDA_DECAY
 PRECISE_DECAY = KDA_DECAY == "precise"
 
 
@@ -203,13 +206,46 @@ class _ForkPrepRecurrence(KDARecurrence):
             kda.prepare_chunk_recurrence = orig
 
 
+class _ExactDecayRecurrence(KDARecurrence):
+    """KDARecurrence with an exact inter-chunk decay (prototype). ttKDA keeps the per-chunk decay alpha = exp(G_last)
+    in bf16 (KDA_PREP_OUTPUT_BF16_MASK bit 5: a slow channel's alpha ~0.9995 rounds to 1.0) and the scans apply it as
+    alpha * S + U on the FPU, reading the fp32 state and alpha through TF32 source registers (truncated: an extra
+    decay of ~2^-11 per read, as large as a slow channel's whole decay). Here chunk preparation (bring-up fork,
+    precise_gate_factors + decay_complement) writes d = 1 - exp(G_last) in fp32 from the exact G_last, and the
+    recurrence / summary scans (bring-up fork of recurrent_chunk_scan, decay_complement) form S - S * d + U with S
+    and the sums in fp32 in DST (S * d through TF32 is a relative 2^-10 of a term of size d S)."""
+
+    def __call__(self, **kwargs):
+        kda = ttnn.experimental.kda
+        orig = (kda.prepare_chunk_recurrence, kda.recurrent_chunk_scan, kda.summarize_chunk_recurrence)
+
+        def prep(*a, output_bf16_mask=0, **kw):
+            return ttnn.bringup.prepare_chunk_recurrence(
+                *a,
+                output_bf16_mask=output_bf16_mask & ~(1 << 5),
+                precise_gate_factors=True,
+                decay_complement=True,
+                **kw,
+            )
+
+        kda.prepare_chunk_recurrence = prep
+        kda.recurrent_chunk_scan = functools.partial(ttnn.bringup.recurrent_chunk_scan, decay_complement=True)
+        kda.summarize_chunk_recurrence = functools.partial(
+            ttnn.bringup.summarize_chunk_recurrence, decay_complement=True
+        )
+        try:
+            return super().__call__(**kwargs)
+        finally:
+            kda.prepare_chunk_recurrence, kda.recurrent_chunk_scan, kda.summarize_chunk_recurrence = orig
+
+
 class _GlmKDA(ttKDA):
     """ttKDA with GLM's projection matmul configs, its fidelity override and the row-partial output path."""
 
     def __init__(self, *args, program_config, **kwargs):
         super().__init__(*args, program_config=program_config, **kwargs)
-        if KDA_DECAY == "fork":
-            self.recurrence = _ForkPrepRecurrence(
+        if KDA_DECAY in ("fork", "exact"):
+            self.recurrence = (_ForkPrepRecurrence if KDA_DECAY == "fork" else _ExactDecayRecurrence)(
                 self.device,
                 program_config.recurrence,
                 sequence_parallel_axis=self.sequence_parallel_axis,
@@ -236,6 +272,11 @@ class _GlmKDA(ttKDA):
         # (GLM_KDA_PREP_L1=1 tries L1).
         if os.environ.get("GLM_KDA_PREP_L1", "0") != "1":
             self.recurrence._preparation_memory = ttnn.DRAM_MEMORY_CONFIG
+        if KDA_DECAY == "exact":
+            # the exact scans' static CBs (+ the exact state ring) clash with ttKDA's L1-resident tensors at shorter
+            # chunks (2048: q/k/v, gate and norm output fit their L1 budgets there); keep those in DRAM
+            self.qkv_memory_config = self.decay_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            self.norm_output_memory_config = self.partial_output_memory_config = ttnn.DRAM_MEMORY_CONFIG
         # explicit projection schedules (tt/mm_configs.py; tests/test_matmul_tune.py at 2560 rows per chip): input
         # projection minimal_matmul M4 K8 N8 sb4x1 (ttnn.linear auto 1.405 -> 1.169 ms, 90% of HiFi4; _project_inputs),
         # o_proj 2D multicast (0.496 -> 0.444 ms)

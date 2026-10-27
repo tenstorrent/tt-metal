@@ -164,8 +164,13 @@ std::vector<Tensor> prepare_chunk_recurrence(
     uint32_t sequence_parallel_axis,
     float gate_scale,
     uint32_t beta_logits_column_offset,
-    bool precise_gate_factors) {
+    bool precise_gate_factors,
+    bool decay_complement) {
     TT_FATAL(std::isfinite(gate_scale), "prepare_chunk_recurrence: gate_scale must be finite");
+    TT_FATAL(
+        !decay_complement || (precise_gate_factors && !(output_bf16_mask & (1U << 5))),
+        "prepare_chunk_recurrence: decay_complement needs precise_gate_factors and an FP32 final_decay (mask bit 5 "
+        "clear)");
     TT_FATAL(!actual_end || actual_start, "prepare_chunk_recurrence: actual_end requires actual_start");
     if (actual_start) {
         kda_factory_detail::check_actual_start(q, *actual_start, "prepare_chunk_recurrence");
@@ -199,6 +204,7 @@ std::vector<Tensor> prepare_chunk_recurrence(
             .gate_scale = gate_scale,
             .beta_logits_column_offset = beta_logits_column_offset,
             .precise_gate_factors = precise_gate_factors,
+            .decay_complement = decay_complement,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         PrepareChunkRecurrenceInputs{

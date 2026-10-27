@@ -418,3 +418,151 @@ The comparator's negative control (+1 on one output) is flagged on every chip.
   0.58 -> ~0.31 ms at the longest context, attention 8.72 -> 8.42 ms (replicated cache 8.21); still bit-identical
   (test_striped_latent.py, chunks 2048 and 5120). Full model 56k: warm prefill 5.70 s (9878 tok/s; 6.07-6.16 s in
   the runs above), top1 0.6816 / top5 0.8865 (unchanged).
+
+## Accuracy gap vs the CPU reference, KDA first (2026-10-27)
+
+Why: last-chunk next-token top1 vs the text is 0.69-0.71 on the device vs 0.908 for the fp32 CPU golden (s56320, chunk
+10, all 5119 rows); find where the ~21 pts go. Scratch tools (not committed): tests/zz_scratch_kda_capture.py (whole
+model, 56k prefill; saves every KDA layer's input per chunk, every KDA state per chunk boundary and every state at
+51200; then re-runs the last chunk with swapped context states / host-exact KDA), scratchpad exact_kda.py (the CPU
+reference KDA on the device's own captured inputs: device state vs exact state, per layer and boundary),
+emu_kda.py (CPU emulation of the device recurrence's roundings on one layer's real inputs), ref_lastchunk.py (CPU
+reference last chunk from the golden context with block-float experts). Logs and data in the session scratchpad.
+
+Context swap, current tree (KDA prep fork, block experts), last chunk from the device's own 51200 context:
+| variant | top1 vs text | top5 | top1 vs CPU argmax | final hidden PCC |
+| device context (fork) | 0.6908 | 0.8916 | 0.7181 | 0.772 |
+| same, re-run (noise) | 0.6900 | 0.8920 | 0.7173 | 0.772 |
+| golden KDA states | 0.8711 | 0.9828 | 0.9064 | 0.938 |
+| every state golden | 0.8683 | 0.9811 | 0.9053 | 0.938 |
+| main's prep op (GLM_KDA_DECAY=kernel), device context | 0.7054 | 0.9006 | 0.7343 | 0.785 |
+| fork + final_decay fp32 (prep output mask 0x6) | 0.7980 | 0.9506 | 0.8275 | 0.868 |
+Reading: as on 2026-10-20, the context loss is all in the KDA recurrent state (golden KDA states = all golden, 0.87);
+the MLA / indexer caches cost nothing measurable. The fork vs main's op is within the ~1.5 pt run-to-run noise
+(0.691 vs 0.705). The KDA state's per-chunk decay alpha = exp(G_last) stored in bf16 (ttKDA's
+KDA_PREP_OUTPUT_BF16_MASK bit 5) alone costs 11 pts of top1.
+| golden context + the exact fp32 KDA on the host for every KDA layer of the chunk | 0.8695 | 0.9816 | 0.9064 | 0.939 |
+| device context (saved) + host-exact KDA in the chunk | 0.7062 | 0.9006 | 0.7330 | 0.785 |
+| device context (saved), device KDA (re-run of the saved context) | 0.7031 | 0.8984 | 0.7318 | 0.785 |
+Within-chunk KDA numerics cost nothing measurable (host-exact KDA = device KDA on either context): the whole KDA loss
+is the state carried between chunks. Run-to-run noise even on one saved context is ~1.3 pt (the combine's sums).
+
+Why the carried state drifts (Q1). Layer 2 (dense layers 0-2 see the embedding, so their inputs are the reference's
+to bf16): device state vs the exact fp32 recurrence on the same (captured) inputs, rel L2 / norm ratio / worst head:
+| position | 5120 | 25600 | 51200 | 56320 |
+| fork (default) | 0.031 / 1.00 / 0.11 | 0.119 / 1.03 / 0.45 | 0.179 / 1.04 / 0.70 | 0.187 / 1.05 / 0.72 (h56 1.56x) |
+| main's op (kernel), 56320 | | | | 0.187 / 1.05 / 0.72 |
+| fork + fp32 final_decay (0x6), 56320 | | | | 0.169 / 0.92 / 0.28 (median head 0.08) |
+The fork vs main's op makes no difference to the carried state. CPU emulation of the device's chunk form on the same
+inputs (scratchpad emu_kda.py; the SP2 grouped path: 5 groups of 16 chunks per rank summarized as affine maps,
+composed per rank, the carry = rank 1 o rank 0 = select_final_carry's unsplit case) reproduces the device:
+| emulated roundings (all on layer 2's real inputs), 56320 | rel | ratio | worst head |
+| everything as the device (bf16 alpha, TF32 alpha / state reads, bf16 summaries, ...) | 0.194 | 1.031 | 0.75 |
+| same without bf16 alpha (= the 0x6 run) | 0.157 | 0.924 | 0.34 |
+| sequential, one effect alone: bf16 alpha | 0.249 | 1.092 | 0.93 |
+| ... alpha read through TF32 once / as the prep forms it (TF32 copy, square, TF32 transpose) | 0.050 / 0.120 | 0.98 / 0.95 | |
+| ... the scan's decay multiply / update add reading the fp32 state at TF32 (truncated), each | 0.076 | 0.963 | 0.17 |
+| ... both, rounded to nearest instead of truncated | 0.024 | 1.003 | 0.05 |
+| ... matmul operands at TF32, bf16 kd / q_decay, bf16 gate: each | <= 0.0002 | | |
+| proposed fix: d = 1 - exp(G_last) in fp32, S - S d + U with S and the sums in fp32, plus every other device rounding (grouped path, TF32 A extraction, bf16 summaries, TF32 matmuls) | 0.014 | 0.995 | 0.05 |
+| proposed fix, bf16 summaries only | 0.003 | 0.999 | 0.006 |
+So the state drift is two biases on the slow channels (alpha ~0.9995 per 32 tokens): alpha stored in bf16 rounds to
+1.0 (no decay: state too large, h56 1.56x), and every TF32 read of the fp32 state or of alpha truncates (an extra
+decay of ~2^-11 per read, as large as the channel's own: state too small). They partly cancel, so the default's state
+error looks smaller than either alone; removing only the bf16 (0x6) helps top1 by 11 pts although the state rel
+barely moves (the slowest heads, which carry long context, improve: worst head 0.72 -> 0.28).
+
+fp32 final_decay (ttKDA's prep bf16 mask 0x26 -> 0x6), cost (asked before making it the default): tests/test_perf.py
+through tests/zz_scratch_perf_mask.py (only the mask differs), interleaved, same tree: warm 56k prefill 0x26 4.81 /
+4.88 s, 0x6 4.88 / 4.85 s (11706 / 11538 vs 11538 / 11621 tok/s: no difference beyond noise); last-chunk top1
+0.701 / 0.714 vs 0.793 / 0.795. One KDA layer (layer 0 weights, chunk 5120, synced wall, tests/zz_scratch_kda_op_time.py,
+3 interleaved reps): chunk preparation 0.60-0.68 -> 0.68-0.75 ms (+~0.07 ms: final_decay [H, N, K, 1] is K tiles per
+chunk, 2 -> 4 KB each), recurrence and whole attention within their +-0.4 ms wall noise; x 34 KDA layers ~2.4 ms per
+5120 chunk (~0.5%).
+
+Prototype fix, GLM_KDA_DECAY=exact (tt/kda_attention.py _ExactDecayRecurrence; new fork ttnn.bringup.recurrent_chunk_scan
+/ summarize_chunk_recurrence with decay_complement, prepare_chunk_recurrence fork's new decay_complement; CHANGELOGs):
+chunk preparation writes d = 1 - exp(G_last) in fp32 from the exact G_last in DST; both scans form S - S d + U with S
+unpacked losslessly to DST (a second, exact copy of the state, packed next to the matmul copy) and the sums as SFPU ops
+in fp32. Why this form: any FPU read of alpha ~0.9995 or of the fp32 state truncates by up to the slow channel's own
+decay; d keeps its relative precision through TF32, and S d is small.
+- Layers 0-2 alone over 56k (tests/zz_scratch_kda_drift.py), state vs golden at 56320 rel / worst head: L0 0.013 /
+  0.022, L1 0.020 / 0.032, L2 0.017 / 0.031 (fork 0.046 / 0.09, 0.176 / 0.33, 0.194 / 0.72). The emulation predicted
+  0.014 for L2.
+- Whole model, last chunk: top1 vs text 0.8613 / 0.8631 (run, re-run of the saved context), top5 0.978, top1 vs the CPU
+  argmax 0.899, final hidden PCC 0.934 (fork 0.69-0.71 / 0.89 / 0.72 / 0.77; golden KDA states 0.873). KDA state vs
+  golden at 56320 per layer (rel, device vs golden, includes the input error of the layers above): fork 0.05-0.54,
+  0x6 0.04-0.53, exact 0.013 (L0) .. 0.10 (L20) .. 0.22 (L44).
+- Cost (tests/test_perf.py, interleaved, GLM_KDA_DECAY only): warm 56k prefill exact 5.02 / 4.93 s (11221 / 11416
+  tok/s) vs fork 4.83 / 4.74 s (11659 / 11875): +0.19 s, +4% (~+0.5 ms per KDA layer per 5120 chunk); last-chunk top1
+  0.870 / 0.873 vs 0.691 / 0.702, top5 0.981 / 0.980 vs 0.891 / 0.899. The exact update is unoptimized (two state
+  tiles per DST acquire, an init per op, an extra pack of the state); room to win most of that back.
+- Per chunk (tests/test_accuracy.py, device LM head, all rows), top1 vs text:
+| chunk start (k) | 0 | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 | all rows |
+| CPU golden | 0.967 | 0.953 | 0.955 | 0.949 | 0.948 | 0.937 | 0.933 | 0.922 | 0.902 | 0.888 | 0.908 | |
+| exact | 0.954 | 0.930 | 0.925 | 0.920 | 0.919 | 0.910 | 0.902 | 0.893 | 0.868 | 0.864 | 0.867 | 0.9046 |
+| fork (default) | 0.954 | 0.930 | 0.928 | 0.922 | 0.916 | 0.905 | 0.887 | 0.865 | 0.803 | 0.775 | 0.710 | 0.8723 |
+  With exact the position decay is gone: a ~3 pt gap to the CPU at every chunk (1.3 at chunk 0, 4.2 at the last).
+
+Within one chunk (golden context, last chunk, 5 repeats in one process; repeats agree to 0.0005): default 0.8681 ..
+0.8722, attention (MLA / indexer / sparse SDPA / q_a) at HiFi4 0.8676 .. 0.8705, routed experts at HiFi4 0.8693 ..
+0.8718: neither fidelity is the within-chunk 3.7 pts (CPU 0.908). Host-exact KDA within the chunk: 0.8695 (above).
+
+Error injected per module, last chunk, every layer run alone from the golden input and golden state (teacher forced,
+tests/zz_scratch_module_err.py; rel L2 of the step output vs the golden boundary, the step's input rel in brackets):
+attn_norm 0.003; attention 0.014 mean (KDA 0.007-0.015, DSA layers 0.017-0.028) [0.003]; h_mid 0.004; ffn_norm 0.006;
+the MoE block (routed + shared vs golden mlp_out) 0.148 mean, 0.087 (L3) .. 0.185 (L36), 0.059 (L44) [0.004-0.012];
+dense MLP 0.009; layer output 0.041 mean (0.016-0.072). The MoE block is ~10x every other module, per layer.
+
+KDA state, all 34 layers, fork (default) run, at 56320 (scratchpad exact_kda.py: the reference KDA re-run on the device's
+own captured inputs, so "numerics" = device vs exact on the same inputs, "input" = exact on the device inputs vs golden):
+| layers | numerics: rel (ratio) | input-driven: rel | device vs golden |
+| L0 / L1 / L2 | 0.046 (0.99) / 0.176 (1.03) / 0.187 (1.05) | 0.001 / 0.015 / 0.052 | 0.046 / 0.176 / 0.194 |
+| L4-L14 | 0.04-0.39 (L10 0.39, ratio 1.17, h25 2.1x) | 0.03-0.11 | 0.07-0.41 |
+| L16-L26 | 0.12-0.22 (1.02-1.14) | 0.08-0.27 | 0.18-0.31 |
+| L28-L44 | 0.06-0.26 (0.95-1.11) | 0.07-0.46 | 0.09-0.54 |
+Drift with length (Q1), layers 0-2 vs the exact recurrence on the same inputs, rel / worst head, at 5k / 15k / 25k / 56k:
+fork L1 0.047/0.06, 0.092/0.14, 0.118/0.19, 0.176/0.33; L2 0.031/0.11, -, 0.119/0.45, 0.187/0.72; main's op identical
+to 1e-3; exact 0.013-0.024 flat (L1 0.013 -> 0.024, worst head 0.02 -> 0.05). The fork does not remove the drift; the
+prototype does. Deep layers' state error with the fork is mostly numerics in the slow heads (ratio > 1: bf16 alpha);
+input noise (bfp4 upstream) grows to 30-46% past L28 but costs ~1 pt of top1 (exact 0.862 vs golden KDA states 0.873).
+Within the chunk the device KDA output is 0.7-2% from exact on the same input and state ("y vs exact(dev state)").
+- Exact at chunk 2048 first failed allocation (the exact state ring's static CBs clash with ttKDA's L1-resident q/k/v,
+  gate and norm output there); exact mode now keeps those four in DRAM (no change at 5120, where they are DRAM
+  already). Layer-0 KDA component test (s4096 chunk 1): exact PASS, output rel 0.0075, state rel 0.0119 / worst head
+  0.022 (fork 0.0076, 0.0183 / 0.0269).
+- Tried and reverted: the state / state_ring buffers themselves unpacked to DST (no second exact copy, -256 KB L1):
+  matmuls reading an UnpackToDest buffer produce garbage (inf everywhere).
+- Tried: the exact scans with full-sync DST (4 state tiles per acquire instead of 2): warm 56k 4.96 s (exact 4.93-5.02), no gain; reverted.
+- s4096 ladder (chunk 2048) does not run on this tree, independent of the KDA mode: sparse_sdpa asserts seq_len_local 7040 (56320 / 8) not divisible by the striped latent's chunk_local 256.
+
+bfp4 experts alone (offline, scratchpad experts_bfp4.py: the reference experts on the golden ffn_norm and golden routing,
+fp32 weights vs block-float-4 weights emulated in torch, blocks of 16 outputs as the device tiles hold them):
+bfp4 experts vs exact rel 0.156 (L4) / 0.156 (L20) / 0.194 (L36); (bfp4 + golden shared) vs golden mlp_out 0.148 /
+0.128 / 0.181 - the device block's measured 0.153 / 0.138 / 0.185. So the MoE block's error is ~all bfp4 weight
+quantization; bfp4 also biases the routed output up by 1.1-1.3% (gain 1.0107 / 1.0132 / 1.0128).
+
+Summary (last chunk top1 vs text; CPU golden 0.908):
+- device today (fork) 0.69-0.71; the context costs 17-18 pts, all of it the KDA recurrent state (golden KDA states
+  -> 0.871, = every state golden 0.868); within the chunk 3.7 pts (golden context 0.868-0.872).
+- KDA state: per-chunk decay alpha in bf16 (-11 pts; fp32 alpha 0.79-0.80) plus TF32-truncated reads of the fp32 state
+  and of alpha in the prep / scans (the other ~7 pts; exact prototype 0.861-0.873). Fork vs main's op: no difference.
+- Within the chunk: KDA numerics 0 (host-exact KDA = device), attention / expert fidelity 0 (HiFi4 = default), the MoE
+  block's 15% per-layer error ~ all bfp4 weights (above). CPU reference with bfp4 experts, last chunk from the golden
+  context (scratchpad ref_lastchunk.py bfp4 / bfp4g): see below when done.
+- CPU reference, last chunk from the golden context, everything fp32 except the routed experts' weights in bfp4
+  (ref_lastchunk.py bfp4, 86 min on the CPU): top1 vs text 0.8740, top5 0.9814, top1 vs the golden argmax 0.9101, final
+  norm rel 0.35 (layer out rel vs golden L3 0.060, L10 0.104, L20 0.188, L30 0.209, L44 0.319). The device on the same
+  golden context: 0.868-0.872 / 0.981 / 0.905-0.908. So the within-chunk 3.5 pts are the bfp4 expert weights (3.4 pts),
+  the rest of the device numerics ~0.5 pt (within noise). The bfp4 gain-corrected variant (bfp4g) was stopped at the
+  wrap-up, not measured.
+
+Accuracy levers, ranked (last-chunk top1 vs text; CPU 0.908, device today 0.69-0.71):
+1. Exact KDA inter-chunk decay (GLM_KDA_DECAY=exact prototype): +17 pts (0.861-0.873), all-row 0.872 -> 0.905; +4%
+   prefill (unoptimized), +~256 KB static L1 per scan core in the summary scan.
+2. fp32 final_decay alone (prep mask 0x26 -> 0x6): +10 pts (0.79-0.80), no measurable cost. A strict subset of 1.
+3. bfp4 routed experts: 3.4 pts at every chunk (CPU-emulated); options bfp8 on some layers (5.4 GB free per chip after
+   load), or correcting bfp4's +1.1-1.3% output gain (untested).
+4. Left in the KDA state after 1: ~1 pt (exact 0.862 vs golden KDA states 0.873): the summaries' TF32 A extraction and
+   bf16 transforms (emulated 1.4% state rel on L2) plus input noise from 3.
+5. Attention / expert fidelity, KDA within-chunk numerics, kd / q_decay / gate bf16: no measurable effect.

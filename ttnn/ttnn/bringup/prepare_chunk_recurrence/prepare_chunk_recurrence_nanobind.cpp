@@ -60,6 +60,10 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
             precise_gate_factors (bool): Form the anchored gate exponents exp(G - G_last/2), exp(G_last/2 - G)
                 and exp(G_last/2) as exact matmuls of the BF16 gate with constant masks, exponentiated in DST,
                 instead of reading the FP32 cumulative gate back at TF32 precision. Defaults to False.
+            decay_complement (bool): ``final_decay`` holds d = 1 - exp(G_last) in FLOAT32 (from the exact
+                G_last in DST) instead of exp(G_last): the input of ``ttnn.bringup.recurrent_chunk_scan``'s
+                ``decay_complement``. Needs ``precise_gate_factors`` and bit 5 of ``output_bf16_mask`` clear.
+                Defaults to False.
 
         Returns:
             list[ttnn.Tensor]: Seven new TILE-layout tensors, where ``N = T / 32``, in order:
@@ -93,7 +97,8 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("gate_scale") = 1.0F,
         nb::arg("beta_logits_column_offset") = 0,
-        nb::arg("precise_gate_factors") = false);
+        nb::arg("precise_gate_factors") = false,
+        nb::arg("decay_complement") = false);
 }
 
 }  // namespace ttnn::operations::bringup::prepare_chunk_recurrence::detail
