@@ -164,16 +164,9 @@ ttnn::device_operation::ProgramArtifacts AttnMatmulProgramFactory::create_progra
     };
 
     // ---- Compute hardware config ----
-    // The legacy descriptor applied only math_fidelity and fp32_dest_acc_en from the resolved compute
-    // kernel config; math_approx_mode and dst_full_sync_en were resolved but never set, so the kernel
-    // always ran with a precise SFPU and a double-buffered Dest, whatever the caller passed.
-    // packer_l1_acc has no Metal 2.0 counterpart. Reproduce exactly that.
     ComputeHardwareConfig compute_hw = to_compute_hardware_config(operation_attributes.compute_kernel_config);
     compute_hw.sfpu_precision_mode = Precision::Precise;
     compute_hw.double_buffer_dest = true;
-    // Metal 2.0 requires an explicit unpack mode for every Float32 DFB the compute kernel consumes
-    // while the Dest register is 32-bit; the legacy descriptor left unpack_to_dest_mode at its default
-    // (unpack to SrcA/B), so mirror that. The compute kernel consumes in0, in1, intermed0 and intermed2.
     if (compute_hw.enable_32_bit_dest) {
         if (in0_data_format == tt::DataFormat::Float32) {
             compute_hw.unpack_modes.emplace(IN0, UnpackMode::UnpackToSrc);
@@ -279,8 +272,6 @@ ttnn::device_operation::ProgramArtifacts AttnMatmulProgramFactory::create_progra
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    // intermed0 is touched by the compute kernel alone (it packs the matmul result into it and
-    // untilizes it out again), so the kernel binds both ends.
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source =
