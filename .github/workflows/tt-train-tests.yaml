@@ -174,7 +174,7 @@ jobs:
       - name: ⬇️ Download packages
         if: ${{ inputs.package-artifact-name != '' }}
         uses: ./docker-job/.github/actions/download-artifact-with-retry
-        timeout-minutes: 15
+        timeout-minutes: 10
         with:
           name: ${{ inputs.package-artifact-name }}
           path: /work/pkgs/
