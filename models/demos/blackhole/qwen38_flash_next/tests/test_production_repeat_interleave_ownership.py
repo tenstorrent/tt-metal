@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from models.demos.blackhole.qwen38_flash_next.ttnn import model as model_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.model import Qwen38TTNNModelPoisonedError, Qwen38TTNNTextModel
 
@@ -15,20 +17,8 @@ class _Tensor:
         self.tensor_id = id(self)
 
 
-def _local_names(tensor: _Tensor) -> list[str]:
-    return [f"{tensor.name}-local-{index}" for index in range(4)]
-
-
 class _Embedding:
-    def __init__(
-        self,
-        token: _Tensor,
-        hidden: _Tensor,
-        events: list[str],
-        *,
-        fail: bool = False,
-        poisoned: bool = False,
-    ) -> None:
+    def __init__(self, token: _Tensor, hidden: _Tensor, events: list[str], *, fail: bool, poisoned: bool) -> None:
         self.token = token
         self.hidden = hidden
         self.events = events
@@ -47,40 +37,31 @@ class _Embedding:
         return self.hidden
 
 
-def _owner(events: list[str], *, fail_embedding: bool = False, poisoned_embedding: bool = False):
-    token = _Tensor("token")
-    hidden = _Tensor("hidden")
-    residual = _Tensor("residual")
+def _embed_residual_fakes(
+    monkeypatch, *, fail_embedding=False, poisoned_embedding=False, fail_repeat=False, fail_sync=False
+):
+    """A bare text model whose ``_embed_residual`` runs on a fake embedding and ttnn; ``events`` logs the calls,
+    ``released`` the deallocated tensors and ``locals`` each mesh tensor's four device-local tensors."""
+    events: list[str] = []
+    released: list[_Tensor] = []
+    token, hidden, residual = _Tensor("token"), _Tensor("hidden"), _Tensor("residual")
     owner = object.__new__(Qwen38TTNNTextModel)
     owner.mesh_device = object()
     owner.model_io = SimpleNamespace(
-        embedding=_Embedding(token, hidden, events, fail=fail_embedding, poisoned=poisoned_embedding),
+        embedding=_Embedding(token, hidden, events, fail=fail_embedding, poisoned=poisoned_embedding)
     )
     owner._poisoned_error = None
     owner._poisoned_device_owners = []
     owner._active_snapshot = None
     owner._validate_hidden = lambda tensor, **_kwargs: events.append(f"validate-{tensor.name}")
     owner._validate_residual = lambda tensor, **_kwargs: events.append(f"validate-{tensor.name}")
-    return owner, token, hidden, residual
 
+    def device_locals(tensor):
+        return tuple(_Tensor(f"{tensor.name}-local-{index}") for index in range(4))
 
-def _install_runtime(
-    monkeypatch,
-    events: list[str],
-    token: _Tensor,
-    hidden: _Tensor,
-    residual: _Tensor,
-    *,
-    fail_repeat=False,
-    fail_sync=False,
-):
-    released: list[_Tensor] = []
-    locals_by_mesh = {
-        tensor: tuple(_Tensor(name) for name in _local_names(tensor)) for tensor in (token, hidden, residual)
-    }
+    locals_by_mesh = {tensor: device_locals(tensor) for tensor in (token, hidden, residual)}
 
     def repeat_interleave(tensor, *, repeats, dim, memory_config):
-        del memory_config
         events.append(f"repeat-{tensor.name}-{repeats}-{dim}")
         if fail_repeat:
             raise RuntimeError("synthetic repeat-interleave enqueue failure")
@@ -93,7 +74,7 @@ def _install_runtime(
 
     def get_device_tensors(tensor):
         events.append(f"locals-{tensor.name}")
-        return locals_by_mesh.setdefault(tensor, tuple(_Tensor(name) for name in _local_names(tensor)))
+        return locals_by_mesh.setdefault(tensor, device_locals(tensor))
 
     def deallocate(tensor):
         events.append(f"deallocate-{tensor.name}")
@@ -103,17 +84,28 @@ def _install_runtime(
     monkeypatch.setattr(model_module.ttnn, "get_device_tensors", get_device_tensors)
     monkeypatch.setattr(model_module.ttnn, "synchronize_device", synchronize_device)
     monkeypatch.setattr(model_module.ttnn, "deallocate", deallocate)
-    return released, locals_by_mesh
+    return SimpleNamespace(
+        owner=owner,
+        token=token,
+        hidden=hidden,
+        residual=residual,
+        events=events,
+        released=released,
+        locals=locals_by_mesh,
+    )
 
 
-def test_success_enqueues_repeat_before_releasing_producer_owners(monkeypatch) -> None:
-    events: list[str] = []
-    owner, token, hidden, residual = _owner(events)
-    released, _locals = _install_runtime(monkeypatch, events, token, hidden, residual)
+@pytest.mark.parametrize("fail_sync", [False, True], ids=["success", "synchronize would fail"])
+def test_success_enqueues_repeat_before_releasing_producer_owners_and_is_trace_capturable(
+    monkeypatch, fail_sync: bool
+) -> None:
+    """The repeat is enqueued before the producers are released and nothing synchronizes, so the path is trace
+    capturable even where a synchronize would fail."""
+    fakes = _embed_residual_fakes(monkeypatch, fail_sync=fail_sync)
 
-    assert owner._embed_residual(object()) is residual
+    assert fakes.owner._embed_residual(object()) is fakes.residual
 
-    assert events == [
+    assert fakes.events == [
         "upload",
         "embedding",
         "validate-hidden",
@@ -125,86 +117,56 @@ def test_success_enqueues_repeat_before_releasing_producer_owners(monkeypatch) -
         "deallocate-token",
         "deallocate-hidden",
     ]
-    assert released == [token, hidden]
-    assert owner._poisoned_device_owners == []
-    assert not owner.poisoned
+    assert fakes.released == [fakes.token, fakes.hidden]
+    assert fakes.owner._poisoned_device_owners == []
+    assert not fakes.owner.poisoned
 
 
-def test_success_is_trace_capturable_even_if_synchronize_would_fail(monkeypatch) -> None:
-    events: list[str] = []
-    owner, token, hidden, residual = _owner(events)
-    released, locals_by_mesh = _install_runtime(monkeypatch, events, token, hidden, residual, fail_sync=True)
-
-    assert owner._embed_residual(object()) is residual
-
-    assert "synchronize" not in events
-    assert released == [token, hidden]
-    assert owner._poisoned_device_owners == []
-    assert not owner.poisoned
-
-
-def test_repeat_enqueue_failure_retains_sources_without_cleanup_or_retry(monkeypatch, expect_error) -> None:
-    events: list[str] = []
-    owner, token, hidden, residual = _owner(events)
-    released, locals_by_mesh = _install_runtime(monkeypatch, events, token, hidden, residual, fail_repeat=True)
+@pytest.mark.parametrize("failure", ["repeat enqueue", "post-enqueue contract"])
+def test_repeat_failure_retains_the_live_owners_without_cleanup_retry_or_fence(
+    monkeypatch, expect_error, failure: str
+) -> None:
+    """A repeat enqueue failure retains the sources; a residual contract failure after the enqueue retains the output
+    too; neither releases, retries the repeat or synchronizes."""
+    fakes = _embed_residual_fakes(monkeypatch, fail_repeat=failure == "repeat enqueue")
+    if failure == "post-enqueue contract":
+        fakes.owner._validate_residual = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("synthetic residual contract failure")
+        )
 
     with expect_error(Qwen38TTNNModelPoisonedError, "initial residual repeat-interleave"):
-        owner._embed_residual(object())
+        fakes.owner._embed_residual(object())
 
-    assert released == []
-    assert owner._poisoned_device_owners == [token, *locals_by_mesh[token], hidden, *locals_by_mesh[hidden]]
-    assert events.count("repeat-hidden-4-1") == 1
-    assert "synchronize" not in events
-
-
-def test_post_enqueue_contract_failure_retains_output_and_skips_fence(monkeypatch, expect_error) -> None:
-    events: list[str] = []
-    owner, token, hidden, residual = _owner(events)
-    owner._validate_residual = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        RuntimeError("synthetic residual contract failure")
-    )
-    released, locals_by_mesh = _install_runtime(monkeypatch, events, token, hidden, residual)
-
-    with expect_error(Qwen38TTNNModelPoisonedError, "initial residual repeat-interleave"):
-        owner._embed_residual(object())
-
-    assert released == []
-    assert owner._poisoned_device_owners == [
-        token,
-        *locals_by_mesh[token],
-        hidden,
-        *locals_by_mesh[hidden],
-        residual,
-        *locals_by_mesh[residual],
+    owners = (fakes.token, fakes.hidden) + ((fakes.residual,) if failure == "post-enqueue contract" else ())
+    assert fakes.released == []
+    assert fakes.owner._poisoned_device_owners == [
+        item for tensor in owners for item in (tensor, *fakes.locals[tensor])
     ]
-    assert "synchronize" not in events
+    assert fakes.events.count("repeat-hidden-4-1") == 1
+    assert "synchronize" not in fakes.events
 
 
 def test_pre_repeat_embedding_failure_keeps_prior_cleanup_semantics(monkeypatch, expect_error) -> None:
-    events: list[str] = []
-    owner, token, hidden, residual = _owner(events, fail_embedding=True)
-    released, _locals = _install_runtime(monkeypatch, events, token, hidden, residual)
+    fakes = _embed_residual_fakes(monkeypatch, fail_embedding=True)
 
     with expect_error(RuntimeError, "synthetic embedding failure"):
-        owner._embed_residual(object())
+        fakes.owner._embed_residual(object())
 
-    assert released == [token]
-    assert owner._poisoned_device_owners == []
-    assert not owner.poisoned
-    assert not any(event.startswith("repeat-") for event in events)
-    assert "synchronize" not in events
+    assert fakes.released == [fakes.token]
+    assert fakes.owner._poisoned_device_owners == []
+    assert not fakes.owner.poisoned
+    assert not any(event.startswith("repeat-") for event in fakes.events)
+    assert "synchronize" not in fakes.events
 
 
 def test_async_embedding_failure_retains_uploaded_token_and_poisons_model(monkeypatch, expect_error) -> None:
-    events: list[str] = []
-    owner, token, hidden, residual = _owner(events, fail_embedding=True, poisoned_embedding=True)
-    released, locals_by_mesh = _install_runtime(monkeypatch, events, token, hidden, residual)
-    embedding_owner = owner.model_io.embedding.poisoned_device_owners[0]
+    fakes = _embed_residual_fakes(monkeypatch, fail_embedding=True, poisoned_embedding=True)
+    (embedding_owner,) = fakes.owner.model_io.embedding.poisoned_device_owners
 
     with expect_error(Qwen38TTNNModelPoisonedError, "token embedding asynchronous chain"):
-        owner._embed_residual(object())
+        fakes.owner._embed_residual(object())
 
-    assert released == []
-    assert owner._poisoned_device_owners == [embedding_owner, token, *locals_by_mesh[token]]
-    assert owner.poisoned
-    assert not any(event.startswith("repeat-") for event in events)
+    assert fakes.released == []
+    assert fakes.owner._poisoned_device_owners == [embedding_owner, fakes.token, *fakes.locals[fakes.token]]
+    assert fakes.owner.poisoned
+    assert not any(event.startswith("repeat-") for event in fakes.events)

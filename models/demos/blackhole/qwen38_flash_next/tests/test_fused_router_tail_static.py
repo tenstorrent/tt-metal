@@ -14,10 +14,14 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import program as fp
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import router_tail as rt
 
 
-def _llk_sort_with_pass_guard() -> str:
-    """The LLK's _bitonic_topk_phases_steps with `if (pass_mask & (1u << (face * 2 + col)))` around each pass's phase
-    loop -- what kernels/topk_lanes.h must contain, regenerated from the LLK source of this tree."""
+def _code(text):
+    return re.sub(r"\s+", "", re.sub(r"//[^\n]*|/\*.*?\*/", "", text, flags=re.S))
 
+
+def test_masked_sort_is_the_llk_sort_with_a_pass_guard():
+    # kernels/topk_lanes.h must contain the LLK's _bitonic_topk_phases_steps with
+    # `if (pass_mask & (1u << (face * 2 + col)))` around each pass's phase loop, regenerated from this tree's LLK.
+    header = (fp.REPO_ROOT / rt.LANES_HEADER).read_text()
     llk = (
         (fp.REPO_ROOT / "tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_topk.h").read_text().splitlines()
     )
@@ -35,16 +39,7 @@ def _llk_sort_with_pass_guard() -> str:
     close = next(i for i, l in enumerate(body) if l == "            dst_addr_offset += 2;")
     inner = ["    " + l if l.strip() else l for l in body[col_open + 1 : close]]
     guard = ["            if (pass_mask & (1u << (face * 2 + col)))", "            {"]
-    return "\n".join(body[: col_open + 1] + guard + inner + ["            }"] + body[close:])
-
-
-def _code(text):
-    return re.sub(r"\s+", "", re.sub(r"//[^\n]*|/\*.*?\*/", "", text, flags=re.S))
-
-
-def test_masked_sort_is_the_llk_sort_with_a_pass_guard():
-    header = (fp.REPO_ROOT / rt.LANES_HEADER).read_text()
-    expected = _llk_sort_with_pass_guard()
+    expected = "\n".join(body[: col_open + 1] + guard + inner + ["            }"] + body[close:])
     assert _code(expected) in _code(
         header
     ), "kernels/topk_lanes.h no longer matches the LLK's _bitonic_topk_phases_steps + guard"
@@ -64,10 +59,10 @@ def test_masked_sort_is_the_llk_sort_with_a_pass_guard():
     assert "VectorMode::RC_custom" in header and "calculate_bitonic_topk_phases_steps_lanes" in header
 
 
-def _llk_exp_precise_loop_with_vector_guard() -> str:
-    """The precise fp32-dest loop of the LLK's calculate_exponential with `if ((pair_mask >> (d >> 1)) & 1u)` around the
-    load / exp / store and the `dst_reg++` kept outside it -- what kernels/exp_live.h must contain."""
-
+def test_live_exp_is_the_llk_precise_loop_with_a_vector_guard():
+    # kernels/exp_live.h must contain the precise fp32-dest loop of the LLK's calculate_exponential with
+    # `if ((pair_mask >> (d >> 1)) & 1u)` around the load / exp / store and the `dst_reg++` kept outside it.
+    header = (fp.REPO_ROOT / rt.EXP_LIVE_HEADER).read_text()
     llk = (
         (fp.REPO_ROOT / "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h")
         .read_text()
@@ -90,7 +85,7 @@ def _llk_exp_precise_loop_with_vector_guard() -> str:
         "_ckernel_sfpu_exp_accurate_<SCALE_EN, is_fp32_dest_acc_en>(val, exp_base_scale_factor);",
     ], body
     assert body[4] == "sfpi::dst_reg++;" and body[5] == "}"
-    return "\n".join(
+    expected = "\n".join(
         [
             "    for (int d = 0; d < end; d++) {",  # end = 2 * (last live pair + 1): the face step is CR-based (see the header)
             "        if ((pair_mask >> (d >> 1)) & 1u) {",
@@ -101,11 +96,6 @@ def _llk_exp_precise_loop_with_vector_guard() -> str:
             "    }",
         ]
     )
-
-
-def test_live_exp_is_the_llk_precise_loop_with_a_vector_guard():
-    header = (fp.REPO_ROOT / rt.EXP_LIVE_HEADER).read_text()
-    expected = _llk_exp_precise_loop_with_vector_guard()
     assert expected in header, "kernels/exp_live.h no longer matches the LLK's precise exp loop + guard"
     assert "            end = 2 * (p + 1);" in header and "for (int p = 0; p < ITERATIONS / 2; p++) {" in header
     # the face step the trailing skip relies on: a carriage-return SETRWC (D = CR + 8, twice), not an increment of D

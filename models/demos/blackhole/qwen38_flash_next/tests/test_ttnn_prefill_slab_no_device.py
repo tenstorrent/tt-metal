@@ -9,13 +9,16 @@ chunk-input emulation, the driver's plan (slabs, then 128-row chunks, then 32-ro
 from __future__ import annotations
 
 import contextlib
-import itertools
 import math
 from types import SimpleNamespace
 
 import pytest
 import torch
 
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_prefill import (  # noqa: F401
+    prefill_context_after,
+    prefill_fakes,
+)
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_prefill_driver as driver_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import contracts as contracts_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import decode_matmul as decode_matmul_module
@@ -75,31 +78,9 @@ def test_slab_routes_its_rows_in_one_call_and_reduces_in_512_row_blocks() -> Non
         assert moe_module.moe_compute_output_height_shard_dim(SLAB, matmul_ring_size=ring) == 1
     assert moe_module.SLAB_REDUCE_BLOCK_ROWS == 512 and SLAB % moe_module.SLAB_REDUCE_BLOCK_ROWS == 0
     # a slab whose rows the 512-row blocks do not divide is refused at construction, not at its first slice
-    assert [rows for rows in range(256, 4097, 128) if rows % moe_module.SLAB_REDUCE_BLOCK_ROWS] == [
-        256,
-        384,
-        640,
-        768,
-        896,
-        1152,
-        1280,
-        1408,
-        1664,
-        1792,
-        1920,
-        2176,
-        2304,
-        2432,
-        2688,
-        2816,
-        2944,
-        3200,
-        3328,
-        3456,
-        3712,
-        3840,
-        3968,
-    ]
+    assert [rows for rows in range(256, 4097, 128) if rows % moe_module.SLAB_REDUCE_BLOCK_ROWS] == sorted(
+        set(range(256, 4097, 128)) - set(range(512, 4097, 512))
+    )
 
 
 class _AliasingTensor:
@@ -109,22 +90,23 @@ class _AliasingTensor:
         self.shape, self.name, self.dtype, self.layout = tuple(shape), name, dtype, layout
 
 
-def _slab_reduce_fakes(monkeypatch, rows: int):
-    """_weighted_reduce_slab_blocks on a fake ttnn whose slice/concat alias like the real ones (a full-extent slice and
-    a one-tensor concat return their input); returns the deallocated names and the reduce's call count."""
-    freed, reduced = [], []
+@pytest.mark.parametrize("rows", [512, 1024, 2048])
+def test_slab_reduce_never_frees_what_it_did_not_create(monkeypatch, rows: int) -> None:
+    """The slab reduce frees only what it created: a full-extent slice and a one-tensor concat return their input
+    (as the real ops do)."""
+    freed, reduced, marked = [], [], []
     K, H = moe_module.TOP_K, moe_module.HIDDEN_SIZE
 
     def slice_(tensor, start, end, memory_config):
         if start == (0,) * len(start) and tuple(end) == tensor.shape:
-            return tensor  # the alias the real op returns for a full-extent slice
+            return tensor
         return _AliasingTensor(
             tuple(e - s for s, e in zip(start, end)), f"{tensor.name}[{start[-2] if len(start) > 2 else start[1]}]"
         )
 
     def concat(tensors, dim, memory_config):
         if len(tensors) == 1:
-            return tensors[0]  # the alias the real op returns for one tensor
+            return tensors[0]
         shape = list(tensors[0].shape)
         shape[dim] = sum(t.shape[dim] for t in tensors)
         return _AliasingTensor(shape, "concat")
@@ -149,11 +131,9 @@ def _slab_reduce_fakes(monkeypatch, rows: int):
         ),
     )
     monkeypatch.setattr(moe_module, "ttnn", fake_ttnn)
-    combine = _AliasingTensor((K, rows, H), "combine")
     routing = SimpleNamespace(
         scores=_AliasingTensor((1, 1, rows, K), "scores"), indices=_AliasingTensor((1, 1, rows, K), "indices")
     )
-    marked = []
     owner = SimpleNamespace(
         rows=rows,
         expert_mapping="mapping",
@@ -162,28 +142,21 @@ def _slab_reduce_fakes(monkeypatch, rows: int):
         row_contract=SimpleNamespace(full_hidden=(1, 1, rows, H)),
     )
     partial = moe_module.Qwen38TTNNMoE._weighted_reduce_slab_blocks(
-        owner, combine, "full_hidden", routing, lambda phase: None
+        owner, _AliasingTensor((K, rows, H), "combine"), "full_hidden", routing, lambda phase: None
     )
-    return SimpleNamespace(partial=partial, freed=freed, reduced=reduced, marked=marked)
-
-
-@pytest.mark.parametrize("rows", [512, 1024, 2048])
-def test_slab_reduce_never_frees_what_it_did_not_create(monkeypatch, rows: int) -> None:
-    """The slab reduce frees only what it created: a full-extent slice and a one-tensor concat return their input."""
-    result = _slab_reduce_fakes(monkeypatch, rows)
     blocks = rows // moe_module.SLAB_REDUCE_BLOCK_ROWS
-    assert len(result.reduced) == blocks
-    assert result.partial.shape == (1, 1, rows, moe_module.HIDDEN_SIZE)
-    assert result.marked and result.marked[0][0] == result.partial.name
-    for name in ("combine", "scores", "indices", result.partial.name):
-        assert name not in result.freed, (name, result.freed)
+    assert len(reduced) == blocks
+    assert partial.shape == (1, 1, rows, moe_module.HIDDEN_SIZE)
+    assert marked and marked[0][0] == partial.name
+    for name in ("combine", "scores", "indices", partial.name):
+        assert name not in freed, (name, freed)
     if blocks == 1:
-        assert result.freed == ["view(tilized(reshape(combine)))"]  # only the tilized stack the method created
-        assert result.partial.name == "partial1"
+        assert freed == ["view(tilized(reshape(combine)))"]  # only the tilized stack the method created
+        assert partial.name == "partial1"
     else:
-        assert result.freed.count("combine[0]") == 1 and f"combine[{rows - 512}]" in result.freed
-        assert all(f"partial{i}" in result.freed for i in range(1, blocks + 1)) and result.partial.name == "concat"
-        assert all(f"scores[{s}]" in result.freed and f"indices[{s}]" in result.freed for s in range(0, rows, 512))
+        assert freed.count("combine[0]") == 1 and f"combine[{rows - 512}]" in freed
+        assert all(f"partial{i}" in freed for i in range(1, blocks + 1)) and partial.name == "concat"
+        assert all(f"scores[{s}]" in freed and f"indices[{s}]" in freed for s in range(0, rows, 512))
 
 
 @pytest.mark.parametrize("rows", [512, 2048])
@@ -336,13 +309,9 @@ def test_a_slab_routes_its_rows_or_128_tokens_per_call_and_never_32(
             fakes.build(rows, per_call)
         return
     module = fakes.build(rows, per_call)
-    assert (module.routed_tokens, module.routed_calls) == (expected, rows // expected), (
-        module.routed_tokens,
-        module.routed_calls,
-    )
+    assert (module.routed_tokens, module.routed_calls) == (expected, rows // expected)
     block_slab = is_slab_rows(rows) and expected == LONG_CHUNK_ROWS
-    assert module.block_slab is block_slab, (module.block_slab, block_slab)
-    assert (module.block_instance is not None) is block_slab, module.block_instance
+    assert module.block_slab is block_slab and (module.block_instance is not None) is block_slab
 
 
 def test_a_slab_off_the_512_row_reduce_blocks_is_refused_in_either_form(monkeypatch, expect_error) -> None:
@@ -354,51 +323,27 @@ def test_a_slab_off_the_512_row_reduce_blocks_is_refused_in_either_form(monkeypa
 
 
 @pytest.mark.parametrize("owned", [False, True], ids=["shared buffer", "own buffer"])
-def test_the_128_row_worker_borrows_the_block_slab_combine_buffer(monkeypatch, owned: bool) -> None:
+def test_the_128_row_worker_borrows_the_combine_buffer_and_is_released_first(monkeypatch, owned: bool) -> None:
     """The block slab's 128-row worker writes the parent's [10, 128, 2560] combine buffer (shared by every layer's
-    slab, or the parent's own) and borrows its weights and prefill dense policy; it owns only its expert mapping."""
+    slab, or the parent's own) and borrows its weights and prefill dense policy; it owns only its expert mapping.
+    ``release_owned_buffers`` releases the worker before the parent; the combine buffer is freed only by the instance
+    that allocated it, once: never by the worker, never when it is the shared one."""
     fakes = _moe_constructor_fakes(monkeypatch)
     shared = None if owned else _AliasingTensor((moe_module.TOP_K, 128, moe_module.HIDDEN_SIZE), "shared", "bf16", "rm")
     parent = fakes.build(SLAB, LONG_CHUNK_ROWS, shared)
     worker = parent.block_instance
-    expected_buffer = "own combine[128]" if owned else "shared"
-    assert parent.local_combine_output.name == expected_buffer, parent.local_combine_output.name
-    assert worker.local_combine_output is parent.local_combine_output, worker.local_combine_output.name
-    assert (worker.rows, worker.routed_tokens, worker.block_instance) == (128, 128, None), (
-        worker.rows,
-        worker.routed_tokens,
-        worker.block_instance,
-    )
-    assert worker.weights is parent.weights and worker.prefill_dense is parent.prefill_dense, worker.prefill_dense
-    assert (parent._owns_local_combine_output, worker._owns_local_combine_output) == (owned, False), (
-        parent._owns_local_combine_output,
-        worker._owns_local_combine_output,
-    )
-    assert worker.expert_mapping is not parent.expert_mapping, worker.expert_mapping.name
-    one_call = fakes.build(SLAB)
-    assert one_call.block_instance is None and one_call.local_combine_output.name == f"own combine[{SLAB}]", (
-        one_call.block_instance,
-        one_call.local_combine_output.name,
-    )
-
-
-@pytest.mark.parametrize("owned", [False, True], ids=["shared buffer", "own buffer"])
-def test_the_block_slab_releases_its_worker_first_and_never_the_borrowed_buffer(monkeypatch, owned: bool) -> None:
-    """``release_owned_buffers`` releases the worker before the parent; the combine buffer is freed only by the
-    instance that allocated it, once: never by the worker, never when it is the shared one."""
-    fakes = _moe_constructor_fakes(monkeypatch)
-    shared = None if owned else _AliasingTensor((moe_module.TOP_K, 128, moe_module.HIDDEN_SIZE), "shared", "bf16", "rm")
-    parent = fakes.build(SLAB, LONG_CHUNK_ROWS, shared)
-    worker = parent.block_instance
-    assert (parent.expert_mapping.name, worker.expert_mapping.name) == ("expert_mapping1", "expert_mapping2"), (
-        parent.expert_mapping.name,
-        worker.expert_mapping.name,
-    )
+    assert parent.local_combine_output.name == ("own combine[128]" if owned else "shared")
+    assert worker.local_combine_output is parent.local_combine_output
+    assert (worker.rows, worker.routed_tokens, worker.block_instance) == (128, 128, None)
+    assert worker.weights is parent.weights and worker.prefill_dense is parent.prefill_dense
+    assert (parent._owns_local_combine_output, worker._owns_local_combine_output) == (owned, False)
+    assert (parent.expert_mapping.name, worker.expert_mapping.name) == ("expert_mapping1", "expert_mapping2")
     parent.release_owned_buffers()
-    expected = ["expert_mapping2", "expert_mapping1"] + (["own combine[128]"] if owned else [])
-    assert fakes.freed == expected, fakes.freed
-    assert parent.block_instance is None and parent._owned_buffers_released, parent.block_instance
-    assert worker.local_combine_output is None and worker._owned_buffers_released, worker.local_combine_output
+    assert fakes.freed == ["expert_mapping2", "expert_mapping1"] + (["own combine[128]"] if owned else [])
+    assert parent.block_instance is None and parent._owned_buffers_released
+    assert worker.local_combine_output is None and worker._owned_buffers_released
+    one_call = fakes.build(SLAB)
+    assert one_call.block_instance is None and one_call.local_combine_output.name == f"own combine[{SLAB}]"
 
 
 def test_a_failed_worker_release_is_retried_and_the_parent_still_releases(monkeypatch, expect_error) -> None:
@@ -550,41 +495,35 @@ def test_same_buffer_compares_buffer_addresses_and_every_freeing_module_shares_i
         assert module.same_buffer is contracts.same_buffer
 
 
-def test_prefill_matmul_config_covers_the_rows_and_columns_with_whole_subblocks(expect_error) -> None:
+def test_prefill_matmul_config_covers_the_rows_and_columns_with_whole_subblocks(expect_error, monkeypatch) -> None:
     captured = {}
-
-    class _Config:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    grid = SimpleNamespace(x=11, y=10)
-    mesh = SimpleNamespace(compute_with_storage_grid_size=lambda: grid)
-    original = decode_matmul_module.ttnn.MatmulMultiCoreReuseMultiCastProgramConfig
-    decode_matmul_module.ttnn.MatmulMultiCoreReuseMultiCastProgramConfig = _Config
-    try:
-        for k, n in (
-            (2560, 4160),
-            (1536, 2560),
-            (2560, 384),
-            (384, 2560),
-            (2560, 512),
-            (2560, 160),
-            (160, 2560),
-            (2560, 1),
-        ):
-            captured.clear()
-            decode_matmul_module.prefill_matmul_program_config(mesh, SLAB, k, n)
-            cols, rows = captured["compute_with_storage_grid_size"]
-            n_tiles, k_tiles = math.ceil(n / 32), k // 32
-            assert 1 <= cols <= min(11, n_tiles) and rows == 10
-            assert captured["per_core_M"] * rows >= SLAB // 32 and captured["per_core_N"] * cols >= n_tiles
-            assert captured["out_subblock_h"] == 1 and captured["per_core_N"] % captured["out_subblock_w"] == 0
-            assert 1 <= captured["out_subblock_w"] <= 4 and k_tiles % captured["in0_block_w"] == 0
-            assert captured["in0_block_w"] <= 8 and captured["transpose_mcast"] is False
-        with expect_error(ValueError):  # allow-pytest.raises: pure contract test
-            decode_matmul_module.prefill_matmul_program_config(mesh, 2000, 2560, 512)
-    finally:
-        decode_matmul_module.ttnn.MatmulMultiCoreReuseMultiCastProgramConfig = original
+    mesh = SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=11, y=10))
+    monkeypatch.setattr(
+        decode_matmul_module.ttnn,
+        "MatmulMultiCoreReuseMultiCastProgramConfig",
+        lambda **kwargs: captured.update(kwargs),
+    )
+    for k, n in (
+        (2560, 4160),
+        (1536, 2560),
+        (2560, 384),
+        (384, 2560),
+        (2560, 512),
+        (2560, 160),
+        (160, 2560),
+        (2560, 1),
+    ):
+        captured.clear()
+        decode_matmul_module.prefill_matmul_program_config(mesh, SLAB, k, n)
+        cols, rows = captured["compute_with_storage_grid_size"]
+        n_tiles, k_tiles = math.ceil(n / 32), k // 32
+        assert 1 <= cols <= min(11, n_tiles) and rows == 10
+        assert captured["per_core_M"] * rows >= SLAB // 32 and captured["per_core_N"] * cols >= n_tiles
+        assert captured["out_subblock_h"] == 1 and captured["per_core_N"] % captured["out_subblock_w"] == 0
+        assert 1 <= captured["out_subblock_w"] <= 4 and k_tiles % captured["in0_block_w"] == 0
+        assert captured["in0_block_w"] <= 8 and captured["transpose_mcast"] is False
+    with expect_error(ValueError):  # allow-pytest.raises: pure contract test
+        decode_matmul_module.prefill_matmul_program_config(mesh, 2000, 2560, 512)
 
 
 # --------------------------------------------------------------------------- QSA slab constants and inputs
@@ -758,153 +697,90 @@ def test_slab_block_mask_never_frees_the_complete_block_column(monkeypatch, rows
 # --------------------------------------------------------------------------- the driver's plan
 
 
-class _FakeModel:
-    allocated_context = 70000
-
-    def __init__(self) -> None:
-        self.calls: list[tuple] = []
-
-    def reset_chunk_state_inplace(self, state, chunk_state) -> None:
-        self.calls.append(("reset", chunk_state.rows))
-
-    def write_chunk_accepted(self, chunk_state, accepted: int) -> None:
-        self.calls.append(("accepted", accepted))
-
-    def prepare_chunk_inputs(self, chunk_state, token_ids, *, ple_context, positions=None, features=None):
-        tokens = list(token_ids)
-        assert len(tokens) == chunk_state.rows
-        self.calls.append(("write", chunk_state.rows, tuple(tokens)))
-        return SimpleNamespace(rows=chunk_state.rows, contexts=tuple([ple_context] * (len(tokens) + 1)))
-
-    def upload_chunk_inputs(self, chunk_state, prepared) -> None:
-        assert prepared.rows == chunk_state.rows
-        self.calls.append(("upload", chunk_state.rows))
-
-    def finish_prefill(self, state, chunk_state, prefilled: int, *, rope_shift: int = 0) -> None:
-        self.calls.append(("finish", prefilled))
-
-    def forward_prefill_chunk_generic(self, chunk_state, state, *, gdn_step_anchor: bool = False, mtp=None) -> None:
-        self.calls.append(("eager", chunk_state.rows, gdn_step_anchor, mtp))
-
-
-@pytest.fixture
-def driver(monkeypatch):
-    fake = SimpleNamespace(
-        synchronize_device=lambda mesh: None,
-        record_event=lambda mesh, cq_id: object(),
-        event_synchronize=lambda event: None,
-        _ttnn_execute_trace=lambda mesh, trace_id, cq_id, blocking: None,
-    )
-    monkeypatch.setattr(driver_module, "ttnn", fake)
-    return fake
+STATES = {rows: SimpleNamespace(rows=rows) for rows in (32, 128, SLAB)}  # the chunk states by rows
 
 
 @pytest.mark.parametrize("start", [0, 5, 32])
 @pytest.mark.parametrize("count", [100, 2048, 2048 + 128 + 40, 2 * 2048 + 3 * 128 + 32 + 7, 5000])
-def test_driver_runs_slabs_then_long_then_short_chunks(driver, start: int, count: int) -> None:
-    model = _FakeModel()
-    states = {rows: SimpleNamespace(rows=rows) for rows in (32, 128, SLAB)}
+def test_driver_runs_slabs_then_long_then_short_chunks(prefill_fakes, start: int, count: int) -> None:
+    calls = prefill_fakes.log
     tokens = list(range(1000, 1000 + count))
     prefill = driver_module.Qwen38ChunkPrefill(
-        model,
-        object(),
-        object(),
-        states[32],
+        prefill_fakes.model,
+        "mesh",
+        "state",
+        STATES[32],
         None,
-        forced_step=lambda token, context: context,
-        long_chunk_state=states[128],
-        slab_state=states[SLAB],
+        forced_step=prefill_fakes.forced_step,
+        long_chunk_state=STATES[128],
+        slab_state=STATES[SLAB],
     )
     result = prefill.run(tokens, start_position=start, ple_context=None)
     aligned = driver_module.alignment_steps(start, count)
     remaining = count - aligned
     slabs = remaining // SLAB
     long = (remaining - slabs * SLAB) // 128
-    short = remaining - slabs * SLAB - long * 128
-    writes = [call for call in model.calls if call[0] == "write"]
-    assert [rows for _, rows, _ in writes] == [SLAB] * slabs + [128] * long + [32] * math.ceil(short / 32)
-    written = [token for _, _, chunk in writes for token in chunk]
-    assert written[:remaining] == tokens[aligned:]
+    short = math.ceil((remaining - slabs * SLAB - long * 128) / 32)
+    plan = [SLAB] * slabs + [128] * long + [32] * short
+    writes = [call for call in calls if call[0] == "prepare"]
+    assert [call[1] for call in writes] == plan
+    assert [token for call in writes for token in call[2]][:remaining] == tokens[aligned:]
+    assert [call[1] for call in calls if call[0] == "upload"] == plan
     assert result.position == start + count
-    assert result.timing.slabs == slabs and result.timing.slab_rows == SLAB
-    uploads = [call for call in model.calls if call[0] == "upload"]
-    assert [rows for _, rows in uploads] == [rows for _, rows, _ in writes]
     timing = result.timing
+    assert (timing.slabs, timing.slab_rows, timing.long_chunks, timing.chunks) == (slabs, SLAB, long, short)
     assert len(timing.slab_prepare_ms) == len(timing.slab_upload_ms) == len(timing.slab_wait_ms) == slabs
     assert all(ms >= 0.0 for ms in timing.slab_prepare_ms + timing.slab_upload_ms + timing.slab_wait_ms)
-    assert result.timing.long_chunks == long and result.timing.chunks == math.ceil(short / 32)
-    eager = [call for call in model.calls if call[0] == "eager"]
-    assert [rows for _, rows, _, _ in eager] == [SLAB] * slabs + [128] * long + [32] * math.ceil(short / 32)
+    eager = [call for call in calls if call[0] == "eager"]
+    assert [rows for _, rows, _, _ in eager] == plan
     assert all(not anchor and mtp is None for _, _, anchor, mtp in eager)
-    resets = [call for call in model.calls if call[0] == "reset"]
+    resets = [call for call in calls if call[0] == "reset"]
     if remaining:
-        assert resets[0] == ("reset", 32) and (slabs == 0 or ("reset", SLAB) in resets)
-        assert model.calls[-1] == ("finish", start + count)
+        assert resets[0] == ("reset", "state", 32) and (slabs == 0 or ("reset", "state", SLAB) in resets)
+        assert calls[-2:] == [("finish", start + count), ("synchronize",)]
 
 
-def test_driver_prepares_the_next_slab_while_the_current_one_replays(monkeypatch) -> None:
+def test_driver_prepares_the_next_slab_while_the_current_one_replays(prefill_fakes) -> None:
     """With slab k queued the host waits for slab k - 1's event, so slab k + 1's inputs are prepared while slab k
     runs; the chunks after keep the every-``event_interval`` sync."""
 
-    log: list[tuple] = []
-    events = itertools.count()
-
-    def record_event(mesh, cq_id):
-        event = next(events)
-        log.append(("record", event))
-        return event
-
-    monkeypatch.setattr(
-        driver_module,
-        "ttnn",
-        SimpleNamespace(
-            synchronize_device=lambda mesh: log.append(("synchronize",)),
-            record_event=record_event,
-            event_synchronize=lambda event: log.append(("wait", event)),
-            _ttnn_execute_trace=lambda mesh, trace_id, cq_id, blocking: log.append(("replay", trace_id, blocking)),
-        ),
-    )
-    model = _FakeModel()
-    model.calls = log
-    states = {rows: SimpleNamespace(rows=rows) for rows in (32, 128, SLAB)}
+    log = prefill_fakes.log
     traces = {"slab": 3, "long": 2, "short": 1}
     count = 3 * SLAB + 5 * 128 + 32 + 8
     tokens = list(range(1000, 1000 + count))
     prefill = driver_module.Qwen38ChunkPrefill(
-        model,
-        object(),
-        object(),
-        states[32],
+        prefill_fakes.model,
+        "mesh",
+        "state",
+        STATES[32],
         traces["short"],
-        forced_step=lambda token, context: context,
+        forced_step=prefill_fakes.forced_step,
         verify_allocations=False,
-        long_chunk_state=states[128],
+        long_chunk_state=STATES[128],
         long_chunk_trace_id=traces["long"],
-        slab_state=states[SLAB],
+        slab_state=STATES[SLAB],
         slab_trace_id=traces["slab"],
     )
     result = prefill.run(tokens, start_position=0, ple_context=None)
 
     plan = [("slab", SLAB)] * 3 + [("long", 128)] * 5 + [("short", 32)] * 2
-    expected: list[tuple] = [("synchronize",), ("reset", 32), ("reset", 128), ("reset", SLAB)]
-    chunks = []
-    offset = 0
+    prepares, chunks, offset = [], [], 0
     for kind, rows in plan:
         chunk = tokens[offset : offset + rows]
+        padded = tuple(chunk + [driver_module.CHUNK_PAD_TOKEN_ID] * (rows - len(chunk)))
+        prepares.append(("prepare", rows, padded, prefill_context_after(tokens[:offset], None)))
+        chunks.append((kind, rows, padded, len(chunk) - 1 if len(chunk) < rows else None))
         offset += rows
-        accepted = len(chunk) - 1 if len(chunk) < rows else None
-        chunks.append((kind, rows, chunk + [driver_module.CHUNK_PAD_TOKEN_ID] * (rows - len(chunk)), accepted))
-    pending = None
-    event = 0
-    # The host half of chunk i + 1 (its "write") is prepared right after chunk i's replay is queued, before the wait
+    pending, event = None, 0
+    # The host half of chunk i + 1 (its "prepare") is prepared right after chunk i's replay is queued, before the wait
     # for the previous slab's event or the chunk event: the host runs one chunk ahead of the device at every cadence.
-    expected.append(("write", chunks[0][1], tuple(chunks[0][2])))
-    for index, (kind, rows, chunk, accepted) in enumerate(chunks):
+    expected = [("synchronize",), *(("reset", "state", rows) for rows in (32, 128, SLAB)), prepares[0]]
+    for index, (kind, rows, padded, accepted) in enumerate(chunks):
         if accepted is not None:
             expected.append(("accepted", accepted))
-        expected += [("upload", rows), ("replay", traces[kind], False)]
+        expected += [("upload", rows, padded), ("replay", traces[kind], False)]
         if index + 1 < len(chunks):
-            expected.append(("write", chunks[index + 1][1], tuple(chunks[index + 1][2])))
+            expected.append(prepares[index + 1])
         if kind == "slab":
             if pending is not None:
                 expected.append(("wait", pending))
@@ -923,61 +799,23 @@ def test_driver_prepares_the_next_slab_while_the_current_one_replays(monkeypatch
     assert len(timed.timing.slab_replay_ms) == 2 and timed.timing.slab_wait_ms == ()
 
 
-def test_driver_rejects_a_slab_without_the_long_chunks_or_with_mtp(expect_error, driver) -> None:
-    states = {rows: SimpleNamespace(rows=rows) for rows in (32, 128, SLAB)}
-    with expect_error(ValueError):  # allow-pytest.raises: pure contract test
-        driver_module.Qwen38ChunkPrefill(
-            _FakeModel(), object(), object(), states[32], None, forced_step=lambda t, c: c, slab_state=states[SLAB]
+def test_driver_rejects_a_slab_without_the_long_chunks_or_with_mtp(expect_error, prefill_fakes) -> None:
+    def chunk_prefill(**kwargs):
+        forms = {"long_chunk_state": STATES[128], "slab_state": STATES[SLAB]} | kwargs
+        return driver_module.Qwen38ChunkPrefill(
+            prefill_fakes.model, "mesh", "state", STATES[32], None, forced_step=prefill_fakes.forced_step, **forms
         )
-    with expect_error(ValueError):  # allow-pytest.raises: pure contract test
-        driver_module.Qwen38ChunkPrefill(
-            _FakeModel(),
-            object(),
-            object(),
-            states[32],
-            None,
-            forced_step=lambda t, c: c,
-            long_chunk_state=states[128],
-            slab_state=SimpleNamespace(rows=200),
-        )
-    with expect_error(ValueError):  # allow-pytest.raises: pure contract test
-        driver_module.Qwen38ChunkPrefill(
-            _FakeModel(),
-            object(),
-            object(),
-            states[32],
-            None,
-            forced_step=lambda t, c: c,
-            long_chunk_state=states[128],
-            slab_state=states[SLAB],
-            mtp=object(),
-        )
-    # a slab with drafting needs the 128-row twin allocated with the same slab form
-    with expect_error(ValueError):  # allow-pytest.raises: pure contract test
-        driver_module.Qwen38ChunkPrefill(
-            _FakeModel(),
-            object(),
-            object(),
-            states[32],
-            None,
-            forced_step=lambda t, c: c,
-            long_chunk_state=states[128],
-            slab_state=states[SLAB],
-            mtp=object(),
-            long_mtp=SimpleNamespace(rows=128, slab_rows=SLAB + 128),
-        )
-    admitted = driver_module.Qwen38ChunkPrefill(
-        _FakeModel(),
-        object(),
-        object(),
-        states[32],
-        None,
-        forced_step=lambda t, c: c,
-        long_chunk_state=states[128],
-        slab_state=states[SLAB],
-        mtp=object(),
-        long_mtp=SimpleNamespace(rows=128, slab_rows=SLAB),
-    )
+
+    for refused in (
+        {"long_chunk_state": None},
+        {"slab_state": SimpleNamespace(rows=200)},
+        {"mtp": object()},
+        # a slab with drafting needs the 128-row twin allocated with the same slab form
+        {"mtp": object(), "long_mtp": SimpleNamespace(rows=128, slab_rows=SLAB + 128)},
+    ):
+        with expect_error(ValueError):  # allow-pytest.raises: pure contract test
+            chunk_prefill(**refused)
+    admitted = chunk_prefill(mtp=object(), long_mtp=SimpleNamespace(rows=128, slab_rows=SLAB))
     assert admitted._extension("slab") is admitted.long_mtp and admitted._extension("long") is admitted.long_mtp
     assert driver_module.slab_count(5000, slab_rows=SLAB) == 2 and driver_module.slab_count(5000, slab_rows=None) == 0
 
@@ -1028,11 +866,13 @@ def test_slab_combine_buffer_admits_the_slab_rows(expect_error, monkeypatch) -> 
             moe_module.allocate_local_combine_output("mesh", fakes.contract, rows)
 
 
-def _fake_text_model_for_chunk_state(monkeypatch, fakes, *, takes_one_call: bool = True):
-    """A stand-in model (a GDN and a QSA layer) on which the real ``Qwen38TTNNTextModel.allocate_chunk_state`` and
-    ``Qwen38TTNNDecoderLayer.admit_slab_call`` run; each probe MoE answers ``takes_one_call`` and records its
-    construction, admissions and release in ``admitted``."""
-
+@pytest.mark.parametrize("takes_one_call", [True, False], ids=["one call", "128-row blocks"])
+def test_slab_chunk_state_routes_in_the_form_moe_compute_takes(monkeypatch, takes_one_call: bool) -> None:
+    """moe_compute is asked once, through a layer-0 probe, whether it takes the slab in one call; the shared combine
+    buffer and every layer's MoE follow the answer: the whole slab per call, or 128-row blocks.  The real
+    ``allocate_chunk_state`` and ``Qwen38TTNNDecoderLayer.admit_slab_call`` run on a stand-in model (a GDN and a QSA
+    layer) whose probe MoEs record their construction, admissions and release in ``admitted``."""
+    fakes = _moe_buffer_fakes(monkeypatch)
     releasable = lambda: SimpleNamespace(deallocate=lambda: None, release=lambda: None, active=True)
     monkeypatch.setattr(
         qsa_module.Qwen38TTNNQSAChunkConstants,
@@ -1107,15 +947,6 @@ def _fake_text_model_for_chunk_state(monkeypatch, fakes, *, takes_one_call: bool
         ),
     )
     base = SimpleNamespace(rows=CHUNK_ROWS, layers=(SimpleNamespace(), SimpleNamespace()))
-    return model, base, admitted
-
-
-@pytest.mark.parametrize("takes_one_call", [True, False], ids=["one call", "128-row blocks"])
-def test_slab_chunk_state_routes_in_the_form_moe_compute_takes(monkeypatch, takes_one_call: bool) -> None:
-    """moe_compute is asked once, through a layer-0 probe, whether it takes the slab in one call; the shared combine
-    buffer and every layer's MoE follow the answer: the whole slab per call, or 128-row blocks."""
-    fakes = _moe_buffer_fakes(monkeypatch)
-    model, base, admitted = _fake_text_model_for_chunk_state(monkeypatch, fakes, takes_one_call=takes_one_call)
     generic_state = SimpleNamespace(position=SimpleNamespace(read=lambda: 0))
     state = model_module.Qwen38TTNNTextModel.allocate_chunk_state(model, generic_state, rows=SLAB, base=base)
     routed = SLAB if takes_one_call else LONG_CHUNK_ROWS
@@ -1126,11 +957,7 @@ def test_slab_chunk_state_routes_in_the_form_moe_compute_takes(monkeypatch, take
     assert state.routed_tokens_per_call == routed, state.routed_tokens_per_call  # READY's prefill_slab_routed_tokens
     # the combine buffer's validation (the chunk's RoPE rows and feature rows validate their own 4-D shapes too)
     assert [shape[1] for shape, _ in fakes.validated if len(shape) == 3] == [routed]
-    assert admitted == [
-        ("probe", 0, SLAB, None, None),
-        ("ask", 0, "w0_w1[0]", "w2[0]"),
-        ("release", 0),
-    ], admitted
+    assert admitted == [("probe", 0, SLAB, None, None), ("ask", 0, "w0_w1[0]", "w2[0]"), ("release", 0)], admitted
 
 
 @pytest.mark.parametrize("admission", ["takes", "refuses", "raises"])

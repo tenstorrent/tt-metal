@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import itertools
+from types import SimpleNamespace
 from unittest import mock
 
 import pytest
@@ -22,6 +23,26 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.moe import (
     Qwen38TTNNRouting,
     Qwen38TTNNSharedPartial,
 )
+
+ROUTER_PHASES = ("before-router-logits", "after-router-logits", "before-router-topk", "after-router-topk")
+ROUTED_PHASES = (
+    "before-routed-dispatch",
+    "after-routed-dispatch",
+    "before-moe-compute-launch",
+    "after-moe-compute-launch",
+    "before-selective-reduce",
+    "after-selective-reduce",
+)
+COMBINE_PHASES = (
+    "before-partial-combine",
+    "after-partial-combine",
+    "before-output-reduce-scatter",
+    "after-output-reduce-scatter",
+    "before-output-release",
+    "after-output-release",
+)
+GATHER_PHASES = ("before-hidden-all-gather", "after-hidden-all-gather")
+NEVER_RELEASED = {"hidden_sharded", "packed_w0_w1", "packed_w2", "expert_mapping", "local_combine_output"}
 
 
 class _FakeTensor:
@@ -53,34 +74,35 @@ def _bare_moe() -> Qwen38TTNNMoE:
     return instance
 
 
-def _forward_fixture(module: Qwen38TTNNMoE):
+@pytest.fixture
+def moe(monkeypatch):
+    """A bare one-row MoE whose forward stages, fences, collectives and releases are fakes logging to ``events``; the
+    fence named ``failing_fence`` raises."""
+    module = _bare_moe()
     contract = module.row_contract
     tensors = {
-        "hidden_sharded": _FakeTensor("hidden_sharded", contract.hidden_sharded),
-        "packed_w0_w1": _FakeTensor("packed_w0_w1", (1,)),
-        "packed_w2": _FakeTensor("packed_w2", (1,)),
-        "full_hidden": _FakeTensor("full_hidden", contract.full_hidden),
-        "scores": _FakeTensor("scores", contract.routing),
-        "indices": _FakeTensor("indices", contract.routing),
-        "shared_partial": _FakeTensor("shared_partial", contract.full_hidden),
-        "routed_partial": _FakeTensor("routed_partial", contract.full_hidden),
-        "local_sum": _FakeTensor("local_sum", contract.full_hidden),
-        "output": _FakeTensor("output", contract.output_sharded),
+        name: _FakeTensor(name, shape)
+        for name, shape in (
+            ("hidden_sharded", contract.hidden_sharded),
+            ("packed_w0_w1", (1,)),
+            ("packed_w2", (1,)),
+            ("full_hidden", contract.full_hidden),
+            ("scores", contract.routing),
+            ("indices", contract.routing),
+            ("shared_partial", contract.full_hidden),
+            ("routed_partial", contract.full_hidden),
+            ("local_sum", contract.full_hidden),
+            ("output", contract.output_sharded),
+        )
     }
-    return tensors, Qwen38TTNNRouting(tensors["scores"], tensors["indices"])
+    routing = Qwen38TTNNRouting(tensors["scores"], tensors["indices"])
+    events = []
+    fakes = SimpleNamespace(module=module, tensors=tensors, routing=routing, events=events, failing_fence=None)
 
-
-def _install_forward_mocks(module, tensors, routing, events, monkeypatch) -> None:
     def route(full, *, hidden_tiles=None, phase_observer=None):
         assert hidden_tiles is None  # the one-row form hands the gathered shard itself to the router
-        if phase_observer is not None:
-            for phase in (
-                "before-router-logits",
-                "after-router-logits",
-                "before-router-topk",
-                "after-router-topk",
-            ):
-                phase_observer(phase)
+        for phase in ROUTER_PHASES if phase_observer is not None else ():
+            phase_observer(phase)
         events.append(("route", full.name))
         return routing
 
@@ -88,18 +110,15 @@ def _install_forward_mocks(module, tensors, routing, events, monkeypatch) -> Non
         raise AssertionError("forward must hand the gathered shard to the linears without a reshard")
 
     def routed(full, route_result, w01, w2, *, phase_observer=None):
-        if phase_observer is not None:
-            for phase in (
-                "before-routed-dispatch",
-                "after-routed-dispatch",
-                "before-moe-compute-launch",
-                "after-moe-compute-launch",
-                "before-selective-reduce",
-                "after-selective-reduce",
-            ):
-                phase_observer(phase)
+        for phase in ROUTED_PHASES if phase_observer is not None else ():
+            phase_observer(phase)
         events.append(("routed", full.name, route_result is routing, w01.name, w2.name))
         return tensors["routed_partial"]
+
+    def fence(stage):
+        events.append(("fence", stage))
+        if stage == fakes.failing_fence:
+            raise RuntimeError(f"{stage} fence failed")
 
     module._all_gather_hidden = mock.Mock(
         side_effect=lambda hidden: events.append(("all-gather", hidden.name)) or tensors["full_hidden"]
@@ -110,14 +129,12 @@ def _install_forward_mocks(module, tensors, routing, events, monkeypatch) -> Non
         or tensors["shared_partial"]
     )
     module._routed_partial = mock.Mock(side_effect=routed)
-    monkeypatch.setattr(moe_module.ttnn, "to_memory_config", no_reshard)
-    module._synchronize_stage = mock.Mock(side_effect=lambda stage: events.append(("fence", stage)))
-    module.mesh_contract.mark_local_partial.side_effect = lambda tensor, **_kwargs: events.append(
-        ("mark-local", tensor.name)
-    )
-    module.mesh_contract.mark_collective_shard.side_effect = lambda tensor, **_kwargs: events.append(
+    module._synchronize_stage = mock.Mock(side_effect=fence)
+    module.mesh_contract.mark_local_partial.side_effect = lambda tensor, **_: events.append(("mark-local", tensor.name))
+    module.mesh_contract.mark_collective_shard.side_effect = lambda tensor, **_: events.append(
         ("mark-collective", tensor.name)
     )
+    monkeypatch.setattr(moe_module.ttnn, "to_memory_config", no_reshard)
     monkeypatch.setattr(
         moe_module.ttnn,
         "add",
@@ -128,109 +145,72 @@ def _install_forward_mocks(module, tensors, routing, events, monkeypatch) -> Non
         "tt_all_reduce",
         lambda tensor, *_args, **_kwargs: events.append(("all-reduce", tensor.name)) or tensors["output"],
     )
-    monkeypatch.setattr(
-        moe_module.ttnn,
-        "deallocate",
-        lambda tensor: events.append(("deallocate", tensor.name)),
+    monkeypatch.setattr(moe_module.ttnn, "deallocate", lambda tensor: events.append(("deallocate", tensor.name)))
+    fakes.forward = lambda **kwargs: module.forward(
+        tensors["hidden_sharded"], tensors["packed_w0_w1"], tensors["packed_w2"], **kwargs
     )
+    return fakes
 
 
-def test_named_stage_fence_is_deterministic_and_fail_closed(expect_error, monkeypatch) -> None:
+def _released(events) -> list[str]:
+    return [event[1] for event in events if event[0] == "deallocate"]
+
+
+@pytest.mark.parametrize(
+    "policy", [Qwen38TTNNMoESyncPolicy.CORRECTNESS_FENCED, Qwen38TTNNMoESyncPolicy.RESIDENT_ASYNC], ids=str
+)
+def test_named_stage_fence_is_deterministic_and_fail_closed(expect_error, monkeypatch, policy) -> None:
+    """A correctness-fenced stage drains the mesh once per named stage; a resident (trace-safe) one never drains."""
     module = _bare_moe()
-    synchronize = mock.Mock()
+    module.synchronization_policy = policy
+    drains = policy is Qwen38TTNNMoESyncPolicy.CORRECTNESS_FENCED
+    synchronize = mock.Mock(side_effect=None if drains else AssertionError("resident trace path drained the host"))
     monkeypatch.setattr(moe_module.ttnn, "synchronize_device", synchronize)
 
     for stage in MOE_STAGE_FENCES:
         module._synchronize_stage(stage)
-
-    assert synchronize.call_args_list == [mock.call(module.mesh_device) for _stage in MOE_STAGE_FENCES]
-    with expect_error(ValueError, match="unknown production MoE stage fence"):  # allow-pytest.raises: pure contract
-        module._synchronize_stage("not-a-stage")
-    assert synchronize.call_count == len(MOE_STAGE_FENCES)
-
-
-def test_resident_async_stage_boundaries_are_trace_safe_and_never_drain(expect_error, monkeypatch) -> None:
-    module = _bare_moe()
-    module.synchronization_policy = Qwen38TTNNMoESyncPolicy.RESIDENT_ASYNC
-    synchronize = mock.Mock(side_effect=AssertionError("resident trace path drained the host"))
-    monkeypatch.setattr(moe_module.ttnn, "synchronize_device", synchronize)
-
-    for stage in MOE_STAGE_FENCES:
-        module._synchronize_stage(stage)
-
-    synchronize.assert_not_called()
     with expect_error(ValueError, match="unknown production MoE stage fence"):  # allow-pytest.raises: pure contract
         module._synchronize_stage("not-a-stage")
 
+    assert synchronize.call_args_list == [mock.call(module.mesh_device)] * (len(MOE_STAGE_FENCES) if drains else 0)
 
-def test_resident_async_forward_executes_all_six_boundaries_without_a_host_drain(monkeypatch) -> None:
-    module = _bare_moe()
-    module.synchronization_policy = Qwen38TTNNMoESyncPolicy.RESIDENT_ASYNC
-    tensors, routing = _forward_fixture(module)
-    events = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
-    # Use the real policy method rather than the event-only fence stub.
-    del module._synchronize_stage
+
+def _resident_async(moe, monkeypatch) -> mock.Mock:
+    """The resident policy with the real fence method; returns the ``synchronize_device`` that must stay uncalled."""
+    moe.module.synchronization_policy = Qwen38TTNNMoESyncPolicy.RESIDENT_ASYNC
+    del moe.module._synchronize_stage
     synchronize = mock.Mock(side_effect=AssertionError("resident trace path drained the host"))
     monkeypatch.setattr(moe_module.ttnn, "synchronize_device", synchronize)
+    return synchronize
 
-    result = module.forward(
-        tensors["hidden_sharded"],
-        tensors["packed_w0_w1"],
-        tensors["packed_w2"],
-        return_routing=True,
-    )
 
-    assert result.hidden_sharded is tensors["output"]
-    assert result.routing is routing
+def test_resident_async_forward_executes_all_six_boundaries_without_a_host_drain(moe, monkeypatch) -> None:
+    synchronize = _resident_async(moe, monkeypatch)
+    result = moe.forward(return_routing=True)
+    assert result.hidden_sharded is moe.tensors["output"] and result.routing is moe.routing
     synchronize.assert_not_called()
 
 
-def test_resident_async_failure_poison_retains_live_owners_and_skips_cleanup(expect_error, monkeypatch) -> None:
-    module = _bare_moe()
-    module.synchronization_policy = Qwen38TTNNMoESyncPolicy.RESIDENT_ASYNC
-    tensors, routing = _forward_fixture(module)
-    events = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
-    del module._synchronize_stage
-    module._shared_partial = mock.Mock(side_effect=RuntimeError("injected async enqueue failure"))
-    synchronize = mock.Mock(side_effect=AssertionError("resident failure path drained the host"))
-    monkeypatch.setattr(moe_module.ttnn, "synchronize_device", synchronize)
-
+def test_resident_async_failure_poison_retains_live_owners_and_skips_cleanup(expect_error, moe, monkeypatch) -> None:
+    synchronize = _resident_async(moe, monkeypatch)
+    moe.module._shared_partial = mock.Mock(side_effect=RuntimeError("injected async enqueue failure"))
     with expect_error(RuntimeError, match="live device owners retained and cleanup skipped"):
-        module.forward(tensors["hidden_sharded"], tensors["packed_w0_w1"], tensors["packed_w2"])
+        moe.forward()
 
     synchronize.assert_not_called()
-    assert module._poisoned_error is not None
-    assert module._poisoned_device_owners == [
-        tensors["hidden_sharded"],
-        tensors["packed_w0_w1"],
-        tensors["packed_w2"],
-        tensors["full_hidden"],
-        tensors["scores"],
-        tensors["indices"],
-    ]
-    assert not any(event[0] == "deallocate" for event in events)
+    assert moe.module._poisoned_error is not None
+    owners = ("hidden_sharded", "packed_w0_w1", "packed_w2", "full_hidden", "scores", "indices")
+    assert moe.module._poisoned_device_owners == [moe.tensors[name] for name in owners]
+    assert _released(moe.events) == []
     with expect_error(RuntimeError, match="process/mesh teardown"):
-        module.release_owned_buffers()
+        moe.module.release_owned_buffers()
 
 
-def test_forward_fences_six_stages_and_holds_collective_inputs(monkeypatch) -> None:
-    module = _bare_moe()
-    tensors, routing = _forward_fixture(module)
-    events = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
+def test_forward_fences_six_stages_and_holds_collective_inputs(moe) -> None:
+    result = moe.forward(return_routing=True)
 
-    result = module.forward(
-        tensors["hidden_sharded"],
-        tensors["packed_w0_w1"],
-        tensors["packed_w2"],
-        return_routing=True,
-    )
-
-    assert result.hidden_sharded is tensors["output"]
-    assert result.routing is routing
-    assert events == [
+    assert result.hidden_sharded is moe.tensors["output"] and result.routing is moe.routing
+    assert moe.events == [
         ("all-gather", "hidden_sharded"),
         ("fence", "all-gather-hidden"),
         ("route", "full_hidden"),
@@ -250,75 +230,35 @@ def test_forward_fences_six_stages_and_holds_collective_inputs(monkeypatch) -> N
         ("deallocate", "local_sum"),
         ("deallocate", "full_hidden"),
     ]
-    released = {event[1] for event in events if event[0] == "deallocate"}
-    assert not released.intersection(
-        {
-            "hidden_sharded",
-            "packed_w0_w1",
-            "packed_w2",
-            "expert_mapping",
-            "local_combine_output",
-            "output",
-            "scores",
-            "indices",
-        }
-    )
+    assert not set(_released(moe.events)) & (NEVER_RELEASED | {"output", "scores", "indices"})
 
 
-def test_forward_phase_observer_brackets_exact_moe_mechanics_without_tensors(monkeypatch) -> None:
-    module = _bare_moe()
-    tensors, routing = _forward_fixture(module)
-    events = []
+def test_forward_phase_observer_brackets_exact_moe_mechanics_without_tensors(moe) -> None:
     phases = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
 
     def observe(phase: str) -> None:
         assert type(phase) is str
         phases.append(phase)
 
-    result = module.forward(
-        tensors["hidden_sharded"],
-        tensors["packed_w0_w1"],
-        tensors["packed_w2"],
-        return_routing=True,
-        phase_observer=observe,
-    )
+    result = moe.forward(return_routing=True, phase_observer=observe)
 
-    assert result.hidden_sharded is tensors["output"]
-    assert result.routing is routing
+    assert result.hidden_sharded is moe.tensors["output"] and result.routing is moe.routing
     assert phases == [
-        "before-hidden-all-gather",
-        "after-hidden-all-gather",
-        "before-router-logits",
-        "after-router-logits",
-        "before-router-topk",
-        "after-router-topk",
+        *GATHER_PHASES,
+        *ROUTER_PHASES,
         "before-shared-partial",
         "after-shared-partial",
-        "before-routed-dispatch",
-        "after-routed-dispatch",
-        "before-moe-compute-launch",
-        "after-moe-compute-launch",
-        "before-selective-reduce",
-        "after-selective-reduce",
-        "before-partial-combine",
-        "after-partial-combine",
-        "before-output-reduce-scatter",
-        "after-output-reduce-scatter",
-        "before-output-release",
-        "after-output-release",
+        *ROUTED_PHASES,
+        *COMBINE_PHASES,
     ]
 
 
-def test_forward_with_the_dense_composite_brackets_one_program_and_releases_its_rows(monkeypatch) -> None:
+def test_forward_with_the_dense_composite_brackets_one_program_and_releases_its_rows(moe) -> None:
     """With moe_dense_fused on, forward takes _dense_composite instead of _route and _shared_partial, hands its rows
     to the fused local sum and releases them before the combine collective; the shared-partial pair brackets the top-k
     pair and the six fences stay six."""
 
-    module = _bare_moe()
-    tensors, routing = _forward_fixture(module)
-    events = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
+    module, tensors, events = moe.module, moe.tensors, moe.events
     module.moe_dense_fused = True
     module.moe_post_fused = True  # the fused local sum owns the expert-owner rows too
     module.expert_owner = _FakeTensor("expert_owner", (1, ROUTED_EXPERTS))
@@ -337,69 +277,40 @@ def test_forward_with_the_dense_composite_brackets_one_program_and_releases_its_
         for phase in composite_phases:
             observe(phase)
         events.append(("composite", full.name))
-        return routing, shared, sparse_rows
+        return moe.routing, shared, sparse_rows
 
     def local_sum(full, route_result, w01, w2, shared_arg, *, phase_observer, sparse_rows=None):
-        for phase in (
-            "before-routed-dispatch",
-            "after-routed-dispatch",
-            "before-moe-compute-launch",
-            "after-moe-compute-launch",
-            "before-selective-reduce",
-            "after-selective-reduce",
-        ):
+        for phase in ROUTED_PHASES:
             phase_observer(phase)
-        events.append(("local-sum", full.name, route_result is routing, shared_arg is shared, sparse_rows.name))
+        events.append(("local-sum", full.name, route_result is moe.routing, shared_arg is shared, sparse_rows.name))
         return tensors["local_sum"]
 
     module._dense_composite = composite
     module._routed_local_sum = local_sum
     phases = []
-    result = module.forward(
-        tensors["hidden_sharded"], tensors["packed_w0_w1"], tensors["packed_w2"], phase_observer=phases.append
-    )
+    result = moe.forward(phase_observer=phases.append)
     assert result.hidden_sharded is tensors["output"]
     module._route.assert_not_called()
     module._shared_partial.assert_not_called()
     module._routed_partial.assert_not_called()
-    assert phases == [
-        "before-hidden-all-gather",
-        "after-hidden-all-gather",
-        *composite_phases,
-        "before-routed-dispatch",
-        "after-routed-dispatch",
-        "before-moe-compute-launch",
-        "after-moe-compute-launch",
-        "before-selective-reduce",
-        "after-selective-reduce",
-        "before-partial-combine",
-        "after-partial-combine",
-        "before-output-reduce-scatter",
-        "after-output-reduce-scatter",
-        "before-output-release",
-        "after-output-release",
-    ]
-    fences = [event[1] for event in events if event[0] == "fence"]
-    assert fences == list(MOE_STAGE_FENCES)
+    assert phases == [*GATHER_PHASES, *composite_phases, *ROUTED_PHASES, *COMBINE_PHASES]
+    assert [event[1] for event in events if event[0] == "fence"] == list(MOE_STAGE_FENCES)
     order = [event for event in events if event[0] in ("composite", "local-sum", "deallocate", "all-reduce")]
     local = next(i for i, event in enumerate(order) if event[0] == "local-sum")
     assert order[local] == ("local-sum", "full_hidden", True, True, "sparse_rows")
-    released = order.index(("deallocate", "sparse_rows"))
-    assert local < released < order.index(("all-reduce", "local_sum"))
-    assert order.index(("deallocate", "shared_partial")) < order.index(("all-reduce", "local_sum"))
-    assert order.index(("deallocate", "sigmoid")) < order.index(("all-reduce", "local_sum"))
+    combine = order.index(("all-reduce", "local_sum"))
+    assert local < order.index(("deallocate", "sparse_rows")) < combine
+    assert order.index(("deallocate", "shared_partial")) < combine
+    assert order.index(("deallocate", "sigmoid")) < combine
     assert not any(event[0] == "add" for event in events)
 
 
-def test_composed_post_gates_the_fused_shared_partial_before_the_add(monkeypatch) -> None:
+def test_composed_post_gates_the_fused_shared_partial_before_the_add(moe, monkeypatch) -> None:
     """QWEN38_FUSED_OFF=moe_post with the fused shared expert on: the shared partial arrives ungated with its sigmoid
     tile, so the composed sum slices the tile's first column, multiplies, adds the product and releases all three."""
 
-    module = _bare_moe()
-    tensors, routing = _forward_fixture(module)
-    events = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
-    shared = Qwen38TTNNSharedPartial(tensors["shared_partial"], _FakeTensor("sigmoid", (1, 1, 32, 32)))
+    module, events = moe.module, moe.events
+    shared = Qwen38TTNNSharedPartial(moe.tensors["shared_partial"], _FakeTensor("sigmoid", (1, 1, 32, 32)))
     module._shared_partial = mock.Mock(side_effect=lambda hidden, full, tiles=None: shared)
     gate = _FakeTensor("gate", (1, 1, module.rows, 1))
     gated = _FakeTensor("gated_shared_partial", module.row_contract.full_hidden)
@@ -414,9 +325,9 @@ def test_composed_post_gates_the_fused_shared_partial_before_the_add(monkeypatch
 
     monkeypatch.setattr(moe_module.ttnn, "slice", slice_)
     monkeypatch.setattr(moe_module.ttnn, "mul", mul)
-    result = module.forward(tensors["hidden_sharded"], tensors["packed_w0_w1"], tensors["packed_w2"])
+    result = moe.forward()
 
-    assert result.hidden_sharded is tensors["output"], f"forward returned {result.hidden_sharded}"
+    assert result.hidden_sharded is moe.tensors["output"], f"forward returned {result.hidden_sharded}"
     combine = [event for event in events if event[0] in ("slice", "mul", "add", "deallocate")][:7]
     assert combine == [
         ("slice", "sigmoid", (0, 0, 0, 0), (1, 1, module.rows, 1)),
@@ -427,185 +338,71 @@ def test_composed_post_gates_the_fused_shared_partial_before_the_add(monkeypatch
         ("add", "routed_partial", "gated_shared_partial"),
         ("deallocate", "routed_partial"),
     ], f"combine events {combine}"
-    released = [event[1] for event in events if event[0] == "deallocate"]
+    released = _released(events)
     assert released.count("gated_shared_partial") == 1, f"released {released}"
 
 
-def test_forward_phase_observer_failure_defers_until_routed_partial_has_cleanup_ownership(
-    expect_error, monkeypatch
-) -> None:
-    module = _bare_moe()
-    tensors, routing = _forward_fixture(module)
-    events = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
-
+def test_forward_phase_observer_failure_defers_until_routed_partial_has_cleanup_ownership(expect_error, moe) -> None:
     def fail_after_moe_compute_launch(phase: str) -> None:
         if phase == "after-moe-compute-launch":
             raise RuntimeError("injected MoE phase observer failure")
 
     with expect_error(RuntimeError, match="injected MoE phase observer failure"):
-        module.forward(
-            tensors["hidden_sharded"],
-            tensors["packed_w0_w1"],
-            tensors["packed_w2"],
-            phase_observer=fail_after_moe_compute_launch,
-        )
+        moe.forward(phase_observer=fail_after_moe_compute_launch)
 
-    released = [event[1] for event in events if event[0] == "deallocate"]
+    released = _released(moe.events)
     assert released == ["routed_partial", "shared_partial", "full_hidden", "scores", "indices"]
-    assert not set(released).intersection(
-        {"hidden_sharded", "packed_w0_w1", "packed_w2", "expert_mapping", "local_combine_output"}
-    )
+    assert not set(released) & NEVER_RELEASED
 
 
-@pytest.mark.parametrize("failed_owner", ["routed_partial", "shared_partial"])
-def test_partial_release_failure_retries_only_the_still_owned_tensor(
-    expect_error, monkeypatch, failed_owner: str
+@pytest.mark.parametrize(
+    "failed_owner, return_routing, attempts_per_owner",
+    [
+        ("routed_partial", True, {"routed_partial": 2, "output": 0}),
+        ("shared_partial", True, {"shared_partial": 2, "routed_partial": 1, "output": 0}),
+        ("full_hidden", True, {"full_hidden": 2, "output": 1}),
+        ("indices", False, {"indices": 2, "output": 1}),
+    ],
+    ids=["routed_partial", "shared_partial", "full_hidden", "indices"],
+)
+def test_release_failure_retries_only_the_still_owned_tensor(
+    expect_error, moe, monkeypatch, failed_owner: str, return_routing: bool, attempts_per_owner: dict
 ) -> None:
-    module = _bare_moe()
-    tensors, routing = _forward_fixture(module)
-    events = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
+    """The failed release is retried once; every other owner (the released local sum and scores included) is
+    released exactly once and forward's inputs and the instance's buffers never."""
     attempts = []
-    injected = False
 
     def fail_once(tensor):
-        nonlocal injected
         attempts.append(tensor.name)
-        if tensor.name == failed_owner and not injected:
-            injected = True
+        if tensor.name == failed_owner and attempts.count(failed_owner) == 1:
             raise RuntimeError(f"{failed_owner} release failed")
-        events.append(("deallocate", tensor.name))
+        moe.events.append(("deallocate", tensor.name))
 
     monkeypatch.setattr(moe_module.ttnn, "deallocate", fail_once)
     with expect_error(RuntimeError, match="release failed"):  # allow-pytest.raises: injected failure
-        module.forward(
-            tensors["hidden_sharded"],
-            tensors["packed_w0_w1"],
-            tensors["packed_w2"],
-            return_routing=True,
-        )
+        moe.forward(return_routing=return_routing)
 
-    assert attempts.count(failed_owner) == 2
-    if failed_owner == "shared_partial":
-        assert attempts.count("routed_partial") == 1
-    assert all(attempts.count(name) == 1 for name in {"local_sum", "full_hidden", "scores", "indices"})
-    assert not set(attempts).intersection(
-        {"hidden_sharded", "packed_w0_w1", "packed_w2", "expert_mapping", "local_combine_output", "output"}
-    )
+    expected = dict.fromkeys(("local_sum", "full_hidden", "scores", "indices"), 1) | attempts_per_owner
+    assert {name: attempts.count(name) for name in expected} == expected, attempts
+    assert not set(attempts) & NEVER_RELEASED
 
 
-def test_full_hidden_release_failure_does_not_retry_released_local_sum(expect_error, monkeypatch) -> None:
-    module = _bare_moe()
-    tensors, routing = _forward_fixture(module)
-    events = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
-    attempts = []
-    injected = False
+def test_final_fence_failure_releases_unreturned_output_and_live_inputs(expect_error, moe) -> None:
+    moe.failing_fence = "final-all-reduce"
+    with expect_error(RuntimeError, match="final-all-reduce fence failed"):  # allow-pytest.raises: injected failure
+        moe.forward(return_routing=True)
 
-    def fail_full_hidden_once(tensor):
-        nonlocal injected
-        attempts.append(tensor.name)
-        if tensor.name == "full_hidden" and not injected:
-            injected = True
-            raise RuntimeError("full_hidden release failed")
-        events.append(("deallocate", tensor.name))
-
-    monkeypatch.setattr(moe_module.ttnn, "deallocate", fail_full_hidden_once)
-    with expect_error(RuntimeError, match="release failed"):  # allow-pytest.raises: injected failure
-        module.forward(
-            tensors["hidden_sharded"],
-            tensors["packed_w0_w1"],
-            tensors["packed_w2"],
-            return_routing=True,
-        )
-
-    assert attempts.count("local_sum") == 1
-    assert attempts.count("full_hidden") == 2
-    assert attempts.count("output") == 1
-    assert attempts.count("scores") == attempts.count("indices") == 1
-    assert not set(attempts).intersection(
-        {"hidden_sharded", "packed_w0_w1", "packed_w2", "expert_mapping", "local_combine_output"}
-    )
+    released = _released(moe.events)
+    assert released == ["routed_partial", "shared_partial", "output", "local_sum", "full_hidden", "scores", "indices"]
+    assert not set(released) & NEVER_RELEASED
 
 
-def test_routing_indices_release_failure_does_not_retry_released_scores(expect_error, monkeypatch) -> None:
-    module = _bare_moe()
-    tensors, routing = _forward_fixture(module)
-    events = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
-    attempts = []
-    injected = False
-
-    def fail_indices_once(tensor):
-        nonlocal injected
-        attempts.append(tensor.name)
-        if tensor.name == "indices" and not injected:
-            injected = True
-            raise RuntimeError("indices release failed")
-        events.append(("deallocate", tensor.name))
-
-    monkeypatch.setattr(moe_module.ttnn, "deallocate", fail_indices_once)
-    with expect_error(RuntimeError, match="release failed"):  # allow-pytest.raises: injected failure
-        module.forward(tensors["hidden_sharded"], tensors["packed_w0_w1"], tensors["packed_w2"])
-
-    assert attempts.count("scores") == 1
-    assert attempts.count("indices") == 2
-    assert attempts.count("local_sum") == attempts.count("full_hidden") == 1
-    assert attempts.count("output") == 1
-    assert not set(attempts).intersection(
-        {"hidden_sharded", "packed_w0_w1", "packed_w2", "expert_mapping", "local_combine_output"}
-    )
-
-
-def test_final_fence_failure_releases_unreturned_output_and_live_inputs(expect_error, monkeypatch) -> None:
-    module = _bare_moe()
-    tensors, routing = _forward_fixture(module)
-    events = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
-
-    def fence(stage):
-        events.append(("fence", stage))
-        if stage == "final-all-reduce":
-            raise RuntimeError("final fence failed")
-
-    module._synchronize_stage = mock.Mock(side_effect=fence)
-    with expect_error(RuntimeError, match="final fence failed"):  # allow-pytest.raises: injected failure
-        module.forward(
-            tensors["hidden_sharded"],
-            tensors["packed_w0_w1"],
-            tensors["packed_w2"],
-            return_routing=True,
-        )
-
-    released = [event[1] for event in events if event[0] == "deallocate"]
-    assert released == [
-        "routed_partial",
-        "shared_partial",
-        "output",
-        "local_sum",
-        "full_hidden",
-        "scores",
-        "indices",
-    ]
-    assert not set(released).intersection(
-        {"hidden_sharded", "packed_w0_w1", "packed_w2", "expert_mapping", "local_combine_output"}
-    )
-
-
-def test_diagnostic_failure_hook_drains_before_first_exception_cleanup_release(expect_error, monkeypatch) -> None:
-    module = _bare_moe()
-    tensors, routing = _forward_fixture(module)
-    events = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
-
-    def fence(stage):
-        events.append(("fence", stage))
-        if stage == "final-all-reduce":
-            raise RuntimeError("final fence failed")
+def test_diagnostic_failure_hook_drains_before_first_exception_cleanup_release(expect_error, moe) -> None:
+    events = moe.events
+    moe.failing_fence = "final-all-reduce"
 
     def before_cleanup(error, owners):
-        assert str(error) == "final fence failed"
+        assert str(error) == "final-all-reduce fence failed"
         assert tuple(owners) == (
             "full_hidden",
             "hidden_tiles",
@@ -621,15 +418,9 @@ def test_diagnostic_failure_hook_drains_before_first_exception_cleanup_release(e
         )
         events.append(("diagnostic-drain", tuple(name for name, value in owners.items() if value is not None)))
 
-    module._synchronize_stage = mock.Mock(side_effect=fence)
-    module._diagnostic_before_exception_cleanup = before_cleanup
-    with expect_error(RuntimeError, match="final fence failed"):  # allow-pytest.raises: injected failure
-        module.forward(
-            tensors["hidden_sharded"],
-            tensors["packed_w0_w1"],
-            tensors["packed_w2"],
-            return_routing=True,
-        )
+    moe.module._diagnostic_before_exception_cleanup = before_cleanup
+    with expect_error(RuntimeError, match="final-all-reduce fence failed"):  # allow-pytest.raises: injected failure
+        moe.forward(return_routing=True)
 
     drain_index = next(index for index, event in enumerate(events) if event[0] == "diagnostic-drain")
     cleanup_indices = [
@@ -637,43 +428,22 @@ def test_diagnostic_failure_hook_drains_before_first_exception_cleanup_release(e
         for index, event in enumerate(events)
         if event[0] == "deallocate" and event[1] in {"output", "local_sum", "full_hidden", "scores", "indices"}
     ]
-    assert cleanup_indices
-    assert drain_index < min(cleanup_indices)
+    assert cleanup_indices and drain_index < min(cleanup_indices)
 
 
-def test_failed_diagnostic_pre_cleanup_drain_retains_live_owners_and_skips_cleanup(expect_error, monkeypatch) -> None:
-    module = _bare_moe()
-    tensors, routing = _forward_fixture(module)
-    events = []
-    retained = []
-    _install_forward_mocks(module, tensors, routing, events, monkeypatch)
-
-    def fence(stage):
-        events.append(("fence", stage))
-        if stage == "final-all-reduce":
-            raise RuntimeError("final fence failed")
+def test_failed_diagnostic_pre_cleanup_drain_retains_live_owners_and_skips_cleanup(expect_error, moe) -> None:
+    events, retained = moe.events, []
+    moe.failing_fence = "final-all-reduce"
 
     def fail_before_cleanup(_error, owners):
         retained.extend(value for value in owners.values() if value is not None)
         events.append(("diagnostic-drain-failed",))
         raise RuntimeError("injected diagnostic drain failure")
 
-    module._synchronize_stage = mock.Mock(side_effect=fence)
-    module._diagnostic_before_exception_cleanup = fail_before_cleanup
+    moe.module._diagnostic_before_exception_cleanup = fail_before_cleanup
     with expect_error(RuntimeError, match="diagnostic pre-cleanup drain also failed; cleanup skipped"):
-        module.forward(
-            tensors["hidden_sharded"],
-            tensors["packed_w0_w1"],
-            tensors["packed_w2"],
-            return_routing=True,
-        )
+        moe.forward(return_routing=True)
 
-    assert retained == [
-        tensors["full_hidden"],
-        tensors["scores"],
-        tensors["indices"],
-        tensors["local_sum"],
-        tensors["output"],
-    ]
+    assert retained == [moe.tensors[name] for name in ("full_hidden", "scores", "indices", "local_sum", "output")]
     drain_index = events.index(("diagnostic-drain-failed",))
     assert not any(index > drain_index and event[0] == "deallocate" for index, event in enumerate(events))
