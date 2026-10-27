@@ -23,7 +23,7 @@ constexpr auto kWriterKernelPath =
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/sdpa_bw/device/kernels/compute/sdpa_bw_kv_compute_kernel.cpp";
 
-// Reader runtime args (fixed order — u_scaler always present, attn_output removed)
+// Reader runtime args (fixed order — u_scaler slot always present, 0 when absent; attn_output removed)
 constexpr uint32_t kReaderGradOutputIdx = 0;
 constexpr uint32_t kReaderQueryIdx = 1U;
 constexpr uint32_t kReaderKeyIdx = 2U;
@@ -43,7 +43,6 @@ constexpr auto kKeyCbIndex = tt::CBIndex::c_3;
 constexpr auto kValueCbIndex = tt::CBIndex::c_4;
 constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_5;
 constexpr auto kIntermediatesCbIndex = tt::CBIndex::c_6;
-constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_7;
 constexpr auto kGradValueAccumCbIndex = tt::CBIndex::c_8;
 constexpr auto kGradKeyAccumCbIndex = tt::CBIndex::c_9;
 constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_10;
@@ -60,6 +59,8 @@ constexpr uint32_t kNumOfIntermCBTiles = 1U;  // single FP32 logsumexp tile per 
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
+const std::string kComputeGradKeyDefKey = "COMPUTE_GRAD_KEY";
+const std::string kComputeGradValueDefKey = "COMPUTE_GRAD_VALUE";
 
 /**
  * Calculate work-balanced pair distribution for causal SDPA backward KV.
@@ -143,7 +144,7 @@ void assign_per_core_runtime_args_balanced(
              value_buffer->address(),
              0U,  // mask_addr unused for balanced causal
              intermediates_buffer->address(),
-             u_scaler_buffer->address(),
+             u_scaler_buffer != nullptr ? u_scaler_buffer->address() : 0U,
              num_pairs,
              start_pair_idx});
 
@@ -153,8 +154,8 @@ void assign_per_core_runtime_args_balanced(
             kernels.writer,
             core,
             {
-                grad_key_buffer->address(),
-                grad_value_buffer->address(),
+                grad_key_buffer != nullptr ? grad_key_buffer->address() : 0U,
+                grad_value_buffer != nullptr ? grad_value_buffer->address() : 0U,
                 num_pairs,
                 start_pair_idx,
             });
@@ -166,6 +167,11 @@ void assign_per_core_runtime_args_balanced(
 
 SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::create(
     const kv::operation_attributes_t& args, const kv::tensor_args_t& tensor_args, kv::tensor_return_value_t& output) {
+    // Which outputs to produce. Both need P (recomputed from Q, K, mask and lse) and dO. grad_V = P^T @ dO needs
+    // nothing else; grad_K additionally needs V (for dP = dO @ V^T), u_scaler and dS.
+    const bool compute_grad_key = args.compute_grad_key;
+    const bool compute_grad_value = args.compute_grad_value;
+
     // -------------------------------------------------------------------------
     // 1) Setup device, data formats, tile sizes, and compute split
     // -------------------------------------------------------------------------
@@ -263,8 +269,11 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     [[maybe_unused]] auto cb_key =
         create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
 
-    [[maybe_unused]] auto cb_value = create_circular_buffer(
-        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+    // V only feeds dP = dO @ V^T, which only grad_K uses.
+    if (compute_grad_key) {
+        [[maybe_unused]] auto cb_value = create_circular_buffer(
+            program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+    }
 
     // Create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly
     // Not needed for AttentionMaskType::None
@@ -282,28 +291,6 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         2 * kNumOfIntermCBTiles);
 
     // Utility buffers
-    [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
-        program,
-        all_cores,
-        kMatMulReduceCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kSingleTileBuffer);
-
-    [[maybe_unused]] auto cb_grad_value_accum = create_circular_buffer(
-        program, all_cores, kGradValueAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
-
-    [[maybe_unused]] auto cb_grad_key_accum = create_circular_buffer(
-        program, all_cores, kGradKeyAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, kWt);
-
-    [[maybe_unused]] auto cb_attn_weights_transposed = create_circular_buffer(
-        program,
-        all_cores,
-        kAttnWeightsTransposedCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kSingleTileBuffer);
-
     [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
         program,
         all_cores,
@@ -312,37 +299,61 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         float32_single_tile_size_bytes,
         kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_attention = create_circular_buffer(
-        program,
-        all_cores,
-        kGradAttentionCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kSingleTileBuffer);
+    // grad_V chain: P^T @ dO, accumulated in L1.
+    if (compute_grad_value) {
+        [[maybe_unused]] auto cb_grad_value_accum = create_circular_buffer(
+            program, all_cores, kGradValueAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
 
-    [[maybe_unused]] auto cb_grad_scores_transposed = create_circular_buffer(
-        program,
-        all_cores,
-        kGradScoresTransposedCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kSingleTileBuffer);
-
-    [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_17
-        create_circular_buffer(
+        [[maybe_unused]] auto cb_attn_weights_transposed = create_circular_buffer(
             program,
             all_cores,
-            kUScalarRowCbIndex,
+            kAttnWeightsTransposedCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            kSingleTileBuffer);
+    }
+
+    // grad_K chain: dP = dO @ V^T, dS = P * (dP - u), dS^T @ Q, accumulated in L1.
+    if (compute_grad_key) {
+        [[maybe_unused]] auto cb_grad_key_accum = create_circular_buffer(
+            program, all_cores, kGradKeyAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, kWt);
+
+        [[maybe_unused]] auto cb_grad_attention = create_circular_buffer(
+            program,
+            all_cores,
+            kGradAttentionCbIndex,
             precise_data_format,
             float32_single_tile_size_bytes,
             kSingleTileBuffer);
 
-    // Output gradient buffers (grad_query is computed by Q kernel, not KV kernel)
-    [[maybe_unused]] auto cb_grad_key = create_circular_buffer(
-        program, all_cores, kGradKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
+        [[maybe_unused]] auto cb_grad_scores_transposed = create_circular_buffer(
+            program,
+            all_cores,
+            kGradScoresTransposedCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            kSingleTileBuffer);
 
-    [[maybe_unused]] auto cb_grad_value = create_circular_buffer(
-        program, all_cores, kGradValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+        [[maybe_unused]] auto cb_u_scaler_row =  // CBIndex::c_14
+            create_circular_buffer(
+                program,
+                all_cores,
+                kUScalarRowCbIndex,
+                precise_data_format,
+                float32_single_tile_size_bytes,
+                kSingleTileBuffer);
+    }
+
+    // Output gradient buffers (grad_query is computed by Q kernel, not KV kernel)
+    if (compute_grad_key) {
+        [[maybe_unused]] auto cb_grad_key = create_circular_buffer(
+            program, all_cores, kGradKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
+    }
+
+    if (compute_grad_value) {
+        [[maybe_unused]] auto cb_grad_value = create_circular_buffer(
+            program, all_cores, kGradValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+    }
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -354,11 +365,13 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     auto* value_buffer = value.buffer();
     auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
     auto* intermediates_buffer = intermediates.buffer();
-    auto* u_scaler_buffer = tensor_args.u_scaler.buffer();
+    auto* u_scaler_buffer = tensor_args.u_scaler.has_value() ? tensor_args.u_scaler.value().buffer() : nullptr;
 
+    // An output is nullopt when it was not requested; its buffer is then null and gets placeholder accessor args
+    // and a 0 address, so the writer's accessor offsets do not depend on the flags.
     auto& [grad_key, grad_value] = output;
-    auto* grad_key_buffer = grad_key.buffer();
-    auto* grad_value_buffer = grad_value.buffer();
+    auto* grad_key_buffer = grad_key.has_value() ? grad_key.value().buffer() : nullptr;
+    auto* grad_value_buffer = grad_value.has_value() ? grad_value.value().buffer() : nullptr;
 
     // Configure defines
     std::map<std::string, std::string> reader_defines;
@@ -384,6 +397,19 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         reader_defines[kBalancedParallelismDefKey] = "1";
         writer_defines[kBalancedParallelismDefKey] = "1";
         compute_defines[kBalancedParallelismDefKey] = "1";
+    }
+
+    // Requested outputs
+    const auto set_define_on_all = [&](const std::string& key) {
+        reader_defines[key] = "1";
+        writer_defines[key] = "1";
+        compute_defines[key] = "1";
+    };
+    if (compute_grad_key) {
+        set_define_on_all(kComputeGradKeyDefKey);
+    }
+    if (compute_grad_value) {
+        set_define_on_all(kComputeGradValueDefKey);
     }
 
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
@@ -563,14 +589,17 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
                      value_buffer->address(),
                      mask_buffer != nullptr ? mask_buffer->address() : 0U,
                      intermediates_buffer->address(),
-                     u_scaler_buffer->address(),
+                     u_scaler_buffer != nullptr ? u_scaler_buffer->address() : 0U,
                      num_rows,
                      start_row});
                 SetRuntimeArgs(
                     program,
                     kernels.writer,
                     core,
-                    {grad_key_buffer->address(), grad_value_buffer->address(), num_rows, start_row});
+                    {grad_key_buffer != nullptr ? grad_key_buffer->address() : 0U,
+                     grad_value_buffer != nullptr ? grad_value_buffer->address() : 0U,
+                     num_rows,
+                     start_row});
                 SetRuntimeArgs(
                     program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
             });
@@ -610,11 +639,11 @@ void SDPABackwardKVProgramFactory::override_runtime_arguments(
     const auto* value_buffer = tensor_args.value.buffer();
     const auto* mask_buffer = tensor_args.attn_mask.has_value() ? tensor_args.attn_mask.value().buffer() : nullptr;
     const auto* intermediates_buffer = tensor_args.intermediates.buffer();
-    const auto* u_scaler_buffer = tensor_args.u_scaler.buffer();
+    const auto* u_scaler_buffer = tensor_args.u_scaler.has_value() ? tensor_args.u_scaler.value().buffer() : nullptr;
 
     auto& [grad_key, grad_value] = tensor_return_value;
-    auto* grad_key_buffer = grad_key.buffer();
-    auto* grad_value_buffer = grad_value.buffer();
+    auto* grad_key_buffer = grad_key.has_value() ? grad_key.value().buffer() : nullptr;
+    auto* grad_value_buffer = grad_value.has_value() ? grad_value.value().buffer() : nullptr;
 
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_bw_reader_kernel);
     auto& writer_runtime_args = GetRuntimeArgs(program, sdpa_bw_writer_kernel);
@@ -628,13 +657,13 @@ void SDPABackwardKVProgramFactory::override_runtime_arguments(
             runtime_args[kReaderValueIdx] = value_buffer->address();
             runtime_args[kReaderMaskIdx] = mask_buffer != nullptr ? mask_buffer->address() : 0;
             runtime_args[kReaderIntermediatesIdx] = intermediates_buffer->address();
-            runtime_args[kReaderUScalerIdx] = u_scaler_buffer->address();
+            runtime_args[kReaderUScalerIdx] = u_scaler_buffer != nullptr ? u_scaler_buffer->address() : 0;
         }
 
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kGradKeyBufferIdx] = grad_key_buffer->address();
-            runtime_args[kGradValueBufferIdx] = grad_value_buffer->address();
+            runtime_args[kGradKeyBufferIdx] = grad_key_buffer != nullptr ? grad_key_buffer->address() : 0U;
+            runtime_args[kGradValueBufferIdx] = grad_value_buffer != nullptr ? grad_value_buffer->address() : 0U;
         }
     });
 }

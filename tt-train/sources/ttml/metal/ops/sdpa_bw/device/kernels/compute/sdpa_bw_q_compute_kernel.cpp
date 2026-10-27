@@ -53,11 +53,12 @@
 // into a second CB that the writer kernel stores to DRAM for the KV kernel. u is computed
 // directly from dY and Y using the identity above.
 //
-// Processing order:
+// Processing order (each step only when one of the requested outputs needs it):
 //   for each query row q:
-//     compute u_scalar = rowsum(dY[q] ⊙ Y[q])
-//     [HAS_GATE] compute dO[q] = dY[q] ⊙ σ(G[q]), dG[q] = dY[q] ⊙ Y[q] ⊙ (1 − σ(G[q]))
-//     for each K/V row k:
+//     compute u_scalar = rowsum(dY[q] ⊙ Y[q])            // grad_Q, u_scaler output
+//     [HAS_GATE] compute dO[q] = dY[q] ⊙ σ(G[q])         // grad_Q, gated dO output
+//     [HAS_GATE] compute dG[q] = dY[q] ⊙ Y[q] ⊙ (1 − σ(G[q]))  // grad_gate output
+//     for each K/V row k:                                // grad_Q only
 //       P[q,k] = softmax(Q[q] @ K[k]^T / sqrt(d) + mask[q,k])  // recomputed
 //       dP[q,k] = dO[q] @ V[k]^T
 //       dS[q,k] = P[q,k] * (dP[q,k] - u_scalar) * scale
@@ -74,6 +75,50 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);      // sqrt(Et) -
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(5);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(6);  // used to transform mask from 0/-1 to 0/-inf
 constexpr uint32_t block_size = get_compile_time_arg_val(7);       // block size for update_grad_query (divides qWt)
+
+// Which outputs to produce. Without grad_Q there is no K/V loop and Q, K, V, the mask, the intermediates and the
+// dP/dS/dQ CBs do not exist; u_scaler and the gate outputs only need dY, Y and G.
+#ifdef COMPUTE_GRAD_QUERY
+constexpr bool compute_grad_query = true;
+#else
+constexpr bool compute_grad_query = false;
+#endif
+
+#ifdef COMPUTE_U_SCALER
+constexpr bool compute_u_scaler = true;
+#else
+constexpr bool compute_u_scaler = false;
+#endif
+
+#ifdef COMPUTE_GRAD_GATE
+constexpr bool compute_grad_gate = true;
+#else
+constexpr bool compute_grad_gate = false;
+#endif
+
+#ifdef COMPUTE_GATED_GRAD_OUTPUT
+constexpr bool compute_gated_grad_output = true;
+#else
+constexpr bool compute_gated_grad_output = false;
+#endif
+
+// u_scaler feeds this kernel's own dS (grad_Q) and the KV kernel's dS (the u_scaler output). The gate gives the
+// gated dO used by dP (grad_Q) and by the KV kernel, and grad_gate. These are preprocessor conditions rather than
+// `if constexpr`: outside a template a discarded branch is still instantiated, and the helpers static_assert that
+// they have something to produce.
+#if defined(COMPUTE_GRAD_QUERY) || defined(COMPUTE_U_SCALER)
+#define SDPA_BW_Q_COMPUTE_U
+#endif
+#if defined(HAS_GATE) && \
+    (defined(COMPUTE_GRAD_QUERY) || defined(COMPUTE_GATED_GRAD_OUTPUT) || defined(COMPUTE_GRAD_GATE))
+#define SDPA_BW_Q_USE_GATE
+#endif
+// Y feeds u and grad_gate; the gated dO alone needs only dY and G, so Y is then neither read nor allocated.
+#if defined(SDPA_BW_Q_COMPUTE_U) || (defined(HAS_GATE) && defined(COMPUTE_GRAD_GATE))
+constexpr bool read_attn_output = true;
+#else
+constexpr bool read_attn_output = false;
+#endif
 
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;  // Gradient w.r.t. output
 constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;  // (Gated) attention output from forward pass
@@ -108,38 +153,19 @@ const uint32_t v_tiles = vWt;             // V/dO/O inner dim tiles
 const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q row
 
 /**
- * Process a single row of the SDPA backward Q computation.
- * This function handles the full backward attention computation for one query row:
+ * The grad_Q part of one query row, the K/V loop:
  * - Recompute P = softmax(Q @ K^T / sqrt(d) + mask) using stored intermediates
  * - Compute dP = dO @ V^T
  * - Compute dS = P * (dP - u) * scale (softmax backward)
- * - Accumulate dQ += dS @ K
+ * - Accumulate dQ += dS @ K, then pack dQ
+ * Expects u_scalar in cb_u_scalar_row and, with a gate, the gated dO in cb_gated_grad_output_local; pops both.
  *
  * @param global_row_idx The global row index (across all batches/heads/sequences)
  */
-FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
-    cb_wait_front(cb_attn_output, v_tiles);
-    cb_wait_front(cb_grad_output, v_tiles);
+FORCE_INLINE void process_kv_loop(uint32_t global_row_idx) {
     cb_wait_front(cb_query, qk_tiles);
 
-    compute_u_scalar_row(
-        cb_grad_output,
-        cb_attn_output,
-        cb_u_scalar_row,
-        cb_mat_mul_reduction,
-        v_tiles,
-        scaler_bits,
-        cb_u_scaler_output);
-
 #ifdef HAS_GATE
-    compute_gated_grad_output_and_grad_gate(
-        cb_grad_output,
-        cb_attn_output,
-        cb_gate,
-        cb_gated_grad_output_local,
-        cb_gated_grad_output,
-        cb_grad_gate,
-        v_tiles);
     cb_wait_front(cb_gated_grad_output_local, v_tiles);
     // The gate helper leaves PACK in BF16; the loop below only reconfigures conditionally
     // from FP32, so restore FP32 here.
@@ -225,12 +251,59 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
 
 #ifdef HAS_GATE
     cb_pop_front(cb_gated_grad_output_local, v_tiles);
-    cb_pop_front(cb_gate, v_tiles);
 #endif
     cb_pop_front(cb_u_scalar_row, onetile);
     cb_pop_front(cb_intermediates, num_of_interm_tiles);
     cb_pop_front(cb_query, qk_tiles);
-    cb_pop_front(cb_attn_output, v_tiles);
+}
+
+/**
+ * Process a single row of the SDPA backward Q computation: u_scalar = rowsum(dY * Y), the gate outputs, and the
+ * K/V loop for grad_Q, each only when requested.
+ *
+ * @param global_row_idx The global row index (across all batches/heads/sequences)
+ */
+FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
+    if constexpr (read_attn_output) {
+        cb_wait_front(cb_attn_output, v_tiles);
+    }
+    cb_wait_front(cb_grad_output, v_tiles);
+
+#ifdef SDPA_BW_Q_COMPUTE_U
+    compute_u_scalar_row</* PackLocal */ compute_grad_query, /* PackOutput */ compute_u_scaler>(
+        cb_grad_output,
+        cb_attn_output,
+        cb_u_scalar_row,
+        cb_mat_mul_reduction,
+        v_tiles,
+        scaler_bits,
+        cb_u_scaler_output);
+#endif
+
+#ifdef SDPA_BW_Q_USE_GATE
+    compute_gated_grad_output_and_grad_gate<
+        /* PackLocal */ compute_grad_query,
+        /* PackOutput */ compute_gated_grad_output,
+        /* PackGradGate */ compute_grad_gate>(
+        cb_grad_output,
+        cb_attn_output,
+        cb_gate,
+        cb_gated_grad_output_local,
+        cb_gated_grad_output,
+        cb_grad_gate,
+        v_tiles);
+#endif
+
+    if constexpr (compute_grad_query) {
+        process_kv_loop(global_row_idx);
+    }
+
+#ifdef SDPA_BW_Q_USE_GATE
+    cb_pop_front(cb_gate, v_tiles);
+#endif
+    if constexpr (read_attn_output) {
+        cb_pop_front(cb_attn_output, v_tiles);
+    }
     cb_pop_front(cb_grad_output, v_tiles);
 }
 
@@ -244,13 +317,23 @@ void kernel_main() {
     const uint32_t num_pairs = get_arg_val<uint32_t>(1);
 #endif
 
-    compute_kernel_hw_startup(cb_grad_output, cb_query, cb_key);
-    copy_init(cb_query);
+    if constexpr (compute_grad_query) {
+        compute_kernel_hw_startup(cb_grad_output, cb_query, cb_key);
+        copy_init(cb_query);
+    } else {
+        // cb_query and cb_key only exist for grad_Q, and Y not for the gated dO alone; dY always does. Every helper
+        // reconfigures its own unpack/pack formats.
+        compute_kernel_hw_startup(cb_grad_output, cb_grad_output, cb_grad_output);
+    }
 
+#ifdef SDPA_BW_Q_COMPUTE_U
     cb_wait_front(cb_mat_mul_reduction, onetile);
-    // compute_kernel_hw_startup above does the one-time HW config; each matmul site below
-    // re-establishes its state with reconfig_data_format + matmul_init.
-    matmul_init(cb_query, cb_key);
+#endif
+    if constexpr (compute_grad_query) {
+        // compute_kernel_hw_startup above does the one-time HW config; each matmul site below
+        // re-establishes its state with reconfig_data_format + matmul_init.
+        matmul_init(cb_query, cb_key);
+    }
 
 #ifdef CAUSAL_MASK
     // Wait for causal mask tile ONCE - it's generated by writer and will be reused for every diagonal
@@ -258,6 +341,7 @@ void kernel_main() {
 #endif
 
 #ifdef BALANCED_PARALLELISM
+    static_assert(compute_grad_query, "Balanced pairing only balances the grad_Q K/V loop");
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     for (uint32_t p = 0; p < num_pairs; ++p) {

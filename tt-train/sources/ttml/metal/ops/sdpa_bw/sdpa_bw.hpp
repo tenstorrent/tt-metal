@@ -9,9 +9,22 @@
 
 namespace ttml::metal {
 
-// Returns [grad_Q, grad_K, grad_V, grad_gate]
-// With a gate, attn_output must be the gated forward output Y = sdpa(Q, K, V) * sigmoid(gate).
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> sdpa_bw(
+// Which grads sdpa_bw computes. A field set to false drops that grad's kernel work; grad_gate also needs a gate.
+struct SDPABackwardGrads {
+    bool query = true;
+    bool key = true;
+    bool value = true;
+    bool gate = true;
+};
+
+// Returns [grad_Q, grad_K, grad_V, grad_gate]; a grad is nullopt when it was not requested (or, for grad_gate,
+// without a gate). With a gate, attn_output must be the gated forward output Y = sdpa(Q, K, V) * sigmoid(gate).
+std::tuple<
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>,
+    std::optional<ttnn::Tensor>>
+sdpa_bw(
     const ttnn::Tensor& grad_output,                              // Gradient w.r.t. output
     const ttnn::Tensor& attn_output,                              // sdpa forward output (needed for gradients)
     const ttnn::Tensor& query,                                    // input Q (needed for gradients)
@@ -24,6 +37,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>
     const std::optional<ttnn::Tensor>& gate =
         std::nullopt,  // out = sdpa(Q, K, V) * sigmoid(gate); gate shape (B, H, S, Dv)
     const std::optional<ttnn::Tensor>& preallocated_grad_gate =
-        std::nullopt);  // grad_gate output buffer, shape (B, H, S, Dv); may alias attn_output
+        std::nullopt,  // grad_gate output buffer, shape (B, H, S, Dv); may alias attn_output; needs grads.gate
+    const SDPABackwardGrads& grads = {});
 
 }  // namespace ttml::metal

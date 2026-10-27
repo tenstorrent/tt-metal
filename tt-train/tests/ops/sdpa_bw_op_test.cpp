@@ -6,6 +6,7 @@
 #include <sys/types.h>
 
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <xtensor-blas/xlinalg.hpp>
 
@@ -672,9 +673,9 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
         use_gate ? xt::eval(float_attn_output * gate_sigmoid) : float_attn_output;
 
     const auto& [kernel_dQ, kernel_dK, kernel_dV, kernel_dGate] = op_result;
-    const xt::xarray<float> sdpa_bw_dQ = core::to_xtensor(kernel_dQ);  // dL_dQ
-    const xt::xarray<float> sdpa_bw_dK = core::to_xtensor(kernel_dK);  // dL_dK
-    const xt::xarray<float> sdpa_bw_dV = core::to_xtensor(kernel_dV);  // dL_dV
+    const xt::xarray<float> sdpa_bw_dQ = core::to_xtensor(kernel_dQ.value());  // dL_dQ
+    const xt::xarray<float> sdpa_bw_dK = core::to_xtensor(kernel_dK.value());  // dL_dK
+    const xt::xarray<float> sdpa_bw_dV = core::to_xtensor(kernel_dV.value());  // dL_dV
 
     // Verify shapes match
     ASSERT_EQ(sdpa_bw_dQ.shape(), float_dQ.shape()) << "kernel_dQ shape != float_dQ shape";
@@ -1310,6 +1311,30 @@ TEST_F(SDPABackwardTest, Validation_RejectsMalformedPreallocatedGradGate) {
         ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U), device, ttnn::Layout::ROW_MAJOR);
     EXPECT_ANY_THROW(call_with_grad_gate(row_major_grad_gate))
         << "sdpa_bw should reject a ROW_MAJOR preallocated_grad_gate";
+
+    // A well-formed buffer is still rejected when no grad_gate is computed. Without a gate and with only grad_V
+    // requested, the Q op (which validates the buffer) does not even run, so sdpa_bw has to check it itself.
+    const auto grad_gate =
+        core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U), device);
+    const auto call_with_grads = [&](const std::optional<ttnn::Tensor>& g, const metal::SDPABackwardGrads& grads) {
+        return metal::sdpa_bw(
+            in.grad_output,
+            in.attn_output,
+            in.query,
+            in.key,
+            in.value,
+            in.intermediates,
+            metal::AttentionMaskType::None,
+            std::nullopt,
+            0.0F,
+            g,
+            grad_gate,
+            grads);
+    };
+    EXPECT_ANY_THROW(call_with_grads(std::nullopt, {.query = false, .key = false}))
+        << "sdpa_bw should reject a preallocated_grad_gate without a gate";
+    EXPECT_ANY_THROW(call_with_grads(gate, {.gate = false}))
+        << "sdpa_bw should reject a preallocated_grad_gate when grad_gate is not requested";
 }
 
 TEST_F(SDPABackwardTest, Validation_RejectsRowMajorGate) {
@@ -1382,9 +1407,9 @@ TEST_F(SDPABackwardTest, GateTest_ProgramCacheHitReadsNewGate) {
     auto dO_b = core::from_xtensor(xt::eval(dY_host * s_b), device);
     const auto [dQ_ref, dK_ref, dV_ref, dG_none] = metal::sdpa_bw(dO_b, O, q, k, v, lse, mask_type);
     ASSERT_FALSE(dG_none.has_value());
-    const xt::xarray<float> dQ_ref_host = core::to_xtensor(dQ_ref);
-    const xt::xarray<float> dK_ref_host = core::to_xtensor(dK_ref);
-    const xt::xarray<float> dV_ref_host = core::to_xtensor(dV_ref);
+    const xt::xarray<float> dQ_ref_host = core::to_xtensor(dQ_ref.value());
+    const xt::xarray<float> dK_ref_host = core::to_xtensor(dK_ref.value());
+    const xt::xarray<float> dV_ref_host = core::to_xtensor(dV_ref.value());
     const xt::xarray<float> dG_ref_host = dY_host * O_host * s_b * (1.0F - s_b);
 
     const auto entries_before = device->num_program_cache_entries();
@@ -1399,9 +1424,9 @@ TEST_F(SDPABackwardTest, GateTest_ProgramCacheHitReadsNewGate) {
     ASSERT_TRUE(dG_a.has_value());
     ASSERT_TRUE(dG_b.has_value());
 
-    const xt::xarray<float> dQ_b_host = core::to_xtensor(dQ_b);
-    const xt::xarray<float> dK_b_host = core::to_xtensor(dK_b);
-    const xt::xarray<float> dV_b_host = core::to_xtensor(dV_b);
+    const xt::xarray<float> dQ_b_host = core::to_xtensor(dQ_b.value());
+    const xt::xarray<float> dK_b_host = core::to_xtensor(dK_b.value());
+    const xt::xarray<float> dV_b_host = core::to_xtensor(dV_b.value());
     const xt::xarray<float> dG_b_host = core::to_xtensor(dG_b.value());
 
     // The device applies sigmoid on the SFPU and the reference on the host, so allow a few bf16 ULP.
@@ -1417,7 +1442,7 @@ TEST_F(SDPABackwardTest, GateTest_ProgramCacheHitReadsNewGate) {
         << "Cache-hit grad_gate does not match the second gate (stale gate or grad_gate address?)";
 
     // And the second run must not have reproduced the first run's outputs.
-    EXPECT_FALSE(xt::allclose(dQ_b_host, core::to_xtensor(dQ_a), rtol, atol))
+    EXPECT_FALSE(xt::allclose(dQ_b_host, core::to_xtensor(dQ_a.value()), rtol, atol))
         << "Cache-hit run reproduced the first gate's dQ: stale gate address";
     EXPECT_FALSE(xt::allclose(dG_b_host, core::to_xtensor(dG_a.value()), rtol, atol))
         << "Cache-hit run reproduced the first gate's grad_gate: stale gate address";
@@ -1454,9 +1479,9 @@ TEST_F(SDPABackwardTest, GateTest_AutogradGateGradMatchesKernel) {
     const auto [dQ_ref, dK_ref, dV_ref, dG_ref] =
         metal::sdpa_bw(dY, fw[0].value(), q, k, v, fw[1].value(), mask_type, std::nullopt, 0.0F, gate);
     ASSERT_TRUE(dG_ref.has_value());
-    const xt::xarray<float> dQ_ref_host = core::to_xtensor(dQ_ref);
-    const xt::xarray<float> dK_ref_host = core::to_xtensor(dK_ref);
-    const xt::xarray<float> dV_ref_host = core::to_xtensor(dV_ref);
+    const xt::xarray<float> dQ_ref_host = core::to_xtensor(dQ_ref.value());
+    const xt::xarray<float> dK_ref_host = core::to_xtensor(dK_ref.value());
+    const xt::xarray<float> dV_ref_host = core::to_xtensor(dV_ref.value());
     const xt::xarray<float> dG_ref_host = core::to_xtensor(dG_ref.value());
 
     for (const bool qkv_requires_grad : {true, false}) {
@@ -1503,7 +1528,286 @@ TEST_F(SDPABackwardTest, GateTest_AutogradGateGradMatchesKernel) {
         EXPECT_THROW(out->backward(/*retain_graph=*/true), std::runtime_error);
         autograd::ctx().reset_graph();
     }
+
+    // With a frozen gate there is no grad_gate to write, so Y stays intact and a second backward over a retained
+    // graph works.
+    {
+        auto q_t = autograd::create_tensor(q, /*requires_grad=*/true);
+        auto k_t = autograd::create_tensor(k, /*requires_grad=*/true);
+        auto v_t = autograd::create_tensor(v, /*requires_grad=*/true);
+        auto gate_t = autograd::create_tensor(gate, /*requires_grad=*/false);
+        auto out = ops::scaled_dot_product_attention(q_t, k_t, v_t, std::nullopt, 0.0F, gate_t);
+        const xt::xarray<float> Y_host = core::to_xtensor(out->get_value());
+        out->set_grad(dY);
+        out->backward(/*retain_graph=*/true);
+
+        EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(out->get_value()), Y_host)))
+            << "a frozen gate must leave the forward output intact";
+        EXPECT_FALSE(gate_t->is_grad_initialized());
+        EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(q_t->get_grad()), dQ_ref_host)));
+        EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(k_t->get_grad()), dK_ref_host)));
+        EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(v_t->get_grad()), dV_ref_host)));
+
+        // The second pass reads the same Y, so each grad doubles (exactly, in bf16) and Y still stays intact.
+        ASSERT_NO_THROW(out->backward(/*retain_graph=*/true));
+        EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(out->get_value()), Y_host)));
+        EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(q_t->get_grad()), 2.0F * dQ_ref_host)));
+        EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(k_t->get_grad()), 2.0F * dK_ref_host)));
+        EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(v_t->get_grad()), 2.0F * dV_ref_host)));
+        autograd::ctx().reset_graph();
+    }
 }
+
+// ========== Skipped grads ==========
+// sdpa_bw takes an SDPABackwardGrads field per grad, and each one drops kernel work:
+//   * without grad_Q the Q kernel has no K/V loop (no Q / K / V / mask / intermediates reads, no balanced row
+//     pairing) and only computes the per-row outputs from dY, Y and G (Y only for u and grad_gate);
+//   * the Q kernel's u_scaler output is only computed for grad_K, its gated dO only for grad_K / grad_V with a gate,
+//     and grad_V alone without a gate skips the Q kernel entirely;
+//   * the KV kernel computes grad_K and grad_V separately, and without grad_K it gets no u_scaler.
+// A requested grad must match the full backward bit for bit (the same kernels do the same arithmetic) and the rest
+// must be nullopt. Each row then runs again on a second input set, alive at the same time, which must hit the program
+// cache and match that set's full backward: a skipped output gets a 0 address, so override_runtime_arguments must
+// only patch the requested ones. A stale address would make the second run write into the first run's outputs, so
+// those are checked again afterwards; the second run's own buffers may hold an earlier row's values, which is why the
+// seed also depends on the row.
+
+namespace {
+
+struct SDPABackwardSkipCase {
+    std::string name;
+    bool grad_q = true;
+    bool grad_k = true;
+    bool grad_v = true;
+    bool grad_gate = true;
+    bool use_gate = false;
+    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal;
+    uint32_t batch_size = 1U;
+    uint32_t num_query_heads = 2U;
+    uint32_t num_kv_heads = 2U;
+    uint32_t sequence_length = 64U;
+    uint32_t qk_head_dim = 64U;
+    uint32_t v_head_dim = 64U;
+};
+
+// gtest prints a failing row's parameter through this; without it the row prints as raw bytes.
+void PrintTo(const SDPABackwardSkipCase& c, std::ostream* os) {
+    *os << c.name;
+}
+
+struct SdpaBwSkipInputs {
+    ttnn::Tensor grad_output;
+    ttnn::Tensor attn_output;
+    ttnn::Tensor query;
+    ttnn::Tensor key;
+    ttnn::Tensor value;
+    ttnn::Tensor intermediates;
+    std::optional<ttnn::Tensor> attn_mask;
+    std::optional<ttnn::Tensor> gate;
+};
+
+SdpaBwSkipInputs make_sdpa_bw_skip_inputs(const SDPABackwardSkipCase& c, uint32_t seed) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const std::size_t B = c.batch_size, qNH = c.num_query_heads, kvNH = c.num_kv_heads, S = c.sequence_length;
+    const auto uniform = [&](const std::array<std::size_t, 4>& shape, float lo, float hi, uint32_t s) {
+        return core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, lo, hi, s), device);
+    };
+
+    const auto query = uniform({B, qNH, S, c.qk_head_dim}, -1.0F, 1.0F, seed);
+    const auto key = uniform({B, kvNH, S, c.qk_head_dim}, -1.0F, 1.0F, seed + 1U);
+    const auto value = uniform({B, kvNH, S, c.v_head_dim}, -1.0F, 1.0F, seed + 2U);
+    std::optional<ttnn::Tensor> attn_mask;
+    if (c.mask_type == metal::AttentionMaskType::Arbitrary) {
+        attn_mask = core::from_xtensor(generate_attn_mask(core::to_xtensor(query)), device);
+    }
+    std::optional<ttnn::Tensor> gate;
+    if (c.use_gate) {
+        gate = uniform({B, qNH, S, c.v_head_dim}, -2.0F, 2.0F, seed + 4U);
+    }
+    const auto fw =
+        metal::sdpa_fw(query, key, value, c.mask_type, attn_mask, 0.0F, /*return_intermediates=*/true, gate);
+    return SdpaBwSkipInputs{
+        .grad_output = uniform({B, qNH, S, c.v_head_dim}, -1.0F, 1.0F, seed + 3U),
+        .attn_output = fw[0].value(),
+        .query = query,
+        .key = key,
+        .value = value,
+        .intermediates = fw[1].value(),
+        .attn_mask = attn_mask,
+        .gate = gate};
+}
+
+using SdpaBwGrads = std::array<std::optional<ttnn::Tensor>, 4>;  // grad_Q, grad_K, grad_V, grad_gate
+constexpr std::array<const char*, 4> kSdpaBwGradNames{"grad_Q", "grad_K", "grad_V", "grad_gate"};
+
+SdpaBwGrads run_sdpa_bw(
+    const SDPABackwardSkipCase& c, const SdpaBwSkipInputs& in, const ttml::metal::SDPABackwardGrads& grads) {
+    auto [dQ, dK, dV, dG] = ttml::metal::sdpa_bw(
+        in.grad_output,
+        in.attn_output,
+        in.query,
+        in.key,
+        in.value,
+        in.intermediates,
+        c.mask_type,
+        in.attn_mask,
+        0.0F,
+        in.gate,
+        /*preallocated_grad_gate=*/std::nullopt,
+        grads);
+    return {std::move(dQ), std::move(dK), std::move(dV), std::move(dG)};
+}
+
+void expect_requested_grads(const SDPABackwardSkipCase& c, const SdpaBwGrads& skipped, const SdpaBwGrads& full) {
+    const std::array<bool, 4> requested{c.grad_q, c.grad_k, c.grad_v, c.use_gate && c.grad_gate};
+    for (size_t i = 0; i < requested.size(); ++i) {
+        if (!requested[i]) {
+            EXPECT_FALSE(skipped[i].has_value()) << kSdpaBwGradNames[i] << " was not requested";
+            continue;
+        }
+        ASSERT_TRUE(skipped[i].has_value()) << kSdpaBwGradNames[i] << " was requested";
+        ASSERT_TRUE(full[i].has_value());
+        EXPECT_TRUE(
+            xt::all(xt::equal(ttml::core::to_xtensor(skipped[i].value()), ttml::core::to_xtensor(full[i].value()))))
+            << kSdpaBwGradNames[i] << " differs from the full backward's";
+    }
+}
+
+}  // namespace
+
+class SDPABackwardSkipTest : public ::testing::TestWithParam<SDPABackwardSkipCase> {
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+TEST_P(SDPABackwardSkipTest, RequestedGradsMatchFullBackward) {
+    using namespace ttml;
+    const SDPABackwardSkipCase& c = GetParam();
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+    // Rows with the same shape would otherwise get the same inputs.
+    const uint32_t seed = autograd::ctx().get_generator()() ^ static_cast<uint32_t>(std::hash<std::string>{}(c.name));
+
+    // Both input sets stay alive, so the second one cannot reuse the first one's addresses.
+    const auto in_a = make_sdpa_bw_skip_inputs(c, seed);
+    const auto in_b = make_sdpa_bw_skip_inputs(c, seed + 10U);
+    const auto full_a = run_sdpa_bw(c, in_a, metal::SDPABackwardGrads{});
+    const auto full_b = run_sdpa_bw(c, in_b, metal::SDPABackwardGrads{});
+
+    const metal::SDPABackwardGrads grads{.query = c.grad_q, .key = c.grad_k, .value = c.grad_v, .gate = c.grad_gate};
+    const auto entries_before = device->num_program_cache_entries();
+    const auto skipped_a = run_sdpa_bw(c, in_a, grads);
+    const auto entries_after_first = device->num_program_cache_entries();
+    // Every row changes the flags of at least one kernel, so its programs must differ from the full backward's.
+    ASSERT_GT(entries_after_first, entries_before) << "the skipping run reused the full backward's programs";
+    {
+        SCOPED_TRACE("first input set");
+        expect_requested_grads(c, skipped_a, full_a);
+    }
+
+    const auto skipped_b = run_sdpa_bw(c, in_b, grads);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_first)
+        << "second skipping run at identical shapes compiled a new program instead of hitting the cache";
+    {
+        SCOPED_TRACE("second input set (program-cache hit)");
+        expect_requested_grads(c, skipped_b, full_b);
+    }
+    {
+        SCOPED_TRACE("first input set after the cache hit (stale output address?)");
+        expect_requested_grads(c, skipped_a, full_a);
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SkipCases,
+    SDPABackwardSkipTest,
+    ::testing::Values(
+        // Q kernel with its K/V loop but no u_scaler output; no KV kernel.
+        SDPABackwardSkipCase{.name = "OnlyQ", .grad_k = false, .grad_v = false},
+        // As OnlyQ without a mask: the K/V loop covers every K/V row and scales instead of masking.
+        SDPABackwardSkipCase{
+            .name = "OnlyQ_NoMask",
+            .grad_k = false,
+            .grad_v = false,
+            .mask_type = ttml::metal::AttentionMaskType::None},
+        // Q kernel without its K/V loop, computing only u_scaler, so no mask CB or define even with a DRAM mask;
+        // KV kernel with grad_K alone, which does read the mask.
+        SDPABackwardSkipCase{
+            .name = "OnlyK_Arbitrary",
+            .grad_q = false,
+            .grad_v = false,
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary},
+        // KV kernel with grad_K alone on balanced row pairs: 2 batches x 8 K/V heads x 16 sequence tiles = 256 K/V
+        // rows, more than there are cores.
+        SDPABackwardSkipCase{
+            .name = "OnlyK_Balanced",
+            .grad_q = false,
+            .grad_v = false,
+            .batch_size = 2U,
+            .num_query_heads = 8U,
+            .num_kv_heads = 8U,
+            .sequence_length = 512U},
+        // No Q kernel; KV kernel with grad_V alone and no u_scaler, on balanced row pairs (same shape as above).
+        SDPABackwardSkipCase{
+            .name = "OnlyV_Balanced",
+            .grad_q = false,
+            .grad_k = false,
+            .batch_size = 2U,
+            .num_query_heads = 8U,
+            .num_kv_heads = 8U,
+            .sequence_length = 512U},
+        // KV kernel with grad_V alone reading a DRAM mask.
+        SDPABackwardSkipCase{
+            .name = "OnlyV_Arbitrary",
+            .grad_q = false,
+            .grad_k = false,
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary},
+        // Q rows that the full backward pairs for balanced parallelism (4 x 8 x 8 = 256); without grad_Q they are
+        // split evenly instead. KV kernel with both grads, four query heads per K/V head.
+        SDPABackwardSkipCase{
+            .name = "FrozenQ_GQA_ManyRows",
+            .grad_q = false,
+            .batch_size = 4U,
+            .num_query_heads = 8U,
+            .num_kv_heads = 2U,
+            .sequence_length = 256U},
+        // Q kernel with its K/V loop and the gated dO but no grad_gate (the op relies on this to keep Y intact).
+        SDPABackwardSkipCase{.name = "Gate_FrozenGate", .grad_gate = false, .use_gate = true},
+        // Q kernel with its K/V loop on the local gated dO, but no gate output and no u_scaler; the gate runtime
+        // args follow the mask args.
+        SDPABackwardSkipCase{
+            .name = "Gate_OnlyQ_Arbitrary",
+            .grad_k = false,
+            .grad_v = false,
+            .grad_gate = false,
+            .use_gate = true,
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary},
+        // Q kernel with its K/V loop and the gated dO output but no u_scaler; KV kernel with grad_V alone on it.
+        SDPABackwardSkipCase{.name = "Gate_QV_FrozenGate", .grad_k = false, .grad_gate = false, .use_gate = true},
+        // Q kernel without its K/V loop computing u_scaler, grad_gate and the gated dO for the KV kernel.
+        SDPABackwardSkipCase{.name = "Gate_FrozenQ", .grad_q = false, .use_gate = true},
+        // Q kernel computing only the gated dO, so it reads neither Y nor anything for the K/V loop; KV kernel with
+        // grad_V alone on it.
+        SDPABackwardSkipCase{
+            .name = "Gate_OnlyV", .grad_q = false, .grad_k = false, .grad_gate = false, .use_gate = true},
+        // Q kernel computing only grad_gate, with gate rows sized by V (1 tile) rather than Q / K (2 tiles); no KV
+        // kernel.
+        SDPABackwardSkipCase{
+            .name = "Gate_OnlyGate_SmallV",
+            .grad_q = false,
+            .grad_k = false,
+            .grad_v = false,
+            .use_gate = true,
+            .v_head_dim = 32U}),
+    [](const ::testing::TestParamInfo<SDPABackwardSkipCase>& info) { return info.param.name; });
 
 TEST_F(SDPABackwardTest, Validation_RejectsMalformedIntermediates) {
     using namespace ttml;
@@ -1664,9 +1968,9 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
         metal::AttentionMaskType::Causal,
         std::nullopt,
         0.0F);
-    const auto full_dQ_cpu = core::to_xtensor(full_dQ);
-    const auto full_dK_cpu = core::to_xtensor(full_dK);
-    const auto full_dV_cpu = core::to_xtensor(full_dV);
+    const auto full_dQ_cpu = core::to_xtensor(full_dQ.value());
+    const auto full_dK_cpu = core::to_xtensor(full_dK.value());
+    const auto full_dV_cpu = core::to_xtensor(full_dV.value());
 
     // === Simulated ring attention: per-chunk forward + logaddexp merge ===
     // For each simulated "device" d, its local Q is Q[:,:,d*Sl:(d+1)*Sl,:].
@@ -1820,9 +2124,9 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
                 std::nullopt,
                 0.0F);
 
-            auto chunk_dQ_cpu = core::to_xtensor(chunk_dQ);
-            auto chunk_dK_cpu = core::to_xtensor(chunk_dK);
-            auto chunk_dV_cpu = core::to_xtensor(chunk_dV);
+            auto chunk_dQ_cpu = core::to_xtensor(chunk_dQ.value());
+            auto chunk_dK_cpu = core::to_xtensor(chunk_dK.value());
+            auto chunk_dV_cpu = core::to_xtensor(chunk_dV.value());
 
             // Accumulate dQ for this device
             xt::view(ring_dQ, xt::all(), xt::all(), xt::range(d * S_local, (d + 1) * S_local), xt::all()) +=
