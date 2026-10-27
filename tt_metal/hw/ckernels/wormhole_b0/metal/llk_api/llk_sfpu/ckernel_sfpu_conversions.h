@@ -57,3 +57,20 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
     // Reinterpret back as float
     return sfpi::as<sfpi::vFloat>(bits);
 }
+
+// The same conversion with its constants bound by the caller. sfpi re-materialises an
+// integer literal (SFPLOADI) at every use, so inside a row loop the version above issues
+// three constant loads per row. A caller that binds kBf16RneBias and kBf16RneMask once
+// before its loop keeps them in two LREGs for the whole face; the tie-breaker LSB comes
+// from a shift pair instead of a third constant. Bit-identical to float32_to_bf16_rne(in).
+constexpr std::uint32_t kBf16RneBias = 0x7fffU;
+constexpr std::uint32_t kBf16RneMask = 0xFFFF0000U;
+
+sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in, const sfpi::vUInt bias, const sfpi::vUInt mask) {
+    sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
+    // Bit 16 of the float32 word, the LSB of the bf16 mantissa (shifts are logical).
+    sfpi::vUInt lsb = (bits << 15) >> 31;
+    bits = bits + bias + lsb;
+    bits = bits & mask;
+    return sfpi::as<sfpi::vFloat>(bits);
+}

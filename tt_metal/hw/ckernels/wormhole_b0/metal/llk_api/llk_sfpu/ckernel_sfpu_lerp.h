@@ -38,6 +38,13 @@ inline void calculate_lerp(
     const uint off_in1 = dst_index_in1 * dst_tile_size_sfpi;
     const uint off_in2 = dst_index_in2 * dst_tile_size_sfpi;
     const uint off_out = dst_index_out * dst_tile_size_sfpi;
+    // RNE constants bound once per face, not re-materialised on every row.
+    sfpi::vUInt rne_bias;
+    sfpi::vUInt rne_mask;
+    if constexpr (!is_fp32_dest_acc_en) {
+        rne_bias = kBf16RneBias;
+        rne_mask = kBf16RneMask;
+    }
     // lerp: out = input + weight * (end - input)
     //
     // Two rows per iteration, both differences computed before either row's second SFPMAD: the
@@ -58,8 +65,8 @@ inline void calculate_lerp(
         sfpi::vFloat a_res = a_in0 + a_in2 * a_diff;
         sfpi::vFloat b_res = b_in0 + b_in2 * b_diff;
         if constexpr (!is_fp32_dest_acc_en) {
-            a_res = float32_to_bf16_rne(a_res);
-            b_res = float32_to_bf16_rne(b_res);
+            a_res = float32_to_bf16_rne(a_res, rne_bias, rne_mask);
+            b_res = float32_to_bf16_rne(b_res, rne_bias, rne_mask);
         }
         sfpi::dst_reg[off_out] = a_res;
         sfpi::dst_reg[off_out + 1].mode(ADDR_MOD_2) = b_res;
