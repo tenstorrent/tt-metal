@@ -178,9 +178,14 @@ def _dram_line(device) -> str:
     alloc = mv.total_bytes_allocated_per_bank
     free = getattr(mv, "total_bytes_free_per_bank", mv.total_bytes_per_bank - alloc)
     largest = getattr(mv, "largest_contiguous_bytes_free_per_bank", -(2**20))
+    try:  # the decode (and spec) traces live in the trace region: its use decides GLM53_MODEL_TRACE_MB
+        tv = ttnn.device.get_memory_view(device, ttnn.BufferType.TRACE)
+        trace = f"; trace region {tv.total_bytes_allocated_per_bank / 2**20:.0f} of {tv.total_bytes_per_bank / 2**20:.0f} MiB per bank"
+    except Exception:  # noqa: BLE001 - informational
+        trace = ""
     return (
         f"DRAM per bank: allocated {alloc / 2**20:.0f} MiB, free {free / 2**20:.0f} MiB, "
-        f"largest free block {largest / 2**20:.0f} MiB (x{mv.num_banks} banks)"
+        f"largest free block {largest / 2**20:.0f} MiB (x{mv.num_banks} banks){trace}"
     )
 
 
