@@ -22,6 +22,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 constexpr uint32_t blocks = get_named_compile_time_arg_val("blocks");
@@ -55,13 +56,13 @@ constexpr uint32_t stage_bytes = stage_rows + 6 * 128;
 
 template <typename Accessor>
 FORCE_INLINE void read_bytes(
-    Noc& noc,
     const Accessor& src,
     DataflowBuffer& buffer,
     uint32_t bytes,
     uint32_t page,
     uint32_t page_offset,
     uint32_t l1_offset) {
+    const Noc noc;
     if (bytes) {
         noc.async_read(src, buffer, bytes, {.page_id = page, .offset_bytes = page_offset}, {.offset_bytes = l1_offset});
     }
@@ -69,13 +70,13 @@ FORCE_INLINE void read_bytes(
 
 template <typename Accessor>
 FORCE_INLINE void write_bytes(
-    Noc& noc,
     DataflowBuffer& buffer,
     const Accessor& dst,
     uint32_t bytes,
     uint32_t l1_offset,
     uint32_t page,
     uint32_t page_offset) {
+    const Noc noc;
     noc.async_write(buffer, dst, bytes, {.offset_bytes = l1_offset}, {.page_id = page, .offset_bytes = page_offset});
 }
 
@@ -127,23 +128,23 @@ void kernel_main() {
     const uint32_t lane = get_arg_val<uint32_t>(19);
     const uint32_t lane_count = get_arg_val<uint32_t>(20);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer stage(cb_stage);
     stage.reserve_back(1);
     const uint32_t base = stage.get_write_ptr();
-    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
-    volatile tt_l1_ptr uint16_t* halves = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base);
+    CoreLocalMem<volatile uint32_t> words(base);
+    CoreLocalMem<volatile uint16_t> halves(base);
     constexpr uint32_t stage_position_row = stage_rows, stage_offsets_row = stage_rows + 128,
                        stage_index_row = stage_rows + 256, stage_block_start_row = stage_rows + 384,
                        stage_kv_block_start_row = stage_rows + 512, stage_shift_row = stage_rows + 640;
 
     {
         // the position row, the offsets row, the shift row and the whole template rows / tile in one batch of reads
-        read_bytes(noc, position_in, stage, 128, 0, 0, stage_position_row);
-        read_bytes(noc, offsets_in, stage, 128, 0, 0, stage_offsets_row);
-        read_bytes(noc, shift_in, stage, 128, 0, 0, stage_shift_row);
-        read_bytes(noc, bf16_templates, stage, bf16_row_bytes, 0, bf16_row_bytes, stage_bf16);  // the MASK half
-        read_bytes(noc, tile_templates, stage, bf16_tile_bytes, 0, 0, stage_tile);              // zero tile
+        read_bytes(position_in, stage, 128, 0, 0, stage_position_row);
+        read_bytes(offsets_in, stage, 128, 0, 0, stage_offsets_row);
+        read_bytes(shift_in, stage, 128, 0, 0, stage_shift_row);
+        read_bytes(bf16_templates, stage, bf16_row_bytes, 0, bf16_row_bytes, stage_bf16);  // the MASK half
+        read_bytes(tile_templates, stage, bf16_tile_bytes, 0, 0, stage_tile);              // zero tile
         noc.async_read_barrier();
     }
 
@@ -170,50 +171,50 @@ void kernel_main() {
                 words[stage_block_start_row / 4 + u] = position_u & lane_block_mask;
                 words[stage_kv_block_start_row / 4 + u] = position_u & kv_block_start_mask;
             }
-            write_bytes(noc, stage, index_row_out, 128, stage_index_row, 0, 0);
-            write_bytes(noc, stage, block_start_row_out, 128, stage_block_start_row, 0, 0);
-            write_bytes(noc, stage, kv_block_start_out, 128, stage_kv_block_start_row, 0, 0);
+            write_bytes(stage, index_row_out, 128, stage_index_row, 0, 0);
+            write_bytes(stage, block_start_row_out, 128, stage_block_start_row, 0, 0);
+            write_bytes(stage, kv_block_start_out, 128, stage_kv_block_start_row, 0, 0);
         }
 
         // indexer_neg_mask row: MASK everywhere, +0.0 for blocks below complete_blocks (matches 0 * MASK = +0.0)
         {
             const uint32_t zero_bytes = complete_blocks * 2;
             const uint32_t bulk = zero_bytes & ~(dram_read_grain - 1);
-            read_bytes(noc, bf16_templates, stage, bulk, 0, 0, stage_bf16);
+            read_bytes(bf16_templates, stage, bulk, 0, 0, stage_bf16);
             noc.async_read_barrier();
             for (uint32_t k = bulk / 2; k < complete_blocks; ++k) {
                 halves[stage_bf16 / 2 + k] = 0;
             }
         }
-        write_bytes(noc, stage, indexer_neg_mask_out, bf16_row_bytes, stage_bf16, lane, 0);
+        write_bytes(stage, indexer_neg_mask_out, bf16_row_bytes, stage_bf16, lane, 0);
         // kv_row_hit tile of this lane (lanes with a tile): the zero tile with lane (kv_row, 0) = 1.0
         if (lane < lane_count) {
             const uint32_t kv_lane = (kv_row >> 4) * 512 + (kv_row & 15) * 16;
             halves[stage_tile / 2 + kv_lane] = one_bf16;
-            write_bytes(noc, stage, kv_row_hit_out, bf16_tile_bytes, stage_tile, lane, 0);
+            write_bytes(stage, kv_row_hit_out, bf16_tile_bytes, stage_tile, lane, 0);
         }
 
         // row_keep_bits row: zeros, all_ones below low
-        read_bytes(noc, u32_templates, stage, u32_row_bytes, 0, 0, stage_u32);
+        read_bytes(u32_templates, stage, u32_row_bytes, 0, 0, stage_u32);
         noc.async_read_barrier();
         {
             const uint32_t bulk = (low * 4) & ~(dram_read_grain - 1);
-            read_bytes(noc, u32_templates, stage, bulk, 0, u32_row_bytes, stage_u32);
+            read_bytes(u32_templates, stage, bulk, 0, u32_row_bytes, stage_u32);
             noc.async_read_barrier();
             for (uint32_t k = bulk / 4; k < low; ++k) {
                 words[stage_u32 / 4 + k] = all_ones;
             }
         }
         noc.async_write_barrier();  // the mask row and the hit tile are out before their staging is reused
-        write_bytes(noc, stage, row_keep_bits_out, u32_row_bytes, stage_u32, lane, 0);
+        write_bytes(stage, row_keep_bits_out, u32_row_bytes, stage_u32, lane, 0);
         noc.async_write_barrier();
 
         // row_fill row: all_ones from high, slot + offset + tail_shift on [low, high), zeros below low
-        read_bytes(noc, u32_templates, stage, u32_row_bytes, 0, u32_row_bytes, stage_u32);
+        read_bytes(u32_templates, stage, u32_row_bytes, 0, u32_row_bytes, stage_u32);
         noc.async_read_barrier();
         {
             const uint32_t bulk = (high * 4) & ~(dram_read_grain - 1);
-            read_bytes(noc, u32_templates, stage, bulk, 0, 0, stage_u32);
+            read_bytes(u32_templates, stage, bulk, 0, 0, stage_u32);
             noc.async_read_barrier();
             for (uint32_t k = bulk / 4; k < high; ++k) {
                 words[stage_u32 / 4 + k] = 0;
@@ -222,38 +223,26 @@ void kernel_main() {
                 words[stage_u32 / 4 + k] = k + offset + tail_shift;
             }
         }
-        write_bytes(noc, stage, row_fill_out, u32_row_bytes, stage_u32, lane, 0);
+        write_bytes(stage, row_fill_out, u32_row_bytes, stage_u32, lane, 0);
 
         // RoPE rows: table rows P_u - S_u and (P_u & ~3) - S_u into row `lane` of the two output tiles (faces
         // (lane >> 4) * 2 and + 1)
-        read_bytes(noc, cos_table, stage, rope_row_bytes, rope_position, 0, stage_rope);
-        read_bytes(noc, sin_table, stage, rope_row_bytes, rope_position, 0, stage_rope + rope_row_bytes);
-        read_bytes(noc, cos_table, stage, rope_row_bytes, rope_block_start, 0, stage_rope + 2 * rope_row_bytes);
-        read_bytes(noc, sin_table, stage, rope_row_bytes, rope_block_start, 0, stage_rope + 3 * rope_row_bytes);
+        read_bytes(cos_table, stage, rope_row_bytes, rope_position, 0, stage_rope);
+        read_bytes(sin_table, stage, rope_row_bytes, rope_position, 0, stage_rope + rope_row_bytes);
+        read_bytes(cos_table, stage, rope_row_bytes, rope_block_start, 0, stage_rope + 2 * rope_row_bytes);
+        read_bytes(sin_table, stage, rope_row_bytes, rope_block_start, 0, stage_rope + 3 * rope_row_bytes);
         noc.async_read_barrier();
         const uint32_t rope_src[4] = {
             stage_rope, stage_rope + rope_row_bytes, stage_rope + 2 * rope_row_bytes, stage_rope + 3 * rope_row_bytes};
         for (uint32_t face = 0; face < rope_dim / 16;
              ++face) {  // face f: lanes 16f..16f+15 -> tile f/2, face row of half f%2
             const uint32_t page = face >> 1, offset_bytes = rope_face_offset(lane, face & 1);
-            write_bytes(noc, stage, cos_out, face_row_bytes, rope_src[0] + face * face_row_bytes, page, offset_bytes);
-            write_bytes(noc, stage, sin_out, face_row_bytes, rope_src[1] + face * face_row_bytes, page, offset_bytes);
+            write_bytes(stage, cos_out, face_row_bytes, rope_src[0] + face * face_row_bytes, page, offset_bytes);
+            write_bytes(stage, sin_out, face_row_bytes, rope_src[1] + face * face_row_bytes, page, offset_bytes);
             write_bytes(
-                noc,
-                stage,
-                block_start_cos_out,
-                face_row_bytes,
-                rope_src[2] + face * face_row_bytes,
-                page,
-                offset_bytes);
+                stage, block_start_cos_out, face_row_bytes, rope_src[2] + face * face_row_bytes, page, offset_bytes);
             write_bytes(
-                noc,
-                stage,
-                block_start_sin_out,
-                face_row_bytes,
-                rope_src[3] + face * face_row_bytes,
-                page,
-                offset_bytes);
+                stage, block_start_sin_out, face_row_bytes, rope_src[3] + face * face_row_bytes, page, offset_bytes);
         }
         noc.async_write_barrier();
     }
