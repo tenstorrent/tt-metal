@@ -11,16 +11,6 @@ from PIL import Image
 
 import ttnn
 
-# (lower, upper) timing limits in seconds per (model, mesh shape, height, arch), from the CI perf
-# logs of the 2026-10-18..22 nightlies plus one branch dispatch: lower is 0.7x the fastest and upper
-# 1.3x the slowest observation across hosts, sc4 quads and ranks (encoder, being tiny and noisy:
-# 0.5x / 2x). The spread is real: bh_sc1 hosts differ by ~40% on denoising, and the two bh_sc4
-# quads by ~25%. Only test_performance_wan.py gates on them, on both bounds.
-#
-# The BH galaxy perf legs run on the high-power pools. The BH 4x8 bands come only from bh_sc1_high_power
-# runs after the host-contention fix (#61784): 4 per config on 2026-10-24..26, on hosts d06u02, d07u02
-# and d07u08, which agree within ~2%. A slower host joining that pool (the standard pool's d04 hosts
-# denoise ~40% slower) would exceed them. The 4x32 bands still span both sc4 quads.
 TIMING_LIMITS = {
     ("t2v", (2, 2), 480, "bh"): {
         "encoder": (0.01, 0.16),
@@ -52,8 +42,6 @@ TIMING_LIMITS = {
         "vae": (1.6, 3.4),
         "total": (240.0, 460.0),
     },
-    # 4x32 T2V has only run on the slower sc4 quad; its lower bounds take the faster quad's I2V
-    # times (same DiT and VAE decode).
     ("t2v", (4, 32), 720, "bh"): {
         "encoder": (0.058, 0.29),
         "denoising": (24.0, 59.0),
@@ -72,7 +60,6 @@ TIMING_LIMITS = {
         "vae": (0.37, 0.73),
         "total": (87.0, 166.0),
     },
-    # Not run in CI, so never measured here: upper limits only, carried over from before.
     ("t2v", (2, 4), 480, "bh"): {
         "encoder": (0.0, 0.1),
         "denoising": (0.0, 240.0),
