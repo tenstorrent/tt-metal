@@ -1948,3 +1948,10 @@ its fused-head programs at its first call); the shared expert is bf8 / HiFi2 vs 
   head 550-552 | dispatch 83-88 | experts + combine 1219-1227 | tail 145-147 us; span 1901-1904 (ring 1768-1774).
   Head + tail 697 vs 573 on the ring (+22%), block +7%: far less than the 2x the TP collectives' link bytes would
   suggest - the head's engine compute hides part of it. PCC as on the ring.
+- K3 at 1280 rows a mesh row (a 4x4 stage's per-chip load at chunk 5120; k3_ring4 1280, 1x4; per-program times from
+  the real-time profiler - the device profiler throws "Source location hashes are colliding" at this plan's zone count):
+  ring head 1596 | dispatch 99 | experts + combine 1364 | tail 204 us; line 1866 | 150 | 1480 | 250 us. The head is
+  3.5x its 640-row time: HeadSE3 plans 11x8, MT 1, NCH 5 - the shared expert's weights no longer stay in L1 next to x
+  and stream once per row chunk (planner: w 718, wnoc 1365 us). Speed of light 376 (ring) / 665 (line) us. The window
+  column is not a 4x4's (this proxy has 28 experts a chip at 183 rows, a 4x4 56 at 91). Scratch patch for the RT read:
+  session scratchpad zz_rt_times.patch (not committed).
