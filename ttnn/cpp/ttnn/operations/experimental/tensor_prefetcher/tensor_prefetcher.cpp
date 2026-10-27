@@ -6,6 +6,7 @@
 
 #include "device/signal_tensor_prefetcher_device_operation.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
@@ -113,6 +114,11 @@ uint32_t get_tensor_prefetcher_signal_address(tt::tt_metal::distributed::MeshDev
 
 void queue_tensor_prefetcher_wait_for_signal(
     tt::tt_metal::distributed::MeshDevice* mesh_device, uint32_t signal_id, bool capture_into_trace) {
+    // A NO_DISPATCH graph capture launches no program, so no op raises the signal that would release
+    // the wait, and every later wait and request would sit behind it.
+    if (ttnn::device_operation::detail::graph_capture_blocks_dispatch()) {
+        return;
+    }
     // Same queue rule as queue_tensor_prefetcher_request: a cq_id keyword has already been made the
     // thread's current queue, so the only choice left is whether to offer it for capture.
     auto* trace_cq = capture_into_trace ? &mesh_device->mesh_command_queue() : nullptr;

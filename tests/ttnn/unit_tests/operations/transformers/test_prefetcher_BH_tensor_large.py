@@ -771,6 +771,26 @@ def test_tensor_prefetcher_signal_raised_before_wait_is_kept(device):
         ttnn.experimental.queue_tensor_prefetcher_wait_for_signal(device, signal_id + 1)
 
 
+def test_tensor_prefetcher_signal_wait_skipped_in_no_dispatch_capture(device):
+    """A NO_DISPATCH graph capture launches no op, so no signal reaches the prefetcher, and it queues no
+    wait either. A wait left behind would pair with the next real signal, and the next real wait would
+    hold its request forever."""
+    case = _TraceCase(device, seed_tag=b"signal_no_dispatch")
+    signal_id = 3
+
+    with tensor_prefetcher_session(device):
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        ttnn.experimental.signal_tensor_prefetcher(device, signal_id)
+        ttnn.experimental.queue_tensor_prefetcher_wait_for_signal(device, signal_id)
+        ttnn.graph.end_graph_capture()
+
+        ttnn.experimental.signal_tensor_prefetcher(device, signal_id)
+        ttnn.experimental.queue_tensor_prefetcher_wait_for_signal(device, signal_id)
+        tt_out = case.prefetch_and_linear()
+        passing, msg = case.check(ttnn.to_torch(tt_out), 0)
+        assert passing, msg
+
+
 def test_tensor_prefetcher_signal_rejects_unknown_signal(device, expect_error):
     """Signal ids run [0, 8)."""
     with tensor_prefetcher_session(device):
