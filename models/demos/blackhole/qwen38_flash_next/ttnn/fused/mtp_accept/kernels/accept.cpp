@@ -20,6 +20,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 constexpr uint32_t cb_stage = get_named_compile_time_arg_val("cb_stage");
@@ -86,6 +87,167 @@ FORCE_INLINE uint32_t as_bits(float f) {
     return b.u;
 }
 
+// The policy row's sampling parameters.
+struct SamplingPolicy {
+    uint32_t top_k;
+    float top_p;
+    float min_weight;
+};
+
+// Row r's kept set in the work arrays of the stage at `words`: sorted_ids / sorted_values / weights / inclusive over
+// its top_k lanes, `kept` and its total `total_kept`; bit r of `guard_mask` when the kept minimum does not clear the
+// shard floor (the largest shard minimum). The table weights are read through `stage`.
+template <typename Table>
+void build_row(
+    uint32_t r,
+    CoreLocalMem<volatile uint32_t> words,
+    const SamplingPolicy& sampling_policy,
+    const Table& table,
+    DataflowBuffer& stage,
+    uint32_t& kept,
+    uint32_t& total_kept,
+    uint32_t& guard_mask) {
+    const Noc noc;
+    const uint32_t top_k = sampling_policy.top_k;
+    const float top_p = sampling_policy.top_p;
+    const float min_weight = sampling_policy.min_weight;
+    CoreLocalMem<volatile uint32_t> values = words + work_values;
+    CoreLocalMem<volatile uint32_t> ids = words + work_ids;
+    CoreLocalMem<volatile uint32_t> keys = words + work_keys;
+    CoreLocalMem<volatile uint32_t> sorted_ids = words + work_sorted_ids;
+    CoreLocalMem<volatile uint32_t> sorted_values = words + work_sorted_values;
+    CoreLocalMem<volatile uint32_t> weights = words + work_weights;
+    CoreLocalMem<volatile uint32_t> inclusive = words + work_inclusive;
+    CoreLocalMem<volatile uint32_t> chunk_offset = words + work_chunk;
+    uint32_t floor_key = 0;
+    {
+        CoreLocalMem<volatile uint32_t> row_lanes = words + (stage_rows + r * row_bytes) / 4;
+        for (uint32_t d = 0; d < lanes / shard_lanes; ++d) {
+            uint32_t shard_min_key = 0xFFFFFFFFu;
+            for (uint32_t c = 0; c < shard_lanes; ++c) {
+                const uint32_t j = d * shard_lanes + c;
+                values[j] = row_lanes[d * 2 * shard_lanes + c];
+                ids[j] = static_cast<uint32_t>(as_float(row_lanes[d * 2 * shard_lanes + shard_lanes + c]));
+                keys[j] = key_of(values[j]);
+                if (keys[j] < shard_min_key) {
+                    shard_min_key = keys[j];
+                }
+            }
+            if (shard_min_key > floor_key) {
+                floor_key = shard_min_key;
+            }
+        }
+        uint32_t taken[lanes / 32] = {0, 0, 0, 0};
+        for (uint32_t k = 0; k < top_k; ++k) {
+            uint32_t best = lanes, best_key = 0, best_id = 0;
+            for (uint32_t j = 0; j < lanes; ++j) {
+                if ((taken[j >> 5] >> (j & 31)) & 1u) {
+                    continue;
+                }
+                if (best == lanes || keys[j] > best_key || (keys[j] == best_key && ids[j] < best_id)) {
+                    best = j;
+                    best_key = keys[j];
+                    best_id = ids[j];
+                }
+            }
+            taken[best >> 5] |= 1u << (best & 31);
+            sorted_values[k] = values[best];
+            sorted_ids[k] = ids[best];
+        }
+    }
+    {
+        const float s_max = as_float(sorted_values[0]);
+        for (uint32_t k = 0; k < top_k; ++k) {
+            const float below = as_float(sorted_values[k]) - s_max;
+            const float scaled = below * -1024.0f;
+            uint32_t index;
+            if (scaled >= static_cast<float>(table_size - 1)) {
+                index = table_size - 1;
+            } else if (scaled > 0.0f) {
+                index = static_cast<uint32_t>(scaled);
+            } else {
+                index = 0;
+            }
+            const uint32_t byte = index * 4;
+            chunk_offset[k] = byte & (grain_bytes - 1);
+            noc.async_read(
+                table,
+                stage,
+                grain_bytes,
+                {.page_id = 0, .offset_bytes = byte - chunk_offset[k]},
+                {.offset_bytes = stage_table + k * grain_bytes});
+        }
+        noc.async_read_barrier();
+        uint32_t running = 0;
+        for (uint32_t k = 0; k < top_k; ++k) {
+            weights[k] = static_cast<uint32_t>(as_float(words[(stage_table + k * grain_bytes + chunk_offset[k]) / 4]));
+            running += weights[k];
+            inclusive[k] = running;
+        }
+        const uint32_t total_top_k = running;
+        const float tau = top_p * static_cast<float>(total_top_k);  // RNE site 1
+        uint32_t kept_top_p = 0, kept_min_weight = 0;
+        for (uint32_t j = 0; j < lanes; ++j) {
+            const uint32_t exclusive = j < top_k ? inclusive[j] - weights[j] : total_top_k;
+            if (static_cast<float>(exclusive) <= tau) {
+                ++kept_top_p;
+            }
+            if (j < top_k && static_cast<float>(weights[j]) >= min_weight) {
+                ++kept_min_weight;
+            }
+        }
+        kept = kept_top_p < kept_min_weight ? kept_top_p : kept_min_weight;
+        if (kept < 1) {
+            kept = 1;
+        }
+        total_kept = inclusive[kept - 1];
+        if (key_of(sorted_values[kept - 1]) <= floor_key) {
+            guard_mask |= 1u << r;
+        }
+    }
+}
+
+// The theta rule over the prefix sums of the first `kept` lanes of the stage's work arrays at `words`, skipping lane
+// `skip` (`lanes` = no skip): the lane whose prefix first exceeds fl32(u * total), capped at the last kept lane; the
+// bits of theta go to `theta_bits`.
+uint32_t draw(
+    uint32_t uniform_bits,
+    uint32_t skip,
+    uint32_t total,
+    uint32_t kept,
+    CoreLocalMem<volatile uint32_t> words,
+    uint32_t& theta_bits) {
+    CoreLocalMem<volatile uint32_t> sorted_ids = words + work_sorted_ids;
+    CoreLocalMem<volatile uint32_t> weights = words + work_weights;
+    const float theta = as_float(uniform_bits) * static_cast<float>(total);  // RNE site 2
+    theta_bits = as_bits(theta);
+    uint32_t below = 0, count = 0, running = 0;
+    for (uint32_t i = 0; i < kept; ++i) {
+        if (i == skip) {
+            continue;
+        }
+        running += weights[i];
+        ++count;
+        if (static_cast<float>(running) <= theta) {
+            ++below;
+        }
+    }
+    if (count == 0) {
+        return sorted_ids[skip == 0 ? 1 : 0];  // unreachable: an accepted-with-certainty lane is never rejected
+    }
+    uint32_t lane = below < count - 1 ? below : count - 1;
+    for (uint32_t i = 0; i < kept; ++i) {
+        if (i == skip) {
+            continue;
+        }
+        if (lane == 0) {
+            return sorted_ids[i];
+        }
+        --lane;
+    }
+    return sorted_ids[kept - 1];
+}
+
 void kernel_main() {
     constexpr auto candidate_rows_args = TensorAccessorArgs<0>();
     constexpr auto draft_row_args = TensorAccessorArgs<candidate_rows_args.next_compile_time_args_offset()>();
@@ -108,11 +270,11 @@ void kernel_main() {
     const auto alignment = TensorAccessor(alignment_args, get_arg_val<uint32_t>(8));
     const auto stats = TensorAccessor(stats_args, get_arg_val<uint32_t>(9));
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer stage(cb_stage);
     stage.reserve_back(1);
     const uint32_t base = stage.get_write_ptr();
-    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
+    CoreLocalMem<volatile uint32_t> words(base);
     {
         for (uint32_t r = 0; r < rows; ++r) {
             noc.async_read(
@@ -130,25 +292,20 @@ void kernel_main() {
         noc.async_read_barrier();
     }
 
-    volatile tt_l1_ptr uint32_t* policy_words = words + stage_policy / 4;
-    const uint32_t top_k = static_cast<uint32_t>(as_float(policy_words[0]));
-    const float top_p = as_float(policy_words[1]);
-    const float min_weight = as_float(policy_words[2]);
-    volatile tt_l1_ptr uint32_t* draft_words = words + stage_drafts / 4;
-    volatile tt_l1_ptr uint32_t* uniform_words = words + stage_uniforms / 4;
-    volatile tt_l1_ptr uint32_t* alignment_words = words + stage_alignment / 4;
-    volatile tt_l1_ptr uint32_t* stat_words = words + stage_stats / 4;
-    volatile tt_l1_ptr uint32_t* index_words = words + stage_index / 4;
-    volatile tt_l1_ptr uint32_t* next_token_words = words + stage_next_token / 4;
-    volatile tt_l1_ptr uint32_t* tile = words + stage_tile / 4;
-    volatile tt_l1_ptr uint32_t* values = words + work_values;
-    volatile tt_l1_ptr uint32_t* ids = words + work_ids;
-    volatile tt_l1_ptr uint32_t* keys = words + work_keys;
-    volatile tt_l1_ptr uint32_t* sorted_ids = words + work_sorted_ids;
-    volatile tt_l1_ptr uint32_t* sorted_values = words + work_sorted_values;
-    volatile tt_l1_ptr uint32_t* weights = words + work_weights;
-    volatile tt_l1_ptr uint32_t* inclusive = words + work_inclusive;
-    volatile tt_l1_ptr uint32_t* chunk_offset = words + work_chunk;
+    CoreLocalMem<volatile uint32_t> policy_words = words + stage_policy / 4;
+    const SamplingPolicy sampling_policy = {
+        .top_k = static_cast<uint32_t>(as_float(policy_words[0])),
+        .top_p = as_float(policy_words[1]),
+        .min_weight = as_float(policy_words[2])};
+    CoreLocalMem<volatile uint32_t> draft_words = words + stage_drafts / 4;
+    CoreLocalMem<volatile uint32_t> uniform_words = words + stage_uniforms / 4;
+    CoreLocalMem<volatile uint32_t> alignment_words = words + stage_alignment / 4;
+    CoreLocalMem<volatile uint32_t> stat_words = words + stage_stats / 4;
+    CoreLocalMem<volatile uint32_t> index_words = words + stage_index / 4;
+    CoreLocalMem<volatile uint32_t> next_token_words = words + stage_next_token / 4;
+    CoreLocalMem<volatile uint32_t> tile = words + stage_tile / 4;
+    CoreLocalMem<volatile uint32_t> sorted_ids = words + work_sorted_ids;
+    CoreLocalMem<volatile uint32_t> weights = words + work_weights;
     for (uint32_t i = 0; i < fp32_tile_bytes / 4; ++i) {
         tile[i] = 0;
     }
@@ -164,135 +321,12 @@ void kernel_main() {
         alignment_words[i] = sentinel;
     }
 
-    // The row's kept set: sorted_ids / sorted_values / weights / inclusive over its top_k lanes, kept and its
-    // total; the guard bit when the kept minimum does not clear the shard floor (the largest shard minimum).
+    // the last built row's kept count and total; the guard bits of every row built
     uint32_t kept = 0, total_kept = 0, guard_mask = 0;
-    auto build_row = [&](uint32_t r) {
-        uint32_t floor_key = 0;
-        {
-            volatile tt_l1_ptr uint32_t* row_lanes = words + (stage_rows + r * row_bytes) / 4;
-            for (uint32_t d = 0; d < lanes / shard_lanes; ++d) {
-                uint32_t shard_min_key = 0xFFFFFFFFu;
-                for (uint32_t c = 0; c < shard_lanes; ++c) {
-                    const uint32_t j = d * shard_lanes + c;
-                    values[j] = row_lanes[d * 2 * shard_lanes + c];
-                    ids[j] = static_cast<uint32_t>(as_float(row_lanes[d * 2 * shard_lanes + shard_lanes + c]));
-                    keys[j] = key_of(values[j]);
-                    if (keys[j] < shard_min_key) {
-                        shard_min_key = keys[j];
-                    }
-                }
-                if (shard_min_key > floor_key) {
-                    floor_key = shard_min_key;
-                }
-            }
-            uint32_t taken[lanes / 32] = {0, 0, 0, 0};
-            for (uint32_t k = 0; k < top_k; ++k) {
-                uint32_t best = lanes, best_key = 0, best_id = 0;
-                for (uint32_t j = 0; j < lanes; ++j) {
-                    if ((taken[j >> 5] >> (j & 31)) & 1u) {
-                        continue;
-                    }
-                    if (best == lanes || keys[j] > best_key || (keys[j] == best_key && ids[j] < best_id)) {
-                        best = j;
-                        best_key = keys[j];
-                        best_id = ids[j];
-                    }
-                }
-                taken[best >> 5] |= 1u << (best & 31);
-                sorted_values[k] = values[best];
-                sorted_ids[k] = ids[best];
-            }
-        }
-        {
-            const float s_max = as_float(sorted_values[0]);
-            for (uint32_t k = 0; k < top_k; ++k) {
-                const float below = as_float(sorted_values[k]) - s_max;
-                const float scaled = below * -1024.0f;
-                uint32_t index;
-                if (scaled >= static_cast<float>(table_size - 1)) {
-                    index = table_size - 1;
-                } else if (scaled > 0.0f) {
-                    index = static_cast<uint32_t>(scaled);
-                } else {
-                    index = 0;
-                }
-                const uint32_t byte = index * 4;
-                chunk_offset[k] = byte & (grain_bytes - 1);
-                noc.async_read(
-                    table,
-                    stage,
-                    grain_bytes,
-                    {.page_id = 0, .offset_bytes = byte - chunk_offset[k]},
-                    {.offset_bytes = stage_table + k * grain_bytes});
-            }
-            noc.async_read_barrier();
-            uint32_t running = 0;
-            for (uint32_t k = 0; k < top_k; ++k) {
-                weights[k] =
-                    static_cast<uint32_t>(as_float(words[(stage_table + k * grain_bytes + chunk_offset[k]) / 4]));
-                running += weights[k];
-                inclusive[k] = running;
-            }
-            const uint32_t total_top_k = running;
-            const float tau = top_p * static_cast<float>(total_top_k);  // RNE site 1
-            uint32_t kept_top_p = 0, kept_min_weight = 0;
-            for (uint32_t j = 0; j < lanes; ++j) {
-                const uint32_t exclusive = j < top_k ? inclusive[j] - weights[j] : total_top_k;
-                if (static_cast<float>(exclusive) <= tau) {
-                    ++kept_top_p;
-                }
-                if (j < top_k && static_cast<float>(weights[j]) >= min_weight) {
-                    ++kept_min_weight;
-                }
-            }
-            kept = kept_top_p < kept_min_weight ? kept_top_p : kept_min_weight;
-            if (kept < 1) {
-                kept = 1;
-            }
-            total_kept = inclusive[kept - 1];
-            if (key_of(sorted_values[kept - 1]) <= floor_key) {
-                guard_mask |= 1u << r;
-            }
-        }
-    };
-
-    // The theta rule over the kept prefix sums, skipping lane `skip` (`lanes` = no skip): the lane whose prefix first
-    // exceeds fl32(u * total), capped at the last kept lane.
-    auto draw = [&](uint32_t uniform_bits, uint32_t skip, uint32_t total, uint32_t* theta_bits) -> uint32_t {
-        const float theta = as_float(uniform_bits) * static_cast<float>(total);  // RNE site 2
-        *theta_bits = as_bits(theta);
-        uint32_t below = 0, count = 0, running = 0;
-        for (uint32_t i = 0; i < kept; ++i) {
-            if (i == skip) {
-                continue;
-            }
-            running += weights[i];
-            ++count;
-            if (static_cast<float>(running) <= theta) {
-                ++below;
-            }
-        }
-        if (count == 0) {
-            return sorted_ids[skip == 0 ? 1 : 0];  // unreachable: an accepted-with-certainty lane is never rejected
-        }
-        uint32_t lane = below < count - 1 ? below : count - 1;
-        for (uint32_t i = 0; i < kept; ++i) {
-            if (i == skip) {
-                continue;
-            }
-            if (lane == 0) {
-                return sorted_ids[i];
-            }
-            --lane;
-        }
-        return sorted_ids[kept - 1];
-    };
-
     uint32_t accepted = drafts, token = 0, theta_bits = 0, resampled = 0, decided_kept = 0;
     {
         for (uint32_t j = 0; j < drafts; ++j) {
-            build_row(j);
+            build_row(j, words, sampling_policy, table, stage, kept, total_kept, guard_mask);
             const uint32_t draft = static_cast<uint32_t>(as_float(draft_words[j]));
             uint32_t draft_lane = lanes, draft_weight = 0;
             for (uint32_t i = 0; i < kept; ++i) {
@@ -310,15 +344,15 @@ void kernel_main() {
                 continue;
             }
             accepted = j;
-            token = draw(uniform_words[drafts], draft_lane, total_kept - draft_weight, &theta_bits);
+            token = draw(uniform_words[drafts], draft_lane, total_kept - draft_weight, kept, words, theta_bits);
             resampled = 1;
             decided_kept = kept;
             break;
         }
     }
     if (accepted == drafts) {
-        build_row(drafts);
-        token = draw(uniform_words[drafts], lanes, total_kept, &theta_bits);
+        build_row(drafts, words, sampling_policy, table, stage, kept, total_kept, guard_mask);
+        token = draw(uniform_words[drafts], lanes, total_kept, kept, words, theta_bits);
         decided_kept = kept;
     }
     {
