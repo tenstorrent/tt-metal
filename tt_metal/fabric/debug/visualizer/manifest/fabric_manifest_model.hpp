@@ -28,9 +28,9 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
 
-// The fabric manifest's model. The collector fills in what the router builders know, the chip pass (join_chip) adds
-// what only ControlPlane, the cluster and the chip's other routers know (keys, peers, cross-host, wrap, cores,
-// sibling producers), and the writer serializes it.
+// The fabric manifest's model. The collector fills in what the router builders know. The chip pass resolves each
+// router's channels against ControlPlane, the cluster and the chip's other routers, and builds the meshes. The
+// describe file fills the run, fabric, arch and types, and the writer turns the whole model into JSON.
 namespace tt::tt_fabric::manifest {
 
 // Which register of a stream a content::Stream reads.
@@ -427,8 +427,6 @@ struct Arch {
     ArchAreas areas;
     StreamRegisters stream_registers;
     CoreRegisters core_registers;
-    // Every struct a schema names, as laid out on this architecture.
-    std::vector<StructType> types;
 };
 
 // ============ The whole manifest ============
