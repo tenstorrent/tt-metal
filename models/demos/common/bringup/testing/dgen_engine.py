@@ -7,7 +7,7 @@ The runner tests drive tt-metal's prefill runner with tt-d-gen's own engine (dge
 tt-d-gen is found, and fall back to tt-metal's prefill_producer only when none is. ttnn (this tree, its own Python)
 and tt_engine (tt-d-gen, Python 3.12) cannot share a process, so the driver is a subprocess with tt-d-gen's
 environment, as in serving. The two sides share only the runner's H2D stream service (/dev/shm descriptor + sockets),
-the layer-ack counter channel /tt_prefill_layer_acks_<service_id> (the runner's router owns it) and the 12-byte
+the layer-completion ring /tt_prefill_layer_completions_<service_id> (ack_shm_name(); the runner's router owns it) and the 12-byte
 header {slot, start, end}.
 
 Finding the build (find_build):
@@ -90,6 +90,15 @@ def server_repo(spec=None) -> Path:
 
     r = os.environ.get("BRINGUP_SERVER_REPO") or _setting(spec, "serving.server_repo")
     return Path(_expand(r or f"/localdev/{getpass.getuser()}/tt-d-gen"))
+
+
+def ack_shm_name(service_id: str) -> str:
+    """F200: the layer-completion ring tt-d-gen's prefill pipeline attaches to (its ack_shm_name): the runner's own name
+    (layer_completion_ring_reader.scheduler_shm_name). Before upstream's layer-completion interface it was the counter
+    channel /tt_prefill_layer_acks_<id>; a plan naming that left the engine waiting for a ring nobody publishes."""
+    from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
+
+    return scheduler_shm_name(service_id)
 
 
 def engine_required(spec=None) -> bool:

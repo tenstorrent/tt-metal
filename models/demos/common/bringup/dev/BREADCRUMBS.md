@@ -2178,3 +2178,8 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - Seeded runs (F185 follow-up, not done): the seed's contract tests are carried unchecked; box literals in them
   (server_rules CHUNK 2048 / MAX_SEQ 4096 / GOLDEN_RUNG s4096) broke K.1 on 8x4. The rule for tt/ (sizes from the spec
   and mesh, never one box's literals) applies to the contract tests too.
+- Also: tt-d-gen attaches to the runner's layer-completion ring /tt_prefill_layer_completions_<id>
+  (dgen_engine.ack_shm_name = layer_completion_ring_reader.scheduler_shm_name), not the pre-ring counter channel
+  /tt_prefill_layer_acks_<id>: with the old name the engine waited out its 30 min connect timeout while the runner
+  waited for its first chunk. Selftest test_the_engine_attaches_to_the_runners_completion_ring. Other models' plans
+  (xing40 serve/server.py, contract test) still name the old channel: fix at their next run.

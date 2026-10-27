@@ -75,3 +75,11 @@ def test_the_engine_driver_names_its_pipeline_arguments():
     want = dict(service_id="s", ack_shm_name="a", chunk_size=5120, connect_timeout_ms=1800000, sp_factor=8)
     assert device_pipeline_args(new + "\n\nOn-device", "s", "a", 5120, 40, 1800000, 8) == want
     assert device_pipeline_args(old, "s", "a", 5120, 40, 1800000, 8) == {**want, "layers_per_chunk": 40}
+
+
+def test_the_engine_attaches_to_the_runners_completion_ring():
+    """Upstream's layer-completion interface renamed the channel tt-d-gen attaches to; the old counter-channel name left
+    the engine waiting out its connect timeout (DeepSeek-V4.1 8x4 K.1 runner smoke, 2026-10-27)."""
+    from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
+
+    assert dgen_engine.ack_shm_name("svc") == scheduler_shm_name("svc") == "/tt_prefill_layer_completions_svc"
