@@ -85,8 +85,11 @@ def _setting(spec, key: str):
 
 
 def server_repo(spec=None) -> Path:
+    """F200: $USER / ~ expanded as the spec's own paths are (core/spec._expand): the template's default names $USER."""
+    from models.demos.common.bringup.core.spec import _expand
+
     r = os.environ.get("BRINGUP_SERVER_REPO") or _setting(spec, "serving.server_repo")
-    return Path(r or f"/localdev/{getpass.getuser()}/tt-d-gen")
+    return Path(_expand(r or f"/localdev/{getpass.getuser()}/tt-d-gen"))
 
 
 def engine_required(spec=None) -> bool:
