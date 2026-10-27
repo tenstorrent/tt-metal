@@ -18,12 +18,14 @@ import os
 import time
 from pathlib import Path
 
+import pytest
 import torch
 from loguru import logger
 
 import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.mesh import mesh_device_params
 from models.demos.glm53_flash.tt.mesh_model import GLM53MeshModel
 
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))
@@ -52,6 +54,10 @@ def _ramp(n: int) -> torch.Tensor:
     return (torch.arange(n, dtype=torch.long) + 12345) % 150000
 
 
+@pytest.mark.parametrize(
+    "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
 def test_decode_after_pool_boundary_prompt(mesh_device):
     cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
     model = GLM53MeshModel(
