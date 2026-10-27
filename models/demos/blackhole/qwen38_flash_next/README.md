@@ -143,5 +143,6 @@ CI=true python -m models.demos.blackhole.qwen38_flash_next.tools.report "$RESULT
   ([docs/NUMERICS.md](docs/NUMERICS.md)).
 - Reference agreement, task quality (GSM8K) and runtime reuse are separate gates; record each with the model
   commit, tt-metal identity, compiler, topology, checkpoint revision, command and saved responses.
-- The baselines under `tools/ci/baselines/` are proposals from the source fork, not results for this port. A
-  standalone MTP rate is not vLLM throughput.
+- The baselines under `tools/ci/baselines/` of chunked-32k, slab2048-32k, mtp4-32k and lanes4-mtp4-32k (A3) and
+  A1 chunked-32k are seeded from this port; forced-32k, vision-chunked-32k and slab2048-mtp4-32k remain proposals
+  from the source fork. A standalone MTP rate is not vLLM throughput.

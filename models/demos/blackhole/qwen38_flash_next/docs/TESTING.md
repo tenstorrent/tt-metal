@@ -17,9 +17,10 @@ Start the server with `--acceptance --require-json-96`. The CPU greedy records i
 `tools/acceptance/greedy-prompts.jsonl` replay before the server listens (with `--prefill-slab` also the slab
 record, `document`); the `json` record must match 96/96 or the server refuses to serve, and every record's first
 divergence index is written to `acceptance.json` in the run directory. The divergence-index and stream pins in
-`tools/ci/baselines/` (for example `A3-chunked-32k-divergence_index.json`) are the source fork's unseeded proposals
-(`todo` in `tools/ci/pins.json`), not bitwise targets for this port; `q38_ci.py seed` makes them targets once runs of
-this port agree. See [NUMERICS.md](NUMERICS.md).
+`tools/ci/baselines/` of chunked-32k, slab2048-32k, mtp4-32k and lanes4-mtp4-32k (A3), and the A1 chunked-32k pins,
+are seeded from three agreeing runs of this port; the forced-32k, vision-chunked-32k and slab2048-mtp4-32k tables
+remain the source fork's unseeded proposals (`todo` in `tools/ci/pins.json`), not bitwise targets for this port;
+`q38_ci.py seed` makes them targets once runs of this port agree. See [NUMERICS.md](NUMERICS.md).
 
 ## The reference corpus
 

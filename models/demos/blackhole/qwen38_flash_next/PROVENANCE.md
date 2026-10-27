@@ -10,8 +10,10 @@ maintenance, optimizations and operation commits after it are Samuel Jett's.
 
 Not ported: the source's fused kernels `qsa_score_pages` (32-row verify tile), `moe_combine`, `gdn_prefill_rows` and
 `sparse_sdpa_tiled`. The op chains they replaced run instead, and their `QWEN38_FUSED` / `QWEN38_FUSED_OFF` names
-are not registered. Measurements and baselines carried over from the source (`tools/ci/baselines/`) are source
-results, not results for this port.
+are not registered. Measurements carried over from the source are source results, not results for this port; of
+the baselines in `tools/ci/baselines/`, the A3 tables of chunked-32k, slab2048-32k, mtp4-32k and lanes4-mtp4-32k and
+the A1 chunked-32k pins are seeded from this port, and the forced-32k, vision-chunked-32k and slab2048-mtp4-32k
+tables remain the source's unseeded proposals.
 
 ## Upstream work used
 

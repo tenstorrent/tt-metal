@@ -1222,7 +1222,8 @@ def test_construction_names_the_slab_knob_when_the_dram_admission_refuses_the_sl
 
 def test_construction_names_the_slab_knob_when_the_model_refuses_the_slab(construction, monkeypatch) -> None:
     refusal = Qwen38SlabRefused(
-        "a slab takes a multiple of 512 rows, the one-call form's reduce block; 768 rows is not"
+        "a slab takes a multiple of 512 rows, the one-call form's reduce block, in either form (the slab's admission "
+        "probe is built in the one-call form); 768 rows is not a multiple"
     )
     # A refusal can arrive wrapped, with the refusal as the cause (a failed open whose cleanup also failed).
     wrapped = RuntimeError("chain open failed and its cleanup also failed")

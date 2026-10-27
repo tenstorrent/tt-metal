@@ -25,10 +25,12 @@ name). `--require-json-96` refuses to serve unless the `json` record matches the
 records leave the CPU stream after a near-tie; each record's first divergence index is written to `acceptance.json`
 in the run directory. The records carry their own system turn in their prompt ids.
 
-The baselines in `tools/ci/baselines/` (`*-divergence_index.json`, `*-device_token_ids_sha256.json` per server
-form, and the reference agreement) are the source fork's unseeded proposals (`todo` in `tools/ci/pins.json`), not
-bitwise targets for this port; `tools/ci/q38_ci.py` checks runs against them and `seed` makes them targets once runs
-of this port agree ([TESTING.md](TESTING.md)).
+The baselines in `tools/ci/baselines/` of chunked-32k, slab2048-32k, mtp4-32k and lanes4-mtp4-32k (A3: the
+divergence indices and stream digests) and the A1 chunked-32k reference agreement are seeded from three agreeing runs
+of this port. The forced-32k (A1, A3), vision-chunked-32k and slab2048-mtp4-32k tables and the C2 eval items remain
+the source fork's unseeded proposals (`todo` in `tools/ci/pins.json`), not bitwise targets for this port;
+`tools/ci/q38_ci.py` checks runs against them and `seed` makes them targets once runs of this port agree
+([TESTING.md](TESTING.md)).
 
 ## Relations between paths
 
