@@ -19,7 +19,7 @@ import torch
 
 from models.experimental.tirex2_forecast.reference import dataflow as df
 from models.experimental.tirex2_forecast.tests.golden.goldens import golden, have_goldens
-from models.experimental.tirex2_forecast.tests.pcc.helpers import host_weights, report
+from models.experimental.tirex2_forecast.tests.pcc.helpers import host_weights
 
 pytestmark = pytest.mark.skipif(not have_goldens(), reason="goldens not generated")
 
@@ -211,15 +211,51 @@ def test_paper_rows(device, precision):
     )
 
 
-def test_sign_flip_16(device):
-    """Sign-flip TTA: x and -x as one batch of 32 rows, against the upstream two-pass ``q_full``."""
+def sign_flip_case():
+    """model16 as the sign-flip batch ``[x; -x]`` (32 rows, two groups per series pair) and its references: the
+    head output of both halves from the CPU dataflow (upstream to 1e-7; the ``x`` half is the golden), the upstream
+    two-pass ``q_full``, and ``forecast(head)`` = the sign-flip average of the two single-pass halves (D7 a)."""
     g = golden("model16")
-    tt = model(device, variate=False)
-    q = tt.forecast(g["context"], g["horizon"], sign_flip=True)
-    p = report("model16.q_full", g["q_full"], q, 0.99)
-    med_err = float(((q[:, 4] - g["q_full"][:, 4]).abs().amax(-1) / g["scale"].reshape(-1)).max())
-    print(f"[PCC] model16.q_full.median: worst |err| / scale {med_err:.3e}")
-    assert p >= 0.99 and med_err <= floors("accuracy")["median_err"]
+    both = torch.cat([g["context"], -g["context"]])
+    n = g["context"].shape[0]
+    prep = df.prepare(both, g["horizon"], torch.arange(2 * n), torch.ones(2 * n, dtype=torch.bool))
+    ref_head = df.forward(host_weights(), prep)[:, df.readout_tokens(g["horizon"])]
+
+    def forecast(head):
+        from models.experimental.tirex2_forecast.tests.pcc import metrics as M
+
+        q = M.forecast_from_head(head, prep.loc, prep.scale, g["horizon"], prep.target_mask)
+        return df.sign_flip_average(q[:n], q[n:])
+
+    return g, both, prep, ref_head, forecast
+
+
+@pytest.mark.parametrize("precision", ["accuracy", "performance"])
+def test_sign_flip_16(device, precision):
+    """Sign-flip TTA: x and -x as one batch of 32 rows, against the upstream two-pass ``q_full``, gated on every
+    head-space floor of model16 (D7 a); the collapsed output must fail them."""
+    from models.experimental.tirex2_forecast.tests.pcc import metrics as M
+
+    from models.experimental.tirex2_forecast.tests.perf.check_gates import passes
+
+    g, both, prep, ref_head, forecast = sign_flip_case()
+    n = g["context"].shape[0]
+    tt = model(device, precision, variate=False)
+    head, q = run(tt, both, g["horizon"])
+    assert LAST_CUT[-1] == 192
+    q = df.sign_flip_average(q[:n], q[n:])
+    assert torch.allclose(q, tt.forecast(g["context"], g["horizon"], sign_flip=True), rtol=1e-3, atol=1e-3)
+    name = f"sign_flip16[{precision}]"
+    m = M.gate_metrics(head, ref_head, q, g["q_full"], g["scale"])
+    f = applicable(floors(precision, name=name), m["active_rows"], name)
+    print(f"[PCC] {name}: {M.fmt(m)}")
+    print(f"[PCC] {name}: floors (gates.json {precision}): {f}")
+    c = M.collapsed(ref_head)
+    cm = M.gate_metrics(c, ref_head, forecast(c), g["q_full"], g["scale"])
+    print(f"[PCC] {name}.collapsed: {M.fmt(cm)}")
+    assert [k for k, v in f.items() if not passes(k, cm[k], v)], "the collapsed output passes every floor"
+    failed = {k: (m[k], v) for k, v in f.items() if not passes(k, m[k], v)}
+    assert not failed, f"{name}: floors failed {failed}"
 
 
 def test_ragged_groups(device):

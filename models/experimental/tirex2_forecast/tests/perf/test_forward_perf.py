@@ -177,3 +177,79 @@ def test_forward_perf(device, shape, precision):
     floors = _floors(json.loads(DEFAULT_GATES.read_text()), shape, precision)
     failed = {k: (metrics.get(k), f) for k, f in floors.items() if k not in metrics or not passes(k, metrics[k], f)}
     assert not failed, f"{shape}/{precision}: floors failed {failed}"
+
+
+@pytest.mark.skipif(not have_goldens(), reason="goldens not generated")
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": TRACE_REGION}], indirect=True)
+@pytest.mark.parametrize("precision", ["accuracy", "performance"])
+def test_sign_flip_perf(device, precision):
+    """D7 (a): the sign-flip forecast (model16 as one ``[x; -x]`` batch of 32 rows, traced) timed and gated
+    against the upstream two-pass ``q_full`` on the suite (model16) floors."""
+    from models.experimental.tirex2_forecast.tests.pcc.test_model import sign_flip_case
+    from models.experimental.tirex2_forecast.tests.perf.check_gates import DEFAULT_GATES, _floors, passes
+    from models.experimental.tirex2_forecast.tt.common import Precision
+    from models.experimental.tirex2_forecast.tt.model import TtTiRex2
+    from models.experimental.tirex2_forecast.tt.trace import TracedForward
+
+    g, both, ref_prep, ref_head, forecast = sign_flip_case()
+    n, horizon = g["context"].shape[0], g["horizon"]
+    tt = TtTiRex2(device, host_weights(), Precision.by_name(precision), variate=False)
+    traced = TracedForward(tt)
+
+    def run():
+        prep = tt.prepare_inputs(both, horizon, ref_prep.group_ids, ref_prep.target_mask)
+        out = traced(prep)
+        q = tt.postprocess(out, prep)
+        return prep, out, df.sign_flip_average(q[:n], q[n:])
+
+    _, cold_s = _sync_time(device, run)
+    steady = [_sync_time(device, run)[1] for _ in range(STEADY_ITERS)]
+    device_runs = []
+    for _ in range(STEADY_ITERS):
+        prep = tt.prepare_inputs(both, horizon, ref_prep.group_ids, ref_prep.target_mask)
+        _sync_time(device, lambda: traced.upload(prep))
+        time.sleep(DEVICE_SETTLE_S)
+        out, device_s = _sync_time(device, lambda: traced.execute(prep))
+        device_runs.append(device_s)
+    q = tt.postprocess(out, prep)
+    q = df.sign_flip_average(q[:n], q[n:])
+    head = readout_head(tt, out, prep)
+    metrics = M.gate_metrics(head, ref_head, q, g["q_full"], g["scale"])
+    c = M.collapsed(ref_head)
+    collapsed = M.gate_metrics(c, ref_head, forecast(c), g["q_full"], g["scale"])
+    traced.release()
+    tt.release()
+
+    print(
+        f"\n[PERF] sign_flip model16 / {precision}: {2 * n} rows x {g['context'].shape[-1]} -> {horizon}"
+        f"\n  cold_s:    {cold_s:.3f}"
+        f"\n  steady_s:  {statistics.median(steady):.3f}  ({', '.join(f'{s:.3f}' for s in steady)})"
+        f"\n  device_s:  {statistics.median(device_runs):.4f}  (median of {STEADY_ITERS})"
+        f"\n  metrics:   {M.fmt(metrics)}"
+        f"\n  collapsed: {M.fmt(collapsed)}"
+    )
+    _record(
+        {
+            "test": "sign_flip",
+            "name": "model16",
+            "precision": precision,
+            "rows": 2 * n,
+            "context": int(g["context"].shape[-1]),
+            "horizon": horizon,
+            "pad_cut": prep.cut,
+            "cold_s": cold_s,
+            "steady_s": statistics.median(steady),
+            "steady_runs": steady,
+            "device_s": statistics.median(device_runs),
+            "device_runs": device_runs,
+            **metrics,
+            **{f"collapsed_{k}": v for k, v in collapsed.items()},
+            "chip": os.environ.get("TTQ_CHIP_SERIAL"),
+            "traced": True,
+        }
+    )
+    floors = _floors(json.loads(DEFAULT_GATES.read_text()), "suite", precision)
+    failed = {k: (metrics.get(k), f) for k, f in floors.items() if k not in metrics or not passes(k, metrics[k], f)}
+    assert not failed, f"sign_flip/{precision}: floors failed {failed}"
+    assert [k for k, f in floors.items() if not passes(k, collapsed[k], f)], "the collapsed output passes every floor"

@@ -7,6 +7,7 @@
 
 The suite's own floors (``test_model.floors`` + ``applicable``) decide; each broken output must fail at least
 one applicable floor, else it is listed as a miss. ``ragged`` is left out: its oracle is a CPU forward.
+``sign_flip16`` (D7 a) scores the forecast as the sign-flip average of the two halves against ``q_full``.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import torch
 from models.experimental.tirex2_forecast.reference import dataflow as df
 from models.experimental.tirex2_forecast.tests.golden.goldens import golden
 from models.experimental.tirex2_forecast.tests.pcc import metrics as M
-from models.experimental.tirex2_forecast.tests.pcc.test_model import applicable, floors
+from models.experimental.tirex2_forecast.tests.pcc.test_model import applicable, floors, sign_flip_case
 from models.experimental.tirex2_forecast.tests.perf.broken_outputs import broken
 from models.experimental.tirex2_forecast.tests.perf.check_gates import passes
 
@@ -36,6 +37,8 @@ def cases():
             groups, per, _ = g["context"].shape
             tm = (torch.arange(groups * per) % per) == 0
         yield name, g["head_out"][:, tok], g["q_one"], g["loc"], g["scale"], g["horizon"], tm, name == "single"
+    g, _, prep, ref_head, forecast = sign_flip_case()
+    yield "sign_flip16", ref_head, g["q_full"], forecast, g["scale"], None, None, False
     g = golden("bench_long_context")
     yield "long_context", g["head_out"], g["q_one"], g["loc"], g["scale"], g["horizon"], torch.ones(
         32, dtype=torch.bool
@@ -59,8 +62,11 @@ def main():
     results, miss = [], []
     for name, g_head, g_q, loc, scale, horizon, tm, single in cases():
         for bname, (head, what) in broken(g_head).items():
-            q = M.forecast_from_head(head, loc, scale, horizon, tm)
-            m = M.gate_metrics(head, g_head, q, g_q, scale[tm])
+            if callable(loc):  # sign flip: loc is the forecast function, scale the target scales
+                q, s = loc(head), scale
+            else:
+                q, s = M.forecast_from_head(head, loc, scale, horizon, tm), scale[tm]
+            m = M.gate_metrics(head, g_head, q, g_q, s)
             for precision in ("accuracy", "performance"):
                 f = applicable(floors(precision, single), m["active_rows"], f"{name}/{precision}/{bname}")
                 fails = [k for k, v in f.items() if not passes(k, m[k], v)]

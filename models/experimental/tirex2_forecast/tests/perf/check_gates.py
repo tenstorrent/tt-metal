@@ -43,7 +43,7 @@ DEFAULT_BASELINE = DEFAULT_GATES.parent / "iter_01" / "r1_1" / "b2b_base.json"
 
 
 def git_stamp() -> dict:
-    """v1.16: HEAD and the porcelain status of the model's tt/ and tests/, tracked files only (the kernel session keeps
+    """v1.16: HEAD and the porcelain status of the model's tt/, tests/ and ops/ (D7 b), tracked files only (the kernel session keeps
     an untracked tests/perf/test_slstm_step_bench.py here)."""
     import subprocess
 
@@ -51,7 +51,7 @@ def git_stamp() -> dict:
     git = lambda *a: subprocess.run(["git", *a], cwd=model, capture_output=True, text=True, check=True).stdout.strip()
     return {
         "git_head": git("rev-parse", "HEAD"),
-        "git_dirty": git("status", "--porcelain", "-uno", "--", "tt", "tests"),
+        "git_dirty": git("status", "--porcelain", "-uno", "--", "tt", "tests", "ops"),
     }
 
 
