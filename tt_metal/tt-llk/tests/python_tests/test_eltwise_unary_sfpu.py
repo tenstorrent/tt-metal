@@ -696,6 +696,32 @@ def test_erfinv_small_magnitude_regression():
     assert torch.equal(torch.signbit(res), torch.signbit(golden))
 
 
+def test_softsign_float16_midpoints_round_to_nearest():
+    if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE:
+        pytest.skip(reason="Blackhole float32 softsign path")
+    formats = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
+    src_A = torch.full((1024,), 2.0, dtype=torch.float16)
+    src_A[:4] = torch.tensor([4094.0, -4094.0, 0.99951171875, -0.99951171875])
+    res = torch.tensor(
+        eltwise_unary_sfpu(
+            formats=formats,
+            dest_acc=DestAccumulation.Yes,
+            approx_mode=ApproximationMode.No,
+            mathop=MathOperation.Softsign,
+            fast_mode=FastMode.No,
+            input_dimensions=[32, 32],
+            src_A=src_A,
+            src_B=torch.zeros_like(src_A),
+            check_golden=False,
+        ),
+        dtype=torch.float16,
+    )
+    expected = torch.nn.functional.softsign(src_A[:4].double()).to(torch.float16)
+    assert torch.equal(
+        res[:4], expected
+    ), f"softsign{src_A[:4].tolist()} = {res[:4].tolist()}, expected {expected.tolist()}"
+
+
 def test_softsign_negative_zero_and_large_magnitude_regression():
     src_A = torch.full((1024,), 2.0, dtype=torch.float32)
     src_A[:6] = torch.tensor([-0.0, 0.0, 2.0**126, -(2.0**126), 3.0e38, -3.0e38])

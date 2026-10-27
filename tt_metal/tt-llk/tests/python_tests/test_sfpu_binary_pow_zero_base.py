@@ -23,9 +23,9 @@ Asserted, for base in {+0, -0} and per IEEE-754 pow:
     pow(+-0, y > 0)   +-0     base sign kept only for odd integer y
     pow(+-0, y < 0)   +-inf   base sign kept only for odd integer y
 
-and, for a negative base in {-2, -1, -inf} on a float32 Dest:
+and, for a base in {-2, -1, -inf, 0.5, 2, +inf} on a float32 Dest:
 
-    pow(x < 0, NaN)   NaN
+    pow(x, NaN)       NaN
 
 and, for a base in {-1, -2} and integer exponents of magnitude 32768 and up, the torch result
 (odd exponents keep the base's sign).
@@ -95,6 +95,7 @@ LARGE_INTEGER_FORMATS = input_output_formats(
 )
 
 _NEGATIVE_BASES = (-2.0, -1.0, -INF)
+_NAN_EXPONENT_BASES = _NEGATIVE_BASES + (0.5, 2.0, INF)
 
 NAN_EXPONENT_FORMATS = input_output_formats([DataFormat.Float32], same=True)
 
@@ -228,10 +229,10 @@ def test_sfpu_binary_pow_zero_base(formats, base):
 
 @parametrize(
     formats=NAN_EXPONENT_FORMATS,
-    base=list(_NEGATIVE_BASES),
+    base=list(_NAN_EXPONENT_BASES),
 )
-def test_sfpu_binary_pow_negative_base_nan_exponent(formats, base):
-    """base**NaN is NaN for a negative base."""
+def test_sfpu_binary_pow_nan_exponent(formats, base):
+    """base**NaN is NaN for every non-zero base other than 1."""
     configuration, exponents = _build_pow_zero_base(formats, base, _NAN_EXPONENTS)
     device, exponents = _finish_pow_zero_base(configuration, exponents, formats)
 

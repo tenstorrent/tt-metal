@@ -132,9 +132,9 @@ def test_pow_negative_zero_odd_exponent_keeps_the_sign(request, device, exponent
     ).all(), f"pow(-0, {exponent:g}): expected {expected!r}, got {result[0].item()!r}"
 
 
-@pytest.mark.parametrize("base", [-2.0, -1.0, float("-inf")])
+@pytest.mark.parametrize("base", [-2.0, -1.0, float("-inf"), 0.5, 2.0, float("inf")])
 @pytest.mark.parametrize("exponent", [float("nan"), -float("nan")])
-def test_pow_negative_base_nan_exponent_is_nan(device, base, exponent):
+def test_pow_nan_exponent_is_nan(device, base, exponent):
     base_tt, exponent_tt = (
         ttnn.from_torch(
             _tile(value, ttnn.float32),
