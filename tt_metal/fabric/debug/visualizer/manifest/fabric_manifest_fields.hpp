@@ -427,7 +427,7 @@ inline constexpr auto k_erisc_fields = [] {
     };
 }();
 
-// The chip pass reads this sender field to find the channels a sibling must have an edge into.
+// The topology pass reads this sender field to find the channels a sibling must have an edge into.
 inline constexpr std::string_view k_static_connection_key = "static_connection";
 
 inline constexpr auto k_sender_channel_fields = [] {
@@ -645,8 +645,8 @@ static_assert(sources_name_channels(k_sender_channel_fields, true));
 static_assert(sources_name_channels(k_receiver_channel_fields, true));
 static_assert(sources_name_channels(k_downstream_edge_fields, true));
 
-// Every named argument and define the router kernel is fed is read by a field table above or by the collector, or
-// is listed as unrecorded with a reason; otherwise the collector throws (check_kernel_inputs_accounted). Arguments
+// Every named argument and define the router kernel is fed is read by a field table above or by the router pass, or
+// is listed as unrecorded with a reason; otherwise the router pass throws (check_kernel_inputs_accounted). Arguments
 // are matched by family, so "SENDER_CH_{}_IS_INJECTION" covers every channel's; defines are matched exactly.
 
 // Where the index at `pos` ends, or `pos` when no index starts there.
@@ -680,8 +680,8 @@ constexpr bool same_arg_family(std::string_view a, std::string_view b) {
     return i == a.size() && j == b.size();
 }
 
-// The named arguments the collector reads to work out facts, rather than through a field table.
-inline constexpr auto k_collector_args = std::to_array<std::string_view>({
+// The named arguments the router pass reads to work out facts, rather than through a field table.
+inline constexpr auto k_router_pass_args = std::to_array<std::string_view>({
     "NUM_ACTIVE_ERISCS",
     "ENABLE_DEADLOCK_AVOIDANCE",
     "ACTUAL_VC{}_SENDER_CHANNELS",
@@ -704,8 +704,8 @@ inline constexpr auto k_collector_args = std::to_array<std::string_view>({
     "NUM_DOWNSTREAM_SENDERS_VC{}",
 });
 
-// The defines the collector reads.
-inline constexpr auto k_collector_defines = std::to_array<std::string_view>({
+// The defines the router pass reads.
+inline constexpr auto k_router_pass_defines = std::to_array<std::string_view>({
     "FABRIC_2D_VC1_ACTIVE",
     "FABRIC_2D_VC1_SERVICED",
     "FABRIC_2D_VC2_SERVICED",
@@ -773,12 +773,12 @@ constexpr bool table_reads(const auto& fields, std::string_view name) {
     });
 }
 
-// Whether a field table or the collector reads the named argument `name`.
+// Whether a field table or the router pass reads the named argument `name`.
 constexpr bool manifest_reads_arg(std::string_view name) {
     return table_reads(k_router_fields, name) || table_reads(k_erisc_fields, name) ||
            table_reads(k_sender_channel_fields, name) || table_reads(k_receiver_channel_fields, name) ||
            table_reads(k_downstream_edge_fields, name) ||
-           std::ranges::any_of(k_collector_args, [&](std::string_view arg) { return same_arg_family(arg, name); });
+           std::ranges::any_of(k_router_pass_args, [&](std::string_view arg) { return same_arg_family(arg, name); });
 }
 
 constexpr bool is_unrecorded_arg(std::string_view name) {
@@ -787,7 +787,7 @@ constexpr bool is_unrecorded_arg(std::string_view name) {
 }
 
 constexpr bool manifest_reads_define(std::string_view name) {
-    return std::ranges::find(k_collector_defines, name) != k_collector_defines.end();
+    return std::ranges::find(k_router_pass_defines, name) != k_router_pass_defines.end();
 }
 
 constexpr bool is_unrecorded_define(std::string_view name) {

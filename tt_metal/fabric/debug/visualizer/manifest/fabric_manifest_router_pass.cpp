@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_collector.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_router_pass.hpp"
 
 #include <fmt/format.h>
 #include <hostdevcommon/fabric_common.h>
@@ -35,7 +35,7 @@ using NamedArgs = std::unordered_map<std::string, uint32_t>;
 uint32_t get_named_arg(const NamedArgs& args, const std::string& name) {
     TT_FATAL(
         manifest::manifest_reads_arg(name),
-        "Fabric manifest: the collector reads {}, which no field table reads and k_collector_args does not list "
+        "Fabric manifest: the router pass reads {}, which no field table reads and k_router_pass_args does not list "
         "(fabric_manifest_fields.hpp). Add to ignore list k_unrecorded_args if this is intentional.",
         name);
     const auto it = args.find(name);
@@ -65,7 +65,7 @@ void check_named_arg(const std::vector<NamedArgs>& named_ct_args_per_risc, const
 
 // A value the builder decides only while emitting compile-time arguments, so it is read back from them. Every
 // RISC must receive the same value.
-uint32_t emitted_value(const std::vector<NamedArgs>& named_ct_args_per_risc, const std::string& name) {
+uint32_t read_emitted_value(const std::vector<NamedArgs>& named_ct_args_per_risc, const std::string& name) {
     const uint32_t value = get_named_arg(named_ct_args_per_risc.front(), name);
     check_named_arg(named_ct_args_per_risc, name, value);
     return value;
@@ -74,12 +74,12 @@ uint32_t emitted_value(const std::vector<NamedArgs>& named_ct_args_per_risc, con
 // A sender channel's `name` argument, as the ERISCs in `serviced_by`, which run the channel, all receive it. The
 // builder gives an ERISC that doesn't run the channel either the same value or 0, for an argument it gates on running
 // the channel, such as SENDER_CH_{}_WAIT_STATIC_CONNECTION. When no ERISC runs the channel, every ERISC must agree.
-uint32_t sender_channel_value(
+uint32_t read_sender_channel_value(
     const std::vector<NamedArgs>& named_ct_args_per_risc,
     const std::string& name,
     const std::vector<uint32_t>& serviced_by) {
     if (serviced_by.empty()) {
-        return emitted_value(named_ct_args_per_risc, name);
+        return read_emitted_value(named_ct_args_per_risc, name);
     }
     const uint32_t value = get_named_arg(named_ct_args_per_risc.at(serviced_by.front()), name);
     for (uint32_t risc_id = 0; risc_id < named_ct_args_per_risc.size(); ++risc_id) {
@@ -96,14 +96,14 @@ uint32_t sender_channel_value(
     return value;
 }
 
-bool emitted_flag(const std::vector<NamedArgs>& named_ct_args_per_risc, const std::string& name) {
-    return emitted_value(named_ct_args_per_risc, name) != 0;
+bool read_emitted_flag(const std::vector<NamedArgs>& named_ct_args_per_risc, const std::string& name) {
+    return read_emitted_value(named_ct_args_per_risc, name) != 0;
 }
 
 bool has_define(const RouterKernelInputs& kernel, const std::string& name) {
     TT_FATAL(
         manifest::manifest_reads_define(name),
-        "Fabric manifest: the collector reads the define {}, which k_collector_defines does not list "
+        "Fabric manifest: the router pass reads the define {}, which k_router_pass_defines does not list "
         "(fabric_manifest_fields.hpp). Add to k_unrecorded_defines if this is intentional.",
         name);
     return kernel.defines.contains(name);
@@ -137,15 +137,15 @@ manifest::RouterShape collect_shape(const ManifestRouterInputs& inputs) {
     manifest::RouterShape shape{
         .num_vcs = inputs.vc_shape.num_vcs,
         .receivers_per_vc = inputs.vc_shape.receiver_counts,
-        .num_active_eriscs = emitted_value(args, "NUM_ACTIVE_ERISCS"),
+        .num_active_eriscs = read_emitted_value(args, "NUM_ACTIVE_ERISCS"),
         .channel_trimming_overrides_applied = inputs.erisc_builder.get_channel_trimming_overrides().has_value(),
-        .vc0_bubble_flow_control = emitted_flag(args, "ENABLE_DEADLOCK_AVOIDANCE"),
+        .vc0_bubble_flow_control = read_emitted_flag(args, "ENABLE_DEADLOCK_AVOIDANCE"),
     };
     for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        shape.senders_per_vc[vc] = emitted_value(args, fmt::format("ACTUAL_VC{}_SENDER_CHANNELS", vc));
+        shape.senders_per_vc[vc] = read_emitted_value(args, fmt::format("ACTUAL_VC{}_SENDER_CHANNELS", vc));
     }
     // Otherwise the manifest would list receivers the kernel does not loop over, or leave out ones it does.
-    const uint32_t num_receivers = emitted_value(args, "NUM_RECEIVER_CHANNELS");
+    const uint32_t num_receivers = read_emitted_value(args, "NUM_RECEIVER_CHANNELS");
     const uint32_t listed = std::accumulate(shape.receivers_per_vc.begin(), shape.receivers_per_vc.end(), 0u);
     TT_FATAL(
         listed == num_receivers,
@@ -161,7 +161,7 @@ bool is_cleared_by_host(const ManifestRouterInputs& inputs, size_t address) {
 
 // An array of T filling `size` bytes at `address`.
 template <typename T>
-manifest::content::L1 l1_array(const ManifestRouterInputs& inputs, size_t address, size_t size) {
+manifest::content::L1 describe_l1_array(const ManifestRouterInputs& inputs, size_t address, size_t size) {
     TT_FATAL(
         size % sizeof(T) == 0,
         "Fabric manifest: array at {:#x} is {} bytes, not a whole number of {}-byte elements",
@@ -193,7 +193,7 @@ manifest::L1CreditCounters collect_credit_counters(const ManifestRouterInputs& i
         {"LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR"},
     }};
     for (auto& base : bases) {
-        base.address = emitted_value(args, base.ct_arg_name);
+        base.address = read_emitted_value(args, base.ct_arg_name);
     }
 
     const size_t size = bases[1].address - bases[0].address;
@@ -209,16 +209,16 @@ manifest::L1CreditCounters collect_credit_counters(const ManifestRouterInputs& i
     }
 
     return {
-        .to_sender_ack = l1_array<uint32_t>(inputs, bases[0].address, size),
-        .to_sender_completion = l1_array<uint32_t>(inputs, bases[1].address, size),
-        .receiver_ack = l1_array<uint32_t>(inputs, bases[2].address, size),
-        .receiver_completion = l1_array<uint32_t>(inputs, bases[3].address, size),
+        .to_sender_ack = describe_l1_array<uint32_t>(inputs, bases[0].address, size),
+        .to_sender_completion = describe_l1_array<uint32_t>(inputs, bases[1].address, size),
+        .receiver_ack = describe_l1_array<uint32_t>(inputs, bases[2].address, size),
+        .receiver_completion = describe_l1_array<uint32_t>(inputs, bases[3].address, size),
     };
 }
 
 // A channel's packet slots, each `slot_size` bytes, or none when it has no slots. No struct describes a slot: it
 // holds a packet.
-std::optional<manifest::content::L1> ring_buffer(
+std::optional<manifest::content::L1> describe_ring_buffer(
     const ManifestRouterInputs& inputs, size_t address, size_t num_slots, size_t slot_size) {
     if (num_slots == 0) {
         return std::nullopt;
@@ -258,7 +258,7 @@ std::optional<manifest::content::L1> collect_leftover_l1(
 using manifest::FieldIndex;
 
 // `arg`'s name, with the channel's or edge's index in its {}.
-std::string arg_name(const manifest::NamedArg& arg, const FieldIndex& index) {
+std::string get_arg_name(const manifest::NamedArg& arg, const FieldIndex& index) {
     switch (arg.index) {
         case manifest::ArgIndex::NONE: return std::string(arg.name);
         case manifest::ArgIndex::COMPACT: return fmt::format(fmt::runtime(arg.name), index.compact);
@@ -342,7 +342,7 @@ std::vector<manifest::Field> collect_fields(
                     if (!is_emitted(arg.emitted, emission)) {
                         return std::nullopt;
                     }
-                    return read_arg(arg_name(arg, index));
+                    return read_arg(get_arg_name(arg, index));
                 },
                 [&](const manifest::BuilderMember& member) -> std::optional<uint32_t> {
                     return member.read(inputs.erisc_builder, index);
@@ -389,8 +389,8 @@ struct ChannelContext {
 };
 
 // The stream register the kernel is fed under `name`, or null when the builder did not allocate one.
-std::optional<manifest::content::Stream> fed_stream(const ManifestRouterInputs& inputs, const std::string& name) {
-    const uint32_t stream_id = emitted_value(inputs.kernel.named_ct_args, name);
+std::optional<manifest::content::Stream> read_fed_stream(const ManifestRouterInputs& inputs, const std::string& name) {
+    const uint32_t stream_id = read_emitted_value(inputs.kernel.named_ct_args, name);
     if (stream_id == k_unused_stream_id) {
         return std::nullopt;
     }
@@ -402,7 +402,7 @@ std::optional<manifest::content::Stream> fed_stream(const ManifestRouterInputs& 
 }
 
 // The kernel runs VC1's channel steps only under FABRIC_2D_VC1_SERVICED, and VC2's only under FABRIC_2D_VC2_SERVICED.
-bool kernel_runs_vc(const ManifestRouterInputs& inputs, uint32_t vc) {
+bool is_vc_run_by_kernel(const ManifestRouterInputs& inputs, uint32_t vc) {
     switch (vc) {
         case 1: return has_define(inputs.kernel, "FABRIC_2D_VC1_SERVICED");
         case 2: return has_define(inputs.kernel, "FABRIC_2D_VC2_SERVICED");
@@ -413,7 +413,7 @@ bool kernel_runs_vc(const ManifestRouterInputs& inputs, uint32_t vc) {
 // The ERISCs whose `serviced_name` argument is set, or none when the kernel does not run the VC's steps.
 std::vector<uint32_t> collect_serviced_by(
     const ManifestRouterInputs& inputs, uint32_t vc, const std::string& serviced_name) {
-    if (!kernel_runs_vc(inputs, vc)) {
+    if (!is_vc_run_by_kernel(inputs, vc)) {
         return {};
     }
     std::vector<uint32_t> serviced_by;
@@ -438,7 +438,7 @@ manifest::ChannelStatus collect_status(
     if (!serviced_by.empty()) {
         return manifest::ChannelStatus::ACTIVE;
     }
-    if (!kernel_runs_vc(ctx.inputs, vc)) {
+    if (!is_vc_run_by_kernel(ctx.inputs, vc)) {
         return manifest::ChannelStatus::VC_NOT_SERVICED;
     }
     if (carried_by_mux) {
@@ -455,7 +455,7 @@ manifest::ChannelStatus collect_status(
 }
 
 // The worker channel is fed by the local worker, or in mux mode by the tensix mux. A sibling producer comes from the
-// edge that lands on the channel, which the chip pass sets.
+// edge that lands on the channel, which the topology pass sets.
 std::optional<manifest::SenderChannelProducer> collect_local_producer(
     const ChannelContext& ctx, const SenderChannelIndex& index) {
     if (ctx.producer_slots.worker_channel(index.vc) != index.channel) {
@@ -472,12 +472,12 @@ std::optional<manifest::SenderChannelProducer> collect_local_producer(
 // gets first-level acks.
 manifest::SenderChannelCredits collect_sender_credits(const ChannelContext& ctx, const SenderChannelIndex& index) {
     const bool counters =
-        emitted_flag(ctx.inputs.kernel.named_ct_args, fmt::format("VC{}_USES_COUNTER_CREDITS", index.vc));
+        read_emitted_flag(ctx.inputs.kernel.named_ct_args, fmt::format("VC{}_USES_COUNTER_CREDITS", index.vc));
     const auto credit = [&](manifest::CreditCounterArray array, const char* stream_name) -> manifest::CreditRef {
         if (counters) {
             return manifest::CounterRef{.array = array, .index = index.compact};
         }
-        return fed_stream(ctx.inputs, fmt::format(fmt::runtime(stream_name), index.compact));
+        return read_fed_stream(ctx.inputs, fmt::format(fmt::runtime(stream_name), index.compact));
     };
 
     manifest::SenderChannelCredits credits{
@@ -505,7 +505,7 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
         ctx.mux_mode && index.vc == 0 && ctx.producer_slots.worker_channel(0) != index.channel,
         ctx.trimming.has_value() && !ctx.trimming->is_sender_channel_used(c));
     sender.producer = collect_local_producer(ctx, index);
-    sender.ring_buffer = ring_buffer(
+    sender.ring_buffer = describe_ring_buffer(
         inputs,
         ctx.allocator.get_sender_channel_base_address(index.vc, index.channel),
         ctx.allocator.get_sender_channel_number_of_slots(index.vc, index.channel),
@@ -518,13 +518,13 @@ manifest::SenderChannel collect_sender_channel(const ChannelContext& ctx, const 
          .fabric_position = index.fabric_position,
          .worker_channel = ctx.producer_slots.worker_channel(index.vc) == index.channel},
         ctx.emission,
-        [&](const std::string& name) { return sender_channel_value(args, name, sender.serviced_by); });
+        [&](const std::string& name) { return read_sender_channel_value(args, name, sender.serviced_by); });
     return sender;
 }
 
 // The kernel runs VC0's receiver step on channel 0 and VC1's on channel 1. VC2's runs on channel 2 when VC1 has
 // senders and on channel 1 otherwise (VC2_RECEIVER_CHANNEL).
-uint32_t kernel_receiver_channel(const ChannelContext& ctx, uint32_t vc) {
+uint32_t get_kernel_receiver_channel(const ChannelContext& ctx, uint32_t vc) {
     if (vc < 2) {
         return vc;
     }
@@ -560,23 +560,23 @@ manifest::ReceiverChannel collect_receiver_channel(const ChannelContext& ctx, co
         ctx.trimming.has_value() && !ctx.trimming->is_receiver_channel_data_forwarded(c));
     const bool serviced = !receiver.serviced_by.empty();
     TT_FATAL(
-        !serviced || c == kernel_receiver_channel(ctx, index.vc),
+        !serviced || c == get_kernel_receiver_channel(ctx, index.vc),
         "Fabric manifest: VC{} receiver channel {} is compact channel {}, but the kernel runs VC{}'s receiver on "
         "channel {}",
         index.vc,
         index.channel,
         c,
         index.vc,
-        kernel_receiver_channel(ctx, index.vc));
+        get_kernel_receiver_channel(ctx, index.vc));
     receiver.forwards_on = collect_forwards_on(ctx, index.vc, serviced);
-    receiver.ring_buffer = ring_buffer(
+    receiver.ring_buffer = describe_ring_buffer(
         inputs,
         ctx.allocator.get_receiver_channel_base_address(index.vc, index.channel),
         ctx.allocator.get_receiver_channel_number_of_slots(index.vc, index.channel),
         ctx.channel_buffer_size);
     receiver.fields = collect_fields(
         inputs, manifest::k_receiver_channel_fields, {.compact = c}, ctx.emission, [&](const std::string& name) {
-            return emitted_value(args, name);
+            return read_emitted_value(args, name);
         });
     return receiver;
 }
@@ -594,23 +594,23 @@ ChannelContext make_channel_context(const ManifestRouterInputs& inputs, const ma
             builder::routing_direction_to_eth_direction(inputs.location.direction), shape.senders_per_vc),
         .emission =
             {
-                .is_2d_fabric = emitted_flag(args, "IS_2D_FABRIC"),
-                .channel_trimming_capture = emitted_flag(args, "ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE"),
+                .is_2d_fabric = read_emitted_flag(args, "IS_2D_FABRIC"),
+                .channel_trimming_capture = read_emitted_flag(args, "ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE"),
             },
-        .speedy_vc0 = emitted_flag(args, "ENABLE_SPEEDY_VC0"),
-        .mux_mode = emitted_flag(args, "FABRIC_TENSIX_EXTENSION_MUX_MODE"),
+        .speedy_vc0 = read_emitted_flag(args, "ENABLE_SPEEDY_VC0"),
+        .mux_mode = read_emitted_flag(args, "FABRIC_TENSIX_EXTENSION_MUX_MODE"),
         .trimming = inputs.erisc_builder.get_channel_trimming_overrides(),
-        .channel_buffer_size = emitted_value(args, "CHANNEL_BUFFER_SIZE"),
+        .channel_buffer_size = read_emitted_value(args, "CHANNEL_BUFFER_SIZE"),
     };
 }
 
 // Where VC `vc`'s senders start in the fabric's free-slots stream table: VC0's at 0, the others where the kernel is
 // told (fabric_position_for_compact_sender).
-uint32_t fabric_position_start(const ManifestRouterInputs& inputs, uint32_t vc) {
+uint32_t get_fabric_position_start(const ManifestRouterInputs& inputs, uint32_t vc) {
     if (vc == 0) {
         return 0;
     }
-    return emitted_value(inputs.kernel.named_ct_args, fmt::format("VC{}_FABRIC_POSITION_START", vc));
+    return read_emitted_value(inputs.kernel.named_ct_args, fmt::format("VC{}_FABRIC_POSITION_START", vc));
 }
 
 // Every sender and receiver channel in the router's shape, each indexed [vc][channel]. Compact indices run over the
@@ -623,7 +623,7 @@ manifest::RouterChannels collect_channels(const ChannelContext& ctx) {
     uint32_t sender_compact = 0;
     uint32_t receiver_compact = 0;
     for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        const uint32_t position_start = fabric_position_start(ctx.inputs, vc);
+        const uint32_t position_start = get_fabric_position_start(ctx.inputs, vc);
         for (uint32_t channel = 0; channel < shape.senders_per_vc[vc]; ++channel) {
             const SenderChannelIndex index{
                 .vc = vc,
@@ -658,7 +658,7 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(const ChannelCont
     const auto& args = inputs.kernel.named_ct_args;
     const auto& adapter = *inputs.erisc_builder.receiver_channel_to_downstream_adapter;
     const auto& connections = adapter.get_downstream_connections(vc);
-    const uint32_t num_edges = emitted_value(args, fmt::format("NUM_DOWNSTREAM_SENDERS_VC{}", vc));
+    const uint32_t num_edges = read_emitted_value(args, fmt::format("NUM_DOWNSTREAM_SENDERS_VC{}", vc));
     TT_FATAL(
         connections.size() == num_edges,
         "Fabric manifest: the kernel is fed {} VC{} downstream edges, but the adapter names {} targets",
@@ -694,7 +694,7 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(const ChannelCont
         adapter.get_downstream_edm_mask_for_vc(vc));
     std::ranges::sort(edges, {}, &manifest::DownstreamEdge::edge);
 
-    const uint32_t teardown_base = vc == 1 ? emitted_value(args, "NUM_DOWNSTREAM_SENDERS_VC0") : 0;
+    const uint32_t teardown_base = vc == 1 ? read_emitted_value(args, "NUM_DOWNSTREAM_SENDERS_VC0") : 0;
     for (uint32_t rank = 0; rank < edges.size(); ++rank) {
         auto& edge = edges[rank];
         edge.fields = collect_fields(
@@ -702,7 +702,7 @@ std::vector<manifest::DownstreamEdge> collect_downstream_edges(const ChannelCont
             manifest::k_downstream_edge_fields,
             {.vc = vc, .edge = edge.edge, .teardown = teardown_base + rank},
             ctx.emission,
-            [&](const std::string& name) { return emitted_value(args, name); });
+            [&](const std::string& name) { return read_emitted_value(args, name); });
     }
     return edges;
 }
@@ -725,7 +725,7 @@ void check_kernel_inputs_accounted(const RouterKernelInputs& kernel) {
         for (const auto& [name, value] : args) {
             TT_FATAL(
                 manifest::manifest_reads_arg(name) || manifest::is_unrecorded_arg(name),
-                "Fabric manifest: {} is fed to the router, but neither a field table nor the collector reads it; add "
+                "Fabric manifest: {} is fed to the router, but neither a field table nor the router pass reads it; add "
                 "a table entry, or an entry with a reason to k_unrecorded_args (fabric_manifest_fields.hpp)",
                 name);
         }
@@ -733,7 +733,7 @@ void check_kernel_inputs_accounted(const RouterKernelInputs& kernel) {
     for (const auto& [name, value] : kernel.defines) {
         TT_FATAL(
             manifest::manifest_reads_define(name) || manifest::is_unrecorded_define(name),
-            "Fabric manifest: the define {} is fed to the router, but the collector does not read it; read it, or "
+            "Fabric manifest: the define {} is fed to the router, but the router pass does not read it; read it, or "
             "add an entry with a reason to k_unrecorded_defines (fabric_manifest_fields.hpp)",
             name);
     }
@@ -759,7 +759,7 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
     auto edges = collect_router_edges(ctx);
 
     auto fields = collect_fields(inputs, manifest::k_router_fields, {}, ctx.emission, [&](const std::string& name) {
-        return emitted_value(args, name);
+        return read_emitted_value(args, name);
     });
     std::vector<manifest::Erisc> eriscs;
     for (size_t risc_id = 0; risc_id < args.size(); ++risc_id) {
