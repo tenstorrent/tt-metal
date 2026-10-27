@@ -14,8 +14,8 @@ The mesh opens with the deployed ring minus `GUARD_BYTES`, so this fails while d
 left: a red run here is a warning, and the fix is to shrink the program or raise the ring in
 `pipeline_minimax_h3.py`. The TT_FATAL lists the size per RISC.
 
-`test_l1_small_fence_keeps_circular_buffers_out_of_l1_small` checks the pipeline's other L1 guard: the fence
-buffer that keeps static CBs out of L1_SMALL, working around tt-metal#62798.
+`test_l1_small_fence_keeps_circular_buffers_out_of_l1_small` checks that this directory's `l1_small_fence` fixture
+is in place, so an H3 program whose static CBs would overwrite L1_SMALL (tt-metal#62798) fails its test.
 
 Run with TT_METAL_MOCK_CLUSTER_DESC_PATH set to a 4x8 cluster descriptor (the mock needs no hardware, and its
 architecture comes from the descriptor) and TT_METAL_WATCHER unset; without the mock every case skips. CI uses
@@ -38,7 +38,6 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 import (
     MINIMAX_H3_KERNEL_CONFIG_RING_BYTES,
     MINIMAX_H3_VISION_PATCH_LADDER,
-    fence_circular_buffers_below_l1_small,
     resolve_mesh_preset,
 )
 from models.tt_dit.tests.encoders.qwen3vl.common import HIDDEN_SIZE, NUM_HEADS
@@ -140,13 +139,13 @@ def _enqueue_cb_program(mesh_device, cb_bytes, io_tensor):
 @pytest.mark.parametrize(
     ("mesh_device", "device_params"), [MESH_4X8_RING_WH, MESH_4X8_RING], indirect=["mesh_device", "device_params"]
 )
-def test_l1_small_fence_keeps_circular_buffers_out_of_l1_small(mesh_device, expect_error):
-    """`MiniMaxH3Pipeline`'s fence (tt-metal#62798) sits right under L1_SMALL and makes the clash check reject
-    static CBs that reach into it; without it, such a program passes when no regular L1 buffer is live."""
+def test_l1_small_fence_keeps_circular_buffers_out_of_l1_small(mesh_device, l1_small_fence, expect_error):
+    """The conftest fence (tt-metal#62798) sits right under L1_SMALL and makes the clash check reject static CBs
+    that reach into it; without it, such a program passes when no regular L1 buffer is live."""
     info = ttnn._ttnn.reports.get_device_info(mesh_device)
     l1_end, base = info.worker_l1_size, info.address_at_first_l1_cb_buffer
     l1_small_base = l1_end - ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank
-    fence = fence_circular_buffers_below_l1_small(mesh_device)
+    fence = l1_small_fence
     assert l1_small_base - 64 <= fence.buffer_address() < l1_small_base, (fence.buffer_address(), l1_small_base)
 
     io = ttnn.from_torch(

@@ -457,28 +457,6 @@ def check_kernel_config_ring(mesh_device: ttnn.MeshDevice) -> None:
         raise ValueError(msg)
 
 
-def fence_circular_buffers_below_l1_small(mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
-    """Allocate a one-row-per-bank L1 buffer that keeps every later program's static CBs out of L1_SMALL.
-
-    Works around tt-metal#62798: the static-CB placement check only compares the CB region against the full L1
-    size and the lowest live *regular* L1 buffer, never L1_SMALL. With no regular L1 buffer live -- common in
-    H3, which keeps its activations in DRAM -- a program's CBs can run into L1_SMALL and overwrite what lives
-    there: the audio decoder's `conv1d` programs hold their sliding-window indices in L1_SMALL for the life of
-    the process. Regular L1 is allocated top-down, so this buffer, allocated before anything else, sits directly
-    under L1_SMALL on every core and the clash check then rejects such a program instead. It costs one L1
-    alignment unit per core (32 B on Wormhole, 64 B on Blackhole). Keep the returned tensor alive; drop this
-    once #62798 is fixed in tt-metal.
-    """
-    num_banks = ttnn._ttnn.reports.get_device_info(mesh_device).l1_num_banks
-    return ttnn.from_torch(
-        torch.zeros(num_banks, 8, dtype=torch.int32),
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-
-
 def draw_request_latents(
     generator: torch.Generator,
     *,
@@ -589,8 +567,6 @@ class MiniMaxH3Pipeline:
         warmup: bool = True,
     ) -> None:
         check_kernel_config_ring(mesh_device)
-        # First L1 allocation, so it lands at the top of the regular region; held for the pipeline's lifetime.
-        self._l1_small_fence = fence_circular_buffers_below_l1_small(mesh_device)
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)

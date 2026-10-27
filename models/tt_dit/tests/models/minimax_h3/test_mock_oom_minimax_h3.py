@@ -18,7 +18,8 @@ pipeline can hit are raised on the host, so the mock reproduces them with silico
     that program; the t2va prompt-encoder warm reaches vision-tower attention shapes ref2va's does not.
     The ring is the deployed one: this directory's conftest opens every mesh with
     `minimax_h3_worker_l1_size()` (`MINIMAX_H3_KERNEL_CONFIG_RING_BYTES`), and both L1 checks run against
-    the allocatable L1 that leaves.
+    the allocatable L1 that leaves. The conftest's `l1_small_fence` also makes a program whose CBs would
+    overwrite L1_SMALL fail here (tt-metal#62798), which the stock placement check lets through.
 Any of them fails the test at once. A pass is the warmup completing. The mock cannot see hangs, timing
 or data-dependent behaviour, and it allocates no kernel-binary DRAM, so its headroom reads about 60 MB per
 device higher than silicon.
