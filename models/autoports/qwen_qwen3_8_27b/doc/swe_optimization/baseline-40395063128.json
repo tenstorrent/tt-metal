@@ -1,0 +1,236 @@
+{
+  "scope": "collected Harbor attempts; saved-response usage excludes missing responses",
+  "task_count": 8,
+  "reward_bearing": 8,
+  "solved": 4,
+  "score_percent": 50.0,
+  "no_exception": 2,
+  "exceptions": {
+    "AgentTimeoutError": 6
+  },
+  "trial_envelope_seconds": 6368.208988,
+  "saved_completion_tokens": 159235,
+  "saved_prompt_tokens": 7434477,
+  "saved_cached_tokens": 7176704,
+  "missing_responses": 2,
+  "implementation_identities": [
+    {
+      "implementation": "models/autoports/qwen_qwen3_8_27b",
+      "model": "Qwen/Qwen3.8-27B",
+      "image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:182a91996c8104cb1373503bf9326deb5d98e01347655bb1305840165262950e",
+      "vllm_args": {
+        "model": "Qwen/Qwen3.8-27B",
+        "block_size": 256,
+        "max_model_len": "262144",
+        "max_num_seqs": 32,
+        "max_num_batched_tokens": 131072,
+        "max-log-len": "32",
+        "seed": "9472",
+        "additional_config": "{\"tt\": {\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"all\", \"trace_mode\": \"decode_only\", \"trace_region_size\": 134217728}}",
+        "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+        "tokenizer_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+        "mamba_block_size": 256,
+        "prefix_cache_retention_interval": 256,
+        "mamba_cache_mode": "align",
+        "long_prefill_token_threshold": 4096,
+        "max_logprobs": -1,
+        "async_scheduling": true,
+        "enable_prefix_caching": true,
+        "enable_prompt_tokens_details": true,
+        "middleware": "qwen38_agentic_audit.AgenticAuditMiddleware",
+        "language_model_only": true,
+        "enable_auto_tool_choice": true,
+        "tool_call_parser": "qwen3_coder",
+        "reasoning_parser": "qwen3",
+        "port": "8000"
+      },
+      "env": {
+        "MESH_DEVICE": "P300x2",
+        "ARCH_NAME": "blackhole",
+        "TT_MODEL_CLASS_OVERRIDES": "TTQwen3_5ForConditionalGeneration=models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM",
+        "QWEN38_SERVING_EVENT_TABLES": "0",
+        "QWEN38_CACHE_BLOCK_SIZE": "256",
+        "QWEN38_SHARED_RECURRENT_SNAPSHOTS": "1",
+        "QWEN38_CACHE_BUDGET_BYTES_PER_DEVICE": "23661297664",
+        "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+        "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "task": "astropy__astropy-13398",
+      "checksum": "3e28f3f0b22af6ed382828b5391100aec18268bf859e8b64d99ec8fbe43d1163",
+      "reward": 0.0,
+      "exception": "AgentTimeoutError",
+      "exit_status": "",
+      "started_at": "2026-10-26T20:36:54.031551Z",
+      "finished_at": "2026-10-26T22:23:02.147201Z",
+      "agent_seconds": 6300.16972,
+      "verifier_seconds": 36.391613,
+      "saved_assistants": 11,
+      "saved_responses": 11,
+      "api_calls": 12,
+      "missing_responses": 1,
+      "saved_prompt_tokens": 152174,
+      "saved_completion_tokens": 12434,
+      "saved_cached_tokens": 126720,
+      "finish_reasons": {
+        "tool_calls": 11
+      }
+    },
+    {
+      "task": "astropy__astropy-13453",
+      "checksum": "781503f811e7e3f95641993ca311894f46fc770085b1e561ab5b87e4585a9f88",
+      "reward": 0.0,
+      "exception": "AgentTimeoutError",
+      "exit_status": "",
+      "started_at": "2026-10-26T20:36:54.033761Z",
+      "finished_at": "2026-10-26T22:22:53.961843Z",
+      "agent_seconds": 6300.191025,
+      "verifier_seconds": 36.68478,
+      "saved_assistants": 27,
+      "saved_responses": 27,
+      "api_calls": 27,
+      "missing_responses": 0,
+      "saved_prompt_tokens": 750933,
+      "saved_completion_tokens": 13940,
+      "saved_cached_tokens": 704768,
+      "finish_reasons": {
+        "tool_calls": 27
+      }
+    },
+    {
+      "task": "astropy__astropy-14309",
+      "checksum": "9f200334dcd1bbf887de59eb4e097cb699f3d4c4231f89ea44b643c0bb5c7514",
+      "reward": 1.0,
+      "exception": "AgentTimeoutError",
+      "exit_status": "",
+      "started_at": "2026-10-26T20:36:54.022880Z",
+      "finished_at": "2026-10-26T22:22:50.167174Z",
+      "agent_seconds": 6300.157852,
+      "verifier_seconds": 27.031789,
+      "saved_assistants": 41,
+      "saved_responses": 41,
+      "api_calls": 41,
+      "missing_responses": 0,
+      "saved_prompt_tokens": 1458796,
+      "saved_completion_tokens": 27400,
+      "saved_cached_tokens": 1418752,
+      "finish_reasons": {
+        "tool_calls": 41
+      }
+    },
+    {
+      "task": "astropy__astropy-7166",
+      "checksum": "f2c39dca6e3f63a22da93c0b3f8f4211374bb08f5629a64718c6a8c9e9349abb",
+      "reward": 0.0,
+      "exception": "AgentTimeoutError",
+      "exit_status": "",
+      "started_at": "2026-10-26T20:36:54.029436Z",
+      "finished_at": "2026-10-26T22:22:25.745484Z",
+      "agent_seconds": 6300.153232,
+      "verifier_seconds": 5.598381,
+      "saved_assistants": 8,
+      "saved_responses": 8,
+      "api_calls": 9,
+      "missing_responses": 1,
+      "saved_prompt_tokens": 50763,
+      "saved_completion_tokens": 12106,
+      "saved_cached_tokens": 36608,
+      "finish_reasons": {
+        "tool_calls": 8
+      }
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13135",
+      "checksum": "8d22a5cea28b7b67c94275c2866af098502495f5ec73d42d0752fcccf6de9bdd",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "started_at": "2026-10-26T20:36:54.027338Z",
+      "finished_at": "2026-10-26T21:13:27.195214Z",
+      "agent_seconds": 2154.869656,
+      "verifier_seconds": 3.494576,
+      "saved_assistants": 18,
+      "saved_responses": 18,
+      "api_calls": 18,
+      "missing_responses": 0,
+      "saved_prompt_tokens": 270062,
+      "saved_completion_tokens": 8650,
+      "saved_cached_tokens": 250368,
+      "finish_reasons": {
+        "tool_calls": 18
+      }
+    },
+    {
+      "task": "sphinx-doc__sphinx-8459",
+      "checksum": "a2491749a5a5055f59e0d73c5edded4f23cf62889059aadc31fa91a3ba431b7a",
+      "reward": 1.0,
+      "exception": "AgentTimeoutError",
+      "exit_status": "",
+      "started_at": "2026-10-26T20:36:54.025122Z",
+      "finished_at": "2026-10-26T22:22:29.263640Z",
+      "agent_seconds": 6300.173937,
+      "verifier_seconds": 5.409909,
+      "saved_assistants": 63,
+      "saved_responses": 63,
+      "api_calls": 63,
+      "missing_responses": 0,
+      "saved_prompt_tokens": 2264779,
+      "saved_completion_tokens": 28261,
+      "saved_cached_tokens": 2224640,
+      "finish_reasons": {
+        "tool_calls": 63
+      }
+    },
+    {
+      "task": "sympy__sympy-18698",
+      "checksum": "b37cd628d9ca81c111945995018ae80d540d79683a37278ce1253fadf0e76833",
+      "reward": 0.0,
+      "exception": "AgentTimeoutError",
+      "exit_status": "",
+      "started_at": "2026-10-26T20:36:53.938213Z",
+      "finished_at": "2026-10-26T22:22:30.513172Z",
+      "agent_seconds": 6300.156064,
+      "verifier_seconds": 10.662208,
+      "saved_assistants": 28,
+      "saved_responses": 28,
+      "api_calls": 28,
+      "missing_responses": 0,
+      "saved_prompt_tokens": 823056,
+      "saved_completion_tokens": 28747,
+      "saved_cached_tokens": 791296,
+      "finish_reasons": {
+        "tool_calls": 28
+      }
+    },
+    {
+      "task": "sympy__sympy-21612",
+      "checksum": "8ee326e4be753ae0692f72704f084ff6a503d6ae8af21252d19ef69c27070ef1",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "started_at": "2026-10-26T20:36:54.035833Z",
+      "finished_at": "2026-10-26T22:18:46.238792Z",
+      "agent_seconds": 6075.606929,
+      "verifier_seconds": 4.370553,
+      "saved_assistants": 49,
+      "saved_responses": 49,
+      "api_calls": 49,
+      "missing_responses": 0,
+      "saved_prompt_tokens": 1663914,
+      "saved_completion_tokens": 27697,
+      "saved_cached_tokens": 1623552,
+      "finish_reasons": {
+        "tool_calls": 49
+      }
+    }
+  ],
+  "limitations": [
+    "No matched GPU reference or parity verdict.",
+    "Verifier reward does not imply normal agent completion.",
+    "Prior reference-exposure findings require trajectory review.",
+    "Trial envelope excludes server startup and artifact collection."
+  ]
+}

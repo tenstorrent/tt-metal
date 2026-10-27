@@ -1,0 +1,33 @@
+{
+  "scope": "synthetic full-vocabulary TP4 sampler-only; no full-model or SWE gain",
+  "rows": [
+    {
+      "candidate": "final-ttsampling-b8.json",
+      "baseline": "final-sampling1d-b8.json",
+      "baseline_us": 474.43532501347363,
+      "candidate_us": 557.7299802098423,
+      "slowdown_percent": 17.5565879699205,
+      "matched_draws": 256,
+      "greedy_boundary_cases": 6
+    },
+    {
+      "candidate": "ttsampling-b8-compact.json",
+      "baseline": "final-sampling1d-b8.json",
+      "baseline_us": 474.43532501347363,
+      "candidate_us": 521.5058755129576,
+      "slowdown_percent": 9.921384015439227,
+      "matched_draws": 256,
+      "greedy_boundary_cases": 6
+    },
+    {
+      "candidate": "final-ttsampling-b32-async.json",
+      "baseline": "final-sampling1d-b32-async.json",
+      "baseline_us": 463.9400856103748,
+      "candidate_us": 533.5314956028014,
+      "slowdown_percent": 15.000085603913682,
+      "matched_draws": 1024,
+      "greedy_boundary_cases": 6
+    }
+  ],
+  "decision": "retain Sampling1D; all tested TTSampling variants slower"
+}
