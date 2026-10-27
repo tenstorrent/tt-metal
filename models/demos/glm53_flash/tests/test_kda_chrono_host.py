@@ -92,10 +92,12 @@ def test_eager_pad_length_buckets():
     from models.demos.glm53_flash.tt.mesh_model import DEFAULT_PREFILL_BUCKETS, eager_pad_length, prefill_buckets
 
     unit = 256  # 32 * 8 rows
-    assert eager_pad_length(128, unit, DEFAULT_PREFILL_BUCKETS) == 2048
+    assert eager_pad_length(128, unit, DEFAULT_PREFILL_BUCKETS) == 256
+    assert eager_pad_length(300, unit, DEFAULT_PREFILL_BUCKETS) == 512
     assert eager_pad_length(2048, unit, DEFAULT_PREFILL_BUCKETS) == 2048
-    assert eager_pad_length(2049, unit, DEFAULT_PREFILL_BUCKETS) == 4096
-    assert eager_pad_length(4097, unit, DEFAULT_PREFILL_BUCKETS) == 16384  # no 8192 bucket (1024-row slab L1 clash)
+    assert (
+        eager_pad_length(2049, unit, DEFAULT_PREFILL_BUCKETS) == 16384
+    )  # no 4096 (DRAM at 1 M) / 8192 (L1 window) buckets
     assert eager_pad_length(16362, unit, DEFAULT_PREFILL_BUCKETS) == 16384
     assert eager_pad_length(16385, unit, DEFAULT_PREFILL_BUCKETS) == 16640  # above the largest bucket: the ceiling
     assert eager_pad_length(300, unit, ()) == 512  # no buckets: the row-unit ceiling
