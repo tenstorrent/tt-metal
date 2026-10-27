@@ -134,8 +134,10 @@ def test_vit(device, batch_size, is_single_card_n300):
     # Targets are the typical scheduled-CI host after the fleet-wide ~2 % speed-up of
     # 2026-09-25 (main b75d7c2800e..01d6e7bdf4a). N300 pool 2026-09-26..30: vm-88 1357,
     # vm-238 1362, vm-236 1382 (fastest host, +2 % on every night); N150 pool 1473-1480.
+    # N300 re-centred after the sharded-softmax padding mask (#60227, partly recovered by #62043):
+    # 2026-10-25..26 scheduled + main runs on vm-88 1278.8 / 1280.2 / 1277.7, vm-239 1289.4, vm-240 1280.7.
     if is_single_card_n300:
-        expected_samples_per_sec = 1360
+        expected_samples_per_sec = 1280
     else:  # n150
         expected_samples_per_sec = 1470
     torch.manual_seed(0)
