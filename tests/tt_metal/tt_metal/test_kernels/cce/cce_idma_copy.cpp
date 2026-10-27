@@ -47,8 +47,7 @@ static bool resolve_operand(uint32_t kind, uint32_t selector, uint64_t offset, O
             operand.check_address = operand.command_address;
             return true;
         case abi::kKindGddr:
-            operand.command_address = experimental::cce_gddr_address(
-                abi::gddr_selector_local(selector), abi::gddr_selector_target(selector), offset);
+            operand.command_address = experimental::cce_gddr_address(selector, offset);
             operand.check_address = operand.command_address;
             return true;
         default: return false;

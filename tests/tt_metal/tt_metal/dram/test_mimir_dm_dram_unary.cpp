@@ -221,7 +221,7 @@ std::string gddr_label(const DramUnaryLayout& layout, uint64_t view_offset, uint
         layout.local_mimir,
         view_offset,
         chiplet_offset,
-        host_cce_gddr_address(layout.local_mimir, layout.local_mimir, chiplet_offset));
+        host_cce_gddr_address(cluster_soc_desc(), layout.local_mimir, layout.local_mimir, chiplet_offset));
 }
 
 std::string staging_label(const DramUnaryLayout& layout) {

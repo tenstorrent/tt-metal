@@ -81,6 +81,7 @@ std::vector<Tl1Region> cce_tl1_regions() {
         {"bank-to-NOC scratch",
          hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BANK_TO_NOC_SCRATCH),
          hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BANK_TO_NOC_SCRATCH)},
+        {"CCE SPA routes", MEM_CCE_SPA_ROUTES_BASE, MEM_CCE_SPA_ROUTES_SIZE},
         {"kernel config",
          hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::KERNEL_CONFIG),
          hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::KERNEL_CONFIG)},

@@ -75,7 +75,7 @@ void kernel_main() {
             }
 
             const volatile uint32_t* source = reinterpret_cast<const volatile uint32_t*>(experimental::cce_gddr_address(
-                local_mimir, local_mimir, source_offset + static_cast<uint64_t>(chunk) * chunk_bytes));
+                local_mimir, source_offset + static_cast<uint64_t>(chunk) * chunk_bytes));
             volatile uint32_t* slot =
                 own_tl1_words(staging_offset + static_cast<uint64_t>(chunk % num_slots) * chunk_bytes);
             for (uint32_t word = 0; word < chunk_words; ++word) {

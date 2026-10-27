@@ -161,6 +161,7 @@ Endpoint gddr_endpoint(uint32_t view, uint64_t view_offset) {
 uint64_t command_address(const metal_SocDescriptor& soc, uint32_t issuing_cce, const Endpoint& endpoint) {
     if (endpoint.kind == EndpointKind::Gddr) {
         return host_cce_gddr_address(
+            soc,
             mimir_index_for_cce(issuing_cce),
             mimir_of_view(soc, endpoint.view),
             chiplet_offset_of(soc, endpoint.view, endpoint.offset));
@@ -354,7 +355,7 @@ KernelOperand kernel_operand(const metal_SocDescriptor& soc, uint32_t issuing_cc
         case EndpointKind::Gddr:
             return {
                 abi::kKindGddr,
-                abi::pack_gddr_selector(mimir_index_for_cce(issuing_cce), mimir_of_view(soc, endpoint.view)),
+                mimir_of_view(soc, endpoint.view),
                 chiplet_offset_of(soc, endpoint.view, endpoint.offset)};
     }
     return {};

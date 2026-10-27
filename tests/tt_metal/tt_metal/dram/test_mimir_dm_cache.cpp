@@ -811,10 +811,7 @@ IdmaOperand own_tl1_operand(uint32_t cce_index, uint64_t offset) { return {idma_
 IdmaOperand sram_operand(uint32_t cce_index, uint64_t offset) { return {idma_abi::kKindSramSpa, cce_index, offset}; }
 
 IdmaOperand gddr_operand(const metal_SocDescriptor& soc, uint32_t issuing_cce, uint32_t view, uint64_t view_offset) {
-    return {
-        idma_abi::kKindGddr,
-        idma_abi::pack_gddr_selector(mimir_index_for_cce(issuing_cce), mimir_of_view(soc, view)),
-        chiplet_offset_of(soc, view, view_offset)};
+    return {idma_abi::kKindGddr, mimir_of_view(soc, view), chiplet_offset_of(soc, view, view_offset)};
 }
 
 uint64_t gddr_source_view_offset() {
