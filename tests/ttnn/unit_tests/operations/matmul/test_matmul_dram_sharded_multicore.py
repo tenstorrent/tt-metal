@@ -504,8 +504,8 @@ def test_fused_activation_falls_back(device, expect_error):
     """A fused activation is outside the multi-core pipeline: opted in with 2 workers per bank, the call runs
     the single-reader program with 2 readers (Blackhole) and matches its 1-reader result; Wormhole has no
     multi-reader program and rejects it."""
-    # 16 weight tiles per bank on every part (N = 4096 on 8-bank P150, 3584 on 7-bank P100), so main's
-    # 2-reader program splits each bank's shard evenly.
+    # Each DRAM bank holds a 16-tile weight shard (n = 4096 on 8-bank P150, 3584 on 7-bank P100), which
+    # the 2-reader DRAM-sharded program can split evenly between its 2 readers.
     n = 16 * device.dram_grid_size().x * 32
     case = _bank_case(device, 4096, n)
     x, w = _operands(device, 4096, n, "bfp8", "bf16", case[5], case[6])
@@ -525,8 +525,8 @@ def test_pipeline_needs_the_opt_in(device, expect_error):
     its 2-reader variant splits each bank's columns over two readers with the same compute in the same K
     order, so its output is bitwise the 1-reader output, while the opted-in call runs the multi-core
     pipeline, whose output differs; Wormhole has no multi-reader program and rejects the call."""
-    # 16 weight tiles per bank on every part (N = 4096 on 8-bank P150, 3584 on 7-bank P100), so main's
-    # 2-reader program splits each bank's shard evenly.
+    # Each DRAM bank holds a 16-tile weight shard (n = 4096 on 8-bank P150, 3584 on 7-bank P100), which
+    # the 2-reader DRAM-sharded program can split evenly between its 2 readers.
     n = 16 * device.dram_grid_size().x * 32
     case = _bank_case(device, 4096, n)
     x, w = _operands(device, 4096, n, "bfp8", "bf16", case[5], case[6])
