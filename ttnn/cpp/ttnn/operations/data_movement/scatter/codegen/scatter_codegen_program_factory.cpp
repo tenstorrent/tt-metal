@@ -6,6 +6,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
+#include <iterator>
+#include <numeric>
 #include <utility>
 #include <vector>
 
@@ -13,11 +16,13 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "scatter_codegen_device_operation.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::prim {
 using namespace tt::tt_metal;
@@ -57,6 +62,10 @@ constexpr uint32_t kRmChunkAlign = 32;
 // Smallest chunk the scaling hands out, and the floor scatter_rm_min_plan_fits_l1() checks against.
 constexpr uint32_t kRmMinChunkElems = 32;
 
+// The bf16-reduce factory widens every bf16 input element of a stick into an fp32 accumulator.
+constexpr uint32_t kFp32Bytes = sizeof(float);
+constexpr uint32_t kBf16Bytes = sizeof(uint16_t);
+
 std::vector<uint32_t> scatter_page_dims(const ttnn::Shape& shape, bool tiled) {
     const int64_t rank = static_cast<int64_t>(shape.rank());
     if (rank == 0) {
@@ -71,7 +80,7 @@ std::vector<uint32_t> scatter_page_dims(const ttnn::Shape& shape, bool tiled) {
         for (int64_t i = 0; i < rank - 2; ++i) {
             dims.push_back(shape[i]);
         }
-        dims.push_back((shape[rank - 2] + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT);
+        dims.push_back(tt::div_up(shape[rank - 2], tt::constants::TILE_HEIGHT));
         return dims;
     }
     if (rank == 1) {
@@ -104,23 +113,10 @@ CoreSplit split_scatter_work(
     const MeshDevice& device, const std::optional<CoreRangeSet>& sub_core_grids, uint32_t total_work) {
     const auto grid = device.compute_with_storage_grid_size();
     const uint32_t device_cores = static_cast<uint32_t>(grid.x * grid.y);
-    CoreRangeSet candidate;
-    if (sub_core_grids.has_value()) {
-        candidate = sub_core_grids.value();
-    } else {
-        const uint32_t cols = static_cast<uint32_t>(grid.y);
-        const uint32_t nc = std::min(total_work, device_cores);
-        const uint32_t full_rows = nc / cols;
-        const uint32_t remaining = nc % cols;
-        std::vector<CoreRange> ranges;
-        if (full_rows > 0) {
-            ranges.emplace_back(CoreCoord(0, 0), CoreCoord(full_rows - 1, cols - 1));
-        }
-        if (remaining > 0) {
-            ranges.emplace_back(CoreCoord(full_rows, 0), CoreCoord(full_rows, remaining - 1));
-        }
-        candidate = CoreRangeSet(std::move(ranges));
-    }
+    const CoreRangeSet candidate =
+        sub_core_grids.has_value()
+            ? sub_core_grids.value()
+            : tt::tt_metal::num_cores_to_corerangeset(std::min(total_work, device_cores), grid, /*row_wise=*/false);
     const auto [num_cores, core_range, group1, group2, wpc1, wpc2] =
         tt::tt_metal::split_work_to_cores(candidate, total_work, /*row_wise=*/false);
     return CoreSplit{num_cores, core_range, group1, group2, wpc1, wpc2};
@@ -190,8 +186,9 @@ std::vector<uint32_t> to_vector(const ScatterPageMap& page_map) { return {page_m
 
 }  // namespace
 
-uint32_t scatter_page_rank(const ttnn::Shape& shape, bool tiled) {
-    return static_cast<uint32_t>(scatter_page_dims(shape, tiled).size());
+uint32_t scatter_page_rank(const ttnn::Shape& shape) {
+    const auto rank = shape.rank();
+    return static_cast<uint32_t>(rank <= 1 ? 1 : rank - 1);
 }
 
 ScatterPageMap compute_scatter_page_map(const ttnn::Shape& input_shape, const ttnn::Shape& index_shape, bool tiled) {
@@ -221,11 +218,8 @@ ScatterTileGeometry compute_scatter_tile_geometry(
     const auto& padded_src = src_tensor.padded_shape();
     const auto& logical_index = index_tensor.logical_shape();
 
-    uint32_t Ht = 1;
-    for (uint32_t i = 0; i + 1 < padded_input.rank(); ++i) {
-        Ht *= padded_input[i];
-    }
-    Ht /= tile_h;
+    const uint32_t Ht =
+        std::accumulate(padded_input.cbegin(), std::prev(padded_input.cend()), 1u, std::multiplies<>()) / tile_h;
 
     const uint32_t Wt_output = padded_input[-1] / tile_w;
     const uint32_t Wt_index = padded_index[-1] / tile_w;
@@ -250,10 +244,8 @@ ScatterTileGeometry compute_scatter_tile_geometry(
 ScatterRmGeometry compute_scatter_rm_geometry(const Tensor& input_tensor, const Tensor& index_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
     const auto& index_shape = index_tensor.logical_shape();
-    uint32_t num_sticks = 1;
-    for (uint32_t i = 0; i + 1 < input_shape.rank(); ++i) {
-        num_sticks *= input_shape[i];
-    }
+    const uint32_t num_sticks =
+        std::accumulate(input_shape.cbegin(), std::prev(input_shape.cend()), 1u, std::multiplies<>());
     return ScatterRmGeometry{num_sticks, input_shape[-1], index_shape[-1]};
 }
 
@@ -269,7 +261,7 @@ uint64_t scatter_output_aligned_page_size(
     return tt::align(input_tensor.buffer()->page_size(), alignment);
 }
 
-uint64_t scatter_rm_stick_page_bytes(const Tensor& tensor, uint32_t stick_elems) {
+uint64_t scatter_rm_aligned_stick_bytes(const Tensor& tensor, uint32_t stick_elems) {
     auto* device = tensor.device();
     const uint64_t raw_bytes = static_cast<uint64_t>(stick_elems) * tensor.element_size();
     const uint64_t alignment = device->allocator()->get_alignment(tensor.memory_config().buffer_type());
@@ -277,25 +269,14 @@ uint64_t scatter_rm_stick_page_bytes(const Tensor& tensor, uint32_t stick_elems)
 }
 
 uint64_t scatter_static_l1(const Tensor& input_tensor) {
-    auto* device = input_tensor.device();
-    const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const uint64_t ceiling = static_cast<uint64_t>(device->l1_size_per_core());
-    // The bank excludes the L1_SMALL region a device may be opened with, which sits at the top of the
-    // span and which the occupancy query below never reports; CBs planned past the bank would overlap
-    // it silently.
-    const uint64_t bank = device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
-    return std::min(ceiling > base ? ceiling - base : 0, bank);
+    // The bank, not l1_size_per_core() less the allocator base: it excludes the L1_SMALL region a
+    // device may be opened with, which sits at the top of the span and which the occupancy query
+    // behind scatter_usable_l1() never reports; CBs planned past the bank would overlap it silently.
+    return input_tensor.device()->allocator()->get_bank_size(tt::tt_metal::BufferType::L1);
 }
 
 uint64_t scatter_usable_l1(const Tensor& input_tensor) {
-    auto* device = input_tensor.device();
-    const uint64_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    uint64_t usable = scatter_static_l1(input_tensor);
-    if (const auto lowest_l1_buffer = device->lowest_occupied_compute_l1_address(); lowest_l1_buffer.has_value()) {
-        const uint64_t frontier = static_cast<uint64_t>(lowest_l1_buffer.value());
-        usable = std::min(usable, frontier > base ? frontier - base : 0);
-    }
-    return usable;
+    return ttnn::operations::data_movement::get_max_l1_space(input_tensor);
 }
 
 bool scatter_interleaved_fits_l1(
@@ -311,7 +292,7 @@ bool scatter_interleaved_fits_l1(
 }
 
 uint64_t scatter_rm_fixed_bytes(uint64_t input_page_bytes, uint64_t output_page_bytes, bool bf16_reduce) {
-    return input_page_bytes + output_page_bytes + (bf16_reduce ? 2 * input_page_bytes : 0);
+    return input_page_bytes + output_page_bytes + (bf16_reduce ? input_page_bytes * kFp32Bytes / kBf16Bytes : 0);
 }
 
 bool scatter_rm_min_plan_fits_l1(
@@ -414,6 +395,7 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryInterleaved::create_
     uint32_t id = 0;
     for (const auto& [core, n] : scatter_assigned_cores(split, attributes.Ht)) {
         KernelDescriptor::RTArgList reader_args;
+        reader_args.reserve(4 + page_map_vec.size());
         reader_args.push_back(n);
         reader_args.push_back(tile_w);
         reader_args.push_back(tile_h);
@@ -492,6 +474,7 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryStreaming::create_de
     uint32_t id = 0;
     for (const auto& [core, n] : scatter_assigned_cores(split, attributes.Wt_output)) {
         KernelDescriptor::RTArgList reader_args;
+        reader_args.reserve(4 + page_map_vec.size());
         reader_args.push_back(n);
         reader_args.push_back(tile_w);
         reader_args.push_back(tile_h);
@@ -523,10 +506,10 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
     // page's bank offset, which is the buffer's ALIGNED page size, not the raw stick byte width --
     // passing the raw width addresses every page past the first at the wrong offset whenever the
     // stick isn't already a multiple of the device's alignment. Computed through
-    // scatter_rm_stick_page_bytes() (not in_t.buffer()->aligned_page_size() directly) so this can
+    // scatter_rm_aligned_stick_bytes() (not in_t.buffer()->aligned_page_size() directly) so this can
     // never drift from supported_by_codegen()'s own feasibility arithmetic over the same stick.
     const uint32_t input_page_bytes =
-        static_cast<uint32_t>(scatter_rm_stick_page_bytes(in_t, attributes.input_stick_elems));
+        static_cast<uint32_t>(scatter_rm_aligned_stick_bytes(in_t, attributes.input_stick_elems));
     const uint32_t output_page_bytes = static_cast<uint32_t>(
         scatter_output_aligned_page_size(in_t, attributes.output_mem_config, tensor_args.output_tensor));
     const uint32_t index_page_bytes = static_cast<uint32_t>(index_t.buffer()->aligned_page_size());
@@ -597,6 +580,7 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryRowMajor::create_des
     uint32_t start = 0;
     for (const auto& [core, n] : scatter_assigned_cores(split, attributes.num_sticks)) {
         KernelDescriptor::RTArgList reader_args;
+        reader_args.reserve(2 + page_map_vec.size());
         reader_args.push_back(start);
         reader_args.push_back(n);
         reader_args.append(page_map_vec);
@@ -623,14 +607,14 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryBf16ReduceRowMajor::
     const uint32_t src_elem_size = src_t.element_size();
     // See ScatterCodegenProgramFactoryRowMajor::create_descriptor: TensorAccessor's page_size argument
     // must be each buffer's ALIGNED page size, not the raw stick byte width, via the same
-    // scatter_rm_stick_page_bytes() helper the feasibility gate uses.
+    // scatter_rm_aligned_stick_bytes() helper the feasibility gate uses.
     const uint32_t input_page_bytes =
-        static_cast<uint32_t>(scatter_rm_stick_page_bytes(in_t, attributes.input_stick_elems));
+        static_cast<uint32_t>(scatter_rm_aligned_stick_bytes(in_t, attributes.input_stick_elems));
     const uint32_t output_page_bytes = static_cast<uint32_t>(
         scatter_output_aligned_page_size(in_t, attributes.output_mem_config, tensor_args.output_tensor));
     const uint32_t index_page_bytes = static_cast<uint32_t>(index_t.buffer()->aligned_page_size());
     const uint32_t src_page_bytes = static_cast<uint32_t>(src_t.buffer()->aligned_page_size());
-    const uint32_t fp32_temp_page_bytes = attributes.input_stick_elems * 4;
+    const uint32_t fp32_temp_page_bytes = attributes.input_stick_elems * kFp32Bytes;
     const uint32_t chunk_elems = scatter_rm_chunk_elems(
         scatter_usable_l1(in_t),
         // The FP32 accumulator is L1-only scratch of exactly input_stick_elems*4 bytes, not a device
@@ -694,6 +678,7 @@ tt::tt_metal::ProgramDescriptor ScatterCodegenProgramFactoryBf16ReduceRowMajor::
     uint32_t start = 0;
     for (const auto& [core, n] : scatter_assigned_cores(split, attributes.num_sticks)) {
         KernelDescriptor::RTArgList reader_args;
+        reader_args.reserve(2 + page_map_vec.size());
         reader_args.push_back(start);
         reader_args.push_back(n);
         reader_args.append(page_map_vec);
