@@ -170,15 +170,17 @@ def test_stack_block_float_tile(device, input_shapes, dim):
 @pytest.mark.parametrize(
     "input_shapes, dim, layout, expected_ops",
     [
-        pytest.param([(1500,)] * 4, 1, RM, ["ConcatDeviceOperation", "PermuteDeviceOperation"], id="rm-rank1"),
-        pytest.param([(8732, 1)] * 4, 2, TILE, ["ConcatDeviceOperation", "PermuteDeviceOperation"], id="tile-rank2"),
-        pytest.param([(8732, 1)], 2, TILE, ["ReshapeViewDeviceOperation"], id="tile-single-input"),
+        pytest.param([(1500,)] * 4, 1, RM, ["Concat", "Permute"], id="rm-rank1"),
+        pytest.param([(8732, 1)] * 4, 2, TILE, ["Concat", "Permute"], id="tile-rank2"),
+        pytest.param([(8732, 1)], 2, TILE, ["Reshape"], id="tile-single-input"),
     ],
 )
 def test_stack_trailing_axis_device_ops(device, input_shapes, dim, layout, expected_ops):
     # Values cannot tell the routes apart, so record the device operations: the leading-axis route
     # is one concat and one permute, while unsqueeze-then-concat starts with a reshape per input and,
     # for row-major, wraps the concat in transposes. A single tile input stays on the reshape.
+    # Expected ops are name prefixes because an op can run as more than one device operation
+    # (reshape picks ReshapeView or ReshapeCodegen by shape and arch); the route is what is asserted.
     torch_tensors = [torch.rand(shape, dtype=torch.bfloat16) for shape in input_shapes]
     ttnn_tensors = [
         ttnn.from_torch(tensor, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -190,7 +192,8 @@ def test_stack_trailing_axis_device_ops(device, input_shapes, dim, layout, expec
     finally:
         captured = ttnn.graph.end_graph_capture()
     device_ops = [name for name in ttnn.graph.extract_calltrace(captured) if name.endswith("DeviceOperation")]
-    assert device_ops == expected_ops, device_ops
+    assert len(device_ops) == len(expected_ops), device_ops
+    assert all(op.startswith(prefix) for op, prefix in zip(device_ops, expected_ops)), device_ops
     _check_result(torch.stack(torch_tensors, dim=dim), ttnn_result, layout)
 
 
