@@ -15,9 +15,12 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.glm53_flash.custom_ops.sparse_bound import live_chunks as bound_live_chunks
+from models.demos.glm53_flash.custom_ops.sparse_bound import scorer_bands
 
 TILE = 32
 KERNELS = Path(__file__).resolve().parent / "kernels"
+CB_BOUND = 8  # the mailbox page of the live bound (reader -> compute), uint32
 
 
 class IndexScoreDecode:
@@ -45,6 +48,7 @@ class IndexScoreDecode:
         segments: int = 1,
         slot: int | None = None,
         cols: int | None = None,
+        bound: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """q [1, B, 32, D] bf16 TILE (user b's 32 index heads as rows); w [1, 1, B, 32] bf16 TILE (B <= 32 per tile
         row, the head weights with the n_heads^-0.5 folded); pools [slots, 1, W, D] bf16 / bfp8_b TILE (the pooled-key
@@ -54,7 +58,11 @@ class IndexScoreDecode:
         as -inf, so the top-k needs no per-row bound. ``slot``: every user scores the pools of that ONE cache slot
         (prefill: the T queries of one prompt as T users of the same slot, each bounded by its own causal pool count);
         ``cols``: score only the first ``cols`` pools of the slot (cols % (32*KC) == 0; the out row is ``cols`` wide),
-        the slot stride stays the cache width. Returns ``out``."""
+        the slot stride stays the cache width. ``bound`` [1, 1] uint32 ROW_MAJOR (the live bound, ``sparse_bound.py``;
+        needs ``valid_rows`` or ``segments``, the v2 writer, and the decode form ``slot is None``): only the first
+        ``ceil(min(bound, W) / (32*KC))`` chunks of every user's row are read, scored and written (the (user, band)
+        items split THOSE chunks), the columns beyond stay untouched; the bound is read on device at every launch, so
+        a captured trace follows the refreshed value. Returns ``out``."""
         B, Hi, D = q.shape[1], q.shape[2], q.shape[3]
         W_full = pools.shape[2]
         W = cols if cols is not None else W_full
@@ -72,6 +80,11 @@ class IndexScoreDecode:
         v2 = valid_rows is not None or segments > 1
         if valid_rows is not None:
             assert list(valid_rows.shape) == [B, 1] and valid_rows.dtype == ttnn.uint32, valid_rows.shape
+        bounded = bound is not None
+        if bounded:
+            assert v2 and slot is None, "the live bound needs the v2 writer (valid_rows / segments) and the decode form"
+            assert list(bound.shape) == [1, 1] and bound.dtype == ttnn.uint32, (bound.shape, bound.dtype)
+            assert bound.layout == ttnn.ROW_MAJOR_LAYOUT, bound.layout
         for t, lay, dt in (
             (q, ttnn.TILE_LAYOUT, ttnn.bfloat16),
             (w, ttnn.TILE_LAYOUT, ttnn.bfloat16),
@@ -88,10 +101,9 @@ class IndexScoreDecode:
         total_chunks = Tt // KC
         # the user's pool slot: slot_base + b * slot_stride, slot_pages tile pages apart (the cache width, not ``cols``)
         slot_base, slot_stride, slot_pages = (slot, 0, (W_full // TILE) * Dt) if slot is not None else (0, 1, Tt * Dt)
-        # work items (user, k-band): about one per core, bands of whole chunks
-        n_bands = max(1, min(-(-self.n_cores // B), total_chunks))
-        band_chunks = -(-total_chunks // n_bands)
-        n_bands = -(-total_chunks // band_chunks)
+        # work items (user, k-band): about one per core, bands of whole chunks of the capacity (with ``bound`` the
+        # kernels re-split the live chunks over the same n_bands at every launch: sparse_bound.scorer_item_range)
+        n_bands, band_chunks = scorer_bands(total_chunks, self.n_cores, B)
         items = B * n_bands
         n_cores = min(items, self.n_cores)
         cores = [ttnn.CoreCoord(c // self.grid_y, c % self.grid_y) for c in range(n_cores)]
@@ -118,14 +130,18 @@ class IndexScoreDecode:
             cb(5, 64 * KC, 2),  # writer lines (scratch)
             cb(6, 1024, 1),  # the w row's two faces (reader scratch)
             cb(7, 64, 1),  # the user's bound page (writer v2 scratch)
+            cb(CB_BOUND, 64, 1, ttnn.uint32),  # the live bound's mailbox page (reader -> compute)
         ]
         acc = lambda t: ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        reader_ct = [Dt, KC, Tt, k_tile_bytes, slot_base, slot_stride, slot_pages] + acc(q) + acc(pools) + acc(w)
-        compute_ct = [Dt, KC]
+        bound_t = bound if bounded else q  # placeholder accessor when unbounded (address 0, never read)
+        reader_ct = [Dt, KC, Tt, k_tile_bytes, slot_base, slot_stride, slot_pages, int(bounded)]
+        reader_ct += acc(q) + acc(pools) + acc(w) + acc(bound_t)
+        compute_ct = [Dt, KC, int(bounded)]
         writer_ct = [KC] + acc(out)
         if v2:
             vt = valid_rows if valid_rows is not None else out  # placeholder accessor when unmasked
-            writer_ct += [seg_cols, segments] + acc(vt)
+            writer_ct += [seg_cols, segments] + acc(vt) + [int(bounded)] + acc(bound if bounded else out)
+        bound_rt = [bound.buffer_address(), bound.buffer_aligned_page_size()] if bounded else [0, 64]
         reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for c, core in enumerate(cores):
             n_items = (items - c + n_cores - 1) // n_cores
@@ -139,7 +155,7 @@ class IndexScoreDecode:
                 n_bands,
                 band_chunks,
                 total_chunks,
-            ]
+            ] + bound_rt
             compute_rt[core.x][core.y] = [c, n_items, n_cores, n_bands, band_chunks, total_chunks]
             writer_rt[core.x][core.y] = [
                 c,
@@ -155,6 +171,7 @@ class IndexScoreDecode:
                     valid_rows.buffer_address() if valid_rows is not None else 0,
                     valid_rows.buffer_aligned_page_size() if valid_rows is not None else 64,
                 ]
+                + bound_rt
                 if v2
                 else []
             )
@@ -186,4 +203,10 @@ class IndexScoreDecode:
             ),
         ]
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        return ttnn.generic_op([q, w, pools, out] + ([valid_rows] if valid_rows is not None else []), program)
+        io = [q, w, pools, out] + ([valid_rows] if valid_rows is not None else []) + ([bound] if bounded else [])
+        return ttnn.generic_op(io, program)
+
+    @staticmethod
+    def live_chunks(bound_pools: int, W: int, kc: int = 8) -> int:
+        """Chunks the kernels score for ``bound_pools`` of a ``W``-wide row (``sparse_bound.live_chunks``)."""
+        return bound_live_chunks(bound_pools, W, kc)

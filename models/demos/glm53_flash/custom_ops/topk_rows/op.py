@@ -104,6 +104,14 @@ class TopkRows:
         assert input_row_bytes == W * elem, (input_row_bytes, W)
         has_meta = valid_rows is not None
         seg = seg_rows_per_user > 0 or translate
+        if has_meta and seg_rows_per_user > 0:
+            # segment mode: the per-USER bounds [B/seg, 1] bound every segment row of the user (the reader clamps
+            # them into the segments; an empty segment is one synthesized -inf chunk): the live-bound stage 1
+            assert list(valid_rows.shape) == [B // seg_rows_per_user, 1] and valid_rows.dtype == ttnn.uint32, (
+                valid_rows.shape,
+                B,
+                seg_rows_per_user,
+            )
         fmt = ttnn.CBFormatDescriptor
         f_idx = fmt(buffer_index=cb_indices, data_format=ttnn.float32, page_size=indices_cb_row_bytes)
         f_idx.face_geometry = ttnn.FaceGeometry(FACE_WIDTH, 2)
@@ -151,6 +159,7 @@ class TopkRows:
         reader_ct += [1 if has_meta else 0, cb_meta if has_meta else 0, 0] + acc(valid_rows if has_meta else scores)
         reader_ct += acc(scores)  # valid_end accessor placeholder (unused: address 0)
         reader_ct += [1 if has_meta else 0]  # per-row metadata
+        reader_ct += [seg_rows_per_user if has_meta else 0, W if has_meta and seg_rows_per_user else 0]  # segment mode
         compute_ct = [
             cb_in,
             cb_indices,
@@ -243,13 +252,23 @@ class TopkRows:
         return ttnn.generic_op(io, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
 
     def segmented(
-        self, scores_seg: ttnn.Tensor, S: int, ids1: ttnn.Tensor, vals1: ttnn.Tensor, out: ttnn.Tensor
+        self,
+        scores_seg: ttnn.Tensor,
+        S: int,
+        ids1: ttnn.Tensor,
+        vals1: ttnn.Tensor,
+        out: ttnn.Tensor,
+        valid_rows: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Two-stage top-512 of B users whose score rows are split into S segments: ``scores_seg`` [B*S,1,1,W/S] bf16 RM
         (columns beyond a user's bound already -inf: the scorer's masked writer); stage 1 ranks every segment row on its
         own core (ids1 [B,1,1,S*512] uint32 and vals1 [B,1,1,S*512] fp32, user-major, persistent); stage 2 ranks the
         S*512 candidate values of each user and translates the winning slots back to pool ids into ``out``
-        [B,1,1,512]. -inf candidates rank last (sentinels only when fewer than 512 finite pools)."""
+        [B,1,1,512]. -inf candidates rank last (sentinels only when fewer than 512 finite pools). ``valid_rows``
+        [B, 1] uint32 (the per-user bounds; the live-bound path, ``custom_ops/sparse_bound.py``): stage 1 ranks every
+        segment row over the user's live columns in it only (an empty segment = one synthesized -inf chunk), reading
+        nothing beyond ``valid[u]``; the ranked candidates are those of the full rows (the dropped chunks are all -inf,
+        below every finite survivor), so stage 2 and ``out`` are unchanged."""
         BS, Wseg = scores_seg.shape[0], scores_seg.shape[-1]
         B = BS // S
         assert BS == B * S and Wseg >= self.k, (scores_seg.shape, S)
@@ -257,7 +276,7 @@ class TopkRows:
             ids1.shape,
             vals1.shape,
         )
-        self._program(scores_seg, None, ids1, values=vals1, seg_rows_per_user=S)
+        self._program(scores_seg, valid_rows, ids1, values=vals1, seg_rows_per_user=S)
         cand = ttnn.typecast(vals1, ttnn.bfloat16)  # [B,1,1,S*K] bf16 RM candidate scores
         self._program(cand, None, out, ids1=ids1, translate=True, seg_len=Wseg)
         ttnn.deallocate(cand)
@@ -313,6 +332,7 @@ class TopkRows:
         reader_ct += [1, cb_meta, 0] + acc(valid_rows)  # metadata mode, meta CB, valid_length_offset 0
         reader_ct += acc(scores)  # valid_end accessor placeholder (unused: address 0)
         reader_ct += [1]  # per-row metadata
+        reader_ct += [0, 0]  # no segment mode (plain per-row bounds)
         compute_ct = [cb_in, cb_indices, llk_k, body_mode, 1, cb_meta, 1]
         writer_ct = [
             cb_indices,

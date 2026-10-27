@@ -23,7 +23,20 @@ Compile-time / common / per-core runtime args follow the shared factory (`op.py`
 per_row=1]`, common `[scores_addr, valid_addr, W, row_bytes, 0]`, per core `[start_row, rows]`; compute
 `[cb_in, cb_indices, 512, body_mode, 1, cb_meta, 1]`, common `[W]`, per core `[rows]`; writer
 `[cb_indices, cb_scratch, row_bytes, 32, 32, 64, acc(out)]`, common `[out_addr]`, per core `[start_row, rows]`.
-Rows are dealt over the whole compute grid row-wise (one row per core while B <= cores). Under trace all three
+Rows are dealt over the whole compute grid row-wise (one row per core while B <= cores).
+
+Segmented form (`segmented(scores_seg, S, ids1, vals1, out, valid_rows=None)`, `GLM53_TOPK_SEGMENTS`): stage 1 ranks
+every segment row `[B*S, 1, 1, W/S]` on its own core into user-major candidate tables (`ids1` / `vals1`
+`[B, 1, 1, S*512]`), stage 2 ranks the `S*512` candidates of each user and translates the winners back to pool ids.
+With `valid_rows` `[B, 1]` (the live bound, `GLM53_SPARSE_DECODE_BOUND`; `custom_ops/sparse_bound.py`) the reader's
+segment mode (compile-time `[seg_rows_per_user, seg_cols]` after the per-row flag) bounds segment row `r` of user
+`r / S` to `clamp(valid[u] - (r % S) * seg_cols, 0, seg_cols)` live columns; an empty segment is ONE chunk of -inf
+synthesized in L1 (never a DRAM read of columns the scorer did not write). The live chunks are processed in the same
+order with the same contents as in the unbounded call and the dropped chunks are entirely -inf (below every finite
+survivor), so the tables and `out` are bit-identical (`test_topk_rows_segmented_live_bound`); the served 1 M build
+(S = 5 x 52 480 columns = 103 classic chunks per row) at position 1024 ranks 1 chunk per segment instead of 103.
+
+Under trace all three
 tensors are persistent (`TtDSA` keeps the output per batch size; the concatenated score rows are allocated inside
 the trace). Test: `tests/custom_ops/test_topk_rows.py` (torch golden per row, W = 1056 and 262 176, B = 1/4/8/32,
 trace replay with refreshed bounds, timing).
