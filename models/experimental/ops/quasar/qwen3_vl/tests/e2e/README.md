@@ -95,7 +95,7 @@ A hang shows up as the pytest timeout. The script prints the last lines of `prog
 | 2026-10-26 | craq-sim 8x4 (.so md5 74c8eb33), branch on main fb6d34ceaed | 134 (+12 experimental add/mul) | 94 (+10) | 23 (+2): 8x5 L1 shard grids, 12-bank DRAM sharding | 16 | 1 | 1 h 45 min (95 min in tests; 12-50 s per case) |
 | 2026-10-26 | craq-sim 8x4, main 5285b13d773 with the DFB drain (no #57646 revert, no tensor_layout droppable) | 134 (+12) | 94 (+10) | 23 (+2) | 16 | 1 | 1 h 34 min (88 min in tests); every case's outcome identical to the run above |
 
-The 16 failures: base add (7) and multiply (3), all passing through the experimental ops; `linear` with a captured 8x8 matmul grid (2); `plus_one` int32 and uint32 (2, Q11); `scatter` (1, Q1); `layer_norm` `[2752, 4096]` at PCC 0.998996 against 0.999 (1). The timeout is prefill SDPA `[16, 12288, 64]` (more than 20 min on craq-sim; the `[32, 4096, 128]` case passes in 13 min). Per-case results and times: `generated/qwen3_vl_ops_sweep_1026/summary.md` and `results.tsv` on the run host.
+The 16 failures: base add (7) and multiply (3), all passing through the experimental ops; `linear` with a captured 8x8 matmul grid (2); `plus_one` int32 and uint32 (2, Q10); `scatter` (1, Q1); `layer_norm` `[2752, 4096]` at PCC 0.998996 against 0.999 (1). The timeout is prefill SDPA `[16, 12288, 64]` (more than 20 min on craq-sim; the `[32, 4096, 128]` case passes in 13 min). Per-case results and times: `generated/qwen3_vl_ops_sweep_1026/summary.md` and `results.tsv` on the run host.
 
 ### e2e ops vs graph-capture cases
 
@@ -124,21 +124,13 @@ Compared on 2026-10-27: every distinct call in `progress.log` of the craq-sim 8x
 **Only in the graph suite:**
 - No case exists for the vision MLP FC1 or the patch-merger FC1, both `linear(activation="gelu")`: the generator could not rebuild the `activation` argument (`test_linear.py` "NOT generated": 72 + 12 calls). The e2e runs both (it found the Quasar gelu gap, since fixed by #57753).
 - Run on the host by the e2e: `scatter` and `zeros_like` (vision-token merge, Q1), token `embedding` over `[151936,2560]` (01, Q8).
-- On-device sampling and position increment: `argmax`, `plus_one` (Q11); the e2e reads logits on the host and teacher-forces one step.
+- On-device sampling and position increment: `argmax`, `plus_one` (Q10); the e2e reads logits on the host and teacher-forces one step.
 - Demo-size prefill only: `minimal_matmul` 00/01, chunked `reshape` 07-09/12/15/16.
 - Others: `multiply` 02 on the KV cache `[1024,8,32,128]`, `interleaved_to_sharded` 01, `unsqueeze_to_4D` 01, `to_device` 00 (page table `[1,1024]`).
 
 **Only in the e2e:** ops added by the small-grid workarounds: `untilize`/`pad`/`tilize`/`reshape` on `[32,128]`/`[1,4096]` (G1), `sharded_to_interleaved` on `[32,2560|4096|9728]` and the `to_memory_config` around unsharded linears (G4), and the LM-head splits. They grow as the grid shrinks: 1212 device ops on 2x1 against 564 on 8x4.
 
 To make the suite reflect what Quasar runs: shorten the prefill and vision token dims (never weight dims), replace the DRAM-sharded and 8x8/8x5 decode configs with ones that fit Quasar, and add cases for the two gelu linears.
-
-## Droppable commits carried on the branch
-
-Kernel fixes not yet in main, each a separate `[droppable]` commit (details in the plan and QUASAR_GAPS.md). The revert of #57646 and the tensor_layout leftover were dropped on 2026-10-26: with main's DataflowBuffer drain the op tests, repros and 8x4 e2e give identical results (the drain hangs were fixed upstream by #62092 and #62427).
-
-| Commit | Why | Drop when |
-|---|---|---|
-| `[droppable] slice (Quasar): access the readers' index odometer under a scoped_lock (#62543)` | Q9: stale DM-cache lines from the slice readers' Scratchpad corrupt a later decode rms_norm | [#62543](https://github.com/tenstorrent/tt-metal/pull/62543) lands |
 
 ## Baselines and run times
 
