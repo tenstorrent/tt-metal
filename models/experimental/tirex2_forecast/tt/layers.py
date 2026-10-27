@@ -586,7 +586,7 @@ def slstm_layer(
     ``init``: the state before the first step (see ``slstm_recurrence``). ``time_major``: ``x`` (and the result)
     is ``[T, 1, B, 512]``."""
     WxT = slstm_prepare(x, w, precision, time_major)
-    if SLSTM_KERNEL and init is None and not precision.y_fp32 and steps == WxT.shape[0]:
+    if SLSTM_KERNEL and init is None and not precision.y_fp32:
         from models.experimental.tirex2_forecast.ops.slstm_step.op import slstm_steps
 
         Y, c, n, m = slstm_steps(WxT, w.r, steps)  # fused step kernel, one launch for every step
