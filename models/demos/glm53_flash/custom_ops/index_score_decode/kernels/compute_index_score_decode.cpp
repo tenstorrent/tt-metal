@@ -7,8 +7,10 @@
 //   out_c = Wrow @ S_c             one single-tile matmul per k-tile with the w-row tile (row 0 = the head weights,
 //                                  rows 1.. zero), so row 0 of out_c = sum_h w_h relu(q_h . k_p) over the 32 pools
 // The writer keeps row 0 of every out tile. bf16 DEST half-sync (KC <= 8 tiles in flight), as the shared scorer.
+// With the live bound (BOUNDED, index_score_decode_bound.hpp) the live chunk count arrives from the reader through
+// the mailbox CB 8 (popped once, before any item) and the bands split the live chunks like the reader / writer do.
 //
-// compile-time args: [Dt, KC]
+// compile-time args: [Dt, KC, BOUNDED]
 // runtime args: [item0, n_items, stride, n_bands, band_chunks, total_chunks]
 
 #include <cstdint>
@@ -19,11 +21,13 @@
 #include "api/compute/pack.h"
 #include "api/compute/cb_api.h"
 #include "api/compute/reconfig_data_format.h"
+#include "index_score_decode_bound.hpp"
 
 void kernel_main() {
     constexpr uint32_t Dt = get_compile_time_arg_val(0);
     constexpr uint32_t KC = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_q = 0, cb_k = 1, cb_w = 2, cb_s = 3, cb_out = 4;
+    constexpr uint32_t bounded = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_q = 0, cb_k = 1, cb_w = 2, cb_s = 3, cb_out = 4, cb_bound = 8;
 
     const uint32_t item0 = get_arg_val<uint32_t>(0);
     const uint32_t n_items = get_arg_val<uint32_t>(1);
@@ -34,11 +38,22 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_s);  // matmul: in1 -> srcA, in0 -> srcB
 
+    // the chunks every user's row is scored over: the capacity's static split, or the live chunk count the reader
+    // derived from the bound tensor (the mailbox page, read on the unpack thread and shared with math / pack)
+    uint32_t live = total_chunks;
+    uint32_t per_band = band_chunks;
+    if constexpr (bounded) {
+        cb_wait_front(cb_bound, 1);
+        live = read_tile_value(cb_bound, 0, 0);
+        cb_pop_front(cb_bound, 1);
+        per_band = index_score_band_chunks(live, n_bands);
+    }
+
     for (uint32_t it = 0; it < n_items; ++it) {
         const uint32_t item = item0 + it * stride;
         const uint32_t band = item % n_bands;
-        const uint32_t c_begin = band * band_chunks;
-        const uint32_t c_end = (c_begin + band_chunks < total_chunks) ? (c_begin + band_chunks) : total_chunks;
+        uint32_t c_begin, c_end;
+        index_score_item_range(band, per_band, live, c_begin, c_end);
         if (c_begin >= c_end) {
             continue;
         }

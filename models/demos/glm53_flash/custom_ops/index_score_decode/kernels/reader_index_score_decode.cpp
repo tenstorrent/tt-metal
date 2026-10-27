@@ -5,13 +5,20 @@
 // query block (Hi = 32 index heads as the 32 rows of Dt tiles), a "w-row tile" (row 0 = the user's Hi head
 // weights, the rest zero) and then the band's pooled-key tiles streamed d-major per chunk of KC k-tiles
 // (CB slot i*KC + c = d-tile i of k-tile c: the layout matmul_block wants for a kt x ct B block).
+// With the live bound (BOUNDED, index_score_decode_bound.hpp) the per-chip [1, 1] uint32 bound tensor is read once:
+// the bands then split the LIVE chunks (ceil(bound / (32*KC)), at most the capacity) instead of the capacity, the
+// derived chunk count goes to the compute through the mailbox CB 8, and the pooled keys beyond the bound are never
+// read.
 //
-// compile-time args: [Dt, KC, Tt, k_tile_bytes (2048 bf16 / 1088 bfp8_b)] + TensorAccessorArgs(q, k, w)
-// runtime args: [item0, n_items, stride, q_addr, k_addr, w_addr, n_bands, band_chunks, total_chunks]
+// compile-time args: [Dt, KC, Tt, k_tile_bytes (2048 bf16 / 1088 bfp8_b), slot_base, slot_stride, slot_pages,
+//                     BOUNDED] + TensorAccessorArgs(q, k, w, bound-or-placeholder)
+// runtime args: [item0, n_items, stride, q_addr, k_addr, w_addr, n_bands, band_chunks, total_chunks, bound_addr,
+//                bound_page_bytes]
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "index_score_decode_bound.hpp"
 
 void kernel_main() {
     constexpr uint32_t Dt = get_compile_time_arg_val(0);
@@ -21,10 +28,12 @@ void kernel_main() {
     constexpr uint32_t slot_base = get_compile_time_arg_val(4);    // user b's pool slot = slot_base + b * slot_stride
     constexpr uint32_t slot_stride = get_compile_time_arg_val(5);  // (1: user b = slot b; 0: every user = slot_base)
     constexpr uint32_t slot_pages = get_compile_time_arg_val(6);   // tile pages per slot (the cache width x Dt)
-    constexpr auto q_args = TensorAccessorArgs<7>();
+    constexpr uint32_t bounded = get_compile_time_arg_val(7);      // 1: the live bound tensor is read (below)
+    constexpr auto q_args = TensorAccessorArgs<8>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
-    constexpr uint32_t cb_q = 0, cb_k = 1, cb_w = 2, cb_wfaces = 6;
+    constexpr auto bound_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_q = 0, cb_k = 1, cb_w = 2, cb_wfaces = 6, cb_bound = 8;
     constexpr uint32_t tile_bytes = 2048;  // bf16 32x32
     constexpr uint32_t face_bytes = 512;
     constexpr uint32_t row_bytes = 32;  // 16 bf16 of one face row
@@ -38,17 +47,37 @@ void kernel_main() {
     const uint32_t n_bands = get_arg_val<uint32_t>(6);
     const uint32_t band_chunks = get_arg_val<uint32_t>(7);
     const uint32_t total_chunks = get_arg_val<uint32_t>(8);
+    const uint32_t bound_addr = get_arg_val<uint32_t>(9);
+    const uint32_t bound_page_bytes = get_arg_val<uint32_t>(10);
 
     const auto q_acc = TensorAccessor(q_args, q_addr, tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
     const auto w_acc = TensorAccessor(w_args, w_addr, tile_bytes);
 
+    // the chunks every user's row is scored over and the per-band split: the capacity's static split, or the live
+    // bound's (one 64 B read; the derived chunk count is handed to the compute through the mailbox CB)
+    uint32_t live = total_chunks;
+    uint32_t per_band = band_chunks;
+    if constexpr (bounded) {
+        const auto bound_acc = TensorAccessor(bound_args, bound_addr, bound_page_bytes);
+        cb_reserve_back(cb_bound, 1);
+        const uint32_t l1 = get_write_ptr(cb_bound);
+        noc_async_read(bound_acc.get_noc_addr(0), l1, bound_page_bytes);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        volatile tt_l1_ptr uint32_t* word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
+        live = index_score_live_chunks(word[0], Tt, KC);
+        per_band = index_score_band_chunks(live, n_bands);
+        word[0] = live;
+        cb_push_back(cb_bound, 1);
+    }
+
     for (uint32_t it = 0; it < n_items; ++it) {
         const uint32_t item = item0 + it * stride;
         const uint32_t b = item / n_bands;
         const uint32_t band = item % n_bands;
-        const uint32_t c_begin = band * band_chunks;
-        const uint32_t c_end = (c_begin + band_chunks < total_chunks) ? (c_begin + band_chunks) : total_chunks;
+        uint32_t c_begin, c_end;
+        index_score_item_range(band, per_band, live, c_begin, c_end);
         if (c_begin >= c_end) {
             continue;  // the compute / writer skip the same items
         }
@@ -101,4 +130,5 @@ void kernel_main() {
             cb_push_back(cb_k, KC * Dt);
         }
     }
+    noc_async_full_barrier();
 }

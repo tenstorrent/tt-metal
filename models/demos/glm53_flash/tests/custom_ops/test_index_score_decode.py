@@ -283,3 +283,73 @@ def test_index_score_decode_prefill_rows_vs_shared_op(mesh_device):
     assert worst_pcc > 0.999 and worst_ov > 0.97
     for t in (pools, w_t, q_h, ref_t, q_r, v_t, o_t):
         ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"trace_region_size": 16 * 1024 * 1024, "l1_small_size": 32768}], indirect=True
+)
+@pytest.mark.parametrize("B", [1, 4, 8])
+def test_index_score_decode_live_bound(mesh_device, B):
+    """The live bound (``bound`` [1, 1] uint32, custom_ops/sparse_bound.py; the decode knob GLM53_SPARSE_DECODE_BOUND):
+    the scorer scores and writes the first ``ceil(min(bound, W) / 256)`` chunks of every user's row only, bit-identical
+    to the masked (v2) output there, and leaves the columns beyond untouched (the pre-filled marker survives); in the
+    segmented layout too; under trace with the bound refreshed in place (a wider bound writes more columns)."""
+    from models.demos.glm53_flash.custom_ops.sparse_bound import live_bound_pools, live_chunks
+
+    W = 262400
+    op = IndexScoreDecode(mesh_device)
+    q, k, w = _inputs(B, W, 41 + B)
+    q_t, w_t, k_t, o_mask = _device(mesh_device, q, k, w)
+    g = torch.Generator().manual_seed(41 + B)
+    valid = torch.randint(K, 3000, (B,), generator=g)
+    valid[0] = K
+    v_t = ttnn.from_torch(valid.reshape(B, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k_t, o_mask, valid_rows=v_t)
+    masked = ttnn.to_torch(o_mask).float().reshape(B, W)
+    bound = live_bound_pools(valid.tolist())
+    live_cols = live_chunks(bound, W) * 256
+    b_t = ttnn.from_torch(
+        torch.tensor([[bound]], dtype=torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+    )
+    marker = torch.full((B, 1, 1, W), 7.0).bfloat16()  # a finite marker: untouched columns keep it
+    o_b = ttnn.from_torch(marker, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op(q_t, w_t, k_t, o_b, valid_rows=v_t, bound=b_t)
+    got = ttnn.to_torch(o_b).float().reshape(B, W)
+    ok_live = torch.equal(got[:, :live_cols], masked[:, :live_cols])
+    ok_rest = bool((got[:, live_cols:] == 7.0).all())
+    logger.info(
+        f"live bound B={B}: valid {valid.tolist()} -> bound {bound} ({live_cols} columns scored of {W}); live columns "
+        f"equal {ok_live}, columns beyond untouched {ok_rest}"
+    )
+    assert ok_live and ok_rest
+    # the segmented layout (S = 5 pages of W/5 columns per user): the live columns land in page 0 of every user
+    S = 5
+    o_seg = ttnn.from_torch(
+        marker.reshape(B * S, 1, 1, W // S).contiguous(),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+    )
+    op(q_t, w_t, k_t, o_seg, valid_rows=v_t, segments=S, bound=b_t)
+    segd = ttnn.to_torch(o_seg).float().reshape(B, W)
+    assert torch.equal(segd[:, :live_cols], masked[:, :live_cols]) and bool((segd[:, live_cols:] == 7.0).all())
+    # trace: the captured program follows the refreshed bound (wider: 3 x the live chunks)
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(marker, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT), o_b)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    op(q_t, w_t, k_t, o_b, valid_rows=v_t, bound=b_t)
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    bound2 = 3 * live_cols
+    ttnn.copy_host_to_device_tensor(
+        ttnn.from_torch(torch.tensor([[bound2]], dtype=torch.int64), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+        b_t,
+    )
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    got2 = ttnn.to_torch(o_b).float().reshape(B, W)
+    live2 = live_chunks(bound2, W) * 256
+    ok2 = torch.equal(got2[:, :live2], masked[:, :live2]) and bool((got2[:, live2:] == 7.0).all())
+    logger.info(f"live bound B={B} trace replay at bound {bound2}: {live2} columns scored, equal {ok2}")
+    assert ok2
+    ttnn.release_trace(mesh_device, tid)
+    for t in (q_t, w_t, k_t, o_mask, v_t, b_t, o_b, o_seg):
+        ttnn.deallocate(t)

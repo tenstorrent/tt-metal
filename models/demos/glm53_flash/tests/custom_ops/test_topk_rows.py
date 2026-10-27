@@ -205,3 +205,66 @@ def test_topk_rows_segmented(mesh_device, W, B):
     logger.info(f"segmented topk W={W} B={B} S={S}: {t_seg:.3f} ms (two stages) vs single-stage {t_one:.3f} ms")
     for t in (seg_t, ids1, vals1, out_t, full_t, vr):
         ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("W,B", [(262400, 4), (262400, 8)])
+def test_topk_rows_segmented_live_bound(mesh_device, W, B):
+    """``segmented(..., valid_rows=...)`` (the live-bound stage 1, custom_ops/sparse_bound.py): every segment row ranks the
+    user's live columns in it only (empty segments synthesized as -inf in L1), reading nothing beyond ``valid[u]``:
+    the stage-1 tables and the final ids must be BIT-IDENTICAL to the unbounded ``segmented`` call on the same rows
+    (the dropped chunks are entirely -inf, below every finite survivor; the W = 262 400 geometry is the served 1 M
+    build's: S = 5 segments of 52 480 columns = 103 chunks, the classic body). The columns beyond each user's bound
+    hold a finite MARKER here, not -inf: the bounded call must not read them."""
+    op = TopkRows(mesh_device)
+    S = op.segments_for(W)
+    assert S > 1, (W, S)
+    Wseg = W // S
+    g = torch.Generator().manual_seed(W + 11 * B)
+    scores = torch.randn(B, 1, 1, W, generator=g).bfloat16()
+    # users across the regimes: the dense minimum, inside segment 0, straddling segments 0/1 and 1/2, the full width
+    valid = torch.randint(K, 3 * Wseg, (B,), generator=g)
+    valid[0] = K
+    valid[1 % B] = Wseg + 1
+    valid[-1] = W if B > 2 else valid[-1]
+    masked = scores.clone()
+    for b in range(B):
+        masked[b, 0, 0, int(valid[b]) :] = float("-inf")
+    marked = scores.clone()
+    for b in range(B):
+        marked[b, 0, 0, int(valid[b]) :] = 9.0  # finite, larger than every real score: a read of it would rank
+    seg_ref = masked.reshape(B * S, 1, 1, Wseg).contiguous()
+    seg_b = marked.reshape(B * S, 1, 1, Wseg).contiguous()
+    ref_t = ttnn.from_torch(seg_ref, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    b_t = ttnn.from_torch(seg_b, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    v_t = ttnn.from_torch(valid.reshape(B, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    mk = lambda dt: ttnn.zeros((B, 1, 1, S * K), dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    ids1_r, vals1_r, ids1_b, vals1_b = mk(ttnn.uint32), mk(ttnn.float32), mk(ttnn.uint32), mk(ttnn.float32)
+    out_r = ttnn.zeros((B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    out_b = ttnn.zeros((B, 1, 1, K), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    op.segmented(ref_t, S, ids1_r, vals1_r, out_r)
+    op.segmented(b_t, S, ids1_b, vals1_b, out_b, valid_rows=v_t)
+    same_out = torch.equal(ttnn.to_torch(out_r), ttnn.to_torch(out_b))
+    same_ids1 = torch.equal(ttnn.to_torch(ids1_r), ttnn.to_torch(ids1_b))
+    same_vals1 = torch.equal(ttnn.to_torch(vals1_r), ttnn.to_torch(vals1_b))
+    ok, common = _check(masked, valid, ttnn.to_torch(out_b).long())
+    logger.info(
+        f"segmented live bound W={W} B={B} S={S} valid {valid.tolist()}: out identical {same_out}, stage-1 ids identical "
+        f"{same_ids1}, stage-1 values identical {same_vals1}; vs torch ok {ok}, common ids {common}/{B * K}"
+    )
+    assert ok and same_out and same_ids1 and same_vals1
+
+    def bench(fn, n=5):
+        fn()
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            fn()
+        ttnn.synchronize_device(mesh_device)
+        return (time.perf_counter() - t0) / n * 1e3
+
+    t_ref = bench(lambda: op.segmented(ref_t, S, ids1_r, vals1_r, out_r))
+    t_b = bench(lambda: op.segmented(b_t, S, ids1_b, vals1_b, out_b, valid_rows=v_t))
+    logger.info(f"segmented live bound W={W} B={B}: {t_b:.3f} ms bounded vs {t_ref:.3f} ms unbounded (two stages)")
+    for t in (ref_t, b_t, v_t, ids1_r, vals1_r, ids1_b, vals1_b, out_r, out_b):
+        ttnn.deallocate(t)

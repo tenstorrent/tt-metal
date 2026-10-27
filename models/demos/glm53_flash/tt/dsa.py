@@ -49,6 +49,7 @@ from models.demos.glm53_flash.custom_ops.dsa_decode_state.op import DsaDecodeSta
 from models.demos.glm53_flash.custom_ops.index_score_decode.op import IndexScoreDecode
 from models.demos.glm53_flash.custom_ops.kda_decode.op import selector_tiles
 from models.demos.glm53_flash.custom_ops.paged_pool_gather.op import PagedPoolGather
+from models.demos.glm53_flash.custom_ops.sparse_bound import live_bound_pools
 from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
@@ -97,6 +98,16 @@ DSA_DECODE_STATE_MODES = ("0", "1", "latent")
 # it changes; ``clear_graph_regime`` is the eager caller's reset. Read at construction (``pool_gather_mode``).
 POOL_GATHER_ENV = "GLM53_POOL_GATHER"
 POOL_GATHER_MODES = ("gather", "dense_skip")
+# GLM53_SPARSE_DECODE_BOUND (2026-10-27): "1" = the traced multi-user decode's scorer and segmented top-k loop to the
+# step's LIVE pool bound (``SparseDecodeMeta.live_bound``, a per-chip [1, 1] uint32 refreshed with the other per-step
+# tensors: the largest per-user top-k width, rounded to ``custom_ops/sparse_bound.GRANULE``) instead of the pool
+# capacity the model was built with: a served model is built at 1 M positions (262 400 pools per user) and every decode
+# step scored, masked and ranked all of them for every user (one DSA layer at position 1024 on the Galaxy: scorer 731 us
+# + segmented top-k 249 us against 11 + 5 us when built at 1088 positions). The ranked ids and the attention are the
+# unbounded path's (``tests/test_sparse_decode_bound_mesh.py``); "0" (default until that block test passes) = today's
+# capacity-wide graph. Read at construction (``sparse_decode_bound_enabled``); the compact flash-MLA decode is untouched:
+# its page table is the [B, 65]-block identity of the compact cache already (73 us at either capacity).
+SPARSE_BOUND_ENV = "GLM53_SPARSE_DECODE_BOUND"
 # prefill stems (q_a, kv_a, q_b, the indexer's q): "fixed" (default: M-independent prefill_linear) | "default"
 PREFILL_STEMS = os.environ.get("GLM53_PREFILL_STEMS", "fixed")
 # The whole-prefix ROW_MAJOR latent copy of the sparse prefill (the sparse_sdpa kv contract), per DSA layer and
@@ -156,6 +167,15 @@ def pool_gather_mode(env=None) -> str:
     if mode not in POOL_GATHER_MODES:
         raise ValueError(f"{POOL_GATHER_ENV}={mode!r}: expected one of {POOL_GATHER_MODES}")
     return mode
+
+
+def sparse_decode_bound_enabled(env=None) -> bool:
+    """The ``GLM53_SPARSE_DECODE_BOUND`` knob (default off)."""
+    env = os.environ if env is None else env
+    mode = env.get(SPARSE_BOUND_ENV, "0")
+    if mode not in ("0", "1"):
+        raise ValueError(f"{SPARSE_BOUND_ENV}={mode!r}: expected 0 or 1")
+    return mode == "1"
 
 
 def dense_exact_max_pos(cfg: GLM53FlashConfig) -> int:
@@ -330,6 +350,10 @@ class SparseDecodeMeta:
     # [B, 1] uint32: the same per-user top-k bounds as ``valid_len`` in one tensor (one 4-byte page per user) for
     # the batched ``topk_large_indices`` call over all users' score rows (``GLM53_TOPK_BATCHED``, default on)
     valid_len_rows: ttnn.Tensor | None = None
+    # [1, 1] uint32 per chip: the chip's live pool bound (``live_bound_values``: the largest of its users' ``valid``,
+    # rounded up to ``sparse_bound.GRANULE``, not clamped to the capacity) that the scorer / segmented top-k loop to
+    # under ``GLM53_SPARSE_DECODE_BOUND=1``; always built and refreshed (one 4-byte page), used only with the knob
+    live_bound: ttnn.Tensor | None = None
     # host regime of the step (``dense_regime``): every slot at a position <= 2050 -> the dense-skip graph
     # (``GLM53_POOL_GATHER=dense_skip``) is exact; refreshed by ``update``
     all_dense: bool = False
@@ -359,6 +383,13 @@ class SparseDecodeMeta:
             torch.tensor(tail, dtype=torch.int64).reshape(B, 1, 1, 1),
             torch.tensor(cur, dtype=torch.int32),
         )
+
+    @staticmethod
+    def live_bound_values(valid: torch.Tensor, R: int, C: int, B: int) -> torch.Tensor:
+        """[R*C, 1] int64: the live pool bound of every chip group (chip (r, c) = row r*C + c) for the per-user top-k
+        widths ``valid`` [R*C*B] (``host_values``): ``sparse_bound.live_bound_pools`` of the group's B users."""
+        vl = valid.reshape(R * C, B).tolist()
+        return torch.tensor([live_bound_pools(v) for v in vl], dtype=torch.int64).reshape(R * C, 1)
 
     @staticmethod
     def _chips(mesh: GLMMesh | None, partition: bool) -> tuple[int, int]:
@@ -395,6 +426,7 @@ class SparseDecodeMeta:
             host=list(positions),
             users_per_chip=B,
             valid_len_rows=_meta_upload(device, valid.reshape(-1, 1).contiguous(), ttnn.uint32, mesh, partition),
+            live_bound=_meta_upload(device, cls.live_bound_values(valid, R, C, B), ttnn.uint32, mesh, partition),
             all_dense=dense_regime(positions, cfg),
         )
 
@@ -454,6 +486,8 @@ class SparseDecodeMeta:
         put(tail, ttnn.uint32, self.tail_pool)
         if self.valid_len_rows is not None:
             put(valid.reshape(-1, 1).contiguous(), ttnn.uint32, self.valid_len_rows)
+        if self.live_bound is not None:
+            put(self.live_bound_values(valid, R, C, B), ttnn.uint32, self.live_bound)
         put(cur, ttnn.int32, self.cur_pos)
 
 
@@ -936,6 +970,9 @@ class TtDSA(LightweightModule):
         # the batched one-query-per-user indexer scorer (model-local generic op) and its persistent score rows
         self.index_scorer = IndexScoreDecode(device)
         self._score_buf: dict[int, ttnn.Tensor] = {}
+        # GLM53_SPARSE_DECODE_BOUND: the scorer / segmented top-k loop to the step's live pool bound (``SPARSE_BOUND_ENV``).
+        # An instance attribute so a test can A/B it on one model (flipping it changes the graph: re-capture the trace)
+        self.sparse_bound = sparse_decode_bound_enabled()
 
     def _init_decode_state(self, sd: dict[str, torch.Tensor], wkb1: torch.Tensor, wkb2: torch.Tensor, weight_dtype):
         """The ``dsa_decode_state`` program's constants (fp32 norm weights -- bf16 checkpoint values, so exactly the
@@ -2041,6 +2078,10 @@ class TtDSA(LightweightModule):
             q4 = ttnn.transpose(q_i, 1, 2)  # [1,B,Hi,D]
             ttnn.deallocate(q_i)
             W = cache.index.pools_per_user
+            # GLM53_SPARSE_DECODE_BOUND=1: the scorer scores / writes the first ``live_bound`` columns only (its bands
+            # split the live chunks) and the segmented top-k's stage 1 ranks each user's live columns per segment; the
+            # single-stage top-k ranks [0, valid[u]) either way. Bit-identical ids (custom_ops/sparse_bound.py).
+            bound = meta.live_bound if self.sparse_bound else None
             # GLM53_TOPK_SEGMENTS=1 (default; wide pool caches only, segments_for): the scorer masks the columns beyond
             # each user's bound (-inf) and writes S segment rows per user; the top-k runs in two stages (S cores per
             # user, then the S*512 candidates) instead of one serial row per core (1.26 ms at 262 K pools)
@@ -2048,15 +2089,37 @@ class TtDSA(LightweightModule):
             if S > 1:
                 seg_buf, ids1, vals1 = self._score_buffers(B, W, S)
                 self.index_scorer(
-                    q4, w_i, cache.index.pools_batched(), seg_buf, valid_rows=meta.valid_len_rows, segments=S
+                    q4,
+                    w_i,
+                    cache.index.pools_batched(),
+                    seg_buf,
+                    valid_rows=meta.valid_len_rows,
+                    segments=S,
+                    bound=bound,
                 )
                 ttnn.deallocate(q4)
                 ttnn.deallocate(w_i)
                 self._mark("index_score")
-                top = self.topk_rows.segmented(seg_buf, S, ids1, vals1, self._top_buffer(B))  # [B,1,1,K] uint32
+                top = self.topk_rows.segmented(
+                    seg_buf,
+                    S,
+                    ids1,
+                    vals1,
+                    self._top_buffer(B),
+                    valid_rows=meta.valid_len_rows if bound is not None else None,
+                )  # [B,1,1,K] uint32
                 self._mark("topk")
                 return self._gather_and_attend(top, q_lat, cache, meta, B, P, out_persistent=True)
-            rows = self.index_scorer(q4, w_i, cache.index.pools_batched(), self._score_buffers(B, W, 1))  # [B,1,1,W]
+            # the bounded scorer runs the masked (v2) writer: the same scores in [0, valid[u]), the columns the single-stage
+            # top-k reads; -inf beyond, up to the bound (the unbounded form writes the raw scores over the whole width)
+            rows = self.index_scorer(
+                q4,
+                w_i,
+                cache.index.pools_batched(),
+                self._score_buffers(B, W, 1),
+                valid_rows=meta.valid_len_rows if bound is not None else None,
+                bound=bound,
+            )  # [B,1,1,W]
             ttnn.deallocate(q4)
             ttnn.deallocate(w_i)
             self._mark("index_score")

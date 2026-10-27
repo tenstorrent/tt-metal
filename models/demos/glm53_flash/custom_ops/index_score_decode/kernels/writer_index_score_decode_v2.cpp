@@ -7,14 +7,18 @@
 // seg_cols columns per page, page b * segs_per_user + segment (the two-stage top-k's per-segment rows).
 // Per chunk: row 0 of each of the KC out tiles (two 32-byte face pieces) is assembled into one 64*KC-byte line,
 // masked, and written at the chunk's column of the user's row / segment.
+// With the live bound (BOUNDED, index_score_decode_bound.hpp) the per-chip [1, 1] uint32 bound tensor is read once
+// and the bands split the LIVE chunks (as the reader / compute do): the columns beyond the bound are never written.
 //
 // compile-time args: [KC] + TensorAccessorArgs(out) + [seg_cols, segs_per_user] + TensorAccessorArgs(valid)
+//                    + [BOUNDED] + TensorAccessorArgs(bound-or-placeholder)
 // runtime args: [item0, n_items, stride, out_addr, out_page_bytes, n_bands, band_chunks, total_chunks, valid_addr,
-//                valid_page_bytes]
+//                valid_page_bytes, bound_addr, bound_page_bytes]
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "index_score_decode_bound.hpp"
 
 void kernel_main() {
     constexpr uint32_t KC = get_compile_time_arg_val(0);
@@ -23,6 +27,9 @@ void kernel_main() {
     constexpr uint32_t seg_cols = get_compile_time_arg_val(v2_base);  // elements per output page (W / segments)
     constexpr uint32_t segs_per_user = get_compile_time_arg_val(v2_base + 1);
     constexpr auto valid_args = TensorAccessorArgs<v2_base + 2>();
+    constexpr uint32_t b_base = valid_args.next_compile_time_args_offset();
+    constexpr uint32_t bounded = get_compile_time_arg_val(b_base);  // 1: the live bound tensor is read (below)
+    constexpr auto bound_args = TensorAccessorArgs<b_base + 1>();
     constexpr uint32_t cb_out = 4, cb_line = 5, cb_valid = 7;
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t face_bytes = 512;
@@ -41,19 +48,35 @@ void kernel_main() {
     const uint32_t total_chunks = get_arg_val<uint32_t>(7);
     const uint32_t valid_addr = get_arg_val<uint32_t>(8);
     const uint32_t valid_page_bytes = get_arg_val<uint32_t>(9);
+    const uint32_t bound_addr = get_arg_val<uint32_t>(10);
+    const uint32_t bound_page_bytes = get_arg_val<uint32_t>(11);
 
     const auto out_acc = TensorAccessor(out_args, out_addr, out_page_bytes);
     const auto valid_acc = TensorAccessor(valid_args, valid_addr, valid_page_bytes);
     const uint32_t line_base = get_write_ptr(cb_line);  // 2 lines, alternated (scratch, never pushed)
-    const uint32_t valid_l1 = get_write_ptr(cb_valid);
+    const uint32_t valid_l1 = get_write_ptr(cb_valid);  // one 64 B page: the bound (once), then the users' bounds
+
+    // the chunks every user's row is written over and the per-band split (the reader's derivation; the capacity's
+    // static split without a bound). Tt = total_chunks * KC tiles of 32 pools is the capacity.
+    uint32_t live = total_chunks;
+    uint32_t per_band = band_chunks;
+    if constexpr (bounded) {
+        const auto bound_acc = TensorAccessor(bound_args, bound_addr, bound_page_bytes);
+        noc_async_read(bound_acc.get_noc_addr(0), valid_l1, bound_page_bytes);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        const uint32_t pools = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(valid_l1)[0];
+        live = index_score_live_chunks(pools, total_chunks * KC, KC);
+        per_band = index_score_band_chunks(live, n_bands);
+    }
 
     uint32_t n = 0;
     for (uint32_t it = 0; it < n_items; ++it) {
         const uint32_t item = item0 + it * stride;
         const uint32_t b = item / n_bands;
         const uint32_t band = item % n_bands;
-        const uint32_t c_begin = band * band_chunks;
-        const uint32_t c_end = (c_begin + band_chunks < total_chunks) ? (c_begin + band_chunks) : total_chunks;
+        uint32_t c_begin, c_end;
+        index_score_item_range(band, per_band, live, c_begin, c_end);
         if (c_begin >= c_end) {
             continue;
         }
@@ -93,4 +116,5 @@ void kernel_main() {
         }
     }
     noc_async_write_barrier();
+    noc_async_full_barrier();
 }
