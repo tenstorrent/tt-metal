@@ -5,12 +5,16 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
+#include <mutex>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt_stl/indestructible.hpp>
 
 #include "device/matmul_reduce_scatter_prefill_device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -58,6 +62,44 @@ std::vector<std::vector<Coord>> build_groups(uint32_t rows, uint32_t cols, int32
     return groups;
 }
 
+// The fewest forwarding links over every hop of the groups along cluster_axis, both directions, ring wrap included.
+size_t count_usable_links(tt::tt_metal::distributed::MeshDevice* mesh, int32_t cluster_axis, bool ring) {
+    const auto& mesh_shape = mesh->shape();
+    auto node = [&](const Coord& c) { return mesh->get_fabric_node_id(ttnn::MeshCoordinate(c.first, c.second)); };
+    size_t avail = std::numeric_limits<size_t>::max();
+    for (const auto& group : build_groups(mesh_shape[0], mesh_shape[1], cluster_axis)) {
+        std::vector<std::pair<Coord, Coord>> pairs;
+        for (size_t i = 0; i + 1 < group.size(); ++i) {
+            pairs.emplace_back(group[i], group[i + 1]);
+        }
+        if (ring) {
+            pairs.emplace_back(group.back(), group.front());
+        }
+        for (const auto& [s, d] : pairs) {
+            avail = std::min(avail, tt::tt_fabric::get_forwarding_link_indices(*mesh, node(s), node(d)).size());
+            avail = std::min(avail, tt::tt_fabric::get_forwarding_link_indices(*mesh, node(d), node(s)).size());
+        }
+    }
+    return avail;
+}
+
+// count_usable_links, counted on a mesh's first call per (axis, ring, fabric config) and read on every later one. The
+// count walks a control-plane route per link of every hop (64 lookups on an 8x4 ring), the bulk of a hot call's host
+// time; the routing tables it reads are fixed while the mesh is open (SetFabricConfig is refused with devices open)
+// and mesh ids are never reused, so the count cannot change under its key.
+size_t usable_links(tt::tt_metal::distributed::MeshDevice* mesh, int32_t cluster_axis, bool ring) {
+    using Key = std::tuple<int, int32_t, bool, tt::tt_fabric::FabricConfig>;
+    static ttsl::Indestructible<std::map<Key, size_t>> counts;
+    static std::mutex counts_mutex;
+    const Key key{mesh->id(), cluster_axis, ring, tt::tt_fabric::GetFabricConfig()};
+    const std::lock_guard<std::mutex> lock(counts_mutex);
+    auto it = counts.get().find(key);
+    if (it == counts.get().end()) {
+        it = counts.get().emplace(key, count_usable_links(mesh, cluster_axis, ring)).first;
+    }
+    return it->second;
+}
+
 }  // namespace
 
 }  // namespace operations::experimental::ccl::matmul_reduce_scatter_prefill
@@ -90,8 +132,6 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     TT_FATAL(mesh != nullptr, "matmul_reduce_scatter_prefill: input_tensor must be on a mesh device");
     const auto& mesh_shape = mesh->shape();
     TT_FATAL(mesh_shape.dims() == 2, "matmul_reduce_scatter_prefill: the mesh must be 2D, got {}", mesh_shape);
-    const uint32_t rows = mesh_shape[0];
-    const uint32_t cols = mesh_shape[1];
     const uint32_t G = mesh_shape[cluster_axis];
     TT_FATAL(G >= 2, "matmul_reduce_scatter_prefill: cluster_axis {} has {} device(s); need >= 2", cluster_axis, G);
     const auto& a_shape = input_tensor.logical_shape();
@@ -115,21 +155,7 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         "matmul_reduce_scatter_prefill: Ring along axis {} needs a fabric config that wraps it (active: {})",
         cluster_axis,
         static_cast<uint32_t>(tt::tt_fabric::GetFabricConfig()));
-    auto node = [&](const Coord& c) { return mesh->get_fabric_node_id(ttnn::MeshCoordinate(c.first, c.second)); };
-    size_t avail = std::numeric_limits<size_t>::max();
-    for (const auto& group : build_groups(rows, cols, cluster_axis)) {
-        std::vector<std::pair<Coord, Coord>> pairs;
-        for (size_t i = 0; i + 1 < group.size(); ++i) {
-            pairs.emplace_back(group[i], group[i + 1]);
-        }
-        if (ring) {
-            pairs.emplace_back(group.back(), group.front());
-        }
-        for (const auto& [s, d] : pairs) {
-            avail = std::min(avail, tt::tt_fabric::get_forwarding_link_indices(*mesh, node(s), node(d)).size());
-            avail = std::min(avail, tt::tt_fabric::get_forwarding_link_indices(*mesh, node(d), node(s)).size());
-        }
-    }
+    const size_t avail = usable_links(mesh, cluster_axis, ring);
     TT_FATAL(avail > 0, "matmul_reduce_scatter_prefill: a hop of the group has no usable fabric link (no wrap link?)");
     uint32_t L = static_cast<uint32_t>(avail);
     if (num_links.has_value()) {
