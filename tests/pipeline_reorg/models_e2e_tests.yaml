@@ -1822,7 +1822,7 @@
   budget_type: e2e
 
 # ── WAN 2.2 (Black Hole single galaxy, bh_sc1) ───────────────────
-- name: TT-DiT Wan2.2-T2V-A14B single galaxy e2e tests
+- name: TT-DiT Wan2.2-T2V-A14B single galaxy perf tests
   cmd: |
     unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
     export NO_PROMPT=1
@@ -1851,7 +1851,7 @@
   team: models
   budget_type: e2e
 
-- name: TT-DiT Wan2.2-I2V-A14B single galaxy e2e tests
+- name: TT-DiT Wan2.2-I2V-A14B single galaxy perf tests
   cmd: |
     unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
     export NO_PROMPT=1
@@ -1908,7 +1908,7 @@
   team: models
   budget_type: e2e
 
-- name: TT-DiT LTX-2.3 Fast T2V e2e tests
+- name: TT-DiT LTX-2.3 Fast T2V perf tests
   cmd: |
     export NO_PROMPT=1
     export HF_HUB_OFFLINE=1
