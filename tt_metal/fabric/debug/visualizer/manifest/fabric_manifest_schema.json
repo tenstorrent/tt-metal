@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Fabric manifest",
-  "description": "The shape of a fabric manifest (README.md in this directory). Fields are described by kind, not by key: FIELDS.md names each key. Values the manifest defines (channel status, credit backing, stream register, field kind and category) are enumerated here; enums from the rest of fabric are lower-case names, and vocabulary lists every name each label key can hold.",
+  "description": "The shape of a fabric manifest (docs/FORMAT.md in this directory). Fields are described by kind, not by key: docs/FIELDS.md names each key. Values the manifest defines (channel status, credit backing, stream register, field kind and category) are enumerated here; enums from the rest of fabric are lower-case names, and vocabulary lists every name each label key can hold.",
   "type": "object",
   "properties": {
     "manifest_version": { "const": 1 },
@@ -612,7 +612,7 @@
     },
 
     "fields": {
-      "description": "Keyed by the field's key (FIELDS.md lists them). Null for a buffer or stream register the builder did not allocate.",
+      "description": "Keyed by the field's key (docs/FIELDS.md lists them). Null for a buffer or stream register the builder did not allocate.",
       "type": "object",
       "propertyNames": { "$ref": "#/$defs/name" },
       "additionalProperties": { "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/field" }] }
