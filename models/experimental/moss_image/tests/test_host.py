@@ -27,13 +27,9 @@ def test_time_embedding_matches_official_phase():
 
 
 def test_invalid_prompt_limits_fail_before_tokenization():
-    with pytest.raises(
-        ValueError, match="4096"
-    ):  # allow-pytest.raises: host-only checks run without native TTNN fixtures
+    with pytest.raises(ValueError, match="4096"):  # allow-pytest.raises: host-only validation
         format_prompt(None, "fox", 4097)
-    with pytest.raises(
-        TypeError, match="string"
-    ):  # allow-pytest.raises: host-only checks run without native TTNN fixtures
+    with pytest.raises(TypeError, match="string"):  # allow-pytest.raises: host-only validation
         format_prompt(None, ["fox"])
 
 
@@ -53,9 +49,7 @@ def test_invalid_weight_index_paths(tmp_path, name):
     (tmp_path / "diffusion_pytorch_model.safetensors.index.json").write_text(
         json.dumps({"weight_map": {"weight": name}})
     )
-    with pytest.raises(
-        ValueError, match="Invalid checkpoint shard path"
-    ):  # allow-pytest.raises: host-only checks run without native TTNN fixtures
+    with pytest.raises(ValueError, match="Invalid checkpoint shard path"):  # allow-pytest.raises: host-only validation
         SafeWeights(tmp_path)
 
 
@@ -94,23 +88,17 @@ def test_capture_file_integrity(tmp_path, damage):
         (tmp_path / "tensor.pt").unlink()
     elif damage == "tampered":
         (tmp_path / "tensor.pt").write_bytes(b"tampered")
-    with pytest.raises(
-        (ValueError, FileNotFoundError)
-    ):  # allow-pytest.raises: host-only checks run without native TTNN fixtures
+    with pytest.raises((ValueError, FileNotFoundError)):  # allow-pytest.raises: host-only validation
         capture.load("tensor")
 
 
 def test_manifest_pin_and_guidance_mismatch(tmp_path):
     path, manifest = fake_capture(tmp_path)
-    with pytest.raises(
-        ValueError, match="manifest digest"
-    ):  # allow-pytest.raises: host-only checks run without native TTNN fixtures
+    with pytest.raises(ValueError, match="manifest digest"):  # allow-pytest.raises: host-only validation
         Capture(tmp_path, "0" * 64, "Base")
     manifest["guidance_scale"] = 1.0
     path.write_text(json.dumps(manifest))
-    with pytest.raises(
-        ValueError, match="guidance"
-    ):  # allow-pytest.raises: host-only checks run without native TTNN fixtures
+    with pytest.raises(ValueError, match="guidance"):  # allow-pytest.raises: host-only validation
         Capture(tmp_path, digest(path), "Base")
 
 
@@ -122,9 +110,7 @@ def test_pcc_does_not_hide_gain_error():
 
 
 def test_nonfinite_comparison_fails():
-    with pytest.raises(
-        ValueError, match="Nonfinite"
-    ):  # allow-pytest.raises: host-only checks run without native TTNN fixtures
+    with pytest.raises(ValueError, match="Nonfinite"):  # allow-pytest.raises: host-only validation
         metrics(torch.tensor([float("nan")]), torch.ones(1))
 
 
@@ -162,9 +148,7 @@ def test_missing_cuda_reference_skips(tmp_path, monkeypatch, ci):
         monkeypatch.delenv("CI", raising=False)
     else:
         monkeypatch.setenv("CI", ci)
-    with pytest.raises(
-        pytest.skip.Exception, match="Missing pinned MOSS CUDA reference"
-    ):  # allow-pytest.raises: host-only fixture validation
+    with pytest.raises(pytest.skip.Exception, match="Missing pinned MOSS CUDA reference"):  # allow-pytest.raises: skip
         # Exercise the real fixture without requesting a hardware fixture.
         moss_assets.__wrapped__(SimpleNamespace(param="Base"))
 
@@ -188,9 +172,7 @@ def test_missing_checkpoint_skips(tmp_path):
     from models.experimental.moss_image.tests.conftest import _load_assets
 
     path, _ = fake_capture(tmp_path)
-    with pytest.raises(
-        pytest.skip.Exception, match="Missing MOSS Base checkpoint"
-    ):  # allow-pytest.raises: host-only fixture validation
+    with pytest.raises(pytest.skip.Exception, match="Missing MOSS Base checkpoint"):  # allow-pytest.raises: skip
         _load_assets(tmp_path, "Base", {"capture": ".", "manifest_sha256": digest(path)})
 
 
