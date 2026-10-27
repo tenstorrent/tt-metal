@@ -113,6 +113,11 @@ struct MatmulDecodeDeviceOperation {
         std::optional<float> rms_norm_gamma = std::nullopt;
         float rms_norm_epsilon = 1.0e-6F;
         uint32_t rms_norm_group_size = 0;
+        // Set when input tensor B is a DRAM ND-sharded weight read by the op itself (no GCB):
+        // the cores that each load one weight shard into L1, shard p going to the p-th core in
+        // row-major order. The shard layout is the one global_cb expects. Mutually exclusive
+        // with global_cb and packed_weight.
+        std::optional<CoreRangeSet> dram_weight_grid = std::nullopt;
     };
 
     struct tensor_args_t {
@@ -194,5 +199,6 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     bool rms_norm = false,
     const std::optional<std::variant<float, Tensor>>& rms_norm_gamma = std::nullopt,
     float rms_norm_epsilon = 1.0e-6F,
-    uint32_t rms_norm_group_size = 0);
+    uint32_t rms_norm_group_size = 0,
+    const std::optional<tt::tt_metal::CoreRangeSet>& weight_core_grid = std::nullopt);
 }  // namespace ttnn::prim

@@ -53,7 +53,7 @@ void bind_matmul_decode_operation(nb::module_& mod) {
 
     ttnn::bind_function<"matmul_decode", "ttnn.experimental.">(
         mod,
-        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None, ring_gather: bool = False, output_core_grid: Optional[ttnn.CoreRangeSet] = None, output_mcast_two_hub: bool = False, rms_norm: bool = False, rms_norm_gamma: Optional[Union[float, ttnn.Tensor]] = None, rms_norm_epsilon: float = 1e-6, rms_norm_group_size: int = 0) -> ttnn.Tensor
+        R"doc(matmul_decode(input_tensor_a: ttnn.Tensor, input_tensor_b: ttnn.Tensor, *, partial_width_sharded: bool = False, dtype: Optional[ttnn.DataType] = None, output_mem_config: Optional[ttnn.MemoryConfig] = None, global_cb: Optional[ttnn.GlobalCircularBuffer] = None, global_cb_k_blocks: int = 1, packed_weight: Optional[ttnn.experimental.MatmulDecodePackedWeightSpec] = None, all_gather: bool = False, mesh_coords: Optional[list[ttnn.MeshCoordinate]] = None, ring_gather: bool = False, output_core_grid: Optional[ttnn.CoreRangeSet] = None, output_mcast_two_hub: bool = False, rms_norm: bool = False, rms_norm_gamma: Optional[Union[float, ttnn.Tensor]] = None, rms_norm_epsilon: float = 1e-6, rms_norm_group_size: int = 0, weight_core_grid: Optional[ttnn.CoreRangeSet] = None) -> ttnn.Tensor
 
         Returns the matrix product of two tensors.
 
@@ -65,7 +65,11 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 (`[M, K]`, or `[batch * M, K]` when batched), M is `shard_height / batch`, and
                 compute treats each row as a 1x32 tile. That output is ROW_MAJOR as well, so it
                 can feed the next decode without a relayout.
-            input_tensor_b (ttnn.Tensor): the second tensor to be multiplied.
+            input_tensor_b (ttnn.Tensor): the second tensor to be multiplied. Either L1
+                width-sharded on the weight cores, or a DRAM ND-sharded tensor laid out exactly as
+                `global_cb` requires (one contiguous slab per weight core, see the table under
+                `global_cb`). A DRAM weight without `global_cb` is read by the op itself: every
+                weight core loads its own slab from DRAM into L1 while the activation is gathered.
 
         Keyword Args:
             partial_width_sharded (bool, optional): force the partial width-sharded program
@@ -156,6 +160,12 @@ void bind_matmul_decode_operation(nb::module_& mod) {
                 full row. Must be <= N, divisible by 32, and divide N evenly. ``0``
                 (the default) preserves legacy full-row normalization. Requires
                 ``rms_norm``; nonzero values are rejected when ``rms_norm`` is False.
+            weight_core_grid (ttnn.CoreRangeSet, optional): for a DRAM ND-sharded
+                `input_tensor_b` without `global_cb`, the cores that each load one weight slab;
+                slab ``p`` goes to the ``p``-th core in row-major order, following the same
+                per-mode slab table as `global_cb`. Defaults to the first ``num_shards`` cores of
+                the compute grid, row-wise. Rejected for any other weight. Not supported with
+                `ring_gather` or `all_gather`.
 
                 When `input_tensor_a` is ROW_MAJOR and HEIGHT_SHARDED, it must be replicated
                 on a core grid that contains `input_tensor_b`'s cores (shard width = K,
@@ -185,7 +195,8 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::arg("rms_norm") = false,
         nb::arg("rms_norm_gamma") = nb::none(),
         nb::arg("rms_norm_epsilon") = 1.0e-6F,
-        nb::arg("rms_norm_group_size") = 0);
+        nb::arg("rms_norm_group_size") = 0,
+        nb::arg("weight_core_grid") = nb::none());
 
     ttnn::bind_function<"matmul_decode_large_k", "ttnn.experimental.">(
         mod,
@@ -273,7 +284,8 @@ void bind_matmul_decode_descriptor(nb::module_& mod) {
         .def_rw("rms_norm", &ttnn::prim::MatmulDecodeParams::rms_norm)
         .def_rw("rms_norm_gamma", &ttnn::prim::MatmulDecodeParams::rms_norm_gamma)
         .def_rw("rms_norm_epsilon", &ttnn::prim::MatmulDecodeParams::rms_norm_epsilon)
-        .def_rw("rms_norm_group_size", &ttnn::prim::MatmulDecodeParams::rms_norm_group_size);
+        .def_rw("rms_norm_group_size", &ttnn::prim::MatmulDecodeParams::rms_norm_group_size)
+        .def_rw("dram_weight_grid", &ttnn::prim::MatmulDecodeParams::dram_weight_grid);
 
     nb::class_<ttnn::prim::MatmulDecodeInputs>(mod, "MatmulDecodeInputs")
         .def(

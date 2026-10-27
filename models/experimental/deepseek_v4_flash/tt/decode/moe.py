@@ -86,6 +86,9 @@ class DeepSeekV4MLP(DeepSeekV4Module):
     decode_layouts = DECODE_LAYOUTS
     prefetch_rings = staticmethod(decode_prefetch_rings)
     clamp_swiglu = False
+    # Without a ring, read the DRAM ND-sharded weight inside matmul_decode instead of copying it
+    # to L1 first. V4 keeps the copy; V4.1 turns this on.
+    dram_sharded_weight = False
 
     def __init__(
         self,
@@ -163,8 +166,9 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         if tp_size > 1:
             # Per-rank gate/up is N=I/TP (8 cores at I=2048, TP=4) and cannot join
             # q_a's 32-receiver ring. A private GCB on those cores also collides with
-            # fused_hyperconnection static CBs on (0,0), so they stay on DRAM->L1.
-            # Down only cuts K and stays on 64 cores.
+            # fused_hyperconnection static CBs on (0,0), so they stay off the ring.
+            # V4 then copies the weight DRAM -> L1; ``dram_sharded_weight`` (V4.1) has the
+            # matmul read the DRAM slab itself. Down only cuts K and stays on 64 cores.
             gate_up_layout = tp_gate_up_layout(tp_size, hidden, local_inter, layouts=self.decode_layouts)
             down_layout = {"K": local_inter, "N": hidden}
             gate_up_prefetch = {"use_prefetcher": False}
@@ -178,6 +182,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
             **gate_up_layout,
             **gate_up_prefetch,
             use_rm_hs=True,
+            dram_sharded_weight=self.dram_sharded_weight,
         )
         self.up_proj = LinearDecode(
             weights[f"{prefix}.up_proj.weight"],
@@ -189,6 +194,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
             **gate_up_layout,
             **gate_up_prefetch,
             use_rm_hs=True,
+            dram_sharded_weight=self.dram_sharded_weight,
         )
         self.down_proj = LinearDecode(
             weights[f"{prefix}.down_proj.weight"],
@@ -201,6 +207,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
             rectangle_b_grid=True,
             **down_layout,
             use_rm_hs=False,
+            dram_sharded_weight=self.dram_sharded_weight,
         )
         assert self.gate_proj._can_matmul_decode_rm_hs() and self.up_proj._can_matmul_decode_rm_hs(), (
             "shared expert gate/up must use ROW_MAJOR HEIGHT_SHARDED matmul_decode, "
@@ -216,7 +223,7 @@ class DeepSeekV4MLP(DeepSeekV4Module):
         :meth:`forward` that uses them.
 
         Queued gate, up, then down: gate/up stream through q_a's 32-receiver FIFO (queued after
-        q_a, CSA and the FFN hyper-connection's ``fn``), down through the shared 64-core GCB. Under TP, gate/up are DRAM->L1 copies.
+        q_a, CSA and the FFN hyper-connection's ``fn``), down through the shared 64-core GCB. Under TP, gate/up are off the ring: V4 copies them DRAM -> L1 here, and ``dram_sharded_weight`` makes ``fetch_weights`` a no-op so the matmul reads DRAM itself.
         Queue order on each ring has to match consume order, here and against the attention block
         (whose weights precede down on the shared buffer, because attention runs first in the
         decoder layer).
@@ -283,12 +290,14 @@ def _make_router_gate(
     matmul_decode: Optional[bool] = None,
     layouts: dict = DECODE_LAYOUTS,
     rings: Optional[dict] = None,
+    dram_sharded_weight: bool = False,
 ):
     """The learned ``[D, E]`` router projection, as :class:`Linear` or :class:`LinearDecode`.
 
     ``matmul_decode`` (default: ``use_prefetcher``) picks :class:`LinearDecode`; without it
     (prefill) the gate keeps ``ttnn.linear``. A ``LinearDecode`` gate without the prefetcher
-    copies its weight DRAM -> L1 per call. Decode runs
+    copies its weight DRAM -> L1 per call, unless ``dram_sharded_weight`` has the matmul read
+    that DRAM slab itself. Decode runs
     ``matmul_decode`` in hub mode: the gate is full-width on ``n_blocks`` cores (8 for V4, one
     output tile per core), so it consumes the decode all-gather replica (ROW_MAJOR HEIGHT_SHARDED
     A) where it sits instead of unreplicating it through DRAM and re-sharding it -- that round
@@ -318,6 +327,7 @@ def _make_router_gate(
         **prefetch,
         rectangle_b_grid=True,
         use_rm_hs=True,
+        dram_sharded_weight=dram_sharded_weight,
     )
     assert gate.num_inputB_cores == layout["n_blocks"], (
         f"router gate must be full-width on n_blocks={layout['n_blocks']} cores, "
@@ -348,6 +358,8 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
 
     decode_layouts = DECODE_LAYOUTS
     prefetch_rings = staticmethod(decode_prefetch_rings)
+    # Without a ring, read the DRAM ND-sharded weight inside matmul_decode. V4 keeps the L1 copy.
+    dram_sharded_weight = False
 
     def __init__(
         self,
@@ -384,6 +396,7 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
             matmul_decode=matmul_decode,
             layouts=self.decode_layouts,
             rings=self.prefetch_rings(),
+            dram_sharded_weight=self.dram_sharded_weight,
         )
         bias = _materialize(
             weights["gate.e_score_correction_bias"], cache.file("gate.e_score_correction_bias"), ttnn.bfloat16

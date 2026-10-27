@@ -20,9 +20,12 @@
 // ([sender][M][K / senders] 1x32 tiles) in cb_gather_in0, and each compute core copies it into
 // full_in0 as [M][K], the whole-K rows custom_mm takes one at a time.
 //
-// in1 (weights) arrive one of two ways:
+// in1 (weights) arrive one of three ways:
 //   - default: the in1 CB is globally allocated over the L1-resident weight shard, so the
 //     reader only has to declare its tiles available.
+//   - IN1_FROM_DRAM: the weight is DRAM ND-sharded, one [K, N/num_weight_cores] slab per B core.
+//     The reader issues the slab's read before the gather so the two overlap, and waits for it
+//     before publishing full_in0: compute takes in1 only after full_in0, so that gates it.
 //   - ENABLE_GLOBAL_CB: the weights are pushed into a DRAM-sender GlobalCircularBuffer by the
 //     tensor prefetcher. This receiver's [K, N/num_receivers] slab arrives as num_k_blocks
 //     remote pages, each a whole number of K-rows (num_k_blocks == 1 is the whole slab in one
@@ -57,6 +60,9 @@ void kernel_main() {
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(16);
     constexpr uint32_t in0_M_tiles = get_compile_time_arg_val(17);
     constexpr uint32_t in0_K_tiles = get_compile_time_arg_val(18);
+#ifdef IN1_FROM_DRAM
+    constexpr auto in1_args = TensorAccessorArgs<19>();
+#endif
 
     const uint32_t is_sender = get_arg_val<uint32_t>(0);
     const uint32_t sender_id = get_arg_val<uint32_t>(1);
@@ -91,6 +97,12 @@ void kernel_main() {
         experimental::remote_cb_wait_front(remote_cb_index, 1);
         in1_cb.push_back(in1_page_tiles);
     }
+#elif defined(IN1_FROM_DRAM)
+    if (is_in1_receiver) {
+        const auto in1 = TensorAccessor(in1_args, get_arg_val<uint32_t>(4), in1_cb.get_tile_size());
+        in1_cb.reserve_back(in1_page_tiles);
+        noc_async_read_shard(get_arg_val<uint32_t>(5), in1, in1_cb.get_write_ptr());
+    }
 #else
     in1_cb.reserve_back(in1_page_tiles);
     in1_cb.push_back(in1_page_tiles);
@@ -116,6 +128,12 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
+    }
+#endif
+#ifdef IN1_FROM_DRAM
+    if (is_in1_receiver) {
+        noc.async_read_barrier();
+        in1_cb.push_back(in1_page_tiles);
     }
 #endif
     full_in0_cb.push_back(full_num_tiles);
@@ -189,6 +207,12 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
+    }
+#endif
+#ifdef IN1_FROM_DRAM
+    if (is_in1_receiver) {
+        noc.async_read_barrier();
+        in1_cb.push_back(in1_page_tiles);
     }
 #endif
     full_in0_cb.push_back(full_num_tiles);
