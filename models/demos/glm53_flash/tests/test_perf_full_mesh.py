@@ -14,6 +14,7 @@ GLM53_MODEL_B / GLM53_PARTITION_USERS / GLM53_PREFILL_PARTITION.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -80,6 +81,7 @@ def test_full_model_decode_profile(mesh_device):
     logger.info(
         f"FULL-PROFILE {len(layers)} layers on {MESH}, B={B}/row ({U} slots), max_seq_len {MAX_SEQ_LEN}, position {POS}"
     )
+    walls: dict[str, list[float]] = {}
     _drain(mesh_device)
     # per-layer labels + a profiler drain after every layer (keeps every core's marker buffer under its 12 000 entries)
     for i, dec in zip(layers, model.layers):
@@ -88,9 +90,13 @@ def test_full_model_decode_profile(mesh_device):
 
         def wrapped(*a, _orig=orig, _label=label, **kw):
             _signpost(f"{_label}_BEGIN")
+            t0 = time.perf_counter()
             try:
                 return _orig(*a, **kw)
             finally:
+                if not PROFILING:  # per-layer eager wall (device-synchronised): the profiler-free attribution
+                    ttnn.synchronize_device(mesh_device)
+                    walls.setdefault(_label, []).append(time.perf_counter() - t0)
                 _signpost(f"{_label}_END")
                 _drain(mesh_device)
 
@@ -113,4 +119,26 @@ def test_full_model_decode_profile(mesh_device):
     for t in outs:
         if t is not None:
             ttnn.deallocate(t)
+    if not PROFILING:
+        # the labelled step's per-layer walls (the warm-up's first pass is excluded: it compiled) + a traced reference
+        rows = [(k, 1e3 * v[-1]) for k, v in walls.items()]
+        kda = [ms for k, ms in rows if k.endswith("_KDA")]
+        dsa = [ms for k, ms in rows if k.endswith("_DSA")]
+        for k, ms in rows:
+            logger.info(f"LAYER-WALL {k}: {ms:.2f} ms (eager, synchronised)")
+        logger.info(
+            f"LAYER-WALL capacity {MAX_SEQ_LEN} position {POS}: KDA {sum(kda):.1f} ms over {len(kda)} layers "
+            f"(mean {sum(kda) / max(1, len(kda)):.2f}), DSA {sum(dsa):.1f} ms over {len(dsa)} (mean "
+            f"{sum(dsa) / max(1, len(dsa)):.2f}), eager step {sum(ms for _, ms in rows):.1f} ms"
+        )
+        trace_id, touts = model.capture(ids, pos)
+        for _ in range(3):
+            model.replay(trace_id)
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(10):
+            model.replay(trace_id, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        ms = (time.perf_counter() - t0) / 10 * 1e3
+        logger.info(f"LAYER-WALL traced step {ms:.2f} ms = {1e3 / ms:.1f} tok/s per user at capacity {MAX_SEQ_LEN}")
     logger.info(f"FULL-PROFILE done: one labelled eager step at position {POS}, capacity {MAX_SEQ_LEN}")
