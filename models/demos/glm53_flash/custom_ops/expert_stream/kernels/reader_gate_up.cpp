@@ -18,10 +18,16 @@
 //   its E experts) comes from a 32 B uint16 page (`base_addr`, one per chip, mesh-sharded) and the kernel reads the
 //   window of tiles covering [base, base + E) (routing_scan.hpp fold_*). Replaces the per-column selector matmul.
 // * SCAN_WORDS: the word-wise active scan (routing_scan.hpp scan_active_words) instead of the element scan.
+// * REGIONS_SRC (2026-10-27, regions_src.hpp / regions.py): the weights are the regions prefill path's per-expert
+//   DRAM-interleaved gate / up tensors (w_addr unused; common runtime args = gate_addr[0..E), up_addr[0..E)): this
+//   bank's column q of expert e is the K run at (k * ppb + q) * tile_bytes from the expert's buffer address, read in
+//   page_bytes packets `src_step` apart (contiguous at ppb = 1: byte-for-byte the stacked stream; one tile per packet
+//   at ppb > 1). The CB layout and the compute are unchanged.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "regions_src.hpp"
 #include "routing_scan.hpp"
 
 void kernel_main() {
@@ -88,7 +94,17 @@ void kernel_main() {
     const uint32_t n = scan_active<E, M>(routing, active);
 #endif
 
+#ifdef REGIONS_SRC
+    // the bank's NOC base alone (the expert's buffer address is added per packet below)
+    const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, 0);
+    (void)w_addr;  // the per-expert addresses come from the common runtime args
+    constexpr uint32_t src_step = ppb == 1 ? page_bytes : ppb * tile_bytes;
+    static_assert(
+        ppb == 1 || page_bytes == tile_bytes, "regions-sourced columns at ppb > 1 are read one tile per packet");
+#else
     const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
+    constexpr uint32_t src_step = page_bytes;
+#endif
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
     noc_async_read_one_packet_set_state<true>(w_base, page_bytes, vc);
 
@@ -106,12 +122,22 @@ void kernel_main() {
     uint32_t issued = 0;
 
     for (uint32_t i = group; i < n; i += groups) {
+#ifdef REGIONS_SRC
+        const uint32_t e = active[i];
+        const uint32_t gate_addr = get_common_arg_val<uint32_t>(e);
+        const uint32_t up_addr = get_common_arg_val<uint32_t>(E + e);
+        uint32_t src = 0;
+#else
         uint32_t src = static_cast<uint32_t>(active[i]) * expert_stride;
+#endif
         for (uint32_t c = 0; c < 2 * ppb; ++c) {  // per pair: gate column, then up column
+#ifdef REGIONS_SRC
+            src = ((c & 1) ? up_addr : gate_addr) + (c >> 1) * tile_bytes;  // pair q = c / 2: its K run in this bank
+#endif
             noc_async_read_set_trid(trid);
             for (uint32_t p = 0; p < pages_per_col; ++p) {
                 noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
-                src += page_bytes;
+                src += src_step;
                 l1_write += page_bytes;
             }
             ++issued;

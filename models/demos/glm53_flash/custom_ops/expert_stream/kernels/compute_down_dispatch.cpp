@@ -9,6 +9,8 @@
 // Phase 2 (per token row tile, used slot count from the mailbox):
 //   out[r] = sum_j G[j]   as identity-tile matmuls accumulated in fp32 DST (exact), packed once.
 // HiFi4 (BF16 x BF16 products exact).
+// REGIONS_SRC: the expert block arrives k-major (tile k * cols + c: reader_down_dispatch.cpp); same products, same
+// order per column, bit-identical h_k.
 
 #include <cstdint>
 
@@ -57,7 +59,11 @@ void kernel_main() {
             matmul_init(cb_a, cb_w);
             for (uint32_t c = 0; c < cols; ++c) {
                 for (uint32_t k = 0; k < seg_tiles; ++k) {
+#ifdef REGIONS_SRC
+                    matmul_tiles(cb_a, cb_w, k, k * cols + c, c);
+#else
                     matmul_tiles(cb_a, cb_w, k, c * seg_tiles + k, c);
+#endif
                 }
             }
             tile_regs_commit();

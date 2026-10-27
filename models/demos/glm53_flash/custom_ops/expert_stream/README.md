@@ -143,3 +143,21 @@ the router's id table, cache tag `_p<hash>`), `GLM53_STREAM_DISPATCH` (1: 32 < T
 `_stream`: the bank-major layouts are built once from the per-chip slices and uploaded width-sharded over the DRAM
 banks through `upload_cached(..., rows=0, cols=1, memory_config=stream_memory_config(rows))`); `GLM53_STREAM_GROUPS`
 (12), `GLM53_STREAM_DOWN_READERS` (2), `GLM53_STREAM_X_L1` (1), `GLM53_STREAM_ACT_L1` (1).
+
+## Regions-sourced weights (`regions_src=True`, 2026-10-27; `regions.py`, `doc/mesh/regions_decode.md`)
+
+Every op takes a `RegionsSource(gate, up, down, banks)` -- the regions prefill path's per-expert DRAM-interleaved
+`[K, I]` / `[K, I]` / `[I, H]` lists (`tt/moe.py` `_build_dispatch_path`) -- in place of the stacked `w13` / `w2`,
+and reads them in place: a DRAM-interleaved tile tensor puts tile column `n` in bank `n % banks` at the K stride
+`ppb = I/32/banks` tiles, so at `ppb = 1` (the 8x4) the gate|up stream is byte-for-byte the stacked one from a per-expert
+base address (`REGIONS_SRC` kernel variants; the addresses as the readers' common runtime args: gate `0..E-1`, up
+`E..2E-1`, down `0..E-1`); the down block is read as `seg_tiles` packets of the core's `cols` tiles (k-major; the
+down computes index `k * cols + c`); the writers map `(bank, q)` to act column `bank + banks * q` and the down core's
+columns to `bank + banks * (r * cols + c)` (`kernels/regions_src.hpp`; the down writers take `[h_tiles, banks]` /
+`[banks]` as compile-time args after the accessor args). Results are bit-identical to the stacked ops. `ppb > 1`
+reads single-tile gate|up packets; the pair-unit kernels are stacked-only. The planner `regions.plan_regions_stream`
+(bank locality: `I/32` and `H/32` multiples of the bank count -- not Wormhole's 12 at these widths) sizes the packets;
+`tests/test_regions_decode_host.py` checks its address walk against the page map, `tests/custom_ops/test_expert_stream.py
+::test_expert_stream_regions_src` the A/B on a chip. Model knob: `GLM53_REGIONS_DECODE=off | stream | regions`
+(`tt/moe.py`): `stream` serves decode (block op) and 33..256 gathered tokens (dispatch ops) from the regions lists --
+the one-copy configuration, no stacked upload; `regions` forces the regions kernel (A/B).

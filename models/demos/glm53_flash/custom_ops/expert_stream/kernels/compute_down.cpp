@@ -6,6 +6,8 @@
 //   out[:, c] = sum_e act[e] @ W2[e][:, c]   (act[e] = D_e @ swiglu_e: the routing-weighted activations)
 // with the `cols` output tiles held in DST (fp32) across all active experts (count from the BRISC mailbox) and
 // packed once. HiFi2, fp32 accumulation.
+// REGIONS_SRC: the reader delivers the expert block k-major (tile i * cols + c: reader_down.cpp); the products and
+// their order per output column (k ascending, experts in scan order) are the same, so the sums are bit-identical.
 
 #include <cstdint>
 
@@ -38,7 +40,11 @@ void kernel_main() {
         cb_wait_front(cb_w, cols * seg_tiles);
         for (uint32_t c = 0; c < cols; ++c) {
             for (uint32_t k = 0; k < seg_tiles; ++k) {
+#ifdef REGIONS_SRC
+                matmul_tiles(cb_a, cb_w, k, k * cols + c, c);
+#else
                 matmul_tiles(cb_a, cb_w, k, c * seg_tiles + k, c);
+#endif
             }
         }
         cb_pop_front(cb_a, seg_tiles);

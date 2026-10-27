@@ -18,7 +18,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.glm53_flash.custom_ops.expert_stream.op import (
+    ExpertDispatch,
     ExpertStream,
+    RegionsSource,
     bfp8_round,
     down_stream_layout,
     expert_stream_golden,
@@ -250,3 +252,105 @@ def test_expert_stream_widths(mesh_device, I_loc, E_loc):
     logger.info(f"I = {I_loc}, E = {E_loc} ({len(active)} active): act pcc {p_act:.6f}, out pcc {p:.6f}")
     assert p_act > 0.9999, p_act
     assert p > 0.9999, p
+
+
+# ---------------------------------------------------------------------------------- regions-sourced weights (2026-10-27)
+def _regions_lists(device, w13_host: torch.Tensor, w2_host: torch.Tensor, E_loc: int, I_loc: int):
+    """The regions prefill path's per-expert lists as tt/moe.py ``_build_dispatch_path`` leaves them: gate[e] / up[e]
+    [K, I_loc] and down[e] [I_loc, H] bfp8 TILE tensors, DRAM interleaved, one buffer each."""
+
+    def mk(t):
+        return ttnn.from_torch(
+            t.contiguous(),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    gate = [mk(w13_host[e, :, :I_loc].float()) for e in range(E_loc)]
+    up = [mk(w13_host[e, :, I_loc:].float()) for e in range(E_loc)]
+    down = [mk(w2_host[e].float()) for e in range(E_loc)]
+    return gate, up, down
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("I_loc, tokens", [(256, 32), (256, 64), (1024, 32), (1024, 64)])
+def test_expert_stream_regions_src(mesh_device, I_loc, tokens):
+    """``regions_src=True`` A/B (doc/mesh/regions_decode.md): the block ops (32 tokens) and the dispatch ops (64) read
+    the per-expert DRAM-interleaved lists in place of the stacked bank-sharded copy, on the same tokens and routing:
+    bit-identical act / out (the same products in the same order through a different (bank, column) map), and both
+    within the golden bar. I_loc = 256 is the 8x4 (ppb = 1: the same packets as the stacked stream), 1024 the (2,4)
+    block (ppb = 4: single-tile gate|up packets)."""
+    E_loc = E
+    g = torch.Generator().manual_seed(7)
+    w13 = (torch.randn(E_loc, K, 2 * I_loc, generator=g) * 0.02).bfloat16()
+    w2 = (torch.randn(E_loc, I_loc, H, generator=g) * 0.02).bfloat16()
+    w13_s = upload_stream_weights(mesh_device, gate_up_stream_layout(w13.float()))
+    w2_s = upload_stream_weights(mesh_device, down_stream_layout(w2.float()))
+    gate, up, down = _regions_lists(mesh_device, w13, w2, E_loc, I_loc)
+    src = RegionsSource(gate, up, down, mesh_device.dram_grid_size().x)
+    logger.info(f"regions plan at I = {I_loc}: {src.plan.as_dict()}")
+    x = torch.randn(tokens, K).bfloat16()
+    r = routing_matrix(tokens, 2, seed=tokens + I_loc)
+    xd = ttnn.from_torch(x.reshape(1, 1, tokens, K), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    rd = ttnn.from_torch(
+        r.reshape(1, 1, tokens, E_loc), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device
+    )
+    active = [e for e in range(E_loc) if r[:, e].abs().sum() > 0]
+    w13_q, w2_q = bfp8_round(w13.float()), bfp8_round(w2.float())
+    if tokens <= 32:
+        op_s = ExpertStream(mesh_device, E_loc, K, I_loc, H, groups=GROUPS, down_readers=DOWN_READERS)
+        op_r = ExpertStream(mesh_device, E_loc, K, I_loc, H, groups=GROUPS, down_readers=DOWN_READERS, regions_src=True)
+        act_s, out_s = op_s.alloc(mesh_device)
+        act_r, out_r = op_r.alloc(mesh_device)
+        t0 = time.perf_counter()
+        op_s.forward(xd, rd, w13_s, w2_s, act_s, out_s)
+        ttnn.synchronize_device(mesh_device)
+        t1 = time.perf_counter()
+        op_r.forward(xd, rd, src, src, act_r, out_r)
+        ttnn.synchronize_device(mesh_device)
+        t2 = time.perf_counter()
+        a_s = ttnn.to_torch(act_s).float().reshape(E_loc, 32, I_loc)[active]
+        a_r = ttnn.to_torch(act_r).float().reshape(E_loc, 32, I_loc)[active]
+        y_s = ttnn.to_torch(out_s).float().reshape(32, H)
+        y_r = ttnn.to_torch(out_r).float().reshape(32, H)
+        assert torch.equal(
+            a_r, a_s
+        ), f"act differs on {int((a_r != a_s).sum())} values (max |d| {(a_r - a_s).abs().max():.3g})"
+        assert torch.equal(
+            y_r, y_s
+        ), f"out differs on {int((y_r != y_s).sum())} values (max |d| {(y_r - y_s).abs().max():.3g})"
+        _, y_ref = expert_stream_golden(x, r, w13_q, w2_q)
+        p = pcc(y_ref, y_r)
+        logger.info(
+            f"I {I_loc} block ({len(active)} active): regions-sourced == stacked bit for bit; golden pcc {p:.6f}; "
+            f"eager wall stacked {1e3 * (t1 - t0):.1f} ms, regions {1e3 * (t2 - t1):.1f} ms (first calls: compile)"
+        )
+        assert p > 0.9999, p
+    else:
+        op_s = ExpertDispatch(mesh_device, E_loc, K, I_loc, H, tokens, groups=GROUPS)
+        op_r = ExpertDispatch(mesh_device, E_loc, K, I_loc, H, tokens, groups=GROUPS, regions_src=True)
+        x_rm, counts = ExpertDispatch.prepare(xd, rd)
+        act_s, table_s, out_s = op_s.alloc(mesh_device)
+        act_r, table_r, out_r = op_r.alloc(mesh_device)
+        op_s.forward(x_rm, rd, counts, w13_s, w2_s, act_s, table_s, out_s)
+        op_r.forward(x_rm, rd, counts, src, src, act_r, table_r, out_r)
+        y_s = ttnn.to_torch(out_s).float().reshape(tokens, H)
+        y_r = ttnn.to_torch(out_r).float().reshape(tokens, H)
+        assert torch.equal(
+            y_r, y_s
+        ), f"out differs on {int((y_r != y_s).sum())} values (max |d| {(y_r - y_s).abs().max():.3g})"
+        act_ref, y_ref, passes = ExpertDispatch.golden(x, r, w13_q, w2_q)
+        n_pass = len(passes)
+        a_s = ttnn.to_torch(act_s).float().reshape(-1, 32, I_loc)[:n_pass]
+        a_r = ttnn.to_torch(act_r).float().reshape(-1, 32, I_loc)[:n_pass]
+        assert torch.equal(a_r, a_s), "per-pass act differs"
+        p = pcc(y_ref, y_r)
+        logger.info(
+            f"I {I_loc} dispatch T {tokens} ({len(active)} active, {n_pass} passes): bit-identical; golden pcc {p:.6f}"
+        )
+        assert p > 0.9999, p
+    for t in gate + up + down + [w13_s, w2_s, xd, rd]:
+        ttnn.deallocate(t)

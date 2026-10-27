@@ -19,6 +19,8 @@
 // 17: unused here (the units kernels' pairs per unit).
 // EP = 2 (the mesh path): the ids are the all_to_all_dispatch metadata rows [t_valid, K] UINT16 and the weights the
 // K BF16 tail of every dispatched token row ([x | w], x_page bytes per row); both packed in L1 at K per token.
+// REGIONS_SRC (regions_src.hpp): this bank's pair q is the global intermediate tile column bank + banks * q (banks =
+// i_tiles / ppb) instead of bank * ppb + q (the regions lists' column -> bank map).
 
 #include <stdint.h>
 
@@ -26,6 +28,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "dispatch_common.hpp"
+#include "regions_src.hpp"
 
 void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
@@ -190,7 +193,12 @@ void kernel_main() {
 
             for (uint32_t q = 0; q < ppb; ++q) {
                 cb_wait_front(cb_out, 1);
-                noc_async_write(get_read_ptr(cb_out), s_act.get_noc_addr(k * i_tiles + bank_id * ppb + q), tile_page);
+#ifdef REGIONS_SRC
+                const uint32_t col = regions_act_col(bank_id, q, i_tiles / ppb);
+#else
+                const uint32_t col = bank_id * ppb + q;
+#endif
+                noc_async_write(get_read_ptr(cb_out), s_act.get_noc_addr(k * i_tiles + col), tile_page);
                 noc_async_write_barrier();
                 cb_pop_front(cb_out, 1);
             }

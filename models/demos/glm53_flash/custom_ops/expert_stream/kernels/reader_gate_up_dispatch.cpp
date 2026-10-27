@@ -10,11 +10,15 @@
 // runtime args: [w_addr, counts_addr (EP: idx_addr), bank_id, vc, group, (EP) base_addr, (EP = 2) t_valid, idx_page]
 // compile-time 12: pair slots of the weight ring (2 = one pair in flight ahead of the compute, today's default;
 // deeper when L1 allows: custom_ops/expert_stream/plan.py), 13: unused here (the units kernels' pairs per unit).
+// REGIONS_SRC (regions_src.hpp, as reader_gate_up.cpp): the regions lists' per-expert gate / up tensors (common
+// runtime args gate_addr[0..E), up_addr[0..E)); pair q = the gate column's K run then the up column's, each
+// pages_per_col packets `src_step` apart, into the same pair slot layout.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
 #include "dispatch_common.hpp"
+#include "regions_src.hpp"
 
 void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(0);
@@ -83,7 +87,15 @@ void kernel_main() {
     pass_bases<E>(n_tok, passes, base);
     const uint32_t n_mine = assign_group<E, 32>(passes, groups, group, mine);
 
+#ifdef REGIONS_SRC
+    const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, 0);
+    (void)w_addr;  // the per-expert addresses come from the common runtime args
+    constexpr uint32_t src_step = ppb == 1 ? page_bytes : ppb * tile_bytes;
+    static_assert(
+        ppb == 1 || page_bytes == tile_bytes, "regions-sourced columns at ppb > 1 are read one tile per packet");
+#else
     const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
+#endif
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
     noc_async_read_one_packet_set_state<true>(w_base, page_bytes, vc);
 
@@ -109,14 +121,30 @@ void kernel_main() {
         // more pairs: the ppb pairs are streamed again for every pass
         const uint32_t repeats = ppb == 1 ? 1 : passes[mine[i]];
         for (uint32_t rep = 0; rep < repeats; ++rep) {
+#ifdef REGIONS_SRC
+            const uint32_t gate_addr = get_common_arg_val<uint32_t>(mine[i]);
+            const uint32_t up_addr = get_common_arg_val<uint32_t>(E + mine[i]);
+#else
             uint32_t src = static_cast<uint32_t>(mine[i]) * expert_stride;
+#endif
             for (uint32_t q = 0; q < ppb; ++q) {
                 noc_async_read_set_trid(trid);
+#ifdef REGIONS_SRC
+                for (uint32_t half = 0; half < 2; ++half) {  // the gate column of pair q, then its up column
+                    uint32_t src = (half ? up_addr : gate_addr) + q * tile_bytes;
+                    for (uint32_t p = 0; p < pages_per_col; ++p) {
+                        noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
+                        src += src_step;
+                        l1_write += page_bytes;
+                    }
+                }
+#else
                 for (uint32_t p = 0; p < pages_per_pair; ++p) {
                     noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
                     src += page_bytes;
                     l1_write += page_bytes;
                 }
+#endif
                 ++issued;
                 if (free_blocks == num_buffers - extra_in_flight) {
                     noc_async_read_barrier_with_trid(trid_to_wait);
