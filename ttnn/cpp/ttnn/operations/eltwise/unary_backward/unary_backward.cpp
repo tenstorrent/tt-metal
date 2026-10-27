@@ -11,7 +11,6 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -1624,7 +1623,6 @@ std::vector<Tensor> repeat_bw(
 
     auto shape_wh = input.padded_shape();
     TT_FATAL(shape_wh[0] == 1, "Input shape[0] must be 1 but got {}", shape_wh[0]);
-    auto* ttnn_device = input.device();
     // input.padded_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input
     if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {
@@ -1633,32 +1631,14 @@ std::vector<Tensor> repeat_bw(
         return grad_tensor;
     }
     if (shape[0] > 1) {
-        ttsl::SmallVector<std::int64_t> dim = {0};
         TT_FATAL(shape[1] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[1], [2], [3] should be 1");
-        std::array<std::uint32_t, 4> intended_shape_array = {1, shape_wh[1], shape_wh[2], shape_wh[3]};
-        const auto required = ttnn::Shape(intended_shape_array);
-        Tensor result = ttnn::moreh_sum(
-            grad,
-            dim,
-            true,
-            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, output_memory_config),
-            output_memory_config,
-            std::nullopt);
+        Tensor result = ttnn::sum(grad, 0, /*keepdim=*/true, output_memory_config);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }
     if (shape[1] > 1) {
-        ttsl::SmallVector<std::int64_t> dim = {1};
         TT_FATAL(shape[0] == 1 && shape[2] == 1 && shape[3] == 1, "repeat[0], [2], [3] should be 1");
-        std::array<std::uint32_t, 4> intended_shape_array = {shape_wh[0], 1, shape_wh[2], shape_wh[3]};
-        const auto required = ttnn::Shape(intended_shape_array);
-        Tensor result = ttnn::moreh_sum(
-            grad,
-            dim,
-            true,
-            ttnn::zeros(required, input.dtype(), input.layout(), *ttnn_device, output_memory_config),
-            output_memory_config,
-            std::nullopt);
+        Tensor result = ttnn::sum(grad, 1, /*keepdim=*/true, output_memory_config);
         grad_tensor.emplace_back(result);
         return grad_tensor;
     }

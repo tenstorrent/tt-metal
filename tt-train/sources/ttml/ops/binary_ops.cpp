@@ -58,24 +58,23 @@ ttnn::Tensor unbroadcast_grad(const autograd::TensorPtr& input, const ttnn::Tens
     auto grad_rank = grad_shape.rank();
     auto max_rank = std::max(input_rank, grad_rank);
 
-    ttsl::SmallVector<int64_t> broadcast_dims;
+    ttsl::SmallVector<int> broadcast_dims;
     for (size_t i = 0; i < max_rank; ++i) {
         auto input_dim = (i < max_rank - input_rank) ? 1u : input_shape[i - (max_rank - input_rank)];
         auto grad_dim = (i < max_rank - grad_rank) ? 1u : grad_shape[i - (max_rank - grad_rank)];
         if (input_dim != grad_dim) {
-            broadcast_dims.push_back(static_cast<int64_t>(i));
+            broadcast_dims.push_back(static_cast<int>(i));
         }
     }
 
-    auto reduced = ttnn::moreh_sum(
+    auto reduced = ttnn::sum(
         grad,
         broadcast_dims,
-        /* keep_dim */ true,
-        /* output_tensor */ std::nullopt,
-        /* memory_config_arg */ std::nullopt,
+        /* keepdim */ true,
+        /* memory_config */ std::nullopt,
         core::ComputeKernelConfig::precise());
 
-    // When ranks differ, moreh_sum with keep_dim preserves the grad's rank.
+    // When ranks differ, the keepdim sum preserves the grad's rank.
     // Reshape back to the input's original shape so add_grad doesn't throw.
     if (input_rank != grad_rank) {
         reduced = ttnn::reshape(reduced, input_shape);

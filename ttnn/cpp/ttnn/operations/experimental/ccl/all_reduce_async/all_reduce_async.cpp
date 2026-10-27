@@ -20,7 +20,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -74,20 +74,14 @@ Tensor local_sum(
     }
 
     bool do_typecast = false;
-    // moreh_sum does not support bfloat8_b
+    // Summing in bf16 and casting back rounds no worse than packing the sum straight to bfloat8_b.
     if (input_tensor.dtype() == DataType::BFLOAT8_B) {
         // cast up to bfloat16 prior to sum
         do_typecast = true;
         input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
     }
 
-    auto sum_tensor = ttnn::moreh_sum(
-        input_tensor,
-        reduce_dim,
-        /* keep_dim */ true,
-        /* output */ std::nullopt,
-        memory_config,
-        /* device kernel config */ std::nullopt);
+    auto sum_tensor = ttnn::sum(input_tensor, reduce_dim, /*keepdim=*/true, memory_config);
 
     if (do_typecast) {
         // cast back down to bfloat8_b

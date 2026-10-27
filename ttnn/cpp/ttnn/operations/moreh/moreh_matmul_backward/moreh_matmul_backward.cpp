@@ -8,7 +8,9 @@
 #include "ttnn/operations/moreh/moreh_dot_backward/moreh_dot_backward.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/device/moreh_matmul_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_matmul/moreh_matmul.hpp"
-#include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_matmul_backward {
@@ -55,8 +57,14 @@ std::vector<std::optional<Tensor>> moreh_matmul_backward(
                 output_grad, other, false, true, std::nullopt, std::nullopt, memory_config, compute_kernel_config);
             auto reduce_dims = operations::moreh::moreh_matmul::find_reduce_dim(
                 temp_input_grad.padded_shape(), input_grad_tensor.padded_shape());
-            ttnn::moreh_sum(
-                temp_input_grad, reduce_dims, true, input_grad_tensor, memory_config, compute_kernel_config);
+            // The grad drops the leading broadcast dims that the keepdim sum leaves as size 1.
+            const auto reduced = ttnn::sum(
+                temp_input_grad,
+                ttsl::SmallVector<int>(reduce_dims.begin(), reduce_dims.end()),
+                /*keepdim=*/true,
+                memory_config,
+                compute_kernel_config);
+            ttnn::assign(ttnn::reshape(reduced, input_grad_tensor.logical_shape()), input_grad_tensor);
         }
         outputs[0] = input_grad_tensor;
     }
@@ -72,8 +80,14 @@ std::vector<std::optional<Tensor>> moreh_matmul_backward(
                 input, output_grad, true, false, std::nullopt, std::nullopt, memory_config, compute_kernel_config);
             auto reduce_dims = operations::moreh::moreh_matmul::find_reduce_dim(
                 temp_other_grad.padded_shape(), other_grad_tensor.padded_shape());
-            ttnn::moreh_sum(
-                temp_other_grad, reduce_dims, true, other_grad_tensor, memory_config, compute_kernel_config);
+            // The grad drops the leading broadcast dims that the keepdim sum leaves as size 1.
+            const auto reduced = ttnn::sum(
+                temp_other_grad,
+                ttsl::SmallVector<int>(reduce_dims.begin(), reduce_dims.end()),
+                /*keepdim=*/true,
+                memory_config,
+                compute_kernel_config);
+            ttnn::assign(ttnn::reshape(reduced, other_grad_tensor.logical_shape()), other_grad_tensor);
         }
         outputs[1] = other_grad_tensor;
     }

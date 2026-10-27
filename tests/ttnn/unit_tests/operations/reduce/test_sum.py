@@ -356,3 +356,31 @@ def test_sum_nc_scalar(device, shape, dim, dtype):
         assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=8)
     else:
         assert_allclose(torch_output.float(), output_tensor.float(), rtol=1e-2, atol=0)
+
+
+@pytest.mark.parametrize("shape, dim, keepdim", [((8, 16, 64, 64), [0], True), ((3, 7, 37, 63), [1, 2, 3], False)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+def test_sum_preallocated_output(device, shape, dim, keepdim, dtype):
+    torch.manual_seed(0)
+    torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}.get(dtype, torch.int32)
+    input_tensor = ttnn.from_torch(
+        torch.randint(-8, 8, shape).to(torch_dtype), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    expected = ttnn.to_torch(ttnn.sum(input_tensor, dim=dim, keepdim=keepdim))
+
+    output = ttnn.from_torch(
+        torch.zeros(expected.shape, dtype=torch_dtype), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    result = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim, output=output)
+
+    assert result.buffer_address() == output.buffer_address()
+    assert torch.equal(ttnn.to_torch(output), expected)
+
+
+def test_sum_preallocated_output_shape_mismatch(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.zeros(8, 16, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    output = ttnn.from_torch(torch.zeros(1, 16, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not match the reduced shape"):
+        ttnn.sum(input_tensor, dim=0, keepdim=True, output=output)
