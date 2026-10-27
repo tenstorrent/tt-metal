@@ -517,8 +517,10 @@ def slstm_prepare(x, w: TtSLSTM, precision: Precision):
     xn = rms_norm(x, df.NORM_EPS)
     xT = ttnn.transpose(xn, 0, 2)  # [T, 1, B, 512]
     free(xn)
-    WxT = linear(xT, w.w_in, precision, bias=w.bias, dtype=ttnn.float32, config=precision.gate_config(), role="w_in")
+    wx = linear(xT, w.w_in, precision, dtype=ttnn.float32, config=precision.gate_config(), role="w_in")
     free(xT)
+    WxT = ttnn.add(wx, w.bias)  # fp32 gate bias
+    free(wx)
     return WxT
 
 
