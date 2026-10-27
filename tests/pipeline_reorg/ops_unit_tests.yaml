@@ -138,7 +138,7 @@
   category: experimental
 
 - name: ttnn nightly experimental generalized MoE gate op tests
-  cmd: 'pytest models/common/tests/modules/moe/test_generalized_moe_gate.py -xv --timeout=600'
+  cmd: 'pytest models/common/tests/moe/test_generalized_moe_gate.py -xv --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -175,13 +175,13 @@
     --timeout=600
   skus:
     wh_n150_civ2:
-      timeout: 10
+      timeout: 20
     wh_n300_civ2:
-      timeout: 10
+      timeout: 20
     bh_p100:
-      timeout: 10
+      timeout: 20
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 20
   owner_id: U08ADLJ4PLP # Aleksandar Stancov
   team: ttnn
   budget_type: unit
@@ -523,7 +523,7 @@
   cmd: |
     exit_code=0
     # Cheap host-side coverage for the mixed-format cache contract and producer decoding.
-    pytest models/demos/common/prefill/tests/test_prefill_producer_kv_decode.py models/demos/deepseek_v3_d_p/tests/test_sparse_kv_cache_contract.py -vvv --tb=short || exit_code=$?
+    pytest models/demos/common/prefill/tests/test_prefill_producer_kv_decode.py models/demos/common/prefill/tests/test_layer_split.py models/demos/deepseek_v3_d_p/tests/test_sparse_kv_cache_contract.py -vvv --tb=short || exit_code=$?
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check and fabric2d)) and (not test_rope_prefill or 4x2) and (not update_padded_kv_cache or 2x4) and (not rotary_embedding_indexed or 2x4) and (not moe_padding_config or fabric2d-2x4) and (not zero_padded or torus-y-8x1 or fabric2d-2x4) and not single-1 and (not test_hybrid_routed_expert_combine or 8x1) and (not test_prefill_dispatch or ((bf16_in and tile and bf16_out) or (fp8_scaled_in and row_major and fp8_out)))" -m "not extended_model" || exit_code=$?
     exit $exit_code
   skus:

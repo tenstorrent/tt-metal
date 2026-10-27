@@ -34,14 +34,14 @@ void kernel_main() {
     constexpr uint32_t dfb_x_id = tt::CBIndex::c_0;
     constexpr uint32_t dfb_one_id = tt::CBIndex::c_1;
     DataflowBuffer dfb_one_obj(dfb_one_id);
-    constexpr uint32_t dfb_decimal_id = tt::CBIndex::c_2;
+    static constexpr uint32_t dfb_decimal_id = tt::CBIndex::c_2;
     DataflowBuffer dfb_decimal_obj(dfb_decimal_id);
-    constexpr uint32_t dfb_recip_p_decimal_id = tt::CBIndex::c_3;  // recip_p_decimal
+    static constexpr uint32_t dfb_recip_p_decimal_id = tt::CBIndex::c_3;  // recip_p_decimal
     DataflowBuffer dfb_recip_p_decimal_obj(dfb_recip_p_decimal_id);
     constexpr uint32_t dfb_mask_h_id = tt::CBIndex::c_4;
     DataflowBuffer dfb_mask_h_obj(dfb_mask_h_id);
 
-    constexpr uint32_t dfb_y_id = tt::CBIndex::c_16;
+    static constexpr uint32_t dfb_y_id = tt::CBIndex::c_16;
 
     constexpr uint32_t dfb_tmp0_id = tt::CBIndex::c_24;
     constexpr uint32_t dfb_tmp1_id = tt::CBIndex::c_25;
@@ -51,13 +51,13 @@ void kernel_main() {
     constexpr uint32_t dfb_tmp5_id = tt::CBIndex::c_29;
     constexpr uint32_t dfb_tmp6_id = tt::CBIndex::c_30;
 
-    constexpr uint32_t dfb_xabs_id = dfb_tmp0_id;          // |x|
-    constexpr uint32_t dfb_xpow_id = dfb_tmp1_id;          // |x|^p
-    constexpr uint32_t dfb_logx_id = dfb_tmp2_id;          // log(|x|)
-    constexpr uint32_t dfb_exp_lxmd_id = dfb_tmp3_id;      // exp(log(|x|) * decimal)
-    constexpr uint32_t dfb_correct_xpow_id = dfb_tmp4_id;  // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
-    constexpr uint32_t dfb_xpowadd_id = dfb_tmp5_id;       // Add(|x + decimal|^p)
-    constexpr uint32_t dfb_xpowsum_id = dfb_tmp6_id;       // Sum(|x + decimal|^p)
+    static constexpr uint32_t dfb_xabs_id = dfb_tmp0_id;          // |x|
+    static constexpr uint32_t dfb_xpow_id = dfb_tmp1_id;          // |x|^p
+    static constexpr uint32_t dfb_logx_id = dfb_tmp2_id;          // log(|x|)
+    static constexpr uint32_t dfb_exp_lxmd_id = dfb_tmp3_id;      // exp(log(|x|) * decimal)
+    static constexpr uint32_t dfb_correct_xpow_id = dfb_tmp4_id;  // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
+    static constexpr uint32_t dfb_xpowadd_id = dfb_tmp5_id;       // Add(|x + decimal|^p)
+    static constexpr uint32_t dfb_xpowsum_id = dfb_tmp6_id;       // Sum(|x + decimal|^p)
 
     DataflowBuffer dfb_x_obj(dfb_x_id);
     DataflowBuffer dfb_y_obj(dfb_y_id);

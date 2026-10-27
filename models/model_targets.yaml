@@ -10,6 +10,24 @@ description: Centralized perf/accuracy targets for models CI.
 #   Accuracy on an active entry stays enforced.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
+  granite42-30b-qb2:
+    skus:
+      p300x2:
+        entries:
+          - batch_size: 5
+            status: active
+            perf: {}
+            accuracy:
+              # First 10/198 GPQA Diamond questions; preserve the 6/10 release gate.
+              gpqa: 100
+              gpqa_tolerance: 0.4
+            owner_id: U08BGTAMU1W
+            team: models
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
   qwen-image-2.1-p150:
     skus:
       bh_p150:
@@ -38,6 +56,39 @@ targets:
               gpqa: 100
               gpqa_tolerance: 0.2
             owner_id: U03HY7MK4BT
+            team: models
+  gemma4-26b-a4b-qb2:
+    skus:
+      p300x2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy:
+              # First 10/198 Diamond questions, 32K output budget; minimum 80%.
+              gpqa: 100
+              gpqa_tolerance: 0.2
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 8
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 16
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
             team: models
   llama3.1-8b-qb2:
     skus:
@@ -394,8 +445,8 @@ targets:
               # across runs, well beyond the validator's 15% upper-tolerance
               # band. The metric needs to be anchored to a fixed seq_len
               # (see PR #43982 description) before it can gate CI usefully.
-              decode_t/s/u: 4.60
-              decode_t/s: 4.60
+              decode_t/s/u: 5.3
+              decode_t/s: 5.3
               decode_t_s_tolerance: 0.25
               decode_t_s_u_tolerance: 0.25
             accuracy: {}
@@ -406,8 +457,8 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 11.43
-              decode_t/s: 11.43
+              decode_t/s/u: 15.9
+              decode_t/s: 15.9
               prefill_t/s: 449.7
               prefill_time_to_token: 0.1846
               # Widened to +/-30% (default is +/-15%): prefill t/s and TTFT on this leg
@@ -519,8 +570,10 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 26.813
-              decode_t/s: 26.813
+              # QB2 decode is bimodal by runner (37.4 or 44.8 ms/token, same code);
+              # centred so both modes pass at the default +/-15%.
+              decode_t/s/u: 24.5
+              decode_t/s: 24.5
               prefill_t/s: 936.1785
               prefill_time_to_token: 0.0929
               compile_decode: 14.0365
@@ -723,11 +776,17 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 54.4664
-              decode_t/s: 54.4664
+              # QB2 decode is bimodal by runner (2.35 or 3.0 ms/token, same code);
+              # +/-20% around 375 covers both modes.
+              decode_t/s/u: 375.0
+              decode_t/s: 375.0
+              decode_t_s_u_tolerance: 0.2
+              decode_t_s_tolerance: 0.2
               prefill_t/s: 435.0536
               prefill_time_to_token: 0.1701
-              compile_decode: 0.0213
+              # One traced decode step: the trace is captured during prefill warmup.
+              compile_decode: 0.005
+              compile_decode_tolerance: 0.6
               compile_prefill: 47.0974
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -893,7 +952,8 @@ targets:
               decode_t/s: 2462.6055
               prefill_t/s: 5015.9476
               prefill_time_to_token: 0.0249
-              compile_prefill: 92.8422
+              # Includes the 1x1 logprob sampling precompile (~18 s).
+              compile_prefill: 110.0
             accuracy: {}
       wh_llmbox_perf:
         entries:
@@ -930,10 +990,9 @@ targets:
               decode_t/s: 206.9905
               prefill_t/s: 6642.8391
               prefill_time_to_token: 0.0173
-              compile_prefill: 68.64
-              # Widened to +/-30% (default is +/-15%): compile_prefill is cache-sensitive
-              # (76.8s on f10cs06 run 105288186828 vs 68.64s on f10cs09 run 105412280076,
-              # ~12% swing). Observed within +/-30% across both runs (PR #59424, pt.9).
+              # Includes the 1x1 logprob sampling precompile on the DP-8 submeshes.
+              # +/-30%: runner-sensitive (90.4 s f10cs09, 101.8 s f10cs08).
+              compile_prefill: 96.0
               compile_prefill_tolerance: 0.30
             accuracy: {}
       wh_galaxy_perf:
@@ -1320,8 +1379,8 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 3.84
-              decode_t/s: 3.84
+              decode_t/s/u: 9.3
+              decode_t/s: 9.3
               prefill_t/s: 12.8039
               prefill_time_to_token: 1.4058
               compile_decode: 35.88
@@ -2114,7 +2173,8 @@ targets:
             seq_len: null
             status: active
             perf:
-              prefill_time_to_token: 0.4608
+              # First frame is host-bound: 0.20-0.46 s across n150 VMs.
+              prefill_time_to_token: 0.32
               prefill_time_to_token_tolerance: 0.5
               decode_t/s/u: 20.1
               decode_t/s: 20.1
@@ -2208,8 +2268,10 @@ targets:
             seq_len: null
             status: active
             perf:
-              fps: 33.65
-              fps_tolerance: 0.15
+              # Host-bound (input prep, per-sample logging, first-iteration compile):
+              # 32.6-37.5 fps on f10cs06/f10cs08, 40.9-46.3 fps on f10cs09.
+              fps: 39.5
+              fps_tolerance: 0.2
             accuracy:
               top1: 75.456
               top1_tolerance: 0.01
@@ -2553,7 +2615,9 @@ targets:
         entries:
           - status: active
             perf:
-              fps: 0.01396
+              # Scheduled runs 2026-10-20..22: 0.01579, 0.01601, 0.01616 (#57208 cut the per-run encoder reload).
+              # The previous 0.01396 came from one run on a slow-I/O runner.
+              fps: 0.0159
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models

@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
-    DestAccumulation,
     DestSync,
     ReducePool,
 )
@@ -29,15 +29,12 @@ def perf_input_dimensions(formats):
     generate_perf_input_dimensions() gives (max_tiles, 1) and (1, max_tiles) in tiles: 8 at
     16-bit, 4 at 32-bit, the same ceiling the functional sweep uses per format. The square is the
     one extra row-axis case: both factors of row_base = rt * block_ct_dim * REDUCE_TILE_STRIDE
-    exceed one there. The single tile is the like-for-like point against Blackhole, whose
-    perf_sfpu_reduce runs only single 32x32 ReduceRow tiles ({Float32, Int32} x {Max, Sum}). The
-    column axis reduces tile by tile, so its rows across these shapes are knowingly duplicates.
+    exceed one there. The single tile is the like-for-like point against Wormhole and Blackhole,
+    whose perf_sfpu_reduce runs only single 32x32 tiles ({Float32, Int32} x {ReduceRow,
+    ReduceColumn} x {Max, Sum, Average}, less Int32 row Average). The column axis reduces tile by
+    tile, so its rows across these shapes are knowingly duplicates.
     """
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        else DestAccumulation.No
-    )
+    dest_acc = dest_acc_for(formats.input_format)
     return generate_perf_input_dimensions(dest_acc, DestSync.Half) + [
         [2 * TILE_DIM, 2 * TILE_DIM],
         [TILE_DIM, TILE_DIM],

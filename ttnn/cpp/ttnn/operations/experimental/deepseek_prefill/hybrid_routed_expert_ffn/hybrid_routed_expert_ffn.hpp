@@ -33,10 +33,11 @@ using unified::RoutedExpertActivation;
 // remaining combine arguments are required in that mode and ignored otherwise; the index table there is the full
 // (groups, extent, experts_per_chip) one, replicated on every device.
 //
-// The overlap also needs three global semaphores the caller creates once and passes on every call: combine's
-// fwd_arrived and final_arrived receive counts and the routed expert's expert_go start signal. They outlive the
-// program because neighbouring chips bump them across launches. Everything else the overlap places in L1 -- an arena
-// over every worker core when the fused pass runs -- is allocated per call and freed when it returns.
+// The overlap also needs global semaphores the caller creates once and passes on every call: combine's
+// fwd_arrived and final_arrived receive counts, the routed expert's expert_go start signal, and combine's
+// `channel_semaphores` (see hybrid_routed_expert_moe_channel_semaphore_count). They outlive the program because
+// neighbouring chips bump them across launches. Everything else the overlap places in L1 -- an arena over every
+// worker core when the fused pass runs -- is allocated per call and freed when it returns.
 ttnn::Tensor hybrid_routed_expert_moe(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& expert_region_offsets,
@@ -62,7 +63,14 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<GlobalSemaphore>& fwd_arrived_semaphore = std::nullopt,
     const std::optional<GlobalSemaphore>& final_arrived_semaphore = std::nullopt,
     const std::optional<GlobalSemaphore>& expert_go_semaphore = std::nullopt,
-    const std::optional<ttnn::Tensor>& forwarding_buffer = std::nullopt);
+    const std::optional<ttnn::Tensor>& forwarding_buffer = std::nullopt,
+    const std::vector<GlobalSemaphore>& channel_semaphores = {});
+
+// How many `channel_semaphores` the overlap needs on this mesh. Create that many once, before the first
+// overlapped forward, and pass the same ones every call -- combine's channel credits cross chips and
+// launches like fwd_arrived, and by the time combine is built the routed expert's L1 arena holds every free
+// byte, so the op cannot make them itself.
+uint32_t hybrid_routed_expert_moe_channel_semaphore_count(ttnn::MeshDevice* mesh_device, uint32_t combine_axis = 0);
 
 // Combine's DRAM forwarding buffer for the overlap, sized for these arguments (318.6 MB per device at GLM-5.3's
 // shape). Create it once per mesh, before the first overlapped forward, and pass it as `forwarding_buffer` on every

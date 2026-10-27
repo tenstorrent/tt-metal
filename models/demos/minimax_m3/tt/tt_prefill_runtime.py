@@ -443,20 +443,14 @@ class TtPrefillRuntime:
                 KV is written into it. The same object is passed on every call.
             chunks: the forward's PrefillChunk list, in pack order (validate_chunks).
             request_id: the runner's forward index, part of the runner's call contract; unused here.
-            d2h_service: the device-side per-layer ack transport. This runtime emits acks only through
-                the host callback (set_layer_completion_sink), so a caller asking for the D2H path gets a
-                loud error rather than silently missing acks.
-            record_dev: the forward's metadata tensor, passed on every call and unused here (it is the
-                record the D2H ack would carry).
-            metadata_msg: the forward's raw socket metadata tensor; a runtime that captures the forward as a
-                trace consumes it on-device (the words must sit at a fixed address). This runtime does not
-                trace, so it is accepted and ignored.
+            d2h_service: the device-side per-layer ack transport. When None, acks go through the host sink
+                (set_layer_completion_sink).
+            record_dev: the forward's metadata tensor, unused here.
+            metadata_msg: the forward's raw socket metadata tensor, sent as the D2H ack record.
         """
-        if d2h_service is not None:
-            raise NotImplementedError(
-                "MiniMax-M3 prefill emits layer acks through the host callback, not the D2H path; "
-                "run with PREFILL_LAYER_ACK_D2H=0 or wire the D2H ack into this runtime."
-            )
+        assert d2h_service is None or (
+            metadata_msg is not None and len(chunks) == 1
+        ), "the D2H ack needs metadata_msg and one chunk per forward (the record names one chunk)"
         cfg = self.config
         assert self.model_built, "build the model before prefill_forward()"
         # A chunk may start mid-slab (multi-turn continuation resumes at a tile boundary): the input rotation
@@ -485,11 +479,19 @@ class TtPrefillRuntime:
         # host reshard, and the tensors are persistent (do NOT deallocate them here). The KV cache is
         # engine-owned and passed in. If a LayerAck channel is registered, the model bumps it once per layer
         # via on_layer_complete.
-        # Pipelined mode: bind the forward's chunks per call so the synchronous callback reads no mutable state.
-        if self._layer_completion_sink is not None:
+        # on_layer_complete runs once the layer is enqueued; the ack must not reach the host before the
+        # layer's cache writes have executed.
+        if d2h_service is not None:
+
+            def on_layer_complete(layer_idx: int) -> None:
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
+
+        elif self._layer_completion_sink is not None:
+            # Pipelined mode: bind the forward's chunks per call so the synchronous callback reads no mutable state.
             sink = self._layer_completion_sink
 
             def on_layer_complete(layer_idx: int) -> None:
+                ttnn.synchronize_device(self.mesh_device)
                 # The model reports a rank-local layer index. Empty chunks write no KV, so they report nothing.
                 global_layer = cfg.first_layer_idx + layer_idx
                 for c in chunks:
@@ -525,6 +527,10 @@ class TtPrefillRuntime:
         prefill_forward() call."""
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
+
+    def set_d2h_ack_service(self, service) -> None:
+        """The runner calls this only for traced runtimes; this one takes the service per forward in prefill_forward."""
+        raise NotImplementedError("MiniMax-M3 prefill does not trace")
 
     def gather_layer(self, kv_cache, slot_id: int, layer_idx: int, n_tokens: int):
         """Read one layer's device cache back to NATURAL token order (un-rotating the block-cyclic SP

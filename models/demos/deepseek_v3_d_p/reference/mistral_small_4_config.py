@@ -38,12 +38,23 @@ class MistralSmall4Config:
     # Max fabric packet payload: one bf16 hidden row + the fabric-2D routing header. The 64 must equal
     # CMB_FABRIC2D_ROUTING_INFO_BYTES (tt/moe/init_helpers.py); keep them in sync if the format changes.
     FABRIC_PAYLOAD_SIZE = EMB_SIZE * 2 + 64
+    USE_FUSED_PREFILL_RMSNORM = True
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension (also the shared expert's)
+    # Routed-expert hybrid split: experts with <= this many active tokens go to moe_fused_swiglu, the
+    # rest to unified_routed_expert_moe. Swept 64/96/128/192 at a 1536-token prompt: all within
+    # run-to-run drift, 128 lowest (320 was slower). Re-measure if the routed-expert matmul shape,
+    # expert count, activation or either kernel changes.
+    ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 128
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension; unused - NUM_DENSE_LAYERS is 0
 
     # MoE configuration
+    ROUTED_EXPERT_COMBINE_OVERLAP = True
     NUM_ROUTED_EXPERTS = 128  # n_routed_experts
     NUM_EXPERTS_PER_TOKEN = 4  # num_experts_per_tok
+    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
+    # what it trades. Held at 8: top-4 leaves the region shallow, and halving it again costs this model
+    # 15.3% on hot_expert traffic -- the worst of the eight -- to save 13 -> 7 MB a chip.
+    COMBINE_FWD_REDUCTION = 8
     NUM_SHARED_EXPERTS = 1  # n_shared_experts
     NUM_EXPERT_GROUPS = 1  # n_group
     NUM_LIMITED_GROUPS = 1  # topk_group
@@ -135,6 +146,8 @@ def mistral4_hf_config(max_seq: int = 8192):
         # Mistral's softmax scale is a plain qk_head_dim ** -0.5 - see module docstring.
         mla_disable_yarn_mscale=True,
         mla_chunked_sdpa_matmul_fidelity="LoFi",
+        mla_chunked_clamp_attention_to_valid_end=True,
+        mla_merge_qkv_a=True,
         # rope_parameters renamed to rope_scaling, with "type" retained for the reference's
         # _init_rope dispatch.
         rope_scaling={

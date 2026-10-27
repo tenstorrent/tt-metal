@@ -90,8 +90,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "params.h"
-#include "sfpu/ckernel_sfpu_fill.h"
 
 // Scaler multiplier applied to the reduction (matches the Compute API default).
 static constexpr float REDUCE_SCALER = 1.0f;

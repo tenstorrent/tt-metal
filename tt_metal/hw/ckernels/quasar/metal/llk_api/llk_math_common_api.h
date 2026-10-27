@@ -29,12 +29,9 @@ inline constexpr bool always_false_v = false;
  * @brief Configures math hardware.
  * Sets up ALU formats for math destination register and source registers.
  *
- * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
  * @tparam EN_32BIT_DEST_FORMAT: Set to true to use 32bit math dest in Float32 or Int32 format
- * @param srca_operand: The srcA input operand circular buffer, used to infer srcA data_format if not implied math
- * format
- * @param srcb_operand: The srcB input operand circular buffer, used to infer srcB data_format if not implied math
- * format
+ * @param srca_operand: The srcA input operand circular buffer, used to infer the srcA data_format
+ * @param srcb_operand: The srcB input operand circular buffer, used to infer the srcB data_format
  */
 template <bool EN_32BIT_DEST_FORMAT>
 inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
@@ -44,7 +41,7 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     const DataFormat srca_format = static_cast<DataFormat>(unpack_dst_format[srca_operand_id]);
     const DataFormat srcb_format = static_cast<DataFormat>(unpack_dst_format[srcb_operand_id]);
 
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, EN_32BIT_DEST_FORMAT>(srca_format, srcb_format);
+    _llk_math_srcAB_hw_configure_<EN_32BIT_DEST_FORMAT>(srca_format, srcb_format);
 }
 
 inline void llk_math_reconfig_remap(const bool /*remap_enable*/) {}

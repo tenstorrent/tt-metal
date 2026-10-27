@@ -165,6 +165,10 @@ void kernel_main() {
 
     DataflowBuffer dfb_eps(dfb_eps_id);
     DataflowBuffer dfb_scaler(dfb_scaler_id);
+    // The reader pushes the reduce scaler tile(s) once. The variance reduce below reads them by index on both
+    // the LayerNorm and RMSNorm paths, so they are waited for once after hw startup (row_wise_mean also waits,
+    // which is a no-op re-wait) and popped at the end.
+    constexpr uint32_t num_scaler_tiles = norm::layernorm::reduce_scaler_tile_count(W, tile_width);
     DataflowBuffer dfb_in(dfb_in_id);
 #ifdef TILIZE_IN
     DataflowBuffer dfb_in_rm(dfb_in_rm_id);
@@ -215,7 +219,8 @@ void kernel_main() {
 #else
     compute_kernel_hw_startup(dfb_in_id, dfb_scaler_id, dfb_ex_id);
 #endif
-#endif                      // FUSE_PRE_ADD
+#endif  // FUSE_PRE_ADD
+    dfb_scaler.wait_front(num_scaler_tiles);
     dfb_eps.wait_front(1);  // comes from the reader
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -483,14 +488,12 @@ void kernel_main() {
         dfb_ex2pe.pop_front(onetile);
     }  // NCHt loop
 
-    // The reduce scalers are pushed once by the reader and waited inside row_wise_mean (or
-    // row_wise_mean_with_pre_add), which never pops them. Those calls compute E[x], so they are
-    // compiled out under RMSNORM and the pop carries the same condition. reduce_scaler_tile_count
-    // is needed to determine the number of tiles to pop, since the number is different for
-    // different compile time args.
-#ifndef RMSNORM
-    dfb_scaler.pop_front(norm::layernorm::reduce_scaler_tile_count(W, tile_width));
-#endif
+    // The reduce scalers are pushed once by the reader (on both the LayerNorm and RMSNorm paths) and
+    // waited above; nothing else pops them. reduce_scaler_tile_count gives the number pushed, which
+    // depends on the compile time args. dummy_unpack orders the pop after the wait on Quasar for a core
+    // whose row loop never unpacked the scaler (TEN-4746).
+    dummy_unpack(dfb_scaler_id);
+    dfb_scaler.pop_front(num_scaler_tiles);
 
     // The epsilon tile is pushed once by the reader and read on every NCHt iteration, so it is
     // waited once up front rather than per iteration. Pop it here to balance the buffer.

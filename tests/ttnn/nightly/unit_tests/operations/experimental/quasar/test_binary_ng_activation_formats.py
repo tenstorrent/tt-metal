@@ -7,8 +7,9 @@
 Cases named wh_bh_descriptor cover the WH/BH descriptor implementation, not
 Quasar regressions awaiting a fix. Cases named shared_dfb and the sharded tests
 remain enabled for Quasar's supported routing as well as WH/BH. See
-QUASAR_PARITY_GAPS.md for the factory capability boundary. With TTNN_QSR_NATIVE
-on, the bf16 no-broadcast tensor-tensor cases run on the Quasar-native factory.
+QUASAR_PARITY_GAPS.md for the factory capability boundary. On Quasar, the
+no-broadcast tensor-tensor cases that the native gate admits run on the
+Quasar-native factory, unless TTNN_QSR_NATIVE=0.
 Passing on WH/BH does not validate Quasar-specific LLKs or packers.
 """
 
@@ -18,6 +19,7 @@ import pytest
 import torch
 
 import ttnn
+from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
 
 _WH_BH_ONLY = pytest.mark.skipif(
     ttnn.get_arch_name() not in ("wormhole_b0", "blackhole"),
@@ -83,7 +85,7 @@ def test_fused_activation_formats(device, op_name, a_dtype, b_dtype, shapes, sid
     out = getattr(ttnn.experimental.quasar, op_name)(
         a, b, dtype=ttnn.bfloat16, sub_core_grids=_GRID, **_activations(side)
     )
-    torch.testing.assert_close(ttnn.to_torch(out).float(), expected, rtol=0, atol=0)
+    assert_equal(expected, ttnn.to_torch(out).float())
 
 
 @pytest.mark.parametrize("op_name", ["subtract", "multiply"])
@@ -106,7 +108,7 @@ def test_fused_scalar_activation_formats(device, op_name, dtype, side):
     out = getattr(ttnn.experimental.quasar, op_name)(
         a, scalar, dtype=ttnn.bfloat16, sub_core_grids=_GRID, **_activations(side)
     )
-    torch.testing.assert_close(ttnn.to_torch(out).float(), expected, rtol=0, atol=0)
+    assert_equal(expected, ttnn.to_torch(out).float())
 
 
 @pytest.mark.parametrize("op_name", ["add", "multiply"])
@@ -127,7 +129,7 @@ def test_fused_activation_sharded_chunks(device, op_name, dtype, side):
     out = getattr(ttnn.experimental.quasar, op_name)(
         a, b, dtype=ttnn.bfloat16, memory_config=memory, sub_core_grids=_GRID, **_activations(side)
     )
-    torch.testing.assert_close(ttnn.to_torch(out).float(), expected, rtol=0, atol=0)
+    assert_equal(expected, ttnn.to_torch(out).float())
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
@@ -145,4 +147,4 @@ def test_activation_intermediate_format(device, dtype, shapes):
     # LOGADDEXP's implicit EXP preprocessing changes block-float inputs to BF16
     # intermediates. The SrcA reference must describe the intermediate, not input.
     out = ttnn.experimental.quasar.logaddexp(a, b, dtype=ttnn.bfloat16, sub_core_grids=_GRID)
-    torch.testing.assert_close(ttnn.to_torch(out).float(), torch.logaddexp(ah, bh), rtol=0.03, atol=0.03)
+    assert_allclose(torch.logaddexp(ah, bh), ttnn.to_torch(out).float(), rtol=0.03, atol=0.03)

@@ -23,7 +23,8 @@
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
-#include "context/context_types.hpp"
+#include "impl/context/context_types.hpp"
+#include "impl/device/device_impl.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
@@ -35,8 +36,8 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class Allocator;
@@ -93,8 +94,8 @@ private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
     private:
-        std::vector<MaybeRemote<IDevice*>> devices_;
-        std::map<ChipId, IDevice*> opened_local_devices_;
+        std::vector<MaybeRemote<Device*>> devices_;
+        std::map<ChipId, Device*> opened_local_devices_;
         ContextId context_id_ = DEFAULT_CONTEXT_ID;
 
     public:
@@ -122,13 +123,9 @@ private:
         ScopedDevices(const ScopedDevices&) = delete;
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
-        // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
-        [[deprecated("This function is deprecated. Use opened_local_devices() instead.")]]
-        const std::vector<IDevice*>& local_root_devices() const;
+        const std::map<ChipId, Device*>& opened_local_devices() const;
 
-        const std::map<ChipId, IDevice*>& opened_local_devices() const;
-
-        const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
+        const std::vector<MaybeRemote<Device*>>& root_devices() const;
     };
 
     // THREAD SAFETY: Enqueueing work on the device should be thread safe. Operations that modify state should be
@@ -154,7 +151,7 @@ private:
     MetalEnvImpl* metal_env_ = nullptr;
     // Legacy path (MeshDevice::create): the MetalContext instance is managed externally and is
     // not destroyed when the MeshDevice closes.
-    // New path (MetalEnv::create_mesh_device): a MetalContext instance is created for the
+    // New path (MeshDevice::open_mesh_device): a MetalContext instance is created for the
     // MeshDevice, and when the MeshDevice closes it also destroys the associated MetalContext.
     bool destroy_metal_context_instance_on_close_ = false;
     std::shared_ptr<ScopedDevices> scoped_devices_;
@@ -163,10 +160,10 @@ private:
     // The view's local devices, which the view fixes when it is constructed. Held here because the
     // accessors that cross-check a property against every device would otherwise rebuild this list
     // on every call. Rewritten when a reshape swaps the view, under the api lock.
-    std::vector<IDevice*> local_devices_;
+    std::vector<Device*> local_devices_;
     // Filled on first use per range and cleared by reshape, both under the api lock, which the
     // dispatch path also holds while it reads an entry by reference.
-    mutable std::unordered_map<MeshCoordinateRange, std::vector<IDevice*>> local_devices_by_range_;
+    mutable std::unordered_map<MeshCoordinateRange, std::vector<Device*>> local_devices_by_range_;
     // The mesh-wide properties that are fixed once the devices are open. Each is otherwise answered
     // by a cross-device agreement check that walks the whole mesh, and the dispatch path asks for
     // several of them once per program on every enqueue. Established as a unit (see
@@ -186,7 +183,6 @@ private:
         uint32_t l1_size_per_core = 0;
         uint32_t dram_size_per_channel = 0;
         std::set<CoreCoord> ethernet_cores;
-        std::set<CoreCoord> storage_only_cores;
     };
     std::optional<MeshProperties> mesh_properties_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
@@ -233,7 +229,7 @@ private:
     // lives until its last holder does.
     std::shared_ptr<experimental::HostRegion> host_region_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
-    IDevice* reference_device() const;
+    Device* reference_device() const;
     // Recursively quiesce all submeshes.
     void quiesce_internal();
 
@@ -362,7 +358,6 @@ public:
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
         ttsl::Span<const SubDeviceId> sub_device_ids) const override;
     const std::set<CoreCoord>& ethernet_cores() const override;
-    const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
     SystemMemoryManager& sysmem_manager() override;
@@ -469,10 +464,10 @@ public:
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
 
     // Returns the devices in the mesh in row-major order.
-    std::vector<IDevice*> get_devices() const;
-    const std::vector<IDevice*>& get_local_devices(const MeshCoordinateRange& range) const;
-    IDevice* get_device(ChipId physical_device_id) const;
-    IDevice* get_device(const MeshCoordinate& coord) const;
+    std::vector<Device*> get_devices() const;
+    const std::vector<Device*>& get_local_devices(const MeshCoordinateRange& range) const;
+    Device* get_device(ChipId physical_device_id) const;
+    Device* get_device(const MeshCoordinate& coord) const;
     tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
 
     // The MPI ranks driving at least one device of this mesh, sorted; empty when this rank drives
@@ -493,7 +488,7 @@ public:
     // TODO: #17477 - Remove the methods that assume 2D mesh.
     size_t num_rows() const;
     size_t num_cols() const;
-    IDevice* get_device(size_t row_idx, size_t col_idx) const;
+    Device* get_device(size_t row_idx, size_t col_idx) const;
 
     // Returns true if the coordinate is local to this mesh device.
     // Throws if the coordinate is out of bounds of this mesh device.

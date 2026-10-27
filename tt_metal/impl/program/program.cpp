@@ -11,6 +11,7 @@
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/detail/reports/memory_reporter.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include <numeric>
 #include <ranges>
 #include <tt_align.hpp>
 #include <algorithm>
@@ -99,6 +100,7 @@
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <fmt/ranges.h>
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt {
 enum CBIndex : std::uint8_t;
@@ -467,20 +469,9 @@ detail::ProgramImpl::ProgramImpl(ContextId context_id) :
 detail::ProgramImpl::~ProgramImpl() noexcept {
     // Deallocate circular buffers and unregister from devices
     deallocate_circular_buffers();
-    persistent_l1_seals_.clear();
+    cb_allocation_metadata_.seals.clear();
+    dfb_allocation_metadata_.seals.clear();
     Inspector::program_destroyed(this);
-}
-
-DeviceAddr detail::ProgramImpl::reserve_program_local_l1(const IDevice* device, const CoreRangeSet& cores) {
-    auto& arena = device->allocator_impl()->persistent_l1();
-    auto& sealed_cores = persistent_l1_seals_[&arena];
-    for (const CoreCoord& core : corerange_to_cores(cores)) {
-        if (sealed_cores.contains(core)) {
-            continue;
-        }
-        sealed_cores.emplace(core, arena.seal(CoreRangeSet(CoreRange(core))));
-    }
-    return arena.high_water_mark(cores);
 }
 
 Program::Program() : internal_(std::make_shared<detail::ProgramImpl>()) {
@@ -652,6 +643,10 @@ KernelHandle detail::ProgramImpl::add_kernel(
                     coreCoord.str());
             }
         }
+    }
+
+    if (!kernel->scratchpad_binding_handles().empty()) {
+        register_ephemeral_allocation(this->dfb_allocation_metadata_, kernel->core_range_set());
     }
 
     kernels_[index].insert({id, kernel});
@@ -956,6 +951,7 @@ KernelGroup::KernelGroup(
     }
 
     std::set<NOC_MODE> noc_modes;
+    bool brisc_specifies_noc = false;
     for (auto kernel_id : this->kernel_ids) {
         const auto kernel = program.get_kernel(kernel_id);
         auto num_binaries = kernel->expected_num_binaries();
@@ -985,6 +981,7 @@ KernelGroup::KernelGroup(
                             noc_modes.insert(arg.noc_mode);
                             // Use brisc's noc if brisc specifies a noc
                             kernel_config.brisc_noc_id() = arg.noc;
+                            brisc_specifies_noc = true;
                             // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
                             // DM_DEDICATED_NOC
                             if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
@@ -994,10 +991,11 @@ KernelGroup::KernelGroup(
                             kernel->get_kernel_processor_type(0) ==
                             ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                             noc_modes.insert(arg.noc_mode);
-                            // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
-                            // If both brisc and ncrisc set the noc, then this is safe due to prior correctness
-                            // validation
-                            kernel_config.brisc_noc_id() = 1 - arg.noc;
+                            // Use 1-ncrisc's noc (the other noc) unless brisc specifies a noc: the two agree
+                            // except when both kernels share one dedicated noc, where brisc's is the one in use
+                            if (!brisc_specifies_noc) {
+                                kernel_config.brisc_noc_id() = 1 - arg.noc;
+                            }
                             // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to
                             // DM_DEDICATED_NOC
                             if (arg.noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
@@ -1309,26 +1307,6 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
     }
 }
 
-void detail::ProgramImpl::CircularBufferAllocator::mark_address(
-    uint64_t address, uint64_t size, uint64_t base_address) {
-    if (this->l1_regions.empty()) {
-        this->l1_regions.emplace_back(base_address, base_address);
-    }
-    auto& last_region = this->l1_regions.back();
-    if (address < last_region.second) {
-        TT_THROW(
-            "Local buffer address {} has to append to last L1 region [{}, {}) or be at a higher address",
-            address,
-            last_region.first,
-            last_region.second);
-    }
-    if (address == last_region.second) {
-        last_region.second += size;
-    } else {
-        this->l1_regions.emplace_back(address, address + size);
-    }
-}
-
 CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer) {
     // Metal 2.0 programs use DataflowBuffers, never legacy circular buffers.
     TT_FATAL(
@@ -1387,16 +1365,10 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
                 add_buffer_indices(circular_buffer->config().remote_buffer_indices(), remote_cb_indices);
             }
         }
-
-        // There is one CircularBufferAllocator per unique core range, create one if it does not already exist for
-        // current core range
-        auto val = std::find_if(
-            cb_allocators_.begin(), cb_allocators_.end(), [&core_range](const CircularBufferAllocator& cb_allocator) {
-                return cb_allocator.core_range == core_range;
-            });
-        if (val == cb_allocators_.end()) {
-            this->cb_allocators_.emplace_back(core_range);
-        }
+    }
+    // A globally allocated CB does need l1 allocation
+    if (!circular_buffer->globally_allocated()) {
+        register_ephemeral_allocation(this->cb_allocation_metadata_, circular_buffer->core_ranges());
     }
 
     this->circular_buffers_.push_back(circular_buffer);
@@ -2215,10 +2187,31 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     if (this->local_circular_buffer_allocation_needed_) {
         return;
     }
-    for (CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
-        cb_allocator.reset_available_addresses();
-    }
+    invalidate_ephemeral_allocation_metadata(this->cb_allocation_metadata_);
     this->local_circular_buffer_allocation_needed_ = true;
+}
+
+void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
+    // Shared scratchpads allocate over the union of their binders' nodes. Register
+    // those exact ranges before initializing region bases and allocating DFBs.
+    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, CoreRangeSet> shared_cores;
+    for (const auto& kernels_of_core_type : this->kernels_) {
+        for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            for (const auto& handle : kernel->scratchpad_binding_handles()) {
+                if (handle.shared_allocation_identifier) {
+                    auto& cores = shared_cores[*handle.shared_allocation_identifier];
+                    cores = cores.merge(kernel->core_range_set());
+                }
+            }
+        }
+    }
+    for (const auto& [identifier, cores] : shared_cores) {
+        register_ephemeral_allocation(this->dfb_allocation_metadata_, cores);
+    }
+
+    auto& persistent_l1 = device->allocator_impl()->persistent_l1();
+    tt::tt_metal::detail::prepare_ephemeral_allocation(this->cb_allocation_metadata_, persistent_l1);
+    tt::tt_metal::detail::prepare_ephemeral_allocation(this->dfb_allocation_metadata_, persistent_l1);
 }
 
 // Scratchpad is a Metal 2.0-only construct.
@@ -2228,6 +2221,48 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
     }
 
     const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
+
+    // Set address to a given scratchpad binding handle and it's kernel
+    auto set_address_on_scratchpad = [](DeviceAddr addr, ScratchpadBindingHandle& handle, Kernel& kernel) {
+        TT_FATAL(
+            addr != 0,
+            "Internal error: scratchpad '{}' on kernel '{}' "
+            "has a 0 allocated address (allocation failed or was skipped).",
+            handle.accessor_name,
+            kernel.name());
+
+        handle.allocated_address = static_cast<uint32_t>(addr);
+
+        // Patch the allocated address into the kernel's CRTA buffer if it exists.
+        // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
+        // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
+        // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
+        // handle.allocated_address into the scratchpad section when it builds the buffer.
+        // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
+        //
+        // Usage of the CRTA buffer:
+        //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
+        //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
+        if (!kernel.common_runtime_args().empty()) {
+            RuntimeArgsData& crta = kernel.common_runtime_args_data();
+            crta[handle.addr_crta_word] = handle.allocated_address;
+        }
+    };
+
+    // Backticks needed to set a binding handle's address
+    struct ScratchpadBindingRef {
+        ScratchpadBindingHandle& handle;
+        Kernel& kernel;
+    };
+
+    // Multiple Scratchpad bindings could share the same allocation through:
+    // ScratchpadAdvancedOptions::allow_instance_multi_binding.
+    //
+    // Shared allocation are identified by an ID.
+    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, std::vector<ScratchpadBindingRef>>
+        multi_binded_scratchpads;
+
+    // Going through all single-binded scratchpads
     for (auto& kernels_of_core_type : this->kernels_) {
         for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
             auto& scratchpad_handles = kernel->scratchpad_binding_handles();
@@ -2235,75 +2270,32 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 continue;
             }
             const CoreRangeSet& kernel_cores = kernel->core_range_set();
-            const DeviceAddr persistent_base = reserve_program_local_l1(device, kernel_cores);
-
             for (auto& handle : scratchpad_handles) {
-                // A scratchpad bumps onto the program-scope L1 region, stacking on top of any DFBs.
-                // (DFBs and CBs are mutually exclusive, so dfb_allocators_ own the whole region.)
-                // Ensure a CircularBufferAllocator exists for each of the kernel's core ranges:
-                // a scratchpad-bearing kernel may have no DFBs, so the allocators may not exist yet.
-                for (const CoreRange& core_range : kernel_cores.ranges()) {
-                    bool exists = false;
-                    for (const CircularBufferAllocator& a : this->dfb_allocators_) {
-                        if (a.core_range == core_range) {
-                            exists = true;
-                            break;
-                        }
-                    }
-                    if (!exists) {
-                        this->dfb_allocators_.emplace_back(core_range);
-                    }
+                // Multi-binded scratchpad, let's collect it and deal with it later
+                if (auto id = handle.shared_allocation_identifier) {
+                    multi_binded_scratchpads[*id].emplace_back(handle, *kernel);
+                    continue;
                 }
 
-                // Uniform per-node base address: the scratchpad address is delivered as a CRTA.
-                // It must sit at the same L1 offset everywhere that it exists.
-                // Take the max region-end over EVERY allocator that intersects the kernel's cores
-                // (not just exact-range matches), so the scratchpad cannot overlap a DFB on
-                // an overlapping-but-different core range. Mark each such allocator exactly once.
-                std::vector<CircularBufferAllocator*> touched;
-                touched.reserve(this->dfb_allocators_.size());
-                for (CircularBufferAllocator& a : this->dfb_allocators_) {
-                    for (const CoreRange& core_range : kernel_cores.ranges()) {
-                        if (a.core_range.intersects(core_range)) {
-                            touched.push_back(&a);
-                            break;
-                        }
-                    }
-                }
-                uint64_t addr = persistent_base;
-                for (const CircularBufferAllocator* a : touched) {
-                    addr = std::max<uint64_t>(addr, a->get_cb_region_end());
-                }
-                addr = align(addr, alignment);
-                for (CircularBufferAllocator* a : touched) {
-                    const uint64_t allocator_base = reserve_program_local_l1(device, CoreRangeSet(a->core_range));
-                    a->mark_address(addr, handle.size_bytes, allocator_base);
-                }
-
-                handle.allocated_address = static_cast<uint32_t>(addr);
-
-                TT_FATAL(
-                    handle.allocated_address != 0,
-                    "Internal error: scratchpad '{}' on kernel '{}' "
-                    "has a 0 allocated address (allocation failed or was skipped).",
-                    handle.accessor_name,
-                    kernel->name());
-
-                // Patch the allocated address into the kernel's CRTA buffer if it exists.
-                // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
-                // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-                // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
-                // handle.allocated_address into the scratchpad section when it builds the buffer.
-                // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
-                //
-                // Usage of the CRTA buffer:
-                //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
-                //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
-                if (!kernel->common_runtime_args().empty()) {
-                    RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                    crta[handle.addr_crta_word] = handle.allocated_address;
-                }
+                DeviceAddr addr =
+                    allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
+                set_address_on_scratchpad(addr, handle, *kernel);
             }
+        }
+    }
+
+    // Now let's deal with multi-binded scratchpads
+    for (auto& [id, refs] : multi_binded_scratchpads) {
+        auto size_bytes = refs.front().handle.size_bytes;
+
+        CoreRangeSet cores = std::accumulate(
+            refs.begin(), refs.end(), CoreRangeSet{}, [](const CoreRangeSet& cores, const auto& handle) {
+                return cores.merge(handle.kernel.core_range_set());
+            });
+
+        DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, cores, size_bytes, alignment);
+        for (auto& handle : refs) {
+            set_address_on_scratchpad(addr, handle.handle, handle.kernel);
         }
     }
 
@@ -2319,7 +2311,7 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
         dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device);
     if (mesh_device != nullptr) {
         // Mesh device: track all sub-devices
-        const auto sub_devices = mesh_device->get_devices();
+        const auto sub_devices = mesh_device->impl().get_devices();
         devices_to_track.reserve(sub_devices.size());
         for (IDevice* sub_device : sub_devices) {
             devices_to_track.push_back(sub_device);
@@ -2369,11 +2361,6 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     }
 
     for (const auto& circular_buffer : this->circular_buffers_) {
-        if (!circular_buffer->globally_allocated()) {
-            reserve_program_local_l1(device, circular_buffer->core_ranges());
-        }
-    }
-    for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
             for (const IDevice* dev : devices_to_track) {
@@ -2387,32 +2374,11 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
             continue;
         }
 
-        uint64_t computed_addr = reserve_program_local_l1(device, circular_buffer->core_ranges());
-        for (const CoreRange& core_range : circular_buffer->core_ranges().ranges()) {
-            // Need the max available address across all cores circular buffer is placed on
-            for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
-                if (cb_allocator.core_range == core_range) {
-                    computed_addr = std::max(computed_addr, cb_allocator.get_cb_region_end());
-                    break;
-                }
-            }
-        }
-        computed_addr = align(computed_addr, device->allocator()->get_alignment(BufferType::DRAM));
-        for (const CoreRange& core_range : circular_buffer->core_ranges().ranges()) {
-            for (CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
-                if (cb_allocator.core_range.intersects(core_range)) {
-                    if (cb_allocator.core_range != core_range and computed_addr < cb_allocator.get_cb_region_end()) {
-                        // Intersecting core range has already been marked to have allocation at this address. This
-                        // could have been marked by a circular buffer on a core range disjoint from current
-                        // `core_range` but also intersecting `cb_allocator.core_range`
-                        continue;
-                    }
-                    const uint64_t allocator_base =
-                        reserve_program_local_l1(device, CoreRangeSet(cb_allocator.core_range));
-                    cb_allocator.mark_address(computed_addr, circular_buffer->size(), allocator_base);
-                }
-            }
-        }
+        const uint64_t computed_addr = allocate_dfb(
+            this->cb_allocation_metadata_,
+            circular_buffer->core_ranges(),
+            circular_buffer->size(),
+            device->allocator()->get_alignment(BufferType::DRAM));
         // Report CB allocation for ALL devices being tracked
         for (const IDevice* dev : devices_to_track) {
             tt::tt_metal::GraphTracker::instance().track_allocate_cb(
@@ -2470,7 +2436,7 @@ void merge_cb_stats_intervals(
 
 void detail::ProgramImpl::merge_cb_l1_regions_by_core_range(
     std::map<CoreRange, std::vector<std::pair<uint64_t, uint64_t>>>& regions_per_range) const {
-    for (const auto& cb_allocator : cb_allocators_) {
+    for (const auto& cb_allocator : cb_allocation_metadata_.regions) {
         merge_cb_stats_intervals(regions_per_range[cb_allocator.core_range], cb_allocator.l1_regions);
     }
 }
@@ -2527,7 +2493,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::vector<AllocatorImpl*> physical_allocators;
     if (hybrid_mode) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            const auto mesh_devices = mesh->get_devices();
+            const auto mesh_devices = mesh->impl().get_devices();
             physical_allocators.reserve(mesh_devices.size());
             for (IDevice* dev : mesh_devices) {
                 physical_allocators.push_back(dev->allocator_impl().get());
@@ -2543,7 +2509,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     std::vector<const IDevice*> devices_for_svc_check;
     if (svc.has_any_claims()) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            const auto mesh_devices = mesh->get_devices();
+            const auto mesh_devices = mesh->impl().get_devices();
             devices_for_svc_check.reserve(mesh_devices.size());
             for (IDevice* dev : mesh_devices) {
                 devices_for_svc_check.push_back(dev);
@@ -2553,7 +2519,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
         }
     }
 
-    for (const CircularBufferAllocator& cb_allocator : this->cb_allocators_) {
+    for (const auto& cb_allocator : this->cb_allocation_metadata_.regions) {
         if (cb_allocator.l1_regions.empty()) {
             continue;
         }
@@ -3103,12 +3069,11 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 
 void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
-    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+    uint64_t device_hash = BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
                                .get_device_build_env(mesh_device->build_id())
                                .build_key();
-    if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
+    if (not mesh_device->impl().metal_env().get_hal().is_coordinate_virtualization_enabled()) {
         ttsl::hash::hash_combine(device_hash, mesh_device->id());
     }
     if (!is_cached()) {
@@ -3123,7 +3088,7 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
-        ProgramCommandSequence program_command_sequence{metal_ctx};
+        ProgramCommandSequence program_command_sequence{mesh_device->impl().metal_context()};
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
@@ -3144,12 +3109,11 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
 
 void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
-    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(mesh_device));
 
-    uint64_t device_hash = BuildEnvManager::get_instance(extract_context_id(mesh_device))
+    uint64_t device_hash = BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
                                .get_device_build_env(mesh_device->build_id())
                                .build_key();
-    if (not metal_ctx.hal().is_coordinate_virtualization_enabled()) {
+    if (not mesh_device->impl().metal_env().get_hal().is_coordinate_virtualization_enabled()) {
         device_hash = (device_hash << 32) | (mesh_device->id());
     }
     if (!is_cached()) {
@@ -3164,7 +3128,7 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->determine_sub_device_ids(mesh_device).at(0);
-        ProgramCommandSequence program_command_sequence{metal_ctx};
+        ProgramCommandSequence program_command_sequence{mesh_device->impl().metal_context()};
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id);
         program_dispatch::assemble_device_commands(
@@ -3188,17 +3152,18 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     TTZoneScopedDN(PROGRAM, "CompileProgram");
 
     const ContextId device_context_id = extract_context_id(device);
-    // Metal 1.0 CreateProgram() always stores DEFAULT_CONTEXT_ID because no MetalEnv/device is
+    // The no-argument CreateProgram() / Program() always store DEFAULT_CONTEXT_ID because no MetalEnv/device is
     // available at construction. MetalContext::instance(DEFAULT_CONTEXT_ID) already bridges that
     // case: when slot 0 is empty it aliases to a live non-default context (mock-only /
     // coexistence) instead of opening silicon. Allow DEFAULT programs on any device so that
     // bridge keeps working; do not overwrite context_id_. Reject only a real mismatch where the
-    // program was explicitly bound (Metal 2.0 MakeProgramFromSpec) to a different context.
+    // program was explicitly bound (CreateProgram(MeshDevice&) or Metal 2.0 MakeProgramFromSpec) to a
+    // different context.
     TT_FATAL(
         context_id_ == DEFAULT_CONTEXT_ID || context_id_ == device_context_id,
         "Program {} was created for context_id {} but is being compiled on a device from context_id {}. "
         "A program bound to a non-default context must be compiled on a device from that same context "
-        "(Metal 2.0 MakeProgramFromSpec / future CreateProgram(MetalEnv)).",
+        "(CreateProgram(MeshDevice&) / Metal 2.0 MakeProgramFromSpec).",
         this->id,
         context_id_.get(),
         device_context_id.get());
@@ -3424,6 +3389,7 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
         return;
     }
     this->compile(device, force_slow_dispatch);
+    this->prepare_ephemeral_allocation(device);
     this->allocate_circular_buffers(device);
     this->validate_circular_buffer_core_ranges(device);
     this->validate_circular_buffer_region(device);
@@ -3443,13 +3409,13 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
         !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
     this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
     this->simple_l1_validation_region_end_ = 0;
-    for (const auto& cb_allocator : this->cb_allocators_) {
+    for (const auto& cb_allocator : this->cb_allocation_metadata_.regions) {
         if (!cb_allocator.l1_regions.empty()) {
             this->simple_l1_validation_region_end_ =
                 std::max(this->simple_l1_validation_region_end_, cb_allocator.l1_regions.back().second);
         }
     }
-    for (const auto& dfb_allocator : this->dfb_allocators_) {
+    for (const auto& dfb_allocator : this->dfb_allocation_metadata_.regions) {
         if (!dfb_allocator.l1_regions.empty()) {
             this->simple_l1_validation_region_end_ =
                 std::max(this->simple_l1_validation_region_end_, dfb_allocator.l1_regions.back().second);

@@ -22,11 +22,14 @@ import os
 from pathlib import Path
 from typing import Callable, Optional
 
+from loguru import logger
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, TtAttnResWalk
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX, load_attn_res_weights
+from models.demos.deepseek_v3_d_p.tt.kda.config import KIMI_K3_PROJECTION_DTYPE
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, K3KdaChunk, build_attention
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.block import TtKimiK3Block
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.kda_state import KdaStateCache
@@ -64,11 +67,20 @@ class TtKimiK3Transformer(LightweightModule):
         but a silently wrong model, because `ttnn.as_tensor` writes whatever tensor it is handed when
         a file is absent and `TtDistributedRmsNorm` hands it `torch.empty` (#54841).
         """
-        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import layer_is_cached
+        from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import layer_is_cached, layer_is_stale
 
         if cache_path is None:
             return False
-        return all(layer_is_cached(Path(cache_path), first_layer_idx + i) for i in range(num_layers))
+        model_cfg = model_cfg if model_cfg is not None else KimiK3Config
+        layers = range(first_layer_idx, first_layer_idx + num_layers)
+        stale = [idx for idx in layers if layer_is_stale(Path(cache_path), idx, model_cfg)]
+        if stale:
+            logger.warning(
+                f"Kimi-K3 cache at {cache_path}: layers {stale} lack {KIMI_K3_PROJECTION_DTYPE.name} KDA projections; "
+                f"rebuild them from the checkpoint (test_transformer_depth does this, rebuilding only the projections)"
+            )
+        return all(layer_is_cached(Path(cache_path), idx, model_cfg) for idx in layers)
 
     def __init__(
         self,
@@ -107,6 +119,8 @@ class TtKimiK3Transformer(LightweightModule):
         padding_side: str = "right",
         sparse_kv_cache_format=None,
         mtp_predictor=None,
+        # KV dedup for the MLA layers only; must match the KVPE cache allocation.
+        tp_shard_kv: Optional[bool] = None,
         **block_kwargs,
     ):
         super().__init__()
@@ -260,6 +274,7 @@ class TtKimiK3Transformer(LightweightModule):
                 kv_only=kv_only_last_layer and is_last,
                 is_balanced=is_balanced,
                 first_layer_idx=first_layer_idx,
+                tp_shard_kv=tp_shard_kv,
             )
             if not self.schedule.local_is_mla(local_idx):
                 kda_layers[layer_idx] = attention.kda
@@ -351,6 +366,12 @@ class TtKimiK3Transformer(LightweightModule):
             )
         for layer in self.layers:
             layer.set_trace_controller(controller)
+
+    def set_tp_shard_kv(self, tp_shard_kv: Optional[bool]):
+        """Switch the MLA layers' KV layout; the cache passed to forward() must be allocated to match."""
+        for layer in self.layers:
+            if layer.attention.writes_kv:
+                layer.attention.set_tp_shard_kv(tp_shard_kv)
 
     def release_sub_device_managers(self):
         """Remove every MoE-created overlap sub-device manager before closing the mesh device.
@@ -449,14 +470,19 @@ class TtKimiK3Transformer(LightweightModule):
         AttnRes is the running sum, and is exactly what the vLLM traces record as
         `decoder_output_layer_i` (pinned by `tests/kimi_k3/test_golden_contract.py`). That makes the
         per-layer PCC curve a tap rather than a separate forward.
+
+        `on_layer_hidden(global_idx, hidden)` is the drafter hook. DSpark taps target layer L at layer
+        L+1's AttnRes read before attention (the input of `attn_norm`), so it fires inside each layer
+        with that read, reported as the layer before it: under AttnRes a new read site would need its
+        own query. `hidden` is borrowed from the stream, so use or copy it before returning.
         """
+        attn_input_tap = None
         if on_layer_hidden is not None:
-            # DFlash's per-layer tap. Under AttnRes a tap is a READ SITE, and a site needs its own
-            # folded query in the walk order — so exposing one is a schedule change, not a callback.
-            raise NotImplementedError(
-                "Kimi-K3 does not support on_layer_hidden: under AttnRes every read needs its own "
-                "query and site, so a per-layer tap is a walk-schedule change rather than a hook"
-            )
+            first = self.first_layer_idx
+
+            def attn_input_tap(local_idx, hidden):
+                on_layer_hidden(first + local_idx - 1, hidden)
+
         if index_kv_cache is not None:
             raise ValueError("Kimi-K3 has no DSA indexer; index_kv_cache must be None")
         if return_intermediates:
@@ -512,6 +538,7 @@ class TtKimiK3Transformer(LightweightModule):
                     actual_end=actual_end,
                     actual_isl=actual_isl,
                     padding_side=padding_side,
+                    attn_input_tap=attn_input_tap,
                 )
                 if layer_tap is not None and not layer.kv_only:
                     layer_tap(local_idx, residual.current())

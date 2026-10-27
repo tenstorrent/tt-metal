@@ -759,6 +759,31 @@ def generate_quasar_sfpu_format_variants(
     return _deduplicate_quasar_sfpu_operation_variants(variants)
 
 
+def unique_quasar_sfpu_formats(
+    variants: List[QuasarSfpuVariant],
+) -> List[InputOutputFormat]:
+    """Return each external input/output format pair once, preserving order."""
+    formats = []
+    seen = set()
+    for variant in variants:
+        key = (variant.formats.input_format, variant.formats.output_format)
+        if key not in seen:
+            seen.add(key)
+            formats.append(variant.formats)
+    return formats
+
+
+def quasar_sfpu_dest_acc_modes(
+    variants: List[QuasarSfpuVariant], formats: InputOutputFormat
+) -> List[DestAccumulation]:
+    """Return the Dest modes retained by a deduplicated variant list for *formats*."""
+    dest_acc_modes = []
+    for variant in variants:
+        if variant.formats == formats and variant.dest_acc not in dest_acc_modes:
+            dest_acc_modes.append(variant.dest_acc)
+    return dest_acc_modes
+
+
 def generate_quasar_srcs_format_dest_acc_combinations(
     formats_list: List[InputOutputFormat],
 ) -> List[Tuple[InputOutputFormat, DestAccumulation]]:

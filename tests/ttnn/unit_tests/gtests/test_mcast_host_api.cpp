@@ -15,6 +15,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "distributed/mesh_device_impl.hpp"
 
 namespace ttnn::kernel_lib::host::api_test {
 using tt::tt_metal::CoreCoord;
@@ -544,7 +545,7 @@ void run_mixed_ack_device(tt::tt_metal::distributed::MeshDevice& device, NOC noc
     m2::ProgramRunArgs args;
     channel.attach(spec, args, "channel", targets);
     auto workload = m2::MakeMeshWorkloadFromSpec(device, spec);
-    auto* physical = device.get_devices().front();
+    auto* physical = device.impl().get_devices().front();
     for (uint32_t run = 0; run < 3; ++run) {
         auto invocation = args;
         const uint32_t seed = 73 + 101 * run;

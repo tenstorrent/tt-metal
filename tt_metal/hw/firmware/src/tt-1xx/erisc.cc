@@ -118,7 +118,7 @@ void __attribute__((noinline)) Application(void) {
     DeviceProfilerInit();
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
-        uint8_t go_message_signal = mailboxes->go_messages[0].signal;
+        uint8_t go_message_signal = mailboxes->go_messages[0].slot[0].signal;
         if (go_message_signal == RUN_MSG_GO) {
             // Only include this iteration in the device profile if the launch message is valid. This is because all
             // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
@@ -142,11 +142,11 @@ void __attribute__((noinline)) Application(void) {
                 kernel_init();
                 WAYPOINT("D");
             }
-            mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            mailboxes->go_messages[0].slot[0].signal = RUN_MSG_DONE;
             DEVICE_PRINT_KERNEL_FINISHED();
             // Fast dispatch to ethernet is removed: no dispatcher done-notify / launch-ring advance, and the
             // dispatcher-driven resets (RUN_MSG_RESET_READ_PTR / RUN_MSG_REPLAY_TRACE) no longer apply here.
-            // Slow (host) dispatch polls go_messages[0].signal and manages the read pointer itself.
+            // Slow (host) dispatch polls go_messages[0].slot[0].signal and manages the read pointer itself.
         } else {
             internal_::risc_context_switch();
         }

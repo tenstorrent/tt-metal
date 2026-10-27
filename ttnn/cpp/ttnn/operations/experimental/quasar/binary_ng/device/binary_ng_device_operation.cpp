@@ -393,6 +393,14 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         return output_tensor->tensor_spec();
     }
 
+    // An ND_SHARDED config is_sharded() with an empty shard_spec(), but its nd_shard_spec applies to any shape
+    // as is, so keep it instead of treating the missing legacy spec as unspecified and dereferencing it below.
+    if (attributes.memory_config.is_sharded() && !attributes.memory_config.shard_spec().has_value() &&
+        attributes.memory_config.nd_shard_spec().has_value()) {
+        return tt::tt_metal::TensorSpec(
+            output_shape, TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
+    }
+
     if (attributes.memory_config.is_sharded()) {
         const auto& memory_layout = attributes.memory_config.memory_layout();
         const auto& buffer_type = attributes.memory_config.buffer_type();
@@ -641,14 +649,15 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards. The broadcast
     // and tensor-scalar rejections are also preconditions of create_no_bcast_artifacts, which asserts them. The others
     // keep the slice to what has been validated on Quasar.
-    const NativeTuning& tuning = native_tuning();
-    // Cheapest possible check first: this predicate runs on EVERY dispatch, cache hits included.
-    if (!tuning.enabled) {
-        return false;
-    }
+    // Cheap checks first: this predicate runs on EVERY dispatch, cache hits included. The arch goes before
+    // native_tuning(), so that off Quasar the knobs are never parsed and the settings line is never logged.
     const auto& a = tensor_args.input_tensor_a;
     // device()->arch(), not the host arch-name helper: that returns "invalid" under the simulator.
     if (a.device()->arch() != tt::ARCH::QUASAR) {
+        return false;
+    }
+    const NativeTuning& tuning = native_tuning();
+    if (!tuning.enabled) {
         return false;
     }
     // MUST precede every input_tensor_b dereference below.
@@ -664,15 +673,27 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
         return false;
     }
-    // add and subtract run the FPU kernel. multiply and divide run the SFPU kernel, and multiply runs the FPU kernel
-    // in fast and approximate mode. The SFPU kernel runs no other op here: each needs its own validation on Quasar.
+    // In bf16, add and subtract run the FPU kernel, multiply and divide run the SFPU kernel, and multiply runs the FPU
+    // kernel in fast and approximate mode. In fp32 all four run the SFPU kernel. The SFPU kernel runs no other op here:
+    // each needs its own validation on Quasar.
     const BinaryOpType op_type = attributes.binary_op_type;
     if (op_type != BinaryOpType::ADD && op_type != BinaryOpType::SUB && op_type != BinaryOpType::MUL &&
         op_type != BinaryOpType::DIV) {
         return false;
     }
-    // Implied by bf16 below, but asserted.
-    if (attributes.is_sfpu && op_type != BinaryOpType::MUL && op_type != BinaryOpType::DIV) {
+    // a and b in one format, bf16 or fp32; the output's format is checked below. Mixed formats are not validated on
+    // Quasar.
+    const DataType dtype = a.dtype();
+    if ((dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32) || b.dtype() != dtype) {
+        return false;
+    }
+    // Implied by the format, but checked, so that a routing change falls back instead of running untested: fp32 runs
+    // only the SFPU kernel, and bf16 runs add and subtract only on the FPU kernel.
+    const bool fp32 = dtype == DataType::FLOAT32;
+    if (fp32 && !attributes.is_sfpu) {
+        return false;
+    }
+    if (!fp32 && attributes.is_sfpu && op_type != BinaryOpType::MUL && op_type != BinaryOpType::DIV) {
         return false;
     }
     // Divide in fast and approximate mode, a reciprocal pass on b before an FPU multiply, is not validated on Quasar.
@@ -682,9 +703,6 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     // Attributes, not tensor.layout(): output_layout has no tensor when none was supplied.
     if (attributes.input_layout_a != Layout::TILE || attributes.input_layout_b != Layout::TILE ||
         attributes.output_layout != Layout::TILE) {
-        return false;
-    }
-    if (a.dtype() != DataType::BFLOAT16 || b.dtype() != DataType::BFLOAT16) {
         return false;
     }
     const auto& a_tile = a.tensor_spec().tile();
@@ -699,7 +717,7 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
 
     // is_binary_sfpu_op sees only the INPUT dtypes, so add(bf16, bf16, dtype=float32) reaches here with
     // is_sfpu false. data_type(), not dtype(), on TensorSpec.
-    if (out_spec.data_type() != DataType::BFLOAT16) {
+    if (out_spec.data_type() != dtype) {
         return false;
     }
     // get_shard_volumes counts every operand's shard in the output's tiles, so those must be 32x32 too.
@@ -742,7 +760,7 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Order matters for the hot path: this runs on EVERY dispatch, cache hits included, and the native
-    // gate's first check is a cached bool that is false unless TTNN_QSR_NATIVE is set.
+    // gate's first checks are the arch and a cached bool, false when TTNN_QSR_NATIVE=0.
     if (matches_quasar_native_slice(attributes, tensor_args)) {
         return ProgramFactoryQuasarNative{};
     }

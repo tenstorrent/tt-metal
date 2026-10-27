@@ -422,6 +422,177 @@ def test_cumsum_bf16_accuracy(size, dim, sequence_type, reverse_order, device):
     assert_with_ulp(expected_result=expected, actual_result=output, ulp_threshold=1)
 
 
+@pytest.mark.parametrize("disable_compensated_sum", [False, True])
+@pytest.mark.parametrize("dim", [0, -2])
+@pytest.mark.parametrize("scan_length", [4, 8, 33])
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "inf",  # +inf at step 1: every later element stays +inf
+        "neg_inf",  # -inf at step 1: every later element stays -inf
+        "overflow",  # 3e38 + 3e38 overflows to +inf at step 1
+        "neg_overflow",  # -3e38 + -3e38 overflows to -inf at step 1
+        "inf_then_neg_max",  # +inf, then minus the largest fp32: the total stays +inf
+        "neg_inf_then_pos_max",  # -inf, then the largest fp32: the total stays -inf
+        "overflow_then_neg_max",  # an overflow to +inf, then minus the largest fp32 at once: still +inf
+        "neg_overflow_then_pos_max",  # an overflow to -inf, then the largest fp32 at once: still -inf
+        "inf_on_large_neg_total",  # +inf arriving on a total of -3e38: +inf from there on
+        "neg_inf_on_large_pos_total",  # -inf arriving on a total of 3e38: -inf from there on
+        "finite_with_overflowing_c",  # the total stays finite, but t - acc overflows
+        "inf_then_neg_inf",  # +inf then -inf: NaN from step 2 on, as in torch
+        "nan",  # NaN input: NaN from step 1 on
+        "inf_last",  # +inf at the last step only
+    ],
+)
+def test_cumsum_fp32_non_finite(pattern, scan_length, dim, disable_compensated_sum, device):
+    """Once the running total is +-inf or NaN, every later element must match an fp32 running total.
+
+    The compensated path keeps the rounding error of each add as c = (t - acc) - y. Once the running
+    total t is +-inf, c is inf - inf = NaN (or +-inf after an overflow), and the next step would turn
+    every later element of the scan into NaN, while the plain path keeps returning +-inf. The first
+    ten patterns cover that: an inf or an overflow of either sign, then the largest fp32 with the
+    other sign, and an inf arriving on a large total of the other sign. In finite_with_overflowing_c
+    the total stays finite, but t - acc overflows, so c is +inf all the same. The last three already
+    gave NaN or a lone inf and must keep doing so.
+
+    The reference is torch.cumsum, except in the two overflow_then patterns. torch.cumsum on CPU
+    accumulates fp32 in double (see test_cumsum_fp32_long_scan_accuracy), so there it returns a
+    finite value again once the largest fp32 is subtracted, while an fp32 running total, which is
+    what both device paths keep, stays at +-inf. Those two use an fp32 running total as the
+    reference.
+    """
+    if (
+        device.arch() == ttnn.device.Arch.QUASAR
+        and not disable_compensated_sum
+        and pattern not in ("inf_then_neg_inf", "nan", "inf_last")
+    ):
+        pytest.xfail("Quasar keeps the unguarded compensation: https://github.com/tenstorrent/tt-metal/issues/58986")
+    torch.manual_seed(0)
+    size = [scan_length, 1, 32, 64] if dim == 0 else [1, 1, scan_length, 64]
+    torch_input = torch.randn(size, dtype=torch.float32)
+    steps = torch_input.movedim(dim, 0)  # a view: steps[i] is step i of the scan
+    fp32_max = torch.finfo(torch.float32).max
+    # Each pattern sets a few of the 64 columns at the scan steps its name describes; the other columns stay random.
+    # A column only gets one sign of inf, except in inf_then_neg_inf.
+    if pattern == "inf":
+        steps[1, ..., :5] = float("inf")
+    elif pattern == "neg_inf":
+        steps[1, ..., 7:12] = float("-inf")
+    elif pattern == "overflow":
+        steps[0, ..., 20:25] = 3e38
+        steps[1, ..., 20:25] = 3e38
+    elif pattern == "neg_overflow":
+        steps[0, ..., 50:55] = -3e38
+        steps[1, ..., 50:55] = -3e38
+    elif pattern == "inf_then_neg_max":
+        steps[1, ..., 34:38] = float("inf")
+        steps[2, ..., 34:38] = -fp32_max
+    elif pattern == "neg_inf_then_pos_max":
+        steps[1, ..., 44:48] = float("-inf")
+        steps[2, ..., 44:48] = fp32_max
+    elif pattern == "overflow_then_neg_max":
+        steps[:2, ..., 2:6] = 3e38
+        steps[2, ..., 2:6] = -fp32_max
+    elif pattern == "neg_overflow_then_pos_max":
+        steps[:2, ..., 8:12] = -3e38
+        steps[2, ..., 8:12] = fp32_max
+    elif pattern == "inf_on_large_neg_total":
+        steps[0, ..., 14:18] = -3e38
+        steps[1, ..., 14:18] = float("inf")
+    elif pattern == "neg_inf_on_large_pos_total":
+        steps[0, ..., 26:30] = 3e38
+        steps[1, ..., 26:30] = float("-inf")
+    elif pattern == "finite_with_overflowing_c":
+        steps[0, ..., 56:60] = -(2.0**126 + 3 * 2.0**103)
+        steps[1, ..., 56:60] = fp32_max
+    elif pattern == "inf_then_neg_inf":
+        steps[1, ..., 30:33] = float("inf")
+        steps[2, ..., 30:33] = float("-inf")
+    elif pattern == "nan":
+        steps[1, ..., 40:43] = float("nan")
+    else:
+        steps[-1, ..., 60:64] = float("inf")
+
+    expected = torch.cumsum(torch_input, dim=dim)
+    if pattern in ("overflow_then_neg_max", "neg_overflow_then_pos_max"):
+        expected_steps = expected.movedim(dim, 0)  # a view, like steps
+        total = torch.zeros_like(steps[0])
+        for i in range(scan_length):
+            total = total + steps[i]
+            expected_steps[i] = total
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim, disable_compensated_sum=disable_compensated_sum))
+
+    for name, kind in (("NaN", torch.isnan), ("+inf", torch.isposinf), ("-inf", torch.isneginf)):
+        assert torch.equal(
+            kind(output), kind(expected)
+        ), f"{name} in {kind(output).sum().item()} elements, the reference has {kind(expected).sum().item()}"
+    finite = torch.isfinite(expected)
+    assert_allclose(expected[finite], output[finite], rtol=1e-2, atol=1e-4)
+
+
+@pytest.mark.parametrize("dim", [0, -2])
+def test_cumsum_fp32_finite_near_max(dim, device):
+    """A finite running total in the top fp32 binade must keep the compensated accuracy.
+
+    From 2^127 up, the rounding error of one add can reach 2^103, and the guard for non-finite
+    totals (see the kernel) must leave the compensation term of a finite step alone: capping it at
+    2^102 puts this scan at up to 2.0x the limit below, which is |out - exact| <= 2 * eps32 *
+    |exact|, 2 to 4 ulp in this binade. (The sum-of-magnitudes bound of
+    test_cumsum_fp32_long_scan_accuracy is too loose to see a drift of a few ulp here.)
+    """
+    torch.manual_seed(0)
+    scan_length = 128
+    size = [scan_length, 1, 32, 64] if dim == 0 else [1, 1, scan_length, 64]
+    base = 2.0**127
+    torch_input = base * (0.001 + 0.019 * torch.rand(size, dtype=torch.float64))
+    torch_input *= torch.where(torch.rand(size) < 0.5, -1.0, 1.0)
+    steps = torch_input.movedim(dim, 0)  # a view: steps[i] is step i of the scan
+    steps[0] = base * (1.2 + 0.25 * torch.rand(steps[0].shape, dtype=torch.float64))
+    steps[..., 32:] *= -1  # negative totals in half of the columns
+    torch_input = torch_input.to(torch.float32)
+    expected = torch.cumsum(torch_input.to(torch.float64), dim=dim)
+    assert expected.abs().max() < torch.finfo(torch.float32).max, "the reference scan must stay finite"
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim)).to(torch.float64)
+
+    assert torch.isfinite(output).all(), f"{(~torch.isfinite(output)).sum().item()} non-finite elements"
+    bound = 2 * torch.finfo(torch.float32).eps * expected.abs()
+    worst = ((output - expected).abs() / bound).max().item()
+    assert worst <= 1.0, f"max error is {worst:.1f}x the bound 2*eps*|exact|"
+
+
+@pytest.mark.parametrize("dim", [0, -2])
+def test_cumsum_fp32_finite_large_inputs(dim, device):
+    """A finite scan whose inputs are as large as its running total must keep the compensated accuracy.
+
+    When an input is larger than the running total, c is the sum of two rounding errors and reaches
+    2^104 in this scan. The guard for non-finite totals (see the kernel) must leave it alone:
+    capping c at 2^103 puts the last element at 32.8x the limit below, the same limit as in
+    test_cumsum_fp32_finite_near_max.
+    """
+    scan = [
+        float.fromhex(h)
+        for h in ("-0x1.c4dbcep+126", "0x1.f74fccp+127", "-0x1.f60404p+125", "0x1.40bc9ap+127", "-0x1.d43534p+127")
+    ]
+    size = [len(scan), 1, 32, 64] if dim == 0 else [1, 1, len(scan), 64]
+    torch_input = torch.empty(size, dtype=torch.float32)
+    steps = torch_input.movedim(dim, 0)  # a view: steps[i] is step i of the scan
+    for i, value in enumerate(scan):
+        steps[i] = value
+    expected = torch.cumsum(torch_input.to(torch.float64), dim=dim)
+
+    input_tensor = ttnn.from_torch(torch_input, device=device, layout=ttnn.Layout.TILE)
+    output = ttnn.to_torch(ttnn.cumsum(input_tensor, dim=dim)).to(torch.float64)
+
+    assert torch.isfinite(output).all(), f"{(~torch.isfinite(output)).sum().item()} non-finite elements"
+    bound = 2 * torch.finfo(torch.float32).eps * expected.abs()
+    worst = ((output - expected).abs() / bound).max().item()
+    assert worst <= 1.0, f"max error is {worst:.1f}x the bound 2*eps*|exact|"
+
+
 def _cumsum_calltrace(input_tensor, **kwargs):
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
     try:
