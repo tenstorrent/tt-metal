@@ -72,11 +72,25 @@ def weights_bytes_estimate(
     return experts + other
 
 
+def default_prefill_qblock(max_seq_len: int | None) -> int:
+    """The sparse prefill's score sub-block rows when ``GLM53_PREFILL_QBLOCK`` is unset: the largest power of two in
+    [256, 2048] whose [rows, pools] bf16 score block stays within 256 MB at the slot's full length (2048 up to 256 K,
+    1024 at 512 K, 512 at 1 M: the README's 1 M rows ran 512). The served 1 M profile ran the 2048 default on
+    2026-10-27 and failed a 201 MB score-block allocation at ~196 K positions with the pool fragmented."""
+    if not max_seq_len:
+        return 2048
+    pools = -(-int(max_seq_len) // 4)
+    qb = 2048
+    while qb > 256 and qb * pools * 2 > 256 * 2**20:
+        qb //= 2
+    return qb
+
+
 def reserve_bytes(
     isl: int,
     trace_mb: int = 512,
     regions_t: int = 2048,
-    qblock: int = 512,
+    qblock: int | None = None,
     k: int = 8,
     e_local: int = 72,
     chunk_tokens: int = 16384,
@@ -84,6 +98,7 @@ def reserve_bytes(
     """Working set beside the caches during a prefill chunk + the decode trace region."""
     trace = trace_mb * 2**20
     regions = 3 * (regions_t * k + e_local * TILE) * 4096 * 2  # region buffer, gather table, pick rows (bf16)
+    qblock = default_prefill_qblock(isl) if qblock is None else qblock
     score = qblock * (isl / 4) * 2  # the index scorer's [qblock, pools] bf16 block
     prefix_copy = isl * 576 * 2  # the per-chunk whole-prefix ROW_MAJOR latent copy (sparse_sdpa contract)
     misc = 256 * 2**20
