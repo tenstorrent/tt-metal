@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
-#include "api/dataflow/noc_semaphore.h"
+#include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 

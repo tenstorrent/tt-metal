@@ -8,6 +8,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -17,7 +18,7 @@ void kernel_main() {
     constexpr uint32_t cb_coordinates = 0;
     DataflowBuffer coordinates(cb_coordinates);
     coordinates.reserve_back(1);
-    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(coordinates.get_write_ptr());
+    const CoreLocalMem<volatile uint32_t> words(coordinates.get_write_ptr());
     words[0] = my_x[0];
     words[1] = my_y[0];
     words[2] = my_x[1];

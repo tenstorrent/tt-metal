@@ -40,7 +40,7 @@ void kernel_main() {
     constexpr uint32_t branches = get_compile_time_arg_val(10);
     static_assert(
         k_tiles % block_tiles == 0 && k_tiles == branches * branch_k_tiles && branches <= 8,
-        "K tiles split into B streams of Kb, pushed blk at a time");
+        "K tiles split into one stream of branch_k_tiles per branch, pushed block_tiles at a time");
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(c_in0, c_in1, c_interm);
     matmul_block_init(c_in0, c_in1, 0, 1, 1, 1);

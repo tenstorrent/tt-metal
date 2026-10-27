@@ -59,7 +59,8 @@ void kernel_main() {
     constexpr uint32_t c_var = 5;
     constexpr uint32_t c_recip = 6;
     constexpr uint32_t c_ukeep = 7;
-    static_assert(width_tiles % block_tiles == 0 && block_tiles <= 4, "blk divides Wt and fits the fp32 dest");
+    static_assert(
+        width_tiles % block_tiles == 0 && block_tiles <= 4, "block_tiles divides width_tiles and fits the fp32 dest");
 
     // ---- 1. stats: stats_compute.cpp, the residual kept ----
     compute_kernel_hw_startup(c_res, c_sscaler, c_x2);

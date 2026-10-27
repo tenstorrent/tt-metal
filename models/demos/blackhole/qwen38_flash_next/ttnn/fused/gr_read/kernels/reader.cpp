@@ -15,7 +15,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/dataflow/noc_semaphore.h"
+#include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
@@ -75,6 +75,18 @@ FORCE_INLINE void make_const(uint32_t bits) {
     }
 }
 
+// Before the gated stream is read: wait until the program's producer raised the gate semaphore to gate_count, then
+// reset it.  Other streams pass straight through.
+FORCE_INLINE void wait_for_gate(uint32_t stream) {
+    if constexpr (gated_stream != 0xFF) {
+        if (stream == gated_stream) {
+            Semaphore<> ready(gate_semaphore_id);
+            ready.wait(gate_count);
+            ready.set(0);
+        }
+    }
+}
+
 void kernel_main() {
     {
         constexpr uint32_t first_const_arg = num_streams * stream_runtime_args;
@@ -97,28 +109,19 @@ void kernel_main() {
     constexpr auto args1 = TensorAccessorArgs<args0.next_compile_time_args_offset()>();
     constexpr auto args2 = TensorAccessorArgs<args1.next_compile_time_args_offset()>();
     constexpr auto args3 = TensorAccessorArgs<args2.next_compile_time_args_offset()>();
-    auto gate = [](uint32_t stream) {
-        if constexpr (gated_stream != 0xFF) {
-            if (stream == gated_stream) {
-                Semaphore<> ready(gate_semaphore_id);
-                ready.wait(gate_count);
-                ready.set(0);
-            }
-        }
-    };
     {
-        gate(0);
+        wait_for_gate(0);
         read_stream(args0, get_compile_time_arg_val(1), 0);
         if constexpr (num_streams > 1) {
-            gate(1);
+            wait_for_gate(1);
             read_stream(args1, get_compile_time_arg_val(2), stream_runtime_args);
         }
         if constexpr (num_streams > 2) {
-            gate(2);
+            wait_for_gate(2);
             read_stream(args2, get_compile_time_arg_val(3), 2 * stream_runtime_args);
         }
         if constexpr (num_streams > 3) {
-            gate(3);
+            wait_for_gate(3);
             read_stream(args3, get_compile_time_arg_val(4), 3 * stream_runtime_args);
         }
     }
