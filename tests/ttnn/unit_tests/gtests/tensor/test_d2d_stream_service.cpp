@@ -557,7 +557,7 @@ MeshWorkload make_remote_gate_opener_workload(
     const MeshCoordinate opener_coord(0, 0);
     const auto src_node = opener_mesh->get_fabric_node_id(opener_coord);
     const auto& dst_node = desc.fabric_node_id;
-    const auto links = tt::tt_fabric::get_forwarding_link_indices(src_node, dst_node);
+    const auto links = tt::tt_fabric::get_forwarding_link_indices(*opener_mesh, src_node, dst_node);
     TT_FATAL(!links.empty(), "no fabric route from the opener chip to the gate's chip");
 
     auto program = CreateProgram();

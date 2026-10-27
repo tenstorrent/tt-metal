@@ -107,8 +107,9 @@ fills in, and `bounded_sliding_kv_cache`. The runtime has no trace path.
 `mpirun`, not pytest. It loads real weights from the tilized TTNN cache and prefills the golden
 prompt in chunks. It prints throughput two ways, over the real prompt tokens and over the processed
 (padded) tokens. Then it reads every layer's K and V back, PCCs them against the golden, and fails
-below `GPT_OSS_KV_PCC_MIN`. The 5k@1k section of the CI job runs exactly this; it is the quickest way to
-reproduce a number.
+below `GPT_OSS_KV_PCC_MIN`. With `PREFILL_RESUME_AT=R` it then re-prefills slot 0 as `[0, R)` plus one chunk
+from `R`, the way a follow-up chat turn resumes mid-chunk, and gates that PCC too. The 5k@1k section of the
+CI job runs exactly this with `R=992`; it is the quickest way to reproduce a number.
 
 ```bash
 cd <tt-metal>; source python_env/bin/activate
@@ -208,11 +209,11 @@ Unit tests: `pytest models/demos/gpt_oss_d_p/tests/unit` (the CPU-only ones run 
 | `tests/galaxy_prefill_kv_pcc.py` | galaxy | full model, real weights, throughput + per-layer PCC |
 | `tests/variable_chunk_smoke.py` | galaxy | one runtime prefilling the same tokens as a 1k and an 8k chunk (no PCC) |
 
-Galaxy CI (`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, "Blaze Models Prefill tests") runs
-one job, `(GPT-OSS-120B) prefill runner accuracy longbook 55k@5k + chunked prefill KV accuracy longbook 5k@1k + variable-chunk smoke 1k vs 8k`
-(`-f test-type=gpt_oss_prefill_suite`), with three time-bounded sections on one allocation: the
-producer/runner e2e through the common runner, the harness with the PCC gate at 5k@1k, then the
-variable-chunk smoke. The job stops at the first failed section. Op-level coverage for the sliding ring read lives in
+Galaxy CI (`tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, "Blaze Models Prefill tests") runs two
+GPT-OSS jobs. The runner gate (`-f test-type=gpt_oss_prefill_runner`) runs the KV-table tests, then the common
+launcher's all-layer K/V PCC over two 1K chunks per slot. The suite (`-f test-type=gpt_oss_prefill_suite`) runs two
+time-bounded sections on one allocation: the harness with the PCC gate at 5k@1k plus the mid-chunk resume pass,
+then the variable-chunk smoke; it stops at the first failed section. Op-level coverage for the sliding ring read lives in
 `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` (production and circular-cache accuracy,
 metadata-path rejection) and the header gtest
 `tests/ttnn/unit_tests/gtests/sdpa/test_sliding_window_work_plan.cpp`.

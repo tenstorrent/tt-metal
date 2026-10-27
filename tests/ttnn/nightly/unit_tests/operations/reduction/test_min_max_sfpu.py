@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""ttnn.max / ttnn.min vs torch.amax / torch.amin for int32 (SFPU reduce path)."""
+"""ttnn.max / ttnn.min vs torch.amax / torch.amin for int32 and uint32 (SFPU reduce path)."""
 
 import pytest
 import torch
@@ -12,20 +12,21 @@ from tests.ttnn.utils_for_testing import assert_equal
 
 pytestmark = pytest.mark.use_module_device
 
+_SHAPES = [
+    (1, 1, 32, 32),
+    (1, 1, 30, 96),
+    (1, 1, 90, 32),
+    (1, 3, 17, 19),
+    (2, 4, 64, 60),
+    (2, 1, 256, 2048),
+    (2, 1, 2048, 256),
+]
 
-@pytest.mark.parametrize(
-    "input_shape",
-    [
-        (1, 1, 32, 32),
-        (1, 1, 30, 96),
-        (1, 1, 90, 32),
-        (1, 3, 17, 19),
-        (2, 4, 64, 60),
-        (2, 1, 256, 2048),
-        (2, 1, 2048, 256),
-    ],
-)
-@pytest.mark.parametrize("dim", [0, 1, -1, -2, (-1, -2), None])
+_DIMS = [0, 1, -1, -2, (-1, -2), None]
+
+
+@pytest.mark.parametrize("input_shape", _SHAPES)
+@pytest.mark.parametrize("dim", _DIMS)
 @pytest.mark.parametrize("op", ["max", "min"])
 def test_max_min(device, input_shape, dim, op):
     torch.manual_seed(0)
@@ -41,6 +42,28 @@ def test_max_min(device, input_shape, dim, op):
 
     assert output_tensor.dtype == torch_input_tensor.dtype
     assert_equal(output_tensor, torch_output_tensor)
+
+
+@pytest.mark.parametrize("input_shape", _SHAPES)
+@pytest.mark.parametrize("dim", _DIMS)
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_max_min_uint32(device, input_shape, dim, op):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randint(0, 2**32, input_shape, dtype=torch.int64)
+    torch_input_tensor.view(-1)[:4] = torch.tensor([0, 2**31 - 1, 2**31, 2**32 - 1])
+
+    torch_op = torch.amax if op == "max" else torch.amin
+    ttnn_op = ttnn.max if op == "max" else ttnn.min
+
+    torch_output_tensor = torch_op(torch_input_tensor, dim=dim)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor.to(torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
+    )
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim))
+
+    assert output_tensor.dtype == torch.uint32
+    assert_equal(output_tensor.to(torch.int64), torch_output_tensor)
 
 
 @pytest.mark.parametrize("scale", [2.0, 0.5, -3.0])
@@ -67,6 +90,17 @@ def test_max_min_with_scaling(device, input_shape, dim, op, scale):
 
     assert output_tensor.dtype == torch_input_tensor.dtype
     assert_equal(output_tensor, torch_expected)
+
+
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_max_min_uint32_rejects_scaling(device, op, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.ones((1, 1, 32, 32), dtype=torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
+    )
+    ttnn_op = ttnn.max if op == "max" else ttnn.min
+
+    with expect_error(RuntimeError, "UINT32 sum/max/min do not support scalar"):
+        ttnn_op(input_tensor, dim=-1, scalar=2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -153,3 +187,24 @@ def test_int32_reduce_row_major_pad_value(device, input_shape, dim, op, base_ran
 
     assert output_tensor.dtype == torch_input.dtype
     assert_equal(output_tensor, torch_output)
+
+
+@pytest.mark.parametrize("dim", [-1, -2, (-1, -2)])
+@pytest.mark.parametrize("value", [0, 2**31, 2**32 - 1])
+@pytest.mark.parametrize("op", ["max", "min"])
+def test_uint32_reduce_tile_pad_value(device, op, dim, value):
+    """A constant UINT32 tensor on a padded shape: tile padding should not become the result."""
+    torch_input = torch.full((1, 1, 30, 50), value, dtype=torch.int64)
+
+    torch_op = torch.amax if op == "max" else torch.amin
+    ttnn_op = ttnn.max if op == "max" else ttnn.min
+
+    torch_output = torch_op(torch_input, dim=dim)
+
+    input_tensor = ttnn.from_torch(
+        torch_input.to(torch.uint32), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.uint32
+    )
+    output_tensor = ttnn.to_torch(ttnn_op(input_tensor, dim=dim))
+
+    assert output_tensor.dtype == torch.uint32
+    assert_equal(output_tensor.to(torch.int64), torch_output)
