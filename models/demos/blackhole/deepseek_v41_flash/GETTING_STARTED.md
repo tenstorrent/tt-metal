@@ -1,25 +1,23 @@
-# DeepSeek-V4.1-Flash on Blackhole Galaxy: getting started
+# DeepSeek-V4.1-Flash on Blackhole Galaxy (B=4): getting started
 
 OpenAI-compatible vLLM server on one Blackhole Galaxy (32 chips, 4x8 mesh). Release notes: `RELEASE_NOTES.md`.
 
 ## Docker image
 
 ```
-dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6
+ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-a06adeb-91da919
 ```
 
-- Built locally from the commits listed in `RELEASE_NOTES.md`; not pushed to ghcr.io (a ghcr tag is TODO until the image is pushed). No weights or caches inside.
-- Image id `de6952f6f477`. Offline copy (5.38 GB tar): `/mnt/tt-data/ssinghal/dsv4-docker-ctx/img_afb78699c8b.tar` (`docker load -i <tar>`). Size on disk: TODO (read `docker images` on a host that has it loaded).
-- Verified on hosts .34, .45 and .33 (load the tar on any other host first).
+- Image id `68748a55fba8`, 21.6 GB on disk. Built from the commits listed in `RELEASE_NOTES.md`. No weights or caches inside.
+- `docker pull` it on each host.
 
-## Configurations
+## Configuration
 
 | | Users | Context | Runtime spec (`assets/`) |
 |---|---|---|---|
-| **B=16** | 16 | 262,144 | `runtime_spec_b16_k5_262144_vision.json` |
 | **B=4** | 4 | 1,048,576 | `runtime_spec_b4_k5_1048576_vision.json` |
 
-Both: speculative decoding up to k = 5 (the server runs rounds of 3 or 5 drafts, whichever is faster), image input, prefix caching on, paged prefill on (bf16 KV pool, which APC needs), bounded prefill replay on (`DSV41_PF_REPLAY=2560`, `0` turns it off), token budget `max_num_batched_tokens` 16,384 with `long-prefill-token-threshold` 4,096 (B=4). To run without prefix caching pass `--no-enable-prefix-caching` (or `DSV41_APC=0`); `DSV41_PF_PAGED=0` selects the previous prefill. The `assets/` folder has more specs (no images, 131,072 tokens with APC and paged prefill off, `*_apc.json` variants: same settings as the default specs at B=4; budget 4,096 at B=16).
+Speculative decoding up to k = 5 (the server runs rounds of 3 or 5 drafts, whichever is faster), image input (up to 250 images per prompt: `limit-mm-per-prompt` in the spec), prefix caching on, paged prefill on (bf16 KV pool, which APC needs), bounded prefill replay on (`DSV41_PF_REPLAY=2560`, `0` turns it off), token budget `max_num_batched_tokens` 16,384 with `long-prefill-token-threshold` 4,096. To run without prefix caching pass `--no-enable-prefix-caching` (or `DSV41_APC=0`); `DSV41_PF_PAGED=0` selects the previous prefill. The `assets/` folder has more B=4 specs (524,288 and 786,432 tokens, `*_apc.json` variants).
 
 ## Start
 
@@ -31,7 +29,7 @@ The weight cache is keyed by directory only, so each checkpoint needs its own em
 export CKPT=/path/to/deepseek-v41-flash-1017   # checkpoint, read-only
 export CACHE=/path/to/dsv41_cache_1017         # weights/ unified/ kernels/, reused across starts
 export STATE=/path/to/dsv41_state         # scratch dirs the server writes
-export IMAGE=dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6
+export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-a06adeb-91da919
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 hf download deepseek-ai/DeepSeek-V4.1-Flash-1017 --local-dir $CKPT        # 476 GB; a token may be needed
@@ -42,7 +40,7 @@ mkdir -p $R/refs $R/snapshots/local && echo -n local > $R/refs/main
 cp $CKPT/config.json $CKPT/tokenizer.json $CKPT/tokenizer_config.json $R/snapshots/local/
 ```
 
-Get the runtime specs (JSON files). They are inside the image (no checkout needed):
+Get the runtime spec (a JSON file). It is inside the image (no checkout needed):
 
 ```bash
 C=$(docker create $IMAGE)
@@ -50,16 +48,13 @@ docker cp $C:/home/container_app_user/tt-metal/models/demos/blackhole/deepseek_v
 docker rm $C
 ```
 
-or from the tt-metal repo, branch `ssinghal/dsv4p1-rebase-1017-v3` (the image is built from its commit `afb78699c8b`): `models/demos/blackhole/deepseek_v41_flash/assets/`. The specs use in-container paths (`/ckpt`, `/cache/...`), so they need no editing.
-
-Pick the configuration:
+or from the tt-metal repo, branch `ssinghal/dsv4p1-rebase-1017-v3d` (the image is built from its commit `a06adeba8f1`): `models/demos/blackhole/deepseek_v41_flash/assets/`. The specs use in-container paths (`/ckpt`, `/cache/...`), so they need no editing.
 
 ```bash
-export SPEC=$PWD/assets/runtime_spec_b16_k5_262144_vision.json     # B=16
-# export SPEC=$PWD/assets/runtime_spec_b4_k5_1048576_vision.json   # B=4
+export SPEC=$PWD/assets/runtime_spec_b4_k5_1048576_vision.json
 ```
 
-Start the server (the same command for both):
+Start the server:
 
 ```bash
 docker run -d --rm --name dsv41 \
@@ -100,13 +95,6 @@ Progress: `docker logs -f dsv41` (`built layer N` for the 40 layers, then trace 
 
 ## Start-up time
 
-From `docker run` to `/health` 200, with the weight and kernel caches populated:
-
-| Configuration | Time |
-|---|---|
-| B=16 (262,144 tokens) | not measured on this image (about 25 minutes on the previous release) |
-| B=4 (1,048,576 tokens) | 20 to 30 minutes: 1,217 / 1,526 / 1,773 / 1,787 s on four boots with the weight and kernel caches populated (the previous release: about 31 minutes) |
-
-<!-- sources: B=4 boots: image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md lane A / B / C / G boot rows; B=16 25 min and B=4 31 min = previous GETTING_STARTED.md -->
+From `docker run` to `/health` 200, with the weight and kernel caches populated: 20 to 30 minutes (1,217 to 1,787 s on four boots).
 
 The first start with empty caches takes much longer (60-90 minutes on earlier images, not re-measured); it writes the weight cache (about 610 GB) and the kernel cache (about 43 GB).
