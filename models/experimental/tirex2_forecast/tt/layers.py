@@ -497,20 +497,14 @@ def slstm_recurrence(
 
 
 def head_layer_norm(device, y, w_gnorm, head_mean, eps: float = df.NORM_EPS):
-    """Per-head (128) LayerNorm of ``y [..., 512]`` fp32 via a block-averaging matmul, times ``w_gnorm``."""
+    """Per-head (128) LayerNorm of ``y [..., 512]`` fp32 on a head-split view, times ``w_gnorm`` (``head_mean`` unused)."""
     import ttnn
 
-    cfg = exact_config()
-    mu = ttnn.matmul(y, head_mean, dtype=ttnn.float32, compute_kernel_config=cfg)
-    cy = ttnn.subtract(y, mu)
-    free(mu)
-    sq = ttnn.multiply(cy, cy)
-    var = ttnn.matmul(sq, head_mean, dtype=ttnn.float32, compute_kernel_config=cfg)
-    free(sq)
-    inv = ttnn.rsqrt(ttnn.add(var, eps))
-    free(var)
-    z = ttnn.multiply(cy, inv)
-    free(cy, inv)
+    shape = tuple(y.shape)
+    yh = ttnn.reshape(y, (*shape[:-1], shape[-1] // 128, 128))  # [..., 4, 128] head-split view
+    zh = ttnn.layer_norm(yh, epsilon=eps, compute_kernel_config=exact_config())
+    z = ttnn.reshape(zh, shape)
+    free(zh)
     out = ttnn.multiply(z, w_gnorm, dtype=ttnn.bfloat16)
     free(z)
     return out
