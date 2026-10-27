@@ -49,3 +49,9 @@
   all e2e.2 submits were refused by blx04's broker gate). JIT cache in ~/fasth3/data/t511/jit survived. blx04 broker in
   post-boot health gate (fabric check). Relaunched the same driver as `ttp detach chain511d` (run dir 2151); it adopted 310
   and retries the e2e.2 submit. Probe: ttp detach --check /home/smarton/fasth3/tt-metal/tt-project/state/runs/2151/chain511d.rc
+- 2026-10-27 01:12 PDT (run 2152): chain511d ended rc=21 after 3 e2e passes, all exit 124 while still JIT-compiling
+  (325 at 00:43, 334 at 01:08 PDT). No drop signs (no Traceback/TT_THROW/link lines). Each pass gets further: 334 finished
+  stage-1 and stage-2 warmups and was compiling VAE decode kernels (depthwise_conv1d, permute) at the timeout; JIT cache now
+  173 kernel dirs. Raised chain511b4.sh to 5 e2e passes (root commit 3f4364097af); relaunched as `ttp detach chain511e`
+  (run dir 2152), it adopted 310/325/334 and submitted e2e.4 = job 340 at 01:12 PDT.
+  Probe: ttp detach --check /home/smarton/fasth3/tt-metal/tt-project/state/runs/2152/chain511e.rc
