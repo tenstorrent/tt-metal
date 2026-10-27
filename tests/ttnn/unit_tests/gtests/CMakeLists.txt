@@ -206,7 +206,6 @@ target_link_libraries(
     test_ccl_multi_cq_multi_device
     PRIVATE
         Boost::asio
-        Boost::lockfree
         test_common_utils
 )
 

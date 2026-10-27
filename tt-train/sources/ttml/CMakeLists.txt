@@ -283,10 +283,6 @@ find_package(
     REQUIRED
 )
 
-foreach(lib ${BoostPackages})
-    target_include_directories(ttml SYSTEM PUBLIC ${Boost${lib}_SOURCE_DIR}/include)
-endforeach()
-
 # Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
 target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
@@ -324,8 +320,6 @@ target_link_libraries(
         xtensor
         xtensor-blas
         xtl
-        Boost::core
-        Boost::container
         tt-logger
         simde::simde
         FlatBuffers::FlatBuffers
@@ -427,8 +421,6 @@ target_link_libraries(
         xtensor
         xtensor-blas
         xtl
-        Boost::core
-        Boost::container
         tt-logger
         simde::simde
         FlatBuffers::FlatBuffers
@@ -504,11 +496,7 @@ set(TTML_SRC_NANOBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/nanobind/nb_util.hpp
 )
-nanobind_add_module(
-    _ttml
-    STABLE_ABI NB_STATIC
-    ${TTML_SRC_NANOBIND}
-)
+nanobind_add_module(_ttml STABLE_ABI NB_STATIC ${TTML_SRC_NANOBIND})
 target_link_libraries(
     _ttml
     PRIVATE
