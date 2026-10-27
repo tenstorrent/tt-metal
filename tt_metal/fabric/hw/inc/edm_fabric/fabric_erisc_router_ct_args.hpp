@@ -341,8 +341,18 @@ constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
 constexpr bool vc0_uses_counter_credits = NAMED_CT_ARG("VC0_USES_COUNTER_CREDITS") != 0;
 constexpr bool vc1_uses_counter_credits = NAMED_CT_ARG("VC1_USES_COUNTER_CREDITS") != 0;
 constexpr bool vc2_uses_counter_credits = NAMED_CT_ARG("VC2_USES_COUNTER_CREDITS") != 0;
+
+// 0 on hardware without stream registers (the Keraunos CCE): every credit is a single-writer
+// free-running total in the consumer's L1 plus a processed count the consumer keeps privately, on
+// every VC. VCn_USES_COUNTER_CREDITS stay metal's per-VC choice where stream registers exist.
+constexpr bool stream_registers_available = NAMED_CT_ARG("STREAM_REGISTERS_AVAILABLE") != 0;
+static_assert(
+    stream_registers_available || !(vc0_uses_counter_credits || vc1_uses_counter_credits || vc2_uses_counter_credits),
+    "VC*_USES_COUNTER_CREDITS are metal's per-VC choice on stream-register hardware; leave them 0 when "
+    "STREAM_REGISTERS_AVAILABLE is 0");
+
 constexpr bool any_vc_uses_counter_credits =
-    vc0_uses_counter_credits || vc1_uses_counter_credits || vc2_uses_counter_credits;
+    !stream_registers_available || vc0_uses_counter_credits || vc1_uses_counter_credits || vc2_uses_counter_credits;
 
 // Flat sender channels are laid out VC0, then VC1, then VC2.
 constexpr size_t vc_of_sender_channel(size_t sender_channel) {
@@ -356,6 +366,9 @@ constexpr size_t vc_of_sender_channel(size_t sender_channel) {
 }
 
 constexpr bool sender_channel_uses_counter_credits(size_t sender_channel) {
+    if (!stream_registers_available) {
+        return true;
+    }
     switch (vc_of_sender_channel(sender_channel)) {
         case 0: return vc0_uses_counter_credits;
         case 1: return vc1_uses_counter_credits;
@@ -375,6 +388,9 @@ constexpr size_t vc_of_receiver_channel(size_t receiver_channel) {
 }
 
 constexpr bool receiver_channel_uses_counter_credits(size_t receiver_channel) {
+    if (!stream_registers_available) {
+        return true;
+    }
     switch (vc_of_receiver_channel(receiver_channel)) {
         case 0: return vc0_uses_counter_credits;
         case 1: return vc1_uses_counter_credits;
@@ -624,7 +640,8 @@ constexpr uint32_t code_profiling_enabled_timers_bitfield = NAMED_CT_ARG("CODE_P
 constexpr size_t code_profiling_buffer_base_addr = NAMED_CT_ARG("CODE_PROFILING_BUFFER_ADDR");
 
 // ============================================================================
-// Multi-TXQ credit counters (always available; 0 when inactive)
+// Receiver-to-sender credit counters: multi-TXQ, express VC1, or no stream registers (always available; 0 when
+// inactive)
 // ============================================================================
 constexpr size_t to_sender_remote_ack_counters_base_address = NAMED_CT_ARG("TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR");
 constexpr size_t to_sender_remote_completion_counters_base_address =
@@ -665,6 +682,26 @@ static_assert(
 static_assert(
     !any_vc_uses_counter_credits || local_receiver_completion_counters_base_address != 0,
     "local_receiver_completion_counters_base_address must be valid");
+
+// Packets-sent credits without stream registers: one 16-byte slot per receiver channel. The sender's
+// total is the source of each update (local) and lands in the receiver's slot at the same address.
+constexpr size_t to_receiver_packets_sent_counters_base_address =
+    NAMED_CT_ARG("TO_RECEIVER_PACKETS_SENT_COUNTERS_BASE_ADDR");
+constexpr size_t local_sender_packets_sent_counters_base_address =
+    NAMED_CT_ARG("LOCAL_SENDER_PACKETS_SENT_COUNTERS_BASE_ADDR");
+// Every software-counter slot another agent writes: one Ethernet word.
+constexpr size_t software_counter_slot_bytes = ETH_WORD_SIZE_BYTES;
+static_assert(
+    stream_registers_available ||
+        (to_receiver_packets_sent_counters_base_address != 0 && local_sender_packets_sent_counters_base_address != 0),
+    "packets-sent counter addresses must be valid when STREAM_REGISTERS_AVAILABLE is 0");
+
+// Downstream free slots without stream registers: one 16-byte slot per downstream router adapter, VC0's
+// VC0_DOWNSTREAM_EDM_SIZE first, then VC1's. The downstream router writes its read count there.
+constexpr size_t local_downstream_read_counters_base_address = NAMED_CT_ARG("LOCAL_DOWNSTREAM_READ_COUNTERS_BASE_ADDR");
+static_assert(
+    stream_registers_available || local_downstream_read_counters_base_address != 0,
+    "downstream read counter address must be valid when STREAM_REGISTERS_AVAILABLE is 0");
 
 // ============================================================================
 // Host signal args (named; always available, 0 when wait_for_host_signal is false)

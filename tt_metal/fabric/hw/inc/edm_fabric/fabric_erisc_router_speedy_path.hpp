@@ -112,8 +112,8 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     bool progress = false;
 
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
-    uint32_t free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
-    bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
+    bool has_unsent_packet =
+        sender_channel_has_unsent_packet(local_sender_channel_worker_interface, sender_channel_free_slots_stream_id);
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
@@ -159,13 +159,13 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             while (busy) {
                 busy = internal_::eth_txq_is_busy(sender_txq_id);
             };
-            remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+            send_packets_sent_credit<to_receiver_pkts_sent_id, sender_txq_id>();
         }
         sender_state.sender_amort_counter++;
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
-        increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        sender_channel_take_packet(sender_channel_free_slots_stream_id);
     }
 
     // We only want to actually bother checking for completions after a certain number of sent packets are outstanding
@@ -251,12 +251,12 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
     SpeedyReceiverState<VC_ID>& receiver_state) {
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    auto pkts_received = get_ptr_val<to_receiver_pkts_sent_id>();
+    auto pkts_received = get_packets_sent_unprocessed<to_receiver_pkts_sent_id>();
     bool unwritten_packets = pkts_received != 0;
 
     if (unwritten_packets) {
         static_assert(!ENABLE_RISC_CPU_DATA_CACHE, "ENABLE_RISC_CPU_DATA_CACHE must be disabled for speedy path");
-        // TODO: hoist me between get_ptr_val and the mask for its value.
+        // TODO: hoist me between get_packets_sent_unprocessed and the mask for its value.
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
             local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
@@ -280,7 +280,7 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         channel_trimming_usage_recorder.set_receiver_channel_data_forwarded(receiver_channel);
 
         wr_sent_counter.increment();
-        increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+        consume_packets_sent_credit<to_receiver_pkts_sent_id>();
         receiver_state.unacked_sends++;
     }
 
