@@ -8,6 +8,7 @@ its final state, take the tail's entry state.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import pytest
@@ -205,6 +206,35 @@ def test_entry_correction_cache_hit_reads_new_interval(device: ttnn.Device, isol
             nrmse_threshold=1e-3,
         )
     assert device.num_program_cache_entries() == entries + 1
+
+
+def test_entry_correction_rejects_aliased_entry_states(
+    device: ttnn.Device, isolated_program_cache: None, expect_error: Callable
+) -> None:
+    """An unsplit interval never reads tail_entry, but the same tensor as entry would leave the cached program's
+    bindings ambiguous: rejected, and a later call with distinct tensors is still correct."""
+    correction = _correction(device, ttnn.MathFidelity.HiFi4)
+    host = _host_inputs(seed=11)
+    zero, identity, final_a, final_b, entry, tail = _device_inputs(device, correction, host)
+    actual_start = make_actual_start(device, 0)
+    with expect_error(RuntimeError, "entry and tail_entry must be different tensors"):
+        correction(zero, identity, final_a, final_b, entry, entry, actual_start, None)
+    output, final = correction(zero, identity, final_a, final_b, entry, tail, actual_start, None)
+    expected_output, expected_final, valid = _reference(host, _INTERVALS["full"])
+    assert_accurate(
+        expected_output,
+        ttnn.to_torch(output).float()[:, :valid],
+        name="output after a rejected alias",
+        pcc_threshold=0.9999,
+        nrmse_threshold=0.01,
+    )
+    assert_accurate(
+        expected_final,
+        ttnn.to_torch(final),
+        name="final after a rejected alias",
+        pcc_threshold=0.9999,
+        nrmse_threshold=1e-3,
+    )
 
 
 @pytest.mark.requires_host_iommu

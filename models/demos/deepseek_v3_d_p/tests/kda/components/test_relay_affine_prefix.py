@@ -251,6 +251,33 @@ def test_relay_affine_prefix_with_output_gate(mesh_device):
 
 
 @_MESH
+def test_relay_affine_prefix_rejects_aliased_output_gate_operands(mesh_device, expect_error):
+    """A cached program refreshes each buffer argument through its own binding: a gate of X @ X would leave the
+    bindings ambiguous and the cached program on the first call's buffers, so the op rejects it."""
+    transforms = _Transforms(mesh_device, seed=0)
+    actual_start = make_actual_start(mesh_device, 0)
+    grid = mesh_device.compute_with_storage_grid_size()
+    relay_columns = [ttnn.CoreCoord(x, y) for x in range(grid.x - 1, grid.x - 4, -1) for y in range(grid.y)]
+    relay = _relay(mesh_device, cores=relay_columns)
+    x = ttnn.from_torch(
+        torch.zeros(_ROWS, _ROWS),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    output_gate = RelayOutputGate(
+        input=x,
+        weight=x,
+        program_config=block_projection_program_config(4, grid.y, _ROWS // 32, _ROWS // 32, 4),
+        compute_config=transforms.compute_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "output_gate_input and output_gate_weight must be different tensors"):
+        relay(transforms.packed, transforms.initial_tt, actual_start, output_gate=output_gate)
+
+
+@_MESH
 def test_relay_affine_prefix_back_to_back(mesh_device):
     """Two relay calls separated by the SP-line barrier the model runs between layers (the relay's final carry): the
     second call must be as exact as the first, from the landing buffers and arrival counters the first left."""

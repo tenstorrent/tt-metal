@@ -137,9 +137,15 @@ void validate_matmul_output_column_window(
         "output_column_offset requires an interleaved output, got {}",
         output.memory_config().memory_layout());
     TT_FATAL(!attributes.untilize_out, "output_column_offset does not support untilize_out");
+    // As for any optional output, leading dimensions may only fold into whole tile rows: otherwise each batch's
+    // partial last tile row is padded on its own, and the output's padded rows differ from the computed output's.
+    const uint32_t tile_h = output.tensor_spec().tile().get_height();
+    const bool same_rows =
+        shape[-2] == computed_shape[-2] || (computed_shape[-2] % tile_h == 0 && shape[-2] % tile_h == 0);
     TT_FATAL(
-        shape.volume() / shape[-1] == computed_shape.volume() / computed_shape[-1],
-        "output_column_offset: the output {} must have the computed output's rows {}",
+        same_rows && shape.volume() / shape[-1] == computed_shape.volume() / computed_shape[-1],
+        "output_column_offset: the output {} must have the computed output's rows {}, with leading dimensions folded "
+        "only into whole tile rows",
         shape,
         computed_shape);
     TT_FATAL(

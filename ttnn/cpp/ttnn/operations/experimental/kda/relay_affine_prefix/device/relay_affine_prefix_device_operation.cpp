@@ -120,6 +120,17 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
             key_dim,
             key_dim);
     }
+    kda_factory_detail::check_distinct_buffers(
+        {{&in.packed, "packed"},
+         {&in.initial_state, "initial_state"},
+         {&in.actual_start, "actual_start"},
+         {&in.entry_landing, "entry_landing"},
+         {&in.state_staging, "state_staging"},
+         {&in.final_landing, "final_landing"},
+         {in.gate_input ? &*in.gate_input : nullptr, "output_gate_input"},
+         {in.gate_weight ? &*in.gate_weight : nullptr, "output_gate_weight"},
+         {in.gate_copy_source ? &*in.gate_copy_source : nullptr, "output_gate_copy_source"}},
+        operation_name);
     kda_factory_detail::check_output_interleaved(attrs.entry_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
     // Compute packs a K-tile column of the next state out of DST.

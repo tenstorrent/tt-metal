@@ -18,7 +18,6 @@ from models.common.utility_functions import (
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import is_tiny_tile_combo_supported
 
-
 pytestmark = pytest.mark.use_module_device
 
 
@@ -1846,6 +1845,22 @@ def test_linear_output_column_offset_rejects_invalid_window(
     with expect_error(RuntimeError, message):
         ttnn.linear(
             activation, weight, program_config=config, optional_output_tensor=output, output_column_offset=offset
+        )
+
+
+def test_linear_output_column_offset_rejects_partial_tile_row_folding(device, expect_error):
+    """Two batches of 16 rows pad to two tile rows, a [32, width] output holds one: the window must not fold them."""
+    to_device = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    activation = to_device(torch.randn(2, 16, 128).bfloat16())
+    weight = to_device((torch.randn(128, 32) * 0.1).bfloat16())
+    output = to_device(torch.zeros(32, 64).bfloat16())
+    with expect_error(RuntimeError, "folded only into whole tile rows"):
+        ttnn.linear(
+            activation,
+            weight,
+            program_config=_in0_column_window_config(1, 1, 4),
+            optional_output_tensor=output,
+            output_column_offset=0,
         )
 
 
