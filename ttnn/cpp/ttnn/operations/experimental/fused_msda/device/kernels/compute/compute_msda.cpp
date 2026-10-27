@@ -49,8 +49,9 @@
 //     not zero (msda_tiled_geometry.hpp). Rows never mix and the writer drops
 //     them.
 //   * input_tile: rows that are in range AND in bounds hold the gathered value
-//     stick, every other row is zeroed. This kernel builds the scalar and so
-//     cannot mask an out-of-bounds corner itself.
+//     stick; every other row holds zero or an earlier stick. This kernel
+//     zeroes the scalar of every out-of-bounds corner, which is what cancels
+//     it.
 //
 // fp32_dest_acc_en is required. See msda_geometry.hpp.
 

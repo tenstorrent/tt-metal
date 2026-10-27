@@ -9,11 +9,15 @@
 // by exactly one RISC.
 //
 // Row r of the block is [NW | NE | SW | SE], D bf16 each (see
-// fused_msda_reader_common.hpp). A row is either fully written by NoC reads
-// and zero stores to disjoint slots, or zeroed whole when r >= v_rows. The
-// zeroing is load-bearing: compute does not mask a corner's weight by the
-// bounds flags it hands over, so a stale slot would be multiplied by a live
-// weight. The caller barriers its own NoC reads; nothing here waits.
+// fused_msda_reader_common.hpp). Only in-bounds corners of rows < v_rows are
+// read. Compute zeroes the weight of every out-of-bounds corner, so on
+// Blackhole a skipped slot keeps whatever the CB held: zero from startup or an
+// earlier value stick, which the zero weight cancels even when it is inf or
+// NaN, because Blackhole's FPU multiplies both by zero to zero. Elsewhere that
+// has not been measured, so the gathers also zero the out-of-bounds slots
+// (ZERO_SKIPPED_SLOTS). Rows >= v_rows are never read or written: their weights
+// can be live (tiled geometry), but the writer emits only rows < v_rows.
+// The caller barriers its own NoC reads; nothing here waits.
 
 #pragma once
 
@@ -27,6 +31,12 @@
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tile_layout.hpp"
 
 namespace fused_msda_gather {
+
+#ifdef ARCH_BLACKHOLE
+constexpr bool ZERO_SKIPPED_SLOTS = false;
+#else
+constexpr bool ZERO_SKIPPED_SLOTS = true;
+#endif
 
 // Everything one point's gather needs, as the reader hands it to the writer
 // through the mailbox. Plain uint32 words so the mailbox is a flat L1 copy.
@@ -44,7 +54,7 @@ struct PointArgs {
 constexpr uint32_t POINT_ARGS_WORDS = sizeof(PointArgs) / sizeof(uint32_t);
 
 // Split gather: the reader takes rows [0, SPLIT_ROW), the writer the rest. A
-// tail block with v_rows <= SPLIT_ROW leaves the writer only zeroing.
+// tail block with v_rows <= SPLIT_ROW leaves the writer nothing to read.
 //
 // Empirical: op device time on Blackhole, tiled geometry, D = 32 (SCA in
 // test_encoder_layer_perf.py bev_100x100 and nuscenes_base in
@@ -75,11 +85,9 @@ constexpr uint32_t SPLIT_ROW = ValueAccessor::is_dram ? SPLIT_ROW_DRAM : SPLIT_R
 // reserved, and the corner tile must stay at the reader's front until the
 // writer has read it.
 //
-// Ordering: volatile accesses keep the mailbox stores ahead of ready, and a
-// compiler barrier keeps the writer's plain zero stores ahead of done. That
-// they also reach L1 in that order assumes one RISC's L1 stores land in
-// program order. The L1 cache note in internal/tt-1xx/cache.h covers
-// visibility (the waiter invalidates on every poll), not store order.
+// Ordering: volatile accesses keep the mailbox stores ahead of ready. The L1
+// cache note in internal/tt-1xx/cache.h covers visibility (the waiter
+// invalidates on every poll).
 
 inline void post_point(uint32_t mailbox_l1, const PointArgs& a) {
     const uint32_t* src = reinterpret_cast<const uint32_t*>(&a);
@@ -128,9 +136,7 @@ __attribute__((noinline)) void gather_rows(
     const uint32_t width = a.width;
     const uint32_t head = a.head;
     constexpr uint32_t STICK = Cfg::STICK_NBYTES;
-    constexpr uint32_t SLOT_WORDS = STICK / sizeof(uint32_t);
     constexpr uint32_t ROW_NBYTES = 4 * STICK;
-    constexpr uint32_t ROW_WORDS = 4 * SLOT_WORDS;
     constexpr bool PACKED = Cfg::VALUE_PACKED;
 
     namespace cw = fused_msda_corner_word;
@@ -138,12 +144,10 @@ __attribute__((noinline)) void gather_rows(
     // for an out-of-bounds NW, which is never read.
     const uint32_t nw_base = a.batch * Cfg::NUM_KEYS + a.start_index - (width + 1);
 
-    for (uint32_t r = r_begin; r < r_end; ++r) {
+    // Rows >= v_rows never reach the output.
+    const uint32_t r_last = r_end < v_rows ? r_end : v_rows;
+    for (uint32_t r = r_begin; r < r_last; ++r) {
         const uint32_t row_l1 = block_l1 + r * ROW_NBYTES;
-        if (r >= v_rows) {
-            zero_words(row_l1, ROW_WORDS);
-            continue;
-        }
         const auto c = cw::decode(
             CoreLocalMem<volatile uint32_t>(corner_l1 + fused_msda_tile_layout::tile_col16_offset_fp32(r))[0]);
         const uint32_t nw = nw_base + c.index;
@@ -151,17 +155,21 @@ __attribute__((noinline)) void gather_rows(
         // NW, NE, SW, SE, in lockstep with the four scalar packs in
         // msda_geometry.hpp::point.
         for (uint32_t dy = 0; dy < 2; ++dy) {
-            const uint32_t pair_l1 = row_l1 + 2u * dy * STICK;
             if (!(c.flags & (cw::FLAG_Y0 << dy))) {
-                zero_words(pair_l1, 2 * SLOT_WORDS);
+                if constexpr (ZERO_SKIPPED_SLOTS) {
+                    zero_words(row_l1 + 2u * dy * STICK, 2 * STICK / sizeof(uint32_t));
+                }
                 continue;
             }
+            const uint32_t pair_l1 = row_l1 + 2u * dy * STICK;
             for (uint32_t dx = 0; dx < 2; ++dx) {
-                const uint32_t slot_l1 = pair_l1 + dx * STICK;
                 if (!(c.flags & (cw::FLAG_X0 << dx))) {
-                    zero_words(slot_l1, SLOT_WORDS);
+                    if constexpr (ZERO_SKIPPED_SLOTS) {
+                        zero_words(pair_l1 + dx * STICK, STICK / sizeof(uint32_t));
+                    }
                     continue;
                 }
+                const uint32_t slot_l1 = pair_l1 + dx * STICK;
                 const uint32_t bs = nw + dy * width + dx;
                 uint32_t page;
                 uint32_t offset_bytes;

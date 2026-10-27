@@ -19,6 +19,7 @@
 //   x0   = floor(px)
 //   dx   = px - x0
 //   w_c  = corner(dx, dy) * attn                        for the four corners
+//   w_c  = 0 where corner c is out of bounds            (the gathers skip it)
 //
 // `primary` is the normalized x (V1) or the reference point's x (V2);
 // `secondary` is the raw sampling offset and exists only for V2. The
@@ -232,6 +233,34 @@ inline void corner_word_lanes() {
     }
 }
 
+// Zeroes the weight of every corner the corner word at WORD marks out of
+// bounds. The gathers skip those corners and leave their input slots stale, so
+// this zero is what keeps them out of the sum.
+template <uint32_t WORD>
+inline void mask_corner_weights() {
+    namespace cw = fused_msda_corner_word;
+    // Below 2^24 the word's bits are 0x4B000000 plus the integer, and the
+    // exponent bits shifted down leave the low four bits to the flags.
+    constexpr int32_t NW = cw::FLAG_X0 | cw::FLAG_Y0;
+    constexpr int32_t NE = cw::FLAG_X1 | cw::FLAG_Y0;
+    constexpr int32_t SW = cw::FLAG_X0 | cw::FLAG_Y1;
+    constexpr int32_t SE = cw::FLAG_X1 | cw::FLAG_Y1;
+#pragma GCC unroll 0
+    for (uint32_t d = 0; d < FACE; ++d) {
+        const sfpi::vInt bits = sfpi::dst_reg[WORD].mode<sfpi::DataLayout::I32>();
+        const sfpi::vInt flags = (bits >> cw::INDEX_BITS) & 0xF;
+        v_if((flags & NW) != NW) { sfpi::dst_reg[DST_NW * TILE] = 0.0f; }
+        v_endif;
+        v_if((flags & NE) != NE) { sfpi::dst_reg[DST_NE * TILE] = 0.0f; }
+        v_endif;
+        v_if((flags & SW) != SW) { sfpi::dst_reg[DST_SW * TILE] = 0.0f; }
+        v_endif;
+        v_if((flags & SE) != SE) { sfpi::dst_reg[DST_SE * TILE] = 0.0f; }
+        v_endif;
+        sfpi::dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 #endif
 
@@ -251,9 +280,9 @@ inline void copy_from(uint32_t new_cb, uint32_t& srca_cb) {
 //
 // That order is a contract with both gathers: the four scalar tiles pushed here
 // are consumed against the corner slots of fused_msda_gather::gather_rows
-// (row-major block [NW | NE | SW | SE], whose pair zeroing relies on NW|NE and
-// SW|SE being adjacent) and against the input-tile groups of the tile-scatter
-// path (`dy = c >> 1; dx = c & 1` in fused_msda_reader_common.hpp). The orders must agree element for element or
+// (row-major block [NW | NE | SW | SE]) and against the input-tile groups of
+// the tile-scatter path (`dy = c >> 1; dx = c & 1` in
+// fused_msda_reader_common.hpp). The orders must agree element for element or
 // every sample is silently wrong.
 //
 // The corner tile is float32 and every other pack target bf16, so the packer is
@@ -299,6 +328,7 @@ inline void point(const GeometryPipes& cb, const AxisConstants& kx, const AxisCo
     // After the weights: the word overwrites the x0 they read.
     MATH((_llk_math_eltwise_unary_sfpu_params_(
         sfpu::corner_word_level<X + F, Y + F, X + F>, 0, VectorMode::C, kx.extent, ky.extent)));
+    MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::mask_corner_weights<X + F>, 0, VectorMode::C)));
 
     tile_regs_commit();
     tile_regs_wait();
@@ -404,6 +434,7 @@ inline void block(const BlockPipes& cb, uint32_t& srca_cb) {
     MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::corner_word_lanes<X0, Y0, W, H, W>, 0, VectorMode::C)));
     MATH((_llk_math_eltwise_unary_sfpu_params_(
         sfpu::corner_weights<PX, X0, PY, Y0, BLK_ATTN * T, true>, 0, VectorMode::C)));
+    MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::mask_corner_weights<W>, 0, VectorMode::C)));
 
     tile_regs_commit();
     tile_regs_wait();

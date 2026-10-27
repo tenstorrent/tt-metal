@@ -128,9 +128,6 @@ void kernel_main() {
                     fused_msda_gather::SPLIT_ROW<decltype(value_acc)>,
                     fused_msda_tile_layout::TILE_MAX_ROWS);
                 noc.async_read_barrier();
-                // Keeps the plain zero stores above ahead of the done store;
-                // see the ordering note in msda_gather_rows.hpp.
-                asm volatile("" ::: "memory");
                 gather_done.set(gather_seq);
             }
         }

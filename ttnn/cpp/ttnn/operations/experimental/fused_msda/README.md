@@ -398,20 +398,25 @@ geometry puts point `j` of a block in column `j` and `16 + j`.
   column is zeroed once per CB slot at reader startup, so an uninitialised L1
   bit pattern never reaches the SFPU as a NaN.
 * **input tile** (reader → compute; reader + writer with the split gather, each
-  for its own rows): rows that are in range **and** in bounds
-  hold the gathered value stick; every other row is explicitly zeroed. In the
-  row-major block the same holds per corner slot: an in-range, in-bounds slot
-  holds its stick, every other slot and every row `>= v_rows` is zeroed.
+  for its own rows): rows that are in range **and** in bounds hold the gathered
+  value stick (per corner slot in the row-major block). On Blackhole every
+  other row or slot keeps what the CB held: the reader zeroes the whole CB once
+  at startup, and afterwards it only ever receives value sticks. Elsewhere the
+  gathers also zero the out-of-bounds slots of rows `< v_rows`.
 * **scalar tile** (compute → compute): column 0 for all 32 rows, from the
   fractions and the attention weight. With the tiled geometry, rows `>= v_rows`
   keep a previous block's operands, so their scalars are not zero. Rows never
   mix and the writer emits only rows `< v_rows`, so that is harmless.
 
-The zeroing of out-of-bounds slots is load-bearing: compute does not mask the
-scalars by the bounds flags it hands the gathers, so an un-zeroed slot of a row
-`< v_rows` would be multiplied by a live weight. Rows `>= v_rows` are zeroed as
-well, but they never reach the output. A stale row is itself a plausible
-sampled value, so the correlation survives it — which is why
+Out-of-bounds corners are cancelled in compute: the SFPU zeroes the weight of
+every corner whose bounds flags in the corner word are clear, and the gathers
+skip those corners. On Blackhole they leave the slot unwritten, so that zero
+weight is load-bearing: the skipped slot holds an earlier point's value stick.
+It also cancels an inf or NaN stick, because Blackhole's FPU multiplies both by
+zero to zero. That has not been measured on other architectures, so there the
+gathers still zero the slot (`ZERO_SKIPPED_SLOTS` in `msda_gather_rows.hpp`).
+A stale stick is itself a plausible sampled value, so the correlation survives
+a missing mask — which is why
 `test_fused_msda_v1_masks_out_of_bounds_corners` asserts a per-element error ratio
 alongside PCC.
 
@@ -470,12 +475,12 @@ reader_msda_v2.cpp ─┘   (staging, gather, tile scatter)     (geometry, reduc
    the four in-bounds flags (a subtract, a mask and a shift);
 4. when `D % 32 == 0`: reserve one block for all four corners and land each
    corner's `D`-wide stick straight in its slot of row `r`
-   (`r * 4*D*2 + c * D*2`), zero the skipped slots while the reads are in
-   flight, barrier, and push once. The reader copies no value data; with the
+   (`r * 4*D*2 + c * D*2`), skip out-of-bounds corners and rows `>= v_rows`,
+   barrier, and push once. The reader copies no value data; with the
    split gather it does this for rows `[0, SPLIT_ROW)` only and waits for the writer's
    rows before the push. Other `D`:
    for each corner, read the sticks into `value_scratch`, scatter them into
-   `n_d_tiles` tile rows, zero the rows it skipped, and push. The stick is at
+   `n_d_tiles` tile rows, skip the rest, and push. The stick is at
    page `(b*S + level_start[l] + cy*W_l + cx) * H + h` (canonical) or
    `b*S + ...` at byte offset `h*D*2` (packed).
 
@@ -489,10 +494,9 @@ can take the tiled geometry. The primary pair is float32 when
 * `msda_geometry::point` — one SFPU window floors `px` and `py`, packs the
   corner word for the gathers and forms `attn * corner_coeff` for the four
   corners — the scalar tiles the reduction consumes. With the tiled geometry
-  `msda_geometry::block` does the same for a whole block (§6). Out-of-bounds
-  corners are *not* masked here: compute hands the flags to the gathers and
-  leaves the scalars live, which is why the gathering RISCs zero the input rows
-  they skipped (§6).
+  `msda_geometry::block` does the same for a whole block (§6). The weight of
+  every out-of-bounds corner is zeroed here, from the same flags the gathers
+  use to skip it (§6).
 * for `D % 32 == 0`, one `tilize_block` per point turns the reader's row-major
   block into `4 * n_d_tiles` tiles in `tiled_input` on the unpacker, with L1
   accumulate off;

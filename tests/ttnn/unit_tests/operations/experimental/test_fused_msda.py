@@ -594,11 +594,11 @@ def test_fused_msda_v1_partially_out_of_bounds(device):
 def test_fused_msda_v1_masks_out_of_bounds_corners(device, Q, D, memory):
     """An out-of-bounds corner must contribute nothing, element by element.
 
-    Regression gate for the input-tile mask. The compute kernel builds the
-    reduction's scalar from the fractions the SFPU produced and has no bounds
-    information, so the zeroing of un-gathered input rows in
-    `fused_msda_reader_common.hpp` is the only thing standing between a stale
-    circular-buffer row and a live weight.
+    Regression gate for the out-of-bounds mask. The gathers skip an
+    out-of-bounds corner and leave its input slot holding an earlier point's
+    value stick, so the zero weight compute gives that corner
+    (`msda_geometry.hpp::mask_corner_weights`) is the only thing standing
+    between a stale slot and the sum.
 
     It asserts a per-element error ratio on top of `_assert_close` because a
     stale row is itself a plausible sampled value: correlation degrades more
@@ -608,11 +608,10 @@ def test_fused_msda_v1_masks_out_of_bounds_corners(device, Q, D, memory):
     The case is built so that both halves matter: enough corners are outside
     the map to exercise the mask, and enough are inside that a slot the reader
     skips has just been written with a real value stick by an earlier point.
-    Every Q leaves a partial trailing block, so the `r >= v_rows` half of the
-    zeroing predicate is taken as well. With the gather split between the two
-    data-movement RISCs at ``SPLIT_ROW[memory]``, v_rows = SPLIT_ROW[memory] and
-    SPLIT_ROW[memory] + 1 sit on the split: the writer only zeroes, or gathers
-    exactly one row.
+    Every Q leaves a partial trailing block, whose rows >= v_rows the gathers
+    skip as well. With the gather split between the two data-movement RISCs at
+    ``SPLIT_ROW[memory]``, v_rows = SPLIT_ROW[memory] and SPLIT_ROW[memory] + 1
+    sit on the split: the writer gathers nothing, or exactly one row.
     """
     spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
     B, H, L, P = 1, 4, 4, 4
@@ -637,7 +636,60 @@ def test_fused_msda_v1_masks_out_of_bounds_corners(device, Q, D, memory):
     high_error_ratio = ((ref - out).abs() > abs_tol).float().mean().item()
     assert high_error_ratio <= 0.01, (
         f"{high_error_ratio:.2%} of output elements are off by more than {abs_tol:.4f}. "
-        "An unmasked out-of-bounds corner reads a stale input row and multiplies it by a live weight"
+        "An out-of-bounds corner kept a live weight and multiplied a stale input slot"
+    )
+
+
+@pytest.mark.parametrize("memory", ["l1", "dram"])
+@pytest.mark.parametrize("path", ["v1", "v2_tiled"])
+@pytest.mark.parametrize("bad", [float("inf"), float("nan")], ids=["inf", "nan"])
+def test_fused_msda_nonfinite_value_does_not_leak_into_out_of_bounds_corners(device, bad, path, memory):
+    """A non-finite value stick gathered for one query must not reach a later one.
+
+    On Blackhole the gathers leave an out-of-bounds corner's input slot holding
+    whatever an earlier point gathered there, and only compute's zero weight
+    cancels it. The contiguous work split gives the first core several query
+    blocks, and its input CB holds two points' corners, so every later point on
+    that core reuses the slots query 0's points wrote. Query 0 samples a
+    non-finite pixel in bounds; every other query has all its corners out of
+    bounds and must come out exactly 0. "v2_tiled" (L * P = 16) is the tiled
+    geometry and, with D = 32, the split gather.
+    """
+    grid = device.compute_with_storage_grid_size()
+    spatial_shapes = [(8, 8)]
+    B, H, D = 1, 1, 32
+    L, P = (1, 16) if path == "v2_tiled" else (1, 4)
+    Q = 96 * grid.x * grid.y
+    torch.manual_seed(0)
+    value = _bf16(torch.randn(B, 64, H, D))
+    value[0, 3 * 8 + 3] = bad
+    attn = torch.full((B, Q, H, L, P), 1.0 / P)
+    value_t = _to_device_in(_pack_value(value), device, memory)
+    attn_t = _to_device(_pack_weights(attn), device)
+
+    if path == "v1":
+        loc = torch.full((B, Q, H, L, P, 2), 5.0)
+        loc[0, 0] = 3.5 / 8
+        out = ttnn.experimental.fused_msda(value_t, _to_device(_pack_locations(loc), device), attn_t, spatial_shapes)
+    else:
+        R = 4
+        ref_pts = torch.full((B, Q, R, 2), 5.0)
+        ref_pts[0, 0] = 3.5 / 8
+        offsets = torch.zeros(B, Q, H, L, P, 2)
+        out = ttnn.experimental.fused_msda_from_offsets(
+            value_t,
+            _to_device(ref_pts, device),
+            _to_device(_pack_locations(offsets), device),
+            attn_t,
+            spatial_shapes,
+            reference_mode="pillar",
+        )
+    out = ttnn.to_torch(out).to(torch.float32)
+
+    assert not out[0, 0].isfinite().all(), "query 0 did not sample the non-finite pixel; the case no longer applies"
+    assert torch.count_nonzero(out[0, 1:]) == 0, (
+        f"{torch.count_nonzero(out[0, 1:])} nonzero outputs outside query 0: a skipped slot "
+        "kept an earlier non-finite stick and its zero weight did not cancel it"
     )
 
 
@@ -652,8 +704,7 @@ def test_fused_msda_v2_tiled_masks_out_of_bounds_corners(device, memory, Q, D):
     geometry on Blackhole, whose block solve and corner tile are separate code
     from the per-point path. Each Q is a full query block followed by a tail
     block with v_rows = SPLIT_ROW[memory] or SPLIT_ROW[memory] + 1 on the split,
-    where the writer only zeroes or gathers one row. D = 16 takes the
-    tile-scatter gather.
+    where the writer gathers nothing or one row. D = 16 takes the tile-scatter gather.
     """
     spatial_shapes = [(16, 20), (8, 10), (4, 5), (2, 3)]
     B, H, L, P, R = 1, 1, 4, 4, 4
@@ -682,7 +733,7 @@ def test_fused_msda_v2_tiled_masks_out_of_bounds_corners(device, memory, Q, D):
     high_error_ratio = ((ref - out).abs() > abs_tol).float().mean().item()
     assert high_error_ratio <= 0.01, (
         f"{high_error_ratio:.2%} of output elements are off by more than {abs_tol:.4f}. "
-        "An unmasked out-of-bounds corner reads a stale input row and multiplies it by a live weight"
+        "An out-of-bounds corner kept a live weight and multiplied a stale input slot"
     )
 
 

@@ -60,9 +60,9 @@
 //     startup), so those rows' scalars are not zero. That is harmless: rows
 //     never mix, and the writer emits only rows < v_rows.
 //   * input tile: rows that are in range AND in bounds hold the gathered value
-//     stick; every other row is explicitly zeroed. Compute does not mask the
-//     scalars by the bounds flags it hands the gathers, so the zeroed slot is
-//     the only thing that cancels an out-of-bounds corner of a row < v_rows.
+//     stick; every other row holds zero or an earlier stick (the CB is zeroed
+//     once at startup). Compute zeroes the scalar of every corner whose bounds flags
+//     are clear, so the gathers skip those corners without writing them.
 //   * with RM_STAGING the four corners of a point go over as one row-major
 //     block (row r = [NW | NE | SW | SE], D bf16 each) that compute tilizes;
 //     the same rule applies per corner slot. With SPLIT_GATHER the writer
@@ -397,7 +397,7 @@ static_assert(!RM_STAGING || value_stick_nbytes == D * 2u, "row-major staging pa
 // scatter is most of the reader's time. Nothing reads these tiles until the
 // push_back that follows, and the caller fences the compiler before it.
 
-// Zeroes one row of one input tile group, for a corner the gather skipped.
+// Zeroes row r of one input tile group, for a corner the gather skipped.
 inline void zero_input_row(uint32_t tile_l1, uint32_t r) {
     const auto off = fused_msda_tile_layout::tile_row_offsets(r);
 #pragma GCC unroll 4
@@ -502,6 +502,18 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
         zero_tile_cb(geom_y_cb_index, geom_cb_pages);
 #endif
         zero_tile_cb(attn_tile_cb_index, geom_cb_pages);
+    }
+
+    // On Blackhole the gathers leave out-of-bounds slots unwritten and only
+    // compute's zero weight cancels them (msda_gather_rows.hpp). Zeroing the CB
+    // once keeps uninitialised L1 out of those slots; an earlier inf or NaN
+    // value stick is cancelled by the FPU itself. The CB has never been pushed,
+    // so the write pointer is at page 0.
+    {
+        const auto& iface = get_local_cb_interface(input_tile_cb_index);
+        input_tile_cb.reserve_back(iface.fifo_size / iface.fifo_page_size);
+        noc.async_write_zeros(input_tile_cb, iface.fifo_size);
+        noc.write_zeros_l1_barrier();
     }
 
     RowGeometry geom;
@@ -725,8 +737,6 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                     fused_msda_gather::gather_rows<ReaderGatherCfg>(noc, value_acc, pt, 0, TILE_MAX_ROWS);
                     noc.async_read_barrier();
                 }
-                // Plain zero stores above; keep them ahead of the push.
-                asm volatile("" ::: "memory");
                 release_corners(j);
                 input_tile_cb.push_back(4 * N_D_TILES);
             } else {
@@ -788,19 +798,15 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                     // behind the barrier, whose fence is not a compiler barrier.
                     asm volatile("" ::: "memory");
 
-                    // Scatter each staged stick across the N_D_TILES face rows, and
-                    // zero the rows that had no corner to gather.
-                    //
-                    // The zeroing is load-bearing: the scalar comes from a compute
-                    // kernel that cannot know which corners fell outside the feature
-                    // map, so a stale row would be multiplied by a live weight — a
-                    // high-error-ratio bug that a PCC gate passes.
-                    for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
-                        if (r >= v_rows || !in_bounds(r)) {
+                    // Scatter each staged stick across the N_D_TILES face rows.
+                    // A skipped row is zeroed where ZERO_SKIPPED_SLOTS asks for it
+                    // (msda_gather_rows.hpp).
+                    for (uint32_t r = 0; r < v_rows; ++r) {
+                        if (in_bounds(r)) {
+                            scatter_stick(tile_l1, r, value_arena_l1 + r * value_stick_nbytes);
+                        } else if constexpr (fused_msda_gather::ZERO_SKIPPED_SLOTS) {
                             zero_input_row(tile_l1, r);
-                            continue;
                         }
-                        scatter_stick(tile_l1, r, value_arena_l1 + r * value_stick_nbytes);
                     }
                     // The tile writes above are plain stores; keep them ahead of
                     // the push that hands the tiles to compute.
