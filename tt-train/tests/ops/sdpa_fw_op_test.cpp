@@ -1492,6 +1492,91 @@ const std::vector<ChunkKnobs> kChunkKnobSweep = {{32, 256}, {128, 32}, {64, 64},
 // uniform few-percent rescale error through.
 constexpr float kCrossChunkingMeanAbsTol = 5e-4F;
 
+ttml::metal::SDPAForwardProgramConfig program_config_of(const ChunkKnobs& knobs) {
+    return {
+        .q_chunk_size = knobs.q_chunk_size,
+        .k_chunk_size = knobs.k_chunk_size,
+        .heads_per_item = knobs.heads_per_item,
+        .max_pieces = knobs.max_pieces,
+        .num_cores = knobs.num_cores};
+}
+
+// The schedule the program factory would build for config on this device.
+ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule host_schedule(const SDPATestConfig& config) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto grid = device->compute_with_storage_grid_size();
+    const uint32_t grid_cores = grid.x * grid.y;
+    const uint32_t value_dim = config.value_dim > 0U ? config.value_dim : config.key_value_dim;
+    const SDPAForwardShape shape{
+        .batch = config.batch_size,
+        .q_heads = config.num_query_heads,
+        .kv_heads = config.num_key_heads,
+        .St = config.sequence_length / 32U,
+        .qWt = config.key_value_dim / config.num_key_heads / 32U,
+        .vWt = value_dim / config.num_key_heads / 32U,
+        .mask_type = config.mask_type,
+        .has_gate = config.use_gate,
+        .return_intermediates = config.return_intermediates};
+    const SDPAForwardChunks chunks =
+        resolve_chunks(config.program_config, shape, ttml::metal::available_l1_bytes(*device), grid_cores);
+    const uint32_t max_pieces = effective_max_pieces(config.program_config);
+    const uint32_t num_cores =
+        std::min(effective_num_cores(config.program_config, grid_cores), num_work_items(shape, chunks) * max_pieces);
+    return make_schedule(shape, chunks, num_cores, max_pieces);
+}
+
+// split and unsplit outputs of the same inputs: two bf16 ULP per element, far closer on average.
+void expect_split_matches_unsplit(
+    const xt::xarray<float>& split_output, const xt::xarray<float>& unsplit_output, const std::string& name) {
+    constexpr float kUlpRel = 2.0F * 7.8125e-3F;  // two bf16 ULP of the mantissa
+    constexpr float kAtol = 1e-3F;  // cancellation noise: a row's terms are ~0.1 while its result can be ~0
+    constexpr float kMeanRelTol = 2e-3F;
+    const xt::xarray<float> gap = xt::abs(split_output - unsplit_output);
+    const xt::xarray<float> bound = kUlpRel * xt::abs(unsplit_output) + kAtol;
+    const float max_excess = xt::amax(gap - bound)();
+    const float mean_rel = xt::mean(gap)() / xt::mean(xt::abs(unsplit_output))();
+    fmt::print(
+        "{}: split vs unsplit max excess over 2 ULP {:.3e}, mean relative gap {:.3e}\n", name, max_excess, mean_rel);
+    EXPECT_LE(max_excess, 0.0F) << name << ": a split element is more than two bf16 ULP off the unsplit run";
+    EXPECT_LT(mean_rel, kMeanRelTol) << name << ": split and unsplit runs differ by " << mean_rel << " on average";
+}
+
+// A split schedule folds the partials into the merger's running state in fp32, in a different order than one
+// core's inner loop, then rounds once to bf16 like the unsplit run. So the two outputs agree to a couple of
+// bf16 ULP per element and far closer on average; a merger that dropped, double-counted or mis-scaled a
+// partial would miss by a lot more. The 2e-2 reference tolerance would not see that on the small late-row
+// outputs that get cut, which is why the sweep's reference checks are not enough.
+void run_split_vs_unsplit(SDPATestConfig base, const ChunkKnobs& knobs) {
+    if (!base.seed.has_value()) {
+        base.seed = ttml::autograd::ctx().get_generator()();
+    }
+    auto arm = [&](uint32_t max_pieces, const char* tag) {
+        SDPATestConfig config = base;
+        config.program_config = program_config_of(knobs);
+        config.program_config.max_pieces = max_pieces;
+        config.test_name = base.test_name + tag;
+        return config;
+    };
+    const SDPATestConfig split = arm(knobs.max_pieces, "_split");
+    const SDPATestConfig unsplit = arm(1U, "_unsplit");
+    // The split arm must really split, or the check proves nothing.
+    ASSERT_GT(host_schedule(split).num_slots, 0U) << split.test_name << " schedules no split units";
+    ASSERT_EQ(host_schedule(unsplit).num_slots, 0U) << unsplit.test_name << " schedules split units";
+
+    xt::xarray<float> split_output;
+    xt::xarray<float> unsplit_output;
+    {
+        SCOPED_TRACE(split.test_name);
+        run_sdpa_test(split, &split_output);
+    }
+    {
+        SCOPED_TRACE(unsplit.test_name);
+        run_sdpa_test(unsplit, &unsplit_output);
+    }
+    expect_split_matches_unsplit(split_output, unsplit_output, base.test_name);
+}
+
 void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep = kChunkKnobSweep) {
     if (!base.seed.has_value()) {
         base.seed = ttml::autograd::ctx().get_generator()();  // every row sees the same inputs
@@ -1506,12 +1591,7 @@ void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sw
     }
     for (const auto& knobs : sweep) {
         SDPATestConfig config = base;
-        config.program_config = {
-            .q_chunk_size = knobs.q_chunk_size,
-            .k_chunk_size = knobs.k_chunk_size,
-            .heads_per_item = knobs.heads_per_item,
-            .max_pieces = knobs.max_pieces,
-            .num_cores = knobs.num_cores};
+        config.program_config = program_config_of(knobs);
         config.test_name = fmt::format(
             "{}_q{}_k{}_h{}_p{}_c{}",
             base.test_name,
@@ -1741,35 +1821,36 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Few heavy items on many cores: every item is heavier than a core's fair share, so the schedule cuts
     // them into step ranges computed on different cores and merged. 2 heads, S=2048 -> 32 items of 128 rows.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 2048U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_SplitUnits"};
     run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 1U,
-            .sequence_length = 2048U,
-            .query_dim = 128U,
-            .key_value_dim = 128U,
-            .num_query_heads = 2U,
-            .num_key_heads = 2U,
-            .mask_type = ttml::metal::AttentionMaskType::Causal,
-            .test_name = "ChunkKnobs_SplitUnits"},
-        {{128, 256, 1, 4, 0}, {128, 256, 1, 8, 0}, {64, 128, 1, 2, 0}, {128, 256, 1, 0, 0}, {128, 256, 1, 1, 0}});
+        base, {{128, 256, 1, 4, 0}, {128, 256, 1, 8, 0}, {64, 128, 1, 2, 0}, {128, 256, 1, 0, 0}, {128, 256, 1, 1, 0}});
+    run_split_vs_unsplit(base, {128, 256, 1, 4, 0});
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Splits with stacked heads, a different value dim and the gate; the gate is applied by the merger only.
-    run_chunk_knob_sweep(
-        SDPATestConfig{
-            .batch_size = 1U,
-            .sequence_length = 1024U,
-            .query_dim = 512U,      // 4 heads * 128
-            .key_value_dim = 256U,  // 2 kv heads * 128
-            .value_dim = 128U,      // 2 kv heads * 64
-            .num_query_heads = 4U,
-            .num_key_heads = 2U,
-            .mask_type = ttml::metal::AttentionMaskType::Causal,
-            .use_gate = true,
-            .test_name = "ChunkKnobs_SplitUnits_GQA_Gate"},
-        {{64, 128, 2, 4, 0}, {128, 256, 2, 3, 16}});
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 1024U,
+        .query_dim = 512U,      // 4 heads * 128
+        .key_value_dim = 256U,  // 2 kv heads * 128
+        .value_dim = 128U,      // 2 kv heads * 64
+        .num_query_heads = 4U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .use_gate = true,
+        .test_name = "ChunkKnobs_SplitUnits_GQA_Gate"};
+    run_chunk_knob_sweep(base, {{64, 128, 2, 4, 0}, {128, 256, 2, 3, 16}});
+    run_split_vs_unsplit(base, {64, 128, 2, 4, 0});
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NumCores) {
