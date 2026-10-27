@@ -7,7 +7,6 @@
 #include <array>
 #include <cstdint>
 #include <optional>
-#include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -402,25 +401,6 @@ struct CoreRegisters {
     uint32_t wall_clock_high = 0;
 };
 
-// A struct the manifest describes: its name, size and members in order, which cover every byte of it.
-struct StructType {
-    std::string_view name;
-    uint32_t size = 0;
-    std::span<const layout::Member> members;
-};
-
-// One named value of an enum.
-struct Enumerator {
-    std::string_view name;
-    uint32_t value = 0;
-};
-
-// An enum the manifest describes: its name and every value it names.
-struct EnumType {
-    std::string_view name;
-    std::vector<Enumerator> enumerators;
-};
-
 // What the manifest describes of the architecture the routers run on.
 struct Arch {
     tt::ARCH arch = tt::ARCH::Invalid;
@@ -468,18 +448,12 @@ struct FabricInfo {
     bool multi_txq = false;
 };
 
-// The type catalog: every struct and enum a schema names (struct:<Name>, enum:<Name>).
-struct TypeCatalog {
-    std::vector<StructType> structs;
-    std::vector<EnumType> enums;
-};
-
-// One rank's fabric manifest. Each member is one top-level block of the JSON.
-struct Manifest {
+// Everything the sources read for one rank's manifest, one member per block they fill. The writer turns it into the
+// JSON, and derives the types and vocabulary blocks from it.
+struct ManifestFacts {
     RunInfo run;
     FabricInfo fabric;
     Arch arch;
-    TypeCatalog types;
     std::vector<Mesh> meshes;
 };
 

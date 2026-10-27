@@ -19,12 +19,14 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_chip_pass.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_collector.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <map>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -48,6 +50,7 @@ using manifest::kind_name;
 using manifest::lower_enum_name;
 using manifest::mesh_key;
 using manifest::router_key;
+using manifest::TypeCollector;
 
 // This process and the build it runs: ranks, when the manifest was written, and the commit built from.
 json make_run_json(const manifest::RunInfo& run) {
@@ -115,29 +118,36 @@ json make_credit_transport_json(const std::vector<manifest::VcCreditTransport>& 
 
 // ============ Contents ============
 
+// The schema of a type the manifest uses outside types. Every such schema is written through here, which adds its type
+// to `types`, so types describes every struct, enum and tagged union a schema names.
+json make_schema_json(const layout::Type& type, TypeCollector& types) {
+    types.add(type);
+    return manifest::schema_name(type);
+}
+
 // A type's size and schema. An array also gets its element count and the size of one element.
-void add_type_json(json& out, const layout::Type& type) {
+void add_type_json(json& out, const layout::Type& type, json schema) {
     out["size"] = type.size;
     if (type.count > 0) {
         out["num_elements"] = type.count;
         out["size_per_element"] = manifest::element_size(type);
     }
-    out["schema"] = manifest::schema_name(type);
+    out["schema"] = std::move(schema);
 }
 
-json l1_json(const manifest::content::L1& l1) {
+json l1_json(const manifest::content::L1& l1, TypeCollector& types) {
     json out;
     out["address"] = l1.address;
-    add_type_json(out, l1.type);
+    add_type_json(out, l1.type, make_schema_json(l1.type, types));
     out["cleared_by_host"] = l1.cleared_by_host;
     return out;
 }
 
-json optional_l1_json(const std::optional<manifest::content::L1>& l1) {
-    return l1.has_value() ? l1_json(*l1) : json(nullptr);
+json optional_l1_json(const std::optional<manifest::content::L1>& l1, TypeCollector& types) {
+    return l1.has_value() ? l1_json(*l1, types) : json(nullptr);
 }
 
-json stream_json(const manifest::content::Stream& stream) {
+json stream_json(const manifest::content::Stream& stream, TypeCollector& types) {
     TT_FATAL(
         stream.stream_id < StreamRegAssignments::num_eth_stream_registers,
         "Fabric manifest: stream id {} is not one of the {} stream registers",
@@ -146,14 +156,14 @@ json stream_json(const manifest::content::Stream& stream) {
     json out;
     out["stream_id"] = stream.stream_id;
     out["register"] = lower_enum_name(stream.reg);
-    out["schema"] = manifest::schema_name(stream.type);
+    out["schema"] = make_schema_json(stream.type, types);
     return out;
 }
 
 // ============ Architecture ============
 
-json heartbeat_json(const manifest::Heartbeat& heartbeat) {
-    json out = l1_json(heartbeat.word);
+json heartbeat_json(const manifest::Heartbeat& heartbeat, TypeCollector& types) {
+    json out = l1_json(heartbeat.word, types);
     out["magic"] = heartbeat.magic;
     out["magic_mask"] = heartbeat.magic_mask;
     out["period_iters"] = heartbeat.period_iters;
@@ -177,12 +187,13 @@ json stream_registers_json(const manifest::StreamRegisters& registers) {
 }
 
 // An array, in the order the registers are read.
-json core_registers_json(const manifest::CoreRegisters& registers) {
-    const auto entry = [](const char* name, uint32_t address) {
+json core_registers_json(const manifest::CoreRegisters& registers, TypeCollector& types) {
+    const auto entry = [&types](const char* name, uint32_t address) {
+        constexpr layout::Type word = layout::type_of<uint32_t>();
         json out;
         out["name"] = name;
         out["address"] = address;
-        add_type_json(out, layout::type_of<uint32_t>());
+        add_type_json(out, word, make_schema_json(word, types));
         return out;
     };
     json soft_reset = entry("soft_reset", registers.soft_reset);
@@ -193,102 +204,71 @@ json core_registers_json(const manifest::CoreRegisters& registers) {
          entry("wall_clock_high", registers.wall_clock_high)});
 }
 
-// Each struct by name, with its members in order.
-json structs_json(const std::vector<manifest::StructType>& types) {
+// Each struct by name, with its members in order. Every type a member names was collected with its struct.
+json structs_json(const std::map<std::string_view, const layout::StructDescription*>& structs) {
     json out = json::object();
-    for (const auto& type : types) {
-        const std::string name(type.name);
-        TT_FATAL(!out.contains(name), "Fabric manifest: two structs are named {}, so its schema is ambiguous", name);
+    for (const auto& [name, description] : structs) {
         json members = json::array();
-        for (const auto& member : type.members) {
+        for (const auto& member : description->members) {
             json entry;
             entry["name"] = std::string(member.name);
             entry["offset"] = member.offset;
-            add_type_json(entry, member.type);
+            add_type_json(entry, member.type, manifest::schema_name(member.type));
             members.push_back(std::move(entry));
         }
-        out[name]["size"] = type.size;
-        out[name]["members"] = std::move(members);
+        json& entry = out[std::string(name)];
+        entry["size"] = description->size;
+        entry["members"] = std::move(members);
     }
     return out;
 }
 
 // What the architecture fixes on every router core: L1 areas at the HAL's addresses, and the register blocks.
-json make_arch_json(const manifest::Arch& arch) {
+json make_arch_json(const manifest::Arch& arch, TypeCollector& types) {
     const auto& areas = arch.areas;
     json areas_json;
-    areas_json["heartbeat"] = heartbeat_json(areas.heartbeat);
-    areas_json["fabric_telemetry"] = l1_json(areas.fabric_telemetry);
-    areas_json["routing_table"] = l1_json(areas.routing_table);
-    areas_json["eth_fw_mailbox"] = optional_l1_json(areas.eth_fw_mailbox);
-    areas_json["base_fw_port_status"] = optional_l1_json(areas.base_fw_port_status);
-    areas_json["base_fw_train_status"] = optional_l1_json(areas.base_fw_train_status);
-    areas_json["base_fw_retrain_count"] = optional_l1_json(areas.base_fw_retrain_count);
-    areas_json["base_fw_rx_link_up"] = optional_l1_json(areas.base_fw_rx_link_up);
-    areas_json["base_fw_postcode"] = optional_l1_json(areas.base_fw_postcode);
+    areas_json["heartbeat"] = heartbeat_json(areas.heartbeat, types);
+    areas_json["fabric_telemetry"] = l1_json(areas.fabric_telemetry, types);
+    areas_json["routing_table"] = l1_json(areas.routing_table, types);
+    areas_json["eth_fw_mailbox"] = optional_l1_json(areas.eth_fw_mailbox, types);
+    areas_json["base_fw_port_status"] = optional_l1_json(areas.base_fw_port_status, types);
+    areas_json["base_fw_train_status"] = optional_l1_json(areas.base_fw_train_status, types);
+    areas_json["base_fw_retrain_count"] = optional_l1_json(areas.base_fw_retrain_count, types);
+    areas_json["base_fw_rx_link_up"] = optional_l1_json(areas.base_fw_rx_link_up, types);
+    areas_json["base_fw_postcode"] = optional_l1_json(areas.base_fw_postcode, types);
     json out;
     out["name"] = lower_enum_name(arch.arch);
     out["l1_areas"] = std::move(areas_json);
     out["stream_registers"] = stream_registers_json(arch.stream_registers);
-    out["core_registers"] = core_registers_json(arch.core_registers);
+    out["core_registers"] = core_registers_json(arch.core_registers, types);
     return out;
 }
 
-// ============ Enums and schemas ============
+// ============ Types ============
 
 // Each enum by name, with its values by their lower_name.
-json make_enums_json(const std::vector<manifest::EnumType>& types) {
+json make_enums_json(const std::map<std::string_view, const layout::EnumDescription*>& enums) {
     json out = json::object();
-    for (const auto& type : types) {
-        const std::string name(type.name);
-        TT_FATAL(!out.contains(name), "Fabric manifest: two enums are named {}, so its schema is ambiguous", name);
+    for (const auto& [name, description] : enums) {
         json values = json::object();
-        for (const auto& enumerator : type.enumerators) {
+        for (const auto& enumerator : description->enumerators) {
             values[manifest::lower_name(enumerator.name)] = enumerator.value;
         }
-        out[name]["values"] = std::move(values);
+        out[std::string(name)]["values"] = std::move(values);
     }
     return out;
 }
 
-// The type catalog: every struct and enum a schema names (struct:<Name>, enum:<Name>).
-json make_types_json(const manifest::TypeCatalog& types) {
+// Every struct and enum a schema names (struct:<Name>, enum:<Name>), and every one those name in turn.
+json make_types_json(const TypeCollector& types) {
+    TT_FATAL(
+        types.get_tagged_unions().empty(),
+        "Fabric manifest: a schema names the tagged union {}, but the manifest doesn't write tagged unions yet",
+        types.get_tagged_unions().empty() ? std::string_view{} : types.get_tagged_unions().begin()->first);
     json out;
-    out["structs"] = structs_json(types.structs);
-    out["enums"] = make_enums_json(types.enums);
+    out["structs"] = structs_json(types.get_structs());
+    out["enums"] = make_enums_json(types.get_enums());
     return out;
-}
-
-// Every struct and enum schema in `node` names a type in `structs` or `enums` (types.structs, types.enums), so decode
-// can read everything the manifest hands it.
-void check_schemas_resolve(const json& node, const json& structs, const json& enums) {
-    if (node.is_array()) {
-        for (const auto& element : node) {
-            check_schemas_resolve(element, structs, enums);
-        }
-        return;
-    }
-    if (!node.is_object()) {
-        return;
-    }
-    for (const auto& [key, value] : node.items()) {
-        if (key != "schema" || !value.is_string()) {
-            check_schemas_resolve(value, structs, enums);
-            continue;
-        }
-        const auto& schema = value.get_ref<const std::string&>();
-        const auto names_missing = [&](std::string_view prefix, const json& described) {
-            return schema.starts_with(prefix) && !described.contains(schema.substr(prefix.size()));
-        };
-        const bool unresolved =
-            names_missing(manifest::k_struct_schema, structs) || names_missing(manifest::k_enum_schema, enums);
-        TT_FATAL(
-            !unresolved,
-            "Fabric manifest: the schema {} names a type the manifest does not describe; add it to "
-            "layout::DescribedStructs (fabric_struct_layouts.hpp) or manifest::DescribedEnums "
-            "(fabric_manifest_type_catalog.hpp)",
-            schema);
-    }
 }
 
 // ============ Paths ============
@@ -346,13 +326,13 @@ json router_shape_json(const manifest::RouterShape& shape) {
 
 // indexed_by says whose sender channel each element belongs to: the to_sender arrays are indexed by this router's
 // sender compact index, and the receiver arrays by the peer router's sender compact index.
-json credit_counters_json(const manifest::L1CreditCounters& counters) {
+json credit_counters_json(const manifest::L1CreditCounters& counters, TypeCollector& types) {
     using manifest::CreditCounterArray;
     using manifest::CreditCounterIndexedBy;
     json out;
-    const auto add = [&out](
+    const auto add = [&out, &types](
                          CreditCounterArray array, const manifest::content::L1& l1, CreditCounterIndexedBy indexed_by) {
-        json entry = l1_json(l1);
+        json entry = l1_json(l1, types);
         entry["indexed_by"] = lower_enum_name(indexed_by);
         out[lower_enum_name(array)] = std::move(entry);
     };
@@ -370,9 +350,9 @@ json credit_counters_json(const manifest::L1CreditCounters& counters) {
 // ============ Channels ============
 
 // A counter element names its array by its path within the router, e.g. "credit_counters/to_sender_ack".
-json credit_ref_json(const manifest::CreditRef& credit) {
+json credit_ref_json(const manifest::CreditRef& credit, TypeCollector& types) {
     if (const auto* stream = std::get_if<std::optional<manifest::content::Stream>>(&credit)) {
-        return stream->has_value() ? stream_json(**stream) : json(nullptr);
+        return stream->has_value() ? stream_json(**stream, types) : json(nullptr);
     }
     const auto& counter = std::get<manifest::CounterRef>(credit);
     json out;
@@ -381,7 +361,7 @@ json credit_ref_json(const manifest::CreditRef& credit) {
     return out;
 }
 
-json fields_json(const std::vector<manifest::Field>& fields) {
+json fields_json(const std::vector<manifest::Field>& fields, TypeCollector& types) {
     json out = json::object();
     for (const auto& field : fields) {
         const std::string key(field.key);
@@ -395,13 +375,13 @@ json fields_json(const std::vector<manifest::Field>& fields) {
         entry["kind"] = kind_name(*field.content);
         std::visit(
             ttsl::overloaded{
-                [&](const manifest::content::L1& l1) { entry.update(l1_json(l1)); },
-                [&](const manifest::content::Stream& stream) { entry.update(stream_json(stream)); },
+                [&](const manifest::content::L1& l1) { entry.update(l1_json(l1, types)); },
+                [&](const manifest::content::Stream& stream) { entry.update(stream_json(stream, types)); },
                 [&](const manifest::content::Number& number) { entry["value"] = number.value; },
                 [&](const manifest::content::Flag& flag) { entry["value"] = flag.value; },
                 [&](const manifest::content::Enum& enumerator) {
                     entry["value"] = enumerator.value;
-                    entry["schema"] = manifest::schema_name(enumerator.type);
+                    entry["schema"] = make_schema_json(enumerator.type, types);
                 },
             },
             *field.content);
@@ -436,31 +416,34 @@ json sender_producer_json(
 }
 
 json sender_channel_json(
-    const manifest::SenderChannel& sender, FabricNodeId node, const manifest::RouterIdentity& identity) {
+    const manifest::SenderChannel& sender,
+    FabricNodeId node,
+    const manifest::RouterIdentity& identity,
+    TypeCollector& types) {
     json credits;
     if (sender.credits.acked.has_value()) {
-        credits["acked"] = credit_ref_json(*sender.credits.acked);
+        credits["acked"] = credit_ref_json(*sender.credits.acked, types);
     }
-    credits["completed"] = credit_ref_json(sender.credits.completed);
+    credits["completed"] = credit_ref_json(sender.credits.completed, types);
 
     json out;
     out["status"] = lower_enum_name(sender.status);
     out["serviced_by"] = serviced_by_json(sender.serviced_by);
     out["producer"] = sender_producer_json(sender.producer, node, identity);
-    out["ring_buffer"] = optional_l1_json(sender.ring_buffer);
+    out["ring_buffer"] = optional_l1_json(sender.ring_buffer, types);
     out["credits"] = std::move(credits);
-    out["fields"] = fields_json(sender.fields);
+    out["fields"] = fields_json(sender.fields, types);
     return out;
 }
 
-json receiver_channel_json(const manifest::ReceiverChannel& receiver) {
+json receiver_channel_json(const manifest::ReceiverChannel& receiver, TypeCollector& types) {
     json out;
     out["status"] = lower_enum_name(receiver.status);
     out["serviced_by"] = serviced_by_json(receiver.serviced_by);
     out["forwards_on"] =
         receiver.forwards_on.has_value() ? json(fmt::format("vc{}", *receiver.forwards_on)) : json(nullptr);
-    out["ring_buffer"] = optional_l1_json(receiver.ring_buffer);
-    out["fields"] = fields_json(receiver.fields);
+    out["ring_buffer"] = optional_l1_json(receiver.ring_buffer, types);
+    out["fields"] = fields_json(receiver.fields, types);
     return out;
 }
 
@@ -484,7 +467,7 @@ json channels_by_vc_json(const std::vector<std::vector<Channel>>& channels_by_vc
 
 // Keyed vc<N> then edge<N>, the kernel's EDGE_<N>. VCs without edges are left out. An edge names the sender channel
 // it lands on. In mux mode, the mux stands in for the sibling's VC0 channels other than the worker channel.
-json downstream_edges_json(const manifest::Router& router, FabricNodeId node) {
+json downstream_edges_json(const manifest::Router& router, FabricNodeId node, TypeCollector& types) {
     json out = json::object();
     for (size_t vc = 0; vc < router.intra_chip_downstream_edges.size(); ++vc) {
         const auto& edges = router.intra_chip_downstream_edges[vc];
@@ -500,7 +483,7 @@ json downstream_edges_json(const manifest::Router& router, FabricNodeId node) {
                 vc,
                 edge.landing_channel);
             entry["through_tensix_mux"] = edge.through_tensix_mux;
-            entry["fields"] = fields_json(edge.fields);
+            entry["fields"] = fields_json(edge.fields, types);
             vc_json[fmt::format("edge{}", edge.edge)] = std::move(entry);
         }
         out[fmt::format("vc{}", vc)] = std::move(vc_json);
@@ -511,13 +494,13 @@ json downstream_edges_json(const manifest::Router& router, FabricNodeId node) {
 // ============ Fields ============
 
 // Keyed erisc<N>.
-json eriscs_json(const std::vector<manifest::Erisc>& eriscs) {
+json eriscs_json(const std::vector<manifest::Erisc>& eriscs, TypeCollector& types) {
     json out = json::object();
     for (size_t risc_id = 0; risc_id < eriscs.size(); ++risc_id) {
         json& erisc = out[fmt::format("erisc{}", risc_id)];
         erisc["processor"] = lower_enum_name(eriscs[risc_id].processor);
         erisc["physical_erisc"] = eriscs[risc_id].physical_erisc;
-        erisc["fields"] = fields_json(eriscs[risc_id].fields);
+        erisc["fields"] = fields_json(eriscs[risc_id].fields, types);
     }
     return out;
 }
@@ -552,20 +535,23 @@ json make_vocabulary_json() {
     return out;
 }
 
-json make_router_json(const manifest::Router& router, FabricNodeId node) {
+json make_router_json(const manifest::Router& router, FabricNodeId node, TypeCollector& types) {
     json out;
     out["identity"] = router_identity_json(router.identity);
     out["link"] = eth_link_json(router.link);
     out["shape"] = router_shape_json(router.shape);
-    out["credit_counters"] = credit_counters_json(router.credit_counters);
-    out["channels"]["senders"] = channels_by_vc_json(
-        router.channels.senders,
-        [&](const manifest::SenderChannel& sender) { return sender_channel_json(sender, node, router.identity); });
-    out["channels"]["receivers"] = channels_by_vc_json(router.channels.receivers, receiver_channel_json);
-    out["intra_chip_downstream_edges"] = downstream_edges_json(router, node);
-    out["fields"] = fields_json(router.fields);
-    out["eriscs"] = eriscs_json(router.eriscs);
-    out["leftover_l1"] = optional_l1_json(router.leftover_l1);
+    out["credit_counters"] = credit_counters_json(router.credit_counters, types);
+    out["channels"]["senders"] =
+        channels_by_vc_json(router.channels.senders, [&](const manifest::SenderChannel& sender) {
+            return sender_channel_json(sender, node, router.identity, types);
+        });
+    out["channels"]["receivers"] = channels_by_vc_json(
+        router.channels.receivers,
+        [&](const manifest::ReceiverChannel& receiver) { return receiver_channel_json(receiver, types); });
+    out["intra_chip_downstream_edges"] = downstream_edges_json(router, node, types);
+    out["fields"] = fields_json(router.fields, types);
+    out["eriscs"] = eriscs_json(router.eriscs, types);
+    out["leftover_l1"] = optional_l1_json(router.leftover_l1, types);
     return out;
 }
 
@@ -581,17 +567,17 @@ json local_sync_json(const manifest::LocalSync& local_sync) {
 }
 
 // The chip's routers keyed <direction><routing_plane>.
-json make_chip_routers_json(const manifest::Chip& chip) {
+json make_chip_routers_json(const manifest::Chip& chip, TypeCollector& types) {
     json routers = json::object();
     for (const auto& router : chip.routers) {
         routers[router_key(router.identity.direction, router.identity.routing_plane)] =
-            make_router_json(router, chip.fabric_node_id);
+            make_router_json(router, chip.fabric_node_id, types);
     }
     return routers;
 }
 
 // A remote chip has only its coordinates, and nulls for the ids this rank cannot read.
-json make_chip_json(const manifest::Chip& chip) {
+json make_chip_json(const manifest::Chip& chip, TypeCollector& types) {
     json out;
     out["mesh_coord"] = chip.mesh_coord;
     if (!chip.physical_chip_id.has_value()) {
@@ -607,11 +593,11 @@ json make_chip_json(const manifest::Chip& chip) {
     out["is_local"] = true;
     out["z_port_role"] = lower_enum_name(chip.z_port_role);
     out["local_sync"] = chip.local_sync ? local_sync_json(*chip.local_sync) : json(nullptr);
-    out["routers"] = make_chip_routers_json(chip);
+    out["routers"] = make_chip_routers_json(chip, types);
     return out;
 }
 
-json make_mesh_json(const manifest::Mesh& mesh) {
+json make_mesh_json(const manifest::Mesh& mesh, TypeCollector& types) {
     json out;
     out["shape"] = mesh.shape;
     if (mesh.torus.has_value()) {
@@ -626,25 +612,29 @@ json make_mesh_json(const manifest::Mesh& mesh) {
     }
     json chips = json::object();
     for (const auto& chip : mesh.chips) {
-        chips[chip_key(chip.fabric_node_id.chip_id)] = make_chip_json(chip);
+        chips[chip_key(chip.fabric_node_id.chip_id)] = make_chip_json(chip, types);
     }
     out["chips"] = std::move(chips);
     return out;
 }
 
-json make_manifest_json(const manifest::Manifest& manifest) {
+// types is written last, from every schema the other blocks wrote, and placed before vocabulary.
+json make_manifest_json(const manifest::ManifestFacts& facts) {
+    TypeCollector types;
+    json arch = make_arch_json(facts.arch, types);
+    json meshes = json::object();
+    for (const auto& mesh : facts.meshes) {
+        meshes[mesh_key(mesh.mesh_id)] = make_mesh_json(mesh, types);
+    }
+
     json out;
     out["manifest_version"] = FABRIC_MANIFEST_VERSION;
     out["file_kind"] = "fabric_manifest";
-    out["run"] = make_run_json(manifest.run);
-    out["fabric"] = make_fabric_json(manifest.fabric);
-    out["arch"] = make_arch_json(manifest.arch);
-    out["types"] = make_types_json(manifest.types);
+    out["run"] = make_run_json(facts.run);
+    out["fabric"] = make_fabric_json(facts.fabric);
+    out["arch"] = std::move(arch);
+    out["types"] = make_types_json(types);
     out["vocabulary"] = make_vocabulary_json();
-    json meshes = json::object();
-    for (const auto& mesh : manifest.meshes) {
-        meshes[mesh_key(mesh.mesh_id)] = make_mesh_json(mesh);
-    }
     out["meshes"] = std::move(meshes);
     return out;
 }
@@ -656,17 +646,14 @@ void serialize_fabric_manifest_to_file(
     TT_FATAL(
         fabric_context.has_builder_context(), "Fabric manifest: must be written after the fabric routers are compiled");
     const auto& metal_context = tt::tt_metal::MetalContext::instance();
-    const manifest::Manifest manifest{
+    const manifest::ManifestFacts facts{
         .run = manifest::describe_run(control_plane),
         .fabric = manifest::describe_fabric(control_plane),
         .arch = manifest::describe_arch(metal_context.hal()),
-        .types = manifest::describe_types(),
         .meshes =
             manifest::describe_meshes(control_plane, metal_context.get_cluster(), fabric_context.get_builder_context()),
     };
-    const json manifest_json = make_manifest_json(manifest);
-    check_schemas_resolve(
-        manifest_json, manifest_json.at("types").at("structs"), manifest_json.at("types").at("enums"));
+    const json manifest_json = make_manifest_json(facts);
 
     std::filesystem::create_directories(output_file_path.parent_path());
     const std::filesystem::path temporary_path =
