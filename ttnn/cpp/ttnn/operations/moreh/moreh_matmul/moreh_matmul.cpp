@@ -42,7 +42,7 @@ Tensor moreh_matmul(
             other,
             /*transpose_a=*/false,
             /*transpose_b=*/true,
-            memory_config,
+            output.has_value() ? output->memory_config() : memory_config.value_or(input.memory_config()),
             /*dtype=*/input.dtype(),
             /*program_config=*/std::nullopt,
             /*activation=*/std::nullopt,
