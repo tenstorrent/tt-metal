@@ -115,3 +115,11 @@ start 128), to see whether migrated state matters; (2) standalone flat_routed_ex
 counts (most experts 0); (3) fix in the fork (K.1 agent + ttnn-expert-debugger, or a fix job), then the runner smoke
 (`gate K.1 --unit 'K.1#test_runner_smoke'`, ~15 min) -> Paris; (4) B for test_adapter_acks; (5) K.1 commit; (6) the
 MoE port; (7) the 5-position profile.
+
+## Overseer error: the hang's tt-triage dump was lost twice in a row
+There is an open bug (the decode hang in flat_routed_expert above), and the overseer let its tt-triage dump be lost
+TWICE: run 2's dump (generated/tt-triage/triage.txt, 20:28) was not copied before run 3 started and was wiped by it;
+run 3's dump (20:46) was killed by the overseer while tt-triage was still writing it. Only run 2's stuck-kernel list
+(above, from the K.1 units log) and run 3's Inspector programs_log.yaml survive. Rule for the next overseer: after a
+hang, let tt-triage finish (~1 min) and copy generated/tt-triage/ and generated/inspector/ off the node BEFORE any
+re-run or kill.
