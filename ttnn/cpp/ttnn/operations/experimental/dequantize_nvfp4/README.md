@@ -285,3 +285,51 @@ and native rounding. These measurements establish the best of the tested
 variants, rather than an optimality proof. A fused consumer could further
 reduce synchronization and intermediate traffic; that integration remains
 separate from this standalone converter.
+
+
+### Exponent and sign instruction optimization
+
+The experimental decoder now uses `sfpi::addexp` (`SFPDIVP2`, exponent-add
+mode) to rebias the synthetic LUT input, and `sfpi::copysgn` (`SFPSETSGN`)
+to insert the E2M1 sign. These replace integer exponent/sign assembly and
+remove redundant nibble/sign masks. The exponent adjustment operates on
+raw bits: it must not be replaced by floating-point multiplication, which
+would flush these synthetic subnormal bit patterns. Disassembly confirms
+the two field instructions followed by the sign-retaining `SFPLUT`.
+
+A direct decoder using `SFPSETMAN` and `SFPSETEXP` was also tested. Its
+normal-value construction is exact, but handling E2M1 zero and subnormal
+values needs predication and conversion. It passed the same 74 fast-path
+tests, but was slower and was discarded.
+
+Fresh measurements on the same Blackhole, shape, core count, and BF16 DEST
+configuration compare the original LUT with the field-instruction variants:
+
+| Decoder | Tensor scale | L1-to-L1 cycles/output tile | L1 device time | DRAM device time |
+| --- | --- | ---: | ---: | ---: |
+| Original LUT | FPU | 1,111 | 52.7 us | 88.9 us |
+| Exponent/sign + LUT | FPU | **982** | **46.6 us** | **83.2 us** |
+| Direct mantissa/exponent/sign | FPU | 1,295 | 61.4 us | 97.3 us |
+| Original LUT | SFPU | 974 | 46.2 us | 82.0 us |
+| Exponent/sign + LUT | SFPU | **843** | **40.0 us** | **77.1 us** |
+| Direct mantissa/exponent/sign | SFPU | 1,157 | 54.8 us | 90.9 us |
+
+Thus the selected version reduces L1 pipeline time by about 13.4% relative
+to the previous fastest version. It delivers about **210.0 billion values/s**
+or **419.9 GB/s of BF16 output** with L1 I/O, and **108.8 billion values/s**
+or **217.5 GB/s of BF16 output** with DRAM I/O. These bandwidths count output
+bytes only, excluding packed inputs and scale traffic.
+
+With the same 128-repeat isolation method, the selected decoder measures
+about **532 cycles/output tile** when tensor scaling uses the FPU (outside
+that measurement), and **590 cycles/output tile** when tensor scaling uses
+the SFPU. The earlier values were 656 and 718, respectively. The complete
+pipeline table includes scale broadcast, transpose, and all other work.
+
+Reports are timestamped `2026_10_27_16_31_43` (fresh original baseline),
+`2026_10_27_16_32_37` (selected exponent/sign version),
+`2026_10_27_16_34_13` (discarded direct field decoder), and
+`2026_10_27_16_34_46` (selected decoder isolation). Each complete-pipeline
+number is the median of calls 3 through 8, with 64 output tiles on the
+busiest core and the profiler-reported 1,350 MHz clock. Temporary repeated
+kernels were restored after measurement; only the selected decoder remains.

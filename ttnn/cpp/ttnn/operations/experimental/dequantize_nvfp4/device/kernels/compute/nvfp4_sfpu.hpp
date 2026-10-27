@@ -94,10 +94,13 @@ inline void nvfp4_decode_column_face(uint32_t plane, uint32_t face, float global
     for (uint32_t vec = 0; vec < 8; ++vec) {
         const uint32_t index = face * 8 + vec;
         sfpi::vUInt packed = sfpi::dst_reg[index].mode<sfpi::DataLayout::U16>();
-        sfpi::vUInt code = (packed >> (plane * 4)) & 15;
-        sfpi::vUInt bits = ((code & 7) << 22) + (127u << 23);
-        bits |= (code & 8) << 28;
-        sfpi::vFloat value = sfpi::lut(sfpi::as<sfpi::vFloat>(bits), small, small, large);
+        // Only the low three bits contribute to the magnitude. SFPDIVP2
+        // rebiases its raw exponent bits without floating-point arithmetic.
+        // SFPSETSGN reads only bit 31, so higher packed nibbles need no mask.
+        sfpi::vUInt code = packed >> (plane * 4);
+        sfpi::vFloat synthetic = sfpi::addexp(sfpi::as<sfpi::vFloat>((code & 7) << 22), 127);
+        synthetic = sfpi::copysgn(synthetic, sfpi::as<sfpi::vFloat>(code << 28));
+        sfpi::vFloat value = sfpi::lut(synthetic, small, small, large);
         value *= (vec & 1) ? odd_scales : even_scales;
         if constexpr (!fpu_tensor_scale) {
             value *= global_scale;
