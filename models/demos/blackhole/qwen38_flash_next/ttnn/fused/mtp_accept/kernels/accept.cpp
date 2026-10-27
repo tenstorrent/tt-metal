@@ -212,7 +212,7 @@ void build_row(
 // The theta rule over the prefix sums of the first `kept` lanes of the stage's work arrays at `words`, skipping lane
 // `skip` (`lanes` = no skip): the lane whose prefix first exceeds fl32(u * total), capped at the last kept lane; the
 // bits of theta go to `theta_bits`.
-uint32_t draw(
+FORCE_INLINE uint32_t draw(
     uint32_t uniform_bits,
     uint32_t skip,
     uint32_t total,

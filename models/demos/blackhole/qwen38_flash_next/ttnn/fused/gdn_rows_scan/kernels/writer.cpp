@@ -31,7 +31,7 @@ static_assert(block_tiles == head_tiles || block_tiles == 1, "a whole head or on
 
 // The state after row + 1 rows -> prefix slot row: the item's `block_state_tiles` tiles from cb_outs.
 template <typename Accessor>
-void drain_state(const Accessor& prefix, uint32_t row, uint32_t head, uint32_t block) {
+FORCE_INLINE void drain_state(const Accessor& prefix, uint32_t row, uint32_t head, uint32_t block) {
     const Noc noc;
     CircularBuffer(cb_outs).wait_front(block_state_tiles);
     for (uint32_t kt = 0; kt < head_tiles; ++kt) {

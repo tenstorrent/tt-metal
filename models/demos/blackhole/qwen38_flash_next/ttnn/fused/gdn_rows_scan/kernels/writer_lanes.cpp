@@ -30,7 +30,7 @@ static_assert(rows >= 1 && lanes >= 1 && lanes * rows <= tile_rows, "B lanes x R
 
 // Lane u's state after row + 1 rows -> prefix slot row0 + row: the head's `block_state_tiles` tiles from cb_outs.
 template <typename Accessor>
-void drain_state(const Accessor& prefix, uint32_t row, uint32_t row0, uint32_t head) {
+FORCE_INLINE void drain_state(const Accessor& prefix, uint32_t row, uint32_t row0, uint32_t head) {
     const Noc noc;
     CircularBuffer(cb_outs).wait_front(block_state_tiles);
     for (uint32_t kt = 0; kt < head_tiles; ++kt) {

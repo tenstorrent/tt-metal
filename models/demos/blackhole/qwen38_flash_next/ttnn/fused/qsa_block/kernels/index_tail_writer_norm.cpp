@@ -23,7 +23,8 @@ using namespace index_tail;
 namespace {
 // The front tiles 0, 1 of `normed_cb` to the peer's in CB (in order) and rot CB (swapped: tile 1, then tile 0), at
 // `peer_in` / `peer_rot` on core (peer_x, peer_y); the caller barriers.
-void hand_off_rope_tiles(uint32_t normed_cb, uint32_t peer_x, uint32_t peer_y, uint32_t peer_in, uint32_t peer_rot) {
+FORCE_INLINE void hand_off_rope_tiles(
+    uint32_t normed_cb, uint32_t peer_x, uint32_t peer_y, uint32_t peer_in, uint32_t peer_rot) {
     const Noc noc;
     noc.async_write(
         CircularBuffer(normed_cb),
