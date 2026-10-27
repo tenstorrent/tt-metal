@@ -95,9 +95,8 @@
   budget_type: e2e
 
 # Per-mesh fabric config (#60499/#60690): heterogeneous per-mesh 2D fabric configs derived from the MGD.
-# Each of the four MGDs below is a SEPARATE scenario -- each mesh's dim_types imply its own 2D fabric config, and
-# the test yaml's `topology: FromMgd` groups hand FabricConfig::MGD_DEFAULT to the control plane, which resolves each
-# process's config from its own mesh's dim_types instead of a hard-coded yaml topology. One job runs all four in
+# Each of the four MGDs below is a SEPARATE scenario -- each mesh's dim_types imply its own 2D fabric config,
+# and the dedicated heterogeneous yaml's MgdDefaultHeterogeneous group (topology: FromMgd) makes each process run its own mesh's config. One job runs all four in
 # sequence (kernel-compile cache is shared, so this is far cheaper than four separate jobs) and fails if any
 # tt-run does. Covered scenarios:
 #   1. torus_yx      -- TORUS_Y + TORUS_X + TORUS_Y (3 meshes)
@@ -105,14 +104,14 @@
 #   3. config_combo  -- ALL four 2D configs: TORUS_XY + TORUS_X + TORUS_Y + FABRIC_2D, ring-connected
 #   4. bigmesh_combo -- 4x4 TORUS_X split across 2 processes + 2x2 TORUS_Y + 2x2 FABRIC_2D, all inter-linked
 #
-# One consolidated, deduped yaml (test_fabric_per_mesh_mgd_default_common.yaml) carries the whole matrix:
-# unicast neighbor_exchange + all_to_all (intra + inter mesh) and multicast all_to_all (intra only -- multicast
-# cannot cross mesh boundaries). The old explicit TORUS_XY/X/Y variants were duplicates once the MGD picks the axis.
+# The single heterogeneous group lives in the dedicated test_fabric_per_mesh_heterogeneous.yaml (topology: FromMgd);
+# one run per MGD selects it with --filter name.MgdDefaultHeterogeneous (neighbor_exchange + all_to_all, intra &
+# inter mesh; unicast only -- multicast can't cross mesh boundaries and is covered elsewhere).
 - id: galaxy-fabric-per-mesh-torus-yx
-  name: Galaxy Fabric per-mesh heterogeneous-config sanity + multicast (4 MGDs)
+  name: Galaxy Fabric per-mesh heterogeneous-config sanity (4 MGDs)
   cmd: |
     set -e
-    YAML=tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_per_mesh_mgd_default_common.yaml
+    YAML=tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_per_mesh_heterogeneous.yaml
     MGDDIR=tests/tt_metal/tt_fabric/custom_mesh_descriptors
     LOGDIR=$(mktemp -d)
     # tt-run does NOT propagate the test binary's exit code: an mpirun SIGABRT from a
@@ -139,7 +138,7 @@
       $MGDDIR/single_galaxy_bigmesh_multirank_combo_mesh_graph_descriptor.textproto; do
       echo "=== per-mesh scenario: $MGD ==="
       LOG="$LOGDIR/$(basename $MGD).log"
-      TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML 2>&1 | tee "$LOG"
+      TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML --filter name.MgdDefaultHeterogeneous 2>&1 | tee "$LOG"
       assert_fabric_ok "$LOG" "$MGD"
     done
   skus:
@@ -158,14 +157,14 @@
   name: Galaxy Fabric per-mesh heterogeneous-config sanity (WH config-combo, experimental)
   cmd: |
     set -e
-    YAML=tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_per_mesh_mgd_default_common.yaml
+    YAML=tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_per_mesh_heterogeneous.yaml
     MGD=tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_galaxy_per_mesh_config_combo_mesh_graph_descriptor.textproto
     LOG=$(mktemp)
     # tt-run does NOT propagate the test binary's exit code (an mpirun SIGABRT from a
     # TT_THROW returns 0 to the shell), so assert test_tt_fabric's own success marker
     # instead of relying on `set -e`.
     echo "=== WH per-mesh config-combo scenario: $MGD ==="
-    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML 2>&1 | tee "$LOG"
+    TT_METAL_OPERATION_TIMEOUT_SECONDS=0 tt-run --mesh-graph-descriptor $MGD --hosts "$(hostname)" --mpi-args "--allow-run-as-root" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $YAML --filter name.MgdDefaultHeterogeneous 2>&1 | tee "$LOG"
     if grep -qiE "Boundary exceeded|exited on signal|caught signal|signal 6|Aborted|terminate called|what\(\):|\bFATAL\b" "$LOG"; then
       echo "::error::WH per-mesh scenario crashed/aborted: $MGD"; exit 1
     fi

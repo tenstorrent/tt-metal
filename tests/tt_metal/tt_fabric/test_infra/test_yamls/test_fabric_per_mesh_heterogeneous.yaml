@@ -1,0 +1,38 @@
+# Per-mesh heterogeneous fabric config (#60499/#60690).
+#
+# A single group, `topology: FromMgd` -- a test-infra marker that hands FabricConfig::MGD_DEFAULT to the control
+# plane, which resolves each process's config from its OWN mesh's dim_types (TORUS_X / TORUS_Y / TORUS_XY /
+# FABRIC_2D). Dedicated yaml (kept out of the shared sanity/express yamls, so the suites that run those unfiltered
+# are unaffected). The per-mesh CI jobs run it on each heterogeneous MGD and select it with --filter
+# name.MgdDefaultHeterogeneous.
+#
+# One group runs the full unicast coverage across all patterns and mesh scopes:
+#   neighbor_exchange  intra_mesh + inter_mesh
+#   all_to_all         intra_mesh + inter_mesh
+# (Multicast is intentionally excluded: it cannot cross mesh boundaries and is covered by other suites.)
+
+Tests:
+
+  - name: "MgdDefaultHeterogeneous"
+    sync: true
+    fabric_setup:
+      topology: FromMgd
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      num_packets: 100
+
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: intra_mesh
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+      - type: all_to_all
+        mesh_scope: intra_mesh
+      - type: all_to_all
+        mesh_scope: inter_mesh
