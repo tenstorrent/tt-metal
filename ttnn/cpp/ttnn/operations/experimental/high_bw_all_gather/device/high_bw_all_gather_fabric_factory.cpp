@@ -300,7 +300,8 @@ GatherPlan build_gather_plan(
         }
     }
 
-    // Gather groups (members in row-major order; rank = index in the group) and the ring orders over each.
+    // Gather groups (members in gathered order; rank = index in the group = output stripe) and the ring orders over
+    // each.
     std::vector<std::vector<Coord>> groups;
     std::vector<std::vector<std::vector<Coord>>> rings_of_group;
     bool closed_ring = false;
@@ -318,10 +319,21 @@ GatherPlan build_gather_plan(
             rings_of_group.push_back({members});
         }
     } else {
+        // Members in the gathered order: row-major (rank r * cols + c) by default, column-major (rank
+        // c * rows + r) when mesh axis 1 is outermost, e.g. shards laid out SP-major with SP on axis 1.
+        // Rank is the output stripe, so this order is the whole of full_mesh_outer_axis.
         std::vector<Coord> members;
-        for (uint32_t r = 0; r < mesh_rows; ++r) {
+        if (args.full_mesh_outer_axis == 1) {
             for (uint32_t c = 0; c < mesh_cols; ++c) {
-                members.emplace_back(r, c);
+                for (uint32_t r = 0; r < mesh_rows; ++r) {
+                    members.emplace_back(r, c);
+                }
+            }
+        } else {
+            for (uint32_t r = 0; r < mesh_rows; ++r) {
+                for (uint32_t c = 0; c < mesh_cols; ++c) {
+                    members.emplace_back(r, c);
+                }
             }
         }
         groups.push_back(members);

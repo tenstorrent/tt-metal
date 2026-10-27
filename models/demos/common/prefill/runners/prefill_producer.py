@@ -99,11 +99,11 @@ CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
 
 
 def _load_env_config() -> None:
-    global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
+    global SP_FACTOR, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
     global MTP_DECODE_LEVELS
-    SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
-    TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
-    GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
+    # The host payload is one row per SP chip, in SP order, whichever mesh axis SP runs on; the
+    # runner's H2D mapper (PREFILL_SP_AXIS) places the rows, so the producer needs only the factor.
+    SP_FACTOR = int(os.environ.get("PREFILL_SP", 8))
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
     # Decode's level count: the levels past MTP_LEVELS are table aliases of level 0's rows, acked with it.
@@ -150,7 +150,7 @@ def _h2d_rows(tokens, actual_start: int = 0):
     # Same host-side reshuffle as the engine's H2D prefill connector: a chunk starting mid-slab (multi-turn
     # resume) is rotated so each SP chip receives the tokens the KV writer places on it (identity when the
     # start is chunk-aligned).
-    sp = GLOBAL_MESH_SHAPE[0]
+    sp = SP_FACTOR
     stride = h2d_row_len(CHUNK_SIZE, sp)
     assert len(tokens) == CHUNK_SIZE, f"expected {CHUNK_SIZE} tokens, got {len(tokens)}"
     tokens = rotate_chunk_tokens(list(tokens), actual_start, sp)
@@ -164,7 +164,7 @@ def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
     n_mtp = num_mtp_tokens(MTP_LEVELS)
     if not n_mtp:
         return None
-    sp = GLOBAL_MESH_SHAPE[0]
+    sp = SP_FACTOR
     stride = h2d_row_len(CHUNK_SIZE, sp)
     actual_end = actual_start + CHUNK_SIZE if actual_end is None else actual_end
     slots = mtp_lookahead_positions(actual_start, sp, stride, actual_end, MTP_LEVELS)

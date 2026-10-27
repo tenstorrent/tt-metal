@@ -33,6 +33,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
@@ -42,7 +43,6 @@ from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_i
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
 
-SP_AXIS, TP_AXIS = 0, 1
 SEQ_LEN = 5120
 NUM_LAYERS = 24
 BOUNDARY = 12
@@ -61,22 +61,37 @@ PLACEMENTS = [
         # 4096: see test_transformer_depth.py. 1152 fails once the sealed set has two blocks, 24576
         # breaks MLA's chunked attention. Both regimes are live here.
         {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
+        0,
+        1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-8x4",
-    )
+    ),
+    # Two 4x4 stages (SP=4 on the axis-1 ring, TP=4 on the axis-0 line) run back to back on one
+    # tray half: the boundary is the one between a Galaxy's top and bottom stages. Runs via
+    # tests/run_4x4_stage_tests.sh; skips on a full 32-chip Galaxy.
+    pytest.param(
+        (4, 4),
+        torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        1,
+        0,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="4x4-sp1",
+    ),
 ]
 
 
-def _compose(mesh_device, tensor):
+def _compose(mesh_device, tensor, sp_axis, tp_axis):
     dims = [0, 0]
-    dims[SP_AXIS], dims[TP_AXIS] = 2, 3
+    dims[sp_axis], dims[tp_axis] = 2, 3
     return ttnn.to_torch(
         tensor,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(dims), mesh_shape=tuple(mesh_device.shape)),
     ).reshape(-1, KimiK3Config.EMB_SIZE)[:SEQ_LEN]
 
 
-def _build_rank(mesh_device, config, cache, first_layer_idx, num_layers, *, is_first, is_last):
+def _build_rank(
+    mesh_device, config, cache, first_layer_idx, num_layers, *, is_first, is_last, sp_axis, tp_axis, kv_only=False
+):
     """One rank's slice, built the way the runner builds it.
 
     `state_dict={}` is the production path: every weight comes from the TTNN cache, which is keyed
@@ -94,18 +109,24 @@ def _build_rank(mesh_device, config, cache, first_layer_idx, num_layers, *, is_f
         first_layer_idx=first_layer_idx,
         is_first_rank=is_first,
         is_last_rank=is_last,
-        sp_axis=SP_AXIS,
-        tp_axis=TP_AXIS,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
+        kv_only_last_layer=kv_only,
     )
 
 
 # Two 12-layer stacks get built and run before anything is scored, which is past the suite's
 # 300s default. The measurement itself is quick; the model build is not.
 @pytest.mark.timeout(2400)
-@pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
-def test_pipeline_split_matches_golden(mesh_device, device_params):
+@pytest.mark.parametrize(
+    "mesh_device, device_params, sp_axis, tp_axis", PLACEMENTS, indirect=["mesh_device", "device_params"]
+)
+# kv-only: the last rank's last layer built as the runner builds it (`kv_only_last_layer`), attention and
+# KV write only. Its decoder output does not exist, so only its KV slab is scored.
+@pytest.mark.parametrize("kv_only", [False, True], ids=["full", "kv-only"])
+def test_pipeline_split_matches_golden(mesh_device, device_params, sp_axis, tp_axis, kv_only):
     checkpoint = resolve_checkpoint()
     trace = resolve_trace(TRACE_1M)
     if checkpoint is None or trace is None:
@@ -114,10 +135,21 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
     checkpoint = Path(checkpoint)
     resolve_model_root(checkpoint)
     config = kimi_k3_hf_config(max_seq=SEQ_LEN)
-    cache = cache_root(checkpoint, tuple(mesh_device.shape), TP_AXIS)
+    cache = cache_root(checkpoint, tuple(mesh_device.shape), tp_axis)
 
-    rank0 = _build_rank(mesh_device, config, cache, 0, BOUNDARY, is_first=True, is_last=False)
-    rank1 = _build_rank(mesh_device, config, cache, BOUNDARY, NUM_LAYERS - BOUNDARY, is_first=False, is_last=True)
+    axes = dict(sp_axis=sp_axis, tp_axis=tp_axis)
+    rank0 = _build_rank(mesh_device, config, cache, 0, BOUNDARY, is_first=True, is_last=False, **axes)
+    rank1 = _build_rank(
+        mesh_device,
+        config,
+        cache,
+        BOUNDARY,
+        NUM_LAYERS - BOUNDARY,
+        is_first=False,
+        is_last=True,
+        kv_only=kv_only,
+        **axes,
+    )
 
     # The plane counts the runner would size the socket with. Asserted here so a mismatch is a
     # readable failure in-process rather than a rendezvous TT_FATAL on two machines.
@@ -136,7 +168,7 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
                 hf_config=config,
                 max_seq_len=SEQ_LEN,
                 mesh_shape=tuple(mesh_device.shape),
-                sp_axis=SP_AXIS,
+                sp_axis=sp_axis,
                 num_layers=model.schedule.num_mla_layers,
                 num_users=1,
             )
@@ -147,17 +179,17 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
     tokens_tt = prepare_prefill_input_tensor(
         trace.token_ids(SEQ_LEN)[0].tolist(),
         mesh_device,
-        tuple(mesh_device.shape)[SP_AXIS],
+        tuple(mesh_device.shape)[sp_axis],
         False,
         tuple(mesh_device.shape),
-        SP_AXIS,
+        sp_axis,
     )
 
     per_layer = {}
 
     def tap_for(first_layer_idx):
         def tap(local_idx, hidden):
-            per_layer[first_layer_idx + local_idx] = _compose(mesh_device, hidden)
+            per_layer[first_layer_idx + local_idx] = _compose(mesh_device, hidden, sp_axis, tp_axis)
 
         return tap
 
@@ -178,6 +210,7 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
 
     # KV first: it is the one oracle a residual-shaped self-consistency cannot fake. Rank 1's slabs
     # are written from reads that exist only if the inherited sealed set arrived.
+    kv_bad = []
     for name, model in (("rank0", rank0), ("rank1", rank1)):
         kvpe = caches[name]
         if kvpe is None:
@@ -192,8 +225,8 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
             for local, slot in enumerate(model.schedule.kv_slot_of_local)
             if slot is not None
         }
-        gathered = gather_cache_tp0(kvpe.storage, mesh_device)
-        positions = blockcyclic_positions(tuple(mesh_device.shape)[SP_AXIS], SEQ_LEN, SEQ_LEN)
+        gathered = gather_cache_tp0(kvpe.storage, mesh_device, sp_axis)
+        positions = blockcyclic_positions(tuple(mesh_device.shape)[sp_axis], SEQ_LEN, SEQ_LEN)
         for slot, model_layer in sorted(slot_to_global.items()):
             if not trace.has_kv_cache(model_layer):
                 continue
@@ -203,15 +236,14 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
             logger.info(
                 f"split KV {name} slot {slot} (model layer {model_layer}): lora={pcc_nope:.6f} rope={pcc_pe:.6f}"
             )
-            assert min(pcc_nope, pcc_pe) >= KV_CACHE_PCC, (
-                f"KV cache {name} slot {slot} (model layer {model_layer}) diverged: "
-                f"lora={pcc_nope:.6f} rope={pcc_pe:.6f}"
-            )
+            if min(pcc_nope, pcc_pe) < KV_CACHE_PCC:
+                kv_bad.append(f"{name} slot {slot} (model layer {model_layer}): lora={pcc_nope:.6f} rope={pcc_pe:.6f}")
+    assert not kv_bad, "KV cache diverged: " + "; ".join(kv_bad)
 
     # Score everything before asserting: the shape of the curve is the diagnosis, and stopping at
     # the first shortfall hides it.
     scores = {}
-    for idx in range(NUM_LAYERS):
+    for idx in sorted(per_layer):
         want = trace.decoder_output(idx, 0, SEQ_LEN)
         _, message = comp_pcc(want, per_layer[idx], LAYER_PCC)
         scores[idx] = float(str(message).split()[-1])
@@ -230,7 +262,7 @@ def test_pipeline_split_matches_golden(mesh_device, device_params):
 
     # The shape assertion. An empty inherited set degrades monotonically through the second block
     # instead of recovering, and would clear a floor-only check on the strength of its early layers.
-    tail = min(scores[i] for i in range(RECOVERY_FROM, NUM_LAYERS))
+    tail = min(scores[i] for i in range(RECOVERY_FROM, NUM_LAYERS) if i in scores)
     assert tail >= RECOVERY_PCC, (
         f"no recovery by layer {RECOVERY_FROM}+ (min {tail:.6f} < {RECOVERY_PCC}); the second block "
         f"is not reading the first block's sealed snapshot"

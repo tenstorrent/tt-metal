@@ -43,6 +43,7 @@
 #include "api/debug/assert.h"
 #include "hostdevcommon/common_values.hpp"
 #include "api/debug/kernel_profiler.hpp"
+#include "api/debug/dprint.h"
 
 #include "moe_fused_swiglu_dataflow.hpp"  // the transport vocabulary shared with the writer
 #include "moe_fused_swiglu_common.hpp"    // the ONE definition of the mailbox word layout
@@ -181,6 +182,17 @@ constexpr bool kPrefetchNextX = true;
 constexpr uint32_t P2_READ_TRID = 14;
 constexpr uint32_t NEXT_X_TRID = 15;
 
+// Stall report for the NEXT_X_TRID barrier, compiled in only under DPRINT (TT_METAL_DPRINT_CORES set and
+// TT_METAL_DPRINT_RISCVS including NC); a normal build runs the plain barrier. That barrier hung
+// intermittently at GLM-5.3 4x4 shapes on 2026-10-26 (three runs on three Galaxies, not reproduced since; PR
+// #62125). After ~50M spins the core prints its own view of the per-trid counters once, then keeps waiting.
+#if defined(DEBUG_PRINT_ENABLED)
+constexpr bool NEXT_X_STALL_REPORT = true;
+#else
+constexpr bool NEXT_X_STALL_REPORT = false;
+#endif
+constexpr uint32_t NEXT_X_STALL_SPINS = 50000000;
+
 // Runtime-arg layout: the 10-word scalar block, then the COLUMN as KGROUPS (vx, vy) pairs in ROW
 // order — the invite fan-out and up-gather destinations. Row r at index r on every core is what
 // makes the slice ownership agree grid-wide.
@@ -316,6 +328,12 @@ void kernel_main() {
     // Bound to this kernel's noc_index (NOC_0). The raw ncrisc_* multicasts below pass the same
     // noc_index explicitly, so every transaction this kernel issues rides one NoC.
     Noc noc;
+    // NEXT_X stall report state (see NEXT_X_STALL_REPORT): the tagged-read counters at entry, and the trid
+    // 15 count either side of this core's last x-row prefetch.
+    auto niu_status = [](uint32_t reg) { return NOC_STATUS_READ_REG(noc_index, reg); };
+    const uint32_t stall_entry14 = NEXT_X_STALL_REPORT ? niu_status(NIU_MST_REQS_OUTSTANDING_ID(P2_READ_TRID)) : 0;
+    const uint32_t stall_entry15 = NEXT_X_STALL_REPORT ? niu_status(NIU_MST_REQS_OUTSTANDING_ID(NEXT_X_TRID)) : 0;
+    uint32_t stall_pre = 0, stall_post = 0, stall_issued = 0, stall_prefetches = 0;
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t counts_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t idx_addr = get_common_arg_val<uint32_t>(2);
@@ -896,11 +914,18 @@ void kernel_main() {
                         row = M_T_MAX - 1;
                     }
                     noc_async_read_set_trid(NEXT_X_TRID);
+                    if constexpr (NEXT_X_STALL_REPORT) {
+                        stall_pre = niu_status(NIU_MST_REQS_OUTSTANDING_ID(NEXT_X_TRID));
+                    }
                     if constexpr (INPUT_FORMAT == 0) {
                         cb_reserve_back(cb_x_in, TILE_H);
                         issue_x_row(row, get_write_ptr(cb_x_in));
                     } else {
                         issue_x_row(row, next_x_base + t * X_ROW_BYTES);
+                    }
+                    if constexpr (NEXT_X_STALL_REPORT) {
+                        stall_post = niu_status(NIU_MST_REQS_OUTSTANDING_ID(NEXT_X_TRID));
+                        ++stall_issued;
                     }
                     noc_async_read_set_trid(P2_READ_TRID);
                 }
@@ -1268,7 +1293,36 @@ void kernel_main() {
             }
             if (prefetch_next_x) {
                 noc_async_read_set_trid(0);
-                noc_async_read_barrier_with_trid(NEXT_X_TRID);
+                if constexpr (!NEXT_X_STALL_REPORT) {
+                    noc_async_read_barrier_with_trid(NEXT_X_TRID);
+                } else {
+                    // noc_async_read_barrier_with_trid(NEXT_X_TRID), reporting once if it stalls.
+                    ++stall_prefetches;
+                    uint32_t spins = 0;
+                    bool reported = false;
+                    while (niu_status(NIU_MST_REQS_OUTSTANDING_ID(NEXT_X_TRID)) != 0) {
+                        if (!reported && ++spins > NEXT_X_STALL_SPINS) {
+                            reported = true;
+                            DPRINT("NEXT_X STALL e={} b={} t15={} entry15={} entry14={} local_row={}\n",
+                                   local_expert_id,
+                                   block_idx,
+                                   niu_status(NIU_MST_REQS_OUTSTANDING_ID(NEXT_X_TRID)),
+                                   stall_entry15,
+                                   stall_entry14,
+                                   (uint32_t)prefetch_has_local_row);
+                            DPRINT("NEXT_X STALL pre={} post={} issued={} prefetches={} t0={} t14={} sent={} recv={}\n",
+                                   stall_pre,
+                                   stall_post,
+                                   stall_issued,
+                                   stall_prefetches,
+                                   niu_status(NIU_MST_REQS_OUTSTANDING_ID(0)),
+                                   niu_status(NIU_MST_REQS_OUTSTANDING_ID(P2_READ_TRID)),
+                                   niu_status(NIU_MST_RD_REQ_SENT),
+                                   niu_status(NIU_MST_RD_RESP_RECEIVED));
+                        }
+                    }
+                    invalidate_l1_cache();
+                }
                 if constexpr (INPUT_FORMAT == 0) {
                     if (prefetch_has_local_row) {
                         cb_push_back(cb_x_in, TILE_H);

@@ -176,6 +176,7 @@ class TtKimiK3Transformer(LightweightModule):
                 mesh_device,
                 hidden_size=model_cfg.EMB_SIZE,
                 eps=model_cfg.RMS_NORM_EPS,
+                sp_axis=sp_axis,
                 tp_axis=tp_axis,
                 # Hand AttnRes the model's own CCL pools. Without this it falls back to one fixed,
                 # privately-allocated semaphore set, which is only safe while nothing else has a

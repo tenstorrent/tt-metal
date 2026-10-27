@@ -20,6 +20,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     d2d_activation_width,
     num_mtp_tokens,
 )
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.tt_dflash_drafter import TtDFlashDrafter
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.utils import load_drafter_state_dict
@@ -732,7 +733,9 @@ class TtPrefillRuntime:
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=cfg.mesh_shape, dims=(cfg.sp_axis, None)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, mesh_shape=cfg.mesh_shape, dims=mesh_shard_dims(0, cfg.sp_axis)
+            ),
         )
 
     def make_mtp_tokens_input(self, token_ids: list[int]) -> ttnn.Tensor:
@@ -1004,7 +1007,9 @@ class TtPrefillRuntime:
             self._packed_padding_rows(rows),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=mesh_shard_dims(0, self.config.sp_axis), mesh_shape=self.mesh_device.shape
+            ),
         )
         # copy_host_to_device_tensor replaces the destination's declared topology; keep the original.
         topology = self._packed_padding_config.tensor_topology()
@@ -1050,7 +1055,9 @@ class TtPrefillRuntime:
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=mesh_shard_dims(0, self.config.sp_axis), mesh_shape=self.mesh_device.shape
+            ),
         )
         controller = SubDeviceTraceController(self.mesh_device)
         self.model.set_trace_controller(controller)
@@ -1930,7 +1937,10 @@ class TtPrefillRuntime:
         # the same path kv_cache_pcc_check takes. (Using `kvpe` directly here raised
         # 'MlaKvCache' object has no attribute 'shape'.)
         kvpe = kv_caches.kvpe
-        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+        # Sequence (dim 2) concatenates over the SP axis and the TP replicas stack on dim 1, so the
+        # `[:, :1]` below keeps one replica whichever mesh axis SP is on.
+        composer_dims = (2, 1) if self.config.sp_axis == 0 else (1, 2)
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=composer_dims, mesh_shape=mesh_device.shape)
 
         def _slot_block(tensor, rows_per_slot: int):
             """This slot's rows of a user-major cache, gathered to host as one TP replica:

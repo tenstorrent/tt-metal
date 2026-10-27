@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM2
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import mesh_shard_dims
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
@@ -109,6 +110,14 @@ def gate_mm_config_key(sp_dim: int, per_device_emb_dim: int, n_routed_experts: i
     """
     k_tiles = (per_device_emb_dim + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
     return (sp_dim, k_tiles * ttnn.TILE_SIZE, n_routed_experts)
+
+
+def gate_mesh_axes(config) -> tuple[int, int]:
+    """(sp_axis, tp_axis) from the gate config's ccl_config ("DISPATCH_AXIS" / "TP_AXIS")."""
+    sp_axis = config.ccl_config.get("DISPATCH_AXIS", 0)
+    tp_axis = config.ccl_config.get("TP_AXIS", 1)
+    assert {sp_axis, tp_axis} == {0, 1}, f"gate DISPATCH_AXIS / TP_AXIS must be 0 and 1, got {sp_axis}, {tp_axis}"
+    return sp_axis, tp_axis
 
 
 @dataclass
@@ -518,6 +527,8 @@ class TtMoEGatePrefill(LightweightModule):
         if torch_bias is None:
             torch_bias = torch.empty(config.n_routed_experts)
 
+        _, tp_axis = gate_mesh_axes(config)
+
         # Convert weight
         weight_tt = ttnn.as_tensor(
             weight_for_ttnn,
@@ -527,7 +538,7 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, 0),
+                dims=mesh_shard_dims(0, tp_axis),  # emb dim sharded over TP, replicated over SP
                 mesh_shape=mesh_device.shape,
             ),
             cache_file_name=_cache_name("weight"),
@@ -556,11 +567,13 @@ class TtMoEGatePrefill(LightweightModule):
                 weight_tt,
                 mesh_composer=ttnn.create_mesh_composer(
                     mesh_device,
+                    # Concat the TP shards on tensor dim 0 and take one SP replica.
                     config=ttnn.MeshComposerConfig(
-                        dims=(-1, 0),  # Work on tensor dims 0 and -1 (both dims of 2D tensor)
-                        mesh_shape_override=ttnn.MeshShape(
-                            1,  # SP replicated
-                            mesh_device.shape[1],  # TP fractured
+                        dims=(-1, 0) if tp_axis == 1 else (0, -1),
+                        mesh_shape_override=(
+                            ttnn.MeshShape(1, mesh_device.shape[1])
+                            if tp_axis == 1
+                            else ttnn.MeshShape(mesh_device.shape[0], 1)
                         ),
                     ),
                 ),
@@ -625,6 +638,8 @@ class TtMoEGatePrefill(LightweightModule):
         """
         self.config = config
         self.mesh_device = mesh_device
+        # SP / TP mesh axes come from the config (TtMoe sets them); default SP=0, TP=1.
+        self.sp_axis, self.tp_axis = gate_mesh_axes(config)
         # Shared per-mesh CCL singleton: provides persistent global semaphores for the gate's TP
         # all-reduce so the op reuses them instead of allocating fresh L1 semaphores every layer
         # (those leaked, pinning the L1 floor and clashing with the next layer's ring_mla CBs).
@@ -755,8 +770,9 @@ class TtMoEGatePrefill(LightweightModule):
             x,
             mesh_composer=ttnn.create_mesh_composer(
                 self.mesh_device,
+                # Tokens (dim 0) concat over the SP axis, emb dim (-1) over the TP axis.
                 config=ttnn.MeshComposerConfig(
-                    dims=(0, -1),  # SP on axis 0, TP on axis 1
+                    dims=(0, -1) if self.sp_axis == 0 else (-1, 0),
                 ),
             ),
         )
@@ -767,11 +783,13 @@ class TtMoEGatePrefill(LightweightModule):
             logits,
             mesh_composer=ttnn.create_mesh_composer(
                 self.mesh_device,
+                # Concat the SP shards on tensor dim 0 and collapse the TP replicas.
                 config=ttnn.MeshComposerConfig(
-                    dims=(0, -1),
-                    mesh_shape_override=ttnn.MeshShape(
-                        self.mesh_device.shape[0],  # concat SP shards
-                        1,  # collapse TP replicas
+                    dims=(0, -1) if self.sp_axis == 0 else (-1, 0),
+                    mesh_shape_override=(
+                        ttnn.MeshShape(self.mesh_device.shape[0], 1)
+                        if self.sp_axis == 0
+                        else ttnn.MeshShape(1, self.mesh_device.shape[1])
                     ),
                 ),
             ),
@@ -787,7 +805,7 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(0, None),  # shard SP, replicate TP
+                dims=mesh_shard_dims(0, self.sp_axis),  # shard SP, replicate TP
                 mesh_shape=self.mesh_device.shape,
             ),
         )
@@ -801,7 +819,7 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(0, None),
+                dims=mesh_shard_dims(0, self.sp_axis),
                 mesh_shape=self.mesh_device.shape,
             ),
         )
@@ -834,7 +852,7 @@ class TtMoEGatePrefill(LightweightModule):
         """Shard host input_ids to device to match x's SP token order.
 
         input_ids (any shape, flattened to [total_tokens]) is reshaped to [total_tokens/32, 32] and
-        SP-sharded on axis 0 / TP-replicated, so device d holds the same tokens as its logits rows.
+        SP-sharded / TP-replicated, so device d holds the same tokens as its logits rows.
         One ROW_MAJOR page = 32 uint32 token ids = one score height tile. (Assumes sequential SP
         placement; balanced/zigzag would need a matching token permutation.)
         """
@@ -850,7 +868,7 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(0, None),  # shard tokens across SP, replicate across TP
+                dims=mesh_shard_dims(0, self.sp_axis),  # shard tokens across SP, replicate across TP
                 mesh_shape=self.mesh_device.shape,
             ),
         )
@@ -864,7 +882,7 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(0, None),
+                dims=mesh_shard_dims(0, self.sp_axis),
                 mesh_shape=self.mesh_device.shape,
             ),
         )
@@ -872,7 +890,7 @@ class TtMoEGatePrefill(LightweightModule):
     def _device_matmul(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Gate matmul + TP all-reduce on device."""
         per_device_dim = x.shape[-1]
-        n_tp_devices = self.mesh_device.shape[1]
+        n_tp_devices = self.mesh_device.shape[self.tp_axis]
         assert (
             per_device_dim * n_tp_devices == self.config.dim
         ), f"Expected per-device dim {self.config.dim // n_tp_devices}, got {per_device_dim}"
@@ -892,7 +910,7 @@ class TtMoEGatePrefill(LightweightModule):
             program_config=program_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        tp_axis = self.config.ccl_config["TP_AXIS"]
+        tp_axis = self.tp_axis
         if self.mesh_device.shape[tp_axis] > 1:
             # Pass persistent CCL semaphores (created once in TT_CCL) so all_reduce_async reuses them
             # instead of internally allocating+leaking global semaphores in main L1 every call. The
@@ -951,7 +969,7 @@ class TtMoEGatePrefill(LightweightModule):
         if cached is not None:
             return cached
 
-        sp_factor = self.mesh_device.shape[0]
+        sp_factor = self.mesh_device.shape[self.sp_axis]
         seq_len_per_chip = self.config.sp_dim
         total_tokens = sp_factor * seq_len_per_chip
         pad_side = 0 if padding_side == "right" else 1
@@ -1017,7 +1035,7 @@ class TtMoEGatePrefill(LightweightModule):
         actual_start) describes the rows: the caller derives the counts from the chunks (packed_real_rows).
         Memoized and owned here like build_padding_config, so callers must NOT deallocate the result.
         """
-        sp_factor = self.mesh_device.shape[0]
+        sp_factor = self.mesh_device.shape[self.sp_axis]
         seq_len_per_chip = self.config.sp_dim
         assert len(real_rows) == sp_factor, f"{len(real_rows)} real-row counts for SP={sp_factor}"
         assert all(0 <= r <= seq_len_per_chip for r in real_rows), f"{real_rows} outside [0, {seq_len_per_chip}]"
@@ -1041,7 +1059,7 @@ class TtMoEGatePrefill(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(0, None),
+                dims=mesh_shard_dims(0, self.sp_axis),
                 mesh_shape=self.mesh_device.shape,
             ),
         )
@@ -1077,7 +1095,7 @@ class TtMoEGatePrefill(LightweightModule):
                 "untraced so the host builder (build_padding_config) handles the balanced layout."
             )
 
-        sp_factor = self.mesh_device.shape[0]
+        sp_factor = self.mesh_device.shape[self.sp_axis]
         if self._padding_config_device is None:
             # Allocate the persistent row once. Same spec the host builder produces, so the consumers
             # (moe_grouped_topk / dispatch) see an identical tensor either way.
@@ -1089,7 +1107,7 @@ class TtMoEGatePrefill(LightweightModule):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device,
-                    dims=(0, None),
+                    dims=mesh_shard_dims(0, self.sp_axis),
                     mesh_shape=self.mesh_device.shape,
                 ),
             )
@@ -1103,9 +1121,9 @@ class TtMoEGatePrefill(LightweightModule):
             actual_end,
             tokens_per_chip=self.config.sp_dim,
             pad_side=0 if padding_side == "right" else 1,
-            # SP is mesh axis 0 — the same axis sp_factor is read from above and that the config is
-            # sharded along, so the op's per-chip coordinate matches the host builder's row order.
-            cluster_axis=0,
+            # The SP axis — the same axis sp_factor is read from above and that the config is sharded
+            # along, so the op's per-chip coordinate matches the host builder's row order.
+            cluster_axis=self.sp_axis,
         )
 
     def _device_grouped_gate_fp32(

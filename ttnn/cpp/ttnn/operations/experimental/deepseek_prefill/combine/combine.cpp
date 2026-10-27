@@ -41,9 +41,7 @@ ttnn::Tensor combine(
     const bool local_only = singleton_domain && dispatch_group_size == 1;
     // Validate fabric configuration - only tested values are supported
     TT_FATAL(
-        cluster_axis.value_or(0) == 0,
-        "cluster_axis must be 0 (current value: {}). Other values are not tested.",
-        cluster_axis.value_or(0));
+        cluster_axis.value_or(0) <= 1, "cluster_axis must be 0 or 1 (current value: {}).", cluster_axis.value_or(0));
     TT_FATAL(
         (local_only || num_links.value_or(1) >= 1) && num_links.value_or(1) <= 4,
         "num_links must be between 1 and 4, or 0 on a singleton dispatch group (current value: {}).",
