@@ -9,15 +9,31 @@ crosses an index_kpool boundary at every step, the first sparse pool (2047 -> 20
 back per chip and compared with the direct path's host values; the user-partitioned cache is the second case.
 
 Four passes over the same ladder from the same state: direct eager, packed eager (+ the field checks), packed
-traced, direct traced. The prompts are prefilled ONCE, before any decode step (an eager 2048-token prefill after
-an MoE decode step clashes on the block: the decode's persistent L1 routing buffers (expert_stream's table / act)
-sit where the KDA sequence-parallel scan's static circular buffers of a 1024-row slab go; the existing tests only
-prefill before decoding or prefill 128 tokens after). Every pass warms up / captures at the ladder's first
-positions (the prompt ends, multiples of 4: the warm-up's latent row and ring slot are rewritten by step 0 before
-anything reads them and no pool completes there) and resets the KDA states before its ladder, so every value a
-step reads was written by the prefill or by this pass (the pools / rows of the previous pass beyond the current
-position are never ranked or attended). The packed segments are allocated before the first capture (the trace
-rule); the per-length prefill traces are not used.
+traced, direct traced. The prompts are prefilled ONCE, before any decode step, in ``PREFILL_CHUNK``-token chunks
+(512-row slabs per chip, the chunked prefill the adapter uses) because of the L1 hazard below. Every pass warms
+up / captures at the ladder's first positions (the prompt ends, multiples of 4: the warm-up's latent row and ring
+slot are rewritten by step 0 before anything reads them and no pool completes there) and resets the KDA states
+before its ladder, so every value a step reads was written by the prefill or by this pass (the pools / rows of the
+previous pass beyond the current position are never ranked or attended). The packed segments are allocated before
+the first capture (the trace rule); the per-length prefill traces are not used.
+
+L1 hazard of long prefill slabs on a (2, 4) block (the first two block runs of this test failed on it, with and
+without a decode step before the prefill; nothing of the packed path was involved): the KDA sequence-parallel
+prefill keeps its chunk-preparation terms and activations in interleaved L1 under the static per-core budgets of
+``deepseek_v3_d_p/tt/kda/config.py`` (sized for Kimi-K3 on the Galaxy: 24 heads, 640 rows per device). GLM has
+16 KDA heads per chip (64 / TP4) and 64 KiB of chunk terms per head per 32-row chunk, so a 1024-row slab (a
+2048-token chunk on 2 rows) holds 32 MiB of terms = 273 KiB per core on the 12x10 grid (under the 320 KiB budget,
+so L1) plus the qkv / decay / norm / partial-output / summary buffers: 608 KiB per core in all (observed: L1
+buffers from 950016 B up to the 1.5 MiB top). ``ttnn.experimental.kda.affine_exclusive_scan`` then statically
+allocates a fixed ~896 KiB of dataflow buffers per worker core (K = V = 128: 256 tile slots, independent of the
+slab length) whose region ends at 1029280 B, 77 KiB into those buffers -> "Statically allocated dataflow buffers
+in program N clash with L1 buffers on core range [0-0 - 11-1]" at the first prefill of the first KDA layer.
+512-row slabs use ~320 KiB per core (safe by ~200 KiB), 768-row slabs ~450 KiB (safe by ~80 KiB), 1024-row slabs
+clash; from 1216 rows the terms exceed the 37.5 MiB budget and spill to DRAM, which is why the 8x4 serving chunks
+(16 K tokens = 2048-row slabs) and the 128-token warm-ups (64-row slabs) never hit it. By the same arithmetic any
+chunk whose padded length gives ~800-1200 rows per chip is in the window: 1600-2400-token chunks on a 2-row
+block (the 2048-token prefill trace of ``DEFAULT_LENGTHS`` included), 6.4-9.6 K-token single-chunk prompts on
+the 8x4 (unverified on the device); keep block prefill chunks <= 1024 tokens (512-row slabs).
 
     GLM53_MESH_SHAPE=2,4 GLM53_MODEL_LAYERS=0-3 GLM53_MODEL_B=4 GLM53_MODEL_TRACE_MB=512 \\
         pytest models/demos/glm53_flash/tests/test_decode_packed_inputs_mesh.py -s
@@ -48,6 +64,8 @@ B = int(os.environ.get("GLM53_MODEL_B", "4"))  # users per row
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 N_STEPS = int(os.environ.get("GLM53_PACKED_STEPS", "16"))  # contiguous decode steps per pass
 MAX_SEQ_LEN = 2304
+# the prefill chunk: 512-row slabs per chip (the module docstring's L1 hazard: 1024-row slabs clash in the KDA scan)
+PREFILL_CHUNK = 512 * MESH[0]
 _DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]
 EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]
@@ -126,11 +144,12 @@ class _Ladder:
 
 
 def _prefill_all(model: GLM53MeshModel, lens: list[int]):
-    """Every user slot's prompt (eager, sequence-parallel over the rows: slot u of every row holds it): the KDA
-    slots, the latent cache rows [0, S) and the pooled-key index are written from position 0. Runs once, before
-    any decode step (see the module docstring)."""
+    """Every user slot's prompt (eager, sequence-parallel over the rows: slot u of every row holds it) in
+    ``PREFILL_CHUNK``-token chunks (the chunked-prefill contract: ``start`` offsets, 512-row slabs per chip; the
+    module docstring's L1 hazard): the KDA slots, the latent cache rows [0, S) and the pooled-key index are written
+    from position 0. Runs once, before any decode step."""
     for u, n in enumerate(lens):
-        streams, logits, _ = model.prefill(_prompt(n), user=u)
+        streams, logits, _ = model.prefill_chunked(_prompt(n), user=u, chunk=PREFILL_CHUNK)
         ttnn.deallocate(streams)
         if logits is not None:
             ttnn.deallocate(logits)
