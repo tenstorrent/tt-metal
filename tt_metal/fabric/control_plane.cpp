@@ -403,13 +403,20 @@ void ControlPlane::init_control_plane(
     int rank = *distributed_context->rank();
 
     const MeshGraphDescriptor mgd(std::filesystem::path(mesh_graph_desc_file), /*backwards_compatible=*/true);
-    if (config_.fabric_config == FabricConfig::MGD_DEFAULT) {
+    const bool fabric_config_from_mgd = (config_.fabric_config == FabricConfig::MGD_DEFAULT);
+    if (fabric_config_from_mgd) {
         config_.fabric_config = mgd.default_fabric_config_from_dim_types(config_.mesh_id);
     }
-    // The fabric config belongs to the mesh this process owns (config_.mesh_id); other meshes use their own MGD
-    // dim_types.
-    this->mesh_graph_ =
-        std::make_unique<MeshGraph>(mgd, config_.fabric_config, cluster.is_ubb_galaxy(), config_.mesh_id);
+    // Every rank must resolve EVERY mesh's fabric type the same way, or the per-mesh edge-port maps diverge and
+    // cross-rank inter-mesh validation throws (the controller places a connection on an edge port that a
+    // non-owner rank reserved for a torus it never requested). Two cases, both identical on every rank:
+    //   - MGD_DEFAULT: each mesh takes its own declared dim_types (nullopt -> MeshGraph derives per mesh), so meshes
+    //     stay heterogeneous while every rank agrees on each one.
+    //   - A concrete config is a process-wide override; it applies uniformly to every mesh (not just the owned one),
+    //     so the owned/non-owned split that broke the edge-port maps disappears.
+    std::optional<FabricConfig> mesh_graph_fabric_config =
+        fabric_config_from_mgd ? std::nullopt : std::optional<FabricConfig>(config_.fabric_config);
+    this->mesh_graph_ = std::make_unique<MeshGraph>(mgd, mesh_graph_fabric_config, cluster.is_ubb_galaxy());
     this->validate_system_health_against_mesh_graph_policy();
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
@@ -712,21 +719,9 @@ ControlPlane::ControlPlane(
 }
 
 void ControlPlane::validate_fabric_config_compatibility() {
-    // A DISABLED control plane runs no fabric, so there is nothing to cross-check between ranks. More
-    // importantly, DISABLED control planes are built at points that are NOT symmetric across ranks: the
-    // eager rebuild in MetalEnv::teardown_fabric_config() fires only on ranks whose control plane is
-    // currently null, so one rank may construct a placeholder DISABLED control plane while another, already
-    // holding a live one, does not. If every such construction took part in the all_gather below, a rank
-    // sitting on a DISABLED teardown build (STRICT, 0 routing planes) would be paired against a rank on a
-    // real build (e.g. RELAXED, 255 planes) and the mismatch check would fatal (control_plane.cpp:854) or,
-    // worse, the collective stream would skew and deadlock. Skipping the collective for DISABLED builds
-    // keeps only the real, symmetric fabric bring-ups in the all_gather, where every rank genuinely agrees.
-    if (this->config_.fabric_config == FabricConfig::DISABLED) {
-        this->validated_fabric_config_ = this->config_.fabric_config;
-        return;
-    }
-
     // Gather every rank's FabricConfigDescriptor (raw bytes; the sending rank is its index in the gather).
+    // Every rank always takes part in this all_gather -- including ranks whose fabric is DISABLED -- so the
+    // collective stays symmetric and so the DISABLED state itself can be cross-checked below.
     const auto& distributed_context = this->distributed_context_.get();
     const auto world_size = static_cast<uint32_t>(*distributed_context.size());
 
@@ -734,6 +729,31 @@ void ControlPlane::validate_fabric_config_compatibility() {
     distributed_context.all_gather(
         ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricConfigDescriptor>{&this->config_, 1}),
         ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricConfigDescriptor>{configs.data(), configs.size()}));
+
+    // Fabric DISABLED must be unanimous. A DISABLED control plane runs no fabric, so once every rank agrees
+    // on DISABLED there is nothing further to validate and we exit early -- but a split where some ranks
+    // disabled fabric while others kept it live is a hard failure (the live ranks would route into dead
+    // peers). Every rank sees the same gathered configs, so this fatals identically everywhere.
+    const bool any_disabled = std::any_of(
+        configs.begin(), configs.end(), [](const auto& c) { return c.fabric_config == FabricConfig::DISABLED; });
+    if (any_disabled) {
+        std::string observed_states;
+        for (uint32_t rank = 0; rank < world_size; ++rank) {
+            observed_states +=
+                fmt::format("\n  rank={}, fabric_config={}", rank, enchantum::to_string(configs[rank].fabric_config));
+        }
+        for (uint32_t rank = 0; rank < world_size; ++rank) {
+            TT_FATAL(
+                configs[rank].fabric_config == FabricConfig::DISABLED,
+                "Fabric must be DISABLED on every rank or none, but rank {} has {} while another rank is DISABLED. "
+                "Observed:{}",
+                rank,
+                enchantum::to_string(configs[rank].fabric_config),
+                observed_states);
+        }
+        this->validated_fabric_config_ = this->config_.fabric_config;
+        return;
+    }
 
     // vc2 / mesh pass-through come from rtoptions rather than FabricConfigDescriptor; bit 0 = vc2, bit 1 =
     // pass-through.
