@@ -1,7 +1,7 @@
 {
   "margin": {
-    "throughput_tok_s": 0.005,
-    "ttft_s": 0.005,
+    "throughput_tok_s": 0.015,
+    "ttft_s": 0.015,
     "chunk_time_ms": 0.1
   },
   "baselines": {
@@ -32,9 +32,9 @@
       "sc4": {
         "probe": "@1020k",
         "8kw": {
-          "throughput_tok_s": 21942,
-          "ttft_s": 36.92,
-          "chunk_time_ms": 1294
+          "throughput_tok_s": 21358,
+          "ttft_s": 37.79,
+          "chunk_time_ms": 1021
         },
         "14kw": {
           "throughput_tok_s": 21942,
