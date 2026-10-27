@@ -209,23 +209,10 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
 
     // Program config: knob checks and the L1 budget of a fully specified config. The unset knobs are picked
     // by the program factory on a cache miss (this validator also runs on cache hits).
-    auto* device = query.device();
-    const uint64_t l1_budget_bytes =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const auto [pB, pNH, pS, pE] = query.padded_shape().to_array_4D();
     check_chunks(
         args.program_config,
-        SDPAForwardShape{
-            .batch = pB,
-            .q_heads = pNH,
-            .kv_heads = kHt,
-            .St = pS / tt::constants::TILE_HEIGHT,
-            .qWt = pE / tt::constants::TILE_WIDTH,
-            .vWt = value.padded_shape()[-1] / tt::constants::TILE_WIDTH,
-            .mask_type = args.mask_type,
-            .has_gate = args.has_gate,
-            .return_intermediates = args.return_intermediates},
-        l1_budget_bytes);
+        shape_of(query, key, value, args.mask_type, args.has_gate, args.return_intermediates),
+        l1_budget_bytes(query.device()));
 }
 
 spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
@@ -298,10 +285,10 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const std::optional<ttnn::Tensor>& mask,
     const float dropout_probability,
     const bool return_intermediates,
+    const ttml::metal::SDPAForwardProgramConfig& program_config,
     const std::optional<ttnn::Tensor>& preallocated_intermediate,
     const std::optional<ttnn::Tensor>& preallocated_output,
-    const std::optional<ttnn::Tensor>& gate,
-    const ttml::metal::SDPAForwardProgramConfig& program_config) {
+    const std::optional<ttnn::Tensor>& gate) {
     using OperationType = ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{

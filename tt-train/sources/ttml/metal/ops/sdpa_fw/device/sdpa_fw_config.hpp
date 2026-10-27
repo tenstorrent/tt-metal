@@ -9,6 +9,7 @@
 
 #include "metal/common/const_utils.hpp"
 #include "metal/ops/sdpa_fw/sdpa_fw_program_config.hpp"
+#include "metal/ttnn_all_includes.hpp"
 
 // Everything the SDPA forward program depends on besides the kernels themselves: how the user knobs
 // turn into chunk sizes, how much L1 the circular buffers take, how the work items are shared out and
@@ -27,6 +28,24 @@ struct SDPAForwardShape {
     bool has_gate;
     bool return_intermediates;
 };
+
+// The shape as the kernels see it (padded dims), and the L1 the circular buffers may use on a core.
+SDPAForwardShape shape_of(
+    const ttnn::Tensor& query,
+    const ttnn::Tensor& key,
+    const ttnn::Tensor& value,
+    AttentionMaskType mask_type,
+    bool has_gate,
+    bool return_intermediates);
+uint64_t l1_budget_bytes(const tt::tt_metal::IDevice* device);
+
+// Reader runtime args: the buffer addresses first, then the work list.
+constexpr uint32_t kReaderArgQuery = 0U;
+constexpr uint32_t kReaderArgKey = 1U;
+constexpr uint32_t kReaderArgValue = 2U;
+constexpr uint32_t kReaderArgMask = 3U;
+constexpr uint32_t kReaderArgGate = 4U;
+constexpr uint32_t kReaderAddressArgs = kReaderArgGate + 1U;
 
 // The program config in tiles. rows = Sq_chunk_t * heads_per_item tile-rows make one work item.
 struct SDPAForwardChunks {
