@@ -154,6 +154,25 @@ inline DeclaredTopology with_effective_ring_dims(DeclaredTopology topology) {
     return topology;
 }
 
+// One pipeline_descriptors entry after Tier A validation, in textproto order.
+// Edges stay directional pairs of stage ids. Omitted and explicit STRICT both survive
+// validation, so a stored edge has no policy of its own.
+struct PipelineDescriptorData {
+    struct Stage {
+        std::string id;
+        std::string label;
+        std::vector<std::int32_t> dims;  // rank 2, both > 0, logical (rows, cols)
+    };
+    struct Edge {
+        std::string src;
+        std::string dst;
+    };
+
+    std::string name;
+    std::vector<Stage> stages;
+    std::vector<Edge> edges;
+};
+
 // TODO: Try make efficient by storing stringviews?
 class MeshGraphDescriptor {
 public:
@@ -370,6 +389,12 @@ public:
     // (all-to-all). Groups are split by mesh at construction (regex and literal entries).
     const std::map<MeshId, std::vector<AsicPinningGroup>>& get_pinnings() const { return pinnings_; }
 
+    // True when pipeline_descriptors is non-empty. An MGD without the section is unchanged.
+    bool has_pipeline_descriptors() const { return !pipeline_descriptors_.empty(); }
+
+    // Pipelines in declaration order. Empty when the MGD declares none.
+    const std::vector<PipelineDescriptorData>& pipeline_descriptors() const { return pipeline_descriptors_; }
+
 private:
     // Descriptor fast lookup
     std::shared_ptr<const proto::MeshGraphDescriptor> proto_;
@@ -408,6 +433,8 @@ private:
     bool inter_mesh_relaxed_policy_ = false;
     bool inter_mesh_policy_specified_ = false;
 
+    std::vector<PipelineDescriptorData> pipeline_descriptors_;
+
     static void set_defaults(proto::MeshGraphDescriptor& proto);
     static std::vector<std::string> static_validate(
         const proto::MeshGraphDescriptor& proto, bool backwards_compatible = false);
@@ -429,6 +456,8 @@ private:
     static void validate_graph_topology_and_connections(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
     static void validate_pinnings(const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
+    static void validate_pipeline_descriptors(
+        const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
 
     static void validate_legacy_requirements(
         const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages);
@@ -444,6 +473,9 @@ private:
 
     // Populate Pinnings
     void populate_pinnings();
+
+    // Copy pipeline_descriptors into pipeline_descriptors_. Tier A has already accepted them.
+    void populate_pipeline_descriptors();
 
     // Populate Instances
     void populate_top_level_instance();

@@ -167,6 +167,15 @@ std::unordered_map<GlobalNodeId, std::vector<ConnectionData>> get_valid_connecti
     return connections;
 }
 
+std::shared_ptr<proto::MeshGraphDescriptor> parse_mesh_graph_text_proto(const std::string& text_proto) {
+    auto temp_proto = std::make_shared<proto::MeshGraphDescriptor>();
+    google::protobuf::TextFormat::Parser parser;
+    parser.AllowUnknownField(true);
+    parser.AllowUnknownExtension(true);
+    TT_FATAL(parser.ParseFromString(text_proto, temp_proto.get()), "Failed to parse MeshGraphDescriptor textproto");
+    return temp_proto;
+}
+
 }  // namespace
 
 MeshGraphDescriptor::MeshGraphDescriptor(
@@ -192,17 +201,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bool backwards_compatible) :
-    MeshGraphDescriptor(
-        [&] {
-            auto temp_proto = std::make_shared<proto::MeshGraphDescriptor>();
-            google::protobuf::TextFormat::Parser parser;
-            parser.AllowUnknownField(true);
-            parser.AllowUnknownExtension(true);
-            TT_FATAL(
-                parser.ParseFromString(text_proto, temp_proto.get()), "Failed to parse MeshGraphDescriptor textproto");
-            return temp_proto;
-        }(),
-        backwards_compatible) {}
+    MeshGraphDescriptor(parse_mesh_graph_text_proto(text_proto), backwards_compatible) {}
 
 MeshGraphDescriptor::MeshGraphDescriptor(
     const std::filesystem::path& text_proto_file_path, const bool backwards_compatible) :
@@ -948,6 +947,7 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(
         validate_graph_descriptors(proto, all_errors);
         validate_graph_topology_and_connections(proto, all_errors);
         validate_pinnings(proto, all_errors);
+        validate_pipeline_descriptors(proto, all_errors);
         if (!all_errors.empty()) {
             return all_errors;
         }
@@ -966,6 +966,7 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(
 }
 
 void MeshGraphDescriptor::populate() {
+    populate_pipeline_descriptors();
     populate_descriptors();
 
     populate_top_level_instance();
@@ -2438,6 +2439,28 @@ bool pinning_entry_uses_regex(const proto::AsicPinning& pinning) {
 }
 }  // namespace
 
+void MeshGraphDescriptor::populate_pipeline_descriptors() {
+    pipeline_descriptors_.clear();
+    pipeline_descriptors_.reserve(static_cast<std::size_t>(proto_->pipeline_descriptors_size()));
+    for (const auto& pipeline : proto_->pipeline_descriptors()) {
+        PipelineDescriptorData record;
+        record.name = pipeline.name();
+        record.stages.reserve(static_cast<std::size_t>(pipeline.stages_size()));
+        for (const auto& stage : pipeline.stages()) {
+            PipelineDescriptorData::Stage stored;
+            stored.id = stage.id();
+            stored.label = stage.label();
+            stored.dims.assign(stage.shape().dims().begin(), stage.shape().dims().end());
+            record.stages.push_back(std::move(stored));
+        }
+        record.edges.reserve(static_cast<std::size_t>(pipeline.edges_size()));
+        for (const auto& edge : pipeline.edges()) {
+            record.edges.push_back(PipelineDescriptorData::Edge{.src = edge.src(), .dst = edge.dst()});
+        }
+        pipeline_descriptors_.push_back(std::move(record));
+    }
+}
+
 void MeshGraphDescriptor::populate_pinnings() {
     pinnings_.clear();
 
@@ -2559,6 +2582,52 @@ void MeshGraphDescriptor::populate_pinnings() {
     // A logical fabric node may appear in several pinning groups. Each group is carried through as its own
     // constraint; the consumer filters out whatever is not present on the physical mesh being solved and
     // applies the rest, so a node listed in a wide group and in a 1:1 anchor is narrowed by the anchor.
+}
+
+void MeshGraphDescriptor::validate_pipeline_descriptors(
+    const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
+    std::unordered_set<std::string> names;
+    for (const auto& pipeline : proto.pipeline_descriptors()) {
+        if (pipeline.name().empty() || !names.insert(pipeline.name()).second) {
+            error_messages.push_back(fmt::format("pipeline name '{}' is empty or repeated", pipeline.name()));
+        }
+        if (pipeline.stages_size() == 0) {
+            error_messages.push_back(fmt::format("pipeline '{}': must declare at least one stage", pipeline.name()));
+        }
+
+        std::unordered_set<std::string> ids;
+        for (const auto& stage : pipeline.stages()) {
+            if (stage.id().empty() || !ids.insert(stage.id()).second) {
+                error_messages.push_back(
+                    fmt::format("pipeline '{}': stage id '{}' is empty or repeated", pipeline.name(), stage.id()));
+            }
+            const auto& dims = stage.shape().dims();
+            if (dims.size() != 2 || dims[0] <= 0 || dims[1] <= 0) {
+                error_messages.push_back(fmt::format(
+                    "pipeline '{}': stage '{}' shape must be rank 2, dims > 0", pipeline.name(), stage.id()));
+            }
+        }
+
+        // In-degree, out-degree, roots, and whether a branch is a chain are all accepted.
+        for (const auto& edge : pipeline.edges()) {
+            if (!ids.contains(edge.src()) || !ids.contains(edge.dst())) {
+                error_messages.push_back(fmt::format(
+                    "pipeline '{}': edge {} -> {} names an unknown stage", pipeline.name(), edge.src(), edge.dst()));
+            }
+            if (edge.src() == edge.dst()) {
+                error_messages.push_back(fmt::format("pipeline '{}': self-edge on '{}'", pipeline.name(), edge.src()));
+            }
+            // Omitted policy is STRICT. An explicit value has to be STRICT too.
+            if (edge.has_policy() && edge.policy() != proto::Policy::STRICT) {
+                error_messages.push_back(fmt::format(
+                    "pipeline '{}': edge {} -> {} policy is {}; every edge is STRICT",
+                    pipeline.name(),
+                    edge.src(),
+                    edge.dst(),
+                    proto::Policy_Name(edge.policy())));
+            }
+        }
+    }
 }
 
 void MeshGraphDescriptor::validate_pinnings(

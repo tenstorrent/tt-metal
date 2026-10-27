@@ -15,6 +15,7 @@
 #include <utility>
 #include <unordered_set>
 #include <fstream>
+#include <sstream>
 
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -3104,6 +3105,555 @@ TEST(MeshGraphDescriptorTests, RingOnShortAxisDoesNotDuplicateNeighbors) {
         EXPECT_EQ(std::set<GlobalNodeId>(destinations.begin(), destinations.end()).size(), destinations.size())
             << "device " << local_id << " lists a neighbor more than once";
     }
+}
+
+}  // namespace tt::tt_fabric::fabric_router_tests
+
+namespace {
+
+std::string mgd_with_pipelines(const std::string& pipelines) {
+    return R"proto(
+               mesh_descriptors {
+                 name: "M0"
+                 arch: BLACKHOLE
+                 device_topology { dims: [ 8, 4 ] }
+                 host_topology { dims: [ 2, 2 ] }
+                 channels { count: 2 policy: RELAXED }
+               }
+               top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+           )proto" +
+           pipelines;
+}
+
+const std::string kGptOssRing = R"proto(
+    pipeline_descriptors {
+      name: "gpt_oss_120b_single_galaxy"
+      stages {
+        id: "s0"
+        label: "Embedding"
+        shape { dims: [ 4, 2 ] }
+      }
+      stages {
+        id: "s1"
+        label: "Windowed"
+        shape { dims: [ 4, 2 ] }
+      }
+      stages {
+        id: "s2"
+        label: "Global"
+        shape { dims: [ 4, 2 ] }
+      }
+      stages {
+        id: "s3"
+        label: "LMHead"
+        shape { dims: [ 4, 2 ] }
+      }
+      edges { src: "s0" dst: "s1" }
+      edges { src: "s1" dst: "s2" }
+      edges { src: "s2" dst: "s3" }
+      edges { src: "s3" dst: "s0" }
+    }
+)proto";
+
+std::string llama_8b_pod_pipeline() {
+    std::ostringstream out;
+    out << "pipeline_descriptors {\n  name: \"llama_8b_pod\"\n";
+    for (int stage = 0; stage < 8; ++stage) {
+        out << "  stages { id: \"s" << stage << "\" label: \"Token4x2\" shape { dims: [ 4, 2 ] } }\n";
+    }
+    for (int stage = 8; stage < 40; ++stage) {
+        out << "  stages { id: \"s" << stage << "\" label: \"Token1x2\" shape { dims: [ 1, 2 ] } }\n";
+    }
+    for (int stage = 0; stage < 39; ++stage) {
+        out << "  edges { src: \"s" << stage << "\" dst: \"s" << (stage + 1) << "\" }\n";
+    }
+    out << "  edges { src: \"s39\" dst: \"s0\" }\n}\n";
+    return out.str();
+}
+
+void expect_pipeline_rejected(const std::string& pipelines, const std::string& reason) {
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(mgd_with_pipelines(pipelines)); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(reason)));
+}
+
+}  // namespace
+
+namespace tt::tt_fabric::fabric_router_tests {
+
+TEST(MeshGraphDescriptorPipelineTests, GptOssRingParsesAndIsReadable) {
+    MeshGraphDescriptor desc(mgd_with_pipelines(kGptOssRing));
+    ASSERT_TRUE(desc.has_pipeline_descriptors());
+    ASSERT_EQ(desc.pipeline_descriptors().size(), 1u);
+
+    const PipelineDescriptorData& pipeline = desc.pipeline_descriptors().front();
+    EXPECT_EQ(pipeline.name, "gpt_oss_120b_single_galaxy");
+    ASSERT_EQ(pipeline.stages.size(), 4u);
+    EXPECT_EQ(pipeline.stages[0].id, "s0");
+    EXPECT_EQ(pipeline.stages[0].label, "Embedding");
+    EXPECT_EQ(pipeline.stages[0].dims, (std::vector<std::int32_t>{4, 2}));
+    EXPECT_EQ(pipeline.stages[3].id, "s3");
+    EXPECT_EQ(pipeline.stages[3].label, "LMHead");
+    ASSERT_EQ(pipeline.edges.size(), 4u);
+    EXPECT_EQ(pipeline.edges[0].src, "s0");
+    EXPECT_EQ(pipeline.edges[0].dst, "s1");
+    EXPECT_EQ(pipeline.edges[3].src, "s3");
+    EXPECT_EQ(pipeline.edges[3].dst, "s0");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, Llama8bPodParsesFortyStages) {
+    MeshGraphDescriptor desc(mgd_with_pipelines(llama_8b_pod_pipeline()));
+    ASSERT_EQ(desc.pipeline_descriptors().size(), 1u);
+    const PipelineDescriptorData& pipeline = desc.pipeline_descriptors().front();
+    EXPECT_EQ(pipeline.name, "llama_8b_pod");
+    ASSERT_EQ(pipeline.stages.size(), 40u);
+    EXPECT_EQ(pipeline.stages[0].dims, (std::vector<std::int32_t>{4, 2}));
+    EXPECT_EQ(pipeline.stages[8].dims, (std::vector<std::int32_t>{1, 2}));
+    EXPECT_EQ(pipeline.stages[39].id, "s39");
+    ASSERT_EQ(pipeline.edges.size(), 40u);
+    EXPECT_EQ(pipeline.edges.back().src, "s39");
+    EXPECT_EQ(pipeline.edges.back().dst, "s0");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, JointStageShapeParses) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "joint_lm_head"
+          stages {
+            id: "s0"
+            label: "Embedding"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s7"
+            label: "LMHead"
+            shape { dims: [ 4, 4 ] }
+          }
+          edges { src: "s0" dst: "s7" }
+          edges { src: "s7" dst: "s0" }
+        }
+    )proto";
+    MeshGraphDescriptor desc(mgd_with_pipelines(pipeline));
+    const PipelineDescriptorData& stored = desc.pipeline_descriptors().front();
+    EXPECT_EQ(stored.stages[1].id, "s7");
+    EXPECT_EQ(stored.stages[1].dims, (std::vector<std::int32_t>{4, 4}));
+}
+
+TEST(MeshGraphDescriptorPipelineTests, DflashForkWithFabricReturnsParses) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "gpt_oss_dflash_router"
+          stages {
+            id: "router"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "target0"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "target1"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "draft0"
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: "router" dst: "target0" }
+          edges { src: "target0" dst: "target1" }
+          edges { src: "target1" dst: "router" }
+          edges { src: "router" dst: "draft0" }
+          edges { src: "draft0" dst: "router" }
+        }
+    )proto";
+    MeshGraphDescriptor desc(mgd_with_pipelines(pipeline));
+    const PipelineDescriptorData& stored = desc.pipeline_descriptors().front();
+    EXPECT_EQ(stored.name, "gpt_oss_dflash_router");
+    EXPECT_EQ(stored.stages.size(), 4u);
+    EXPECT_EQ(stored.edges.size(), 5u);
+    EXPECT_EQ(stored.stages[0].label, "");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, TwoPipelinesInOneMgdParse) {
+    MeshGraphDescriptor desc(mgd_with_pipelines(kGptOssRing + R"proto(
+        pipeline_descriptors {
+          name: "mixed4_b"
+          stages {
+            id: "s0"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s1"
+            shape { dims: [ 4, 4 ] }
+          }
+          edges { src: "s0" dst: "s1" }
+        }
+    )proto"));
+    ASSERT_EQ(desc.pipeline_descriptors().size(), 2u);
+    EXPECT_EQ(desc.pipeline_descriptors()[0].name, "gpt_oss_120b_single_galaxy");
+    EXPECT_EQ(desc.pipeline_descriptors()[1].name, "mixed4_b");
+    EXPECT_EQ(desc.pipeline_descriptors()[1].stages[0].id, "s0");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, RepeatedEdgeDeclaresAnotherChannel) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "two_channels"
+          stages {
+            id: "s0"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s1"
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: "s0" dst: "s1" }
+          edges { src: "s0" dst: "s1" }
+        }
+    )proto";
+    MeshGraphDescriptor desc(mgd_with_pipelines(pipeline));
+    ASSERT_EQ(desc.pipeline_descriptors().front().edges.size(), 2u);
+    EXPECT_EQ(desc.pipeline_descriptors().front().edges[0].dst, "s1");
+    EXPECT_EQ(desc.pipeline_descriptors().front().edges[1].dst, "s1");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, TwoRootsParse) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "two_roots"
+          stages {
+            id: "s0"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s1"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s2"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s3"
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: "s0" dst: "s1" }
+          edges { src: "s2" dst: "s3" }
+        }
+    )proto";
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(mgd_with_pipelines(pipeline)));
+}
+
+TEST(MeshGraphDescriptorPipelineTests, ThreeOutgoingEdgesParse) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "fan_out"
+          stages {
+            id: "s0"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s1"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s2"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s3"
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: "s0" dst: "s1" }
+          edges { src: "s0" dst: "s2" }
+          edges { src: "s0" dst: "s3" }
+        }
+    )proto";
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(mgd_with_pipelines(pipeline)));
+}
+
+TEST(MeshGraphDescriptorPipelineTests, BranchStageWithOutDegreeTwoParses) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "fork_in_branch"
+          stages {
+            id: "router"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "a"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "c"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "d"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "b"
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: "router" dst: "a" }
+          edges { src: "router" dst: "b" }
+          edges { src: "a" dst: "c" }
+          edges { src: "a" dst: "d" }
+          edges { src: "c" dst: "router" }
+          edges { src: "b" dst: "router" }
+        }
+    )proto";
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(mgd_with_pipelines(pipeline)));
+}
+
+TEST(MeshGraphDescriptorPipelineTests, DeadEndBranchParses) {
+    const std::string pipeline = R"proto(
+        pipeline_descriptors {
+          name: "dead_end"
+          stages {
+            id: "s0"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s1"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s2"
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: "s0" dst: "s1" }
+          edges { src: "s0" dst: "s2" }
+          edges { src: "s1" dst: "s0" }
+        }
+    )proto";
+    MeshGraphDescriptor desc(mgd_with_pipelines(pipeline));
+    EXPECT_EQ(desc.pipeline_descriptors().front().stages.size(), 3u);
+}
+
+TEST(MeshGraphDescriptorPipelineTests, RejectsDuplicatePipelineName) {
+    expect_pipeline_rejected(
+        kGptOssRing + R"proto(
+            pipeline_descriptors {
+              name: "gpt_oss_120b_single_galaxy"
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2 ] }
+              }
+            }
+        )proto",
+        "pipeline name 'gpt_oss_120b_single_galaxy' is empty or repeated");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, RejectsEmptyPipelineName) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2 ] }
+              }
+            }
+        )proto",
+        "pipeline name '' is empty or repeated");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, RejectsPipelineWithNoStages) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors { name: "empty" }
+        )proto",
+        "pipeline 'empty': must declare at least one stage");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, RejectsDuplicateStageId) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "dup"
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2 ] }
+              }
+            }
+        )proto",
+        "pipeline 'dup': stage id 's0' is empty or repeated");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, RejectsEmptyStageId) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "blank"
+              stages {
+                id: ""
+                shape { dims: [ 4, 2 ] }
+              }
+            }
+        )proto",
+        "pipeline 'blank': stage id '' is empty or repeated");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, RejectsUnknownStage) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "missing"
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: "s0" dst: "s9" }
+            }
+        )proto",
+        "pipeline 'missing': edge s0 -> s9 names an unknown stage");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, RejectsSelfEdge) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "loop"
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: "s0" dst: "s0" }
+            }
+        )proto",
+        "pipeline 'loop': self-edge on 's0'");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, RejectsRank3Shape) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "rank3"
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2, 1 ] }
+              }
+            }
+        )proto",
+        "pipeline 'rank3': stage 's0' shape must be rank 2, dims > 0");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, RejectsNonPositiveShape) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "zero"
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 0 ] }
+              }
+            }
+        )proto",
+        "pipeline 'zero': stage 's0' shape must be rank 2, dims > 0");
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "line"
+              stages {
+                id: "s0"
+                shape { dims: [ 4 ] }
+              }
+            }
+        )proto",
+        "pipeline 'line': stage 's0' shape must be rank 2, dims > 0");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, EdgePolicyStrictParses) {
+    MeshGraphDescriptor desc(mgd_with_pipelines(R"proto(
+        pipeline_descriptors {
+          name: "strict_edge"
+          stages {
+            id: "s0"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s1"
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: "s0" dst: "s1" policy: STRICT }
+        }
+    )proto"));
+    const PipelineDescriptorData& pipeline = desc.pipeline_descriptors().front();
+    EXPECT_EQ(pipeline.edges.front().src, "s0");
+    EXPECT_EQ(pipeline.edges.front().dst, "s1");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, EdgePolicyRelaxedIsRejected) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "relaxed_edge"
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "s1"
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: "s0" dst: "s1" policy: RELAXED }
+            }
+        )proto",
+        "pipeline 'relaxed_edge': edge s0 -> s1 policy is RELAXED; every edge is STRICT");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, UnknownFieldElsewhereStillParses) {
+    // Channel policy is a real field. An unknown mesh field stays legal. A comment that
+    // mentions policy is not an edge field.
+    const std::string text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          not_a_field: 3
+          arch: BLACKHOLE
+          device_topology { dims: [ 8, 4 ] }
+          host_topology { dims: [ 2, 2 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+        top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+        pipeline_descriptors {
+          name: "solo"
+          stages {
+            id: "s0"
+            label: "only"
+            shape { dims: [ 4, 2 ] }
+          }
+          # policy: RELAXED is a comment, not a field
+        }
+    )proto";
+    MeshGraphDescriptor desc(text_proto);
+    EXPECT_TRUE(desc.has_pipeline_descriptors());
+    EXPECT_EQ(desc.pipeline_descriptors().front().name, "solo");
+}
+
+TEST(MeshGraphDescriptorPipelineTests, AbsentSectionIsUnchanged) {
+    MeshGraphDescriptor desc(mgd_with_pipelines(""));
+    EXPECT_FALSE(desc.has_pipeline_descriptors());
+    EXPECT_TRUE(desc.pipeline_descriptors().empty());
+}
+
+TEST(MeshGraphDescriptorPipelineTests, ShippedMeshGraphDescriptorsStillParse) {
+    const std::filesystem::path root = "tt_metal/fabric/mesh_graph_descriptors";
+    ASSERT_TRUE(std::filesystem::is_directory(root));
+    std::size_t parsed = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(root)) {
+        if (entry.path().extension() != ".textproto") {
+            continue;
+        }
+        MeshGraphDescriptor desc(entry.path());
+        EXPECT_FALSE(desc.has_pipeline_descriptors()) << entry.path();
+        ++parsed;
+    }
+    EXPECT_GT(parsed, 0u);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
