@@ -2111,3 +2111,51 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   that started late in collectives (500k chunk: experts + moe_add 182.2 -> 166.9 ms device once warm). Device times
   from a run that built programs are inflated too, not only host times.
 - Not done: the selftest suite takes a UMD chip lock (CHIP_IN_USE_0) somewhere: a box test waited on it (2026-10-27).
+
+## F198: every fork test is counted; a failing test is never accepted because it failed before (owner, 2026-10-27)
+- Symptom (pre-rebase baseline, 2x2, 2026-10-27; reports/fork_test_gaps_2026-10-27.md): 12 flat_routed_expert subgrid
+  tests crashed for 16 days, re-recorded six times as "pre-existing"; O.1 (`fork_cases --run-tests`) returned before
+  running anything when one fork had no case file (update_padded_kv_cache), so 8 forks' cases never ran, and it
+  reported 1 failure; a test file that failed to import was dropped from the collection; skips counted as passes;
+  `fork_source` failed only on regressions, so tests failing on the original and the fork (dispatch 2, the
+  update_padded_kv_cache selection's collection error, indexer_score's fp32-refusal test) passed for good; F137 removed
+  Settings(max_precision) and missed xing40_a4b_d_p, whose import error broke every test in the DeepSeek-V3 test folder
+  (the source tests of combine, dispatch, offset_cumsum, update_padded_kv_cache) from 10-21; one dead Ethernet core
+  left a device open and 175 all-gather tests errored at setup, reported as results.
+- Owner: a failing fork test is never accepted (no "same as baseline"); transparency on what works and what does not.
+- Fix: testing/fork_tests.py counts every test per fork from a junit report per group (passed, failed, errors,
+  skipped with pytest's reason, not run = collected but never reported), collection errors (an import error, nothing
+  collected) are failures, a group in which every test errored or none reported (a box error) runs once more after
+  run_safe_pytest's reset and says so. testing/fork_cases.py: a fork without a case file is a failure of its own and
+  the others still run; records fork_tests_failed (failed + errors + not run + collection errors + forks without
+  cases), fork_tests_passed, fork_tests_skipped, fork_tests_not_run; O.1 shows passed and skipped in its gate output.
+  testing/fork_source.py: every test that does not pass on the fork fails the check, labelled regression / new /
+  failing at baseline too; skips listed. indexer_score's source selection filters out the one test the fork can
+  never pass (its change), with the reason. xing40_a4b_d_p/tt/settings.py: max_precision removed.
+- Selftests: test_fork_cases.py (counting, a fork without cases, import errors, junit names, the box-error retry, the
+  strict source report), test_model_imports.py (every model's settings and serving adapter import; fails without
+  the xing fix).
+- Not done here (owner's list, 2026-10-27): cases for update_padded_kv_cache (57 calls) and the unpadded shared-expert
+  call; the flat_routed_expert perf band (passes when faster, numbers per box); the strict all-fork run at the end of
+  a completed run and in the rebase skill; skips that are not "this box is too small" (parametrize combinations, dead
+  rms_norm perf tests, a known rms_norm bug, the indexer source entry run on 1 card, missing moe_ag perf numbers);
+  test time (a mesh opened per test, weights built per test).
+
+## F199: every fork's every test, strictly, once a run is complete (task F.1) and in the rebase skill (owner, 2026-10-27)
+- Owner: transparency on what works; the strict all-fork run runs after a completed bring-up run and in the rebase
+  skill, not on every fork change (it takes about an hour on a 2x2).
+- testing/fork_suite.py: per fork, each tests/unit file (perf files included), the model cases (fork_tests.py) and the
+  original op's tests (fork_source.py), every test counted (F198's tallies), every skip and failure listed. A failure
+  passes only through an owner waiver, spec `tests.fork_waivers: {<test id>: reason}` (defaults.yaml), reported
+  WAIVED. Records fork_suite_failed (gate == 0), _passed, _skipped, _waived and <task>_fork_suite.json.
+- plan/ledger_gen.py: task F.1 after Z.1 (role optests: an agent fixes a failure, three attempts, then stops for the
+  owner); briefs/roles.yaml tells it never to skip, filter, delete or loosen a test, and that only the owner waives.
+  Existing ledgers get it with `ledger_gen --extend`.
+- Skills: rebase-bringup step 1 (baseline: fork_suite, the full list to the owner before rebasing) and step 5 (done
+  when fork_suite_failed == 0; a failure is never accepted because step 1 had it); bringup-fork-op ("must match the
+  baseline" is gone: every test passes, a by-design divergence is filtered with its reason, skips are reported);
+  bringup (fork-test transparency, F.1).
+- Timing tests (flat_routed_expert indexed perf, moe_ag): fail when slower than the margin, log a recalibration note
+  when faster (owner); the shared helper tests/ttnn/profiling/realtime_profiler_utils.py (upstream) is used to measure
+  only.
+- Selftests: test_fork_cases.py (the suite's waivers and totals; the skills name the rule).

@@ -110,7 +110,7 @@ def test_the_seeded_graph_carries_the_seed_and_ports_its_layers(fx):
     ids = [t["id"] for t in out["tasks"]]
     assert ids[:6] == ["CK.1", "G.s256", "G.s512", "B.1", "W.1", "M.1"]
     assert not [i for i in ids if i.split(".")[0] in ("R", "SC", "PL", "C", "S", "SG")]
-    assert "L.seed" not in ids and ids[-3:] == ["X.3", "O.1", "Z.1"]
+    assert "L.seed" not in ids and ids[-4:] == ["X.3", "O.1", "Z.1", "F.1"]
     t = {x["id"]: x for x in out["tasks"]}
     assert t["W.1"]["role"] == "port" and t["W.1"]["deps"] == ["B.1", "CK.1", "G.s256"]
     assert "BRINGUP_RUNG=seed " in t["W.1"]["gate"]["cmd"] and t["W.1"]["gate"]["metrics"]["err_layer_L*"] == "<= limit"
