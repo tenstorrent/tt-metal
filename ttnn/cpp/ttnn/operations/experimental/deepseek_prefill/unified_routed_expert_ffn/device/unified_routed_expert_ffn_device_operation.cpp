@@ -425,7 +425,8 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& down_biases,
     uint32_t min_active_tokens,
     uint32_t max_active_tokens,
-    bool stacked_packed_weights) {
+    bool stacked_packed_weights,
+    uint32_t l1_end) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -438,7 +439,8 @@ ttnn::Tensor unified_routed_expert_moe(
             .compute_kernel_config = compute_kernel_config,
             .min_active_tokens = min_active_tokens,
             .max_active_tokens = max_active_tokens,
-            .stacked_packed_weights = stacked_packed_weights},
+            .stacked_packed_weights = stacked_packed_weights,
+            .l1_end = l1_end},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

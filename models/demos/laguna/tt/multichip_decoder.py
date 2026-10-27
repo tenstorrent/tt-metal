@@ -1240,6 +1240,8 @@ class MultichipDecoder(OptimizedDecoder):
             self.w["exp_down"],
             seq_len,
             compute_kernel_config=self._ck_moe,
+            # fit the op's circular buffers below L1 buffers kept resident across prefills (DFlash's)
+            l1_end=int(self.device.lowest_occupied_compute_l1_address() or 0),
         )
         ttnn.deallocate(dispatched)
 

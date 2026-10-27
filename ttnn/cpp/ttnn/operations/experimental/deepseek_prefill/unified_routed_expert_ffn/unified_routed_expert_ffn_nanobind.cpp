@@ -105,7 +105,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("down_projs").noconvert(),
         nb::arg("max_dispatched_tokens_per_expert"),
         nb::kw_only(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("l1_end") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

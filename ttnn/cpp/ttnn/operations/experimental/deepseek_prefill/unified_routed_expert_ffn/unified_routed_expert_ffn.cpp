@@ -119,7 +119,8 @@ ttnn::Tensor unified_routed_expert_moe_stacked(
     const ttnn::Tensor& gate_up_projs,
     const ttnn::Tensor& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    uint32_t l1_end) {
     // Laguna's stacked expert weights: gate_up [1, E, K, 2N] (gate | up per row) and down [1, E, N, K]. Each list
     // entry is the same tensor; the program factory turns expert e into its slice's base address and the kernels read
     // gate/up with row stride 2N (STACKED_GATE_UP).
@@ -163,7 +164,8 @@ ttnn::Tensor unified_routed_expert_moe_stacked(
         {},
         0,
         std::numeric_limits<uint32_t>::max(),
-        /*stacked_packed_weights=*/true);
+        /*stacked_packed_weights=*/true,
+        l1_end);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

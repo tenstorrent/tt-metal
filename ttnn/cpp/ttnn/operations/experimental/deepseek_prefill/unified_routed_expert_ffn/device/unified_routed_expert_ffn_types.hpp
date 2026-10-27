@@ -106,6 +106,11 @@ struct UnifiedRoutedExpertFfnParams {
     // with stride 2N (up at column offset N). Compile-time in the kernels, so part of the program-cache key.
     bool stacked_packed_weights = false;
 
+    // L1 address the circular buffers must end below (0: the whole L1). A caller that keeps buffers resident in L1
+    // passes the lowest such address so the CB blocking is fitted to the L1 left free instead of clashing with them.
+    // It sizes the CBs, so it is part of the program-cache key.
+    uint32_t l1_end = 0;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -114,7 +119,8 @@ struct UnifiedRoutedExpertFfnParams {
         "fuse_bias",
         "min_active_tokens",
         "max_active_tokens",
-        "stacked_packed_weights");
+        "stacked_packed_weights",
+        "l1_end");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -124,7 +130,8 @@ struct UnifiedRoutedExpertFfnParams {
             fuse_bias,
             min_active_tokens,
             max_active_tokens,
-            stacked_packed_weights);
+            stacked_packed_weights,
+            l1_end);
     }
 };
 

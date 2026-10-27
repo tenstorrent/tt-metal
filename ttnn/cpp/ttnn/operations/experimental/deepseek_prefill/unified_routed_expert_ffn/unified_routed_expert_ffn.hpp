@@ -81,7 +81,8 @@ ttnn::Tensor unified_routed_expert_moe_stacked(
     const ttnn::Tensor& gate_up_projs,
     const ttnn::Tensor& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    uint32_t l1_end = 0);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 
