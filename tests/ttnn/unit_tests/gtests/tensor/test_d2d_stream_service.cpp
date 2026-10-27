@@ -2591,6 +2591,83 @@ TEST_F(D2DStreamServiceTest, FoldedChainSenderFirstFailsCleanly) {
     auto receiver_mesh = this->mesh_device_->create_submesh(                                           \
         MeshShape(1, 1), (shape[1] >= 2) ? MeshCoordinate(0, 1) : MeshCoordinate(1, 0))
 
+// Lease groups (Config::fabric_link_group). Two lease-mode pairs between the same two chips:
+// each chip then hosts two services of one kind whose forwarding links are the same routers,
+// like a prefill stage's activation and index streams in one direction. In one group they
+// share the routers (each sender keeps every lane) and, granted turns one at a time, both
+// stream correctly.
+namespace {
+size_t pair_forwarding_links(const MeshDevice& sender_mesh, const MeshDevice& receiver_mesh) {
+    const MeshCoordinate local(0, 0);
+    return tt::tt_fabric::get_forwarding_link_indices(
+               sender_mesh, sender_mesh.get_fabric_node_id(local), receiver_mesh.get_fabric_node_id(local))
+        .size();
+}
+
+D2DStreamConfig make_lease_group_config(
+    const std::shared_ptr<MeshDevice>& sender_mesh, const ttnn::Shape& global_shape, const std::string& group) {
+    auto cfg = make_config(sender_mesh, global_shape, /*share_fabric_links=*/true);
+    cfg.fabric_link_group = group;
+    return cfg;
+}
+}  // namespace
+
+TEST_F(D2DStreamServiceTest, LeaseGroupPairsShareRouters) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    const ttnn::Shape global_shape({1, 1, 32, 64});
+    const MeshCoordinate local(0, 0);
+    const size_t links = pair_forwarding_links(*sender_mesh, *receiver_mesh);
+    auto [sender_a, receiver_a] = D2DStreamService::create_pair(
+        sender_mesh, receiver_mesh, make_lease_group_config(sender_mesh, global_shape, "lease-group-test"));
+    auto [sender_b, receiver_b] = D2DStreamService::create_pair(
+        sender_mesh, receiver_mesh, make_lease_group_config(sender_mesh, global_shape, "lease-group-test"));
+    const size_t max_lanes = make_config(sender_mesh, global_shape).max_sender_lanes;
+    EXPECT_EQ(sender_a->get_num_lanes(local), std::min(max_lanes, links));
+    EXPECT_EQ(sender_b->get_num_lanes(local), std::min(max_lanes, links));
+
+    // One transfer per pair, strictly in turn: grant, transfer, fence, then the other pair.
+    auto run_turn = [&](D2DStreamServiceSender* sender, D2DStreamServiceReceiver* receiver, uint32_t seed) {
+        receiver->release_fabric_links();
+        sender->release_fabric_links();
+        auto receiver_workload = make_receiver_worker_workload(receiver, receiver_mesh, /*num_iters=*/1);
+        auto sender_workload = make_sender_worker_workload(sender, sender_mesh, /*num_iters=*/1, /*fill_base=*/seed);
+        EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), receiver_workload, /*blocking=*/false);
+        EnqueueMeshWorkload(sender_mesh->mesh_command_queue(), sender_workload, /*blocking=*/false);
+        sender->wait_for_fabric_links();
+        receiver->wait_for_fabric_links();
+        Finish(sender_mesh->mesh_command_queue());
+        Finish(receiver_mesh->mesh_command_queue());
+        expect_receiver_backing_iota(receiver, receiver_mesh, seed);
+    };
+    run_turn(sender_a.get(), receiver_a.get(), 0x1111u);
+    run_turn(sender_b.get(), receiver_b.get(), 0x2222u);
+    run_turn(sender_a.get(), receiver_a.get(), 0x3333u);
+}
+
+// Without a group, the second pair's sender finds every router held. OWN mode: the claims do
+// not depend on the mode, and an OWN-mode pair tears down without ever being granted a turn.
+TEST_F(D2DStreamServiceTest, NoLeaseGroupSecondSenderHasNoRouter) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    const ttnn::Shape global_shape({1, 1, 32, 64});
+    const size_t links = pair_forwarding_links(*sender_mesh, *receiver_mesh);
+    const size_t max_lanes = make_config(sender_mesh, global_shape).max_sender_lanes;
+    if (links > max_lanes) {
+        GTEST_SKIP() << "the first sender leaves a link free (" << links << " links); nothing to collide";
+    }
+    auto [sender_a, receiver_a] =
+        D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape));
+    EXPECT_THROW(
+        (void)D2DStreamService::create_pair(sender_mesh, receiver_mesh, make_config(sender_mesh, global_shape)),
+        std::exception);
+}
+
+TEST_F(D2DStreamServiceTest, LeaseGroupNeedsLeaseMode) {
+    D2D_SINGLE_CHIP_PAIR_GUARD();
+    auto cfg = make_config(sender_mesh, ttnn::Shape({1, 1, 32, 64}), /*share_fabric_links=*/false);
+    cfg.fabric_link_group = "own-mode-group";
+    EXPECT_THROW((void)D2DStreamService::create_pair(sender_mesh, receiver_mesh, std::move(cfg)), std::exception);
+}
+
 #define D2D_ROW_PAIR_GUARD()                                                                      \
     if (!service_cores_supported()) {                                                             \
         GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";        \

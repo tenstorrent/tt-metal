@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 
 #include <tt-metalium/buffer_types.hpp>
@@ -127,7 +128,8 @@ struct D2DStreamConfig {
     // RISCV_1/NOC_1). The actual lane count per coord is
     // min(max_sender_lanes, free forwarding links sender->receiver); on Blackhole
     // there are up to 2 links between adjacent chips. A link is not free when
-    // another D2D service on the same chip already holds its router: a router's
+    // another D2D service on the same chip, outside this service's lease group (see
+    // fabric_link_group), already holds its router: a router's
     // worker channel serves one worker, so a chip's receiver and sender never share
     // one, and a sender whose route leaves the same way as the chip's receiver's
     // runs a lane fewer. Create a chip's receivers before its senders so the sender
@@ -136,6 +138,14 @@ struct D2DStreamConfig {
     // the sender's per-coord lane count from the sender (see get_num_lanes), so it
     // knows how many data-landed increments to await.
     uint32_t max_sender_lanes = 2;
+
+    // Lease group (LEASE mode only). Services on one chip that name the same non-empty
+    // group may hold the same fabric routers: the caller guarantees their connections
+    // never overlap, by granting them turns one at a time with release_fabric_links /
+    // wait_for_fabric_links (as the prefill runner does with a stage's activation and
+    // index streams in one direction). Services in different groups, or with no group
+    // (the default), never share a router. Groups are process-local names.
+    std::string fabric_link_group;
 
     // Receiver only.
     std::optional<D2DStageGateConfig> stage_gate;

@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/indestructible.hpp>
 #include <tt_stl/span.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -422,34 +423,54 @@ struct ServiceCoreReleaseGuard {
 // Each service claims its routers here, keyed by fabric node and ethernet core,
 // before its kernels are built; a claim is held until the service is destroyed.
 // Claims apply in LEASE mode too: the sender and receiver leases are independent,
-// so their connection windows can overlap.
+// so their connection windows can overlap. Services in one lease group
+// (Config::fabric_link_group) may share a router: their caller serializes their
+// connections, so the router's worker channel only ever has one of them.
 class FabricLinkRegistry {
 public:
-    // Claims (node, eth_core) for `holder`. Returns the current holder instead
-    // when another service already has it.
+    // Claims (node, eth_core) for `holder`, in lease group `group` (empty: none).
+    // A router already held in the same non-empty group is shared; otherwise this
+    // returns the current holder instead.
     std::optional<std::string> try_claim(
-        const tt::tt_fabric::FabricNodeId& node, CoreCoord eth_core, const std::string& holder) {
+        const tt::tt_fabric::FabricNodeId& node,
+        CoreCoord eth_core,
+        const std::string& holder,
+        const std::string& group) {
         std::lock_guard lock(mutex_);
-        auto [it, inserted] = holders_.try_emplace({node, eth_core}, holder);
+        auto [it, inserted] = claims_.try_emplace({node, eth_core}, Claim{.holder = holder, .group = group});
         if (inserted) {
             return std::nullopt;
         }
-        return it->second;
+        if (!group.empty() && it->second.group == group) {
+            ++it->second.services;
+            return std::nullopt;
+        }
+        return it->second.holder;
     }
 
     void release(const tt::tt_fabric::FabricNodeId& node, CoreCoord eth_core) {
         std::lock_guard lock(mutex_);
-        holders_.erase({node, eth_core});
+        auto it = claims_.find({node, eth_core});
+        if (it != claims_.end() && --it->second.services == 0) {
+            claims_.erase(it);
+        }
     }
 
 private:
+    struct Claim {
+        std::string holder;  // the first service to claim it, for messages
+        std::string group;
+        uint32_t services = 1;
+    };
     std::mutex mutex_;
-    std::map<std::pair<tt::tt_fabric::FabricNodeId, CoreCoord>, std::string> holders_;
+    std::map<std::pair<tt::tt_fabric::FabricNodeId, CoreCoord>, Claim> claims_;
 };
 
+// Never destroyed: a service handle owned by another static may release its claims
+// during static teardown, after a destructible registry would be gone.
 FabricLinkRegistry& fabric_link_registry() {
-    static FabricLinkRegistry registry;
-    return registry;
+    static ttsl::Indestructible<FabricLinkRegistry> registry;
+    return registry.get();
 }
 
 // One service's router claims; released on destruction (handle teardown, or a
@@ -470,8 +491,11 @@ public:
     ~FabricLinkClaims() { release_all(); }
 
     std::optional<std::string> try_claim(
-        const tt::tt_fabric::FabricNodeId& node, CoreCoord eth_core, const std::string& holder) {
-        auto other = fabric_link_registry().try_claim(node, eth_core, holder);
+        const tt::tt_fabric::FabricNodeId& node,
+        CoreCoord eth_core,
+        const std::string& holder,
+        const std::string& group) {
+        auto other = fabric_link_registry().try_claim(node, eth_core, holder, group);
         if (!other) {
             held_.emplace_back(node, eth_core);
         }
@@ -488,6 +512,16 @@ private:
 
     std::vector<std::pair<tt::tt_fabric::FabricNodeId, CoreCoord>> held_;
 };
+
+// A lease group lets services share routers because their caller takes turns between
+// them; in OWN mode a service holds its connection for life, so no turn ever ends.
+void validate_fabric_link_group(const D2DStreamConfig& cfg) {
+    TT_FATAL(
+        cfg.fabric_link_group.empty() || cfg.share_fabric_links,
+        "D2DStreamService: fabric_link_group '{}' needs LEASE mode (share_fabric_links == true); an OWN-mode "
+        "service holds its fabric connections for its whole life, so it cannot share a router",
+        cfg.fabric_link_group);
+}
 
 // Which end of a D2D stream a service is, for its router claims and their messages.
 enum class D2DServiceRole { Sender, Receiver };
@@ -511,11 +545,18 @@ std::vector<uint32_t> claim_forwarding_links(
     const tt::tt_fabric::FabricNodeId& dst,
     uint32_t max_links,
     D2DServiceRole service_role,
+    const std::string& group,
     FabricLinkClaims& claims) {
     const char* role = role_name(service_role);
     const auto links = tt::tt_fabric::get_forwarding_link_indices(mesh, src, dst);
     TT_FATAL(!links.empty(), "D2DStreamService: no fabric link from the {} at coord {} toward its peer", role, coord);
-    const std::string holder = fmt::format("D2D {} at coord {} ({} -> {})", role, coord, src, dst);
+    const std::string holder = fmt::format(
+        "D2D {} at coord {} ({} -> {}){}",
+        role,
+        coord,
+        src,
+        dst,
+        group.empty() ? std::string{} : fmt::format(", lease group '{}'", group));
     std::vector<uint32_t> claimed;
     std::string taken;  // "; "-separated, for the messages below
     for (const uint32_t link : links) {
@@ -523,7 +564,7 @@ std::vector<uint32_t> claim_forwarding_links(
             break;
         }
         const CoreCoord eth = tt::tt_fabric::get_forwarding_eth_core(mesh, src, dst, link);
-        if (auto other = claims.try_claim(src, eth, holder)) {
+        if (auto other = claims.try_claim(src, eth, holder, group)) {
             taken += fmt::format("{}link {} (eth {}) held by the {}", taken.empty() ? "" : "; ", link, eth, *other);
             continue;
         }
@@ -1432,12 +1473,20 @@ SenderSideResources build_sender_side(
     // router fails cleanly. One RISC + one link per lane, capped by config and by the
     // forwarding links no other D2D service on the chip holds.
     TT_FATAL(cfg.max_sender_lanes >= 1, "D2DStreamService: max_sender_lanes must be >= 1");
+    validate_fabric_link_group(cfg);
     LaneLinks lane_links_per_coord;
     for (const auto& coord : coords) {
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const auto receiver_node = sender_socket.get_fabric_node_id(distributed::SocketEndpoint::RECEIVER, coord);
         auto lanes = claim_forwarding_links(
-            *mesh, coord, sender_node, receiver_node, cfg.max_sender_lanes, D2DServiceRole::Sender, link_claims);
+            *mesh,
+            coord,
+            sender_node,
+            receiver_node,
+            cfg.max_sender_lanes,
+            D2DServiceRole::Sender,
+            cfg.fabric_link_group,
+            link_claims);
         lane_links_per_coord.emplace(coord, std::move(lanes));
     }
 
@@ -1585,12 +1634,20 @@ ReceiverSideResources build_receiver_side(
 
     // Choose each coord's credit-return router first, before any allocation: one
     // forwarding link toward the sender that no other D2D service on the chip holds.
+    validate_fabric_link_group(cfg);
     std::map<distributed::MeshCoordinate, uint32_t> ack_link_per_coord;
     for (const auto& coord : coords) {
         const auto receiver_node = mesh->get_fabric_node_id(coord);
         const auto sender_node = receiver_socket.get_fabric_node_id(distributed::SocketEndpoint::SENDER, coord);
         const auto ack = claim_forwarding_links(
-            *mesh, coord, receiver_node, sender_node, /*max_links=*/1, D2DServiceRole::Receiver, link_claims);
+            *mesh,
+            coord,
+            receiver_node,
+            sender_node,
+            /*max_links=*/1,
+            D2DServiceRole::Receiver,
+            cfg.fabric_link_group,
+            link_claims);
         ack_link_per_coord.emplace(coord, ack.front());
     }
 
