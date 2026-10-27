@@ -72,6 +72,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     engram_table_nbytes,
     load_engram_table,
 )
+from models.experimental.deepseek_v41_flash.tt.lm_head import DeepSeekV41LMHead
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v41_flash.tt.vision import extend_embedding, image_mask
 from models.experimental.deepseek_v4_flash.tt.common import (
@@ -99,7 +100,7 @@ from models.experimental.deepseek_v4_flash.tt.decode.paged_cache import (
     plan_pool_blocks,
 )
 from models.experimental.deepseek_v4_flash.tt.embedding import DeepSeekV4Embedding
-from models.experimental.deepseek_v4_flash.tt.layers import DeepSeekV4RMSNorm, Linear
+from models.experimental.deepseek_v4_flash.tt.layers import DeepSeekV4RMSNorm
 from models.experimental.deepseek_v4_flash.tt.model import (
     DeepSeekV4Model,
     _OUT_SOCKET_CORE,
@@ -1893,7 +1894,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
         device = self.device.create_submesh(ttnn.MeshShape(1, self.tp_size), ttnn.MeshCoordinate(drafter_row, 0))
         link = self._create_socket_pair(out_sm["device"], device)
         logger.info(f"DSpark drafter on idle row {drafter_row}, its stash on output stage {out_sm['index']}")
-        lm_head = Linear(
+        lm_head = DeepSeekV41LMHead(
             dequantized(self.loader, "lm_head.weight", translate=True),
             device,
             self.cache.file("lm_head"),
