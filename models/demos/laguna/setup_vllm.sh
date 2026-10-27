@@ -41,7 +41,8 @@ VLLM_PIN=$(req 'vllm==')
 PLUGIN_PIN=$(req 'vllm-tt-plugin @')
 PYTEST_PIN=$(req 'pytest==')
 PYTEST_TIMEOUT_PIN=$(req 'pytest-timeout==')
-for p in "$VLLM_PIN" "$PLUGIN_PIN" "$PYTEST_PIN" "$PYTEST_TIMEOUT_PIN"; do
+TTT_PIN=$(req 'tt-transformers @')
+for p in "$VLLM_PIN" "$PLUGIN_PIN" "$PYTEST_PIN" "$PYTEST_TIMEOUT_PIN" "$TTT_PIN"; do
   [ -n "$p" ] || { echo "ERROR: could not read pins from $MODEL_DIR/requirements.txt"; exit 1; }
 done
 PLUGIN_SHA="${PLUGIN_PIN##*@}"
@@ -115,6 +116,7 @@ uv pip install --python "$PY" "$PLUGIN_PIN"
 
 echo "==> [5/6] this model's vllm_ext compatibility hooks + device-free test dependency"
 uv pip install --python "$PY" -e "$MODEL_DIR/vllm_ext"
+uv pip install --python "$PY" --no-deps "$TTT_PIN"  # Sampling1D; --no-deps keeps this checkout's ttnn
 uv pip install --python "$PY" "$PYTEST_PIN" "$PYTEST_TIMEOUT_PIN"
 
 # ---- verify -------------------------------------------------------------------------------

@@ -15,7 +15,7 @@ import torch
 
 from models.demos.laguna.tt import generator_vllm as gv
 from models.demos.laguna.tt.generator import LagunaGenerator
-from models.common.modules.sampling.sampling_1d import Sampling1DConfig
+from tt_transformers.modules.sampling.sampling_1d import Sampling1DConfig
 
 
 class _FakeSampler:

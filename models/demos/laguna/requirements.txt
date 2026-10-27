@@ -20,6 +20,11 @@ vllm==0.24.0
 # a moving branch makes otherwise identical Laguna environments non-reproducible.
 vllm-tt-plugin @ git+https://github.com/tenstorrent/vllm-tt-plugin@c127c17d80d66ee83d23064d3a62ac844a1170de
 
+# Sampling1D (the on-device sampler) lives in tt-transformers since tt-metal removed models/common/modules
+# (#59548). Same pin as tt-metal's tests/scripts/tt_transformers_ref.txt. Installed with --no-deps: it depends on
+# ttnn, and a resolving install would replace this checkout's ttnn build.
+tt-transformers @ git+https://github.com/tenstorrent/tt-transformers.git@c95935d8934f136833f02f306f32deb8a1136177
+
 # Device-free compatibility tests run as part of setup verification.
 pytest==9.0.3
 pytest-timeout==2.4.0

@@ -23,7 +23,7 @@ from models.demos.laguna.tests.laguna_test_utils import (
     profile_summary,
 )
 from models.demos.laguna.tt.model import LagunaModel
-from models.common.modules.sampling.sampling_1d import Sampling1D
+from tt_transformers.modules.sampling.sampling_1d import Sampling1D
 
 
 def main():

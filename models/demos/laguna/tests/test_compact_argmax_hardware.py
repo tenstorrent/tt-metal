@@ -21,7 +21,7 @@ import torch
 
 import ttnn
 from models.demos.laguna.tests.laguna_test_utils import close_mesh, open_mesh, resolve_profile
-from models.common.modules.sampling.sampling_1d import Sampling1D
+from tt_transformers.modules.sampling.sampling_1d import Sampling1D
 
 HARDWARE_GATE_ENV = "TT_LAGUNA_RUN_COMPACT_ARGMAX_HW"
 VOCAB_SIZE = 100_352

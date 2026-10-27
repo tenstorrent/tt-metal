@@ -31,7 +31,7 @@ from typing import Any, Callable, List, Optional
 import torch
 
 import ttnn
-from models.common.modules.sampling.sampling_1d import Sampling1D
+from tt_transformers.modules.sampling.sampling_1d import Sampling1D
 from models.common.readiness_check.contract import Generator as ReadinessGenerator
 
 # The readiness runner loads this file as a standalone module (not as a package member), so relative
