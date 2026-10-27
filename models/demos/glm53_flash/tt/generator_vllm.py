@@ -206,7 +206,11 @@ class GLM53FlashForCausalLM:
     tt_supported_decode_batch_sizes: tuple[int, ...] = ()
     _HYBRID_KV_CACHE_GROUPS_ENABLED = False
 
-    def __init__(self, model, geometry: ServingGeometry, *, pad_token_id: int | None = None):
+    def __init__(self, model, geometry: ServingGeometry, *, pad_token_id: int | None = None, **vllm_kwargs):
+        # ``**vllm_kwargs`` (``vllm_config`` / ``prefix``) is never used: the plugin constructs the adapter through
+        # ``initialize_vllm_model``. vLLM >= 0.30 inspects the registered class with ``is_vllm_model`` (an ``__init__``
+        # that accepts ``vllm_config``, ``embed_input_ids``, ``forward(input_ids, positions)``) before it admits the
+        # generate runner, so the signature has to advertise the keyword like the tt_transformers adapters do.
         self.model = model
         self.geometry = geometry
         self.slots = SlotTable(geometry)
