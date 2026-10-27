@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import gc
-import math
 import time
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
@@ -28,7 +27,6 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
 
     The rollout rank boots with dummy weights; the trainer pushes the policy as version 0
     before training, then update_weights pushes it every ``weight_sync_every`` steps, as version ``step``.
-    No push follows the last batch.
     """
 
     def __init__(
@@ -53,13 +51,11 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
         self._max_completion_length = max_completion_length
         self._weight_sync_every = int(weight_sync_every)
         self._pushed_version: Optional[int] = None
-        self._batches_left = math.ceil(len(prompts) / batch_prompts)
         self._client = client
 
     def __iter__(self) -> Iterator[ScoredRolloutBatch]:
         n, g = self._batch_prompts, self._num_generations
         for start in range(0, len(self._prompts), n):
-            self._batches_left -= 1
             prompts = [list(p) for p in self._prompts[start : start + n]]
             extra = {k: list(col[start : start + n]) for k, col in self._extra_columns.items()}
             generate_start = time.perf_counter()
@@ -89,8 +85,6 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
             )
 
     def update_weights(self, model: Any, step: int) -> None:
-        if self._batches_left == 0:
-            return
         if self._pushed_version is not None and step - self._pushed_version < self._weight_sync_every:
             return
         hf_dict = weights_ref_hf_dict(model)
