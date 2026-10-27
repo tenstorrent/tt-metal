@@ -1853,6 +1853,8 @@
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
+    # The pipeline test runs the 4x8 linear case: it's the only Blackhole 4x8 config test_pipeline_wan.py
+    # has for I2V (the 4x8 ring case is T2V only).
     # Stop at the first failed command: the devices are not reset between commands (#57706).
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || exit $?; }
     run --timeout 2700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
