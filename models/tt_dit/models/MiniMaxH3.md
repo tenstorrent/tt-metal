@@ -363,6 +363,13 @@ the vision tower's ring attention otherwise overflows the ring on Wormhole. `Min
 a mesh opened with a smaller ring, and the test fixtures (`tests/models/minimax_h3/conftest.py`) open with
 the same value, so the Memory Test checks the deployed layout.
 
+The pipeline's first L1 allocation is a 32-64 B-per-core fence directly under L1_SMALL
+(`fence_circular_buffers_below_l1_small`). tt-metal's static-CB placement check ignores L1_SMALL when no
+regular L1 buffer is live (tt-metal#62798), so without it a program's circular buffers could overwrite the
+audio decoder's `conv1d` indices, which live in L1_SMALL for the life of the process. With the fence, such a
+program fails its placement check instead. It is a workaround for that tt-metal bug, not a fix, and goes away
+once #62798 is fixed.
+
 ### Running on the quad
 
 `tt-run` with `32x4_quad_bh_galaxy_rank_bindings.yaml` and the four hosts in physical ring order
