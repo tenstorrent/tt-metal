@@ -1238,3 +1238,8 @@ served path ran the scorer's 2048-row default while every harness 1 M run set `G
 the planner assumed 512). Fix 413b3d9dceb: the score block follows the slot length (2048 up to 256 K, 1024 at 512 K, 512 at 1 M;
 the env still overrides), and the planner's reserve uses the same rule. Diag `serve_diag_glm53_1m_qblock` (wt_frozen22, default
 path, one 1 M request) queued.
+
+15:37 `serve_diag_glm53_1m_qb256` (wt_frozen24: score block 256 rows at 1 M by default): ONE SERVED 1 M REQUEST COMPLETES: 64 chunks,
+TTFT 504.6 s (2076 tok/s), 160 tokens at 95.4 ms per token = 10.5 tok/s per user; DRAM 219 MiB per bank free at the last chunk (largest
+hole 161 MiB; the 512-row run had died at chunk 62 on the 264 MB ranking copy). TIS targets gained the 1 M-context row (c1). Next served
+point: the profile's cap, 1 M x 4 distinct requests (`serve_bench_glm53_1m_c4`, ~40 min), queued after the 8x4 fused spec stages.

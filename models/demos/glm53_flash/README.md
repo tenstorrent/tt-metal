@@ -89,8 +89,11 @@ prompts), greedy determinism across rounds through the chat template (thinking o
 Served decode (2026-10-27, today's defaults, `vllm bench` 128 x 128 tokens): 1 M profile 94.2 ms per token = 10.6 tok/s per user at
 concurrency 1 (TTFT 272 ms) and 103.4 ms = 9.7 tok/s per user at 4 (37 tok/s output); 128 K profile (28 users per row, 224 traced
 slots) 150.9 ms = 6.6 tok/s per user at 1 and 172.8 ms = 5.8 tok/s per user at 28 (142 tok/s output); boot ~10 min on a warm cache.
-Long prompts under concurrency are scheduler-bound today (the engine interleaves 2 prefill steps per decode step: 64 K x 28 on the
-128 K profile completes at 0.34 tok/s per user with 389 s TTFT); the tt-inference-server targets are these served points per profile. That is the traced replay
+A served 1 M-context request (1 047 612 tokens, 160 out, 1 M profile) completes with TTFT 504.6 s (2076 tok/s prefill) and 95.4 ms per
+token = 10.5 tok/s per user at the 1 M position (the sparse prefill's score block is 256 rows at 1 M: `tt/memory_plan.py`
+`default_prefill_qblock`; 2048 rows ran out of DRAM at ~196 K, 512 at chunk 62 of 64). Long prompts under concurrency are
+scheduler-bound today (the engine interleaves 2 prefill steps per decode step: 64 K x 28 on the 128 K profile completes at 0.34 tok/s
+per user with 389 s TTFT); the tt-inference-server targets are these served points per profile. That is the traced replay
 of the 1 M-capacity model on the regions-sourced streaming decode (~76 ms) plus ~26 ms of host work per step (one packed upload and
 one read per row: `GLM53_DECODE_PACKED_INPUTS=1`, default since smoke r12). History: 372 ms with the Python page-table check,
 192 after its removal, 174.6 with packed inputs, 103.2 once the streaming decode replaced the regions fallback (next paragraph). The replay costs 148 ms against 65 ms in the harness at a short cache,
