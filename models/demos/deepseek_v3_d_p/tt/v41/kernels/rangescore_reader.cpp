@@ -12,10 +12,13 @@
 // tile rows are chunked by CHUNK; chunk c belongs to core c mod NCORES. The visible bound is entry `user` of the pin
 // page (uint32 [1, 1, 1, PIN_ROWS]: the user's newest visible row, SENTINEL for none): visible tile rows
 // vt = ceil((newest + 1) / 32), pushed to the compute through cb_meta (word 0); chunks at or past vt are not read.
+// With DYN (the one-live-row capture) the user is not a runtime argument but word 0 of the pin
+// page and its newest word 2 (a per-step host row: a capture must not bake in the slot); a user past the tile's
+// rows reads row 0 of the query (the newest is then the sentinel: nothing is read).
 //
-// compile_time_args = [cb_qrm, cb_wrm, cb_k, cb_meta, CHUNK, TR, NCORES, PIN_ROWS, TensorAccessorArgs(q)...,
+// compile_time_args = [cb_qrm, cb_wrm, cb_k, cb_meta, CHUNK, TR, NCORES, PIN_ROWS, DYN, TensorAccessorArgs(q)...,
 //                      TensorAccessorArgs(w)..., TensorAccessorArgs(k)..., TensorAccessorArgs(pin)...]
-// runtime args      = [q_addr, w_addr, k_addr, pin_addr, user, core_index]
+// runtime args = [q_addr, w_addr, k_addr, pin_addr, user, core_index]
 
 #include <cstdint>
 
@@ -27,7 +30,7 @@ void kernel_main() {
     const uint32_t w_addr = get_arg_val<uint32_t>(1);
     const uint32_t k_addr = get_arg_val<uint32_t>(2);
     const uint32_t pin_addr = get_arg_val<uint32_t>(3);
-    const uint32_t user = get_arg_val<uint32_t>(4);
+    const uint32_t user_arg = get_arg_val<uint32_t>(4);
     const uint32_t core = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t cb_qrm = get_compile_time_arg_val(0);
@@ -38,7 +41,8 @@ void kernel_main() {
     constexpr uint32_t TR = get_compile_time_arg_val(5);      // key tile rows per user (the score width / 32)
     constexpr uint32_t NCORES = get_compile_time_arg_val(6);  // chunk c on core c % NCORES
     constexpr uint32_t PIN_ROWS = get_compile_time_arg_val(7);
-    constexpr auto q_args = TensorAccessorArgs<8>();
+    constexpr uint32_t DYN = get_compile_time_arg_val(8);  // 1: the user is word 0 of the pin page, its newest word 2
+    constexpr auto q_args = TensorAccessorArgs<9>();
     constexpr auto w_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto k_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto pin_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
@@ -67,7 +71,9 @@ void kernel_main() {
     noc_async_read(pin.get_noc_addr(0, 0), pin_l1, PIN_ROWS * 4);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_l1);
-    const uint32_t newest = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pin_l1)[user];
+    volatile tt_l1_ptr uint32_t* pins = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pin_l1);
+    const uint32_t user = DYN ? (pins[0] < 32 ? pins[0] : 0) : user_arg;
+    const uint32_t newest = DYN ? pins[2] : pins[user];
     const uint32_t visible = newest == SENTINEL ? 0 : newest + 1;
     uint32_t vt = (visible + 31) / 32;
     if (vt > TR) {

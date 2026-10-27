@@ -10,9 +10,9 @@
 // PER_ROW * CHUNK * 32]: the split layout, one page a core; the selection merges the rows, tt/v41/indexer.py
 // select_split). Two chunk buffers alternate so a write overlaps the next collection. The bound is entry `user` of
 // the pin page (uint32 [1, 1, 1, PIN_ROWS]: the user's newest visible row, SENTINEL for none, which makes every
-// row -inf).
+// row -inf). With DYN the newest is word 2 of the pin page (the reader's DYN: the one-live-row capture).
 //
-// compile_time_args = [cb_out, cb_scratch, CHUNK, TR, NCORES, PIN_ROWS, PER_ROW, TensorAccessorArgs(out)...,
+// compile_time_args = [cb_out, cb_scratch, CHUNK, TR, NCORES, PIN_ROWS, PER_ROW, DYN, TensorAccessorArgs(out)...,
 //                      TensorAccessorArgs(pin)...]
 // runtime args      = [out_addr, pin_addr, user, core_index]
 
@@ -34,7 +34,8 @@ void kernel_main() {
     constexpr uint32_t NCORES = get_compile_time_arg_val(4);
     constexpr uint32_t PIN_ROWS = get_compile_time_arg_val(5);
     constexpr uint32_t PER_ROW = get_compile_time_arg_val(6);  // chunk slots of a core's output row
-    constexpr auto out_args = TensorAccessorArgs<7>();
+    constexpr uint32_t DYN = get_compile_time_arg_val(7);      // 1: the newest is word 2 of the pin page
+    constexpr auto out_args = TensorAccessorArgs<8>();
     constexpr auto pin_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t ROW_U32 = 16;             // 32 bf16 scores of a key tile row
@@ -59,7 +60,7 @@ void kernel_main() {
     noc_async_read(pin.get_noc_addr(0, 0), base_l1, PIN_BYTES);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* pins = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_l1);
-    const uint32_t newest = pins[user];
+    const uint32_t newest = DYN ? pins[2] : pins[user];
     const uint32_t visible = newest == SENTINEL ? 0 : newest + 1;
     uint32_t vt = (visible + 31) / 32;
     if (vt > TR) {

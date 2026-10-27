@@ -205,7 +205,7 @@ def _largest_divisor(n: int, options=(8, 4, 2, 1)) -> int:
     return next(b for b in options if n % b == 0)
 
 
-def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_base: int = 0):
+def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_base: int = 0, base_page=None):
     """A ratio-1 candidate index source's score over each query's candidate rows only.
 
     ``q`` [1, 1, R, 32 * 128] bf16 row-major (the query's 32 heads, head-major, after RoPE and QDQ), ``w`` [1, 1, R, 32]
@@ -215,16 +215,26 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
     DRAM-interleaved; ``pin`` the per-chip ``V41ChunkTables.query_first()`` or a per-row page (``_pin_rows``:
     ``p_i = start + pin[i]``, every row visible to a sentinel entry); ``start`` the chunk start; ``rows_visible``
     the index-K rows any query of the chunk can see (a multiple of 8, at most the rows from the slot's block 0).
-    -> bf16 row-major [1, 1, R, K * 8]: element 8 r + j of row i is ``sum_h w[i, h] * relu(q[i, h] . k[t])`` for
+    -> bf16 row-major [1, 1, R, K * 8]: element 8 r + j of row i is ``sum_h w[i, h] * relu(q[i, h]. k[t])`` for
     ``t = 8 ids[i, r] + j``, -inf where ``ids[i, r]`` is the sentinel or ``t > p_i`` (the query's position,
     ``start + query_first + i``), i.e. ``gather_runs(score, ids, 8)`` of the full masked score. A row-major cache
     is first copied into blocks of 8 rows per page ([rows_visible / 8, 8 * 128]: a whole block is one 2 KB DRAM
     read; random 256-byte row reads are bound by the DRAM request rate, measured 20 ms vs ~5 ms of bandwidth for
     640 x 16,384 rows); then one op (kernels/candscore_*): per query its candidate blocks are gathered and tilized,
-    ``relu(Q @ K^T)`` rounded to bf16 per head, and the heads summed by ``W @ S`` in fp32 (HiFi4)."""
+    ``relu(Q @ K^T)`` rounded to bf16 per head, and the heads summed by ``W @ S`` in fp32 (HiFi4). ``base_page``
+    (uint32 row-major [1, 1, 1, P], P >= 32): the page of the slot's block 0 is read from its word 1 on device
+    instead of ``block_base`` (the one-live-row capture: the live user is a per-step input, not
+    a constant of the capture); ``ids``, ``pin`` and ``rows_visible`` stay the slot's own, as with ``block_base``."""
     for t, dtype, what in ((q, ttnn.bfloat16, "query"), (w, ttnn.bfloat16, "weights"), (k, ttnn.bfloat16, "index-K")):
         _check_row_major(t, dtype, f"candidate_scores {what}")
     _check_row_major(ids, ttnn.uint32, "candidate_scores ids")
+    dyn = base_page is not None
+    if dyn:
+        _check_row_major(base_page, ttnn.uint32, "candidate_scores base page")
+        assert base_page.shape[2] == 1 and base_page.shape[3] >= 32 and block_base == 0, (
+            tuple(base_page.shape),
+            block_base,
+        )
     rows, nk = q.shape[2], ids.shape[3]
     pin_rows = _pin_rows(pin, rows)
     pin_slot = _round_up(max(32, pin_rows * 4), 64)
@@ -236,7 +246,7 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
     per_read = _largest_divisor(tile_rows, (8, 4, 2, 1))
     nblocks = rows_visible // CANDSCORE_BLOCK
     if k.shape[3] == CANDSCORE_BLOCK * 128:  # block pages already (persistent): no copy
-        assert block_base + nblocks <= k.shape[2], (block_base, nblocks, tuple(k.shape))
+        assert (nblocks if dyn else block_base + nblocks) <= k.shape[2], (block_base, nblocks, tuple(k.shape))
     else:
         assert k.shape[3] == 128 and block_base == 0 and rows_visible <= k.shape[2], (tuple(k.shape), rows_visible)
         if rows_visible < k.shape[2]:
@@ -262,6 +272,7 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
             count,
             nblocks,
             block_base,
+            base_page.buffer_address() if dyn else 0,
         ]
         writer_args[cx][cy] = [
             ids.buffer_address(),
@@ -277,11 +288,12 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/candscore_reader.cpp",
             core_ranges=cores,
-            compile_time_args=[0, 1, 2, 3, nk, per_read]
+            compile_time_args=[0, 1, 2, 3, nk, per_read, int(dyn)]
             + ttnn.TensorAccessorArgs(q).get_compile_time_args()
             + ttnn.TensorAccessorArgs(w).get_compile_time_args()
             + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
-            + ttnn.TensorAccessorArgs(k).get_compile_time_args(),
+            + ttnn.TensorAccessorArgs(k).get_compile_time_args()
+            + ttnn.TensorAccessorArgs(base_page if dyn else ids).get_compile_time_args(),
             runtime_args=reader_args,
             config=ttnn.ReaderConfigDescriptor(),
         ),
@@ -318,7 +330,8 @@ def candidate_scores(q, w, k, ids, pin, start: int, rows_visible: int, block_bas
         _cb(16, 2 * batch * _TILE_BYTES, cores),  # O = W S (row 0)
         _cb(8, writer_scratch, cores, page=writer_scratch),  # writer: pin | ids | two output rows
     ]
-    return ttnn.generic_op([q, w, k, ids, pin, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+    inputs = [q, w, k, ids, pin] + ([base_page] if dyn else []) + [out]
+    return ttnn.generic_op(inputs, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
 
 
 RANGE_CHUNK = 8  # key tile rows (of 32 keys) per range_scores chunk: 64 KB of keys read, 512 B of score written
@@ -347,7 +360,7 @@ def split_geometry(width: int, rows: int | None = None) -> tuple[int, int, int, 
     return rows, nchunks, per_row, per_row * chunk_cols
 
 
-def range_scores(q, w, k, pin, user: int, width: int, rows: int | None = None):
+def range_scores(q, w, k, pin, user: int, width: int, rows: int | None = None, dyn: bool = False):
     """One user's query of the decode tile against the visible prefix of its own index keys, in the pool's tiled
     form (the single-query scorer of the densely scored sources).
 
@@ -359,7 +372,9 @@ def range_scores(q, w, k, pin, user: int, width: int, rows: int | None = None):
     rows)``: key ``t``'s element is ``sum_h w[user, h] * relu(q[user, h]. k[user, t])`` (``candidate_scores``'s
     arithmetic) for ``t <= newest``, -inf past it (and everywhere for the sentinel). Chunk ``c`` of key tile rows is
     scored by core ``c % rows`` into slot ``c // rows`` of its row; the bound is read on device, so only the visible
-    chunks are read and computed and the op is trace-safe. One op (kernels/rangescore_*)."""
+    chunks are read and computed and the op is trace-safe. One op (kernels/rangescore_*). ``dyn``: the user and its
+    newest row are words 0 and 2 of ``pin`` (a per-step host page; ``user`` is ignored): the one-live-row capture's
+    selection of the live user alone, whichever slot it is."""
     for t, what in ((q, "query"), (w, "weights")):
         _check_row_major(t, ttnn.bfloat16, f"range_scores {what}")
     _check_row_major(pin, ttnn.uint32, "range_scores pin")
@@ -397,7 +412,7 @@ def range_scores(q, w, k, pin, user: int, width: int, rows: int | None = None):
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/rangescore_reader.cpp",
             core_ranges=core_set,
-            compile_time_args=[0, 1, 2, 3, chunk, tile_rows, nrows, pin_rows]
+            compile_time_args=[0, 1, 2, 3, chunk, tile_rows, nrows, pin_rows, int(dyn)]
             + ttnn.TensorAccessorArgs(q).get_compile_time_args()
             + ttnn.TensorAccessorArgs(w).get_compile_time_args()
             + ttnn.TensorAccessorArgs(k).get_compile_time_args()
@@ -408,7 +423,7 @@ def range_scores(q, w, k, pin, user: int, width: int, rows: int | None = None):
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNEL_DIR}/rangescore_writer.cpp",
             core_ranges=core_set,
-            compile_time_args=[16, 8, chunk, tile_rows, nrows, pin_rows, per_row]
+            compile_time_args=[16, 8, chunk, tile_rows, nrows, pin_rows, per_row, int(dyn)]
             + ttnn.TensorAccessorArgs(out).get_compile_time_args()
             + ttnn.TensorAccessorArgs(pin).get_compile_time_args(),
             runtime_args=writer_args,

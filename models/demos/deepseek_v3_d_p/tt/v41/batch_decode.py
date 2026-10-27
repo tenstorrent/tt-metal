@@ -42,10 +42,11 @@ from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import MOE_ROWS, ROWS, TtV41Decoder
 from models.demos.deepseek_v3_d_p.tt.v41.decode_norm import DECODE_NORM, DecodeRmsNorm
 from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
-from models.demos.deepseek_v3_d_p.tt.v41.indexer import DecodePins, TtV41Indexer
+from models.demos.deepseek_v3_d_p.tt.v41.indexer import CandidateBlocks, DecodePins, TtV41Indexer
 from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import range_scores
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
+from models.demos.deepseek_v3_d_p.tt.v41.moe_c1 import _SENTINEL as C1_ONEHOT_SENTINEL
 from models.demos.deepseek_v3_d_p.tt.v41.moe_c1 import C1Moe
 from models.demos.deepseek_v3_d_p.tt.v41.pool import RING, V41DecodePool, scatter_rows
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
@@ -56,6 +57,27 @@ from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceCo
 
 NEG_INF = float("-inf")
 JOIN_MIN_WIDTH = 8192  # the narrowest join index (tokens); doubles up to the pool's max_seq_len
+
+# the c1 index path's one-hot matmuls: exact row picks (HiFi4, fp32 accumulation)
+_C1_HIFI4 = ttnn.types.BlackholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False, math_approx_mode=False
+)
+
+
+def c1_place(topk, put_row):
+    """The live user's selection ``topk`` [1, 1, 1, K] uint32 row-major into its row of the tile, the other rows the
+    sentinel -> [1, 1, ROWS, K] uint32 row-major. ``put_row`` is the step's ``c1put`` page ([1, 1, 1, ROWS] uint32
+    row-major: word u is 0 on the live rank's row u, the one-hot sentinel elsewhere; ``C1Moe.host_rows``). The row
+    is repeated over the tile and masked by the live row's column in fp32 (ids below 2^24 and the 0 / 1 mask are
+    exact there; a matmul is not: the FPU keeps ~10 bits of an fp32 input), 1 added first so the masked rows and
+    the sentinel tail read -1 after it is taken back."""
+    rows = topk.shape[2]
+    col = ttnn.to_layout(ttnn.reshape(put_row, (1, 1, put_row.shape[3], 1)), ttnn.TILE_LAYOUT)  # [ROWS, 1]
+    live = ttnn.typecast(ttnn.eq(col, 0), ttnn.float32)  # 1.0 at the live row
+    tile = ttnn.to_layout(ttnn.concat([topk] * (put_row.shape[3] // rows), dim=2), ttnn.TILE_LAYOUT)
+    ids = ttnn.typecast(ttnn.typecast(tile, ttnn.int32), ttnn.float32)
+    placed = ttnn.subtract(ttnn.multiply(ttnn.add(ids, 1.0), live), 1.0)
+    return ttnn.to_layout(ttnn.typecast(ttnn.typecast(placed, ttnn.int32), ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
 
 
 @dataclass
@@ -301,6 +323,21 @@ class TtV41BatchDecoder(TtV41Decoder):
             ccl = model.blocks[0].attn.ccl
             self.c1_moes = [C1Moe(moe, ccl, self.pool) for moe in self.moes]
             self.c1_table = C1Moe.identity_table(self.mesh_device)
+        # V41_DECODE_C1_INDEX=1: in the c1 capture the index sources select for the live
+        # user alone (``_index_c1``): its user index, newest row and block page are per-step host rows (``c1usr``,
+        # ``c1pin`` per ratio, ``c1all``), read on device by the scorers, so the capture carries no slot; the
+        # selection is placed into the tile's row by the ``c1put`` page (``c1_place``), the other rows sentinels
+        self.c1_index = os.environ.get("V41_DECODE_C1_INDEX", "0") == "1"
+        if self.c1_index:
+            assert (
+                self.c1 and self.single_query
+            ), "V41_DECODE_C1_INDEX=1 needs V41_DECODE_C1_MOE=1 and V41_DECODE_SINGLE_QUERY=1"
+            self.c1_caps: dict[int, int] = {}
+            for src, slot in self.pool.slots.items():
+                if src < 0:
+                    continue
+                ratio = self.config.compress_ratio(src)
+                assert self.c1_caps.setdefault(ratio, slot.cap) == slot.cap, (ratio, slot.cap, self.c1_caps)
         # V41_DECODE_NORM=sharded: the sublayer norms of the decode tile on a core grid
         # instead of the interleaved ops' one core (DecodeRmsNorm; the prefill keeps the block's norms)
         self.decode_norms: dict[int, tuple] = {}
@@ -458,6 +495,16 @@ class TtV41BatchDecoder(TtV41Decoder):
                     ints[k] = v
                 else:
                     inputs[k] = self.pool.per_rank(v.view(sp, 1, 1, ROWS), ttnn.uint32, device=False)
+            if self.c1_index:
+                # every word the live user's index on the live rank (the one-hot of every row: the live query
+                # repeated over the tile), the identity table's zero row elsewhere
+                all_ = torch.full((sp, ROWS), C1_ONEHOT_SENTINEL, dtype=torch.int32)
+                if live is not None:
+                    all_[live[0], :] = live[1]
+                if packed:
+                    ints["c1all"] = all_
+                else:
+                    inputs["c1all"] = self.pool.per_rank(all_.view(sp, 1, 1, ROWS), ttnn.uint32, device=False)
             tick("c1")
         if self.sample_on_device:
             k = torch.ones(sp * ROWS, dtype=torch.int32)
@@ -508,6 +555,23 @@ class TtV41BatchDecoder(TtV41Decoder):
             comp = torch.where(writes, positions // ratio, torch.full_like(positions, -1)).to(
                 torch.int32
             )  # -1: sentinel
+            if self.c1_index:
+                # the c1 capture's index pages: ``c1usr`` word 0 the live user (0 when none: row 0 is read, nothing
+                # is visible), word 1 the page of its block 0, word 2 its newest row (the sentinel for none);
+                # ``c1pin`` its newest in every word (the candidate scorer's per-row page)
+                usr = torch.full((sp, ROWS), -1, dtype=torch.int32)
+                usr[:, :2] = 0
+                pin = torch.full((sp, ROWS), -1, dtype=torch.int32)
+                if live is not None:
+                    r, u = live
+                    rows_u = self.c1_caps[ratio] + 32
+                    usr[r, 0], usr[r, 1], usr[r, 2] = u, u * rows_u // cfg.CANDIDATE_BLOCK_SIZE, int(newest[r, u])
+                    pin[r, :] = int(newest[r, u])
+                if packed:
+                    ints[f"c1usr{ratio}"], ints[f"c1pin{ratio}"] = usr, pin
+                else:
+                    inputs[f"c1usr{ratio}"] = self.pool.per_rank(usr.view(sp, 1, 1, ROWS), ttnn.uint32, device=False)
+                    inputs[f"c1pin{ratio}"] = self.pool.per_rank(pin.view(sp, 1, 1, ROWS), ttnn.uint32, device=False)
             if packed:
                 ints[f"newest{ratio}"], ints[f"comp{ratio}"] = newest, comp
                 if not self.single_query:  # the masks are the only reader
@@ -682,6 +746,9 @@ class TtV41BatchDecoder(TtV41Decoder):
         if c1:
             sel, put = C1Moe.onehots(self.inputs["c1sel"], self.inputs["c1put"], self.c1_table)
             moes = self.c1_moes
+            if self.c1_index:
+                sel_all, _ = C1Moe.onehots(self.inputs["c1all"], self.inputs["c1all"], self.c1_table)
+                selection["c1"] = sel_all
         else:
             moes = self.moes
         for layer, block, moe in zip(model.layers, model.blocks, moes):
@@ -773,7 +840,14 @@ class TtV41BatchDecoder(TtV41Decoder):
                 keys = ttnn.to_layout(keys, ttnn.ROW_MAJOR_LAYOUT)
                 pool.write_index_keys(src, keys, idx, stride=pool.slots[src].cap + 32, rows=n)
                 ttnn.deallocate(keys)
-            if attn.is_index_source:
+            if attn.is_index_source and "c1" in selection:
+                compressed, candidates = self._index_c1(
+                    attn.indexer, x, qr, src, selection.get("candidates"), selection["c1"]
+                )
+                selection["topk"] = compressed
+                if candidates is not None:
+                    selection["candidates"] = candidates
+            elif attn.is_index_source:
                 compressed, candidates = self._index(
                     attn.indexer, x, qr, src, masks[ratio], selection.get("candidates")
                 )
@@ -896,6 +970,44 @@ class TtV41BatchDecoder(TtV41Decoder):
         if self.users < ROWS:
             parts.append(self.pad_topk)
         return ttnn.concat(parts, dim=2), published
+
+    def _index_c1(self, indexer: TtV41Indexer, x, qr, source: int, candidates: CandidateBlocks | None, sel_all):
+        """``_index`` for the c1 capture (``V41_DECODE_C1_INDEX=1``): the live user's selection alone, the user read
+        on device from the step's ``c1usr`` page (``range_scores(dyn=True)``, ``select_live_in_blocks``), placed into
+        its row of the tile by the ``c1put`` page (``c1_place``; the other rows sentinels) -> (the top-k tile
+        ``[1, 1, ROWS, INDEX_TOPK]`` uint32 row-major, the candidate source's published ``CandidateBlocks`` of the
+        live user or None). ``sel_all``: the one-hot that repeats the live row over the tile (``c1all``)."""
+        cfg, pool = self.config, self.pool
+        cap = pool.slots[source].cap
+        ratio = cfg.compress_ratio(source)
+        usr, pin_n = self.inputs[f"c1usr{ratio}"], self.inputs[f"c1pin{ratio}"]
+        cos, sin = self.inputs["ropec"]
+        q = ttnn.linear(fp8_qdq(qr), indexer.wq_b, compute_kernel_config=indexer.compute_kernel_config)
+        q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
+            q, num_heads=indexer.heads, num_kv_heads=0, transpose_k_heads=False
+        )
+        q = indexer.qdq(indexer.rope(q, cos, sin))
+        w = indexer.ccl.tp_all_reduce(ttnn.linear(x, indexer.weights_proj))
+        blocks_of = pool.index_k_blocks.get(source)
+        if blocks_of is not None and candidates is not None and candidates.ids is not None:
+            # a candidate index source over the live user's published blocks: its query and head weights in every
+            # row of the tile by the one-hot matmul (exact: one 1.0 a row), the scorer's per-row pin page the
+            # ``c1pin`` row, its block 0 read by the scorer from ``c1usr``
+            q_n = ttnn.to_layout(
+                ttnn.matmul(sel_all, ttnn.experimental.nlp_concat_heads(q), compute_kernel_config=_C1_HIFI4),
+                ttnn.ROW_MAJOR_LAYOUT,
+            )
+            w_n = ttnn.to_layout(ttnn.matmul(sel_all, w, compute_kernel_config=_C1_HIFI4), ttnn.ROW_MAJOR_LAYOUT)
+            topk = indexer.select_live_in_blocks(
+                q_n, w_n, blocks_of, pin_n, candidates.ids, usr, cap + 32, cfg.INDEX_TOPK
+            )
+            published = None
+        else:
+            q_rm, w_rm = indexer.decode_query(q, w)
+            score = range_scores(q_rm, w_rm, pool.index_k[source], usr, 0, cap + 32, dyn=True)
+            pin_u = ttnn.slice(usr, [0, 0, 0, 2], [1, 1, 1, 3])
+            topk, published = indexer.select_split(score, pin_u, cap + 32, cfg.INDEX_TOPK, candidates)
+        return c1_place(topk, self.inputs["c1put"]), published
 
     def _index_rows(self, layer: int, compressed):
         """``sparse_sdpa`` index rows ``[1, 1, ROWS, K]`` uint32 row-major: the layer's window ring, then the selected

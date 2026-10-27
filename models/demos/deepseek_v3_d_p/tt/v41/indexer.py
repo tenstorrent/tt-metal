@@ -425,8 +425,6 @@ class TtV41Indexer(LightweightModule):
         for the top-k."""
         assert self.uses_candidates and self.ratio == 1
         n = q_rm.shape[2]
-        per = ids.shape[3] // n
-        assert per * n == ids.shape[3] and (per * self.config.CANDIDATE_BLOCK_SIZE) % 32 == 0, (tuple(ids.shape), n)
         row = [0, 0, user, 0]
         q_u = ttnn.slice(q_rm, row, [1, 1, user + 1, q_rm.shape[3]])
         w_u = ttnn.slice(w_rm, row, [1, 1, user + 1, w_rm.shape[3]])
@@ -435,8 +433,27 @@ class TtV41Indexer(LightweightModule):
         pin_u = newest if newest.shape[3] == 1 else ttnn.slice(newest, [0, 0, 0, user], [1, 1, 1, user + 1])
         q_n, w_n = ttnn.concat([q_u] * n, dim=2), ttnn.concat([w_u] * n, dim=2)
         pin_n = ttnn.concat([pin_u] * n, dim=3)
+        return self._select_rows_in_blocks(q_n, w_n, blocks, pin_n, ids_u, rows, block_base, k)
+
+    def select_live_in_blocks(self, q_n, w_n, blocks, pin_n, ids_u, base_page, rows: int, k: int):
+        """``select_user_in_blocks`` for the one-live-row capture: the live user's query and
+        head weights already repeated over the ROWS rows (``q_n`` [1, 1, ROWS, 32 * 128], ``w_n`` [1, 1, ROWS, 32]
+        bf16 row-major, a one-hot matmul of the tile), its pin repeated (``pin_n`` [1, 1, 1, ROWS] uint32 row-major),
+        its published blocks ``ids_u`` [1, 1, 1, K] and the page of its block 0 as word 1 of ``base_page`` (a
+        per-step host row), so the capture carries no slot."""
+        assert self.uses_candidates and self.ratio == 1
+        return self._select_rows_in_blocks(q_n, w_n, blocks, pin_n, ids_u, rows, 0, k, base_page=base_page)
+
+    def _select_rows_in_blocks(
+        self, q_n, w_n, blocks, pin_n, ids_u, rows: int, block_base: int, k: int, base_page=None
+    ):
+        n = q_n.shape[2]
+        per = ids_u.shape[3] // n
+        assert per * n == ids_u.shape[3] and (per * self.config.CANDIDATE_BLOCK_SIZE) % 32 == 0, (tuple(ids_u.shape), n)
         ids_n = ttnn.reshape(ids_u, [1, 1, n, per])  # row r: blocks [r * per, (r + 1) * per) of the user's
-        scores = candidate_scores(q_n, w_n, blocks, ids_n, pin_n, 0, rows, block_base=block_base)  # [1, 1, n, per*8]
+        scores = candidate_scores(
+            q_n, w_n, blocks, ids_n, pin_n, 0, rows, block_base=block_base, base_page=base_page
+        )  # [1, 1, n, per*8]
         rows_u = ttnn.reshape(scores, [1, 1, 1, n * per * self.config.CANDIDATE_BLOCK_SIZE])
         # the top-k kernels take a tile of rows: the user's row first, the rest -inf (sentinel picks)
         rows_n = ttnn.pad(rows_u, [(0, 0), (0, 0), (0, n - 1), (0, 0)], float("-inf"))

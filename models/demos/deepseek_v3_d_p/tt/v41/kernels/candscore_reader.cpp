@@ -12,11 +12,13 @@
 // page per block of 8 rows: whole-block reads, as random 256-byte row reads are DRAM-request bound at ~4x the
 // bandwidth time). Block id c is page block_base + c: the pages of one user's slot in a pool of block pages (the
 // decode pool, tt/v41/pool.py index_k_blocks) or 0 for a cache of one sequence. A sentinel id (>= nblocks) reads
-// the slot's block 0 instead (finite values; the writer masks it to -inf).
+// the slot's block 0 instead (finite values; the writer masks it to -inf). With DYN (the one-live-row capture) block_base is word 1 of a per-step uint32 page (the live user's slot; a capture must not bake
+// in the slot) read from base_addr instead of the runtime argument.
 //
-// compile_time_args = [cb_qrm, cb_wrm, cb_krm, cb_ids, K, ROWS_PER_READ, TensorAccessorArgs(q)...,
-//                      TensorAccessorArgs(w)..., TensorAccessorArgs(ids)..., TensorAccessorArgs(k_blocks)...]
-// runtime args      = [q_addr, w_addr, ids_addr, k_addr, row_start, row_count, nblocks, block_base]
+// compile_time_args = [cb_qrm, cb_wrm, cb_krm, cb_ids, K, ROWS_PER_READ, DYN, TensorAccessorArgs(q)...,
+//                      TensorAccessorArgs(w)..., TensorAccessorArgs(ids)..., TensorAccessorArgs(k_blocks)...,
+//                      TensorAccessorArgs(base)... (DYN only)]
+// runtime args = [q_addr, w_addr, ids_addr, k_addr, row_start, row_count, nblocks, block_base, base_addr (DYN)]
 
 #include <cstdint>
 
@@ -31,7 +33,7 @@ void kernel_main() {
     const uint32_t row_start = get_arg_val<uint32_t>(4);
     const uint32_t row_count = get_arg_val<uint32_t>(5);
     const uint32_t nblocks = get_arg_val<uint32_t>(6);
-    const uint32_t block_base = get_arg_val<uint32_t>(7);
+    const uint32_t block_base_arg = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t cb_qrm = get_compile_time_arg_val(0);
     constexpr uint32_t cb_wrm = get_compile_time_arg_val(1);
@@ -39,10 +41,12 @@ void kernel_main() {
     constexpr uint32_t cb_ids = get_compile_time_arg_val(3);
     constexpr uint32_t K = get_compile_time_arg_val(4);              // candidate blocks per query
     constexpr uint32_t ROWS_PER_READ = get_compile_time_arg_val(5);  // tile-rows of K gathered per read barrier
-    constexpr auto q_args = TensorAccessorArgs<6>();
+    constexpr uint32_t DYN = get_compile_time_arg_val(6);            // 1: block_base is word 1 of the base page
+    constexpr auto q_args = TensorAccessorArgs<7>();
     constexpr auto w_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto ids_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto k_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
+    constexpr auto base_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t BLOCK = 8;                      // rows per candidate block
     constexpr uint32_t BLOCK_BYTES = BLOCK * 128 * 2;  // one candidate block's index-K rows (one page)
@@ -64,6 +68,16 @@ void kernel_main() {
     DataflowBuffer idsb(cb_ids);
     const uint32_t ids_l1 = idsb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* id = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ids_l1);
+
+    uint32_t block_base = block_base_arg;
+    if constexpr (DYN) {
+        // the base page (uint32 [1, 1, 1, 32]: word 1 the live user's block 0) through the ids buffer, before any row
+        const auto base = TensorAccessor(base_args, get_arg_val<uint32_t>(8));
+        const uint32_t scratch = (ids_l1 + 63) & ~63u;
+        noc_async_read(base.get_noc_addr(0, 0), scratch, 128);
+        noc_async_read_barrier();
+        block_base = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[1];
+    }
 
     // both pages of cb_wrm: zero rows 1..31 once (row 0 is overwritten per query)
     {
