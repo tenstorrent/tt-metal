@@ -246,19 +246,19 @@ cleanup() {
   local rc=$?
   stop_runner || true
   if [ -s "${OUT}" ]; then
-    python3 "${PKG_DIR}/matrix_table.py" "${OUT}" --csv "${OUT_DIR}/results_${STAGES}stage.csv" > "${OUT_DIR}/tables.txt" 2>&1 || true
-    cat "${OUT_DIR}/tables.txt"
+    # Markdown in the layout of the tt-metal#57827 comments, so a run can be pasted there as is.
+    python3 "${PKG_DIR}/matrix_table.py" "${OUT}" --markdown --csv "${OUT_DIR}/results_${STAGES}stage.csv" \
+      > "${OUT_DIR}/tables.md" 2>&1 || true
     {
       echo "### MiniMax-M3 pipeline prefill perf matrix (16 stages, SC4)"
       echo
-      echo "commit \`${COMMIT}\`, hosts \`${RESOLVED_HOSTS}\`, launch \`${LAUNCH}\`, cached \`${CACHED_LIST[*]}\`, new \`${NEW}\`," \
-        "users ${USERS}, iters ${ITERS}, target chunks ${TARGET_CHUNKS}, chunk ${MATRIX_CHUNK}, layer split \`${MATRIX_LAYER_COUNTS:-even}\`," \
-        "KV capacity cached + ${MAX_NEW} (one runner launch per row). Baseline and history: tt-metal#57827."
-      echo
-      echo '```'
-      cat "${OUT_DIR}/tables.txt"
-      echo '```'
+      echo "**Setup:** commit \`${COMMIT}\`, hosts \`${RESOLVED_HOSTS}\` (launch \`${LAUNCH}\`). ${STAGES} stages x [2,4]," \
+        "chunk ${MATRIX_CHUNK}, layers per stage \`${MATRIX_LAYER_COUNTS:-even}\`, ${EXPERT_DTYPE:-bf4} experts, ${USERS} users," \
+        "${ITERS} idle iterations, ${TARGET_CHUNKS} chunks per loaded cell, KV capacity cached + ${MAX_NEW} (one runner" \
+        "launch per row). Cached rows \`${CACHED_LIST[*]}\`. Baseline and history: tt-metal#57827."
+      cat "${OUT_DIR}/tables.md"
     } > "${PREFILL_SUMMARIES}/perf/m3_prefill_matrix_sc4.md"
+    cat "${PREFILL_SUMMARIES}/perf/m3_prefill_matrix_sc4.md"
   else
     echo "[matrix-ci] no results in ${OUT}"
   fi
