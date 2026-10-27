@@ -636,7 +636,7 @@ jobs:
       # The gate's thresholds, for the compare job and for stage 2 in the legs.
       thresholds: >-
         {"blackhole": {"threshold": "0.02", "module_thresholds": ""},
-         "wormhole": {"threshold": "0.13", "module_thresholds": "perf_matmul=0.25,perf_math_matmul=0.25"}}
+         "wormhole": {"threshold": "0.02", "module_thresholds": ""}}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
