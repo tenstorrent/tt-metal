@@ -478,11 +478,14 @@ def slstm_recurrence(
             free(pi, lfm, m)
             iz = ttnn.multiply(ig, pz, input_tensor_b_activations=[_act.TANH])
             free(pz)
-            c_new = ttnn.addcmul(iz, fg, c)  # fg c + ig tanh z
-            free(iz, c)
-            c = c_new
-            nn = ttnn.addcmul(ig, fg, n)  # fg n + ig
-            free(n, fg, ig)
+            fc = ttnn.multiply(fg, c)
+            free(c)
+            c = ttnn.add(fc, iz)
+            free(fc, iz)
+            fn = ttnn.multiply(fg, n)
+            free(n, fg)
+            nn = ttnn.add(fn, ig)
+            free(fn, ig)
             n = ttnn.maximum(nn, 1.0)
             free(nn)
             oc = ttnn.multiply(c, po, input_tensor_b_activations=[_act.SIGMOID])
