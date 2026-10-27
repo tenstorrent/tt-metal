@@ -303,6 +303,7 @@ class GLM53MeshModel:
             inp.trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
             inp.streams = self._prefill_graph(inp)
             ttnn.end_trace_capture(self.device, inp.trace_id, cq_id=cq_id)
+            self.mesh.allocations_frozen[0] = True  # no lazily allocated constants from here on (tt/kda.py)
             ttnn.synchronize_device(self.device)
             self.prefill_traces[T] = inp
             logger.info(f"traced prefill: T={T} captured in {time.perf_counter() - t0:.1f} s")
@@ -359,6 +360,7 @@ class GLM53MeshModel:
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
         outs = self.decode_step(self.ids_dev, self.positions)
         ttnn.end_trace_capture(self.device, trace_id, cq_id=cq_id)
+        self.mesh.allocations_frozen[0] = True  # no lazily allocated constants from here on (tt/kda.py)
         return trace_id, outs
 
     def replay(self, trace_id, cq_id: int = 0, blocking: bool = True):
@@ -463,4 +465,5 @@ class GLM53MeshModel:
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=cq_id)
         outs = self.decode_step_with_draft(self.ids_dev, self.positions, self.mtp_positions)
         ttnn.end_trace_capture(self.device, trace_id, cq_id=cq_id)
+        self.mesh.allocations_frozen[0] = True  # no lazily allocated constants from here on (tt/kda.py)
         return trace_id, outs

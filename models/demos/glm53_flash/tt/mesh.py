@@ -90,6 +90,11 @@ class GLMMesh:
     # device constants shared by every module of the model (``const``): one tensor per key instead of one per layer
     _consts: dict = field(default_factory=dict, repr=False, compare=False)
     _prefill_depth: list = field(default_factory=lambda: [0], repr=False, compare=False)  # prefill_scope nesting
+    # the eager KDA prefill's persistent chronology scalars (tt/kda.py chrono_scalar: one start/end pair per mesh)
+    chrono: dict = field(default_factory=dict, repr=False, compare=False)
+    # set by the mesh model after a trace capture: a device buffer allocated while traces exist is clobbered by
+    # their replays (the 2026-10-27 served KDA hang), so lazily allocated constants must not appear after it
+    allocations_frozen: list = field(default_factory=lambda: [False], repr=False, compare=False)
 
     @classmethod
     def from_device(cls, mesh_device, topology=None) -> "GLMMesh":

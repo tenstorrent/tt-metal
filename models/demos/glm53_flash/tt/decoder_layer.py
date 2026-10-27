@@ -269,12 +269,12 @@ class TtDecoderLayer(LightweightModule):
 
         def attention(h):  # h: [1,1,T/rows,hidden] bf16, input_layernorm applied
             if self.is_kda:
-                start_t = actual_start if actual_start is not None else self.attn.scalar(start)
+                start_t = actual_start if actual_start is not None else self.attn.chrono_scalar(start, "start")
                 end = actual_end
                 # the exclusive global valid end; a chunk at start > 0 always carries it so the kernels'
                 # chronology is the clipped interval [start, start + seq_len) (derive_interval)
                 if end is None and (seq_len != T or start):
-                    end = self.attn.scalar(start + seq_len)
+                    end = self.attn.chrono_scalar(start + seq_len, "end")
                 T_loc = h.shape[-2]
                 y, new_state.kda = self.attn.prefill_forward(
                     ttnn.reshape(h, [1, T_loc, self.hidden]), state.kda, start_t, end
