@@ -30,10 +30,24 @@ std::tuple<autograd::TensorPtr, autograd::TensorPtr> mla_kv_assemble(
     auto out_v = autograd::create_tensor(v_raw);
 
     autograd::GradFunction grad = [kv_up, k_pe, out_k, out_v, n_heads, qk_nope_dim, qk_rope_dim, v_dim]() {
+        if (!autograd::any_requires_grad(kv_up, k_pe)) {
+            return;
+        }
         auto [dkv_up, dk_pe] = ttml::metal::mla_kv_assemble_bw(
-            out_k->get_grad(), out_v->get_grad(), n_heads, qk_nope_dim, qk_rope_dim, v_dim);
-        kv_up->add_grad(dkv_up);
-        k_pe->add_grad(dk_pe);
+            out_k->get_grad(),
+            out_v->get_grad(),
+            n_heads,
+            qk_nope_dim,
+            qk_rope_dim,
+            v_dim,
+            /*compute_grad_kv_up=*/kv_up->get_requires_grad(),
+            /*compute_grad_k_pe=*/k_pe->get_requires_grad());
+        if (kv_up->get_requires_grad()) {
+            kv_up->add_grad(dkv_up.value());
+        }
+        if (k_pe->get_requires_grad()) {
+            k_pe->add_grad(dk_pe.value());
+        }
     };
 
     auto k_node = autograd::add_backward_node(std::move(grad), out_k, kv_up, k_pe);
