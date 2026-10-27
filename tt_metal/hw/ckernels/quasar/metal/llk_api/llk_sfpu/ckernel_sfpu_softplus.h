@@ -54,18 +54,26 @@ constexpr float SOFTPLUS_BF16_H3 = 0.12548828125f;      // 257 * 2^-11
 constexpr float SOFTPLUS_BF16_H4 = -0.03411865234375f;  // -559 * 2^-14
 
 // BF16: u = 2^(y-127), y = max(127 - a/ln2, 0), i.e. exp(-a) for a >= 0.
-// Quasar has the truncating fp32->uint16 conversion (RoundMode::Zero), same as Blackhole.
 // k = trunc(y), f = y - k in [0, 1), p(f) ~ 2^f in [1, 2), u = setexp(p(f), k).
-// The max(y, 0) in softplus_bf16_eval is what sends y < 0 to k = 0: the conversion
-// takes the magnitude, so an unclamped negative y comes back as a positive k.
+// RoundMode::Zero on fp32->uint16 is SFPSTOCHRND rnd_mode=2, which the Quasar
+// simulator rejects. y is in [0, 127], so nearest-even plus a fixup is trunc:
+// a rounded-up k leaves f in [-0.5, 0). The max(y, 0) in softplus_bf16_eval is
+// what sends y < 0 to k = 0: the conversion takes the magnitude, so an unclamped
+// negative y comes back as a positive k.
 // a > 88 clamps to y = 0: k = 0 and p(0) = 1 has a zero mantissa, so setexp yields exactly
 // +0; 0 < y < 1 just above gives a denormal the SFPU flushes. Both are the right bf16 answer.
 sfpi_inline sfpi::vFloat softplus_exp2_bf16(sfpi::vFloat y) {
-    sfpi::vUInt16 k = sfpi::convert<sfpi::vUInt16>(y, sfpi::RoundMode::Zero);
-    sfpi::vFloat f = y - sfpi::convert<sfpi::vFloat>(k, sfpi::RoundMode::Nearest);
+    sfpi::vUInt16 ku = sfpi::convert<sfpi::vUInt16>(y, sfpi::RoundMode::Nearest);
+    sfpi::vInt k = sfpi::vInt(ku);
+    sfpi::vFloat f = y - sfpi::convert<sfpi::vFloat>(ku, sfpi::RoundMode::Nearest);
+    v_if(f < 0.0f) {
+        k = k - 1;
+        f = f + 1.0f;
+    }
+    v_endif;
     sfpi::vFloat p =
         PolynomialEvaluator::eval(f, SOFTPLUS_BF16_P0, sfpi::vConstFloatPrgm1, SOFTPLUS_BF16_P2, SOFTPLUS_BF16_P3);
-    return sfpi::setexp(p, sfpi::as<sfpi::vInt>(k));
+    return sfpi::setexp(p, k);
 }
 
 // f(a) = ln(1+u) = u * (1 + u*h(u)), u = exp(-a), a = |t|. No tail branch: the residual
