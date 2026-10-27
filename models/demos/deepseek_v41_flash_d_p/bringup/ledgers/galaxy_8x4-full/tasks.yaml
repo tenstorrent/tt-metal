@@ -440,3 +440,19 @@ tasks:
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
+- id: F.1
+  title: 'Every forked op''s tests, strictly: unit suites, every model''s cases, the original ops'' tests'
+  step: optests
+  deps:
+  - Z.1
+  gate:
+    cmd: python -m models.demos.common.bringup.testing.fork_suite
+    metrics:
+      fork_suite_failed: == 0
+      fork_suite_passed: '>= 0'
+      fork_suite_skipped: '>= 0'
+      fork_suite_waived: '>= 0'
+  role: optests
+  paths:
+  - ttnn/ttnn/bringup
+  device: true

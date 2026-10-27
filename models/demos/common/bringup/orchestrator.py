@@ -1920,6 +1920,9 @@ class Orchestrator:
             if why:
                 self.stop_task(task, f"not started: {why}")
                 return STOPPED
+        why = engine_missing(self.spec, gate_command(task, self.led.tasks()))
+        if why:  # F200: no gate and no agent for a runner test without its engine; independent work goes on (F109)
+            return self._human(task, why)
         if self.perf_pick(task):  # F57: no gate before or after the agent; the owner decides on the A/B report
             return self.perf_step(task)
         if task.get("step") == "perf" and role is None:  # F122: the final task: the quick picks' full gates first
@@ -2087,6 +2090,10 @@ class Orchestrator:
         for t in tids:
             if not state.get(t, {}).get("waiting") or satisfied(state.get(t, {}).get("status")):
                 continue
+            if str(state[t]["waiting"]).startswith(ENGINE_WAIT) and not engine_missing(
+                self.spec, gate_command(self.led.task(t), self.led.tasks())
+            ):
+                continue  # F200: its build has appeared; it runs at its turn
             dirty_here = set(self.changed_under(self.led.task(t)))
             rec = state.get(t, {}).get("ab")
             if (
@@ -2223,6 +2230,39 @@ def iommu_problem(root: str | None = None) -> str | None:
         f"IOMMU domains differ across the box's cards: {cards}; Metal uses one IOMMU mode for all, so these cards' "
         f"pinned host buffers fail (the real-time profiler loses them: no device time from those chips). Fix (root, a "
         f"person): {fix}"
+    )
+
+
+ENGINE_WAIT = "tt-d-gen build missing"
+ENGINE_MARKS = ("dgen_engine", "use_engine")  # the runner tests that tt-d-gen's engine drives (testing/dgen_engine.py)
+
+
+def engine_tests(repo, cmd: str) -> list[str]:
+    """F200: the gate's test files that tt-d-gen's engine drives (they name dgen_engine or use_engine)."""
+    out = []
+    for word in shlex.split(cmd.replace("&&", " ")):
+        p = Path(repo) / word.split("::")[0]
+        if p.suffix == ".py" and p.is_file() and any(m in p.read_text(errors="replace") for m in ENGINE_MARKS):
+            out.append(word)
+    return out
+
+
+def engine_missing(spec, cmd: str) -> str | None:
+    """F200: why a gate that runs a runner test cannot pass (serving.require_engine and no tt-d-gen build), else None.
+    The gate would fail on the missing build and start an agent attempt that cannot succeed (DeepSeek-V4.1 8x4 K.1,
+    2026-10-27: the engine was built in parallel with the run)."""
+    from models.demos.common.bringup.testing import dgen_engine
+
+    tests = engine_tests(spec.repo, cmd)
+    if not tests or not dgen_engine.engine_required(spec):
+        return None
+    build, why = dgen_engine.find_build(spec)
+    if build is not None:
+        return None
+    return (
+        f"{ENGINE_WAIT}: {why}; {', '.join(Path(t).name for t in tests)} need it (serving.require_engine). Build it "
+        f"(dgen-build agent, REPO={dgen_engine.server_repo(spec)}); the run goes on with independent tasks and "
+        "starts this one once the build is found"
     )
 
 
