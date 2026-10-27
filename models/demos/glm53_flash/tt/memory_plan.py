@@ -86,16 +86,17 @@ def reserve_bytes(
     regions = 3 * (regions_t * k + e_local * TILE) * 4096 * 2  # region buffer, gather table, pick rows (bf16)
     score = qblock * (isl / 4) * 2  # the index scorer's [qblock, pools] bf16 block
     prefix_copy = isl * 576 * 2  # the per-chunk whole-prefix ROW_MAJOR latent copy (sparse_sdpa contract)
-    misc = 128 * 2**20
-    # the dense part of a device prefill chunk (mHC collapse / expand, fp32 at the mHC width 4096 + 288) keeps about
-    # three [chunk, 4384] fp32 buffers live beside the regions sub-chunk buffers: 862 MB at 16 K tokens. Two calibration
-    # points (2026-10-27): the 1 M x 4-users-per-row served profile boots and serves with ~50 MB of modelled spare, and the
-    # 128 K x 32-users boot (0.55 GiB modelled spare before this term) failed a 287 MB (= 16384 x 4384 x 4 B) allocation in
-    # the 32 K warm-up prompt with 613 MB free but fragmented -> 28 users per row (7 slots per chip) at 128 K.
-    chunk_ws = 3 * chunk_tokens * 4384 * 4
+    misc = 256 * 2**20
+    # the floor of the prefill transient is a device chunk's dense working set: about four [chunk, 4384] fp32 buffers of
+    # the mHC collapse / expand (1.15 GB at 16 K tokens), whatever the context. Two calibration points (2026-10-27): the
+    # 1 M x 4-users-per-row served profile boots and serves with ~120 MB of modelled spare (its whole-prefix copy is the
+    # larger term), and the 128 K x 32-users boot (0.55 GiB modelled spare before this term) failed a 287 MB
+    # (= 16384 x 4384 x 4 B) allocation in the 32 K warm-up prompt with 613 MB free but fragmented -> 28 users per row
+    # (7 slots per chip) at 128 K.
+    chunk_ws = 4 * chunk_tokens * 4384 * 4
     # the regions buffers and the score block are released before the attention of a sub-block takes the whole-prefix
     # copy; the observed peak transient at 1 M (QBLOCK 512, regions 2048) was ~1.5 GB with ~1 GB left at the last chunk
-    return trace + misc + max(prefix_copy, regions + score + chunk_ws)
+    return trace + misc + max(prefix_copy, regions + score, chunk_ws)
 
 
 @dataclass(frozen=True)
