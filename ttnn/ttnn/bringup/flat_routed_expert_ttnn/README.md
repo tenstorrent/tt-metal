@@ -141,7 +141,10 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7) (the same 
   (1710341 ns vs lower 1720090, 2026-10-18): recalibrate that class from its RT-CAL lines when run there.
 - flat_routed_expert_with_program has math_fidelity and weights_nk only (no hidden).
 - With the combine_rf L1 hand-off, rows wider than SPC_PIECE (default 7168 B) hang unless SPC_PIECE >= row bytes
-  and the fabric payload >= row + 32 B (FLAT_COMBINE_OVERLAP_WORKLOG.md; asserted in sparse_combine_rf.py).
+  and the fabric payload >= row + 32 B (FLAT_COMBINE_OVERLAP_WORKLOG.md; both asserted in sparse_combine_rf.py since
+  2026-10-27: a mesh opened without the 10880 B fabric_router_config hung DeepSeek-V4.1's first MoE call, DS41-127).
+- Hot experts: any routing completes, up to every token of a column on one expert and a chip at rows_cap
+  (tests/unit/test_hot_experts.py, 8x4).
 - GLM's experts_ag path only builds at <= 64 experts per chip; it was never run on a 2x2 (known_issues.md DS41-63).
 - Not tested on Wormhole or on meshes other than 1 chip, 2x2, LoudBox 8x1 / 2x4 (tests and worklogs), Galaxy 8x4 (deepseek_v41_flash_d_p).
 

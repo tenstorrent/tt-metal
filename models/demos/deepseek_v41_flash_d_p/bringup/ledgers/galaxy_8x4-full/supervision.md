@@ -438,3 +438,17 @@ check (F196 / F197); host times stay hidden until verified warm.
 - 21:38 the 1-layer repro (prefill [0,128) at start 0, layer 0 only) HANGS: Timeout, every device on physical 15-3 /
   15-2 = logical (11,1)/(11,0) - the same core that led run 2's triage on b06u08 (combine kernel in cb_wait_front).
   The K.1 hang now reproduces in ~2 min with ONE layer and without the runner.
+- 23:05 K.1 DECODE HANG ROOT-CAUSED + FIXED (bringup-engineer, fix role, 4 h with the 4-min loop; overseer F202):
+  not the op and not hot experts: test_runner_smoke.open_mesh() set the fabric without the spec's
+  fabric_router_config (10880 B payload) -> the weighted combine's 10272 B packets over the router default 4352 B
+  hung the first MoE call. The runner sets the payload itself (K-79): prefill passed, the stand-in decode hung.
+  Evidence: the op alone on the captured routing passes (PCC 0.99989) on a correctly opened mesh and hangs with the
+  model's exact triage signature on a default-payload mesh. Fixes: combine_rf refuses a too-small payload at build
+  (no kernel change; tests/unit/test_fabric_payload.py 2/2), test_hot_experts.py regression (3/3 + the capture),
+  F202 harness.open_mesh used by both smoke tests (DS41 and xing40) + lint selftest. 40-layer device model: prefill +
+  4 tail steps pass. The smoke test edit is an overseer/framework edit of a contract test (its own mesh setup; no
+  check, threshold or golden touched), like the 20:15 one. DS41-127 in known_issues.md (agent).
+  Fork tests on 8x4 (flat tests/unit + combine_rf tests/unit + test_flat_routed_expert_ttnn.py): 57 pass, 17 fail,
+  4 skip, 3 errors; none runs the changed code: test_acc_dtype 3 errors (2x2 mesh hard-coded, fabric init fails on a
+  Galaxy), test_column_planner_mc 15 fail (planner alone forced to 8x4, overflows its L1), test_flat_routed_expert_op
+  [tp4] AssertionError (16,1,6,2) (NEW on this node, uninvestigated), k2 perf band 4.7 % slow. -> owner report; F.1.

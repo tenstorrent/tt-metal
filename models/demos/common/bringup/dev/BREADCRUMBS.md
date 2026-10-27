@@ -2196,3 +2196,15 @@ of this user runs, before every framework kill: overseer abort, an agent's timeo
 Selftest test_hangdump.py (a three-unit gate whose middle unit hangs and whose next unit rewrites inspector; abort
 waits before it kills). Overseer side (skill): never kill a device run by hand while tt-triage runs; diagnostic runs
 outside a gate go through a serialized wrapper that copies the same dirs before the next run (diag/run.sh on the node).
+
+## F202: a mesh a test opens itself carries every device param (DeepSeek-V4.1 galaxy_8x4 K.1 decode hang, 2026-10-27)
+Problem: the K.1 runner smoke's stand-in decode opens a fresh mesh by hand (test_runner_smoke.open_mesh: set_fabric_config
++ open_mesh_device) and dropped the spec's fabric_router_config (hooks.device_params: 10880 B payload for the weighted
+combine's 10272 B packets). Every combine packet exceeded the router default 4352 B: the first MoE call hung (2/2 on
+b06u08, every run here), while the runner (sets the payload itself) and the fixture-based tests passed. Hours went into
+a "flat_routed_expert decode hang" that was a test's mesh setup. xing40's copy of the test had the same latent bug.
+Fix: testing/harness.open_mesh(spec) / close_mesh: every device_params entry applied as the repo fixture applies it
+(conftest set_fabric: STRICT_INIT, tensix extension off, router config passed; the rest to open_mesh_device). Both
+smoke tests use it. Selftest test_open_mesh.py: the helper's calls, and a lint that refuses ttnn.set_fabric_config /
+ttnn.open_mesh_device in any models/demos/*/tests/bringup file. The fork side (combine_rf) now refuses a payload too
+small for its packets at build time, so this can never be a silent hang again.

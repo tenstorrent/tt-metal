@@ -3420,3 +3420,36 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   test_runner_contract uses the same driver; not run.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate K.1 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## K.1 decode hang: the stand-in decode's mesh had the default fabric payload (fix role, overseer-directed, 2026-10-27, bh-glx-110)
+- Symptom (K.1 run 2 on b06u08, the 1-layer repro here): the first MoE call (flat_routed_expert_with_program + the
+  weighted combine) hangs on all 32 chips: se3 / se6 compute in matmul, readers in cb_reserve_back, combine
+  accumulators polling their rings, ports in cb / credit waits, routers on credits.
+- Not the routing. The call's PAD rows put ~4900 of a column's 5120 tokens on each of 6 experts (54 / 99 / 153 / 318 /
+  355 / 379). A standalone replay of the op (fork tests/unit/test_hot_experts.py, the model's wiring through
+  weighted_case.py) with the captured routing (dump_cap128/call0000_L00.pt) PASSES (min PCC 0.99989 on every chip, 15 s).
+  It also passes with poisoned L1, the model's own fabric all-gather of x, uint16 ids, the model's real x, and every
+  synthetic extreme (one chip at 30720 rows, every column's tokens on one expert). In the model the call still hangs
+  with random weights (diag plugin swapping the layer's fe), so weights and data were ruled out too.
+- Cause: tests/bringup/contract/test_runner_smoke.py open_mesh (used by the K.1 stand-in decode and the diag
+  repro) called ttnn.set_fabric_config(fabric_config) without the spec's fabric_router_config. The router kept its
+  4352 B default payload, but the combine sends one 10272 B packet a row (10240 B + 32 B trailer). The replay on a mesh
+  opened that way hangs with the model's exact triage signature (same kernel counts, same 15-3 / 15-2 timeout cores).
+  tt-d-gen's runner opens its mesh with the payload (K-79), so the prefill ran and only the decode hung.
+- Fix: open_mesh passes router_config (one call). Fork combine_rf: sparse_combine_rf_prepare refuses a combine group
+  of > 1 chip whose ttnn.get_tt_fabric_max_payload_size_bytes() < piece + 32 B, naming the payload it needs
+  (tests/unit/test_fabric_payload.py). No kernel or program change.
+- Results: 1-layer repro REPRO_CAP=128 STEPS=0 PASS (prefill [0, 128) 13.5 s); default STEPS=1 tail PASS; all 40
+  layers, REPRO_STEPS=4: PASS, model up 386 s, prefill 57.6 s, tail steps 1.1-2.7 s, greedy 'We need answer one'
+  (coherent; the smoke's Paris check is K.1's runner smoke). Fork
+  regression on 8x4 (BRINGUP_TEST_MESH=8x4, flat tests/unit + combine_rf tests/unit + test_flat_routed_expert_ttnn.py):
+  every test that builds sparse_combine_rf here passes (test_with_program_patch, test_hot_experts 3/3,
+  test_fabric_payload 2/2, test_max_y_writers 2/2). Not related to the change: test_acc_dtype (2x2 only, fabric
+  init error on Galaxy), test_column_planner_mc forced to 8x4 (planner L1, never calls the combine),
+  test_flat_routed_expert_op[tp4] (AssertionError (16, 1, 6, 2), the plain op), and the k2 perf band (+4.7%, E=7 node).
+- Gotcha: a mesh opened by hand (ttnn.set_fabric_config + open_mesh_device) must carry every device_params entry the
+  harness gives, fabric_router_config included; only the conftest / harness path applied it.
+- Re-run: `cd /scratch/dnijemcevic/diag && REPRO_LAYERS=1 REPRO_CAP=128 REPRO_STEPS=0 ./run.sh <name> --no-precompile
+  /scratch/dnijemcevic/diag/test_repro_tail.py -s`; op replay: `BRINGUP_TEST_MESH=8x4
+  HOT_CAPTURE=/scratch/dnijemcevic/diag/dump_cap128/call0000_L00.pt scripts/run_safe_pytest.sh --run-all
+  ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_hot_experts.py`.

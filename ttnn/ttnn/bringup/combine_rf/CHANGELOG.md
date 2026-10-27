@@ -122,3 +122,21 @@ imported, unchanged.
   No kernel or program change.
 - Why: the flat expert's `max_y_writers` and the model read the limit from here.
 - Files: sparse_combine_rf.py
+
+### Refuse a fabric payload smaller than the combine's packets (2026-10-27, deepseek_v41_flash_d_p K.1 hang, overseer-directed fix)
+- What: `sparse_combine_rf_prepare` asserts, for a combine group of > 1 chip, that `ttnn.get_tt_fabric_max_payload_size_bytes()`
+  >= PD + 32 (one row piece and its trailer: every piece is one fabric packet). Message: the packet size, the mesh's
+  payload, and the fix (open the mesh with a fabric_router_config of at least that payload). No kernel or program
+  change: every configuration that builds builds the same program (bit-identical by construction).
+- Why: the K.1 stand-in decode (models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+  open_mesh) opened its 8x4 mesh with only the fabric config, so the router kept its default 4352 B payload while the
+  weighted combine sent 10272 B packets (H 5120 rows, one piece with the L1 hand-off): the first MoE call hung on every
+  chip (combine readers / accumulators polling for rows, ports in cb / credit waits, the flat expert's compute stalled
+  behind full rings, routers on credits). The README already said "fabric payload >= row + 32 B, else a hang (assert
+  ...)" but only the piece count was asserted. The routing of that call (PAD rows: 6 experts with ~4900 of a column's
+  5120 tokens each) was not the cause: replayed on a mesh with the 10880 B payload it completes (flat fork
+  tests/unit/test_hot_experts.py); on the default payload the same replay hangs with the model's triage signature.
+- Results (Galaxy 8x4, bh-glx-110): tests/unit/test_fabric_payload.py 2/2 (default payload refused with "10272 B fabric
+  packets", 10880 B builds); the flat fork's model cases and tests/unit unchanged (CHANGELOG there, 2026-10-27).
+- Needed by: deepseek_v41_flash_d_p K.1 (DS41-127)
+- Files: sparse_combine_rf.py, tests/unit/test_fabric_payload.py

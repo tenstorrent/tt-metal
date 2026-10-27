@@ -32,7 +32,8 @@ import time
 import pytest
 import torch
 
-from models.demos.common.bringup.testing.harness import device_params, device_timeout, impl_mode, spec
+from models.demos.common.bringup.testing import harness
+from models.demos.common.bringup.testing.harness import device_timeout, impl_mode, spec
 from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import caches as C
 from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import server_rules as R
 
@@ -68,21 +69,12 @@ def smoke_prompt(tok) -> tuple[list[int], str]:
 
 
 def open_mesh():
-    import ttnn
-
-    p = device_params(S)
-    if p.get("fabric_config"):
-        ttnn.set_fabric_config(p["fabric_config"])
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(*S.mesh), l1_small_size=int(p.get("l1_small_size", 0)))
-    return mesh, p
+    """The stand-in decode's fresh mesh with every device param of the spec (harness.open_mesh, F202)."""
+    return harness.open_mesh(S)
 
 
 def close_mesh(mesh, p) -> None:
-    import ttnn
-
-    ttnn.close_mesh_device(mesh)
-    if p.get("fabric_config"):
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    harness.close_mesh(mesh, p)
 
 
 def tail_next(model, state, layers, seq: list[int], cap: int) -> int:

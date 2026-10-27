@@ -1027,6 +1027,17 @@ def sparse_combine_rf_prepare(
         f"combine L1 hand-off: {row_bytes} B rows need one piece (SPC_PIECE={PIECE_MAX} < row: set SPC_PIECE >= "
         f"{row_bytes} and a fabric payload >= {row_bytes + 32})"
     )
+    # every piece goes as ONE fabric packet of PD + 32 B (its trailer); the routers do not split packets, so a mesh whose
+    # fabric payload is smaller (the router default 4352 B: a mesh opened without the caller's fabric_router_config)
+    # hangs the combine (deepseek_v41_flash_d_p K.1, 2026-10-27: every chip waiting on rows / credits, the flat expert's
+    # compute stalled behind full rings). Refused here, at build, instead.
+    if G > 1:
+        fab_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        assert PD + 32 <= fab_payload, (
+            f"sparse_combine_rf: {PD + 32} B fabric packets (a {PD} B row piece + its 32 B trailer) exceed the mesh's "
+            f"fabric payload of {fab_payload} B: open the mesh with a fabric_router_config whose "
+            f"max_packet_payload_size_bytes >= {PD + 32} (or set SPC_PIECE / piece_max smaller, without the L1 hand-off)"
+        )
     chips, nb, (wrap_x, wrap_y) = mesh_plan(mesh_device, num_links, torus)
     if axis is not None:
         chips = axis_ports(chips, axis)

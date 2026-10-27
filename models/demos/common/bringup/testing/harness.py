@@ -172,6 +172,44 @@ def device_params(s) -> dict:
     return p
 
 
+FABRIC_KEYS = ("fabric_config", "fabric_router_config", "reliability_mode", "fabric_tensix_config", "fabric_manager")
+
+
+def open_mesh(s=None):
+    """F202: a mesh opened outside the mesh_device fixture (a test that opens a second, fresh mesh), with EVERY entry
+    of device_params applied as the repo fixture applies them (conftest.py set_fabric + open_mesh_device), so a test
+    never drops one (DeepSeek-V4.1 K.1: a hand-rolled open dropped fabric_router_config; the weighted combine's 10272 B
+    packets over the router's default 4352 B hung the stand-in decode). Returns (mesh, params) for close_mesh."""
+    import ttnn
+
+    s = s or spec()
+    p = device_params(s)
+    fab = {k: p.pop(k) for k in FABRIC_KEYS if k in p}
+    if fab.get("fabric_config"):
+        args = [
+            fab["fabric_config"],
+            fab.get("reliability_mode", ttnn.FabricReliabilityMode.STRICT_INIT),
+            None,
+            fab.get("fabric_tensix_config", ttnn.FabricTensixConfig.DISABLED),
+            ttnn.FabricUDMMode.DISABLED,
+            fab.get("fabric_manager", ttnn.FabricManagerMode.DEFAULT),
+        ]
+        if fab.get("fabric_router_config") is not None:
+            args.append(fab["fabric_router_config"])
+        ttnn.set_fabric_config(*args)
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(*s.mesh), **p)
+    return mesh, fab
+
+
+def close_mesh(mesh, fab) -> None:
+    """Close a mesh from open_mesh and turn its fabric off again."""
+    import ttnn
+
+    ttnn.close_mesh_device(mesh)
+    if fab.get("fabric_config"):
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
 def mesh_parametrize(fn):
     """Parametrize a pytest test with the spec's mesh shape and device params (the repo's mesh_device fixture).
     Under BRINGUP_IMPL=reference, stub or mutate:<kind> no device is opened: mesh_device is None."""
