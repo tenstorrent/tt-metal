@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr uint32_t tile_row_bytes = 2 * half_row_bytes;
 
     const auto dst = TensorAccessor(dst_args, dst_addr);
-    Noc noc;
+    const Noc noc;
     DataflowBuffer row_tiles(cb_id);
 
     for (uint32_t tile = start; tile < start + count; ++tile) {
