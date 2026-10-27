@@ -421,6 +421,33 @@ class SlotTable:
                 pos[flat] = int(p)
         return ids, pos
 
+    def device_feed_block(
+        self, blocks: dict[int, Sequence[int]], positions: dict[int, int], width: int, park_position: int = 0
+    ) -> tuple[torch.Tensor, list[int]]:
+        """The speculative verify's inputs (``tt/spec_decode.py`` ``SpecDecoder.verify_forward``): the
+        ``[rows * users_per_row, width]`` long candidate rows (``[anchor, d_1 .. d_K]`` of every live logical slot
+        at its physical indices, every row's copy when the rows replicate) and the ``[rows * users_per_row]``
+        anchor positions; idle physical slots are parked at ``([pad_token_id] * width, park_position)``. Every
+        block must hold exactly ``width`` real token ids (the caller substitutes the plugin's placeholder
+        columns); ``blocks`` / ``positions`` are keyed by logical slot and must agree."""
+        if set(blocks) != set(positions):
+            raise ValueError(f"blocks for slots {sorted(blocks)} but positions for {sorted(positions)}")
+        ids = torch.full((self.g.physical_slots, int(width)), self.g.pad_token_id, dtype=torch.long)
+        pos = [park_position] * self.g.physical_slots
+        for logical, block in blocks.items():
+            row = torch.as_tensor(list(block), dtype=torch.long).reshape(-1)
+            if int(row.numel()) != int(width):
+                raise ValueError(f"slot {logical}: candidate block of {row.numel()} tokens, expected {width}")
+            if bool((row < 0).any()):
+                raise ValueError(f"slot {logical}: candidate block {row.tolist()} holds a placeholder token")
+            p = positions[logical]
+            if not (0 <= p < self.g.max_seq_len):
+                raise ValueError(f"slot {logical}: position {p} outside [0, {self.g.max_seq_len})")
+            for flat in self.flat_indices(logical):
+                ids[flat] = row
+                pos[flat] = int(p)
+        return ids, pos
+
     # ------------------------------------------------------------------ helpers
     def _check_logical(self, logical: int) -> None:
         if not (0 <= int(logical) < self.n):

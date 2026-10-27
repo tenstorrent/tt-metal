@@ -75,9 +75,23 @@ stream can be injected): a 286-token image prompt pads to the 512 bucket. Knobs:
 the class's ``supports_multimodal``; 1 / 0 force), ``GLM53_VLLM_VISION_RESIDENT`` (1), ``GLM53_VLLM_VISION_BATCH_PATCHES``
 (4096), ``GLM53_VLLM_WARMUP_MM`` (1). The text-only class is bit for bit the engine it was.
 
+Speculative decoding (``GLM53_VLLM_SPEC=1``, the plugin's ``docs/SPEC_DECODE_CONTRACT.md``; policy in
+``tt/vllm_spec.py``, graphs in ``tt/spec_decode.py``): the checkpoint's MTP layer drafts on device, the main model
+verifies ``[anchor, d_1 .. d_K]`` per slot in one batched step (``B (K + 1) <= 32`` rows per mesh row), greedy
+rows only (``argmax_ids``; a sampled request's steps run as the plain decode through ``supports_narrow_decode``).
+Launch: ``--speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter",
+"num_speculative_tokens": 3}'`` with ``GLM53_VLLM_SPEC=1 GLM53_PARTITION_USERS=0`` in the engine's env. The
+adapter answers ``spec_plan`` (``GLM53SpecEngine`` / ``spec_plan``), ``decode_forward(spec_mode=...)``
+(``_spec_verify``: graph V) and ``propose_draft_tokens`` (graphs C + D after a verify, D0 after a plain step);
+every ordinary decode of a speculating launch is graph P (the plain step + MTP level 1, so the drafter's cache
+follows every position); the prefill fills the MTP's cache from each chunk's streams (``_mtp_prefill_fill``).
+v1 limits: replicated caches only (``GLM53_PARTITION_USERS=0``), the dense range (a slot beyond position
+``2050 - K`` gets no drafts and makes its steps plain ones), ``rows_independent`` off.
+
 Not supported (declared off): async decode overlap, stochastic device sampling (greedy argmax
-only: ``max_device_top_k = 1``; other rows sample on host from the logits), speculative decoding, multimodal
-prompts under the per-row wave prefill, lane-DP / standard DP (one engine = one mesh).
+only: ``max_device_top_k = 1``; other rows sample on host from the logits), multimodal prompts under
+the per-row wave prefill, prefix caching together with speculative decode (one of the two per launch),
+lane-DP / standard DP (one engine = one mesh).
 """
 
 from __future__ import annotations
@@ -93,6 +107,7 @@ from typing import Any
 import torch
 from loguru import logger
 
+from models.demos.glm53_flash.tt import vllm_spec as vs
 from models.demos.glm53_flash.tt.mm_inputs import (
     IMAGE_TOKEN_ID,
     MMItem,
@@ -327,6 +342,87 @@ class GLM53DecodeOutput:
     on_host: bool = False
 
 
+class GLM53SpecEngine:
+    """The device side of the served speculative decode: a ``SpecDecoder`` (``tt/spec_decode.py``) over the resident
+    model and its MTP drafter, with the calls the adapter makes. The host test substitutes a torch fake with the
+    same surface (``tests/test_serving_spec_host.py``); nothing here is imported without a device."""
+
+    def __init__(self, model, mtp, draft_len: int, commit_mode: str):
+        from models.demos.glm53_flash.tt.spec_decode import SpecDecoder
+
+        self.model, self.mtp = model, mtp
+        self.dec = SpecDecoder(model, mtp, draft_len, keep_logits=False, commit_mode=commit_mode, plain_draft=True)
+        self.K = self.dec.K
+        self.N = self.dec.N  # user slots over the mesh (rows x users per row)
+        self.commit_mode = self.dec.commit_mode
+        self.max_dense_pos = self.dec.vin.max_dense_pos
+
+    # ---- warm-up / capture (the adapter's boot order: every eager run before every capture)
+    def warmup_plain(self, ids: torch.Tensor, positions: list[int]) -> None:
+        self.dec.warmup_plain(ids, positions)
+
+    def warmup(self, positions: list[int]) -> None:
+        self.dec.warmup(positions)
+
+    def capture_plain(self, ids: torch.Tensor, positions: list[int]):
+        """The P trace: ``(trace id, (logits, ids))``."""
+        return self.dec.capture_plain(ids, positions)
+
+    def capture(self) -> None:
+        self.dec.capture()
+
+    def release(self) -> None:
+        self.dec.release()
+
+    # ---- the ordinary step (P)
+    def set_plain_positions(self, positions: list[int]) -> None:
+        """The MTP's level-1 positions of the step (= the main positions the adapter loaded)."""
+        self.model.set_mtp_positions(positions)
+
+    def plain_step(self, eager: bool = False):
+        """Replay P (eager before the capture, or on request): ``(logits, ids)``."""
+        return self.dec.plain_step(eager=eager)
+
+    def read_plain_d1(self) -> torch.Tensor:
+        return self.dec.read_plain_d1()
+
+    def draft_chain_plain(self, positions: list[int]) -> torch.Tensor:
+        return self.dec.draft_chain_plain(positions)
+
+    # ---- the verify / commit / draft graphs
+    def verify(self, tokens: torch.Tensor, positions: list[int]) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.dec.verify_forward(tokens, positions)
+
+    def commit(self, m: torch.Tensor, positions: list[int]) -> None:
+        self.dec.commit(m, positions)
+
+    def draft_chain(self, m: torch.Tensor, d1: torch.Tensor, positions: list[int]) -> torch.Tensor:
+        return self.dec.draft_chain(m, d1, positions)
+
+    # ---- the prompt
+    def prefill_fill(self, ids: torch.Tensor, first: int, streams, user: int, start: int, seq_len: int) -> None:
+        """The MTP's cache / index rows ``[start, start + seq_len)`` of ``user`` from one prefill chunk: the main
+        model's normed hidden of the chunk's streams (this row's slab; ``head.collapse`` + ``head.norm``) and the
+        next token of every row (``ids`` shifted by one, the last row taking ``first`` = the chunk's greedy
+        chunk-end token: the prompt's first generated token on the last chunk, the model's own guess of the next
+        chunk's first token on an intermediate one). ``spec_decode.prefill_with_mtp`` per chunk."""
+        ttnn = _ttnn()
+        from models.demos.glm53_flash.tt.spec_decode import _upload
+
+        mesh = self.model.mesh
+        T_pad = int(streams.shape[-2]) * mesh.rows
+        next_ids = torch.cat([ids.reshape(-1).long()[1:], torch.tensor([int(first)], dtype=torch.long)])
+        host = self.model.embedding.tokens_to_host(next_ids, pad_to=T_pad)  # [1,1,1,T_pad]
+        ids_dev = _upload(mesh, host, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 3 if mesh.rows > 1 else None)
+        h = self.model.head.collapse(streams)  # this row's slab [1,1,T_loc,H] fp32
+        hidden = self.model.head.norm(h)  # bf16: the LM-head input of every prompt row
+        if h is not streams:
+            ttnn.deallocate(h)
+        out = self.mtp.prefill_cache(ids_dev, hidden, user=user, seq_len=int(seq_len), start=int(start))
+        for t in (out, hidden, ids_dev):
+            ttnn.deallocate(t)
+
+
 class GLM53FlashForCausalLM:
     """GLM-5.3-Flash text generation on a Blackhole Galaxy mesh for the TT vLLM plugin."""
 
@@ -347,6 +443,14 @@ class GLM53FlashForCausalLM:
         # A prompt split across engine steps resumes through FunctionalDecoder's chunked prefill (``start``).
         "supports_chunked_prefill": True,
         "fabric_config": _fabric_capability(),
+        # The plugin's speculative contract (docs/SPEC_DECODE_CONTRACT.md): the model's own MTP drafter proposes on
+        # device (``custom_class``), the target hidden state never leaves the device (the level-1 hidden of every
+        # candidate row stays in the SpecDecoder's buffers), the verify answers ``argmax_ids``. ``spec_plan`` admits
+        # a launch only with GLM53_VLLM_SPEC=1 (and replicated caches); without it the adapter is the plain one.
+        "supports_spec_decode": True,
+        "spec_requirements": (vs.SPEC_REQUIREMENT_DEVICE_PROPOSE,),
+        "spec_hidden_handoff": (vs.HIDDEN_HANDOFF_ON_DEVICE,),
+        "supports_async_spec_decode": False,
     }
 
     # Narrowed to the one captured decode width by ``warmup_model_decode`` (fixed user slots: no smaller bucket).
@@ -364,6 +468,7 @@ class GLM53FlashForCausalLM:
         pad_token_id: int | None = None,
         prefix_cache_entries: int | None = None,
         vision=None,
+        spec=None,
         **vllm_kwargs,
     ):
         # ``**vllm_kwargs`` (``vllm_config`` / ``prefix``) is never used: the plugin constructs the adapter through
@@ -375,6 +480,25 @@ class GLM53FlashForCausalLM:
         # the vision tower (``tt/multimodal.py::VisionRuntime`` or a test double with ``encode`` / ``chunk_streams``);
         # None = text-only: a prompt that arrives with pixel data is refused
         self.vision = vision
+        # the speculative path (GLM53_VLLM_SPEC=1): a ``GLM53SpecEngine`` (or the host test's fake) over the model and
+        # its MTP drafter; None = the plain adapter (every spec branch below is gated on it)
+        self.spec = spec
+        self.spec_policy: vs.ServingSpecPolicy | None = None
+        if spec is not None:
+            if geometry.rows_independent or geometry.partitioned:
+                raise NotImplementedError(
+                    "the speculative path needs replicated caches and today's row placement: GLM53_PARTITION_USERS=0 "
+                    "and GLM53_VLLM_ROWS_INDEPENDENT=0 (tt/vllm_spec.py resolve_spec_decision)"
+                )
+            if int(spec.N) != geometry.physical_slots:
+                raise ValueError(f"the spec engine serves {spec.N} slots, the geometry {geometry.physical_slots}")
+            self.spec_policy = vs.ServingSpecPolicy(
+                draft_len=int(spec.K), max_dense_pos=int(spec.max_dense_pos), max_seq_len=geometry.max_seq_len
+            )
+        self._spec_pending: vs.VerifyRecord | None = None  # a verify awaiting its commit (propose_draft_tokens)
+        self._spec_last: vs.PlainRecord | None = None  # the last ordinary step of a speculating launch
+        self._spec_stats = vs.SpecServingStats()
+        self._spec_narrow_warned = False
         self.slots = SlotTable(geometry)
         self.blocks = LogicalBlockTable(geometry)
         self.prefill_planner = PrefillPlanner(geometry, traced_available=self._has_prefill_trace)
@@ -391,7 +515,7 @@ class GLM53FlashForCausalLM:
         self.pad_token_id = int(pad_token_id if pad_token_id is not None else geometry.pad_token_id)
         self.vocab_size = int(getattr(getattr(model, "cfg", None), "vocab_size", 0))
         self.trace_id = None
-        self._trace_outputs = None  # (streams, logits, ids) of the captured decode step
+        self._trace_outputs = None  # (logits, ids) of the captured decode step
         self._decode_inputs_ready = False
         self.already_warmed_up_prefill = False
         self._decode_warmup_complete = False
@@ -540,7 +664,33 @@ class GLM53FlashForCausalLM:
             vision_bytes=vision_static,
             vision_transient=vision_transient,
         )
+        layers = cls._layer_ids(n_layers, cfg.num_hidden_layers)
+        if len(layers) < cfg.num_hidden_layers:
+            # a reduced-layer build (GLM53_MODEL_LAYERS: the (2,4) block tests): the planner's weights are the whole
+            # model's, scaled to the subset so the gate does not refuse a 4-layer build on an 8-chip block
+            plan = dataclasses.replace(plan, weights_bytes=plan.weights_bytes * len(layers) / cfg.num_hidden_layers)
+            logger.info(f"GLM53 vLLM: {len(layers)}-layer build: the planner's weight bytes scaled to the subset")
         geometry.check_memory_plan(plan)
+        # the speculative path: decided once from the env + geometry (the same rule ``spec_plan`` applied at config
+        # time); the drafter and its buffers are built right after the model, before any warm-up or capture
+        spec_decision = vs.resolve_spec_decision(
+            os.environ,
+            max_num_seqs=int(max_batch_size),
+            requested_k=vs.spec_k_setting() if vs.spec_enabled() else vs.DEFAULT_SPEC_K,
+            rows=rows,
+            cols=cols,
+            max_model_len=int(max_seq_len),
+        )
+        if vs.spec_enabled() and not spec_decision.admitted:
+            raise ValueError(f"GLM53 vLLM: {vs.SPEC_ENV}=1 but the speculative path is refused: {spec_decision.reason}")
+        if spec_decision.admitted:
+            extra = vs.spec_resident_bytes(cfg, rows, cols, users_per_row, int(max_seq_len), eb)
+            if plan.bytes_for(users_per_row, int(max_seq_len)) + extra > plan.headroom(int(max_seq_len)):
+                raise ValueError(
+                    f"GLM53 vLLM: the MTP drafter ({extra / 2**30:.2f} GiB per chip beside the caches) does not fit "
+                    f"the planner's headroom at {users_per_row} users per row x {max_seq_len}: lower the context or "
+                    f"drop {vs.SPEC_ENV}"
+                )
         logger.info(
             f"GLM53 vLLM: {rows}x{cols} mesh, {users_per_row} users per row ({geometry.request_capacity} requests, "
             f"{geometry.physical_slots} slots), max_seq_len {max_seq_len}, partitioned={partitioned}, planner headroom "
@@ -582,8 +732,28 @@ class GLM53FlashForCausalLM:
             from models.demos.glm53_flash.tt.multimodal import VisionRuntime
 
             vision = VisionRuntime(mesh_device, snapshot, resident=vision_resident, max_patches=vision_batch)
+        spec = None
+        if spec_decision.admitted:
+            spec = cls._build_spec_engine(
+                model,
+                cfg,
+                snapshot,
+                cache_root,
+                spec_decision,
+                users_per_row,
+                int(max_seq_len),
+                expert_dtype,
+                expert_down_dtype,
+            )
+        if spec is not None and entries:
+            raise NotImplementedError(
+                "prefix caching together with speculative decode is not wired (the verify path records no content "
+                f"and takes no snapshots): launch with one of {APC_ENV}=1 and {vs.SPEC_ENV}=1"
+            )
         _install_step_profiler()
-        return cls(model, geometry, pad_token_id=cfg.pad_token_id, prefix_cache_entries=entries, vision=vision)
+        return cls(
+            model, geometry, pad_token_id=cfg.pad_token_id, prefix_cache_entries=entries, vision=vision, spec=spec
+        )
 
     @staticmethod
     def _prefix_cache_plan(plan, users_per_row: int, max_seq_len: int) -> tuple[int, str]:
@@ -614,6 +784,84 @@ class GLM53FlashForCausalLM:
             f"({plan.snapshot_bytes(users_per_row, entries) / 2**20:.0f} MiB per chip when on device)"
         )
         return entries, store
+
+    @staticmethod
+    def _build_spec_engine(
+        model,
+        cfg,
+        snapshot,
+        cache_root,
+        decision: vs.SpecDecision,
+        users_per_row,
+        max_seq_len,
+        expert_dtype,
+        expert_down_dtype,
+    ) -> GLM53SpecEngine:
+        """The MTP drafter (checkpoint layer 45: its routed experts from ``<cache>/layer45``, the model's shared
+        embedding and head) attached to the model, and the ``SpecDecoder`` over both: every persistent tensor of the
+        speculative graphs exists before the first warm-up / capture (the allocation discipline)."""
+        from models.demos.glm53_flash.reference.checkpoint import shard_headers
+        from models.demos.glm53_flash.tt.mtp import TtMTPBlock
+
+        t0 = time.perf_counter()
+        mtp = TtMTPBlock.from_checkpoint(
+            model.device,
+            cfg,
+            snapshot,
+            shard_headers(snapshot),
+            embedding=model.embedding,
+            head=model.head,
+            weight_cache_root=cache_root,
+            mesh=model.mesh,
+            expert_dtype=expert_dtype,
+            expert_down_dtype=expert_down_dtype,
+            max_batch=users_per_row,
+            max_seq_len=int(max_seq_len) + vs.MTP_CACHE_MARGIN,
+        )
+        model.attach_mtp(mtp)
+        spec = GLM53SpecEngine(model, mtp, decision.k_cap, decision.commit_mode)
+        logger.info(
+            f"GLM53 vLLM: MTP drafter (layer {vs.MTP_LAYER}) + speculative graphs allocated in "
+            f"{time.perf_counter() - t0:.0f} s: K={spec.K} (cap {decision.k_cap} for {users_per_row} users per row, "
+            f"B(K+1)={users_per_row * (spec.K + 1)} verify rows per mesh row), KDA commit {spec.commit_mode}, "
+            f"dense range: anchors <= {spec.max_dense_pos - spec.K}"
+        )
+        return spec
+
+    @classmethod
+    def spec_plan(cls, vllm_config, max_num_seqs: int, requested_k: int):
+        """The plugin's config-time admission (``docs/SPEC_DECODE_CONTRACT.md`` section 2): a ``SpecPlan`` with
+        ``effective_k = min(requested_k, GLM53_VLLM_SPEC_K, 32 // users_per_row - 1)`` when ``GLM53_VLLM_SPEC=1``
+        and the caches are replicated, else a ``SpecReject`` naming the knob. Never raises. The instance applies
+        the same rule (``initialize_vllm_model``) so the two sides agree on K without sharing state; a launch whose
+        ``num_speculative_tokens`` is below the adapter's K is served with its narrower block (the verify pads the
+        missing columns and answers the plugin's width)."""
+        max_model_len = None
+        try:
+            max_model_len = int(vllm_config.model_config.max_model_len)
+        except Exception:  # the plugin passes a vLLM config; a test may pass anything
+            pass
+        rows, cols = _mesh_shape_from_env()
+        decision = vs.resolve_spec_decision(
+            os.environ,
+            max_num_seqs=int(max_num_seqs),
+            requested_k=int(requested_k),
+            rows=rows,
+            cols=cols,
+            max_model_len=max_model_len,
+        )
+        extra = 0
+        if decision.admitted and max_model_len:
+            try:
+                from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
+                from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+                from models.demos.glm53_flash.tt.memory_plan import BFP8_BYTES
+
+                cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
+                extra = int(vs.spec_resident_bytes(cfg, rows, cols, decision.users_per_row, max_model_len, BFP8_BYTES))
+            except Exception as exc:  # pragma: no cover - the byte estimate is advisory (not budgeted by the plugin)
+                logger.warning(f"GLM53 vLLM: spec_plan could not estimate the drafter's bytes ({exc})")
+        return vs.make_spec_plan(decision, extra_bytes_per_seq=extra // max(1, decision.users_per_row))
 
     @staticmethod
     def _snapshot_dir(hf_config, default_snapshot_dir) -> Path:
@@ -728,6 +976,22 @@ class GLM53FlashForCausalLM:
                     )
                 if self.vision is not None and _env_flag(WARMUP_MM_ENV, "1"):
                     self._warmup_multimodal()
+                if self.spec is not None:
+                    # the speculative graphs compile eagerly here, after the prefill ladder (the MTP prefill's row
+                    # collectives are compiled by it) and before ANY capture (a collective of a new shape compiled
+                    # after a capture corrupts the replays: the 2026-10-26 block hang); placeholder rows at 0..K
+                    t0 = time.perf_counter()
+                    self.spec.warmup([0] * U)
+                    self.model.reset_kda_states()
+                    self._sync()
+                    pol = self.spec_policy
+                    logger.info(
+                        f"GLM53 vLLM: SPECULATIVE DECODE ACTIVE: MTP drafter (layer {vs.MTP_LAYER}) K={self.spec.K}, "
+                        f"B(K+1)={self.geometry.users_per_row * (self.spec.K + 1)} verify rows per mesh row, KDA commit "
+                        f"{self.spec.commit_mode}, accept argmax_ids (greedy rows; sampled rows take the plain step), "
+                        f"narrow decode on, drafts for anchors <= {pol.max_dense_pos - pol.draft_len} (dense range); "
+                        f"graphs V/C/D/D0 compiled in {time.perf_counter() - t0:.1f} s"
+                    )
                 self.already_warmed_up_prefill = True
             return
         if self.trace_id is not None:
@@ -783,10 +1047,19 @@ class GLM53FlashForCausalLM:
         if self.trace_id is None:
             self._warmup_apc_snapshots()  # before the capture whatever the caller's eager / traced order
             t0 = time.perf_counter()
-            self.trace_id, self._trace_outputs = self.model.capture(torch.zeros(U, dtype=torch.long), [0] * U)
+            if self.spec is None:
+                self.trace_id, outs = self.model.capture(torch.zeros(U, dtype=torch.long), [0] * U)
+            else:
+                # the speculating launch's ordinary step is P (the plain step + MTP level 1); V / C / D / D0 follow
+                self.trace_id, outs = self.spec.capture_plain(torch.zeros(U, dtype=torch.long), [0] * U)
+                self.spec.capture()
+            self._trace_outputs = (outs[-2], outs[-1])  # (logits, ids) of the captured step
             self.model.reset_kda_states()
             self._sync()
-            logger.info(f"GLM53 vLLM: decode trace captured in {time.perf_counter() - t0:.1f} s ({U} slots)")
+            logger.info(
+                f"GLM53 vLLM: decode trace{'s (P, V, C, D, D0)' if self.spec is not None else ''} captured in "
+                f"{time.perf_counter() - t0:.1f} s ({U} slots)"
+            )
             if self._apc_alloc_checking:
                 self._apc_alloc_baseline = self._dram_allocated()
                 logger.info(
@@ -944,7 +1217,10 @@ class GLM53FlashForCausalLM:
         if self._decode_inputs_ready:
             return
         t0 = time.perf_counter()
-        self.model.warmup_decode(torch.zeros(U, dtype=torch.long), [0] * U)
+        if self.spec is None:
+            self.model.warmup_decode(torch.zeros(U, dtype=torch.long), [0] * U)
+        else:
+            self.spec.warmup_plain(torch.zeros(U, dtype=torch.long), [0] * U)  # P: the plain step + MTP level 1
         self.model.reset_kda_states()
         logger.info(f"GLM53 vLLM: eager decode warm-up in {time.perf_counter() - t0:.1f} s")
         self._decode_inputs_ready = True
@@ -1179,6 +1455,8 @@ class GLM53FlashForCausalLM:
         if plan.kind == "traced":
             res = self.model.prefill_traced(ids, user=user)
             first = int(self.model.first_token(res))
+            if self.spec is not None:  # the drafter's cache rows of the prompt, from the trace's streams
+                self.spec.prefill_fill(ids, first, res.streams, user, 0, int(ids.numel()))
             logits = self._traced_last_logits(res) if want_logits else None
             if on_chunk is not None:
                 on_chunk(plan.end, traced=True)
@@ -1189,7 +1467,14 @@ class GLM53FlashForCausalLM:
             if out is not None:
                 self._free(out[0])
                 self._free(out[1])
-            out = self.model.prefill(ids[s0 - plan.start : e - plan.start], user=user, start=s0)
+            chunk_ids = ids[s0 - plan.start : e - plan.start]
+            out = self.model.prefill(chunk_ids, user=user, start=s0)
+            if self.spec is not None:
+                # every chunk fills the drafter's rows [s0, e): the last row takes the chunk's greedy chunk-end token
+                # (the prompt's first generated token on the last chunk; on an intermediate chunk the model's own
+                # guess of the next chunk's first token, which the plugin never hands this call)
+                first_c = int(self.model.first_token(out[1], out[2]))
+                self.spec.prefill_fill(chunk_ids, first_c, out[0], user, s0, e - s0)
             if on_chunk is not None:
                 on_chunk(e)
             if mem_log:
@@ -1292,24 +1577,39 @@ class GLM53FlashForCausalLM:
         sends); the sampling commands are accepted and need no state (greedy argmax has none)."""
         if "reset_batch" in kwargs:
             raise TypeError("legacy reset_batch keyword: this adapter declares decode_input_update_contract = 1")
-        if kwargs.get("spec_mode") is not None or kwargs.get("num_valid_drafts") is not None:
-            raise NotImplementedError("speculative decoding is not supported by the GLM53 adapter")
-        if not reload_inputs:
-            raise ValueError(
-                "reload_inputs=False: the GLM53 adapter has no resident token / position state yet "
-                "(supports_async_decode is False), every decode must reload its inputs"
+        spec_mode = kwargs.pop("spec_mode", None)
+        num_valid_drafts = kwargs.pop("num_valid_drafts", None)
+        kwargs.pop("accepted_counts", None)  # the commit happened in propose_draft_tokens (graph C); nothing to select
+        kwargs.pop("draft_token_ids", None)
+        if spec_mode is not None or num_valid_drafts is not None:
+            if self.spec is None:
+                raise NotImplementedError(
+                    f"a speculative step reached the GLM53 adapter without {vs.SPEC_ENV}=1 (spec_plan would have "
+                    "refused the launch): the drafter is not built"
+                )
+            return self._spec_verify(
+                tokens,
+                start_pos,
+                spec_mode,
+                num_valid_drafts,
+                page_table=page_table,
+                enable_trace=enable_trace,
+                sampling_params=sampling_params,
+                slot_remap=slot_remap,
+                reload_inputs=reload_inputs,
+                reload_page_table=reload_page_table,
             )
-        if reload_page_table:
-            raise ValueError("reload_page_table with reload_inputs is not a legal command combination")
-        if self.trace_id is None and enable_trace:
-            raise RuntimeError("decode trace not captured: warmup_model_decode(enable_trace=True) must run first")
+        self._check_reload(reload_inputs, reload_page_table, enable_trace)
         tokens = torch.as_tensor(tokens).reshape(-1)
         positions = torch.as_tensor(start_pos).reshape(-1)
         wire = int(tokens.shape[0])
         if int(positions.shape[0]) != wire:
             raise ValueError(f"tokens {wire} rows vs start_pos {int(positions.shape[0])}")
-        if wire > self.slots.n:
-            raise ValueError(f"{wire} decode rows exceed the {self.slots.n} logical slots")
+        if self.spec is not None and self._spec_pending is not None:
+            raise RuntimeError(
+                "a decode step follows a verify whose commit never ran (propose_draft_tokens was not called): the "
+                "KDA states still hold the pre-verify context"
+            )
         # the remap, applied exactly once; rolled back if the device refuses the step so the plugin's un-advanced
         # ownership map and this table still agree
         snapshot = list(self.slots._phys)
@@ -1318,70 +1618,28 @@ class GLM53FlashForCausalLM:
             remap = [int(v) for v in torch.as_tensor(slot_remap).reshape(-1).tolist()]
             applied_moves = self.slots.apply_remap(remap)
         try:
-            live = [i for i in range(wire) if int(positions[i]) >= 0]
             is_tokens = sampling_params is not None
-            if is_tokens:
-                greedy_rows(sampling_params, live)
-            feed_tokens: dict[int, int] = {}
-            feed_positions: dict[int, int] = {}
-            rows = DecodeRowMap(wire_rows=wire, read_index=[-1] * wire)
-            for i in live:
-                state = self.slots.physical(i)
-                if state is None:
-                    raise RuntimeError(f"decode row {i} (slot {i}) was never prefilled: map {self.slots._phys}")
-                p = int(positions[i])
-                if state.phase == "prefill":
-                    # the first decode after the prompt: it consumes the token at the prefilled end
-                    if state.prefilled_to != p:
-                        raise RuntimeError(
-                            f"decode row {i}: slot {i} prefilled to {state.prefilled_to} but decodes at position {p} "
-                            "(a prompt chunk is missing or out of order)"
-                        )
-                elif state.position != p:
-                    logger.warning(
-                        f"GLM53 vLLM: decode row {i} at position {p}, the adapter expected {state.position}; the host "
-                        "position is authoritative (reload_inputs=True)"
-                    )
-                if page_table is not None:
-                    self.blocks.check_row(page_table[i], p + 1)
-                feed_tokens[i] = int(tokens[i])
-                feed_positions[i] = p
-                rows.read_index[i] = self.slots.read_index(i)
-            # mid-prefill = a prefill-phase slot this decode does not advance (its next chunk is still to come)
-            busy = [s for s in self.slots.in_prefill() if s not in feed_tokens]
-            if busy and not getattr(self.model, "supports_slot_mask", False):
-                # the decode step updates EVERY slot's KDA state in place; a slot between two prompt chunks would be
-                # corrupted. The scheduler never schedules a decode while a continuation is pending when the decode
-                # interleave is off (``decode_interleave_enabled: false``); fail loudly rather than corrupt.
-                raise RuntimeError(
-                    f"decode step while slots {busy} are mid-prefill: run with decode_interleave_enabled=false until "
-                    "the mesh model's decode step takes an active-slot mask"
-                )
+            live, feed_tokens, feed_positions, rows = self._stage_rows(tokens, positions, page_table, sampling_params)
             park = self.apc.park_positions() if self.apc is not None else None
             ids_feed, pos_feed = self.slots.device_feed(feed_tokens, feed_positions, park=park)
             t0 = time.perf_counter()
-            # one call per step: with GLM53_DECODE_PACKED_INPUTS=1 the mesh model uploads ONE packed tensor (ids +
-            # positions + sparse metadata, tt/packed_inputs.py) instead of the per-field refreshes
-            load = getattr(self.model, "load_decode_inputs", None)
-            if load is not None:
-                load(torch.tensor(ids_feed, dtype=torch.long), pos_feed)
+            self._load_inputs(ids_feed, pos_feed, live)
+            if self.spec is None:
+                if enable_trace:
+                    self.model.replay(self.trace_id)
+                    logits_dev, ids_dev = self._trace_outputs
+                    transient = False
+                else:
+                    _, logits_dev, ids_dev = self.model.decode_step(self.model.ids_dev, self.model.positions)
+                    transient = True
             else:
-                self.model.load_ids(torch.tensor(ids_feed, dtype=torch.long))
-                self.model.set_positions(pos_feed)
-            set_active = getattr(self.model, "set_active_slots", None)
-            if set_active is not None:  # future device hook: freeze idle / mid-prefill slots inside the traced step
-                active = [False] * self.geometry.physical_slots
-                for i in live:
-                    for flat in self.slots.flat_indices(i):
-                        active[flat] = True
-                set_active(active)
-            if enable_trace:
-                self.model.replay(self.trace_id)
-                _, logits_dev, ids_dev = self._trace_outputs
-                transient = False
-            else:
-                _, logits_dev, ids_dev = self.model.decode_step(self.model.ids_dev, self.model.positions)
-                transient = True
+                # the speculating launch's ordinary step: P (the plain step + MTP level 1 at the same positions, so
+                # the drafter's cache follows every position and the next proposal starts from this step)
+                self.spec.set_plain_positions(pos_feed)
+                logits_dev, ids_dev = self.spec.plain_step(eager=not enable_trace)
+                transient = not enable_trace
+                self._spec_last = vs.PlainRecord(positions=list(pos_feed), read_index=list(rows.read_index), live=live)
+                self._spec_stats.plain_steps += 1
             synced = False
             for i in live:
                 state = self.slots.physical(i)
@@ -1414,6 +1672,294 @@ class GLM53FlashForCausalLM:
             self._free(ids_dev)
         self._perf(t0, len(live))
         return out
+
+    def _check_reload(self, reload_inputs: bool, reload_page_table: bool, enable_trace: bool) -> None:
+        if not reload_inputs:
+            raise ValueError(
+                "reload_inputs=False: the GLM53 adapter has no resident token / position state yet "
+                "(supports_async_decode is False), every decode must reload its inputs"
+            )
+        if reload_page_table:
+            raise ValueError("reload_page_table with reload_inputs is not a legal command combination")
+        if self.trace_id is None and enable_trace:
+            raise RuntimeError("decode trace not captured: warmup_model_decode(enable_trace=True) must run first")
+
+    def _stage_rows(self, tokens: torch.Tensor, positions: torch.Tensor, page_table, sampling_params):
+        """The per-row bookkeeping of one decode submission (plain or verify): the live wire rows (position >= 0),
+        their anchor token / position per logical slot (phase and contiguity checks, the block-table check), the row
+        map, and the mid-prefill guard. ``tokens`` / ``positions`` are the ``[B_pad]`` column-0 values."""
+        wire = int(tokens.shape[0])
+        if wire > self.slots.n:
+            raise ValueError(f"{wire} decode rows exceed the {self.slots.n} logical slots")
+        live = [i for i in range(wire) if int(positions[i]) >= 0]
+        if sampling_params is not None:
+            greedy_rows(sampling_params, live)
+        feed_tokens: dict[int, int] = {}
+        feed_positions: dict[int, int] = {}
+        rows = DecodeRowMap(wire_rows=wire, read_index=[-1] * wire)
+        for i in live:
+            state = self.slots.physical(i)
+            if state is None:
+                raise RuntimeError(f"decode row {i} (slot {i}) was never prefilled: map {self.slots._phys}")
+            p = int(positions[i])
+            if state.phase == "prefill":
+                # the first decode after the prompt: it consumes the token at the prefilled end
+                if state.prefilled_to != p:
+                    raise RuntimeError(
+                        f"decode row {i}: slot {i} prefilled to {state.prefilled_to} but decodes at position {p} "
+                        "(a prompt chunk is missing or out of order)"
+                    )
+            elif state.position != p:
+                logger.warning(
+                    f"GLM53 vLLM: decode row {i} at position {p}, the adapter expected {state.position}; the host "
+                    "position is authoritative (reload_inputs=True)"
+                )
+            if page_table is not None:
+                self.blocks.check_row(page_table[i], p + 1)
+            feed_tokens[i] = int(tokens[i])
+            feed_positions[i] = p
+            rows.read_index[i] = self.slots.read_index(i)
+        # mid-prefill = a prefill-phase slot this decode does not advance (its next chunk is still to come)
+        busy = [s for s in self.slots.in_prefill() if s not in feed_tokens]
+        if busy and not getattr(self.model, "supports_slot_mask", False):
+            # the decode step updates EVERY slot's KDA state in place; a slot between two prompt chunks would be
+            # corrupted. The scheduler never schedules a decode while a continuation is pending when the decode
+            # interleave is off (``decode_interleave_enabled: false``); fail loudly rather than corrupt.
+            raise RuntimeError(
+                f"decode step while slots {busy} are mid-prefill: run with decode_interleave_enabled=false until "
+                "the mesh model's decode step takes an active-slot mask"
+            )
+        return live, feed_tokens, feed_positions, rows
+
+    def _load_inputs(self, ids_feed: list[int], pos_feed: list[int], live: list[int]) -> None:
+        """The step's token / position vectors onto the device (one call per step: with GLM53_DECODE_PACKED_INPUTS=1
+        the mesh model uploads ONE packed tensor, ids + positions + sparse metadata, tt/packed_inputs.py) and the
+        future active-slot hook."""
+        load = getattr(self.model, "load_decode_inputs", None)
+        if load is not None:
+            load(torch.tensor(ids_feed, dtype=torch.long), pos_feed)
+        else:
+            self.model.load_ids(torch.tensor(ids_feed, dtype=torch.long))
+            self.model.set_positions(pos_feed)
+        set_active = getattr(self.model, "set_active_slots", None)
+        if set_active is not None:  # future device hook: freeze idle / mid-prefill slots inside the traced step
+            active = [False] * self.geometry.physical_slots
+            for i in live:
+                for flat in self.slots.flat_indices(i):
+                    active[flat] = True
+            set_active(active)
+
+    # ================================================================================= speculative decode
+    def _spec_verify(
+        self,
+        tokens,
+        start_pos,
+        spec_mode: str,
+        num_valid_drafts,
+        *,
+        page_table,
+        enable_trace: bool,
+        sampling_params,
+        slot_remap,
+        reload_inputs: bool,
+        reload_page_table: bool,
+    ):
+        """A decode step the plugin marked speculative: the ``[B_pad, 1+K']`` candidate block (column 0 the row's last
+        committed token at ``start_pos[:, 0]``, columns ``1 .. num_valid_drafts[i]`` its drafts, the rest
+        placeholders) -> ``VerifyOutput(spec_mode="argmax_ids", argmax_ids [B_pad, 1+K'])``: return column ``j`` is
+        the main model's greedy choice at candidate position ``j`` (graph V over every slot's ``[anchor, d_1 ..
+        d_K]`` rows, the padded columns carrying the anchor). The commit of the accepted prefix is graph C, run in
+        ``propose_draft_tokens`` once the runner's accept walk has fixed the counts. When V cannot run for this
+        batch (a live slot beyond the dense range, or no block to verify), the step is the plain one (P) on column 0
+        and the answer is ONE column wide: the runner then commits exactly that token per row and counts every
+        draft as rejected (``accept_greedy_drafts`` at width 1), which is what a plain step commits."""
+        if spec_mode != vs.ACCEPT_MODE_ARGMAX_IDS:
+            raise ValueError(
+                f"the GLM53 adapter verifies in {vs.ACCEPT_MODE_ARGMAX_IDS!r} only, asked for {spec_mode!r}"
+            )
+        self._check_reload(reload_inputs, reload_page_table, enable_trace)
+        if self._spec_pending is not None:
+            raise RuntimeError(
+                "a verify follows a verify whose commit never ran (propose_draft_tokens was not called in between)"
+            )
+        types = vs.contract_types()
+        tokens = torch.as_tensor(tokens)
+        positions = torch.as_tensor(start_pos)
+        if tokens.dim() != 2 or positions.shape != tokens.shape:
+            raise ValueError(
+                f"a verify needs [B, 1+K] tokens and positions, got {tuple(tokens.shape)} / {tuple(positions.shape)}"
+            )
+        wire, width = (int(v) for v in tokens.shape)
+        K = int(self.spec.K)
+        if width - 1 > K:
+            raise ValueError(f"the verify block carries {width - 1} drafts per row, the captured graphs verify {K}")
+        if width - 1 < K and not self._spec_narrow_warned:
+            self._spec_narrow_warned = True
+            logger.warning(
+                f"GLM53 vLLM: the launch verifies {width - 1} drafts per row, the adapter's graphs {K} "
+                f"({vs.SPEC_K_ENV}): the missing columns are padded; set num_speculative_tokens={K} to use them"
+            )
+        valid = (
+            [int(v) for v in torch.as_tensor(num_valid_drafts).reshape(-1).tolist()]
+            if num_valid_drafts is not None
+            else [0] * wire
+        )
+        if len(valid) != wire:
+            raise ValueError(f"num_valid_drafts has {len(valid)} rows for a block of {wire}")
+        snapshot = list(self.slots._phys)
+        applied_moves: dict[int, int] = {}
+        if slot_remap is not None:
+            remap = [int(v) for v in torch.as_tensor(slot_remap).reshape(-1).tolist()]
+            applied_moves = self.slots.apply_remap(remap)
+        try:
+            live, feed_tokens, feed_positions, rows = self._stage_rows(
+                tokens[:, 0], positions[:, 0], page_table, sampling_params
+            )
+            drafted = [i for i in live if valid[i] > 0]
+            can_verify = (
+                bool(drafted) and width > 1 and self.spec_policy.step_can_verify([feed_positions[i] for i in live])
+            )
+            t0 = time.perf_counter()
+            if not can_verify:
+                # the plain answer: P on column 0, one column wide (every draft counts as rejected)
+                ids_feed, pos_feed = self.slots.device_feed(feed_tokens, feed_positions)
+                self._load_inputs(ids_feed, pos_feed, live)
+                self.spec.set_plain_positions(pos_feed)
+                logits_dev, ids_dev = self.spec.plain_step(eager=not enable_trace)
+                host_ids = self.model.ids_to_host(ids_dev).reshape(-1)
+                if not enable_trace:
+                    self._free(logits_dev)
+                    self._free(ids_dev)
+                argmax = torch.zeros(wire, 1, dtype=torch.int32)
+                for i in live:
+                    argmax[i, 0] = int(host_ids[rows.read_index[i]])
+                    state = self.slots.physical(i)
+                    state.position = feed_positions[i] + 1
+                    state.phase = "decode"
+                self._spec_last = vs.PlainRecord(positions=list(pos_feed), read_index=list(rows.read_index), live=live)
+                self._spec_stats.plain_steps += 1
+                if drafted:
+                    self._spec_stats.fallbacks += 1
+                    beyond = [i for i in live if not self.spec_policy.anchor_ok(feed_positions[i])]
+                    logger.info(
+                        f"GLM53 vLLM spec: verify of rows {drafted} answered one column wide (plain step): rows "
+                        f"{beyond} sit beyond the dense range (anchor + K > {self.spec_policy.max_dense_pos})"
+                    )
+                out = types["VerifyOutput"](spec_mode=vs.ACCEPT_MODE_ARGMAX_IDS, argmax_ids=argmax, hidden=None)
+            else:
+                blocks = {i: vs.candidate_block(tokens[i].tolist(), valid[i], K + 1) for i in live}
+                ids_feed, pos_feed = self.slots.device_feed_block(blocks, feed_positions, K + 1)
+                ids_v, d1_v = self.spec.verify(ids_feed, pos_feed)  # [N, K+1] each, user-major
+                argmax = torch.zeros(wire, width, dtype=torch.int32)
+                for i in live:
+                    argmax[i] = ids_v[rows.read_index[i], :width].to(torch.int32)
+                    state = self.slots.physical(i)
+                    state.phase = "decode"  # the position advances with the accepted count, in propose_draft_tokens
+                self._spec_pending = vs.VerifyRecord(
+                    positions=list(pos_feed),
+                    read_index=list(rows.read_index),
+                    live=live,
+                    ids=ids_v,
+                    d1=d1_v,
+                    width=width,
+                    valid={i: valid[i] for i in live},
+                )
+                self._spec_stats.verifies += 1
+                self._spec_stats.verify_s += time.perf_counter() - t0
+                out = types["VerifyOutput"](spec_mode=vs.ACCEPT_MODE_ARGMAX_IDS, argmax_ids=argmax, hidden=None)
+        except Exception:
+            self.slots._phys = snapshot
+            raise
+        self._pending_moves = applied_moves or None
+        self._perf(t0, len(live))
+        return out
+
+    def propose_draft_tokens(
+        self, num_drafts: int, committed_tokens, committed_positions, accepted_counts, hidden=None
+    ):
+        """The plugin's proposal call after every decode step of a speculating launch (``docs/SPEC_DECODE_CONTRACT.md``
+        section 4b): ``committed_tokens`` / ``committed_positions`` ``[B_pad, 1+K']`` the step's committed block,
+        ``accepted_counts[i]`` how much of row ``i`` is real. After a verify: graph C commits candidates ``0 ..
+        count - 1`` of every slot (the KDA states and the pooled-key index; the next anchor is the block's last
+        committed token = the verify's bonus / correction) and graph D chains MTP levels ``2 .. K`` from the
+        accepted row's level-1 output; after an ordinary step (count 1 everywhere): graph D0 chains them from P's
+        level-1 output. ``hidden`` is None (the hidden state stays on device). A row is offered ``min(K, num_drafts)``
+        drafts when its next anchor and every other live anchor are inside the dense range, else 0
+        (``DraftOutput.num_valid``): the next step is then the plain decode."""
+        if self.spec is None:
+            raise NotImplementedError(f"propose_draft_tokens without {vs.SPEC_ENV}=1: the drafter is not built")
+        types = vs.contract_types()
+        committed = torch.as_tensor(committed_tokens)
+        positions = torch.as_tensor(committed_positions)
+        counts = torch.as_tensor(accepted_counts).reshape(-1)
+        rows_n = int(committed.shape[0])
+        K, N = int(self.spec.K), int(self.spec.N)
+        k_req = int(num_drafts)
+        t0 = time.perf_counter()
+        rec, last = self._spec_pending, self._spec_last
+        if rec is not None:
+            if rows_n != len(rec.read_index):
+                raise ValueError(f"propose_draft_tokens got {rows_n} rows, the verify ran on {len(rec.read_index)}")
+            m = torch.zeros(N, dtype=torch.long)
+            next_anchor: dict[int, int] = {}
+            for i in rec.live:
+                c = int(counts[i])
+                if not 1 <= c <= rec.valid.get(i, 0) + 1:
+                    raise ValueError(
+                        f"row {i}: accepted count {c} outside [1, {rec.valid.get(i, 0) + 1}] (num_valid_drafts "
+                        f"{rec.valid.get(i, 0)})"
+                    )
+                flat = rec.read_index[i]
+                expect = int(rec.ids[flat, c - 1])
+                got = int(committed[i, c - 1])
+                if got != expect:
+                    raise RuntimeError(
+                        f"row {i}: the runner committed {got} at count {c}, the verify's choice there was {expect}: "
+                        "the accept walk and the adapter's verify output disagree"
+                    )
+                for f in self.slots.flat_indices(i):
+                    m[f] = c - 1
+                next_anchor[i] = rec.positions[flat] + c
+            # the record is consumed only once every check passed (a refused proposal leaves the adapter as it was)
+            self._spec_pending = None
+            self.spec.commit(m, rec.positions)
+            for i in rec.live:
+                c = int(counts[i])
+                state = self.slots.physical(i)
+                if state is not None:
+                    state.position = next_anchor[i]
+                self._spec_stats.committed += c
+                self._spec_stats.accepted += c - 1
+            d1_sel = rec.d1[torch.arange(N), m]
+            rest = self.spec.draft_chain(m, d1_sel, rec.positions) if K > 1 else torch.zeros(N, 0, dtype=torch.long)
+            read_index, live = rec.read_index, rec.live
+        elif last is not None:
+            if rows_n != len(last.read_index):
+                raise ValueError(f"propose_draft_tokens got {rows_n} rows, the step ran on {len(last.read_index)}")
+            self._spec_last = None
+            d1_sel = self.spec.read_plain_d1().reshape(-1)
+            rest = self.spec.draft_chain_plain(last.positions) if K > 1 else torch.zeros(N, 0, dtype=torch.long)
+            next_anchor = {i: last.positions[last.read_index[i]] + 1 for i in last.live}
+            read_index, live = last.read_index, last.live
+        else:
+            raise RuntimeError("propose_draft_tokens without a decode step to propose from")
+        drafts = torch.cat([d1_sel.reshape(N, 1).long(), rest.reshape(N, K - 1).long()], dim=1)  # [N, K]
+        out_ids = torch.zeros(rows_n, k_req, dtype=torch.int32)
+        out_valid = torch.zeros(rows_n, dtype=torch.int32)
+        all_ok = self.spec_policy.step_can_verify([next_anchor[i] for i in live])
+        for i in live:
+            # the runner's committed block starts one past the step's first column: its last real column is the
+            # position the next anchor is consumed at (``_committed_positions``)
+            if positions.dim() == 2 and int(positions[i, int(counts[i]) - 1]) != next_anchor[i]:
+                raise RuntimeError(
+                    f"row {i}: the runner's committed positions end at {int(positions[i, int(counts[i]) - 1])}, the "
+                    f"adapter's next anchor is {next_anchor[i]}"
+                )
+            n = self.spec_policy.row_drafts(next_anchor[i], all_ok, k_req)
+            out_ids[i, :n] = drafts[read_index[i], :n].to(torch.int32)
+            out_valid[i] = n
+        self._spec_stats.propose_s += time.perf_counter() - t0
+        return types["DraftOutput"](draft_token_ids=out_ids, num_valid=out_valid)
 
     def read_decode_output(self, tt_out, async_read: bool = False, sample_rows=None):
         """Host read of a submission (blocking today; the event list is empty). ``sample_rows`` (selective readback)
@@ -1497,6 +2043,15 @@ class GLM53FlashForCausalLM:
     def release_persistent_capture(self) -> None:
         """Drop the captured traces (plugin teardown). A model without a device (the host test's fake) has no trace
         to release, so ttnn is only touched when the process already loaded it for a real mesh."""
+        if self.spec is not None and self.trace_id is not None:
+            # the P trace is the SpecDecoder's (released with V / C / D / D0)
+            try:
+                self.spec.release()
+            except Exception as exc:  # pragma: no cover - device library detail
+                logger.warning(f"GLM53 vLLM: releasing the speculative traces failed: {exc}")
+            self.trace_id = None
+            self._trace_outputs = None
+            self._spec_pending = self._spec_last = None
         if self.trace_id is not None:
             if "ttnn" in sys.modules and getattr(self.model, "device", None) is not None:
                 try:
@@ -1606,6 +2161,10 @@ class GLM53FlashForCausalLM:
                 f"[glm53-vllm-perf] decode step {ms:.1f} ms = {1000 / ms:.2f} tok/s per user, "
                 f"{live * 1000 / ms:.1f} tok/s aggregate over {live} live users ({self._perf_steps} steps, host wall incl. readback)"
             )
+            if self.spec is not None:
+                logger.info(
+                    f"[glm53-vllm-spec] K={self.spec.K} commit {self.spec.commit_mode}: {self._spec_stats.summary()}"
+                )
 
     @staticmethod
     def _to_torch(shard) -> torch.Tensor:

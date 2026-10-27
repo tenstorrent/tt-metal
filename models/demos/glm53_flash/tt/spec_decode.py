@@ -69,6 +69,13 @@ is persistent; reshaped id rows (views) are never deallocated.
 Scope of v1 (device validation pending): dense range only (``max position + K <= 2050``), non-partitioned
 caches, block-mode KDA (``GLM53_KDA_FUSED=1``, the default), greedy. The sparse-range verify needs the index
 scorer with ``K + 1`` rows per user (plan item 4) and is refused.
+
+Served form (``SpecDecoder(plain_draft=True)``, the vLLM adapter ``tt/generator_vllm.py`` + ``tt/vllm_spec.py``): the
+same V / C / D graphs plus **P** (the plain decode step on the model's persistent inputs + MTP level 1 on every user
+slot, its draft ids / normed hidden kept in ``plain_d1`` / ``plain_hidden``: the ordinary decode of a speculating
+launch, so the drafter's cache follows every position) and **D0** (levels ``2 .. K`` from P's output, no gather).
+The plugin owns the accept walk: V runs in ``decode_forward(spec_mode="argmax_ids")``, C + D (or D0) in
+``propose_draft_tokens`` once the runner's accepted counts are known.
 """
 
 from __future__ import annotations
@@ -923,7 +930,13 @@ class SpecDecoder:
         *,
         keep_logits: bool = True,
         commit_mode: str | None = None,
+        plain_draft: bool = False,
     ):
+        """``plain_draft``: also own the served ordinary step (graph P: the plain decode on the model's persistent
+        inputs + MTP level 1 on every user slot, ``plain_d1`` / ``plain_hidden`` kept for the proposal) and the
+        plain-sourced draft chain (graph D0: levels ``2 .. K`` from that hidden, no gather) -- the vLLM adapter's
+        speculating launch, where a step without drafts is the plain decode and the next proposal still needs
+        the MTP (``tt/generator_vllm.py``)."""
         if model.head is None:
             raise ValueError("the speculative decoder needs the model's head")
         self.model, self.mtp, self.K = model, mtp, int(draft_len)
@@ -963,8 +976,14 @@ class SpecDecoder:
         self.d1_ids = _upload(self.mesh, torch.zeros(1, 1, 1, self.N, dtype=torch.int32), u32, rm, 3)
         self.level_pos = {k: _up_i32(self.mesh, [0] * self.N) for k in range(2, self.K + 1)}
         self.out_draft = {k: _zeros((1, 1, self.B, 1), u32, device, rm) for k in range(2, self.K + 1)}
+        # P outputs (``plain_draft``): the ordinary step's MTP level-1 ids and normed hidden of every user slot, the
+        # D0 chain's source (persistent: allocated here, before any capture)
+        self.plain_draft = bool(plain_draft)
+        self.plain_d1 = _zeros((1, 1, self.B, 1), u32, device, rm) if plain_draft else None
+        self.plain_hidden = _zeros((1, 1, self.B, H), ttnn.bfloat16, device) if plain_draft else None
+        self.plain_outputs = None  # the captured P step's (logits, ids), read after every replay
         self.hifi4 = _hifi4_fp32(device)
-        self.trace_v = self.trace_c = self.trace_d = None
+        self.trace_v = self.trace_c = self.trace_d = self.trace_d0 = self.trace_p = None
         self.compiled = False
 
     # ------------------------------------------------------------------------------------------ graphs
@@ -1005,12 +1024,26 @@ class SpecDecoder:
                 st.commit(self.vin)
         self.mtp_state.commit(self.vin)
 
-    def _draft_graph(self):
-        """D: MTP levels 2 .. K from the selected level-1 rows (exact one-hot gather of the level-1 hidden)."""
+    def _draft_graph(self, source: str = "verify"):
+        """D: MTP levels 2 .. K from the selected level-1 rows (exact one-hot gather of the level-1 hidden);
+        ``source="plain"`` (D0, ``plain_draft``): the same chain from the ordinary step's ``plain_d1`` /
+        ``plain_hidden`` of every user slot (no gather; the persistent source is never deallocated)."""
         if self.K < 2:
             return
-        hid = ttnn.matmul(self.sel, self.out_hidden, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4)  # [1,1,B,H]
-        ids = self.d1_ids  # [1,1,1,B] persistent
+        if source == "verify":
+            hid = ttnn.matmul(
+                self.sel, self.out_hidden, dtype=ttnn.bfloat16, compute_kernel_config=self.hifi4
+            )  # [1,1,B,H]
+            ids = self.d1_ids  # [1,1,1,B] persistent
+            owned = True  # ``hid`` is this graph's transient
+        elif source == "plain":
+            if not self.plain_draft:
+                raise RuntimeError("the plain-sourced draft chain needs SpecDecoder(plain_draft=True)")
+            hid = self.plain_hidden
+            ids = self.mtp.ids_row(self.plain_d1)  # a view of the persistent ids: never deallocated
+            owned = False
+        else:
+            raise ValueError(f"draft source {source!r}: expected 'verify' or 'plain'")
         garbage: list[ttnn.Tensor] = []
         for k in range(2, self.K + 1):
             x = self.mtp.project(ids, hid)
@@ -1018,13 +1051,45 @@ class SpecDecoder:
             out = self.mtp.block_rows(x, lambda h, pos=pos: self.mtp_state.chain_attention(h, pos))
             normed, logits, dids = self.mtp.head_forward(out)
             ttnn.copy(dids, self.out_draft[k])
-            garbage += [out, logits, hid]
-            hid = normed
+            garbage += [out, logits]
+            if owned:
+                garbage.append(hid)
+            hid, owned = normed, True
             ids = self.mtp.ids_row(dids)  # a view of dids: dids is freed after the next level consumed it
             garbage.append(dids)
-        garbage.append(hid)
+        if owned:
+            garbage.append(hid)
         for t in garbage:
             ttnn.deallocate(t)
+
+    def _plain_graph(self):
+        """P (``plain_draft``): the plain decode step on the model's persistent inputs (``ids_dev`` / ``positions``,
+        the packed unpack included) + MTP level 1 on every user slot at ``model.mtp_positions`` (the same values):
+        ``GLM53MeshModel.decode_step_with_draft`` with the drafter's ids and normed hidden copied into the persistent
+        ``plain_d1`` / ``plain_hidden`` (the D0 chain's source). Returns ``(logits [1,1,B,V], ids [1,1,B,1])`` like
+        ``decode_step``: the served ordinary step's outputs. Device ops only (trace-capturable)."""
+        if not self.plain_draft:
+            raise RuntimeError("the plain-with-draft step needs SpecDecoder(plain_draft=True)")
+        m = self.model
+        if m.mtp_positions is None:
+            raise RuntimeError("set the MTP positions first (GLM53MeshModel.set_mtp_positions)")
+        m._unpack_inputs(m.ids_dev, m.positions)
+        streams = m.embedding(m.ids_dev)
+        last = len(m.layers) - 1
+        for k, dec in enumerate(m.layers):
+            collapse = k == last and dec.supports_collapse
+            out = dec.decode_forward(streams, positions=m.positions, collapse=collapse)
+            ttnn.deallocate(streams)
+            streams = out
+        hn, logits, ids = m.head_forward_with_hidden(streams)
+        ttnn.deallocate(streams)
+        # the id row is a view of ``ids`` (never deallocated); ``project`` reads it and ``hn`` without consuming
+        out, normed, mlogits, draft = self.mtp.decode_forward(self.mtp.ids_row(ids), hn, m.mtp_positions)
+        ttnn.copy(draft, self.plain_d1)
+        ttnn.copy(normed, self.plain_hidden)
+        for t in (out, normed, mlogits, draft, hn):
+            ttnn.deallocate(t)
+        return logits, ids
 
     # ------------------------------------------------------------------------------------ compile / trace
     def warmup(self, positions: list[int] | None = None, cq_id: int = 0):
@@ -1036,41 +1101,77 @@ class SpecDecoder:
         m = torch.zeros(self.N, dtype=torch.long)
         self._set_commit(m, positions)
         self._set_draft(m, torch.zeros(self.N, dtype=torch.long), positions)
+        if self.plain_draft:
+            self._set_draft_plain(positions)
         t0 = time.perf_counter()
         self._verify_graph()
         self._commit_graph()
         self._draft_graph()
+        if self.plain_draft and self.K >= 2:
+            self._draft_graph("plain")
         ttnn.synchronize_device(self.mesh.device)
         self.compiled = True
         logger.info(
             f"spec decode: graphs compiled in {time.perf_counter() - t0:.1f} s (B {self.B} K {self.K} R {self.R}, "
-            f"KDA commit {self.commit_mode})"
+            f"KDA commit {self.commit_mode}{', plain-sourced chain' if self.plain_draft else ''})"
         )
 
+    def warmup_plain(self, ids: torch.Tensor, host_positions: list[int]):
+        """``GLM53MeshModel.warmup_decode`` for the P step (``plain_draft``): allocate the model's persistent decode
+        inputs (the packed segments with the knob) and the MTP positions, run P once eagerly (compiles the plain
+        programs and the MTP's decode row). Consumes the token (the states advance): reset / re-prefill after."""
+        m = self.model
+        m._stage_decode_inputs(ids, host_positions)
+        m.set_mtp_positions(host_positions)
+        for t in self._plain_graph():
+            ttnn.deallocate(t)
+        ttnn.synchronize_device(m.device)
+
+    def capture_plain(self, ids: torch.Tensor, host_positions: list[int], cq_id: int = 0):
+        """Warm-up + capture of the P step on the model's persistent inputs (``GLM53MeshModel.capture`` with the
+        drafter): returns ``(trace id, (logits, ids))``, transient outputs read after every ``replay``. Both passes
+        consume the token."""
+        self.warmup_plain(ids, host_positions)
+        dev = self.mesh.device
+        t0 = time.perf_counter()
+        tid = ttnn.begin_trace_capture(dev, cq_id=cq_id)
+        outs = self._plain_graph()
+        ttnn.end_trace_capture(dev, tid, cq_id=cq_id)
+        self.mesh.allocations_frozen[0] = True  # no lazily allocated constants from here on (tt/kda.py)
+        ttnn.synchronize_device(dev)
+        self.trace_p, self.plain_outputs = tid, outs
+        logger.info(f"spec decode: trace P (plain step + MTP level 1) captured in {time.perf_counter() - t0:.1f} s")
+        return tid, outs
+
     def capture(self, cq_id: int = 0):
-        """Capture V, C and D (after ``warmup``; every persistent tensor already exists). Call ``warmup`` before ANY
-        trace capture of the model (the plain decode trace included): a collective of a new shape compiled after a
-        capture places its semaphores in the L1 the captured trace overwrites, and the replay hangs."""
+        """Capture V, C and D (and D0 with ``plain_draft``; after ``warmup``: every persistent tensor already
+        exists). Call ``warmup`` before ANY trace capture of the model (the plain decode trace included): a
+        collective of a new shape compiled after a capture places its semaphores in the L1 the captured trace
+        overwrites, and the replay hangs."""
         if not self.compiled:
             self.warmup(cq_id=cq_id)
         dev = self.mesh.device
-        for name, fn in (("V", self._verify_graph), ("C", self._commit_graph), ("D", self._draft_graph)):
-            if name == "D" and self.K < 2:
+        graphs = [("V", self._verify_graph), ("C", self._commit_graph), ("D", self._draft_graph)]
+        if self.plain_draft:
+            graphs.append(("D0", lambda: self._draft_graph("plain")))
+        for name, fn in graphs:
+            if name in ("D", "D0") and self.K < 2:
                 continue
             t0 = time.perf_counter()
             tid = ttnn.begin_trace_capture(dev, cq_id=cq_id)
             fn()
             ttnn.end_trace_capture(dev, tid, cq_id=cq_id)
             ttnn.synchronize_device(dev)
-            setattr(self, {"V": "trace_v", "C": "trace_c", "D": "trace_d"}[name], tid)
+            setattr(self, {"V": "trace_v", "C": "trace_c", "D": "trace_d", "D0": "trace_d0"}[name], tid)
             logger.info(f"spec decode: trace {name} captured in {time.perf_counter() - t0:.1f} s")
 
     def release(self):
-        for attr in ("trace_v", "trace_c", "trace_d"):
+        for attr in ("trace_v", "trace_c", "trace_d", "trace_d0", "trace_p"):
             tid = getattr(self, attr)
             if tid is not None:
                 ttnn.release_trace(self.mesh.device, tid)
                 setattr(self, attr, None)
+        self.plain_outputs = None
 
     def _run(self, trace_id, fn, cq_id: int = 0):
         if trace_id is not None:
@@ -1124,6 +1225,37 @@ class SpecDecoder:
             return torch.zeros(self.N, 0, dtype=torch.long)
         self._set_draft(m, d1, positions)
         self._run(self.trace_d, self._draft_graph)
+        return torch.stack([self._ids_host(self.out_draft[k]) for k in range(2, self.K + 1)], dim=1)
+
+    # ------------------------------------------------------------------------ the served ordinary step (P / D0)
+    def _set_draft_plain(self, positions: list[int]):
+        """The D0 chain's per-level positions after an ordinary step at ``positions`` (its level-1 row sat at the
+        step's position ``p``; level ``k`` at ``p + k - 1``: ``_set_draft`` with ``m = 0``)."""
+        for k in range(2, self.K + 1):
+            _set_i32(self.mesh, [p + k - 1 for p in positions], self.level_pos[k])
+
+    def plain_step(self, eager: bool = False) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """One ordinary step (P) on the model's persistent inputs (loaded by the caller: ``load_decode_inputs`` +
+        ``set_mtp_positions``): the captured trace's ``(logits, ids)`` after ``capture_plain``, else (or with
+        ``eager``) an eager run's transient outputs (the caller deallocates those)."""
+        if self.trace_p is not None and not eager:
+            ttnn.execute_trace(self.mesh.device, self.trace_p, cq_id=0, blocking=True)
+            return self.plain_outputs
+        return self._plain_graph()
+
+    def read_plain_d1(self) -> torch.Tensor:
+        """``[N]`` long: the MTP level-1 draft of every user slot after the last P step (its prediction of the token
+        after the step's greedy id)."""
+        return self._ids_host(self.plain_d1)
+
+    def draft_chain_plain(self, positions: list[int]) -> torch.Tensor:
+        """MTP levels ``2 .. K`` of every user slot from the last P step's level-1 output (``plain_d1`` /
+        ``plain_hidden``) at the step positions ``positions`` -> ``[N, K - 1]`` draft ids (the drafts after
+        ``read_plain_d1``'s)."""
+        if self.K < 2:
+            return torch.zeros(self.N, 0, dtype=torch.long)
+        self._set_draft_plain(positions)
+        self._run(self.trace_d0, lambda: self._draft_graph("plain"))
         return torch.stack([self._ids_host(self.out_draft[k]) for k in range(2, self.K + 1)], dim=1)
 
     # ------------------------------------------------------------------------------------------ prefill
