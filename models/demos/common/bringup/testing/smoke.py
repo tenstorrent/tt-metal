@@ -38,7 +38,10 @@ def tokenizer(s):
     return AutoTokenizer.from_pretrained(str(hf_path(s)), trust_remote_code=bool(s.get("hf.trust_remote_code", False)))
 
 
-def run_smoke(s, mesh, max_new: int = 8) -> dict:
+def run_smoke(s, mesh, max_new: int | None = None) -> dict:
+    from models.demos.common.bringup.intake.check_hf_sanity import smoke_tokens
+
+    max_new = smoke_tokens(s) if max_new is None else max_new  # F195: the CPU smoke's budget, not a fixed 8
     t_all = time.time()
     tok = tokenizer(s)
     ids = prompt_ids(s, tok)

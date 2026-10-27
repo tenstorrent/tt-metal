@@ -52,7 +52,16 @@ def load_model(spec):
     ).eval()
 
 
-def smoke(model, tok, prompt_text: str, n: int = 24, template_kwargs: dict | None = None) -> str:
+SMOKE_TOKENS = 24  # greedy tokens of the intake smoke, CPU (R.1) and device (testing/smoke.py) alike (F195)
+
+
+def smoke_tokens(spec) -> int:
+    """F195: the smoke's token budget, the same on the CPU and the device: ``intake.smoke.max_new`` or SMOKE_TOKENS
+    (a thinking model reasons before it answers; 8 device tokens ended mid-thought where the CPU found the answer)."""
+    return int((spec.get("intake.smoke") or {}).get("max_new") or SMOKE_TOKENS)
+
+
+def smoke(model, tok, prompt_text: str, n: int = SMOKE_TOKENS, template_kwargs: dict | None = None) -> str:
     if hasattr(tok, "apply_chat_template") and getattr(tok, "chat_template", None):
         text = tok.apply_chat_template(
             [{"role": "user", "content": prompt_text}],
@@ -111,7 +120,7 @@ def main(argv=None):
     model = load_model(spec)
     sm = spec.get("intake.smoke")
     if sm:
-        answer = smoke(model, tok, sm["prompt"], template_kwargs=prompt.template_kwargs(spec))
+        answer = smoke(model, tok, sm["prompt"], n=smoke_tokens(spec), template_kwargs=prompt.template_kwargs(spec))
         ok = sm["expect"].lower() in answer.lower()
         print(f"smoke: {sm['prompt']!r} -> {answer!r} (expect {sm['expect']!r}): {'ok' if ok else 'FAIL'}")
         metrics.record("smoke_ok", int(ok))
