@@ -533,6 +533,7 @@ class LinearDecode(DeepSeekV4Module):
         rectangle_b_grid: bool = False,
         use_rm_hs: bool = False,
         dram_sharded_weight: bool = False,
+        b_core_grid: Optional[ttnn.CoreRangeSet] = None,
     ):
         """Build the per-core weight for ``K``-wide in / ``N``-wide out (both per rank).
 
@@ -555,6 +556,10 @@ class LinearDecode(DeepSeekV4Module):
         B cores out as a filled rectangle rather than the generic row-wise set, which can come
         out ragged on Blackhole and then cannot be an output-mcast destination or a receiver
         subset.
+
+        ``b_core_grid`` (``dram_sharded_weight`` only) names the ``num_inputB_cores`` cores the
+        matmul reads the slabs onto, in place of that grid -- e.g. another projection's B grid, so
+        both read the one activation replica.
         """
         self.partial_width_sharded = partial_width_sharded
         self.use_rm_hs = use_rm_hs
@@ -588,6 +593,11 @@ class LinearDecode(DeepSeekV4Module):
             K, N, partial_width_sharded, k_blocks, n_blocks
         )
         self.num_inputB_cores = num_inputB_cores
+        if b_core_grid is not None:
+            if not self.dram_sharded_weight:
+                raise ValueError("b_core_grid places a DRAM ND-sharded weight: it needs dram_sharded_weight")
+            if b_core_grid.num_cores() != num_inputB_cores:
+                raise ValueError(f"b_core_grid has {b_core_grid.num_cores()} cores, this weight {num_inputB_cores}")
         if use_prefetcher:
             self._init_prefetched_weight(
                 weight,
@@ -624,7 +634,7 @@ class LinearDecode(DeepSeekV4Module):
         if self.dram_sharded_weight:
             # matmul_decode hands slab p to the p-th core of this grid in row-major order, the same
             # core the L1 width shard would have put it on.
-            self.dram_weight_grid = b_core_range_set
+            self.dram_weight_grid = b_core_grid if b_core_grid is not None else b_core_range_set
             self._store_dram_sharded_weight(weight, cache_file_name, dtype, shard_shape, device.dram_grid_size().x)
             self._check_use_rm_hs()
             return
