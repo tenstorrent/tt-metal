@@ -5,7 +5,8 @@
 // The codegen scatter prim takes an optional preallocated output that no public entry exposes, so
 // its contract on that argument is only reachable from C++: the destination must be the tensor the
 // op would create for itself (standard padding included) and must not be one of the operands the
-// kernels still read.
+// kernels still read. Likewise the shape relations ttnn::scatter establishes before calling (an
+// index no wider than the input on any leading axis) are only testable against the prim directly.
 
 #include <gtest/gtest.h>
 
@@ -64,7 +65,42 @@ Tensor run(const Operands& ops, const std::optional<Tensor>& output) {
         ops.input, ops.index, ops.src, kReductionNone, ops.input.memory_config(), output, std::nullopt);
 }
 
+// Index and src of `shape` (scatter axis last, values within `width`) against a bf16 TILE input of
+// `input_shape`.
+Operands make_operands_of(
+    tt::tt_metal::distributed::MeshDevice* device,
+    const ttnn::Shape& input_shape,
+    const ttnn::Shape& shape,
+    uint32_t width) {
+    std::vector<int32_t> index(shape.volume());
+    for (size_t i = 0; i < index.size(); ++i) {
+        index[i] = static_cast<int32_t>(i % width);
+    }
+    const tt::tt_metal::TensorSpec index_spec(
+        shape,
+        tt::tt_metal::TensorLayout(
+            DataType::INT32, tt::tt_metal::PageConfig(Layout::TILE), tt::tt_metal::MemoryConfig{}));
+    return {
+        ttnn::ones(input_shape, DataType::BFLOAT16, Layout::TILE, *device),
+        Tensor::from_vector(index, index_spec, device),
+        ttnn::zeros(shape, DataType::BFLOAT16, Layout::TILE, *device),
+    };
+}
+
 }  // namespace
+
+TEST_F(ScatterCodegenPrimFixture, RejectsAnIndexWiderThanTheInputOnALeadingAxis) {
+    // The readers walk the input's pages and clip each page coordinate against the index's extent,
+    // so index pages past the input's extent on a leading axis are never visited: without the check
+    // the call returns a well-formed result with those updates silently dropped. A narrower index
+    // is served, so only the wider one is refused.
+    const Operands wider = make_operands_of(device_, ttnn::Shape({1, 1, 32, 64}), ttnn::Shape({1, 2, 32, 32}), 64);
+    EXPECT_THROW(run(wider, std::nullopt), std::exception);
+    const Operands lower_rank = make_operands_of(device_, ttnn::Shape({1, 1, 32, 64}), ttnn::Shape({32, 32}), 64);
+    EXPECT_THROW(run(lower_rank, std::nullopt), std::exception);
+    const Operands narrower = make_operands_of(device_, ttnn::Shape({1, 2, 32, 64}), ttnn::Shape({1, 1, 32, 32}), 64);
+    EXPECT_NO_THROW(run(narrower, std::nullopt));
+}
 
 TEST_F(ScatterCodegenPrimFixture, AcceptsTheDestinationItWouldCreateItself) {
     const Operands ops = make_operands(device_, 64);

@@ -5,10 +5,10 @@
 # Hand-written regressions for the scatter routing seams the generated sweep in
 # test_scatter_codegen_routing.py does not reach: the demotion predicate's axis spelling, small
 # row-axis shapes, an output placement that differs from the input's, empty operands, the bf16
-# reduce path, the unknown reduce string, the out-of-scope clauses that stay native, the index
-# dtypes, an explicit core grid, host-resident operands, an operand padded past tile rounding, the
-# calls whose resident sticks or pending copies no longer fit the L1 that is actually free, and
-# the program-cache key that follows the L1 frontier.
+# reduce path, the unknown reduce string, the out-of-scope clauses that stay native, the uint32
+# index, host-resident operands, an operand padded past tile rounding, the calls whose resident
+# sticks or pending copies no longer fit the L1 that is actually free, and the program-cache key
+# that follows the L1 frontier.
 
 import pytest
 import torch
@@ -72,16 +72,6 @@ def _run_auto_against_native(device, xt, it, st, dim, **kwargs):
     return out, device.num_program_cache_entries() - entries_before
 
 
-@pytest.mark.parametrize("dim", [3, -1])
-def test_scatter_codegen_demotion_matches_either_axis_spelling(device, dim):
-    # is_demoted() normalizes the caller's raw dim before its unit-row check, so the last axis of a
-    # rank-4 tensor demotes the same whether spelled 3 or -1. The L1 output keeps the row-major detour
-    # from serving the unit row, which is what makes the case demote at all.
-    xt, it, st = _make_case([1, 1, 1, 64], [1, 1, 1, 32], dim, ttnn.TILE_LAYOUT, device)
-    _, added = _run_auto_against_native(device, xt, it, st, dim, memory_config=ttnn.L1_MEMORY_CONFIG)
-    assert added == 0, f"dim={dim} routed a unit TILE row the detour cannot serve to codegen; expected native"
-
-
 @pytest.mark.parametrize(
     "shape,index_shape,layout",
     [
@@ -112,17 +102,19 @@ def test_scatter_codegen_tile_dram_input_l1_output_runs_tile_factory(device):
 
 
 @pytest.mark.parametrize(
-    "output_memory_config,expect_codegen",
-    [(None, True), (ttnn.L1_MEMORY_CONFIG, False)],
-    ids=["same_placement_detour", "mismatched_placement_demoted"],
+    "output_memory_config,dim,expect_codegen",
+    [(None, -1, True), (ttnn.L1_MEMORY_CONFIG, -1, False), (ttnn.L1_MEMORY_CONFIG, 3, False)],
+    ids=["same_placement_detour", "mismatched_placement_demoted", "mismatched_placement_demoted_positive_dim"],
 )
-def test_scatter_codegen_unit_row_tile_demotion_follows_detour(device, output_memory_config, expect_codegen):
+def test_scatter_codegen_unit_row_tile_demotion_follows_detour(device, output_memory_config, dim, expect_codegen):
     # A unit TILE row is only kept on codegen when the row-major detour serves it. With the output in
     # the input's own placement the detour runs; with a different placement the detour is unavailable
     # and the case is demoted to native rather than paying the TILE factories' padded-row cost.
-    xt, it, st = _make_case([1, 1, 1, 64], [1, 1, 1, 32], -1, ttnn.TILE_LAYOUT, device)
+    # is_demoted() normalizes the caller's raw dim before its unit-row check, so the last axis demotes
+    # the same whether spelled 3 or -1.
+    xt, it, st = _make_case([1, 1, 1, 64], [1, 1, 1, 32], dim, ttnn.TILE_LAYOUT, device)
     kwargs = {} if output_memory_config is None else {"memory_config": output_memory_config}
-    _, added = _run_auto_against_native(device, xt, it, st, -1, **kwargs)
+    _, added = _run_auto_against_native(device, xt, it, st, dim, **kwargs)
     if expect_codegen:
         assert added > 0, "auto fell back to native; expected the codegen row-major detour to serve this call"
     else:
@@ -139,16 +131,13 @@ def _error_of(fn):
 
 
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
-@pytest.mark.parametrize(
-    "shape,index_shape", [([0, 32], [0, 16]), ([2, 0, 32], [2, 0, 16])], ids=["[0,32]", "[2,0,32]"]
-)
-def test_scatter_codegen_empty_operands_stay_native(device, shape, index_shape, layout, expect_error):
+def test_scatter_codegen_empty_operands_stay_native(device, layout, expect_error):
     # A zero extent is a divisor in the codegen host arithmetic (CB page size, page map), which dies
     # with SIGFPE rather than an exception, so empties must never reach the codegen factories: auto
     # must behave exactly as native does on them (native raises on a zero leading extent; a zero
     # scatter axis, e.g. [0] or [32, 0], crashes native itself and is not probed here), and the
-    # forced entry refuses.
-    xt, it, st = _make_case(shape, index_shape, -1, layout, device)
+    # forced entry refuses. test_scatter_zero_volume drives the auto route over the other empties.
+    xt, it, st = _make_case([2, 0, 32], [2, 0, 16], -1, layout, device)
     device.clear_program_cache()
     native_error = _error_of(lambda: _force_native(xt, -1, it, st))
     entries_before = device.num_program_cache_entries()
@@ -259,15 +248,16 @@ def test_scatter_codegen_row_major_sliced_source_counts_against_live_l1(device):
 def test_scatter_codegen_tile_row_too_wide_for_interleaved_streams(device):
     # The interleaved TILE factory keeps a whole row of input and output tiles resident; a row the
     # per-core L1 cannot hold twice has to stream one tile at a time instead. The width comes from the
-    # device so the row just overflows the budget on Wormhole and Blackhole alike, and 160 tile rows
-    # fill either grid, so the row split alone would not have chosen streaming.
+    # device so the row just overflows the budget on Wormhole and Blackhole alike. Two tile rows on a
+    # two-core grid fill the grid, so the row split alone would not have chosen streaming.
     torch.manual_seed(0)
     budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
     tile_bytes = 32 * 32 * 2
     width = 32 * (budget // (2 * tile_bytes) + 1)
-    rows, index_w = 32 * 160, 32
+    rows, index_w = 32 * 2, 32
+    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
     # Unique positions per row without sorting a row this wide: stride the 32 columns across it and
-    # shift by the row, which cannot collide because 31 strides stay short of the width.
+    # shift by the row, which cannot collide because 63 shifts stay short of one stride.
     index = (torch.arange(index_w) * (width // index_w) + torch.arange(rows).unsqueeze(1)) % width
     x = torch.rand([1, 1, rows, width], dtype=torch.bfloat16)
     src = torch.rand([1, 1, rows, index_w], dtype=torch.bfloat16)
@@ -276,7 +266,10 @@ def test_scatter_codegen_tile_row_too_wide_for_interleaved_streams(device):
         index.reshape(1, 1, rows, index_w).to(torch.int32), dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device
     )
     st = ttnn.from_torch(src, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    assert_equal(ttnn.to_torch(_force_native(xt, -1, it, st)), ttnn.to_torch(_force_codegen(xt, -1, it, st)))
+    assert_equal(
+        ttnn.to_torch(_force_native(xt, -1, it, st, sub_core_grids=grid)),
+        ttnn.to_torch(_force_codegen(xt, -1, it, st, sub_core_grids=grid)),
+    )
 
 
 def test_scatter_codegen_streaming_with_more_columns_than_cores(device):
@@ -287,21 +280,21 @@ def test_scatter_codegen_streaming_with_more_columns_than_cores(device):
     assert_equal(ttnn.to_torch(_force_native(xt, -1, it, st)), ttnn.to_torch(_force_codegen(xt, -1, it, st)))
 
 
-@pytest.mark.parametrize("reduce", ["add", "multiply"])
-def test_scatter_codegen_row_major_bf16_reduce_matches_native(device, reduce):
+def test_scatter_codegen_row_major_bf16_reduce_matches_native(device):
     # Positions drawn from the first 8 of 64 columns, so every hit column accumulates several
-    # updates: the FP32 accumulator's rounding order is what this pins against native.
+    # updates: the FP32 accumulator's rounding order is what this pins against native. The add
+    # reduce is a merge-gate unit case; multiply is only compared against native here.
     xt, it, st = _make_case([1, 1, 32, 64], [1, 1, 32, 32], -1, ttnn.ROW_MAJOR_LAYOUT, device, index_max=8)
-    golden = ttnn.to_torch(_force_native(xt, -1, it, st, reduce=reduce))
-    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st, reduce=reduce)))
+    golden = ttnn.to_torch(_force_native(xt, -1, it, st, reduce="multiply"))
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st, reduce="multiply")))
 
 
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
-@pytest.mark.parametrize("index_dtype", [ttnn.int32, ttnn.uint32], ids=["int32", "uint32"])
-def test_scatter_codegen_index_dtype_matches_native(device, layout, index_dtype):
-    # A 400 B stick is not 32 B aligned, so the TILE leg declines the row-major detour and reaches
+def test_scatter_codegen_uint32_index_matches_native(device, layout):
+    # The int32 index is a merge-gate unit case; uint32 shares the readers and is pinned here. A
+    # 400 B stick is not 32 B aligned, so the TILE leg declines the row-major detour and reaches
     # the TILE readers; a 32 B multiple would be untilized and served by the ROW_MAJOR factory.
-    xt, it, st = _make_case([1, 1, 64, 200], [1, 1, 64, 100], -1, layout, device, index_dtype=index_dtype)
+    xt, it, st = _make_case([1, 1, 64, 200], [1, 1, 64, 100], -1, layout, device, index_dtype=ttnn.uint32)
     golden = ttnn.to_torch(_force_native(xt, -1, it, st))
     assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st)))
 
@@ -310,19 +303,6 @@ def test_scatter_codegen_uint16_index_stays_native(device):
     xt, it, st = _make_case([1, 1, 64, 64], [1, 1, 64, 32], -1, ttnn.ROW_MAJOR_LAYOUT, device, index_dtype=ttnn.uint16)
     _, added = _run_auto_against_native(device, xt, it, st, -1)
     assert added == 0, "auto routed a uint16 index to codegen; expected native"
-
-
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT], ids=["row_major", "tile"])
-def test_scatter_codegen_sub_core_grids_matches_native(device, layout):
-    # The grid, not the default, drives the split: Ht=2 tile rows against Wt_output=7 columns, so on
-    # the full grid column_cores=7 > Ht selects the column-split (streaming) factory, while a
-    # two-core grid caps column_cores at 2 and lands the same call on the row-resident factory. The
-    # 400 B stick is not 32 B aligned, so the TILE leg declines the row-major detour and reaches
-    # those factories at all.
-    grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
-    xt, it, st = _make_case([1, 1, 64, 200], [1, 1, 64, 100], -1, layout, device)
-    golden = ttnn.to_torch(_force_native(xt, -1, it, st, sub_core_grids=grid))
-    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st, sub_core_grids=grid)))
 
 
 @pytest.mark.parametrize(
@@ -355,26 +335,6 @@ def test_scatter_codegen_out_of_scope_cases_stay_native(device, input_dtype, lay
     kwargs = {} if reduce is None else {"reduce": reduce}
     _, added = _run_auto_against_native(device, xt, it, st, -1, **kwargs)
     assert added == 0, "auto routed an out-of-scope case to codegen; expected native"
-
-
-def test_scatter_codegen_index_empty_on_a_non_scatter_axis_stays_native(device):
-    # An index with a zero extent on a non-scatter axis against a non-empty input is a no-op native
-    # answers with a copy of the input; the gate sends it there on the index's volume before any
-    # codegen host arithmetic could divide by that extent.
-    x = torch.rand([2, 3, 4], dtype=torch.bfloat16)
-    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    it = ttnn.from_torch(
-        torch.zeros([2, 0, 4], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-    )
-    st = ttnn.from_torch(
-        torch.zeros([2, 0, 4], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-    )
-    device.clear_program_cache()
-    native_error = _error_of(lambda: _force_native(xt, -1, it, st))
-    entries_before = device.num_program_cache_entries()
-    auto_error = _error_of(lambda: ttnn.scatter(xt, -1, it, st))
-    assert auto_error == native_error, "auto diverged from native on an empty index"
-    assert device.num_program_cache_entries() == entries_before, "auto routed an empty index to codegen"
 
 
 @pytest.mark.parametrize(

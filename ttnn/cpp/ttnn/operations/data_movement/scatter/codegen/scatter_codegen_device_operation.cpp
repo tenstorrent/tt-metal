@@ -73,15 +73,12 @@ ScatterCodegenDeviceOperation::program_factory_t ScatterCodegenDeviceOperation::
 // Calling select_program_factory() here is sound because create_output_tensors() has already run by
 // the time the key is computed (ttnn/device_operation.hpp), so this sees the same frontier the
 // factory's create_descriptor() will.
+//
+// Because the key depends on live L1, a trace captured under one L1 state replays that state's
+// plan; a capture whose frontier differs from the warm-up's misses the cache, and the framework
+// throws on a miss during capture rather than replaying a stale plan.
 ttsl::hash::hash_t ScatterCodegenDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // The framework's validate_input_tensors has already rejected a host or deallocated operand by
-    // the time the key is computed; this restates the precondition select_program_factory() reads
-    // the buffers under, since it runs ahead of validate_on_program_cache_miss().
-    TT_FATAL(
-        tensor_args.input_tensor.buffer() != nullptr && tensor_args.index_tensor.buffer() != nullptr &&
-            tensor_args.src_tensor.buffer() != nullptr,
-        "scatter_codegen: operands need to be allocated in buffers on the device.");
     const auto factory = select_program_factory(attributes, tensor_args);
     uint32_t chunk_elems = 0;
     const bool is_row_major = std::holds_alternative<ScatterCodegenProgramFactoryRowMajor>(factory);
@@ -91,7 +88,7 @@ ttsl::hash::hash_t ScatterCodegenDeviceOperation::compute_program_hash(
         const auto& in_t = tensor_args.input_tensor;
         // The same page sizes and fixed bytes the matching create_descriptor() computes, so this key
         // never diverges from the chunk depth it bakes into the program.
-        const uint64_t input_page_bytes = scatter_rm_stick_page_bytes(in_t, attributes.input_stick_elems);
+        const uint64_t input_page_bytes = scatter_rm_aligned_stick_bytes(in_t, attributes.input_stick_elems);
         const uint64_t output_page_bytes =
             scatter_output_aligned_page_size(in_t, attributes.output_mem_config, tensor_args.output_tensor);
         chunk_elems = scatter_rm_chunk_elems(
@@ -133,35 +130,37 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
         index_tensor.logical_shape(),
         src_tensor.logical_shape());
 
-    // The prim only ever holds an already-normalized tensor (transpose-to-last-dim already applied),
-    // so the scatter axis here is always the last dim; -1 says that without re-deriving rank.
-    TT_FATAL(
-        ttnn::operations::data_movement::scatter::supported_by_codegen(
-            input_tensor, /*dim=*/-1, index_tensor, src_tensor, attributes.reduction_mode),
-        "scatter_codegen: input/index/src tensors are not supported by the codegen prim (see "
-        "supported_by_codegen())");
-
-    // The page map is a fixed [rank, input dims x8, index dims x8] descriptor. Its builder runs
-    // ahead of this validate (build_scatter_codegen_params) and only clamps, so the bound is here.
+    // The readers walk the input's pages and clip each page coordinate against the index's extent
+    // (map_scatter_input_page), so an index wider than the input on a leading axis has pages no
+    // reader ever visits: its updates would be dropped with no error. The prim only ever holds
+    // normalized tensors with the scatter axis last, so every other axis is a leading one.
     {
-        const bool tiled = input_tensor.layout() == Layout::TILE;
-        const uint32_t input_rank = scatter_page_rank(input_tensor.logical_shape(), tiled);
-        const uint32_t index_rank = scatter_page_rank(index_tensor.logical_shape(), tiled);
+        const auto& input_shape = input_tensor.logical_shape();
+        const auto& index_shape = index_tensor.logical_shape();
         TT_FATAL(
-            input_rank == index_rank,
-            "scatter_codegen: page maps require equal-rank input/index tensors (got {} vs {})",
-            input_rank,
-            index_rank);
-        TT_FATAL(
-            input_rank <= kScatterMaxPageRank,
-            "scatter_codegen: at most {} page dimensions are supported; got {}",
-            kScatterMaxPageRank,
-            input_rank);
+            input_shape.rank() == index_shape.rank(),
+            "scatter_codegen: input and index must have equal rank (input {}, index {}).",
+            input_shape,
+            index_shape);
+        for (int32_t i = 0; i + 1 < static_cast<int32_t>(input_shape.rank()); ++i) {
+            TT_FATAL(
+                index_shape[i] <= input_shape[i],
+                "scatter_codegen: index extent {} on axis {} exceeds the input's {} (input {}, index {}).",
+                index_shape[i],
+                i,
+                input_shape[i],
+                input_shape,
+                index_shape);
+        }
     }
 
-    // Structural preconditions copied from ScatterDeviceOperation::validate_on_program_cache_miss
-    // (device/scatter_device_operation.cpp): supported_by_codegen() only answers layout/dtype/
-    // memory-config questions, all of which answer for a host or deallocated tensor too.
+    // Repeated ahead of supported_by_codegen(), which also rejects each, so a direct prim caller
+    // gets the specific reason.
+    TT_FATAL(
+        scatter_page_rank(input_tensor.logical_shape()) <= kScatterMaxPageRank,
+        "scatter_codegen: at most {} page dimensions are supported; got {}",
+        kScatterMaxPageRank,
+        scatter_page_rank(input_tensor.logical_shape()));
     TT_FATAL(
         input_tensor.dtype() == src_tensor.dtype(),
         "scatter_codegen: input_dtype differs from src_dtype (input_dtype: {}, src_dtype: {}).",
@@ -170,13 +169,19 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !input_tensor.is_sharded() && !index_tensor.is_sharded() && !src_tensor.is_sharded(),
         "scatter_codegen: sharded tensors are not supported.");
+
+    // The prim only ever holds an already-normalized tensor (transpose-to-last-dim already applied),
+    // so the scatter axis here is always the last dim; -1 says that without re-deriving rank.
     TT_FATAL(
-        input_tensor.buffer() != nullptr && index_tensor.buffer() != nullptr && src_tensor.buffer() != nullptr,
-        "scatter_codegen: operands need to be allocated in buffers on the device.");
-    TT_FATAL(
-        input_tensor.storage_type() == StorageType::DEVICE && index_tensor.storage_type() == StorageType::DEVICE &&
-            src_tensor.storage_type() == StorageType::DEVICE,
-        "scatter_codegen: operands must be allocated on a device.");
+        ttnn::operations::data_movement::scatter::supported_by_codegen(
+            input_tensor, /*dim=*/-1, index_tensor, src_tensor, attributes.reduction_mode),
+        "scatter_codegen: operands are outside the codegen scope (see supported_by_codegen(): bfloat16 input/src "
+        "with an int32/uint32 index in one shared TILE or ROW_MAJOR layout, all non-sharded, non-empty and on the "
+        "device, default untransposed 32x32 tiles and standard padding, add/multiply reduction only on ROW_MAJOR, "
+        "at most {} page dimensions, and for ROW_MAJOR resident input/output sticks plus the smallest index/src "
+        "chunk fitting the device's static per-core L1 bank).",
+        kScatterMaxPageRank);
+
     // The descriptor launches on input_tensor.device() while embedding index/src's raw buffer
     // addresses, so every operand must live on that same device.
     TT_FATAL(
@@ -210,8 +215,8 @@ void ScatterCodegenDeviceOperation::validate_on_program_cache_miss(
 // A hit re-runs the miss checks. The key pins the tensor specs through their attribute values, and
 // a Tile's leave out its transpose flags, so a transposed-tile operand hashes like a default-tile one
 // and only a re-check keeps it off the fixed-face readers; the checks also cover what no key carries
-// at all, a deallocated or host-resident operand or one on another device. They are a few scalar
-// reads per call.
+// at all, an operand on another device. The cost is a few spec constructions and allocator reads
+// per call, small next to a dispatch.
 void ScatterCodegenDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(attributes, tensor_args);
