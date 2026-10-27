@@ -88,7 +88,39 @@ matmul_multi_core_reuse_mcast_1d_optimized_helper(
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 
+// Mask-mode sparsity for the mcast_in0 body, as the sparse matmul drives it: batch bB of the weight's
+// batchB groups is computed only where the one-page `mask` holds a non-zero entry, which is the in0
+// sender's and the in1 sender/writer's SPARSITY path. Absent, the body builds the dense program
+// unchanged.
+struct McastIn0Sparsity {
+    const tt::tt_metal::MeshTensor& mask;
+    // Groups (experts) the mask covers per outer batch.
+    uint32_t batchB = 0;
+    // Batches the in0 receivers and compute loop over: nnz when the caller supplied it, else batchB.
+    uint32_t num_batch_compute = 0;
+    // True when nnz is unknown, so the in0 sender broadcasts each batch's validity to the receivers
+    // and compute instead of them looping num_batch_compute times.
+    bool get_batch_from_reader = false;
+    // False when in0 holds one [M, K] slice per group (is_input_a_sparse) rather than one for all.
+    bool bcast_A = true;
+    // Output holds only the active groups' results, packed in mask order.
+    bool compact_output = false;
+};
+
 namespace reuse_mcast_1d_optimized_helpers {
+// The mcast_in0 body over prefetcher_pipes with mask-mode sparsity: the sparse matmul's spec factory
+// translates its parameters into these and builds the same program the dense matmul over pipes does,
+// plus the SPARSITY paths. in0 and output must be interleaved; `batchA` is the outer batch count.
+ttnn::device_operation::ProgramArtifacts create_sparse_mcast_in0_artifacts(
+    const Tensor& a,
+    const Tensor& b,
+    const Tensor& output,
+    operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig program_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    uint32_t batchA,
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    const McastIn0Sparsity& sparsity);
+
 void override_program_parameters(
     const MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t& override_variables,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,

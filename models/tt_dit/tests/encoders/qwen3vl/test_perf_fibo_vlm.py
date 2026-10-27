@@ -17,7 +17,7 @@ import transformers
 from loguru import logger
 
 import ttnn
-from models.common.modules.tt_ccl import default_topology
+from models.common.tt_ccl import default_topology
 from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import Qwen3VlEncoder
 from models.tt_dit.encoders.transformer import MAX_CHUNK_SIZE, Cache
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor

@@ -47,7 +47,7 @@ void kernel_main() {
                         /*popm=*/0);
                 } else {
                     // The y*dy buffer under a second name; one FIFO, not an extra buffer.
-                    constexpr auto dfb_inter0_id = dfb::ydy;
+                    static constexpr auto dfb_inter0_id = dfb::ydy;
                     mask_tile_to_dfb<dfb::dy, dfb::mask, dfb_inter0_id>(
                         dfb_dy_obj,
                         dfb_mask_obj,
@@ -72,7 +72,7 @@ void kernel_main() {
             ckl::ReduceInputBlockShape::single());
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
-            constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
+            static constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
             exp_tile_to_dfb<dfb::y, dfb_exp_id>(dfb_y_obj, dfb_ydy_obj);
             // sum * exp(y)
             mul_tiles_bcast_cols_to_dfb<dfb_exp_id, dfb::sum, dfb::dy_m_sum>(

@@ -63,4 +63,4 @@ One row per run (`--json` writes every metric):
 - The model goes stale as prefill gets faster. To check it, replay one slice on silicon (`../demo/agentx_replay.py`, added with the continuous-batching PR) and compare with `agentx_slice.py predict --measured`.
 - Not modelled: loading a cached prefix into the device, and the first decode token.
 
-`--help` on each script lists its options and the other knobs (cache size, chunk-aligned or exact resume, think-time cap, decode rate).
+`--help` on each script lists its options and the other knobs: cache size, resume rounding (chunk, Gemma4's resume granularity, or exact), the extra cost of a chunk that starts mid-chunk, think-time cap, decode rate.

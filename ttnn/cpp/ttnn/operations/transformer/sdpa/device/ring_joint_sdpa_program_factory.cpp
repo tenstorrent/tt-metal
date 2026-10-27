@@ -3190,6 +3190,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
     }
+    // Padded multicast slots exist only under the same conditions that let static_mcast_q_count exceed q_per_core
+    // (or with the rotated Q split); without them the compute kernel drops its padded-slot drain loop.
+    const bool padded_q_slots_enabled =
+        use_rotated_q_split ||
+        (enable_kv_chains && ((k_uses_batch_chain && k_mcast_enabled) || (gqa_grouped_kv && gqa_mcast_enabled)));
+    compute_kernel.named_compile_time_args.emplace_back("padded_q_slots", padded_q_slots_enabled ? 1u : 0u);
     reader_kernel.named_compile_time_args.emplace_back(
         "k_row_Wt", input_tensor_k.padded_shape()[3] / tt::constants::TILE_WIDTH);
     reader_kernel.named_compile_time_args.emplace_back(
@@ -3526,10 +3532,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 neighbour.has_value(),
                 "Sliding halo hop {} has no fabric neighbour",
                 halo_exchanges[direction_exchanges[direction][0]].hop);
-            const uint32_t links_available =
-                tt::tt_fabric::get_forwarding_link_indices(
-                    mesh_device->get_fabric_node_id(coord), mesh_device->get_fabric_node_id(neighbour.value()))
-                    .size();
+            const uint32_t links_available = tt::tt_fabric::get_forwarding_link_indices(
+                                                 *mesh_device,
+                                                 mesh_device->get_fabric_node_id(coord),
+                                                 mesh_device->get_fabric_node_id(neighbour.value()))
+                                                 .size();
             TT_FATAL(links_available >= 1, "Chunked sliding halo found no forwarding fabric link");
             // Every predecessor must use the same link count, or arrival counts would not match.
             TT_FATAL(

@@ -33,6 +33,11 @@ MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
+            // The unpadding path writes a compact output (padded == logical). Handing it the input's
+            // tile-rounded padded shape back would declare more bytes than its buffer holds.
+            if (output.padded_shape() == output.logical_shape()) {
+                return ttnn::reshape(output, original_shape->first);
+            }
             auto unsqueezed_tensor = ttnn::reshape(output, original_shape->first, original_shape->second);
             return unsqueezed_tensor;
         },

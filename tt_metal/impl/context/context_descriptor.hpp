@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstddef>
-#include <optional>
 #include <cstdint>
 #include <string>
 
@@ -14,7 +13,6 @@
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "context/metal_env_accessor.hpp"
 #include "context/metal_env_impl.hpp"
-#include "context_types.hpp"
 
 namespace tt {
 class Cluster;

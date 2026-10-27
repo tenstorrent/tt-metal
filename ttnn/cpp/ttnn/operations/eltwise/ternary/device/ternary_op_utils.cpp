@@ -33,6 +33,28 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
 }
 
+static bool has_empty_shards(const tt::tt_metal::TensorSpec& t, const tt::tt_metal::MemoryConfig& c) {
+    using namespace tt::tt_metal;
+    if (not c.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& shape = t.padded_shape();
+    const auto& spec = *c.shard_spec();
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(shape.rank()) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+    const uint64_t shards_h = (volume_except_last + spec.shape[0] - 1) / spec.shape[0];
+    const uint64_t shards_w = (shape[-1] + spec.shape[1] - 1) / spec.shape[1];
+    uint64_t num_shards = shards_h * shards_w;
+    if (c.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_shards = shards_h;
+    } else if (c.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        num_shards = shards_w;
+    }
+    return num_shards < spec.grid.num_cores();
+}
+
 // Check based on input specs and output memory config (two tensors, same shape and memory config).
 static bool is_native_L1_sharding(
     const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const tt::tt_metal::MemoryConfig& c) {
@@ -65,7 +87,7 @@ static bool is_native_L1_sharding(
     if (b.memory_config().is_sharded() && b.memory_config().buffer_type() == BufferType::L1) {
         return true;
     }
-    if (c.is_sharded() && c.buffer_type() == BufferType::L1) {
+    if (c.is_sharded() && c.buffer_type() == BufferType::L1 && !has_empty_shards(a, c)) {
         return true;
     }
     return false;
@@ -130,7 +152,8 @@ bool is_native_L1_sharding(
         if (false_spec->memory_config().is_sharded() && false_spec->memory_config().buffer_type() == BufferType::L1) {
             return true;
         }
-        if (output_memory_config.buffer_type() == BufferType::L1) {
+        if (output_memory_config.buffer_type() == BufferType::L1 &&
+            !has_empty_shards(predicate_spec, output_memory_config)) {
             return true;
         }
     }

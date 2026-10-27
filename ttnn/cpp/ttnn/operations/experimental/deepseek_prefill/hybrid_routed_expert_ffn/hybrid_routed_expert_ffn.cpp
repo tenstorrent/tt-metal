@@ -21,6 +21,15 @@ uint32_t semaphore_addr(const std::optional<GlobalSemaphore>& sem) {
     return sem.has_value() ? static_cast<uint32_t>(sem->address()) : 0u;
 }
 
+std::vector<uint32_t> semaphore_addrs(const std::vector<GlobalSemaphore>& sems) {
+    std::vector<uint32_t> addrs;
+    addrs.reserve(sems.size());
+    for (const auto& sem : sems) {
+        addrs.push_back(static_cast<uint32_t>(sem.address()));
+    }
+    return addrs;
+}
+
 }  // namespace
 
 ttnn::Tensor hybrid_routed_expert_moe(
@@ -48,7 +57,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<GlobalSemaphore>& fwd_arrived_semaphore,
     const std::optional<GlobalSemaphore>& final_arrived_semaphore,
     const std::optional<GlobalSemaphore>& expert_go_semaphore,
-    const std::optional<ttnn::Tensor>& forwarding_buffer) {
+    const std::optional<ttnn::Tensor>& forwarding_buffer,
+    const std::vector<GlobalSemaphore>& channel_semaphores) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -195,9 +205,11 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .fwd_arrived = fwd_arrived_semaphore,
             .final_arrived = final_arrived_semaphore,
             .expert_go = expert_go_semaphore,
+            .channel_semaphores = channel_semaphores,
             .fwd_arrived_addr = semaphore_addr(fwd_arrived_semaphore),
             .final_arrived_addr = semaphore_addr(final_arrived_semaphore),
             .expert_go_addr = semaphore_addr(expert_go_semaphore),
+            .channel_semaphore_addrs = semaphore_addrs(channel_semaphores),
             .l1_arena_addr =
                 overlap_combine && l1_arena.has_value() ? static_cast<uint32_t>(l1_arena->buffer()->address()) : 0u},
         OperationType::tensor_args_t{
@@ -217,6 +229,11 @@ ttnn::Tensor hybrid_routed_expert_moe(
             .expert_offsets = expert_offsets,
             .replicated_global_expert_idx_table = replicated_global_expert_idx_table,
             .forwarding_buffer = forwarding_buffer});
+}
+
+uint32_t hybrid_routed_expert_moe_channel_semaphore_count(ttnn::MeshDevice* mesh_device, uint32_t combine_axis) {
+    return combine::channel_semaphore_count(
+        static_cast<uint32_t>(mesh_device->shape()[static_cast<int32_t>(combine_axis)]));
 }
 
 ttnn::Tensor hybrid_routed_expert_moe_forwarding_buffer(

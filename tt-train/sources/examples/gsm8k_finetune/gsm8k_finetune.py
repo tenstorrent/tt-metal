@@ -425,8 +425,10 @@ def train():
 
     sched = SpeedrunScheduler(scheduler_config)
 
-    mask_np = build_causal_mask(max_sequence_length)
-    causal_mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
+    causal_mask = None
+    if device_config.enable_tp:
+        mask_np = build_causal_mask(max_sequence_length)
+        causal_mask = ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
     trainer = SFTTrainer(
         model=tt_model,
@@ -434,7 +436,8 @@ def train():
         eval_dataloader=eval_loader,
         config=sft_config,
         optimizer=optimizer_cfg,
-        lr_schedule=sched.lr_at,  # SpeedrunScheduler uses 0-based step index
+        # SpeedrunScheduler uses a 0-based step index; the optimizer's lr is max_lr, so lr_at / max_lr is the factor.
+        lr_lambda=lambda step: sched.lr_at(step) / scheduler_config.max_lr,
         attention_mask=causal_mask,
     )
 

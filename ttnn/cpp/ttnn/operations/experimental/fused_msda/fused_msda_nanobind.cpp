@@ -46,7 +46,8 @@ ttnn::Tensor fused_msda_from_offsets_py(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     const std::string& reference_mode,
     bool align_corners,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::vector<uint32_t>>& num_valid_queries) {
     return ttnn::experimental::fused_msda_from_offsets(
         value,
         reference_points,
@@ -55,7 +56,8 @@ ttnn::Tensor fused_msda_from_offsets_py(
         spatial_shapes,
         parse_reference_mode(reference_mode),
         align_corners,
-        memory_config);
+        memory_config,
+        num_valid_queries);
 }
 
 bool can_use_fused_msda_from_offsets_l1_value_py(
@@ -160,10 +162,17 @@ void bind_fused_msda(nb::module_& mod) {
                   as (P // R, R). BEVFormer spatial/temporal attention.
             * :attr:`align_corners`: pixel mapping
             * :attr:`memory_config`: output memory config
+            * :attr:`num_valid_queries`: optional list of B counts, each in [0, Q] and at
+              least one nonzero. Only queries [0, num_valid_queries[b]) of batch b are
+              computed; None computes every query. Changing the counts reuses the cached
+              program, and a captured trace replays the counts it was captured with.
 
         Returns:
             (B, Q, H*D) ROW_MAJOR bfloat16, equivalent to calling fused_msda on the
-            materialized locations, up to rounding.
+            materialized locations, up to rounding. With num_valid_queries, that holds for
+            rows below each batch's count; the rows past it are unwritten and hold
+            undefined data (possibly NaN or Inf), so drop them with a select such as
+            ttnn.where, not by multiplying with a 0/1 mask.
 
         Constraints: as fused_msda, including each level's H_l and W_l <= 256.
         )doc";
@@ -180,7 +189,8 @@ void bind_fused_msda(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("reference_mode") = "level",
         nb::arg("align_corners") = false,
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("num_valid_queries") = nb::none());
 
     const auto* l1_value_fit_doc =
         R"doc(

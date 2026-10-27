@@ -4,7 +4,7 @@
 #pragma once
 
 #include "argmax_common.hpp"
-#include "tt-metalium/constants.hpp"
+#include "api/tile_constants.h"
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "api/dataflow/noc.h"

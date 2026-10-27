@@ -37,12 +37,14 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "device_fixture.hpp"
 #include "tests/tt_metal/tt_metal/api/dram_sender_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "hostdev/remote_dfb_config_layout.h"
+#include "impl/allocator/allocator.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/prefetcher_pipe_dram_sender_internal.hpp"
 #include "impl/context/metal_context.hpp"
@@ -758,6 +760,94 @@ TEST_F(PrefetcherPipeDramSenderFixture, BlockSizeChangeAcrossPrograms) {
         *mesh_device_,
         set,
         credit_units(*mesh_device_, kFirstBatch * kFirstEntrySize + kPadBytes + kSecondBatch * kSecondEntrySize));
+}
+
+TEST_F(PrefetcherPipeDramSenderFixture, DriscKernelReadsDramAndWorkerL1OverNoc) {
+    // The Tensor prefetcher reads a device-written expert mask before it streams, which makes it a
+    // DRISC kernel that issues NoC reads rather than only DMAs and NoC writes. Both of a bank's
+    // sender roles read a DRAM page in their own bank, one in another bank, and one page of worker
+    // L1, all through virtual NoC coordinates resolved on the host the way the prefetcher resolves
+    // its mask page.
+    constexpr uint32_t kPageBytes = 256;
+    constexpr uint32_t kOwnBank = 0;
+    constexpr uint32_t kOtherBank = 1;
+    const CoreCoord kWorker{0, 0};
+    IDevice* device = mesh_device_->get_devices().at(0);
+    const auto& allocator = device->allocator();
+    const uint32_t num_banks = allocator->get_num_banks(BufferType::DRAM);
+    ASSERT_GT(num_banks, kOtherBank);
+
+    // One page per bank: interleaved page p lives in bank p.
+    auto dram_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = num_banks * kPageBytes},
+        distributed::DeviceLocalBufferConfig{.page_size = kPageBytes, .buffer_type = BufferType::DRAM},
+        mesh_device_);
+    std::vector<uint32_t> dram_words(num_banks * kPageBytes / sizeof(uint32_t));
+    for (uint32_t w = 0; w < dram_words.size(); ++w) {
+        dram_words[w] = 0xD7A40000u | w;
+    }
+    distributed::EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), dram_buffer, dram_words, /*blocking=*/true);
+
+    std::vector<uint32_t> worker_words(kPageBytes / sizeof(uint32_t));
+    for (uint32_t w = 0; w < worker_words.size(); ++w) {
+        worker_words[w] = 0x10C40000u | w;
+    }
+    const auto worker_addr = static_cast<uint32_t>(allocator->get_base_allocator_addr(HalMemType::L1));
+    detail::WriteToDeviceL1(device, kWorker, worker_addr, worker_words, CoreType::WORKER);
+
+    Buffer* dram_device_buffer = dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+    const auto dram_source = [&](uint32_t bank) {
+        const CoreCoord xy = MetalContext::instance(context_id_of(*mesh_device_))
+                                 .get_cluster()
+                                 .get_soc_desc(device->id())
+                                 .get_preferred_worker_core_for_dram_view(
+                                     static_cast<int>(allocator->impl().get_dram_channel_from_bank_id(bank)),
+                                     static_cast<uint8_t>(NOC::NOC_0));
+        return std::vector<uint32_t>{
+            static_cast<uint32_t>(xy.x),
+            static_cast<uint32_t>(xy.y),
+            static_cast<uint32_t>(dram_device_buffer->page_address(bank, /*page_index=*/bank))};
+    };
+    const CoreCoord worker_xy = device->worker_core_from_logical_core(kWorker);
+    std::vector<uint32_t> rt_args = {3};
+    for (const auto& source :
+         {dram_source(kOwnBank),
+          dram_source(kOtherBank),
+          std::vector<uint32_t>{static_cast<uint32_t>(worker_xy.x), static_cast<uint32_t>(worker_xy.y), worker_addr}}) {
+        rt_args.insert(rt_args.end(), source.begin(), source.end());
+    }
+
+    // A NoC read lands at the same offset within a DRAM-alignment word as its source.
+    const uint32_t dram_alignment = allocator->get_alignment(BufferType::DRAM);
+    const auto dst_l1_base = static_cast<uint32_t>(align(drisc_pattern_base(*mesh_device_), dram_alignment));
+    const std::vector<CoreCoord> senders = mesh_device_->impl().dram_sender_logical_cores(device, kOwnBank);
+    Program program = CreateProgram();
+    for (const CoreCoord& sender : senders) {
+        const KernelHandle kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/drisc_noc_read.cpp",
+            sender,
+            DramConfig{.noc = NOC::NOC_0, .compile_args = {dst_l1_base, kPageBytes}});
+        SetRuntimeArgs(program, kernel, sender, rt_args);
+    }
+    distributed::MeshWorkload workload;
+    workload.add_program(distributed::MeshCoordinateRange({0, 0}, {0, 0}), std::move(program));
+    distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, /*blocking=*/true);
+
+    const uint32_t words_per_page = kPageBytes / sizeof(uint32_t);
+    const auto dram_page = [&](uint32_t bank) {
+        return std::vector<uint32_t>(
+            dram_words.begin() + bank * words_per_page, dram_words.begin() + (bank + 1) * words_per_page);
+    };
+    const std::vector<std::vector<uint32_t>> expected = {dram_page(kOwnBank), dram_page(kOtherBank), worker_words};
+    for (const CoreCoord& sender : senders) {
+        const auto got = read_drisc_l1(*mesh_device_, sender, dst_l1_base, expected.size() * words_per_page);
+        for (uint32_t i = 0; i < expected.size(); ++i) {
+            const std::vector<uint32_t> got_page(
+                got.begin() + i * words_per_page, got.begin() + (i + 1) * words_per_page);
+            EXPECT_EQ(got_page, expected[i]) << "sender " << sender.str() << " source " << i;
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

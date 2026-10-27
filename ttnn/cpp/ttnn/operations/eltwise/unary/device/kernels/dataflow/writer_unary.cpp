@@ -7,6 +7,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#if DRAM_FLOW
+#include "dram_read.hpp"
+#endif
 
 void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
@@ -55,12 +58,33 @@ void kernel_main() {
     noc.async_write_barrier();
 #else
     const uint32_t page_bytes = dfb_dst.get_entry_size();
+#if DRAM_FLOW
+    // Writes in the reader's page order, WRITE_BURST pages per flush.
+    auto order = dram_read::RotatedPages::from_args();
+    dram_read::DfbGroups groups{.depth = dfb_dst.get_total_num_entries()};
+    auto work = dram_read::WorkSource::from_args(noc);
+    auto write_group = [&](uint32_t n) {
+        // The scheduler core answers requests while its own pages are on the way.
+        work.serve_until([&] { return dfb_dst.pages_available_at_front(n); });
+        dfb_dst.wait_front(n);
+        for (uint32_t k = 0; k < n; ++k) {
+            noc.async_write(dfb_dst, dst, page_bytes, {.offset_bytes = k * page_bytes}, {.page_id = order.next()});
+        }
+        noc.async_writes_flushed();
+        dfb_dst.pop_front(n);
+    };
+    auto write_pages = [&](uint32_t first, uint32_t count) {
+        dram_read::for_each_group(order, groups, first, count, [] { return uint32_t{WRITE_BURST}; }, write_group);
+    };
+    work.for_each_chunk(write_pages);
+#else
     for (uint32_t i = start_id; i < end_id; ++i) {
         dfb_dst.wait_front(onepage);
         noc.async_write(dfb_dst, dst, page_bytes, {}, {.page_id = i});
         noc.async_writes_flushed();
         dfb_dst.pop_front(onepage);
     }
+#endif  // DRAM_FLOW
     noc.async_write_barrier();
 #endif
 #endif
