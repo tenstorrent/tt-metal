@@ -39,3 +39,9 @@
 - Update 00:00 PDT (tt-buddy 2e437e49): report quality only (PCC/PSNR, VBench, stills), no speed/denoise-time quotes.
   On a tray/chip drop or broker degrade: no retry (chain already stops), `ttp note --to tt-buddy` with job id + PDT time,
   hand off blocked with waits_on `when:timeout 50 tt-project/harness/bin/fasth3-box-health blx04 >/dev/null 2>&1 || exit 1`.
+- 2026-10-27 00:12 PDT (run 2149): job 310 (e2e.1) ended exit 124 at 00:09:30 PDT: cold JIT still compiling
+  (model load began 00:08:34 PDT after ~8 min of kernel builds); no drop signs, not a device fault. JIT cache persists
+  in ~/fasth3/data/t511/jit (tt-metal-cache<build_key>/kernels, 96 kernels after 310). chain511b4.sh now allows up to
+  3 e2e passes, continuing only on exit 124/timeout (root commit 5910d21e3a9). Relaunched as `ttp detach chain511c`
+  (run dir 2149): adopted 310, e2e.2 submit waiting on blx04's post-job broker gate (chainlib retries).
+  Probe: ttp detach --check /home/smarton/fasth3/tt-metal/tt-project/state/runs/2149/chain511c.rc
