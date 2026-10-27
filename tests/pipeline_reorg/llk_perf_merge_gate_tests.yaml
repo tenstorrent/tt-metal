@@ -111,3 +111,4 @@
     LLK_PERF_RUN_TYPES: "L1_TO_L1"
     PIPELINE: "merge_baseline"
     TT_LLK_DISABLE_ASSERTS: "1"
+# trial: merge-gate stage 2
