@@ -2773,9 +2773,9 @@ void kernel_main() {
     // COMMON CT ARGS (not specific to sender or receiver)
     //
 
-    // Initialize stream register state for credit management across the Ethernet link.
-    // We make sure to do this before we handshake to guarantee that the registers are
-    // initialized before the other side has any possibility of modifying them.
+    // Initialize stream register (or, without them, software counter) state for credit management
+    // across the Ethernet link. We make sure to do this before we handshake to guarantee that the
+    // registers are initialized before the other side has any possibility of modifying them.
     init_packets_sent_credit<to_receiver_packets_sent_streams[0]>();
     init_stream_reg_if_used<to_sender_packets_acked_streams[0]>(0);
     init_stream_reg_if_used<to_sender_packets_acked_streams[1]>(0);
@@ -3118,7 +3118,7 @@ void kernel_main() {
                         sender_channel_1_free_slots_stream_id,
 #endif
                         // This is our local stream register for the copy of the downstream router's
-                        // free slots
+                        // free slots (stream-register mode only)
                         receiver_channel_free_slots_stream_id,
                         receiver_channel_forwarding_data_cmd_buf_ids[0],
                         receiver_channel_forwarding_sync_cmd_buf_ids[0]);
