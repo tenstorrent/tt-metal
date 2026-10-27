@@ -3,7 +3,7 @@
   "device_params": {
    "fabric_config": "FabricConfig.FABRIC_2D",
    "l1_small_size": 24576,
-   "fabric_router_config": "<ttnn._ttnn.fabric.FabricRouterConfig object at 0x7f926fae6370>"
+   "fabric_router_config": "<ttnn._ttnn.fabric.FabricRouterConfig object at 0x7f5ca67ecbd0>"
   },
   "fabric_config": "FABRIC_2D"
  },
@@ -872,7 +872,7 @@
   },
   {
    "sig": "03f82eaff0",
-   "sig_full": "b0a49a6401",
+   "sig_full": "6b87363ba8",
    "count": 8,
    "op": "ttnn.bringup.flat_routed_expert_with_program",
    "args": [
@@ -1038,7 +1038,7 @@
     },
     "down_fp32": true,
     "extra": "MeshProgramDescriptor(kernels=[5, 5, 5, 5])",
-    "extra_key": 7113728,
+    "extra_key": 7974048,
     "h_bf16": false,
     "intermediate": 2304,
     "l1_args": [
@@ -3595,6 +3595,395 @@
    }
   },
   {
+   "sig": "54aa3bbe0e",
+   "sig_full": "54aa3bbe0e",
+   "count": 1,
+   "op": "ttnn.bringup.prepare_program",
+   "args": [
+    {
+     "type": "MeshProgramDescriptor",
+     "programs": 4,
+     "kernels": [
+      "inline:34a9bf72ec76",
+      "inline:372dff9dde09",
+      "inline:525e32a467fe"
+     ],
+     "digest": "befea287463f"
+    },
+    [
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       512
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       2048,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     }
+    ]
+   ],
+   "kwargs": {}
+  },
+  {
+   "sig": "f0e39b029d",
+   "sig_full": "f0e39b029d",
+   "count": 2,
+   "op": "ttnn.bringup.prepare_program",
+   "args": [
+    {
+     "type": "MeshProgramDescriptor",
+     "programs": 4,
+     "kernels": [
+      "inline:0dc3b7014769",
+      "inline:0f622a8dda3f",
+      "inline:17fa31b1e484",
+      "inline:211235f2c3fa",
+      "inline:41e48a659406",
+      "inline:4366e2256d1c",
+      "inline:4d0c03d17e33",
+      "inline:51ed3454839b",
+      "inline:5ea73fd1bdb3",
+      "inline:635b20cc9c0d",
+      "inline:6efc0df89f63",
+      "inline:73ab0f0dd54e",
+      "inline:7559b8e5b577",
+      "inline:7a613957fd03",
+      "inline:85115a20454f",
+      "inline:8a42526022c8",
+      "inline:9608e0a2d753",
+      "inline:9a44195acf96",
+      "inline:a5c1f95bc39b",
+      "inline:a8bc0ca79e80",
+      "inline:aa37ad469fb4",
+      "inline:abefebbf93f4",
+      "inline:bbcb6683da7f",
+      "inline:dbbdfcd74c82",
+      "inline:efdf131e75ac"
+     ],
+     "digest": "dfe7d6fa1d59"
+    },
+    [
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1024,
+       2560
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       74240,
+       256
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [
+       74240,
+       32
+      ],
+      "shard_cores": 8,
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       512,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       101,
+       321680
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "L1",
+      "memory_layout": "HEIGHT_SHARDED",
+      "shard_shape": [
+       1,
+       321680
+      ],
+      "shard_cores": 101,
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       16,
+       384
+      ],
+      "dtype": "UINT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       2048,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       512
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       2560
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       32
+      ],
+      "dtype": "FLOAT32",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       32
+      ],
+      "dtype": "UINT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       8,
+       3328
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       96
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       96
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       13056
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       408,
+       64
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       1024
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     }
+    ]
+   ],
+   "kwargs": {}
+  },
+  {
    "sig": "377a477700",
    "sig_full": "377a477700",
    "count": 2,
@@ -4438,6 +4827,395 @@
      "devices": 4
     }
    }
+  },
+  {
+   "sig": "bef5e0fc64",
+   "sig_full": "bef5e0fc64",
+   "count": 7,
+   "op": "ttnn.bringup.run_prepared",
+   "args": [
+    {
+     "type": "MeshProgramDescriptor",
+     "programs": 4,
+     "kernels": [
+      "inline:34a9bf72ec76",
+      "inline:372dff9dde09",
+      "inline:525e32a467fe"
+     ],
+     "digest": "befea287463f"
+    },
+    [
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       512
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       2048,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     }
+    ]
+   ],
+   "kwargs": {}
+  },
+  {
+   "sig": "ef9baff5aa",
+   "sig_full": "ef9baff5aa",
+   "count": 9,
+   "op": "ttnn.bringup.run_prepared",
+   "args": [
+    {
+     "type": "MeshProgramDescriptor",
+     "programs": 4,
+     "kernels": [
+      "inline:0dc3b7014769",
+      "inline:0f622a8dda3f",
+      "inline:17fa31b1e484",
+      "inline:211235f2c3fa",
+      "inline:41e48a659406",
+      "inline:4366e2256d1c",
+      "inline:4d0c03d17e33",
+      "inline:51ed3454839b",
+      "inline:5ea73fd1bdb3",
+      "inline:635b20cc9c0d",
+      "inline:6efc0df89f63",
+      "inline:73ab0f0dd54e",
+      "inline:7559b8e5b577",
+      "inline:7a613957fd03",
+      "inline:85115a20454f",
+      "inline:8a42526022c8",
+      "inline:9608e0a2d753",
+      "inline:9a44195acf96",
+      "inline:a5c1f95bc39b",
+      "inline:a8bc0ca79e80",
+      "inline:aa37ad469fb4",
+      "inline:abefebbf93f4",
+      "inline:bbcb6683da7f",
+      "inline:dbbdfcd74c82",
+      "inline:efdf131e75ac"
+     ],
+     "digest": "dfe7d6fa1d59"
+    },
+    [
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1024,
+       2560
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       74240,
+       256
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [
+       74240,
+       32
+      ],
+      "shard_cores": 8,
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       512,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       101,
+       321680
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "L1",
+      "memory_layout": "HEIGHT_SHARDED",
+      "shard_shape": [
+       1,
+       321680
+      ],
+      "shard_cores": 101,
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       16,
+       384
+      ],
+      "dtype": "UINT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       2048,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       512
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       2560
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       32
+      ],
+      "dtype": "FLOAT32",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       32
+      ],
+      "dtype": "UINT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       8,
+       3328
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       96
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       96
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       13056
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       408,
+       64
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       1024
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     }
+    ]
+   ],
+   "kwargs": {}
   },
   {
    "sig": "09a0901c6f",
