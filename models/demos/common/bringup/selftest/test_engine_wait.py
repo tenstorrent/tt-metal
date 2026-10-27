@@ -63,3 +63,15 @@ def test_the_specs_server_repo_expands_like_its_other_paths(monkeypatch, tmp_pat
     monkeypatch.setenv("BRINGUP_SELFTEST_DIR", str(tmp_path))
     assert dgen_engine.server_repo(_Spec()) == tmp_path / "tt-d-gen"
     assert "$" not in str(dgen_engine.server_repo(None))  # the defaults.yaml template path
+
+
+def test_the_engine_driver_names_its_pipeline_arguments():
+    """tt-d-gen 1cf343887 dropped device_prefill_pipeline's layers_per_chunk: positional arguments shifted the timeout
+    into sp_factor. The driver passes keywords, layers_per_chunk only to a build that declares it."""
+    from models.demos.common.bringup.testing.dgen_prefill_driver import device_pipeline_args
+
+    new = "device_prefill_pipeline(service_id: str, ack_shm_name: str, chunk_size: int, connect_timeout_ms: int = 30000, sp_factor: int = 1, num_mtp_tokens: int = 0) -> PipelineConfig"
+    old = "device_prefill_pipeline(service_id: str, ack_shm_name: str, chunk_size: int, layers_per_chunk: int, connect_timeout_ms: int = 30000, sp_factor: int = 1, num_mtp_tokens: int = 0) -> PipelineConfig"
+    want = dict(service_id="s", ack_shm_name="a", chunk_size=5120, connect_timeout_ms=1800000, sp_factor=8)
+    assert device_pipeline_args(new + "\n\nOn-device", "s", "a", 5120, 40, 1800000, 8) == want
+    assert device_pipeline_args(old, "s", "a", 5120, 40, 1800000, 8) == {**want, "layers_per_chunk": 40}

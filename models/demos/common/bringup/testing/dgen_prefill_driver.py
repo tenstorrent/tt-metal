@@ -40,6 +40,16 @@ def log(msg: str) -> None:
     print(f"[dgen driver] {msg}", flush=True)
 
 
+def device_pipeline_args(doc: str, svc: str, ack: str, chunk: int, lpc: int, timeout_ms: int, sp: int) -> dict:
+    """F200: keyword arguments for te.device_prefill_pipeline as this build declares it (its signature, the first line
+    of __doc__). tt-d-gen 1cf343887 (#1600, the runner's layer-completion ring) dropped layers_per_chunk; passed by
+    position, the timeout became sp_factor (ENGINE_FATAL chunk_size=5120 is not divisible by sp_factor=1800000)."""
+    kw = dict(service_id=svc, ack_shm_name=ack, chunk_size=chunk, connect_timeout_ms=timeout_ms, sp_factor=sp)
+    if "layers_per_chunk" in doc.split("\n", 1)[0]:
+        kw["layers_per_chunk"] = lpc
+    return kw
+
+
 def main(plan_path: str, out_path: str) -> int:
     plan = json.loads(open(plan_path).read())
     rec = {"ok": False, "errors": [], "requests": {}, "telemetry": {}, "path": "tt-d-gen engine"}
@@ -77,7 +87,15 @@ def main(plan_path: str, out_path: str) -> int:
         log(f"mock pipeline (host only), layers_per_chunk {lpc}")
     else:
         pipe = te.device_prefill_pipeline(
-            svc, ack, cfg.chunk_size, lpc, int(plan.get("connect_timeout_ms", 600000)), int(plan["sp_factor"])
+            **device_pipeline_args(
+                te.device_prefill_pipeline.__doc__ or "",
+                svc,
+                ack,
+                cfg.chunk_size,
+                lpc,
+                int(plan.get("connect_timeout_ms", 600000)),
+                int(plan["sp_factor"]),
+            )
         )
         log(
             f"device pipeline: service {svc!r}, acks {ack!r}, chunk {cfg.chunk_size}, layers/chunk {lpc}, "
