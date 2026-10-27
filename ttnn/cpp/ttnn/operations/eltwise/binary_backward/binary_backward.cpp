@@ -942,55 +942,124 @@ std::vector<std::optional<Tensor>> div_bw(
 }
 
 std::vector<std::optional<Tensor>> div_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
+    const Tensor& grad_tensor_arg,
+    const Tensor& input_tensor_arg,
+    const Tensor& other_tensor_arg,
     const std::optional<std::string>& rounding_mode,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
-    operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
     TT_FATAL(
         (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
+    // Only the None rounding-mode branch has non-zero gradients worth fusing. 'trunc'/'floor'
+    // return zero grads (see below), so let them keep the trivial existing composite.
     if (rounding_mode == std::nullopt) {
+        const auto hard = operations::binary_backward::BinaryBackwardDeviceOperation::hard_invariants_reason(
+            operations::binary_backward::BinaryBackwardOpType::DIV_BW,
+            grad_tensor_arg,
+            input_tensor_arg,
+            other_tensor_arg,
+            input_grad,
+            other_grad);
+        TT_FATAL(!hard.has_value(), "{}", hard.value_or(std::string{}));
+        const auto soft = operations::binary_backward::BinaryBackwardDeviceOperation::soft_fallback_reason(
+            operations::binary_backward::BinaryBackwardOpType::DIV_BW,
+            grad_tensor_arg,
+            input_tensor_arg,
+            other_tensor_arg,
+            output_mem_config,
+            {are_required_outputs.at(0), are_required_outputs.at(1)},
+            input_grad,
+            other_grad);
+        if (!soft.has_value()) {
+            auto outs = operations::binary_backward::launch_binary_backward(
+                operations::binary_backward::BinaryBackwardOpType::DIV_BW,
+                grad_tensor_arg,
+                input_tensor_arg,
+                other_tensor_arg,
+                tt::tt_metal::DataType::INVALID,
+                output_mem_config.value_or(input_tensor_arg.memory_config()),
+                {true, true},
+                input_grad,
+                other_grad);
+            return {outs[0], outs[1]};
+        }
+    }
+
+    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
+    operations::binary_backward::detail::preallocated_tensors_check(
+        input_grad,
+        other_grad,
+        input_tensor_arg,
+        other_tensor_arg,
+        {are_required_outputs[0], are_required_outputs[1]},
+        output_mem_config);
+
+    if (rounding_mode == std::nullopt) {
+        // d(a/b)/da = grad/b; d(a/b)/db = -grad*a/b². Compute at grad shape (broadcast(a,b))
+        // then sum-reduce along axes where operand was expanded.
+        const auto input_needs_reduce = operations::binary_backward::is_broadcasted_over(
+            input_tensor_arg.logical_shape(), grad_tensor_arg.logical_shape());
+        const auto other_needs_reduce = operations::binary_backward::is_broadcasted_over(
+            other_tensor_arg.logical_shape(), grad_tensor_arg.logical_shape());
+
         if (are_required_outputs.at(0)) {
-            ttnn::multiply(
-                grad_tensor, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config, input_grad);
+            Tensor grad_a = ttnn::multiply(
+                grad_tensor_arg,
+                ttnn::reciprocal(other_tensor_arg, output_mem_config),
+                std::nullopt,
+                output_mem_config);
+            if (input_needs_reduce) {
+                grad_a = operations::binary_backward::detail::reduce_grad_to_operand_shape(
+                    grad_a, input_tensor_arg.logical_shape(), output_mem_config);
+            }
+            ttnn::assign(grad_a, input_grad.value());
             result[0] = input_grad;
         }
         if (are_required_outputs.at(1)) {
             // -grad * input_a / other^2, evaluated as -grad * ((input_a / other) / other).
-            // Squaring first loses the answer at both ends -- infinity below
-            // |other| = 1.0842e-19, zero above 2^63; see the note in rdiv_bw. The op count is
-            // unchanged: one reciprocal and two multiplies either way.
-            Tensor recip_other = ttnn::reciprocal(other, output_mem_config);
-            ttnn::multiply(
-                ttnn::neg(grad_tensor, output_mem_config),
-                (ttnn::multiply(
-                    ttnn::multiply(input_a, recip_other, std::nullopt, output_mem_config),
+            // Squaring loses the answer at both ends; see rdiv_bw.
+            Tensor recip_other = ttnn::reciprocal(other_tensor_arg, output_mem_config);
+            Tensor grad_b = ttnn::multiply(
+                ttnn::neg(grad_tensor_arg, output_mem_config),
+                ttnn::multiply(
+                    ttnn::multiply(input_tensor_arg, recip_other, std::nullopt, output_mem_config),
                     recip_other,
                     std::nullopt,
-                    output_mem_config)),
+                    output_mem_config),
                 std::nullopt,
-                output_mem_config,
-                other_grad);
+                output_mem_config);
             recip_other.deallocate();
+            if (other_needs_reduce) {
+                grad_b = operations::binary_backward::detail::reduce_grad_to_operand_shape(
+                    grad_b, other_tensor_arg.logical_shape(), output_mem_config);
+            }
+            ttnn::assign(grad_b, other_grad.value());
             result[1] = other_grad;
         }
     } else {
+        // rounding_mode 'trunc'/'floor': gradients are zero at every non-boundary point.
         if (are_required_outputs.at(0)) {
             ttnn::zeros_like(
-                grad_tensor, grad_tensor.dtype(), grad_tensor.layout(), std::nullopt, output_mem_config, input_grad);
+                grad_tensor_arg,
+                grad_tensor_arg.dtype(),
+                grad_tensor_arg.layout(),
+                std::nullopt,
+                output_mem_config,
+                input_grad);
             result[0] = input_grad;
         }
         if (are_required_outputs.at(1)) {
             ttnn::zeros_like(
-                grad_tensor, grad_tensor.dtype(), grad_tensor.layout(), std::nullopt, output_mem_config, other_grad);
+                grad_tensor_arg,
+                grad_tensor_arg.dtype(),
+                grad_tensor_arg.layout(),
+                std::nullopt,
+                output_mem_config,
+                other_grad);
             result[1] = other_grad;
         }
     }
