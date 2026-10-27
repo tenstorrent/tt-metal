@@ -24,7 +24,7 @@ void kernel_main() {
 
     const auto out = TensorAccessor(out_args, out_addr);
     const uint32_t tile_bytes = get_tile_size(cb_out);
-    Noc noc;
+    const Noc noc;
     DataflowBuffer out_tile(cb_out);
     for (uint32_t u = first_unit; u < first_unit + units; ++u) {
         out_tile.wait_front(1);

@@ -35,7 +35,7 @@ FORCE_INLINE void mcast_phase(const TilesArgs& tiles_args, const ExtraArgs& extr
     const uint32_t num_dests = (x1 - x0 + 1) * (y1 - y0 + 1);
     const uint32_t tile_bytes = get_tile_size(src_cb);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer src(src_cb);
     DataflowBuffer dst(dst_cb);
     Semaphore<> landed(semaphore_id);

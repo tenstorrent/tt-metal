@@ -43,7 +43,7 @@ void kernel_main() {
     const auto logits = TensorAccessor(logits_args, logits_addr);
     const auto index_template = TensorAccessor(index_args, index_addr);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer in0(cb_in0);
     DataflowBuffer index(cb_index);
 

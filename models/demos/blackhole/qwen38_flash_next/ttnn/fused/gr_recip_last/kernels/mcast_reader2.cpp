@@ -40,7 +40,7 @@ FORCE_INLINE void read_stream(const Args& args, uint32_t cb_id, uint32_t first_a
     const uint32_t batch = get_arg_val<uint32_t>(first_arg + 6);
     const auto accessor = TensorAccessor(args, addr);
     const uint32_t tile_bytes = get_tile_size(cb_id);
-    Noc noc;
+    const Noc noc;
     DataflowBuffer stream_cb(cb_id);
     uint32_t pending = 0;
     for (uint32_t o = 0; o < outer; ++o) {

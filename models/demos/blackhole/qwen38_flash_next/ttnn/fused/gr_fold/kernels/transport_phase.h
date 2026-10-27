@@ -43,8 +43,8 @@ using namespace tt::tt_fabric::linear::experimental;
 constexpr uint32_t phase_runtime_args = 6;  // before the consumers' coordinates
 
 // This RISC's connection along the line: BRISC forward (the ranks above), NCRISC backward (the ranks below).
-// Device 2.0 migration: legacy primitive retained: the 1D fabric sender (WorkerToFabricEdmSender, PacketHeaderPool,
-// fabric_multicast_noc_*) has no Device 2.0 interface; its packets take raw 64-bit NoC addresses.
+// The 1D fabric sender (WorkerToFabricEdmSender, PacketHeaderPool, fabric_multicast_noc_*) has no Device 2.0
+// interface; its packets take raw 64-bit NoC addresses.
 struct LineSender {
     tt::tt_fabric::WorkerToFabricEdmSender connection;
     volatile PACKET_HEADER_TYPE* header;
@@ -126,21 +126,20 @@ FORCE_INLINE void transport_phase(
     const uint32_t consumer_semaphore_id = get_arg_val<uint32_t>(first_arg + 5);
     const auto out = TensorAccessor(out_args, out_addr);
     const uint32_t tile_bytes = get_tile_size(scratch_cb);
-    Noc noc;
+    const Noc noc;
     DataflowBuffer scratch(scratch_cb);
     Semaphore<> go(go_semaphore_id);
     Semaphore<> scratch_ready(scratch_semaphore_id);
     Semaphore<> done(done_semaphore_id);
-    // Device 2.0 migration: legacy primitive retained: barrier_addr and data_addr are GlobalSemaphore addresses, and
-    // Semaphore<> binds a program semaphore id, so their waits and resets stay noc_semaphore_wait_min / set, which take
-    // these volatile L1 pointers.
+    // barrier_addr and data_addr are GlobalSemaphore addresses and Semaphore<> binds a program semaphore id, so their
+    // waits and resets are noc_semaphore_wait_min / set, which take these volatile L1 pointers.
     volatile tt_l1_ptr uint32_t* barrier = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_addr);
     volatile tt_l1_ptr uint32_t* data = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_addr);
     const uint64_t data_noc_addr = safe_get_noc_addr(my_x[0], my_y[0], data_addr, 0);
     const uint32_t rank = line.rank;
 
 #if defined(COMPILE_FOR_BRISC)
-    // Device 2.0 migration: legacy primitive retained: `barrier` is a GlobalSemaphore word (see above).
+    // `barrier` is a GlobalSemaphore word (see above).
     noc_semaphore_wait_min(barrier, line_devices - 1);
     noc_semaphore_set(barrier, 0);  // FACT 2: reset before the release below; the sends follow the release
     if (delay_after_reset != 0) {
@@ -189,7 +188,7 @@ FORCE_INLINE void transport_phase(
     if (line.has_peers) {
         for (uint32_t i = 0; i < carried_tiles; ++i) {
             noc.async_writes_flushed();
-            // Device 2.0 migration: legacy primitive retained: the fabric write takes the page's raw NoC address.
+            // The fabric write takes the page's raw NoC address.
             fabric_multicast_noc_fused_unicast_with_atomic_inc(
                 &line.connection,
                 line.header,
@@ -208,7 +207,7 @@ FORCE_INLINE void transport_phase(
         line.close();
     }
 #if defined(COMPILE_FOR_BRISC)
-    // Device 2.0 migration: legacy primitive retained: `data` is a GlobalSemaphore word (see above).
+    // `data` is a GlobalSemaphore word (see above).
     noc_semaphore_wait_min(data, (line_devices - 1) * carried_tiles);  // FACT 3: every peer's every tile
     noc_semaphore_set(data, 0);
     for (uint32_t c = 0; c < consumers; ++c) {  // the gathered pages are complete: release this program's consumers

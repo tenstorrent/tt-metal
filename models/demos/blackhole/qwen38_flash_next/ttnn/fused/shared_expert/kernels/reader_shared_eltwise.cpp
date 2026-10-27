@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr auto gate_up_scalar_args = TensorAccessorArgs<0, 0>();
     const auto gate_up_scalar = TensorAccessor(gate_up_scalar_args, gate_up_scalar_addr);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer gate(cb_gate);
     DataflowBuffer up(cb_up);
     DataflowBuffer scalar(cb_scalar);

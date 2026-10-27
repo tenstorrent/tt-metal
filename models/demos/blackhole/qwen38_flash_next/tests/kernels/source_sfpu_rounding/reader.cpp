@@ -9,7 +9,7 @@
 void kernel_main() {
     const auto input = TensorAccessor(TensorAccessorArgs<0>(), get_arg_val<uint32_t>(0));
     const uint32_t tiles = get_arg_val<uint32_t>(1);
-    Noc noc;
+    const Noc noc;
     DataflowBuffer buffer(0);
     for (uint32_t tile = 0; tile < tiles; ++tile) {
         buffer.reserve_back(1);

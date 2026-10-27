@@ -68,7 +68,7 @@ void kernel_main() {
     const auto shared = TensorAccessor(shared_args, shared_addr);
     const auto sigmoid = TensorAccessor(sigmoid_args, sigmoid_addr);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer act(cb_act);
     DataflowBuffer score_tiles(cb_scores);
     DataflowBuffer owner_row(cb_owner);

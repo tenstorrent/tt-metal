@@ -24,7 +24,7 @@ FORCE_INLINE void write_stream(const Args& args, uint32_t cb_id, uint32_t first_
     const uint32_t batch = get_arg_val<uint32_t>(first_arg + 4);
     const auto accessor = TensorAccessor(args, addr);
     const uint32_t tile_bytes = get_tile_size(cb_id);
-    Noc noc;
+    const Noc noc;
     DataflowBuffer stream_cb(cb_id);
     for (uint32_t done = 0; done < count; done += batch) {
         stream_cb.wait_front(batch);

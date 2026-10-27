@@ -25,7 +25,7 @@ void kernel_main() {
     words[3] = my_y[1];
     coordinates.push_back(1);
     const auto out = TensorAccessor(args, addr);
-    Noc noc;
+    const Noc noc;
     coordinates.wait_front(1);
     noc.async_write(coordinates, out, 16, {.offset_bytes = 0}, {.page_id = slot});
     noc.async_write_barrier();

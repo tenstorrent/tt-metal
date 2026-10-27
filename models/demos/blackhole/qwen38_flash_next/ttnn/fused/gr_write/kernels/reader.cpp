@@ -37,7 +37,7 @@ void kernel_main() {
     const auto residual = TensorAccessor(residual_args, residual_addr);
     const auto injection = TensorAccessor(injection_args, injection_addr);
     const uint32_t tile_bytes = get_tile_size(cb_block);
-    Noc noc;
+    const Noc noc;
     DataflowBuffer block_tile(cb_block);
     DataflowBuffer residual_tile(cb_res);
     DataflowBuffer injection_tile(cb_coef);

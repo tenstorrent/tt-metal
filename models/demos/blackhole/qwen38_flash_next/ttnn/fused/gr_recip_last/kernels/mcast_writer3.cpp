@@ -35,7 +35,7 @@ void kernel_main() {
             get_compile_time_arg_val(5)>(stats_tiles_args, stats_extra_args, 0);
     }
     if constexpr (gate_semaphore_id != 0xFF) {
-        Noc noc;
+        const Noc noc;
         Semaphore<> gate(gate_semaphore_id);
         gate.up(noc, get_arg_val<uint32_t>(39), get_arg_val<uint32_t>(40), 1);
         noc.async_atomic_barrier();
