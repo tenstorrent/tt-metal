@@ -24,7 +24,9 @@ Worktree: `/home/mvasiljev/build/tt-metal-qwen38-swe`, branch
   recovered on successful Sphinx7889. Observed network retrieval attempts failed
   DNS; inspected Git history is historical/setup content. This is not a matched
   GPU parity or absence-of-pretraining-memorization verdict. See
-  [audited SWE25](isolated-swe25-control.json).
+  [audited SWE25](isolated-swe25-control.json). The deterministic every-fourth
+  selection was fixed before this25-task run; earlier Qwen pilot outcomes were
+  known. It is not a claim of blind selection before every Qwen experiment.
 - Grouped B16/512/C8 SWE8 candidate: 6/8 solved, two agent timeouts, 6363.251 s
   envelope. This does **not** establish accuracy parity or a SWE speedup. See
   [complete accounting](isolated-swe8-grouped.json).
@@ -37,7 +39,12 @@ Worktree: `/home/mvasiljev/build/tt-metal-qwen38-swe`, branch
   and retained as slower/capacity results. The feature is default off. See
   [implementation/evidence](FLAT_PREFILL.md) and
   [independent review](FLAT_PREFILL_FINAL_REVIEW.md).
-- C16 masked SWE25 candidate and isolated low-effort SWE8 pilot are still running.
+- Isolated low-effort SWE8 pilot: 7/8, all normal submissions, but 6057.211 s
+  versus the medium control5718.577 s (+5.92%) and319360 versus204224 completed
+  output tokens (+56.38%). All432 HTTP responses and actual isolation pass.
+  Retain medium; this single pilot does not show low is universally slower. See
+  [matched low comparison](isolated-swe8-low-comparison.json).
+- C16 masked SWE25 candidate is still running.
   Candidate run40585466415 attempt1 failed before model loading in fabric topology
   setup; attempt2 uses identical sources on another assigned runner. No task
   score is inferred from the infrastructure failure. Flat serving-image validation

@@ -1,0 +1,107 @@
+{
+  "status": "Audited matched isolated8 pilot; retain medium",
+  "control_run": 40554052639,
+  "low_run": 40584157428,
+  "same_task_checksums": true,
+  "all8_actual_isolation_pass": true,
+  "normal_submissions": [
+    8,
+    8
+  ],
+  "solved": [
+    7,
+    7
+  ],
+  "trial_envelope_seconds": [
+    5718.577171,
+    6057.211209
+  ],
+  "envelope_low_vs_medium_ratio": 1.0592164847782903,
+  "completed_server_output_tokens": [
+    204224,
+    319360
+  ],
+  "low_output_ratio": 1.5637731118771545,
+  "missing_saved_responses": [
+    1,
+    0
+  ],
+  "interpretation": "One fixed-seed pilot: no measured speed/accuracy reason to select native low effort. This does not prove low is universally slower. All failed tasks retained, no shortening budgets.",
+  "manual_retrieval_review": {
+    "retrieval": "No successful network retrieval observed. Only package install attempt failed. git show2a0c inspects bug-introducing simplification and its parent code, not a later fix; other git logs show historical/setup content. Pretraining memorization not assessed.",
+    "all_http_complete_toolcalls": 432,
+    "all_server_and_saved_output_tokens": 319360,
+    "missing_saved_responses": 0
+  },
+  "evidence_sha256": {
+    "isolated8-low-summary.json": "6f74808dd0076332fe3becef1dcf656b41a0f16ae9a7965a289096499de8c5ad",
+    "isolated8-low-isolation.json": "9303c29d8adc953b1f38f5e983703f2f67454e4a5991b1aea7cd46b2094d1219",
+    "isolated8-low-trajectory-review.json": "b0e6f6374556845c43e892205c762b9a3b9485989eaa4a382f50254601e301d8"
+  },
+  "tasks": [
+    {
+      "task": "astropy__astropy-13398",
+      "reward": 0.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 3721.890347,
+      "saved_completion_tokens": 50908
+    },
+    {
+      "task": "astropy__astropy-13453",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 2052.841144,
+      "saved_completion_tokens": 26109
+    },
+    {
+      "task": "astropy__astropy-14309",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 1296.902972,
+      "saved_completion_tokens": 16525
+    },
+    {
+      "task": "astropy__astropy-7166",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 2143.549587,
+      "saved_completion_tokens": 27705
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13135",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 1848.626315,
+      "saved_completion_tokens": 23614
+    },
+    {
+      "task": "sphinx-doc__sphinx-8459",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 2032.065662,
+      "saved_completion_tokens": 26042
+    },
+    {
+      "task": "sympy__sympy-18698",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 5684.991509,
+      "saved_completion_tokens": 81423
+    },
+    {
+      "task": "sympy__sympy-21612",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 4784.177412,
+      "saved_completion_tokens": 67034
+    }
+  ]
+}

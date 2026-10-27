@@ -6,7 +6,7 @@
   "image_digest": "47319d8b11749575cc921bae9c03458d37be2667433d7e8e7e0faa3be7a3d895",
   "protocol": {
     "tasks": 25,
-    "selection": "Every fourth ordered historical frozen Gemma SWE100 identity, before Qwen outcomes",
+    "selection": "Every fourth ordered identity from the historical frozen Gemma SWE100; fixed before this25-task run by that deterministic rule, not selected by Qwen rewards. Earlier Qwen pilot outcomes were already known.",
     "seed": 1234,
     "reasoning_effort": "medium",
     "temperature": 1.0,
