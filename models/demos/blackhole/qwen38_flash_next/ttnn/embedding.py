@@ -1270,10 +1270,7 @@ class Qwen38TTNNTokenEmbedding:
             retained.append(owner)
             retained_ids.add(id(owner))
 
-    def upload_tokens(
-        self,
-        input_ids: torch.Tensor,
-    ) -> Qwen38ValidatedTokens:
+    def upload_tokens(self, input_ids: torch.Tensor) -> Qwen38ValidatedTokens:
         """Range-check CPU IDs, localize all four shards, and upload once."""
 
         self._require_healthy()
@@ -1516,10 +1513,7 @@ class Qwen38TTNNTokenEmbedding:
             )
         return hidden
 
-    def __call__(
-        self,
-        validated: Qwen38ValidatedTokens,
-    ):
+    def __call__(self, validated: Qwen38ValidatedTokens):
         self._require_healthy()
         if not isinstance(validated, Qwen38ValidatedTokens):
             raise TypeError("embedding requires Qwen38ValidatedTokens from upload_tokens")

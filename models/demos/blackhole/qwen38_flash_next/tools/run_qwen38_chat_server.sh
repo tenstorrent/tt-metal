@@ -135,7 +135,8 @@ if [[ -e "$REPO_ROOT/.git" ]]; then
     dirty=$(git -C "$REPO_ROOT" status --porcelain=v1 --untracked-files=no | wc -l | tr -d ' ')
 else  # a tree without git history, such as a CI image: the server admits the head declared in QWEN38_TT_METAL_SHA
     head=${QWEN38_TT_METAL_SHA:-} dirty=0
-    [[ "$head" =~ ^[0-9a-f]{40}$ ]] || die "$REPO_ROOT has no git history: set QWEN38_TT_METAL_SHA to the commit it was built from"
+    [[ "$head" =~ ^[0-9a-f]{40}$ ]] \
+        || die "$REPO_ROOT has no git history: set QWEN38_TT_METAL_SHA to the commit it was built from"
 fi
 extension=$("$python" -c 'import ttnn._ttnn as m; print(m.__file__)') || die "$python cannot import ttnn"
 case "$(readlink -f -- "$extension")" in

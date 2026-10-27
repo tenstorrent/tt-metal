@@ -101,14 +101,14 @@ against an independent recurrence; set `QWEN38_FUSED_DEVICE_TEST=1` on the held 
 
 `tools/benchmark.py` scores and times GSM8K through a live OpenAI endpoint (the official 1,319-item test file at
 revision `3101c7d5072418e28b9008a6636bde82a006892c`, hash-checked; `--limit 64` is the fixed smoke subset).
-`tools/report.py` with `CI=true` writes the standard tt-metal benchmark artifact; `--device-name` (`P150x4` or `QB2`)
-must come from the allocation's topology record.
+`tools/report.py` with `CI=true` writes the standard tt-metal benchmark data; `--device-name` names the chips the run
+used (`P150x4`, or `P300x2` for a QuietBox 2).
 
 ```bash
 python -m models.demos.blackhole.qwen38_flash_next.tools.benchmark \
   --checkpoint "$CHECKPOINT" --dataset "$GSM8K_TEST_JSONL" --output-dir "$RESULTS"
 CI=true python -m models.demos.blackhole.qwen38_flash_next.tools.report "$RESULTS/summary.json" \
-  --device-name "$QUALIFIED_DEVICE_NAME"
+  --device-name P150x4
 ```
 
 ### End-to-end demo
@@ -116,7 +116,7 @@ CI=true python -m models.demos.blackhole.qwen38_flash_next.tools.report "$RESULT
 `demo/chat_demo.py` starts the server through the launcher with `--acceptance --require-json-96`, so it serves only
 after the `json` record matches 96/96. It then runs `tools/benchmark.py` on the GSM8K smoke subset through the
 server's endpoint, requires the benchmark's 0.80 floor, and stops the server. With `CI=true` it also writes the
-benchmark JSON (`tools/report.py`).
+benchmark data (`tools/report.py`).
 
 ```bash
 MODEL_WEIGHTS_DIR="$CHECKPOINT" QWEN38_CACHE_ROOT="$CACHE_ROOT" QWEN38_DEVICE_NODES=4,5,6,7 \

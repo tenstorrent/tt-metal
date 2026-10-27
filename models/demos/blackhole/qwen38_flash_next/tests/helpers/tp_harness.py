@@ -8,8 +8,8 @@ tests are the same layers on the mesh.
 
 Env: MODEL_WEIGHTS_DIR (or QWEN38_CHECKPOINT, or HF_MODEL resolved through the local Hugging Face cache) names the
 checkpoint.  QWEN38_CACHE_ROOT is needed only for the routed experts: the BF4 cache under ``<root>/caches/bf4-experts``.
-GDN and QSA weights are converted into ``<root>/caches/<label>/components`` when the root is set and into the test's
-temporary directory otherwise.
+GDN and QSA weights are converted into ``<root>/caches/<label>/components`` (label QWEN38_CACHE_LABEL, default
+``c32768-tests``) when the root is set and into the test's temporary directory otherwise.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ class Qwen38TPHarness:
         self.rope = Qwen38TTNNRoPE(mesh_device, self.contract, self.config)
         cache_root = os.environ.get("QWEN38_CACHE_ROOT")
         self.caches = None if not cache_root else Path(cache_root) / "caches"
-        self.cache_label = os.environ.get("QWEN38_CACHE_LABEL") or f"c{RESIDENT_DEFAULT_QSA_CACHE_CAPACITY}-vllm"
+        self.cache_label = os.environ.get("QWEN38_CACHE_LABEL") or f"c{RESIDENT_DEFAULT_QSA_CACHE_CAPACITY}-tests"
         self.component_cache_root = tmp_path if self.caches is None else self.caches / self.cache_label / "components"
 
     def upload_sharded(self, host: torch.Tensor):

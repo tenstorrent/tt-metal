@@ -7,7 +7,7 @@ GSM8K smoke subset (the first 64 of the 1,319 test items) through its OpenAI end
 The launcher starts the server with ``--acceptance --require-json-96``: the server replays the CPU greedy records and
 serves only when the ``json`` record matches 96/96. ``tools/benchmark.py`` then asks the 64 questions greedily (512
 output tokens at most, natural EOS) and scores the final ``####`` answers; the test needs the benchmark's 0.80 floor.
-Under ``CI=true``, ``tools/report.py`` writes the standard tt-metal benchmark JSON.
+Under ``CI=true``, ``tools/report.py`` writes the standard tt-metal benchmark data.
 The server must then stop cleanly on SIGTERM.
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/demo/chat_demo.py
@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
+from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION
 from models.demos.blackhole.qwen38_flash_next.tools import report
 from models.demos.blackhole.qwen38_flash_next.tools.benchmark import DATASET_REVISION
@@ -41,9 +42,8 @@ LAUNCHER = MODEL_DIR / "tools" / "run_qwen38_chat_server.sh"
 GSM8K_URL = (
     f"https://raw.githubusercontent.com/openai/grade-school-math/{DATASET_REVISION}/grade_school_math/data/test.jsonl"
 )
-DEVICE_NAMES = {"p150-line": "P150x4", "tt-quietbox": "P150x4", "qb2": "QB2"}  # tools/report.py's device names
-# The 1x4 p150 line measured READY after 443 s (mesh open, cold component and JIT caches, the trace captures, the
-# acceptance replay) and the 64 questions in 632 s: the guards are about twice that. SIGTERM to STOPPED took 1 s.
+DEVICE_NAMES = {"p150-line": "P150x4", "tt-quietbox": "P150x4", "qb2": "P300x2"}  # tools/report.py's device names
+# About twice the start-up (cold component and JIT caches) and benchmark times on the 1x4 p150 line.
 READY_SECONDS = 900
 BENCHMARK_SECONDS = 1300
 STOP_SECONDS = 60
@@ -134,6 +134,7 @@ def chat_server(profile, checkpoint_dir, tmp_path):
     assert status == "stopped", f"the server stopped with status {status}:\n{log_tail(server_log)}"
 
 
+@run_for_blackhole()
 def test_chat_demo(chat_server, profile, checkpoint_dir, tmp_path):
     url, run_dir, ready = chat_server
     acceptance = json.loads((run_dir / "acceptance.json").read_text())

@@ -3086,7 +3086,7 @@ class Qwen38TTNNGDN:
         Under the verify-rows fold (the default) the state is the forward pass's prefix state after ``accepted + 1``
         rows; otherwise the recurrence reruns from the committed state with beta and g past the committed prefix
         zeroed. The state lands in ``state.recurrent`` and the FIR history moves forward by ``accepted + 1`` rows.
-        ``step_on_full_rejection`` (a diagnostic) commits a full rejection through the 1-row FP32 step arithmetic
+        ``step_on_full_rejection`` (tests) commits a full rejection through the 1-row FP32 step arithmetic
         instead; ``step_committed_rows`` (the state re-anchor) steps every committed row through it. Both need the
         chain's rows buffers.
         """

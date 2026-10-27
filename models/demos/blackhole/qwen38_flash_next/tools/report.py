@@ -9,10 +9,12 @@ from pathlib import Path
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
+DEVICE_NAMES = ("P150x4", "P300x2")  # four p150, or the two p300 of a QuietBox 2 (the in-tree QB2 models' name)
+
 
 def report(summary, *, device_name):
-    if device_name not in ("P150x4", "QB2"):
-        raise ValueError("device_name must come from the qualified physical allocation: P150x4 or QB2")
+    if device_name not in DEVICE_NAMES:
+        raise ValueError(f"device_name must name the chips the run used, one of {DEVICE_NAMES}, got {device_name!r}")
     if summary["completed_samples"] != summary["requested_samples"]:
         raise ValueError("An incomplete task run cannot supply the CI accuracy gate")
     profiler = BenchmarkProfiler()
@@ -63,8 +65,8 @@ def main(argv=None):
     parser.add_argument(
         "--device-name",
         required=True,
-        choices=("P150x4", "QB2"),
-        help="Physical hardware from allocation/qualification evidence; a logical 1x4 mesh does not identify the SKU",
+        choices=DEVICE_NAMES,
+        help="the chips the run used; a 1x4 mesh does not tell four p150 from a QuietBox 2",
     )
     args = parser.parse_args(argv)
     report(json.loads(args.summary.read_text()), device_name=args.device_name)

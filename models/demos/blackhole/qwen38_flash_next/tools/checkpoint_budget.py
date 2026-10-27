@@ -3,8 +3,8 @@
 """Fail-closed checkpoint accounting and four-P150 placement budget.
 
 This module accounts for checkpoint payloads only. Runtime allocator, trace,
-collective, and activation reservations belong in the bring-up admission
-budget and must not be inferred from these values.
+collective, and activation reservations are the runtime's and must not be
+inferred from these values.
 """
 
 from __future__ import annotations

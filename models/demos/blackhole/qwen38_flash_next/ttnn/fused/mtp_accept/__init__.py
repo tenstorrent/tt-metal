@@ -314,7 +314,7 @@ def mtp_accept(
 
 
 def decide_on_host_composed(*args, **kwargs):
-    """No ttnn composite: with this program off, the host decides (``qwen38_sampling_step.accept_pass``)."""
+    """No ttnn composite: with this program off, the host decides (``tools/qwen38_sampling.py`` ``accept_pass``)."""
 
     raise RuntimeError("mtp_accept has no composed device form: the chain decides the pass on the host when it is off")
 
