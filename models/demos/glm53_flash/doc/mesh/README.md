@@ -1192,3 +1192,10 @@ script rebuilds the serving tree from `FROZEN` (default wt_frozen10) on every ru
 and stream knobs were never read (TPOT 175.2 / 174.8 ms = r12; needles 4/4, first tokens exact, determinism 4/4 on all three). The
 script now refuses a `SMOKE_EXTRA_ENV` knob the snapshot does not know. r15 = `FROZEN=wt_frozen20` (stream + packed defaults, fill
 clip, + `GLM53_SPARSE_DECODE_BOUND=1`) is the served validation of the streaming decode.
+
+12:21 `long1m_B1_8x4_default` (wt_frozen20: stream + packed defaults, fill clip, `GLM53_SPARSE_DECODE_BOUND=1`; ISL 1 047 612, gen 64, one
+prompt replicated to the 8 rows): TTFT 492.4 s (2128 tok/s; the clipped last chunk of 15 420 tokens took 9.2 s vs 7.8 for full chunks),
+decode step 73.9 ms = 13.5 tok/s per user at position 1 047 612 (was 148.9 / 6.7). Needle 7/8 rows: row 1 produced "The user asked what
+is the secret passphrase for the vault. Answer with the passphrase only." (same first token 785, a near-tie flip later; rows are not
+bit-identical per the ring reduce-scatter order) -- watch item if the 4-users-per-row run or the served smokes show more divergence.
+README 1 M rows (8 slots / batch 1) refreshed from this run.
