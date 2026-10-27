@@ -12,6 +12,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -36,6 +37,7 @@ void kernel_main() {
     const auto scores_out = TensorAccessor(scores_args, scores_addr);
     const auto indices_out = TensorAccessor(indices_args, indices_addr);
 
+    const Noc noc;
     DataflowBuffer index_tile(cb_idx_t);
     DataflowBuffer score_tile(cb_scores);
     DataflowBuffer stage(cb_stage);
@@ -48,18 +50,14 @@ void kernel_main() {
     {
         index_tile.wait_front(1);
         score_tile.wait_front(1);
-        volatile tt_l1_ptr uint32_t* index_words =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_tile.get_read_ptr());
-        volatile tt_l1_ptr uint16_t* score_words =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(score_tile.get_read_ptr());
+        const CoreLocalMem<volatile uint32_t> index_words(index_tile.get_read_ptr());
+        const CoreLocalMem<volatile uint16_t> score_words(score_tile.get_read_ptr());
         for (uint32_t row = 0; row < rows_in_tile; ++row) {
             if (((token_mask >> row) & 1u) == 0) {
                 continue;  // another core's token
             }
-            volatile tt_l1_ptr uint16_t* score_row =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage_scores + row * stage_pitch);
-            volatile tt_l1_ptr uint16_t* index_row =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stage_indices + row * stage_pitch);
+            const CoreLocalMem<volatile uint16_t> score_row(stage_scores + row * stage_pitch);
+            const CoreLocalMem<volatile uint16_t> index_row(stage_indices + row * stage_pitch);
             const uint32_t face_row = row >> 4;
             const uint32_t in_face = row & 15;
             for (uint32_t k = 0; k < top_k; ++k) {
@@ -68,10 +66,10 @@ void kernel_main() {
                     static_cast<uint16_t>(index_words[face_row * 256 + k * 16 + in_face]);  // [k, token] uint32
             }
             const uint32_t page = tile_row * 32 + row;
-            noc_async_write(stage_scores + row * stage_pitch, scores_out.get_noc_addr(page), row_bytes);
-            noc_async_write(stage_indices + row * stage_pitch, indices_out.get_noc_addr(page), row_bytes);
+            noc.async_write(score_row, scores_out, row_bytes, {}, {.page_id = page});
+            noc.async_write(index_row, indices_out, row_bytes, {}, {.page_id = page});
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
         index_tile.pop_front(1);
         score_tile.pop_front(1);
         stage.push_back(stage_pages);

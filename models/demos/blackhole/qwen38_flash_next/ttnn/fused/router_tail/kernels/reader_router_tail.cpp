@@ -12,6 +12,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
@@ -82,7 +83,7 @@ void kernel_main() {
         DataflowBuffer vals_ready(cb_vals_ready);
         vals.wait_front(1);
         {
-            volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(vals.get_read_ptr());
+            const CoreLocalMem<volatile uint32_t> tile(vals.get_read_ptr());
             for (uint32_t i = 0; i < 256; ++i) {
                 tile[256 + i] = 0u;  // face 1: rows 0..15, columns 16..31
                 tile[768 + i] = 0u;  // face 3: rows 16..31, columns 16..31
@@ -107,7 +108,7 @@ void kernel_main() {
         DataflowBuffer sums_ready(cb_sums_ready);
         sums.wait_front(1);
         {
-            volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sums.get_read_ptr());
+            const CoreLocalMem<volatile uint32_t> tile(sums.get_read_ptr());
             for (uint32_t row = 0; row < 32; ++row) {
                 const uint32_t base = (row >> 4) * 2 * 256 + (row & 15) * 16;
                 const uint32_t value = tile[base];
