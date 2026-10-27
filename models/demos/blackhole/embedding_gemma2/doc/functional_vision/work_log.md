@@ -41,11 +41,13 @@ layers; free-running soft-token PCC 0.99878 / 0.99972. No numerical fix was need
 ## 4. Free-running drift analysis (scratch scripts)
 
 - Per-layer free-running probe on landscape: PCC >= 0.99999 through layer 10, 0.99942 at 14,
-  0.99736 at 15. The worst patch (1243) has per-patch cosine 0.290 at layer 15 while its norm jumps
-  748 -> 1594.
-- HF itself in bf16 vs HF fp32, same images: encoder-out PCC 0.99728 (landscape) / 0.99725 (portrait) /
-  0.99882 (square) / 0.99955 (small); worst patch cosine 0.294 on **the same patch 1243**; soft
-  PCC 0.99882 / 0.99843 / 0.99922 / 0.99984. The ill-conditioning is in the model, not the port.
+  0.99736 at 15. (The per-patch figures from this scratch probe were removed during E2 review:
+  no committed log reproduces them.)
+- HF itself in bf16 vs HF fp32, from the committed `$E2/final_results.jsonl`: soft PCC 0.99882
+  (landscape) / 0.99843 (portrait) / 0.99922 (square) / 0.99984 (small). Worst per-token cosine:
+  TT is below HF-bf16 on landscape (0.92698 vs 0.94131), square, small, tiny and 5 of 8 video
+  frames, and above it on portrait (0.94289 vs 0.86620) and 3 of 8 frames. So the worst-token
+  error of the port is not "no worse than HF bf16"; it is worse on most cases.
 - fp32 residual stream variant (all residual adds and norm inputs in fp32): soft PCC landscape
   0.99963, portrait 0.99910, video frames 0.99833-0.99923. Not a consistent win, so not kept.
 

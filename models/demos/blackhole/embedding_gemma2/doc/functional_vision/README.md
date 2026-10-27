@@ -102,14 +102,22 @@ End to end, free running (`VisionEncoder.encode`, eager; processor output -> sof
 Analysis of the gap between per-layer (>= 0.99996) and end-to-end (0.9977-0.9997) PCC, measured
 with a free-running per-layer probe on the landscape image (scratch script, see `work_log.md`):
 the free-running PCC stays >= 0.99999 through layer 10, then drops to 0.99942 (layer 14) and
-0.99736 (layer 15). The drop comes from a handful of patches whose hidden state grows sharply in
-the last layers (patch 1243: norm 748 -> 1594 in layer 15). Per-patch cosine for patch 1243 is
-0.290 for TT vs HF fp32, and **0.294 for HF itself run in bf16 vs HF fp32** (same patch is the
-argmin). These patches are ill-conditioned for bf16 in the reference too. TT's distance to the
-fp32 reference is in the same range as HF run in bf16 (the dtype the checkpoint ships in): soft
-PCC 0.9977-0.9997 vs HF-bf16 0.9970-0.9998 (TT higher on portrait, square and 3 of 8 video
-frames, lower on the others). The worst per-token cosine is also in the same range (TT higher
-on portrait and 3 of 8 frames, lower elsewhere). A fp32 residual stream was tried (scratch, not kept): landscape soft PCC 0.99878 ->
+0.99736 (layer 15). A few patches have hidden states that grow sharply in the last layers. The
+per-patch figures from that probe are not repeated here because no committed log or test
+reproduces them.
+
+Comparison with HF itself run in bf16 (the dtype the checkpoint ships in), both against HF fp32,
+from the committed `e2/final_results.jsonl` (`test_vision_model.py::test_soft_tokens`):
+
+- Soft-token PCC: TT 0.9977-0.9997, HF-bf16 0.9970-0.9998. TT is higher on portrait, square and
+  3 of 8 video frames, and lower on the others.
+- Worst per-token cosine: TT is **lower** than HF-bf16 on landscape (0.92698 vs 0.94131), square
+  (0.97943 vs 0.98440), small (0.99593 vs 0.99878), tiny (0.98892 vs 0.99448) and 5 of 8 video
+  frames (0, 1, 3, 6, 7). TT is higher on portrait (0.94289 vs 0.86620) and 3 of 8 frames (2, 4,
+  5; frame 4: 0.92725 vs 0.81484). So TT's worst token is not uniformly as good as HF-bf16's; it
+  is worse on most cases, by up to 0.0146 (landscape) in cosine.
+
+A fp32 residual stream was tried (scratch, not kept): landscape soft PCC 0.99878 ->
 0.99963, but portrait 0.99908 -> 0.99910 and video frames mixed (0.99833-0.99923). So the residual
 adds are not the main error source, and the bf16 path was kept. Precision levers belong to E5/E6.
 
@@ -142,6 +150,10 @@ readback; host prep = `prepare_inputs`, not part of e2e).
 Batch 4 costs 73.6 ms per image, more than batch 1 (55.6 ms). [guess] The per-image work is the
 same, so the batched SDPA / matmul program configs (written for B = 1) scale badly. E5 should
 profile b4 before choosing a batching strategy.
+
+The b1 x 2560 tt-perf-report below is the representative op-level report for this stage. Batch 4
+(and batch 8 x 1280) has a traced device-time number only (b4: 294.41 ms in the final run,
+`e2/final_results.jsonl`); no tt-perf-report was taken for it.
 
 tt-perf-report for one warmed eager forward, b1 x 2560 (landscape), signposts
 `PERF_VISION`/`PERF_VISION_END` (`tracy/b1_s2560/forward_perf_report.{txt,csv}`, stacked
