@@ -25,7 +25,14 @@ namespace sfpu {
 // before power-of-two scaling. Intended for BF16 Dest; this preserves the normal
 // reciprocal ±2^-126 at input ±2^126 instead of flushing an intermediate result.
 // normalized=true requires a finite input with magnitude in [1, 2) and skips scaling.
-template <int max_iter = 2, bool round_to_bf16 = false, bool normalized = false>
+// positive_input=true drops the final SFPSETSGN (one SFPU slot per call): the scale factor is
+// multiplied by -0.5 instead of 0.5, which flips the sign SFPNOT gave it (the complement of
+// in's sign), so y*scale already carries in's sign. This is bit-identical for every finite or
+// zero input of either sign; it differs only for -inf and NaN-with-sign-bit-set inputs, whose
+// scale is a zero and whose product therefore flushes to +0 (Wormhole discards the sign of a
+// zero product) where SFPSETSGN would restore -0. Only enable it where `in` is provably never
+// -inf nor a negative NaN, e.g. 1 + exp(-x) or (u + 1)^2 + 1.
+template <int max_iter = 2, bool round_to_bf16 = false, bool normalized = false, bool positive_input = false>
 sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // Combines the sign and exponent of -1.0 with the mantissa of `in`.
     // Scale the input value to the range [1.0, 2.0), and make it negative.
@@ -74,7 +81,7 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // If scale = ±0, then scale*0.5 = 0 and scale.Exp=0.
     // Otherwise, scale.Exp = scale.Exp-1 = 255-in.Exp-1 = 254-in.Exp.
     if constexpr (!normalized) {
-        scale *= 0.5f;
+        scale *= positive_input ? -0.5f : 0.5f;
     }
 
     // Continue Newton-Raphson: y = y + y*t.
@@ -99,7 +106,9 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     if constexpr (!normalized) {
         y = y * scale;
     }
-    y = sfpi::copysgn(y, in);
+    if constexpr (!positive_input) {
+        y = sfpi::copysgn(y, in);
+    }
 
     return y;
 }
@@ -123,9 +132,9 @@ inline void _calculate_reciprocal_internal_(const int iterations) {
     }
 }
 
-template <bool APPROXIMATE = false, bool save_reg = true /* Unused. Enough registers available. */>
+template <bool APPROXIMATE = false, bool save_reg = true /* Unused. Enough registers available. */, bool positive_input = false>
 sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
-    return sfpu_reciprocal_iter<APPROXIMATE ? 0 : 2>(in);
+    return sfpu_reciprocal_iter<APPROXIMATE ? 0 : 2, false, false, positive_input>(in);
 }
 
 template <bool APPROXIMATE = false, bool round_to_bf16 = false>

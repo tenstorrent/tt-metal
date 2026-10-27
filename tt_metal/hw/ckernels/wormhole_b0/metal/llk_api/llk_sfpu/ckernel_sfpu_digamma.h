@@ -82,7 +82,9 @@ inline void calculate_digamma() {
         // bf16-accurate. #45520 targets bf16 ULP; an fp32-accurate log here would collide
         // with the reciprocal's vConstFloatPrgm0, so fp32 large-x is intentionally left as-is.
         v_if(x > 102.0f) {
-            sfpi::vFloat inv_x = sfpu_reciprocal_iter<2>(x);
+            // Only lanes with x > 102 (or +inf / a NaN with the sign bit clear, which the
+            // compare routes like +inf) are enabled here, so the reciprocal's sign restore is dead.
+            sfpi::vFloat inv_x = sfpu_reciprocal_iter<2, false, false, /*positive_input=*/true>(x);
             sfpi::vFloat inv_x2 = inv_x * inv_x;
             // ln(x) - inv_x*0.5 - inv_x2*(1/12 - inv_x2/120). 1/12 and 1/120 are literals:
             // the reciprocal owns vConstFloatPrgm0/1/2 for its Newton seed, so digamma has no

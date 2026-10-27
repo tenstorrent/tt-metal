@@ -34,6 +34,9 @@ constexpr uint32_t ERF_NUM_DEGREE = 16;
 constexpr uint32_t ERF_DEN_DEGREE = 16;
 constexpr uint32_t ERF_NUM_SEGMENTS = 1;
 constexpr uint32_t ERF_LUT_SIZE = 36;
+// The two top denominator coefficients are negative: a -NaN input survives symmetric_clamp
+// (SFPABS keeps -NaN) and makes Q a negative NaN, so the reciprocal must restore the sign.
+constexpr bool ERF_DEN_POSITIVE = false;
 constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
     {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f,  1.1283791065e+00f,  0.0000000000e+00f,
      2.1477432549e-01f,  0.0000000000e+00f, 6.2133435160e-02f,  0.0000000000e+00f,  5.6230435148e-03f,
@@ -53,6 +56,9 @@ constexpr uint32_t ERF_NUM_DEGREE = 8;
 constexpr uint32_t ERF_DEN_DEGREE = 8;
 constexpr uint32_t ERF_NUM_SEGMENTS = 1;
 constexpr uint32_t ERF_LUT_SIZE = 20;
+// Every denominator coefficient is positive and Q is evaluated in x^2 (sign bit clear for any
+// x, NaN included), so Q's sign bit is clear for every input: the reciprocal's sign restore is dead.
+constexpr bool ERF_DEN_POSITIVE = true;
 constexpr std::array<float, ERF_LUT_SIZE> ERF_LUT = {
     {-1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f, 1.1280932447e+00f, 0.0000000000e+00f,
      2.7609212279e-01f,  0.0000000000e+00f, 4.5400281738e-02f, 0.0000000000e+00f, 7.4481184425e-04f,
@@ -73,7 +79,8 @@ inline void calculate_erf() {
             ERF_NUM_SEGMENTS,
             ERF_LUT_SIZE,
             true,
-            APPROXIMATION_MODE>(ERF_LUT, x);
+            APPROXIMATION_MODE,
+            ERF_DEN_POSITIVE>(ERF_LUT, x);
         // Saturate to [-1, 1]: rational fit is not bounded and overshoots by
         // up to ~3e-8 (FP32) / ~2e-4 (BF16 LUT) in the tail. Persists in FP32
         // dest register and biases downstream ops (e.g. decomposed GELU in CLIP).

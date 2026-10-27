@@ -32,9 +32,13 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
 
     sfpi::vFloat result;
     if constexpr (is_fp32_acc_to_dest_mode) {
+        // _sfpu_exp_accurate_<true> propagates a NaN with its sign, so a +NaN x makes the
+        // denominator a negative NaN: positive_input would turn that lane's -0 into +0.
         result = sfpu_reciprocal_iter<2>(denominator);
     } else {
-        result = sfpu_reciprocal_iter<1>(denominator);
+        // The bf16 exp clamps its argument, so exp_neg_x is finite and non-negative for every
+        // x (NaN included) and the denominator is >= 1: the reciprocal's sign restore is dead.
+        result = sfpu_reciprocal_iter<1, false, false, /*positive_input=*/true>(denominator);
     }
 
     return result;

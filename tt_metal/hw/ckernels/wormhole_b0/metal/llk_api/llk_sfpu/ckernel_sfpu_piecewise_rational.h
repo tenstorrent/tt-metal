@@ -238,13 +238,16 @@ sfpi_inline void piecewise_rational_unroll_segment(
 // USE_PARITY template parameter allows per-call parity control without macros.
 // ============================================================================
 
+// POSITIVE_DENOM=true: the caller guarantees Q(x) is never -inf nor a negative NaN for any x it
+// passes (see positive_input on sfpu_reciprocal_iter), which drops one SFPU slot.
 template <
     uint32_t NUM_DEGREE,
     uint32_t DEN_DEGREE,
     uint32_t NUM_SEGMENTS,
     uint32_t LUT_SIZE,
     bool USE_PARITY = false,
-    bool APPROX_RECIP = false>
+    bool APPROX_RECIP = false,
+    bool POSITIVE_DENOM = false>
 sfpi_inline sfpi::vFloat piecewise_rational_eval(const std::array<float, LUT_SIZE>& lut, sfpi::vFloat x) {
     constexpr uint32_t NUM_COEFFS = NUM_DEGREE + 1;
     constexpr uint32_t COEFF_OFFSET = NUM_SEGMENTS + 1;
@@ -273,7 +276,7 @@ sfpi_inline sfpi::vFloat piecewise_rational_eval(const std::array<float, LUT_SIZ
             lut, x, numer, denom, x2);
     }
 
-    return numer * sfpu_reciprocal<APPROX_RECIP>(denom);
+    return numer * sfpu_reciprocal<APPROX_RECIP, true, POSITIVE_DENOM>(denom);
 }
 
 // ============================================================================

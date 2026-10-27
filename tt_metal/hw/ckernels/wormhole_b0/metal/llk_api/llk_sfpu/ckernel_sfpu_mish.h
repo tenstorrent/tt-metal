@@ -56,13 +56,16 @@ inline void calculate_mish() {
             sfpi::vFloat one_plus_u = u + 1.0f;
             sfpi::vFloat denom = one_plus_u * one_plus_u + 1.0f;
 
+            // denom is a square plus one: its sign bit is clear for every u, a NaN or inf of
+            // either sign included (the product's sign is the XOR of two equal signs), so the
+            // reciprocal's sign restore is dead.
             sfpi::vFloat inv_denom;
             if constexpr (APPROXIMATION_MODE) {
-                inv_denom = sfpu_reciprocal_iter<0>(denom);
+                inv_denom = sfpu_reciprocal_iter<0, false, false, /*positive_input=*/true>(denom);
             } else if constexpr (is_fp32_dest_acc_en) {
-                inv_denom = sfpu_reciprocal_iter<2>(denom);
+                inv_denom = sfpu_reciprocal_iter<2, false, false, /*positive_input=*/true>(denom);
             } else {
-                inv_denom = sfpu_reciprocal_iter<1>(denom);
+                inv_denom = sfpu_reciprocal_iter<1, false, false, /*positive_input=*/true>(denom);
             }
 
             result = x * (numer * inv_denom);

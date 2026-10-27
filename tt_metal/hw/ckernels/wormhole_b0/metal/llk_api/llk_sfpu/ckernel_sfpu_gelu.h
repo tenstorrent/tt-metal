@@ -435,7 +435,9 @@ inline void calculate_gelu_tanh_fast() {
         sfpi::vFloat e = sfpi::setexp(frac, exponential_part);
 
         // Two Newton steps: one alone lands at or below 1/d and biases |GELU| low.
-        sfpi::vFloat result = x * sfpu_reciprocal_iter<2>(e + 1.0f);
+        // e is finite and positive for every x (xlog2 is clamped, the 2^f polynomial is >= 1),
+        // so e + 1 >= 1 and the reciprocal's sign restore is dead.
+        sfpi::vFloat result = x * sfpu_reciprocal_iter<2, false, false, /*positive_input=*/true>(e + 1.0f);
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
