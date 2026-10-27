@@ -187,6 +187,18 @@ def _subject(ctx):
     )
 
 
+def _report_line(ctx, run_link):
+    """Where the full table is: this gate's own summary, not the whole run page."""
+    links = []
+    if ctx.get("report_url"):
+        links.append(f"<{ctx['report_url']}|full table>")
+    if ctx.get("artifact_url"):
+        links.append(f"<{ctx['artifact_url']}|download the report and CSVs>")
+    if not links:
+        return f"The full table is in the report attached to the {run_link}."
+    return "Report: " + " · ".join(links)
+
+
 def build_text(status, rows, ctx):
     """The Slack message for one verdict. Plain text; Slack renders the links."""
     subject, byline, where = _subject(ctx)
@@ -236,9 +248,8 @@ def build_text(status, rows, ctx):
         lines += [_describe_finding(g, varying) for g in worst]
     if len(findings) > _TOP_N:
         lines.append(f"_… and {len(findings) - _TOP_N} more finding(s)._")
+    lines += ["", _report_line(ctx, run_link)]
     lines += [
-        "",
-        f"The full table is in the report attached to the {run_link}.",
         "",
         "Reproduce the worst one locally:",
         f"```{_repro_command(rows, ctx.get('arch'), ctx.get('baseline_sha'))}```",
@@ -274,6 +285,10 @@ def main(argv=None):
     ap.add_argument("--arch", default="")
     ap.add_argument("--run-types", default="")
     ap.add_argument("--run-url", default="")
+    ap.add_argument(
+        "--report-url", default="", help="this job's summary on the run page"
+    )
+    ap.add_argument("--artifact-url", default="", help="the uploaded gate report")
     ap.add_argument("--baseline-sha", default="")
     ap.add_argument("--commit", default="")
     ap.add_argument("--mode", default="")
@@ -318,6 +333,8 @@ def main(argv=None):
         "arch": a.arch,
         "run_types": a.run_types,
         "run_url": a.run_url,
+        "report_url": a.report_url,
+        "artifact_url": a.artifact_url,
         "baseline_sha": a.baseline_sha,
         "reason": reason,
         "gate_name": a.gate_name,
