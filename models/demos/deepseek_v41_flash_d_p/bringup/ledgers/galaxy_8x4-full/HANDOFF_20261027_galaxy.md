@@ -103,7 +103,9 @@ dirty-card markers. 8. xing40's serve/server.py still names the old ack channel.
 Run 3 (DS41_EXPERTS_PROGRAM_KEY=addresses, FIX.5's patch path OFF): the tt-d-gen prefill again PASSED (prefill done
 in 495 s incl. the runner's 40-layer load, KV read 192 records), and the stand-in decode HUNG again on its first tail
 call (Timeout detected 20:46:15). **FIX.5 is not the cause.** The hang is flat_routed_expert on the decode tail input
-(32 real tokens at start 128, mostly-empty experts, migrated state). Run 3's triage was cut (the session was released);
+(32 real tokens at start 128, mostly-empty experts, migrated state). Run 3's tt-triage dump was KILLED by the overseer before it was written (overseer error); the Inspector data Metal
+saved at the hang survives: node_handoff_20261027b/inspector_run3_hang_2046/programs_log.yaml (programs enqueued up to
+the hang). The hang reproduced 2/2: a re-run (~15 min, gate --unit K.1#test_runner_smoke) regenerates the dump;
 run 2's stuck-kernel list is above and in node_handoff_20261027b/logs/K.1.units.log. Log: node_handoff_20261027b/
 overseer/smoke_diag.log.
 
