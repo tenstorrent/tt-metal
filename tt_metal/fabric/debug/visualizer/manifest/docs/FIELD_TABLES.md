@@ -1,8 +1,8 @@
 # Field tables
 
-Most of what the manifest records about a router is a value its kernel was fed: an L1 address, a stream register id,  
-a flag, a count. The manifest reads each of these through a **field table** in `fabric_manifest_fields.hpp`: one entry  
-per value, saying which kernel argument feeds it and how to read it. The router pass reads the tables ([ROUTER_PASS.md](ROUTER_PASS.md)). Facts that need logic beyond reading one argument (computed facts) are code in the router pass  
+Most of what the manifest records about a router is a value its kernel was fed: an L1 address, a stream register id,
+a flag, a count. The manifest reads each of these through a **field table** in `fabric_manifest_fields.hpp`: one entry
+per value, saying which kernel argument feeds it and how to read it. The router pass reads the tables ([ROUTER_PASS.md](ROUTER_PASS.md)). Facts that need logic beyond reading one argument (computed facts) are code in the router pass
 instead.
 
 [FIELDS.md](FIELDS.md) lists every entry, generated from the tables. This doc explains what an entry says, how it's

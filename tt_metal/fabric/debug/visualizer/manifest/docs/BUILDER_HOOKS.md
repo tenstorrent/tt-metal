@@ -16,8 +16,8 @@ program compiles. Anything the manifest needs from them has to be collected befo
 arguments in `create_kernel` and passes them straight to `CreateKernel`. Those arguments are the best record of what
 each router was configured with, so the builder has to keep a copy for the manifest.
 
-The manifest is written later, after the routers are launched, when ControlPlane, the cluster and the HAL can answer  
-the questions the builders can't, such as which router is on the other end of each link. So the hooks split the work:  
+The manifest is written later, after the routers are launched, when ControlPlane, the cluster and the HAL can answer
+the questions the builders can't, such as which router is on the other end of each link. So the hooks split the work:
 each router's facts are collected during the build and kept, and the rest is added at manifest-write time.
 
 ## When each hook runs
