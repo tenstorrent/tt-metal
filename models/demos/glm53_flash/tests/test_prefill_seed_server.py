@@ -319,6 +319,7 @@ def test_prefill_seed_server(mesh_device):
     )
     logger.info(f"[seed-server] model built in {time.time() - t0:.0f} s; warm-up prefill")
     push_layers = list(layers)
+    mtp_layer = None  # G53F-0227: the MTP layer this server can seed (GLM53F_SEED_MTP=1)
     if SEED_MTP:
         from models.demos.glm53_flash.tt.mtp import MTP_LAYER, TtMTPBlock
 
@@ -335,6 +336,7 @@ def test_prefill_seed_server(mesh_device):
             cache_only=True,
         )
         push_layers.append(MTP_LAYER)
+        mtp_layer = MTP_LAYER
         logger.info(f"[seed-server] MTP layer {MTP_LAYER} cache builder in {time.time() - tm:.0f} s (G53F-0227)")
     # compile the programs at the lengths the ring will ask for (GLM53F_SEED_WARMUP, default 4 and 4092 tokens: the
     # first request at a new length otherwise pays its compile, 4.66 s vs 1.82 s at 4092, G53F-0085)
@@ -526,12 +528,17 @@ def test_prefill_seed_server(mesh_device):
             if sp == 0:
                 _send(s, rep)
                 continue
-            while not all(
-                L in ranks for L in push_layers
-            ):  # every seeded rank must be registered before the first push
+            # every trunk rank must be registered before the first push. The MTP layer is seeded only when the ring
+            # registered it (an MTP ring builds stage 47 before its driver connects; a plain ring has no layer 45), so
+            # one MTP server serves plain and MTP rings, and a plain ring skips the MTP build (G53F-0227)
+            trunk = [L for L in push_layers if L != mtp_layer]
+            while not all(L in ranks for L in trunk):
                 c, h2, addr = _accept_one()
                 if c is not None and h2["op"] == "register":
                     ranks[int(h2["layer"])] = c
+            want_mtp = mtp_layer is not None and mtp_layer in ranks
+            req_layers = trunk + ([mtp_layer] if want_mtp else [])
+            rep["mtp"] = int(want_mtp)
             # tt-blaze G53F-0198: a test driver may A/B prefill knobs read per call (GLM53_INDEXER_POOL_BUCKET,
             # GLM53_MHC_PREFILL_HMIX, GLM53_PREFILL_ABLOCK, ...) with "opts": {"env": {name: value}}, set for this
             # request only; the ring's driver sends none
@@ -543,7 +550,7 @@ def test_prefill_seed_server(mesh_device):
             ttnn.synchronize_device(mesh_device)
             t1 = time.perf_counter()
             try:
-                st, lg, owner = _prefill(model, ids[:sp], mtp_next=ids[1 : sp + 1])
+                st, lg, owner = _prefill(model, ids[:sp], mtp_next=ids[1 : sp + 1] if want_mtp else None)
             finally:
                 for k, v in env_old.items():
                     if v is None:
@@ -584,10 +591,10 @@ def test_prefill_seed_server(mesh_device):
             # tt-blaze G53F-0219: the 11 DSA layers first (GLM53F_SEED_DSA_FIRST=1, default): their 1 GiB pushes + ring
             # writes are the tail after the last export, and the 34 small KDA exports (~0.9 s, flat in S) then run
             # under that tail instead of before it. Same bytes per layer; only the order of the pushes changes.
-            order = push_layers
+            order = req_layers
             if os.environ.get("GLM53F_SEED_DSA_FIRST", "1") == "1":
-                order = [L for L in push_layers if decs[L].cache is not None] + [
-                    L for L in push_layers if decs[L].cache is None
+                order = [L for L in req_layers if decs[L].cache is not None] + [
+                    L for L in req_layers if decs[L].cache is None
                 ]
             try:
                 for L in order:
