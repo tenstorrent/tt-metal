@@ -744,10 +744,17 @@ DRAM per chip at 1M (34.18 GB per chip, weights 24.24 GB):
 | 2 | both chips of the pair | 30.74 GB | 3.44 GB | 717 |
 | 4 | the pair splits the users | 30.71 GB | 3.47 GB | 714 |
 | 4 | both chips of the pair | out of memory allocating the global KV, 33.69 GB in use | | 715 |
+| 4 | the pair splits every 128-token block (`--kv-pair-split`, vLLM's default layout) | 30.72 GB | 3.46 GB | 2026-10-27 |
 
 Used DRAM does not change after the last 4K chunk at 1M, after prefill or after decode (to 0.01 GB). The last 4K chunk at
 1M takes 1.46 s with the K / V on both chips (8 heads per chip) and 2.78 s when the pair splits the users (the owner
 runs all 16 heads). One untraced decode step at 1M - 1 on one row: 0.19 s with 1 or 4 users, 0.17 s with 2.
+
+With the KV pair split (`mimo-v2.6/kv-pair-split`, 2026-10-27, `--mode capacity --users 4 --kv-pair-split`) 4 users
+per row fit as when the pair splits the users (30.72 GB, 3.46 GB free), and the last 4K chunk at 1M takes 1.57 s: each
+chip runs all 16 heads over its half of the keys (G 2 / S 15) and the pair merges by LSE, 7% over the head split's
+1.46 s, which only fits 1 user per row. Scaled by the last chunk, about 300 s per 1M user on one row, ~20 minutes
+for 4 (against ~28 when the pair splits the users). The decode step: 0.196 s with 4 users.
 
 1M passkey prompts:
 
