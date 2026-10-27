@@ -6995,6 +6995,7 @@ def test_multihost_graph_report(request):
         assert op_counts[op_name] == expected, f"{op_name} count per rank {op_counts[op_name]}, expected {expected}"
     # Each rank records only its own local devices: get_num_devices() counts the whole mesh across all ranks, while
     # get_device_ids() lists this rank's local ones. Assumes every rank owns the same number of devices, as each half
-    # of the T3K two-rank binding does.
+    # of the T3K two-rank binding does. The count matches only because the MeshDevice's id 0 collides with chip 0 in
+    # the report's devices list (tenstorrent/ttnn-visualizer#2225); fixing that will change what this sees.
     expected = {r: len(mesh_device.get_device_ids()) for r in range(world_size)}
     assert device_counts == expected, f"device count per rank {device_counts}, expected {expected}"
