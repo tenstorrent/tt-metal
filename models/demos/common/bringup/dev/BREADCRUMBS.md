@@ -2088,3 +2088,14 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - Selftest: selftest/test_smoke_budget.py (fails without the fix).
 - Not done: R.1 does not record the CPU's greedy token ids, so the device smoke cannot report its matching prefix
   with the CPU (would tell a budget miss from a divergence); needs an R.1 CPU re-run (~13 min decode), next model.
+
+## F196: the clean wall is timed only when proven warm (owner, DeepSeek-V4.1 galaxy_8x4, 2026-10-27)
+- Symptom: one 40-layer 5120 chunk: first timed run after compile 26.3 s, the fourth (profiled) 15.8 s; the owner:
+  "verify the cache is hit for everything, then call that a warm run". F114b's fixed WALL_WARM (10) was a guess.
+- Fix (testing/profile.py, BRINGUP_PROFILE_WALL=1): warm_up() runs the chunk until a run adds no program-cache entry
+  (mesh.num_program_cache_entries(); at most WALL_MAX_WARM = 100, else an assertion naming the growth), then
+  WALL_RUNS = 10 timed runs with mesh.set_program_cache_misses_allowed(False): a completed timed run hit the cache for
+  every program. Records chunk_wall_warm_runs, chunk_wall_warm_ms, program_cache_entries(_runs),
+  chunk_wall_cache_hits_only. A mesh without the API (selftests) keeps the fixed WALL_WARM.
+- Selftest: selftest/test_warm_wall.py. Also: host numbers of the real-time-profiler run with op mode on are not the
+  model's (per-call bookkeeping); only the clean wall is a host number.
