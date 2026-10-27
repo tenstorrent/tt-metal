@@ -59,6 +59,61 @@ class VaeNormDescGroup:
 VaeNormDesc = VaeNormDescRms | VaeNormDescGroup
 
 
+class VaeRowPad:
+    """Bottom row padding of an H-sharded VAE activation (``h_factor > 1``): the activation holds ``padded_h`` rows
+    over the H mesh axis, of which the first ``logical_h`` are the image and the rest are padding (an image whose
+    height does not split into whole 32-row tiles per device is decoded padded, then cropped). The blocks keep the
+    padding rows out of every result that reaches an image row:
+
+    * ``VaeConv2d``: ``neighbor_pad(logical_h=...)`` zeroes the rows at and below ``logical_h`` in the conv input,
+      local and sent halo rows alike, so the conv sees the same zeros below the last image row as at the image edge;
+    * ``_VaeSpatialGroupNorm``: the padding rows are zeroed (``zero_padding``) and the fused op divides the group
+      statistics by the valid element count (``dit_fused_distributed_groupnorm(num_valid_rows=...)``);
+    * ``VaeAttention``: the norm, K and V take the image rows only; queries of padding rows are computed and dropped.
+
+    Per-pixel ops (upsample, linears, residual adds) need nothing. ``upsampled()`` is the same padding one level up
+    (both counts doubled). The masks are built once per ``(padded_h, logical_h)`` and kept in ``cache``."""
+
+    def __init__(self, ctx: VaeContext, *, logical_h: int, padded_h: int, cache: dict | None = None) -> None:
+        if ctx.h_factor <= 1 or ctx.h_mesh_axis is None:
+            msg = "row padding needs an H-sharded context (h_factor > 1)"
+            raise ValueError(msg)
+        if not 0 < logical_h <= padded_h or padded_h % ctx.h_factor:
+            msg = f"invalid row padding: logical_h {logical_h}, padded_h {padded_h}, h_factor {ctx.h_factor}"
+            raise ValueError(msg)
+        self.ctx = ctx
+        self.logical_h = int(logical_h)
+        self.padded_h = int(padded_h)
+        self._cache = {} if cache is None else cache
+
+    @property
+    def active(self) -> bool:
+        return self.logical_h < self.padded_h
+
+    def upsampled(self, factor: int = 2) -> VaeRowPad:
+        return VaeRowPad(
+            self.ctx, logical_h=self.logical_h * factor, padded_h=self.padded_h * factor, cache=self._cache
+        )
+
+    @property
+    def mask(self) -> ttnn.Tensor:
+        """``[1, padded_h / h_factor, 1, 1]`` bf16 per device (sharded over the H axis): 1 on image rows, 0 below."""
+        key = (self.padded_h, self.logical_h)
+        if key not in self._cache:
+            rows = torch.zeros(1, self.padded_h, 1, 1)
+            rows[:, : self.logical_h] = 1.0
+            self._cache[key] = tensor.from_torch(
+                rows, device=self.ctx.device, dtype=ttnn.bfloat16, mesh_axes=[None, self.ctx.h_mesh_axis, None, None]
+            )
+        return self._cache[key]
+
+    def zero_padding(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """``x`` [N, padded_h / h_factor, W, C] TILE with the padding rows set to zero (image rows unchanged)."""
+        if not self.active:
+            return x
+        return ttnn.multiply(x, self.mask)
+
+
 # ---------------------------------------------------------------------------
 # Spatial-parallel helpers (no-op when h_factor == w_factor == 1)
 # ---------------------------------------------------------------------------
@@ -347,7 +402,9 @@ class VaeConv2d(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "", "inner")
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, *, logical_h: int = 0) -> ttnn.Tensor:
+        """``logical_h`` > 0 (H-sharded input of ``logical_h`` image rows over a taller padded height): the rows at and
+        below it are read as zeros (fused into ``neighbor_pad``), like the zero padding at the image edge."""
         if self._needs_neighbor_pad:
             ccl = self._ctx.ccl_manager
             assert ccl is not None
@@ -372,6 +429,10 @@ class VaeConv2d(Module):
                 axes.append(self._ctx.w_mesh_axis)
                 sems.append(ccl.get_np_ping_pong_semaphore(self._ctx.w_mesh_axis))
                 links.append(_get_neighbor_pad_num_links(ccl, x, 3))
+            masked_h = int(logical_h) if self._h_sharded and logical_h else 0
+            if masked_h and x.shape[2] * self._ctx.h_factor <= masked_h:
+                masked_h = 0  # no padding rows at this level
+            pad_kwargs = {"logical_h": masked_h} if masked_h else {}
             x = ccl.neighbor_pad(
                 x,
                 dims=dims,
@@ -381,8 +442,13 @@ class VaeConv2d(Module):
                 axes=axes,
                 neighbor_sems=sems,
                 num_links=links,
+                **pad_kwargs,
             )
             x = ttnn.squeeze(x, 0)  # back to [N, H_local+pad, W_local+pad, C]
+
+        elif logical_h and self._ctx.h_factor > 1 and x.shape[1] * self._ctx.h_factor > logical_h:
+            msg = "row padding needs the neighbor_pad halo path (an H-sharded conv with H padding)"
+            raise ValueError(msg)
 
         if self._use_conv3d:
             result = self.inner.forward(x)
@@ -400,9 +466,12 @@ class VaeUpsampler(Module):
         super().__init__()
         self.conv = VaeConv2d(in_channels, out_channels, kernel_size=3, padding=1, ctx=ctx)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, *, pad: VaeRowPad | None = None) -> ttnn.Tensor:
+        """``pad``: the row padding of the INPUT level (the conv runs one level up)."""
         x = tensor.upsample(x, scale_factor=2)
-        return self.conv.forward(x)
+        if pad is None:
+            return self.conv.forward(x)
+        return self.conv.forward(x, logical_h=pad.upsampled().logical_h)
 
 
 class VaeResnetBlock(Module):
@@ -430,14 +499,21 @@ class VaeResnetBlock(Module):
         if "conv_shortcut.weight" in state:
             state["conv_shortcut.weight"] = state["conv_shortcut.weight"].squeeze(2, 3)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, *, pad: VaeRowPad | None = None) -> ttnn.Tensor:
         h = x
 
-        h = self.norm1.forward(h)
-        h = self.conv1.forward(h)
+        if pad is None:
+            h = self.norm1.forward(h)
+            h = self.conv1.forward(h)
 
-        h = self.norm2.forward(h)
-        h = self.conv2.forward(h)
+            h = self.norm2.forward(h)
+            h = self.conv2.forward(h)
+        else:
+            h = self.norm1.forward(h, pad=pad)
+            h = self.conv1.forward(h, logical_h=pad.logical_h)
+
+            h = self.norm2.forward(h, pad=pad)
+            h = self.conv2.forward(h, logical_h=pad.logical_h)
 
         if self.conv_shortcut is not None:
             x = self.conv_shortcut.forward(x)
@@ -569,11 +645,19 @@ class VaeAttention(Module):
 
         return qkv.squeeze(-1) if is_1d else qkv
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, *, pad: VaeRowPad | None = None) -> ttnn.Tensor:
         identity = x  # [N, H/h, W/w, C/tp] when SP+TP active; identity captured pre-AG
 
         # SDPA over the full spatial extent → AG H+W once (no-op when SP inactive).
         x = _all_gather_hw(self._ctx, x)
+
+        # Row padding (``VaeRowPad``): the norm, K and V see the image rows only; the queries are padded back to the
+        # padded height below so each chip keeps its own rows (the padding rows' outputs are never read).
+        padded_h = x.shape[1]
+        if pad is not None and pad.logical_h < padded_h:
+            x = ttnn.slice(x, [0, 0, 0, 0], [x.shape[0], pad.logical_h, x.shape[2], x.shape[3]])
+        else:
+            pad = None
 
         x = self.norm.forward(x)
 
@@ -596,6 +680,13 @@ class VaeAttention(Module):
         del x
 
         n, h, w, c = q.shape  # h, w are full-spatial after AG
+        kv_rows = h * w
+        if pad is not None:
+            q = ttnn.concat(
+                [q, ttnn.zeros([n, padded_h - h, w, c], dtype=q.dtype, layout=q.layout, device=self._ctx.device)],
+                dim=1,
+            )
+            h = padded_h
 
         # Keep only this chip's query rows (see ``local_queries``): the spatial shard, then a slice of it per TP
         # rank. Rows are attention-order independent (one head, no mask, full K/V), so any subset is valid.
@@ -613,8 +704,8 @@ class VaeAttention(Module):
 
         # convert to 1d sequence and insert head dimension; there is only one head
         q = q.reshape([n, 1, local_rows, c])
-        k = k.reshape([n, 1, h * w, c])
-        v = v.reshape([n, 1, h * w, c])
+        k = k.reshape([n, 1, kv_rows, c])
+        v = v.reshape([n, 1, kv_rows, c])
 
         x = ttnn.transformer.scaled_dot_product_attention(
             q,
@@ -708,11 +799,12 @@ class VaeMidBlock(Module):
 
         self._num_layers = num_layers
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, *, pad: VaeRowPad | None = None) -> ttnn.Tensor:
+        kwargs = {} if pad is None else {"pad": pad}
         for i in range(self._num_layers + 1):
-            x = self.resnets[i].forward(x)
+            x = self.resnets[i].forward(x, **kwargs)
             if i < self._num_layers:
-                x = self.attentions[i].forward(x)
+                x = self.attentions[i].forward(x, **kwargs)
 
         return x
 
@@ -750,12 +842,15 @@ class VaeUpBlock(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "upsamplers.0", "upsampler")
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, *, pad: VaeRowPad | None = None) -> ttnn.Tensor:
+        """``pad``: the row padding of the input level; with an upsampler the output is one level up
+        (``pad.upsampled()``)."""
+        kwargs = {} if pad is None else {"pad": pad}
         for block in self.resnets:
-            x = block.forward(x)
+            x = block.forward(x, **kwargs)
 
         if self.upsampler is not None:
-            x = self.upsampler.forward(x)
+            x = self.upsampler.forward(x, **kwargs)
 
         return x
 
@@ -853,15 +948,25 @@ class _VaeSpatialGroupNorm(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "", "inner")
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, *, pad: VaeRowPad | None = None) -> ttnn.Tensor:
+        """``pad`` (``VaeRowPad``, H-sharded only): the padding rows are zeroed and the statistics divided by the
+        image rows' element count, so the image rows normalize exactly as without the padding."""
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+        norm_kwargs = {}
+        if pad is not None and pad.active:
+            if self._gather_w:
+                msg = "row padding is not supported with both H and W sharded"
+                raise ValueError(msg)
+            x = pad.zero_padding(x)
+            norm_kwargs["num_valid_rows"] = pad.logical_h * x.shape[2]
 
         if self._gather_w:
             assert self._ctx.ccl_manager is not None
             x = self._ctx.ccl_manager.all_gather(x, dim=2, mesh_axis=self._ctx.w_mesh_axis, use_hyperparams=True)
 
-        x = self.inner.forward(x, compute_kernel_config=self._compute_kernel_config)
+        x = self.inner.forward(x, compute_kernel_config=self._compute_kernel_config, **norm_kwargs)
 
         if self._gather_w:
             original_layout = x.layout

@@ -42,7 +42,8 @@ ttnn::Tensor dit_fused_distributed_groupnorm(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation) {
+    const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
+    uint32_t num_valid_rows) {
     // Always launch the fused device op. Width-1 runs local PRE+POST (no fabric);
     // width>1 runs PRE → fabric AG → POST. Packed RM γ/β + input_mask (same as ttnn.group_norm).
     return ttnn::prim::dit_fused_distributed_groupnorm(
@@ -60,7 +61,8 @@ ttnn::Tensor dit_fused_distributed_groupnorm(
         compute_kernel_config,
         persistent_output_buffer,
         subdevice_id,
-        fused_activation);
+        fused_activation,
+        num_valid_rows);
 }
 
 std::optional<ttnn::Tensor> dit_fused_distributed_groupnorm_create_stats_buffer(

@@ -27,6 +27,9 @@ struct DitFusedDistributedGroupnormParams {
     // Optional unary activation fused into the POST stage (applied after gamma/beta, on the
     // output tile still in DEST). nullopt = plain GroupNorm.
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
+    // Valid spatial rows summed over cluster_axis (0 = all rows valid). Rows past it are zero-filled
+    // by the caller; the cross-device merge rescales the stats to the valid count.
+    uint32_t num_valid_rows = 0;
 
     uint32_t cluster_axis = 0;
     uint32_t ring_size = 1;
@@ -42,6 +45,7 @@ struct DitFusedDistributedGroupnormParams {
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("compute_kernel_config", compute_kernel_config);
         attrs.emplace_back("fused_activation", fused_activation);
+        attrs.emplace_back("num_valid_rows", num_valid_rows);
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("topology", topology);

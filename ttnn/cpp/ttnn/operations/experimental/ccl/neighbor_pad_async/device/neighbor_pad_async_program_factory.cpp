@@ -518,6 +518,14 @@ ProgramDescriptor build_program_descriptor_at(
     h_reader_kernel.core_ranges = worker_core_ranges;
     h_reader_kernel.compile_time_args = std::move(h_reader_compile_args);
     h_reader_kernel.config = ReaderConfigDescriptor{};
+    // logical_h > 0: rows at global H index >= logical_h are padding. The local copy zeroes them in this device's
+    // output interior; the H fabric reader must also SEND zeros for them, otherwise a device whose rows are all
+    // padding (bottom padding of more than the last device's share, or ending exactly on a device boundary) hands
+    // its first, non-zero rows to the previous device's bottom halo. Without logical_h the kernel text is unchanged.
+    const bool mask_sent_rows = operation_attributes.logical_h > 0;
+    if (mask_sent_rows) {
+        h_reader_kernel.defines.emplace_back("NP_MASK_SENT_ROWS", "1");
+    }
     {
         KernelDescriptor::RTArgList h_reader_crta;
         h_reader_crta.push_back(input_buffer);
@@ -589,6 +597,10 @@ ProgramDescriptor build_program_descriptor_at(
             reader_rt_args.push_back(direction ? is_last_device : is_first_device);  // is_first_chip
             reader_rt_args.push_back(direction ? is_first_device : is_last_device);  // is_last_chip
             reader_rt_args.push_back(direction);                                     // direction
+            if (mask_sent_rows) {
+                reader_rt_args.push_back(operation_attributes.logical_h);      // logical_h
+                reader_rt_args.push_back(device_index * input_halo_dim_size);  // device_h_offset
+            }
             emplace_u32_runtime_args(h_reader_kernel, core, reader_rt_args);
 
             // For 2D case, H fabric writer uses output row width and W offset

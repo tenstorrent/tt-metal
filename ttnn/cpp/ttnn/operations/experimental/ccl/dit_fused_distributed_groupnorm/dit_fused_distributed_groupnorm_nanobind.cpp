@@ -32,7 +32,8 @@ ttnn::Tensor dit_fused_distributed_groupnorm_wrapper(
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    const std::optional<std::string>& activation) {
+    const std::optional<std::string>& activation,
+    uint32_t num_valid_rows) {
     std::optional<ttnn::operations::unary::UnaryWithParam> act_param = std::nullopt;
     if (activation.has_value()) {
         act_param = ttnn::operations::unary::utils::string_to_unary_with_param(activation.value());
@@ -52,7 +53,8 @@ ttnn::Tensor dit_fused_distributed_groupnorm_wrapper(
         compute_kernel_config,
         persistent_output_buffer,
         subdevice_id,
-        act_param);
+        act_param,
+        num_valid_rows);
 }
 
 void bind_dit_fused_distributed_groupnorm(nb::module_& mod) {
@@ -73,6 +75,12 @@ void bind_dit_fused_distributed_groupnorm(nb::module_& mod) {
             without the extra full-tensor DRAM read/write. The activation
             consumes the fp32 DEST value (after gamma/beta), so it is applied
             before the output is rounded to the output dtype.
+
+            ``num_valid_rows`` (0 = every row) is the number of valid spatial
+            rows summed over the devices of ``cluster_axis`` (requires a cluster
+            width > 1). The caller zero-fills the remaining padding rows; the
+            per-group statistics then divide by the valid element count, so a
+            bottom-padded image normalizes exactly like its unpadded rows.
         )doc",
         &dit_fused_distributed_groupnorm_wrapper,
         nb::arg("input_tensor"),
@@ -90,7 +98,8 @@ void bind_dit_fused_distributed_groupnorm(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("persistent_output_buffer") = nb::none(),
         nb::arg("subdevice_id") = nb::none(),
-        nb::arg("activation") = nb::none());
+        nb::arg("activation") = nb::none(),
+        nb::arg("num_valid_rows") = 0);
 
     ttnn::bind_function<"dit_fused_distributed_groupnorm_create_stats_buffer", "ttnn.experimental.">(
         mod,

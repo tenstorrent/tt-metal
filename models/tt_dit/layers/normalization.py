@@ -674,7 +674,11 @@ class GroupNorm(Module):
 
         def up(t, mp):
             return ttnn.from_torch(
-                t.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mp,
+                t.float(),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh,
+                mesh_mapper=mp,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
@@ -686,7 +690,11 @@ class GroupNorm(Module):
         m = up(ind.reshape(1, 1, c, g_local), rep)
         mt = up(ind.T.contiguous().reshape(1, 1, g_local, c), rep)
         cfg = ttnn.init_device_compute_kernel_config(
-            mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+            mesh.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
         )
         self._unaligned_cache = (gamma, beta, m, mt, cg, cfg)
         return self._unaligned_cache
@@ -713,7 +721,9 @@ class GroupNorm(Module):
             out.append(chans[: self.num_local_channels])
         return torch.cat(out)
 
-    def _forward_unaligned(self, x: ttnn.Tensor, batch_size: int, height: int, width: int, channels: int) -> ttnn.Tensor:
+    def _forward_unaligned(
+        self, x: ttnn.Tensor, batch_size: int, height: int, width: int, channels: int
+    ) -> ttnn.Tensor:
         gamma, beta, m, mt, cg, cfg = self._unaligned_consts()
         n = height * width
         n32 = math.ceil(n / 32) * 32
@@ -733,7 +743,10 @@ class GroupNorm(Module):
             keep = torch.zeros(1, 1, n32, 1)
             keep[:, :, :n, :] = 1.0
             keep_t = ttnn.from_torch(
-                keep, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.mesh_device,
+                keep,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
             xc = ttnn.multiply(xc, keep_t)
@@ -957,8 +970,14 @@ class DistributedGroupNorm(Module):
         ]
         return torch.cat(torch_sharded_lst, dim=0)
 
-    def forward(self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(
+        self, x: ttnn.Tensor, num_out_blocks=-1, compute_kernel_config=None, num_valid_rows: int | None = None
+    ) -> ttnn.Tensor:
+        """``num_valid_rows`` (fused path, cluster width > 1): the valid spatial rows (``H * W``) summed over the
+        ``cluster_axis`` devices of a bottom-padded input whose padding rows the caller zeroed; the statistics then
+        divide by the valid count. ``None``: every row is valid."""
         if self.inner is not None:
+            assert num_valid_rows is None, "num_valid_rows needs the fused path (cluster_axis set)"
             out = self.inner.forward(x, num_out_blocks=num_out_blocks, compute_kernel_config=compute_kernel_config)
             return _apply_activation_fn(out, self.activation_fn)
 
@@ -990,6 +1009,10 @@ class DistributedGroupNorm(Module):
 
         # Mirror GroupNorm.forward kwargs; cluster_axis / mesh / semaphore / topology
         # are the only distributed additions.
+        valid_kwargs = {}
+        if num_valid_rows is not None and num_valid_rows < height * width * self.cluster_size:
+            assert self.cluster_size > 1, "num_valid_rows needs a cluster width > 1"
+            valid_kwargs["num_valid_rows"] = int(num_valid_rows)
         out = ttnn.experimental.dit_fused_distributed_groupnorm(
             x4,
             num_groups=self.num_padded_groups,
@@ -1004,6 +1027,7 @@ class DistributedGroupNorm(Module):
             persistent_output_buffer=persistent,
             compute_kernel_config=compute_kernel_config,
             activation=self.fused_activation,
+            **valid_kwargs,
         )
         out = out.reshape([batch_size, height, width, channels])
         # No-op when the activation was consumed into the op above.

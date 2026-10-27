@@ -31,8 +31,14 @@ token chunks are whole latent rows because the tokens are row-major, hence ``h %
 ``preprocess_and_unpatchify`` applies the BatchNorm inverse and the 2x2 unpatchify (channel ``c * 4 + py * 2 + px``
 on both sides: diffusers decode through this unpack equals the reference decode to 4.4e-6). The typecast precedes
 the gather only to halve the gathered bytes; it is elementwise, so the order is numerically irrelevant.
-Sizes with ``h % h_factor != 0`` (e.g. a 1344-px height, h 84, with H8) take a second, lazily built decoder with no
-H partition (channels TP only, replicated rows); it is not exercised by the M7 rows.
+A size whose rows do not split that way (``h % h_factor != 0``, e.g. a 1344-px height, h 84, with H8, or a decoder
+level with a partial 32-row tile per device, e.g. 1376x768) is padded at the bottom with zero token rows to the smallest
+height that does (:func:`h_partition_padded_height`) and decoded on the same H-partitioned decoder with ``logical_h``:
+the padding rows never reach an image row (``models/vae/vae.py::VaeRowPad``: masked conv halos, group statistics over
+the image rows only, attention keys / values from the image rows only) and the render is cropped back (the FLUX.2
+Klein change of 2026-10-27, same shared layers). Only a size that cannot be padded that way (or
+``FLUX3_KLEIN_VAE_PAD_ROWS=0``) takes the second, lazily built decoder with no H partition (channels TP only,
+replicated rows).
 
 The host finishes with ``tensor.to_torch(out)[0].permute(2, 0, 1).float()`` and the reference ``to_pil`` formula
 ``((x.clamp(-1, 1) + 1) * 127.5).to(uint8)`` (truncation toward zero), so the PSNR gate compares like with like.
@@ -56,7 +62,13 @@ from ...models.vae.vae_flux2 import Flux2VaeDecoder
 from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
-from .packing import FLUX3_KLEIN_IN_CHANNELS, FLUX3_KLEIN_PATCH, FLUX3_KLEIN_VAE_CHANNELS, latent_shape
+from .packing import (
+    FLUX3_KLEIN_IN_CHANNELS,
+    FLUX3_KLEIN_PATCH,
+    FLUX3_KLEIN_TILE,
+    FLUX3_KLEIN_VAE_CHANNELS,
+    latent_shape,
+)
 
 VAE_SUBFOLDER = "vae"
 VAE_WEIGHTS_FILE = "diffusion_pytorch_model.safetensors"
@@ -156,6 +168,52 @@ def klein_downsample_slices(height: int, width: int) -> dict[tuple[int, int, int
         out[key] = min(stride1[key], conv_slice_cap(downsample_extent(w)))
         h, w = downsample_extent(h), downsample_extent(w)
     return out
+
+
+def h_partition_tile_aligned(height: int, width: int, h_factor: int) -> bool:
+    """True when every DECODER level of a ``height x width`` image (``/8``, ``/4``, ``/2``, full) holds a whole number
+    of 32-row tiles per device under an H split of ``h_factor``: ``(H_level / h_factor) * W_level % 32 == 0``. The
+    H-partitioned decoder's ``DistributedGroupNorm`` runs ``dit_fused_distributed_groupnorm`` on the per-device
+    ``[1, 1, H_level / F * W_level, C]`` rows, which TT_FATALs on padded rows
+    (``dit_fused_distributed_groupnorm_device_operation.cpp:65``). Whole-image alignment does not imply it: 1376x768
+    has 96 x 172 latent-level rows but 12 x 172 = 2064 per device on H8; 1184x896 gives 14 x 148 = 2072, 2496x1664
+    26 x 312 = 8112 (API sweep 2026-10-27, job 158230)."""
+    h, w = int(height) // FLUX3_KLEIN_VAE_SCALE, int(width) // FLUX3_KLEIN_VAE_SCALE
+    for _ in range(4):
+        if h % h_factor or (h // h_factor) * w % FLUX3_KLEIN_TILE:
+            return False
+        h, w = 2 * h, 2 * w
+    return True
+
+
+def h_partition_padded_height(height: int, width: int, h_factor: int) -> int | None:
+    """The image height the H-partitioned decoder decodes a ``height x width`` canvas at: ``height`` itself when the
+    canvas splits as it is (:func:`h_partition_tile_aligned` and ``h % h_factor == 0``), else the smallest taller
+    16-px multiple that does, padded with zero token rows at the bottom (``Flux2VaeDecoder.forward(logical_h=...)``).
+    Since every decoder level doubles both sides, the latent level's per-device tile alignment implies the others.
+    ``None`` when no padding helps: the image's own latent-level area (the attention's keys / values) is not a whole
+    number of 32-row tiles. ``h_factor <= 1``: ``height``."""
+    height, width = int(height), int(width)
+    if h_factor <= 1:
+        return height
+    scale, patch = FLUX3_KLEIN_VAE_SCALE, FLUX3_KLEIN_VAE_SCALE * FLUX3_KLEIN_PATCH
+    if height % patch or width % patch:
+        return None
+    if (height // scale) * (width // scale) % FLUX3_KLEIN_TILE:
+        return None
+    step = patch * h_factor  # whole latent token rows per device
+    padded = -(-height // step) * step
+    for _ in range(FLUX3_KLEIN_TILE):  # the tile condition repeats with period <= 32 steps
+        if h_partition_tile_aligned(padded, width, h_factor):
+            return padded
+        padded += step
+    return None
+
+
+def _pad_rows_enabled() -> bool:
+    """``FLUX3_KLEIN_VAE_PAD_ROWS`` (default 1): decode canvases the H split does not divide on the H-partitioned
+    decoder with bottom row padding (:func:`h_partition_padded_height`); 0 sends them to the replicated fallback."""
+    return os.environ.get("FLUX3_KLEIN_VAE_PAD_ROWS", "1").strip().lower() not in ("0", "false", "no")
 
 
 def partitioned_conv_rows(level_height: int, h_factor: int, halo: int = 1) -> int:
@@ -331,13 +389,17 @@ def set_exact_group_norm(decoder, *, mesh_device, h_axis: int | None, ccl_manage
             )
 
         def exact_forward(
-            x: ttnn.Tensor, _st=state, _cg=cg, _eps=eps, _act=activation, _gn=gn, _build=build_state
+            x: ttnn.Tensor, _st=state, _cg=cg, _eps=eps, _act=activation, _gn=gn, _build=build_state, *, pad=None
         ) -> ttnn.Tensor:
             if not _st:
                 _build()
             if x.layout != ttnn.TILE_LAYOUT:
                 x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             b, hh, ww, cc = x.shape
+            rows_total = hh * h_factor
+            if pad is not None and pad.active:  # ``VaeRowPad``: zero the padding rows, divide by the image rows
+                x = pad.zero_padding(x)
+                rows_total = pad.logical_h
             x4 = ttnn.reshape(x, [b, 1, hh * ww, cc])
             xf = ttnn.typecast(x4, ttnn.float32)
             s1 = ttnn.sum(xf, dim=2, keepdim=True, compute_kernel_config=fp32)  # [1, 1, 1, C_dev]
@@ -361,7 +423,7 @@ def set_exact_group_norm(decoder, *, mesh_device, h_axis: int | None, ccl_manage
                         )
                 gs1 = ttnn.add(parts[0], parts[1], compute_kernel_config=fp32)
                 gs2 = ttnn.add(parts[2], parts[3], compute_kernel_config=fp32)
-            n = float(hh * ww * h_factor * _cg)
+            n = float(rows_total * ww * _cg)
             mean = ttnn.multiply(gs1, 1.0 / n)
             var = ttnn.subtract(
                 ttnn.multiply(gs2, 1.0 / n),
@@ -552,6 +614,9 @@ class Flux3KleinVaeDecode:
         self._snapshot = snapshot
         self._fallback: Flux2VaeDecoder | None = None
         self._traced_size: dict[int, tuple[int, int]] = {}
+        # Bottom row padding onto the H-partitioned decoder (``h_partition_padded_height``); False = the old routing
+        # (unaligned canvases on the replicated fallback). Per instance, so a test can compare both.
+        self.pad_rows = _pad_rows_enabled()
         if sp_axis is not None and dit_ccl is None:
             raise ValueError("an SP-sharded state needs the DiT's CCL manager for the gather")
 
@@ -563,10 +628,29 @@ class Flux3KleinVaeDecode:
     def h_factor(self) -> int:
         return self._h_factor
 
-    def partitioned(self, height: int, width: int) -> bool:
-        """True when ``height x width`` decodes on the H-partitioned decoder (``h % h_factor == 0``)."""
+    def padded_height(self, height: int, width: int) -> int | None:
+        """The height ``height x width`` decodes at on the H-partitioned decoder (``height``: no padding), or ``None``
+        for the replicated-rows fallback. Unpadded when ``h % h_factor == 0`` and every decoder level is tile-aligned
+        per device (:func:`h_partition_tile_aligned`); otherwise, with ``pad_rows``, the bottom-padded height of
+        :func:`h_partition_padded_height`."""
         h, _ = latent_shape(height, width)
-        return h % self._h_factor == 0
+        if self._h_factor <= 1 or (h % self._h_factor == 0 and h_partition_tile_aligned(height, width, self._h_factor)):
+            return int(height)
+        if not self.pad_rows:
+            return None
+        return h_partition_padded_height(height, width, self._h_factor)
+
+    def partitioned(self, height: int, width: int) -> bool:
+        """True when ``height x width`` decodes on the H-partitioned decoder (padded or not: :meth:`padded_height`);
+        otherwise the replicated-rows fallback."""
+        return self.padded_height(height, width) is not None
+
+    def route(self, height: int, width: int) -> str:
+        """``"H8"`` (unpadded), ``"H8+pad"`` (bottom row padding) or ``"replicated"`` -- the log / bench label."""
+        padded = self.padded_height(height, width)
+        if padded is None:
+            return "replicated"
+        return f"H{self._h_factor}" + ("+pad" if padded > height else "")
 
     def _fallback_decoder(self) -> Flux2VaeDecoder:
         if self._fallback is None:
@@ -605,32 +689,46 @@ class Flux3KleinVaeDecode:
         h, w = latent_shape(height, width)
         if h * w != num_image_rows:
             raise ValueError(f"{height}x{width} has {h * w} latent rows, got num_image_rows {num_image_rows}")
-        partitioned = self.partitioned(height, width)
+        padded_height = self.padded_height(height, width)
+        partitioned = padded_height is not None
+        decode_height = padded_height if partitioned else height
         tp_factor = int(self._device.shape[self._tp_axis]) if self._tp_axis is not None else 1
         register_klein_conv_slices(
             tuple(self._device.shape),
-            height,
+            decode_height,
             width,
             h_factor=self._h_factor if partitioned else 1,
             tp_factor=tp_factor,
         )
         decoder = self._decoder if partitioned else self._fallback_decoder()
         rows = self.gather_real_rows(state, num_image_rows=num_image_rows)
+        logical_h = None
+        if decode_height > height:
+            # zero token rows below the image (``h_partition_padded_height``); the decoder masks them (``logical_h``)
+            extra = (decode_height // (FLUX3_KLEIN_VAE_SCALE * FLUX3_KLEIN_PATCH) - h) * w
+            padded = ttnn.pad(rows, [(0, 0), (0, extra), (0, 0)], 0.0)
+            ttnn.deallocate(rows)
+            rows = padded
+            logical_h = height // FLUX3_KLEIN_VAE_SCALE
         if partitioned and self._h_axis is not None and self._h_factor > 1:
             parted = ttnn.mesh_partition(rows, dim=1, cluster_axis=self._h_axis, memory_config=rows.memory_config())
             ttnn.deallocate(rows)
             rows = parted
         z = decoder.preprocess_and_unpatchify(
-            rows, height=height // FLUX3_KLEIN_VAE_SCALE, width=width // FLUX3_KLEIN_VAE_SCALE
+            rows, height=decode_height // FLUX3_KLEIN_VAE_SCALE, width=width // FLUX3_KLEIN_VAE_SCALE
         )
         ttnn.deallocate(rows)
+        forward_kwargs = {}
+        if logical_h is not None:
+            forward_kwargs["logical_h"] = logical_h
+            decoder.row_padding(logical_h=logical_h, padded_h=decode_height // FLUX3_KLEIN_VAE_SCALE)  # masks first
         if traced:
             key = id(decoder)
             if self._traced_size.get(key) not in (None, (height, width)):
                 release_module_trace(decoder)  # one trace per decoder, keyed by size (Flux2 precedent)
             self._traced_size[key] = (height, width)
         replay = traced and _trace_captured(decoder)
-        out = decoder.forward(z, traced=traced)
+        out = decoder.forward(z, traced=traced, **forward_kwargs)
         if not traced or replay:
             # Eager: ``z`` is a plain intermediate. Traced REPLAY: the tracer copied ``z`` into the captured input
             # buffer (``utils/tracing.py`` ``_update_input``: ``ttnn.copy`` when the addresses differ), so this fresh
@@ -676,6 +774,8 @@ __all__ = [
     "build_flux3_klein_vae_decoder",
     "conv_slice_cap",
     "downsample_extent",
+    "h_partition_padded_height",
+    "h_partition_tile_aligned",
     "klein_conv_slices",
     "klein_downsample_slices",
     "load_flux3_klein_vae_weights",

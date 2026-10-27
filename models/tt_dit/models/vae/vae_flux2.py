@@ -15,7 +15,7 @@ from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tracing import traced_function
-from .vae import VaeContext, VaeConv2d, VaeMidBlock, VaeNormDescGroup, VaeUpBlock, _all_gather_hw, _norm
+from .vae import VaeContext, VaeConv2d, VaeMidBlock, VaeNormDescGroup, VaeRowPad, VaeUpBlock, _all_gather_hw, _norm
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -96,6 +96,7 @@ class Flux2VaeDecoder(Module):
         self.bn_eps = 1e-4
 
         self._ctx = ctx
+        self._row_pad_masks: dict = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # remove encoder state
@@ -140,23 +141,57 @@ class Flux2VaeDecoder(Module):
         z = ttnn.to_layout(z, ttnn.TILE_LAYOUT)
         return z
 
+    def row_padding(self, *, logical_h: int, padded_h: int) -> VaeRowPad:
+        """The ``VaeRowPad`` of the latent level (``z``'s rows: ``padded_h`` over the H axis, the first ``logical_h``
+        the image) with the masks of every decoder level built (once per size): a traced capture allocates none."""
+        pad = VaeRowPad(self._ctx, logical_h=logical_h, padded_h=padded_h, cache=self._row_pad_masks)
+        level = pad
+        for _ in range(len(self.up_blocks)):
+            if level.active:
+                _ = level.mask
+            level = level.upsampled()
+        return pad
+
     @traced_function(device=lambda self: self._ctx.device, clone_prep_inputs=False)
-    def forward(self, z: ttnn.Tensor, /) -> ttnn.Tensor:
+    def forward(self, z: ttnn.Tensor, /, *, logical_h: int | None = None) -> ttnn.Tensor:
+        """``logical_h`` (H-sharded decoder only): the latent rows of the image when ``z`` holds more (rows padded at
+        the bottom so every level splits into whole tiles per device); the padding rows never reach an image row
+        (``VaeRowPad``) and the output is cropped to ``logical_h * 8`` rows."""
         # Input arrives H-sharded when SP is active (preprocess_and_unpatchify uses per-device
         # H), or replicated when SP is off — both cases work for post_quant_conv (per-position
         # Linear) and the SP-aware conv pyramid below.
+        pad = None
+        if logical_h is not None and z.shape[1] * self._ctx.h_factor > logical_h:
+            pad = self.row_padding(logical_h=logical_h, padded_h=z.shape[1] * self._ctx.h_factor)
+
         z = self.post_quant_conv.forward(z)
 
-        z = self.conv_in.forward(z)
-        z = self.mid_block.forward(z)
+        if pad is None:
+            z = self.conv_in.forward(z)
+            z = self.mid_block.forward(z)
 
-        for block in self.up_blocks:
-            z = block.forward(z)
+            for block in self.up_blocks:
+                z = block.forward(z)
 
-        z = self.conv_norm_out.forward(z)
+            z = self.conv_norm_out.forward(z)
+        else:
+            z = self.conv_in.forward(z, logical_h=pad.logical_h)
+            z = self.mid_block.forward(z, pad=pad)
+
+            for block in self.up_blocks:
+                z = block.forward(z, pad=pad)
+                if block.upsampler is not None:
+                    pad = pad.upsampled()
+
+            z = self.conv_norm_out.forward(z, pad=pad)
 
         if self._ctx.ccl_manager is not None and self._ctx.tp_axis is not None:
             z = self._ctx.ccl_manager.all_gather(z, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
 
-        z = self.conv_out.forward(z)
-        return _all_gather_hw(self._ctx, z)
+        if pad is None:
+            z = self.conv_out.forward(z)
+            return _all_gather_hw(self._ctx, z)
+
+        z = self.conv_out.forward(z, logical_h=pad.logical_h)
+        z = _all_gather_hw(self._ctx, z)
+        return ttnn.slice(z, [0, 0, 0, 0], [z.shape[0], pad.logical_h, z.shape[2], z.shape[3]])
