@@ -21,10 +21,11 @@ std::uint32_t pack_sync_tile_dst_ptr       = 0;
 std::uint32_t math_sync_tile_dst_index     = 0;
 static constexpr ckernel::DstSync DST_SYNC = ckernel::DstSync::SyncHalf;
 
-// Dest layout for one SFPU bcast invocation: data, bcast operand, result.
+// Dest layout for one SFPU bcast invocation: data (overwritten in place by the
+// result, as every sfpu_*_bcast_* API caller does) and the bcast operand.
 static constexpr std::uint32_t INPUT_TILE_A         = 0;
 static constexpr std::uint32_t INPUT_TILE_B         = INPUT_TILE_A + 1;
-static constexpr std::uint32_t RESULT_TILE          = INPUT_TILE_A + 2;
+static constexpr std::uint32_t RESULT_TILE          = INPUT_TILE_A;
 static constexpr std::uint32_t INPUT_TILES_PER_LOOP = 2;
 
 #ifdef LLK_TRISC_UNPACK
