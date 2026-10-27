@@ -24,7 +24,14 @@ from models.experimental.tafsut_forecast.tt.common import MASK_FILL, Precision, 
 NH, DH = df.NH, df.DH
 # (bucket context, s_pad, chunk): the table, plus the alternatives D0 Q2 / CONTRACT §7 item 1 measure.
 SHAPES = [(b, *df.PAD_TABLE[b]) for b in df.BUCKETS] + [(32768, 1152, 64)]
-BATCHES = (2, 16, 32)  # the odd-chunk-count bug shows at 16 and 32, not at 2 (job 933)
+# Batch per SDPA call that the model really issues at each padded length (D1 ruling 3): the model runs the whole
+# batch through one SDPA call, so this is each golden's rows at each forward's bucket. 128: single 1, ragged4 4,
+# model16/fallback 16, long_horizon forward 1 512, paper 1024. 256: horizon4 / long_horizon forward 2 (4, 512).
+# 384: gift_ragged_odd 16. 640: no case reaches it, so 2 and 32 cover the row. 1088: single_long 1, long_context /
+# gift_ragged 32. 1152/64 is the round-1 alternative at long_context's 32. The odd-chunk-count bug shows at B = 16 / 32,
+# not at 2 or 64 (jobs 932/933), so batch is part of the trigger.
+MODEL_BATCHES = {128: (1, 4, 16, 512, 1024), 256: (4, 512), 384: (16,), 640: (2, 32), 1088: (1, 32), 1152: (1, 32)}
+CASES = [(c, s, k, B) for c, s, k in SHAPES for B in MODEL_BATCHES[s]]
 PRECS = {
     "accuracy": Precision.accuracy(),
     "performance": Precision.performance(),
@@ -42,7 +49,8 @@ def key_valid(ctx_len: int, s_pad: int, chunk: int, B: int = 2) -> torch.Tensor:
     kv[:, :S] = True
     lead = min(2 * chunk + 17, P)
     kv[0, :lead] = False
-    kv[1, 5] = False
+    if B > 1:
+        kv[1, 5] = False
     for b in range(2, B):  # ragged rows: GIFT-style leading padding of every length
         kv[b, : (b * 37) % (P + 1)] = False
     return kv
@@ -57,15 +65,20 @@ def run_sdpa(device, q, k, v, bias, chunk, prec: Precision):
         exp_approx_mode=prec.exp_approx,
     )
     out = ttnn.transformer.scaled_dot_product_attention(
-        up(q), up(k), up(v), attn_mask=up(bias), is_causal=False, scale=1.0, program_config=pc,
+        up(q),
+        up(k),
+        up(v),
+        attn_mask=up(bias),
+        is_causal=False,
+        scale=1.0,
+        program_config=pc,
         compute_kernel_config=ckc(prec.sdpa_fidelity),
     )
     return ttnn.to_torch(out).float()
 
 
-@pytest.mark.parametrize("B", BATCHES)
 @pytest.mark.parametrize("prec", list(PRECS))
-@pytest.mark.parametrize("ctx_len,s_pad,chunk", SHAPES, ids=[f"{s}-c{c}" for _, s, c in SHAPES])
+@pytest.mark.parametrize("ctx_len,s_pad,chunk,B", CASES, ids=[f"{s}-c{k}-B{B}" for _, s, k, B in CASES])
 def test_sdpa_masked(device, ctx_len, s_pad, chunk, prec, B):
     p = PRECS[prec]
     assert df.chunk_count_ok(s_pad, chunk)
@@ -91,20 +104,23 @@ def test_sdpa_masked(device, ctx_len, s_pad, chunk, prec, B):
     bad = run_sdpa(device, q, k, v, ctrl, chunk, p)[:, :, :S]
     ctrl_err = float((bad - exp).abs().max())
     rows = M.row_pccs(exp.reshape(B, -1), got.reshape(B, -1))
-    print(f"[sdpa] {s_pad}-c{chunk}-{prec}-B{B}: worst row {float(rows.min()):.6f} pcc {pc:.6f} max_err {err:.4f} |capped-forced{big}| {capped:.4f} "
-          f"control max_err {ctrl_err:.4f} lead {int((~kv[0, :S]).sum())} whole_chunks {int((~kv[0, :S]).sum()) // chunk}")
+    print(
+        f"[sdpa] {s_pad}-c{chunk}-{prec}-B{B}: worst row {float(rows.min()):.6f} pcc {pc:.6f} max_err {err:.4f} |capped-forced{big}| {capped:.4f} "
+        f"control max_err {ctrl_err:.4f} lead {int((~kv[0, :S]).sum())} whole_chunks {int((~kv[0, :S]).sum()) // chunk}"
+    )
     assert pc > 0.999 and err < 0.1 and float(rows.min()) > 0.999
     assert ctrl_err > 5 * err, "positive control passed: the mask is not being applied"
 
 
-def test_sdpa_rejects_broadcast_mask(device):
+def test_sdpa_rejects_broadcast_mask(device, expect_error):
     """D0 amendment 4: ttnn SDPA needs the mask's query dim equal to Q's; a [B, 1, 1, S] mask is rejected."""
     q = torch.randn(1, NH, 128, DH)
     bias = torch.zeros(1, 1, 1, 128)
     up = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    with pytest.raises(Exception):
-        ttnn.transformer.scaled_dot_product_attention(up(q), up(q), up(q), attn_mask=up(bias), is_causal=False,
-                                                      scale=1.0)
+    with expect_error(RuntimeError, "Mask sequence length must match Q sequence length"):
+        ttnn.transformer.scaled_dot_product_attention(
+            up(q), up(q), up(q), attn_mask=up(bias), is_causal=False, scale=1.0
+        )
 
 
 @pytest.mark.parametrize("s_pad,chunk", [(384, 128), (1088, 64)])
