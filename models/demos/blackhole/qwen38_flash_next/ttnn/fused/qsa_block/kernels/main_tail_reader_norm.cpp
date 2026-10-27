@@ -7,6 +7,7 @@
 // Runtime args: 0 x, 1 gamma addresses, 2 first tile.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
@@ -24,13 +25,14 @@ void kernel_main() {
     constexpr auto gamma_args = TensorAccessorArgs<projection_args.next_compile_time_args_offset()>();
     const auto projection = TensorAccessor(projection_args, projection_addr);
     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
+    const Noc noc;
 
     {
         dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
             1.0f);
         generate_bcast_col_scalar(CircularBuffer(cb_eps), eps_bits);
         CircularBuffer(cb_zero).reserve_back(1);
-        tile_rows::fill_words(get_write_ptr(cb_zero), tile_bytes / 4, 0);
+        tile_rows::fill_words(CircularBuffer(cb_zero).get_write_ptr(), tile_bytes / 4, 0);
         CircularBuffer(cb_zero).push_back(1);
     }
 
@@ -38,10 +40,20 @@ void kernel_main() {
         CircularBuffer(cb_gamma).reserve_back(head_tiles);
         CircularBuffer(cb_x).reserve_back(head_tiles);
         for (uint32_t c = 0; c < head_tiles; ++c) {
-            noc_async_read_page(c, gamma, get_write_ptr(cb_gamma) + c * tile_bytes);
-            noc_async_read_page(first_tile + c, projection, get_write_ptr(cb_x) + c * tile_bytes);
+            noc.async_read(
+                gamma,
+                CircularBuffer(cb_gamma),
+                gamma.get_aligned_page_size(),
+                {.page_id = c},
+                {.offset_bytes = c * tile_bytes});
+            noc.async_read(
+                projection,
+                CircularBuffer(cb_x),
+                projection.get_aligned_page_size(),
+                {.page_id = first_tile + c},
+                {.offset_bytes = c * tile_bytes});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         CircularBuffer(cb_gamma).push_back(head_tiles);
         CircularBuffer(cb_x).push_back(head_tiles);
     }

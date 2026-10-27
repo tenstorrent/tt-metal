@@ -6,8 +6,8 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "main_tail_cbs.h"
@@ -21,6 +21,7 @@ void kernel_main() {
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     const auto cos = TensorAccessor(cos_args, cos_addr);
     const auto sin = TensorAccessor(sin_args, sin_addr);
+    const Noc noc;
     Semaphore<> rope_handoff(rope_semaphore_id);
 
     {
@@ -28,10 +29,20 @@ void kernel_main() {
         CircularBuffer(cb_cos).reserve_back(rope_tiles);
         CircularBuffer(cb_sin).reserve_back(rope_tiles);
         for (uint32_t t = 0; t < rope_tiles; ++t) {
-            noc_async_read_page(t, cos, get_write_ptr(cb_cos) + t * tile_bytes);
-            noc_async_read_page(t, sin, get_write_ptr(cb_sin) + t * tile_bytes);
+            noc.async_read(
+                cos,
+                CircularBuffer(cb_cos),
+                cos.get_aligned_page_size(),
+                {.page_id = t},
+                {.offset_bytes = t * tile_bytes});
+            noc.async_read(
+                sin,
+                CircularBuffer(cb_sin),
+                sin.get_aligned_page_size(),
+                {.page_id = t},
+                {.offset_bytes = t * tile_bytes});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         CircularBuffer(cb_cos).push_back(rope_tiles);
         CircularBuffer(cb_sin).push_back(rope_tiles);
     }

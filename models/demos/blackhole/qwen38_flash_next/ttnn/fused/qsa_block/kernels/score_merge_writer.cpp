@@ -6,6 +6,7 @@
 // chunk, 3 chunks on this core.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "tile_rows.h"
@@ -18,11 +19,13 @@ void kernel_main() {
     constexpr uint32_t cb_out = 16, chunk_bytes = tile_rows::tile_bytes;
     constexpr auto out_args = TensorAccessorArgs<0>();
     const auto out = TensorAccessor(out_args, out_addr);
+    const Noc noc;
     for (uint32_t chunk = first_chunk; chunk < first_chunk + chunks; ++chunk) {
         for (uint32_t r = 0; r < rows; ++r) {
             CircularBuffer(cb_out).wait_front(1);
-            noc_async_write(get_read_ptr(cb_out), out.get_noc_addr(r, chunk * chunk_bytes), chunk_bytes);
-            noc_async_write_barrier();
+            noc.async_write(
+                CircularBuffer(cb_out), out, chunk_bytes, {}, {.page_id = r, .offset_bytes = chunk * chunk_bytes});
+            noc.async_write_barrier();
             CircularBuffer(cb_out).pop_front(1);
         }
     }

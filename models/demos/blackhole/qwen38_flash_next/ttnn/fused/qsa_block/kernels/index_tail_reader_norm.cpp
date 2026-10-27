@@ -10,7 +10,9 @@
 // 11 lane_count, 12 do_query.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
@@ -48,13 +50,14 @@ void kernel_main() {
     const auto gamma_key = TensorAccessor(gamma_key_args, gamma_key_addr);
     const auto ring = TensorAccessor(ring_args, ring_addr);
     const auto row_hit = TensorAccessor(row_hit_args, row_hit_addr);
+    const Noc noc;
 
     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(1.0f);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler_ring, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>(
         0.25f);
     generate_bcast_col_scalar(CircularBuffer(cb_eps), eps_bits);
     CircularBuffer(cb_ones).reserve_back(1);
-    tile_rows::fill_words(get_write_ptr(cb_ones), tile_bytes / 4, 0x3F803F80u);
+    tile_rows::fill_words(CircularBuffer(cb_ones).get_write_ptr(), tile_bytes / 4, 0x3F803F80u);
     CircularBuffer(cb_ones).push_back(1);
 
     CircularBuffer(cb_gamma_q).reserve_back(head_tiles);
@@ -63,42 +66,61 @@ void kernel_main() {
     CircularBuffer(cb_raw).reserve_back(head_tiles);
     CircularBuffer(cb_pos_r).reserve_back(1);
     CircularBuffer(cb_poscr).reserve_back(1);
-    const uint32_t gamma_query_l1 = get_write_ptr(cb_gamma_q), gamma_key_l1 = get_write_ptr(cb_gamma_k);
-    const uint32_t x_l1 = get_write_ptr(cb_x), raw_key_l1 = get_write_ptr(cb_raw),
-                   positions_l1 = get_write_ptr(cb_pos_r);
+    // cb_raw and cb_pos_r are scratch: reserved once and never pushed, read by the RISC after the reads land
+    const uint32_t raw_key_l1 = CircularBuffer(cb_raw).get_write_ptr();
+    const CoreLocalMem<volatile uint32_t> positions(CircularBuffer(cb_pos_r).get_write_ptr());
     {
         for (uint32_t c = 0; c < head_tiles; ++c) {
-            noc_async_read_page(c, gamma_key, gamma_key_l1 + c * tile_bytes);
-            noc_async_read_page(raw_key_first_tile + c, raw_key, raw_key_l1 + c * tile_bytes);
+            noc.async_read(
+                gamma_key,
+                CircularBuffer(cb_gamma_k),
+                gamma_key.get_aligned_page_size(),
+                {.page_id = c},
+                {.offset_bytes = c * tile_bytes});
+            noc.async_read(
+                raw_key,
+                CoreLocalMem<uint32_t>(raw_key_l1),
+                raw_key.get_aligned_page_size(),
+                {.page_id = raw_key_first_tile + c},
+                {.offset_bytes = c * tile_bytes});
             if (do_query) {
-                noc_async_read_page(c, gamma_query, gamma_query_l1 + c * tile_bytes);
-                noc_async_read_page(query_first_tile + c, index_query, x_l1 + c * tile_bytes);
+                noc.async_read(
+                    gamma_query,
+                    CircularBuffer(cb_gamma_q),
+                    gamma_query.get_aligned_page_size(),
+                    {.page_id = c},
+                    {.offset_bytes = c * tile_bytes});
+                noc.async_read(
+                    index_query,
+                    CircularBuffer(cb_x),
+                    index_query.get_aligned_page_size(),
+                    {.page_id = query_first_tile + c},
+                    {.offset_bytes = c * tile_bytes});
             }
         }
-        noc_async_read_barrier();
-        tile_rows::read_positions(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1),
-            block_start,
-            row_hit,
-            rows,
-            get_write_ptr(cb_poscr));
+        noc.async_read_barrier();
+        tile_rows::read_positions(positions, block_start, row_hit, rows, CircularBuffer(cb_poscr).get_write_ptr());
         CircularBuffer(cb_gamma_k).push_back(head_tiles);
         if (do_query) {
             CircularBuffer(cb_gamma_q).push_back(head_tiles);
             CircularBuffer(cb_x).push_back(head_tiles);
         }
     }
-    volatile tt_l1_ptr uint32_t* positions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1);
 
     for (uint32_t i = 0; i < lane_count; ++i) {
         const uint32_t lane = lane_first + i;
         const uint32_t slot = positions[lane] & 3;
         CircularBuffer(cb_ring).reserve_back(head_tiles);
-        const uint32_t ring_l1 = get_write_ptr(cb_ring);
+        const uint32_t ring_l1 = CircularBuffer(cb_ring).get_write_ptr();
         for (uint32_t c = 0; c < head_tiles; ++c) {
-            noc_async_read_page(lane * head_tiles + c, ring, ring_l1 + c * tile_bytes);
+            noc.async_read(
+                ring,
+                CircularBuffer(cb_ring),
+                ring.get_aligned_page_size(),
+                {.page_id = lane * head_tiles + c},
+                {.offset_bytes = c * tile_bytes});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         invalidate_l1_cache();
         for (uint32_t c = 0; c < head_tiles; ++c) {
             copy_tile_row(raw_key_l1 + c * tile_bytes, lane, ring_l1 + c * tile_bytes, slot, true);

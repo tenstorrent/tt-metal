@@ -11,6 +11,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "tile_rows.h"
 
@@ -27,30 +28,41 @@ void kernel_main() {
     const auto qg = TensorAccessor(qg_args, qg_addr);
     using tile_rows::half_row_bytes;
     using tile_rows::tile_bytes;
+    const Noc noc;
 
     CircularBuffer(cb_gate).reserve_back(head_tiles);
     CircularBuffer(cb_att).reserve_back(head_tiles);
-    const uint32_t gate_l1 = get_write_ptr(cb_gate), attention_l1 = get_write_ptr(cb_att);
+    const uint32_t attention_l1 = CircularBuffer(cb_att).get_write_ptr();
     {
-        Noc noc;
         DataflowBuffer attention_cb(cb_att);
         noc.async_write_zeros(attention_cb, head_tiles * tile_bytes);
         noc.write_zeros_l1_barrier();
     }
     {
         for (uint32_t t = 0; t < head_tiles; ++t) {
-            noc_async_read_page(qg_first + 2 * head_tiles * head + gate_first_tile + t, qg, gate_l1 + t * tile_bytes);
+            noc.async_read(
+                qg,
+                CircularBuffer(cb_gate),
+                qg.get_aligned_page_size(),
+                {.page_id = qg_first + 2 * head_tiles * head + gate_first_tile + t},
+                {.offset_bytes = t * tile_bytes});
         }
         // DRAM reads land whole (64-byte aligned) rows in the scratch; the RISC places the chunks into the tile faces
         CircularBuffer(cb_row).reserve_back(1);
-        const uint32_t row_l1 = get_write_ptr(cb_row);
+        // cb_row is scratch: reserved once and never pushed
+        const uint32_t row_l1 = CircularBuffer(cb_row).get_write_ptr();
         for (uint32_t lane = 0; lane < rows; ++lane) {
-            noc_async_read(attention.get_noc_addr(head * rows + lane, 0), row_l1, head_tiles * 2 * half_row_bytes);
-            noc_async_read_barrier();
+            noc.async_read(
+                attention,
+                CoreLocalMem<uint32_t>(row_l1),
+                head_tiles * 2 * half_row_bytes,
+                {.page_id = head * rows + lane, .offset_bytes = 0},
+                {});
+            noc.async_read_barrier();
             invalidate_l1_cache();
             tile_rows::place_row(row_l1, attention_l1, head_tiles, lane);
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         CircularBuffer(cb_gate).push_back(head_tiles);
         CircularBuffer(cb_att).push_back(head_tiles);
     }

@@ -8,7 +8,9 @@
 // 6 lane_first, 7 lane_count, 8 do_query.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "index_tail_cbs.h"
 #include "positions.h"
@@ -33,42 +35,44 @@ void kernel_main() {
     const auto cache = TensorAccessor(cache_args, cache_addr);
     const auto block_start = TensorAccessor(block_start_args, block_start_addr);
     const auto row_hit = TensorAccessor(row_hit_args, row_hit_addr);
+    const Noc noc;
 
     CircularBuffer(cb_pos_w).reserve_back(1);
     CircularBuffer(cb_poscw).reserve_back(1);
-    const uint32_t positions_l1 = get_write_ptr(cb_pos_w);
-    tile_rows::read_positions(
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1),
-        block_start,
-        row_hit,
-        rows,
-        get_write_ptr(cb_poscw));
-    volatile tt_l1_ptr uint32_t* positions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1);
+    // cb_pos_w is scratch: reserved once and never pushed
+    const CoreLocalMem<volatile uint32_t> positions(CircularBuffer(cb_pos_w).get_write_ptr());
+    tile_rows::read_positions(positions, block_start, row_hit, rows, CircularBuffer(cb_poscw).get_write_ptr());
 
     if (do_query) {
         CircularBuffer(cb_out_q).wait_front(rope_tiles);
         for (uint32_t t = 0; t < rope_tiles; ++t) {
-            noc_async_write_page(t, out, get_read_ptr(cb_out_q) + t * tile_bytes);
+            noc.async_write(
+                CircularBuffer(cb_out_q),
+                out,
+                out.get_aligned_page_size(),
+                {.offset_bytes = t * tile_bytes},
+                {.page_id = t});
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
         CircularBuffer(cb_out_q).pop_front(rope_tiles);
     }
 
     for (uint32_t i = 0; i < lane_count; ++i) {
         const uint32_t lane = lane_first + i;
         CircularBuffer(cb_out_k).wait_front(rope_tiles);
-        const uint32_t key_l1 = get_read_ptr(cb_out_k);
         const uint32_t row = positions[lane] >> 2;
         const uint32_t tile_row = lane * lane_tile_rows + (row >> 5);
         for (uint32_t t = 0; t < rope_tiles; ++t) {
             for (uint32_t half = 0; half < 2; ++half) {
-                noc_async_write(
-                    key_l1 + t * tile_bytes + chunk_offset(0, half),
-                    cache.get_noc_addr(tile_row * head_tiles + t, chunk_offset(row & 31, half)),
-                    half_row_bytes);
+                noc.async_write(
+                    CircularBuffer(cb_out_k),
+                    cache,
+                    half_row_bytes,
+                    {.offset_bytes = t * tile_bytes + chunk_offset(0, half)},
+                    {.page_id = tile_row * head_tiles + t, .offset_bytes = chunk_offset(row & 31, half)});
             }
         }
-        noc_async_write_barrier();
+        noc.async_write_barrier();
         CircularBuffer(cb_out_k).pop_front(rope_tiles);
     }
 }
