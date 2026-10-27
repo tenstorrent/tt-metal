@@ -94,7 +94,7 @@ for a 128-token prompt (`GLM53_MODEL_MAX_SEQ_LEN=1048576 GLM53_PARTITION_USERS=1
 The gap is a threshold, not capacity scaling: 256 K per user replays in 70.9 ms, 512 K and 1 M in ~152 ms. Above ~256 K x 4 users
 the memory planner drops the second, DRAM-bank-sharded expert copy that the decode streaming op reads (it does not fit beside the
 caches: `GLM53_REGIONS_KEEP_STACKED`), and decode falls back to the prefill regions lists (per-expert matmuls): ~+80 ms per step
-over the 42 MoE layers. The 128 K x 32-users profile runs the same fallback. Levers under test: a streaming decode that sources
+over the 42 MoE layers (confirmed: 256 K with the copy forced off replays in 148.9 ms with the 1 M numerics). The 128 K x 32-users profile runs the same fallback. Levers under test: a streaming decode that sources
 the one resident expert copy directly (`GLM53_REGIONS_DECODE`, in progress), and bfp4 experts so both copies fit at 1 M (accuracy
 gate pending). The sparse-decode scorer and top-k also looped over the pool capacity (+0.94 ms per DSA layer per step); a per-step
 live-pool bound (`GLM53_SPARSE_DECODE_BOUND=1`) is validated bit-identical on the block and on the 8x4 (152.2 -> 148.6 ms).
