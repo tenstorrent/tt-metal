@@ -243,7 +243,9 @@ def test_pipeline_distilled(
         if thresholds is None:
             pytest.skip(f"no VBench thresholds calibrated for height {height}")
 
-        # VBENCH_TEMPORAL_WIDTH > 0 scores the temporal metrics on a reduced-width copy (see vbench_gate.md).
+        # VBENCH_TEMPORAL_WIDTH > 0 records vbench_cpu.score_clip_ci as the bundle's scorer: motion_smoothness
+        # and dynamic_degree are scored on a copy downscaled to that width so the full-size clips score within
+        # the leg's time; 0 or unset scores everything at full resolution.
         temporal_width = int(os.environ.get("VBENCH_TEMPORAL_WIDTH", "0"))
         scorer = (
             {
