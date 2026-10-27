@@ -701,13 +701,13 @@ fills from 1x2, 2x1, 2x2, 2x4 plus 15 designed rings), the 12 heterogeneous mult
 the 28 no-1x1 multi-mesh rings (2 to 8 meshes of 4x8, 1 to 4 cables per pair, all-domino or
 mixed). 132 cases, 60 s cap. Full rows in `carve_comparison.md`; the summary:
 
-| Group | Cases | Verdicts | footprint Auto, decided | with completeness (5.4) | planner, decided | resolver after a carve, worst | topology after a carve, worst |
+| Group | Cases | Verdicts | footprint Auto: cases decided within 60 s | with completeness (5.4): decided within 60 s | planner: decided | resolver after a carve, worst | topology after a carve, worst |
 |---|---|---|---|---|---|---|---|
-| original 17 | 17 | 14 feasible, 2 infeasible, 1 open | 11 (3 only at 600 s) | 16 | 0 (17 budget-exhausted) | 0.029 s | 0.059 s |
+| original 17 | 17 | 14 feasible, 2 infeasible, 1 open | 14 | 16 | 0 (17 budget-exhausted) | 0.029 s | 0.059 s |
 | heterogeneous sweep | 30 | 21 feasible, 9 infeasible | 30 | 30 | 0 (30 budget-exhausted) | 0.001 s | 0.001 s |
-| no-1x1 single mesh | 45 | 29 feasible, 12 infeasible, 4 open | 39 | 43 | 0 (45 stage-0 rule; rule off: 2 found, 12 `no-alignment` on feasible cases, 29 budget) | 0.029 s | 0.004 s |
+| no-1x1 single mesh | 45 | 29 feasible, 12 infeasible, 4 open | 40 | 43 | 0 (45 stage-0 rule; rule off: 2 found, 12 `no-alignment` on feasible cases, 29 budget) | 0.029 s | 0.004 s |
 | heterogeneous multi-mesh | 12 | 12 feasible | 12 | 12 | 0 (11 stage-0 rule; rule off: 10 budget, 2 `no-alignment`) | 0.001 s | 0.001 s |
-| no-1x1 multi-mesh | 28 | 22 feasible, 4 infeasible, 2 open | 16 | 26 | 0 (28 stage-0 rule; rule off: 26 budget, 2 `no-alignment`) | 0.036 s | 0.004 s |
+| no-1x1 multi-mesh | 28 | 22 feasible, 4 infeasible, 2 open | 18 | 26 | 0 (28 stage-0 rule; rule off: 26 budget, 2 `no-alignment`) | 0.036 s | 0.004 s |
 
 What the table says:
 
@@ -720,7 +720,7 @@ What the table says:
   raw depth-first Hamiltonian-cycle search, which the budget was never sized for. Blaze's real
   fabrics are rings of columns, where contraction does the work (its comment cites ~900
   expansions for SC16). On meshes shaped like these, the planner is not a usable C1.
-- **The footprint is the only carver that works on them**, deciding 108 of 132 within 60 s as
+- **The footprint is the only carver that works on them**, deciding 114 of 132 within 60 s as
   first run, and 127 with the completeness clauses of 5.4. Its own carve is the whole cost: the
   resolver then places every one of its carves in at most 36 ms, and the topology solver at
   slot level in at most 59 ms. So the design's C1 then C2 order holds with the footprint as C1,
