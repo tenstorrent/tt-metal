@@ -17,13 +17,12 @@ namespace ttnn::operations::moreh::moreh_sum_backward {
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
-void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_shape) {
-    const auto rank = padded_shape.rank();
+void get_tensor_dim(ttsl::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_shape, uint32_t rank) {
     for (auto i = 0; i < rank; ++i) {
-        auto idx = rank - 1 - i;
+        const auto idx = -1 - i;
 
         // last 2-dim
-        if (idx == rank - 1 || idx == rank - 2) {
+        if (i < 2) {
             dim[i] = padded_shape[idx] / tt::constants::TILE_HEIGHT;
         } else {
             dim[i] = padded_shape[idx];
@@ -45,14 +44,16 @@ std::pair<ttnn::Shape, ttnn::Shape> get_output_grad_shape(
     auto logical_shape = input_grad.logical_shape();
     auto padded_shape = input_grad.padded_shape();
     auto rank = logical_shape.rank();
+    // dims count logical dims. A rank-1 tensor has one more padded dim at the front.
+    const auto padded_offset = padded_shape.rank() - rank;
     for (auto dim : dims) {
         TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
         bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
         logical_shape[dim] = 1;
         if (is_tile_dim) {
-            padded_shape[dim] = tt::constants::TILE_HEIGHT;
+            padded_shape[dim + padded_offset] = tt::constants::TILE_HEIGHT;
         } else {
-            padded_shape[dim] = 1;
+            padded_shape[dim + padded_offset] = 1;
         }
     }
 
@@ -105,24 +106,23 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
 
     const auto& input_grad_shape = input_grad.padded_shape();
     const auto& input_grad_shape_wo_padding = input_grad.logical_shape();
-    const uint32_t input_grad_rank = input_grad_shape.rank();
+    const uint32_t input_grad_rank = input_grad_shape_wo_padding.rank();
 
     ttsl::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "input_grad");
-    get_tensor_dim(input_grad_dim, input_grad_shape);
+    get_tensor_dim(input_grad_dim, input_grad_shape, input_grad_rank);
     const auto [output_grad_shape_wo_padding, output_grad_shape] =
         get_output_grad_shape(output_grad, input_grad, dims, keepdim);
 
     ttsl::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "output_grad");
-    get_tensor_dim(output_grad_dim, output_grad_shape);
+    get_tensor_dim(output_grad_dim, output_grad_shape, input_grad_rank);
 
     ttsl::SmallVector<uint32_t> need_bcast_dim(input_grad_rank, 0);
     for (auto i = 0; i < input_grad_rank; ++i) {
-        auto idx = input_grad_rank - 1 - i;
-        bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
+        const auto idx = -1 - i;
 
-        if (is_tile_dim) {
+        if (i < 2) {
             need_bcast_dim[i] = (output_grad_shape_wo_padding[idx] != input_grad_shape_wo_padding[idx]);
         } else {
             need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
@@ -257,7 +257,7 @@ ttnn::device_operation::ProgramArtifacts MorehSumBackwardOperation::ProgramFacto
             .compile_time_args =
                 {{"num_output_tiles", num_output_tiles},
                  {"wt_need_bcast", need_bcast_dim[0]},
-                 {"ht_need_bcast", need_bcast_dim[1]}},
+                 {"ht_need_bcast", get_ht_need_bcast(need_bcast_dim)}},
             .hw_config = ComputeHardwareConfig{compute_cfg},
         };
     };

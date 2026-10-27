@@ -30,7 +30,8 @@ void MorehSumBackwardOperation::validate_inputs(
     check_tensor(input, "moreh_sum_backward", "input");
     const auto& input_shape = input.value().padded_shape();
     auto input_shape_wo_padding = input.value().logical_shape();
-    auto input_rank = input_shape.rank();
+    // A rank-1 input has a rank-2 padded shape.
+    auto input_rank = input_shape_wo_padding.rank();
     auto output_grad_shape_wo_padding = output_grad.logical_shape();
 
     // validate output_grad shape
@@ -53,7 +54,6 @@ void MorehSumBackwardOperation::validate_inputs(
             reduced_dims[dim] = 1;
         }
 
-        TT_FATAL(input_rank >= 2, "at least input_rank {} >= 2", input_rank);
         for (int i = 0; i < input_rank; ++i) {
             log_debug(tt::LogOp, "reduced_dims[{}] = {}", i, reduced_dims[i]);
             bool is_tile_dim = (i == input_rank - 1 || i == input_rank - 2);
