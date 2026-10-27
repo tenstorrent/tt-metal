@@ -290,3 +290,52 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
   failure). Committed F197 + the hack (default off) + records; pushed (owner: include the hack). PAUSED for the
   owner's rebase onto latest tt-metal. Pending after the rebase: FIX.5 (proper op fix, or moot with the new op),
   torus with the new op, K.1 (needs a current tt-d-gen), X.*.
+
+## 2026-10-27 11:20 HAND-OFF: node bh-glx-120-b06u08 may be released (slurm 155944); the next overseer may be on another Galaxy
+Where the run is: CK.1, G.s10240, G.s56320, B.1, W.1, FIX.1-4, M.1 (all 40 layers), L.s10240, L.last, L.s56320 (full
+56320 target: top5 1.0, err_final_hidden 0.189 / 0.259), L.smoke ('...Capital of France = Paris', F195) PASS.
+Orchestrator STOPPED (not running; no PAUSE file needed): `orchestrator resume` continues with FIX.5 (queued) then K.1.
+Branch dnijemcevic/model_bringup on GitHub = f9e7c977c3a (everything up to the pause); every later local commit is
+mirrored to /data/dnijemcevic/tt-metal-ds41.git (post-commit hook). The OWNER IS REBASING the branch onto latest
+tt-metal (2026-10-27): work only from the rebased branch the owner pushes; never push onto the old one meanwhile.
+After the rebase every passed gate re-runs once on resume (ttnn / tt_metal are in the stamps): expected, ~2-3 h.
+
+What lives where (a new Galaxy has none of the node-local parts):
+- Repo + ~/.claude (memory, transcripts) and /scratch are NODE-LOCAL. Shared NFS /data keeps: goldens
+  (/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4, spec paths.golden), the git mirror, the
+  2026-10-26 ledger backup, and node_handoff_20261027/ (this hand-off's copies: scratch_bringup/runs (orchestrator log,
+  agents' transcripts, gate logs, state), profiles, input; overseer/ = the launcher scripts (run_ds41_8x4.sh,
+  run_overseer.sh, overseer_guard.sh + overseer_respawn.sh (tmux pane-died -> resume the same session),
+  autoresume.sh, ensure_overseer.sh), overseer prompts, hf_dl.py, posprof/ + seedprof/ (measurement plugins + results)).
+- To rebuild on a new Galaxy: clone/fetch the rebased branch, build; checkpoint: hf_dl.py (HF deepseek-ai/
+  DeepSeek-V4.1-Flash rev 5254448103b6254fc646dacbca1cbbf20e9216c1, ~501 GB, ~7 min here; the 4 ignored shards were
+  added separately: all 48 shards needed, see 2026-10-26 entries) into /scratch/$USER/bringup/deepseek_v41_flash_d_p/
+  hf_full; copy node_handoff_20261027/scratch_bringup/runs back to /scratch/$USER/bringup/deepseek_v41_flash_d_p/runs
+  (the orchestrator's state, logs and attempt numbers); the expert weight cache (tt_cache, 285 GB) rebuilds itself
+  on first load (~117 s a layer, ~75 min once: the first M.1-type run needs a timeout above 3600 s or the framework's
+  one retry, see 07:42 entry). Node gotchas: `source python_env/bin/activate` (no plain python), umask 022, the
+  overseer's tmux guard (overseer_guard.sh).
+- If the new box is not a Galaxy 8x4 (32 x p150b, 12x10 grid): the spec's box and the goldens are 8x4-specific.
+
+Open items, in order:
+1. After the rebase: fetch, build, box test (test_box.py, seconds), resume; watch the gates re-run.
+2. FIX.5 (queued): flat_routed_expert_with_program bakes buffer addresses into its program key -> misses the cache on
+   every run unless EXPERTS_XG_PINNED=on (the overseer hack, default off, bit-identical). The owner says a NEW flat
+   expert op is in the works (also fixes torus): when it lands, drop FIX.5 and check the new op converges under F196
+   (warm = a run adds no program-cache entry) and works on FABRIC_2D_TORUS_XY.
+3. Torus (owner: wanted): FABRIC_2D_TORUS_XY hangs in flat_routed_expert_with_program (10:25, triage in
+   node_handoff/overseer/posprof/pos0.log... copied as posprof/); retry with the new op; then the indexer's
+   Topology.Linear (tt/indexer.py:121). Then re-measure the 5-position profile on torus.
+4. K.1 needs a CURRENT tt-d-gen (owner: a month-old one is of no use): dgen-build agent on the latest tt-d-gen.
+5. X.*: perf picks are the owner's. Candidates from today: trace capture (warm wall 860 ms vs ~250-330 ms device per
+   40-layer 5120 chunk), sparse expert dispatch (full column gather today: 28 % of the routed MoE), torus.
+6. 2x2 QuietBox re-verify of FIX.1, FIX.2, W.1 fabric change (owner, on the QB).
+7. Framework: the selftest suite takes a UMD chip lock (find which test); dirty-card markers live in /tmp (lost on a
+   /tmp wipe); a 3600 s gate timeout cannot cover a cold expert-cache build; all at the next boundary.
+Measurements of 2026-10-27 (outside the ledger, copies in node_handoff/overseer/posprof/results): device time per
+5120 chunk (FABRIC_2D, before the warm fix: MoE slightly inflated) at context 0 / 50k / 100k / 200k / 500k: 329.9 /
+350.6 / 360.0 / 372.7 / 403.7 ms; only the indexer grows (3.6 -> 63.9 ms). Verified warm (XG_PINNED=on): 500k device
+383.5 ms; host wall 860 ms (0k, 10 runs, misses refused) and 930 ms (500k).
+Owner rules: the 2026-10-26 15:23 HAND-OFF list still binds (autonomy, no shortcuts, framework fixes with a selftest,
+push only on the owner's word, dashboard at milestones). Plus today: never call a run warm without the program-cache
+check (F196 / F197); host times stay hidden until verified warm.
