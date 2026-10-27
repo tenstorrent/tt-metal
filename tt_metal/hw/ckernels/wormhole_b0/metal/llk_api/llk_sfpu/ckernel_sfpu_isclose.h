@@ -34,7 +34,9 @@ inline void calculate_sfpu_isclose(
     // IEEE-754 abs(+inf). abs_bits == inf_bits -> +-Inf; abs_bits > inf_bits -> NaN
     // (NaN has exp == 0xFF and a non-zero mantissa, irrespective of sign or
     // quiet/signaling bit). One comparison classifies both special cases.
-    constexpr int32_t inf_bits = 0x7F800000;
+    // vConstIntPrgm1 holds 0x7F800000, programmed in isclose_init, so the hot loop
+    // reads it as a register operand instead of re-materialising it per use.
+    const sfpi::vInt inf_bits = sfpi::vConstIntPrgm1;
 
     const sfpi::vFloat atol = Converter::as_float(atol_bits);
     const sfpi::vFloat rtol = Converter::as_float(rtol_bits);
@@ -53,7 +55,10 @@ inline void calculate_sfpu_isclose(
         sfpi::vInt b_bits = sfpi::as<sfpi::vInt>(b);
         sfpi::vInt a_abs_bits = a_bits & sfpi::vConstIntPrgm0;
         sfpi::vInt b_abs_bits = b_bits & sfpi::vConstIntPrgm0;
-        sfpi::vFloat b_abs = sfpi::abs(b);
+        // |b| for the tolerance is the same sign-cleared pattern, so reuse it rather than
+        // spend an SFPABS. The two differ only for b = -NaN (SFPABS keeps the sign), a lane
+        // the special-value fix-up below overwrites whatever the tolerance compare returned.
+        sfpi::vFloat b_abs = sfpi::as<sfpi::vFloat>(b_abs_bits);
 
         // abs(a - b) via sign-bit clear.
         sfpi::vFloat abs_diff = sfpi::abs(a - b);
@@ -96,8 +101,11 @@ inline void calculate_sfpu_isclose(
     }
 }
 
-// Programs the sign-clear mask into a constant register so the hot loop does not
-// rebuild it with a per-element SFPLOADI inside the replay block.
-inline void isclose_init() { sfpi::vConstIntPrgm0 = 0x7FFFFFFF; }
+// Programs the sign-clear mask and the abs(+inf) bit pattern into constant registers so
+// the hot loop does not rebuild them with per-element SFPLOADIs inside the replay block.
+inline void isclose_init() {
+    sfpi::vConstIntPrgm0 = 0x7FFFFFFF;
+    sfpi::vConstIntPrgm1 = 0x7F800000;
+}
 
 }  // namespace ckernel::sfpu
