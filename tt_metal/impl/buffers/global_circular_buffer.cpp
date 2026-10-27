@@ -237,6 +237,19 @@ GlobalCircularBufferImpl::GlobalCircularBufferImpl(
     sender_state_drisc_l1_base_ = pages_sent_drisc_l1_base_ + pages_sent_region;
 
     if (has_dram_receivers()) {
+        TT_FATAL(
+            size_ > 0 && size_ % kDramReceiverCreditUnitBytes == 0,
+            "DRAM-receiver GlobalCircularBuffer size {} B must be a non-zero multiple of the {} B credit unit",
+            size_,
+            kDramReceiverCreditUnitBytes);
+        const uint32_t receiver_zone_size = mesh_device.impl().drisc_l1_arena().receiver_zone_size();
+        TT_FATAL(
+            static_cast<uint64_t>(kDramReceiverConfigPageBytes) + size_ <= receiver_zone_size,
+            "DRAM-receiver GlobalCircularBuffer size {} B and its {} B config page exceed the {} B DRISC L1 receiver "
+            "zone",
+            size_,
+            kDramReceiverConfigPageBytes,
+            receiver_zone_size);
         drisc_receiver_alloc_ = mesh_device.impl().drisc_l1_arena().allocate_receiver(
             kDramReceiverConfigPageBytes + size_, kDramReceiverLineBytes);
         pages_sent_worker_l1_base_ = drisc_receiver_alloc_->addr() + kDramReceiverCreditLineOffset;
