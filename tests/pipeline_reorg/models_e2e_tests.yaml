@@ -1738,7 +1738,6 @@
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
     bh_sc4_high_power:
       timeout: 75
       tier: 1
@@ -1812,7 +1811,6 @@
   model: wan-2.2-i2v
   model_family: Wan
   skus:
-    # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
     bh_sc4_high_power:
       timeout: 50
       tier: 1
@@ -1842,7 +1840,6 @@
   model: wan-2.2-t2v
   model_family: Wan
   skus:
-    # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
     bh_sc1_high_power:
       timeout: 65
       tier: 1
@@ -1875,7 +1872,6 @@
   model: wan-2.2-i2v
   model_family: Wan
   skus:
-    # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
     bh_sc1_high_power:
       timeout: 75
       tier: 1
@@ -1935,7 +1931,6 @@
   model: ltx-2.3-fast-t2v
   model_family: LTX
   skus:
-    # Perf-gated (steady-state stage timings): the high-power (14 kW) pool, where the limits are calibrated.
     bh_sc1_high_power:
       timeout: 35
       tier: 1
