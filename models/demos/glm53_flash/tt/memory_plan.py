@@ -73,17 +73,14 @@ def weights_bytes_estimate(
 
 
 def default_prefill_qblock(max_seq_len: int | None) -> int:
-    """The sparse prefill's score sub-block rows when ``GLM53_PREFILL_QBLOCK`` is unset: the largest power of two in
-    [256, 2048] whose [rows, pools] bf16 score block stays within 256 MB at the slot's full length (2048 up to 256 K,
-    1024 at 512 K, 512 at 1 M: the README's 1 M rows ran 512). The served 1 M profile ran the 2048 default on
-    2026-10-27 and failed a 201 MB score-block allocation at ~196 K positions with the pool fragmented."""
-    if not max_seq_len:
+    """The sparse prefill's score sub-block rows when ``GLM53_PREFILL_QBLOCK`` is unset: 2048 up to 256 K, 512 at
+    512 K, 256 at 1 M. The scorer keeps a [rows, pools] bf16 score block and its ranking copy (``_rank_pools``) live
+    beside the chunk's whole-prefix latent copy, so at 1 M the three are 134 + 134 + 1200 MB with 256 rows. Served
+    1 M runs on 2026-10-27: 2048 rows died at ~196 K (a 201 MB score block), 512 rows at chunk 62 of 64 (the 264 MB
+    ranking copy, 0.5 GB free but fragmented); the harness 1 M rows ran 512 with the decode trace not yet captured."""
+    if not max_seq_len or int(max_seq_len) <= 262144:
         return 2048
-    pools = -(-int(max_seq_len) // 4)
-    qb = 2048
-    while qb > 256 and qb * pools * 2 > 256 * 2**20:
-        qb //= 2
-    return qb
+    return 512 if int(max_seq_len) <= 524288 else 256
 
 
 def reserve_bytes(

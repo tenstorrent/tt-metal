@@ -50,5 +50,5 @@ def test_default_prefill_qblock_follows_the_slot_length():
     profile ran 2048 on 2026-10-27 and failed a 201 MB score-block allocation at ~196 K positions)."""
     assert default_prefill_qblock(None) == 2048
     assert default_prefill_qblock(131072) == 2048 and default_prefill_qblock(262144) == 2048
-    assert default_prefill_qblock(524288) == 1024 and default_prefill_qblock(1048576) == 512
-    assert reserve_bytes(1048576) == reserve_bytes(1048576, qblock=512)
+    assert default_prefill_qblock(524288) == 512 and default_prefill_qblock(1048576) == 256
+    assert reserve_bytes(1048576) == reserve_bytes(1048576, qblock=256)
