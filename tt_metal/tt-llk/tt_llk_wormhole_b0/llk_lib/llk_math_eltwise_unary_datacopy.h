@@ -35,8 +35,8 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
  * @param dst_index: Tile index into the destination register.
  * @param src_format: Source data format (DataFormat enum underlying value).
  * @param dst_format: Destination data format (DataFormat enum underlying value).
- * @param tensor_shape: Tile geometry. Only validated, not otherwise used; it need not match the shape passed to
- *        @ref _llk_math_eltwise_unary_datacopy_init_.
+ * @param tensor_shape: Tile geometry. Only validated, not otherwise used. @ref ckernel::DEFAULT_TENSOR_SHAPE is always
+ *        valid.
  * @note Call @ref _llk_math_eltwise_unary_datacopy_init_ with matching template args before this function, and
  *       @ref _llk_math_eltwise_unary_datacopy_uninit_ after it to restore modified state.
  * @note On the unpack thread, @ref _llk_unpack_A_ must feed the tile into SrcA/SrcB (or dest for unpack-to-dest).
@@ -517,8 +517,7 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
     {
         // The ROW MOP always runs 4 faces and takes each face's row from SrcB faces 0, 1, 0, 1. On a
         // 32x16 tile SrcB face 1 is the bottom face, so the bottom half takes the wrong row.
-        LLK_ASSERT(
-            !(tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == 1), "Row broadcast datacopy does not support 32x16 tiles");
+        LLK_ASSERT(!is_tensor_shape_2x1_face_grid(tensor_shape), "Row broadcast datacopy does not support 32x16 tiles");
     }
 
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);

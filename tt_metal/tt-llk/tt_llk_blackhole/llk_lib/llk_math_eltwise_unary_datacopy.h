@@ -35,10 +35,9 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format);
  * @param dst_index: Tile index into the destination register.
  * @param src_format: Source data format (DataFormat enum underlying value).
  * @param dst_format: Destination data format (DataFormat enum underlying value).
- * @param tensor_shape: Tile geometry. Only the total face count is used (must be 1, 2, or 4): it sets how many faces get
- *        their Dest zero flags cleared on 32-bit unpack-to-dest. It need not match the shape passed to
- *        @ref _llk_math_eltwise_unary_datacopy_init_; @ref ckernel::DEFAULT_TENSOR_SHAPE (4 faces, as before TensorShape)
- *        is always valid, and the metal wrappers pass it on purpose.
+ * @param tensor_shape: Tile geometry. Only the total face count is used (must be 1, 2, or 4). On 32-bit unpack to dest it
+ *        sets how many faces get their Dest zero flags re-cleared (budabackend#2730), so it must cover at least the
+ *        faces unpacked to Dest. @ref ckernel::DEFAULT_TENSOR_SHAPE (4 faces) is always valid.
  * @note Call @ref _llk_math_eltwise_unary_datacopy_init_ with matching template args before this
  *       function, and @ref _llk_math_eltwise_unary_datacopy_uninit_ after it to restore modified state.
  * @note On the unpack thread, @ref _llk_unpack_A_ must feed the tile into SrcA/SrcB (or dest for unpack-to-dest).

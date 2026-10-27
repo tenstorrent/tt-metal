@@ -330,7 +330,7 @@ inline void _llk_unpack_A_init_(
     // the output is wrong; ttsim cannot run this path.
     LLK_ASSERT(
         !(BType == BroadcastType::ROW && should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format) &&
-          tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == 1),
+          is_tensor_shape_2x1_face_grid(tensor_shape)),
         "Row broadcast with unpack to dest does not support 32x16 tiles");
 
     // Set transpose register to prevent state pollution

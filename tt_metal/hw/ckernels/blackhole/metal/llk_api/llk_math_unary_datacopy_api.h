@@ -21,13 +21,10 @@ template <
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false>
 inline void llk_math_eltwise_unary_datacopy_impl(
-    std::uint32_t dst_index,
-    std::uint32_t src_format,
-    std::uint32_t dst_format,
-    const ckernel::TensorShape tensor_shape) {
+    std::uint32_t dst_index, std::uint32_t src_format, std::uint32_t dst_format) {
     LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
     _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-        dst_index, src_format, dst_format, tensor_shape);
+        dst_index, src_format, dst_format);
 }
 
 template <
@@ -53,20 +50,8 @@ inline void llk_math_eltwise_unary_datacopy_init_impl(
 }
 
 // Kept for the experimental/2_0 callers; remove when they move to TensorShape.
-// Main passed no geometry here and the LLK defaulted to 4 faces, which DEFAULT_TENSOR_SHAPE matches.
-template <
-    DataCopyType type,
-    bool is_fp32_dest_acc_en,
-    BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    bool unpack_to_dest = false>
-inline void llk_math_eltwise_unary_datacopy_impl(
-    std::uint32_t dst_index, std::uint32_t src_format, std::uint32_t dst_format) {
-    llk_math_eltwise_unary_datacopy_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-        dst_index, src_format, dst_format, ckernel::DEFAULT_TENSOR_SHAPE);
-}
-
-// Kept for the experimental/2_0 callers; remove when they move to TensorShape.
-// Outside of asserts the LLK only uses the total face count, so the 1x2 pick for num_faces == 2 matches main.
+// Outside of asserts the LLK only uses the total face count, so the 1x2 grid picked for num_faces == 2 gives the
+// same behaviour as passing num_faces.
 template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,
@@ -92,10 +77,10 @@ inline void llk_math_eltwise_unary_datacopy(std::uint32_t dst_index, std::uint32
         StateVal<Operand<Exu::Fpu>::Format>(unpack_dst_format[operand_id]),
         StateDiscard<std::uint32_t>(dst_index)));
 
-    // The execute keeps main's 4-face Dest zero-flag clear on 32-bit unpack to dest (it never got the
-    // operand's face count), so pass the default shape here, not the operand's.
+    // No shape passed: the LLK's DEFAULT_TENSOR_SHAPE makes execute clear Dest zero flags for all 4 faces
+    // on 32-bit unpack to dest, regardless of operand shape.
     llk_math_eltwise_unary_datacopy_impl<type, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-        dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id], ckernel::DEFAULT_TENSOR_SHAPE);
+        dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
 }
 
 template <
@@ -106,6 +91,7 @@ template <
 inline void llk_math_eltwise_unary_datacopy_block(
     std::uint32_t start_dst_index, std::uint32_t ntiles, std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
+
     SAN_HOOK(execute<OperationFpuEltwiseUnaryDatacopy>(
         StateVal<OperationFpuEltwiseUnaryDatacopy::DataCopyType>(to_underlying(type)),
         StateVal<OperationFpuEltwiseUnaryDatacopy::BroadcastType>(to_underlying(src_b_bcast_type)),
@@ -117,9 +103,10 @@ inline void llk_math_eltwise_unary_datacopy_block(
     for (std::uint32_t dst_index = start_dst_index; dst_index < start_dst_index + ntiles; dst_index++) {
         LLK_ASSERT((dst_index < get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()), "");
 
-        // Same as llk_math_eltwise_unary_datacopy: keep main's 4-face Dest zero-flag clear.
+        // No shape passed: execute clears Dest zero flags for all 4 faces on 32-bit unpack to dest,
+        // regardless of operand shape.
         _llk_math_eltwise_unary_datacopy_<type, DST_SYNC_MODE, is_fp32_dest_acc_en, src_b_bcast_type, unpack_to_dest>(
-            dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id], ckernel::DEFAULT_TENSOR_SHAPE);
+            dst_index, unpack_src_format[operand_id], unpack_dst_format[operand_id]);
     }
 }
 
