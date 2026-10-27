@@ -80,6 +80,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
     const tt::tt_metal::experimental::DFBSpecName final_state_dfb_name{"final_state"};
     const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
     const tt::tt_metal::experimental::DFBSpecName state_carry_dfb_name{"state_carry"};
+    const tt::tt_metal::experimental::DFBSpecName identity_dfb_name{"identity"};
     const tt::tt_metal::experimental::DFBSpecName summary_head_output_dfb_name{"summary_head_output"};
     const tt::tt_metal::experimental::DFBSpecName summary_head_state_dfb_name{"summary_head_state"};
     const tt::tt_metal::experimental::DFBSpecName tail_entry_states_dfb_name{"tail_entry_states"};
@@ -137,6 +138,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         // UnpackToDest view of the same FP32 state, accumulated in place beside the ring; it seeds and publishes the
         // state exactly. The ring feeds the matmuls.
         make_dfb(state_carry_dfb_name, state_tiles, fp32),
+        make_dfb(identity_dfb_name, 2, fp32),  // [I, 0], seeded by the reader
         // ProgramSpec names must exist even when if-constexpr discards their
         // users. Give inactive-mode buffers one tile instead of reserving every
         // summary and recurrent restart payload simultaneously.
@@ -161,6 +163,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ProducerOf(q_decay_dfb_name, "q_decay"),
                 tt::tt_metal::experimental::ProducerOf(intra_dfb_name, "intra"),
                 tt::tt_metal::experimental::ProducerOf(tail_entry_states_dfb_name, "tail_entry_states"),
+                tt::tt_metal::experimental::ProducerOf(identity_dfb_name, "identity"),
             },
         .tensor_bindings =
             {
@@ -279,6 +282,7 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
           k_decay_transposed_dfb_name,
           final_state_dfb_name,
           scratch_dfb_name,
+          identity_dfb_name,
           summary_head_output_dfb_name,
           summary_head_state_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
@@ -315,12 +319,13 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 tt::tt_metal::experimental::ConsumerOf(scratch_dfb_name, "scratch"),
                 tt::tt_metal::experimental::ProducerOf(state_carry_dfb_name, "state_carry"),
                 tt::tt_metal::experimental::ConsumerOf(state_carry_dfb_name, "state_carry"),
+                tt::tt_metal::experimental::ConsumerOf(identity_dfb_name, "identity"),
                 tt::tt_metal::experimental::ProducerOf(summary_head_output_dfb_name, "summary_head_output"),
                 tt::tt_metal::experimental::ProducerOf(summary_head_state_dfb_name, "summary_head_state"),
                 tt::tt_metal::experimental::ConsumerOf(tail_entry_states_dfb_name, "tail_entry_states"),
             },
         .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"summary", static_cast<uint32_t>(summary)}},
-        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "group"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_chunks", "group", "value_block"}},
         .hw_config = std::move(compute_hw),
     };
     tt::tt_metal::experimental::KernelRunArgs reader_run_args{.kernel = reader_kernel_name};
@@ -360,7 +365,9 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
              {"peer_y1", sender ? peers.y0 : peers.y1},
              {"receivers", value_blocks - 1}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
-            compute_run_args.runtime_arg_values, core, {{"num_chunks", NC}, {"group", group}});
+            compute_run_args.runtime_arg_values,
+            core,
+            {{"num_chunks", NC}, {"group", group}, {"value_block", value_block}});
     }
 
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {

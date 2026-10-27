@@ -141,7 +141,7 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     const auto output_dtype = DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
     const auto state_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
-    // Summary structure is independent of actual_start: one [A | B] slot per segment kind.
+    // Summary structure is independent of actual_start: one [E | B] slot per segment kind.
     if (summary) {
         const uint32_t slots = attrs.tail ? 2 : 1;
         return {TensorSpec(
