@@ -10,46 +10,13 @@ from loguru import logger
 import ttnn
 
 
-def _clip_text_model_is_flattened(text_encoder):
-    """Whether this CLIP text encoder's attention module paths lack the
-    ``text_model.`` prefix.
-
-    transformers>=5 flattened ``CLIPTextModel`` (SDXL's first text encoder) so
-    ``named_modules()`` now yields e.g. ``encoder.layers.0.self_attn.q_proj``
-    instead of ``text_model.encoder.layers.0.self_attn.q_proj``. The projection
-    text encoder (``CLIPTextModelWithProjection``, te2) still keeps the prefix.
-    """
-    for name, _ in text_encoder.named_modules():
-        if name.endswith((".q_proj", ".k_proj", ".v_proj", ".out_proj", ".fc1", ".fc2")):
-            return not name.startswith("text_model.")
-    return False
-
-
-def _strip_text_model_segment(mapping, prefix):
-    """Drop the ``text_model.`` segment right after ``{prefix}.`` in each key."""
-    seg = f"{prefix}.text_model."
-    return {(f"{prefix}." + k[len(seg) :] if k.startswith(seg) else k): v for k, v in mapping.items()}
-
-
-def resolve_lora_scales(lora_scale, clip_scale):
-    """Normalize the UNet/CLIP scale pair.
-
-    Single home for this so the two managers cannot drift. Callers that pass an
-    optional scale positionally hand us None when it is unset (e.g.
-    tt-inference-server's SDXL runners); that means full strength, and must not reach
-    the delta arithmetic as None. An omitted clip scale follows the UNet's.
-    """
-    if lora_scale is None:
-        lora_scale = 1.0
-    if clip_scale is None:
-        clip_scale = lora_scale
-    return lora_scale, clip_scale
-
-
 class TtLoRAWeightsManager:
-    def __init__(self, device, torch_pipeline):
+    def __init__(self, device, torch_pipeline, load_torch_lora=None):
         self._device = device
         self._torch_pipeline = torch_pipeline
+        # Attaches the adapter to the torch pipeline. The SDXL pipeline swaps in a
+        # loader that also handles text-encoder keys; the UNet path only reads the UNet.
+        self._load_torch_lora = load_torch_lora or torch_pipeline.load_lora_weights
 
         self._base_weights_host = {}
         self._base_weights_device = {}
@@ -76,7 +43,6 @@ class TtLoRAWeightsManager:
 
         ``fused`` is whether the UNet deltas are merged on device, and
         ``skipped_reason`` is why a load was rejected (``None`` when it was applied).
-        Text-encoder state lives on TtTextEncoderLoRAWeightsManager.
         """
         return {
             "fused": self._is_fused,
@@ -126,79 +92,6 @@ class TtLoRAWeightsManager:
                 return True
         return False
 
-    @staticmethod
-    def _load_lora_weights_te_compat(pipeline, lora_path, adapter_name=None):
-        """``pipeline.load_lora_weights`` that also works under transformers>=5.
-
-        diffusers' text-encoder LoRA loader builds its rank dict by matching
-        ``{module}.lora_B.weight`` against the live ``text_encoder`` module names, but
-        the converted LoRA keys always carry a ``text_model.`` prefix. Since
-        transformers>=5 flattened ``CLIPTextModel`` (dropping that prefix from its
-        module paths), nothing matches for the first text encoder, the rank dict comes
-        out empty, and ``get_peft_kwargs`` raises ``IndexError: list index out of
-        range``. When an encoder is flattened we strip ``text_model.`` from its LoRA
-        keys (weights and network-alpha keys) and mirror diffusers' own
-        unet -> te1 -> te2 load sequence with the remapped state dict.
-
-        When no encoder is flattened (transformers<5, or after diffusers fixes this
-        upstream) we defer to the stock loader untouched.
-
-        TODO: remove once the upstream diffusers loader handles transformers>=5.
-        """
-        encoders = [
-            (getattr(pipeline, "text_encoder", None), "text_encoder"),
-            (getattr(pipeline, "text_encoder_2", None), "text_encoder_2"),
-        ]
-        if not any(te is not None and _clip_text_model_is_flattened(te) for te, _ in encoders):
-            pipeline.load_lora_weights(lora_path)
-            return
-
-        # unet_config is required so diffusers remaps SGM block numbers to diffusers
-        # block names (e.g. down_blocks.1.attentions.0); without it the UNet LoRA keys
-        # stay half-converted and peft can't find the target modules.
-        result = pipeline.lora_state_dict(lora_path, unet_config=pipeline.unet.config)
-        state_dict = result[0]
-        network_alphas = result[1] if len(result) > 1 else None
-
-        for te, prefix in encoders:
-            if te is not None and _clip_text_model_is_flattened(te):
-                state_dict = _strip_text_model_segment(state_dict, prefix)
-                if network_alphas:
-                    network_alphas = _strip_text_model_segment(network_alphas, prefix)
-
-        # low_cpu_mem_usage=True mirrors the stock loader: peft materialises the
-        # adapter layers on the meta device instead of randomly initialising them
-        # first, so this path consumes no global RNG. Without it, hundreds of init
-        # draws shift every torch.rand() that follows, which moves the randomly
-        # generated inputs of downstream PCC tests off the stream their thresholds
-        # were tuned on.
-        pipeline.load_lora_into_unet(
-            state_dict,
-            network_alphas,
-            pipeline.unet,
-            adapter_name=adapter_name,
-            _pipeline=pipeline,
-            low_cpu_mem_usage=True,
-        )
-        pipeline.load_lora_into_text_encoder(
-            state_dict,
-            network_alphas,
-            pipeline.text_encoder,
-            prefix="text_encoder",
-            adapter_name=adapter_name,
-            _pipeline=pipeline,
-            low_cpu_mem_usage=True,
-        )
-        pipeline.load_lora_into_text_encoder(
-            state_dict,
-            network_alphas,
-            pipeline.text_encoder_2,
-            prefix="text_encoder_2",
-            adapter_name=adapter_name,
-            _pipeline=pipeline,
-            low_cpu_mem_usage=True,
-        )
-
     def load_lora_weights(self, lora_path):
         self._skipped_reason = None
 
@@ -206,7 +99,7 @@ class TtLoRAWeightsManager:
             logger.info("LoRA weights already loaded, skipping.")
             return
 
-        self._load_lora_weights_te_compat(self._torch_pipeline, lora_path)
+        self._load_torch_lora(lora_path)
 
         if self._uses_dora():
             logger.warning("DoRA is not supported, skipping loading LoRA weights.")
@@ -221,19 +114,10 @@ class TtLoRAWeightsManager:
             return
 
     def fuse_lora(self, lora_scale=1.0):
-        """Fuse the loaded LoRA into the UNet on device.
+        if not self.has_lora_adapter():
+            logger.warning("No LoRA weights loaded. Please load LoRA weights with load_lora_weights() before fusing.")
+            return
 
-        ``lora_scale`` is expected to be a real number: resolve_lora_scales() handles
-        the None case for callers that pass scales positionally.
-
-        The caller is responsible for establishing the mesh-mapper context for the
-        device work — see TtSDXLPipeline.fuse_lora.
-        """
-        logger.info(f"Fusing UNet LoRA weights (scale={lora_scale})...")
-        if self.has_lora_adapter():
-            self._fuse_unet_lora(lora_scale)
-
-    def _fuse_unet_lora(self, lora_scale=1.0):
         if self._is_fused:
             logger.info("LoRA weights already fused. Skipping fusion.")
             return
@@ -357,9 +241,6 @@ class TtLoRAWeightsManager:
             device_tensor = self._base_weights_device[key]
             ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
 
-        # Torch adapters may already have been stripped by the text-encoder fuse
-        # path (which unloads them after merging); only unload when still attached.
-        if self.has_lora_adapter():
-            self._torch_pipeline.unload_lora_weights()
+        self._torch_pipeline.unload_lora_weights()
         self._is_fused = False
         self._skipped_reason = None

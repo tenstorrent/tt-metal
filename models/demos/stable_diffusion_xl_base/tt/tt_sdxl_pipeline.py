@@ -13,8 +13,11 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_wormhole_b0, profiler
-from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager, resolve_lora_scales
-from models.demos.stable_diffusion_xl_base.lora.tt_te_lora_weights_manager import TtTextEncoderLoRAWeightsManager
+from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
+from models.demos.stable_diffusion_xl_base.lora.tt_te_lora_weights_manager import (
+    TtTextEncoderLoRAWeightsManager,
+    load_lora_weights_te_compat,
+)
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     batch_encode_prompt_on_device,
@@ -85,10 +88,15 @@ class TtSDXLPipeline(LightweightModule):
         self.pipeline_config = pipeline_config
         self._reset_num_inference_steps()
 
-        # Two managers, one per component: the UNet's fuses deltas onto weights it
-        # allocated itself, the text encoders' hands merged torch weights back through a
-        # reload hook. Neither drives the other's weights; this pipeline sequences them.
-        self._lora_weights_manager = TtLoRAWeightsManager(self.ttnn_device, self.torch_pipeline)
+        # Two managers, one per component, each fusing in place on device into the weights
+        # it owns. Neither drives the other's weights; this pipeline sequences them. The
+        # torch-side load attaches the adapter to every component at once, so it uses the
+        # text-encoder module's loader, which handles transformers>=5 CLIP key names.
+        self._lora_weights_manager = TtLoRAWeightsManager(
+            self.ttnn_device,
+            self.torch_pipeline,
+            load_torch_lora=lambda path: load_lora_weights_te_compat(self.torch_pipeline, path),
+        )
         self._te_lora_weights_manager = TtTextEncoderLoRAWeightsManager(self.torch_pipeline)
 
         # Validate config parameters once at initialization
@@ -196,14 +204,12 @@ class TtSDXLPipeline(LightweightModule):
     def fuse_lora(self, lora_scale=1.0, clip_scale=None):
         """Fuse the loaded LoRA. ``clip_scale`` defaults to ``lora_scale``; 0.0 skips
         the text encoders entirely."""
-        lora_scale, clip_scale = resolve_lora_scales(lora_scale, clip_scale)
-
-        if not (
-            self._lora_weights_manager.has_lora_adapter()
-            or self._lora_weights_manager.is_fused
-            or self._te_lora_weights_manager.is_fused
-        ):
-            logger.warning("No LoRA weights loaded. Please load LoRA weights with load_lora_weights() before fusing.")
+        # Callers that pass an optional scale positionally hand us None when it is unset
+        # (e.g. tt-inference-server's SDXL runners); that means full strength.
+        if lora_scale is None:
+            lora_scale = 1.0
+        if clip_scale is None:
+            clip_scale = lora_scale
 
         # The UNet manager's from_torch calls pass no mesh_mapper, so the replicate
         # context must be established here. The text-encoder bind uploads its factors the
