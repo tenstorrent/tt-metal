@@ -28,15 +28,6 @@
 
 constexpr uint32_t onetile = 1U;
 
-// Round `a` up to the nearest multiple of `b`. Uses the bitwise fast path when
-// `b` is a power of two and the standard divmul form otherwise.
-inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
-    if ((b & (b - 1U)) == 0U) {
-        return (a + (b - 1U)) & -b;
-    }
-    return ((a + b - 1U) / b) * b;
-}
-
 // SFPU intrinsics for first-column-only operations.
 // Column vectors (from row-reduce) only have meaningful data in column 0,
 // so we process 4 SFPU iterations (half-face) instead of the standard 8,
