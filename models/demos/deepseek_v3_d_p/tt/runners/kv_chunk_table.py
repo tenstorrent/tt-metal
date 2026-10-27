@@ -487,6 +487,7 @@ def _build_and_serialize_merged_kv_chunk_table(
         cfg.num_slots = num_users
         cfg.chunk_n_tokens = kda_chunk_n_tokens(spec.geometry, kind)
         cfg.chunk_size_bytes = kda_segment_bytes(spec.geometry, kind)
+        cfg.tensor_type = disagg.KvChunkTensorType.Snapshot
         tensor = spec.tensor(kind)
         if tensor is not None:
             page = tensor.buffer_aligned_page_size()
