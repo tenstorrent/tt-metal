@@ -16,9 +16,9 @@ vLLM's host sampler owns codebook 0: temperature, top-k, the repetition penalty,
 the code predictor's sampling, which reads the checkpoint's `subtalker_*` settings.
 
 Up to `max_num_seqs` requests decode together, one per talker row: decode row i is device
-slot i. Host sampling, no plugin trace: the pipeline captures its own step traces after the
-first prefill and keeps them. A later request's reference encoding and prefill run eagerly
-beside them, stalling the others for that long. Plugin capabilities used:
+slot i. Host sampling, no plugin trace: the pipeline captures its own step traces after
+every prefill, and every prefill releases them first, so a request arriving mid-decode
+stalls the others for its prefill and the recapture. Plugin capabilities used:
 
     supports_stage_inputs   prefill_forward(stage_inputs=[additional_information])
     supports_stage_outputs  pop_stage_outputs() after every decode_forward

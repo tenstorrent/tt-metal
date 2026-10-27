@@ -196,9 +196,9 @@ class ReferenceEncoders:
 
     On the host by default, as the fp32 references: 16-31 ms (speaker) and 53-295 ms (codec)
     a 3-10 s clip, compiling nothing. On device each new clip length compiles, 2.9 s for the
-    speaker and 25 s for the codec measured beside live traces, which stalls everything
-    else on that device. `device` puts them there anyway; build that before any trace
-    exists, since weights allocated while a trace is live are corrupted when it replays.
+    speaker and 25 s for the codec, which stalls everything else on that device. `device`
+    puts them there anyway; build that before any trace exists, since weights allocated
+    while a trace is live are corrupted when it replays.
     """
 
     def __init__(self, device=None):
@@ -226,9 +226,9 @@ class ReferenceEncoders:
 def build_clone_reference(device, audio, text=None, sample_rate=None, x_vector_only=False, encoders=None):
     """A reference clip -> `CloneReference`, running the encoders it needs on device.
 
-    `x_vector_only=True` skips the codec encoder and needs no transcript. Without
-    `encoders` the device encoders' weights are built for this call, which must not happen
-    while a trace is live; with `ReferenceEncoders`, this runs beside live traces.
+    `x_vector_only=True` skips the codec encoder and needs no transcript. Call this before
+    a pipeline captures its traces, or release them first: eager work beside a live trace
+    hangs the card. Without `encoders` the device encoders' weights are built for this call.
     """
     audio = torch.as_tensor(audio, dtype=torch.float32).reshape(-1)
     expected = checkpoint.codec_config()["input_sample_rate"]
@@ -877,8 +877,8 @@ class Qwen3TTSPipeline:
         """Prefill a prompt [1, P, hidden] into talker row `row`, whose page table the caller
         has set, and keep its last hidden state. Returns P.
 
-        Eager, beside the step traces if they are live: the prefill keeps nothing it
-        allocates past its return, and writes only the row's cache blocks and hidden state.
+        Eager, so it releases both traces; `capture` again before the next row step. The
+        other rows' state survives: their caches are theirs and their hidden states are kept.
         """
         prompt = embeddings.shape[1]
         padded = -(-prompt // PROMPT_BUCKET) * PROMPT_BUCKET
@@ -886,6 +886,7 @@ class Qwen3TTSPipeline:
             raise ValueError(f"prompt of {prompt} plus {limit} frames exceeds the cache's {self.talker.max_seq}")
         if padded > prompt:
             embeddings = torch.cat([embeddings, self.tables.tts_pad.expand(1, padded - prompt, -1)], dim=1)
+        self.release()
         hidden = self.talker.prefill(embeddings, row=row)
         last = ttnn.to_torch(ttnn.slice(hidden, [0, prompt - 1, 0], [1, prompt, hidden.shape[2]]))
         ttnn.deallocate(hidden)
@@ -895,9 +896,8 @@ class Qwen3TTSPipeline:
         return prompt
 
     def capture(self):
-        """Capture both step traces, unless they are live already."""
-        if self.talker.trace_id is None:
-            self._capture()
+        """Capture both step traces, after the row prefills."""
+        self._capture()
 
     def move_rows(self, order):
         """Row `i` takes what row `order[i]` held."""
