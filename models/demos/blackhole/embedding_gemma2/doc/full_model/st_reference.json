@@ -1,0 +1,174 @@
+{
+ "source": "sentence-transformers 6.2.0 + transformers 5.21.0 (hf_ref venv, py3.11), SentenceTransformer('google/embeddinggemma-2') fp32 and bf16, snapshot 914f7f89; produced by tt-ops/runs/embeddinggemma-2/e4/st/st_dump.py and check_formatting.py",
+ "items": {
+  "text_query": {
+   "tokens": 15,
+   "input_ids_sha256": "4aaff8813750c6f28c20f4940f5800ffa1950ccf695c862a46680c13db9bea73",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.9999667
+  },
+  "text_doc": {
+   "tokens": 27,
+   "input_ids_sha256": "97267b3f539dd4b59b183654796847a31efc9311bef293a2a09e1b3c85d03967",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.9999577
+  },
+  "text_de": {
+   "tokens": 22,
+   "input_ids_sha256": "cd9deb274fc3163b6e7700447ab3409db8bf7d1a03157130cbeffefacbabad80",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.9999771
+  },
+  "text_ja": {
+   "tokens": 22,
+   "input_ids_sha256": "c43a790b7ad928e1ccfc90e5d192699a48151f376ec02c69fac4c6ef3dd4a057",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.9999785
+  },
+  "text_es": {
+   "tokens": 17,
+   "input_ids_sha256": "e56710a34109efcadf0553ce61a19d915f377677d03f5714ed4f83eeff815767",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.999979
+  },
+  "text_long": {
+   "tokens": 2080,
+   "input_ids_sha256": "e090cc08a4412cbba4a939d52d7f6953e55f7861d342e62bddfa9e3710fb5848",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.9999828
+  },
+  "image_house": {
+   "tokens": 268,
+   "input_ids_sha256": "f2fa523363cbe9dd21089c9a805552d9ac6113d1ab6eaaf2d3a9005b884cb546",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.9999371
+  },
+  "image_pajamas": {
+   "tokens": 264,
+   "input_ids_sha256": "b8b4fde463ede9fc349085fc4283a8197f436019b2eed16c4206335879af8171",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.9999499
+  },
+  "image_dog": {
+   "tokens": 260,
+   "input_ids_sha256": "3fa33a83870715b50cdc0484b508253a7a38332b1823f8f9a4880237c6474555",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.9999695
+  },
+  "image_handwriting": {
+   "tokens": 274,
+   "input_ids_sha256": "11ce2c02b71b9a4f5277f1f5b796c42cd2115d0b5395e1d057ad376ac061ed1c",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.9999819
+  },
+  "image_house_caption": {
+   "tokens": 277,
+   "input_ids_sha256": "560aaab098b419413d29d735947613f28cb3125e4016a28ca21b84be51e98910",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.9999413
+  },
+  "image_dog_caption": {
+   "tokens": 267,
+   "input_ids_sha256": "eac08ea2dd7e3a6a5a7b28f64055788aeb60d6d80a932c3780128fd6b09f41f2",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.9999612
+  },
+  "image_pajamas_caption": {
+   "tokens": 269,
+   "input_ids_sha256": "8b36569362a57c048a7c5682523e5d334e4cefe7e2b7af402abc592ad7d5ae46",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.999936
+  },
+  "video_text": {
+   "tokens": 986,
+   "input_ids_sha256": "dc17691911a4bdfba3d1c8f2b504f644a674cec2aaba2216d061d952e4b1de46",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000002,
+   "cos_st_bf16_vs_st_fp32": 0.9998126
+  },
+  "audio_speech2s": {
+   "tokens": 54,
+   "input_ids_sha256": "f1b367f81bb47e516036355cc662eab518300738f636fde35c02dd7a5d2837fb",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.9999259
+  },
+  "audio_speech10s": {
+   "tokens": 254,
+   "input_ids_sha256": "e0a1ac14c02362f542e7184368c8d2911e08b28b7ecccf7625fde5fa07b7881b",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.9999757
+  },
+  "audio_tone3s": {
+   "tokens": 79,
+   "input_ids_sha256": "872c1964b36773d7e7947161b2ca6eac5c74c5e0e2b881fc49c8426768bc3da1",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.9996172
+  },
+  "audio_speech2s_text": {
+   "tokens": 57,
+   "input_ids_sha256": "704e0b08fb10ef94ab8ee1c32a6d821c61b610f52ab87a1592134009873228b3",
+   "cos_hf_overlay_fp32_vs_st_fp32": 0.9999999,
+   "cos_st_bf16_vs_st_fp32": 0.9999307
+  },
+  "audio_speech10s_text": {
+   "tokens": 260,
+   "input_ids_sha256": "bbf680dc98c7e4a1e6bd3cb550820b4e8fd081021101acc2e01282c1ae5c8f06",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.9999535
+  },
+  "mixed_image_audio": {
+   "tokens": 323,
+   "input_ids_sha256": "c8710aefa9dc9afe13796f11efb478d862176fbc500e3e8eaa85ef173992599b",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.999925
+  },
+  "mixed_two_images": {
+   "tokens": 537,
+   "input_ids_sha256": "ea349bc0137d9cf4fba33b6faac18ee1e2b02a7b53b67fcbddd385b9d97f388f",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.9998872
+  },
+  "caption_house": {
+   "tokens": 8,
+   "input_ids_sha256": "75555fc7a5d9a5bba0cdc760b2a44627fd2d4975180c1a498a855f6b6516551e",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.9999811
+  },
+  "caption_pajamas": {
+   "tokens": 10,
+   "input_ids_sha256": "848f7be5f7fa858cefc2aa54465e7ca7275d15369a8e6dc760449ed57a7855e5",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0,
+   "cos_st_bf16_vs_st_fp32": 0.9999704
+  },
+  "caption_dog": {
+   "tokens": 7,
+   "input_ids_sha256": "5789f784d2876f7c4acaad284e561779957dc0e07afc7e56b3e929dbb3ccdaf4",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000002,
+   "cos_st_bf16_vs_st_fp32": 0.9999802
+  },
+  "caption_handwriting": {
+   "tokens": 5,
+   "input_ids_sha256": "da4dd4a48f0e25df73ae06ea5918933a415f965196e882c00bc43632e33ad01f",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.9999763
+  },
+  "caption_speech2s": {
+   "tokens": 9,
+   "input_ids_sha256": "4da53007e4d77f9e25308c8614872e0249ffd192dad37666ed10c638c37bb559",
+   "cos_hf_overlay_fp32_vs_st_fp32": 0.9999999,
+   "cos_st_bf16_vs_st_fp32": 0.9999844
+  },
+  "caption_speech10s": {
+   "tokens": 9,
+   "input_ids_sha256": "2ef4a8487c8fb4c7a5079174ceb54b8a6d346ebe46b0d91cb4f05d2bf19f415b",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.9999828
+  },
+  "caption_tone3s": {
+   "tokens": 11,
+   "input_ids_sha256": "86648b5a1c7c7dace043073dac060bbdeecf5e18ce55bdafdad30cfdb355447c",
+   "cos_hf_overlay_fp32_vs_st_fp32": 1.0000001,
+   "cos_st_bf16_vs_st_fp32": 0.9999775
+  }
+ },
+ "all_input_ids_equal": true
+}

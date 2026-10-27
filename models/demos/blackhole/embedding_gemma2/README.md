@@ -1,14 +1,31 @@
-# EmbeddingGemma 2 (text tower)
+# EmbeddingGemma 2
 
-TTNN implementation of the text tower of
-[google/embeddinggemma-2](https://huggingface.co/google/embeddinggemma-2) on one Blackhole P150a:
-token embedding, projection-only per-layer inputs (PLE), 24 bidirectional encoder layers, final
-norm, 512->768 projection, masked mean pooling and L2 normalization. The output matches
-`SentenceTransformer("google/embeddinggemma-2").encode(text)` (`[Transformer, Pooling(mean), Normalize]`).
+TTNN implementation of [google/embeddinggemma-2](https://huggingface.co/google/embeddinggemma-2)
+on one Blackhole P150a: text, image, video, audio and mixed inputs to one 768-dim embedding. The
+output matches `SentenceTransformer("google/embeddinggemma-2").encode(input)`
+(`[Transformer, Pooling(mean), Normalize]`), with optional MRL truncation to 512/256/128.
 
-Status: stage E1 (functional text encoder), stage E2 (functional vision tower, see
-[Vision tower](#vision-tower)) and stage E3 (functional audio tower, see
-[Audio tower](#audio-tower)). The multimodal merge comes in a later stage.
+The text tower is token embedding, projection-only per-layer inputs (PLE), 24 bidirectional encoder
+layers, final norm, 512->768 projection, masked mean pooling and L2 normalization. Image and video
+soft tokens come from the vision tower, audio soft tokens from the audio tower; they are placed
+into their placeholder positions on device before the text tower.
+
+Status: stage E1 (functional text encoder), E2 (vision tower, see [Vision tower](#vision-tower)),
+E3 (audio tower, see [Audio tower](#audio-tower)) and E4 (full multimodal model and public API,
+see [Full model](#full-model)).
+
+## How to run
+
+```bash
+source python_env/bin/activate          # plus the Setup exports below
+pytest models/demos/blackhole/embedding_gemma2/demo/demo.py -s          # text + multimodal demos
+python models/demos/blackhole/embedding_gemma2/demo/demo.py             # same, as a script
+python models/demos/blackhole/embedding_gemma2/demo/demo.py --no-hf     # skip the HF fp32 comparison
+```
+
+The demo embeds in-tree media on device with traced forwards: text retrieval, image <-> text,
+audio <-> text and video <-> text similarity matrices, and prints the TT vs HF fp32 cosine of
+every embedding.
 
 ## Setup
 
@@ -187,6 +204,56 @@ per-token cosine 0.764 (s10 token 126) and 0.773 (s30 token 267), against 0.851 
 HF-bf16 on the same tokens. Traced latency is 23.7 ms for a 10 s clip,
 47.8 ms for 30 s, and 80.5 ms for 4 x 10 s. Details, the fp32-activation precision lever and
 limitations are in `doc/functional_audio/README.md`.
+
+## Full model
+
+`tt/model.py` (`EmbeddingGemma2Model`, device forward) and `tt/embedding_model.py`
+(`EmbeddingGemma2`, public host API) join the three towers:
+
+```python
+from models.demos.blackhole.embedding_gemma2.tt.embedding_model import EmbeddingGemma2
+
+model = EmbeddingGemma2.from_pretrained(device, "google/embeddinggemma-2", max_seq_len=8192)
+inputs = [
+    "task: search result | query: northern lights",
+    {"text": "A dog.", "image": pil_image},
+    {"audio": {"array": wave_16k, "sampling_rate": 16000}},
+    {"text": "A dashboard.", "video": {"array": frames, "video_metadata": {"fps": 1.0}}},
+]
+emb = model.encode(inputs)                      # [4, 768] float32, unit norm (eager)
+model.capture_all(model.shape_keys(inputs))     # one trace per ShapeKey, all in one call
+emb = model.encode(inputs, traced=True)         # replays the captured traces
+# MRL: encode(..., truncate_dim=256); traced MRL needs shape_keys(inputs, truncate_dim=256) captured too
+```
+
+Inputs use the sentence-transformers format and are formatted exactly as ST 6.2.0 does (same
+token ids on all 28 test inputs). The host runs the HF processor and builds a gather index from
+the token ids. On device, one forward runs the towers, places the soft tokens into the
+`<|image|>` / `<|video|>` / `<|audio|>` slots with one `ttnn.embedding` gather, then runs the text
+encoder, pooling and normalization; it is captured as one trace per shape.
+
+| path | content |
+|---|---|
+| `tt/model.py` | `EmbeddingGemma2Model` (towers + on-device merge + text encoder + pool + MRL), `ShapeKey` |
+| `tt/embedding_model.py` | `EmbeddingGemma2` (ST formatting, batching, buckets, gather index, trace, readback) |
+| `reference/hf_full_reference.py` | HF fp32 `EmbeddingGemma2Model` + ST pooling |
+| `reference/full_model_inputs.py` | in-tree test / demo inputs (text, images, video, audio, mixed) |
+| `tests/pcc/test_full_model*.py` | accuracy per input, batching, retrieval, audit, trace, perf |
+| `doc/full_model/` | merge semantics with HF file:line, API, buckets, results, limits |
+
+```bash
+pytest models/demos/blackhole/embedding_gemma2/tests/pcc/test_full_model.py -q        # accuracy, retrieval, audit
+pytest models/demos/blackhole/embedding_gemma2/tests/pcc/test_full_model_trace.py -q  # trace == eager, determinism
+pytest models/demos/blackhole/embedding_gemma2/tests/pcc/test_full_model_perf.py -k traced -s
+```
+
+Measured on 21 real inputs (6 texts incl. German, Japanese, Spanish and a 2080-token document;
+4 images; 3 images with captions; an 8-frame video with text; 3 audio clips; 2 audio clips with
+text; 2 mixed inputs): embedding cosine vs HF fp32 min 0.99957, mean 0.99990; at MRL 256 min
+0.99963. TT and HF pick the same best match on every row of the caption x image and
+caption x audio similarity matrices. Traced latency (inputs on device -> normalized embedding):
+text 1 x 512 18.3 ms, 1 image + caption 73.9 ms, 10 s audio + text 42.0 ms, 8-frame video
+230.1 ms. Details are in `doc/full_model/README.md`.
 
 ## Out of scope (decoder-only items of the bring-up skill)
 

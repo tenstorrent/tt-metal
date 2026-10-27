@@ -1,0 +1,86 @@
+{
+ "rows": [
+  "caption_house",
+  "caption_pajamas",
+  "caption_dog",
+  "caption_handwriting"
+ ],
+ "columns": [
+  "image_house",
+  "image_pajamas",
+  "image_dog",
+  "image_handwriting"
+ ],
+ "tt": [
+  [
+   0.71368,
+   0.47914,
+   0.58969,
+   0.52908
+  ],
+  [
+   0.50582,
+   0.76652,
+   0.49261,
+   0.48698
+  ],
+  [
+   0.54056,
+   0.56526,
+   0.65505,
+   0.56418
+  ],
+  [
+   0.56588,
+   0.54562,
+   0.53655,
+   0.68215
+  ]
+ ],
+ "hf_fp32": [
+  [
+   0.71292,
+   0.47845,
+   0.5904,
+   0.52913
+  ],
+  [
+   0.50468,
+   0.76665,
+   0.49378,
+   0.48707
+  ],
+  [
+   0.53913,
+   0.56457,
+   0.65452,
+   0.56361
+  ],
+  [
+   0.56423,
+   0.54451,
+   0.53616,
+   0.68196
+  ]
+ ],
+ "argmax_tt": [
+  "image_house",
+  "image_pajamas",
+  "image_dog",
+  "image_handwriting"
+ ],
+ "argmax_hf": [
+  "image_house",
+  "image_pajamas",
+  "image_dog",
+  "image_handwriting"
+ ],
+ "hf_top1_minus_top2": [
+  0.12252,
+  0.26197,
+  0.08996,
+  0.11773
+ ],
+ "max_abs_diff": 0.001645,
+ "agree": true
+}

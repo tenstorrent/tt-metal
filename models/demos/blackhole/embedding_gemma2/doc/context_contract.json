@@ -63,5 +63,41 @@
     "reduction": "none: the feature extractor bounds a clip at 750 tokens and the largest bucket (768) runs it",
     "untested": "batch > 4; act_dtype=float32 traced beyond batch 1",
     "decode": "not applicable: one-pass causal-local encoder per clip; no streaming cache"
+  },
+  "full_model": {
+    "component": "EmbeddingGemma2Model (vision + audio towers, on-device soft-token merge, text encoder) + ST mean pooling + L2 normalize (+ MRL 512/256/128)",
+    "api": "tt/embedding_model.py EmbeddingGemma2.encode; default max_seq_len 8192",
+    "shared_context": "every modality draws from one token sequence: text tokens + per image (2 markers + up to 280 soft tokens) + per video frame (2 + up to 140) + per audio clip (2 + 25 per second)",
+    "max_text_tokens_per_item": {
+      "default": 8192,
+      "why": "model card context window (8,192 tokens, shared by all modalities). The wrapper accepts max_seq_len up to 32768 (E1 bucket limit, see reduction_reason); full-model inputs were tested up to 2080 tokens (bucket 4096)",
+      "largest_tested": 2080,
+      "evidence": "tests/pcc/test_full_model.py::test_full_model_item[text_long] (2080 tokens, b1_s4096, cosine 0.99997 vs HF fp32)"
+    },
+    "images_per_item": {
+      "max_by_context": 29,
+      "why": "8192 tokens / (280 soft tokens + 2 markers) at the default 280-token image budget; the vision tower runs all images of a batch as one [n, 2560-patch] forward (key-padding mask [n,1,2560,2560] bf16 = 13 MB per image), far below device DRAM at 29",
+      "largest_tested": 2,
+      "evidence": "test_full_model_item[mixed_two_images] (2 images + text, 537 tokens) and test_batched_mixed_modalities (b2_s512_image2x2560)"
+    },
+    "audio_seconds": {
+      "per_clip_max": 30,
+      "why": "the HF feature extractor caps a clip at 2999 mel frames = 750 soft tokens (E3); several clips per item share the 8192-token context (about 320 s of audio in total by tokens)",
+      "largest_tested_in_full_model": 10,
+      "largest_tested_tower": "30 s (E3 test_soft_tokens[s30])",
+      "evidence": "test_full_model_item[audio_speech10s] / [audio_speech10s_text] (250 audio tokens, audio bucket 256)"
+    },
+    "video_frames": {
+      "max": 32,
+      "why": "processor_config.json video_processor max_frames 32 at 1 fps; 32 x (140 + 2) = 4544 tokens fits the 8192 context. All frames of a batch run as one [F, 1280-patch] vision forward",
+      "largest_tested": 8,
+      "evidence": "test_full_model_item[video_text] (8 frames x 120 soft tokens, 986 tokens, b1_s1024_video8x1280)"
+    },
+    "batch": {
+      "tested": "text 8 (perf b8_s512), 3 (mixed batch), image+text 2, single audio / video items",
+      "note": "batch size is not padded; each (batch, buckets) is its own ShapeKey / trace"
+    },
+    "reduction": "none against the model card: 8192 tokens, 280-token images, 32 video frames and 30 s clips are all inside the supported buckets; the larger multi-image / 32-frame / multi-clip combinations are untested",
+    "decode": "not applicable: encoder"
   }
 }

@@ -1,0 +1,63 @@
+{
+ "rows": [
+  "caption_speech2s",
+  "caption_speech10s",
+  "caption_tone3s"
+ ],
+ "columns": [
+  "audio_speech2s",
+  "audio_speech10s",
+  "audio_tone3s"
+ ],
+ "tt": [
+  [
+   0.68817,
+   0.71507,
+   0.7095
+  ],
+  [
+   0.66223,
+   0.70521,
+   0.68589
+  ],
+  [
+   0.61517,
+   0.619,
+   0.7307
+  ]
+ ],
+ "hf_fp32": [
+  [
+   0.68984,
+   0.71541,
+   0.71078
+  ],
+  [
+   0.66209,
+   0.70432,
+   0.68583
+  ],
+  [
+   0.61569,
+   0.61867,
+   0.73021
+  ]
+ ],
+ "argmax_tt": [
+  "audio_speech10s",
+  "audio_speech10s",
+  "audio_tone3s"
+ ],
+ "argmax_hf": [
+  "audio_speech10s",
+  "audio_speech10s",
+  "audio_tone3s"
+ ],
+ "hf_top1_minus_top2": [
+  0.00463,
+  0.01849,
+  0.11154
+ ],
+ "max_abs_diff": 0.001664,
+ "agree": true
+}
