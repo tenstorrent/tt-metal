@@ -1,0 +1,356 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Unary SFPU kernel shared by the functional, perf and accuracy tests.
+
+// The stock eltwise_unary_sfpu_test.cpp, its math thread compiled for every (operation,
+// approximation mode) pair of SWEEP_OPERATIONS; a run executes the pair SWEEP_INDEX names.
+// The BF16 exhaustive sweep (helpers/bf16_sweep.py, driven by each operation's
+// test_eltwise_unary_sfpu_bf16_<op>.py) builds one ELF for several operations.
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <iterator>
+#include <type_traits>
+#include <utility>
+
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "ckernel_ops.h"
+#include "counters.h"
+#include "llk_defs.h"
+#include "params.h"
+#include "perf.h"
+#include "profiler.h"
+
+// Globals
+std::uint32_t unp_cfg_context                          = 0;
+std::uint32_t pack_sync_tile_dst_ptr                   = 0;
+std::uint32_t math_sync_tile_dst_index                 = 0;
+static constexpr std::uint32_t MAX_TILES_DEST          = ckernel::get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, ckernel::DstTileShape::Tile32x32>();
+static constexpr ckernel::BroadcastType BROADCAST_TYPE = ckernel::BroadcastType::NONE;
+
+#ifdef LLK_TRISC_UNPACK
+
+#include "llk_unpack_A.h"
+#include "llk_unpack_common.h"
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t num_faces   = params.num_faces;
+
+    const std::uint32_t TILE_CNT = params.TILE_CNT;
+
+    const bool UNPACK_TRANSPOSE_FACES       = params.UNPACK_TRANSPOSE_FACES;
+    const bool UNPACK_TRANSPOSE_WITHIN_FACE = params.UNPACK_TRANSPOSE_WITHIN_FACE;
+
+    const auto& buffer_A = params.buffer_A;
+#endif
+    const EltwiseBinaryReuseDestType reuse_dest_type = EltwiseBinaryReuseDestType::NONE;
+
+    {
+        START_PERF_MEASURE("INIT")
+
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
+
+        // llk_unpack_A forbids acc_to_dest together with unpack_to_dest.
+        _llk_unpack_A_init_<BROADCAST_TYPE, false, reuse_dest_type, unpack_to_dest>(
+            UNPACK_TRANSPOSE_FACES,
+            UNPACK_TRANSPOSE_WITHIN_FACE,
+            ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces),
+            formats.unpack_A_src,
+            formats.unpack_A_dst);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // Only the hardware valid handshake; with unpack_to_dest the data is taken as already in Dest.
+            if constexpr (!unpack_to_dest)
+            {
+                _perf_unpack_loop_set_valid<
+                    /* src A */ true,
+                    /* src B */ is_fp32_dest_acc_en>(
+                    /* iterations*/ num_faces * TILE_CNT * LOOP_FACTOR);
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE) // UNPACK_ISOLATE, L1_TO_L1, L1_CONGESTION
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                {
+                    _llk_unpack_A_<BROADCAST_TYPE, false /* acc_to_dest (see init) */, reuse_dest_type, unpack_to_dest>(
+                        L1_ADDRESS(buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+}
+
+#endif // LLK_TRISC_UNPACK
+
+#ifdef LLK_TRISC_MATH
+#include "llk_math_common.h"
+#include "llk_math_eltwise_unary_datacopy.h"
+#include "llk_math_eltwise_unary_sfpu.h"
+#include "sfpu_operations.h"
+
+template <SfpuType OPERATION, bool APPROXIMATION>
+void run_operation(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t num_faces   = params.num_faces;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+#endif
+    const DataCopyType data_copy_type = DataCopyType::A2D;
+
+    {
+        START_PERF_MEASURE("INIT")
+
+        _llk_math_eltwise_unary_datacopy_init_<data_copy_type, is_fp32_dest_acc_en>(num_faces, formats.math);
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+
+        test_utils::call_unary_sfpu_operation_init<
+            OPERATION,
+            APPROXIMATION,
+            is_fp32_dest_acc_en,
+            ITERATIONS,
+            FAST_MODE,
+            STABLE_SORT,
+            CLAMP_NEGATIVE,
+            DataFormat::Invalid /* TYPECAST_IN */,
+            DataFormat::Invalid /* TYPECAST_OUT */,
+            FUSED_SORT>(formats.math);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                {
+                    if constexpr (unpack_to_dest)
+                    {
+                        _llk_math_eltwise_unary_datacopy_<data_copy_type, dest_sync, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                            i % MAX_TILES_DEST, formats.math, formats.math);
+                    }
+                    else
+                    {
+                        _perf_math_loop_clear_valid<
+                            /* src A */ true,
+                            /* src B */ true>(
+                            /* iterations*/ num_faces);
+                    }
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
+                {
+                    std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                    {
+                        if constexpr (unpack_to_dest)
+                        {
+                            _llk_math_eltwise_unary_datacopy_<data_copy_type, dest_sync, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                                block_tile, formats.math, formats.math);
+                        }
+                        else
+                        {
+                            _perf_math_loop_clear_valid<
+                                /* src A */ true,
+                                /* src B */ true>(
+                                /* iterations*/ num_faces);
+                        }
+                    }
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
+                {
+                    std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                    {
+                        if constexpr (!unpack_to_dest)
+                        {
+                            LLK_ASSERT(
+                                (block_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                                "block_tile exceeds max dest tiles");
+                            _llk_math_eltwise_unary_datacopy_<data_copy_type, dest_sync, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                                block_tile, formats.math, formats.math);
+                        }
+
+                        test_utils::call_unary_sfpu_operation<
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            OPERATION,
+                            APPROXIMATION,
+                            is_fp32_dest_acc_en,
+                            ITERATIONS,
+                            FAST_MODE,
+                            STABLE_SORT,
+                            CLAMP_NEGATIVE,
+                            DataFormat::Invalid /* TYPECAST_IN */,
+                            DataFormat::Invalid /* TYPECAST_OUT */,
+                            FUSED_SORT>(block_tile, formats.math);
+                    }
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
+                {
+                    std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+
+                    _llk_math_wait_for_dest_available_<dest_sync>();
+
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                    {
+                        LLK_ASSERT(
+                            (block_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
+
+                        _llk_math_eltwise_unary_datacopy_<data_copy_type, dest_sync, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
+                            block_tile, formats.math, formats.math);
+
+                        test_utils::call_unary_sfpu_operation<
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            OPERATION,
+                            APPROXIMATION,
+                            is_fp32_dest_acc_en,
+                            ITERATIONS,
+                            FAST_MODE,
+                            STABLE_SORT,
+                            CLAMP_NEGATIVE,
+                            DataFormat::Invalid /* TYPECAST_IN */,
+                            DataFormat::Invalid /* TYPECAST_OUT */,
+                            FUSED_SORT>(block_tile, formats.math);
+                    }
+
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+}
+
+template <std::size_t... I>
+void run_selected(RUNTIME_PARAMETERS params, std::index_sequence<I...>)
+{
+    ((params.SWEEP_INDEX == I ? run_operation<SWEEP_OPERATIONS[I], SWEEP_APPROXIMATION[I]>(params) : void()), ...);
+}
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+    run_selected(params, std::make_index_sequence<std::size(SWEEP_OPERATIONS)> {});
+}
+
+#endif // LLK_TRISC_MATH
+
+#ifdef LLK_TRISC_PACK
+
+#include "llk_lib_pack_wrappers.h"
+#include "llk_pack_common.h"
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t num_faces   = params.num_faces;
+    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const auto& buffer_Res          = params.buffer_Res;
+#endif
+    {
+        START_PERF_MEASURE("INIT")
+
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * num_faces);
+
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
+                {
+                    std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                    {
+                        LLK_ASSERT(
+                            (block_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
+                    }
+                }
+            }
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
+                {
+                    std::uint32_t block_tiles = std::min(TILE_CNT - block_start, MAX_TILES_DEST);
+
+                    _llk_packer_wait_for_math_done_();
+                    for (std::uint32_t block_tile = 0; block_tile < block_tiles; ++block_tile)
+                    {
+                        LLK_ASSERT(
+                            (block_tile < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "block_tile exceeds max dest tiles");
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
+                    }
+                    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+
+        PROFILER_SYNC();
+    }
+}
+
+#endif // LLK_TRISC_PACK
