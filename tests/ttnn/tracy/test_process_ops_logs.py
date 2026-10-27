@@ -264,6 +264,18 @@ def test_enrich_ops_from_perf_csv_accepts_a_device_whose_only_trace_was_never_re
     assert enriched[1] == []
 
 
+def test_enrich_ops_from_perf_csv_keeps_the_report_when_one_non_trace_op_lost_its_row():
+    # The device reported rows, but one non-trace op's markers were dropped (buffer overflow under
+    # dispatch pressure). Losing that one op must not discard the ops that did land -- the whole
+    # report used to be thrown away at the end of post-processing for exactly this.
+    host_ops = {0: [_host_op(10, None), _host_op(11, None), _host_op(12, None)]}
+    device_rows = {0: {(10, None, None): _perf_row(10, None, None), (12, None, None): _perf_row(12, None, None)}}
+
+    enriched = process_ops_logs._enrich_ops_from_perf_csv(host_ops, device_rows, None)
+
+    assert [op["global_call_count"] for op in enriched[0]] == [10, 12], "the surviving ops are still reported"
+
+
 def test_enrich_ops_from_perf_csv_still_asserts_on_a_device_missing_from_the_report():
     # Device 1 ran a non-trace op but the report has no entry for it: that is lost device data.
     host_ops = {0: [_host_op(10, None)], 1: [_host_op(20, None)]}

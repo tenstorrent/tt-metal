@@ -711,6 +711,7 @@ def _enrich_ops_from_perf_csv(
 
         enriched_ops = []
         dropped_ops_by_trace: Dict[int, int] = {}
+        ops_missing_device_rows = 0
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -743,6 +744,25 @@ def _enrich_ops_from_perf_csv(
                 # whole report. A trace that the host did replay keeps the assert below, so a
                 # device report that lost every row of a replayed trace is still an error.
                 dropped_ops_by_trace[host_trace_id] = dropped_ops_by_trace.get(host_trace_id, 0) + 1
+                continue
+
+            if not candidates and host_trace_id is None and device_rows:
+                # PARTIAL LOSS IS NOT TOTAL LOSS. The device profiler drops markers under dispatch
+                # pressure -- the per-core marker-buffer overflow the periodic drain exists to limit
+                # -- so on a dense multi-chip capture a handful of ops never land a row while the
+                # rest of the device reports normally. Failing the whole report for one of them
+                # throws away every op that DID land, and it happens at the end, after the full
+                # post-processing cost is already paid: measured on an 8-chip run, 10.6 h over
+                # 35,145,154 device rows discarded because one op of 33,321 was absent.
+                #
+                # Carried the same way an unreplayed trace's ops are carried above: counted, warned
+                # about once per device, and left out of the enriched set rather than hidden.
+                #
+                # DELIBERATELY NARROW. Only a NON-TRACE op, and only when the device reported rows
+                # at all. A replayed trace missing rows and a device missing from the report are
+                # both still errors -- they indicate loss of a whole unit of work rather than a
+                # dropped marker, and each has a test pinning that behaviour.
+                ops_missing_device_rows += 1
                 continue
 
             missing_hint = ""
@@ -783,6 +803,15 @@ def _enrich_ops_from_perf_csv(
                 f"Device {device_id}: trace {dropped_trace_id} was captured but never replayed (no REPLAY marker "
                 f"from the host, no rows in {PROFILER_CPP_DEVICE_PERF_REPORT}); its {dropped_count} host ops get no "
                 f"device data and appear in the report as host-only rows"
+            )
+
+        if ops_missing_device_rows:
+            logger.warning(
+                f"Device {device_id}: {ops_missing_device_rows} non-trace op(s) have no row in "
+                f"{PROFILER_CPP_DEVICE_PERF_REPORT} and are left out of the report; the device dropped their "
+                f"markers (per-core marker-buffer overflow under dispatch pressure). Device totals read from "
+                f"this report are therefore LOW by those ops -- reduce the capture or increase the drain "
+                f"frequency if the count is a meaningful fraction of the run"
             )
 
         host_ops_by_device[device_id] = enriched_ops
