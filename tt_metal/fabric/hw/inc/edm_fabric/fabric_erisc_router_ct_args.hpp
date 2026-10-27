@@ -640,7 +640,8 @@ constexpr uint32_t code_profiling_enabled_timers_bitfield = NAMED_CT_ARG("CODE_P
 constexpr size_t code_profiling_buffer_base_addr = NAMED_CT_ARG("CODE_PROFILING_BUFFER_ADDR");
 
 // ============================================================================
-// Multi-TXQ credit counters (always available; 0 when inactive)
+// Receiver-to-sender credit counters: multi-TXQ, express VC1, or no stream registers (always available; 0 when
+// inactive)
 // ============================================================================
 constexpr size_t to_sender_remote_ack_counters_base_address = NAMED_CT_ARG("TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR");
 constexpr size_t to_sender_remote_completion_counters_base_address =
