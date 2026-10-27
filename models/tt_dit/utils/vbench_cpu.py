@@ -33,6 +33,7 @@ def motion_decision(scores, *, pairs, threshold, required):
 
 
 def dynamic_degree(video_path):
+    """VBench's dynamic_degree for one clip: 1.0 if enough frame pairs show motion, else 0.0."""
     import torch
     from easydict import EasyDict
     from vbench.dynamic_degree import DynamicDegree

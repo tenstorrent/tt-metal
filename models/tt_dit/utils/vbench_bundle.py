@@ -4,8 +4,8 @@
 """VBench gate over N prompts x M seeds: each prompt's mean over its seeds must clear that prompt's floors.
 
 A single clip at a single seed is too noisy to gate on (a numeric perturbation reshuffles the whole
-video, and dynamic_degree is binary per clip), so a test renders every (prompt, seed) clip into a
-fresh bundle directory with ``clip_path`` and then calls ``write_manifest``. The bundle is scored by
+video), so a test renders every (prompt, seed) clip into a bundle directory (``create_bundle``) with
+``clip_path`` and then calls ``write_manifest``. The bundle is scored by
 ``evaluate``: in-process for a local run, or in CI by a separate step after pytest has closed the
 devices::
 
@@ -32,7 +32,13 @@ DEFAULT_SCORER = "models.tt_dit.utils.vbench:score_vbench"
 
 @dataclass(frozen=True)
 class GatePrompt:
-    """One gate prompt: its text and the floor each scored metric's mean over the seeds must clear."""
+    """One gate prompt: its text and, per VBench metric, the floor its mean over the seeds must clear.
+
+    Most VBench metrics are continuous scores in [0, 1]. dynamic_degree is not: VBench scores each clip
+    1 if optical flow (RAFT) finds enough frame pairs with motion, else 0. Its mean over the seeds is
+    therefore the fraction of seeds that move, and a floor of k/n requires at least k of n seeds to move
+    (0.75 over 4 seeds tolerates one static clip).
+    """
 
     text: str
     thresholds: dict[str, float]
