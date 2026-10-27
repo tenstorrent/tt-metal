@@ -1135,3 +1135,14 @@ top-k stage 1 had no per-row bound; both now take a per-chip live-pool bound (`S
 decode hang (2175 / 2176 / 65514+25 / 65536 / slot reuse with a 65514+32 prior request) all pass on 4 layers: the hang needs the
 served composition (45 layers, 8x4, 1 M) or the random content; a served 131 K natural-text needle run decides whether long served
 prompts work at all.
+
+### 2026-10-27 09:00: the 1 M decode gap is the dropped stacked expert copy
+
+Capacity ladder (45 layers, 4 users per row, 128-token prompt, traced step): 256 -> 70.1 ms, 256 K partitioned -> 70.9 ms,
+512 K -> 151.4 ms, 1 M -> 152.2 ms, 1 M with 1 user per row replicated -> 139 ms; caches allocated after every weight -> 152.4 ms
+(placement excluded); the sparse-decode bound -> 148.6 ms; the KDA layer does not scale, the DSA layer +1.06 ms (bounded away).
+The numerics flip with the step (chain pcc 0.8615 below the threshold, 0.9497 above). Cause: `mesh_model` keeps the stacked
+(bank-sharded) expert copy for the decode streaming op only while `MemoryPlan.fits(max_batch, max_seq_len)` with the copy; above
+~256 K x 4 (and at 128 K x 32) it is dropped and decode runs the regions per-expert lists (`_stream_serves` False), ~+80 ms over 42
+MoE layers. Per-op profiling of multi-layer models at 1 M is impossible on this stack (the 1 M build floods the device profiler;
+the host capture tool crashes on 45 layers); the single-layer harness keeps the copy, which is why it never showed the gap.
