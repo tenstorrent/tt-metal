@@ -57,6 +57,10 @@ B = int(os.environ.get("GLM53_PERF_B", "4"))  # users per row (design points: 4 
 POS = int(os.environ.get("GLM53_PERF_POS", "1024"))  # decode position (the single-chip table: after a 1024 prefill)
 DECODE_STEPS = int(os.environ.get("GLM53_PERF_DECODE_STEPS", "1"))  # signposted replays (1 => rows == ops)
 WALL_STEPS = int(os.environ.get("GLM53_PERF_WALL_STEPS", "10"))  # unsignposted replays for the wall time
+# cache capacity of the built layer (default: just past POS); 1048576 vs the default at a short POS shows which
+# decode ops scale with the allocated capacity instead of the position (the served 1 M model decodes 148 ms/step at
+# position ~200 where the 256-capacity harness replays in 65 ms)
+MAX_SEQ_LEN = int(os.environ.get("GLM53_PERF_MAX_SEQ_LEN", str(POS + 64)))
 # under the device profiler the un-drained wall replays overflow the per-core marker buffers (12000 entries;
 # a layer-3 B=32 step leaves ~5k markers on some cores: 3 replays already dropped markers and 10 crashed the
 # Tracy capture, no CSV), so the wall loop is skipped there; the profiler-free run is the wall number anyway
@@ -140,7 +144,7 @@ def test_mesh_layer_perf(mesh_device):
         layer_idx=LAYER,
         mesh_device=mesh_device,
         max_batch=B,
-        max_seq_len=POS + 64,
+        max_seq_len=MAX_SEQ_LEN,
         expert_dtype=_DTYPES[EXPERT_DTYPE],
         expert_down_dtype=_DTYPES[EXPERT_DOWN_DTYPE],
     )
@@ -149,7 +153,7 @@ def test_mesh_layer_perf(mesh_device):
     kind = f"{'KDA' if dec.layer.is_kda else 'DSA'}+{'MoE' if dec.layer.is_moe else 'dense'}"
     if dec.layer.is_moe:
         kind += f" experts gate/up {EXPERT_DTYPE} down {EXPERT_DOWN_DTYPE}"
-    _log_dram(mesh_device, f"layer {LAYER} ({kind}) built on {ROWS}x{COLS}, B={B}/row, max_seq_len={POS + 64}")
+    _log_dram(mesh_device, f"layer {LAYER} ({kind}) built on {ROWS}x{COLS}, B={B}/row, max_seq_len={MAX_SEQ_LEN}")
     if dec.cache is not None:  # DSA: seed every slot's latent pages with random rows (replicated on every chip)
         g = torch.Generator().manual_seed(0)
         rows = -(-POS // 32) * 32
