@@ -75,12 +75,17 @@ class GroupedExperts:
         self.w_tile_bytes = ttnn.Tile([TILE, TILE]).get_tile_size(self.w_dtype)
         self.gu_tiles = 2 * self.kt
         self.wd_tiles = self.ikt * self.cols
+        # LoFi: matmul unpacks the weights (in1) to srcA, and LoFi already takes srcA's hidden bit + 4 mantissa MSBs, all
+        # of BFP4's 3 bits; HiFi2's second phase only adds srcA's lower bits (zero here). x / h in srcB get 6 mantissa
+        # bits at both fidelities, so LoFi is bit-identical to HiFi2 with BFP4 weights (not with BFP8).
+        lofi = self.w_dtype == ttnn.bfloat4_b
         self.compute_config = ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi if lofi else ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             dst_full_sync_en=False,
         )
+        self.defines = []  # (name, value) preprocessor defines for all three kernels (benchmark ablations)
 
     def _cbs(self):
         def cb(index, dtype, pages):
@@ -92,17 +97,21 @@ class GroupedExperts:
             return ttnn.CBDescriptor(total_size=pages * page, core_ranges=self.ranges, format_descriptors=[fmt])
 
         bf = ttnn.bfloat16
+        # Two groups of x rows and of y rows with BFP4 weights. BFP8 weight slices take 400 KB more: one of each keeps
+        # the static CBs below their end on dev (1.47 MB; the chunked prefill tests hold L1 buffers from 1.50 MB).
+        slots = 2 if self.w_dtype == ttnn.bfloat4_b else 1
         return [
             cb(self.CB_PLAN, ttnn.float32, 1),
             cb(self.CB_WGU, self.w_dtype, 2 * self.gu_tiles),
             cb(self.CB_WD, self.w_dtype, 2 * self.wd_tiles),
             cb(self.CB_X, bf, self.kt),
-            cb(self.CB_XRM, bf, 2 * self.quarter_tiles),
+            cb(self.CB_XRM, bf, slots * self.quarter_tiles),
             cb(self.CB_XQ, bf, self.quarter_tiles),
             cb(self.CB_RW, bf, 2),
             cb(self.CB_H_OWN, bf, 4),
             cb(self.CB_H_ALL, bf, 2 * self.ikt),
-            cb(self.CB_Y, bf, 8),
+            # 32 rows x this core's 32 output tile columns, row-major
+            cb(self.CB_Y, bf, slots * 2 * self.cols),
             ttnn.CBDescriptor(
                 total_size=64,
                 core_ranges=self.ranges,
@@ -193,6 +202,7 @@ class GroupedExperts:
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=self.ranges,
                 compile_time_args=ct,
+                defines=self.defines,
                 runtime_args=rt,
                 config=ttnn.DataMovementConfigDescriptor(processor=processor, noc=noc),
             )
@@ -265,6 +275,7 @@ class GroupedExperts:
                 self.CB_XQ,
                 self.quarter_tiles,
             ],
+            defines=self.defines,
             runtime_args=compute_rt,
             config=self.compute_config,
         )

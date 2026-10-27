@@ -1,16 +1,15 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// BRISC (NOC 1) of the grouped prefill experts. Per group: first this core's quarter of the group's x tiles (cb_xq,
-// tilized by compute) goes to slot quarter of cb_x on every team core, one increment of each one's x semaphore, and
-// once this core's x semaphore counts the team's 4 quarters cb_x is pushed to compute. A core only sends group n's
-// quarter after its down of group n - 1, which needed every team core's h of group n - 1, which each makes after it
-// is done with its cb_x for group n - 1, so cb_x is never overwritten while in use. Then this core's two h tiles
-// (intermediate columns b0 and b1) go to slots b0 and b1 of cb_h_all on every core of the team (itself included),
-// then one increment of each team core's semaphore; once this core's semaphore counts the team's 4 cores for this
-// group, cb_h_all is complete and pushed to compute. Then this core's down output, 8 passes of 32 untilized rows of
-// 4 adjacent tile columns (16 j + 4 quarter ..): row r of the group goes to row row_dest[r] (k * T + t) of the
-// k-major row-major output [K * T, H]; padding rows (row_dest 0xFFFFFFFF) are skipped.
+// BRISC (NOC 1) of the grouped prefill experts. Per group n: this core's two h tiles (intermediate columns b0 and b1)
+// go to slots b0 and b1 of cb_h_all on every core of the team (itself included), then one increment of each team
+// core's semaphore; once this core's semaphore counts the team's 4 cores for this group, cb_h_all is complete and
+// pushed to compute. Then group n + 1's x: this core's quarter of its x tiles (cb_xq, tilized by compute) goes to slot
+// quarter of cb_x on every team core, one increment of each one's x semaphore, and once this core's x semaphore counts
+// the team's 4 quarters cb_x is pushed to compute. Every team core has made its h of group n by then, so it is done
+// reading its cb_x of group n. Then this core's down output of group n, 32 untilized rows of its 32 adjacent tile
+// columns (2 KB each): row r goes to row row_dest[r] (k * T + t) of the k-major row-major output [K * T, H]; padding
+// rows (row_dest 0xFFFFFFFF) are skipped. These writes overlap compute's gate | up of group n + 1.
 //
 // cb_h_all holds two groups (8 tiles each) and every team core walks the same groups, so a sender's group n lands
 // in slot n % 2: a core that is still reading slot n % 2 for group n - 2 cannot be overwritten, because the sender
@@ -36,8 +35,7 @@ void kernel_main() {
     constexpr uint32_t quarter_tiles = nt / team_size;
     constexpr uint32_t quarter_bytes = quarter_tiles * 2048;
     constexpr uint32_t cb_dst = get_compile_time_arg_val(13);  // 128 B: one group's row destinations
-    constexpr uint32_t seg_bytes = 4 * 64;                     // a row of one pass: 4 tiles of columns, bf16
-    constexpr uint32_t out_block = 4;
+    constexpr uint32_t seg_bytes = 2 * cols * 64;  // a row of this core's 32 adjacent output columns, bf16: 2 KB
     constexpr uint32_t tile_bytes = 2048;
 
     const uint32_t bank0 = get_arg_val<uint32_t>(0);
@@ -67,28 +65,38 @@ void kernel_main() {
     const uint32_t dst_l1 = get_write_ptr(cb_dst);
     volatile tt_l1_ptr uint32_t* row_dest = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_l1);
 
+    uint32_t total = 0;
+    for (uint32_t j = 0; j < jobs; j++) {
+        total += plan[3 + 3 * j];
+    }
+
+    // this core's quarter of group n's x tiles to slot quarter of cb_x on every team core
+    auto x_exchange = [&](uint32_t n) {
+        cb_reserve_back(cb_x, nt);
+        cb_wait_front(cb_xq, quarter_tiles);
+        const uint32_t xq = get_read_ptr(cb_xq);
+        for (uint32_t t = 0; t < team_size; t++) {
+            noc_async_write(xq, get_noc_addr(peer_x[t], peer_y[t], x_slot), quarter_bytes);
+        }
+        noc_async_write_barrier();
+        for (uint32_t t = 0; t < team_size; t++) {
+            noc_semaphore_inc(get_noc_addr(peer_x[t], peer_y[t], x_sem_addr), 1);
+        }
+        noc_async_atomic_barrier();
+        cb_pop_front(cb_xq, quarter_tiles);
+        noc_semaphore_wait_min(x_sem, team_size * (n + 1));
+        cb_push_back(cb_x, nt);
+    };
+
+    if (total > 0) {
+        x_exchange(0);
+    }
     uint32_t n = 0;  // groups done by this team
     for (uint32_t j = 0; j < jobs; j++) {
         const uint32_t first = plan[2 + 3 * j];
         const uint32_t groups = plan[3 + 3 * j];
         for (uint32_t i = 0; i < groups; i++, n++) {
             const uint32_t g = first + i;
-            // x exchange
-            cb_reserve_back(cb_x, nt);
-            cb_wait_front(cb_xq, quarter_tiles);
-            const uint32_t xq = get_read_ptr(cb_xq);
-            for (uint32_t t = 0; t < team_size; t++) {
-                noc_async_write(xq, get_noc_addr(peer_x[t], peer_y[t], x_slot), quarter_bytes);
-            }
-            noc_async_write_barrier();
-            for (uint32_t t = 0; t < team_size; t++) {
-                noc_semaphore_inc(get_noc_addr(peer_x[t], peer_y[t], x_sem_addr), 1);
-            }
-            noc_async_atomic_barrier();
-            cb_pop_front(cb_xq, quarter_tiles);
-            noc_semaphore_wait_min(x_sem, team_size * (n + 1));
-            cb_push_back(cb_x, nt);
-
             // h exchange
             cb_reserve_back(cb_h_all, ikt);
             cb_wait_front(cb_h_own, 2);
@@ -108,22 +116,30 @@ void kernel_main() {
             noc_semaphore_wait_min(sem, team_size * (n + 1));
             cb_push_back(cb_h_all, ikt);
 
-            // this core's down output rows of group g
+            // The next group's x now: every team core has made its h of group n, so it is done with its cb_x.
+            if (n + 1 < total) {
+                x_exchange(n + 1);
+            }
+
+            // this core's down output rows of group g: 32 rows of its 32 adjacent columns (2 KB each)
             noc_async_read(dest_gen.get_noc_addr(0, g * 128), dst_l1, 128);
             noc_async_read_barrier();
-            for (uint32_t p = 0; p < 2 * cols / out_block; p++) {
-                const uint32_t col_bytes = (16 * p + 4 * quarter) * 64;
-                cb_wait_front(cb_y, out_block);
-                const uint32_t src_y = get_read_ptr(cb_y);
-                for (uint32_t r = 0; r < 32; r++) {
-                    const uint32_t d = row_dest[r];
-                    if (d != 0xFFFFFFFF) {
-                        noc_async_write(src_y + r * seg_bytes, y_gen.get_noc_addr(d, col_bytes), seg_bytes);
-                    }
+            cb_wait_front(cb_y, 2 * cols);
+            const uint32_t src_y = get_read_ptr(cb_y);
+            const uint32_t col_bytes = quarter * seg_bytes;
+            for (uint32_t r = 0; r < 32; r++) {
+                const uint32_t d = row_dest[r];
+#ifdef ABL_NO_Y
+                if (false) {
+#else
+                if (d != 0xFFFFFFFF) {
+#endif
+                    noc_async_write(src_y + r * seg_bytes, y_gen.get_noc_addr(d, col_bytes), seg_bytes);
                 }
-                noc_async_write_barrier();
-                cb_pop_front(cb_y, out_block);
             }
+            noc_async_writes_flushed();
+            cb_pop_front(cb_y, 2 * cols);
         }
     }
+    noc_async_write_barrier();
 }

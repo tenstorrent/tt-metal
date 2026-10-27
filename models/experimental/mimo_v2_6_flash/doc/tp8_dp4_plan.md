@@ -637,6 +637,73 @@ TTFT, one user on one row, chunks of 4096, profiler off:
 | + global heads split over the pair (`replicate_global_kv`) | 0.57 s | 4.53 s | 20.62 s |
 | + MoE plan in two programs | **0.54 s** | **4.18 s** | **19.20 s** |
 
+### MoE prefill experts: where the time goes, 2026-10-27
+
+`tests/perf/moe_experts_bench.py` times the plan, `GroupedExperts` and `CombineK` of one layer alone (4096 tokens,
+the layer's router on random tokens: 1127 groups, 10% padding rows, 192 experts used, up to 35 groups per expert).
+Under `python -m tracy -r` with `MIMO_PROFILE_ZONES=1`, `tests/perf/moe_bench_parse.py` prints device time per
+piece. `--configs` takes `/`-separated define sets for the kernels' ablation switches (`ABL_NO_X` / `ABL_NO_Y` /
+`ABL_NO_W` / `ABL_NO_MM`: skip the x row reads, the y row writes, the weight reads after the first job, the matmuls).
+
+| `GroupedExperts` on `mimo-v2.6/dev` (device ms) | |
+|---|---|
+| as is | 3.69 |
+| LoFi | 3.57 |
+| no y writes | 2.59 |
+| no x reads / no weight reads / no matmuls | 3.52 / 3.53 / 3.34 |
+| no x, y / no x, y, weights / no x, y, weights, matmuls | 2.15 / 1.78 / 1.27 |
+
+The kernel is neither DRAM-bound (238 GB/s of ~450) nor math-bound (17% of HiFi2 peak). The y row writes are 1.1
+ms: 256 writes of 256 B per core per group, issued by the writer between the team's x and h swaps, so they sit on the
+critical path. With no DRAM traffic and no matmuls the program still takes 1.27 ms, 34 us per group: the team's two
+swaps per group, tilize and untilize, SwiGLU, all serial per group.
+
+Changes:
+
+- **LoFi.** Matmul unpacks the weights (in1) to srcA; LoFi takes srcA's hidden bit + 4 mantissa MSBs, all of BFP4's
+  3 bits, and srcB (x, h) gets 6 mantissa bits at LoFi and at HiFi2. The output is bit-identical to HiFi2.
+- **2 KB y rows, off the critical path.** Each team core owns 32 adjacent output columns (32 q + c, read tile by tile
+  from the 8 banks as before) and untilizes each 4-column pass into a 32-tile-wide row-major block
+  (`pack_untilize_dest<4, 32>`), so it writes 32 rows of 2 KB per group instead of 256 of 256 B. The writer now swaps
+  h of group n, then x of group n + 1, then writes group n's rows, which overlap gate | up of group n + 1; compute
+  tilizes group n + 1's x quarter between h and down of group n, and the reader reads a job's first group before its
+  weights (else the reader would wait for the slot the previous job's last down frees). cb_y and cb_xrm hold two groups with
+  BFP4 weights and one with BFP8 (whose weight slices fill L1). Bit-identical output.
+- **Team plan without the cap x E scan.** `plan_gather.cpp`'s core 0 dealt the team plan with a loop over cap x 256
+  experts (about 9.7K iterations with divisions at 4K). It now deals the whole chunks, then the remainders bucketed
+  by size, in the same order: the same plan (`moe_plan_bench.py`: identical to `DevicePlan` at 32, 1056, 4096).
+
+| One layer, device ms | before | after |
+|---|---|---|
+| plan (`plan_slice` + `plan_gather`) | 0.599 (0.125 + 0.467) | 0.360 (0.125 + 0.236) |
+| `GroupedExperts` | 3.53 | 3.19 (model FLOPs: 58 -> 65 TFLOP/s) |
+| `CombineK` | 0.83 | 0.83 |
+
+A 4K chunk of all 48 layers saves about 27 ms (47 MoE layers x (0.34 + 0.24 ms)). TTFT, one user on one row, chunks
+of 4096, `--replicate-global-kv`, profiler off (`profile_prefill.py --ttft`):
+
+| | 4K | 32K | 128K |
+|---|---|---|---|
+| before (2026-10-27 profile) | 0.502 s | 4.18 s | 18.96 s |
+| after | 0.477 s | 3.93 s | 17.88 s |
+
+Accuracy (MOPD, BFP4 experts): `test_model_tp8_dp4.py` with `MIMO_MOE_DEDUP=0`: top-1 0.950, 34/34 rows with a
+reference margin >= 0.2, logits PCC mean 0.9917 (min 0.8658); `test_model_long_tp8_dp4.py -k 32k`: every pass key
+found by both cuts, next-token logits PCC 0.9906-0.9952 with the same top-1, shared prompt identical on all rows.
+The grouped output is bit-identical to the dev kernel's (`moe_experts_bench.py --ref`).
+
+Tried and not kept:
+
+- Teams of 8 cores (4 x 2), K-split: each core tilizes and multiplies only its own 16 of the 128 x tiles for all
+  8 intermediate columns and the team reduce-scatters fp32 partials (8 KB per peer, unpacked to dest), so there is no
+  x swap, and with 221 KB of weights per core the next job's weights load during the current job. 3.25 ms
+  (`matmul_block` 3.19 ms), no better than the above: twice the groups per team, with the same per-group swaps.
+- Two items in `CombineK`'s input buffer: 0.83 ms either way (it reads 268 MB of y; DRAM-bound).
+
+What is left: the y rows (each pair's full-width bf16 output, 268 MB written, read again by `CombineK`) are 0.75 ms
+of the grouped program and all of `CombineK`. Cutting them needs the k sum before DRAM, which expert-major order does
+not give.
+
 ### Global prefill SDPA past 128K: grouped heads and split-K, 2026-10-23
 
 Up to 1M (one user per row, `--users 1`, so the cache fits), the 9 global layers' SDPA is most of a long prompt.
