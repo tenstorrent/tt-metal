@@ -218,10 +218,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             RELU_CONFIG /* relu_config */);
         _llk_pack_init_wrapper_<llk_test_pack_mode_v<false, tilize_en>, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+#if defined(ARCH_BLACKHOLE)
         if constexpr (pack_block_en)
         {
             _llk_pack_block_fast_init_<false>();
         }
+#endif
         PROFILER_SYNC();
     }
     {
