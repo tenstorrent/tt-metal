@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -32,6 +33,9 @@ public:
     // concurrently, on the workers or on the calling thread, but calls for the same device run one at a time, in index
     // order. Rethrows the first exception thrown by fn. Independent of enqueue() and wait().
     virtual void parallel_for(ttsl::Span<const uint32_t> device_ids, const std::function<void(size_t)>& fn) = 0;
+    // Lets idle workers park now instead of staying awake for a next fan-out, for a caller about to wait on
+    // something slower than the spin window. They stay awake again after the next fan-out.
+    virtual void park_workers() {}
 };
 
 // API accespting the number of threads to spawn in the pool. Will bind each thread to a CPU core, but the
@@ -42,6 +46,10 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices);
+// As above; after its last task or parallel_for call, each worker stays awake for `spin` before it parks, so that
+// back-to-back fan-outs reach it without a wake.
+std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
+    ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices, std::chrono::microseconds spin);
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId context_id);
 
 // Call before the pages are faulted.
