@@ -59,7 +59,7 @@ class Display:
         cv2.putText(view, text, (self.tile_w - w - 4, 11), font, 0.38, (90, 230, 90), 1, cv2.LINE_AA)
         cv2.rectangle(view, (0, 0), (self.tile_w - 1, self.tile_h - 1), (40, 40, 40), 1)
 
-    def panel(self, stats, counts):
+    def panel(self, stats, counts, rows=None):  # redraws everything; rows is for the 1-chip panel's partial redraw
         x0 = self.canvas.shape[1] - PANEL_W
         p = self.canvas[:, x0:]
         p[:] = (24, 24, 24)

@@ -56,6 +56,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0034 | Batch 20 before / after table; how batch 20 combines L1 and DRAM | 2026-10-27 | ANSWERED: 108.3 → 44.6 ms (all cameras), on screen 110.7 → 53.0 ms; every layer computes in L1 in groups (4 above 20×20, 8 at 20×20), DRAM only holds full-batch stage tensors |
 | YOLO26-0035 | Why on-screen latency exceeds capture-to-results, and by different amounts per configuration; synchronized batch 4 | 2026-10-27 | ANSWERED: ~9 ms fixed display work (panel ~2 ms, JPEG ~6 ms) plus up to one compose of waiting when the renderer is busy; synchronized batch 4 11.5 → 35.3 ms by set |
 | YOLO26-0036 | Cut the on-screen (display) overhead: parallel strip JPEG + panel at 10 Hz | 2026-10-27 | DONE: on screen bs4 staggered 21.4 → 11.3 ms, bs4 synchronized 34.2 → 24.6, bs20 53.0 → 48.0; live-view image identical; panel may lag tiles ≤ 100 ms |
+| YOLO26-0037 | Defect from 0036: panel at 10 Hz disagreed with the tiles in the recording | 2026-10-27 | FIXED: only changed panel rows redrawn on every update; 60/60 rows match in 3 checked frames; on screen 11.5 → 12.8 ms |
 
 ## Entries
 
@@ -1176,3 +1177,22 @@ MEASURED (1 chip, 20 × 30 FPS, 60 s, live view on; capture → results unchange
 INFERRED: staggered bs4 gap 12 → ~2 ms: with ~1 ms encode and ~0.2 ms tiles a compose is shorter than the 6.7 ms
 between sets, so results no longer wait for a previous compose; bs20 gap 8.4 → 3.6 ms (one compose per tick, encode
 ~6 → ~1 ms, panel skipped on most ticks... at 30 updates/s every third tick redraws it).
+
+### YOLO26-0037 — correction to YOLO26-0036: panel throttle (appended 2026-10-27)
+
+Defect (MEASURED): with the panel capped at 10 redraws per second (YOLO26-0036 item 2), the 60 s batch-4 recording
+`yolo26s_20streams_1chip_batch4_v2.mp4` showed 6 of 20 panel rows different from their tiles in the frame at 30 s
+(CAM 02 tile 0 / panel 1, 06 0/1, 08 1/0, 13 3/2, 19 2/4, 20 0/1). The recording captures 30 frames a second, so
+about 2 of every 3 recorded frames carried a panel up to 100 ms old. Before 0036 the panel was redrawn on every
+update (30/s originally, ~120-150/s after YOLO26-0031) and always matched. The cap was chosen for readability and
+the recording was not considered; it saved only ~2 ms per update (most of 0036's gain is the strip JPEG).
+
+Fix (`Display.panel(stats, counts, rows)`): the header (rates, latency, total) is redrawn on every update; of the
+20 camera rows only those whose streams were updated since the last call, or all rows when the bar scale (largest
+count) changes. `multichip_demo.Display.panel` takes `rows` and still redraws everything.
+
+MEASURED (1 chip, batch 4, staggered, 20 × 30 FPS, 60 s, live view + recording,
+`yolo26_demo_outputs/multistream/yolo26s_20streams_1chip_batch4_v3.mp4`, 1831 frames, 61.0 s): 600.0 images/s;
+capture-to-results 9.4 / 9.4 / 10.0 / 9.8 / 9.5 ms by group; on screen 12.8 ms (11.5 ms with the 10 Hz panel, v2
+clip; 21.4 ms before YOLO26-0036). Frames at 15 / 30 / 45 s: 20/20 panel rows equal their tiles in each, totals
+52 / 42 / 62 equal the tile sums.

@@ -319,10 +319,15 @@ class Display:
         cv2.putText(view, text, (self.tile_w - w - 6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
         cv2.rectangle(view, (0, 0), (self.tile_w - 1, self.tile_h - 1), (40, 40, 40), 1)
 
-    def panel(self, stats, counts):
+    def panel(self, stats, counts, rows=None):
+        """
+        Side panel. The header (rates, latency, total) is redrawn every time; of the camera rows only `rows` (the
+        cameras whose counts changed), or all of them when rows is None or the bar scale (largest count) changed.
+        """
         x0 = self.canvas.shape[1] - PANEL_W
         p = self.canvas[:, x0:]
-        p[:] = (24, 24, 24)
+        top = 214
+        p[:top] = (24, 24, 24)
         put = lambda text, y, scale=0.55, color=(230, 230, 230), thick=1: cv2.putText(
             p, text, (16, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thick, cv2.LINE_AA
         )
@@ -333,16 +338,20 @@ class Display:
         put(f"latency {stats['latency_ms']:.0f} ms (median)   display {stats['display_fps']:.0f} FPS", 148)
         total = sum(counts)
         put(f"People now: {total}", 186, 0.75, (255, 255, 255), 2)
-        top = 214
         row_h = max(18, (p.shape[0] - top - 10) // self.n)
         put("camera                                   people now", top - 6, 0.42, (150, 150, 150))
         bar_x0, bar_x1 = 90, PANEL_W - 70
         scale = max(4, max(counts))
+        if rows is None or scale != getattr(self, "bar_scale", None):
+            rows, self.bar_scale = range(self.n), scale
+            p[top:] = (24, 24, 24)
         text = lambda s, x, y, color=(255, 255, 255): cv2.putText(
             p, s, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA
         )
-        for i, n in enumerate(counts):
+        for i in rows:
+            n = counts[i]
             y = top + 4 + i * row_h
+            p[y : y + row_h] = (24, 24, 24)
             text(f"CAM {i + 1:02d}", 16, y + 13, (210, 210, 210))
             cv2.rectangle(p, (bar_x0, y + 2), (bar_x1, y + row_h - 4), (45, 45, 45), -1)
             cv2.rectangle(
@@ -519,11 +528,11 @@ class PrepPool:
 def render_process(make_display, args, num_streams, chips, render_q, ready_q):
     """
     Separate process: as soon as results arrive (merging any that queued meanwhile), their tiles are drawn and the
-    mosaic is published as MJPEG (JPEG encoded in parallel strips, panel redrawn at most 10 times a second); the
+    mosaic is published as MJPEG (JPEG encoded in parallel strips, only the changed panel rows redrawn); the
     latest mosaic is recorded on a fixed --fps clock (real-time video).
     On-screen latency is per result: capture of a tile's frame to the publication of the first mosaic showing it.
     make_display(args, num_streams, chips) gives an object with canvas, tile(s, frame_idx, dets, fps) and
-    panel(stats, counts).
+    panel(stats, counts, rows) (rows: the streams updated since the last panel call).
     """
     display = make_display(args, num_streams, chips)
     mjpeg = Mjpeg(args.port) if args.port else None
@@ -531,7 +540,6 @@ def render_process(make_display, args, num_streams, chips, render_q, ready_q):
     writer = Recorder(args.record, display.canvas.shape[1], display.canvas.shape[0], args.fps) if args.record else None
     ready_q.put("ready")
     period = 1.0 / args.fps
-    panel_period, panel_at = 0.1, 0.0  # the panel (~2 ms) is redrawn at most 10 times a second
     counts, captured = [0] * num_streams, [None] * num_streams
     stats, recent, all_latencies, composed = {}, deque(maxlen=20 * num_streams), [], deque()
     recorded, next_record, last = 0, None, None
@@ -557,9 +565,7 @@ def render_process(make_display, args, num_streams, chips, render_q, ready_q):
                 counts[s], captured[s] = len(dets), cap
                 fresh.add(s)
         if fresh and "stream_fps" in stats:
-            if time.perf_counter() - panel_at >= panel_period:
-                display.panel({**stats, **shown}, counts)
-                panel_at = time.perf_counter()
+            display.panel({**stats, **shown}, counts, fresh)
             if mjpeg:
                 mjpeg.publish(jpeg.encode(display.canvas))
             now = time.perf_counter()
