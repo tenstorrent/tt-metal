@@ -37,11 +37,13 @@ void SelectFinalCarryOperation::validate_on_program_cache_miss(
         kda_factory_detail::check_interleaved(*tensor, operation_name, name);
     }
     kda_factory_detail::check_same_device(in.rank_final, in.prefix_final, operation_name, "prefix_final");
-    // Each buffer argument is refreshed on a program-cache hit through its own binding; one buffer bound to both would
-    // leave one of them stale.
-    TT_FATAL(
-        in.rank_final.buffer() != in.prefix_final.buffer(),
-        "{}: rank_final and prefix_final must be different tensors",
+    kda_factory_detail::check_distinct_buffers(
+        {{&in.rank_final, "rank_final"},
+         {&in.prefix_final, "prefix_final"},
+         {&in.actual_start, "actual_start"},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"},
+         {in.projection_input ? &*in.projection_input : nullptr, "projection_input"},
+         {in.projection_weight ? &*in.projection_weight : nullptr, "projection_weight"}},
         operation_name);
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     const auto& tail = in.rank_final.logical_shape();

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <enchantum/enchantum.hpp>
+#include <iterator>
 #include <set>
 
 #include <tt-metalium/constants.hpp>
@@ -93,6 +94,23 @@ void check_same_device(
 
 void check_interleaved(const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name) {
     TT_FATAL(!tensor.is_sharded(), "{}: {} must use interleaved memory", operation_name, tensor_name);
+}
+
+void check_distinct_buffers(
+    std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors, std::string_view operation_name) {
+    for (auto first = tensors.begin(); first != tensors.end(); ++first) {
+        if (first->first == nullptr) {
+            continue;
+        }
+        for (auto second = std::next(first); second != tensors.end(); ++second) {
+            TT_FATAL(
+                second->first == nullptr || first->first->buffer() != second->first->buffer(),
+                "{}: {} and {} must be different tensors",
+                operation_name,
+                first->second,
+                second->second);
+        }
+    }
 }
 
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name) {

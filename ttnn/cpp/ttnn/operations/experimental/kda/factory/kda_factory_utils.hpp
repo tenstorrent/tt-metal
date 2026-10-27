@@ -3,9 +3,11 @@
 
 #pragma once
 
+#include <initializer_list>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -37,6 +39,11 @@ void check_matching_dtype(
 void check_same_device(
     const Tensor& reference, const Tensor& candidate, std::string_view operation_name, std::string_view candidate_name);
 void check_interleaved(const Tensor& tensor, std::string_view operation_name, std::string_view tensor_name);
+// A cached program refreshes each buffer argument through its own binding on a program-cache hit; one buffer passed as
+// two arguments leaves the bindings ambiguous, and the cached program would keep reading and writing the first call's
+// buffers. Absent optional tensors are passed as nullptr and skipped.
+void check_distinct_buffers(
+    std::initializer_list<std::pair<const Tensor*, std::string_view>> tensors, std::string_view operation_name);
 void check_actual_start(const Tensor& reference, const Tensor& actual_start, std::string_view operation_name);
 void check_output_interleaved(const tt::tt_metal::MemoryConfig& memory_config, std::string_view operation_name);
 void check_compute_config(const DeviceComputeKernelConfig& config, std::string_view operation_name);

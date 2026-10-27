@@ -47,6 +47,16 @@ void EntryCorrectionOperation::validate_on_program_cache_miss(
             operation_name,
             name);
     }
+    kda_factory_detail::check_distinct_buffers(
+        {{&in.zero_output, "zero_output"},
+         {&in.identity_output, "identity_output"},
+         {&in.final_a, "final_a"},
+         {&in.final_b, "final_b"},
+         {&in.entry, "entry"},
+         {&in.tail_entry, "tail_entry"},
+         {&in.actual_start, "actual_start"},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}},
+        operation_name);
     const auto& state = in.final_b.logical_shape();
     // The kernels read every state and chunk row as K tiles: V must equal K.
     TT_FATAL(state.rank() == 3 && state[1] == state[2], "{}: the states must be [B*H, K, K]", operation_name);

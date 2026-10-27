@@ -183,6 +183,52 @@ def test_select_final_carry_rejects_contract_violations(mesh_device, case, error
         ttnn.experimental.kda.select_final_carry(rank_final, prefix_final, actual_start=actual_start, **kwargs)
 
 
+@pytest.mark.parametrize("mesh_device,device_params", _meshes(), indirect=True)
+def test_select_final_carry_with_projection_rejects_aliased_operands(mesh_device, expect_error):
+    """A cached program refreshes each buffer argument through its own binding: X @ X would leave the bindings
+    ambiguous and the cached program on the first call's buffers, so the op rejects it."""
+    state = lambda: ttnn.from_torch(
+        torch.zeros(_HEADS, _KEY, _VALUE),
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    x = ttnn.from_torch(
+        torch.zeros(256, 256),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    grid = mesh_device.compute_with_storage_grid_size()
+    config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+        in0_block_w=2,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=2,
+        out_block_w=1,
+        per_core_M=2,
+        per_core_N=1,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+    with expect_error(RuntimeError, "projection_input and projection_weight must be different tensors"):
+        ttnn.experimental.kda.select_final_carry_with_projection(
+            state(),
+            state(),
+            x,
+            x,
+            actual_start=make_actual_start(mesh_device),
+            local_rows=_ROWS,
+            cores=[ttnn.CoreCoord(grid.x - 1, y) for y in range(grid.y - 4, grid.y)],
+            projection_program_config=config,
+            prefix_on_last_rank=True,
+        )
+
+
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [

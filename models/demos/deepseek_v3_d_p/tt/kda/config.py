@@ -149,7 +149,11 @@ class KDAProgramConfig:
 
 def matmul_grid(grid: ttnn.CoreCoord, max_cores: int) -> ttnn.CoreCoord:
     """The widest block of full-height worker columns of ``grid`` with at most ``max_cores`` cores."""
-    return ttnn.CoreCoord(max(1, min(grid.x, max_cores // grid.y)), grid.y)
+    if max_cores < grid.y:
+        raise ValueError(
+            f"max_matmul_cores {max_cores} cannot hold one full-height worker column of the {grid.x}x{grid.y} grid"
+        )
+    return ttnn.CoreCoord(min(grid.x, max_cores // grid.y), grid.y)
 
 
 # Rows per device the projection schedules were tuned at: Galaxy SP8xTP4 at T=5120.
