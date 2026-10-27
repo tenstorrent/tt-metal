@@ -115,7 +115,8 @@ void kernel_main() {
 #ifdef SPLIT_UNITS
         if (unit.role == kUnitSender) {
             // The partial state goes to its scratch slot; once it has landed, the merger's semaphore is bumped.
-            const uint32_t sem_ids[4] = {
+            static_assert(sdpa_fw_items::kMaxMergersPerCore == 4U, "the semaphore ids are compile args 5..8");
+            const uint32_t sem_ids[sdpa_fw_items::kMaxMergersPerCore] = {
                 get_compile_time_arg_val(5),
                 get_compile_time_arg_val(6),
                 get_compile_time_arg_val(7),

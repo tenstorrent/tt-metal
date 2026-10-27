@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "metal/common/const_utils.hpp"
+#include "metal/ops/sdpa_fw/device/sdpa_fw_item_math.hpp"
 #include "metal/ops/sdpa_fw/sdpa_fw_program_config.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
@@ -98,7 +99,8 @@ struct WorkUnit {
 using CoreUnits = std::vector<WorkUnit>;
 constexpr uint32_t kWordsPerUnit = 3U;
 
-// Runtime-arg words of one unit; merger_noc_x/y = the merger core's NoC coordinates (senders only).
+// Runtime-arg words of one unit (layout in sdpa_fw_item_math.hpp); merger_noc_x/y = the merger core's NoC
+// coordinates (senders only). Throws when a field does not fit its width.
 void append_unit_words(
     std::vector<uint32_t>& words, const WorkUnit& unit, uint32_t merger_noc_x, uint32_t merger_noc_y);
 
@@ -106,8 +108,8 @@ uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& 
 // K/V steps item attends to: causal up to its diagonal, else all.
 uint32_t num_kv_steps(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t item);
 
-constexpr uint32_t kMaxPieces = 63U;         // num_partials has 6 bits in the unit word
-constexpr uint32_t kMaxMergersPerCore = 4U;  // semaphores per core
+constexpr uint32_t kMaxPieces = sdpa_fw_items::unit_field_max(sdpa_fw_items::kUnitPartialsBits);  // 63
+constexpr uint32_t kMaxMergersPerCore = sdpa_fw_items::kMaxMergersPerCore;
 constexpr uint32_t kDefaultMaxPieces = 4U;
 
 uint32_t partial_tiles_per_row(const SDPAForwardShape& shape);  // a sender's row: max, sum, output tiles

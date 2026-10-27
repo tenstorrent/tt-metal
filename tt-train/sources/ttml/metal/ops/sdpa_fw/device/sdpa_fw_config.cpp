@@ -202,13 +202,27 @@ uint32_t num_kv_steps(const SDPAForwardShape& shape, const SDPAForwardChunks& ch
 
 void append_unit_words(
     std::vector<uint32_t>& words, const WorkUnit& unit, uint32_t merger_noc_x, uint32_t merger_noc_y) {
+    using namespace sdpa_fw_items;
     TT_FATAL(
-        unit.item < (1U << 20U) && unit.num_partials < 64U && unit.sem_idx < 16U, "work unit does not fit its words");
-    TT_FATAL(unit.step_end < (1U << 16U) && unit.slot < (1U << 16U), "work unit does not fit its words");
-    words.push_back(
-        unit.item | (static_cast<uint32_t>(unit.role) << 20U) | (unit.num_partials << 22U) | (unit.sem_idx << 28U));
-    words.push_back(unit.role == UnitRole::Whole ? unit.num_items : (unit.step_begin | (unit.step_end << 16U)));
-    words.push_back(unit.slot | (merger_noc_x << 16U) | (merger_noc_y << 24U));
+        unit.item <= unit_field_max(kUnitItemBits) && unit.num_partials <= unit_field_max(kUnitPartialsBits) &&
+            unit.sem_idx < kMaxMergersPerCore && unit.step_end <= unit_field_max(kUnitStepBits) &&
+            unit.slot <= unit_field_max(kUnitSlotBits) && merger_noc_x <= unit_field_max(kUnitNocBits) &&
+            merger_noc_y <= unit_field_max(kUnitNocBits),
+        "work unit does not fit its words");
+    const UnitWords w = encode_unit(WorkUnitFields{
+        .item = unit.item,
+        .role = static_cast<uint32_t>(unit.role),
+        .num_items = unit.num_items,
+        .step_begin = unit.step_begin,
+        .step_end = unit.step_end,
+        .num_partials = unit.num_partials,
+        .sem_idx = unit.sem_idx,
+        .slot = unit.slot,
+        .merger_x = merger_noc_x,
+        .merger_y = merger_noc_y});
+    words.push_back(w.w0);
+    words.push_back(w.w1);
+    words.push_back(w.w2);
 }
 
 uint32_t partial_tiles_per_row(const SDPAForwardShape& shape) {
