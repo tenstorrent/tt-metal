@@ -564,6 +564,11 @@ def test_grpo_config_rejects_invalid_lr_and_clip(expect_error, override, message
         GRPOConfig(**{**_HOST_GRPO_CONFIG, **override})
 
 
+def test_grpo_config_rejects_weight_sync_every_for_in_process(expect_error):
+    with expect_error(ValueError, "'weight_sync_every' does not apply to rollout_backend='ttml_in_process_sync'"):
+        GRPOConfig(**_HOST_GRPO_CONFIG, weight_sync_every=2)
+
+
 def test_validate_clip_grad_norm_rejects_sharded_params(monkeypatch, expect_error):
     from ttml.common.utils import validate_clip_grad_norm
 
