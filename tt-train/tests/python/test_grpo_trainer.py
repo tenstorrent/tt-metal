@@ -333,6 +333,10 @@ def test_grpo_trainer_one_step_smoke(
         "generation_time_s",
         "reward_time_s",
         "rollout_wait_s",
+        "weight_sync_time_s",
+        "logprob_mismatch_mean",
+        "logprob_mismatch_max",
+        "clip_frac",
     ):
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"metric {key} is not finite: {metrics[key]}"
@@ -700,7 +704,9 @@ def _run_train_loop_on_host(monkeypatch, num_batches=1):
     def fake_build_policy(self, transformer_config, device_config, dataset_func):
         self.model = SimpleNamespace(get_run_mode=lambda: RunMode.TRAIN)
         self.tokenizer = _IdsTokenizer()
-        self._batch_layout = SimpleNamespace(fsdp_enabled=False, ddp_context_enabled=False, ddp_enabled=False)
+        self._batch_layout = SimpleNamespace(
+            fsdp_enabled=False, ddp_context_enabled=False, ddp_enabled=False, composer=None
+        )
         self._optimizer = optimizer
         self._lr_scheduler = SimpleNamespace(step=lambda: setattr(optimizer, "lr", optimizer.lr / 2))
         self._monitor_cb = monitor
@@ -712,7 +718,12 @@ def _run_train_loop_on_host(monkeypatch, num_batches=1):
     monkeypatch.setattr(grpo_trainer_module, "is_rollout_rank", lambda config: False)
     monkeypatch.setattr(GRPOTrainer, "_build_policy", fake_build_policy)
     monkeypatch.setattr(
-        GRPOTrainer, "_compute_loss_and_backward", lambda self, i, t, m, old, adv, n: run.pi_old.append(old)
+        GRPOTrainer, "_compute_loss_and_backward", lambda self, nlog_new, m, old, adv, n: run.pi_old.append(old)
+    )
+    monkeypatch.setattr(
+        GRPOTrainer,
+        "_compute_policy_nlog_probs",
+        lambda self, inputs, targets: SimpleNamespace(to_numpy=lambda *a, **k: np.zeros(inputs.shape, np.float32)),
     )
     monkeypatch.setattr(grpo_trainer_module, "save_checkpoint", fake_save_checkpoint)
 
@@ -757,6 +768,18 @@ def test_train_loop_mini_epoch_metrics(monkeypatch):
     assert step_2["rollout_wait_s"] == step_2["reward_time_s"] == 0.0
     assert step_1["_Recorder_time_s"] == step_2["_Recorder_time_s"] == _ON_SAVE_TIME_S
     assert "step_1_only" in step_1 and "step_1_only" not in step_2
+    assert step_1["logprob_mismatch_mean"] == step_1["logprob_mismatch_max"] == 0.5
+    assert step_1["clip_frac"] == 0.5
+
+
+def test_clipping_stats_counts_tokens_whose_clipped_term_is_the_min():
+    from ttml.trainers.grpo_trainer.grpo_trainer import clipping_stats
+
+    new = np.array([[-0.5, 0.0, 9.0], [0.5, 0.0, 9.0]], dtype=np.float32)
+    mask = np.array([[1, 1, 0], [1, 1, 0]], dtype=np.float32)
+    mismatch, clipped = clipping_stats(np.zeros_like(new), new, mask, np.array([1.0, -1.0]), eps=0.2)
+    np.testing.assert_array_equal(mismatch, [0.5, 0.0, 0.5, 0.0])
+    np.testing.assert_array_equal(clipped, [True, False, True, False])
 
 
 def test_train_loop_step_time_includes_checkpoint(monkeypatch):

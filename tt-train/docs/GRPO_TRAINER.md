@@ -301,7 +301,7 @@ from ttml.trainers import GRPOConfig
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
-| `logging_steps` | `int` | — | `logging_steps` | Cadence (in optimizer steps) at which the built-in `GRPOMonitor` emits a CSV row / wandb log. All callbacks fire every step; metrics are accumulated every step and emitted every *N* steps as an interval-mean (except `min_completion_len`, `max_completion_len`, `lr` where minimum, maximum, last value is emitted respectively). Set to `0` or negative to disable emission. |
+| `logging_steps` | `int` | — | `logging_steps` | Cadence (in optimizer steps) at which the built-in `GRPOMonitor` emits a CSV row / wandb log. All callbacks fire every step; metrics are accumulated every step and emitted every *N* steps as an interval-mean (except `min_completion_len`, `max_completion_len` and `logprob_mismatch_max`, `lr` where minimum, maximum, last value is emitted respectively). Set to `0` or negative to disable emission. |
 | `log_completions` | `bool` | `False` | `log_completions` | When `True`, the built-in [`GRPOMonitor`](#built-in-grpomonitor) prints a sample of `(prompt, completion, reward)` triples every logging step (and, if `report_to == "wandb"`, logs them as a `wandb.Table`). |
 | `num_completions_to_print` | `int` | `0` | `num_completions_to_print` | Upper bound on how many completions per step the monitor prints when `log_completions=True`. `0` disables the sample dump even when `log_completions` is set (a warning is emitted). |
 | `report_to` | `str` | `"none"` | `report_to` | Where the built-in monitor forwards scalar metrics and the optional completions table. Only `"none"` and `"wandb"` are accepted in this framework (TRL takes a list; here it must be a single string). When `"wandb"` is set, the built-in `GRPOMonitor` calls `wandb.init(...)` itself in `on_train_begin` (matching the TRL / `transformers` `WandbCallback` convention); `project` / `entity` / `mode` come from the `WANDB_PROJECT` / `WANDB_ENTITY` / `WANDB_MODE` env vars, and `name` from `run_name` below. If the caller already opened a wandb run before constructing the trainer, the monitor logs into it and leaves its lifecycle alone. |
@@ -410,14 +410,18 @@ before the next step runs). The columns are a fixed base set —
 ```
 step, reward_mean, reward_std, mean_completion_len, min_completion_len,
 max_completion_len, lr, step_time_s, generation_time_s, reward_time_s,
-rollout_wait_s, weight_sync_time_s, rollout_weight_version
+rollout_wait_s, weight_sync_time_s, rollout_weight_version,
+logprob_mismatch_mean, logprob_mismatch_max, clip_frac
 ```
 
 (`generation_time_s` times `generate()`, `reward_time_s` the reward functions,
 `rollout_wait_s` the trainer's wait for the batch; `weight_sync_time_s` the
 weight push before the step's batch was generated (including the version-0 push
 before step 1), 0 when there was none; `rollout_weight_version` is the weight
-version that generated the step's batch.)
+version that generated the step's batch; `logprob_mismatch_mean` /
+`logprob_mismatch_max` are `|log π − log π_old|` over completion tokens;
+`clip_frac` is the fraction of completion tokens whose clipped term is the
+minimum, so they get no gradient.)
 
 — followed by one `<CallbackClassName>_time_s` column per callback present at
 `on_train_begin` (**excluding `GRPOMonitor` itself**), followed by every extra
@@ -447,7 +451,7 @@ and pushes every numeric scalar in `trainer.metrics` into constant-memory
 running stats. It only emits a CSV row / wandb log once every `logging_steps`
 steps, at which point each metric is aggregated as the interval-mean over the
 window, then the running stats are cleared. Two policy exceptions apply:
-`min_completion_len` and `max_completion_len` are emitted as the min / max
+`min_completion_len`, `max_completion_len` and `logprob_mismatch_max` are emitted as the min / max
 across the window (a mean of per-step mins is meaningless), and `lr` is
 emitted as the current-step value (matching TRL's `_get_learning_rate`).
 Non-numeric payloads (`prompts` / `completions` / `rewards`) always snapshot
@@ -526,7 +530,7 @@ Two contracts are worth calling out:
 | Hook | Signature | When |
 |------|-----------|------|
 | `on_train_begin` | `(trainer)` | Before the first batch. |
-| `on_step_end` | `(trainer, step, **kwargs)` | Every optimizer step (matches the base `TrainerCallback.on_step_end` contract; not gated by `logging_steps`). Keyword args are the current step's `trainer.metrics`: `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `generation_time_s`, `reward_time_s`, `rollout_wait_s`, and one `<CallbackClassName>_time_s` per non-monitor callback (accumulated for the current step across every hook fired so far — a callback later in the list sees the current-step total for every callback before it). `step_time_s` is only present for `GRPOMonitor`, which runs after the timer is sealed; other callbacks see `trainer.metrics` without it. When `log_completions=True`, truncated `prompts` / `completions` / `rewards` lists are also passed. The built-in `GRPOMonitor` accumulates these values across every step and only emits a CSV / wandb row every `logging_steps` steps (see [Built-in GRPOMonitor](#built-in-grpomonitor)). |
+| `on_step_end` | `(trainer, step, **kwargs)` | Every optimizer step (matches the base `TrainerCallback.on_step_end` contract; not gated by `logging_steps`). Keyword args are the current step's `trainer.metrics`: `reward_mean`, `reward_std`, `mean_completion_len`, `min_completion_len`, `max_completion_len`, `lr`, `generation_time_s`, `reward_time_s`, `rollout_wait_s`, `weight_sync_time_s`, `logprob_mismatch_mean`, `logprob_mismatch_max`, `clip_frac`, and one `<CallbackClassName>_time_s` per non-monitor callback (accumulated for the current step across every hook fired so far — a callback later in the list sees the current-step total for every callback before it). `step_time_s` is only present for `GRPOMonitor`, which runs after the timer is sealed; other callbacks see `trainer.metrics` without it. When `log_completions=True`, truncated `prompts` / `completions` / `rewards` lists are also passed. The built-in `GRPOMonitor` accumulates these values across every step and only emits a CSV / wandb row every `logging_steps` steps (see [Built-in GRPOMonitor](#built-in-grpomonitor)). |
 | `on_before_optimizer_step` | `(trainer)` | After gradient sync, before gradient clipping and `optimizer.step()`, so callbacks see unclipped gradients. |
 | `on_save` | `(trainer, step, path)` | After a checkpoint is saved. `path` is the checkpoint directory. |
 | `on_train_end` | `(trainer)` | After the final batch. |
