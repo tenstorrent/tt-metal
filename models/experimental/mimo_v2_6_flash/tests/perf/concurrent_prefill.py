@@ -116,8 +116,13 @@ def sampled(models, prompts, users, chunk, label, prefix, samples, rounds, pair)
     t0 = time.time()
     walls, host = rounds_from(0, prefix // chunk)
     t_prefix = time.time() - t0
+    say(
+        f"{label}: measured {t_prefix:.1f} s for positions 0 .. {prefix} ({len(walls)} rounds; last 8 rounds wall "
+        f"{1e3 * sum(walls[-8:]) / 8:.0f} ms, host {1e3 * sum(host[-8:]) / 8:.0f} ms)"
+    )
     points = [(prefix - 4 * chunk, sum(walls[-8:]) / 8, sum(host[-8:]) / 8)]
     for start in samples:
+        start = min(start, n - rounds * chunk)  # its rounds end inside the prompt
         for r, s in keys:
             skip_to(models[r], s, start, chunk, pair)
         w, h = rounds_from(start, rounds)
