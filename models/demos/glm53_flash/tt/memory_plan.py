@@ -61,6 +61,23 @@ def fixed_bytes_per_user(cfg, cols: int, layers=None) -> float:
     return n_kda * (rec + conv) + rings
 
 
+def kda_state_bytes_per_user(cfg, cols: int) -> float:
+    """One user's KDA carries on one chip (its H/cols heads): the recurrent [H/cols, K, V] fp32 + the conv taps
+    per KDA layer. Every chip of a mesh row holds these for EVERY user of the row (the batched state is [B, H/cols,
+    K, V]; the user partition splits the DSA caches, not the KDA heads), so a per-chip total is users_per_row x this,
+    and so is one KDA snapshot (``tt/kda_snapshot.py``): 34 x (16 x 128 x 128 x 4 + 3 x 6144 x 2) B = 35.2 MiB."""
+    n_kda = sum(1 for t in cfg.layer_types if t == "linear_attention") if cfg.layer_types else 34
+    h_local = cfg.kda_num_heads // cols
+    rec = h_local * cfg.kda_head_dim * cfg.kda_head_dim * 4
+    conv = (cfg.kda_conv_kernel - 1) * (3 * h_local * cfg.kda_head_dim) * 2
+    return n_kda * (rec + conv)
+
+
+def snapshot_bytes_per_chip(cfg, cols: int, users_per_row: int, entries: int) -> float:
+    """The KDA snapshot ring of the slot-level prefix cache (``entries`` per user slot) on one chip."""
+    return users_per_row * entries * kda_state_bytes_per_user(cfg, cols)
+
+
 def expert_bytes_per_chip(cfg, rows: int, cols: int, expert_bytes: float = BFP8_BYTES, layers=None) -> float:
     """The routed experts of the hybrid layout: E/cols experts, each I/rows wide, per MoE layer (the layers at or
     past ``first_k_dense_replace`` = 3 among ``layers``; every one of the config's when None)."""
@@ -142,6 +159,10 @@ class MemoryPlan:
     # waves (doc/mesh/row_ownership.md): every row runs W = wave_rows of its own chunk; the MoE gathers rows x W tokens
     # per chip, so the chunk working set is that of a rows x W global chunk: neutral at W = 2048 on the 8x4 (16 K)
     wave_rows: int = 2048
+    # the slot-level prefix cache's KDA snapshot ring: ``snapshot_entries`` per user slot, each one user's carries on
+    # this chip (``kda_state_bytes``); counted per chip for EVERY user of the row (``snapshot_bytes_per_chip``)
+    kda_state_bytes: float = 0.0
+    snapshot_entries: int = 0
 
     @classmethod
     def estimate(
@@ -157,6 +178,7 @@ class MemoryPlan:
         trace_mb: int = 512,
         dram_bytes: float = P150_DRAM_BYTES,
         layers=None,
+        snapshot_entries: int = 0,
     ) -> "MemoryPlan":
         """``layers``: the layer ids the instance builds (None = the whole config); the block tests' 4-layer models
         on 2 rows do not fit the full-depth estimate (the 2-row expert shards alone exceed a chip)."""
@@ -170,11 +192,22 @@ class MemoryPlan:
             partition,
             scratch_slot,
             trace_mb,
+            kda_state_bytes_per_user(cfg, cols),
+            int(snapshot_entries),
         )
 
     @classmethod
     def from_device(
-        cls, device, cfg, rows: int, cols: int, *, partition: bool, scratch_slot: bool = True, trace_mb: int = 512
+        cls,
+        device,
+        cfg,
+        rows: int,
+        cols: int,
+        *,
+        partition: bool,
+        scratch_slot: bool = True,
+        trace_mb: int = 512,
+        snapshot_entries: int = 0,
     ) -> "MemoryPlan":
         """After the weights are built and before the caches: the allocator's allocated bytes are the weights."""
         import ttnn
@@ -190,6 +223,8 @@ class MemoryPlan:
             partition,
             scratch_slot,
             trace_mb,
+            kda_state_bytes_per_user(cfg, cols),
+            int(snapshot_entries),
         )
 
     def slots_per_chip(self, users_per_row: int) -> int:
@@ -217,8 +252,29 @@ class MemoryPlan:
                 hi = mid
         return lo
 
+    def snapshot_bytes(self, users_per_row: int, entries: int | None = None) -> float:
+        """The KDA snapshot ring per chip (``entries`` per user slot; the plan's own count when None)."""
+        e = self.snapshot_entries if entries is None else int(entries)
+        return users_per_row * e * self.kda_state_bytes
+
     def bytes_for(self, users_per_row: int, isl: int) -> float:
-        return self.slots_per_chip(users_per_row) * (isl * self.cache_per_token + self.fixed_per_user)
+        return self.slots_per_chip(users_per_row) * (
+            isl * self.cache_per_token + self.fixed_per_user
+        ) + self.snapshot_bytes(users_per_row)
+
+    def spare(self, users_per_row: int, isl: int) -> float:
+        """Headroom left beside the caches (negative = does not fit)."""
+        return self.headroom(isl) - self.bytes_for(users_per_row, isl)
+
+    def max_snapshot_entries(self, users_per_row: int, isl: int, cap: int = 8) -> int:
+        """KDA snapshot entries per user slot the chip's spare DRAM allows at ``users_per_row x isl`` beyond the
+        plan's own count (0 when nothing fits; at most ``cap``)."""
+        if self.kda_state_bytes <= 0:
+            return 0
+        spare = self.spare(users_per_row, isl)
+        if spare <= 0:
+            return 0
+        return min(cap, int(spare // (users_per_row * self.kda_state_bytes)))
 
     def fits(self, users_per_row: int, isl: int) -> bool:
         return self.bytes_for(users_per_row, isl) <= self.headroom(isl)
@@ -226,10 +282,11 @@ class MemoryPlan:
     def max_isl(self, users_per_row: int, step: int = 16384) -> int:
         """The largest context (a multiple of ``step``) that fits ``users_per_row`` users per row."""
         slots = self.slots_per_chip(users_per_row)
+        ring = self.snapshot_bytes(users_per_row)
         lo, hi = 0, 1 << 24
         while hi - lo > step:
             mid = (lo + hi) // 2
-            if slots * (mid * self.cache_per_token + self.fixed_per_user) <= self.headroom(mid):
+            if slots * (mid * self.cache_per_token + self.fixed_per_user) + ring <= self.headroom(mid):
                 lo = mid
             else:
                 hi = mid
@@ -245,9 +302,13 @@ class MemoryPlan:
         return u
 
     def table(self, isls=(16384, 65536, 131072, 262144, 524288, 1048576)) -> str:
-        head = "| ISL | max users per row | users on the mesh | cache GiB per chip |\n|---|---|---|---|\n"
+        head = (
+            "| ISL | max users per row | users on the mesh | cache GiB per chip | KDA snapshots per slot (spare) |\n"
+            "|---|---|---|---|---|\n"
+        )
         rows = []
         for isl in isls:
             u = self.max_users_per_row(isl)
-            rows.append(f"| {isl} | {u} | {u * self.rows} | {self.bytes_for(u, isl) / GIB:.1f} |")
+            snaps = self.max_snapshot_entries(u, isl) if u else 0
+            rows.append(f"| {isl} | {u} | {u * self.rows} | {self.bytes_for(u, isl) / GIB:.1f} | {snaps} |")
         return head + "\n".join(rows)

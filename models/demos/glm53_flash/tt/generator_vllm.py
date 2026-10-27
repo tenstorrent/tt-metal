@@ -51,9 +51,19 @@ needs ``GLM53MeshModel.prefill_wave`` / ``prefill_traced_wave`` (the device side
 construction until it exists). Knobs: ``GLM53_VLLM_WAVE_ROWS`` (rows per mesh row per wave, 2048),
 ``GLM53_VLLM_SP_FALLBACK`` (1).
 
-Not supported in this draft (declared off): async decode overlap, prefix caching, stochastic device
-sampling (greedy argmax only: ``max_device_top_k = 1``; other rows sample on host from the logits),
-speculative decoding, multimodal inputs, lane-DP / standard DP (one engine = one mesh).
+Slot-level automatic prefix caching (``GLM53_VLLM_PREFIX_CACHING=1``, design ``doc/serving/prefix_caching.md``):
+``supports_prefix_caching`` lets vLLM admit a request with ``num_computed_tokens = N > 0`` (its block hashes,
+mm-aware, matched cached blocks); the adapter serves it only from a retained physical slot whose resident content
+equals the request's first ``N`` tokens (``SlotPrefixCache``) and which holds a KDA snapshot at or below ``N``
+(``tt/kda_snapshot.py``: taken at every 32-aligned decode crossing and at eager prefill chunk ends), restored
+before the chunk ``[snapshot, end)`` is prefilled there; otherwise the hit is downgraded to a prefill from 0 (vLLM's
+bookkeeping stays valid: the device ends in the state it expects). Knobs: ``GLM53_VLLM_APC_SNAPSHOTS`` (entries
+per slot; 0 = what the planner fits), ``GLM53_VLLM_APC_SNAPSHOT_STORE`` (``device`` ring / ``host`` copies),
+``GLM53_VLLM_APC_TAIL_SPLIT`` (eager prefills end on the prompt's last 32-boundary first).
+
+Not supported in this draft (declared off): async decode overlap, stochastic device sampling (greedy argmax
+only: ``max_device_top_k = 1``; other rows sample on host from the logits), speculative decoding, multimodal
+inputs, lane-DP / standard DP (one engine = one mesh).
 """
 
 from __future__ import annotations
@@ -70,6 +80,11 @@ import torch
 from loguru import logger
 
 from models.demos.glm53_flash.tt.vllm_config import (
+    APC_ENV,
+    APC_MAX_SNAPSHOTS,
+    APC_SNAPSHOT_STORE_ENV,
+    APC_SNAPSHOTS_ENV,
+    APC_TAIL_SPLIT_ENV,
     DEFAULT_BLOCK_SIZE,
     DEFAULT_DEVICE_PREFILL_CHUNK,
     DEFAULT_WAVE_ROWS,
@@ -80,6 +95,7 @@ from models.demos.glm53_flash.tt.vllm_config import (
     PrefillPlan,
     PrefillPlanner,
     ServingGeometry,
+    SlotPrefixCache,
     SlotTable,
     SPStep,
     WaveCall,
@@ -88,6 +104,8 @@ from models.demos.glm53_flash.tt.vllm_config import (
     WaveStep,
     greedy_rows,
     max_tokens_all_users,
+    mm_payload_missing,
+    mm_spans_of_row,
 )
 
 HF_ARCHITECTURES = ("Glm5NextForConditionalGeneration", "Glm5NextForCausalLM")
@@ -146,6 +164,16 @@ def _fabric_capability() -> dict | None:
 
 def _env_flag(name: str, default: str) -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _mm_payload_present(kwargs: dict) -> bool:
+    """Whether any prefill row carries multimodal tensors (the plugin's per-row lists hold None for text rows and
+    for items whose payload vLLM stripped as prefix-cached)."""
+    for field in ("pixel_values", "pixel_values_videos", "input_features"):
+        for row in kwargs.get(field) or ():
+            if row is not None and any(item is not None for item in row):
+                return True
+    return False
 
 
 DEFAULT_MESH_CACHE = "/home/ttuser/ashai/glm53/_cache/mesh"  # the model tests' tensorbin weight cache
@@ -281,7 +309,9 @@ class GLM53FlashForCausalLM:
     decode_input_update_contract = 1
 
     model_capabilities = {
-        "supports_prefix_caching": False,
+        # Slot-level APC (doc/serving/prefix_caching.md); off until device-validated. Read at import: the plugin
+        # snapshots the class attribute in check_and_update_config.
+        "supports_prefix_caching": _env_flag(APC_ENV, "0"),
         # Every decode reloads tokens / positions from the host (no resident token feedback in the mesh model's
         # decode step yet); the plugin then runs synchronous scheduling. Flip with the device-side feedback.
         "supports_async_decode": False,
@@ -299,7 +329,15 @@ class GLM53FlashForCausalLM:
     tt_supported_decode_batch_sizes: tuple[int, ...] = ()
     _HYBRID_KV_CACHE_GROUPS_ENABLED = False
 
-    def __init__(self, model, geometry: ServingGeometry, *, pad_token_id: int | None = None, **vllm_kwargs):
+    def __init__(
+        self,
+        model,
+        geometry: ServingGeometry,
+        *,
+        pad_token_id: int | None = None,
+        prefix_cache_entries: int | None = None,
+        **vllm_kwargs,
+    ):
         # ``**vllm_kwargs`` (``vllm_config`` / ``prefix``) is never used: the plugin constructs the adapter through
         # ``initialize_vllm_model``. vLLM >= 0.30 inspects the registered class with ``is_vllm_model`` (an ``__init__``
         # that accepts ``vllm_config``, ``embed_input_ids``, ``forward(input_ids, positions)``) before it admits the
@@ -330,6 +368,14 @@ class GLM53FlashForCausalLM:
         self._perf_steps = 0
         self._perf_s = 0.0
         self._perf_log_every = max(1, int(os.environ.get("GLM53_VLLM_PERF_LOG_EVERY", "32")))
+        # slot-level prefix cache: the resident-content records + the KDA snapshot policy (None = APC off); the
+        # model's snapshot store (``allocate_kda_snapshots``) must exist when entries > 0
+        self.apc: SlotPrefixCache | None = None
+        self.apc_tail_split = _env_flag(APC_TAIL_SPLIT_ENV, "0")
+        if prefix_cache_entries is not None:
+            self.apc = SlotPrefixCache(geometry, int(prefix_cache_entries))
+            if self.apc.entries and not callable(getattr(model, "snapshot_kda", None)):
+                raise NotImplementedError("the prefix cache needs a mesh model with snapshot_kda / restore_kda")
 
     # ================================================================================= construction
     @classmethod
@@ -429,8 +475,45 @@ class GLM53FlashForCausalLM:
         )
         logger.info(f"GLM53 vLLM: mesh model built in {time.perf_counter() - t0:.0f} s ({len(layers)} layers)")
         geometry = dataclasses.replace(geometry, traced_prefill_lengths=tuple(model.trace_prefill_lengths()))
+        entries = None
+        if cls.model_capabilities.get("supports_prefix_caching"):
+            entries, store = cls._prefix_cache_plan(plan, users_per_row, int(max_seq_len))
+            if entries:
+                model.allocate_kda_snapshots(entries, store)  # before any capture: a persistent ring
+            if store == "device" and entries:
+                geometry.check_memory_plan(dataclasses.replace(plan, snapshot_entries=entries))
         _install_step_profiler()
-        return cls(model, geometry, pad_token_id=cfg.pad_token_id)
+        return cls(model, geometry, pad_token_id=cfg.pad_token_id, prefix_cache_entries=entries)
+
+    @staticmethod
+    def _prefix_cache_plan(plan, users_per_row: int, max_seq_len: int) -> tuple[int, str]:
+        """``(entries per slot, store)`` of the KDA snapshot ring: ``GLM53_VLLM_APC_SNAPSHOTS`` (0 / unset = as many
+        as the planner's spare DRAM fits, at most ``APC_MAX_SNAPSHOTS``) in the ``GLM53_VLLM_APC_SNAPSHOT_STORE``
+        (``device``, the default; ``host``: torch copies, no DRAM). A device ring that fits nothing falls back to
+        one host entry per slot (the multi-turn hit still works, over PCIe) with a warning."""
+        want = int(os.environ.get(APC_SNAPSHOTS_ENV, "0"))
+        store = os.environ.get(APC_SNAPSHOT_STORE_ENV, "device").strip().lower()
+        fit = plan.max_snapshot_entries(users_per_row, max_seq_len, cap=APC_MAX_SNAPSHOTS)
+        if store == "host":
+            entries = want or 1
+        else:
+            entries = min(want, fit) if want else fit
+            if want and entries < want:
+                logger.warning(
+                    f"GLM53 vLLM APC: {want} snapshot entries requested, the planner fits {fit}: using {entries}"
+                )
+            if entries == 0:
+                store, entries = "host", 1
+                logger.warning(
+                    "GLM53 vLLM APC: no DRAM for a KDA snapshot ring at this profile (planner spare "
+                    f"{plan.spare(users_per_row, max_seq_len) / 2**20:.0f} MiB per chip, one entry = "
+                    f"{plan.snapshot_bytes(users_per_row, 1) / 2**20:.0f} MiB per chip): host store, 1 entry per slot"
+                )
+        logger.info(
+            f"GLM53 vLLM APC: {entries} KDA snapshot entries per slot in the {store} store "
+            f"({plan.snapshot_bytes(users_per_row, entries) / 2**20:.0f} MiB per chip when on device)"
+        )
+        return entries, store
 
     @staticmethod
     def _snapshot_dir(hf_config, default_snapshot_dir) -> Path:
@@ -710,7 +793,7 @@ class GLM53FlashForCausalLM:
         prompt_lens[i])`` is prefilled into the physical slot of logical slot ``empty_slots[i]`` (allocated here when
         the chunk starts at 0). Prompts go one at a time through the mesh (the sequence-parallel prefill uses every
         chip). Returns ``logits [B, 1, vocab]`` fp32 (host sampling) or ``(tokens [B, 1], None)`` (device greedy)."""
-        if kwargs.get("pixel_values") is not None or kwargs.get("image_grid_thw") is not None:
+        if _mm_payload_present(kwargs):
             raise NotImplementedError("multimodal prefill is not wired through the vLLM adapter yet")
         B = int(tokens.shape[0])
         if prompt_lens is None:
@@ -733,27 +816,62 @@ class GLM53FlashForCausalLM:
         out_logits = None if wants_tokens else torch.zeros(B, 1, self.vocab_size, dtype=torch.float32)
         # placement / contiguity of every row first (a refused row leaves no half-run step behind)
         rows_of: dict[int, int] = {}  # logical slot -> row of the call
-        items = []  # (i, logical, state, start, end, ids)
+        items = []  # (i, logical, state, start, end, ids, spans): start = the position the device run begins at
+        apc = self.apc
         for i in range(B):
             logical = int(empty_slots[i])
             start, end = starts[i], ends[i]
             if page_table is not None:
                 self.blocks.check_row(page_table[i], end)
             self.prefill_planner.check_range(start, end)
+            spans = mm_spans_of_row(kwargs, i) if apc is not None else []
+            state = self.slots.physical(logical)
             if start == 0:
-                state = self.slots.allocate(logical)
-            else:
-                state = self.slots.physical(logical)
-                if state is None or state.phase != "prefill" or state.prefilled_to != start:
-                    raise RuntimeError(
-                        f"slot {logical}: chunk [{start}, {end}) is not contiguous with the prefilled prefix "
-                        f"({None if state is None else state.prefilled_to}); chunks must follow each other"
+                state = self._allocate_slot(logical)
+            elif state is not None and state.phase == "prefill" and state.prefilled_to == start:
+                pass  # a chunked continuation of this slot's own prompt
+            elif state is None and apc is not None:
+                # a request vLLM admitted with num_computed_tokens = start (its first `start` tokens hashed to cached
+                # blocks): served from the retained slot holding exactly that content + a KDA snapshot at or below
+                # `start`, else downgraded to a prefill from 0 in a fresh slot (doc/serving/prefix_caching.md s.3)
+                hit = apc.lookup(tokens[i], spans, start)
+                if hit is not None:
+                    state = self.slots.allocate(logical, at=(hit.row, hit.user))
+                    apc.begin(hit.row, hit.user, hit.position)
+                    self.model.restore_kda(state.user, hit.entry, hit.position)
+                    apc.stats["hits"] += 1
+                    logger.info(
+                        f"[glm53-apc] hit: slot {logical} -> user {state.user} (row {state.row}) holds [0, {start}), "
+                        f"snapshot at {hit.position}: prefilling [{hit.position}, {end}) ({apc.stats})"
                     )
+                    start = hit.position
+                else:
+                    missing = mm_payload_missing(kwargs, i, start)
+                    if missing:
+                        apc.stats["refused_mm"] += 1
+                        raise RuntimeError(
+                            f"slot {logical}: prefix-cache hit of {start} tokens cannot be served (no retained slot "
+                            f"holds that content) and multimodal items {missing} inside it arrived without their "
+                            "pixels (vLLM strips fully cached items): the prefill from 0 is impossible. Needs the "
+                            "plugin's hit confirmation hook (doc/serving/prefix_caching.md s.5) or APC off"
+                        )
+                    state = self._allocate_slot(logical)
+                    apc.stats["downgraded"] += 1
+                    logger.info(
+                        f"[glm53-apc] miss: slot {logical}: no retained slot holds the {start}-token prefix; "
+                        f"prefilling [0, {end}) in user {state.user} (row {state.row}) ({apc.stats})"
+                    )
+                    start = 0
+            else:
+                raise RuntimeError(
+                    f"slot {logical}: chunk [{start}, {end}) is not contiguous with the prefilled prefix "
+                    f"({None if state is None else state.prefilled_to}); chunks must follow each other"
+                )
             ids = tokens[i, start:end].reshape(-1).to(torch.long)
             if int(ids.numel()) != end - start:
                 raise ValueError(f"row {i}: tokens hold {ids.numel()} of the {end - start} chunk tokens")
             rows_of[logical] = i
-            items.append((i, logical, state, start, end, ids))
+            items.append((i, logical, state, start, end, ids, spans))
 
         def record(i, state, end, first, last_logits):
             state.prefilled_to = end
@@ -764,11 +882,21 @@ class GLM53FlashForCausalLM:
             else:
                 out_logits[i, 0] = last_logits
 
+        def on_chunk(state):  # a KDA snapshot at every eager chunk end (the ring policy decides which to keep)
+            if apc is None:
+                return None
+            return lambda pos: self._snapshot(state, pos, "prefill")
+
+        split_tail = apc is not None and self.apc_tail_split
         if not self.geometry.rows_independent:
-            for i, logical, state, start, end, ids in items:
-                plan = self.prefill_planner.plan(start, end, enable_trace=enable_trace)
+            for i, logical, state, start, end, ids, spans in items:
+                plan = self.prefill_planner.plan(start, end, enable_trace=enable_trace, split_tail=split_tail)
                 t0 = time.perf_counter()
-                first, last_logits = self._prefill_one(ids, state.user, plan, want_logits=not wants_tokens)
+                first, last_logits = self._prefill_one(
+                    ids, state.user, plan, want_logits=not wants_tokens, on_chunk=on_chunk(state)
+                )
+                if apc is not None:
+                    apc.record_prefill(state.row, state.user, start, ids, spans)
                 record(i, state, end, first, last_logits)
                 logger.info(
                     f"GLM53 vLLM: prefill slot {logical} -> user {state.user} (row {state.row}) [{start}, {end}) via "
@@ -776,9 +904,12 @@ class GLM53FlashForCausalLM:
                     f"chunk-end token {first}"
                 )
         else:
-            by_logical = {logical: (i, state, start, end, ids) for i, logical, state, start, end, ids in items}
+            by_logical = {logical: (i, state, start, end, ids) for i, logical, state, start, end, ids, _ in items}
+            if apc is not None:  # the wave path records content; its snapshots are the decode crossings only
+                for _, _, state, start, _, ids, spans in items:
+                    apc.record_prefill(state.row, state.user, start, ids, spans)
             steps = self.waves.plan(
-                [(logical, start, end) for _, logical, _, start, end, _ in items], enable_trace=enable_trace
+                [(logical, start, end) for _, logical, _, start, end, _, _ in items], enable_trace=enable_trace
             )
             for step in steps:
                 t0 = time.perf_counter()
@@ -833,14 +964,17 @@ class GLM53FlashForCausalLM:
             out[m.row] = (int(first), logits if want_logits else None)
         return out
 
-    def _prefill_one(self, ids: torch.Tensor, user: int, plan, *, want_logits: bool):
+    def _prefill_one(self, ids: torch.Tensor, user: int, plan, *, want_logits: bool, on_chunk=None):
         """Run ``plan`` for one prompt chunk into physical user ``user``; returns ``(first greedy token, last-token
-        logits [vocab] fp32 or None)``. TODO(device): confirm the traced path's tile read and the eager owner-row
+        logits [vocab] fp32 or None)``. ``on_chunk(end)`` is called after every device call (the prefix cache's
+        chunk-end snapshots). TODO(device): confirm the traced path's tile read and the eager owner-row
         read on the 8x4 (both follow tests/test_mesh_model.py / demo/text_demo.py)."""
         if plan.kind == "traced":
             res = self.model.prefill_traced(ids, user=user)
             first = int(self.model.first_token(res))
             logits = self._traced_last_logits(res) if want_logits else None
+            if on_chunk is not None:
+                on_chunk(plan.end)
             return first, logits
         out = None
         mem_log = os.environ.get(MEM_LOG_ENV, "0") == "1"
@@ -849,6 +983,8 @@ class GLM53FlashForCausalLM:
                 self._free(out[0])
                 self._free(out[1])
             out = self.model.prefill(ids[s0 - plan.start : e - plan.start], user=user, start=s0)
+            if on_chunk is not None:
+                on_chunk(e)
             if mem_log:
                 logger.info(
                     f"GLM53 vLLM mem: user {user} chunk [{s0}, {e}) done: {_dram_line(_mesh_device_of(self.model))}"
@@ -964,7 +1100,8 @@ class GLM53FlashForCausalLM:
                     f"decode step while slots {busy} are mid-prefill: run with decode_interleave_enabled=false until "
                     "the mesh model's decode step takes an active-slot mask"
                 )
-            ids_feed, pos_feed = self.slots.device_feed(feed_tokens, feed_positions)
+            park = self.apc.park_positions() if self.apc is not None else None
+            ids_feed, pos_feed = self.slots.device_feed(feed_tokens, feed_positions, park=park)
             t0 = time.perf_counter()
             # one call per step: with GLM53_DECODE_PACKED_INPUTS=1 the mesh model uploads ONE packed tensor (ids +
             # positions + sparse metadata, tt/packed_inputs.py) instead of the per-field refreshes
@@ -992,6 +1129,12 @@ class GLM53FlashForCausalLM:
                 state = self.slots.physical(i)
                 state.position = feed_positions[i] + 1
                 state.phase = "decode"
+                if self.apc is not None:
+                    self.apc.record_decode(state.row, state.user, feed_positions[i], feed_tokens[i])
+                    if (
+                        state.position % TILE == 0
+                    ):  # the state now sits on a block boundary: the multi-turn hit position
+                        self._snapshot(state, state.position, "decode")
         except Exception:
             self.slots._phys = snapshot
             raise
@@ -1068,9 +1211,13 @@ class GLM53FlashForCausalLM:
         """The request in logical ``slot`` finished: free its physical slot (the next prompt's ``start == 0``
         prefill resets the KDA state and refills the cache; idle slots are parked at position 0)."""
         try:
+            state = self.slots.physical(int(slot))
             self.slots.release(int(slot))
         except ValueError:
             logger.warning(f"GLM53 vLLM: release_request({slot}) outside the slot range")
+            return
+        if self.apc is not None and state is not None:
+            self.apc.release(state.row, state.user)  # the content stays resident (parked at its end) until reused
 
     def note_state_slots_moved(self, moves) -> None:
         """The plugin's ``old -> new`` notification of the gather ``decode_forward`` already applied through
@@ -1101,10 +1248,49 @@ class GLM53FlashForCausalLM:
         rel = getattr(self.model, "release_prefill_traces", None)
         if rel is not None:
             rel()
+        store = getattr(self.model, "kda_snapshots", None)
+        if store is not None and callable(getattr(store, "release", None)):
+            store.release()
         self._decode_warmup_complete = False
         self.tt_supported_decode_batch_sizes = ()
 
+    # ================================================================================= prefix cache
+    def confirm_prefix_cache_hit(self, prompt_token_ids, mm_items=(), num_computed_tokens: int = 0) -> int:
+        """The tokens of a cached prefix the adapter will honour (the plugin proposal of
+        doc/serving/prefix_caching.md s.5 calls this from the scheduler before it commits vLLM's hit): the snapshot
+        position of the best retained slot holding ``prompt_token_ids[:num_computed_tokens]`` (``mm_items``:
+        ``(identifier, offset, length, modality)`` per multimodal item), 0 when nothing resident serves it."""
+        if self.apc is None or num_computed_tokens <= 0:
+            return 0
+        from models.demos.glm53_flash.tt.vllm_config import MMSpan
+
+        spans = [
+            MMSpan(int(off), int(ln), "video" if str(mod).startswith("video") else str(mod or "image"), ident)
+            for ident, off, ln, mod in mm_items
+        ]
+        ids = torch.as_tensor(list(prompt_token_ids), dtype=torch.int32)
+        hit = self.apc.lookup(ids, spans, int(num_computed_tokens))
+        return 0 if hit is None else int(hit.position)
+
     # ================================================================================= helpers
+    def _allocate_slot(self, logical: int):
+        """A fresh prompt's physical slot: the column / row balance, then (APC) a slot without retained content
+        before the least recently used resident prefix; a logical slot still mapped (never released) retains first."""
+        if self.apc is None:
+            return self.slots.allocate(logical)
+        old = self.slots.physical(logical)
+        if old is not None:
+            self.apc.release(old.row, old.user)
+        state = self.slots.allocate(logical, slot_rank=self.apc.slot_rank)
+        self.apc.begin(state.row, state.user, 0)
+        return state
+
+    def _snapshot(self, state, position: int, kind: str) -> None:
+        """Snapshot slot ``state``'s KDA carries at ``position`` when the ring policy grants an entry."""
+        entry = self.apc.plan_snapshot(state.row, state.user, position, kind)
+        if entry is not None:
+            self.model.snapshot_kda(state.user, entry)
+
     def _perf(self, t0: float, live: int) -> None:
         self._perf_steps += 1
         self._perf_s += time.perf_counter() - t0

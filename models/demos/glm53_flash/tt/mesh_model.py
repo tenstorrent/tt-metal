@@ -308,6 +308,9 @@ class GLM53MeshModel:
         )
         self.wave_traces: dict[int, WaveTraceInputs] = {}  # per-row length -> the captured wave
         self.prefill_traces: dict[int, PrefillTraceInputs] = {}
+        # the slot-level prefix cache's KDA snapshot store (tt/kda_snapshot.py): allocated by the served adapter
+        # through ``allocate_kda_snapshots`` before any capture; None = no snapshots
+        self.kda_snapshots = None
 
     # ------------------------------------------------------------------ inputs
     def ids_to_device(self, ids: torch.Tensor) -> ttnn.Tensor:
@@ -795,6 +798,49 @@ class GLM53MeshModel:
 
     def replay(self, trace_id, cq_id: int = 0, blocking: bool = True):
         ttnn.execute_trace(self.device, trace_id, cq_id=cq_id, blocking=blocking)
+
+    # ------------------------------------------------------------- prefix cache (KDA snapshots)
+    def allocate_kda_snapshots(self, entries: int, store: str = "device"):
+        """The KDA snapshot store of the served prefix cache (``doc/serving/prefix_caching.md``): ``entries`` per
+        user slot in a DRAM ring (``store="device"``: allocated here, before any trace capture) or as host copies
+        (``"host"``: no device memory). Returns the store (``save(user, entry)`` / ``load(user, entry)``)."""
+        from models.demos.glm53_flash.tt.kda_snapshot import DeviceKdaSnapshotRing, HostKdaSnapshotStore
+
+        if self.kda_snapshots is not None:
+            raise RuntimeError("the KDA snapshot store is already allocated")
+        if store == "device":
+            if self.mesh.allocations_frozen[0]:
+                raise RuntimeError("the KDA snapshot ring must be allocated before the first trace capture")
+            self.kda_snapshots = DeviceKdaSnapshotRing(self, entries)
+        elif store == "host":
+            self.kda_snapshots = HostKdaSnapshotStore(self, entries)
+        else:
+            raise ValueError(f"snapshot store {store!r}: expected 'device' or 'host'")
+        logger.info(
+            f"mesh model: KDA snapshot store {store}, {entries} entries per user slot ({self.max_batch} slots per row)"
+        )
+        return self.kda_snapshots
+
+    def snapshot_kda(self, user: int, entry: int) -> None:
+        """Copy slot ``user``'s live KDA carries into snapshot ``entry`` (between replays, never traced)."""
+        if self.kda_snapshots is None:
+            raise RuntimeError("allocate_kda_snapshots first")
+        self.kda_snapshots.save(user, entry)
+
+    def restore_kda(self, user: int, entry: int, position: int) -> None:
+        """Snapshot ``entry`` -> slot ``user``'s live carries, and re-arm the chunked prefill at ``position`` (the
+        next chunk of that slot starts there: ``FunctionalDecoder.next_start``)."""
+        if self.kda_snapshots is None:
+            raise RuntimeError("allocate_kda_snapshots first")
+        self.kda_snapshots.load(user, entry)
+        self.rewind_user(user, position)
+
+    def rewind_user(self, user: int, position: int) -> None:
+        """Set every layer's chunked-prefill cursor of slot ``user`` to ``position`` (a 32-multiple)."""
+        if position < 0 or position % 32:
+            raise ValueError(f"rewind position {position} must be a non-negative multiple of 32")
+        for dec in self.layers:
+            dec.next_start[user] = int(position)
 
     def reset_kda_states(self):
         for dec in self.layers:

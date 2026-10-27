@@ -236,16 +236,28 @@ class SlotTable:
         return [i for i, s in enumerate(self._phys) if s is not None and s.phase == "prefill"]
 
     # ------------------------------------------------------------------ placement
-    def allocate(self, logical: int) -> SlotState:
+    def allocate(self, logical: int, *, at: tuple[int, int] | None = None, slot_rank=None) -> SlotState:
         """Give ``logical`` a physical slot for a new prompt. A logical slot the plugin hands out again
         (``empty_slots`` of a prefill) is released first: the plugin reuses a slot only after its previous
-        request finished, and a resumed request re-prefills from position 0."""
+        request finished, and a resumed request re-prefills from position 0.
+        ``at``: the exact free ``(row, user)`` to take (a prefix-cache hit continues the slot holding the prefix:
+        ``SlotPrefixCache``); ``slot_rank(row, user) -> int``: a tie-break after the column / row balance (0 = a slot
+        without retained content, higher = more recently used retained content, so an unused slot is consumed before a
+        resident prefix is dropped)."""
         self._check_logical(logical)
         if self._phys[logical] is not None:
             self.release(logical)
         col_loads, row_loads = self.column_loads(), self.row_loads()
         best = None  # (key, row, user)
-        if self.g.rows_independent and self.g.wave_affinity == "user":
+        rank = slot_rank or (lambda row, user: 0)
+        if at is not None:
+            row, user = int(at[0]), int(at[1])
+            if (row, user) in self._occupied:
+                raise RuntimeError(f"physical slot {(row, user)} is live; a prefix-cache hit cannot take it")
+            if not (0 <= row < self.g.rows and 0 <= user < self.g.users_per_row):
+                raise ValueError(f"physical slot {(row, user)} outside the {self.g.rows}x{self.g.users_per_row} slots")
+            best = (None, row, user)
+        elif self.g.rows_independent and self.g.wave_affinity == "user":
             # wave-affine: the first slot index (column-interleaved order) with a free row, its lowest free row
             for user in self.g.wave_user_order():
                 for row in range(self.g.rows):
@@ -261,10 +273,9 @@ class SlotTable:
                 for row in rows:
                     for user in self.g.users_of_column(col):
                         if (row, user) not in self._occupied:
-                            key = (col_loads[col], row_loads[row], col, row, user)
+                            key = (col_loads[col], row_loads[row], rank(row, user), col, row, user)
                             if best is None or key < best[0]:
                                 best = (key, row, user)
-                            break
         if best is None:
             raise RuntimeError(
                 f"no free physical slot for a new request: {len(self.live())} of {self.n} logical slots live, "
@@ -317,15 +328,24 @@ class SlotTable:
         self.apply_remap(remap)
 
     # ------------------------------------------------------------------ device vectors
-    def device_feed(self, tokens: dict[int, int], positions: dict[int, int], park_position: int = 0):
+    def device_feed(
+        self, tokens: dict[int, int], positions: dict[int, int], park_position: int = 0, park: dict | None = None
+    ):
         """Flat ``[rows * users_per_row]`` token and position lists for ``load_ids`` / ``set_positions``:
         live logical slots at their physical indices (every row's copy when the rows replicate), idle
         physical slots parked at ``(pad_token_id, park_position)``. ``tokens`` / ``positions`` are keyed by
-        logical slot and must agree."""
+        logical slot and must agree. ``park``: ``{(row, user): position}`` of idle slots that keep resident
+        prefix content (``SlotPrefixCache``): parked at their own end, so the idle decode step writes its
+        latent row / pool past the content instead of over row 0 (every replica row when the rows replicate)."""
         if set(tokens) != set(positions):
             raise ValueError(f"tokens for slots {sorted(tokens)} but positions for {sorted(positions)}")
         ids = [self.g.pad_token_id] * self.g.physical_slots
         pos = [park_position] * self.g.physical_slots
+        for (row, user), p in (park or {}).items():
+            if not (0 <= p < self.g.max_seq_len):
+                raise ValueError(f"park position {p} of slot {(row, user)} outside [0, {self.g.max_seq_len})")
+            for r in [row] if self.g.rows_independent else range(self.g.rows):
+                pos[self.g.flat(r, user)] = int(p)
         for logical, tok in tokens.items():
             p = positions[logical]
             if not (0 <= p < self.g.max_seq_len):
@@ -430,14 +450,23 @@ class PrefillPlanner:
         return T if T is not None and self._traced(T) else None
 
     @staticmethod
-    def walk(start: int, end: int, chunk: int) -> tuple[tuple[int, int], ...]:
-        """``[start, end)`` in consecutive device chunks of at most ``chunk`` tokens."""
+    def walk(start: int, end: int, chunk: int, *, split_tail: bool = False) -> tuple[tuple[int, int], ...]:
+        """``[start, end)`` in consecutive device chunks of at most ``chunk`` tokens. ``split_tail``: when ``end``
+        is not a 32-multiple, the last chunk ends on the prompt's last 32-boundary and the remaining < 32 tokens form
+        one more chunk, so the KDA state at that boundary can be snapshotted (``SlotPrefixCache``: a multi-turn
+        request whose response never crossed a 32-boundary hits at exactly that position)."""
         out = []
         s0 = start
         while s0 < end:
             e = min(end, s0 + chunk)
             out.append((s0, e))
             s0 = e
+        if split_tail and end % TILE and out:
+            s_last, _ = out[-1]
+            cut = end // TILE * TILE
+            if cut > s_last:
+                out[-1] = (s_last, cut)
+                out.append((cut, end))
         return tuple(out)
 
     def check_range(self, start: int, end: int) -> tuple[int, int]:
@@ -450,14 +479,14 @@ class PrefillPlanner:
             raise ValueError(f"prefill chunk end {end} exceeds max_seq_len {self.g.max_seq_len}")
         return start, end
 
-    def plan(self, start: int, end: int, *, enable_trace: bool = True) -> PrefillPlan:
+    def plan(self, start: int, end: int, *, enable_trace: bool = True, split_tail: bool = False) -> PrefillPlan:
         start, end = self.check_range(start, end)
         n = end - start
         if start == 0 and enable_trace:
             T = self.captured_length(n)
             if T is not None:
                 return PrefillPlan("traced", ((0, end),), T)
-        return PrefillPlan("eager", self.walk(start, end, self.g.device_prefill_chunk))
+        return PrefillPlan("eager", self.walk(start, end, self.g.device_prefill_chunk, split_tail=split_tail))
 
 
 # ------------------------------------------------------------------------------------------- waves
@@ -637,3 +666,315 @@ class DecodeRowMap:
 
     def live_rows(self) -> list[int]:
         return [i for i, v in enumerate(self.read_index) if v >= 0]
+
+
+# ------------------------------------------------------------------------------------ prefix cache
+SNAPSHOT_KINDS = ("decode", "prefill")
+APC_ENV = (
+    "GLM53_VLLM_PREFIX_CACHING"  # "1": declare supports_prefix_caching (slot-level APC, doc/serving/prefix_caching.md)
+)
+APC_SNAPSHOTS_ENV = "GLM53_VLLM_APC_SNAPSHOTS"  # KDA snapshot entries per user slot (0 = planner's fit, capped)
+APC_SNAPSHOT_STORE_ENV = "GLM53_VLLM_APC_SNAPSHOT_STORE"  # device (DRAM ring) | host (torch copies)
+APC_TAIL_SPLIT_ENV = "GLM53_VLLM_APC_TAIL_SPLIT"  # "1": eager prefills snapshot the prompt's last 32-boundary
+APC_MAX_SNAPSHOTS = 8
+
+
+@dataclass(frozen=True)
+class MMSpan:
+    """One multimodal item's placeholder run in a prompt: ``[offset, offset + length)`` of ``kind`` (image / video /
+    audio) and vLLM's content hash ``identifier`` when the plugin forwards it (``mm_identifiers``; the proposal in
+    doc/serving/prefix_caching.md), else None. Two spans match only with equal, known identifiers: the token ids of
+    an image run are all ``image_token_id``, so the ids alone cannot tell two images apart."""
+
+    offset: int
+    length: int
+    kind: str = "image"
+    identifier: str | None = None
+
+    @property
+    def end(self) -> int:
+        return self.offset + self.length
+
+    def intersects(self, n: int) -> bool:
+        """Whether any placeholder of the span lies in ``[0, n)``."""
+        return self.offset < n and self.length > 0
+
+    def same_content(self, other: "MMSpan") -> bool:
+        return (
+            self.offset == other.offset
+            and self.length == other.length
+            and self.kind == other.kind
+            and self.identifier is not None
+            and self.identifier == other.identifier
+        )
+
+
+@dataclass(frozen=True)
+class PrefixHit:
+    """A served prefix-cache hit: continue in physical slot ``(row, user)`` from ``position`` (the KDA snapshot
+    ``entry`` restored there); the request's tokens ``[position, end)`` are prefilled."""
+
+    row: int
+    user: int
+    position: int
+    entry: int
+
+
+class SlotContent:
+    """What one physical slot ``(row, user)`` holds on device: the token ids it consumed (prefilled or decoded),
+    the multimodal spans among them, the positions at which a KDA state snapshot exists (``snapshots``: position
+    -> ring entry), whether a request is live in it, and when it was last used (the retention LRU). The latent
+    pages / pooled index are valid for ``[0, length)``; the live KDA state is at ``length`` only while the slot is
+    live or parked (the idle decode step advances every slot's KDA state, which is why the snapshots exist)."""
+
+    def __init__(self, row: int, user: int, max_seq_len: int):
+        self.row, self.user = row, user
+        self.tokens = torch.zeros(max_seq_len, dtype=torch.int32)
+        self.length = 0
+        self.mm: list[MMSpan] = []
+        self.snapshots: dict[int, int] = {}
+        self.live = False
+        self.last_used = 0
+
+    @property
+    def key(self) -> tuple[int, int]:
+        return (self.row, self.user)
+
+    @property
+    def retained(self) -> bool:
+        return not self.live and self.length > 0
+
+    def clear(self) -> None:
+        self.length = 0
+        self.mm = []
+        self.snapshots = {}
+
+    def truncate(self, n: int) -> None:
+        """Keep ``[0, n)``: the content a prefix-cache hit continues from (the snapshot at the hit position stays;
+        later snapshots and the spans past ``n`` are dropped; a span straddling ``n`` is dropped too: the resumed
+        prefill scatters its features again)."""
+        n = int(n)
+        if n >= self.length:
+            return
+        self.length = n
+        self.mm = [sp for sp in self.mm if sp.end <= n]
+        self.snapshots = {pos: e for pos, e in self.snapshots.items() if pos <= n}
+
+    def write(self, start: int, ids: torch.Tensor) -> None:
+        ids = torch.as_tensor(ids).reshape(-1).to(torch.int32)
+        n = int(ids.numel())
+        if n == 0:
+            return
+        if start + n > self.tokens.numel():
+            raise ValueError(f"slot {self.key}: content [{start}, {start + n}) exceeds {self.tokens.numel()} positions")
+        self.tokens[start : start + n] = ids
+        self.length = max(self.length, start + n) if start <= self.length else start + n
+
+    def matches(self, ids: torch.Tensor, spans: Sequence[MMSpan], n: int) -> bool:
+        """Whether this slot's content equals ``ids[:n]`` with compatible multimodal spans inside ``[0, n)``."""
+        n = int(n)
+        if n <= 0 or self.length < n:
+            return False
+        req = torch.as_tensor(ids).reshape(-1)[:n].to(torch.int32)
+        if int(req.numel()) < n or not torch.equal(self.tokens[:n], req):
+            return False
+        mine = [sp for sp in self.mm if sp.intersects(n)]
+        theirs = [sp for sp in spans if sp.intersects(n)]
+        if len(mine) != len(theirs):
+            return False
+        return all(
+            a.same_content(b)
+            for a, b in zip(sorted(mine, key=lambda s: s.offset), sorted(theirs, key=lambda s: s.offset))
+        )
+
+    def best_snapshot(self, n: int) -> tuple[int, int] | None:
+        """``(position, entry)`` of the highest snapshot at or below ``n`` (positive positions only)."""
+        best = None
+        for pos, e in self.snapshots.items():
+            if 0 < pos <= n and (best is None or pos > best[0]):
+                best = (pos, e)
+        return best
+
+
+class SlotPrefixCache:
+    """Slot-level automatic prefix caching (doc/serving/prefix_caching.md): the host record of every physical
+    slot's resident content and KDA snapshots, the hit decision for a request vLLM admitted with
+    ``num_computed_tokens = n > 0``, the retention LRU, and the snapshot-ring policy.
+
+    Ring policy (``entries`` per user slot, ``plan_snapshot``): entry 0 rolls with the decode (overwritten at every
+    32-aligned crossing: the multi-turn hit lands exactly there), entries 1.. hold prefill-time positions (device
+    chunk ends, the tail split), evicting the lowest position when full; with one entry everything shares it.
+    A hit continues from the highest snapshot at or below ``n`` (``PrefixHit.position``); the tokens between it
+    and ``n`` are prefilled again (their latent rows are rewritten; the result is what a prefill from 0 gives).
+    """
+
+    def __init__(self, geometry: ServingGeometry, entries: int):
+        self.g = geometry
+        self.entries = int(entries)
+        if self.entries < 0:
+            raise ValueError(f"snapshot entries {entries} < 0")
+        self._content: dict[tuple[int, int], SlotContent] = {}
+        self._tick = 0
+        self.stats = {"hits": 0, "downgraded": 0, "refused_mm": 0, "snapshots": 0, "retained_evicted": 0}
+
+    # ------------------------------------------------------------------ records
+    def content(self, row: int, user: int) -> SlotContent:
+        key = (int(row), int(user))
+        c = self._content.get(key)
+        if c is None:
+            c = self._content[key] = SlotContent(key[0], key[1], self.g.max_seq_len)
+        return c
+
+    def _touch(self, c: SlotContent) -> None:
+        self._tick += 1
+        c.last_used = self._tick
+
+    def begin(self, row: int, user: int, start: int) -> SlotContent:
+        """A request takes the slot: a fresh prompt (``start == 0``: the resident content is dropped) or a served
+        hit (``start > 0``: the content is kept up to ``start``). Pins the slot."""
+        c = self.content(row, user)
+        if start == 0:
+            if c.retained:
+                self.stats["retained_evicted"] += 1
+            c.clear()
+        else:
+            c.truncate(start)
+        c.live = True
+        self._touch(c)
+        return c
+
+    def record_prefill(self, row: int, user: int, start: int, ids: torch.Tensor, spans: Sequence[MMSpan] = ()) -> None:
+        c = self.content(row, user)
+        c.write(start, ids)
+        end = start + int(torch.as_tensor(ids).reshape(-1).numel())
+        for sp in spans:
+            if sp.offset < end and sp.end > start and all(sp.offset != m.offset for m in c.mm):
+                c.mm.append(sp)
+
+    def record_decode(self, row: int, user: int, position: int, token: int) -> None:
+        """The decode step consumed ``token`` at ``position``: the slot's content grows by one."""
+        c = self.content(row, user)
+        if position < c.length:  # the host position is authoritative (a replay / reset): the tail is rewritten
+            c.truncate(position)
+        c.write(position, torch.tensor([int(token)], dtype=torch.int32))
+
+    def release(self, row: int, user: int) -> None:
+        """The request finished: the slot keeps its content (retained) until a prompt takes the slot."""
+        c = self.content(row, user)
+        c.live = False
+        self._touch(c)
+
+    def forget(self, row: int, user: int) -> None:
+        c = self.content(row, user)
+        c.clear()
+        c.live = False
+
+    # ------------------------------------------------------------------ policy
+    def slot_rank(self, row: int, user: int) -> int:
+        """``SlotTable.allocate`` tie-break: 0 for a slot without retained content, then the retained slots from the
+        least to the most recently used (the LRU resident prefix is the first dropped)."""
+        c = self._content.get((int(row), int(user)))
+        if c is None or not c.retained:
+            return 0
+        order = sorted(x.last_used for x in self._content.values() if x.retained)
+        return 1 + order.index(c.last_used)
+
+    def park_positions(self) -> dict[tuple[int, int], int]:
+        """Idle slots with resident content park at their content end (``SlotTable.device_feed``); content that fills
+        the context cannot park past itself and is dropped."""
+        out = {}
+        for c in self._content.values():
+            if c.retained:
+                if c.length < self.g.max_seq_len:
+                    out[c.key] = c.length
+                else:
+                    c.clear()
+        return out
+
+    def lookup(self, ids: torch.Tensor, spans: Sequence[MMSpan], n: int) -> PrefixHit | None:
+        """The slot to continue a request whose first ``n`` tokens vLLM found cached: a retained slot whose content
+        equals ``ids[:n]`` (multimodal spans by identifier) with a snapshot at or below ``n``; the highest snapshot
+        position wins, then the most recently used slot. None = the hit cannot be served (prefill from 0)."""
+        best = None
+        for c in self._content.values():
+            if not c.retained or not c.matches(ids, spans, n):
+                continue
+            snap = c.best_snapshot(n)
+            if snap is None:
+                continue
+            key = (snap[0], c.last_used)
+            if best is None or key > best[0]:
+                best = (key, PrefixHit(c.row, c.user, snap[0], snap[1]))
+        return None if best is None else best[1]
+
+    def plan_snapshot(self, row: int, user: int, position: int, kind: str) -> int | None:
+        """Which ring entry a KDA snapshot of the slot at ``position`` goes to (None: no ring, position 0, not a
+        32-multiple, or already held). Records it: the caller then copies the device state into that entry."""
+        if kind not in SNAPSHOT_KINDS:
+            raise ValueError(f"snapshot kind {kind!r}")
+        if self.entries == 0 or position <= 0 or position % TILE:
+            return None
+        c = self.content(row, user)
+        if position in c.snapshots:
+            return None
+        if kind == "decode" or self.entries == 1:
+            entry = 0
+        else:
+            used = {e for e in c.snapshots.values()}
+            free = [e for e in range(1, self.entries) if e not in used]
+            if free:
+                entry = free[0]
+            else:
+                pos_min = min(p for p, e in c.snapshots.items() if e != 0)
+                entry = c.snapshots[pos_min]
+        c.snapshots = {p: e for p, e in c.snapshots.items() if e != entry}
+        c.snapshots[position] = entry
+        self.stats["snapshots"] += 1
+        return entry
+
+    def retained_slots(self) -> list[tuple[int, int]]:
+        return sorted(c.key for c in self._content.values() if c.retained)
+
+
+def mm_spans_of_row(kwargs: dict, row: int) -> list[MMSpan]:
+    """The multimodal spans of prefill row ``row`` from the plugin's per-field lists (``mm_placeholder_offsets`` /
+    ``mm_placeholder_lengths``, the kind from which pixel field is set, ``mm_identifiers`` when forwarded). An item
+    without a placeholder position yields no span (its content cannot be located)."""
+    offs = kwargs.get("mm_placeholder_offsets")
+    lens = kwargs.get("mm_placeholder_lengths")
+    if not offs or row >= len(offs) or offs[row] is None:
+        return []
+    idents = kwargs.get("mm_identifiers")
+    row_ids = idents[row] if idents and row < len(idents) and idents[row] is not None else None
+    videos = kwargs.get("pixel_values_videos")
+    row_videos = videos[row] if videos and row < len(videos) and videos[row] is not None else None
+    out = []
+    for k, (o, n) in enumerate(zip(offs[row], lens[row])):
+        if o is None or n is None:
+            continue
+        kind = "video" if row_videos is not None and k < len(row_videos) and row_videos[k] is not None else "image"
+        ident = row_ids[k] if row_ids is not None and k < len(row_ids) else None
+        out.append(MMSpan(int(o), int(n), kind, None if ident is None else str(ident)))
+    return out
+
+
+def mm_payload_missing(kwargs: dict, row: int, n: int) -> list[int]:
+    """Items of prefill row ``row`` whose placeholders lie inside ``[0, n)`` and whose tensor payload the plugin
+    stripped (vLLM ``strip_covered_mm_data``: fully prefix-cached items carry no pixels), i.e. the items a prefill
+    from 0 could not scatter. Empty for a text row."""
+    offs = kwargs.get("mm_placeholder_offsets")
+    lens = kwargs.get("mm_placeholder_lengths")
+    if not offs or row >= len(offs) or offs[row] is None:
+        return []
+    out = []
+    for k, (o, ln) in enumerate(zip(offs[row], lens[row])):
+        if o is None or ln is None or o + ln > n:
+            continue
+        has = False
+        for field in ("pixel_values", "pixel_values_videos", "input_features"):
+            col = kwargs.get(field)
+            if col and row < len(col) and col[row] is not None and k < len(col[row]) and col[row][k] is not None:
+                has = True
+        if not has:
+            out.append(k)
+    return out
