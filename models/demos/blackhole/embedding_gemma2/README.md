@@ -63,7 +63,7 @@ emb = enc.encode(batch["input_ids"], batch["attention_mask"], traced=True)  # tr
 ```
 
 Open the device with a trace region (`trace_region_size=128 MiB` is what the tests use).
-Logical lengths run in the smallest power-of-two bucket >= L (32 ... 32768); `capture_all`
+Logical lengths run in the smallest power-of-two bucket >= L (32 ... 65536); `capture_all`
 explains why every trace is captured in one call.
 
 ## Layout
@@ -98,7 +98,25 @@ in each module docstring and in `doc/functional_text/README.md`.
 pytest models/demos/blackhole/embedding_gemma2/tests/pcc -q          # all PCC / trace / audit tests
 pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -k traced -s
 pytest models/demos/blackhole/embedding_gemma2/demo/demo.py -s
+python models/demos/blackhole/embedding_gemma2/tests/perf/bench_sustained.py   # burst + sustained
 ```
+
+## Text tower performance (E5a, optimized)
+
+Traced device time per forward on one P150a (burst median; sustained after a 10 s soak is within
+0.07 ms). Details, the change ledger and tt-perf-report tables: `doc/optimized_text/README.md`.
+
+| batch x bucket | E4 functional ms | optimized ms | speedup |
+|---|---|---|---|
+| 1 x 128 | 8.75 | 4.92 | 1.78x |
+| 1 x 512 | 18.31 | 7.32 | 2.50x |
+| 1 x 2048 | 58.98 | 22.05 | 2.67x |
+| 8 x 512 | 74.50 | 29.42 | 2.53x |
+| 1 x 8192 | 411.70 | 109.81 | 3.75x |
+
+Policy: bfp8 weights + HiFi2 matmuls with measured program configs, HiFi2 SDPA with per-shape
+chunks, bfp4 additive masks (with an SDPA block map at buckets >= 4096), intermediates and the
+residual stream in L1 up to 4096 tokens. The largest bucket is now 65536 (was 32768).
 
 ## Vision tower
 

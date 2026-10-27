@@ -6,14 +6,26 @@
   "hf_max_position_embeddings": 262144,
   "model_card_context": 8192,
   "sliding_window_radius": 512,
-  "supported_max_seq_len": 32768,
+  "supported_max_seq_len": 65536,
   "largest_tested_seq_len": 32768,
   "largest_tested_evidence": "tests/pcc/test_text_model.py::test_text_model[b1_s32768] (last-hidden PCC and embedding cosine vs HF fp32)",
-  "physical_buckets": [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768],
+  "largest_run_seq_len": 65536,
+  "largest_run_evidence": "E5a tt-ops/runs/embeddinggemma-2/e5a/scripts/long_ctx.py (logs/long_ctx.log): a 32768-token prompt in bucket 32768 vs the same prompt padded into bucket 65536, embedding cosine 1.000000 (max abs diff 3.0e-8); a 65536-token forward is finite, unit-norm and bit-identical on repeat, 2.23 s eager; host peak RSS 22.8 GB. No HF reference at 65536 (fp32 CPU reference needs about 4x the 24 GB measured at 32768)",
+  "physical_buckets": [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536],
   "logical_lengths_tested": [1, 7, 31, 33, 64, 77, 100, 129, 257, 300, 400, 480, 511, 512, 513, 700, 1025, 1500, 2000, 8192, 32768],
   "decode": "not applicable: encoder, no KV cache or decode step",
+  "reduction_reason_e5a": {
+    "summary": "E5a keeps dense additive masks (TT native sliding_window_size was 1.5-2.5x slower and cannot mask key padding) but stores them in bfloat4_b (0.5625 B/element) and skips out-of-band SDPA blocks with a block map at buckets >= 4096. Largest feasible bucket 65536; HF-validated max still 32768.",
+    "device_bytes": {
+      "per_mask_bfp4_at_65536": 2415919104,
+      "per_mask_bfp4_at_131072": 9663676416,
+      "masks_live_per_forward": "3 (band constant, sliding, full): 7.2 GB at 65536, 29 GB at 131072 of 32 GB device DRAM (131072 infeasible)"
+    },
+    "host_bytes": "band constant built on the host in bf16: 8.6 GB at 65536, 34 GB at 131072",
+    "path_to_close_gap": "a mask-free padding scheme (per-row valid length in SDPA) or block-sparse masks; an HF reference that streams attention (or stored goldens) for > 32768"
+  },
   "reduction_reason": {
-    "summary": "The functional attention bakes the |q-k|<=512 band and key padding into dense additive [B,1,S,S] bf16 masks (TT SDPA cannot combine sliding_window_size with attn_mask). Mask memory grows as S^2.",
+    "summary": "(E1, superseded by reduction_reason_e5a) The functional attention bakes the |q-k|<=512 band and key padding into dense additive [B,1,S,S] bf16 masks (TT SDPA cannot combine sliding_window_size with attn_mask). Mask memory grows as S^2.",
     "device_bytes": {
       "per_mask_bf16_at_32768": 2147483648,
       "per_mask_bf16_at_65536": 8589934592,
@@ -70,7 +82,7 @@
     "shared_context": "every modality draws from one token sequence: text tokens + per image (2 markers + up to 280 soft tokens) + per video frame (2 + up to 140) + per audio clip (2 + 25 per second)",
     "max_text_tokens_per_item": {
       "default": 8192,
-      "why": "model card context window (8,192 tokens, shared by all modalities). The wrapper accepts max_seq_len up to 32768 (E1 bucket limit, see reduction_reason); full-model inputs were tested up to 2080 tokens (bucket 4096)",
+      "why": "model card context window (8,192 tokens, shared by all modalities). The wrapper accepts max_seq_len up to 65536 (E5a bucket limit, see reduction_reason_e5a; HF-validated to 32768); full-model inputs were tested up to 2080 tokens (bucket 4096)",
       "largest_tested": 2080,
       "evidence": "tests/pcc/test_full_model.py::test_full_model_item[text_long] (2080 tokens, b1_s4096, cosine 0.99997 vs HF fp32)"
     },
