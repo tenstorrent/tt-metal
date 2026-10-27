@@ -152,9 +152,9 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     must not change until the consuming sparse_matmul has run, else the prefetcher
                     and the matmul disagree on which experts arrive and deadlock. Order the
                     prefetcher after a host-enqueued write with wait_for_cq_on_tensor_prefetcher,
-                    or after an op that writes the mask inside a trace with
-                    queue_tensor_prefetcher_wait_for_signal plus signal_tensor_prefetcher run after
-                    that op. Reading the mask on device is what keeps a captured request correct
+                    or after an op that writes the mask on device, inside a trace included, with
+                    queue_tensor_prefetcher_wait_for_signal and a signal that op raises (or
+                    signal_tensor_prefetcher run after it). Reading the mask on device is what keeps a captured request correct
                     when the mask changes between trace replays. A grouped weight without a
                     selector streams every group.
                 prefetcher_pipes (List[PrefetcherPipe]): the DRAM-sender PrefetcherPipes (created via
@@ -245,8 +245,12 @@ void bind_tensor_prefetcher(nb::module_& mod) {
             it runs raises a signal.
 
             Use it to order the prefetcher after device work that has no host-side fence, e.g. a
-            mask an op writes inside a trace: run that op, then signal_tensor_prefetcher, and
-            queue this wait ahead of the request that reads the mask.
+            mask an op writes inside a trace. Either that op's kernel raises the signal itself
+            (experimental::tensor_prefetcher_signal at get_tensor_prefetcher_signal_address), or
+            signal_tensor_prefetcher runs after the op. Queue this wait ahead of the request that
+            reads the mask: for ttnn.sparse_matmul over prefetcher pipes, which queues its own
+            request, that is before the sparse_matmul call, with capture_into_trace=True inside a
+            trace.
 
             Args:
                 mesh_device (ttnn.MeshDevice): the mesh device whose prefetcher waits.

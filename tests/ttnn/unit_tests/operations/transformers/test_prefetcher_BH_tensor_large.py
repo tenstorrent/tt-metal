@@ -1938,12 +1938,11 @@ def _check_sparse_output(setup, tt_out, active, label, compact=False):
 
 
 def _sparse_matmul_over_pipes(setup, pipes, sparsity, **kwargs):
-    """``ttnn.sparse_matmul`` over the Tensor prefetcher's pipes, which queues its own prefetch request.
-    A ``signal_id`` keyword orders the prefetcher's mask read behind an op signal (prefetch_and_sparse_matmul)."""
-    return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_sparse_matmul(
+    """``ttnn.sparse_matmul`` over the Tensor prefetcher's pipes, which queues its own prefetch request."""
+    return ttnn.sparse_matmul(
         setup["tt_act"],
         setup["tt_weight"],
-        sparsity,
+        sparsity=sparsity,
         prefetcher_pipes=pipes,
         program_config=setup["program_config"],
         is_input_a_sparse=setup["is_input_a_sparse"],
@@ -2046,8 +2045,8 @@ _MASK_WRITE_DELAY_CYCLES = 5_000_000
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872}], indirect=True)
 def test_tensor_prefetcher_sparse_matmul_pipes_trace_mask_written_in_trace(device):
-    """The MoE router case: an op inside the trace writes the mask the prefetcher reads. With
-    ``signal_id``, every replay raises the signal after that write and the captured wait holds the
+    """The MoE router case: an op inside the trace writes the mask the prefetcher reads. Every replay
+    raises an op signal after that write, and the captured wait ahead of the sparse matmul holds its
     request for that replay's signal, so the prefetcher never reads the previous replay's mask -- even
     with the write held back behind a device delay. The selections keep the expert count, so a stale
     mask shows up as wrong experts rather than a hang."""
@@ -2060,7 +2059,9 @@ def test_tensor_prefetcher_sparse_matmul_pipes_trace_mask_written_in_trace(devic
         rows, cols = device.shape[0], device.shape[1]
         ttnn.apply_device_delay(device, [[_MASK_WRITE_DELAY_CYCLES] * cols for _ in range(rows)])
         ttnn.copy(mask_source, sparsity)
-        return _sparse_matmul_over_pipes(setup, pipes, sparsity, signal_id=signal_id)
+        ttnn.experimental.signal_tensor_prefetcher(device, signal_id)
+        ttnn.experimental.queue_tensor_prefetcher_wait_for_signal(device, signal_id, capture_into_trace=True)
+        return _sparse_matmul_over_pipes(setup, pipes, sparsity)
 
     with tensor_prefetcher_session(device):
         mask_source = _to_device_mask(device, _sparse_mask(setup["E"], selections[0]))
