@@ -148,6 +148,13 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         Must be idempotent (no-op if already captured) since the engine does not track capture
         state itself."""
 
+    supports_media = False
+    """OPTIONAL — set True if `prefill_chunk` takes `media_rows=(rows, mask)` on the first rank: the image
+    embedding rows a chunk injects after its token embedding, from `build_injection`
+    (common/prefill/media.py). The runner sends them only under PREFILL_MEDIA=1 and refuses that flag for a
+    runtime without it. MiniMax-M3's `inject_media_embeddings` (minimax_m3/tt/media_injection.py) is the
+    reference. Wire format: tt-d-gen docs/multimodal_media_ipc.md."""
+
     # --- REQUIRED KV-table hooks: `build_kv_chunk_table` and `kv_migration_stages`. The engine builds a
     #     chunk table on every run, so a runtime missing them fails at bringup. Keep the heavy table logic
     #     in your model's own module (a thin forwarder on the runtime), not inline here. ---

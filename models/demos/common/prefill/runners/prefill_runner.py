@@ -19,6 +19,8 @@ from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams,
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
 from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter
+from models.demos.common.prefill.runners.media_prefill import MediaPrefill
+from models.demos.common.prefill.runners.media_ring import MediaRing, media_ring_shm_name
 from models.demos.common.prefill.runners.migration import (
     migration_file_export_enabled,
     migration_publish_enabled,
@@ -126,7 +128,9 @@ assert MTP_DECODE_LEVELS == MTP_LEVELS or (
 NUM_MTP_TOKENS = num_mtp_tokens(MTP_LEVELS)
 TOKEN_ID_BYTES = 4
 _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
+# Image deployments add media_pending_count to the engine's per-chunk metadata (tt-d-gen docs/multimodal_media_ipc.md).
+MEDIA_ENABLED = os.environ.get("PREFILL_MEDIA", "0") == "1"
+CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MEDIA_ENABLED else 0)
 
 D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default))) == "1"
@@ -177,14 +181,16 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
-def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
-    # One D2H read; the 4th word is MTP provided_levels.
+def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False, with_media: bool = False) -> dict:
+    # One D2H read; the 4th word is MTP provided_levels on D2D, media_pending_count on an image deployment's H2D.
     m = ttnn.to_torch(ttnn.get_device_tensors(metadata_msg)[0]).view(torch.int32).flatten()
     meta = {
         "slot_id": int(m[0]),
         "actual_start": int(m[1]),
         "actual_end": int(m[2]),
     }
+    if with_media:
+        meta["media_count"] = int(m[3])
     # Mirror _metadata_record_words: the fourth word exists only when MTP is on.
     if with_provided_levels and m.numel() > 3:
         meta["provided_levels"] = max(0, int(m[3]))
@@ -254,11 +260,11 @@ def _h2d_drain_op(h2d_service, sockets, n_mtp: int):
 def _socket_next(h2d_service, sockets, n_mtp: int = 0) -> tuple:
     if sockets.drain_trace is not None:
         sockets.drain_trace.replay()
-        return sockets.tokens, sockets.overhang, _decode_metadata(sockets.metadata)
+        return sockets.tokens, sockets.overhang, _decode_metadata(sockets.metadata, with_media=MEDIA_ENABLED)
     outs = _h2d_drain_op(h2d_service, sockets, n_mtp)
     tokens, overhang = (outs[0], outs[1]) if n_mtp else (outs[0], None)
     sockets.metadata = outs[-1]
-    return tokens, overhang, _decode_metadata(sockets.metadata)
+    return tokens, overhang, _decode_metadata(sockets.metadata, with_media=MEDIA_ENABLED)
 
 
 def build_d2d_pipeline_endpoints(
@@ -629,6 +635,7 @@ def _compute_and_send(
     mtp_tokens=None,
     indices=None,
     idx_out=None,
+    media_rows=None,
 ) -> float:
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
@@ -653,6 +660,7 @@ def _compute_and_send(
             metadata_msg=sockets.metadata,
             **mtp_kwargs,
             **({"indexer_indices": indices} if indices is not None else {}),
+            **({"media_rows": media_rows} if media_rows is not None else {}),
         )
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
@@ -713,6 +721,7 @@ def run_request_loop(
     idx_in=None,
     idx_out=None,
     sockets=None,
+    media: Optional[MediaPrefill] = None,
 ) -> None:
     cfg = runtime.config
     if cfg.is_first_rank and h2d_service is None:
@@ -770,6 +779,7 @@ def run_request_loop(
             before_first_chunk = None
         if warmup:
             continue
+        media_rows = media.rows_for(meta) if media is not None else None
         t = _compute_and_send(
             runtime,
             kv_caches,
@@ -783,6 +793,7 @@ def run_request_loop(
             mtp_tokens=mtp_tokens,
             indices=indices,
             idx_out=idx_out,
+            media_rows=media_rows,
         )
         if first is None:
             first = t
@@ -971,6 +982,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     ttnn.distributed_context_barrier()
 
     h2d_service = None
+    media_ring = media = None
     if is_first_rank:
         mesh_device.clear_loaded_sub_device_manager()
 
@@ -991,6 +1003,20 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
 
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, CHUNK_SIZE, MTP_LEVELS), service_id)
+        if MEDIA_ENABLED:
+            assert getattr(
+                runtime, "supports_media", False
+            ), f"PREFILL_MEDIA=1: model {ADAPTER.name!r} does not take media"
+            media_ring = MediaRing(media_ring_shm_name(service_id))
+            media = MediaPrefill.from_env(
+                media_ring,
+                hidden=hf_config.hidden_size,
+                sp=GLOBAL_MESH_SHAPE[0],
+                chunk_local=CHUNK_SIZE // GLOBAL_MESH_SHAPE[0],
+            )
+            logger.info(
+                f"[pp rank {rank}] [media] ring {media_ring.name}; encoder cache {media.cache.capacity_bytes >> 20} MiB"
+            )
 
     d2d_in = d2d_out = idx_in = idx_out = None
     if num_ranks > 1:
@@ -1185,9 +1211,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             idx_in=idx_in,
             idx_out=idx_out,
             sockets=sockets,
+            media=media,
         )
     finally:
         import gc
+
+        if media_ring is not None:
+            media_ring.close()
 
         sockets.release_traces()
         if layer_ack_service is not None:

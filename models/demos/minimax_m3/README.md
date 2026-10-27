@@ -126,6 +126,15 @@ which the runner's `PREFILL_PRODUCER_MULTI_TURN_PROB` mode (off by default) exer
 | `PREFILL_COMPILE` | `1` | `0` = skip `compile()`'s warm-up (three forward variants: first / cache-read / ragged; per-chunk offsets are runtime args, so no per-ISL JIT exists). |
 | `PREFILL_RESULTS_JSONL` | unset | Append one JSON line per run (perf, min PCC, status). |
 
+**Image (media) prefill** (`common/prefill/runners/prefill_runner.py`, tt-metal#62157):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PREFILL_MEDIA` | `0` | `1` = image deployment: 16-byte H2D chunk metadata carrying `media_pending_count`, and the media ring `/tt_prefill_media_<service_id>` the d-gen engine writes images into. Runner and producer must agree. |
+| `M3_MEDIA_STUB_EMBEDDINGS` | `0` | `1` = embed images with deterministic stubs seeded from the media hash. Required with `PREFILL_MEDIA=1` until the vision encoder (tt-metal#62156) is wired in. |
+| `PREFILL_ENCODER_CACHE_MB` | `2048` | Per-worker LRU of image embeddings keyed by media hash (about 7 MB per 576-token image). Hit, miss and eviction counts are logged on each `MEDIA_CHUNK` line. |
+| `PREFILL_MEDIA_TIMEOUT_S` | `30` | How long stage 0 waits for a chunk's images on the media ring before failing. |
+
 **Zone profiler** (`tests/perf/profile_prefill.py`, driven by `scripts/run_prefill_profile.sh`): `PROFILE_CHUNK`,
 `PROFILE_CACHE`, `PROFILE_NUM_LAYERS`, `PROFILE_LAYER_IDS`, `PROFILE_READ_EVERY`, `PROFILE_READ_IN_CHUNK`,
 `PROFILE_SKIP_PREFIX`, `PROFILE_STAGES`, `PROFILE_STAGE`, `PROFILE_FABRIC`, `PROFILE_DRY_RUN` and the script's
