@@ -66,6 +66,13 @@
 //  15: experts_block (experts per block; the activation block held in cb_act at once)
 //  16: gate_up_reserve_tiles (pages a gate_up slice occupies in cb_weights, >= the slice itself)
 //  17: down_reserve_tiles    (pages a down slice occupies in cb_weights, >= the slice itself)
+//  18-22: cores_per_expert, shards_per_core, i_shards_per_core, num_expert_groups, cb_reduce
+//  23: shared_i_tiles  (6-expert path's shared expert I-tiles; 0 without one)
+//  24: shared_slots    (cb_act tiles each group reserves for its shared tiles)
+//  25: cb_shared_gate_up (streamed [shared_chunk_k, 2] gate|up chunks)
+//  26: cb_shared_down  (one [shared_slots, 2] slot per H-slice)
+//  27: shared_chunk_k
+//  28: shared_limit_bits (shared SwiGLU clamp limit as a float bit pattern; +inf = unclamped)
 //
 // Runtime args:
 //   0: core_index (this core's flat grid index, x*GRID_Y + y)
@@ -95,6 +102,12 @@ void kernel_main() {
     constexpr uint32_t i_shards_per_core = get_compile_time_arg_val(20);
     constexpr uint32_t num_expert_groups = get_compile_time_arg_val(21);
     constexpr uint32_t cb_reduce_id = get_compile_time_arg_val(22);
+    constexpr uint32_t shared_i_tiles = get_compile_time_arg_val(23);
+    constexpr uint32_t shared_slots = get_compile_time_arg_val(24);
+    constexpr uint32_t cb_shared_gate_up_id = get_compile_time_arg_val(25);
+    constexpr uint32_t cb_shared_down_id = get_compile_time_arg_val(26);
+    constexpr uint32_t shared_chunk_k = get_compile_time_arg_val(27);
+    constexpr uint32_t shared_limit_bits = get_compile_time_arg_val(28);
 
     const uint32_t core_index = get_arg_val<uint32_t>(0);
     const uint32_t local_idx = core_index % cores_per_expert;
@@ -102,6 +115,11 @@ void kernel_main() {
     const uint32_t expert_group = core_index / cores_per_expert;
     const bool down_core = get_arg_val<uint32_t>(1) != 0xFFFFFFFFu;
     const bool is_root = expert_group == 0 && down_core;
+    // 6-expert path's shared expert: the group's I-tiles are expert_group, expert_group + 6, ...,
+    // and tile j runs on local core j + 1 (see SharedExpert in fetch_gate_up.h).
+    const uint32_t shared_tiles =
+        expert_group < shared_i_tiles ? (shared_i_tiles - expert_group + num_expert_groups - 1) / num_expert_groups : 0;
+    const bool shared_core = local_idx >= 1 && local_idx < 1 + shared_tiles;
     (void)local_idx;
 
     constexpr uint32_t kOutTilesPerCore = 2;
@@ -223,13 +241,69 @@ void kernel_main() {
             }
         }
 
+        // Shared expert: one I-tile's gate (dst 0) and up (dst 1), accumulated over the streamed
+        // K-chunks of its [K, 2] shard, then the same SwiGLU with the shared clamp. The writer
+        // scatters the tile behind the group's routed activation.
+        if (shared_core) {
+            CircularBuffer shared_w_cb(cb_shared_gate_up_id);
+            constexpr uint32_t kChunkTiles = 2 * shared_chunk_k;
+
+            matmul_init(cb_input_id, cb_shared_gate_up_id);
+            reconfig_full_operand(cb_shared_gate_up_id, cb_input_id);
+            pack_reconfig_data_format(cb_mm_id);
+            mm_cb.reserve_back(2);
+
+            tile_regs_acquire();
+            for (uint32_t c = 0; c < k_tiles / shared_chunk_k; ++c) {
+                shared_w_cb.wait_front(kChunkTiles);
+                for (uint32_t k = 0; k < shared_chunk_k; ++k) {
+                    matmul_tiles(cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k + k, 2 * k, 0);
+                    matmul_tiles(cb_input_id, cb_shared_gate_up_id, c * shared_chunk_k + k, 2 * k + 1, 1);
+                }
+                shared_w_cb.pop_front(kChunkTiles);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(0, cb_mm_id, 0);
+            pack_tile<true>(1, cb_mm_id, 1);
+            tile_regs_release();
+            mm_cb.push_back(2);
+
+            mm_cb.wait_front(2);
+            copy_tile_to_dst_init_short(cb_mm_id);
+            reconfig_full_operand_srca(cb_mm_id);
+            pack_reconfig_data_format(cb_out_id);
+            out_cb.reserve_back(1);
+
+            tile_regs_acquire();
+            copy_tile(cb_mm_id, 0, 0);
+            copy_tile(cb_mm_id, 1, 1);
+            clamp_tile_init();
+            clamp_tile(0, kNegInfBits, shared_limit_bits);
+            silu_tile_init();
+            silu_tile(0);
+            clamp_tile_init();
+            clamp_tile(1, shared_limit_bits ^ 0x80000000u, shared_limit_bits);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_out_id);
+            tile_regs_release();
+
+            mm_cb.pop_front(2);
+            out_cb.push_back(1);
+        }
+
         // PHASE 2: down matmul for this group's expert, shards_per_core H-slices. No local
         // accumulation across shards (they are different H columns); group 0 then reduces
-        // the matching H-slices from the other groups.
-        act_cb.wait_front(i_tiles);
+        // the matching H-slices from the other groups. The block also carries the group's
+        // shared-expert tiles after the routed i_tiles, padded to shared_slots.
+        constexpr uint32_t act_tiles = i_tiles + shared_slots;
+        act_cb.wait_front(act_tiles);
         if (!down_core) {
             // The broadcast still lands here (the group rectangle spans all 9 rows); release it.
-            act_cb.pop_front(i_tiles);
+            act_cb.pop_front(act_tiles);
             if (swiglu_core) {
                 in_cb.pop_front(k_tiles);
             }
@@ -239,6 +313,11 @@ void kernel_main() {
 
         const uint32_t mul_dst_id = is_root ? cb_acc_id : cb_down_out_id;
         CircularBuffer mul_dst_cb(mul_dst_id);
+        // With shared tiles, the weighted routed slice is staged in cb_wtmp (free until the root's
+        // reduce) and the shared partial is added on its way to mul_dst.
+        const uint32_t weighted_id = shared_tiles > 0 ? cb_wtmp_id : mul_dst_id;
+        CircularBuffer weighted_cb(weighted_id);
+        CircularBuffer shared_down_cb(cb_shared_down_id);
 
         for (uint32_t s = 0; s < shards_per_core; ++s) {
             down_w_cb.wait_front(down_reserve_tiles);
@@ -266,8 +345,8 @@ void kernel_main() {
             mm_cb.wait_front(kOutTilesPerCore);
             mul_init(cb_mm_id, cb_rscalar_id);
             reconfig_full_operand(cb_mm_id, cb_rscalar_id);
-            pack_reconfig_data_format(mul_dst_id);
-            mul_dst_cb.reserve_back(kOutTilesPerCore);
+            pack_reconfig_data_format(weighted_id);
+            weighted_cb.reserve_back(kOutTilesPerCore);
 
             tile_regs_acquire();
             mul_tiles(cb_mm_id, cb_rscalar_id, 0, 0, 0);
@@ -275,14 +354,58 @@ void kernel_main() {
             tile_regs_commit();
             mm_cb.pop_front(kOutTilesPerCore);
             tile_regs_wait();
-            pack_tile(0, mul_dst_id);
-            pack_tile(1, mul_dst_id);
+            pack_tile(0, weighted_id);
+            pack_tile(1, weighted_id);
             tile_regs_release();
-            mul_dst_cb.push_back(kOutTilesPerCore);
+            weighted_cb.push_back(kOutTilesPerCore);
+
+            if (shared_tiles > 0) {
+                // shared = act_shared @ down_shared rows (this group's I-tiles, this H-slice);
+                // row j of the slot is weight tile (j, n) at j*2 + n.
+                shared_down_cb.wait_front(shared_slots * kOutTilesPerCore);
+                matmul_init(cb_act_id, cb_shared_down_id);
+                reconfig_full_operand(cb_shared_down_id, cb_act_id);
+                pack_reconfig_data_format(cb_mm_id);
+                mm_cb.reserve_back(kOutTilesPerCore);
+
+                tile_regs_acquire();
+                for (uint32_t n = 0; n < kOutTilesPerCore; ++n) {
+                    for (uint32_t j = 0; j < shared_tiles; ++j) {
+                        matmul_tiles(cb_act_id, cb_shared_down_id, i_tiles + j, j * kOutTilesPerCore + n, n);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_mm_id);
+                pack_tile(1, cb_mm_id);
+                tile_regs_release();
+                mm_cb.push_back(kOutTilesPerCore);
+                shared_down_cb.pop_front(shared_slots * kOutTilesPerCore);
+
+                // mul_dst = weighted routed + shared.
+                weighted_cb.wait_front(kOutTilesPerCore);
+                mm_cb.wait_front(kOutTilesPerCore);
+                add_init(cb_wtmp_id, cb_mm_id);
+                reconfig_full_operand(cb_wtmp_id, cb_mm_id);
+                pack_reconfig_data_format(mul_dst_id);
+                mul_dst_cb.reserve_back(kOutTilesPerCore);
+
+                tile_regs_acquire();
+                add_tiles(cb_wtmp_id, cb_mm_id, 0, 0, 0);
+                add_tiles(cb_wtmp_id, cb_mm_id, 1, 1, 1);
+                tile_regs_commit();
+                weighted_cb.pop_front(kOutTilesPerCore);
+                mm_cb.pop_front(kOutTilesPerCore);
+                tile_regs_wait();
+                pack_tile(0, mul_dst_id);
+                pack_tile(1, mul_dst_id);
+                tile_regs_release();
+                mul_dst_cb.push_back(kOutTilesPerCore);
+            }
         }
 
         rscalar_cb.pop_front(1);
-        act_cb.pop_front(i_tiles);
+        act_cb.pop_front(act_tiles);
 
         if (is_root) {
             acc_cb.wait_front(kLocalTiles);

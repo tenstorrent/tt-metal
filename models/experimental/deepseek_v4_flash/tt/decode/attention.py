@@ -3,7 +3,15 @@ from typing import Optional
 import ttnn
 import torch
 
-from ..common import DeepSeekV4Module, _HIFI4_SDPA, _MASK_NEG, _profile, _signpost, width_sharded_l1_config
+from ..common import (
+    CCL_TOPOLOGY,
+    DeepSeekV4Module,
+    _HIFI4_SDPA,
+    _MASK_NEG,
+    _profile,
+    _signpost,
+    width_sharded_l1_config,
+)
 from .decode_prefetch import (
     DECODE_LAYOUTS,
     KV_GCB,
@@ -1240,7 +1248,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 output,
                 cluster_axis=_tp_cluster_axis(self.device),
                 num_links=2,
-                topology=ttnn.Topology.Ring,
+                topology=CCL_TOPOLOGY,
             )
             ttnn.deallocate(output)
             output = gathered
@@ -1345,7 +1353,7 @@ class DeepSeekV4Attention(DeepSeekV4Module):
                 dim=1,
                 cluster_axis=_tp_cluster_axis(self.device),
                 num_links=1,
-                topology=ttnn.Topology.Ring,
+                topology=CCL_TOPOLOGY,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)

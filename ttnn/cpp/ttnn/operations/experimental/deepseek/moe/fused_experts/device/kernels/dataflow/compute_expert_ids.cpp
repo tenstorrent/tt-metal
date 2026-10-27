@@ -96,6 +96,7 @@
 //   59+: TensorAccessorArgs(routing), TensorAccessorArgs(scores), TensorAccessorArgs(ranking),
 //        TensorAccessorArgs(gate_up), TensorAccessorArgs(down)
 //   then: gate_up base addresses (one per expert), then down base addresses (one per expert)
+//   then: the shared-expert block (SharedExpert in fetch_gate_up.h) and its two accessors
 //
 // Runtime args:
 //   0: routing base address (the selected-id tensor)
@@ -111,6 +112,7 @@
 //   15: hub1_noc_x   16: hub1_noc_y    rectangle corners; hub0 is this core on the sender path)
 //   17: ranking base address (the row top-k'd when the ranking form drives the selection)
 //   18: down_local     (this core's down slot in its expert group; see run_reader_loop)
+//   19: shared gate_up base address   20: shared down base address
 
 namespace {
 
@@ -221,6 +223,10 @@ void kernel_main() {
     // in the compile-time args, indexed by the runtime-selected expert id.
     constexpr uint32_t kGateUpAddrBase = down_args.next_compile_time_args_offset();
     constexpr uint32_t kDownAddrBase = kGateUpAddrBase + num_weights;
+    constexpr uint32_t kSharedCtBase = kDownAddrBase + num_weights;
+    constexpr auto shared_gate_up_args = TensorAccessorArgs<kSharedCtBase + kSharedExpertCtArgs>();
+    constexpr auto shared_down_args = TensorAccessorArgs<shared_gate_up_args.next_compile_time_args_offset()>();
+    const SharedExpert shared = shared_expert_args<kSharedCtBase>(get_arg_val<uint32_t>(19), get_arg_val<uint32_t>(20));
 
     const uint32_t routing_addr = get_arg_val<uint32_t>(0);
     const uint32_t mcast_start_x = get_arg_val<uint32_t>(1);
@@ -563,5 +569,8 @@ void kernel_main() {
         gather,
         sem_reduce_id,
         cb_reduce_id,
-        get_arg_val<uint32_t>(18));
+        get_arg_val<uint32_t>(18),
+        shared,
+        shared_gate_up_args,
+        shared_down_args);
 }

@@ -33,7 +33,14 @@ over rows ``[0, window)``.
 import torch
 import ttnn
 
-from models.experimental.deepseek_v4_flash.tt.common import _HIFI4_SDPA, _MASK_NEG, DeepSeekV4Module, _profile, _region
+from models.experimental.deepseek_v4_flash.tt.common import (
+    CCL_TOPOLOGY,
+    _HIFI4_SDPA,
+    _MASK_NEG,
+    DeepSeekV4Module,
+    _profile,
+    _region,
+)
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     CSA_INDEX_BLOCK_SIZE,
     _StaticLayerCache,
@@ -623,7 +630,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         out = self.o_b_proj(_decode_activation(self.o_b_proj, y))
         if self.tp_size > 1:
             reduced = ttnn.experimental.deepseek.width_sharded_all_reduce(
-                out, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=ttnn.Topology.Ring
+                out, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
             )
             ttnn.deallocate(out)
             out = reduced

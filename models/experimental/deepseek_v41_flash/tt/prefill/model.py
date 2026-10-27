@@ -61,7 +61,7 @@ from models.experimental.deepseek_v41_flash.tt.prefill.attention import (
 )
 from models.experimental.deepseek_v41_flash.tt.prefill.decoder_layer import DeepSeekV41PrefillDecoderLayer
 from models.experimental.deepseek_v41_flash.tt.vision import extend_embedding, image_mask
-from models.experimental.deepseek_v4_flash.tt.common import _HIFI4, _trace_capture_guard
+from models.experimental.deepseek_v4_flash.tt.common import CCL_TOPOLOGY, _HIFI4, _trace_capture_guard
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import (
     _OUT_SOCKET_CORE,
@@ -1017,7 +1017,7 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
                 # ``broadcast`` corrupts a row-major page larger than one fabric packet (~4.3 KB): send rows of <= 4 KB.
                 width = self._pkt_bcast_width
                 rows = ttnn.reshape(stage.pkt, [1, 1, self._pkt_w // width, width])
-                sent = ttnn.broadcast(rows, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=ttnn.Topology.Ring)
+                sent = ttnn.broadcast(rows, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=CCL_TOPOLOGY)
                 pkt = ttnn.reshape(sent, [1, 1, 1, self._pkt_w])
         else:
             ttnn.experimental.recv_direct_async(io.streams_in, stage.recv)

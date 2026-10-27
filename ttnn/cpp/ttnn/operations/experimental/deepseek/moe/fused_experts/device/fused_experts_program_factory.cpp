@@ -248,6 +248,55 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         parallel_experts ? cores_per_expert * i_shards_per_core : num_producers,
         swiglu_tiles_per_core);
 
+    // Shared expert (6-expert path only). Its I-tiles are dealt round-robin over the groups (tile t
+    // to group t % 6), and a group's j-th tile runs on its local core j + 1: local core 0 is hub0,
+    // the last one hub1. Each such core streams its [H, 64] gate_up shard in K-chunks and scatters
+    // the one SwiGLU tile behind the group's routed activation in cb_act. Every down core then adds
+    // act_shared_g @ down_shared[g's tiles, its H-slices] to its weighted routed slice, and the
+    // existing group-0 reduce sums those K-partials across the groups.
+    const bool has_shared = tensor_args.shared_gate_up_weights.has_value();
+    TT_FATAL(
+        !has_shared || parallel_experts,
+        "fused_experts: the fused shared expert needs the {}-expert path (num_experts == {} on a {}x{} or larger "
+        "grid), got num_experts {} on a {}x{} grid",
+        kParallelExperts,
+        kParallelExperts,
+        kParallelGridX,
+        parallel_grid_y,
+        num_active,
+        grid.x,
+        grid.y);
+    Buffer* shared_gate_up_buffer = has_shared ? tensor_args.shared_gate_up_weights->buffer() : nullptr;
+    Buffer* shared_down_buffer = has_shared ? tensor_args.shared_down_weights->buffer() : nullptr;
+    const uint32_t shared_i_tiles =
+        has_shared ? static_cast<uint32_t>(tensor_args.shared_gate_up_weights->logical_shape()[-1]) /
+                         (2u * tt::constants::TILE_WIDTH)
+                   : 0u;
+    // cb_act room for the shared tiles of the group that gets the most of them.
+    const uint32_t shared_slots = (shared_i_tiles + num_expert_groups - 1u) / num_expert_groups;
+    TT_FATAL(
+        shared_slots + 2u <= cores_per_expert,
+        "fused_experts: {} shared I-tiles over {} groups put {} on a group, but a group has only {} non-hub cores",
+        shared_i_tiles,
+        num_expert_groups,
+        shared_slots,
+        cores_per_expert - 2u);
+    const uint32_t shared_gate_up_tile_bytes =
+        has_shared ? static_cast<uint32_t>(shared_gate_up_buffer->page_size()) : 0u;
+    const uint32_t shared_down_tile_bytes = has_shared ? static_cast<uint32_t>(shared_down_buffer->page_size()) : 0u;
+    // K tile-rows per streamed gate_up chunk: the largest divisor of k_tiles whose [chunk_k, 2] tiles
+    // fit kSharedChunkBytes, so two chunks double-buffer without holding the whole shard in L1.
+    // The model's decode keeps L1 buffers right above the op's CBs (48 KB chunks overflowed into
+    // them at V4.1, D = 5120), so the chunk stays small: ~44 KB of CB at V4.1, ~35 KB at V4.
+    constexpr uint32_t kSharedChunkBytes = 24u * 1024u;
+    uint32_t shared_chunk_k = 1u;
+    for (uint32_t c = 1; c <= k_tiles; ++c) {
+        if (k_tiles % c == 0 && c * 2u * shared_gate_up_tile_bytes <= kSharedChunkBytes) {
+            shared_chunk_k = c;
+        }
+    }
+    const uint32_t shared_limit_bits = std::bit_cast<uint32_t>(operation_attributes.shared_swiglu_limit);
+
     // Split the SwiGLU I dim across the two gather/broadcast hubs. Every SwiGLU core owns
     // `producer_cols` I-tiles, so halving the producer set splits the I dim exactly on a producer
     // boundary -- no producer ever straddles the two hubs, and the hub choice is a fixed per-core
@@ -445,8 +494,10 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // produces swiglu_tiles_per_core SwiGLU output tiles (its slice of the I dim) per expert.
     // cb_out holds the bf8 SwiGLU activation (== act_df) so the writer can scatter it
     // directly into cb_act.
-    const uint32_t out_cb_bytes = parallel_experts ? i_shards_per_core * swiglu_tiles_per_core * act_tile_bytes
-                                                   : 2u * swiglu_tiles_per_core * act_tile_bytes;
+    // A shared-expert core pushes one more SwiGLU tile behind its routed ones.
+    const uint32_t out_cb_bytes =
+        parallel_experts ? (i_shards_per_core * swiglu_tiles_per_core + (has_shared ? 1u : 0u)) * act_tile_bytes
+                         : 2u * swiglu_tiles_per_core * act_tile_bytes;
     // Matmul staging buffer (fp32 for full precision before the SwiGLU SFPU pass): phase 1
     // stages 2*swiglu_tiles_per_core tiles (gate | up) and phase 2 reuses it for the
     // kOutTilesPerCore down-matmul tiles, so it is sized for whichever is larger. The DEST
@@ -466,7 +517,9 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // more experts than L1 could hold at once by streaming them through in blocks. The batch rides
     // along inside each tile and costs nothing here: what bounds a block is the number of DISTINCT
     // experts in it, not the token count.
-    const uint32_t act_cb_bytes = act_slots * experts_block * i_tiles * act_tile_bytes;
+    // The 6-expert path's single block also holds the group's shared-expert tiles after its routed
+    // ones (shared_slots is 0 without a shared expert).
+    const uint32_t act_cb_bytes = act_slots * (experts_block * i_tiles + shared_slots) * act_tile_bytes;
     // Per-core down output: the single accumulated [B, H] output tile-row slice (kOutTilesPerCore
     // tiles), double-buffered.
     const uint32_t down_out_tiles = parallel_experts ? shards_per_core * kOutTilesPerCore : kOutTilesPerCore;
@@ -842,6 +895,54 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         }}},
     });
 
+    // Shared expert weights, in their own dtype (cb_weights is the routed format). gate_up streams
+    // through two [shared_chunk_k, 2] chunks. down holds every one of a core's H-slices at once, so
+    // the reader's pre-barrier prefetch can never block on it; each slice reserves room for the
+    // group with the most shared tiles, [shared_slots, 2].
+    constexpr uint32_t cb_shared_gate_up = CBIndex::c_12;
+    constexpr uint32_t cb_shared_down = CBIndex::c_13;
+    if (has_shared) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2u * shared_chunk_k * 2u * shared_gate_up_tile_bytes,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_shared_gate_up,
+                .data_format = datatype_to_dataformat_converter(tensor_args.shared_gate_up_weights->dtype()),
+                .page_size = shared_gate_up_tile_bytes,
+            }}},
+        });
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = shards_per_core * shared_slots * kOutTilesPerCore * shared_down_tile_bytes,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_shared_down,
+                .data_format = datatype_to_dataformat_converter(tensor_args.shared_down_weights->dtype()),
+                .page_size = shared_down_tile_bytes,
+            }}},
+        });
+    }
+    // The readers' shared-expert compile-time block (see SharedExpert in fetch_gate_up.h), then its
+    // two accessors. Without a shared expert the routed weights stand in for the accessors, which
+    // are then never dereferenced.
+    auto append_shared_ct = [&](std::vector<uint32_t>& ct_args) {
+        for (uint32_t a :
+             {shared_i_tiles,
+              shared_slots,
+              num_weight_shards,
+              static_cast<uint32_t>(cb_shared_gate_up),
+              static_cast<uint32_t>(cb_shared_down),
+              shared_gate_up_tile_bytes,
+              shared_down_tile_bytes,
+              shared_chunk_k}) {
+            ct_args.push_back(a);
+        }
+        TensorAccessorArgs(has_shared ? *shared_gate_up_buffer : *gate_up0_buffer).append_to(ct_args);
+        TensorAccessorArgs(has_shared ? *shared_down_buffer : *down0_buffer).append_to(ct_args);
+    };
+    // The matching runtime args, bound so a program-cache hit patches the addresses.
+    Buffer* shared_gate_up_binding = has_shared ? shared_gate_up_buffer : gate_up0_buffer;
+    Buffer* shared_down_binding = has_shared ? shared_down_buffer : down0_buffer;
+
     // Multicast rectangle (NoC coords) covering the whole grid. Non-loopback
     // multicast excludes the sender, so num_dests = total cores - 1.
     const auto corner_a = device->worker_core_from_logical_core(CoreCoord{0, 0});
@@ -1007,6 +1108,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     TensorAccessorArgs(*gate_up0_buffer).append_to(sender_ct_args);
     TensorAccessorArgs(*down0_buffer).append_to(sender_ct_args);
     append_addrs_ct(sender_ct_args);
+    append_shared_ct(sender_ct_args);
 
     // The framework resolves every bound Buffer to an address, so the routing / ranking slots each
     // need a real buffer even when their accessor is compiled out. The score buffer is always
@@ -1053,7 +1155,9 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
          // The ranking row (read only when the leader top-k's on it; the score buffer stands in
          // otherwise, and the accessor is compiled out).
          ranking_binding,
-         down_local_for(sender)});
+         down_local_for(sender),
+         shared_gate_up_binding,
+         shared_down_binding});
     desc.kernels.push_back(std::move(sender_desc));
 
     // ---- Input-broadcaster kernel on {1,0} (NoC 1). ----
@@ -1104,6 +1208,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     TensorAccessorArgs(*gate_up0_buffer).append_to(input_ct_args);
     TensorAccessorArgs(*down0_buffer).append_to(input_ct_args);
     append_addrs_ct(input_ct_args);
+    append_shared_ct(input_ct_args);
 
     KernelDescriptor input_sender_desc;
     input_sender_desc.kernel_source = std::string(kKernelDir) + "/dataflow/broadcast_input.cpp";
@@ -1133,7 +1238,9 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
          // hub1 of this core's group: the rectangle's far corner (hub0 is leader_noc above).
          group0_rect[2],
          group0_rect[3],
-         down_local_for(input_sender)});
+         down_local_for(input_sender),
+         shared_gate_up_binding,
+         shared_down_binding});
     desc.kernels.push_back(std::move(input_sender_desc));
 
     // ---- Receiver reader kernel on the other 62 cores (NoC 0). ----
@@ -1180,6 +1287,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     TensorAccessorArgs(*gate_up0_buffer).append_to(receiver_ct_args);
     TensorAccessorArgs(*down0_buffer).append_to(receiver_ct_args);
     append_addrs_ct(receiver_ct_args);
+    append_shared_ct(receiver_ct_args);
 
     // The receiver reader comes in two NOC flavours. Hub1 runs on NOC 1 -- that is what keeps the
     // two hubs' activation multicasts on separate NoCs -- and every other core stays on NOC 0. On a
@@ -1204,22 +1312,23 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
                 const uint32_t g = parallel_experts ? idx / cores_per_expert : 0u;
                 const auto g_rect = group_rect(g);
                 const auto g_leader = group_leader_noc(g);
-                d.runtime_args.emplace_back(
+                d.emplace_runtime_args(
                     core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        idx,
-                        // hub0 (== this group's leader) and hub1 (== the rectangle's far corner).
-                        g_leader.first,
-                        g_leader.second,
-                        g_rect[0],
-                        g_rect[1],
-                        g_rect[2],
-                        g_rect[3],
-                        g_rect[4],
-                        hub_role_of(core),
-                        g_rect[2],
-                        g_rect[3],
-                        down_local_for(core)});
+                    {idx,
+                     // hub0 (== this group's leader) and hub1 (== the rectangle's far corner).
+                     g_leader.first,
+                     g_leader.second,
+                     g_rect[0],
+                     g_rect[1],
+                     g_rect[2],
+                     g_rect[3],
+                     g_rect[4],
+                     hub_role_of(core),
+                     g_rect[2],
+                     g_rect[3],
+                     down_local_for(core),
+                     shared_gate_up_binding,
+                     shared_down_binding});
             }
         }
         desc.kernels.push_back(std::move(d));
@@ -1255,6 +1364,12 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         i_shards_per_core,
         num_expert_groups,
         cb_reduce,
+        shared_i_tiles,
+        shared_slots,
+        cb_shared_gate_up,
+        cb_shared_down,
+        shared_chunk_k,
+        shared_limit_bits,
     };
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = std::string(kKernelDir) + "/compute/matmul_gate_up.cpp";
@@ -1298,6 +1413,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         num_hubs,
     };
     TensorAccessorArgs(*out_buffer).append_to(writer_ct_args);
+    writer_ct_args.push_back(shared_i_tiles);
 
     auto make_writer = [&](const CoreRangeSet& cores, DataMovementProcessor proc, NOC noc) {
         KernelDescriptor writer_desc;
