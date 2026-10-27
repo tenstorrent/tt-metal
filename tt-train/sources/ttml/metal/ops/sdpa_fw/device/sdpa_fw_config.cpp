@@ -5,7 +5,6 @@
 #include "sdpa_fw_config.hpp"
 
 #include <algorithm>
-#include <limits>
 #include <tt-metalium/kernel_types.hpp>
 
 #include "metal/ttnn_all_includes.hpp"
@@ -97,52 +96,6 @@ uint32_t chunk_size_to_tiles(uint32_t chunk_size, uint32_t St, const char* name)
     return chunk_size / tt::constants::TILE_HEIGHT;
 }
 
-// ---- cost model -------------------------------------------------------------------------------------
-// Microseconds on Blackhole, measured by knocking phases out of the kernel one at a time (q=128,
-// k=256, D=64 and D=128, S=2048). The reader's DRAM time and the compute passes did not overlap in
-// those measurements, so the per-step cost is their sum.
-constexpr double kExpUsPerScoreTile = 0.16;    // scaled exp, fp32
-constexpr double kMaxUsPerScoreTile = 0.066;   // row-max reduce
-constexpr double kPassUsPerScoreTile = 0.14;   // pack/unpack traffic of the score block
-constexpr double kQkUsPerTileMatmul = 0.03;    // HiFi4 fp32-dest tile matmul
-constexpr double kPvUsPerTileMatmul = 0.035;   // incl. the rescale of the accumulator
-constexpr double kStatUsPerRow = 0.3;          // alpha + sum fold passes
-constexpr double kStepFixedUs = 3.0;           // per-step inits, CB handshakes, reconfigs
-constexpr double kFinalizeUsPerRow = 0.5;      // row reduce, lse, recip
-constexpr double kFinalizeUsPerOutTile = 0.1;  // normalize (and gate)
-constexpr double kDramGBps = 420.0;            // aggregate, all cores reading
-constexpr double kCoreDramGBps = 25.0;         // one core's share can not exceed its NoC link
-
-double dram_us(uint64_t bytes, uint32_t num_cores) {
-    const double per_core_gbps = std::min(kDramGBps / num_cores, kCoreDramGBps);
-    return static_cast<double>(bytes) / (per_core_gbps * 1e3);  // GB/s = 1e3 bytes/us
-}
-
-double step_us(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
-    const double rows = chunks.rows();
-    const double score_tiles = rows * chunks.Sk_chunk_t;
-    const double compute = score_tiles * (kExpUsPerScoreTile + kMaxUsPerScoreTile + kPassUsPerScoreTile) +
-                           score_tiles * shape.qWt * kQkUsPerTileMatmul + score_tiles * shape.vWt * kPvUsPerTileMatmul +
-                           rows * kStatUsPerRow + kStepFixedUs;
-    uint64_t bytes = static_cast<uint64_t>(chunks.Sk_chunk_t) * (shape.qWt + shape.vWt) * kBf16TileBytes;
-    if (shape.mask_type == AttentionMaskType::Arbitrary) {
-        bytes += static_cast<uint64_t>(chunks.Sq_chunk_t) * chunks.Sk_chunk_t * kBf16TileBytes;
-    }
-    return compute + dram_us(bytes, num_cores);
-}
-
-double item_fixed_us(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
-    const double rows = chunks.rows();
-    uint64_t bytes = static_cast<uint64_t>(chunks.rows()) * (shape.qWt + shape.vWt) * kBf16TileBytes;  // Q in, out
-    if (shape.has_gate) {
-        bytes += static_cast<uint64_t>(chunks.rows()) * shape.vWt * kBf16TileBytes;
-    }
-    if (shape.return_intermediates) {
-        bytes += static_cast<uint64_t>(chunks.rows()) * kFp32TileBytes;
-    }
-    return rows * (kFinalizeUsPerRow + shape.vWt * kFinalizeUsPerOutTile) + dram_us(bytes, num_cores);
-}
-
 }  // namespace
 
 SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
@@ -182,16 +135,6 @@ uint64_t l1_bytes(const SDPAForwardCbTiles& t) {
 uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
     const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
     return num_stacks * (shape.St / chunks.Sq_chunk_t);
-}
-
-uint32_t num_kv_steps(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t item) {
-    const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
-    return sdpa_fw_items::num_kv_steps_of_chunk(
-        shape.mask_type == AttentionMaskType::Causal,
-        shape.St,
-        chunks.Sq_chunk_t,
-        chunks.Sk_chunk_t,
-        sdpa_fw_items::first_row_tile_of(item, q_num_chunks, chunks.Sq_chunk_t));
 }
 
 SDPAForwardShape shape_of(
@@ -234,26 +177,6 @@ std::vector<CoreItemRuns> split_work(
         per_core_runs = split_items_contiguous(total_items, num_cores);
     }
     return per_core_runs;
-}
-
-double predict_us(
-    const SDPAForwardShape& shape,
-    const SDPAForwardChunks& chunks,
-    const std::vector<CoreItemRuns>& per_core_runs,
-    uint32_t num_cores) {
-    const double step = step_us(shape, chunks, num_cores);
-    const double fixed = item_fixed_us(shape, chunks, num_cores);
-    double busiest = 0.0;
-    for (const auto& runs : per_core_runs) {
-        double core_us = 0.0;
-        for (const auto& run : runs) {
-            for (uint32_t item = run.first_item; item < run.first_item + run.num_items; ++item) {
-                core_us += fixed + step * num_kv_steps(shape, chunks, item);
-            }
-        }
-        busiest = std::max(busiest, core_us);
-    }
-    return busiest;
 }
 
 namespace {
@@ -300,69 +223,49 @@ SDPAForwardChunks resolve_chunks(
     const SDPAForwardShape& shape,
     uint64_t l1_budget_bytes,
     uint32_t num_available_cores) {
-    const uint32_t heads_per_group = shape.q_heads / shape.kv_heads;
     const SDPAForwardChunks user = user_chunks(config, shape);
     if (user.Sq_chunk_t != 0U && user.Sk_chunk_t != 0U && user.heads_per_item != 0U) {
         check_l1(shape, user, l1_budget_bytes);
         return user;
     }
 
-    // Candidates for the unset knobs: the chunk sizes that divide the sequence, up to the sizes beyond
-    // which the gain flattens out; head stacks that divide the group.
-    auto candidates = [](uint32_t fixed, std::initializer_list<uint32_t> options, uint32_t divides) {
-        std::vector<uint32_t> out;
-        if (fixed != 0U) {
-            out.push_back(fixed);
-            return out;
-        }
-        for (const uint32_t c : options) {
-            if (divides % c == 0U) {
-                out.push_back(c);
-            }
-        }
-        return out;
-    };
-    const auto sq_options = candidates(user.Sq_chunk_t, {1U, 2U, 4U, 8U}, shape.St);
-    const auto sk_options = candidates(user.Sk_chunk_t, {1U, 2U, 4U, 8U, 16U}, shape.St);
-    const auto h_options = candidates(user.heads_per_item, {1U, 2U, 4U, 8U}, heads_per_group);
-
-    SDPAForwardChunks best{};
-    double best_us = std::numeric_limits<double>::infinity();
-    uint64_t smallest_l1 = std::numeric_limits<uint64_t>::max();
-    for (const uint32_t h : h_options) {
-        for (const uint32_t Sq : sq_options) {
-            for (const uint32_t Sk : sk_options) {
-                const SDPAForwardChunks chunks{.Sq_chunk_t = Sq, .Sk_chunk_t = Sk, .heads_per_item = h};
-                const uint64_t bytes = l1_bytes(cb_tiles(shape, chunks));
-                smallest_l1 = std::min(smallest_l1, bytes);
-                if (bytes > l1_budget_bytes) {
-                    continue;
-                }
-                const uint32_t num_cores = std::min(num_available_cores, num_work_items(shape, chunks));
-                const double us = predict_us(shape, chunks, split_work(shape, chunks, num_cores), num_cores);
-                if (us < best_us) {
-                    best_us = us;
-                    best = chunks;
-                }
-            }
+    // Shape rule for the unset knobs, from the chunk sweep on Blackhole (S=2048/4096, D=64/128, every mask
+    // mode): four query tile-rows per item and eight K/V tiles per step win or tie everywhere they fit;
+    // four K/V tiles do better once the inner dim reaches 128 tiles-wide traffic or with a mask tensor
+    // (the step then reads mask tiles on top of K/V). More rows per item only pay off once the work is
+    // scheduled by cost rather than paired, so heads_per_item stays 1 unless asked for. The chunks shrink
+    // while they do not fit L1 or would leave cores idle.
+    constexpr uint32_t kDefaultSqChunkT = 4U;
+    const uint32_t default_sk_chunk_t = (shape.qWt >= 4U || shape.mask_type == AttentionMaskType::Arbitrary) ? 4U : 8U;
+    SDPAForwardChunks chunks{
+        .Sq_chunk_t = user.Sq_chunk_t,
+        .Sk_chunk_t = user.Sk_chunk_t,
+        .heads_per_item = std::max(user.heads_per_item, 1U)};
+    if (chunks.Sq_chunk_t == 0U) {
+        chunks.Sq_chunk_t = kDefaultSqChunkT;
+        while (chunks.Sq_chunk_t > 1U &&
+               (shape.St % chunks.Sq_chunk_t != 0U || num_work_items(shape, chunks) < num_available_cores)) {
+            chunks.Sq_chunk_t /= 2U;
         }
     }
-    TT_FATAL(
-        best_us < std::numeric_limits<double>::infinity(),
-        "SDPA forward circular buffers need at least {} bytes of L1 per core but only {} are available. "
-        "Reduce q_chunk_size, k_chunk_size or heads_per_item (0 = pick).",
-        smallest_l1,
-        l1_budget_bytes);
-    log_debug(
-        tt::LogOp,
-        "sdpa_fw chunks: Sq={} Sk={} heads={} (predicted {:.0f} us on {} cores, L1 budget {} B)",
-        best.Sq_chunk_t,
-        best.Sk_chunk_t,
-        best.heads_per_item,
-        best_us,
-        num_available_cores,
-        l1_budget_bytes);
-    return best;
+    if (chunks.Sk_chunk_t == 0U) {
+        chunks.Sk_chunk_t = default_sk_chunk_t;
+        while (chunks.Sk_chunk_t > 1U && shape.St % chunks.Sk_chunk_t != 0U) {
+            chunks.Sk_chunk_t /= 2U;
+        }
+    }
+    // Shrink the picked (not the pinned) chunks until the circular buffers fit.
+    while (l1_bytes(cb_tiles(shape, chunks)) > l1_budget_bytes) {
+        if (user.Sk_chunk_t == 0U && chunks.Sk_chunk_t > 1U) {
+            chunks.Sk_chunk_t /= 2U;
+        } else if (user.Sq_chunk_t == 0U && chunks.Sq_chunk_t > 1U) {
+            chunks.Sq_chunk_t /= 2U;
+        } else {
+            break;
+        }
+    }
+    check_l1(shape, chunks, l1_budget_bytes);
+    return chunks;
 }
 
 }  // namespace ttml::metal::ops::sdpa_fw::device
