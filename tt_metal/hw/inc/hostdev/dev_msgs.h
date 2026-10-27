@@ -77,6 +77,14 @@ constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(DispatchEngineProcess
 #else
 constexpr uint32_t PROCESSOR_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
+// Go messages per sub-device: one per launch message slot on Tensix, which fast dispatch targets. Other cores are only
+// slow-dispatched and keep one.
+#if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_DRISC) || \
+    defined(COMPILE_FOR_DISPATCH_ENGINE)
+constexpr uint32_t GO_RING_DEPTH = 1;
+#else
+constexpr uint32_t GO_RING_DEPTH = 8;
+#endif
 #else
 #error "Host code is not allowed to include dev_msgs.h, please use HAL interface instead."
 #endif
@@ -233,6 +241,11 @@ struct go_msg_t {
     };
 } __attribute__((packed));
 
+// One sub-device's go messages, indexed by launch message slot.
+struct go_ring_t {
+    struct go_msg_t slot[GO_RING_DEPTH];
+};
+
 struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
 } __attribute__((packed));
@@ -288,6 +301,8 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeEthDestL1AddrOverflow = 16,
     DebugSanitizeCBOutOfBounds = 17,
     DebugSanitizeNocInvalidTxnId = 18,
+    DebugSanitizeNocSharedCmdBuf = 19,
+    DebugSanitizeNocReadToRegAddr = 20,
 };
 
 struct debug_assert_msg_t {
@@ -340,6 +355,14 @@ struct debug_eth_link_t {
     volatile uint8_t link_down;
 };
 
+// The NoC command buffers each data movement RISC has programmed on one NOC since the current launch began,
+// a bit per command buffer. Kept by kernels built with DEDICATED_NOC_SHARED, the two dedicated-NOC kernels of
+// a core that share one NOC (DataMovement1XXConfig::dedicated_noc_sharing), which must keep to disjoint
+// command buffers; the NoC sanitizer flags one that both have used. BRISC firmware zeroes it per launch.
+struct debug_noc_cmd_buf_usage_msg_t {
+    volatile uint8_t by_risc[2];  // index 0: BRISC (DM0), 1: NCRISC (DM1)
+};
+
 enum watcher_enable_msg_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
@@ -355,6 +378,7 @@ struct watcher_msg_t {
     std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
     struct debug_eth_link_t eth_status;
     uint8_t pad0;  // CODEGEN:skip
+    struct debug_noc_cmd_buf_usage_msg_t noc_cmd_buf_usage[MAX_NUM_NOCS_PER_CORE];
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
     struct debug_stack_usage_t stack_usage;
@@ -431,6 +455,7 @@ constexpr uint32_t launch_msg_buffer_num_entries = 8;
 // Equal to the maximum number of subdevices + 1. This allows all workers that aren't assigned to a subdevice to receive
 // a dummy entry.
 constexpr uint32_t go_message_num_entries = 9;
+static_assert(GO_RING_DEPTH == 1 || GO_RING_DEPTH == launch_msg_buffer_num_entries);
 
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
@@ -438,9 +463,10 @@ struct mailboxes_t {
     volatile uint32_t launch_msg_rd_ptr;  // Volatile so this can be manually reset by host. TODO: remove volatile when
                                           // dispatch init moves to one-shot.
     alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) struct launch_msg_t launch[launch_msg_buffer_num_entries];
-    volatile struct go_msg_t go_messages[go_message_num_entries];
+    volatile struct go_ring_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
-    volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
+    // Index into go_messages to use. Always 0 on unicast cores.
+    alignas(TT_ARCH_MAX_NOC_WRITE_ALIGNMENT) volatile uint32_t go_message_index;
     volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4 for
                                                            // the 4 TRISCs per engine.
     volatile uint8_t fw_shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +4
@@ -467,6 +493,9 @@ static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 // debug_ring_buf is a byte array reinterpreted as 4-byte fields, and on Blackhole its head is the
 // target of an atomic, which traps if misaligned.
 static_assert(offsetof(watcher_msg_t, debug_ring_buf) % sizeof(uint32_t) == 0);
+// BRISC firmware clears the command buffer usage record with one word store per launch.
+static_assert(offsetof(watcher_msg_t, noc_cmd_buf_usage) % sizeof(uint32_t) == 0);
+static_assert(sizeof(watcher_msg_t::noc_cmd_buf_usage) == sizeof(uint32_t));
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);
 

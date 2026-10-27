@@ -42,11 +42,13 @@ struct RSqrtPolicy {
  *                     and pushed to the combined CB instead of variance
  * @tparam NextSetSizeFn Functor that takes the set index and returns the
  *                       size of the next set
+ * @tparam PartialsDFB DataflowBuffer type of dfb_partials (deduced)
+ * @tparam CombinedDFB DataflowBuffer type of dfb_combined (deduced)
  */
-template <typename NextSetSizeFn>
+template <typename NextSetSizeFn, typename PartialsDFB, typename CombinedDFB>
 inline void combine_welford_partials(
-    DataflowBuffer& dfb_partials,
-    DataflowBuffer& dfb_combined,
+    PartialsDFB& dfb_partials,
+    CombinedDFB& dfb_combined,
     uint32_t num_sets,
     NextSetSizeFn&& next_set_size_fn,
     RSqrtPolicy rsqrt_policy = RSqrtPolicy{}) {

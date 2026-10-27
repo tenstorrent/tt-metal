@@ -18,6 +18,7 @@
 #include "api/tt-metalium/device.hpp"
 #include "impl/host_api/temp_quasar_api.hpp"
 #include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
+#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
@@ -101,10 +102,12 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: DFB accessor names -> device-slot binding. Normal DFBs may carry LLK metadata; relays do not.
-// prefetcher_pipe_id is 0xFF (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for
-// PrefetcherPipe relays, where it names the persistent slot baked into the token so
-// the TRISC constructor can O(1)-align the borrowed iface to the durable checkpoint.
+// Metal 2.0: DFB accessor names -> device-slot binding (optionally typed as relay).
+// Normal DFBs may carry LLK metadata; relays do not. prefetcher_pipe_id is 0xFF
+// (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for PrefetcherPipe relays, where it names
+// the persistent slot baked into the token so the TRISC constructor can O(1)-align the borrowed
+// iface to the durable checkpoint. pap / cap are both sides' access patterns (dfb::AccessPattern
+// numbering) so DFBBindingToken<Pap, Cap> can specialize the device DataflowBuffer at compile time.
 struct DataflowBufferBindingHandle {
     uint16_t logical_dfb_id = 0;
     bool is_relay = false;
@@ -118,6 +121,8 @@ struct DataflowBufferBindingHandle {
     std::string borrowed_tensor_parameter_name;
     bool produces = false;
     bool consumes = false;
+    uint8_t pap = 0;
+    uint8_t cap = 0;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 
@@ -156,7 +161,7 @@ struct TensorBindingHandle {
 };
 
 // Metal 2.0: per-kernel resolved scratchpad binding.
-// A scratchpad is a private, uninitialized, node-local L1 region bound to a kernel.
+// A scratchpad is an uninitialized, node-local L1 region, private to a kernel by default.
 //  - The base address is allocated at Program-compile time, and is passed to the kernel as an
 //    implicit CRTA.
 //  - Since the address is persistent across enqueues, we store it on the Kernel object rather
@@ -172,7 +177,18 @@ struct ScratchpadBindingHandle {
     uint32_t size_bytes = 0;         // per-node size; emitted as the accessor's compile-time size
     uint32_t addr_crta_word = 0;     // word index of the base-address slot within the kernel's CRTA buffer
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
-    std::optional<LLKMetadata> llk_metadata;
+    std::optional<LLKMetadata> llk_metadata;  // LLK related metadata (dataformat/ tile format)
+    // Present only if the binding handle could share it's allocation with another scratchpad.
+    // Configured in advanced options: ScratchpadAdvancedOptions::allow_instance_multi_binding.
+    // For all the scratchpad binding handle sharing the same identifier,
+    // the size_bytes are all equivalent.
+    //
+    // Note this field does not affect kernel hash computation,
+    // as the build artifact of 2 kernels with/without shared allocation is the same.
+    //
+    // The ScratchpadSpecName serves as an identifier & does not carry specific meaning.
+    using AllocationIdentifier = experimental::ScratchpadSpecName;
+    std::optional<experimental::ScratchpadSpecName> shared_allocation_identifier;
 };
 
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
@@ -267,6 +283,8 @@ public:
 
     // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core);
+    // User-arg count. Ignores the watcher count word and dispatch-view padding.
+    std::size_t logical_runtime_arg_count(const CoreCoord& logical_core) const;
     RuntimeArgsData& runtime_args_data(const CoreCoord& logical_core);
     std::vector<std::vector<std::vector<uint32_t>>>& runtime_args();
     std::vector<std::vector<RuntimeArgsData>>& runtime_args_data();
@@ -274,6 +292,7 @@ public:
 
     // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& common_runtime_args();
+    std::size_t logical_common_runtime_arg_count() const;
     RuntimeArgsData& common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
@@ -296,7 +315,9 @@ public:
                                                      uint16_t logical_dfb_id,
                                                      bool is_relay,
                                                      uint8_t prefetcher_pipe_id,
-                                                     const std::optional<LLKMetadata>&)>&) const override;
+                                                     const std::optional<LLKMetadata>&,
+                                                     uint8_t pap,
+                                                     uint8_t cap)>&) const override;
     void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
@@ -757,7 +778,7 @@ public:
 
     std::string_view get_linker_opt_level() const override;
 
-    bool get_trisc2_rvv_enabled() const override { return this->config_.enable_trisc2_rvv; }
+    bool get_rvv_enabled() const override { return this->config_.enable_trisc2_rvv; }
 
 private:
     const ComputeConfig config_;
@@ -929,6 +950,8 @@ public:
     std::string_view get_compiler_opt_level() const override;
 
     std::string_view get_linker_opt_level() const override;
+
+    bool get_rvv_enabled() const override { return this->config_.enable_trisc0_rvv; }
 
     void set_build_options(JitBuildOptions& build_options) const override;
 

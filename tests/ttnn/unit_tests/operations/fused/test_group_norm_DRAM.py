@@ -13,7 +13,12 @@ import math
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
-from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole, skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import (
+    is_blackhole,
+    is_watcher_enabled,
+    run_for_blackhole,
+    skip_for_blackhole,
+)
 
 DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 # atol for the non-tile-aligned regressions, matching the tile-aligned specify_grid cases.

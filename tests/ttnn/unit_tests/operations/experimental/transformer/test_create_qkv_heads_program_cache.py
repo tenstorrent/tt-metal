@@ -23,7 +23,7 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import comp_pcc, skip_for_blackhole, tt2torch_tensor
+from tt_py_test_utils_common.utility_functions import comp_pcc, skip_for_blackhole, tt2torch_tensor
 
 
 def run_cqkv(device, batch, seq_len, num_q_heads, num_kv_heads, head_dim, cores_h, cores_w, transpose_k, dtype):

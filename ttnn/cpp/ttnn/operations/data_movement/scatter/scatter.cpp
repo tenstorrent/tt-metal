@@ -273,12 +273,10 @@ Tensor scatter(
     // validate_inputs covers ranks and shapes only; dtype, sharding, buffer and device rules live in
     // the device operation. Run them here, before the pre-scatter transforms launch any device work,
     // so a bad call fails fast instead of after (or instead of, if one hangs) those transforms.
-    // These rules see the caller's tensors, not the transformed ones, which differs in two cases:
-    // - to_layout(ROW_MAJOR) turns a BFLOAT8_B tensor into BFLOAT16, so a BFLOAT8_B operand mixed with
-    //   a BFLOAT16 one is rejected here; it used to pass once both were untilized. The output is
-    //   BFLOAT16 either way, so convert to one dtype first.
-    // - reshape in pad_rank_up_to_4d can turn a sharded rank < 4 operand interleaved, so such an
-    //   operand is rejected here even if it used to reach the device operation interleaved.
+    // These rules see the caller's tensors, not the transformed ones. Of the properties they check,
+    // the transforms change only dtype: to_layout(ROW_MAJOR) turns a BFLOAT8_B tensor into BFLOAT16, so the device
+    // operation compares input and source dtypes as untilized, and a BFLOAT8_B operand mixed with a
+    // BFLOAT16 one is accepted here, as it is after the transforms.
     ttnn::prim::ScatterDeviceOperation::validate_on_program_cache_miss(
         ttnn::prim::ScatterParams{
             normalized_dim,

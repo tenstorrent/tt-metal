@@ -12,7 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_scan_test_utils import (
@@ -60,12 +60,13 @@ _REGRESSION_CASE = _PerformanceCase(
     dim=32,
     expected_duration_ns=14_567,
 )
+# Kimi-K3 on Galaxy SP8xTP4: one device's 640 tokens of 24 heads.
 _PRODUCTION_CASE = _PerformanceCase(
-    "pr7-leaf-bh96-n20-d128",
-    batch_heads=96,
+    "bh24-n20-d128",
+    batch_heads=24,
     num_chunks=20,
     dim=128,
-    expected_duration_ns=295_405,
+    expected_duration_ns=123_100,
 )
 _PRODUCTION_BF16 = frozenset({"kd", "q_decay", "final_decay"})
 

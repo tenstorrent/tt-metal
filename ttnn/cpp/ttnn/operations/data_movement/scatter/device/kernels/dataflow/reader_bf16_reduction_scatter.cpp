@@ -39,11 +39,11 @@ FORCE_INLINE float perform_reduction(float input, uint16_t source_value, Scatter
 }
 
 // performs scatter on data loaded to scratchpads with load_to_scratchpad
-template <typename index_type>
+template <typename index_type, typename OutputDFB>
 FORCE_INLINE void scatter_along_chunk(
     const Scratchpad<volatile index_type>& index_page,
     const Scratchpad<volatile uint16_t>& source_page,
-    const DataflowBuffer& output_dfb,
+    const OutputDFB& output_dfb,
     const Scratchpad<volatile float>& fp32_temp,
     const uint32_t& input_stick_size,
     const uint32_t& input_offset,
@@ -81,8 +81,9 @@ FORCE_INLINE void copy_input_to_fp32_temp(
     }
 }
 
+template <typename OutputDFB>
 FORCE_INLINE void copy_fp32_temp_to_output(
-    const Scratchpad<volatile float>& fp32_temp, const DataflowBuffer& output_dfb, uint32_t chunk_size) {
+    const Scratchpad<volatile float>& fp32_temp, const OutputDFB& output_dfb, uint32_t chunk_size) {
     const uint32_t output_l1_write_addr = output_dfb.get_write_ptr();
     volatile tt_l1_ptr uint16_t* output_l1_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(output_l1_write_addr);
@@ -130,6 +131,10 @@ void kernel_main() {
 
     Scratchpad<volatile uint16_t> input_page(scratch::input);
     Scratchpad<volatile float> fp32_temp(scratch::fp32_temp);
+    // The fp32 accumulator is CPU-only scratch, but on Quasar DM its stores go through the cache. Keep it under a
+    // scoped_lock so its dirty lines are written back before the kernel ends; otherwise a later program's flush or
+    // an eviction writes them over whatever buffer it put at this address. No-op on WH/BH.
+    const auto fp32_temp_lock = fp32_temp.scoped_lock(0, fp32_temp.size());
     DataflowBuffer output_dfb(dfb::output);
     Scratchpad<volatile index_std_type> index_page(scratch::index);
     Scratchpad<volatile uint16_t> source_page(scratch::source);

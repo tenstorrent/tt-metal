@@ -57,7 +57,16 @@ def kda_channel_chunk_size(channels, cap=512):
 
 
 def kda_conv_prefill(
-    qkv, T, history, taps, widths, actual_start, xin_memory_config=ttnn.DRAM_MEMORY_CONFIG, emit_state=True
+    qkv,
+    T,
+    history,
+    taps,
+    widths,
+    actual_start,
+    xin_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    emit_state=True,
+    predecessor_fn=None,
+    chunk_cap=512,
 ):
     """Depthwise causal conv (K=4) + SiLU + q/k/v split in ONE program (ttnn.experimental.kda.qkv_causal_conv1d_silu).
 
@@ -71,6 +80,9 @@ def kda_conv_prefill(
     Returns q [1,T,Q], k [1,T,K], v [1,T,V] bf16 TILE DRAM, and new_state [1, 3, C] bf16 TILE DRAM: the chunk's
     last three INPUT rows, i.e. the next chunk's history (the op does not emit it).
     emit_state=False skips new_state (returned as None), for callers that keep their own carry (the spec verify).
+    predecessor_fn: sequence parallelism (sp.py): called with the row-major conv input, returns the [1, 3, C] row-major
+    history of the preceding mesh row; `history` then only seeds the row holding the first token. None: local execution.
+    chunk_cap: cap (channels) for the op's channel_chunk_size, see kda_channel_chunk_size (smaller = more cores).
     """
     C = qkv.shape[-1]
     n_hist = history.shape[1]  # K - 1 = 3 rows, the op's fixed history depth
@@ -79,20 +91,28 @@ def kda_conv_prefill(
     # The op's input contract is row-major: one untilize of the conv columns.
     xin = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=xin_memory_config)
     hist = history if history.layout == ttnn.ROW_MAJOR_LAYOUT else ttnn.to_layout(history, ttnn.ROW_MAJOR_LAYOUT)
+    pred = None if predecessor_fn is None else predecessor_fn(xin)
     q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
         xin,
         hist,
         *taps,
         *widths,
-        program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=kda_channel_chunk_size(C)),
+        program_config=ttnn.QkvCausalConv1dSiluProgramConfig(
+            channel_chunk_size=kda_channel_chunk_size(C, cap=chunk_cap)
+        ),
         actual_start=actual_start,
-        # No sequence parallelism on the TP mesh (sequence_parallel_axis=0 on a 1xN mesh): the op validates
-        # predecessor_carry against history and never reads it, so alias history as its docstring says.
-        predecessor_carry=hist,
+        # On a 1xN mesh the op never reads predecessor_carry (it only validates it against history), so alias history
+        # as its docstring says. On a 2D mesh the rows (axis 0, the op's default sequence_parallel_axis) are SP ranks
+        # to the op and rows > 0 read predecessor_carry: aliasing the history gives every row the same zero-start conv
+        # (rows are replicas without sequence parallelism; with it predecessor_fn supplies the real predecessor rows).
+        predecessor_carry=hist if pred is None else pred,
         memory_config=_dram,
+        **({} if pred is None else {"sequence_parallel_axis": 0}),
     )
     if hist is not history:
         ttnn.deallocate(hist)
+    if pred is not None:
+        ttnn.deallocate(pred)
     if not emit_state:
         ttnn.deallocate(xin)
         return q, k, v, None
@@ -362,7 +382,7 @@ class TPGatedDeltaNet:
         )
         # Which of the two conv mirrors is authoritative. The traced batched verify advances only the
         # window buffers (refilling the K conv_states taps in the trace would cost ~10 ms/iteration
-        # over 48 layers, and nothing in the spec loop reads them), so after materialize_spec_state
+        # over 48 layers, and nothing in the spec loop reads them), so after a spec loop
         # the taps are behind: _conv_taps_stale. Anything that writes the taps from outside (prefill
         # capture_state, reset, slot edits, decode's own shift register) leaves the window behind:
         # _conv_win_stale. At most one is set; each setter clears the other. sync_conv_taps()
@@ -394,6 +414,7 @@ class TPGatedDeltaNet:
         self._zero_conv0 = None
         self._zero_conv_carry = None
         self._zero_rec = None
+        self._zero_rec_f32 = None  # batch-1 zero initial state for carry_state=False prefill (_ensure_zero_rec_f32)
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
 
     def _release_spec_bufs(self):
@@ -447,6 +468,24 @@ class TPGatedDeltaNet:
         # Fresh (zero) taps and no window: neither mirror is behind.
         self._conv_taps_stale = False
         self._conv_win_stale = False
+
+    def _ensure_zero_rec_f32(self):
+        """Batch-1 zero initial state the delta op reads when forward_prefill(carry_state=False), allocated once.
+
+        The op never writes its initial state, so the buffer stays zero, and it spares the op building its own zeros
+        (a host write). It survives reset_state, so a captured trace's address stays valid, and only models that
+        take the no-carry path allocate it.
+        """
+        if self._zero_rec_f32 is not None:
+            return
+        bf16 = os.environ.get("QWEN35_GDN_STATE_BF16") == "1"
+        self._zero_rec_f32 = ttnn.from_torch(
+            torch.zeros(1, self.Nv, self.Dk, self.Dv, dtype=torch.bfloat16 if bf16 else torch.float32),
+            dtype=ttnn.bfloat16 if bf16 else ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
 
     def reset_state_inplace(self):
         """Zero conv + recurrent state in place (preserves trace buffer addresses).
@@ -510,13 +549,24 @@ class TPGatedDeltaNet:
                 mesh_mapper=rep_map,
             )
 
-    def _kda_conv_prefill(self, qkv, T, conv_state):
+    def _kda_conv_prefill(self, qkv, T, conv_state, emit_state=True, predecessor_fn=None):
         """kda_conv_prefill on this layer's taps and widths. conv_state: the previous chunk's carry
-        [1, K-1, C] TILE, or None from scratch. Returns (q, k, v, new_state), see kda_conv_prefill."""
+        [1, K-1, C] TILE, or None from scratch. Returns (q, k, v, new_state), see kda_conv_prefill
+        (new_state is None when emit_state is False). predecessor_fn: sequence parallelism, see kda_conv_prefill."""
         self._ensure_kda_consts()
         history = conv_state if conv_state is not None else self._kda_zero_history
         kd, vd = self.key_dim_tp, self.value_dim_tp
-        return kda_conv_prefill(qkv, T, history, self.tw["conv_taps"], (kd, kd, vd), self._kda_actual_start)
+        return kda_conv_prefill(
+            qkv,
+            T,
+            history,
+            self.tw["conv_taps"],
+            (kd, kd, vd),
+            self._kda_actual_start,
+            emit_state=emit_state,
+            predecessor_fn=predecessor_fn,
+            chunk_cap=getattr(self.args, "kda_conv_chunk_cap", 512),
+        )
 
     def _kda_conv_packed(self, E, T):
         """KDA conv + SiLU + q/k/v split for B independent windows in one op call.
@@ -612,14 +662,46 @@ class TPGatedDeltaNet:
         if self._fuse_ab:
             # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + qkvzab matmul.
             if self._fuse_agmm and S > tpc.TILE_SIZE:
-                qkvzab = tpc.all_gather_matmul_prefill(
-                    x,
-                    self.tw["qkvz"],
-                    self.tt_ccl,
-                    self.cfg,
-                    self.args.ccl_topology(),
-                    out_memory_config=_proj_mc,
-                )
+                if tpc.use_small_m(self.args, S) and getattr(self.args, "proj_1d_decode", False):
+                    # Short S (args.prefill_small_m_max): the fused AGMM has a ~100 us floor, a separate all-gather +
+                    # 1D-mcast matmul (as the decode in-proj; needs the interleaved weight = proj_1d_decode) is faster.
+                    # x stays the caller's (as in the AGMM helper): only the bf8 cast and the gather are freed here.
+                    x4 = ttnn.reshape(x, (1, 1, S, x.shape[-1]))
+                    x8 = x4
+                    if getattr(self.args, "prefill_agmm_bf8", False) and x4.dtype != ttnn.bfloat8_b:
+                        x8 = ttnn.typecast(x4, ttnn.bfloat8_b, memory_config=x4.memory_config())
+                    xg = tpc.tp_all_gather(
+                        x8,
+                        self.tt_ccl,
+                        dim=3,
+                        memory_config=tpc.prefill_act_mem(S, ttnn.L1_MEMORY_CONFIG),
+                        topology=self.args.ccl_topology(),
+                    )
+                    if x8 is not x4:
+                        ttnn.deallocate(x8)
+                    qkvzab = tpc.small_m_matmul(
+                        xg,
+                        self.tw["qkvz"],
+                        S,
+                        self.args.dim,
+                        self.tw["qkvz"].shape[-1],
+                        num_cores=44,
+                        compute_cfg=self.cfg,
+                        grid_w=getattr(self.args, "decode_grid_w", 8),
+                        memory_config=_proj_mc,
+                    )
+                    ttnn.deallocate(xg)
+                else:
+                    qkvzab = tpc.all_gather_matmul_prefill(
+                        x,
+                        self.tw["qkvz"],
+                        self.tt_ccl,
+                        self.cfg,
+                        self.args.ccl_topology(),
+                        out_memory_config=_proj_mc,
+                        act_bf8=getattr(self.args, "prefill_agmm_bf8", False),
+                        config_override=tpc.agmm_config_override(self.args, x.shape[-2], "gdn_in"),
+                    )
                 qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
             elif getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE:
                 # Decode: small-grid 1D matmul on the interleaved fused weight (beats the DRAM-sharded grid).
@@ -656,7 +738,9 @@ class TPGatedDeltaNet:
         ttnn.deallocate(ab)
         return qkv, z, a, b
 
-    def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False):
+    def forward_prefill(
+        self, x, chunk_size=128, valid_len=None, capture_state=False, return_state=False, carry_state=True, sp=None
+    ):
         """Causal chunk-prefill from scratch. x [1,1,T,dim]: K-sharded (dim/tp per device) when the
         fused in-proj AG-matmul path is active (``_fuse_agmm`` and T>TILE — the norm skips its
         post-AG); replicated otherwise. Output reduce-scattered.
@@ -666,11 +750,19 @@ class TPGatedDeltaNet:
         ``(output, final_state, conv_new_state)`` for one user's from-scratch B=1
         pass and skip all self.* writeback; the caller stitches per-user states via
         assemble_batched_state(). Single-sequence behavior is unchanged when False.
+        carry_state: False: start from a zero recurrent/conv state and do not write the final state back
+        (prefill-only callers that never continue the sequence); incompatible with capture_state/return_state.
+        sp: tt/sp.py SeqParallel: x holds this mesh row's T tokens of a sequence split over the rows. The conv takes its
+        history from the previous row and the recurrence entry state is chained over the rows (from zero state, single
+        pass: needs carry_state=False, valid_len=None and the kda-conv / head-major-out / flat-qkv paths).
         """
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         if len(x.shape) == 4:
             x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
         T = x.shape[1]
+        if sp is not None:
+            assert not carry_state and valid_len is None, "sequence parallelism is a from-zero-state single pass"
+            assert self._gdn_kda_conv and self._gdn_fuse_out and self._gdn_flat_qkv, "sp needs kda conv + flat-qkv"
         # Pass the RAW valid_len (may be None) to the conv-FIR / seq kernels below — NOT a
         # `valid_len or T` coercion. A full chunk (valid_len is None) must take the kernels'
         # valid_len-None path (a static last-(K-1) slice for the conv state), which is trace-safe;
@@ -684,12 +776,20 @@ class TPGatedDeltaNet:
         # single pass reads zeros == None).
         # Per-user prefill (return_state) is always from scratch: must not carry the shared
         # batched buffer (other users' state) as its initial recurrent/conv state.
-        carry = not return_state
+        assert carry_state or not capture_state, "carry_state=False drops the final state capture_state would save"
+        assert carry_state or not return_state, "carry_state=False drops the final state return_state would return"
+        carry = (not return_state) and carry_state
         if carry and self.conv_carry is None:
             self.reset_state()
+        if not carry_state and self._zero_rec_f32 is None:
+            # One-time host writes, so only ever reached eagerly (warm-up).
+            if self.conv_states is None:
+                self.reset_state()
+            self._ensure_zero_rec_f32()
 
-        # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
-        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=ttnn.L1_MEMORY_CONFIG)
+        # Prefill qkvzab in L1 (DRAM above S=2048): keeps proj + q/k/v/z/a/b resident for conv+gate prep.
+        _L1 = tpc.prefill_act_mem(T, ttnn.L1_MEMORY_CONFIG)
+        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_L1)
 
         # Causal conv + SiLU; conv_state = previous chunk's last K-1 inputs (None/zero from scratch).
         # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
@@ -698,7 +798,9 @@ class TPGatedDeltaNet:
         if self._gdn_kda_conv and valid_len is None:
             # KDA op: conv + SiLU + q/k/v split in one program; its outputs are already the three
             # token-major tensors the flat-qkv path wants (masked buckets keep the MAC FIR below).
-            q, k, v, conv_new_state = self._kda_conv_prefill(qkv, T, _cstate)
+            q, k, v, conv_new_state = self._kda_conv_prefill(
+                qkv, T, _cstate, emit_state=carry_state, predecessor_fn=None if sp is None else sp.conv_predecessor
+            )
             ttnn.deallocate(qkv)
             if self._gdn_flat_qkv:
                 _qkv_head_dims = (Nk, Dk, Nv, Dv)
@@ -716,7 +818,7 @@ class TPGatedDeltaNet:
                 self.K,
                 self.mesh,
                 # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=_L1,
                 conv_state=_cstate,
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,
@@ -740,6 +842,21 @@ class TPGatedDeltaNet:
         ttnn.deallocate(b)
         g = ttnn.reshape(ttnn.multiply(tw["neg_exp_A"], _softplus_add(a, tw["dt_bias"])), (1, T, Nv))
         ttnn.deallocate(a)
+
+        _init_state = self.rec_state if carry else (None if return_state else self._zero_rec_f32)
+        _delta_head_dims = _qkv_head_dims
+        if sp is not None:
+            if sp.use_fold(T):
+                # Fold: ONE batch-1 call on the augmented value v' = [0 | v] (Dv' = Dk + Dv) from S'_0 = [I | 0]; its final
+                # state is the packed [A | B] and its outputs [U | O0], see sp.py. Needs the delta op's num_key_heads.
+                assert _qkv_head_dims is not None, "the sp fold needs flat q/k/v"
+                v = sp.gdn_fold_v(v)
+                _init_state = sp.gdn_init_fold
+                _delta_head_dims = (Nk, Dk, Nv, Dk + Dv)
+            else:
+                # Batch 2: real inputs from a zero state (O0, B) and v = 0 from an identity state (U, A), see sp.py.
+                q, k, v, beta, g = sp.gdn_batch2(q, k, v, beta, g)
+                _init_state = sp.gdn_init2
 
         # Fused chunk_gated_delta_rule; also used for masked valid_len.
         from models.demos.blackhole.qwen36.tt.gdn.fused_chunk import (
@@ -767,20 +884,34 @@ class TPGatedDeltaNet:
             g,
             chunk_size=chunk_size,
             scale=self.scale,
-            initial_state=self.rec_state if carry else None,
+            initial_state=_init_state,
             device=self.mesh,
             cached_masks=self.chunk_seq_masks,
             valid_len=valid_len,
-            qkv_head_dims=_qkv_head_dims,
+            qkv_head_dims=_delta_head_dims,
             return_o_bh=self._gdn_fuse_out,
             **_extra,
         )
         B, D = 1, self.qkv_dim_tp
         captured = None
-        if return_state:
+        if sp is not None:
+            # SP: the final state is only A and B of this row's slice; chain the rows' transforms into the entry
+            # state and add its contribution to the outputs. Nothing is written back (from-zero-state single pass).
+            if sp.use_fold(T):
+                entry = sp.gdn_entry_state_fold(final_state, local_rows=T)
+                o = sp.gdn_combine_fold(o, entry)
+            else:
+                entry = sp.gdn_entry_state(final_state, local_rows=T)
+                o = sp.gdn_combine(o, entry)
+        elif return_state:
             # Per-user prefill: return this user's state for assemble_batched_state to stitch
             # into the batched buffers. No self.* writeback; tensors are not deallocated here.
             captured = (final_state, conv_new_state)
+        elif not carry_state:
+            # Prefill-only caller: the state is never read again, so skip the writeback.
+            ttnn.deallocate(final_state)
+            if conv_new_state is not None:
+                ttnn.deallocate(conv_new_state)
         else:
             # ---- Carry recurrent + conv state for the NEXT chunk (chunk-outer prefill). ----
             # In place (ttnn.copy) so the addresses the prefill/decode traces
@@ -815,7 +946,6 @@ class TPGatedDeltaNet:
                 self._conv_win_stale = True
             ttnn.deallocate(conv_new_state)
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
-        _L1 = ttnn.L1_MEMORY_CONFIG
         if self._gdn_fuse_out:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
             # TILE-native head->token relayout (transpose + fold), dropping the
@@ -839,6 +969,7 @@ class TPGatedDeltaNet:
             ttnn.deallocate(out_f)
             ttnn.deallocate(z)
             # TODO(#57458): switch to the op's barrier_semaphore once it is wired up (see tpc.agmm_gather_buffer).
+            _bf8 = getattr(self.args, "prefill_agmm_bf8", False)
             out = tpc.all_gather_matmul_prefill(
                 gated,
                 tw["out_colpar"],
@@ -846,7 +977,9 @@ class TPGatedDeltaNet:
                 self.cfg,
                 self.args.ccl_topology(),
                 out_memory_config=_L1,
-                persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, gated),
+                persistent_output_buffer=tpc.agmm_gather_buffer(self.tt_ccl, gated, act_bf8=_bf8),
+                act_bf8=_bf8,
+                config_override=tpc.agmm_config_override(self.args, gated.shape[-2], "gdn_out"),
             )
             ttnn.deallocate(gated)
             if return_state:
@@ -870,14 +1003,8 @@ class TPGatedDeltaNet:
         partial = self._row_proj(gated, tw["out"])
         ttnn.deallocate(gated)
         partial = ttnn.reshape(partial, (1, 1, T, partial.shape[-1]))
-        out = tt_all_reduce(
-            partial,
-            self.mesh,
-            self.tt_ccl,
-            cluster_axis=0,
-            dim=3,
-            topology=self.args.ccl_topology(),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        out = tpc.tp_reduce_scatter(
+            partial, self.mesh, self.tt_ccl, self.args, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         if return_state:
             return out, captured[0], captured[1]
@@ -1090,6 +1217,28 @@ class TPGatedDeltaNet:
             self._gather_indices(self.conv_states[m], idx, dim=1)
         self._conv_win_stale = True
 
+    def remap_spec_slots(self, remap):
+        """remap_slots plus the spec state: each user's ring blocks (every token slot) and E_prev row move too."""
+        idx = [int(remap[i]) for i in range(self.B)]
+        if all(idx[i] == i for i in range(self.B)):
+            return
+        self.remap_slots(idx)
+        if self._spec_ring is None:
+            return
+        B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
+        T = self._spec_shape[1]
+        r4 = ttnn.reshape(self._spec_ring, (T, B * Nv, Dk, Dv))
+        assert (
+            r4.buffer_address() == self._spec_ring.buffer_address()
+        ), "the rank-4 ring view copied instead of aliasing; the copy would land in a temporary"
+        parts = [ttnn.slice(r4, (0, j * Nv, 0, 0), (T, (j + 1) * Nv, Dk, Dv)) for j in idx]
+        new = ttnn.concat(parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for p in parts:
+            ttnn.deallocate(p)
+        ttnn.copy(new, r4)
+        ttnn.deallocate(new)
+        self._gather_indices(self._verify_win_buf, idx, dim=0)
+
     def _gather_indices(self, buf, idx, dim):
         """Rebuild `buf` so slice i along `dim` becomes old slice idx[i], then copy back in place.
         `new` is fully materialized before the copy, so gathering from `buf` into itself is safe."""
@@ -1273,6 +1422,7 @@ class TPGatedDeltaNet:
             dim=3,
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **tpc.prefill_rs_kwargs(self.args),
         )
 
     def forward_decode(self, x):
@@ -1498,43 +1648,94 @@ class TPGatedDeltaNet:
             ttnn.deallocate(full)
         self._conv_taps_stale, self._conv_win_stale = False, False
 
-    def materialize_spec_state(self, mi):
-        """Copy the accepted state from the spec buffers back into the durable decode state.
+    def seed_spec_rows(self, rows):
+        """seed_spec_state for the users in ``rows`` only; every other user's ring blocks and E_prev row are kept.
+        One fixed program per user offset: warm every user before trace capture."""
+        assert self._spec_ring is not None, "seed_spec_rows before prepare_spec_verify"
+        Nv, Dk, Dv, K, C = self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
+        T = self._spec_shape[1]
+        rows = {int(u) for u in rows}
+        self.sync_conv_win()
+        ring_parts = {}
+        for u in sorted(rows):
+            s = ttnn.slice(self.rec_state, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv))
+            if s.dtype != ttnn.float32:
+                c = ttnn.typecast(s, ttnn.float32)
+                ttnn.deallocate(s)
+                s = c
+            ring_parts[u] = s
+        full = (
+            self._conv_win_buf
+            if self._spec_win_pad is None
+            else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+        e_parts = {u: ttnn.slice(full, (u, 0, 0), (u + 1, K - 1 + T, C)) for u in sorted(rows)}
+        self._write_spec_rows(ring_parts, e_parts)
+        if full is not self._conv_win_buf:
+            ttnn.deallocate(full)
+        self._conv_taps_stale, self._conv_win_stale = False, False
 
-        The spec loop never commits on device; this ends it (or hands a plain decode step the right
-        state). For user u: rec_state row u <- ring block (mi[u]*B + u)*Nv, and _conv_win_buf row u <-
-        E_prev rows [mi[u], mi[u]+K), the shift register sequential decode steps would leave after
-        accepting through row mi[u].
-
-        Leaves the K conv_states taps behind the window (``_conv_taps_stale``); the next tap consumer
-        rebuilds them via sync_conv_taps.
-        """
-        assert self._spec_ring is not None, "materialize_spec_state before prepare_spec_verify"
+    def _write_spec_rows(self, ring_parts, e_parts):
+        """Write per-user device tensors ([1, Nv, Dk, Dv] fp32 / [1, K-1+T, C]) into ring slot 0 / the E_prev row;
+        users not given keep theirs. Deallocates the given tensors."""
+        assert self._spec_ring is not None, "_write_spec_rows before prepare_spec_verify"
         B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
         T = self._spec_shape[1]
-        assert len(mi) == B, f"need one mi per user: got {len(mi)} for {B} users"
-        assert all(0 <= int(m) < T for m in mi), f"mi {list(mi)} out of range [0,{T})"
-        rows = []
-        for u in range(B):
-            blk = (int(mi[u]) * B + u) * Nv
-            rows.append(ttnn.reshape(ttnn.slice(self._spec_ring, (blk, 0, 0), (blk + Nv, Dk, Dv)), (1, Nv, Dk, Dv)))
-        new_rec = ttnn.concat(rows, dim=0) if B > 1 else rows[0]
-        src = new_rec if new_rec.dtype == self.rec_state.dtype else ttnn.typecast(new_rec, self.rec_state.dtype)
-        ttnn.copy(src, self.rec_state)
-        if src is not new_rec:
-            ttnn.deallocate(src)
-        if B > 1:
-            for r in rows:
-                ttnn.deallocate(r)
-        ttnn.deallocate(new_rec)
-        wins = [ttnn.slice(self._verify_win_buf, (u, int(mi[u]), 0), (u + 1, int(mi[u]) + K, C)) for u in range(B)]
-        new_win = ttnn.concat(wins, dim=0) if B > 1 else wins[0]
-        ttnn.copy(new_win, self._conv_win_buf)
-        if B > 1:
-            for w in wins:
-                ttnn.deallocate(w)
-        ttnn.deallocate(new_win)
-        self._conv_taps_stale, self._conv_win_stale = True, False
+        ring4 = ttnn.reshape(self._spec_ring, (1, T * B * Nv, Dk, Dv))
+        assert (
+            ring4.buffer_address() == self._spec_ring.buffer_address()
+        ), "the rank-4 ring view copied instead of aliasing; slice_write would write to a temporary"
+        parts = [
+            ring_parts[u] if u in ring_parts else ttnn.slice(ring4, (0, u * Nv, 0, 0), (1, (u + 1) * Nv, Dk, Dv))
+            for u in range(B)
+        ]
+        blk0 = ttnn.concat(parts, dim=1)
+        for s in parts:
+            ttnn.deallocate(s)
+        sharded = ttnn.to_memory_config(blk0, self._row_shard_memcfg(B * Nv * Dk, Dv))
+        ttnn.deallocate(blk0)
+        ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B * Nv, Dk, Dv], [1, 1, 1, 1])
+        ttnn.deallocate(sharded)
+        eparts = [
+            e_parts[u] if u in e_parts else ttnn.slice(self._verify_win_buf, (u, 0, 0), (u + 1, K - 1 + T, C))
+            for u in range(B)
+        ]
+        new = ttnn.concat(eparts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for e in eparts:
+            ttnn.deallocate(e)
+        ttnn.copy(new, self._verify_win_buf)
+        ttnn.deallocate(new)
+
+    def save_spec_user(self, u):
+        """Host copy of user u's ring blocks (every slot) and E_prev row.
+
+        Returns ([D*T, Nv, Dk, Dv], [D, K-1+T, C]); D = devices.
+        """
+        assert self._spec_ring is not None, "save_spec_user before prepare_spec_verify"
+        B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
+        T = self._spec_shape[1]
+        r4 = ttnn.reshape(self._spec_ring, (T, B * Nv, Dk, Dv))
+        ring_dev = ttnn.slice(r4, (0, u * Nv, 0, 0), (T, (u + 1) * Nv, Dk, Dv))
+        e_dev = ttnn.slice(self._verify_win_buf, (u, 0, 0), (u + 1, K - 1 + T, C))
+        comp = ttnn.ConcatMeshToTensor(self.mesh, dim=0)
+        ring, e = ttnn.to_torch(ring_dev, mesh_composer=comp), ttnn.to_torch(e_dev, mesh_composer=comp)
+        ttnn.deallocate(ring_dev)
+        ttnn.deallocate(e_dev)
+        return ring, e
+
+    def load_spec_users(self, states):
+        """Write host states {u: (ring slot [D, Nv, Dk, Dv], E_prev row [D, K-1+T, C])}.
+
+        Goes into ring slot 0 / the E_prev row of each u; other users kept.
+        """
+        mapper = ttnn.ShardTensorToMesh(self.mesh, dim=0)
+
+        def up(x, dtype):
+            return ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=mapper)
+
+        ring_parts = {u: up(r, ttnn.float32) for u, (r, _) in states.items()}
+        e_parts = {u: up(e, self._verify_win_buf.dtype) for u, (_, e) in states.items()}
+        self._write_spec_rows(ring_parts, e_parts)
 
     def forward_verify_recurrent(self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None):
         """Batched hybrid spec-decode verify for GDN: advance B users x T candidate rows at once.
@@ -1555,7 +1756,7 @@ class TPGatedDeltaNet:
 
         Side effects: the ring is updated in place (every candidate's state, for every user) and
         _verify_win_buf becomes the new E_prev. rec_state and conv_states are untouched; the host
-        commits later by index (materialize_spec_state).
+        commits later by index.
         """
         assert valid_len <= tpc.TILE_SIZE, f"verify bucket {valid_len} exceeds one tile"
         assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
@@ -1571,7 +1772,7 @@ class TPGatedDeltaNet:
     def _verify_project(self, x, valid_len, pre_gathered):
         """Gather the real rows to full dim and run one decode qkvzab projection over them.
 
-        Shared by the batched verify and the T=1 seed. ``_project_qkvzab`` at S = valid_len <= TILE_SIZE
+        Used by the batched verify. ``_project_qkvzab`` at S = valid_len <= TILE_SIZE
         routes through matmul_1d_decode, the projection a plain decode step runs. That matmul is
         row-independent and processes a full 32-row M-tile however many rows are real, so one
         projection over every user's rows is per-row identical to projecting them one at a time. The
@@ -1776,8 +1977,7 @@ class TPGatedDeltaNet:
         # touched: for the whole spec loop the durable conv truth is _verify_win_buf plus the host's
         # mi, so both the K conv_states taps and _conv_win_buf are behind it, and marking one stale
         # would claim the other is current. No in-loop consumer may read either; the loop's own carry
-        # is this buffer and conv_sel. materialize_spec_state restores the two-mirror invariant when
-        # the loop ends.
+        # is this buffer and conv_sel.
         ttnn.copy(E_new, self._verify_win_buf)
         q_all, k_all, v_all = self._kda_conv_packed(E_new, T)  # each [1, B*T, width], SiLU applied
         ttnn.deallocate(E_new)

@@ -7,7 +7,7 @@ from loguru import logger
 import torch
 import pytest
 import math
-from models.common.utility_functions import skip_for_wormhole_b0
+from tt_py_test_utils_common.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tt_lib.utils import _nearest_32
 import ttnn
