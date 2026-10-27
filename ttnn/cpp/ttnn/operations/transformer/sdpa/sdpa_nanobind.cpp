@@ -427,6 +427,26 @@ void bind_sdpa(nb::module_& mod) {
                 q_isl or tp*q_isl (tp = mesh_size/sp) — the only two values it can legally take.
             block_cyclic_cache_tp_sharded (bool): True = the cache is striped across ALL sp*tp devices (linear chip =
                 sp_coord*tp + tp_coord), so stripes = sp*tp and per-stripe chunk = block_cyclic_chunk_local/tp.
+            sub_core_grids (ttnn.CoreRangeSet, optional): restrict work to these cores (default: all cores of the
+                first subdevice). Part of the program-cache key. Required with a fused push, disjoint from
+                push_core_grid.
+
+        Fused sparse KV push: when push_table is set, the next layer's prefix rows (``sparse_kv_push`` part 1,
+        the rows before the plan's chunk start) are pushed in the same program, on push_core_grid. The push_*
+        arguments follow the matching ``ttnn.experimental.sparse_kv_push`` arguments and constraints:
+            push_input (ttnn.Tensor): the KVPE cache (``input_tensor``).
+            push_table (ttnn.Tensor): the all-gathered sparse_push_plan tables (``table``).
+            push_output (ttnn.Tensor): the next layer's compact buffer (``output_tensor``).
+            push_stripe_chunk (int), push_max_rows (int): the plan's ``stripe_chunk`` and ``max_rows``.
+            push_batch_index (int): the cache slot pushed (``batch_index``).
+            push_num_links (int): fabric links per direction, 1 or 2 (``num_links``). Defaults to 2.
+            push_ready_semaphore, push_data_valid_semaphore (ttnn.GlobalSemaphore): required; distinct,
+                zero-initialised and left at zero, as for ``sparse_kv_push``.
+            push_core_grid (ttnn.CoreRangeSet): required; push_num_links * 4 * 3 cores outside sub_core_grids.
+            push_batch_index_tensor (ttnn.Tensor, optional): trace-safe slot, read on device as
+                push_batch_index_tensor[0] * push_batch_slot_num_layers + push_batch_slot_layer_idx
+                (``batch_index_tensor``); push_batch_index is then ignored.
+            push_batch_slot_num_layers (int), push_batch_slot_layer_idx (int): see push_batch_index_tensor.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -444,7 +464,21 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none(),
         nb::arg("block_cyclic_cache_tp_sharded") = false,
-        nb::arg("attention_sink") = nb::none());
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("push_input") = nb::none(),
+        nb::arg("push_table") = nb::none(),
+        nb::arg("push_output") = nb::none(),
+        nb::arg("push_stripe_chunk") = 0,
+        nb::arg("push_max_rows") = 0,
+        nb::arg("push_batch_index") = 0,
+        nb::arg("push_num_links") = 2,
+        nb::arg("push_ready_semaphore") = nb::none(),
+        nb::arg("push_data_valid_semaphore") = nb::none(),
+        nb::arg("push_core_grid") = nb::none(),
+        nb::arg("push_batch_index_tensor") = nb::none(),
+        nb::arg("push_batch_slot_num_layers") = 1,
+        nb::arg("push_batch_slot_layer_idx") = 0);
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

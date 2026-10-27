@@ -48,7 +48,15 @@ target_sources(
 )
 
 target_include_directories(ttnn_op_transformer PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(ttnn_op_transformer PRIVATE TT::Metalium PUBLIC TTNN::Core)
+# sparse_sdpa fuses the sparse KV push and builds it with that op's program builder.
+target_link_libraries(
+    ttnn_op_transformer
+    PRIVATE
+        TT::Metalium
+        TTNN::Ops::Experimental::SparseKvPush
+    PUBLIC
+        TTNN::Core
+)
 
 install(
     TARGETS
