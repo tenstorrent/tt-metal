@@ -2172,3 +2172,9 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - Also: testing/dgen_engine.server_repo expands $USER / ~ like the spec's own paths (core/spec._expand); the 8x4 spec's
   `/scratch/$USER/tt-d-gen` was taken literally and the built engine never found (selftest
   test_the_specs_server_repo_expands_like_its_other_paths).
+- Also: testing/dgen_prefill_driver passes device_prefill_pipeline its arguments by name, layers_per_chunk only to a build
+  whose signature declares it (tt-d-gen 1cf343887 dropped it; by position the timeout became sp_factor and the engine
+  died, ENGINE_FATAL ... sp_factor=1800000). Selftest test_the_engine_driver_names_its_pipeline_arguments.
+- Seeded runs (F185 follow-up, not done): the seed's contract tests are carried unchecked; box literals in them
+  (server_rules CHUNK 2048 / MAX_SEQ 4096 / GOLDEN_RUNG s4096) broke K.1 on 8x4. The rule for tt/ (sizes from the spec
+  and mesh, never one box's literals) applies to the contract tests too.
