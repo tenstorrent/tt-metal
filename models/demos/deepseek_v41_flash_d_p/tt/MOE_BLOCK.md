@@ -43,8 +43,8 @@ the flat path's.
 
 ## The fused head (MOE_HEAD=fused)
 
-Setting `MOE_HEAD` (env `DS41_MOE_HEAD`, read only under `MOE_IMPL=block`): `ops` (default, everything above) or
-`fused` (owner decision 2026-10-27 "go with fused head"; `ops` stays the default until the owner has seen the A/B).
+Setting `MOE_HEAD` (env `DS41_MOE_HEAD`, read only under `MOE_IMPL=block`): `fused` (the default: owner decisions
+2026-10-27 "go with fused head", then fused the default after the A/B below) or `ops` (everything above).
 The head becomes one program a chip (tt/fused_head.py HeadSE3): x gathered over TP on its ports straight into the
 shared expert engine (bfp8, LoFi, clamped SiLU 10) with its row reduce-scatter to the owners, the router (logits HiFi3
 on the engine, fp32 partial sums in a fixed order, sqrt(softplus) + bias, top 6, weights / sum x 1.5), the routing
@@ -101,10 +101,10 @@ scripts: /localdev/dnijemcevic/bringup/fused_head_2026-10-27/.
 | D1 | A/B on the 2x2 behind `MOE_IMPL` (default `flat`, unchanged) | tt/settings.py `MOE_IMPL`; tt/model.py `TtDS41Block.__init__` / `_fns` |
 | D2 | x reaches the block gathered; ffn_norm unchanged | moe_block.py `MoEOptions.x_gathered` (`_x_shape`, `_head`: no x all-gather, router fed `mesh_partition(x, dim=3)`, x not freed); adapter `block_options()` |
 | D3 | Marko's ops router with DS41's gate weight, bias, route scale 1.5, top 6 | moe_block.py `Router` (unchanged); adapter `host()` (bf16 gate, fp32 bias recentred as tt/router.py, rows permuted), `block_model()` (asserts the config's top-k, H, I, route scale, limit against `DSV41_FLASH`) |
-| D4 | ops head; fused head behind `MOE_HEAD` (owner 2026-10-27) | adapter `block_options()`: `head="ops"` (`x_gathered` also requires it), `MOE_HEAD=fused`: `head="fused"`, `combine_snap` (section above) |
+| D4 | ops head first; then the fused head, the default (owner 2026-10-27, after the A/B) | adapter `block_options()`: `MOE_HEAD=fused` (default): `head="fused"`, `combine_snap` (section above); `ops`: `head="ops"` (`x_gathered` also requires it) |
 | D5 | shared expert LoFi, bfp8 weights | adapter `block_dtypes()`: `MoEDtypes(shared_fidelity=LoFi)`; bfp8 is the block's default. The block already had the fidelity option: no block change |
 | D6 | Marko's expert layout (owner change 2026-10-27, after the flat-path A/B 65.74 vs 68.10 ms / chunk) | DS41's `EXPERTS_LAYOUT` (default `marko`, copied from 979579fee03): tt/experts.py `TtExperts.flat_op` / `flat_layout`; the adapter gives the block that layout (`MoELayer.build(..., layout=)`, new `RoutedExperts(layout=)` so the exchange plans with it) and asserts `marko` equals the block's `RoutedExperts.layout_of`. `legacy` also works (the exchange then plans with LEGACY: untested) |
-| D7 | fixed combine order | moe_block.py `MoEOptions.combine_deterministic` -> `TokenExchange(deterministic=)` -> `TtK3TokenSplitMoE(deterministic=True)` (the exchange's det planner); adapter `block_options()` |
+| D7 | fixed combine order (ops head); superseded for the fused head by the combine snap (owner 2026-10-27: keep the snap) | fused: adapter `COMBINE_SNAP` 2^-19 -> `MoEOptions.combine_snap`; ops: moe_block.py `MoEOptions.combine_deterministic` -> `TokenExchange(deterministic=)` -> `TtK3TokenSplitMoE(deterministic=True)` (the exchange's det planner); adapter `block_options()` |
 | D8 | EXPERTS_PRECISION=glm only | adapter `TtMoEBlockLayer.__init__` refuses `full` with the decision in the message (the exchange calls the flat op at LoFi, bfp8 x / h) |
 | D9 | carry prepared_program, not the generic_op by-reference change, not mcast_v1 | `ttnn/ttnn/bringup/prepared_program/` (+ 2 lines in bringup_nanobind.cpp, CHANGELOG, README, INDEX.md) |
 | D10 | FABRIC_2D lines | adapter asserts the open fabric does not wrap (the block reads it: `Geometry.of`) |
