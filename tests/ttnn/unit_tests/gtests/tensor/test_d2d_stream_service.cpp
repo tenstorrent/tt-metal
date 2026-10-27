@@ -57,6 +57,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/arch.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -2458,6 +2459,60 @@ TEST_F(D2DStreamServiceTest, H2DtoD2DBridgeRowPair) {
 // keeps consuming inbound and producing outbound across iterations without desync.
 TEST_F(D2DStreamServiceTest, ThreeStageChainOwnIteration) {
     D2D_THREE_STAGE_GUARD();
+    verify_three_stage_chain(stage0, stage1, stage2, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
+}
+
+// The same chain folded back on itself: stage1 sits at the end of the row, (0,0), with
+// stage0 at (0,2) and stage2 at (0,1). Both of stage1's routes now leave east, so the D2D0
+// receiver's credit-return connection (links.front() toward stage0) and the D2D1 sender's
+// lane 0 (links[0] toward stage2) resolve to the same ethernet router. Nothing in
+// D2DStreamService keeps the two apart, and a router's worker channel serves one worker:
+// the second connection overwrites the first's worker record, the receiver never sees a
+// free slot, and the chain stops. It is the 4-rank 4x4 prefill chain's hang on three chips of
+// one Galaxy in OWN mode, where the collision holds for the whole run. Disabled
+// because it hangs until D2DStreamService picks disjoint routers on a chip that hosts both
+// ends; run it with --gtest_also_run_disabled_tests.
+TEST_F(D2DStreamServiceTest, DISABLED_ThreeStageChainFoldedOwnSharedRouter) {
+    if (!service_cores_supported()) {
+        GTEST_SKIP() << "D2DStreamService service cores require Blackhole or UBB Galaxy.";
+    }
+    if (!h2d_host_pinning_supported()) {
+        GTEST_SKIP() << "H2D front-end host-DMA pinning requires a DMA-translation IOMMU (not iommu=pt).";
+    }
+    const auto shape = this->mesh_device_->shape();
+    if (shape.dims() != 2 || shape[1] < 3) {
+        GTEST_SKIP() << "Need a 2D mesh with >= 3 devices in a row; got " << shape;
+    }
+    const MeshCoordinate upstream_coord(0, 2);
+    const MeshCoordinate middle_coord(0, 0);
+    const MeshCoordinate downstream_coord(0, 1);
+    auto stage0 = this->mesh_device_->create_submesh(MeshShape(1, 1), upstream_coord);
+    auto stage1 = this->mesh_device_->create_submesh(MeshShape(1, 1), middle_coord);
+    auto stage2 = this->mesh_device_->create_submesh(MeshShape(1, 1), downstream_coord);
+
+    // Precondition: the middle chip's receiver ack and sender lane 0 share a router, the
+    // way D2DStreamService picks them. If routing ever separates them, this is not a repro.
+    const auto middle = this->mesh_device_->get_fabric_node_id(middle_coord);
+    const auto upstream = this->mesh_device_->get_fabric_node_id(upstream_coord);
+    const auto downstream = this->mesh_device_->get_fabric_node_id(downstream_coord);
+    const auto ack_links = tt::tt_fabric::get_forwarding_link_indices(*this->mesh_device_, middle, upstream);
+    const auto send_links = tt::tt_fabric::get_forwarding_link_indices(*this->mesh_device_, middle, downstream);
+    ASSERT_FALSE(ack_links.empty());
+    ASSERT_FALSE(send_links.empty());
+    const auto ack_eth =
+        tt::tt_fabric::get_forwarding_eth_core(*this->mesh_device_, middle, upstream, ack_links.front());
+    const auto send_eth =
+        tt::tt_fabric::get_forwarding_eth_core(*this->mesh_device_, middle, downstream, send_links[0]);
+    log_info(
+        tt::LogTest,
+        "folded chain: middle {} receiver ack via eth {} (link {}), sender lane 0 via eth {} (link {})",
+        middle_coord,
+        ack_eth,
+        ack_links.front(),
+        send_eth,
+        send_links[0]);
+    ASSERT_EQ(ack_eth, send_eth) << "routes from the middle chip no longer share a router; the repro is void";
+
     verify_three_stage_chain(stage0, stage1, stage2, ttnn::Shape({1, 1, 32, 64}), kWorkerCores, /*num_iters=*/4);
 }
 
