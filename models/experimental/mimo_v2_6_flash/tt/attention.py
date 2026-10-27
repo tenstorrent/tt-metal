@@ -82,22 +82,25 @@ PAIR_SPLIT_OPS = all(
 )
 
 # A speculative verify's global attention under the KV pair split (_verify_grouped): one KV scan per request for all
-# its candidates (paged MLA decode's spec_multi_pos_tiles) instead of one per candidate slot. One chip, one request of
-# 4 candidates (verify_sdpa_bench): 1.57 against 2.19 ms per global layer at 1M (512K local keys), even at 128K, and
-# 0.128 against 0.051 ms at 8K, where the 4 full Q tiles (16 heads and 16 padding rows each) cost more than the reads
-# saved. Off by default (MIMO_VERIFY_GROUPED=1 turns it on); the adapter then packs a verify's requests one per group
-# of GROUP_SLOTS slots (verify_grouped()).
-VERIFY_GROUPED = os.environ.get("MIMO_VERIFY_GROUPED", "0") == "1"
+# its candidates (paged MLA decode's spec_multi_pos_tiles) instead of one per candidate slot. One chip, ms per global
+# layer (tests/perf/verify_sdpa_bench.py; per slot / grouped / a plain decode step of the requests):
+# - 4 requests of 2 candidates (MIMO_SPEC_GROUPS=4, c=16): 1M 4.33 / 3.05 / 2.19, 256K 1.10 / 0.81 / 0.57, 32K even,
+#   4K 0.048 / 0.070 / 0.040 (0.2 ms of a ~19 ms verify step);
+# - 1 request of 4: 1M 2.19 / 1.57 / 0.62, 128K even, 8K 0.051 / 0.128 / 0.085 (0.7 ms of a ~15 ms step).
+# Each candidate's 16 heads fill a 32-row Q tile, half of it padding, so the grouped program is compute-bound. On by
+# default for groups of 2 slots, off for 4 (MIMO_VERIFY_GROUPED=1 / 0 overrides); the adapter then packs a verify's
+# requests one per group of GROUP_SLOTS slots (verify_grouped()).
+VERIFY_GROUPED = os.environ.get("MIMO_VERIFY_GROUPED", "1" if GROUP_SLOTS == 2 else "0") == "1"
 GROUPED_VERIFY_OPS = "spec_multi_pos_tiles" in (
     ttnn.transformer.paged_flash_multi_latent_attention_decode.__doc__ or ""
 )
 
 
 def verify_grouped():
-    """Whether a pair-split verify runs its global attention one KV scan per request (VERIFY_GROUPED, groups of 4
+    """Whether a pair-split verify runs its global attention one KV scan per request (VERIFY_GROUPED, groups of 2 or 4
     candidates, and a ttnn build with spec_multi_pos_tiles on paged MLA decode). 8 candidates (DFlash's one group)
     need 128-token K chunks and at most 32 cores per request to fit L1 beside decode's buffers: not wired."""
-    return VERIFY_GROUPED and GROUPED_VERIFY_OPS and GROUP_SLOTS == 4
+    return VERIFY_GROUPED and GROUPED_VERIFY_OPS and GROUP_SLOTS in (2, 4)
 
 
 # A global layer's later prefill chunks stream the whole cached context once per (head group, Q chunk) unit. With

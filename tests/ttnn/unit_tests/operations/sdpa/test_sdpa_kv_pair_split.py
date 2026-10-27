@@ -320,8 +320,9 @@ def run_grouped_decode(device, q_slots, k_cache, v_cache, page_table_tt, cur_pos
         (4, [61, 2044 - 3]),
         (4, [0, 30, 126, 1500]),
         (8, [123]),
+        (2, [62, 127, 700, 2046]),
     ],
-    ids=["t4_r1", "t4_r2", "t4_r4", "t8_r1"],
+    ids=["t4_r1", "t4_r2", "t4_r4", "t8_r1", "t2_r4"],
 )
 def test_mla_decode_spec_multi_pos(device, layout, cands, starts, function_level_defaults, reset_seeds):
     """A speculative verify's MLA decode with one KV scan per request (spec_multi_pos_tiles = T candidates per page

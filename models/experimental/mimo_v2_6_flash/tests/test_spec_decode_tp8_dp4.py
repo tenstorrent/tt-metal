@@ -41,6 +41,7 @@ the first draft after the prompt backfills the rings from the prompt's last rows
 accepted at least as often as without it.
 """
 
+import math
 import threading
 import time
 from types import SimpleNamespace
@@ -81,6 +82,28 @@ PROMPT = (
 MIN_MEAN_ACCEPTED = 2.0 if MAX_DRAFTS >= 3 else 1.5  # one draft (MIMO_SPEC_GROUPS=4): accepted half the time
 # The mean accepted length of each (MTP layers, RoPE tables, backfill) case run in this session.
 MEAN_ACCEPTED = {}
+
+
+# The grouped verify attention (tt/attention.py _verify_grouped, on by default with groups of 2 slots) rounds
+# differently from the plain decode's, so where the plain step's top logits tie to within bf16 rounding the verify can
+# pick the other token. A divergence passes only there: the speculative token scores within TIE_STEPS bf16 steps of the
+# plain step's best logit at that position (as test_model_chunked_tp8_dp4.near_top); every token before it matched.
+TIE_STEPS = 2
+
+
+def near_tie(first_diff, seq, plain_top):
+    if first_diff is None:
+        return True
+    if first_diff not in plain_top:  # the prefill's token
+        return False
+    top = plain_top[first_diff]
+    best = float(top.values[0])
+    step = 2.0 ** (math.floor(math.log2(abs(best))) - 7)
+    scores = dict(zip(top.indices.tolist(), top.values.tolist()))
+    logger.info(
+        f"divergence at {first_diff}: speculative {seq[first_diff]}, plain top {list(scores.items())}, bf16 step {step}"
+    )
+    return seq[first_diff] in scores and scores[seq[first_diff]] >= best - TIE_STEPS * step
 
 
 def vllm_kv_layout(cfg):
@@ -168,6 +191,7 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
 
     prompt = AutoTokenizer.from_pretrained(path)(PROMPT, return_tensors="pt")["input_ids"][0].to(torch.int32)
     plain_row, spec_row = 0, PER_LANE  # lane 0 slot 0, lane 1 slot 0
+    plain_top = {}  # position -> the plain step's top logits there (near_tie)
 
     def prefill(row):
         # Row i of a prefill's tables is its i-th request's (prefill_forward): this one-request batch sends the slot's
@@ -190,6 +214,8 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
         logits = model.decode_forward(
             tokens, positions, page_table, kv, enable_trace=True, page_tables_per_layer=layer_tables
         )
+        if row == plain_row:
+            plain_top[pos + 1] = logits[row, 0].float().topk(4)
         return int(logits[row, 0].argmax())
 
     # Plain greedy on lane 0.
@@ -336,7 +362,7 @@ def test_spec_decode_tp8_dp4(mesh_device, device_rope, mtp_layers, backfill, mon
         f"{len(fused_mismatch)} of {LOGITS_CHECKS}"
     )
     first_diff = next((i for i in range(prompt.numel(), n) if seq[i] != plain[i]), None)
-    assert first_diff is None, f"speculative tokens diverge from greedy at position {first_diff}"
+    assert near_tie(first_diff, seq, plain_top), f"speculative tokens diverge from greedy at position {first_diff}"
     assert mean >= MIN_MEAN_ACCEPTED, f"mean accepted {mean:.2f} < {MIN_MEAN_ACCEPTED}: the drafts rarely match"
     # Without the backfill the rings hold zeros at the prompt's positions, which every draft of this run attends (the
     # prompt and STEPS tokens fit in the MTP layers' 128-position window): with the backfilled rings the drafts must be
@@ -375,6 +401,7 @@ def test_chained_spec_decode_tp8_dp4(mesh_device, mtp_layers, monkeypatch):
     model.warmup_model_decode(kv, enable_trace=True)
     prompt = AutoTokenizer.from_pretrained(path)(PROMPT, return_tensors="pt")["input_ids"][0].to(torch.int32)
     plain_row, spec_row = 0, PER_LANE
+    plain_top = {}  # position -> the plain step's top logits there (near_tie)
     k1 = 1 + MAX_DRAFTS
 
     def prefill(row):
@@ -398,6 +425,8 @@ def test_chained_spec_decode_tp8_dp4(mesh_device, mtp_layers, monkeypatch):
         logits = model.decode_forward(
             tokens, positions, page_table, kv, enable_trace=True, page_tables_per_layer=layer_tables
         )
+        if row == plain_row:
+            plain_top[pos + 1] = logits[row, 0].float().topk(4)
         return int(logits[row, 0].argmax())
 
     plain = prompt.tolist() + [prefill(plain_row)]
@@ -480,5 +509,5 @@ def test_chained_spec_decode_tp8_dp4(mesh_device, mtp_layers, monkeypatch):
     # The only host-planned draft (the first, after the prompt) backfilled the rings; every chained one continued them.
     assert model.chain_stats["backfills"] == 1
     first_diff = next((i for i in range(prompt.numel(), n) if seq[i] != plain[i]), None)
-    assert first_diff is None, f"chained speculative tokens diverge from greedy at position {first_diff}"
+    assert near_tie(first_diff, seq, plain_top), f"chained speculative tokens diverge from greedy at {first_diff}"
     assert mean >= MIN_MEAN_ACCEPTED, f"mean accepted {mean:.2f} < {MIN_MEAN_ACCEPTED}: the drafts rarely match"

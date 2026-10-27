@@ -38,6 +38,7 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
     load_config_and_ckpt,
     pcc,
 )
+from models.experimental.mimo_v2_6_flash.reference.spec_decode import SPEC_SLOTS
 from models.experimental.mimo_v2_6_flash.tt import kv as kv_lib
 from models.experimental.mimo_v2_6_flash.tt.attention import PAIR_SPLIT_OPS, TtMiMoAttention, page_table_width
 from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan, pad_to
@@ -48,7 +49,7 @@ from models.experimental.mimo_v2_6_flash.tt.rope import MiMoRotarySetup
 MAX_BATCH = 32
 BLOCK = 64
 HIDDEN_STD = 1.0
-SERIAL = 4
+SERIAL = SPEC_SLOTS  # a verify pass's slots (one request in all of them: its draft groups share its table row)
 
 
 def per_chip_torch(t):
