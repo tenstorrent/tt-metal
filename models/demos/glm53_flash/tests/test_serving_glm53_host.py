@@ -278,3 +278,33 @@ def test_adapter_satisfies_the_vllm_model_protocol():
     assert callable(getattr(GLM53FlashForCausalLM, "compute_logits", None))
     forward = inspect.signature(GLM53FlashForCausalLM.forward).parameters
     assert "input_ids" in forward and "positions" in forward
+
+
+def test_step_profiler_wraps_the_plugin_runner(monkeypatch):
+    """GLM53_VLLM_STEP_PROFILE=N wraps TTModelRunner.execute_model once (idempotent), keeps the return value and
+    counts calls; unset, nothing is touched."""
+    import sys
+    import types
+
+    from models.demos.glm53_flash.tt import generator_vllm as gv
+
+    class Runner:
+        model = None
+
+        def execute_model(self, x):
+            return x * 2
+
+    orig = Runner.execute_model
+    fake = types.ModuleType("vllm_tt_plugin.model_runner")
+    fake.TTModelRunner = Runner
+    monkeypatch.setitem(sys.modules, "vllm_tt_plugin", types.ModuleType("vllm_tt_plugin"))
+    monkeypatch.setitem(sys.modules, "vllm_tt_plugin.model_runner", fake)
+    monkeypatch.delenv("GLM53_VLLM_STEP_PROFILE", raising=False)
+    gv._install_step_profiler()
+    assert Runner.execute_model is orig
+    monkeypatch.setenv("GLM53_VLLM_STEP_PROFILE", "3")
+    gv._install_step_profiler()
+    gv._install_step_profiler()  # idempotent
+    assert getattr(Runner.execute_model, "_glm53_profiled", False)
+    r = Runner()
+    assert [r.execute_model(i) for i in range(40)] == [2 * i for i in range(40)]

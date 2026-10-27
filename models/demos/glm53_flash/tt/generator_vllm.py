@@ -161,6 +161,63 @@ def mesh_cache_root() -> Path | None:
 
 
 # ------------------------------------------------------------------------------------------- outputs
+
+
+def _install_step_profiler() -> None:
+    """``GLM53_VLLM_STEP_PROFILE=N`` (debug, default off): wrap the plugin runner's ``execute_model`` so the engine
+    log shows, every 32 engine steps, the mean wall of a whole step next to the adapter's own decode wall (the
+    difference is the runner + vLLM share), and after N steps a cProfile top-40 (cumulative) of those steps. The
+    served step is ~5x the device step (2026-10-27 smoke: 372 ms ITL vs 65 ms replay); this knob attributes it."""
+    spec = os.environ.get("GLM53_VLLM_STEP_PROFILE", "")
+    if not spec:
+        return
+    import cProfile
+    import io
+    import pstats
+
+    try:
+        from vllm_tt_plugin import model_runner as mr
+    except ImportError as exc:  # pragma: no cover - plugin-less host runs
+        logger.warning(f"GLM53 vLLM: step profiler not installed ({exc})")
+        return
+    runner_cls = getattr(mr, "TTModelRunner", None)
+    if runner_cls is None or getattr(runner_cls.execute_model, "_glm53_profiled", False):
+        return
+    n_profile = max(1, int(spec))
+    state = {"calls": 0, "wall": 0.0, "prof": cProfile.Profile(), "done": False}
+    orig = runner_cls.execute_model
+
+    def execute_model(self, *args, **kwargs):
+        t0 = time.perf_counter()
+        profiling = not state["done"] and state["calls"] < n_profile
+        if profiling:
+            state["prof"].enable()
+        try:
+            return orig(self, *args, **kwargs)
+        finally:
+            if profiling:
+                state["prof"].disable()
+            state["calls"] += 1
+            state["wall"] += time.perf_counter() - t0
+            if state["calls"] % 32 == 0:
+                model = getattr(self, "model", None)
+                steps = getattr(model, "_perf_steps", 0) or 0
+                adapter_ms = 1000 * getattr(model, "_perf_s", 0.0) / steps if steps else float("nan")
+                logger.info(
+                    f"[glm53-vllm-step] engine step {1000 * state['wall'] / state['calls']:.1f} ms mean over "
+                    f"{state['calls']} execute_model calls; adapter decode wall {adapter_ms:.1f} ms over {steps} steps"
+                )
+            if not state["done"] and state["calls"] >= n_profile:
+                state["done"] = True
+                buf = io.StringIO()
+                pstats.Stats(state["prof"], stream=buf).strip_dirs().sort_stats("cumulative").print_stats(40)
+                logger.info(f"[glm53-vllm-step] cProfile of the first {n_profile} engine steps:\n{buf.getvalue()}")
+
+    execute_model._glm53_profiled = True  # type: ignore[attr-defined]
+    runner_cls.execute_model = execute_model
+    logger.info(f"GLM53 vLLM: step profiler installed (cProfile over the first {n_profile} engine steps)")
+
+
 @dataclass
 class DeviceOwnedCache:
     """What ``allocate_kv_cache`` returns: a marker that the latent cache lives inside the mesh model (allocated at
@@ -332,6 +389,7 @@ class GLM53FlashForCausalLM:
         )
         logger.info(f"GLM53 vLLM: mesh model built in {time.perf_counter() - t0:.0f} s ({len(layers)} layers)")
         geometry = dataclasses.replace(geometry, traced_prefill_lengths=tuple(model.trace_prefill_lengths()))
+        _install_step_profiler()
         return cls(model, geometry, pad_token_id=cfg.pad_token_id)
 
     @staticmethod
