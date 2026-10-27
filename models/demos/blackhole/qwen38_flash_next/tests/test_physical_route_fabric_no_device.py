@@ -3,10 +3,9 @@
 
 """``derive_fabric_line_route``: a ring under the 1x4 LINE descriptor opens in the order the fabric embedded the line.
 
-The fixtures are real cluster descriptors and fabric mappings (``tools/qb_mesh_smoke.py`` results): a QuietBox (4x p150,
-where the fabric's order equals the ring walk from chip 0) and a QuietBox 2 (2x p300c, where it does not). The route
-is read before the fabric is enabled, so the opened mesh is checked to hold fabric chip k at coordinate k
-(``live_mapping``).
+The fixtures are cluster descriptors and fabric mappings read on real hosts: a QuietBox (4x p150, where the fabric's
+order equals the ring walk from chip 0) and a QuietBox 2 (2x p300c, where it does not). The route is read before the
+fabric is enabled, so the opened mesh is checked to hold fabric chip k at coordinate k (``live_mapping``).
 """
 
 from __future__ import annotations

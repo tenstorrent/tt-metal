@@ -52,7 +52,7 @@ class TensorRecord:
 
 
 def read_tensor_manifest(path: Path) -> list[TensorRecord]:
-    """Read the deterministic TSV emitted by ``safetensors_metadata.py``."""
+    """Read a tensor manifest TSV: one ``name, dtype, shape (AxB), elements, data bytes`` row per checkpoint tensor."""
 
     records: list[TensorRecord] = []
     with path.open("r", encoding="utf-8") as source:
