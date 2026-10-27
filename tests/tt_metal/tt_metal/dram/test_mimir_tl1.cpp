@@ -583,9 +583,8 @@ TEST_P(MimirLocalTl1, SameChipletControl) {
     if (const std::string skip_reason = local_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     run_local_copy(device, pair);
 }
 
@@ -599,9 +598,8 @@ TEST_P(MimirRemoteTl1Direct, WriteRead) {
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     run_remote_write_read(device, {pair}, fmt::format("{} WriteRead", remote_pair_label(pair)));
 }
@@ -612,9 +610,8 @@ TEST_P(MimirRemoteTl1Direct, HostInitRemoteRead) {
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     run_remote_host_init_read(device, pair);
 }
@@ -625,9 +622,8 @@ TEST_P(MimirRemoteTl1Direct, SizeAlignment) {
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     run_remote_size_alignment(device, pair);
 }
@@ -642,9 +638,8 @@ TEST_P(MimirRemoteTl1Routed, WriteRead) {
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     run_remote_write_read(device, {pair}, fmt::format("{} WriteRead", remote_pair_label(pair)));
 }
@@ -655,9 +650,8 @@ TEST_P(MimirRemoteTl1Routed, HostInitRemoteRead) {
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     run_remote_host_init_read(device, pair);
 }
@@ -668,9 +662,8 @@ TEST_P(MimirRemoteTl1Routed, SizeAlignment) {
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     run_remote_size_alignment(device, pair);
 }
@@ -686,9 +679,8 @@ TEST_F(MimirRemoteTl1Bidir, Concurrent) {
     if (const std::string skip_reason = remote_skip_reason(pairs.front()); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     run_remote_write_read(device, pairs, "MimirRemoteTl1Bidir.Concurrent");
 }
@@ -704,9 +696,8 @@ TEST(MimirRemoteMixed, FanOutFanIn) {
     if (const std::string skip_reason = remote_skip_reason(RemotePair{0, 0, 1, 1}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     const std::vector<RemoteTransfer> transfers = {
         {.source_cce = 1, .hart = 0, .destination_cce = 2, .size_bytes = 1024},

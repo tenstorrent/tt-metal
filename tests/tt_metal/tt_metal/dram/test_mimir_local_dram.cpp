@@ -243,9 +243,8 @@ TEST_P(MimirLocalDram, CceWritesTl1ToDram) {
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice session{device};
+    ScopedDevice session;
+    IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t local_mimir = mimir_index_for_cce(cce_index);
     const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
@@ -310,9 +309,8 @@ TEST_P(MimirLocalDram, CceReadsDramToTl1) {
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice session{device};
+    ScopedDevice session;
+    IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t local_mimir = mimir_index_for_cce(cce_index);
     const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
@@ -378,9 +376,8 @@ TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice session{device};
+    ScopedDevice session;
+    IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t local_mimir = mimir_index_for_cce(cce_index);
     const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
@@ -474,9 +471,8 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice session{device};
+    ScopedDevice session;
+    IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t local_mimir = mimir_index_for_cce(cce_index);
     const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
@@ -594,9 +590,8 @@ TEST_P(MimirLocalDram, RepeatedAndOverlappingPerHart) {
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice session{device};
+    ScopedDevice session;
+    IDevice* device = session.device();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t local_mimir = mimir_index_for_cce(cce_index);
     const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);

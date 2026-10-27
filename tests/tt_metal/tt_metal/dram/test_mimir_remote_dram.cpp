@@ -1037,9 +1037,8 @@ TEST(MimirRemoteMixed, Concurrent) {
     if (!preflight.empty()) {
         GTEST_SKIP() << preflight;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
@@ -1237,9 +1236,8 @@ TEST_P(MimirRemoteDram, WriteFromTl1) {
     if (!preflight.empty()) {
         GTEST_SKIP() << preflight;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
@@ -1265,9 +1263,8 @@ TEST_P(MimirRemoteDram, ReadToTl1) {
     if (!preflight.empty()) {
         GTEST_SKIP() << preflight;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
@@ -1293,9 +1290,8 @@ TEST_P(MimirRemoteDram, Tl1RoundTrip) {
     if (!preflight.empty()) {
         GTEST_SKIP() << preflight;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
@@ -1325,9 +1321,8 @@ TEST_P(MimirRemoteDramTrafficMatrix, TrafficMatrix) {
     if (!preflight.empty()) {
         GTEST_SKIP() << preflight;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 

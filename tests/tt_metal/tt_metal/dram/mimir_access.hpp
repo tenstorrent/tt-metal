@@ -21,6 +21,7 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "umd/device/coordinates/grendel_noc_address_resolver.hpp"
@@ -356,31 +357,6 @@ inline void expect_copy_done(const CceCopyResult& result, uint32_t expected_xor,
     EXPECT_EQ(result.xor_signature, expected_xor) << where;
 }
 
-// Owns one open device. The destructor closes it on every path; close() closes early. A throw from CloseDevice is
-// reported as a failure, not propagated.
-class ScopedDevice {
-public:
-    explicit ScopedDevice(IDevice* device) : device_(device) {}
-    ScopedDevice(const ScopedDevice&) = delete;
-    ScopedDevice& operator=(const ScopedDevice&) = delete;
-    ~ScopedDevice() { close(); }
-
-    void close() {
-        IDevice* device = device_;
-        device_ = nullptr;
-        if (device != nullptr) {
-            try {
-                EXPECT_TRUE(CloseDevice(device));
-            } catch (const std::exception& error) {
-                ADD_FAILURE() << "CloseDevice threw: " << error.what();
-            }
-        }
-    }
-
-private:
-    IDevice* device_ = nullptr;
-};
-
 // Owns one open MeshDevice. The destructor closes it on every path; a throw from close() is reported, not propagated.
 class ScopedMesh {
 public:
@@ -403,6 +379,28 @@ public:
 
 private:
     std::shared_ptr<distributed::MeshDevice> mesh_;
+};
+
+// Launches `program` through slow dispatch and waits until its cores are idle.
+inline void launch_program_and_wait(IDevice* device, Program& program) {
+    slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/true);
+    slow_dispatch::WaitProgramDone(*device, program);
+}
+
+// Opens chip 0 as a unit MeshDevice and owns it. device() is the physical device under it, for host reads and writes
+// and slow-dispatch launches. The destructor closes the mesh on every path; close() closes early.
+class ScopedDevice {
+public:
+    ScopedDevice() : mesh_(distributed::MeshDevice::create_unit_mesh(0)), closer_(mesh_) {}
+
+    IDevice* device() const {
+        return mesh_->get_device(distributed::MeshCoordinate::zero_coordinate(mesh_->shape().dims()));
+    }
+    void close() { closer_.close(); }
+
+private:
+    std::shared_ptr<distributed::MeshDevice> mesh_;
+    ScopedMesh closer_;
 };
 
 inline uint64_t go_message_tl1_offset() {
@@ -477,7 +475,7 @@ inline void add_cce_kernels(IDevice* device, Program& program, const std::vector
 // with detail::WaitProgramDone; a blocking slow-dispatch mesh workload would stall every later host access instead.
 inline void launch_on_idle_cces(IDevice* device, Program& program, const std::vector<CceKernelLaunch>& launches) {
     require_idle_cces(device, launches);
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+    slow_dispatch::LaunchProgramAsync(*device, program, /*force_slow_dispatch=*/true);
 }
 
 // One Program holding every kernel, launched with launch_on_idle_cces.
@@ -546,7 +544,7 @@ inline ::testing::AssertionResult run_cce_copy_ops(
         write_cce_tl1(device, launch.cce_index, tl1_done_block(launch.hart), {cce_copy_ops_abi::kDonePoison});
     }
 
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    launch_program_and_wait(device, program);
 
     for (const CceCopyLaunch& launch : launches) {
         const std::vector<uint32_t> done_words = read_cce_tl1(

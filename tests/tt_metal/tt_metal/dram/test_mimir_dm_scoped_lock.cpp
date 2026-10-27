@@ -215,9 +215,8 @@ TEST_P(MimirDmScopedLockClm, CacheOps) {
     if (const std::string skip_reason = clm_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     check_tl1_layout();
 
     const metal_SocDescriptor& soc = soc_desc_of(device);
@@ -510,9 +509,8 @@ protected:
 // lines NEW through its cache and the unlocked lines OLD.
 TEST_P(MimirCacheScopedLock, MultiConsumer) {
     const uint32_t cce_index = GetParam();
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
 
@@ -610,9 +608,8 @@ TEST_P(MimirCacheScopedLock, MultiConsumer) {
 // its previous trip round the ring must read the new round's values.
 TEST_P(MimirCacheScopedLock, RingWrap) {
     const uint32_t cce_index = GetParam();
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
 
@@ -688,9 +685,8 @@ TEST_P(MimirCacheScopedLock, RingWrap) {
 // the ExternalWriters probe showed sibling SPA stores are snooped.
 TEST_P(MimirCacheScopedLock, NonSnoopingProducer) {
     const uint32_t cce_index = GetParam();
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
     const uint32_t producer_cce = sibling_cce(cce_index);
