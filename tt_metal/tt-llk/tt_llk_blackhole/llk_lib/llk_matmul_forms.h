@@ -245,6 +245,8 @@ inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
     // Bfp8_b HiFi2, a 4 by 2 block over 2 to 32 k steps, at half and full sync
     {MathFidelity::HiFi2, 0, 2, 32, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 4, false, 'r', false, 0, 4},
     {MathFidelity::HiFi2, 1, 2, 32, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 4, false, 'r', false, 0, 4},
+    // Bfp8_b to Float32 at HiFi2, half sync, one k step, 16-bit DEST, a single tile: the table's form reads 0.6 cycles behind main
+    {MathFidelity::HiFi2, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 1, 1, false, 'r', false, 0, 1},
     // Float16_b HiFi4 at full sync over 32 k steps, 1x1, 1x8 and 2x4 blocks; at half sync over 2 to 4 k steps, a single tile
     {MathFidelity::HiFi4, 1, 32, 32, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 1, false, 'r', false, 0, 1},
     {MathFidelity::HiFi4, 1, 32, 32, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 8, false, 'r', false, 0, 8},
