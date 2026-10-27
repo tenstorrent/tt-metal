@@ -1687,7 +1687,6 @@
     test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
-    # Single-clip sanity gate (CLIP + loose VBench floors); the multi-seed gate runs in the perf leg.
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
@@ -1721,8 +1720,6 @@
     test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
-    # The perf test renders the VBench gate (1 prompt x 4 seeds) into the shared NFS staging dir;
-    # it is scored on CPU after the devices are closed.
     export RUN_VBENCH=1 VBENCH_EXPORT_DIR="${PIPELINE_DIR}/vbench"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
@@ -1760,7 +1757,6 @@
     test -f "${PIPE_TEST}" || { echo "ERROR: missing ${PIPE_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
-    # Single-clip sanity gate (CLIP + loose VBench floors); the multi-seed gate runs in the perf leg.
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
@@ -1794,8 +1790,6 @@
     test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
-    # The perf test renders the VBench gate (1 prompt x 4 seeds) into the shared NFS staging dir;
-    # it is scored on CPU after the devices are closed.
     export RUN_VBENCH=1 VBENCH_EXPORT_DIR="${PIPELINE_DIR}/vbench"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
@@ -1859,10 +1853,6 @@
     export TT_MESH_HOST_RANK=0
     export TT_METAL_SHM_TRACKING_DISABLED=1
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    # Single-galaxy counterparts of the bh_sc4 quad legs above, on one rank instead of tt-run:
-    # ring_bh_4x8 for perf (it requests a Blackhole-sized fabric packet payload, so it self-skips
-    # on Wormhole only, not here), and the 4x8 linear pipeline case, which is the only Blackhole 4x8
-    # config test_pipeline_wan.py runs for I2V -- the 4x8 ring case is T2V only.
     # Stop at the first failed command: the devices are not reset between commands (#57706).
     run() { mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" python3 -m pytest "$@" || exit $?; }
     run --timeout 2700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
