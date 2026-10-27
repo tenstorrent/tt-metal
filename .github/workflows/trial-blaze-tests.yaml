@@ -13,6 +13,8 @@ on:
         required: false
         default: main
         type: string
+  schedule:
+    - cron: "0 4,8,16,20 * * *"
 
 permissions:
   contents: read
@@ -58,4 +60,5 @@ jobs:
       # match the libraries it links against.
       metal-ref: ${{ github.sha }}
       dev-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      blaze-ref: ${{ inputs.blaze-ref }}
+      # Scheduled runs use blaze main with metal main.
+      blaze-ref: ${{ inputs.blaze-ref || 'main' }}
