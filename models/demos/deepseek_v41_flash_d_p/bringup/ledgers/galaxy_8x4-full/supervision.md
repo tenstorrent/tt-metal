@@ -339,3 +339,20 @@ Measurements of 2026-10-27 (outside the ledger, copies in node_handoff/overseer/
 Owner rules: the 2026-10-26 15:23 HAND-OFF list still binds (autonomy, no shortcuts, framework fixes with a selftest,
 push only on the owner's word, dashboard at milestones). Plus today: never call a run warm without the program-cache
 check (F196 / F197); host times stay hidden until verified warm.
+
+## 2026-10-27 16:44 overseer session on bh-glx-120-b06u08 (slurm 157973) after the owner's rebase
+- Repo on the rebased dnijemcevic/model_bringup at 7c06953a55c (= rebase_switched); old head kept as ds41-prerebase.
+  No python_env change in the new base (requirements untouched; setup.py drops two header globs only): env kept.
+  Build: /scratch/dnijemcevic/build_rebase.sh (Release, Tracy, clang-20 as before; stage lines in build_rebase.log).
+- Owner order (2026-10-27): complete the bring-up end to end on this Galaxy, K.1 with the full 40-layer runner smoke.
+  Spec serving: require_engine true, server_repo /scratch/$USER/tt-d-gen (/localdev does not exist on this node),
+  answer 7 rewritten (the smoke runs here). Intake re-approved on the owner's word (16:45). dgen-build agent started
+  in the background on tt-d-gen's latest commit (nice 19, -j24 beside the tt-metal build).
+- FIX.5 stands: no new flat expert op in the rebased branch (7c06953 is Marko's combine-trailer hang fix only).
+- Framework gap (F200, selftest test_engine_wait.py): with require_engine and no build, K.1's gate would fail and start
+  an agent attempt that cannot succeed. Now a gate that runs a runner test (its file names dgen_engine / use_engine)
+  waits with "tt-d-gen build missing" (no gate, no agent); independent tasks go on (F109); it runs once the build is found.
+- Hand-off item 6: the owner's bab52a1 records the 2x2 passing after the rebase (L.*, K.1 contract, O.1 238 fork
+  cases). Whether that closes the QB re-verify of FIX.1, FIX.2 and the W.1 fabric change stays the owner's call.
+- Guard (overseer_guard.sh: remain-on-exit + pane-died respawn) re-applied; heartbeat cron :07/:37; Stop hook present.
+- F.1 (F199, run-closing strict fork suite) added with ledger_gen --extend; runs after Z.1 (cost on the 8x4 stated before it starts).

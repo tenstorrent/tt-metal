@@ -2159,3 +2159,13 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   when faster (owner); the shared helper tests/ttnn/profiling/realtime_profiler_utils.py (upstream) is used to measure
   only.
 - Selftests: test_fork_cases.py (the suite's waivers and totals; the skills name the rule).
+
+## F200: a runner test waits for its engine build instead of failing into an agent (DeepSeek-V4.1 galaxy_8x4, 2026-10-27)
+- Seen: the owner turned on serving.require_engine for the 8x4 full run while tt-d-gen was still being built (dgen-build
+  in parallel); K.1's gate would have failed on the missing build and started an agent attempt that cannot succeed.
+- orchestrator.engine_missing: a task whose gate names a test file that tt-d-gen's engine drives (it names dgen_engine
+  or use_engine) with require_engine and no build (dgen_engine.find_build) does not gate; it waits ("tt-d-gen build
+  missing: <why>", WAITING FOR A PERSON) and F109 runs the independent tasks meanwhile. parked_waiting releases it as
+  soon as the build is found; when only it is left, the run stops waiting and `resume` re-checks.
+- Selftest: test_engine_wait.py (waits, no gate, no agent, independent work passes, runs once a build appears; no wait
+  without the requirement or without a runner test).
