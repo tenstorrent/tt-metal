@@ -59,13 +59,13 @@ TEST(NamedShmHost, HostOnlyCompletionQueueIgnoresHugepageOption) {
     const auto name = generate_shm_name("test_completion");
     using tt::tt_metal::internal::LayerCompletionMessage;
     using tt::tt_metal::internal::LayerCompletionQueue;
-    auto owner = LayerCompletionQueue::create(name);
+    auto owner = LayerCompletionQueue::create(name, 1);
     auto peer = LayerCompletionQueue::connect(name, 100);
-    ASSERT_TRUE(peer->try_push(LayerCompletionMessage{.seq = 7, .layer_idx = 59}));
+    ASSERT_TRUE(peer->try_push(LayerCompletionMessage{.slot_id = 7, .layer_start = 59, .layer_end = 60}));
     LayerCompletionMessage message;
     ASSERT_TRUE(owner->try_pop(message));
-    EXPECT_EQ(message.seq, 7);
-    EXPECT_EQ(message.layer_idx, 59);
+    EXPECT_EQ(message.slot_id, 7);
+    EXPECT_EQ(message.layer_start, 59);
 }
 
 TEST(NamedShmHost, SmallRegionDoesNotNeedHugepageMount) {
