@@ -11,7 +11,7 @@ from typing import Any, Sequence, Tuple
 
 from transformers import AutoTokenizer
 
-from ttml.common.utils import resolve_pad_token_id
+from ttml.common.utils import resolve_pad_token_id, resolve_stop_token_ids
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
     MathFidelitySetting,
@@ -19,15 +19,6 @@ from models.tt_transformers.tt.model_config import (
     OpGroup,
     PrecisionSetting,
     TensorGroup,
-)
-
-
-# Stop-token strings (stable across Llama-3 base/instruct variants; the IDs are
-# not). Resolved to IDs by :func:`llama_stop_and_pad`.
-LLAMA_STOP_TOKEN_STRS: tuple[str, ...] = (
-    "<|eot_id|>",
-    "<|end_of_text|>",
-    "<|eom_id|>",
 )
 
 
@@ -69,11 +60,4 @@ def llama_stop_and_pad(model_id: str) -> Tuple[Sequence[int], int]:
     with the peer tokenizer.
     """
     tok = AutoTokenizer.from_pretrained(model_id)
-    ids: set[int] = set()
-    if tok.eos_token_id is not None:
-        ids.add(int(tok.eos_token_id))
-    for s in LLAMA_STOP_TOKEN_STRS:
-        tid = tok.convert_tokens_to_ids(s)
-        if tid is not None and tid >= 0 and tid != tok.unk_token_id:
-            ids.add(int(tid))
-    return sorted(ids), resolve_pad_token_id(tok)
+    return sorted(resolve_stop_token_ids(tok)), resolve_pad_token_id(tok)
