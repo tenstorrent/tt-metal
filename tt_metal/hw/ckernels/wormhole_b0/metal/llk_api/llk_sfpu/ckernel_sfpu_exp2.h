@@ -75,10 +75,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
 // xfails on fmod / remainder / where / rdiv), so a device-side NaN guard here
 // would be dead code.
 //
-// The overload taking c0, c1 and c2 is for a caller that evaluates it once per element
-// (logaddexp2): as with _sfpu_exp_21f_bf16_unsafe_, it can load the fractional-part
-// coefficients once, before its loop, and pass the registers. Each may be a float or a
-// vFloat, so the one-argument form below, which passes floats, compiles as before.
+// Used by logaddexp2, which evaluates it once per element: as with
+// _sfpu_exp_21f_bf16_unsafe_, it can load the fractional-part coefficients once, before
+// its loop, and pass the registers. Each may be a float or a vFloat. calculate_exp2
+// itself runs the same algorithm on the raw-TTI replay body of exp (below).
 template <typename C0, typename C1, typename C2>
 sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x, C0 c0, C1 c1, C2 c2) {
     // Map x → xlog2 such that 2^x has biased exponent floor(xlog2) and the
@@ -113,10 +113,6 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x, C0 c0, C1 c1, C2 c2) {
     return sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
 }
 
-sfpi_inline sfpi::vFloat _sfpu_exp2_bf16_(sfpi::vFloat x) {
-    return _sfpu_exp2_bf16_(x, EXP_21F_BF16_C0, EXP_21F_BF16_C1, EXP_21F_BF16_C2);
-}
-
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_exp2() {
     if constexpr (is_fp32_dest_acc_en) {
@@ -128,14 +124,16 @@ inline void calculate_exp2() {
             sfpi::dst_reg++;
         }
     } else {
-        // bf16 body is a dependent format-conversion chain (convert/exexp/setexp);
-        // unrolling overlaps independent iterations to hide that latency.
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat v = sfpi::dst_reg[0];
-            sfpi::dst_reg[0] = _sfpu_exp2_bf16_(v);
-            sfpi::dst_reg++;
-        }
+        // bf16: the raw-TTI replay body of exp, whose range reduction is x * LREG12 + 127 with
+        // LREG12 = vConstFloatPrgm0. exp2_init sets it to 1.0f, so fl(x * 1 + 127) == fl(x + 127):
+        // the same instruction sequence and constants as _sfpu_exp2_bf16_ (FP32_C0 loads c0 as
+        // the fp32 EXP_21F_BF16_C0), 20 issue slots per row instead of sfpi's 24.
+        _sfpu_exp_21f_bf16_tti_<
+            /*SCALE_EN=*/false,
+            /*is_fp32_dest_acc_en=*/false,
+            /*CLAMP_NEGATIVE=*/true,
+            ITERATIONS,
+            /*FP32_C0=*/true>(0);
     }
 }
 
@@ -147,6 +145,10 @@ inline void exp2_init() {
         sfpi::vConstFloatPrgm0 = 0x1.62e42ep-1f;
         sfpi::vConstFloatPrgm1 = 0x1.ebfba0p-3f;
         sfpi::vConstFloatPrgm2 = 0x1.c6afd8p-5f;
+    } else {
+        // LREG12 = x multiplier and LREG13 = c2 of _sfpu_exp_21f_bf16_tti_ (exp_init loads 1/ln2 here).
+        sfpi::vConstFloatPrgm0 = 1.0f;
+        sfpi::vConstFloatPrgm1 = EXP_21F_BF16_C2;
     }
 }
 

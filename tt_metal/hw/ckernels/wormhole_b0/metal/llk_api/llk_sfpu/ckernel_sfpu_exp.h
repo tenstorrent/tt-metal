@@ -301,14 +301,19 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
  * Requires _init_exponential_tti_bf16_() to have been called to configure
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
  *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
+ *
+ * exp2 runs the same body with LREG12 = 1.0f (x * 1 + 127 == x + 127 exactly) and
+ * FP32_C0 set, which loads c0 as the fp32 EXP_21F_BF16_C0 instead of its fp16
+ * rounding: with that, the body is instruction-for-instruction the sfpi
+ * _sfpu_exp2_bf16_ with the same constants.
  */
-template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS>
+template <bool SCALE_EN, bool is_fp32_dest_acc_en, bool CLAMP_NEGATIVE, int ITERATIONS, bool FP32_C0 = false>
 inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // Iteration-invariant constants:
     //   LREG3 = 127.0f                      (bias term in z = x/ln2 + 127)
     //   LREG5 = 7.839635491371155e-08f      (poly coeff c1)
-    //   LREG6 = 1.0017248f                  (poly coeff c0)
-    //   LREG12 = 1/ln2                      (programmable, set in init)
+    //   LREG6 = 1.0017248f                  (poly coeff c0; fp16-rounded unless FP32_C0)
+    //   LREG12 = 1/ln2                      (programmable, set in init; 1.0f for exp2)
     //   LREG13 = 4.791750143340323e-15f     (poly coeff c2; programmable, set in init)
     //   LREG2 = 255.0f                      (upper clamp threshold; refreshed in-loop)
     TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, 0x42fe);
@@ -316,7 +321,13 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, 0x33a8);
     TTI_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, 0x5ada);
 
-    TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATA, 0x3c02);
+    if constexpr (FP32_C0) {
+        static_assert(__builtin_bit_cast(std::uint32_t, EXP_21F_BF16_C0) == 0x3f803885u);
+        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_UPPER, 0x3f80);
+        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_LOWER, 0x3885);
+    } else {
+        TTI_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATA, 0x3c02);
+    }
 
     TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, 0x437f);
 
