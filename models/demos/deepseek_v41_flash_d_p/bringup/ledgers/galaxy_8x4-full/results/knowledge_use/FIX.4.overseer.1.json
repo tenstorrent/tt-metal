@@ -1,0 +1,65 @@
+{
+ "used": [
+  {
+   "id": "DS41-35",
+   "how": "kept the bfp8 exactness assert on the stored [N, K] orientation (_bfp8_exact per stacked w1 / w3 / w2) on the miss path; the cache stores the same [N, K] tiles",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-10",
+   "how": "bfp4 stays the lossy default: bfp4_stats (changed fraction, worst matrix) kept correct on a hit by storing them in the cache's completion marker",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "K-66",
+   "how": "measured the flat cache's flatbuffer hit (load_tensor_flatbuffer, 7.1 GiB / layer on 8x4) before relying on it: 1.0-1.2 s, no spin (a different API from ttnn.as_tensor)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the flat fork's cache dump (_bank_sharded) writes straight to the final file names: a process killed mid-dump leaves a truncated file the next run would load (now DS41-121; tt/experts.py:_CacheMarker guards it model-side)",
+  "where the routed-expert load time goes on 8x4 (from_torch bfp4 packing 55 s, flat_weight_regions 26 s, host dequant / stats 24-32 s per layer; now DS41-121)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "FIX.4 pads, duplicates or inflates nothing: the same weights, layout and kernels (test_host_weights_identical: bit-identical bf16 tensors; W.1 err metrics equal to the previous W.1 to the last digit)"
+  },
+  {
+   "id": "FIX.4",
+   "answer": "done",
+   "evidence": "(1) FlatRoutedExpert(cache_prefix=<tt_cache>/experts-<rev>/<mesh>/L<layer>.<impl>.<sha1 of the layer's stored expert tensors>, weights=callable); bfp4_stats in <prefix>.done.json. (2) miss host part 49-55 s -> 31.7 s / 24-25 s in W.1 (vectorised dequant per 32-chip slot, one bf16 / bfp8 check per stacked tensor, no .float() copies, no |g| copy; bit-identical, tt/perf_experts_load.py::test_host_weights_identical). Layer 0 8x4: old miss 118.9 s, new miss 119.9 s with dump (the fork's packing is ~95 s of it), hit 1.0 s. W.1 model_load_s: 1057.3 s (old) -> 887.7 s (run 1, 7 misses + L00 hit) -> 65.6 s (run 2, all 8 layers hit 1.0-1.2 s; W.1 command 956 s -> 119 s; both PASS, identical metrics). Dense weights not cached (not cheap: no cache path in the dense modules)."
+  }
+ ],
+ "cited_only": [
+  "DS41-121",
+  "DS41-74"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.4",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-27T06:41:48",
+  "head": "89e622744f9",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.4.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.4.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts_load.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

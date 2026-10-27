@@ -125,7 +125,15 @@ class DS41PrefillRuntime:
         assert m % c == 0, (m, c)
         self.mesh_device, self.config = mesh_device, params
         self.layer_ids = served_layer_ids(params.first_layer_idx, params.num_layers)
-        self.model = TtDS41Model(mesh_device, model_path(), self.layer_ids, max_seq=m, chunk=c, lm_head=False)
+        self.model = TtDS41Model(
+            mesh_device,
+            model_path(),
+            self.layer_ids,
+            max_seq=m,
+            chunk=c,
+            lm_head=False,
+            weight_cache=params.weight_cache_path,
+        )
         self.geo = WindowGeometry(mesh_device, c)
         from models.demos.common.bringup.testing.contract import gap_feed
 
@@ -309,7 +317,11 @@ class DS41PrefillAdapter(PrefillModelAdapter):
         return types.SimpleNamespace(**raw.get("text_config", raw))
 
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
-        return None  # weights load from the checkpoint (experts converted to bfp8 at load, tt/experts.py)
+        """The routed experts' laid-out weight cache (tt/experts.py:expert_cache_dir, EXPERTS_WEIGHT_CACHE); every
+        other weight loads from the checkpoint."""
+        from models.demos.deepseek_v41_flash_d_p.tt.experts import expert_cache_dir
+
+        return expert_cache_dir(bringup_spec())
 
     def num_kv_cache_layers(self, num_layers: int) -> int:
         """Acks per chunk: one per served layer (every layer owns 0_window_kv)."""
