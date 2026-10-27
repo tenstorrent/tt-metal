@@ -134,12 +134,11 @@ carries the mesh defaults. The adapter allocates the cache, builds the runtime a
 at the model's weight-cache layout. Layer completion is reported to the migration layer through the
 host `on_layer_complete` callback (`set_layer_completion_sink`), not through D2H device records.
 `tt/runners/kv_chunk_table.py` builds the KV chunk address table for migration from the packed
-cache. The producer/runner e2e scenario `single_user_full_depth`
-(`models/demos/common/prefill/tests/test_producer_runner_e2e.py`, 11 × 5120-token chunks) runs
-GPT-OSS end to end and checks the producer's KV PCC over the first 5000 positions, which is all the
-golden holds. GPT-OSS acks layers through the host callback, so the scenario runs with
-`PREFILL_LAYER_ACK_D2H=0`. The runner section of the CI job runs it; that section in the matrix is the
-reference launch command. General runner usage: `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md`
+cache. `scripts/ci/run_prefill_acceptance.sh` runs the common launcher
+(`models/demos/common/prefill/runners/ci/run_multirank_pcc.sh gptoss120b sc1`, configured by
+`scripts/ci/runner_config.sh`): two 1K chunks per slot over all 36 layers and both slots, with the
+producer's K/V PCC against the golden. GPT-OSS acks layers through the host callback, so it runs with
+`PREFILL_LAYER_ACK_D2H=0`. The runner job in the CI matrix is the reference launch command. General runner usage: `models/demos/common/prefill/docs/ADDING_A_PREFILL_MODEL.md`
 and `models/demos/common/prefill/runners/RUN_COMMANDS.md`.
 
 ## The KV cache

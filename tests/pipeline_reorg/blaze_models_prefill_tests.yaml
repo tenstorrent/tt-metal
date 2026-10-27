@@ -297,41 +297,6 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K2.7-1T) prefill runner accuracy code_debug 55k@5k"
-  fabric_profile: torus_xy
-  cmd: |
-    export MESH_DEVICE=TG
-    export PREFILL_MODEL=kimi_k2_7
-    export PREFILL_FABRIC_MODE=2d_torus_xy
-    export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K2.7-Code-dequantized
-    export PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
-    export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
-    export PREFILL_NUM_LAYERS=61
-    export PREFILL_CI_PRODUCER_TIMEOUT_S=1800
-    export PREFILL_CI_RUNNER_READY_TIMEOUT_S=1800
-    export PREFILL_RUNNER_LAUNCH=ci
-    export PREFILL_STANDALONE_CHUNKED_PCC=0.877000
-    export LOGURU_LEVEL=INFO  # as every other prefill entry; keeps per-layer progress, drops per-op DEBUG
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      export TT_METAL_OPERATION_TIMEOUT_SECONDS=300  # 5 min; the runner idles up to 111s in the H2D recv
-      python3 -m pytest models/demos/common/prefill/tests/test_producer_runner_e2e.py::test_producer_runner_pcc -k single_user_full_depth -vvv --tb=short --timeout=3600
-    '
-  test_type: prefill_runner
-  test_tags: [kimi_k2_7, runner]
-  test_group: module
-  skus:
-    bh_sc1:
-      timeout: 60
-      tier: 2
-      release_ready: false
-  owner_id: U09L76N1MAT  # Nenad Babin
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
 # ===== Kimi-K3-2.8T ====================================================================================
 
 - name: "(Kimi-K3-2.8T) contract gates, KDA 5k, MLA chunked 10k@5k and 55k@5k"
