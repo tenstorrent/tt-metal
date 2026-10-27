@@ -23,6 +23,7 @@
 #include "moe_test_utils.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/layernorm_op.hpp"
+#include "ops/mla_kv_assemble_op.hpp"
 #include "ops/moe_ffn_swiglu_op.hpp"
 #include "ops/moe_group_op.hpp"
 #include "ops/moe_ungroup_op.hpp"
@@ -84,6 +85,9 @@ constexpr const char* kSwigluElemwiseBw = "SwigluElemwiseBwDeviceOperation";
 constexpr const char* kUnaryBackward = "UnaryBackwardDeviceOperation";
 constexpr const char* kNlpConcatHeads = "NLPConcatHeadsDeviceOperation";
 constexpr const char* kMoeUngroup = "MoeUngroupDeviceOperation";
+constexpr const char* kTernary = "TernaryDeviceOperation";
+constexpr const char* kSdpaBwQ = "SDPABackwardQDeviceOperation";
+constexpr const char* kSdpaBwKV = "SDPABackwardKVDeviceOperation";
 
 xt::xarray<float> uniform(const std::vector<uint32_t>& shape, float lo, float hi, uint32_t seed) {
     return ttml::test_utils::make_uniform_xarray<float>(shape, lo, hi, seed);
@@ -225,6 +229,17 @@ OpUnderTest attention(bool sigmoid, bool causal_mask = false) {
         }};
 }
 
+// Fused kernels (sdpa_fw / sdpa_bw) with the causal mask they use when no mask is passed. query, key, value: [1, 2,
+// 64, 32].
+OpUnderTest fused_attention() {
+    const std::vector<uint32_t> shape{1U, 2U, 64U, 32U};
+    return OpUnderTest{
+        .inputs = {{uniform(shape, -1.F, 1.F, 1U)}, {uniform(shape, -1.F, 1.F, 2U)}, {uniform(shape, -1.F, 1.F, 3U)}},
+        .forward = [](const std::vector<TensorPtr>& in) {
+            return ttml::ops::scaled_dot_product_attention(in[0], in[1], in[2]);
+        }};
+}
+
 // qs: [1, 1, 32, 64] split into 2 query heads, kvs: [1, 1, 32, 64] split into 1 key and 1 value head, all of size 32.
 // The heads feed composite attention so backward has a single root.
 OpUnderTest grouped_heads() {
@@ -233,6 +248,20 @@ OpUnderTest grouped_heads() {
         .forward = [](const std::vector<TensorPtr>& in) {
             auto [q, k, v] = ttml::ops::grouped_heads_creation(in[0], in[1], /*num_heads=*/2U, /*num_groups=*/1U);
             return ttml::ops::scaled_dot_product_attention_composite(q, k, v);
+        }};
+}
+
+// Inputs: kv_up [2, 1, 32, 2 * (32 + 64)], k_pe [2, 1, 32, 32]: 2 heads with qk_nope = qk_rope = 32 and v = 64. K and
+// V then share their [2, 2, 32, 64] shape, so their sum is a single root that sends a random grad into each.
+OpUnderTest mla_kv_assemble() {
+    constexpr uint32_t n_heads = 2U, qk_nope = 32U, qk_rope = 32U, v_dim = 64U;
+    return OpUnderTest{
+        .inputs =
+            {{uniform({2U, 1U, 32U, n_heads * (qk_nope + v_dim)}, -1.F, 1.F, 1U)},
+             {uniform({2U, 1U, 32U, qk_rope}, -1.F, 1.F, 2U)}},
+        .forward = [](const std::vector<TensorPtr>& in) {
+            auto [k, v] = ttml::ops::mla_kv_assemble(in[0], in[1], n_heads, qk_nope, qk_rope, v_dim);
+            return ttml::ops::add(k, v);
         }};
 }
 
@@ -345,6 +374,12 @@ TensorPtr mul_op(const TensorPtr& a, const TensorPtr& b) {
 TensorPtr div_op(const TensorPtr& a, const TensorPtr& b) {
     return ttml::ops::div(a, b);
 }
+TensorPtr min_op(const TensorPtr& a, const TensorPtr& b) {
+    return ttml::ops::min(a, b);
+}
+TensorPtr max_op(const TensorPtr& a, const TensorPtr& b) {
+    return ttml::ops::max(a, b);
+}
 
 }  // namespace
 
@@ -456,6 +491,27 @@ INSTANTIATE_TEST_SUITE_P(
             .make = [] { return binary(div_op, kActivation, kActivation, 1.F); },
             .frozen = {1},
             .must_skip = {kUnary, kBinary}},
+        // The frozen side's comparison of b - a with zero and its where; the tie split is shared.
+        GradSkipCase{
+            .name = "Min_FrozenA",
+            .make = [] { return binary(min_op, kActivation, kActivation); },
+            .frozen = {0},
+            .must_skip = {kUnary, kTernary}},
+        GradSkipCase{
+            .name = "Min_FrozenB",
+            .make = [] { return binary(min_op, kActivation, kActivation); },
+            .frozen = {1},
+            .must_skip = {kUnary, kTernary}},
+        GradSkipCase{
+            .name = "Max_FrozenA",
+            .make = [] { return binary(max_op, kActivation, kActivation); },
+            .frozen = {0},
+            .must_skip = {kUnary, kTernary}},
+        GradSkipCase{
+            .name = "Max_FrozenB",
+            .make = [] { return binary(max_op, kActivation, kActivation); },
+            .frozen = {1},
+            .must_skip = {kUnary, kTernary}},
         // The dtensor chain; normalized_tensor is still recomputed for dgamma.
         GradSkipCase{
             .name = "CompositeLayerNorm_FrozenTensor",
@@ -610,6 +666,16 @@ INSTANTIATE_TEST_SUITE_P(
             .make = [] { return attention(/*sigmoid=*/true, /*causal_mask=*/true); },
             .frozen = {0, 1},
             .must_skip = {kMatmul, kUnaryBackward}},
+        // grad_Q is skipped inside the Q kernel, which still runs for u_scaler, so there is no op to count; the row
+        // checks that grad_K and grad_V are unchanged.
+        GradSkipCase{.name = "FusedSDPA_FrozenQ", .make = fused_attention, .frozen = {0}},
+        GradSkipCase{.name = "FusedSDPA_FrozenKV", .make = fused_attention, .frozen = {1, 2}, .must_skip = {kSdpaBwKV}},
+        // Without a gate, grad_V alone needs nothing from the Q kernel.
+        GradSkipCase{.name = "FusedSDPA_OnlyV", .make = fused_attention, .frozen = {0, 1}, .must_skip = {kSdpaBwQ}},
+        // The frozen grad is skipped inside mla_kv_assemble_bw, which is still launched for the other, so there is no
+        // op to count; the rows check that the other grad is unchanged.
+        GradSkipCase{.name = "MlaKvAssemble_FrozenKvUp", .make = mla_kv_assemble, .frozen = {0}},
+        GradSkipCase{.name = "MlaKvAssemble_FrozenKPe", .make = mla_kv_assemble, .frozen = {1}},
         GradSkipCase{
             .name = "GroupedHeads_FrozenQs", .make = grouped_heads, .frozen = {0}, .must_skip = {kNlpConcatHeads}},
         GradSkipCase{
@@ -656,9 +722,19 @@ INSTANTIATE_TEST_SUITE_P(
             .frozen = {0, 1, 2, 3, 4},
             .must_skip = {kVariableMatmul, kSwigluElemwiseBw},
             .blackhole_only = true},
-        GradSkipCase{.name = "MoeGroup_FrozenDispatched", .make = moe_group, .frozen = {0}, .must_skip = {kMoeUngroup}},
-        // The one-hot scatter of d(grouped_scores) into d(scores) and its moe_ungroup.
-        GradSkipCase{.name = "MoeGroup_FrozenScores", .make = moe_group, .frozen = {1}, .must_skip = {kMoeUngroup}},
+        // The row-scatter moe_ungroup, and moe_ungroup_op's d(expert_out) since grouped no longer requires grad.
+        GradSkipCase{
+            .name = "MoeGroup_FrozenDispatched",
+            .make = moe_group,
+            .frozen = {0},
+            .must_skip = {kMoeUngroup, kTranspose, kBinary}},
+        // The one-hot scatter of d(grouped_scores) into d(scores) and its moe_ungroup, and moe_ungroup_op's
+        // d(grouped_scores) since grouped_scores no longer requires grad.
+        GradSkipCase{
+            .name = "MoeGroup_FrozenScores",
+            .make = moe_group,
+            .frozen = {1},
+            .must_skip = {kMoeUngroup, kTranspose, kBinary, kReduce}},
         GradSkipCase{
             .name = "MoeUngroup_FrozenExpertOut",
             .make = moe_ungroup,
