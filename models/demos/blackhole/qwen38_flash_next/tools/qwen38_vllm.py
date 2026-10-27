@@ -60,6 +60,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import numpy
 import torch
 from loguru import logger
 from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING
@@ -78,6 +79,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_batch_decode import (
     pack_buckets_from_env,
     pack_dram_bytes,
     prefill_pack_enabled,
+    row_read_bucket,
 )
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
     CHUNK_PREFILL_MIN_ROWS,
@@ -121,7 +123,19 @@ BATCH_CANDIDATES_VARIABLE = "QWEN38_BATCH_CANDIDATES"  # "1" (default) / "0": ca
 BATCH_NORMALIZER_VARIABLE = (
     "QWEN38_BATCH_NORMALIZER"  # "1" (default) / "0": the device normalizer for top-k-off sampled rows
 )
+BATCH_ROW_READ_VARIABLE = "QWEN38_BATCH_ROW_READ"  # "1" (default) / "0": a fallback step reads only its rows' logits
 CANDIDATE_FALLBACK_REASONS = ("top_k", "penalty", "guard", "nonfinite", "nucleus")
+# The host branches of ``sample_from_row`` (the keys of a ``branch_counts`` dict): greedy; top_k <= the candidates; the
+# nucleus over the top 1024 values; the nucleus over the argsorted full row; the whole row by inverse CDF (top-k off,
+# top_p >= 1); the top-k threshold over the full row (1024 < top_k < vocab).
+HOST_DRAW_BRANCHES = (
+    "greedy",
+    "top_k",
+    "nucleus_1024",
+    "nucleus_full",
+    "inverse_cdf",
+    "top_k_threshold",
+)  # fmt: skip
 DECODE_LOG_INTERVAL = 256  # batch mode: one adapter log line per this many decode calls
 BATCH_LANE_INDEXER_FORM = "wide"
 KV_BYTES_PER_TOKEN = 12 * 512 * 2  # 12 QSA layers x one 512-wide bf16 row, per device
@@ -267,33 +281,54 @@ def sample_from_row(
     generator: torch.Generator | None,
     *,
     candidates: int = REDUCED_CANDIDATES,
+    branch_counts: dict[str, int] | None = None,
 ) -> int:
     """vLLM's sampler over one fp32 row (``Sampler.sample`` + ``apply_top_k_top_p_pytorch`` + ``random_sample``):
     greedy below the temperature epsilon; else temperature, the top-k set (every value equal to the k-th kept), the
     nucleus (a token is kept while the probability mass ranked above it is below top_p; the first always), then the
-    exponential-noise argmax over the kept set.  Computed on the row's top candidates when that is exact: the top-k
-    set fits in them, or top-k is off and the candidates hold the nucleus (their mass, taken over the full row's
-    softmax, reaches top_p).  Otherwise the full row, vLLM's own way.  Same distribution as vLLM's sampler; the noise
-    is drawn over the kept set, so a seed does not reproduce vLLM's token stream."""
+    exponential-noise argmax over the kept set.  Computed on the row's top ``candidates`` values when that is exact: the
+    top-k set fits in them, or top-k is off and their mass over the full row's softmax reaches top_p (they hold the
+    nucleus).  When it does not, the full row ordered by ``numpy.argsort(-row)`` (default kind, not stable,
+    deterministic for the same input) gives the nucleus.  Top-k off with top_p at 1 keeps the whole row: the draw is the
+    inverse CDF of its softmax (float64 cumulative sum, one uniform variate), never a token of zero probability.  A
+    top-k wider than the candidates takes vLLM's full-row threshold.  Same distribution as vLLM's sampler; the noise is
+    drawn over the kept set, so a seed does not reproduce vLLM's token stream.
+    ``branch_counts`` (optional): the branch that drew the row (``HOST_DRAW_BRANCHES``) is counted in it."""
+
+    def count(branch: str) -> None:
+        if branch_counts is not None:
+            branch_counts[branch] = branch_counts.get(branch, 0) + 1
 
     if policy.greedy:
+        count("greedy")
         return int(row.argmax())
     vocab = row.numel()
     top_k = policy.top_k if 0 < policy.top_k < vocab else vocab
     top_p = policy.top_p
     if top_k <= candidates:
+        count("top_k")
         values, indices = row.topk(top_k)
         extra = int((row >= values[-1]).sum()) - top_k
         if extra > 0:
             values, indices = row.topk(top_k + extra)
         probs = torch.softmax(values / policy.temperature, 0)
     elif top_k == vocab:
-        values, indices = row.topk(candidates)
         scaled = row / policy.temperature
-        probs = torch.exp(values / policy.temperature - torch.logsumexp(scaled, 0))
-        if top_p >= 1.0 or float(probs.sum()) < top_p:
-            return _sample_full_row(scaled, top_k, top_p, generator)
+        if top_p >= 1.0:
+            count("inverse_cdf")
+            return _sample_whole_row(scaled, generator)
+        lse = torch.logsumexp(scaled, 0)
+        values, indices = row.topk(candidates)
+        probs = torch.exp(values / policy.temperature - lse)
+        if float(probs.sum()) >= top_p:
+            count(f"nucleus_{candidates}")
+        else:  # the nucleus is wider than the candidates: the whole row, ordered by numpy's (unstable) argsort
+            count("nucleus_full")
+            indices = torch.from_numpy(numpy.argsort(-row.cpu().numpy()))
+            values = row[indices]
+            probs = torch.exp(values / policy.temperature - lse)
     else:
+        count("top_k_threshold")
         return _sample_full_row(row / policy.temperature, top_k, top_p, generator)
     if top_p < 1.0:
         keep = torch.cumsum(probs, 0) - probs < top_p
@@ -325,6 +360,20 @@ def batch_normalizer_enabled(environ: Mapping[str, str] | None = None) -> bool:
         return True
     if value not in ("0", "1"):
         raise ValueError(f"{BATCH_NORMALIZER_VARIABLE} must be 0 or 1, got {value!r}")
+    return value == "1"
+
+
+def batch_row_read_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """``QWEN38_BATCH_ROW_READ``: "1" or unset = a step with fallback rows reads only those lanes' logits rows from the
+    device (P3g-3), "0" = it reads the full gathered logits of every lane (the P3g-2 path); anything else is refused.
+    It
+    only matters while ``QWEN38_BATCH_CANDIDATES`` is on."""
+
+    value = (os.environ if environ is None else environ).get(BATCH_ROW_READ_VARIABLE)
+    if value is None:
+        return True
+    if value not in ("0", "1"):
+        raise ValueError(f"{BATCH_ROW_READ_VARIABLE} must be 0 or 1, got {value!r}")
     return value == "1"
 
 
@@ -524,8 +573,8 @@ def position_generator(seed: int | None, position: int) -> torch.Generator | Non
 
 def _sample_full_row(scaled: torch.Tensor, top_k: int, top_p: float, generator: torch.Generator | None) -> int:
     """vLLM's full-row algorithm on the temperature-scaled row: the top-k threshold, a sort for the nucleus when
-    top_p < 1, softmax, exponential noise, argmax.  Reached when the candidates cannot bound the nucleus (top-k off
-    with top_p at 1, or a nucleus wider than the candidates) or top-k is wider than the candidates but on."""
+    top_p < 1, softmax, exponential noise, argmax.  Reached when top-k is wider than the candidates but on (the
+    top-k-off rows take :func:`sample_from_row`'s nucleus branches or :func:`_sample_whole_row`)."""
 
     if top_k < scaled.numel():
         scaled = scaled.masked_fill(scaled < scaled.topk(top_k).values[-1], float("-inf"))
@@ -539,6 +588,20 @@ def _sample_full_row(scaled: torch.Tensor, top_k: int, top_p: float, generator: 
     probs = torch.softmax(scaled, 0)
     noise = torch.empty_like(probs).exponential_(generator=generator)
     return int((probs / noise).argmax())
+
+
+def _sample_whole_row(scaled: torch.Tensor, generator: torch.Generator | None) -> int:
+    """One draw from the softmax of the whole temperature-scaled row (top-k off, top_p at 1) by inverse CDF: the float64
+    cumulative sum of the probabilities, one float64 uniform variate scaled to its total, the first index whose
+    cumulative mass exceeds it.  The index is clamped to the last token of positive probability, so a masked column
+    (``-inf``) is
+    never drawn.  One pass over the row instead of 248k exponential variates."""
+
+    probs = torch.softmax(scaled, 0)
+    cdf = probs.double().cumsum(0)
+    uniform = torch.rand(1, generator=generator, dtype=torch.float64) * cdf[-1]
+    last = int((probs > 0).nonzero()[-1])
+    return min(int(torch.searchsorted(cdf, uniform, right=True)), last)
 
 
 def prefill_form(environ: Mapping[str, str] | None = None) -> tuple[bool, int | None]:
@@ -728,6 +791,10 @@ class Qwen38ForCausalLM:
         # default on; refused at start when bad); only with the candidate rows on
         batch_normalizer = batch_normalizer_enabled() if batch_lanes > 1 else False
         self.batch_normalizer = bool(self.batch_candidates and batch_normalizer)
+        # P3g-3: a step with fallback rows reads only those lanes' logits rows (QWEN38_BATCH_ROW_READ, default on;
+        # refused at start when bad); only with the candidate rows on
+        batch_row_read = batch_row_read_enabled() if batch_lanes > 1 else False
+        self.batch_row_read = bool(self.batch_candidates and batch_row_read)
         # candidate-path counters: rows drawn from candidates, rows sent to the full-logits path per reason, the steps
         # that paid the full gather for them
         self.candidate_counters: dict[str, int] = {
@@ -736,8 +803,14 @@ class Qwen38ForCausalLM:
             "fallback_steps": 0,
             "normalizer_steps": 0,  # steps that replayed the candidate + normalizer trace
             "normalizer_rows": 0,  # rows drawn with the device normalizer (top-k off)
+            "row_read_steps": 0,  # fallback steps that read only their rows' logits (P3g-3)
+            "row_read_rows": 0,  # lanes those reads returned
+            "full_read_steps": 0,  # fallback steps that read the full gather (knob off, or too many rows)
             **{f"fallback_{reason}": 0 for reason in CANDIDATE_FALLBACK_REASONS},
         }
+        self.host_branch_counts: dict[str, int] = {
+            branch: 0 for branch in HOST_DRAW_BRANCHES
+        }  # P3g-3: per fallback row
         self.decode_stats: deque[dict[str, float]] = deque(maxlen=4096)  # per decode call: total/step/gather seconds
         self.dram: dict[
             str, dict[str, int]
@@ -1248,6 +1321,7 @@ class Qwen38ForCausalLM:
             pack=prefill_pack_enabled(lanes=self.lanes),  # on with >= 8 lanes (P3e); QWEN38_PREFILL_PACK wins
             candidates=self.batch_candidates,
             normalizer=self.batch_normalizer,
+            row_read=self.batch_row_read,
         )
         decoder.warm_logits_gather = True  # host-sampled rows and host logits read the lane logits under the miss guard
         self.decoder, self.block_size, self.num_blocks = decoder, block_size, num_blocks
@@ -1598,7 +1672,8 @@ class Qwen38ForCausalLM:
             raise
         gather_started = time.perf_counter()
         logits = None
-        candidates_s = draw_s = fallback_s = normalizer_s = 0.0
+        candidates_s = draw_s = fallback_s = normalizer_s = fallback_read_s = fallback_draw_s = 0.0
+        fallback_logits: dict[int, torch.Tensor] = {}  # lane -> its logits row, when only the fallback lanes were read
         drawn: dict[int, int] = {}
         use_candidates = (
             self.batch_candidates
@@ -1612,8 +1687,13 @@ class Qwen38ForCausalLM:
             )
             if fallback_rows:
                 fallback_started = time.perf_counter()
-                logits = self._read_lane_logits()
-                fallback_s = time.perf_counter() - fallback_started
+                fallback_lanes = sorted({row_lanes[row] for row in fallback_rows})
+                if self._row_read_serves(decoder, len(fallback_lanes)):
+                    fallback_logits = dict(zip(fallback_lanes, self._read_lane_rows(fallback_lanes)))
+                else:
+                    logits = self._read_lane_logits()
+                    self.candidate_counters["full_read_steps"] += 1
+                fallback_read_s = fallback_s = time.perf_counter() - fallback_started
                 self.candidate_counters["fallback_steps"] += 1
         elif sampling_params is None or host_rows:
             logits = self._read_lane_logits()
@@ -1630,12 +1710,18 @@ class Qwen38ForCausalLM:
                     continue
                 if row in host_rows:
                     draw_started = time.perf_counter()
-                    values = logits[lane]
+                    values = fallback_logits[lane] if lane in fallback_logits else logits[lane]
                     if row in histories:
                         apply_penalties(values, *histories[row], policies[row])
                     generator = position_generator(policies[row].seed, positions[row])
-                    out[row, 0] = sample_from_row(values, policies[row], generator)
+                    out[row, 0] = sample_from_row(
+                        values,
+                        policies[row],
+                        generator,
+                        branch_counts=self.host_branch_counts if use_candidates else None,
+                    )
                     if use_candidates:
+                        fallback_draw_s += time.perf_counter() - draw_started
                         fallback_s += time.perf_counter() - draw_started
                     continue
                 token = int(lane_ids[lane])
@@ -1661,6 +1747,8 @@ class Qwen38ForCausalLM:
                 "candidates_s": candidates_s,
                 "draw_s": draw_s,
                 "normalizer_s": normalizer_s,
+                "fallback_read_s": fallback_read_s,
+                "fallback_draw_s": fallback_draw_s,
                 "fallback_s": fallback_s if use_candidates else (now - gather_started if host_rows else 0.0),
                 "sampled_rows": len(host_rows),
             }
@@ -1671,6 +1759,11 @@ class Qwen38ForCausalLM:
             mean = lambda key: sum(entry[key] for entry in recent) / len(recent)  # noqa: E731
             counters = self.candidate_counters
             norm_steps = [entry["normalizer_s"] for entry in recent if entry["normalizer_s"] > 0.0]
+            fallback_steps = [entry for entry in recent if entry["fallback_read_s"] > 0.0]
+            fallback_mean = lambda key: (  # noqa: E731
+                sum(entry[key] for entry in fallback_steps) / len(fallback_steps) * 1e3 if fallback_steps else 0.0
+            )
+            branches = ", ".join(f"{name} {count}" for name, count in self.host_branch_counts.items() if count)
             logger.info(
                 f"batch decode: {self.decode_calls} calls, last {len(recent)}: mean rows {mean('rows'):.2f}, "
                 f"total {mean('total_s') * 1e3:.2f} ms, replay {mean('step_s') * 1e3:.2f} ms, "
@@ -1684,7 +1777,12 @@ class Qwen38ForCausalLM:
                 f"{counters['fallback_nucleus']}); normalizer {'on' if self.batch_normalizer else 'off'}: "
                 f"{counters['normalizer_rows']} rows in {counters['normalizer_steps']} steps, device+readback "
                 f"{(sum(norm_steps) / len(norm_steps) * 1e3) if norm_steps else 0.0:.2f} ms per normalizer step "
-                f"({len(norm_steps)} of the last {len(recent)})"
+                f"({len(norm_steps)} of the last {len(recent)}); fallback steps {len(fallback_steps)} of the last "
+                f"{len(recent)}: device read {fallback_mean('fallback_read_s'):.2f} ms + host draw "
+                f"{fallback_mean('fallback_draw_s'):.2f} ms per fallback step, "
+                f"row read {'on' if self.batch_row_read else 'off'}: "
+                f"{counters['row_read_steps']} steps / {counters['row_read_rows']} lanes, full gather "
+                f"{counters['full_read_steps']} steps; host branches: {branches or 'none'}"
             )
         return out
 
@@ -1758,6 +1856,31 @@ class Qwen38ForCausalLM:
             candidates_s if norm_rows else 0.0,
         )
 
+    def _row_read_serves(self, decoder: Any, lanes: int) -> bool:
+        """True when a fallback step with ``lanes`` lanes reads only those rows: the knob is on, the decoder captured
+        the
+        row-read traces and ``lanes`` fits the largest bucket."""
+
+        return (
+            self.batch_row_read
+            and getattr(decoder, "has_row_read", False)
+            and row_read_bucket(lanes, decoder.row_read_buckets) is not None
+        )
+
+    def _read_lane_rows(self, lanes: list[int]) -> torch.Tensor:
+        """The last replay's logits of the given lanes, fp32 ``[len(lanes), VOCAB_SIZE]``, the LM head's padding
+        masked."""
+
+        try:
+            logits = self.decoder.read_logits_rows(lanes)
+        except BaseException:
+            self.batch_failed = True
+            raise
+        logits[:, TOKENIZER_SIZE:] = float("-inf")
+        self.candidate_counters["row_read_steps"] += 1
+        self.candidate_counters["row_read_rows"] += len(lanes)
+        return logits
+
     def _read_lane_logits(self) -> torch.Tensor:
         """The last replay's logits of every lane, fp32 ``[lanes, VOCAB_SIZE]``, the LM head's padding masked."""
 
@@ -1818,6 +1941,9 @@ class Qwen38ForCausalLM:
             self.decoder.read_candidates()  # one candidate replay and readback under the closed miss guard
             if self.batch_normalizer and getattr(self.decoder, "has_normalizer", False):
                 self.decoder.read_candidates_normalized([1.0] * self.lanes)  # and one candidate + normalizer replay
+            if self.batch_row_read and getattr(self.decoder, "has_row_read", False):
+                for size in self.decoder.row_read_buckets:  # and every row-read bucket's replay and readback
+                    self.decoder.read_logits_rows(list(range(size)))
         self.release_request(0)
         self.lane_of_slot = list(range(self.lanes))
         self.lane_slots = [Qwen38VLLMSlot() for _ in range(self.lanes)]

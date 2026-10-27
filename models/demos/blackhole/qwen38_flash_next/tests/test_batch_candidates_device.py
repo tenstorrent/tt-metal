@@ -10,8 +10,13 @@ others):
   top-32 of that lane's full gathered logits (values bitwise, ids equal up to ties at a shard's 32nd value);
 * ``seeded_b8``: a seeded sampled request draws the same tokens alone and among seven other requests (sampled, greedy, and
   rows that fall back to the full logits);
-* ``mixed_b8``: greedy, candidate, and every fallback reason in one step: the counters, one full gather for all fallback rows, and
+* ``mixed_b8``: greedy, candidate, and every fallback reason in one step: the counters, one read for all fallback rows,
+and
   every drawn token inside the support of the full-row law of that row.
+
+P3g-3 ids: ``row_read_b8`` / ``row_read_b32`` (the row-read traces return the rows of ``read_full_logits`` bit for bit,
+for random lane sets at every bucket size) and ``row_mixed_b8`` (a mixed step whose fallback rows read only their lanes:
+the counters, and the fallback rows' tokens equal to the host path over the full logits, every step).
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/tests/test_batch_candidates_device.py -v -s -k cand_rows_b8
 Env as test_vllm_batch_contract_device.py.
@@ -228,6 +233,9 @@ def candidate_rows_equal_the_topk_of_the_full_logits(mesh_device, lanes: int, mo
         pytest.param("norm_lse", 32, id="norm_lse_b32", marks=pytest.mark.timeout(5400)),
         pytest.param("norm_mixed", 8, id="norm_mixed_b8", marks=pytest.mark.timeout(5400)),
         pytest.param("norm_seeded", 8, id="norm_seeded_b8", marks=pytest.mark.timeout(5400)),
+        pytest.param("row_read", 8, id="row_read_b8", marks=pytest.mark.timeout(5400)),
+        pytest.param("row_read", 32, id="row_read_b32", marks=pytest.mark.timeout(5400)),
+        pytest.param("row_mixed", 8, id="row_mixed_b8", marks=pytest.mark.timeout(5400)),
     ],
 )
 def test_batch_candidates(mesh_device, kind, lanes, monkeypatch, record_property):
@@ -241,6 +249,10 @@ def test_batch_candidates(mesh_device, kind, lanes, monkeypatch, record_property
         normalizer_equals_the_host_logsumexp(mesh_device, lanes, monkeypatch)
     elif kind == "norm_mixed":
         normalizer_mixed_step(mesh_device, lanes, monkeypatch)
+    elif kind == "row_read":
+        row_read_equals_the_full_gather(mesh_device, lanes, monkeypatch)
+    elif kind == "row_mixed":
+        mixed_step(mesh_device, lanes, monkeypatch, row_read=True)
     else:
         seeded_request_is_the_same_alone_and_in_a_batch(mesh_device, lanes, monkeypatch, normalizer=True)
 
@@ -288,9 +300,10 @@ def seeded_request_is_the_same_alone_and_in_a_batch(
         model.release_persistent_capture()
 
 
-def mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
+def mixed_step(mesh_device, lanes: int, monkeypatch, row_read: bool = False) -> None:
     prompts = make_prompts(lanes, 3)
     model = open_model(mesh_device, lanes, monkeypatch)
+    assert model.batch_row_read and model.decoder.has_row_read and model.decoder.row_read_buckets == (1, 2, 4, 8)
     try:
         driver = Lanes(model, lanes)
         driver.admit(list(range(lanes)), prompts)
@@ -345,6 +358,9 @@ def mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
             assert (
                 delta["fallback_steps"] == 1 and delta["fallback_top_k"] == 2 and delta["fallback_penalty"] == 1
             ), delta
+            # Rows 3, 4, 5 and the guard rows read only their lanes.
+            assert delta["row_read_steps"] == 1 and delta["full_read_steps"] == 0, delta
+            assert delta["row_read_rows"] == 3 + len(guard_rows), (step, guard_rows, delta)
             for row in range(1, lanes):
                 policy = Qwen38HostSamplingPolicy.from_contract(params, row)
                 masked = full[row].clone()
@@ -361,6 +377,8 @@ def mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
                 checked += 1
                 expected = sample_from_row(masked.clone(), policy, position_generator(policy.seed, positions[row]))
                 equal += token == expected
+                if row_read and row in (3, 4, 5):  # fallback rows: their logits are the full gather's, bit for bit
+                    assert token == expected, (step, row, token, expected)
                 if policy.top_k <= 32 and not policy.penalized or row in (6, 7):
                     support = full_law(masked, Qwen38HostSamplingPolicy(policy.temperature, policy.top_k, policy.top_p))
                     assert token in support, (step, row, token)
@@ -370,6 +388,53 @@ def mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
             f"counters {json.dumps(model.candidate_counters)}"
         )
         assert equal >= 0.97 * checked
+    finally:
+        model.release_persistent_capture()
+
+
+# -- P3g-3: the row-read traces
+# -----------------------------------------------------------------------------------------
+
+
+def row_read_equals_the_full_gather(mesh_device, lanes: int, monkeypatch) -> None:
+    """After sampled steps, ``read_logits_rows`` of random lane sets (distinct, in random order, sizes 1 .. lanes
+    including sizes between two buckets) returns exactly the rows of ``read_full_logits`` (fp32 of the same bf16 values,
+    padding columns
+    included), and the lane replay's logits are untouched by the reads."""
+
+    model = open_model(mesh_device, lanes, monkeypatch)
+    try:
+        decoder = model.decoder
+        assert decoder.has_row_read and decoder.row_read_buckets[-1] == lanes
+        driver = Lanes(model, lanes)
+        driver.admit(list(range(lanes)), make_prompts(lanes, 4))
+        params = sampling(lanes, temperature=[1.0] * lanes, top_k=[20] * lanes, top_p=[0.95] * lanes)
+        rng = random.Random(7)
+        sizes = sorted({1, 2, 3, 4, 5, 8, 9, 16, 17, lanes} & set(range(1, lanes + 1)))
+        checked = 0
+        for step in range(3):
+            driver.step(params)
+            full = decoder.read_full_logits()
+            assert tuple(full.shape) == (lanes, VOCAB_SIZE)
+            for size in sizes:
+                for _ in range(2):
+                    chosen = rng.sample(range(lanes), size)
+                    rows = decoder.read_logits_rows(chosen)
+                    assert tuple(rows.shape) == (size, VOCAB_SIZE) and rows.dtype == torch.float32
+                    assert torch.equal(rows, full[chosen]), (step, size, chosen)
+                    checked += size
+            assert torch.equal(decoder.read_full_logits(), full)
+        logger.info(f"B={lanes}: {checked} lane rows equal to the full gather over sizes {sizes}")
+        for bad in (
+            [0, 0],
+            list(range(lanes)) + [0],
+            [lanes],
+        ):  # repeated, too many, out of range: refused before a replay
+            try:
+                decoder.read_logits_rows(bad)
+            except ValueError:
+                continue
+            raise AssertionError(f"read_logits_rows({bad}) was not refused")
     finally:
         model.release_persistent_capture()
 
@@ -466,6 +531,7 @@ def normalizer_mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
         )
         equal = checked = 0
         mismatched_rows: list[tuple[int, int]] = []
+        nucleus_steps: list[int] = []  # the steps whose top-k-off rows included a nucleus fallback (host draw)
         for step in range(STEPS):
             histories = {6: (prompts[6], driver.outputs[6])}
             before = dict(model.candidate_counters)
@@ -475,6 +541,8 @@ def normalizer_mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
             delta = {k: model.candidate_counters[k] - before[k] for k in before}
             assert delta["normalizer_steps"] == 1 and delta["candidate_steps"] == 1, delta
             assert delta["normalizer_rows"] + delta["fallback_nucleus"] == 3, delta  # rows 2, 3, 4
+            if delta["fallback_nucleus"]:
+                nucleus_steps.append(step)
             assert delta["fallback_top_k"] == 2 and delta["fallback_penalty"] == 1, delta  # rows 5 and 7, row 6
             assert delta["fallback_guard"] == 0 and delta["fallback_nonfinite"] == 0, delta
             for row in range(1, lanes):
@@ -492,12 +560,21 @@ def normalizer_mixed_step(mesh_device, lanes: int, monkeypatch) -> None:
                 equal += int(out[row, 0]) == expected
                 if int(out[row, 0]) != expected:
                     mismatched_rows.append((step, row))
+                    kept = masked.sort(descending=True).values / policy.temperature
+                    probs = torch.softmax(kept, 0)
+                    kept = kept[torch.cumsum(probs, 0) - probs < policy.top_p]
+                    ties = kept.numel() - kept.unique().numel()
+                    logger.info(
+                        f"mismatch step {step} row {row}: token {int(out[row, 0])} vs host {expected}; nucleus of "
+                        f"{kept.numel()} tokens with {ties} tied values"
+                    )
+                    assert ties > 0, "a mismatch needs tied bf16 values in the nucleus (the order of ties is not fixed)"
         counters = dict(model.candidate_counters)
         logger.info(
             f"norm mixed: {STEPS} steps, token equal to the host full-row draw in {equal} of {checked} rows, mismatches "
-            f"{mismatched_rows}; counters {json.dumps(counters)}"
+            f"{mismatched_rows}, nucleus fallbacks at steps {nucleus_steps}; counters {json.dumps(counters)}"
         )
         assert counters["normalizer_rows"] >= STEPS, "the normalizer never drew a row: the test proves nothing"
-        assert equal >= 0.98 * checked
+        assert equal >= 0.95 * checked  # every mismatch above has tied nucleus values (checked in the loop)
     finally:
         model.release_persistent_capture()

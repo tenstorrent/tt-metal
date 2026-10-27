@@ -594,6 +594,22 @@ but 59% of the steps hold at least one and pay the full gather (about 1.6 rows e
 top_k off: B = 32 c32 190 -> 221 tok/s (TPOT 166.7 -> 143.4 ms), B = 8 c8 118 -> 127 tok/s (TPOT 67.0 -> 62.1 ms); top_k 20 is
 unchanged (360 tok/s, TPOT 87.1 ms).  Random prompts give flat rows: about 72% of the B = 32 steps there hold a fallback row.
 
+Fallback read and host full-row law (P3g-3; `QWEN38_BATCH_ROW_READ`, default on; `0` reads the full gather as before; only meaningful
+with the candidate rows on): a step with fallback rows reads only those lanes' logits.  One small trace per bucket (1, 2, 4, ... up to
+the lane count) copies the chosen rows of the bf16 shard logits with `ttnn.embedding` over a ROW_MAJOR table (an exact copy; the
+lane indices are a persistent input written before the replay) into a bf16 block per shard; the host reads the four blocks in one call
+and masks the padding columns.  More lanes than the largest bucket take the full gather.  At B = 32 the read costs 0.2 / 0.5 / 0.9 /
+1.5 ms for 1 / 4 / 8 / 16 lanes against 7.5 ms (12.9 ms in the server) for the full gather; about 10 MiB of DRAM per device.  The host
+law of `sample_from_row` for top-k off and top_p < 1 is the nucleus over the top 1024 values (the old code) and, when their mass is
+below top_p, over the full row ordered by `numpy.argsort(-row)` (unstable, deterministic for the same input); top-k off with top_p >= 1
+draws by inverse CDF (float64 cumulative sum, one uniform variate) instead of 248k exponential variates.  The periodic
+`batch decode:` line adds the device read and host draw per fallback step, the row-read and full-gather counts and the count per
+host branch.  Measured on GPQA text (B = 32, T 1.0, top_p 0.95, top_k off): the
+fallback segment falls from 15.1 to 1.9 ms per fallback step (0.49 read + 1.41 draw), the mean step from 93.9 to 85.2 ms, the
+64-question run from 805 to 720 s.  Flat rows (random-token bench) take the full-row branch: 7 ms per row against 19 ms for the old
+sort.  `vllm bench serve` random 128/1024, top_k off (2026-10-27): B = 32 top_p 0.95 221 -> 292 tok/s (TPOT 143.4 -> 107.7 ms),
+top_p 1.0 273 -> 297 tok/s, B = 8 top_p 0.95 129 -> 141 tok/s; top_k 20 unchanged (360 tok/s).
+
 Multi-user prefill pack (on by default with 8 or more lanes since 2026-10-26; `QWEN38_PREFILL_PACK=0` turns it off, `=1` turns it
 on with fewer lanes): the adapter plans each prefill call into packs (1..16 users
 of up to 128 / 256 / 512 / 1024 prompt tokens in one 0.65 s replay of the 2048-row slab) and single-path rows, and lands each packed

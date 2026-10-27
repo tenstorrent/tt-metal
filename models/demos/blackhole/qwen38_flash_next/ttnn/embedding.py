@@ -2302,6 +2302,44 @@ class Qwen38TTNNLMHead:
         ttnn.copy(row, into)
         return row
 
+    def select_logits_rows(self, logits: Qwen38ShardedLogits, lane_indices, *, into):
+        """P3g-3: ``k`` chosen rows of the vocabulary-sharded lane logits as one ROW_MAJOR bf16 row block per shard, for
+        the host's fallback read of only the lanes that need the full row (no all-gather, no fp32 copy on the device).
+
+        The bf16 shard logits are relaid to ROW_MAJOR (a 32-row table) and ``ttnn.embedding`` gathers the rows named by
+        ``lane_indices`` (replicated UINT32 ROW_MAJOR ``[1,1,k]``, a persistent input the host writes before the replay)
+        into ``into`` (``[1,k,LOCAL_VOCAB_SIZE]`` bf16 ROW_MAJOR, one block per shard).  A table lookup copies a row:
+        the selected rows are the lane logits bit for bit, whatever their values (a matmul with a one-hot selector would
+        turn an infinity
+        into NaN).  Slot ``j`` of a shard's block is lane ``lane_indices[j]``'s row of that shard.  Returns ``into``."""
+
+        rows = self._validate_logits(logits)
+        count = int(_shape(into)[1])
+        if _shape(lane_indices) != (1, 1, count) or lane_indices.dtype != ttnn.uint32:
+            raise RuntimeError(f"lane indices must be UINT32 [1,1,{count}], got {_metadata(lane_indices)}")
+        if (
+            _shape(into) != (1, count, LOCAL_VOCAB_SIZE)
+            or into.dtype != ttnn.bfloat16
+            or into.layout != ttnn.ROW_MAJOR_LAYOUT
+            or not 1 <= count <= rows
+        ):
+            raise RuntimeError(
+                f"logits row block must be BF16 ROW_MAJOR [1,k,{LOCAL_VOCAB_SIZE}] with k in 1..{rows}, "
+                f"got {_metadata(into)}"
+            )
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        table = ttnn.to_layout(logits.tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+        ttnn.embedding(
+            lane_indices,
+            table,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=dram,
+            output_tensor=into,
+        )
+        _deallocate(table)
+        return into
+
     def resolve_greedy_rows_on_device(self, candidates: Qwen38GreedyCandidates):
         """:meth:`resolve_greedy_on_device` for ``rows`` candidate rows (1 .. 32): one FP32 ROW_MAJOR ``[1,1,1,rows]``
         row whose lane j is the global greedy id of row j (the MTP v2 verify pass's per-row argmaxes).

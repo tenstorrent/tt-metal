@@ -55,7 +55,7 @@ from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import Qwen38TracedChain
 from models.demos.blackhole.qwen38_flash_next.ttnn import pack as pack_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TP_SIZE, replicate_tensor_2d_mesh_mapper
-from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import SAMPLING_CANDIDATE_ROW_SHAPE
+from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import LOCAL_VOCAB_SIZE, SAMPLING_CANDIDATE_ROW_SHAPE
 from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import (
     Qwen38LaneHostPool,
     Qwen38TTNNLaneImporter,
@@ -125,6 +125,25 @@ def pack_dram_bytes(buckets: Sequence[int], context: int = 32768) -> int:
     launches = max(len(pack_module.pack_bucket(rows).launches) for rows in buckets)
     tails = sum((context // 4 - rows // 4) * PACK_TAIL_ROW_BYTES for rows in buckets)
     return PACK_FIXED_BYTES + launches * PACK_LAUNCH_BYTES + sum(PACK_TRACE_BYTES[rows] for rows in buckets) + tails
+
+
+def row_read_buckets(lanes: int) -> tuple[int, ...]:
+    """P3g-3: the sizes of the row-read traces of a ``lanes``-lane decoder: the powers of two up to ``lanes``.  A
+    fallback step reads ``k`` lanes with the smallest bucket >= ``k`` (``None`` above the largest: the full gather).
+    Measured at B=32 (scratch test, trace replay plus one concat read of the bf16 row blocks): 0.16 / 0.23 / 0.32 /
+    0.55 / 0.98 ms for 1 / 2 / 4 / 8 / 16 lanes against 7.5 ms for the full gather (p3g3 REPORT.md, read options)."""
+
+    buckets, size = [], 1
+    while size <= lanes:
+        buckets.append(size)
+        size *= 2
+    return tuple(buckets)
+
+
+def row_read_bucket(count: int, buckets: Sequence[int]) -> int | None:
+    """The smallest bucket holding ``count`` lanes, ``None`` when ``count`` is above the largest (or below 1)."""
+
+    return next((size for size in buckets if size >= count > 0), None)
 
 
 def lane_page_count(prompt_len: int, decode_steps: int, page_size: int) -> int:
@@ -217,6 +236,7 @@ class Qwen38PlainLaneDecoder:
         pack: bool | None = None,
         candidates: bool = False,
         normalizer: bool = False,
+        row_read: bool = False,
     ) -> None:
         self.lanes = lanes
         # QSA lane indexer form, "wide" or "per_lane"; the argument beats QWEN38_LANE_INDEXER_FORM (default "wide")
@@ -265,6 +285,15 @@ class Qwen38PlainLaneDecoder:
         self.normalizer_buffer = None
         self.normalizer_trace_id: int | None = None
         self._normalizer_scratch: tuple | None = None
+        # P3g-3: the logits rows of chosen lanes for the host's fallback draws.  One small trace per bucket size
+        # (``row_read_buckets``) selects the rows into a bf16 block per shard; its lane indices are a persistent input
+        # the host writes before the replay.  Only the sampled path uses it, so it needs the candidate rows (the step
+        # that found a fallback row).
+        self.row_read = bool(candidates and row_read)
+        self.row_read_buckets: tuple[int, ...] = row_read_buckets(lanes) if self.row_read else ()
+        self.row_read_indices: dict[int, Any] = {}
+        self.row_read_blocks: dict[int, Any] = {}
+        self.row_read_traces: dict[int, int] = {}
         self.pack_state = None
         self.pack_traces: dict[int, tuple[int, Any]] = {}
         self.lander: Qwen38TTNNPackLander | None = None
@@ -387,6 +416,43 @@ class Qwen38PlainLaneDecoder:
             ttnn.synchronize_device(mesh)
             ttnn.deallocate(lse)
             self._read_normalizer_buffer()
+        if self.row_read:
+            self._prepare_row_reads(logits)
+
+    def _prepare_row_reads(self, logits: Any) -> None:
+        """The index inputs and row blocks of every bucket (before any capture) and one eager selection and readback
+        each: every
+        program of the row-read traces compiles here."""
+
+        mesh, lm_head = self.mesh, self.model.model_io.lm_head
+        for size in self.row_read_buckets:
+            self.row_read_indices[size] = ttnn.from_torch(
+                torch.zeros(1, 1, size, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
+            )
+            self.row_read_blocks[size] = ttnn.from_torch(
+                torch.zeros(1, size, LOCAL_VOCAB_SIZE, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
+            )
+            lm_head.select_logits_rows(logits, self.row_read_indices[size], into=self.row_read_blocks[size])
+            ttnn.synchronize_device(mesh)
+            self._read_row_block(size)
+
+    def _read_row_block(self, size: int) -> torch.Tensor:
+        """The bucket's row block of the four shards, one readback: bf16 ``[size, VOCAB_SIZE]`` (slot j = the lane the
+        j-th
+        index named)."""
+
+        host = ttnn.to_torch(self.row_read_blocks[size], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=-1))
+        return host.reshape(size, -1)
 
     def _read_candidate_buffer(self) -> torch.Tensor:
         host = ttnn.to_torch(ttnn.get_device_tensors(self.candidate_buffer)[0])
@@ -439,6 +505,61 @@ class Qwen38PlainLaneDecoder:
                 acknowledge_corruptible(tensor)
             self.timing["normalizer_capture_s"] = time.perf_counter() - started
             self.timing["normalizer_trace_bytes"] = before - self._dram_free()
+        if self.row_read:
+            self.capture_row_reads(logits, guard)
+
+    def capture_row_reads(self, logits: Any, guard: Any) -> None:
+        """One trace per row-read bucket, after the candidate traces: the row selection of :meth:`_prepare_row_reads`
+        over the
+        lane trace's persistent logits into the bucket's block (the programs compiled there)."""
+
+        mesh, lm_head = self.mesh, self.model.model_io.lm_head
+        started, before = time.perf_counter(), self._dram_free()
+        for size in self.row_read_buckets:
+            with corruptible_allocation_scope(mesh):
+                trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+                with guard(f"row read {size} capture"):
+                    lm_head.select_logits_rows(logits, self.row_read_indices[size], into=self.row_read_blocks[size])
+                ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+            ttnn.synchronize_device(mesh)
+            self.row_read_traces[size] = trace_id
+            acknowledge_corruptible(self.row_read_indices[size])
+            acknowledge_corruptible(self.row_read_blocks[size])
+        self.timing["row_read_capture_s"] = time.perf_counter() - started
+        self.timing["row_read_trace_bytes"] = before - self._dram_free()
+
+    @property
+    def has_row_read(self) -> bool:
+        return bool(self.row_read_traces)
+
+    def read_logits_rows(self, lanes: Sequence[int]) -> torch.Tensor:
+        """The last lane replay's logits of the given lanes (distinct lanes, in this order), fp32 ``[len(lanes),
+        VOCAB_SIZE]``: the rows :meth:`read_full_logits` returns for them, bit for bit (the LM head's padding columns
+        are not masked here either).  Writes the lane indices into the smallest bucket's input (unused slots repeat the
+        first lane), replays its trace and reads the row blocks.  More lanes than the largest bucket: ``ValueError``
+        (use the full gather).
+        """
+
+        lanes = [int(lane) for lane in lanes]
+        if not self.row_read_traces:
+            raise RuntimeError("the row-read traces are not captured")
+        if not lanes or len(set(lanes)) != len(lanes) or not all(0 <= lane < self.lanes for lane in lanes):
+            raise ValueError(f"row read needs distinct lanes in 0..{self.lanes - 1}, got {lanes}")
+        size = row_read_bucket(len(lanes), self.row_read_buckets)
+        if size is None:
+            raise ValueError(f"{len(lanes)} lanes are above the largest row-read bucket {self.row_read_buckets[-1]}")
+        padded = lanes + [lanes[0]] * (size - len(lanes))
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                torch.tensor(padded, dtype=torch.int32).reshape(1, 1, size),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh),
+            ),
+            self.row_read_indices[size],
+        )
+        ttnn._ttnn_execute_trace(self.mesh, self.row_read_traces[size], cq_id=0, blocking=True)
+        return self._read_row_block(size)[: len(lanes)].to(torch.float32)
 
     @property
     def has_candidates(self) -> bool:
@@ -571,6 +692,7 @@ class Qwen38PlainLaneDecoder:
         if self.pack_enabled:
             self.capture_pack()
         candidate_ids = [i for i in (self.candidate_trace_id, self.normalizer_trace_id) if i is not None]
+        candidate_ids += list(self.row_read_traces.values())
         for trace_id in (*chain.trace_ids(), *self.trace_ids, *candidate_ids, *self.pack_trace_ids()):
             TraceAllocationTracker.verify_before_replay(mesh, trace_id)
         entries = resident_decode.program_cache_count(mesh)
@@ -901,6 +1023,9 @@ class Qwen38PlainLaneDecoder:
             for trace_id in (*self.trace_ids, *self.pack_trace_ids()):
                 ttnn.release_trace(mesh, trace_id)
             self.trace_ids.clear()
+            for trace_id in self.row_read_traces.values():
+                ttnn.release_trace(mesh, trace_id)
+            self.row_read_traces.clear()
             for attribute in ("candidate_trace_id", "normalizer_trace_id"):
                 if getattr(self, attribute) is not None:
                     ttnn.release_trace(mesh, getattr(self, attribute))
@@ -915,6 +1040,10 @@ class Qwen38PlainLaneDecoder:
             ):
                 if tensor is not None:
                     ttnn.deallocate(tensor)
+            for tensor in (*self.row_read_indices.values(), *self.row_read_blocks.values()):
+                ttnn.deallocate(tensor)
+            self.row_read_indices.clear()
+            self.row_read_blocks.clear()
             self._candidate_scratch = self._normalizer_scratch = self.candidate_buffer = None
             self.normalizer_buffer = self.normalizer_inv_temperature = self.normalizer_mask = None
             for _trace_id, output in self.pack_traces.values():
