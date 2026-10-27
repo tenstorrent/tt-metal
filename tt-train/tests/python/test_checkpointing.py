@@ -337,3 +337,39 @@ def test_bad_file_raises(tmp_path, expect_error):
         pickle.dump({"not": "a checkpoint"}, f)
     with expect_error(ValueError, "not a ttml checkpoint or unsupported format"):
         checkpointing.read_header(str(wrong_format))
+
+
+@pytest.mark.requires_device
+def test_param_groups_survive_checkpoint(tmp_path):
+    """Per-group options and initial LRs are written to the checkpoint and restored into a fresh AdamW."""
+    from ttml.common.schedulers import CosineAnnealingScheduler
+
+    def make(model):
+        params = model.parameters()
+        biases = [name for name in params.keys() if name.endswith("/bias")]
+        cfg = ttml.optimizers.AdamWConfig.make(lr=1e-3, beta1=0.9, beta2=0.999, epsilon=1e-8, weight_decay=0.1)
+        return ttml.optimizers.AdamW(params, cfg, param_groups=[{"params": biases, "lr": 2e-3, "weight_decay": 0.0}])
+
+    x_np = np.random.default_rng(0).standard_normal((1, 1, DIM, DIM)).astype(np.float32)
+    ttml.init.manual_seed(0)
+    orig = TwoLayer()
+    opt = make(orig)
+    sched = CosineAnnealingScheduler(opt, T_max=10, eta_min=1e-4)
+    for _ in range(3):
+        _train_steps(orig, opt, n=1, x_np=x_np)
+        sched.step()
+    opt.set_param_group_option(1, "beta2", 0.95)
+
+    path = str(tmp_path / "ckpt.pkl")
+    checkpointing.save_checkpoint(path, header={"step": 3}, model_params=orig.parameters(), optimizer=opt)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+    restored = TwoLayer()
+    opt2 = make(restored)
+    checkpointing.load_checkpoint(path, model_params=restored.parameters(), optimizer=opt2)
+
+    for got, want in zip(opt2.get_param_groups(), opt.get_param_groups()):
+        assert got["params"] == want["params"]
+        for key in ("lr", "beta1", "beta2", "epsilon", "weight_decay"):
+            assert got[key] == pytest.approx(want[key], rel=1e-6), key
+    assert opt2.get_initial_group_lrs() == pytest.approx([1e-3, 2e-3], rel=1e-6)

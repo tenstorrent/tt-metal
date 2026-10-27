@@ -210,20 +210,13 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
 
     ttml::optimizers::AdamWFullPrecision opt(params, cfg);
 
-    // Inject optimizer state
-    serialization::StateDict state;
+    // Inject optimizer state on top of the optimizer's own state dict, which carries its param groups.
+    auto state = opt.get_state_dict();
     state["steps"] = initial_steps;
-    state["lr"] = pc.lr;
-    state["initial_lr"] = pc.lr;
-    state["beta1"] = pc.beta1;
-    state["beta2"] = pc.beta2;
-    state["epsilon"] = pc.epsilon;
-    state["weight_decay"] = pc.weight_decay;
     state["master_weights"] =
         serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(w0_fp32), false)}};
     state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(m0), false)}};
     state["exp_avg_sq"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(v0), false)}};
-    state["amsgrad"] = pc.amsgrad;
     if (pc.amsgrad) {
         state["max_exp_avg_sq"] =
             serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(max_v0), false)}};
@@ -358,7 +351,7 @@ protected:
 };
 
 // Builds an optimizer whose constructor betas differ from the effective ones, applies the
-// effective betas either through the state dict or through the setters, then verifies one
+// effective betas either through the state dict or through set_group_options, then verifies one
 // step against a CPU reference driven purely by the effective betas.
 static void run_effective_betas_step_and_compare(bool use_beta_setters) {
     using namespace ttml;
@@ -402,36 +395,30 @@ static void run_effective_betas_step_and_compare(bool use_beta_setters) {
     cfg.weight_decay = 0.0f;
     optimizers::AdamWFullPrecision opt(params, cfg);
 
-    // When exercising the setters, the state dict carries the constructor betas so that only
-    // the setters introduce the effective ones.
+    // When exercising set_group_options, the state dict carries the constructor betas so that only
+    // it introduces the effective ones.
     const float state_beta1 = use_beta_setters ? constructor_beta1 : effective_beta1;
     const float state_beta2 = use_beta_setters ? constructor_beta2 : effective_beta2;
     {
-        serialization::StateDict state;
+        auto state = opt.get_state_dict();
         state["steps"] = initial_steps;
-        state["lr"] = lr;
-        state["initial_lr"] = lr;
-        state["beta1"] = state_beta1;
-        state["beta2"] = state_beta2;
-        state["epsilon"] = epsilon;
-        state["weight_decay"] = 0.0f;
+        state["param_groups.0.beta1"] = state_beta1;
+        state["param_groups.0.beta2"] = state_beta2;
         state["master_weights"] =
             serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(w0), false)}};
         state["exp_avg"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(m0), false)}};
-        state["exp_avg_sq"] =
-            serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(v0), false)}};
-        state["amsgrad"] = false;
+        state["exp_avg_sq"] = serialization::NamedParameters{{"theta", autograd::create_tensor(to_tt_fp32(v0), false)}};
         opt.set_state_dict(state);
     }
 
     if (use_beta_setters) {
-        opt.set_beta1(effective_beta1);
-        opt.set_beta2(effective_beta2);
+        opt.set_group_options("beta1", {effective_beta1});
+        opt.set_group_options("beta2", {effective_beta2});
     }
 
     EXPECT_EQ(opt.get_steps(), initial_steps);
-    EXPECT_FLOAT_EQ(opt.get_beta1(), effective_beta1);
-    EXPECT_FLOAT_EQ(opt.get_beta2(), effective_beta2);
+    EXPECT_FLOAT_EQ(opt.get_param_groups()[0].options.at("beta1"), effective_beta1);
+    EXPECT_FLOAT_EQ(opt.get_param_groups()[0].options.at("beta2"), effective_beta2);
 
     theta->set_grad(to_tt_bf16(g0_bf16));
     opt.step();

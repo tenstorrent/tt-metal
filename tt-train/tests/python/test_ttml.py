@@ -487,7 +487,7 @@ class TestCppOptimizersWithPythonModules:
             ), f"Optimizer should have updated nested parameter {key}"
 
     def test_optimizer_lr_adjustment(self):
-        """Test that optimizer learning rate can be adjusted via set_lr."""
+        """Test that optimizer learning rate can be adjusted via set_group_lrs."""
         from ttml.modules import AbstractModuleBase, Parameter
 
         class SimpleModule(AbstractModuleBase):
@@ -507,11 +507,11 @@ class TestCppOptimizersWithPythonModules:
         optimizer = ttml.optimizers.AdamW(params, adamw_config)
 
         # Verify initial LR
-        assert abs(optimizer.get_lr() - 0.001) < 1e-6, "Initial LR should be 0.001"
+        assert optimizer.get_group_lrs() == pytest.approx([0.001], abs=1e-6), "Initial LR should be 0.001"
 
-        # Adjust LR
-        optimizer.set_lr(0.01)
-        assert abs(optimizer.get_lr() - 0.01) < 1e-6, "LR should be updated to 0.01"
+        # Adjust LR (one param group: the optimizer is built without param groups)
+        optimizer.set_group_lrs([0.01])
+        assert optimizer.get_group_lrs() == pytest.approx([0.01], abs=1e-6), "LR should be updated to 0.01"
 
         # Verify optimizer still works after LR change
         model.train()
