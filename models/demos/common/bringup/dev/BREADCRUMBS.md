@@ -2099,3 +2099,15 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   chunk_wall_cache_hits_only. A mesh without the API (selftests) keeps the fixed WALL_WARM.
 - Selftest: selftest/test_warm_wall.py. Also: host numbers of the real-time-profiler run with op mode on are not the
   model's (per-call bookkeeping); only the clean wall is a host number.
+
+## F197: no run is called warm unless it built no program (owner, DeepSeek-V4.1 galaxy_8x4, 2026-10-27)
+- Symptom: F196's first use found no warm run at all: ttnn.bringup.flat_routed_expert_with_program keyed its program
+  on xg's DRAM address, a new one every call (56 addresses in 5 runs; census plugin): every "warm" host number of the
+  run (15-43 s a 40-layer chunk) was program rebuilds; with the address pinned the verified warm wall is 860 ms.
+- Fix: testing/profile.py record_warm(mesh, before, what): the plain timed run, the real-time-profiled run and every
+  positions.py timed run record <what>_new_programs (program-cache entries it added; -1 when the mesh cannot tell) and
+  print "NOT WARM ..." when > 0. Selftest test_warm_wall.py::test_a_timed_run_that_built_programs_is_reported_not_warm.
+- Also seen: with programs built mid-run, the real-time profiler's per-chip program spans include waiting for peers
+  that started late in collectives (500k chunk: experts + moe_add 182.2 -> 166.9 ms device once warm). Device times
+  from a run that built programs are inflated too, not only host times.
+- Not done: the selftest suite takes a UMD chip lock (CHIP_IN_USE_0) somewhere: a box test waited on it (2026-10-27).

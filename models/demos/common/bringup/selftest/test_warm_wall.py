@@ -48,3 +48,17 @@ def test_misses_allowed_reaches_the_mesh(allowed):
     m = _Mesh([])
     profile.misses_allowed(m, allowed)
     assert m.allowed[-1] is allowed
+
+
+def test_a_timed_run_that_built_programs_is_reported_not_warm(monkeypatch, capsys):
+    """F197: every timed profile / position run records the programs it built; one that built any says NOT WARM."""
+    got = {}
+    monkeypatch.setattr(profile.metrics, "record", lambda k, v, **kw: got.__setitem__(k, v))
+    m = _Mesh([])
+    m.n = 120
+    profile.record_warm(m, 100, "profiled")
+    assert got["profiled_new_programs"] == 20 and "NOT WARM" in capsys.readouterr().out
+    profile.record_warm(m, 120, "plain")
+    assert got["plain_new_programs"] == 0 and "NOT WARM" not in capsys.readouterr().out
+    profile.record_warm(None, None, "pos_0")
+    assert got["pos_0_new_programs"] == -1

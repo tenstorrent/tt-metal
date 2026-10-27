@@ -21,7 +21,7 @@ import time
 import torch
 
 from models.demos.common.bringup.core import metrics
-from models.demos.common.bringup.testing import cpu_bridge
+from models.demos.common.bringup.testing import cpu_bridge, profile
 from models.demos.common.bringup.testing.harness import begin_chunk
 
 
@@ -81,9 +81,11 @@ def run_positions(s, mesh) -> list[tuple[int, float]]:
 
         once()  # compile this position's programs
         cpu_bridge.STATS.reset()
+        n0 = profile.cache_entries(mesh)
         t0 = time.time()
         once()
         ms = (time.time() - t0) * 1e3
+        profile.record_warm(mesh, n0, f"pos_{start}")  # F197: a timed run that built programs is not warm
         bridge.ms += cpu_bridge.STATS.ms
         bridge.steps |= cpu_bridge.STATS.steps
         metrics.record(f"pos_ms_{start}", round(ms, 1))
