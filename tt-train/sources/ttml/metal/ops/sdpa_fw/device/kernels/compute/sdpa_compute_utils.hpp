@@ -375,6 +375,7 @@ void send_partial(uint32_t Wt, uint32_t cb_mm_out, uint32_t cb_max, uint32_t cb_
         reconfig_data_format_srca(cb_sum_exp);
         copy_init(cb_sum_exp);
         copy_tile(cb_sum_exp, r, 1);
+        reconfig_data_format_srca(cb_mm_out);  // same fp32 format, but every other O copy reconfigures too
         copy_init(cb_mm_out);
         const uint32_t first = (Wt < 2U) ? Wt : 2U;
         for (uint32_t t = 0; t < first; ++t) {

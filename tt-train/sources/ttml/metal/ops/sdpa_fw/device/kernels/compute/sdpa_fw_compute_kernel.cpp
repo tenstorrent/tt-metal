@@ -185,7 +185,11 @@ FORCE_INLINE void finalize_chunk(uint32_t cb_mm_out, uint32_t cb_max, uint32_t c
 // exp_max_diff): row r sits in slot r. Output accumulators: row r starts at r * vWt.
 // Runs K/V steps [k_begin, k_end) of the chunk; the softmax state starts fresh at k_begin.
 FORCE_INLINE void process_q_chunk(
-    uint32_t item, uint32_t k_begin, uint32_t k_end, uint32_t role, uint32_t num_partials) {
+    uint32_t item,
+    uint32_t k_begin,
+    uint32_t k_end,
+    [[maybe_unused]] uint32_t role,  // role and num_partials only matter to split units
+    [[maybe_unused]] uint32_t num_partials) {
     cb_wait_front(cb_query, q_tiles);
 
     const uint32_t first_row_tile = sdpa_fw_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
