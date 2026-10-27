@@ -251,6 +251,7 @@ def _stub_runtime(patch):
         class VerifyOutput:
             spec_mode: str
             argmax_ids: object = None
+            logits: object = None
             hidden: object = None
 
         @dataclass
@@ -263,11 +264,12 @@ def _stub_runtime(patch):
             drafter_state: str
             drafter_target_cache_requires: tuple
             supports_narrow_decode: bool = False
+            k_by_rows: tuple = ()
 
         @dataclass
         class SpecReject:
             reason: str
-            supported_k: tuple
+            supported_k: tuple = ()
 
         patch.setitem(sys.modules, "vllm_tt_plugin", _module("vllm_tt_plugin", __path__=[]))
         patch.setitem(
