@@ -23,7 +23,18 @@ import textwrap
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agentx_sim import BUCKETS  # noqa: E402
 
-KNOBS = ("config", "concurrency", "cache", "align", "mid_cost", "max_think_s", "decode_tps")
+KNOBS = (
+    "config",
+    "concurrency",
+    "cache",
+    "align",
+    "mid_cost",
+    "max_think_s",
+    "decode_tps",
+    "chunk_overhead_ms",
+    "request_overhead_ms",
+    "inject_depth",
+)
 # Categorical palette in a fixed order, so a run keeps its color across plots of the same sweep.
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#8f5bd6", "#d6457a", "#4c9f9f", "#7a7a72"]
 
@@ -44,6 +55,9 @@ def load_runs(paths, where):
             for line in f:
                 r = json.loads(line)
                 r.setdefault("mid_cost", 0.0)  # exports from before --mid-cost
+                r.setdefault("chunk_overhead_ms", 0.0)  # and from before the overhead knobs
+                r.setdefault("request_overhead_ms", 0.0)
+                r.setdefault("inject_depth", 1)
                 if all(matches(r.get(k), v) for k, v in where):
                     runs.append(r)
     return runs
@@ -56,14 +70,16 @@ def design(cfg):
     name = f"{unit // 1024}k" if unit % 1024 == 0 else str(unit)
     if budget > unit:
         name += f" x{budget // unit} lanes"
-    return name + (", shortest-first" if policy == "pack" else "")
+    return name + {"pack": ", shortest-first", "rr": ", round robin"}.get(policy, "")
 
 
 def knob(k, v):
     if k == "config":
         return design(v)
     if k == "cache":
-        return "unlimited cache" if v == "inf" else f"{float(v) / 1e6:g}M-token cache"
+        if v == "inf":
+            return "unlimited cache"
+        return f"{v[4:]} KV slots" if v.startswith("slot") else f"{float(v) / 1e6:g}M-token cache"
     if k == "concurrency":
         return f"{v} sessions"
     if k == "align":
@@ -72,6 +88,12 @@ def knob(k, v):
         return f"mid-chunk cost +{100 * float(v):g}%"
     if k == "max_think_s":
         return f"think cap {float(v):g} s"
+    if k == "chunk_overhead_ms":
+        return f"+{float(v):g} ms a chunk"
+    if k == "request_overhead_ms":
+        return f"+{float(v):g} ms a request"
+    if k == "inject_depth":
+        return f"{v} chunks queued ahead"
     return f"decode {float(v):g} tok/s"
 
 
