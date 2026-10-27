@@ -35,6 +35,7 @@ def test_single_trace_fp8_needs_the_switch(monkeypatch):
     monkeypatch.setenv("DSV41_PF_PAGED_FP8", "1")
     on, why = PS.resolve_server_default(512, 1048576)
     assert not on and "fp8" in why  # shipped behaviour
+    monkeypatch.delenv("DSV41_PF_SINGLE")  # (the first call pinned it to 0)
     monkeypatch.setenv("DSV41_FP8_SERVING", "1")
     on, why = PS.resolve_server_default(512, 1048576)
     assert on and "fp8" in why
