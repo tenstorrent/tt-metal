@@ -26,7 +26,6 @@
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
-#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_type_catalog.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
 #include "tt_metal/llrt/hal.hpp"
 
@@ -249,10 +248,6 @@ Arch describe_arch(const tt::tt_metal::Hal& hal) {
         .stream_registers = describe_stream_registers(hal),
         .core_registers = describe_core_registers(hal),
     };
-}
-
-TypeCatalog describe_types() {
-    return TypeCatalog{.structs = described_struct_types(), .enums = described_enum_types()};
 }
 
 }  // namespace tt::tt_fabric::manifest

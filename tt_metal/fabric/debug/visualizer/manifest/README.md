@@ -48,8 +48,8 @@ The types at L1 addresses come from the struct layouts in `fabric_struct_layouts
 | `arch.l1_areas` | L1 areas the architecture fixes on every router core: heartbeat, telemetry, routing table, Ethernet firmware mailbox, base firmware link status |
 | `arch.stream_registers` | Where the stream registers are and how wide their values are: `base`, `stride`, `count`, and each register's `offset` and `bits`, from the HAL |
 | `arch.core_registers` | The soft reset and wall clock registers, in the order they are read, with each physical ERISC's reset bit |
-| `types.structs` | Every struct a schema names, with its size and members in order |
-| `types.enums` | Every enum a schema names, with its values. These decode integers read from the device |
+| `types.structs` | Every struct a schema names, and every struct those name in turn, with its size and members in order. Nothing else |
+| `types.enums` | Every enum a schema names, including through a struct, with its values. These decode integers read from the device |
 | `vocabulary` | Every name each label can hold, so a reader knows all of a label's values without the C++ enums. Each list is named for what the label is, and the schema shows which key uses which list: `arch` (`arch.name`); `fabric_config`, `reliability_mode`, `tensix_config`, `udm_mode`, `fabric_manager_mode` (`fabric.config`); `fabric_topology`; `credit_backing` and `l1_credit_counter_reason` (a mesh's credit transport); `z_port_role`; `edge_capability`; `credit_counter_indexed_by`; `stream_register`; `field_category` and `field_kind`; `channel_status`; `erisc_processor`. These are names the manifest writes as strings, so nothing appears both here and in `types.enums` |
 | `meshes` | Each mesh, its chips, and each local chip's routers |
 
@@ -194,9 +194,9 @@ names what to update. By kind of change:
 | New define | The collector: "the define ... is fed to the router, but the collector does not read it" | Read it in the collector and list it in `k_collector_defines`, or add it to `k_unrecorded_defines` with a reason |
 | Removed argument | The collector: "missing fabric router named compile-time argument ..." | Delete its table entry. An unrecorded entry for it is not detected; delete it by hand |
 | Collector code reads a new argument | `get_named_arg`: "the collector reads ..., which no field table reads" | Add it to `k_collector_args` |
-| New struct in L1 | The build, when a field's content names a struct with no `StructLayout`; the writer, when its schema does not resolve | A `StructLayout<T>` and an entry in `DescribedStructs` (`fabric_struct_layouts.hpp`) |
-| New enum | The writer, when a schema names it | An entry in `DescribedEnums` (`fabric_manifest_type_catalog.hpp`) |
-| New enum value | Nothing for enums enchantum reads; the build for `EDMStatus` | `FABRIC_MANIFEST_EDM_STATUSES` for `EDMStatus` |
+| New struct in L1 | The build, when a field's content names a struct with no `StructLayout` | A `StructLayout<T>` (`fabric_struct_layouts.hpp`). `types` picks it up from the schema that names it |
+| New enum | Nothing for an enum enchantum reads; the build, when enchantum finds none of its enumerators | Nothing, or an `EnumLayout<E>` (`fabric_struct_layouts.hpp`) for an enum enchantum can't read. `types` picks it up from the schema that names it |
+| New enum value | Nothing for enums enchantum reads; the build for `EDMStatus` | `FABRIC_LAYOUT_EDM_STATUSES` (`fabric_struct_layouts.hpp`) for `EDMStatus` |
 | New or renamed field category, field kind, Z port role or channel status | The schema check, on the name in `vocabulary` | Its list in `fabric_manifest_schema.json` (`field_category`, `field_kind`, `z_port_role` or `channel_status`) |
 | New label key (a key whose value is one of a fixed set of names) | Nothing | A list in `make_vocabulary_json` (`fabric_manifest.cpp`) named for what the label is, and the same name in the schema's `vocabulary` |
 | New computed fact | Nothing | The model, the collector or chip pass, the writer, the tests, a paragraph above, and the schema |
