@@ -686,6 +686,12 @@ void kernel_main() {
 
             reconfig_data_format(cb_prev_sum, cb_prev_sum);
             pack_reconfig_data_format(cb_prev_sum);
+#ifdef SDPA_DECODE_RETURN_LSE
+            // The root's final max (raw q.k) and softmax denominator, for the writer's lse = scale * m + log(l).
+            // cb_out_m / cb_out_l are only used by non-root senders, so the root can hand them to its writer.
+            move_block<false>(cb_prev_max, cb_out_m, Sq_chunk_t);
+            move_block<false>(cb_prev_sum, cb_out_l, Sq_chunk_t);
+#endif
             recip_block_inplace(cb_prev_sum, Sq_chunk_t);
 
             /* OUT_ACC *= 1/SUM */

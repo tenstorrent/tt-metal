@@ -99,6 +99,10 @@ void kernel_main() {
         if (use_chunk_start_idx_tensor != 0) {
             cb_chunk_start_idx_obj.wait_front(1);
             uint32_t chunk_start_idx = ckernel::read_tile_value(cb_chunk_start_idx, 0, 0);
+#ifdef SDPA_PAIR_SPLIT
+            // Pair-split prefill: the reader put this device's parity after the chunk start.
+            sdpa_pair_split::g_parity = ckernel::read_tile_value(cb_chunk_start_idx, 0, 1) & 1u;
+#endif
             cb_chunk_start_idx_obj.pop_front(1);
             const uint32_t q_chunk_size = Sq_chunk_t * TILE_HEIGHT;
             chunked_q_chunk_offset_phase_1 = chunk_start_idx / q_chunk_size;

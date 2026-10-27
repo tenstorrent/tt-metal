@@ -8,6 +8,7 @@
 #include <climits>
 #include <cstdint>
 #include <optional>
+#include <tuple>
 
 #include <tt-metalium/program_descriptors.hpp>
 
@@ -124,5 +125,30 @@ Tensor sdpa_decode(
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     std::optional<uint32_t> cache_position_modulo = std::nullopt,
     uint32_t spec_multi_pos_tiles = 0);
+
+// sdpa_decode plus the per-(user, head) log-sum-exp as a second output (see SdpaDecodeInputs::lse_output).
+// Supported for causal decode with one KV head, no attention sink, a TILE layout Q and no Q-head parallelism
+// (paged MLA with height-sharded Q is the intended path). Users skipped with cur_pos = -1 get output rows 0 and
+// lse = -1e30.
+std::tuple<Tensor, Tensor> sdpa_decode_with_lse(
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const std::optional<const Tensor>& input_tensor_v,
+    const std::optional<const Tensor>& cur_pos_tensor,
+    const std::optional<const Tensor>& page_table_tensor,
+    const std::optional<const Tensor>& attn_mask,
+    const std::optional<const Tensor>& attention_sink,
+    bool is_causal,
+    bool paged_attention,
+    const std::vector<uint32_t>& cur_pos,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t k_chunk_size,
+    std::optional<bool> share_cache,
+    std::optional<bool> use_mla,
+    std::optional<uint32_t> head_dim_v);
 
 }  // namespace ttnn::prim

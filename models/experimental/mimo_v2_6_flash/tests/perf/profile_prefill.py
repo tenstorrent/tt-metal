@@ -15,7 +15,9 @@ up with parse_prefill_zones.py:
 ``--ttft``: no profiler; wall-clock time of each whole prompt (prefill and its last-token logits), the second of
 two runs, for every ``--contexts`` length.
 
-Prompts are random token ids (seed 0), as in prefill_time.py.
+Prompts are random token ids (seed 0), as in prefill_time.py. ``--replicate-global-kv`` / ``--kv-pair-split``: the
+global KV layouts vLLM serves with MIMO_KV_PAIR_SPLIT=0 / 1 (TtMiMoModel), whose later chunks split the heads / the
+keys over the chip pair; neither, the pair splits the users (one chip runs a user's 16 heads).
 """
 
 import argparse
@@ -45,7 +47,7 @@ def fabric_router_config(packet_bytes):
     return config
 
 
-def build(mesh, max_seq_len, replicate_global_kv=False, users=4):
+def build(mesh, max_seq_len, replicate_global_kv=False, users=4, kv_pair_split=False):
     cfg = MiMoConfig.from_model_path(common.MODEL_PATH)
     gen = MiMoGalaxyGenerator(
         mesh,
@@ -56,6 +58,7 @@ def build(mesh, max_seq_len, replicate_global_kv=False, users=4):
         users_per_replica=users,
         max_seq_len=max_seq_len,
         replicate_global_kv=replicate_global_kv,
+        kv_pair_split=kv_pair_split,
     )
     tokens = torch.randint(0, cfg.vocab_size, (max_seq_len,), generator=torch.Generator().manual_seed(0))
     return gen.models, tokens
@@ -139,10 +142,16 @@ def main():
     parser.add_argument("--fill", choices=("real", "skip"), default="real", help="zones: the earlier chunks (profile)")
     parser.add_argument("--rows", type=int, default=1, help="zones: Galaxy rows to profile (1-4)")
     parser.add_argument("--fabric-packet", type=int, default=0, help="fabric packet payload bytes (0: default)")
-    parser.add_argument(
+    kv = parser.add_mutually_exclusive_group()
+    kv.add_argument(
         "--replicate-global-kv",
         action="store_true",
-        help="both chips of a global layer's pair keep the K / V (vLLM's layout): later chunks split the heads",
+        help="both chips of a global layer's pair keep the K / V (MIMO_KV_PAIR_SPLIT=0): later chunks split the heads",
+    )
+    kv.add_argument(
+        "--kv-pair-split",
+        action="store_true",
+        help="each chip of the pair keeps half of every 128-token block (vLLM's default): later chunks split the keys",
     )
     parser.add_argument(
         "--graph-report",
@@ -172,7 +181,8 @@ def main():
     )
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(4, 8), l1_small_size=65536)
     try:
-        models, tokens = build(mesh, max(contexts) if args.ttft else args.context, args.replicate_global_kv, args.users)
+        max_seq_len = max(contexts) if args.ttft else args.context
+        models, tokens = build(mesh, max_seq_len, args.replicate_global_kv, args.users, args.kv_pair_split)
         if args.ttft:
             ttft(models[0], tokens, contexts, args.chunk)
         else:

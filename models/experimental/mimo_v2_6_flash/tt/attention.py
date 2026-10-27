@@ -29,6 +29,17 @@ there. A later chunk needs the keys before it:
   the group's 16 Q heads (the decode weights) through ``chunked_flash_mla_prefill`` over the K and
   128-wide V caches, and the non-owner's result is zeroed before the row all-reduce.
 
+Global KV pair split (vLLM mode, MIMO_KV_PAIR_SPLIT, the default; reference/kv_pair_split.py, tt/pair_split.py):
+under vLLM a block can be shared by requests in slots of either parity (prefix caching), so the pair cannot split
+the users; it splits every 128-position block instead, each chip keeping its 64-position halves (``self.pair``, set
+by the model). Each chip runs the group's 16 Q heads over its local keys for every user, the attention ops return the
+partial output with its LSE (``return_lse``), and ``PairSplit.merge`` scales it by the chip's merge weight from the
+pair's two LSEs, so the row all-reduce after ``wo_decode`` sums full attention. Decode writes K / V and attends at the
+chip's own positions (``_forward_decode_pair``); a first prefill chunk is unchanged but for its fill table (each
+chip's halves, kv.PrefillTables), and a later chunk runs pair-split chunked MLA prefill and the merge
+(``_prefill_kv_split_chunk``) in place of the head split (``_prefill_pair_chunk``, both copies on the pair). The two
+attention ops' new arguments are used only in ``_paged_mla_decode_lse`` and ``_chunked_mla_prefill_lse``.
+
 Every prefill program keys on the chunk's padded length (and, for a later chunk, on how far ``start_pos`` is
 aligned and how many window blocks it reads), never on ``start_pos``, the user or a block id: the model hands each
 chunk its block tables as small device tensors (``kv.PrefillTables``) instead of the layers slicing the page tables,
@@ -56,6 +67,19 @@ from .rope import permute_heads_for_rope
 # that keyword key the program on the scalar start, which compiles a program for every new start.
 MLA_RUNTIME_START = "chunk_start_idx_tensor" in (ttnn.transformer.chunked_flash_mla_prefill.__doc__ or "")
 
+# The KV pair split's op arguments (runs/kvsplit/SPEC.md): both MLA attention ops return (output, lse) with
+# ``return_lse=True``; chunked MLA prefill also takes each chip's pair parity (PairSplit.prefill_parity, a per-chip
+# one-element int32 tensor) through this keyword.
+PAIR_PARITY_KWARG = "kv_pair_parity_tensor"
+PAIR_SPLIT_OPS = all(
+    word in (op.__doc__ or "")
+    for op, words in (
+        (ttnn.transformer.paged_flash_multi_latent_attention_decode, ("return_lse",)),
+        (ttnn.transformer.chunked_flash_mla_prefill, ("return_lse", PAIR_PARITY_KWARG)),
+    )
+    for word in words
+)
+
 # A global layer's later prefill chunks stream the whole cached context once per (head group, Q chunk) unit. With
 # grouped heads (SDPAProgramConfig.q_heads_per_unit: G heads share each K/V chunk read) and a K split (k_splits: each
 # unit's keys over S work items, merged after the program) on the full grid, the K / V reads drop by G and every core
@@ -73,6 +97,14 @@ def global_sdpa_split():
         return None
     g, s = GLOBAL_SDPA.lstrip("g").split("s")
     return int(g), int(s)
+
+
+def later_chunk_split(chunk, start_pos):
+    """(G, S) of a global layer's later chunk at ``start_pos`` whose SDPA chunk size is ``chunk``, or None when it runs
+    the legacy program (TtMiMoAttention._prefill_sdpa_program)."""
+    split = global_sdpa_split() if start_pos >= GLOBAL_SDPA_MIN_START else None
+    fp32_acc = os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1"  # the grouped program needs bf16 dest
+    return split if chunk == 256 and not fp32_acc else None
 
 
 def page_table_width(blocks):
@@ -590,6 +622,8 @@ class TtMiMoAttention:
             exp_approx_mode=False,
         )
         self._split_sdpa_programs = {}
+        # The KV pair split (vLLM mode, MIMO_KV_PAIR_SPLIT): the model's PairSplit, on the global layers.
+        self.pair = None
 
     def _split_sdpa_program(self, batch, table_tokens):
         """Global decode SDPA program for a batch of ``batch`` page-table rows: every core of the 8 x 8 grid works
@@ -734,9 +768,8 @@ class TtMiMoAttention:
         chunk = 256 if seq_len >= 2048 else (128 if seq_len >= 128 else 32)
         while seq_len % chunk or start_pos % chunk:
             chunk //= 2
-        split = global_sdpa_split() if later_chunk and start_pos >= GLOBAL_SDPA_MIN_START else None
-        fp32_acc = os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1"  # the grouped program needs bf16 dest
-        if split is not None and chunk == 256 and not fp32_acc:
+        split = later_chunk_split(chunk, start_pos) if later_chunk else None
+        if split is not None:
             heads, splits = split
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.plan.mesh_device.compute_with_storage_grid_size(),
@@ -834,8 +867,11 @@ class TtMiMoAttention:
         """
         assert start_pos == 0 or tables is not None, "a later chunk needs its kv.PrefillTables"
         assert users == 1 or (start_pos == 0 and isinstance(tables, BatchFillTables)), "a batch is first chunks"
+        assert self.pair is None or tables is not None, "a pair-split chunk writes through its fill tables"
         with steps() as step:  # profiling zones (profiling.py)
             if start_pos > 0 and self.split_users:
+                if self.pair is not None:
+                    return self._prefill_kv_split_chunk(x, kv_cache, start_pos, tables, step)
                 if self.kv_both_chips:
                     return self._prefill_pair_chunk(x, user_id, kv_cache, start_pos, tables, step)
                 return self._prefill_owner_chunk(x, user_id, kv_cache, start_pos, tables, step)
@@ -1038,6 +1074,105 @@ class TtMiMoAttention:
         step("all_reduce")
         return self.plan.all_reduce(out)
 
+    def _prefill_kv_split_chunk(self, x, kv_cache, start_pos, tables, step):
+        """A global layer's chunk after the first under the KV pair split: the group's 16 Q heads over the chip's local
+        keys of the whole context (pair-split chunked MLA prefill, ``tables.context`` the global table from position
+        0), the chunk's own K / V written first into the chip's halves (``tables.fill``), then the merge (both chips
+        carry every query)."""
+        assert self.sinks is None and self.sliding_window is None
+        seq_len = x.shape[-2]
+        assert start_pos % 128 == 0 and seq_len % 128 == 0, "pair-split chunks start and end on 128-token blocks"
+        step("qkv")
+        xqkv = ttnn.linear(
+            x,
+            self.wqkv_decode,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.mm_config,
+        )
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv,
+            num_heads=self.nh_decode,
+            num_kv_heads=1,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        xqkv.deallocate(True)
+        step("rope")
+        q_rot, k_rot = self._rope_prefill(q, k, start_pos, seq_len)
+        step("kv_cache")
+        self._fill(kv_cache, k_rot, v, None, 0, tables)
+        k_rot.deallocate(True)
+        v.deallocate(True)
+
+        step("sdpa")
+        k_cache = kv_cache[0]
+        assert tables.context.shape[-1] * 2 * k_cache.shape[-2] >= start_pos + seq_len, "chunk runs past its context"
+        attn, lse = self._chunked_mla_prefill_lse(q_rot, kv_cache, tables, start_pos)  # [1, 16, S, 128], [1, 16, S, 1]
+        q_rot.deallocate(True)
+        step("pair_merge")
+        merged = self.pair.merge(attn, lse, ttnn.DRAM_MEMORY_CONFIG)
+        attn.deallocate(True)
+        lse.deallocate(True)
+        attn_cat = ttnn.experimental.nlp_concat_heads(merged, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        merged.deallocate(True)
+        step("o_proj")
+        out = ttnn.linear(
+            attn_cat,
+            self.wo_decode,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.mm_config,
+        )
+        attn_cat.deallocate(True)
+        step("all_reduce")
+        return self.plan.all_reduce(out)
+
+    def _chunked_mla_prefill_lse(self, q, kv_cache, tables, start_pos):
+        """Pair-split chunked MLA prefill (the ops' interface in runs/kvsplit/SPEC.md): queries q [1, nh, S, D] at
+        global positions start .. start + S - 1 (``tables.start``) over the chip's local keys [0, (start + S) / 2)
+        through the global table ``tables.context``, the chip's parity from PairSplit.prefill_parity. The program is an
+        unsplit later chunk's (``_prefill_sdpa_program``: the Q / K chunk sizes divide S and start, the op walks the
+        local keys in tiles; from GLOBAL_SDPA_MIN_START the grouped / K split program, whose 16 heads over half the
+        keys are the head split's work: 8 heads over all of them). Returns (output [1, nh, S, 128] bf16, lse [1, nh, S, 1] fp32: NO_KEY_LSE and output 0 for a query
+        with no visible local key)."""
+        k_cache, v_cache = kv_cache
+        attn, lse = ttnn.transformer.chunked_flash_mla_prefill(
+            q,
+            k_cache,
+            self.v_head_dim,
+            tables.context,
+            chunk_start_idx_tensor=tables.start,
+            scale=self.scale,
+            program_config=self._prefill_sdpa_program(q.shape[-2], start_pos, later_chunk=True),
+            compute_kernel_config=self.sdpa_config,
+            input_tensor_v=v_cache,
+            return_lse=True,
+            **{PAIR_PARITY_KWARG: self.pair.prefill_parity},
+        )
+        return attn, lse
+
+    def _paged_mla_decode_lse(self, q, kv_cache, page_table, cur_pos):
+        """Global decode SDPA with its LSE (the ops' interface in runs/kvsplit/SPEC.md): q (height-sharded, 16 heads)
+        over the chip's local keys up to each user's SDPA position ``cur_pos`` (-1: none) through ``page_table``.
+        Returns (output [1, B, 16, 128] bf16 in L1, lse [1, B, 16, 1] fp32: NO_KEY_LSE and output 0 for a user with
+        no visible local key)."""
+        k_cache, v_cache = kv_cache
+        attn, lse = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+            q,
+            k_cache,
+            v_cache,
+            head_dim_v=self.v_head_dim,
+            page_table_tensor=page_table,
+            cur_pos_tensor=cur_pos,
+            scale=self.scale,
+            program_config=self._split_sdpa_program(page_table.shape[0], page_table.shape[-1] * k_cache.shape[-2]),
+            compute_kernel_config=self.decode_sdpa_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            return_lse=True,
+        )
+        return attn, lse
+
     # ---------------------------------------------------------------- decode
     def _cache_width_v(self, v, batch, width):
         """Decode V heads [1, B, 1, D] (height-sharded) -> the cache's ``width`` real dims, height-sharded for
@@ -1087,7 +1222,9 @@ class TtMiMoAttention:
         """x [1, 1, B, hidden] (B users padded to a tile).
 
         cur_pos: int32 [B] on device (-1 skips a slot), or a dict {"pos", "pos_owned", "owner_mask"} and optionally
-        "pos_update" and "serial"; global layers with split users read the per-chip owned view (see kv.py).
+        "pos_update" and "serial"; global layers with split users read the per-chip owned view (see kv.py). Under
+        the KV pair split (``self.pair``) the dict has "pair_write" and "pair_sdpa", the global layers' per-chip
+        positions (PairSplit.positions), and with "serial" also "pair_serial" (``_forward_decode_pair``).
         "serial": per-slot position tensors, each keeping one slot's position, to write K / V slot by slot: the
         slots of a speculative verify are one request at consecutive positions, whose rows share cache tiles that
         the per-slot cache writers read, patch and write back concurrently (reference/spec_decode.py).
@@ -1095,6 +1232,8 @@ class TtMiMoAttention:
         serial = None
         if isinstance(cur_pos, dict):
             serial = cur_pos.get("serial")
+            if self.split_users and self.pair is not None:
+                return self._forward_decode_pair(x, rot_mats, cur_pos, page_table, kv_cache, compact)
             if self.split_users:
                 return self._forward_decode_split(
                     x,
@@ -1233,3 +1372,44 @@ class TtMiMoAttention:
         owned = self.concat_heads(attn, owner_mask)
         attn.deallocate(True)
         return self._decode_o(owned, compact)
+
+    def _forward_decode_pair(self, x, rot_mats, positions, page_table, kv_cache, compact=False):
+        """Global-layer decode under the KV pair split: all 16 Q heads of this chip's KV group for every slot, over the
+        chip's local keys. ``positions``: forward_decode's dict; "pair_write" the chip's K / V write positions (or
+        "pair_serial", one slot per tensor, written one after another as in a verify), "pair_sdpa" its SDPA positions,
+        and with "page_table_sdpa" the first n slots' table rows and "pos_sdpa" their SDPA positions (see
+        ``_forward_decode_split``). The SDPA's partial output is scaled by the chip's merge weight
+        (PairSplit.merge); the row reduction after the o projection adds the pair's two."""
+        batch = x.shape[-2]
+        xqkv = self._decode_qkv(x, self.wqkv_decode, self.decode_qkv_program)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            xqkv,
+            num_heads=self.nh_decode,
+            num_kv_heads=1,
+            memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
+        )
+        xqkv.deallocate(True)
+        trans = self.rope.transformation_mat
+        q_rot = ttnn.experimental.rotary_embedding_llama(q, rot_mats[0], rot_mats[1], trans, is_decode_mode=True)
+        k_rot = ttnn.experimental.rotary_embedding_llama(k, rot_mats[0], rot_mats[1], trans, is_decode_mode=True)
+        q.deallocate(True)
+        k.deallocate(True)
+        v_shard = self._cache_width_v(v, batch, self.v_head_dim)
+
+        k_cache, v_cache = kv_cache
+        for pos in positions.get("pair_serial") or [positions["pair_write"]]:
+            update = dict(update_idxs_tensor=pos, page_table=page_table)
+            ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
+            ttnn.experimental.paged_update_cache(v_cache, v_shard, **update)
+        k_rot.deallocate(True)
+        v_shard.deallocate(True)
+
+        table, pos = page_table, positions["pair_sdpa"]
+        if positions.get("page_table_sdpa") is not None:
+            table, pos = positions["page_table_sdpa"], positions["pos_sdpa"]
+        attn, lse = self._paged_mla_decode_lse(q_rot, kv_cache, table, pos)  # [1, B or n, 16, 128], [.., 16, 1]
+        q_rot.deallocate(True)
+        attn_cat = self.pair.merge_heads(attn, lse, self.concat_heads)
+        attn.deallocate(True)
+        lse.deallocate(True)
+        return self._decode_o(attn_cat, compact)

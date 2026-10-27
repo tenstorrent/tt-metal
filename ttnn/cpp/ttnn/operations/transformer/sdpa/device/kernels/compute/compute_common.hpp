@@ -28,6 +28,9 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
+#ifdef SDPA_PAIR_SPLIT
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_pair_split.hpp"
+#endif
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
@@ -1320,18 +1323,32 @@ void apply_causal_mask_lightweight(
 
         if (straddle_col == 0) {
             // Fast path: K coords contiguous across cols.
+#ifdef SDPA_PAIR_SPLIT
+            // K columns are this chip's local tiles: compare against the Q tile's local row position, and
+            // stamp the diagonal only when the Q tile is on this chip.
+            bool stamp_diag = true;
+            int32_t diag_col =
+                sdpa_pair_split::local_q_tile(static_cast<uint32_t>(q_pos), sdpa_pair_split::g_parity, stamp_diag) -
+                static_cast<int32_t>(k_start_tile);
+#else
             int32_t diag_col = q_pos - static_cast<int32_t>(k_start_tile);
+#endif
             if (diag_col < 0) {
                 // Entire row above diagonal -> stamp all neginf
                 stamp_tile_range_l1_acc<dst_batch>(mask_cb, neginf_idx, out_cb, row_offset, num_cols);
             } else if (static_cast<uint32_t>(diag_col) < num_cols) {
                 // Stamp the diagonal tile
-                tile_regs_acquire();
-                copy_tile(mask_cb, diag_idx, 0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile<true>(0, out_cb, row_offset + static_cast<uint32_t>(diag_col));
-                tile_regs_release();
+#ifdef SDPA_PAIR_SPLIT
+                if (stamp_diag)
+#endif
+                {
+                    tile_regs_acquire();
+                    copy_tile(mask_cb, diag_idx, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile<true>(0, out_cb, row_offset + static_cast<uint32_t>(diag_col));
+                    tile_regs_release();
+                }
 
                 // Stamp neginf tiles to the right of diagonal
                 uint32_t neginf_start = static_cast<uint32_t>(diag_col) + 1;
@@ -1711,7 +1728,13 @@ void sdpa_inner_loop(
                 // Clamp to total K-tile extent. Mirrors reader_interleaved's clamp; without
                 // both, the reader and compute disagree on K-chunk count when Q-chunk extends
                 // past total K (Sq_chunk_t > Skt) → CB deadlock.
+#ifdef SDPA_PAIR_SPLIT
+                // K is this chip's half of the cache: the local tiles visible to the chunk's last row.
+                const uint32_t q_high_unclamped =
+                    sdpa_pair_split::local_k_end(q_start_tile + Sq_chunk_t, sdpa_pair_split::g_parity);
+#else
                 const uint32_t q_high_unclamped = q_start_tile + Sq_chunk_t;
+#endif
                 q_high_tile = q_high_unclamped < Skt ? q_high_unclamped : Skt;
             } else {
                 q_high_tile = Skt;
@@ -1847,7 +1870,16 @@ void sdpa_inner_loop(
                     k_high_idx = k_low_idx + Sk_chunk_t;
                 }
                 // Apply mask if causal overlap, sliding window, or this K chunk has padding
+#ifdef SDPA_PAIR_SPLIT
+                // Local K tiles: the first Q row's local row position decides the overlap (it is the lowest).
+                bool first_row_has_diag = true;
+                const int32_t first_local_q =
+                    sdpa_pair_split::local_q_tile(q_start_tile, sdpa_pair_split::g_parity, first_row_has_diag);
+                apply_mask = (first_local_q < static_cast<int32_t>(k_high_idx)) || (sliding_window_size > 0) ||
+                             needs_padding_mask;
+#else
                 apply_mask = (q_start_tile < k_high_idx) || (sliding_window_size > 0) || needs_padding_mask;
+#endif
             } else if constexpr (use_provided_mask) {
                 apply_mask = true;
             } else if constexpr (use_padded_mask) {
@@ -2123,6 +2155,17 @@ void sdpa_inner_loop(
                 copy_block(alias_prev_max, cb_lse_out, Sq_chunk_t);
             }
         } else {
+#ifdef SDPA_RETURN_LSE
+            // return_lse: hand the writer this Q chunk's final row max (raw q.k) and softmax denominator
+            // (column 0 after matmul_reduce) for lse = scale * m + log(l).
+            static_assert(!use_attention_sink, "SDPA return_lse does not support an attention sink");
+            reconfig_data_format_srca(alias_prev_max);
+            pack_reconfig_data_format(SDPA_LSE_M_CB);
+            move_block<false>(alias_prev_max, SDPA_LSE_M_CB, Sq_chunk_t);
+            reconfig_data_format_srca(alias_prev_sum);
+            pack_reconfig_data_format(SDPA_LSE_L_CB);
+            move_block<false>(alias_prev_sum, SDPA_LSE_L_CB, Sq_chunk_t);
+#endif
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 

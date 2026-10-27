@@ -62,6 +62,8 @@ Tensor sdpa(
     const std::optional<Tensor>& windowed_q_token_offset_tensor = std::nullopt,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     bool output_concat_heads = false,
-    const std::optional<Tensor>& attn_mask_block_map = std::nullopt);
+    const std::optional<Tensor>& attn_mask_block_map = std::nullopt,
+    const std::optional<Tensor>& lse_output = std::nullopt,
+    const std::optional<Tensor>& kv_pair_parity = std::nullopt);
 
 }  // namespace ttnn::prim

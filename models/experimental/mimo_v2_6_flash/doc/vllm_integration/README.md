@@ -119,24 +119,122 @@ vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.
 - vLLM starts one API server per DP rank (4) by default; that needs plugin 11dc5a9 or later (before it, every
   extra API server rejected the plugin's structured-output setting and `--api-server-count 1` was required).
   Checked: 24 concurrent completions, a chat and 4 JSON-schema requests over the 4 API servers all succeed.
-- `MIMO_KV_GB_PER_CHIP` (default 6) caps the KV pool per lane; `MIMO_MODEL_PATH` / `MIMO_TT_CACHE` as for the tests.
+- `MIMO_KV_GB_PER_CHIP` caps the KV pool per lane (default 6.7 with the pair split, else 6); the adapter warns when
+  the cap holds fewer than `--max-num-seqs` requests of `--max-model-len` (vLLM then queues the rest).
+  `MIMO_MODEL_PATH` / `MIMO_TT_CACHE` as for the tests.
+- `MIMO_KV_PAIR_SPLIT` (default 1; "Global KV pair split" below) halves the global layers' KV: 4 x 1M per lane fits at
+  `MIMO_KV_GB_PER_CHIP=6.7` (6.69 GB: 4 x 546,368 pool tokens; 6.6 holds 3.95), the default. It needs a ttnn build whose MLA attention ops return their LSE; `MIMO_KV_PAIR_SPLIT=0`
+  restores the duplicated layout (and serves on builds without those ops).
 - Clients on this host should use `127.0.0.1`: it has no `localhost` entry in /etc/hosts, and the async OpenAI
   client times out resolving it.
 
 ## KV cache
 
-`get_kv_cache_spec` reports a FullAttentionSpec for the 9 global layers and a SlidingWindowSpec (window 128) for the
-39 SWA layers, both K 192 / V 128, with the global page padded to the SWA page so vLLM keeps block size 64. vLLM
-groups them into 6 KV cache groups (1 global, 5 SWA of up to 9 layers), each with its own block table, all drawing
-block ids from one pool per lane. The model keeps one device page table per group
+`get_kv_cache_spec` reports a FullAttentionSpec for the 9 global layers and a SlidingWindowSpec for the 39 SWA
+layers, both K 192 / V 128. The SWA layers attend a window of 128; their spec declares 128 + the chunk start alignment
+- 1 (255 with the pair split, 191 without; `swa_spec_window`), because vLLM frees sliding-window blocks by the window it
+is told and `prefill_forward` recomputes up to alignment - 1 positions in front of an unaligned chunk start (see the
+prefill bullet below). With the pair split (below) the global spec has block size 128, whose page is the
+SWA page (4 KV heads x 128 tokens against 8 x 64); with `MIMO_KV_PAIR_SPLIT=0` it keeps block size 64 with its page
+padded to the SWA page. vLLM groups them into 6 KV cache groups (1 global, 5 SWA of up to 9 layers), each with its own
+block table, all drawing block ids from one pool per lane. The model keeps one device page table per group
 (`TtMiMoModel.setup_vllm_kv_cache` / `set_vllm_page_tables`, copied only when a row changes) and reads a later SWA
 chunk's window from vLLM's SlidingWindowSpec table. Buffers are shared the way vLLM shares them (the i-th layer of
 every group): K for all layers, V among layers of the same width; 4.7 KB per token per chip.
 
-Under vLLM each global layer keeps both copies of its KV head on a chip pair (the standalone model splits users
-between the pair by slot parity): a prefix-cached block can be reused by a request in a slot of either parity.
-Decode still splits the attention by slot. The cost is 1M x 4 users no longer fitting at once; the 6 GB pool
-holds about 1.27M tokens per lane.
+A global layer's KV head is served by a chip pair (4 KV heads over 8 chips). The standalone model splits the users
+between the pair by slot parity, which vLLM cannot use: a prefix-cached block can be reused by a request in a slot of
+either parity. With `MIMO_KV_PAIR_SPLIT=0` each global layer keeps both copies of its KV head on the pair and decode
+still splits the attention by slot; the 6 GB pool then holds about 1.27M tokens per lane (one 1M request).
+
+## Global KV pair split
+
+`MIMO_KV_PAIR_SPLIT=1` (the default, vLLM mode only; `reference/kv_pair_split.py`, `tt/pair_split.py`) stores each
+global KV head once per pair by splitting every block instead of the users:
+
+- **Layout.** A block j of vLLM's global group (block id b) covers global positions [128 j, 128 j + 128). Chip
+  c = chip % 2 of the pair keeps positions [128 j + 64 c, 128 j + 64 c + 64) in rows 0..63 of the same physical page
+  b (`[1, 64, dim]` per chip, shared with the SWA layers as before): global position p sits at local index
+  `64 (p >> 7) + (p & 63)` on the chip with `((p >> 6) & 1) == c`. Both chips use vLLM's table unchanged, one entry
+  per 64 local positions, so the paged ops read and write local positions with no change.
+- **Capacity.** A global token costs half a pool token: `get_max_tokens_all_users` counts a request's global group as
+  `64 ceil(max_model_len / 128)` pool tokens. At `MIMO_KV_GB_PER_CHIP=6.7` the pool holds 4 x 1M requests per lane,
+  c=16 at 1M on the Galaxy: the model asks for 2,185,472 pool tokens (6.69 GB), and the plugin's sizing adds its
+  output and sliding-window headroom for 34,216 blocks (6.70 GB per chip), where vLLM accounts 8,537 blocks per 1M
+  request (8,192 global and 5 x 69 sliding-window blocks with a 2048-token step budget and two steps in flight).
+- **Decode.** Every chip runs its KV group's 16 Q heads over its own keys for every decode user (no owner mask), with
+  `paged_flash_multi_latent_attention_decode(..., return_lse=True)`: the normalized partial output o and its LSE
+  (`m + log l`). `PairSplit.merge_heads` then runs one launch: each chip's exchange core sends its 16 x B LSEs to the
+  pair partner over the fabric (one hop, `kernels/attn/pair_lse_send.cpp`, a fused scatter write and semaphore
+  increment into one of two receive slots), and 64 merge cores (`kernels/attn/pair_merge_heads.cpp`) wait for the
+  partner's packet, compute `alpha = 1 / (1 + exp(clamp(lse_p - lse, -80, 80)))` in fixed point (~1e-8) and write
+  `alpha * o` with the heads concatenated (in place of ConcatHeads), each bf16 product rounded once. The receive slot
+  and the expected arrival come from per-core call counts in persistent global semaphores that every launch advances
+  on every chip. The row reduction after `wo_decode` then sums `W (alpha_A o_A + alpha_B o_B)`, which is full
+  attention (prefill keeps the ttnn-op `PairSplit.merge`: an `all_gather` of the LSE and eltwise ops). A user with no
+  key on a chip has o = 0 and LSE -1e30, so the other chip carries it. The per-chip write positions (-1 where the chip
+  does not keep the token) and SDPA positions (the last local index at or before the user's position) are derived
+  inside the trace from the step's global positions, which advance with `plus_one`, by one one-core program
+  (`kernels/attn/pair_positions.cpp`, mirrored by `positions_step`); it also writes a verify's serial (one slot each)
+  write positions.
+- **Prefill.** A first chunk is unchanged (8 heads per chip over the chunk's own K / V) but for its fill table: one
+  entry per 64 positions, the block on the chip that keeps them and the null block on the other (`kv.pair_fill_rows`,
+  also for batched first chunks). A later chunk runs the group's 16 Q heads through pair-split
+  `chunked_flash_mla_prefill(..., kv_pair_parity_tensor=<the chip's parity>, return_lse=True)` (it reads the chip's
+  local keys [0, (start + length) / 2) with an unsplit later chunk's program: from 64K the grouped / K split one, G 2
+  S 15, whose LSE the K split's merge forms from the pieces' statistics) and the same merge, in place of the head
+  split that `MIMO_KV_PAIR_SPLIT=0` runs (8 heads per chip over both copies: the same work). Chunk starts and later chunks' lengths are multiples of 128: a later chunk pads to at
+  least 128 tokens, and `prefill_forward` moves a chunk start back to a 128-token block. vLLM's prefix-cache hits
+  land on its scheduler block, lcm(64, 128) = 128, and the plugin's TTScheduler ends partial chunks on its 128-token
+  grid (`prefill_chunk_alignment`), but a running request whose leftover step budget cannot reach the grid gets the
+  shorter chunk, so its next chunk starts up to 127 positions past a block (two long prompts chunk-prefilled in one
+  step do this). The moved-back chunk recomputes those positions, whose sliding windows reach up to 127 positions
+  further back than vLLM keeps for the scheduled start; the SWA specs' longer window (`swa_spec_window`) keeps them
+  (vLLM overwrites a spec's `extra_retained_tokens` from the speculative config, so the margin cannot go there).
+  `prefill_warmup_chunks(..., pair_split=True)` warms the later chunks at those starts and lengths, and each length
+  that takes the grouped / K split program once at 64K.
+- **Slot parity.** Every chip of the pair computes every slot, so a global layer no longer depends on a slot's parity
+  in decode or in later prefill chunks.
+- The SWA layers' attention, the MTP and DFlash caches, the MTP history and the ring backfill are unchanged.
+
+The two attention ops' new arguments are used only in `TtMiMoAttention._paged_mla_decode_lse` and
+`_chunked_mla_prefill_lse` (`PAIR_PARITY_KWARG`). `tests/test_kv_pair_split_host.py` checks the mappings (0, 63, 64,
+127, 128 and random positions to 1M), the fill tables and decode positions through a torch mirror of the paged ops,
+the merge against full attention, the warmup's coverage, the capacity and the adapter's per-group block sizes and
+table widths, that `prefill_forward` moving a chunk start back reads only sliding-window blocks vLLM still holds (at
+every offset, with vLLM's own freeing rule; the model's 128 window as vLLM's trips at offsets 63 and up), and, where
+vLLM and the plugin are installed, that vLLM 0.30 groups the specs with block sizes 128 / 64 on one page size and that
+the plugin's pool at 6.7 GB holds 4 x 1M by vLLM's accounting and passes its planner. `tests/test_kv_pair_split_tp8.py`
+(device, one Galaxy row): the positions program and the merge against their host mirrors (merge PCC 0.999999), a
+global layer's prefill chunks and decode steps with the split on vs off (positions straddling 64 / 128: prefill PCC
+0.99999, decode 0.99998; 32K context: 0.99999 / 0.99998), and the serving decode configurations (the compact SDPA
+over 4 table rows, and verifies writing K / V slot by slot at 62..65 and 126..129: 0.99999 / 0.99998); the split cache
+holds the unsplit one's K / V at each local index (PCC 1.0).
+
+Served (vLLM, DP=4 lanes x `--max-num-seqs 4`, `--max-model-len 1048576`, `MIMO_KV_GB_PER_CHIP=6.7`, greedy device
+sampling, no speculation; the same build with `MIMO_KV_PAIR_SPLIT=0` as the baseline):
+
+| | split | `MIMO_KV_PAIR_SPLIT=0` |
+|---|---|---|
+| KV pool per lane (vLLM) | 4,202,656 tokens, 4.01x a 1M request | 2,149,317 tokens, 2.05x |
+| c=16, 128 in / 128 out | 912 tok/s, TPOT 15.16 ms, median ITL 13.51 ms | 967 tok/s, 14.29 ms, 12.97 ms |
+| c=1, 128 / 128 | TPOT 9.76 ms, median ITL 9.69 ms | 9.32 ms, 9.22 ms |
+| c=16, 32K in / 256 out | median TTFT 43.9 s, median ITL 14.41 ms | 43.9 s, 14.01 ms |
+| APC check (16K document, 16 questions) | 48/48 correct, warm == cold 32/32 | the same |
+| plugin HTTP suite (tests/tt) | 76 passed, 2 failed | 74 passed, 4 failed |
+
+The table's split column ran the first merge (the LSE all_gather and seven ttnn ops, 41.1 us per global layer, about
+0.5 ms per step). The fused merge (`tests/perf/kagent_pair_merge_bench.py`: 8.4-8.6 us per call at 4 users, found with
+tt-kernel-agent) brings the split back to the baseline's speed: c=16 128 / 128 955.6 tok/s, TPOT 14.50 ms, median ITL
+12.99 ms; c=1 TPOT 9.33 ms, median ITL 9.25 ms; c=16 32K / 256 median ITL 13.84 ms; APC check exact (48/48, warm ==
+cold 32/32); HTTP suite 76 passed, the same 2 seed tests failed. At long context the step reads the same KV bytes as
+before, since decode already split the users. Both HTTP
+runs fail the same two seed-reproducibility tests (`test_seeding`, `test_same_seeds_reproduce_across_batches`); the
+baseline also fails `test_specific_seed_reproducible[42]` and `test_mixed_params_batch`. Greedy over 16 prompts of 63
+to 60K tokens (64 tokens each): split and baseline agree on 3 of 16 served alone (c=1), and the continuations stay
+coherent; for scale, each mode agrees with itself on 6 of 16 between two c=16 runs and on 8 of 16 between c=1 and
+c=16, so these prompts flip on rounding near-ties, and the split changes the attention's rounding in every global
+layer.
 
 ## Device RoPE tables
 
@@ -175,6 +273,11 @@ overwritten by the replay (tech_reports/AdvancedPerformanceOptimizationsForModel
   `generic_op` programs. It takes 84 s at startup with the kernel cache warm (396 s cold).
 - a prefill that still compiles a new program makes `generator_vllm.py` recapture that replica's decode trace
   (`decode_recaptures`): 0 during the HTTP suite and benchmarks.
+- with the KV pair split, the per-chip positions program and the merge's ops (LSE all_gather, the partner slice, the
+  fp32 eltwise ops) run in the decode warm-up before the decode capture, on the shapes the verify uses too
+  (generic_op keys on its runtime arguments' count, not their addresses, so the verify trace's run of the positions
+  program is a cache hit); their constants and output buffers are made in `setup_vllm_kv_cache`. The later chunks'
+  pair-split programs compile in `warmup_model_prefill` (`prefill_warmup_chunks(..., pair_split=True)`).
 
 With `TT_METAL_TRACE_ALLOC_TRACKING=1` (`ttnn.execute_trace` then refuses to replay over a live buffer allocated after
 the capture) and program-cache misses forbidden after the capture, a driver that serves 16 prompts (15-2154 tokens)
@@ -202,7 +305,7 @@ other token.
 
 A global layer's prefill chunk after the first (`_prefill_owner_chunk`) zeroes the non-owner chip's rows before an
 `all_reduce` in the same way, so prompts longer than one chunk likely still prefill slightly differently per parity
-(not measured).
+(not measured). The KV pair split (the default) removes that: both chips of a pair contribute to every slot.
 
 ## Speculative decoding (MTP)
 
@@ -544,7 +647,9 @@ with one mechanism, for 1 and 3 MTP layers:
 
 ## Not done
 
-- Slot parity of chunked prefill (above).
+- The KV pair split: a 4 x 1M per lane run (16 prompts of 1M tokens; a 1M prefill takes about an hour per lane), an
+  accuracy eval with the split on (only greedy agreement and the APC check so far).
+- Slot parity of chunked prefill with `MIMO_KV_PAIR_SPLIT=0` (above).
 - Device sampling beyond greedy (top-k / top-p / temperature, penalties, logprobs run on the host, synchronously).
 - A 1M-token prompt, and the 1M server with the compact device RoPE tables (not yet run on hardware).
 - Prefill and decode in the same step for different lanes (the plugin runs a step as all-prefill or all-decode).

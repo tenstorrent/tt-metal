@@ -104,15 +104,24 @@ def kv_cache_and_tables(model, cfg, groups, buffers, rows, width):
     """The KV cache (allocate_kv_cache_per_layer) and each group's block table [rows, width]. Block 0 is vLLM's null
     block; the groups share buffers, so their blocks are disjoint, and every row has blocks of its own, so a step that
     reads another slot's or lane's row reads blocks its request never wrote. Returns the cache, group 0's table (the
-    plugin's page_table) and each layer's group table (its page_tables_per_layer)."""
+    plugin's page_table) and each layer's group table (its page_tables_per_layer). With the KV pair split
+    (generator_vllm.KV_PAIR_SPLIT) the global group's blocks hold 128 positions: its rows use their first half and
+    the rest is zeros, as the plugin pads every group's rows to one width."""
     num_groups = max(groups) + 1
     num_blocks = 1 + num_groups * rows * width
     specs = []
+    pair_groups = set()
     for i in range(cfg.num_hidden_layers):
         dims = cfg.attention_dims(i)
-        specs.append(((num_blocks, 1, BLOCK_SIZE, dims.head_dim), torch.bfloat16, buffers[i]))
+        block = BLOCK_SIZE
+        if generator_vllm.KV_PAIR_SPLIT and not cfg.is_swa(i):
+            block = 2 * BLOCK_SIZE
+            pair_groups.add(groups[i])
+        specs.append(((num_blocks, 1, block, dims.head_dim), torch.bfloat16, buffers[i]))
     kv = model.allocate_kv_cache_per_layer(specs)
     group_tables = 1 + torch.arange(num_blocks - 1, dtype=torch.int32).reshape(num_groups, rows, width)
+    for g in pair_groups:
+        group_tables[g, :, -(-width // 2) :] = 0
     return kv, group_tables[0], [group_tables[g] for g in groups]
 
 

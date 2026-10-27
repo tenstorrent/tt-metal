@@ -66,6 +66,11 @@ struct SdpaDecodeInputs {
     std::optional<Tensor> page_table_tensor;
     std::optional<Tensor> attn_mask;
     std::optional<Tensor> attention_sink;
+
+    // Optional second output, preallocated by sdpa_decode_with_lse: the log-sum-exp of every (user, Q head),
+    // fp32 [1, B, nh, 1] TILE (one tile row per head, the value in column 0, padding 0), in the
+    // kernel's logit space: lse = scale * m + log(l). Absent (the default) leaves the op's programs unchanged.
+    std::optional<Tensor> lse_output;
 };
 
 }  // namespace ttnn::prim

@@ -601,9 +601,11 @@ TTFT (one user, one row, chunks of 4096): 4K 0.58 -> 0.56 s, 32K 5.12 -> 4.78 s,
 **Global SDPA on both chips of the pair.** A later chunk of a global layer ran the group's 16 heads on both chips of
 the pair and kept one result (`_prefill_owner_chunk`). When both chips keep the user's K / V, it now runs 8 heads per
 chip like a first chunk does, over the whole cached context, and the row all-reduce adds the two o projections
-(`_prefill_pair_chunk`, `TtMiMoAttention.keep_kv_on_both_chips`). vLLM's caches always keep both copies, so serving
-takes this path; the standalone model takes it with `TtMiMoModel(replicate_global_kv=True)` (twice the global KV:
-0.8 -> 1.6 GB per chip for 4 users at 128K). `test_chunked_prefill_tp8_dp4.py` has `kvboth` cases for layers 0 and 5
+(`_prefill_pair_chunk`, `TtMiMoAttention.keep_kv_on_both_chips`). vLLM's caches keep both copies with
+`MIMO_KV_PAIR_SPLIT=0`, so serving then takes this path (with the pair split, the default, each chip keeps half of the
+keys and runs all 16 heads over them, the same work: `_prefill_kv_split_chunk`, `doc/vllm_integration/README.md`);
+the standalone model takes it with `TtMiMoModel(replicate_global_kv=True)` (twice the global KV: 0.8 -> 1.6 GB per
+chip for 4 users at 128K). `test_chunked_prefill_tp8_dp4.py` has `kvboth` cases for layers 0 and 5
 (short and 32k, and the program-cache test): all pass, every PCC within 0.0002 of the split-user layout.
 
 **MoE plan in two programs.** `plan.cpp` had every one of its 16 cores read and count all T x 8 pairs, then scan them
@@ -683,7 +685,8 @@ One global layer, last chunk, one chip (ms):
 - Below 64K of context the merge costs more than the split saves (32K: 8.7 ms against 5.9 ms).
 
 MiMo (`TtMiMoAttention._prefill_sdpa_program`): a global layer's later chunk (`_prefill_pair_chunk`,
-`_prefill_owner_chunk`) starting at 64K or later, with Q chunk 256 and bf16 dest, takes G 2, S 15 on the whole grid.
+`_prefill_kv_split_chunk`, `_prefill_owner_chunk`) starting at 64K or later, with Q chunk 256 and bf16 dest, takes G 2,
+S 15 on the whole grid (`attention.later_chunk_split`; the vLLM warmup runs it once at 64K).
 `MIMO_GLOBAL_SDPA=legacy` keeps the 8 x 8 program everywhere, `MIMO_GLOBAL_SDPA=gGsS` picks G and S, and
 `MIMO_GLOBAL_SDPA_MIN_START` moves the threshold.
 
@@ -741,10 +744,17 @@ DRAM per chip at 1M (34.18 GB per chip, weights 24.24 GB):
 | 2 | both chips of the pair | 30.74 GB | 3.44 GB | 717 |
 | 4 | the pair splits the users | 30.71 GB | 3.47 GB | 714 |
 | 4 | both chips of the pair | out of memory allocating the global KV, 33.69 GB in use | | 715 |
+| 4 | the pair splits every 128-token block (`--kv-pair-split`, vLLM's default layout) | 30.72 GB | 3.46 GB | 2026-10-27 |
 
 Used DRAM does not change after the last 4K chunk at 1M, after prefill or after decode (to 0.01 GB). The last 4K chunk at
 1M takes 1.46 s with the K / V on both chips (8 heads per chip) and 2.78 s when the pair splits the users (the owner
 runs all 16 heads). One untraced decode step at 1M - 1 on one row: 0.19 s with 1 or 4 users, 0.17 s with 2.
+
+With the KV pair split (`mimo-v2.6/kv-pair-split`, 2026-10-27, `--mode capacity --users 4 --kv-pair-split`) 4 users
+per row fit as when the pair splits the users (30.72 GB, 3.46 GB free), and the last 4K chunk at 1M takes 1.57 s: each
+chip runs all 16 heads over its half of the keys (G 2 / S 15) and the pair merges by LSE, 7% over the head split's
+1.46 s, which only fits 1 user per row. Scaled by the last chunk, about 300 s per 1M user on one row, ~20 minutes
+for 4 (against ~28 when the pair splits the users). The decode step: 0.196 s with 4 users.
 
 1M passkey prompts:
 

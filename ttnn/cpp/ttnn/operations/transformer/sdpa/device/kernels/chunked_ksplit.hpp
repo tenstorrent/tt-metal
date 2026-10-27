@@ -6,6 +6,10 @@
 
 #include <cstdint>
 
+#ifdef SDPA_PAIR_SPLIT
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_pair_split.hpp"
+#endif
+
 // Chunked (paged) causal prefill with grouped query heads and a K split. Shared by the reader, writer and compute
 // kernels, which must agree on every piece's K range or the CB counts desync.
 //
@@ -23,11 +27,18 @@ struct ChunkedKSplitRange {
 // The unit's causal K chunks are [0, k_end) with k_end = ceil((q_start_tile + Sq_chunk_t) / Sk_chunk_t) clamped to
 // k_num_chunks (the bound the unsplit kernels use). Slice s of S takes [k_end * s / S, k_end * (s + 1) / S): slices
 // differ by at most one chunk, the last one holds the diagonal, and a slice is empty only when k_end < S.
+// Pair split (SDPA_PAIR_SPLIT): K is the chip's half of the cache, so k_end counts the local tiles visible to the
+// unit's last row (sdpa_pair_split::local_k_end, at least one); every kernel sets sdpa_pair_split::g_parity first.
 inline uint32_t chunked_ksplit_bound(uint32_t k_end, uint32_t S, uint32_t s) { return k_end * s / S; }
 
 inline uint32_t chunked_unit_k_end(
     uint32_t q_start_tile, uint32_t Sq_chunk_t, uint32_t Sk_chunk_t, uint32_t k_num_chunks) {
-    const uint32_t k_end = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+#ifdef SDPA_PAIR_SPLIT
+    const uint32_t k_end_tiles = sdpa_pair_split::local_k_end(q_start_tile + Sq_chunk_t, sdpa_pair_split::g_parity);
+#else
+    const uint32_t k_end_tiles = q_start_tile + Sq_chunk_t;
+#endif
+    const uint32_t k_end = (k_end_tiles + Sk_chunk_t - 1) / Sk_chunk_t;
     return k_end < k_num_chunks ? k_end : k_num_chunks;
 }
 

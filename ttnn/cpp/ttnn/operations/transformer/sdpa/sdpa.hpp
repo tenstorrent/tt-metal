@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tuple>
+
 #include <variant>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -211,6 +213,10 @@ ttnn::Tensor flash_mla_prefill(
 
 /// Exactly one of chunk_start_idx (scalar, part of the program cache key) and chunk_start_idx_tensor (device int32
 /// [1], read at runtime: one program for every start, as chunked_scaled_dot_product_attention's flexible overload).
+/// kv_pair_parity_tensor (int32 [1] per device, needs chunk_start_idx_tensor) selects the pair-split cache: the
+/// cache holds this chip's (parity c) half of every 128-token global block, local key l being global position
+/// 128 * (l >> 6) + 64 * c + (l & 63); query i of the chunk (global position start + i) sees local key l iff
+/// that global position is <= start + i. A query that sees no key gets output 0.
 ttnn::Tensor chunked_flash_mla_prefill(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -222,7 +228,25 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& input_tensor_v = std::nullopt,
-    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& kv_pair_parity_tensor = std::nullopt);
+
+/// chunked_flash_mla_prefill that also returns the log-sum-exp of every (head, query): (output, lse), lse fp32
+/// [b, nqh, s, 1] TILE (each query's value in column 0 of its tile row, padding 0), lse = log(sum_k exp(scale * q.k))
+/// over the query's visible keys; -1e30 (and output 0) for a query that sees no key.
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunked_flash_mla_prefill_with_lse(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    uint32_t head_dim_v,
+    const ttnn::Tensor& page_table_tensor,
+    std::optional<int64_t> chunk_start_idx,
+    std::optional<float> scale = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& input_tensor_v = std::nullopt,
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& kv_pair_parity_tensor = std::nullopt);
 
 ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
