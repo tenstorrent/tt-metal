@@ -45,7 +45,7 @@ class V41Collectives:
             cluster_axis=TP_AXIS,
         )
 
-    def tp_all_gather(self, t, dim=3):
+    def tp_all_gather(self, t, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         if self.tp == 1:
             return t
         return ttnn.experimental.all_gather_async(
@@ -54,7 +54,7 @@ class V41Collectives:
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=TP_AXIS),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=TP_AXIS),
             num_links=self.num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=memory_config,
             topology=self.tp_topology,
             cluster_axis=TP_AXIS,
         )

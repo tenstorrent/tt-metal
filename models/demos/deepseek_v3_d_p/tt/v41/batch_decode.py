@@ -40,6 +40,7 @@ from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import mhc_expand
 from models.demos.deepseek_v3_d_p.tt.v41.attention import TOPK_ALIGN, TtV41Attention
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import MOE_ROWS, ROWS, TtV41Decoder
+from models.demos.deepseek_v3_d_p.tt.v41.decode_norm import DECODE_NORM, DecodeRmsNorm
 from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import DecodePins, TtV41Indexer
 from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import range_scores
@@ -300,6 +301,17 @@ class TtV41BatchDecoder(TtV41Decoder):
             ccl = model.blocks[0].attn.ccl
             self.c1_moes = [C1Moe(moe, ccl, self.pool) for moe in self.moes]
             self.c1_table = C1Moe.identity_table(self.mesh_device)
+        # V41_DECODE_NORM=sharded: the sublayer norms of the decode tile on a core grid
+        # instead of the interleaved ops' one core (DecodeRmsNorm; the prefill keeps the block's norms)
+        self.decode_norms: dict[int, tuple] = {}
+        if DECODE_NORM == "sharded":
+            ccl = model.blocks[0].attn.ccl
+            width = self.config.EMB_SIZE // self.tp
+            for layer, block in zip(model.layers, model.blocks, strict=False):
+                self.decode_norms[layer] = (
+                    DecodeRmsNorm(block.attn_norm, width, ccl.tp_all_gather),
+                    DecodeRmsNorm(block.ffn_norm, width, ccl.tp_all_gather),
+                )
         # V41_DECODE_HOST_INPUTS=packed: the RoPE rows from host tables by position, the
         # Engram rows gathered for the chips that hold a live row only, the small inputs packed into four
         # uploads (StepPacker) and sliced apart in the graph; the default builds and uploads every input apart
@@ -675,14 +687,15 @@ class TtV41BatchDecoder(TtV41Decoder):
         for layer, block, moe in zip(model.layers, model.blocks, moes):
             if layer in model.engram:
                 x = model.engram[layer](x, self.inputs["engram"][layer])
+            attn_norm, ffn_norm = self.decode_norms.get(layer, (block.attn_norm, block.ffn_norm))
             x, pre = block.residual(
                 x,
                 pre,
-                attention=lambda h, a=block.attn, n=block.attn_norm: self._attention(a, n(h), masks, selection),
+                attention=lambda h, a=block.attn, n=attn_norm: self._attention(a, n(h), masks, selection),
                 ffn=(
-                    (lambda h, m=moe, n=block.ffn_norm: m(n(h), sel, put))
+                    (lambda h, m=moe, n=ffn_norm: m(n(h), sel, put))
                     if c1
-                    else (lambda h, m=moe, n=block.ffn_norm: self._ffn(m, n(h)))
+                    else (lambda h, m=moe, n=ffn_norm: self._ffn(m, n(h)))
                 ),
             )
             if on_block is not None:
