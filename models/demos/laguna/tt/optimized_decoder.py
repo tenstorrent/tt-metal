@@ -389,6 +389,19 @@ def _hf_rope_tables(hf_config, attention_type: str, max_seq_len: int):
 _WEIGHT_CACHE_DISABLE = os.environ.get("TT_LAGUNA_WEIGHT_CACHE_DISABLE", "0") == "1"
 
 
+def _kv_heads_geometry(k_cache, num_kv_heads):
+    """Decode SDPA kwargs that read ``k_cache`` with ``num_kv_heads`` heads per block. Nothing when the cache already
+    has that many (the old ``num_kv_heads=`` kwarg was then a no-op); otherwise ttnn's PagedCacheGeometryOverride with
+    the cache's own block size (the default the old kwarg kept)."""
+    if int(k_cache.shape[1]) == int(num_kv_heads):
+        return {}
+    return {
+        "paged_cache_geometry": ttnn.PagedCacheGeometryOverride(
+            block_size=int(k_cache.shape[2]), num_kv_heads=int(num_kv_heads)
+        )
+    }
+
+
 def _weight_cache_dir() -> str:
     from .model_spec import MODEL_SLUG
 
@@ -1644,10 +1657,10 @@ class OptimizedDecoder(LightweightModule):
             sdpa_kwargs["sliding_window_size"] = cfg.sliding_window
         if sequential_kv_write:  # spec-decode verify. k_chunk via TT_LAGUNA_VERIFY_K (default 64 = accurate SDPA)
             sdpa_kwargs["program_config"] = self._sdpa_pc_verify
-            sdpa_kwargs["num_kv_heads"] = cfg.num_kv_heads
+            sdpa_kwargs.update(_kv_heads_geometry(kv_cache["k"], cfg.num_kv_heads))
         elif self._decode_use_sdpa_pc:  # Stage 2: accuracy-safe fast normal-decode config (k64, max_cores=16)
             sdpa_kwargs["program_config"] = self._sdpa_pc_decode
-            sdpa_kwargs["num_kv_heads"] = cfg.num_kv_heads
+            sdpa_kwargs.update(_kv_heads_geometry(kv_cache["k"], cfg.num_kv_heads))
         attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q, kv_cache["k"], kv_cache["v"], **sdpa_kwargs
         )  # [1,B,nh,hd]

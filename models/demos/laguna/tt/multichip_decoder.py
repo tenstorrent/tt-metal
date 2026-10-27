@@ -46,6 +46,7 @@ import ttnn
 
 from .optimized_decoder import (
     TILE,
+    _kv_heads_geometry,
     LayerConfig,
     OptimizedDecoder,
     PrecisionPolicy,
@@ -2464,14 +2465,14 @@ class MultichipDecoder(OptimizedDecoder):
             # normal-decode SDPA. The disproven "verify REQUIRES k128" claim is dropped (k64 verify runs
             # correctly on device — standalone driver + served HumanEval). See tt/optimized_decoder.py.
             sdpa_kwargs["program_config"] = self._sdpa_pc_verify
-            sdpa_kwargs["num_kv_heads"] = cfg.num_kv_heads
+            sdpa_kwargs.update(_kv_heads_geometry(kv_cache["k"], cfg.num_kv_heads))
         elif self._decode_use_sdpa_pc:
             # Stage 2 fix: accuracy-safe fast NORMAL-decode config — k_chunk=64 (not 128) keeps the
             # max_cores=16 parallel-KV-scan long-context speed but drops the k128 last-partial-chunk masking
             # that was LOSSY (teacher top1 0.95→0.58, layer PCC -0.016 at low non-aligned cur_pos).
             # See tt/optimized_decoder.py (decode SDPA program config).
             sdpa_kwargs["program_config"] = self._sdpa_pc_decode
-            sdpa_kwargs["num_kv_heads"] = cfg.num_kv_heads
+            sdpa_kwargs.update(_kv_heads_geometry(kv_cache["k"], cfg.num_kv_heads))
         if q.memory_config().buffer_type != ttnn.BufferType.DRAM:  # paged decode SDPA needs Q in DRAM
             q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
         attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
@@ -2607,7 +2608,7 @@ class MultichipDecoder(OptimizedDecoder):
             kw["sliding_window_size"] = cfg.sliding_window
         if self._decode_use_sdpa_pc:
             kw["program_config"] = self._sdpa_pc_verify
-            kw["num_kv_heads"] = cfg.num_kv_heads
+            kw.update(_kv_heads_geometry(kv_cache["k"], cfg.num_kv_heads))
         return ttnn.transformer.paged_scaled_dot_product_attention_decode(q, kv_cache["k"], kv_cache["v"], **kw)
 
     def _decode_tail(self, o, residual, B, next_norm_cores):
