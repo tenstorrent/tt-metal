@@ -174,7 +174,7 @@ budget in expert order right after `pass_bases` in every count-deriving kernel o
 twins, the `_units` twins; the computes take the clamped counts from the writers' metadata page / mailboxes), the down
 writer pins its `P_MAX` to the formula (`static_assert`), and the gate|up writer sets the pass table's pad word
 `TABLE_FLAG_WORD` (63) to 1 when it clamped (`op.table_clamped`): an over-budget routing yields a truncated, flagged
-result instead of a hang. Upstream, `tt/moe.py` masks the dense routing rows past `seq_len` before `routing_counts`
+result instead of a hang (a token keeps its first `MAX_PICKS` contributions in expert order: the down writer's gather slots, `J`, are sized by the top-k contract too; `op.dispatch_contributions` is the host mirror of both rules). Upstream, `tt/moe.py` masks the dense routing rows past `seq_len` before `routing_counts`
 (`GLM53_ROUTER_PAD_MASK`, default on: `TtMoE._mask_pad_rows`, an exact 0/1 matmul + `ttnn.where`, bit-identical for the
 valid rows; the traced prefill carries the mask as a per-length input refreshed per prompt) and an eager call reads the
 counts back and refuses an over-budget routing with the call site and the offending rows (`GLM53_DISPATCH_GUARD`,

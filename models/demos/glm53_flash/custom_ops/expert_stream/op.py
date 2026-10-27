@@ -290,6 +290,25 @@ def dispatch_passes(routing: torch.Tensor, p_max: int | None = None) -> list[tup
     return passes
 
 
+def dispatch_contributions(
+    routing: torch.Tensor, p_max: int | None = None, j_max: int = MAX_PICKS
+) -> tuple[list[tuple[int, list[int]]], torch.Tensor]:
+    """The (expert, row) contributions the down op sums, as the pass enumeration (``dispatch_passes``) and a [T, E]
+    bool mask: a token keeps its first ``j_max`` contributions in pass order (experts ascending), the down writer's
+    gather slots (``J = MAX_PICKS`` per token: writer_down_dispatch.cpp ``if (j < J)``). A well-formed top-k routing
+    never has more, so the mask is its non-zero pattern; on an over-budget routing the rows past ``p_max`` and the
+    contributions past the slots are the ones the kernels drop."""
+    passes = dispatch_passes(routing, p_max)
+    kept = torch.zeros(routing.shape, dtype=torch.bool)
+    slots = [0] * routing.shape[0]
+    for e, rows in passes:
+        for t in rows:
+            if slots[t] < j_max:
+                kept[t, e] = True
+            slots[t] += 1
+    return passes, kept
+
+
 def table_clamped(table: torch.Tensor) -> bool:
     """The gate|up writer's clamp flag from a host copy of the pass table ([.., P, TABLE_WIDTH] uint16): row 0's
     pad word ``TABLE_FLAG_WORD`` (meaningful when at least one pass was written, i.e. counts.sum() > 0)."""
@@ -305,15 +324,15 @@ def expert_dispatch_golden(
     p_max: int | None = None,
 ):
     """As ``expert_stream_golden`` for T tokens plus the per-pass activations the dispatch gate|up op writes:
-    (act_pass [P, 32, I] (rows past a pass's count zero), y [T, H], passes). ``p_max``: the kernels' pass budget;
-    the golden then sums exactly the (expert, row) contributions the truncated enumeration dispatches."""
-    passes = dispatch_passes(routing, p_max)
-    if p_max is not None:
-        kept = torch.zeros(routing.shape, dtype=torch.bool)
-        for e, rows in passes:
-            kept[rows, e] = True
-        routing = torch.where(kept, routing, torch.zeros((), dtype=routing.dtype))  # a NaN entry stays NaN
+    (act_pass [P, 32, I] (rows past a pass's count zero), y [T, H], passes). ``y`` sums exactly the contributions
+    the down op gathers (``dispatch_contributions``: the enumeration truncated to the pass budget ``p_max``, a
+    token's first MAX_PICKS contributions in expert order); identical to the plain sum for a well-formed routing.
+    ``act_pass`` holds every row of every enumerated pass (the gate|up op is not slot-capped)."""
+    passes, kept = dispatch_contributions(routing, p_max)
     act, y = expert_stream_golden(x, routing, w13, w2, limit)
+    if not bool((kept == (routing != 0)).all()):  # contributions dropped (budget / slots): y from the kept ones
+        summed = torch.where(kept, routing, torch.zeros((), dtype=routing.dtype))  # a NaN entry stays NaN
+        y = expert_stream_golden(x, summed, w13, w2, limit)[1]
     act_pass = torch.zeros(len(passes), TILE, act.shape[-1])
     for k, (e, rows) in enumerate(passes):
         act_pass[k, : len(rows)] = act[e, rows]

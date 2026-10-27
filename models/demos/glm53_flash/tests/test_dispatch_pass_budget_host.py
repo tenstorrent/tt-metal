@@ -39,6 +39,7 @@ from models.demos.glm53_flash.custom_ops.expert_stream.op import (  # noqa: E402
     TABLE_WIDTH,
     TILE,
     clamp_passes_host,
+    dispatch_contributions,
     dispatch_passes,
     expert_dispatch_golden,
     max_passes,
@@ -184,8 +185,11 @@ def test_clamp_mirror_and_kernel_derivations_agree(kind):
 
 
 def test_truncated_golden_matches_enumeration():
-    """``expert_dispatch_golden(..., p_max)`` sums exactly the (expert, row) contributions the clamped enumeration
-    dispatches: the rows an expert lost through the budget do not reach its output."""
+    """``expert_dispatch_golden(..., p_max)`` sums exactly the (expert, row) contributions the kernels gather
+    (``dispatch_contributions``): the rows an expert lost through the budget do not reach its output, and a token
+    keeps its first MAX_PICKS contributions in expert order (the down writer's gather slots, ``if (j < J)``): the
+    33 dense rows of the hang's routing keep experts 0..7 of the 52 surviving ones. The chip-0 run of 2026-10-27
+    returned pcc 0.57 on those rows against a golden without the slot cap and 0.99998 on the others."""
     r = _over_budget_routing("dense")
     K, I, H = 64, 32, 64
     x = torch.randn(T, K).bfloat16()
@@ -193,13 +197,46 @@ def test_truncated_golden_matches_enumeration():
     w2 = torch.randn(E_LOCAL, I, H) * 0.1
     act_pass, y, passes = expert_dispatch_golden(x, r, w13, w2, p_max=P)
     assert act_pass.shape[0] == len(passes) == P
-    kept = torch.zeros(T, E_LOCAL, dtype=torch.bool)
-    for e, rows in passes:
-        kept[rows, e] = True
+    _, kept = dispatch_contributions(r, P)
+    surviving = sorted({e for e, _ in passes})
+    assert surviving == list(range(52))  # experts 0..51 keep their 2 passes, 52..71 are dropped
+    for t in range(T - 33, T):  # the dense rows: 52 contributions on the table, 8 gathered (experts 0..7)
+        assert kept[t].sum() == MAX_PICKS and kept[t, :MAX_PICKS].all()
+    for t in range(T - 33):  # the top-2 rows: their experts below 52 only
+        nz = torch.nonzero(r[t] != 0).flatten().tolist()
+        assert kept[t].nonzero().flatten().tolist() == [e for e in nz if e < 52]
     r_kept = torch.where(kept, r, torch.zeros((), dtype=r.dtype))
     _, y_kept, _ = expert_dispatch_golden(x, r_kept, w13, w2)
     assert torch.equal(y, y_kept)
     assert not torch.equal(y, expert_dispatch_golden(x, r, w13, w2)[1])  # the budget changed the result
+    # act_pass is not slot-capped: every enumerated pass carries all of its rows (the gate|up op's output)
+    assert all(bool((act_pass[k, : len(rows)].abs().sum(-1) > 0).all()) for k, (_, rows) in enumerate(passes))
+
+
+def test_gather_slot_cap_within_the_budget():
+    """A routing within the pass budget but with more than MAX_PICKS contributions per token (12 experts on every
+    row): no clamp, yet the down op gathers only the first 8 (expert ascending) -- the mirror keeps exactly those;
+    a well-formed top-k routing is untouched (its mask is its non-zero pattern)."""
+    r = torch.zeros(64, E_LOCAL)
+    picks = [3, 5, 8, 13, 21, 34, 40, 41, 42, 55, 60, 71]
+    r[:, picks] = 0.25
+    r = r.bfloat16()
+    _, _, total, clamped = clamp_passes_host(_counts(r), max_passes(64, E_LOCAL))
+    assert total == 2 * len(picks) and not clamped
+    passes, kept = dispatch_contributions(r)
+    assert len(passes) == 2 * len(picks)
+    assert (
+        kept.sum(-1).tolist() == [MAX_PICKS] * 64
+        and kept[:, picks[:MAX_PICKS]].all()
+        and not kept[:, picks[MAX_PICKS:]].any()
+    )
+    ok = _topk_routing(T, E_LOCAL, MAX_PICKS, 5)
+    _, kept_ok = dispatch_contributions(ok)
+    assert torch.equal(kept_ok, ok != 0)
+    assert (
+        "if (j < J) {" in _src("writer_down_dispatch")
+        and "self.J = MAX_PICKS" in (KERNEL_DIR.parent / "op.py").read_text()
+    )
 
 
 # ------------------------------------------------------------------------------------------- the C++ clamp
