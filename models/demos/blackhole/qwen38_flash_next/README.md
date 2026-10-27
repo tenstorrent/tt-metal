@@ -90,10 +90,8 @@ QWEN38_CHECKPOINT="$CHECKPOINT" python_env/bin/python -m pytest models/demos/bla
 
 `tests/` holds the no-device tests, the checkpoint-reading component tests (skipped without `QWEN38_CHECKPOINT`)
 and the device tests (`*_device.py`, `*_tp.py`). `tests/test_gdn_public_device.py` checks the public GDN dispatch
-against an independent recurrence; set `QWEN38_FUSED_DEVICE_TEST=1` on the held mesh. No CI pipeline runs these
-device tests; run them manually on the held mesh. The end-to-end accuracy check is the server's start-up acceptance
-gate (`--acceptance --require-json-96`, [Validation](#validation)). [docs/TESTING.md](docs/TESTING.md) covers the
-acceptance gate and the reference corpus.
+against an independent recurrence; set `QWEN38_FUSED_DEVICE_TEST=1` on the held mesh.
+[docs/TESTING.md](docs/TESTING.md) covers the acceptance gate and the reference corpus.
 
 `tools/benchmark.py` scores and times GSM8K through a live OpenAI endpoint (the official 1,319-item test file at
 revision `3101c7d5072418e28b9008a6636bde82a006892c`, hash-checked; `--limit 64` is the fixed smoke subset).
@@ -106,6 +104,23 @@ python -m models.demos.blackhole.qwen38_flash_next.tools.benchmark \
 CI=true python -m models.demos.blackhole.qwen38_flash_next.tools.report "$RESULTS/summary.json" \
   --device-name "$QUALIFIED_DEVICE_NAME"
 ```
+
+### End-to-end demo
+
+`demo/chat_demo.py` starts the server through the launcher with `--acceptance --require-json-96`, so it serves only
+after the `json` record matches 96/96. It then runs `tools/benchmark.py` on the GSM8K smoke subset through the
+server's endpoint, requires the benchmark's 0.80 floor, and stops the server. With `CI=true` it also writes the
+benchmark JSON (`tools/report.py`).
+
+```bash
+MODEL_WEIGHTS_DIR="$CHECKPOINT" QWEN38_CACHE_ROOT="$CACHE_ROOT" QWEN38_DEVICE_NODES=4,5,6,7 \
+  python_env/bin/python -m pytest models/demos/blackhole/qwen38_flash_next/demo/chat_demo.py
+```
+
+`QWEN38_PROFILE` picks the launcher profile (`p150-line` by default) and `QWEN38_DEVICE_NODES` the four chips of a
+larger host. The BF4 expert cache must be in place (`--prepare-only`). On the 1x4 p150 line the demo took 18.5 min:
+start-up 443 s with cold component and JIT caches, GSM8K 58/64 in 632 s. No CI pipeline runs the demo or the device
+tests yet; run them on a held 1x4 mesh.
 
 ## Validation
 

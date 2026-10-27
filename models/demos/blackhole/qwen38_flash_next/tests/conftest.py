@@ -34,9 +34,9 @@ def pcc_thresholds():
 
 
 def _checkpoint_root(unset) -> Path:
-    """The checkpoint directory ``MODEL_WEIGHTS_DIR`` or ``QWEN38_CHECKPOINT`` names, or ``HF_MODEL``'s snapshot in the
-    local Hugging Face cache (offline).  A named path that is not a directory fails the test; with no variable set,
-    ``unset`` (``pytest.skip`` or ``pytest.fail``) gets the message."""
+    """The checkpoint directory ``MODEL_WEIGHTS_DIR`` or ``QWEN38_CHECKPOINT`` names, or ``HF_MODEL``'s snapshot at the
+    pinned revision in the local Hugging Face cache (offline).  A named path that is not a directory fails the test;
+    with no variable set, ``unset`` (``pytest.skip`` or ``pytest.fail``) gets the message."""
 
     for name in ("MODEL_WEIGHTS_DIR", "QWEN38_CHECKPOINT"):
         if os.environ.get(name):
@@ -47,7 +47,11 @@ def _checkpoint_root(unset) -> Path:
     if os.environ.get("HF_MODEL"):
         from huggingface_hub import snapshot_download
 
-        return Path(snapshot_download(os.environ["HF_MODEL"], local_files_only=True))
+        from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION
+
+        return Path(
+            snapshot_download(os.environ["HF_MODEL"], revision=PINNED_CHECKPOINT_REVISION, local_files_only=True)
+        )
     unset("set QWEN38_CHECKPOINT (or MODEL_WEIGHTS_DIR) to the checkpoint directory, or HF_MODEL to its id")
 
 

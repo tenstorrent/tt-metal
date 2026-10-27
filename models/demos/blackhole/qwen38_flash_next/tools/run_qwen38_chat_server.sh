@@ -43,7 +43,8 @@
 #                           weights' dtype (ttnn/decode_matmul.py); the launcher passes it through and prints it
 #
 # The checkout this script lives in must be built (build_metal.sh, create_venv.sh); the server admits only a ttnn
-# imported from it and records the checkout's commit, tree and extension digest as the runtime identity.
+# imported from it and records the checkout's commit, tree and extension digest as the runtime identity; a tree without
+# git history (a CI image) names its commit in QWEN38_TT_METAL_SHA.
 # Start it from any directory, the model directory included: relative path arguments are the
 # caller's, and the interpreter runs from the repository root so the model's own ttnn/ package never shadows ttnn.
 #
@@ -57,7 +58,7 @@ readonly REPO_ROOT="$(cd -- "$MODEL_DIR/../../../.." && pwd -P)"
 readonly SERVER="$HERE/qwen38_chat_server.py"
 
 die() { printf 'run_qwen38_chat_server: %s\n' "$*" >&2; exit 2; }
-usage() { sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 profile= instance=0 devices= checkpoint= cache_root= allocated_context=32768 mtp= port=8000 host=0.0.0.0 long_chunks=
 prefill_slab=
@@ -135,8 +136,13 @@ case "$profile" in
 esac
 
 # -- the checkout identity the server admits (printed here, proven there) -----------------------------------------
-head=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null) || die "$REPO_ROOT is not a git checkout"
-dirty=$(git -C "$REPO_ROOT" status --porcelain=v1 --untracked-files=no | wc -l | tr -d ' ')
+if [[ -e "$REPO_ROOT/.git" ]]; then
+    head=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null) || die "$REPO_ROOT is not a git checkout"
+    dirty=$(git -C "$REPO_ROOT" status --porcelain=v1 --untracked-files=no | wc -l | tr -d ' ')
+else  # a tree without git history, such as a CI image: the server admits the head declared in QWEN38_TT_METAL_SHA
+    head=${QWEN38_TT_METAL_SHA:-} dirty=0
+    [[ "$head" =~ ^[0-9a-f]{40}$ ]] || die "$REPO_ROOT has no git history: set QWEN38_TT_METAL_SHA to the commit it was built from"
+fi
 extension=$("$python" -c 'import ttnn._ttnn as m; print(m.__file__)') || die "$python cannot import ttnn"
 case "$(readlink -f -- "$extension")" in
     "$REPO_ROOT"/*) ;;

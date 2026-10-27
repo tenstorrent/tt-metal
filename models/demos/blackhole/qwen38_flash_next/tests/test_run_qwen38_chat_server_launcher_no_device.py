@@ -3,7 +3,8 @@
 
 """The public launcher without a device: ``--help`` and ``--validate-only`` behave the same from the model directory
 and from an unrelated directory, the interpreter it starts runs from the repository root (so the model's own ``ttnn/``
-package never shadows ttnn), and relative path arguments are the caller's."""
+package never shadows ttnn), relative path arguments are the caller's, and a tree without git history starts only
+with its head declared."""
 
 from __future__ import annotations
 
@@ -126,6 +127,44 @@ def test_long_chunks_and_a_slab_combine_with_mtp(tmp_path) -> None:
     assert "--long-chunks and --mtp are alternatives" not in launcher
     assert "--prefill-slab and --mtp are alternatives" not in launcher
     assert "accepted for compatibility: the 128-row chunks are the server's default (combines with --mtp)" in launcher
+
+
+def test_a_tree_without_git_history_starts_only_with_its_declared_head(tmp_path) -> None:
+    """A tree without git history (such as a CI image) takes its head from QWEN38_TT_METAL_SHA, as the server's
+    runtime admission does; without a 40-hex value the launcher refuses before it probes the interpreter."""
+
+    tree = tmp_path / "tree"
+    launcher = tree / LAUNCHER.relative_to(REPO_ROOT)
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text(LAUNCHER.read_text(encoding="utf-8"), encoding="utf-8")
+    (tree / "ttnn" / "ttnn").mkdir(parents=True)
+    (tree / "ttnn" / "ttnn" / "__init__.py").touch()
+    stub = tmp_path / "python"
+    stub.write_text(STUB_PYTHON.replace(str(REPO_ROOT), str(tree)))
+    stub.chmod(0o755)
+    (tmp_path / "checkpoint").mkdir()
+    head = "0123456789abcdef0123456789abcdef01234567"
+    runs = {}
+    for declared in (None, head[:12], head):
+        env = {name: value for name, value in os.environ.items() if name != "QWEN38_TT_METAL_SHA"}
+        env["TT_METAL_HOME"] = str(tree)
+        if declared is not None:
+            env["QWEN38_TT_METAL_SHA"] = declared
+        runs[declared] = subprocess.run(
+            ["bash", str(launcher), "--profile", "p150-line", "--checkpoint", str(tmp_path / "checkpoint")]
+            + ["--cache-root", str(tmp_path / "cache"), "--python", str(stub), "--validate-only"],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=120,
+        )
+    for declared in (None, head[:12]):
+        run = runs[declared]
+        assert run.returncode == 2 and "set QWEN38_TT_METAL_SHA" in run.stderr, (declared, run.returncode, run.stderr)
+    run = runs[head]
+    assert run.returncode == 0, run.stderr
+    assert f"head {head}" in run.stderr and run.stdout.splitlines()[-1] == "arg=--validate-only", run.stdout
 
 
 def test_the_launcher_changes_directory_before_the_interpreter_runs() -> None:
