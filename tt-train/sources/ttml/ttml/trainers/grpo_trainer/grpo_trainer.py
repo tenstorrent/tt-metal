@@ -17,7 +17,7 @@ import random
 import sys
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 import os
 import numpy as np
@@ -1290,7 +1290,36 @@ class GRPOTrainer:
             validate_clip_grad_norm(tt_model)
 
         num_devices = self._batch_layout.num_shards
+        prompts, extra_columns, generation_batch_prompts = self._prompt_batches(dataset, tokenizer, num_devices)
+        completions_per_microbatch = grpo_cfg.per_device_train_batch_size * num_devices
+        total_prompts = len(prompts)
+        from .rollout_batch_source import build_rollout_batch_source
 
+        # Publish outputs onto self for the per-batch helpers.
+        self._pad_token = int(pad_token)
+        self._optimizer = optimizer
+        self._completions_per_microbatch = completions_per_microbatch
+        self._monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
+        self.rollout_batch_source = build_rollout_batch_source(
+            grpo_cfg,
+            sampler=self.rollout_sampler,
+            client=self._rollout_client,
+            prompts=prompts,
+            extra_columns=extra_columns,
+            batch_prompts=generation_batch_prompts,
+            tokenizer=tokenizer,
+            reward_funcs=self.reward_funcs,
+        )
+        total_optimizer_steps = (total_prompts // generation_batch_prompts) * grpo_cfg.num_iterations
+        self._lr_scheduler = _build_lr_scheduler(optimizer, grpo_cfg, total_optimizer_steps)
+
+    def _prompt_batches(
+        self, dataset: Any, tokenizer: Any, num_devices: int
+    ) -> Tuple[List[List[int]], Dict[str, list], int]:
+        """Check the batch sizes and tokenize the prompts; returns (prompts, extra_columns, generation_batch_prompts)."""
+        from .rollout_batch_source import tokenize_prompts
+
+        grpo_cfg = self.config
         # Derive the across-mesh micro-batch size (in completions), the per
         # micro-batch prompt count, and the generation (effective) batch size up
         # front, and validate the divisibility relationships so misconfigurations
@@ -1340,28 +1369,8 @@ class GRPOTrainer:
                 f"{grad_accum} = {generation_batch_prompts}) to avoid a ragged final batch that can break "
                 "micro-batch sharding"
             )
-        from .rollout_batch_source import build_rollout_batch_source, tokenize_prompts
-
         prompts, extra_columns = tokenize_prompts(dataset, tokenizer, total_prompts)
-
-        # Publish outputs onto self for the per-batch helpers.
-        self._pad_token = int(pad_token)
-        self._optimizer = optimizer
-        self._completions_per_microbatch = completions_per_microbatch
-        self._monitor_cb = next((cb for cb in self.callbacks if isinstance(cb, GRPOMonitor)), None)
-        self.rollout_batch_source = build_rollout_batch_source(
-            grpo_cfg,
-            sampler=self.rollout_sampler,
-            client=self._rollout_client,
-            prompts=prompts,
-            extra_columns=extra_columns,
-            batch_prompts=generation_batch_prompts,
-            tokenizer=tokenizer,
-            reward_funcs=self.reward_funcs,
-        )
-        self._num_generation_batches = total_prompts // generation_batch_prompts
-        total_optimizer_steps = self._num_generation_batches * grpo_cfg.num_iterations
-        self._lr_scheduler = _build_lr_scheduler(optimizer, grpo_cfg, total_optimizer_steps)
+        return prompts, extra_columns, generation_batch_prompts
 
     # -- phase helpers -------------------------------------------------------
     #
