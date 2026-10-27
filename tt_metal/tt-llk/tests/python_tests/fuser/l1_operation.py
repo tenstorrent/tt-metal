@@ -22,7 +22,6 @@ from .fpu_node import FpuNode
 from .golden.executor import GoldenExecutor
 from .pack_node import PackNode
 from .pipeline_plan import PlannedBlock
-from .quasar.unpacker import common as quasar_unpack_common
 from .sfpu_node import SfpuNode
 
 if TYPE_CHECKING:
@@ -150,7 +149,7 @@ class L1Operation:
         init_code += config.sentinel.hw_configure_unpack(config, self)
         if unpack_ops and not config.skip_unpack_init:
             init_code += config.sentinel.configure_unpack(config, self, unpack_ops[0])
-        init_code += quasar_unpack_common.unpack_to_dest_sync_init(config, self)
+        init_code += unpack_common.unpack_to_dest_sync_init(config, self)
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             init_code += unpack_ops[0].unpack_init(self, config, None)
         code = self._zone(config, "INIT", init_code)
@@ -168,7 +167,7 @@ class L1Operation:
             )
 
         def batch_body(planned: PlannedBlock, constants):
-            body = quasar_unpack_common.unpack_to_dest_wait_for_dest_available(config)
+            body = unpack_common.unpack_to_dest_wait_for_dest_available(config)
             after_commit = ""
             for cu in self.math_nodes:
                 if not isinstance(cu, FpuNode):
@@ -193,14 +192,14 @@ class L1Operation:
                 if (
                     config.uses_unpack_to_dest_sync
                     and cu.unpacker is not None
-                    and cu.unpacker.dummy_srcb_valid_per_call
+                    and cu.unpacker.emits_dummy_srcb_valid
                 ):
                     after_commit += node_body
                 else:
                     body += node_body
             if not hoist_reconfig and not config.skip_unpack_init:
                 body += config.sentinel.configure_unpack(config, self, unpack_ops[0])
-            body += quasar_unpack_common.unpack_to_dest_section_done(config, self)
+            body += unpack_common.unpack_to_dest_section_done(config, self)
             return body + after_commit
 
         code += self._zone_loop(

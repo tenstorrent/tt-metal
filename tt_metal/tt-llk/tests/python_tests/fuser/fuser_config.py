@@ -60,6 +60,10 @@ class GlobalConfig:
         return self.quasar_unpack_to_dest and not self.skip_unpack_init
 
     @property
+    def uses_unpack_to_dest_pack_sync(self) -> bool:
+        return self.uses_unpack_to_dest_sync and not self.skip_sync
+
+    @property
     def skip_math_init(self) -> bool:
         return self.perf_run_type in (
             PerfRunType.UNPACK_ISOLATE,

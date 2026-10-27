@@ -124,10 +124,7 @@ class PlannedNode:
         return result
 
     def check_bounds(self, banks, dest_capacity: int) -> None:
-        if (
-            self.role == "math"
-            or (self.role == "unpack" and self.node.unpack_to_dest.value)
-        ) and not self.unit.supports_dest_offset:
+        if self.role == "math" and not self.unit.supports_dest_offset:
             _check_tile_bounds(
                 (call.dest for bank in banks for call in self.loop.calls(bank)),
                 1,
@@ -143,9 +140,7 @@ class PlannedNode:
             operand = operands.get(slot)
             if operand is not None:
                 capacity, label = operand.tile_count, f"operand '{operand.name}'"
-            elif slot in DEST_SLOTS and (
-                self.role != "unpack" or self.node.unpack_to_dest.value
-            ):
+            elif slot in DEST_SLOTS and self.role != "unpack":
                 capacity, label = dest_capacity, "(Dst)"
             else:
                 continue

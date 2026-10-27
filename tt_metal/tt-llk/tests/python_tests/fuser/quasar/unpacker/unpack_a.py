@@ -102,12 +102,13 @@ class UnpackerA(Unpacker):
         per_tile = compute_unit.reuse_dest != EltwiseBinaryReuseDestType.NONE
         num_tiles = 1 if per_tile else block.block_cols
 
-        init_call = (
-            f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
-            f"(bfd_id, {tensor_shape}, {num_tiles});\n"
-        )
         if compute_unit.unpack_to_dest.value:
             init_call = "_llk_unpack_unary_operand_to_dest_init_(bfd_id);\n"
+        else:
+            init_call = (
+                f"_llk_unpack_unary_operand_init_<{unp_sel}, {transpose_en}, {en_32bit_dest}, {reuse_dest}, {unpack_to_dest}>"
+                f"(bfd_id, {tensor_shape}, {num_tiles});\n"
+            )
 
         return (
             "{\n"

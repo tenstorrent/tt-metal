@@ -63,21 +63,19 @@ def pack_dest_init(
     if operation.stage_id != 1:
         return ""
     code = f"_llk_pack_dest_init_<p_pacr::PACK0, {operation.dest_sync.cpp_enum_value}>();\n"
-    if config.quasar_unpack_to_dest:
+    if config.uses_unpack_to_dest_sync:
         code = "set_up_zero_dest_dvalid_handshake_for_pack();\n" + code
     return code
 
 
 def packer_wait_for_math(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if (
-        config.skip_sync or config.quasar_use_dvalid
-    ) and not config.uses_unpack_to_dest_sync:
+    if config.skip_sync or config.quasar_use_dvalid:
         return ""
     return "_llk_packer_wait_for_math_done_();\n"
 
 
 def packer_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if config.uses_unpack_to_dest_sync:
+    if config.uses_unpack_to_dest_pack_sync:
         code = (
             "_llk_sync_get_<p_stall::PACK0>(semaphore::UNPACK_PACK);\n"
             "_llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);\n"

@@ -66,10 +66,11 @@ def math_pack_sync_init(config: "GlobalConfig", operation: "L1Operation") -> str
 
 def math_wait_for_dest(config: "GlobalConfig", operation: "L1Operation") -> str:
     if config.uses_unpack_to_dest_sync:
-        return (
-            "_llk_math_wait_for_dest_available_();\n"
-            "_llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);\n"
-        )
+        code = ""
+        if config.uses_unpack_to_dest_pack_sync:
+            code += "_llk_math_wait_for_dest_available_();\n"
+        code += "_llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(semaphore::UNPACK_MATH);\n"
+        return code
     if config.skip_sync or config.quasar_use_dvalid:
         return ""
     return "_llk_math_wait_for_dest_available_();\n"
@@ -77,10 +78,13 @@ def math_wait_for_dest(config: "GlobalConfig", operation: "L1Operation") -> str:
 
 def math_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
     if config.uses_unpack_to_dest_sync:
-        code = (
-            "_llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);\n"
-            "_llk_sync_get_(semaphore::UNPACK_MATH);\n"
-        )
+        if config.uses_unpack_to_dest_pack_sync:
+            code = (
+                "_llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);\n"
+                "_llk_sync_get_(semaphore::UNPACK_MATH);\n"
+            )
+        else:
+            code = "_llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);\n"
         if operation.dest_sync == DestSync.Half:
             code += (
                 "_llk_sync_advance_dest_section_<ckernel::TRISC_ID, "

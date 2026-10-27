@@ -73,19 +73,21 @@ def unpack_to_dest_sync_init(config: "GlobalConfig", operation: "L1Operation") -
     if not config.uses_unpack_to_dest_sync or operation.stage_id != 1:
         return ""
     num_banks = 2 if operation.dest_sync == DestSync.Half else 1
-    return (
+    code = (
         "set_up_zero_dest_dvalid_handshake_for_unpack();\n"
         "_llk_unpack_dest_init_();\n"
-        f"_llk_sync_init_(semaphore::UNPACK_MATH, {num_banks}, 0);\n"
-        f"_llk_sync_init_(semaphore::UNPACK_PACK, {num_banks}, 0);\n"
-        "_llk_sync_barrier_raise_(semaphore::UNPACK_INIT);\n"
+        f"_llk_sync_init_(semaphore::UNPACK_MATH, {num_banks} /*max*/, 0 /*init*/);\n"
     )
+    if config.uses_unpack_to_dest_pack_sync:
+        code += f"_llk_sync_init_(semaphore::UNPACK_PACK, {num_banks} /*max*/, 0 /*init*/);\n"
+    return code + "_llk_sync_barrier_raise_(semaphore::UNPACK_INIT);\n"
 
 
 def unpack_to_dest_wait_for_dest_available(config: "GlobalConfig") -> str:
     if not config.uses_unpack_to_dest_sync:
         return ""
-    return "_llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::UNPACK_PACK);\n"
+    semaphore = "UNPACK_PACK" if config.uses_unpack_to_dest_pack_sync else "UNPACK_MATH"
+    return f"_llk_sync_wait_<p_stall::STALL_UNPACK, p_stall::STALL_ON_MAX>(semaphore::{semaphore});\n"
 
 
 def unpack_to_dest_section_done(
@@ -93,10 +95,10 @@ def unpack_to_dest_section_done(
 ) -> str:
     if not config.uses_unpack_to_dest_sync:
         return ""
-    code = (
-        "_llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_PACK);\n"
-        "_llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);\n"
-    )
+    code = ""
+    if config.uses_unpack_to_dest_pack_sync:
+        code += "_llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_PACK);\n"
+    code += "_llk_sync_post_<p_stall::UNPACK0>(semaphore::UNPACK_MATH);\n"
     if operation.dest_sync == DestSync.Half:
         code += (
             f"_llk_unpack_dest_section_advance_<{config.dest_acc.cpp_enum_value}>();\n"
