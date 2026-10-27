@@ -61,7 +61,12 @@ from ttml.trainers.grpo_trainer import (
     save_checkpoint,
 )
 from ttml.trainers.grpo_trainer import grpo_trainer as grpo_trainer_module
-from ttml.trainers.grpo_trainer.remote_rollout import mpi_rollout, rollout_queue, sync_remote_rollout_batch_source
+from ttml.trainers.grpo_trainer.remote_rollout import (
+    async_rollout,
+    mpi_rollout,
+    rollout_queue,
+    sync_remote_rollout_batch_source,
+)
 from ttml.trainers.grpo_trainer.remote_rollout.rollout_queue import RolloutQueue
 from ttml.trainers.grpo_trainer.remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
 from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK
@@ -1418,6 +1423,94 @@ def test_rollout_queue_loopback(monkeypatch):
         np.testing.assert_array_equal(got.rewards, want.rewards)
         np.testing.assert_array_equal(got.reward_components["length"], want.reward_components["length"])
         assert (got.generation_time_s, got.reward_time_s) == (want.generation_time_s, want.reward_time_s)
+
+
+class _ScriptedBridge:
+    """receive_weights yields the scripted results in order; the peer counts as closed once they run out."""
+
+    def __init__(self, received):
+        self._received = list(received)
+        self.blocks = []
+        self.connected = self.closed = False
+
+    def connect(self):
+        self.connected = True
+
+    def close(self):
+        self.closed = True
+
+    @contextlib.contextmanager
+    def receive_weights(self, block):
+        self.blocks.append(block)
+        yield self._received.pop(0) if self._received else None
+
+    @property
+    def peer_closed(self):
+        return not self._received
+
+
+class _RecordingQueue:
+    def __init__(self):
+        self.pushed = []
+        self.connected = self.closed = False
+
+    def connect(self):
+        self.connected = True
+
+    def push(self, scored):
+        self.pushed.append(scored)
+
+    def close(self):
+        self.closed = True
+
+
+def _async_rollout_server(bridge, queue, sampler, reward_funcs):
+    return async_rollout.AsyncRolloutServer(
+        bridge=bridge,
+        queue=queue,
+        sampler=sampler,
+        prompts=[[1], [2]],
+        extra_columns={"answer": ["a", "b"]},
+        batch_prompts=1,
+        tokenizer=_IdsTokenizer(),
+        reward_funcs=reward_funcs,
+        num_generations=1,
+    )
+
+
+def test_async_rollout_server_walks_prompts_with_the_newest_weights(monkeypatch):
+    monkeypatch.setattr(async_rollout, "_require_distributed_context", lambda owner: TTT_RANK)
+    monkeypatch.setattr(async_rollout, "exit_on_error", contextlib.nullcontext)
+    answers = []
+
+    def answer_reward(completions, answer, **_):
+        answers.append(answer)
+        return [0.0] * len(completions)
+
+    bridge = _ScriptedBridge([(0, [{}]), None, (1, [{}]), None])
+    queue_ = _RecordingQueue()
+    sampler = _EchoSampler()
+    server = _async_rollout_server(bridge, queue_, sampler, [answer_reward])
+    assert bridge.connected and queue_.connected
+    server.serve_forever()
+
+    assert [s.rollout.weight_version for s in queue_.pushed] == [0, 0, 1]
+    assert [s.rollout.prompts for s in queue_.pushed] == [[[1]], [[2]], [[1]]]
+    assert answers == [["a"], ["b"], ["a"]]
+    assert bridge.blocks == [True, False, False, False]
+    assert bridge.closed and queue_.closed
+    assert not getattr(sampler, "closed", False)
+
+
+def test_async_rollout_client_and_server_check_their_rank(monkeypatch, expect_error):
+    bridge, queue_ = _ScriptedBridge([]), _RecordingQueue()
+    monkeypatch.setattr(async_rollout, "_require_distributed_context", lambda owner: TTT_RANK)
+    with expect_error(RuntimeError, "AsyncRolloutClient must run on TTML_RANK=0"):
+        async_rollout.AsyncRolloutClient(bridge=bridge, queue=queue_)
+    monkeypatch.setattr(async_rollout, "_require_distributed_context", lambda owner: TTML_RANK)
+    with expect_error(RuntimeError, "AsyncRolloutServer must run on TTT_RANK=1"):
+        _async_rollout_server(bridge, queue_, _EchoSampler(), [])
+    assert not bridge.connected and not queue_.connected
 
 
 QWEN3_MODEL_ID = "Qwen/Qwen3-0.6B"
