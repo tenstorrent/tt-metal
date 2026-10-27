@@ -1186,3 +1186,9 @@ reproducer of the served random-65536 decode hang) PASSED at 10:33: the hang sta
 prompts), determinism 4/4, 4 x 65 514-token needles 4/4 (TTFT 26.5 / 52.3 / 78.3 / 104.4 s, no cross-talk), bench 128 x 128 x 32:
 TPOT 174.6 ms = 5.7 tok/s per user (192 before packed inputs: the host share 41 -> ~26 ms per step), 32/32 completed. Packed inputs
 default on (mesh_model.packed_inputs_enabled). Next: r13 (+ sparse bound, tree17), r14 (+ stream decode, tree18).
+
+12:05 CORRECTION: r13 (`serve_smoke_glm53_r13_bound`) and r14 (`serve_smoke_glm53_r14_regions_stream`) served wt_frozen10 code: the smoke
+script rebuilds the serving tree from `FROZEN` (default wt_frozen10) on every run and `SERVE_TREE` only names the output dir, so the bound
+and stream knobs were never read (TPOT 175.2 / 174.8 ms = r12; needles 4/4, first tokens exact, determinism 4/4 on all three). The
+script now refuses a `SMOKE_EXTRA_ENV` knob the snapshot does not know. r15 = `FROZEN=wt_frozen20` (stream + packed defaults, fill
+clip, + `GLM53_SPARSE_DECODE_BOUND=1`) is the served validation of the streaming decode.
