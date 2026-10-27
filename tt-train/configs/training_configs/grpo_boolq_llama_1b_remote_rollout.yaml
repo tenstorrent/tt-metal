@@ -22,7 +22,8 @@ training_config:
 
   grpo_config:
     rollout_backend: "ttt_remote_sync"
-    # Push the policy weights to the rollout rank every N optimizer steps.
+    # Push the policy weights to the rollout rank at a generation-batch boundary
+    # once N optimizer steps have passed since the last push.
     weight_sync_every: 1
     epsilon: 0.4
     per_device_train_batch_size: 2

@@ -26,7 +26,8 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
     """Generates each prompt batch on the rollout rank and scores it here.
 
     The rollout rank boots with dummy weights; the trainer pushes the policy as version 0
-    before training, then update_weights pushes it every ``weight_sync_every`` steps, as version ``step``.
+    before training, then update_weights pushes it as version ``step`` once ``weight_sync_every`` optimizer steps
+    have passed since the last push.
     """
 
     def __init__(

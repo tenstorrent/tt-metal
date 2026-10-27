@@ -13,8 +13,9 @@ Reference for two related dict formats:
    which ships it from a ttml rank to a tt-transformers rank over MPI.
    It is what the GRPO BoolQ example
    ([`tt-train/sources/examples/grpo/boolq/`](../sources/examples/grpo/boolq/))
-   uses to push the freshly-updated policy to the inference worker every
-   `weight_sync_every` optimizer steps.
+   uses to push the freshly-updated policy to the inference worker at a
+   generation-batch boundary once `weight_sync_every` optimizer steps have
+   passed since the last push.
 
 The structural rules apply to every Llama 3 / 3.1 / 3.2 / 3.3 decoder
 (only counts and dims change). The full key listing in §2.3 is for
@@ -212,7 +213,7 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
 - **Replicated parameters only.** Every value in the dict must be
   fully replicated across every mesh axis (`PlacementReplicate`
   everywhere) — enforced at runtime by
-  `WeightBridge._validate_source_tensor` for the cross-rank path. This
+  `MPIRolloutClient.send_weights` for the cross-rank path. This
   is independent of the *sender's* mesh shape: a DDP-only `[1, N]`
   mesh (e.g. `mesh_shape: [1, 2], enable_ddp: true` from
   [`grpo_boolq_llama_1b_remote_rollout.yaml`](../configs/training_configs/grpo_boolq_llama_1b_remote_rollout.yaml))
@@ -225,9 +226,9 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
   receiver mesh has to keep per-tensor weights on a single device group
   (typically a `[1, 1]` submesh on the tt-transformers side). The
   asymmetric `[1, 2] → [1, 1]` cross-rank configuration used by the
-  GRPO BoolQ example satisfies both constraints simultaneously: the
-  bridge ships replicated weights over a single `(0,0) → (0,0)` socket
-  connection, and the receiver lands them on its lone chip.
+  GRPO BoolQ example satisfies both constraints simultaneously:
+  `HostWeightBridge` reads device 0's copy of each tensor to host, sends it
+  over MPI, and the receiver uploads it to every `[1, 1]` submesh.
 
 ### 3.5 Usage
 
@@ -243,7 +244,8 @@ finally:
 ```
 
 Cross-rank, via the `WeightBridge` (one process per rank, separate
-meshes; the BoolQ GRPO example uses this path every `weight_sync_every` steps):
+meshes; the BoolQ GRPO example uses this path at a generation-batch boundary
+once `weight_sync_every` optimizer steps have passed since the last push):
 
 ```python
 # ttml rank
@@ -255,7 +257,7 @@ ttt_model.update_weights(received_hf_dict, hf_rope=False)
 ```
 
 End-to-end smoke tests (run under tt-run, not in CI):
-- Cross-rank ttml -> TTT transfer: [`weight_transfer/test_weight_transfer.py`](../tests/python/remote_rollout/weight_transfer/test_weight_transfer.py) (currently skipped; the skip reason is in the file).
+- Cross-rank ttml -> TTT transfer: [`weight_transfer/test_weight_transfer.py`](../tests/python/remote_rollout/weight_transfer/test_weight_transfer.py).
 - `HostWeightBridge` alone: [`weight_bridge/test_weight_bridge.py`](../tests/python/remote_rollout/weight_bridge/test_weight_bridge.py).
 
 ---

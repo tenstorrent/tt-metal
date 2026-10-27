@@ -151,8 +151,9 @@ In `ttt_remote_sync` both ranks run this script. The constructor picks the role:
   `SyncRemoteRolloutBatchSource`. For each batch it sends the unexpanded
   prompts to rank 1, receives completions, tt-transformers' per-token
   log-probs and rank 1's `weight_version`, and computes the rewards itself.
-  Every `weight_sync_every` optimizer steps it pushes the policy weights as
-  version `step`, except after the last batch.
+  At a generation-batch boundary once `weight_sync_every` optimizer steps have
+  passed since the last push, it pushes the policy weights as version `step`,
+  except after the last batch.
 - **Rank 1 (rollout)** opens the `remote_rollout_config.mesh_shape` mesh,
   builds a `TTTRolloutSampler` and an `MPIRolloutServer`, and never calls
   `dataset_func`. Its `train()` serves generate and weight-update requests until
@@ -296,7 +297,7 @@ from ttml.trainers import GRPOConfig
 | `use_clip_grad_norm` | `bool` | `False` | `max_grad_norm > 0` | Clip the gradient norm before `optimizer.step()`. TRL clips by default (`max_grad_norm=1.0`), so a ported config trains unclipped unless this is set. Raises in `_setup` when any parameter is sharded (FSDP/TP). |
 | `clip_grad_norm_max_norm` | `float` | `1.0` | `max_grad_norm` | Maximum gradient norm when `use_clip_grad_norm` is set. |
 | `rollout_backend` | `str` | — | *(no direct equivalent)* | Which sampler generates and where it runs: `"ttml_in_process_sync"` or `"ttt_remote_sync"`; see [Rollout modes](#rollout-modes). Required in `grpo_config`. |
-| `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `ttt_remote_sync` only: push the policy weights to the rollout rank every *N* optimizer steps. |
+| `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `ttt_remote_sync` only: push the policy weights to the rollout rank at a generation-batch boundary once *N* optimizer steps have passed since the last push. |
 | `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `ttt_remote_sync`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `top_k` (default 32), `top_p` (default 1.0). |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
@@ -540,7 +541,8 @@ progress bars, or dashboards belong in additional callbacks.
 
 > **Cross-rank weight transfer** needs no callback: in `ttt_remote_sync` the
 > trainer's rollout batch source pushes the weights to the rollout rank
-> every `weight_sync_every` steps (see [Rollout modes](#rollout-modes)).
+> at a generation-batch boundary once `weight_sync_every` optimizer steps have
+> passed since the last push (see [Rollout modes](#rollout-modes)).
 
 ---
 
@@ -634,10 +636,7 @@ When `setup_ttml_model` opens a named mesh with an `"fsdp"` axis (size > 1), the
 Parameters too small to shard into whole tiles can be kept replicated with
 `device_config.fsdp_replicate_params`; see [Keeping parameters replicated](./FSDP.md#keeping-parameters-replicated).
 
-Checkpointing is unsupported under FSDP (the checkpoint would store per-rank
-shards rather than full tensors) — set `checkpointing: false`.
-
-Gradient clipping is also unsupported under FSDP: with `use_clip_grad_norm: true`,
+Gradient clipping is unsupported under FSDP: with `use_clip_grad_norm: true`,
 `_setup` raises when any parameter is sharded.
 
 ---
@@ -692,6 +691,8 @@ To start from a checkpoint's weights, point `model_source` at the checkpoint
 directory (it contains `checkpoint.pkl` and the tokenizer files). A
 `model.safetensors` with ttml parameter names (the old GRPO checkpoint format)
 raises `ValueError`, and a HuggingFace source must provide every model weight.
+Only the weights are loaded: the optimizer starts fresh and the LR schedule
+restarts at step 0.
 
 ---
 
