@@ -5,36 +5,56 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/tensor/noc_traits.h"
-#include "api/core_local_mem.h"
 
 #include <cstdint>
-#include <utility>
 
-#include "unicast_common.hpp"
+#include "all_gather_common.hpp"
 
 using address_t = uint32_t;
 
-// Store-and-forward reader: CB producer, no fabric. It owns every data_valid wait (see the protocol note in
-// unicast_common.hpp). Iteration 0 fills the CB from this device's local data; later iterations relay the
-// stripe upstream delivered into our output, gated on data_valid.
+// Store-and-forward reader: CB producer, no fabric. It starts at once: the init handshake gates only the writer's
+// remote sends, so the first slots and the local copy overlap it. Iteration 0 reads this device's stripe from the
+// input; iteration i >= 1 re-reads the stripe upstream relayed into our output in its iteration i - 1, gated on
+// data_valid. Each slot carries up to packets_per_slot packets behind one read barrier (see ag::fill_slots and the
+// protocol note in all_gather_common.hpp).
 void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
     ///////////////////////////////////////////////////
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(0);
-    constexpr uint32_t output_chunk_size = get_compile_time_arg_val(1);
-    constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(2);
-    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(3);
+    constexpr uint32_t unit_bytes = get_compile_time_arg_val(0);
+    constexpr uint32_t in_page_units = get_compile_time_arg_val(1);
+    constexpr uint32_t out_page_units = get_compile_time_arg_val(2);
+    constexpr uint32_t stripe_units = get_compile_time_arg_val(3);
     constexpr uint32_t num_devices = get_compile_time_arg_val(4);
-    constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(6);
-    constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
-    constexpr auto input_tensor_args = TensorAccessorArgs<8>();
+    constexpr uint32_t element_units = get_compile_time_arg_val(5);
+    constexpr uint32_t max_packet_bytes = get_compile_time_arg_val(6);
+    constexpr bool dst_cross = get_compile_time_arg_val(7) != 0;
+    constexpr bool src_cross = get_compile_time_arg_val(8) != 0;
+    constexpr uint32_t packet_cap = get_compile_time_arg_val(9);
+    constexpr uint32_t packets_per_slot = get_compile_time_arg_val(10);
+    constexpr uint32_t packet_header_size = get_compile_time_arg_val(11);
+    constexpr uint32_t cb0_id = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_page_size = get_compile_time_arg_val(13);
+    constexpr auto input_tensor_args = TensorAccessorArgs<14>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
-    constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
+    static_assert(
+        packet_cap % unit_bytes == 0 && packet_cap >= unit_bytes && packet_cap <= max_packet_bytes,
+        "the packet cap is a whole number of units within the payload");
+    constexpr ag::SlotLayout lay = ag::slot_offsets(packets_per_slot, unit_bytes, packet_header_size, packet_cap);
+    static_assert(lay.slot_bytes == cb_page_size, "host and kernel disagree on the slot layout");
+    // The most units one slot carries.
+    constexpr uint32_t slot_units = packets_per_slot * (packet_cap / unit_bytes);
+    constexpr ag::WalkGeo geo{
+        .unit_bytes = unit_bytes,
+        .in_page_units = in_page_units,
+        .out_page_units = out_page_units,
+        .stripe_units = stripe_units,
+        .num_devices = num_devices,
+        .element_units = element_units,
+        .max_packet_bytes = max_packet_bytes,
+        .dst_cross = dst_cross,
+        .src_cross = src_cross};
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -45,101 +65,61 @@ void kernel_main() {
     const uint32_t initial_stripe = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t stripe_step = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_iters = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t total_chunks = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t slice_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t total_units = get_arg_val<uint32_t>(arg_idx++);  // units upstream delivers (completion wait)
+    const uint32_t slice_start = get_arg_val<uint32_t>(arg_idx++);  // walk elements [start, start + count)
     const uint32_t slice_count = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t final_start = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t final_skip = get_arg_val<uint32_t>(arg_idx++);  // last iteration: walk positions skipped, taken
     const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t input_page_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
+    const bool do_local_write = get_arg_val<uint32_t>(arg_idx++) != 0;
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
 
-    auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
-    auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
+    const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
+    const auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
     Noc noc;
     CircularBuffer cb(cb0_id);
     auto* data_valid_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_valid_sem);
 
-    OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
+    ag::Walk walk(output_tensor_accessor, geo);
+    ag::InputPieces<decltype(input_tensor_accessor)> input_pieces(input_tensor_accessor, geo);
+    ag::RelayPieces relay_pieces(geo);
+    ag::PacketBuilder input_builder(walk, input_pieces, packet_cap);
+    ag::PacketBuilder relay_builder(walk, relay_pieces, packet_cap);
 
     ///////////////////////////////////////////////////
     // MAIN
     ///////////////////////////////////////////////////
 
-    // Startup barrier: wait for downstream remote device to be ready.
-    // A sink direction (num_iters == 0) has no upstream here and is never signalled, so it must not wait.
-    // Consume the credit instead of resetting, so an early handshake for the next launch is kept.
-    if constexpr (do_init_barrier) {
-        if (num_iters > 0) {
-            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
-            noc_semaphore_inc(get_noc_addr(barrier_sem), uint32_t{0} - 1);
-        }
-    }
-
-    uint32_t stripe = initial_stripe;
+    const uint32_t iter_units = slice_count * element_units;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
+        const bool last = iter + 1 == num_iters;
+        const uint32_t skip = last ? final_skip : 0;
+        const uint32_t take = last ? final_count : slice_count;
+        const uint32_t take_units = take * element_units;
+        walk.init((initial_stripe + iter * stripe_step) % num_devices, slice_start, slice_count, skip, take);
         if (iter == 0) {
             // Local data (our own input tensor)
-            uint32_t page = input_page_id_start;
-            while (page < input_page_id_end) {
-                cb.reserve_back(1);
-                uint32_t l1_write_addr = cb.get_write_ptr();
-                for (uint32_t i = 0; i < inputs_per_cb_page && page < input_page_id_end; ++i) {
-                    noc.async_read(
-                        input_tensor_accessor,
-                        CoreLocalMem<uint32_t>(l1_write_addr),
-                        input_page_size,
-                        {.page_id = page},
-                        {},
-                        {});
-                    l1_write_addr += input_page_size;
-                    ++page;
-                }
-                noc.async_read_barrier();
-                cb.push_back(1);
-            }
+            ag::fill_slots(noc, cb, lay, unit_bytes, input_builder, take_units, do_local_write, [](uint32_t) {});
         } else {
-            // Relay: read the stripe upstream delivered into our output, waiting per CB-page batch for its
-            // chunks to arrive. base_chunk is where this read begins in the delivered-chunk stream: 0 for a full
-            // stripe or an even-ring prefix half, `half` for a suffix half.
-            const bool last = (iter == num_iters - 1);
-            const uint32_t start = last ? final_start : slice_start;
-            const uint32_t count = last ? final_count : slice_count;
-            const uint32_t base_chunk = (iter - 1) * slice_count + (start - slice_start);
-            it.init(stripe, start, count);
-            for (uint32_t chunks_read = 0; chunks_read < count;) {
-                const uint32_t batch = std::min(outputs_per_cb_page, count - chunks_read);
-                noc_semaphore_wait_min(data_valid_ptr, base_chunk + chunks_read + batch);
-
-                cb.reserve_back(1);
-                uint32_t l1_write_addr = cb.get_write_ptr();
-                for (uint32_t i = 0; i < batch; ++i) {
-                    auto [page_id, byte_off] = it.next();
-                    noc.async_read(
-                        output_tensor_accessor,
-                        CoreLocalMem<uint32_t>(l1_write_addr),
-                        output_chunk_size,
-                        {.page_id = page_id, .offset_bytes = byte_off},
-                        {},
-                        {});
-                    l1_write_addr += output_chunk_size;
-                }
-                noc.async_read_barrier();
-                cb.push_back(1);
-                chunks_read += batch;
-            }
+            // Relay: upstream sent its iteration iter - 1 in walk order and signals cumulative units, so the first
+            // `skip` elements of that pass precede ours. Wait before reserving: a slot holds at most slot_units, all
+            // of this iteration, so the target covers every read of the slot and is reached without holding one (a
+            // ring would deadlock otherwise).
+            const uint32_t relay_base = (iter - 1) * iter_units + skip * element_units;
+            ag::fill_slots(noc, cb, lay, unit_bytes, relay_builder, take_units, false, [&](uint32_t consumed) {
+                noc_semaphore_wait_min(data_valid_ptr, relay_base + std::min(consumed + slot_units, take_units));
+            });
         }
-        stripe = (stripe + stripe_step) % num_devices;
     }
 
     ///////////////////////////////////////////////////
     // CLEANUP
     ///////////////////////////////////////////////////
 
-    // Completion: wait for all chunks, then subtract only this launch's credits; a reset could drop the next's.
-    noc_semaphore_wait_min(data_valid_ptr, total_chunks);
-    noc_semaphore_inc(get_noc_addr(data_valid_sem), uint32_t{0} - total_chunks);
+    // Completion: wait for every unit upstream sends us, then subtract only this launch's; a reset could drop the
+    // next's.
+    ag::wait_and_consume(data_valid_sem, total_units);
     noc.async_atomic_barrier();
+    // The local copy has landed in our output before the op completes.
+    noc.async_write_barrier();
 }

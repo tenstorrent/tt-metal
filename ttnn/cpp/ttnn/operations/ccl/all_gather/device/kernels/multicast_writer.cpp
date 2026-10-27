@@ -5,72 +5,58 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/tensor/noc_traits.h"
-#include "api/core_local_mem.h"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
-#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "tt_metal/fabric/hw/inc/api_common.h"
 
 #include <cstdint>
-#include <array>
-#include <type_traits>
-#include <utility>
 
 #include "multicast_common.hpp"
+#include "all_gather_common.hpp"
 
 using address_t = uint32_t;
 
+// Multicast writer: CB consumer, owns all fabric. Each packet goes once over every connection (one per direction with
+// a neighbor), and together the connections reach every other device of the collective once. The init and done credits
+// ride the same routes, so every device counts one of each from every other device, and done lands after our data.
 void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
     ///////////////////////////////////////////////////
-    constexpr uint32_t output_chunk_size = get_compile_time_arg_val(0);
-    constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(1);
-    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(2);
-    constexpr uint32_t output_page_stripe_jump = get_compile_time_arg_val(3);
-    constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t packet_size = get_compile_time_arg_val(6);
-    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(7) != 0;
-    constexpr uint32_t num_connections = get_compile_time_arg_val(8);
-    constexpr bool do_init_barrier = get_compile_time_arg_val(9) != 0;
-    constexpr auto output_tensor_args = TensorAccessorArgs<10>();
+    constexpr uint32_t unit_bytes = get_compile_time_arg_val(0);
+    constexpr uint32_t packet_cap = get_compile_time_arg_val(1);
+    constexpr uint32_t packets_per_slot = get_compile_time_arg_val(2);
+    constexpr uint32_t cb0_id = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_page_size = get_compile_time_arg_val(4);
+    constexpr uint32_t num_connections = get_compile_time_arg_val(5);
 
-    constexpr bool enable_fabric = (num_connections > 0);
-    constexpr uint32_t output_page_size = output_chunks_per_page * output_chunk_size;
-    constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
+    // Headers come from the pool, so the slot holds none.
+    constexpr ag::SlotLayout lay = ag::slot_offsets(packets_per_slot, unit_bytes, 0, packet_cap);
+    static_assert(lay.slot_bytes == cb_page_size, "host and kernel disagree on the slot layout");
+    static_assert(ag::kSegmentsPerPacket <= NOC_SCATTER_WRITE_MAX_CHUNKS, "a packet has more segments than a scatter");
+    // E, W, N and S. The two header sets below need 2 * num_connections of the pool's headers.
+    constexpr uint32_t max_connections = 4;
+    static_assert(num_connections >= 1 && num_connections <= max_connections, "no route to the other devices");
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
     ///////////////////////////////////////////////////
     size_t arg_idx = 0;
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
-    const uint32_t output_page_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_chunk_in_stripe_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_page_byte_offset = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t output_page_byte_offset_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_output_chunks = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t slice_count = get_arg_val<uint32_t>(arg_idx++);
     const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const address_t done_sem = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t line_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_e_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_w_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_spine_hops = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t line_hops_alt = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_e_hops_alt = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_w_hops_alt = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_spine_hops_alt = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t line_dir = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_e_dir = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_w_dir = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t rect_spine_dir = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (semaphore location)
+    const uint32_t sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t barrier_wait_value = get_arg_val<uint32_t>(arg_idx++);  // init credits to wait for
+    const uint8_t e_hops = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t w_hops = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t n_hops = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t s_hops = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t e_dir = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t w_dir = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t n_dir = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t s_dir = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
-
-    auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
 
     Noc noc;
     CircularBuffer cb(cb0_id);
@@ -80,168 +66,124 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
-    if constexpr (enable_fabric) {
-        open_connections(fabric_connection, num_connections, arg_for_fab);
-    }
+    tt::tt_fabric::common::experimental::open_connections(fabric_connection, num_connections, arg_for_fab);
 
-    // Build the line then rect ranges, in connection order (matches the host). Each hop count is placed at
-    // its physical slot; an absent branch (hop == 0) is skipped so it can't clobber a live slot.
-    FabricRange ranges[2] = {};
-    FabricRange ranges_alt[2] = {};
+    // One connection per direction with a neighbor, in the host's order: the E and W lines, then the S and N spines,
+    // which branch E and W at every hop. Each hop count is placed at its physical slot; an absent branch (hop == 0) is
+    // skipped so it can't clobber a live slot.
+    FabricRange ranges[max_connections] = {};
     uint32_t conn = 0;
-    if (line_hops > 0) {
-        uint8_t hops[4] = {}, hops_alt[4] = {};
-        hops[line_dir] = line_hops;
-        hops_alt[line_dir] = line_hops_alt;
-        ranges[conn] = make_fabric_range(hops[0], hops[1], hops[2], hops[3]);
-        ranges_alt[conn] = make_fabric_range(hops_alt[0], hops_alt[1], hops_alt[2], hops_alt[3]);
-        ++conn;
-    }
-    if (rect_spine_hops > 0) {
-        uint8_t hops[4] = {}, hops_alt[4] = {};
-        if (rect_e_hops > 0) {
-            hops[rect_e_dir] = rect_e_hops;
-            hops_alt[rect_e_dir] = rect_e_hops_alt;
+    auto add_connection = [&](uint8_t spine_hops, uint8_t spine_dir, bool branches) {
+        if (spine_hops == 0) {
+            return;
         }
-        if (rect_w_hops > 0) {
-            hops[rect_w_dir] = rect_w_hops;
-            hops_alt[rect_w_dir] = rect_w_hops_alt;
+        uint8_t hops[4] = {};
+        if (branches && e_hops > 0) {
+            hops[e_dir] = e_hops;
         }
-        hops[rect_spine_dir] = rect_spine_hops;
-        hops_alt[rect_spine_dir] = rect_spine_hops_alt;
-        ranges[conn] = make_fabric_range(hops[0], hops[1], hops[2], hops[3]);
-        ranges_alt[conn] = make_fabric_range(hops_alt[0], hops_alt[1], hops_alt[2], hops_alt[3]);
-        ++conn;
-    }
+        if (branches && w_hops > 0) {
+            hops[w_dir] = w_hops;
+        }
+        hops[spine_dir] = spine_hops;
+        ranges[conn++] = make_fabric_range(hops[0], hops[1], hops[2], hops[3]);
+    };
+    add_connection(e_hops, e_dir, false);
+    add_connection(w_hops, w_dir, false);
+    add_connection(s_hops, s_dir, true);
+    add_connection(n_hops, n_dir, true);
+    ASSERT(conn == num_connections);
+#ifndef FABRIC_2D
+    uint8_t starts[max_connections] = {1, 1, 1, 1};  // every connection starts one hop out
+#endif
 
-    // Allocate header and set state for data sends
-    FabricWriter<output_chunk_size, packet_size, load_balance_across_alt_routes> fabric(
-        noc, fabric_connection, num_connections, ranges, ranges_alt);
-
-    // Allocate header and set state for semaphore sends
-    uint8_t sem_route_id = 0;
-    if constexpr (enable_fabric) {
-        sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-        uint8_t starts[1] = {1};
-
+    // One unicast-write route (it also carries the init and done credits) and one scatter-write route, each a header
+    // per connection. Headers are reused, so every re-encode waits for the previous send to leave L1.
+    const uint8_t unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    const uint8_t scatter_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    // Sends one credit to the mirror core on every other device.
+    auto signal_all = [&](address_t sem) {
         fabric_api::fabric_multicast_noc_unicast_atomic_inc_set_state<
-            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
             fabric_connection,
-            sem_route_id,
+            unicast_route_id,
 #ifndef FABRIC_2D
             starts,
 #endif
             ranges,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                0u,    // ignore
-                1u});  // increment 1
-    }
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{ag::fabric_frame_addr(sem_noc_x, sem_noc_y, sem), 1});
+        fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
+            fabric_connection, unicast_route_id);
+        noc.async_writes_flushed();
+    };
 
-    // Initialization barrier:
-    // In some cases we don't have a guarantee that the output tensor has been allocated
-    // on remote devices (every device's command queue executes asynchronously). So we wait
-    // for this kernel to begin execution on all remote devices before sending any data.
-    //
-    // Mechanism:
-    // Each worker core syncs with its mirror core (the same core) on all remote devices.
-    // Reader fires sem increment forward, and also owns sem wait + decrement.
-    // Writer fires sem increment backward, and implicitly gets blocked waiting for CB to
-    // contain valid data.
-    if constexpr (do_init_barrier && enable_fabric) {
-        uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(sem_noc0_x, sem_noc0_y, barrier_sem, 0);
-        fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_connection,
-            sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
-    }
+    // Initialization barrier: tell every other device we are alive (our output exists, and we are done reading the
+    // previous launch's), then set up the data routes.
+    signal_all(barrier_sem);
+    fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
+        fabric_connection,
+        unicast_route_id,
+#ifndef FABRIC_2D
+        starts,
+#endif
+        ranges);
+    fabric_api::fabric_multicast_noc_scatter_write_set_state<UnicastScatterWriteUpdateMask::None>(
+        fabric_connection,
+        scatter_route_id,
+#ifndef FABRIC_2D
+        starts,
+#endif
+        ranges);
+    // Our data goes into every other device's output: wait until all are alive (each sent its init the same way). Our
+    // reader fills the slots and does the local copy meanwhile.
+    ag::wait_and_consume(barrier_sem, barrier_wait_value);
 
     ///////////////////////////////////////////////////
     // MAIN
     ///////////////////////////////////////////////////
 
-    // "iterator" for output_tensor:
-    //   byte_offset++ within an output page -> chunk++ -> stripe+=jump
-    // (see the "Page indexing" glossary in all_gather_multicast_factory.cpp)
-    // Returns {output_page_id, byte_offset} for the current chunk, then advances.
-    // Supports any gather dim, any N-D shape, any shard spec.
-    uint32_t output_page_id = output_page_id_start;
-    uint32_t output_page_byte_off = output_page_byte_offset_start;
-    uint32_t output_chunks_sent = 0;
-    uint32_t output_chunk_in_stripe = output_chunk_in_stripe_start;
-    auto valid_output_chunk = [&]() __attribute__((always_inline)) { return output_chunks_sent < num_output_chunks; };
-    auto next_output_chunk = [&]() __attribute__((always_inline)) {
-        std::pair<uint32_t, uint32_t> loc{output_page_id, output_page_byte_off};
-        output_chunks_sent++;
-        if (++output_chunk_in_stripe == output_chunks_per_stripe) {
-            output_chunk_in_stripe = 0;
-            output_page_id += output_page_stripe_jump;
-            output_page_byte_off = output_page_byte_offset;
-        } else {
-            output_page_byte_off += output_chunk_size;
-            if (output_page_byte_off == output_page_size) {
-                output_page_byte_off = 0;
-                output_page_id++;
-            }
-        }
-        return loc;
-    };
-
-    while (valid_output_chunk()) {
+    for (bool iter_end = slice_count == 0; !iter_end;) {
         cb.wait_front(1);
-        auto l1_read_addr = cb.get_read_ptr();
-
-        for (uint32_t i = 0; i < outputs_per_cb_page && valid_output_chunk(); ++i) {
-            auto [page_id, page_byte_offset] = next_output_chunk();
-            // Fabric write
-            auto fabric_tensor_page_addr =
-                tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, page_byte_offset);
-            if constexpr (enable_fabric) {
-                fabric.async_write(l1_read_addr, fabric_tensor_page_addr);
+        const uint32_t slot = cb.get_read_ptr();
+        ag::slot_acquire();
+        const ag::SlotInfo info = *reinterpret_cast<const ag::SlotInfo*>(slot);
+        for (uint32_t j = 0; j < info.packets; ++j) {
+            const auto& rec = *reinterpret_cast<const ag::PacketRecord*>(lay.record(slot, j));
+            const uint32_t payload = lay.payload(slot, j);
+            noc.async_writes_flushed();
+            if (rec.segments == 1) {
+                fabric_api::fabric_multicast_noc_unicast_write_with_state<
+                    UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
+                    fabric_connection,
+                    unicast_route_id,
+                    payload,
+                    tt::tt_fabric::NocUnicastCommandHeader{rec.dst[0]},
+                    rec.payload_bytes);
+            } else {
+                fabric_api::fabric_multicast_noc_scatter_write_with_state<
+                    UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                    UnicastScatterWriteUpdateMask::PayloadSize>(
+                    fabric_connection,
+                    scatter_route_id,
+                    payload,
+                    tt::tt_fabric::NocUnicastScatterCommandHeader(
+                        rec.dst, rec.bytes, static_cast<uint8_t>(rec.segments)),
+                    rec.payload_bytes);
             }
-
-            // Local write.
-            // For local writes use posted writes (to skip waiting for ack) on different virtual channel
-            // (to avoid interfering with Fabric writes on same noc)
-            noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC>(
-                CoreLocalMem<uint32_t>(l1_read_addr),
-                output_tensor_accessor,
-                output_chunk_size,
-                {},
-                {.page_id = page_id, .offset_bytes = page_byte_offset},
-                {.vc = NOC_UNICAST_WRITE_VC + 1});
-
-            l1_read_addr += output_chunk_size;
         }
-
-        noc.async_writes_flushed<NocOptions::POSTED>();  // wait for local writes
-        if constexpr (enable_fabric) {
-            fabric.async_writes_flushed();  // wait for Fabric writes
-        }
+        // Wait for Fabric writes to be sent out before popping CB entry
+        noc.async_writes_flushed();
         cb.pop_front(1);
+        iter_end = info.iter_end != 0;
     }
 
     ///////////////////////////////////////////////////
     // CLEANUP
     ///////////////////////////////////////////////////
 
-    // Completion barrier:
-    // We must only exit this op after guaranteeing that all remote data has arrived.
-    //
-    // Mechanism:
-    // Each worker core sends a sem to its mirror core (the same core) on all remote devices. The sem
-    // is sent after all data sends on a particular link, so it's correctly ordered at the receiver.
-    // Reader fires sem increment forward, and also owns sem wait + decrement.
-    // Writer fires sem increment backward, and exits immediately.
-    if constexpr (enable_fabric) {
-        uint64_t done_sem_noc_addr_in_pkt = safe_get_noc_addr(sem_noc0_x, sem_noc0_y, done_sem, 0);
-        fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_connection,
-            sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{done_sem_noc_addr_in_pkt, 0});
-    }
-
-    if constexpr (enable_fabric) {
-        close_connections(fabric_connection);
-    }
+    // Completion barrier: after every data packet on the same routes, so each receiver's done count implies our data
+    // has landed. Sent even with nothing to send: every reader waits for all of them.
+    signal_all(done_sem);
+    tt::tt_fabric::common::experimental::close_connections(fabric_connection);
     noc.async_write_barrier();
+    noc.async_atomic_barrier();
 }

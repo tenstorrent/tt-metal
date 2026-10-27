@@ -16,8 +16,12 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <algorithm>
+#include <limits>
+#include <numeric>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -214,6 +218,36 @@ AllGatherDeviceOperation::create_op_performance_model(
     return result;
 }
 
+namespace {
+
+// A sharded output whose shards go round-robin to the banks puts every device's stripe in one bank when a stripe is
+// within one shard along the gather dim and every other shard-grid dim steps by whole rounds of the banks.
+bool stripe_in_one_bank(const tt::tt_metal::TensorSpec& output_spec, int32_t dim_from_end, uint32_t num_devices) {
+    const auto& nd_shard_spec = output_spec.memory_config().nd_shard_spec();
+    const auto& shape = output_spec.padded_shape();
+    if (!nd_shard_spec.has_value() || nd_shard_spec->shard_shape.rank() != shape.rank() ||
+        nd_shard_spec->shard_distribution_strategy != tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D) {
+        return false;
+    }
+    const auto& shard_shape = nd_shard_spec->shard_shape;
+    const uint64_t num_banks = nd_shard_spec->grid.num_cores();
+    const int32_t gather_dim = static_cast<int32_t>(shape.rank()) + dim_from_end;
+    if (shard_shape[gather_dim] % (shape[gather_dim] / num_devices) != 0) {
+        return false;
+    }
+    uint64_t stride = 1;  // shards between neighbours along dim i
+    for (int32_t i = static_cast<int32_t>(shape.rank()) - 1; i >= 0; --i) {
+        const uint64_t shards = tt::div_up(shape[i], shard_shape[i]);
+        if (i != gather_dim && shards > 1 && stride % num_banks != 0) {
+            return false;
+        }
+        stride *= shards;
+    }
+    return true;
+}
+
+}  // namespace
+
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     // Pick the kernel algorithm based on limitations and heuristics
@@ -228,6 +262,20 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
     } else if (args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
         // Limitation: NeighborExchange only permits 1-hop unicast
         use_unicast = true;
+    } else if (get_available_worker_cores(args, tensor_args.input_tensor).num_cores() < 4) {
+        // Limitation: unicast needs a fabric mux and a worker per direction
+        use_unicast = false;
+    } else if (!compute_walk_geometry(
+                    tensor_args.input_tensor,
+                    args.output_spec,
+                    args.dim_from_end,
+                    args.num_devices,
+                    args.packet_size,
+                    /*unicast=*/true)
+                    .has_value()) {
+        // Limitation: the unicast relay re-reads its own output, so pages resharded on the way (concat or split)
+        // must also be cut on the output's read alignment
+        use_unicast = false;
     } else {
         // Heuristics: Decide between multicast or unicast algorithm
         const auto& input_tensor = tensor_args.input_tensor;
@@ -242,26 +290,21 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 break;
             }
             case tt::ARCH::BLACKHOLE: {
-                // Multicast only wins the small-volume + large-page corner; unicast is
-                // bandwidth-optimal and wins outright once ~4MB cross a link (at any page size).
-                // Between, the multicast-favorable per-link-byte ceiling scales with the actual page
-                // size squared, up to that 4MB floor. The boundary errs toward unicast: its downside
-                // (up to ~40% at scale) dwarfs multicast's ~5-17% upside.
-                const uint64_t in_page = input_tensor.tensor_spec().compute_page_size_bytes();
-                const uint64_t out_page = args.output_spec.compute_page_size_bytes();
-                const uint64_t txn = std::min(in_page, out_page);  // NOC transaction size
-
-                // per-link bytes on the gathered axis (same axis/links the unicast factory uses)
+                // Multicast sends each packet once, unicast relays it hop by hop at a higher bandwidth but with more
+                // cores to start (workers and a mux per link-direction): unicast wins once enough bytes cross the
+                // busiest link-direction. Measured crossover (2 links, 15168 B payload, bf16 tiles 64 KB - 42 MB,
+                // init handshake included): 1.05 MB on a line, 233 KB on a ring, where both directions carry it.
+                const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
                 const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
-                const uint64_t per_link_bytes =
-                    input_tensor.physical_volume() * input_tensor.element_size() * args.num_devices / num_links;
-
-                // Page^2 ceiling, anchored so a 2KB page permits multicast up to 1MB/link, capped at
-                // unicast's 4MB bandwidth floor. (2KB/1MB are the anchor; txn is the real page size.)
-                constexpr uint64_t anchor_page = 2048, anchor_ceiling = 1'000'000, unicast_bw_floor = 4'000'000;
-                const uint64_t mcast_ceiling =
-                    std::min(unicast_bw_floor, (txn * txn * anchor_ceiling) / (anchor_page * anchor_page));
-                use_unicast = per_link_bytes >= mcast_ceiling;
+                const uint64_t input_bytes =
+                    static_cast<uint64_t>(input_tensor.buffer()->num_pages()) * input_tensor.buffer()->page_size();
+                const uint64_t busiest_link_bytes =
+                    input_bytes * (args.num_devices - 1) / ((is_ring ? 2u : 1u) * num_links);
+                constexpr uint64_t line_unicast_bytes = 1'050'000, ring_unicast_bytes = 233'000;
+                use_unicast = busiest_link_bytes >= (is_ring ? ring_unicast_bytes : line_unicast_bytes);
+                // Except when every device's output stripe sits in one bank: the unicast relay's writes and re-reads
+                // all queue on it (ND-sharded DRAM, 8 MB: multicast 1.3-1.4x faster).
+                use_unicast = use_unicast && !stripe_in_one_bank(args.output_spec, args.dim_from_end, args.num_devices);
                 break;
             }
             default: break;  // uncalibrated arch
@@ -287,6 +330,158 @@ tt::tt_metal::TensorSpec compute_output_specs_helper(
     return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config));
+}
+
+std::optional<all_gather_walk::WalkGeo> compute_walk_geometry(
+    const Tensor& input_tensor,
+    const tt::tt_metal::TensorSpec& output_spec,
+    int32_t gather_dim_from_end,
+    uint32_t num_devices,
+    uint32_t packet_size,
+    bool unicast) {
+    const auto& input_spec = input_tensor.tensor_spec();
+    auto read_alignment = [](const tt::tt_metal::TensorSpec& spec) {
+        return spec.memory_config().is_dram() ? tt::tt_metal::hal::get_dram_alignment()
+                                              : tt::tt_metal::hal::get_l1_alignment();
+    };
+    // Page sizes are UNALIGNED (content) sizes.
+    const uint32_t input_page_size = input_spec.compute_page_size_bytes();
+    const uint32_t output_page_size = output_spec.compute_page_size_bytes();
+    const uint32_t input_aligned_page_size = tt::align(input_page_size, read_alignment(input_spec));
+    const uint32_t output_aligned_page_size = tt::align(output_page_size, read_alignment(output_spec));
+
+    // --- Unit ---
+    // Every source is read at unit offsets into a unit-aligned slot, so the unit must be a multiple of each source's
+    // read alignment (else BH reads (src & ~63) | (dst & 63)) and of the NOC write alignment (the L1 alignment).
+    const uint32_t unit_bytes = std::lcm(
+        std::lcm(tt::tt_metal::hal::get_l1_alignment(), read_alignment(input_spec)),
+        unicast ? read_alignment(output_spec) : 1u);
+    uint32_t in_page_units = 0;
+    uint32_t out_page_units = 0;
+    if (input_page_size % unit_bytes == 0 && output_page_size % unit_bytes == 0) {
+        // Cuts land on any unit boundary, also inside a page (concat and split).
+        in_page_units = input_page_size / unit_bytes;
+        out_page_units = output_page_size / unit_bytes;
+    } else if (
+        input_page_size == output_page_size && tt::align(input_page_size, unit_bytes) <= output_aligned_page_size) {
+        // Whole pages move at pitch align(content, unit); the tail lands in the output page's own padding.
+        in_page_units = out_page_units = tt::align(input_page_size, unit_bytes) / unit_bytes;
+    } else {
+        return std::nullopt;
+    }
+    const uint32_t max_packet_bytes =
+        std::min<uint32_t>(packet_size, tt::tt_metal::hal::get_noc_max_burst_size_bytes()) / unit_bytes * unit_bytes;
+    if (max_packet_bytes == 0) {
+        return std::nullopt;
+    }
+
+    // --- Stripe geometry ---
+    // input_pages_per_stripe = num input pages along [gather dim .. last dim] this device contributes per stripe. For
+    // a last-dim RM gather this is the *page* count, which handles sharded RM input (> 1 input page per row).
+    const auto& input_shape = input_tensor.padded_shape();
+    const bool is_tile = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    auto tile_spec = is_tile ? input_spec.tile() : tt::tt_metal::Tile();
+    uint64_t input_pages_per_stripe = 1;
+    for (int32_t i = gather_dim_from_end; i < 0; i++) {
+        uint64_t extent;
+        if (i == -1) {
+            if (is_tile) {
+                extent = input_shape[i] / tile_spec.get_width();
+            } else {
+                // This is a page count, so divide by the unaligned page size, not aligned
+                const uint64_t row_bytes = uint64_t{input_shape[i]} * input_tensor.element_size();
+                if (row_bytes % input_page_size != 0) {
+                    return std::nullopt;
+                }
+                extent = row_bytes / input_page_size;
+            }
+        } else if (is_tile && i == -2) {
+            extent = input_shape[i] / tile_spec.get_height();
+        } else {
+            extent = input_shape[i];
+        }
+        input_pages_per_stripe *= extent;
+    }
+    const uint64_t num_input_pages = input_tensor.buffer()->num_pages();
+    if (input_pages_per_stripe == 0 || num_input_pages % input_pages_per_stripe != 0) {
+        return std::nullopt;
+    }
+    // Stripe = this device's contribution to one output row, in units. A walk element is one output page when the
+    // stripe is whole output pages, else one unit.
+    const uint64_t stripe_units = input_pages_per_stripe * in_page_units;
+    const uint32_t element_units = stripe_units % out_page_units == 0 ? out_page_units : 1u;
+    if (stripe_units * num_devices > std::numeric_limits<uint32_t>::max() ||
+        num_input_pages * in_page_units > std::numeric_limits<uint32_t>::max()) {
+        return std::nullopt;
+    }
+    return all_gather_walk::WalkGeo{
+        .unit_bytes = unit_bytes,
+        .in_page_units = in_page_units,
+        .out_page_units = out_page_units,
+        .stripe_units = static_cast<uint32_t>(stripe_units),
+        .num_devices = num_devices,
+        .element_units = element_units,
+        .max_packet_bytes = max_packet_bytes,
+        .dst_cross = out_page_units * unit_bytes == output_aligned_page_size,
+        .src_cross = in_page_units * unit_bytes == input_aligned_page_size};
+}
+
+uint32_t compute_packet_cap(const all_gather_walk::WalkGeo& geo, const Tensor& output_tensor) {
+    // The output's page stride between banks and its contiguous runs bound how long a packet segment can be.
+    const auto* buffer = output_tensor.buffer();
+    const auto& dist_spec = buffer->buffer_distribution_spec();
+    const uint32_t page_stride = dist_spec.has_value()
+                                     ? dist_spec->contiguous_page_stride()
+                                     : output_tensor.device()->allocator()->get_num_banks(buffer->buffer_type());
+    const uint32_t run_pages =
+        dist_spec.has_value() ? dist_spec->num_contiguous_pages(0) : std::numeric_limits<uint32_t>::max();
+    return all_gather_walk::packet_cap(geo, page_stride, run_pages);
+}
+
+uint32_t compute_packets_per_slot(
+    const all_gather_walk::WalkGeo& geo,
+    uint32_t packet_cap,
+    uint32_t num_slices,
+    uint32_t header_bytes,
+    const Tensor& input_tensor) {
+    // A slot's packets are read behind one read barrier: enough of them to keep about 30 KB of reads in flight, which
+    // hides DRAM read latency whatever the fabric payload (BH: two 15168 B packets per barrier take 24% less worker
+    // time per packet than one), at least two slots per worker iteration so both work, and only as many as fit in L1.
+    constexpr uint32_t read_bytes_per_barrier = 30336;
+    constexpr uint32_t max_packets_per_slot = 32;
+    const uint32_t num_elements = input_tensor.buffer()->num_pages() * geo.in_page_units / geo.element_units;
+    const uint64_t iter_packets = tt::div_up(
+        uint64_t{tt::div_up(num_elements, num_slices)} * geo.element_units * geo.unit_bytes, uint64_t{packet_cap});
+    uint32_t packets_per_slot = static_cast<uint32_t>(std::clamp<uint64_t>(
+        std::min<uint64_t>(tt::div_up(read_bytes_per_barrier, packet_cap), iter_packets / all_gather_walk::kNumSlots),
+        1,
+        max_packets_per_slot));
+    auto cb_bytes = [&](uint32_t k) {
+        return all_gather_walk::kNumSlots *
+               all_gather_walk::slot_offsets(k, geo.unit_bytes, header_bytes, packet_cap).slot_bytes;
+    };
+    const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
+    if (packets_per_slot > 1 && cb_bytes(packets_per_slot) > max_l1_space) {
+        while (packets_per_slot > 1 && cb_bytes(packets_per_slot) > max_l1_space) {
+            --packets_per_slot;
+        }
+        log_warning(
+            tt::LogOp,
+            "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
+            max_l1_space);
+    }
+    return packets_per_slot;
+}
+
+CoreRangeSet get_available_worker_cores(const AllGatherParams& args, const Tensor& input_tensor) {
+    auto* mesh_device = input_tensor.device();
+    auto cores = mesh_device->worker_cores(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX,
+        args.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0)));
+    if (args.sub_core_grid.has_value()) {
+        cores = cores.intersection(args.sub_core_grid.value());
+    }
+    return cores;
 }
 
 std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(

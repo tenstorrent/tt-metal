@@ -13,6 +13,7 @@
 #include <tt-metalium/tt_align.hpp>
 
 #include <algorithm>
+#include <numeric>
 
 namespace ttnn {
 
@@ -93,14 +94,16 @@ std::pair<bool, std::string> use_composite_all_gather(
     }
     // NoC write alignment (NOC_{L1,DRAM}_WRITE_ALIGNMENT_BYTES): 16 B on Wormhole/Blackhole, 1 B on Quasar.
     // Ideally this should be queried (Hal::get_write_alignment(HalMemType) is currently unreachable from TTNN).
+    // split cuts each input page into output rows read from the input, so they also keep its read alignment.
     constexpr uint32_t noc_write_alignment = 16;
-    if (input_page_size > output_page_size && output_page_size % noc_write_alignment != 0) {
+    const uint32_t split_alignment = std::lcm(noc_write_alignment, input_tensor.buffer()->alignment());
+    if (input_page_size > output_page_size && output_page_size % split_alignment != 0) {
         return {
             true,
             fmt::format(
                 "output is sharded finer than the input; its rows ({} B) must be a multiple of {} B",
                 output_page_size,
-                noc_write_alignment)};
+                split_alignment)};
     }
     // matched and concat write a whole *aligned* input page into each output page slot, so the slot
     // must be at least that large. They differ only across memories with unequal alignments.

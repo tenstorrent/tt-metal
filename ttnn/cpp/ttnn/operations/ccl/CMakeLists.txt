@@ -50,6 +50,7 @@ target_sources(
             shared_with_host/hetergeneous_data_structs.hpp
             shared_with_host/sharded_tensor_addr_gen.hpp
             shared_with_host/snake_ring.hpp
+            all_gather/shared_with_host/all_gather_walk.hpp
             # common/
             common/host/ccl_command_stream_builders.hpp
             common/host/ccl_worker_builder.hpp
