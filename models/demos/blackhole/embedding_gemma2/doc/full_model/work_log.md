@@ -96,3 +96,16 @@ embedding cosine >= 0.99961); `python demo/demo.py --no-hf`: exit 0.
 
 E1/E2/E3 modules were not modified (`git diff --stat` shows only README.md, demo/demo.py,
 doc/context_contract.json plus new files), so the E1-E3 PCC suite was not rerun.
+
+## 9. Final run on the committed code (f07e1f1d82, after pre-commit black / isort)
+
+```bash
+export EMBEDDING_GEMMA2_RESULTS=$E4/final_results.jsonl
+pytest $P/tests/pcc/test_full_model.py -q                                       # 30 passed in 51 s
+TT_METAL_TRACE_ALLOC_TRACKING=1 pytest $P/tests/pcc/test_full_model_trace.py -q # 11 passed in 29 s
+pytest $P/tests/pcc/test_full_model_perf.py -k traced -q -s                     # 6 passed in 29 s
+pytest $P/demo/demo.py -q -s                                                    # 2 passed in 26 s
+```
+(`logs/final_run.log`). Same numbers as above: 21 inputs cosine min 0.99957 / mean 0.99990,
+MRL 256 min 0.99963, batched min 0.99975, merge row cosine min 0.99868, retrieval agree 2/2,
+trace vs eager max abs diff 0.0, device ms 8.73 / 18.30 / 74.49 / 73.89 / 41.99 / 230.16.
