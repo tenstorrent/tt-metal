@@ -356,3 +356,7 @@ check (F196 / F197); host times stay hidden until verified warm.
   cases). Whether that closes the QB re-verify of FIX.1, FIX.2 and the W.1 fabric change stays the owner's call.
 - Guard (overseer_guard.sh: remain-on-exit + pane-died respawn) re-applied; heartbeat cron :07/:37; Stop hook present.
 - F.1 (F199, run-closing strict fork suite) added with ledger_gen --extend; runs after Z.1 (cost on the 8x4 stated before it starts).
+- 16:48 build_ok = 5308dbb; box test PASS (24.7 s; box_rebase.log); 16:49 orchestrator resumed in tmux ds41-8x4.
+  It placed FIX.5 first (queued fix, gate = W.1's frozen tests: these re-run on the rebased code). A resume does not
+  re-gate the other PASS tasks by itself, so at the FIX.5 boundary (pause) the overseer runs `core.verify --tasks M.1
+  'L.*' --batch` (the stamps reuse nothing across the rebase: ~2-3 h, owner-expected), then resumes with K.1.
