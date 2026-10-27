@@ -814,7 +814,8 @@ class V41GenericPrefillTrace:
         token_ids, engram_inputs = model._stage(host, self.buffers)
         state.tables.prepare_chunk(start, length)
         first_scored = start + length - 1
-        out = step(lambda: model._chunk_forward(state, host, token_ids, engram_inputs, None, None, first_scored, None))
+        rope = state.tables.dspark_rope(length) if model.dspark is not None else None  # the seed rows' pair
+        out = step(lambda: model._chunk_forward(state, host, token_ids, engram_inputs, None, rope, first_scored, None))
         ttnn.synchronize_device(model.mesh_device)
         return out
 
