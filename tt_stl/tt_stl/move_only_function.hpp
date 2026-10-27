@@ -54,23 +54,24 @@ template <typename T>
 inline constexpr bool is_nullable_callable_v =
     std::is_pointer_v<T> || std::is_member_pointer_v<T> || is_move_only_function<T>::value;
 
-template <typename R, typename V>
+template <typename Result, typename Value>
 inline constexpr bool binds_to_temporary_v =
 #if __has_builtin(__reference_converts_from_temporary)
-    __reference_converts_from_temporary(R, V);
+    __reference_converts_from_temporary(Result, Value);
 #else
     false;
 #endif
 
-template <typename VT, typename R, typename... Args>
-concept IsCallableFrom = std::is_invocable_r_v<R, VT, Args...> && std::is_invocable_r_v<R, VT&, Args...> &&
-                         !binds_to_temporary_v<R, std::invoke_result_t<VT, Args...>> &&
-                         !binds_to_temporary_v<R, std::invoke_result_t<VT&, Args...>>;
+template <typename Target, typename Result, typename... Args>
+concept IsCallableFrom =
+    std::is_invocable_r_v<Result, Target, Args...> && std::is_invocable_r_v<Result, Target&, Args...> &&
+    !binds_to_temporary_v<Result, std::invoke_result_t<Target, Args...>> &&
+    !binds_to_temporary_v<Result, std::invoke_result_t<Target&, Args...>>;
 
-template <typename F, typename Self, typename R, typename... Args>
+template <typename Callable, typename Self, typename Result, typename... Args>
 concept MoveOnlyFunctionTarget =
-    !std::is_same_v<std::remove_cvref_t<F>, Self> && !is_in_place_type<std::remove_cvref_t<F>>::value &&
-    IsCallableFrom<std::decay_t<F>, R, Args...>;
+    !std::is_same_v<std::remove_cvref_t<Callable>, Self> && !is_in_place_type<std::remove_cvref_t<Callable>>::value &&
+    IsCallableFrom<std::decay_t<Callable>, Result, Args...>;
 
 template <typename T>
 inline constexpr bool stored_inline_v =
@@ -82,20 +83,20 @@ template <typename T>
 inline constexpr bool trivial_inline_v =
     stored_inline_v<T> && std::is_trivially_move_constructible_v<T> && std::is_trivially_destructible_v<T>;
 
-template <typename R, typename F, typename... A>
-R invoke_r(F& f, A&&... args) {
-    if constexpr (std::is_void_v<R>) {
-        std::invoke(f, std::forward<A>(args)...);
+template <typename Result, typename Callable, typename... Args>
+Result invoke_r(Callable& callable, Args&&... args) {
+    if constexpr (std::is_void_v<Result>) {
+        std::invoke(callable, std::forward<Args>(args)...);
     } else {
-        return std::invoke(f, std::forward<A>(args)...);
+        return std::invoke(callable, std::forward<Args>(args)...);
     }
 }
 
 }  // namespace detail
 
-// A polyfill for C++23 std::move_only_function: a type-erased wrapper for any callable that is
-// move-constructible, including ones that cannot be copied, such as a lambda capturing a
-// std::unique_ptr.
+// A C++20 implementation of C++23's std::move_only_function, to use until the standard library has
+// it: a type-erased wrapper for any callable that is move-constructible, including ones that cannot
+// be copied, such as a lambda capturing a std::unique_ptr.
 //
 // It follows std::move_only_function except that:
 //   - calling an empty instance throws std::bad_function_call, as std::function does, rather than
@@ -126,7 +127,7 @@ public:
     move_only_function() noexcept : tag_(empty_tag()) {}
     move_only_function(std::nullptr_t) noexcept : tag_(empty_tag()) {}
 
-    move_only_function(move_only_function&& other) noexcept { take(other); }
+    move_only_function(move_only_function&& other) noexcept { take(std::move(other)); }
 
     template <typename F>
         requires detail::MoveOnlyFunctionTarget<F, move_only_function, R, Args...>
@@ -155,7 +156,7 @@ public:
 
     move_only_function& operator=(move_only_function&& other) noexcept {
         if (this != &other) {
-            replace(other);
+            replace(std::move(other));
         }
         return *this;
     }
@@ -180,6 +181,7 @@ public:
     }
 
     // Calling an empty instance throws through the empty table, with no branch here.
+    // NOLINTNEXTLINE(performance-unnecessary-value-param): std::move_only_function's signature; args are forwarded
     R operator()(Args... args) { return table()->call(buffer_, std::forward<Args>(args)...); }
 
     void swap(move_only_function& other) noexcept {
@@ -275,7 +277,7 @@ private:
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #pragma GCC diagnostic ignored "-Wuninitialized"
 #endif
-    void take(move_only_function& other) noexcept {
+    void take(move_only_function&& other) noexcept {
         tag_ = other.tag_;
         if (tag_ & kBytewiseRelocate) {
             __builtin_memcpy(buffer_, other.buffer_, detail::kMoveOnlyFunctionInlineSize);
@@ -291,19 +293,19 @@ private:
 
     // Takes other's target in place of the current one. other may be owned by the current target, as when
     // a callback replaces itself with its successor, so it is read before that target is destroyed.
-    void replace(move_only_function& other) noexcept {
+    void replace(move_only_function&& other) noexcept {
         if (tag_ & kNoDestroy) {
-            take(other);
+            take(std::move(other));
         } else if (tag_ & kHeapPointer) {
             alignas(void*) std::byte old_target[sizeof(void*)];
             __builtin_memcpy(old_target, buffer_, sizeof(void*));
             const VTable* old_table = table();
-            take(other);
+            take(std::move(other));
             old_table->destroy(old_target);
         } else {
             move_only_function incoming(std::move(other));
             destroy_target();
-            take(incoming);
+            take(std::move(incoming));
         }
     }
 #if defined(__GNUC__) && !defined(__clang__)
