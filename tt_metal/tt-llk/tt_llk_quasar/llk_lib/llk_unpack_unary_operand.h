@@ -285,7 +285,7 @@ inline void _llk_unpack_unary_operand_init_(const std::uint32_t buf_desc_id, con
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B),
-        "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B; unpack to DEST is _llk_unpack_unary_operand_to_dest_init_");
+        "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B; for unpack to DEST please use _llk_unpack_unary_operand_to_dest_init_");
     static_assert(!(TRANSPOSE_EN && reuse_dest != EltwiseBinaryReuseDestType::NONE), "Transpose is not supported with reuse_dest");
 
     if constexpr (UNP_SEL == p_unpacr::UNP_A)
@@ -334,7 +334,7 @@ inline void _llk_unpack_unary_operand_(const std::uint32_t l1_tile_idx, const Te
 {
     static_assert(
         (UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B),
-        "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B; unpack to DEST is _llk_unpack_unary_operand_to_dest_tile_/_block_");
+        "UNP_SEL can only be set to p_unpacr::UNP_A/UNP_B; for unpack to DEST please use _llk_unpack_unary_operand_to_dest_tile_/_block_");
 
     // RT: for the best performance, setting counters should be placed in a REPLAY buffer
     // in the mop_config, but for back compatibility with APIs, the counter functions must
