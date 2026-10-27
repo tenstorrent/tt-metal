@@ -308,6 +308,9 @@ MISC_BYTES = 2048
 # devplan scratch; 256.. rows consumed per source chip (accumulators increment); 288.. rows covered by the credit
 # snapshots sent; 320.. acc taken[] (per ring = source chip)
 M_RTOT, M_RDONE, M_TAKEN = 256, 288, 320
+# the L1 hand-off's y writers: one landed counter each on every receiver (MISC words 128..159; 160..191 for an
+# accumulator that shares its core with a port) and the port readers' writer coordinates (wx / hwx[32])
+L1_MAX_WRITERS = 32
 
 
 def state_layout(N, A):
@@ -1217,7 +1220,7 @@ def sparse_combine_rf_prepare(
         )
         wv = [virt(ttnn.CoreCoord(*c)) for c in l1["writers"]]
         wxy = [v for c in wv for v in (c.x, c.y)]
-        assert len(wv) <= 32
+        assert len(wv) <= L1_MAX_WRITERS, f"{len(wv)} y writers > the L1 hand-off's {L1_MAX_WRITERS}"
     l1_args = []
     prof = os.environ.get("SPC_PROF") == "1"
     pace_us = float(os.environ.get("SPC_PACE", "0"))  # pace every port's injections to finish at this time

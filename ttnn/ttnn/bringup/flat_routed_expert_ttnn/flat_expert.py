@@ -1943,6 +1943,7 @@ class FlatRoutedExpert:
         h_bf16=False,
         weights_nk=False,
         check_exact=False,
+        max_y_writers=0,
     ):
         """``weights``: per device, per local expert (Wg [H, I], Wu [H, I], Wd [I, H]), or a callable returning that
         (only called when the weight cache misses), or ``"fake"``: uninitialised weight tensors in the right layout
@@ -1952,11 +1953,15 @@ class FlatRoutedExpert:
         laid out tile by tile transposed (flat_weight_regions nk) and every call passes weights_nk (the matmuls
         transpose them back): a bfp8 tile then shares its exponents along K. ``check_exact``: assert the block-float dtype
         holds every weight value exactly (each 16-value group of a tile row: integer multiples of 2^(E - 6) for bfp8,
-        E the group's largest exponent)."""
+        E the group's largest exponent). ``max_y_writers`` (0: off, the plan unchanged): at most this many y writers
+        (down cores + reader tails; DeepSeek-V4.1: the appended combine's L1 hand-off limit, combine_rf
+        sparse_combine_rf.L1_MAX_WRITERS); every call and flat_routed_expert_with_program must pass ``self.max_y_writers``.
+        """
         E, n_dev = len(gids[0]), len(gids)
         self.device, self.H, self.I, self.m, self.act, self.pin = device, H, I, m, ACTS[act], pin
         self.x_bf16, self.h_bf16 = x_bf16, h_bf16  # x / h tile formats (else bfp8): part of the plan
         self.weights_nk = weights_nk
+        self.max_y_writers = int(max_y_writers)
         self.plan = ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
             device,
             H,
@@ -1968,6 +1973,7 @@ class FlatRoutedExpert:
             pin=pin,
             x_bf16=x_bf16,
             h_bf16=h_bf16,
+            max_y_writers=self.max_y_writers,
         )
         lay = dict(self.plan)
         w_dtype = W_DTYPES[wdtype][0]
@@ -2092,4 +2098,5 @@ class FlatRoutedExpert:
             math_fidelity=math_fidelity,
             weights_nk=self.weights_nk,
             hidden=hidden,
+            max_y_writers=self.max_y_writers,
         )

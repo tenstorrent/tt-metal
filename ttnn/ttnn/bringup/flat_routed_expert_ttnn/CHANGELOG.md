@@ -373,3 +373,24 @@ shapes, mesh, row-major y).
 - Files: device/flat_with_program_device_operation.{hpp,cpp}, device/flat_routed_expert_program_factory.{hpp,cpp},
   flat_routed_expert.{hpp,cpp}, flat_routed_expert_nanobind.cpp, tests/weighted_case.py,
   tests/unit/test_with_program_patch.py, README.md
+
+### Cap the y writers: `max_y_writers` (2026-10-27, deepseek_v41_flash_d_p galaxy_8x4-full, overseer-directed fix)
+- What: `max_y_writers=0` (plan config attribute; `flat_routed_expert_plan`, `flat_routed_expert`,
+  `flat_routed_expert_with_program`, `FlatRoutedExpert(max_y_writers=)` which passes it to the plan and every call):
+  at most this many y writers (down cores + reader tails). In the auto-shaped one-subgrid plan the kept down cores are
+  cut to the first `max_y_writers - tails` (the plan's own order) before the columns per core are chosen; other plans
+  keep each subgrid's first `cap / nsg`. The cut cells idle (free cells for the appended op). In the plan cache key and
+  flat_with_program's flat_key. Default 0: the plan, keys and programs as before.
+- Why: on a Galaxy chip whose east DRAM readers sit in column 7 (bh-glx-110-c10u02; column 6 on bh-glx-120-b06u08)
+  V4.1-Flash plans 40 down cores of 4 columns; the appended combine's L1 hand-off takes 32 writers (combine_rf
+  `L1_MAX_WRITERS`: the receivers' landed counters, MISC words 128..159 / 160..191, and their wx / hwx[32]), so the
+  model did not build. Capped at 32 the chip gets the column-6 chip's 32 x 5 down split, so the same weight-layout
+  cache key (owner: no ~75 min expert-cache rebuild when moving between Galaxies).
+- Results (bh-glx-110-c10u02, east column 7): tests/unit/test_max_y_writers.py 2 / 2 (plan unchanged at 0 and above
+  the writers; capped cores = the uncapped plan's first ones; cap 32 -> nd 32, pcds 5, col0s 0..155, the column-6
+  layout keys; capped op (27 cores) vs the bfp4 reference min PCC 0.998). Model layer 0 on 8x4: plan down=32,
+  EXPERTS_LOAD cache=hit on the b06u08 cache (lay9c3da689dd35).
+- Needed by: deepseek_v41_flash_d_p (tt/experts.py, tt/weighted_combine.py)
+- Files: device/flat_routed_expert_plan.{hpp,cpp}, flat_routed_expert.{hpp,cpp}, flat_routed_expert_nanobind.cpp,
+  flat_expert.py, tests/weighted_case.py, tests/test_flat_routed_expert_ttnn.py, tests/unit/test_with_program_patch.py,
+  tests/unit/test_max_y_writers.py, README.md

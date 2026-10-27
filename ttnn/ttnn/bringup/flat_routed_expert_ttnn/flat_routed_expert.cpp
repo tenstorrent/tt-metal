@@ -17,7 +17,8 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
     tt::tt_metal::IDevice* device, const FlatRoutedExpertConfig& c) {
-    using Key = std::tuple<const void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, bool, bool>;
+    using Key =
+        std::tuple<const void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, bool, bool, uint32_t>;
     static std::mutex mu;
     static std::map<Key, std::shared_ptr<const FlatRoutedExpertPlan>> cache;
     const Key key{
@@ -30,7 +31,8 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
         c.weights_bf8,
         c.pin,
         c.x_bf16,
-        c.h_bf16};
+        c.h_bf16,
+        c.max_y_writers};
     std::lock_guard<std::mutex> lock(mu);
     auto it = cache.find(key);
     if (it == cache.end()) {
@@ -94,7 +96,8 @@ ttnn::Tensor flat_routed_expert(
     bool y_bf16,
     uint32_t math_fidelity,
     bool weights_nk,
-    uint32_t hidden) {
+    uint32_t hidden,
+    uint32_t max_y_writers) {
     using namespace tt::tt_metal;
     TT_FATAL(!(y_bf16 && y_row_major), "flat_routed_expert: y_bf16 is for tiled y (row-major y is bf16 already)");
     // hidden (0: x width x pages per row): x rows wider than H (x_pages_per_row 1), e.g. a dispatch buffer whose rows
@@ -121,7 +124,8 @@ ttnn::Tensor flat_routed_expert(
         .h_bf16 = h_bf16,
         .y_bf16 = y_bf16,
         .math_fidelity = math_fidelity,
-        .weights_nk = weights_nk};
+        .weights_nk = weights_nk,
+        .max_y_writers = max_y_writers};
     auto* device = x.device();
     const auto plan = flat_routed_expert_plan(device, cfg);
     TT_FATAL(
@@ -188,7 +192,8 @@ ttnn::Tensor flat_routed_expert_with_program(
     uint32_t math_fidelity,
     bool weights_nk,
     bool patch_addresses,
-    const std::vector<uint32_t>& extra_addrs) {
+    const std::vector<uint32_t>& extra_addrs,
+    uint32_t max_y_writers) {
     using namespace tt::tt_metal;
     // (math_fidelity / weights_nk: as flat_routed_expert's, DeepSeek-V4.1 P.8; defaults 0 / false = the program before)
     FlatRoutedExpertConfig cfg{
@@ -206,7 +211,8 @@ ttnn::Tensor flat_routed_expert_with_program(
         .x_bf16 = x_bf16,
         .h_bf16 = h_bf16,
         .math_fidelity = math_fidelity,
-        .weights_nk = weights_nk};
+        .weights_nk = weights_nk,
+        .max_y_writers = max_y_writers};
     auto* device = x.device();
     // (planned before cmb_rt is set: the plan cache ignores it, and the standalone plan keeps the DRISC senders)
     const auto plan = flat_routed_expert_plan(device, cfg);
@@ -292,7 +298,8 @@ ttnn::Tensor flat_routed_expert_with_program(
         cfg.cmb_rt,
         static_cast<uint32_t>(arena.memory_config().shard_spec()->shape[0]),
         cfg.math_fidelity,
-        static_cast<uint32_t>(cfg.weights_nk)};
+        static_cast<uint32_t>(cfg.weights_nk),
+        cfg.max_y_writers};
     auto result = ttnn::prim::bringup::flat_with_program(
         p,
         FlatRoutedExpertInputs{
