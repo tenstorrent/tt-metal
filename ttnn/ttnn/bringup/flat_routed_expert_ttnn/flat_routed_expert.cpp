@@ -17,7 +17,18 @@ namespace ttnn::operations::bringup::flat_routed_expert {
 
 std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
     tt::tt_metal::IDevice* device, const FlatRoutedExpertConfig& c) {
-    using Key = std::tuple<const void*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, bool, uint32_t, bool, bool>;
+    using Key = std::tuple<
+        const void*,
+        uint32_t,
+        uint32_t,
+        uint32_t,
+        uint32_t,
+        uint32_t,
+        bool,
+        uint32_t,
+        bool,
+        bool,
+        std::vector<uint32_t>>;
     static std::mutex mu;
     static std::map<Key, std::shared_ptr<const FlatRoutedExpertPlan>> cache;
     const Key key{
@@ -30,12 +41,20 @@ std::shared_ptr<const FlatRoutedExpertPlan> flat_routed_expert_plan(
         c.weights_bf8,
         c.pin,
         c.x_bf16,
-        c.h_bf16};
+        c.h_bf16,
+        c.layout.key()};
     std::lock_guard<std::mutex> lock(mu);
     auto it = cache.find(key);
     if (it == cache.end()) {
+        log_info(tt::LogOp, "flat_routed_expert plan: layout {}", c.layout.str());
         it = cache.emplace(key, std::make_shared<const FlatRoutedExpertPlan>(make_flat_routed_expert_plan(device, c)))
                  .first;
+        log_info(
+            tt::LogOp,
+            "flat_routed_expert plan: gate/up row passes {} K group {} sub-block rows {}",
+            it->second->gu_rp,
+            it->second->gu_kg,
+            it->second->mt * 32);
     }
     return it->second;
 }
@@ -93,6 +112,8 @@ ttnn::Tensor flat_routed_expert(
     bool h_bf16,
     bool y_bf16,
     uint32_t math_fidelity,
+    const FlatLayoutOptions& layout,
+    const std::optional<ttnn::Tensor>& output_tensor,
     bool weights_nk,
     uint32_t hidden) {
     using namespace tt::tt_metal;
@@ -121,19 +142,25 @@ ttnn::Tensor flat_routed_expert(
         .h_bf16 = h_bf16,
         .y_bf16 = y_bf16,
         .math_fidelity = math_fidelity,
+        .layout = layout,
         .weights_nk = weights_nk};
     auto* device = x.device();
     const auto plan = flat_routed_expert_plan(device, cfg);
     TT_FATAL(
         plan->rdown == reader_down_weights.has_value(),
         "flat_routed_expert: reader_down_weights iff the plan has reader tails");
-    const ttnn::Tensor output = ttnn::empty(
-        ttnn::Shape(
-            {token_index ? token_index->logical_shape()[-1] : x.logical_shape()[-2] / x_pages_per_row, cfg.hidden}),
-        y_row_major || y_bf16 ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
-        y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
-        device,
-        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+    // (output: a caller's tensor, e.g. a persistent buffer another program reads at a fixed address; validated)
+    const ttnn::Tensor output =
+        output_tensor
+            ? *output_tensor
+            : ttnn::empty(
+                  ttnn::Shape(
+                      {token_index ? token_index->logical_shape()[-1] : x.logical_shape()[-2] / x_pages_per_row,
+                       cfg.hidden}),
+                  y_row_major || y_bf16 ? DataType::BFLOAT16 : DataType::BFLOAT8_B,
+                  y_row_major ? Layout::ROW_MAJOR : Layout::TILE,
+                  device,
+                  MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     // per-launch scratch: the arena (every role's buffers) and the relays' freed words; freed right after the launch
     // (the device reads them in order), so they never pin L1 against the next op's circular buffers
     const auto& [arena_spec, words_spec] = scratch_specs(*plan);  // plans live in the (never freed) plan cache
@@ -185,6 +212,8 @@ ttnn::Tensor flat_routed_expert_with_program(
     bool h_bf16,
     const std::vector<std::vector<uint32_t>>& l1_args,
     const std::optional<ttnn::Tensor>& relay_words,
+    std::optional<bool> y_l1,
+    const FlatLayoutOptions& layout,
     uint32_t math_fidelity,
     bool weights_nk) {
     using namespace tt::tt_metal;
@@ -204,6 +233,7 @@ ttnn::Tensor flat_routed_expert_with_program(
         .x_bf16 = x_bf16,
         .h_bf16 = h_bf16,
         .math_fidelity = math_fidelity,
+        .layout = layout,
         .weights_nk = weights_nk};
     auto* device = x.device();
     // (planned before cmb_rt is set: the plan cache ignores it, and the standalone plan keeps the DRISC senders)
@@ -225,8 +255,10 @@ ttnn::Tensor flat_routed_expert_with_program(
     }
     cfg.cmb_rt = 48 + static_cast<uint32_t>(plan->gu.size()) + 2 * cfg.experts_per_chip;
     // the writers report local experts in slot order, with cumulative counts and no go handshake
-    setenv("MIMO_FL_CMB_SLOT_ORDER", "1", 0);
-    setenv("MIMO_FL_CMB_NO_GO", "1", 0);
+    cfg.cmb_slot_order = true;
+    cfg.cmb_no_go = true;
+    // the y writers hand rows to the combine's L1 (SE_Y_L1; default: with hand-off args) - without args they write no y
+    cfg.y_l1 = y_l1.value_or(!l1_args.empty());
     // (the relays' words: the caller's persistent tensor if given - a per-call one can land elsewhere, and its address
     // is part of the program-cache key a caller predicts; launches initialize it)
     ttnn::Tensor words = relay_words ? *relay_words : create_device_tensor(l1_sharded_spec(plan->relays, 32), device);
@@ -247,7 +279,6 @@ ttnn::Tensor flat_routed_expert_with_program(
         .extra_key = extra_key,
         .l1_args = l1_args};
     if (!l1_args.empty()) {
-        setenv("MIMO_FL_Y_L1", "1", 0);  // (the writers' args and SE_Y_L1)
         for (const auto& v : l1_args) {
             p.addrs.insert(p.addrs.end(), v.begin(), v.end());
         }
@@ -282,8 +313,14 @@ ttnn::Tensor flat_routed_expert_with_program(
         cfg.h_bf16,
         cfg.cmb_rt,
         static_cast<uint32_t>(arena.memory_config().shard_spec()->shape[0]),
-        cfg.math_fidelity,
-        static_cast<uint32_t>(cfg.weights_nk)};
+        cfg.y_l1,
+        cfg.cmb_no_go,
+        cfg.cmb_slot_order};
+    for (const uint32_t v : cfg.layout.key()) {
+        p.flat_key.push_back(v);
+    }
+    p.flat_key.push_back(cfg.math_fidelity);
+    p.flat_key.push_back(static_cast<uint32_t>(cfg.weights_nk));
     auto result = ttnn::prim::bringup::flat_with_program(
         p,
         FlatRoutedExpertInputs{

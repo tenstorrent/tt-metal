@@ -8,8 +8,9 @@
 // activation into the left (HALF 0: faces 0 / 2) or right (HALF 1: faces 1 / 3) half of tile OUT. (Call it from one
 // call site: two inlined copies in one loop trip the SFPI compiler's rvtt_synth_renumber pass.) Two units of one
 // 32-column h tile: the first in place (left), the second into the first's right half (its up faces are consumed by
-// then). Activations (SE_ACT): 0 SiLU-GLU, 2 SiTU-GLU (Kimi), 3 clamped SiLU-GLU (DeepSeek V4); the sigmoid is SiTU's
-// (exp + Newton reciprocal, no vConstFloatPrgm; init: situ_glu_init).
+// then). Activations (SE_ACT): 0 SiLU-GLU, 1 SwiGLU-OAI (GPT-OSS / MiniMax M3: (clamp(u, 7) + 1) g sigmoid(1.702 g),
+// g = min(gate, 7)), 2 SiTU-GLU (Kimi), 3 clamped SiLU-GLU (DeepSeek V4); the sigmoid is SiTU's (exp + Newton
+// reciprocal, no vConstFloatPrgm; init: situ_glu_init).
 #pragma once
 
 #include <cstdint>
@@ -25,14 +26,19 @@ inline void calculate_glu_faces(const uint src_tile, const uint /*unused*/, cons
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat gate = sfpi::dst_reg[src_tile * ts];
         sfpi::vFloat result;
-        if constexpr (ACT == 2) {
+        if constexpr (ACT == 1) {
+            constexpr float alpha = 1.702f, limit = 7.0f;  // (swiglu_sfpu.h SwiGLUConfigGPTOSS)
+            gate = sfpi::min(gate, limit);
+            const sfpi::vFloat up = sfpi::clamp(sfpi::vFloat(sfpi::dst_reg[src_tile * ts + 8]), -limit, limit);
+            result = (up + 1.0f) * gate * _situ_glu_sigmoid_<is_fp32_dest_acc_en>(alpha * gate);
+        } else if constexpr (ACT == 2) {
             using C = SituGluConfigKimi;
             const sfpi::vFloat up = sfpi::dst_reg[src_tile * ts + 8];
             const sfpi::vFloat a =
                 _sfpu_softcap_(gate, C::beta_gate, 1.0f / C::beta_gate) * _situ_glu_sigmoid_<is_fp32_dest_acc_en>(gate);
             result = a * _sfpu_softcap_(up, C::beta_up, 1.0f / C::beta_up);
         } else {
-            static_assert(ACT == 0 || ACT == 3, "SE_HG: SiLU / SiTU / clamped SiLU GLU only");
+            static_assert(ACT == 0 || ACT == 3, "SE_HG: SiLU / SwiGLU-OAI / SiTU / clamped SiLU GLU only");
             if constexpr (ACT == 3) {
                 gate = sfpi::min(gate, ClampedSiluGluConfigDsV4::limit);
             }

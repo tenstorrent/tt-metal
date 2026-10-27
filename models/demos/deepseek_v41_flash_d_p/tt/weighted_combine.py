@@ -381,6 +381,7 @@ class WeightedCombine:
                 out_row0=p * self.S_pass,
                 zero_unseen=True,
                 acc_dtype=self.acc_dtype,
+                local_keep=2,  # (2 local slots kept: the arena split the pass sizing assumes, as before 856d97d5864)
             )
             assert len(run.cells["accs"]) == self.A, (run.cells, self.A)
             desc, l1_args = run.build_l1(self.y, self.out, arena)
@@ -518,6 +519,7 @@ class WeightedCombine:
                 relay_words=relay_words,
                 math_fidelity=fidelity,
                 weights_nk=fe.weights_nk,
+                layout=fe.layout,  # (the op re-plans per call: the plan fe's weights were laid out with)
             )
         for t in (arena, relay_words, words):
             dealloc(t)

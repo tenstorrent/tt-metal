@@ -8,7 +8,13 @@ Public entry points (`from ttnn.bringup.combine_rf.<module> import ...`):
 `first_hop_idx`, `det_page_bytes`), `fabric_all_gather_py.fabric_all_gather` (+ `plan`, `link_load`, `worker_cores`),
 `stream_linear.stream_linear_prepare`, `lin2d.lin2d_prepare` (+ `glu_weight`, `upload_stacked`),
 `router_topk.router_topk_prepare`, `sum_ops.sum_parts_prepare`, `layout_ops.layout_op_prepare`,
-`l1_zero.l1_zero_program`.
+`l1_zero.l1_zero_program` (+ `l1_zero_kernels`), `sparse_combine_rf.combine_l1_layout` / `combine_auto` /
+`fused_arena_reserve` / `CombineProbes`, `routing_a2a.routing_a2a_planner_prepare` (+ `routing_a2a_sizes`,
+`routing_a2a_reserve`), `routing_pack.routing_pack_prepare`, `glu_act.glu_act_prepare`, `kv_push_plan.want_program` /
+`route_program` / `exchange_route_words`.
+Needs the core binding `ttnn.freeze_program_hashes`
+(ttnn/cpp/ttnn/operations/generic/freeze_program_hashes_nanobind.cpp, carried with the 856d97d5864 sync; see
+CHANGELOG): the modules freeze the hash of every descriptor they cache.
 
 ## What it does
 New ops (Marko Staletovic's; no TTNN source). Each is a host builder that emits one `ttnn.generic_op`
@@ -19,6 +25,12 @@ New ops (Marko Staletovic's; no TTNN source). Each is a host builder that emits 
   from its expert's chip to its token's home chip as one multi-hop 2D unicast (Y then X, fixed link per (accumulator,
   source, home)) straight into a home accumulator ring in L1. Accumulators multiply each row by its gate weight
   (HiFi4, fp32 DEST) and add it onto the token's fp32 sum with packer L1 accumulation; output bf16 rows per home token.
+  Each accumulator's landing pool (depth x (N - 1) slots, or what the arena leaves) is carved per call into one ring
+  per source chip by that call's demand (every source with rows gets a slot, the rest half equal, half by rows); the
+  layouts go to the sources through the home's ports before their rows. Optional (Marko's MoE block): piggybacked
+  credits (on by default where they apply: a port per link, two links, not deterministic), a shared landing pool with
+  slot grants (landing="shared"), the shared expert's partials through the same rings (shared_rows), the sparse
+  dispatch as the ports' first phase (dispatch), a start barrier (barrier), order-independent sums (snap_q).
   Cores: one port core per (direction, link) + A accumulator cores. Standalone (`run(y, out)`, y in DRAM) or appended
   to the flat expert via `ttnn.bringup.flat_routed_expert_with_program` (`run.build` / `build_l1`: rings and state in
   the flat expert's arena, rows handed over from the flat y writers in L1, per-call counts from `combine_plan`).
@@ -50,7 +62,13 @@ New ops (Marko Staletovic's; no TTNN source). Each is a host builder that emits 
 - `sum_ops`: y = a + b[0] + ... + b[P-1] for bf16 TILE DRAM tensors in one pass and one rounding.
 - `layout_ops`: bf16 tilize / untilize of a [rows, W] DRAM tensor, parallel over (row tile, CW-column chunk) units on
   the whole grid.
-- `l1_zero`: zero runs of L1 on chosen cores on device (per-call scratch: counters, ring trailers).
+- `l1_zero`: zero runs of L1 on chosen cores on device (per-call scratch: counters, ring trailers); `l1_zero_kernels`:
+  the same as kernels of another program (with a per-chip zero gate).
+- `routing_a2a`: the routing exchange as a direct all-to-all of routing entries plus the combine planner from local
+  data only (combine_plan's tables, no chip holding the whole mesh's routing).
+- `routing_pack`: top-k ids + weights (TILE) -> the joint routing rows in one generic_op.
+- `glu_act`: the clamped SiLU GLU (DeepSeek V4 / GLM-5.3 swiglu_limit) in one op.
+- `kv_push_plan`: planning of a sparse KV push (GLM-5.3 shared layers) in the sparse 2D dispatch's style.
 
 ## Consider it instead of
 - sparse_combine_rf: `ttnn.experimental.deepseek_prefill.combine` / `combine_fabric2d` + `post_combine_reduce`, or
@@ -68,13 +86,22 @@ New ops (Marko Staletovic's; no TTNN source). Each is a host builder that emits 
 Realistic (use by default):
 - `sparse_combine_rf_prepare(mesh_device, S, W, rows_by_chip, *, num_links=2, torus=(False, False), n_acc=16, depth=8,
   cells=None, arena=None, writers=0, counts_off=None, l1=None, devplan=None, deterministic=False,
-  ports_per_direction=False, acc_on_ports=False, piece_max=None, axis=None, out_dtype=None, out_row0=None,
-  acc_unpack_fp32=False, zero_unseen=False, acc_dtype=None)`: S home tokens per chip, W row width; rows_by_chip
+  ports_per_direction=False, acc_on_ports=False, piece_max=None, inj_slots=64, ring_depth=None, probes=None,
+  shared_rows=None, barrier=None, dispatch=None, piggyback_credits=True, pool_slots=None, local_keep=8,
+  fill_sink=None, landing="rings", snap_q=None, axis=None, out_dtype=None, out_row0=None, acc_unpack_fp32=False,
+  zero_unseen=False, acc_dtype=None)`: S home tokens per chip, W row width; rows_by_chip
   places the cores (and, without devplan, gives the rows); n_acc accumulators (<= 16); depth ring slots cap; cells =
   allowed logical cells; arena = caller-owned L1 tensor; writers > 0 = overlapped with the flat expert; l1 = L1
   hand-off from the flat y writers; devplan = combine_plan's device tables; deterministic = fixed sum order (needs
   l1 + devplan with "dord"); ports_per_direction = one port core per direction; acc_on_ports = ports on accumulator
-  cells; piece_max = row bytes per fabric packet (env SPC_PIECE, default 7168). axis=0 (default None: the whole
+  cells; piece_max = row bytes per fabric packet (default 7168); inj_slots = a port's L1 hand-off injection ring;
+  ring_depth / pool_slots = the landing pool's size exactly (default min(depth x (N - 1), what the arena leaves));
+  local_keep = the accumulators' local ring slots kept free before the pool takes the arena (default 8;
+  deepseek_v41 passes 2, the split before 856d97d5864); piggyback_credits (default True: on where it applies - a port
+  per link, two links, A <= 16, not deterministic, landing "rings"); landing "shared" = slot grants instead of rings
+  (not with deterministic / acc_on_ports); snap_q = every term rounded to a multiple of q (a power of two):
+  order-independent fp32 sums; shared_rows / dispatch / barrier / fill_sink: Marko's MoE block (whole mesh only;
+  read the docstring). axis=0 (default None: the whole
   mesh) = the combine within each mesh column (chip r of an R-chip group, Y ports, R - 1 rings; with
   combine_planner_prepare(axis=0)); out_row0 (default
   None) = home token t at output row out_row0 + t; zero_unseen (default False, with l1) = a home token with no row writes zeros;
@@ -117,7 +144,11 @@ Realistic (use by default):
 - `layout_op_prepare(mesh_device, kind, *, cw=8, pages_per_row=1, out_memory_config=None, row0_of=None, exclude=())`:
   kind "tilize" / "untilize"; cw tile columns per unit.
 - `l1_zero_program(mesh_device, runs_by_core)`: runs (address, bytes, stride, count) per logical core.
-Many env knobs (SPC_*, FC_*, L2D_*, SUM_SPLIT) change behaviour; read the module before setting them.
+Env knobs (FC_*, L2D_*, SUM_SPLIT) change behaviour; read the module before setting them. sparse_combine_rf's probes
+are `CombineProbes` (default `CombineProbes.from_env()`: SPC_PROF / TPROF / PACE / INJB / ABL / CREDTHR / CREDIDLE /
+CREDAGE / NOYREAD / NODRAIN / PIGGY / HW / BK / FILLY / SE); SPC_PIECE, SPC_QP and SPC_D are no longer read (piece_max,
+inj_slots, ring_depth). Idle credit snapshots are batched (>= 8 rows or ~6 us) when the combine group has >= 16 chips
+(the whole Galaxy mesh; not a column of 8).
 
 Precision only: per-step checks or a measured end-to-end gap (rule 7):
 - `sparse_combine_rf_prepare(out_dtype=ttnn.float32)` (default bf16): the fp32 sums written.
@@ -186,8 +217,10 @@ All from ../flat_routed_expert_ttnn/FLAT_COMBINE_OVERLAP_WORKLOG.md (LoudBox 2 x
 - acc_dtype bf16: each added row costs one bf16 rounding of the running sum (K rows a token: ~K roundings; error
   grows with K and with rows that cancel); fp32 output of bf16 sums is exact but not more precise. There is no 8-bit tile limit: the earlier "255-tile hang" was the local ring
   grant deadlock fixed in P.8 (CHANGELOG).
+- sparse_combine_rf axis=0: shared_rows, dispatch, barrier and landing="shared" are refused (whole-mesh options, not
+  ported to the column group). Landing pool < 4096 slots (12-bit ring fields; landing "shared" < 255).
 - sparse_combine_rf: N <= 32 chips, A <= 16 accumulators (assert); with the L1 hand-off a row must fit one piece:
-  SPC_PIECE >= row bytes and fabric payload >= row + 32 B, else a hang (assert in sparse_combine_rf_prepare);
+  piece_max >= row bytes and fabric payload >= row + 32 B, else a hang (assert in sparse_combine_rf_prepare);
   acc_on_ports / deterministic / ports_per_direction need the L1 hand-off; the arena must not move between calls (the
   kernels bake its address).
 - lin2d: M % 32 == 0, 2 <= M/32 <= grid rows, K/32 % kb == 0, nb even and <= 8 (asserts).

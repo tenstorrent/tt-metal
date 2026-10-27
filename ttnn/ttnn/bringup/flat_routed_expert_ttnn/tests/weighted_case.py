@@ -472,6 +472,7 @@ class WeightedCase:
                 relay_words=relay_words,
                 math_fidelity=fidelity,
                 weights_nk=fe.weights_nk,
+                layout=fe.layout,  # (the plan the weights were laid out with)
             )
         for t in (arena, relay_words, words):
             ttnn.deallocate(t)

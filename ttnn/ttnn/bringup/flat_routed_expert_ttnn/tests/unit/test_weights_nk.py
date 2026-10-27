@@ -25,6 +25,7 @@ from loguru import logger
 import ttnn
 from ttnn.bringup._testing.mesh import MESH_PARAMS
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert, block_float_exact
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
 TILE = 32
 HIFI4 = 4
@@ -93,6 +94,7 @@ class Case:
              for dev in self.w],
             m=cap, H=H, I=I, gids=[[d * epc + le for le in range(epc)] for d in range(self.n_dev)], n_global=E,
             wdtype="bf8", act=CLAMPED_SILU, pin=1, x_bf16=True, h_bf16=True, weights_nk=nk, check_exact=True,
+            layout=LEGACY,  # (deepseek_v41_flash_d_p's routed-expert plan)
         )  # fmt: skip
         self.tt_x = _put(mesh, self.x, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
         self.tt_reg = _put(mesh, torch.stack(self.regions).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)

@@ -47,9 +47,29 @@ constexpr uint32_t SD_MPFE =
 // 1: both of the bank's DRISC tiles send this call: at most 2 DMA reads in flight each (two tiles with deep DMA queues
 // next to the bank's NoC DRAM reads wedged the NoC: pure mode on K2.7, 3 of 3 runs; a 2-read cap or one tile: clean)
 constexpr uint32_t SD_PAIRED = SD_MPFE + 1;
-constexpr uint32_t SD_LOADS = SD_MPFE + 2;  // N_LOAD x (expert | region << 8)
+constexpr uint32_t SD_XON = SD_MPFE + 2;    // 1: this call's x comes from the DRISCs (SE_DRISC_X; the x info below)
+constexpr uint32_t SD_LOADS = SD_MPFE + 3;  // N_LOAD x (expert | region << 8)
 constexpr uint32_t SD_MAX_LOADS = 128;
 static_assert((SD_LOADS + SD_MAX_LOADS) * 4 <= 640 && se_drisc_desc(2) <= SE_DRISC_SLOTS);
+
+// x from the DRISCs (SE_DRISC_X): each DRISC reads the x row segments in its own bank and writes them into the relays'
+// row-major chunks; per job an x area of SE_DRISC_XA bytes at the top of the working region (job k: region - (k + 1)
+// XA): the launcher's x info (words XI_*), the sub-block's token ids (XI_IDX_OFF), the relays' credits read back
+// (XI_RSV_OFF, 16 B each). On the relays, program semaphores (zero at every launch, before any kernel runs: no state
+// across calls): SE_XSEM_RSV its credit (row-major batches reserved this call), SE_XSEM_ARR[p] the rows landed in chunk
+// slot p.
+constexpr uint32_t SE_DRISC_XA = 4096;
+constexpr uint32_t XI_XADDR = 1, XI_PAGE = 2, XI_MT = 3, XI_NSB = 4, XI_VSTRIDE = 5, XI_NRECT = 6, XI_RMC = 7,
+                   XI_BATCH = 8, XI_SEG = 9, XI_RING = 10, XI_RSV = 11, XI_SLOT = 12, XI_BANKS = 13, XI_SPB = 14,
+                   XI_TIDX0 = 15, XI_TIDX1 = 17, XI_RXY = 19, XI_MAX_RL = 8, XI_ARR = 27, XI_MAX_RMC = 5, XI_NACT = 32,
+                   XI_ENT = 33;
+constexpr uint32_t XI_IDX_OFF = 1024, XI_RSV_OFF = 1536, XI_INFO_BYTES = 1024;
+// the relays' semaphore ids (ids the relay kernels leave alone: 4 / 7 / 8 / 10 helper data, 5 helper credit, 9 XARR,
+// 13 WORD, 3 / 14 / 15 the X2 / XFWD probes)
+constexpr uint32_t SE_XSEM_RSV = 0;
+constexpr uint32_t SE_XSEM_ARR[XI_MAX_RMC] = {1, 2, 6, 11, 12};
+constexpr uint32_t SE_DRISC_XS = 8;  // x segment slots a job (<= the 8-entry DMA ring)
+static_assert((XI_ENT + 2 * 95) * 4 <= XI_INFO_BYTES, "x info: up to 95 schedule entries");
 
 // The receivers count their grants in their own L1 (no NoC writes from them: they are the x multicast's
 // destinations); the DRISC reads the counters when it runs out of grants.

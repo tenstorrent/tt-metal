@@ -41,6 +41,8 @@ ttnn::Tensor flat_routed_expert(
     bool h_bf16 = false,
     bool y_bf16 = false,
     uint32_t math_fidelity = 0,
+    const FlatLayoutOptions& layout = {},
+    const std::optional<ttnn::Tensor>& output = std::nullopt,
     bool weights_nk = false,
     uint32_t hidden = 0);
 
@@ -77,6 +79,8 @@ ttnn::Tensor flat_routed_expert_with_program(
     bool h_bf16 = false,
     const std::vector<std::vector<uint32_t>>& l1_args = {},
     const std::optional<ttnn::Tensor>& relay_words = std::nullopt,
+    std::optional<bool> y_l1 = std::nullopt,
+    const FlatLayoutOptions& layout = {},
     uint32_t math_fidelity = 0,
     bool weights_nk = false);
 

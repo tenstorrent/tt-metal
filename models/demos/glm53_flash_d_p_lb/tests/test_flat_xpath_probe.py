@@ -37,6 +37,7 @@ def _counts(total, gen):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_flat_xpath_probe(device):
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
     from models.demos.common.bringup.testing.harness import spec
     from models.demos.glm53_flash_d_p.bringup import hooks
@@ -49,7 +50,17 @@ def test_flat_xpath_probe(device):
         gw, uw, dw = PackedExpert(loader, LAYER, e).weights(torch.float32)
         W.append(tuple(w.T.contiguous() for w in (gw, uw, dw)))
     op = FlatRoutedExpert(
-        device, [W], m=8192, H=H, I=I, gids=[list(range(E))], n_global=NG, wdtype="bf4", act="clamped_silu", pin=1
+        device,
+        [W],
+        m=8192,
+        H=H,
+        I=I,
+        gids=[list(range(E))],
+        n_global=NG,
+        wdtype="bf4",
+        act="clamped_silu",
+        pin=1,
+        layout=LEGACY,
     )
     gen = torch.manual_seed(0)
     x_host = torch.randn(T, H).to(torch.bfloat16)

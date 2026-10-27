@@ -23,11 +23,13 @@ _ROUTE = (
     + r"""
 constexpr uint32_t K = __K__;
 constexpr uint32_t ME = __ME__;
+constexpr uint32_t ROWMATES = __ROWMATES__;
 constexpr uint8_t CHIP_OF[__E__] = {__CHIPS__};
 constexpr auto ids_args = TensorAccessorArgs<0>();
 constexpr auto route_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
 constexpr uint32_t ROW = 4 * K;  // a joint routing row: K ids, K weights (uint16)
 constexpr uint32_t PT = __PT__;  // routing rows per page (router_topk: 32)
+constexpr uint32_t G0 = __OWN__ ? 0 : ME * S;  // my first token's routing row: the chip's own rows, or the replicated
 static_assert(K % 2 == 0);
 
 FORCE_INLINE uint32_t links(uint32_t s) { return (s & 15) + (s >> 4); }
@@ -38,7 +40,9 @@ void kernel_main() {
     const uint32_t scratch = get_write_ptr(0);
     const auto ids = TensorAccessor(ids_args, ids_addr, ROW * PT);
     const auto route = TensorAccessor(route_args, route_addr, S * 4 * RW);
-    constexpr uint32_t RS = (ROW + 63) / 64 * 64;  // (64-byte landing: a DRAM read keeps its source alignment)
+    // (64-byte landing: a DRAM read keeps its source alignment - a row at offset so(t) in its slot; rows not dividing
+    // 64 B - K 6's 24 B - may start late in theirs: one more 64 B so the row never runs into the next slot)
+    constexpr uint32_t RS = (ROW + (64 % ROW ? 63 : 0) + 63) / 64 * 64;
     const uint32_t rows_l1 = (scratch + 63) & ~63u, words_l1 = rows_l1 + (t1 - t0) * RS;
     auto put = [&](uint32_t t, uint32_t m, uint32_t flags) {  // (flags: order | link << 1)
         volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words_l1);
@@ -52,20 +56,23 @@ void kernel_main() {
     if constexpr (__NOROUTE__) {  // (probe: no route words)
         return;
     }
+    // (a DRAM read keeps its source's 64 B alignment in L1: a row at an odd 32 B of its page lands 32 B into its slot)
+    auto so = [&](uint32_t t) { return ((G0 + t) % PT * ROW) & 63u; };
     for (uint32_t t = t0; t < t1; ++t) {
-        const uint32_t g = ME * S + t;
-        noc_async_read(ids.get_noc_addr(g / PT) + (g % PT) * ROW, rows_l1 + (t - t0) * RS, ROW);
+        const uint32_t g = G0 + t;
+        noc_async_read(ids.get_noc_addr(g / PT) + (g % PT) * ROW, rows_l1 + (t - t0) * RS + so(t), ROW);
     }
     noc_async_read_barrier();
     invalidate_l1_cache();
     const uint32_t r0 = ME / C, c0 = ME % C;
     for (uint32_t t = t0; t < t1; ++t) {
-        const uint32_t* id2 = reinterpret_cast<const uint32_t*>(rows_l1 + (t - t0) * RS);  // two ids a word
+        const uint32_t* id2 = reinterpret_cast<const uint32_t*>(rows_l1 + (t - t0) * RS + so(t));  // two ids a word
         uint32_t m = 0;
         for (uint32_t k = 0; k < K / 2; ++k) {
             const uint32_t v = id2[k];
             m |= (1u << CHIP_OF[v & 0xFFFF]) | (1u << CHIP_OF[v >> 16]);
         }
+        m |= ROWMATES;  // (shared_rows: every token also to the other chips of my mesh row - the TP shared expert's x)
         m &= ~(1u << ME);
         if (m == 0) {
             put(t, 0, 0);
@@ -122,6 +129,11 @@ void kernel_main() {
 """
 
 
+def _mates_mask(R, C, r, c, axis):
+    """The chips of (r, c)'s group as a bit mask over r C + c: its mesh row (axis 1) or column (axis 0)."""
+    return ((1 << C) - 1) << (r * C) if axis == 1 else sum(1 << (rr * C + c) for rr in range(R))
+
+
 def dispatch_prep_prepare(
     mesh_device,
     *,
@@ -134,13 +146,19 @@ def dispatch_prep_prepare(
     torus=(False, False),
     rows=(8, 9),
     tokens_per_page=1,
+    own_routing=False,
     copy=True,
+    row_mates=False,
+    mates_axis=1,
 ):
     """Returns run(joint_routing, own_rows, xbuf, route) (one generic_op: route words + own-row copy).
-    joint_routing [N S, 2 K] uint16 row-major (replicated), own_rows [S, W] bf16 row-major, xbuf [1, 1, N S, W]
+    joint_routing [N S, 2 K] uint16 row-major (replicated; own_routing: only this chip's [S, 2 K] - the routing
+    all-to-all's input, nothing replicated), own_rows [S, W] bf16 row-major, xbuf [1, 1, N S, W]
     row-major, route [1, 1, 1, RW S] uint32 (RW = route_words(N); outputs written in place). Cores (logical): n_route route cores on row
     rows[0] (each a token range: 8-word multiples, 32-byte aligned route writes), n_copy copy cores on row rows[1].
     copy=False: route words only (the own rows already in xbuf, e.g. layout_ops' untilize with a row offset; own None).
+    row_mates: every own token also goes to the other chips of this chip's mesh row (mates_axis 1; 0: its mesh column) -
+    the split shared expert's input: after the dispatch each chip holds its group's tokens at slots (r C + c) S + t.
     """
     R, C = tuple(mesh_device.shape)
     N = R * C
@@ -150,6 +168,7 @@ def dispatch_prep_prepare(
     assert N <= 32
     chips_of = ", ".join(str(e // EPC) for e in range(E))
     grid = mesh_device.compute_with_storage_grid_size()
+    n_copy = min(n_copy, 2 * grid.x - n_route)  # (an 11-column board: 14 copy cores)
     assert n_route <= grid.x and n_copy <= 2 * grid.x and max(rows) < grid.y and n_route + n_copy <= 2 * grid.x
     rcs = [ttnn.CoreCoord(i, rows[0]) for i in range(n_route)]
     cps = [
@@ -165,7 +184,7 @@ def dispatch_prep_prepare(
         W = int(xbuf.shape[-1])
         progs = {}
         row = W * 2
-        route_l1 = rper * (((4 * K) + 63) // 64 * 64) + rper * 4 * RW + 128
+        route_l1 = rper * ((4 * K + (63 if 64 % (4 * K) else 0) + 63) // 64 * 64) + rper * 4 * RW + 128
         mesh_desc = ttnn.MeshProgramDescriptor()
         jr_ct = list(ttnn.TensorAccessorArgs(jr).get_compile_time_args())
         rt_ct = list(ttnn.TensorAccessorArgs(route).get_compile_time_args())
@@ -185,9 +204,11 @@ def dispatch_prep_prepare(
                 .replace("__RW__", str(RW))
                 .replace("__K__", str(K))
                 .replace("__ME__", str(me))
+                .replace("__ROWMATES__", str(_mates_mask(R, C, r, c, mates_axis) if row_mates else 0) + "u")
                 .replace("__E__", str(E))
                 .replace("__CHIPS__", chips_of)
                 .replace("__PT__", str(tokens_per_page))
+                .replace("__OWN__", "1" if own_routing else "0")
                 .replace("__NOROUTE__", "1" if os.environ.get("DPREP_PROBE") == "noroute" else "0")
             )
             copy_src = _COPY.replace("__NOCOPY__", "1" if os.environ.get("DPREP_PROBE") == "nocopy" else "0")
@@ -254,6 +275,7 @@ def dispatch_prep_prepare(
         k = tuple(int(t.buffer_address()) for t in ts)
         if state.get("key") != k:
             state["key"], state["desc"] = k, build(jr, own, xbuf, route)
+            ttnn.freeze_program_hashes(state["desc"])  # (hash stored once: not re-hashed per call)
         return ttnn.generic_op(ts, state["desc"])
 
     run.programs = lambda jr, own, xbuf, route: build(jr, own, xbuf, route, per_chip=True)
@@ -317,6 +339,7 @@ def own_rows_copy_prepare(mesh_device, *, S, n_copy=4, batch=8, row0=8):
         k = (int(own.buffer_address()), int(buf.buffer_address()))
         if state.get("key") != k:
             state["key"], state["desc"] = k, build(own, buf)
+            ttnn.freeze_program_hashes(state["desc"])  # (hash stored once: not re-hashed per call)
         return ttnn.generic_op([own, buf], state["desc"])
 
     return run

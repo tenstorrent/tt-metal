@@ -14,6 +14,7 @@
 #include <iterator>
 #include <optional>
 #include <set>
+#include <tuple>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -52,13 +53,14 @@ int noc_hops(const Core& src, const Core& dst, int noc) {
 // (DST tiles the gate/up sub-block may use, row passes?): fp32 DEST holds 4 tiles; row passes (NP <= 2, the x ring
 // holds a sub-block's K-blocks) keep the 8-tile rows. l1acc (3 subgrids) keeps the bf16 8-tile DST half.
 std::pair<uint32_t, bool> gu_dst(uint32_t np, uint32_t ht, uint32_t x_slots, bool fp32, bool np34 = false) {
+    const FlatProbes pr = FlatProbes::from_env();
     // (np: the gate/up width in pairs; a units width w is w / 2 rounded up)
     if (!fp32) {
         return {8, false};
     }
     // MIMO_FL_GU_SPLIT with np 3 / 4 (probe), or an uneven split (np34): the gate/up sub-block in a full-sync fp32 DST
     // (8 tiles: one row tile of 2 np <= 8 tiles per M-group), the mode bf16 x runs in; even plans are unchanged
-    if (np > 2 && 2 * np <= 8 && (np34 || std::getenv("MIMO_FL_GU_SPLIT")) && ht / KBLK <= x_slots) {
+    if (np > 2 && 2 * np <= 8 && (np34 || cstr(pr.gu_split)) && ht / KBLK <= x_slots) {
         return {8, true};
     }
     const bool rp = np <= 2 && ht / KBLK <= x_slots;
@@ -83,8 +85,9 @@ std::optional<std::pair<uint32_t, uint32_t>> gu_split(
     std::optional<std::tuple<int, int, int>> best_key;
     uint32_t best_np = 0, best_g = 0, best_cores = 0;
     // MIMO_FL_GU_SPLIT=np,g (probe): only that split (still subject to the checks below)
+    const FlatProbes pr = FlatProbes::from_env();
     uint32_t force_np = 0, force_g = 0;
-    if (const char* fs = std::getenv("MIMO_FL_GU_SPLIT")) {
+    if (const char* fs = cstr(pr.gu_split)) {
         TT_FATAL(std::sscanf(fs, "%u,%u", &force_np, &force_g) == 2, "MIMO_FL_GU_SPLIT: np,g");
     }
     for (uint32_t np : {1u, 2u, 3u, 4u}) {
@@ -242,6 +245,8 @@ tt::tt_metal::CoreRangeSet rect_ranges(const std::vector<Core>& cores) {
 }
 
 FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device, const FlatRoutedExpertConfig& cfg) {
+    const FlatProbes pr = FlatProbes::from_env();
+    const FlatLayoutOptions& lo = cfg.layout;
     FlatRoutedExpertPlan p;
     p.H = cfg.hidden;
     p.I = cfg.intermediate;
@@ -262,18 +267,18 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.h_tile = 2048;
     }
     p.banks = device->dram_grid_size().x;
-    p.hg = std::getenv("MIMO_FL_HG") && std::atoi(std::getenv("MIMO_FL_HG")) != 0;
+    p.hg = lo.half_width;
     const auto phys = [device](const Core& c) { return device->worker_core_from_logical_core(c); };
 
     // subgrids: 2 for It <= 16 (TP4-like), 3 for It <= 32 (TP2-like), else 1
-    p.nsg = p.It <= 16 ? 2 : (p.It <= 32 ? 3 : 1);
+    p.nsg = lo.single_subgrid ? 1 : (p.It <= 16 ? 2 : (p.It <= 32 ? 3 : 1));
     // Subgrids only when they have a gate/up split: at large H (DeepSeek-V4.1 H 5120, Ht 160) a subgrid's 16-cell
     // rectangle has none for small It (two pairs' weight ring alone is 1.39 MB of the 1.40 MB budget); such a width
     // takes the one-subgrid plan, where the uneven pair split covers widths with no even one (It 18 / 36: the
     // DeepSeek-V4.1 shared expert's TP 4 / TP 2 slice). Every It that planned before keeps its plan (this only
     // replaces the "no gate/up split" TT_FATAL). The MIMO_FL_GU_SPLIT probe keeps the old choice.
-    if (p.nsg > 1 && !std::getenv("MIMO_FL_GU_SPLIT")) {
-        const bool sg_fp32 = p.nsg != 3 && !std::getenv("MIMO_FL_GU_BF16");
+    if (p.nsg > 1 && cstr(pr.gu_split) == nullptr) {
+        const bool sg_fp32 = p.nsg != 3 && cstr(pr.gu_bf16) == nullptr;
         bool sg_split = false;
         for (uint32_t xs : {24u, 16u, 12u}) {  // (the fixed subgrid rectangles: 16 cells each)
             sg_split =
@@ -284,20 +289,24 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         }
     }
     p.n_rd_sg = p.nsg > 1 ? (p.nsg == 2 ? 8 : 4) : 16;
-    // MIMO_FL_ROWS=y0,y1 (probe): plan on grid rows [y0, y1] only, leaving the rest of the chip to another op (e.g.
-    // combine_fabric2d's senders / untilizers on rows 0-1, next to the eth cores). One subgrid only.
-    // A grid of fewer than 10 rows (dispatch on a row: 12 x 9 on a p150) plans on all of its rows the same way.
+    // layout rows [row0, row1] (probe): plan on grid rows [y0, y1] only, leaving the rest of the chip to another op
+    // (e.g. combine_fabric2d's senders / untilizers on rows 0-1, next to the eth cores). One subgrid only. A grid of
+    // fewer than 10 rows (dispatch on a row: 12 x 9 on a p150) plans on all of its rows the same way.
     const uint32_t grid_rows = device->compute_with_storage_grid_size().y;
     uint32_t row0 = 0, row1 = std::min(grid_rows, 10u) - 1;
-    bool rows_cap = std::getenv("MIMO_FL_ROWS") != nullptr || grid_rows < 10;
-    if (std::getenv("MIMO_FL_ROWS")) {
+    bool rows_cap = lo.row1 >= 0 || grid_rows < 10;
+    if (lo.row1 >= 0) {
         TT_FATAL(
-            std::sscanf(std::getenv("MIMO_FL_ROWS"), "%u,%u", &row0, &row1) == 2 && row0 <= row1 &&
-                row1 < std::min(grid_rows, 10u),
-            "MIMO_FL_ROWS: y0,y1");
+            lo.row0 >= 0 && lo.row0 <= lo.row1 && static_cast<uint32_t>(lo.row1) < std::min(grid_rows, 10u),
+            "flat_routed_expert layout rows {}..{}: 0 <= row0 <= row1 < {}",
+            lo.row0,
+            lo.row1,
+            std::min(grid_rows, 10u));
+        row0 = lo.row0;
+        row1 = lo.row1;
     }
     if (rows_cap) {
-        TT_FATAL(p.nsg == 1, "MIMO_FL_ROWS: one subgrid only (It {})", p.It);
+        TT_FATAL(p.nsg == 1, "flat layout rows: one subgrid only (It {})", p.It);
     }
     const uint32_t nrows = row1 - row0 + 1;
     const auto grid = device->compute_with_storage_grid_size();
@@ -321,7 +330,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // MIMO_FL_RD_SAMECOL (with rows capped): a bank's second reader in its first reader's column (nearest free row)
     // instead of the column east of it, so columns 1 and E + 1 join the gate/up rectangles: 64 gate/up cores fit next
     // to a combine that keeps grid row 0
-    const bool rd_samecol = rows_cap && std::getenv("MIMO_FL_RD_SAMECOL") != nullptr;
+    const bool rd_samecol = rows_cap && cstr(pr.rd_samecol) != nullptr;
     // With the rows capped, the gate/up rectangles take every column the readers leave: west from column 2 (1 with
     // same-column readers) up to E - 1, east from E + 2 (E + 1) to the grid's edge (at most 4 wide). On a p150 that is
     // 4 x 3 (5 x 4 same-column); on a Galaxy chip 5 x 3 (6 x 4): its extra column lands west of the east readers.
@@ -341,7 +350,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     p.gu_fp32 = p.nsg != 3;  // 3 subgrids: bf16 DEST + packer L1 accumulation
     p.gu_l1acc = !p.gu_fp32;
-    if (std::getenv("MIMO_FL_GU_BF16")) {  // (perf probe: plain bf16 gate/up DEST, half-sync 8 tiles; inaccurate)
+    if (cstr(pr.gu_bf16)) {  // (perf probe: plain bf16 gate/up DEST, half-sync 8 tiles; inaccurate)
         p.gu_fp32 = false;
         p.gu_l1acc = false;
     }
@@ -349,13 +358,57 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     for (const auto& [x0, x1, y0, y1] : p.rects) {
         min_rect = std::min(min_rect, (x1 - x0 + 1) * (y1 - y0 + 1));
     }
+    bool found = false;
+    // even split (layout.even_split, full grid, one subgrid): the 2 It weight tiles a K row ([gate | up] 16-column
+    // units) over at most 64 gate/up cores, the fewest tiles a core that divide them evenly over a multiple of the 16
+    // weight slots; whole gate / up tile pairs (NP = tiles / 2) where they give the same tiles a core, else 16-column
+    // units. GLM-5.3 / -Flash, K2.7: 64 cores x 2 (pairs); K3, M3 (I 3072): 64 x 3 units; V4.1-Flash (I 2304): 48 x 3
+    // units (64 cores would leave the slowest with 3 as well)
+    const bool even_gu = lo.even_split && p.nsg == 1 && !rows_cap && lo.hg_units < 0 && !lo.half_width &&
+                         cstr(pr.gu_split) == nullptr && p.x_tile == BF8_TILE;
+    if (even_gu) {
+        const uint32_t tiles = 2 * p.It;
+        for (uint32_t per = (tiles + 63) / 64; per <= 8 && !found; ++per) {
+            if (tiles % per != 0 || (tiles / per) % 16 != 0) {
+                continue;
+            }
+            const uint32_t np = per / 2;
+            const bool pairs = per % 2 == 0 && p.It % np == 0 && (p.It / np) % 16 == 0;
+            for (uint32_t xs : {24u, 16u, 12u}) {
+                const uint32_t dst = pairs ? gu_dst(np, p.Ht, xs, p.gu_fp32).first
+                                           : gu_dst((per + 1) / 2, p.Ht, xs, p.gu_fp32, true).first;
+                const uint32_t mt_ = std::min(dst / per, MT_MAX);
+                if (mt_ >= 1 && 2 * p.Ht * per * p.w_tile + xs * mt_ * KBLK * p.x_tile <= GU_L1_BUDGET) {
+                    p.np = pairs ? np : 0;
+                    p.nu = pairs ? 0 : per;
+                    p.hg = !pairs;
+                    p.g = 1;
+                    p.x_slots = xs;
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    p.even_gu = found;
+    if (lo.even_split && !found) {  // (the close-out tests assert even_gu; other callers get the older split, loudly)
+        log_warning(
+            tt::LogOp,
+            "flat_routed_expert: no even gate/up split for I {} ({} weight tiles a K row over at most 64 cores, a "
+            "multiple of 16; subgrids {}): the older split rules pick it",
+            p.I,
+            2 * p.It,
+            p.nsg);
+    }
     // the x ring shrinks (24 -> 16 -> 12 slots) before the gate/up split gives up
     // bfp8 x: the first ring size with a split. bf16 x: the split with the most gate/up cores over all ring sizes
     // (ties: the larger ring); the first-fit choice halved the gate/up cores (NP 2 at 24 slots instead of NP 1 at 16:
     // +57% expert time at large M)
-    bool found = false;
     uint32_t best_cores = 0;
     for (uint32_t xs : {24u, 16u, 12u}) {
+        if (found && even_gu) {
+            break;
+        }
         const uint32_t gu_cells = rows_cap ? aw_max * nrows + bw_cap * hb_max : 64;  // 64 on the full grid
         const auto split = p.nsg == 1 ? gu_split(p.It, p.Ht, p.w_tile, xs, 16, gu_cells, p.gu_fp32, p.x_tile)
                                       : gu_split(p.It, p.Ht, p.w_tile, xs, p.n_rd_sg, min_rect, p.gu_fp32, p.x_tile);
@@ -376,8 +429,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // no even split: 16-column units (half-width gate / up tiles, MIMO_FL_HG_AUTO=0: off) with NU units a core, the
     // most gate/up cores that are a multiple of the 16 readers and fit (V4.1-Flash I 2304: 144 units -> 48 cores x 3;
     // us / expert at E 24 vs the uneven pair split (72 cores): M 80 48.2 vs 51.0, M 1024 226.5 vs 245.4)
-    const char* hga = std::getenv("MIMO_FL_HG_AUTO");
-    if (!found && p.nsg == 1 && !(hga && std::atoi(hga) == 0) && !std::getenv("MIMO_FL_HG_NU")) {
+    const char* hga = cstr(pr.hg_auto);
+    if (!found && p.nsg == 1 && !(hga && std::atoi(hga) == 0) && lo.hg_units < 0) {
         const uint32_t units = 2 * p.It;
         const uint32_t cap_full = (east0 - a_x0) * nrows + std::min<uint32_t>(4u, uint32_t(grid.x) - b_x0) * hb_max;
         const uint32_t cells = rows_cap ? aw_max * nrows + bw_cap * hb_max : cap_full;
@@ -408,7 +461,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     // no even split (e.g. I 2304: 72 columns, no It / np a multiple of the 16 readers): an uneven one, the pair-sets a
     // multiple of the banks (MIMO_FL_UNEVEN=0: off)
-    if (!found && p.nsg == 1 && !(std::getenv("MIMO_FL_UNEVEN") && std::atoi(std::getenv("MIMO_FL_UNEVEN")) == 0)) {
+    if (!found && p.nsg == 1 && !(cstr(pr.uneven) && std::atoi(cstr(pr.uneven)) == 0)) {
         // (full grid: the auto-shaped rectangles' cells, not the fixed 64: 12 x 10 5 x 10 + 3 x 8 = 74)
         const uint32_t cap_full = (east0 - a_x0) * nrows + std::min<uint32_t>(4u, uint32_t(grid.x) - b_x0) * hb_max;
         for (uint32_t xs : {24u, 16u, 12u}) {
@@ -422,14 +475,14 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
         }
     }
-    // 16-column units (HG): MIMO_FL_HG_NU units per core, one M-group; the readers' share even when the groups are a
+    // 16-column units (HG): layout.hg_units units per core, one M-group; the readers' share even when the groups are a
     // multiple of 16, else the uneven layout
-    if (const char* nus = std::getenv("MIMO_FL_HG_NU"); p.hg && nus && p.nsg == 1) {
-        const uint32_t nu = static_cast<uint32_t>(std::atoi(nus)), units = 2 * p.It;
-        TT_FATAL(nu >= 1 && nu <= 8 && units % nu == 0, "MIMO_FL_HG_NU={}: {} units", nu, units);
+    if (p.hg && lo.hg_units >= 0 && p.nsg == 1) {
+        const uint32_t nu = static_cast<uint32_t>(lo.hg_units), units = 2 * p.It;
+        TT_FATAL(nu >= 1 && nu <= 8 && units % nu == 0, "flat layout hg_units {}: {} units", nu, units);
         const uint32_t cap_full = (east0 - a_x0) * nrows + std::min<uint32_t>(4u, uint32_t(grid.x) - b_x0) * hb_max;
         const uint32_t cells = rows_cap ? aw_max * nrows + bw_cap * hb_max : cap_full;
-        TT_FATAL(units / nu <= cells, "MIMO_FL_HG_NU={}: {} gate/up cores > {} cells", nu, units / nu, cells);
+        TT_FATAL(units / nu <= cells, "flat layout hg_units {}: {} gate/up cores > {} cells", nu, units / nu, cells);
         found = false;
         for (uint32_t xs : {24u, 16u, 12u}) {
             const uint32_t dst = gu_dst((nu + 1) / 2, p.Ht, xs, p.gu_fp32, true).first;
@@ -440,7 +493,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                 break;
             }
         }
-        TT_FATAL(found, "MIMO_FL_HG_NU={}: the gate/up core does not fit", nu);
+        TT_FATAL(found, "flat layout hg_units {}: the gate/up core does not fit", nu);
         p.nu = nu;
         p.np = 0;
         p.g = 1;
@@ -456,7 +509,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // rectangles
     const bool auto_shape = !rows_cap && p.nsg == 1 &&
                             (p.ngrp * p.g < 64 || ((p.uneven || p.nu) && p.ngrp * p.g != 64)) &&
-                            std::getenv("MIMO_FL_NO_SHAPE") == nullptr;
+                            cstr(pr.no_shape) == nullptr;
     if (auto_shape) {
         rows_cap = true;
         aw_max = east0 - a_x0;
@@ -509,42 +562,46 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                 }
             }
         }
-        TT_FATAL(shaped, "MIMO_FL_ROWS: no rectangle pair of {} gate/up cores in {} rows", want, nrows);
+        TT_FATAL(shaped, "flat layout rows: no rectangle pair of {} gate/up cores in {} rows", want, nrows);
     }
     std::tie(p.dst_tiles, p.gu_rp) = gu_dst((p.gwt + 1) / 2, p.Ht, p.x_slots, p.gu_fp32, p.uneven || p.nu);
     const uint32_t mt_cap = p.g * std::min(p.dst_tiles / p.gwt, MT_MAX / p.g);
     p.mt = std::min(mt_cap, std::max(p.g, p.m / 32 / p.g * p.g));
     const uint32_t mt_full = p.mt;
     p.rdown = p.Ht > 6 * 26;  // readers compute down columns when down is heavy (> 6 columns per down core)
-    if (const char* rd = std::getenv("MIMO_FL_RDOWN")) {  // (perf probe: force the readers' down columns on / off)
+    if (const char* rd = cstr(pr.rdown)) {  // (perf probe: force the readers' down columns on / off)
         p.rdown = std::atoi(rd) != 0;
     }
-    if (p.nu && !std::getenv("MIMO_FL_RDOWN")) {  // (units leave enough down cores: tails slow the readers' streams,
-        p.rdown = false;                          // V4.1 E24 M 1024 242 -> 226.5 us / expert without them)
+    if (p.nu && !cstr(pr.rdown)) {  // (units leave enough down cores: tails slow the readers' streams,
+        p.rdown = false;            // V4.1 E24 M 1024 242 -> 226.5 us / expert without them)
+    }
+    if (lo.even_split && p.nsg == 1 && !cstr(pr.rdown)) {  // (even splits: the down work on the down cores only)
+        p.rdown = false;
     }
     if (p.uneven) {  // reader tails use semaphores 5 (HARR) and 12: their credits must stay in 0..4 (<= 5 receivers)
         const uint32_t ps = p.ngrp, rpb = 16 / p.banks;
         const uint32_t rg_max = ((ps + p.banks - 1) / p.banks + rpb - 1) / rpb;
         p.rdown = p.rdown && rg_max * p.g <= 5;
     }
-    // DRISC mode: one subgrid, not inside the combine overlap (not validated there)
-    // (inside the combine overlap only with MIMO_FL_CMB_DRISC=1, while it is being validated there)
-    const char* cmb_drisc = std::getenv("MIMO_FL_CMB_DRISC");
+    // DRISC mode: one subgrid, not inside the combine overlap (not validated there) - the program factory's plan has
+    // cmb_rt set (the host's weight-layout plan does not) - unless layout.drisc_in_overlap, while it is validated there
     // (uneven splits: each DRISC job carries its slot's own pair-sets and receivers, se_drisc_post.hpp)
-    p.drisc = flat_drisc_enabled() && p.nsg == 1 && (cfg.cmb_rt == 0 || (cmb_drisc && std::atoi(cmb_drisc) != 0));
+    p.drisc = lo.drisc && flat_drisc_enabled() && p.nsg == 1 && (cfg.cmb_rt == 0 || lo.drisc_in_overlap);
     if (p.drisc) {
         flat_drisc_set_auto_pure(
-            !p.rdown);  // (flat_drisc.cpp: pure DRISC slots unless the readers compute down columns)
+            lo.drisc_pure >= 0
+                ? lo.drisc_pure != 0
+                : !p.rdown);  // (flat_drisc.cpp: pure DRISC slots unless the readers compute down columns)
         // default: one DRISC slot per bank (the hybrid: GLM-Flash us / expert vs Tensix readers M 64 34.0 / 35.4, 256
         // 49.0 / 49.7, 512 71.3 / 70.6, 2048 273.9 / 273.4); all 16 (two tiles per bank, MIMO_FL_DRISC_TILES=2): 2048
         // 265.7 but 512 77.0 (half the weights on the x multicast's NOC0). (Clamped to the readers below.)
-        const char* dn = std::getenv("MIMO_FL_DRISC_SLOTS");
+        const char* dn = cstr(pr.drisc_slots);
         p.drisc_n = flat_drisc_pure() ? 16 : (dn ? std::atoi(dn) : p.banks);
         // reader down columns (se9_rdown reads gate/up weights too) stay on Tensix-reader slots; none are left at 16
         p.rdown = p.rdown && (p.drisc_n < 16 || flat_drisc_pure());  // (pure: the tails keep only their down work)
     }
     // h units (MIMO_FL_HU = row tiles per unit): one M-group, one subgrid, no reader down columns
-    if (const char* hu = std::getenv("MIMO_FL_HU")) {
+    if (const char* hu = cstr(pr.hu)) {
         p.hu = static_cast<uint32_t>(std::atoi(hu));
     }
     if (p.hu && (p.g != 1 || p.nsg != 1 || p.rdown || p.mt % p.hu != 0)) {
@@ -555,26 +612,51 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     if (cfg.h_bf16 && !p.hu) {
         p.mt = std::min(p.mt, 2u / p.g * p.g);
     }
-    if (const char* mt = std::getenv("MIMO_FL_MT")) {  // (perf probe: cap the sub-block's row tiles)
+    // layout.rows_hint (expected rows per expert, <= 320): 64-row sub-blocks for the plans with 128-row ones and
+    // gate/up row passes - one pass a sub-block, so the next sub-block's x streams in during the whole pass and the
+    // drain after the last weights is halved (GLM-5.3 E 8 M 32 / 128 / 256: 408 / 516 / 642 -> 403 / 498 / 632 us)
+    if (lo.rows_hint > 0 && lo.rows_hint <= 320 && p.gu_rp && p.g == 1 && p.mt == 4 && !p.hu && !cfg.h_bf16) {
+        p.mt = 2;
+    }
+    if (const char* mt = cstr(pr.mt)) {  // (perf probe: cap the sub-block's row tiles)
         p.mt = std::min(mt_full, static_cast<uint32_t>(std::atoi(mt)) / p.g * p.g);
     }
     // bf16 x + bfp8 h (128-row sub-blocks): gate/up in a full-sync DST (bf16 x + bfp8 h at M 160 / 512 / 2048: 48.9 /
     // 101.6 / 373.1 -> 44.2 / 91.4 / 366.5 us per expert); with 64-row sub-blocks there is one row pass anyway
     p.gu_full_sync = (cfg.x_bf16 || p.gwt > 4) && p.gu_fp32 && p.gu_rp && p.mt / p.g * p.gwt > 4;
     TT_FATAL(p.mt % p.g == 0 && (p.mt / p.g) * p.gwt <= p.dst_tiles, "flat_routed_expert: sub-block split");
+    // gate/up K blocks per handshake (row passes only; MIMO_FL_GU_KG: perf probe override)
+    if (p.gu_rp && !p.gu_full_sync) {
+        p.gu_kg = lo.gu_kgroup > 0 ? static_cast<uint32_t>(lo.gu_kgroup) : 2u;
+        if (const char* kg = cstr(pr.gu_kg)) {
+            p.gu_kg = static_cast<uint32_t>(std::max(1, std::atoi(kg)));
+        }
+        p.gu_kg = std::min(p.gu_kg, p.Ht / KBLK);
+    }
     // 16-column units: DRISC as the other plans without reader down columns (pure slots, Tensix readers above 96 tokens
     // / expert; MIMO_FL_HG_DRISC=0: Tensix readers only). V4.1 E 24 us / expert M 32 / 80 / 256 / 1024: 44.2 / 48.0 /
-    // 62.9 / 211.6 -> 43.2 / 48.3 / 62.9 / 211.7; without the Tensix readers (MIMO_FL_DRISC_DUAL=0, 16 cells freed)
+    // 62.9 / 211.6 -> 43.2 / 48.3 / 62.9 / 211.7; without the Tensix readers (layout.drisc_dual false, 16 cells freed)
     // 58.9 / 61.3 / 70.6 / 215.0
-    const char* hgd = std::getenv("MIMO_FL_HG_DRISC");
+    const char* hgd = cstr(pr.hg_drisc);
     p.drisc = p.drisc && (!p.nu || !hgd || std::atoi(hgd) != 0);
+    // DRISC only (layout.drisc_pure 1, the default): no silent fall back to Tensix weight readers
+    TT_FATAL(
+        p.drisc || !lo.drisc || lo.drisc_pure != 1,
+        "flat_routed_expert: the layout asks for DRISC only (drisc_pure 1) but this plan cannot use the DRAM cores "
+        "(DRISC firmware {}, subgrids {}, inside a combine overlap {} with drisc_in_overlap {}, MIMO_FL_HG_DRISC {}); "
+        "layout drisc false or drisc_pure -1 (flat_layouts.LEGACY) allows Tensix weight readers",
+        flat_drisc_enabled(),
+        p.nsg,
+        cfg.cmb_rt != 0,
+        lo.drisc_in_overlap,
+        hgd ? hgd : "unset");
     p.mtg = p.mt / p.g;
     const uint32_t m_pad = (p.m + p.mt * 32 - 1) / (p.mt * 32) * p.mt * 32;
     p.nh = p.g > 1 ? 2 : 1;
     // (perf probe: x helpers per rectangle, 1-4; 2 on GLM-Flash: M 512 / 2048 83.5 / 326.3 vs 70.6 / 273.4, the
     // helpers take down cells)
-    if (const char* nh = std::getenv("MIMO_FL_NH")) {
-        p.nh = std::clamp<uint32_t>(std::atoi(nh), 1, 4);
+    if (lo.x_helpers >= 0) {
+        p.nh = std::clamp<uint32_t>(lo.x_helpers, 1, 4);
     }
     p.land_slots = p.nh > 1 || p.x_tile != BF8_TILE ? 2 : 3;
     // the down weight ring: two whole experts with pinning (the pinned schedule's regions); bf16 h: 1.5 experts, the
@@ -583,7 +665,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // (16-column units: 64-row h buffers of 295 KB at V4.1-Flash, the 2-expert ring and the pinned schedule fit with
     // bf16 h too: E 24 M 256 / 1024 with 4 chains 80.4 / 221.1 -> 63.6 / 209.1 us per expert, bfp8 h 62.8 / 211.6)
     p.dring = cfg.pin && (!cfg.h_bf16 || p.nu) ? 2.0f : 1.5f;
-    if (const char* dr = std::getenv("MIMO_FL_DRING")) {  // (perf probe: the down weight ring in experts)
+    if (const char* dr = cstr(pr.dring)) {  // (perf probe: the down weight ring in experts)
         p.dring = static_cast<float>(std::atof(dr));
     }
 
@@ -629,7 +711,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                     best_y = y;
                 }
             }
-            TT_FATAL(best_y != 1000, "MIMO_FL_ROWS: no row for a reader in column {}", c.x);
+            TT_FATAL(best_y != 1000, "flat layout rows: no row for a reader in column {}", c.x);
             c = Core(c.x, best_y);
             used.insert({c.x, c.y});
         }
@@ -677,22 +759,20 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     if (p.drisc) {  // the DRISC slots' reader cells but the launcher's go to the relays / down cores
         p.drisc_n = std::min<uint32_t>(p.drisc_n, p.readers.size());
-        const char* du = std::getenv("MIMO_FL_DRISC_DUAL");
-        p.dual = (du == nullptr || std::atoi(du) != 0) && (p.drisc_n < p.readers.size() || flat_drisc_pure());
+        p.dual = lo.drisc_dual && (p.drisc_n < p.readers.size() || flat_drisc_pure());
         TT_FATAL(
             !p.rdown || p.dual || p.readers.size() - p.drisc_n >= 7,
-            "MIMO_FL_DRISC: reader down columns need 7 non-DRISC slots (or dual slots)");
+            "flat DRISC: reader down columns need 7 non-DRISC slots (or dual slots)");
         TT_FATAL(p.drisc_n >= 1, "MIMO_FL_DRISC_SLOTS >= 1");
         // (probe MIMO_FL_DRISC_RD_SWAP=1: the reader cells' halves swapped, so the Tensix slots 8.. run on the cells
         // next to the DRAM columns)
-        if (std::getenv("MIMO_FL_DRISC_RD_SWAP") && std::atoi(std::getenv("MIMO_FL_DRISC_RD_SWAP")) != 0 &&
-            p.readers.size() == 16) {
+        if (cstr(pr.drisc_rd_swap) && std::atoi(cstr(pr.drisc_rd_swap)) != 0 && p.readers.size() == 16) {
             std::rotate(p.readers.begin(), p.readers.begin() + 8, p.readers.end());
         }
         p.launcher = p.readers[0];  // (dual: slot 0's own Tensix reader posts the jobs)
         // the freed cells as down cores (MIMO_FL_DRISC_RD_DOWN, default: only with every slot on DRISC; next to the
         // remaining Tensix readers they slow large M: hybrid 2048 290 vs 274 idle)
-        const char* rdd = std::getenv("MIMO_FL_DRISC_RD_DOWN");
+        const char* rdd = cstr(pr.drisc_rd_down);
         if (!p.dual && (rdd ? std::atoi(rdd) != 0 : p.drisc_n == p.readers.size())) {
             for (uint32_t r = 1; r < p.drisc_n; ++r) {
                 taken.erase({p.readers[r].x, p.readers[r].y});
@@ -755,8 +835,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             taken.insert({c.x, c.y});
         }
         for (uint32_t j = 0; j < p.nh; ++j) {  // helpers: relay NR + NR j + k is rectangle k's j-th helper
-            const Core a = first_free(rx_w, {5, 3, 6, 2, 7, 1, 8, 0, 9});
-            const Core b = first_free(rx_e, {4, 2, 5, 1, 6, 0, 7, 8, 9});
+            Core a = first_free(rx_w, {5, 3, 6, 2, 7, 1, 8, 0, 9});
+            Core b = first_free(rx_e, {4, 2, 5, 1, 6, 0, 7, 8, 9});
             p.relays.push_back(a);
             p.relays.push_back(b);
             taken.insert({a.x, a.y});
@@ -764,12 +844,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         }
     }
     // MIMO_FL_COLS=n (probe): down cores only in columns [0, n), e.g. 11 on a 12-column grid to reproduce the 11 x 10
-    const uint32_t cols_cap = std::getenv("MIMO_FL_COLS") ? std::atoi(std::getenv("MIMO_FL_COLS")) : grid.x;
+    const uint32_t cols_cap = cstr(pr.cols) ? std::atoi(cstr(pr.cols)) : grid.x;
     // MIMO_FL_SKIP_COLS="x,x,.." (probe): no down cores in these columns, e.g. 6 on a Galaxy chip (12 x 10, east
     // readers in column 7): the column a p150's 11 x 10 doesn't have, so the plan is the p150's (cores-for-cores) on a
     // Galaxy chip
     std::set<uint32_t> skip_cols;
-    if (const char* sc = std::getenv("MIMO_FL_SKIP_COLS")) {
+    if (const char* sc = cstr(pr.skip_cols)) {
         for (const char* q = sc; *q;) {
             char* end = nullptr;
             skip_cols.insert(static_cast<uint32_t>(std::strtoul(q, &end, 10)));
@@ -792,7 +872,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     // MIMO_FL_XDOWN="x,y;x,y;.." (probe, with the rows capped): extra down cores outside the rows, e.g. the grid row 0
     // cells combine leaves free when it runs on row-major y (flat_combine_overlap)
-    if (const char* xd = std::getenv("MIMO_FL_XDOWN"); xd && rows_cap) {
+    if (const char* xd = cstr(pr.xdown); xd && rows_cap) {
         for (const char* q = xd; *q;) {
             uint32_t x = 0, y = 0;
             int n = 0;
@@ -871,8 +951,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
         }
     }
-    if (const char* ndc = std::getenv("MIMO_FL_ND")) {  // (perf probe: cap the down cores; the rest stay idle)
-        const uint32_t cap = static_cast<uint32_t>(std::atoi(ndc));
+    if (lo.max_down >= 0) {  // (cap the down cores; the rest stay idle)
+        const uint32_t cap = static_cast<uint32_t>(lo.max_down);
         if (cap > 0 && cap < p.down.size()) {
             p.down.resize(cap);
         }
@@ -919,7 +999,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // (probe): more regions, so more small experts stream in under a pinned expert's chunks (the down ring must match:
     // MIMO_FL_DRING = the same count keeps the down weights per region, SE_DN_REG)
     p.ring_g = 2 * p.nk_gu;
-    if (const char* nr = std::getenv("MIMO_FL_GU_NREG")) {
+    if (const char* nr = cstr(pr.gu_nreg)) {
         p.ring_g = static_cast<uint32_t>(std::max(2, std::atoi(nr))) * p.nk_gu;
     }
     p.d_ch = p.rdown ? std::min(D_CHAINS, p.n_rd_sg) : D_CHAINS;
@@ -929,16 +1009,20 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     if (p.nu) {
         p.d_ch = 4;
     }
-    if (const char* dch = std::getenv("MIMO_FL_DCH"); dch && !p.rdown) {  // (perf probe: down chains)
+    if (const char* dch = cstr(pr.dch); dch && !p.rdown) {  // (perf probe: down chains)
         p.d_ch = static_cast<uint32_t>(std::atoi(dch));
     }
     p.n_rdn = p.rdown ? p.d_ch : 0;
     p.pcd_r = p.rdown ? 6 : 0;
-    if (const char* pr = std::getenv("MIMO_FL_PCD_R"); pr && p.rdown) {  // (perf probe: the readers' down columns)
-        p.pcd_r = static_cast<uint32_t>(std::atoi(pr));
+    if (const char* pcr = cstr(pr.pcd_r); pcr && p.rdown) {  // (perf probe: the readers' down columns)
+        p.pcd_r = static_cast<uint32_t>(std::atoi(pcr));
     }
     p.rem_cols = p.Ht - p.n_rdn * p.pcd_r;
-    if (auto_shape && !std::getenv("MIMO_FL_ND")) {
+    // even split (layout.even_split, one subgrid): the output tile columns over at most 32 down cores, the fewest
+    // cores with the fewest columns a core (GLM-5.3 / M3 32 x 6, K2.7 32 x 7, GLM-5.3-Flash 32 x 4, V4.1-Flash 32 x 5,
+    // K3 28 x 4); the rest of the cells are left to the combine
+    const bool even_dn = lo.even_split && p.nsg == 1 && lo.max_down < 0;
+    if ((auto_shape || even_dn) && lo.max_down < 0) {
         // down cores under the east rectangle (its columns, below it) are slow (far from the h relays, in the east
         // gate/up's traffic): drop them, then keep the fewest cores with the same most tile columns per core (K3 at
         // M 2048, us per expert: 26 down 5 columns max 409, 28 / 30 at 4 384, 32 at 4 400, 34 / 42 into columns 8+ 443
@@ -946,7 +1030,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         const uint32_t east_x0 = b_x0 - (east0 - 6);
         std::vector<Core> kept;
         for (const auto& c : p.down) {
-            if (c.x < east_x0) {
+            if (!auto_shape || c.x < east_x0) {
                 kept.push_back(c);
             }
         }
@@ -955,7 +1039,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             // (192 B writes; a Galaxy-like 12 x 10 gives K3 38 down cores) cost the y writes far more than their bytes
             // (K3 E56 us / expert, 38 -> 28 down cores, M 128 / 192 / 256: 47.8 / 52.0 / 57.0 -> 45.8 / 49.7 / 53.6;
             // E12 49.3 / 55.1 / 60.4 -> 49.0 / 53.6 / 57.9; 23 / 19 down cores are slower: the down matmul)
-            const uint32_t per = std::max<uint32_t>(4u, (p.rem_cols + kept.size() - 1) / kept.size());
+            const uint32_t per =
+                even_dn ? (p.rem_cols + std::min<uint32_t>(32u, kept.size()) - 1) / std::min<uint32_t>(32u, kept.size())
+                        : std::max<uint32_t>(4u, (p.rem_cols + kept.size() - 1) / kept.size());
             kept.resize(std::min<size_t>(kept.size(), (p.rem_cols + per - 1) / per));
             p.down = kept;
             ND = p.down.size();
@@ -979,7 +1065,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     for (uint32_t d = 0; d < ND; ++d) {
         p.pcds[d] = base_p + (p.dl(d) < extra ? 1 : 0);
     }
-    if (std::getenv("MIMO_FL_DRISC_DBG")) {
+    if (cstr(pr.drisc_dbg)) {
         std::string dl;
         for (uint32_t d = 0; d < ND; ++d) {
             dl += " (" + std::to_string(p.down[d].x) + "," + std::to_string(p.down[d].y) +
@@ -1021,7 +1107,40 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     auto rect_of0 = [&](const Core& c) { return p.rect_of(c); };
     std::vector<std::vector<uint32_t>> per_reader(n_rd);
-    for (uint32_t j = 0; j < p.r_; ++j) {
+    // every slot on DRISC, one rectangle: each slot's cores by the hops from the tile that actually sends it on small
+    // counts (switch mode: a bank's second slot from its NOC1-endpoint tile, on NOC0; the round-robin below measured
+    // it from the free tile), all pairs (slot, core) taken nearest first rather than round-robin nearest (which left
+    // the last slots 15-21 hops). Galaxy loads GLM-5.3 / GLM-Flash / K3 / K2.7 525 / 382 / 1232 / 808 -> 522 / 381 /
+    // 1216 / 808 us. (perf probe MIMO_FL_DRISC_PLACE=0: the round-robin)
+    bool placed = false;
+    const char* pl = cstr(pr.drisc_place);
+    if ((!pl || std::atoi(pl) != 0) && !p.group_rect && p.nsg == 1) {
+        bool all_drisc = !p.dual;
+        for (uint32_t r = 0; r < n_rd; ++r) {
+            all_drisc = all_drisc && p.drisc_slot(r);
+        }
+        if (all_drisc) {
+            std::vector<std::tuple<int, uint32_t, uint32_t>> pairs;  // (hops, slot, core)
+            for (uint32_t r = 0; r < n_rd; ++r) {
+                const auto [sp, snoc] = flat_drisc_sender(device, r, p.banks, p.rdown);
+                for (uint32_t ci : left) {
+                    pairs.emplace_back(
+                        noc_hops(Core(sp), Core(flat_worker_noc0(device, gu_all[ci])), int(snoc)), r, ci);
+                }
+            }
+            std::sort(pairs.begin(), pairs.end());
+            std::vector<bool> taken(gu_all.size(), false);
+            for (const auto& [h, r, ci] : pairs) {
+                if (!taken[ci] && per_reader[r].size() < p.r_of(r)) {
+                    per_reader[r].push_back(ci);
+                    taken[ci] = true;
+                }
+            }
+            left.erase(std::remove_if(left.begin(), left.end(), [&](uint32_t ci) { return taken[ci]; }), left.end());
+            placed = true;
+        }
+    }
+    for (uint32_t j = 0; j < p.r_ && !placed; ++j) {
         for (uint32_t r = 0; r < n_rd; ++r) {
             if (j >= p.r_of(r)) {  // (uneven: this reader's pair-sets are done)
                 continue;
@@ -1042,7 +1161,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             // them falls back to the Tensix readers on larger counts, which a DRISC assignment slows by ~14% (K3 E56 M
             // 256 64.9 vs 56.9 us / expert) while the readers' assignment costs the DRISC calls little (M 32 / 64 39.2
             // / 41.2 -> 39.3 / 41.4))
-            const char* as = std::getenv("MIMO_FL_DRISC_ASSIGN");
+            const char* as = cstr(pr.drisc_assign);
             const bool by_drisc =
                 p.drisc_slot(r) && (as ? std::atoi(as) != 0 : (!p.dual || (flat_drisc_pure() && p.rdown)));
             // (DRISC: NOC0 coordinates on both ends; a DRAM tile's translated ones are not on the NoC grid)
@@ -1062,7 +1181,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         for (uint32_t ci : per_reader[r]) {
             p.gu.push_back(gu_all[ci]);
         }
-        if (p.drisc_slot(r) && std::getenv("MIMO_FL_DRISC_DBG")) {
+        if (p.drisc_slot(r) && cstr(pr.drisc_dbg)) {
             const Core dp = flat_drisc_physical(device, r, p.banks);
             std::string g;
             for (uint32_t ci : per_reader[r]) {
@@ -1087,7 +1206,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             }
         }
     }
-    if (const char* xm = std::getenv("MIMO_FL_X_SLOTS_MAX")) {
+    if (const char* xm = cstr(pr.x_slots_max)) {
         const uint32_t xs = static_cast<uint32_t>(std::atoi(xm));
         TT_FATAL(
             p.x_off + al(xs * x_bytes) + al(4 * p.mtg * p.hpc * p.h_tile) <= GU_L1_BUDGET,
@@ -1122,7 +1241,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     if (p.hu) {  // h units: as many unit buffers as fit (<= 8: the gather semaphores on the down heads)
         uint32_t cap = 8;
-        if (const char* hb = std::getenv("MIMO_FL_HBUF")) {  // (perf probe: cap the h unit buffers)
+        if (const char* hb = cstr(pr.hbuf)) {  // (perf probe: cap the h unit buffers)
             cap = std::min(cap, static_cast<uint32_t>(std::atoi(hb)));
         }
         p.hbuf = 2;
@@ -1141,6 +1260,13 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         p.o_off + al(std::max(pcd, p.rdown ? p.pcd_r : 0u) * 2048) + 2048 <= L1_BANK,
         "flat_routed_expert: down core arena does not fit");
     const uint32_t gu_bytes = p.hl_off + (p.hl_in_arena ? al(p.hl_slots * p.mtg * p.hpc * p.h_tile) : 0);
+    {  // (the program factory's static CBs, an upper bound: CB 9 counted whether or not the schedule pull is on)
+        const uint32_t se_max_e = p.E <= 16 ? 16 : (p.E <= 32 ? 32 : 64);
+        const uint32_t meta_bytes = se_max_e == 16 ? 512 : (se_max_e == 32 ? 1024 : 2048);
+        const auto a64 = [](uint32_t b) { return (b + 63) / 64 * 64; };
+        p.static_l1_bytes = a64(meta_bytes) + a64(4 * dyn_half) + 1024 + 2048 +
+                            (p.hl_in_arena ? 0 : a64(p.hl_slots * p.mtg * p.hpc * p.h_tile));
+    }
     TT_FATAL(gu_bytes <= L1_BANK, "flat_routed_expert: gate/up core arena does not fit");
     for (uint32_t t : {32u, 16u, 8u}) {
         if (p.Ht % t == 0 && t % KBLK == 0) {
@@ -1148,27 +1274,63 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             break;
         }
     }
+    if (const char* sb = cstr(pr.sbt)) {  // (probe: a narrower super-block, e.g. a shorter x head)
+        const uint32_t t = static_cast<uint32_t>(std::atoi(sb));
+        TT_FATAL(
+            p.Ht % t == 0 && t % KBLK == 0 && t <= 32, "MIMO_FL_SBT={}: must divide Ht and be a K-block multiple", t);
+        p.sbt = t;
+    }
     p.seg = p.sbt * 64;
     p.nsb = p.Ht / p.sbt;
     // x staging depth probes: MIMO_FL_RM_CHUNKS (relay row-major chunks), MIMO_FL_SB_SLOTS (relay tilized
     // super-blocks), MIMO_FL_X_SLOTS_MAX (the gate/up x ring, if it fits the gate/up budget)
-    if (const char* rc = std::getenv("MIMO_FL_RM_CHUNKS")) {
+    if (const char* rc = cstr(pr.rm_chunks)) {
         p.rm_chunks = static_cast<uint32_t>(std::atoi(rc));
     }
-    if (const char* ss = std::getenv("MIMO_FL_SB_SLOTS")) {
+    if (const char* ss = cstr(pr.sb_slots)) {
         p.sb_slots = static_cast<uint32_t>(std::atoi(ss));
     }
     p.sb_off = al(p.rm_chunks * 32 * p.seg);
     p.land_off = p.sb_off + al(p.sb_slots * p.mt * p.sbt * p.x_tile);
-    p.xfwd = std::getenv("MIMO_FL_XFWD") && std::atoi(std::getenv("MIMO_FL_XFWD")) != 0 && p.nsg == 1 &&
-             p.rects.size() == 2 && !p.group_rect;
-    p.fw_off = p.land_off + al(p.nh * p.land_slots * p.mt * p.sbt * p.x_tile);
+    p.xfwd = cstr(pr.xfwd) && std::atoi(cstr(pr.xfwd)) != 0 && p.nsg == 1 && p.rects.size() == 2 && !p.group_rect;
+    if (const char* fs = cstr(pr.fw_slots)) {  // (probe: XFWD forward ring super-blocks, default 2)
+        const int v = std::atoi(fs);
+        TT_FATAL(v >= 1 && v <= 8, "MIMO_FL_FW_SLOTS={}: 1..8", v);
+        p.fw_slots = static_cast<uint32_t>(v);
+    }
+    // x read once by the helpers (layout.x_once -1, the default): two rectangles full of gate/up cores on the snakes,
+    // one helper each - each helper reads / tilizes half of x (super-blocks g % 2 == k) and writes every super-block
+    // into both primaries' landing rings (2 slots each); the primaries read nothing and feed only their own snake. x
+    // leaves DRAM once and no relay sends more than a primary did before (bit-exact; GLM-5.3 / GLM-Flash / K3 / K2.7
+    // at Galaxy loads 522 / 380 / 1216 / 807 -> 483 / 355 / 1181 / 749 us, never slower at M 32..1024 or under six
+    // routings, FLAT_EXPERT_WORKLOG.md). Probe MIMO_FL_XDUAL=0/1 overrides.
+    {
+        bool full = p.rects.size() == 2;
+        for (uint32_t k = 0; full && k < 2; ++k) {
+            const auto [x0, x1, y0, y1] = p.rects[k];
+            uint32_t n = 0;
+            for (const auto& c : p.gu) {
+                n += p.rect_of(c) == k;
+            }
+            full = n == (x1 - x0 + 1) * (y1 - y0 + 1);
+        }
+        const bool can = p.nsg == 1 && p.rects.size() == 2 && !p.group_rect && p.nh == 1 && !p.xfwd && full &&
+                         !(cstr(pr.x2) && std::atoi(cstr(pr.x2)) != 0) && (lo.x_path < 0 || lo.x_path == 3);
+        p.xdual = cstr(pr.xdual) ? std::atoi(cstr(pr.xdual)) != 0 && can : lo.x_once < 0 && can;
+        if (p.xdual) {
+            p.land_slots = std::min(p.land_slots, 2u);  // (two landing rings a primary)
+        }
+    }
+    p.fw_off = p.land_off + al((p.xdual ? 2 : p.nh) * p.land_slots * p.mt * p.sbt * p.x_tile);
     p.ti_off = p.fw_off + (p.xfwd ? al(p.fw_slots * p.mt * p.sbt * p.x_tile) : 0);
-    // (MIMO_FL_XIDX_ALL=1: room for the call's token index; no gain measured - K3 E1 / E12 / E56 within 0.1%)
-    const bool xidx_all = std::getenv("MIMO_FL_XIDX_ALL") && std::atoi(std::getenv("MIMO_FL_XIDX_ALL")) != 0;
-    const uint32_t relay_bytes = p.ti_off + (xidx_all ? al(4 * p.m) : 0);
+    const uint32_t relay_bytes = p.ti_off;
     TT_FATAL(relay_bytes <= L1_BANK, "flat_routed_expert: relay arena does not fit");
-    p.arena_tiles = std::max({gu_bytes, dn_bytes, relay_bytes, p.rd_off}) / 2048;
+    // (MIMO_FL_DRISC_X: the relays' x words and the launcher's x info staging, 16 slots x 1 KB, from ti_off)
+    const uint32_t x_words_bytes = on(pr.drisc_x) ? p.ti_off + 256 + 16 * 1024 : 0;
+    p.arena_tiles = (std::max({gu_bytes, dn_bytes, relay_bytes, p.rd_off, x_words_bytes}) + 2047) / 2048;
+    p.gu_bytes = gu_bytes;
+    p.dn_bytes = dn_bytes;
+    p.relay_bytes = std::max(relay_bytes, x_words_bytes);
     p.vstride = 1 + p.nh;
     p.region_bytes = p.E * p.nk_gu * p.rg * p.slot * p.w_tile;
     p.wd_region = p.E * p.It * pcd * p.w_tile;
@@ -1176,7 +1338,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // at 55% of DRAM peak alone, rotating 65%; worklog 8d). Bit-identical. Kimi K2.7 / GLM 5.3 us per expert at
     // M 32 / 128: 62.3 / 72.3 -> 58.2 / 68.7, 54.3 / 63.9 -> 51.2 / 61.4; none at M >= 512. MIMO_FL_DW_ROT=0: one
     // bank per core (the weight cache keys the two layouts apart)
-    if (const char* dr = std::getenv("MIMO_FL_DW_ROT"); !dr || std::atoi(dr) != 0) {
+    if (const char* dr = cstr(pr.dw_rot); !dr || std::atoi(dr) != 0) {
         p.dw_rot = true;
         uint32_t sub = 0;  // tiles: a core's share of one bank, the widest core's
         for (uint32_t d = 0; d < p.down.size(); ++d) {
@@ -1206,7 +1368,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                 for (uint32_t r = 0; r < n_rd; ++r) {
                     const bool used = std::any_of(p.rdn.begin(), p.rdn.end(), [r](auto t) { return t.first == r; });
                     // (perf probe MIMO_FL_RDN_HI=1: tails among readers 8.. only, as DRISC mode's default hybrid)
-                    const bool hi_only = std::getenv("MIMO_FL_RDN_HI") && r < 8;
+                    const bool hi_only = cstr(pr.rdn_hi) && r < 8;
                     // (a DRISC slot's reader only with dual slots: its se9_rdown skips gate/up on DRISC calls)
                     if (used || p.sg_rd(r) != k || (p.drisc_slot(r) && !p.dual) || hi_only) {
                         continue;
@@ -1233,7 +1395,7 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
                 found = true;
             }
         }
-        TT_FATAL(found, "MIMO_FL_DRISC dual: every DRISC slot's reader is a down-column tail");
+        TT_FATAL(found, "flat DRISC dual: every DRISC slot's reader is a down-column tail");
     }
     return p;
 }

@@ -29,6 +29,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.common.bringup.testing import determinism
+from ttnn.bringup.flat_routed_expert_ttnn import flat_layouts
 from models.demos.common.bringup.testing.fork_cases import CALIB, noise_limit, round_to
 
 _HERE = Path(__file__).resolve().parent
@@ -125,6 +126,7 @@ def test_flat_routed_expert(mesh_device, device_params, case):
         h_bf16=c["h_bf16"],
         weights_nk=c["weights_nk"],
         check_exact=True,
+        layout=getattr(flat_layouts, c["layout"]),
     )
     rep = ttnn.ReplicateTensorToMesh(mesh_device)
     chips = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(0, 1))
@@ -235,6 +237,7 @@ def test_flat_routed_expert_with_program(mesh_device, device_params, case):
         h_bf16=c["h_bf16"],
         weights_nk=c["weights_nk"],
         check_exact=True,
+        layout=getattr(flat_layouts, c["layout"]),
     )
     del per_dev
     logger.info(f"{c['id']}: {E} experts built and laid out in {time.time() - t0:.0f} s")

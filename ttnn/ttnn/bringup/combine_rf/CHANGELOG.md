@@ -1,11 +1,82 @@
 # combine_rf (Python ProgramDescriptor ops; not registered as ttnn.bringup.<name>)
 
-- Source: mstaletovic/galaxy-unified-k3-v41-combine @ e4d239c6d81 (imported with flat_routed_expert_ttnn, synced in commit dc556fa6726); first imported @ f080c8df021 in 9003c0fd2ca.
+- Source: ttnn/ttnn/bringup/combine_rf on mstaletovic/combine-lean-sender-llk @ 856d97d5864 (three-way sync from
+  e4d239c6d81, 2026-10-27, entry below); before: mstaletovic/galaxy-unified-k3-v41-combine @ e4d239c6d81 (imported with
+  flat_routed_expert_ttnn, synced in commit dc556fa6726); first imported @ f080c8df021 in 9003c0fd2ca.
 - New ops, no TTNN source on this tree.
 
 ## Changes
 
 imported, unchanged.
+
+### Sync with Marko @ 856d97d5864 (2026-10-27)
+- What: a three-way merge of this folder, base e4d239c6d81 (our last sync; an ancestor of his branch), ours bab52a1a844,
+  theirs origin/mstaletovic/combine-lean-sender-llk 856d97d5864. Every change of ours is kept (column-axis combine,
+  fp32 output / out_row0 / acc_unpack_fp32 / zero_unseen, acc_dtype, accumulator_bytes and the arena refusal, the
+  one-core column planner and the column multi-core planner, the rebase ports, tests/, examples/).
+- Taken from Marko (his 38 combine_rf commits since e4d239c6d81):
+  - sparse_combine_rf: the landing pool (each accumulator's depth x (N - 1) slots carved per call into one ring per
+    source by demand, layouts forwarded by the home's ports; ccb61f5c92f), typed options instead of env knobs
+    (inj_slots, ring_depth, pool_slots, local_keep, CombineProbes; 078879e6229, b10e0b79632), piggybacked credits
+    (default on where they apply; off with deterministic and ports_per_direction; 251859a48d9, ee4f7c72cbe,
+    50b36072a18), idle credit batching at >= 16 sources (c2e4fbbc4cd), shared landing with slot grants
+    (landing="shared", 75916a7168b), snap_q (e94d370c790), shared_rows / dispatch / barrier / fill_sink and the
+    probes (HW hang words, BK, FILLY), combine_l1_layout / combine_auto / fused_arena_reserve. His copy of our P.8
+    ring-grant fix (the same `(QL < 4 ? QL : 4)`) merged into one.
+  - combine_plan: the V2 multi-core planner's bucket / per-instance row sizing (16c0771dcff, eb4e1db54a9); the one-core
+    and column planners are untouched by it.
+  - l1_zero (l1_zero_kernels), sparse_all_gather_2d (zero kernels, dispatch_phase, memoized mesh_plan),
+    dispatch_prep (folded / row-mate masks, own routing), layout_ops (src_tile_of gathers, persistent dst),
+    router_topk (fold, split=None), fabric_all_gather_py: as on his branch.
+  - New modules: routing_a2a.py, routing_pack.py, kv_push_plan.py, glu_act.py, FUSED_SHARED_EXPERT_PLAN.md (for his
+    MoE block; DeepSeek-V4.1 does not use them).
+  - `ttnn.freeze_program_hashes(desc)` where a module caches a descriptor (1bc1002c13d): combine_plan run(),
+    l1_zero_program, layout_ops, dispatch_prep, sparse_all_gather_2d, fabric_all_gather_py, routing_a2a,
+    routing_pack, glu_act. It only stores each program's structural hash in custom_program_hash (the same value
+    generic_op would compute per call), so a reused descriptor is not re-hashed.
+- Conflicts (git merge-file per file) and their resolution:
+  - sparse_combine_rf.py, 5 hunks: (1) our _ACC_COMPUTE_WZ (zero_unseen) next to his state-layout comment: both kept,
+    _ACC_COMPUTE_WZ now derives from his _ACC_COMPUTE_W (SNAP lines; its anchors still match, module asserts pass);
+    (2) the local ring grant comment (same code both sides): his comment; (3) the signature: his new arguments, then
+    ours (axis ... acc_dtype; every caller passes keywords); (4) the docstring: his text, then our column-option
+    block; (5) the arena: our refusal (ValueError with the largest S / smallest A) kept, now with his `local_keep`
+    in `keep` and stated as one landing slot per source, then his landing-pool sizing (PSL) instead of our fixed
+    depth D.
+  - layout_ops.py (4 hunks) and router_topk.py (1): ours was only the repo formatter's reflow; his side taken (it is
+    black-clean).
+  - Clean, both sides changed: combine_plan.py (our column planners, his MC2 sizing + freeze), l1_zero.py,
+    fabric_all_gather_py.py, sparse_all_gather_2d.py (both carried the same rebase port); sparse_combine_l1.py
+    identical on both sides. Only ours: sum_ops.py (formatting). Only his: dispatch_prep.py.
+- Adjustments made in the merge (beyond picking sides):
+  - sparse_combine_rf: his idle-credit-batching rule counts the combine group's chips (N; axis=0: the column) instead
+    of the mesh's (R x C): identical for the whole mesh, and DeepSeek's 8-chip Galaxy column stays unbatched as before.
+  - sparse_combine_rf axis=0 refuses shared_rows, dispatch, barrier and landing="shared" (whole-mesh options; their
+    port / barrier wiring is not ported to the column group, and nothing tests them there).
+  - sparse_all_gather_2d: the descriptor-cache hit called `ttnn.bringup.prepared_program.generic_op` (his fork, not on
+    this tree; ImportError on the second call); it falls back to `ttnn.generic_op` on the same cached descriptor.
+  - accumulator_bytes unchanged in form: the pool of depth x (N - 1) slots takes the L1 our fixed rings did, and its
+    value equals his combine_l1_layout's acc_used (checked for N 2 / 4 / 8, A 9-16, W 5120-7168). His state block is
+    larger (layouts, U0, piggyback words): +896 B a core at N 2, +2944 B at N 8 (A 9). One-pass capacities at a
+    1356 KB arena are unchanged (bf16 / fp32: 1125 / 558 tokens at N 2 A 9, 1062 / 531 at N 8 A 9).
+  - his `local_keep` defaults to 8 (was 2 slots for the L1 hand-off): deepseek_v41_flash_d_p tt/weighted_combine.py
+    and tests/unit/test_acc_dtype.py pass local_keep=2, so the model's arena split and refusal limits stay as its
+    pass sizing (accumulator_bytes, local_slots 2) assumes.
+- What changes for DeepSeek-V4.1 (deterministic, ports_per_direction, axis=0, depth 4): its rings are carved from the
+  pool per call (2x2: one source, all 4 slots as before; 8x4 column: up to 28 slots over 7 sources by demand
+  instead of 4 each); piggyback, credit batching, shared landing and snap stay off; the deterministic order (so the
+  sums) is unchanged. Not taken: generic_op holding the caller's descriptor by reference (1bc1002c13d, every generic_op
+  caller), the prepared_program fork, vendored multicast helpers; examples/ left as they were (reference only).
+- Core binding carried: `ttnn.freeze_program_hashes` only (from 1bc1002c13d), in its own files:
+  ttnn/cpp/ttnn/operations/generic/freeze_program_hashes_nanobind.{hpp,cpp}, plus one line each in ttnn/sources.cmake,
+  ttnn/ttnn/types.py and ttnn/ttnn/__init__.py, and the include + call in ttnn/cpp/ttnn-nanobind/__init__.cpp
+  (beside bind_generic_operation, module ttnn._ttnn.operations.generic). It needs nothing else:
+  generic_op already returns custom_program_hash when set, and the copy generic_op makes keeps it. No upstream PR.
+- Why: keep this fork equal to its source (smaller future syncs); his landing pool keeps a Galaxy's ring L1
+  independent of the source count.
+- Results: not run here (no build, no device). Merged modules import with their module-level kernel-string asserts
+  passing; black clean.
+- Needed by: deepseek_v41_flash_d_p (expert ops sync, plan 2026-10-27 step 3)
+- Files: every module above; tests/unit/test_acc_dtype.py (local_keep=2); README.md
 
 ### Column multi-core planner: combine_planner_prepare(axis=0, cores=...) (2026-10-20, deepseek_v41_flash_d_p P.11)
 - What: the one-core planner's column / pass options (axis=0, id_offset, tokens / token_base, ids_uint32, tile_in,

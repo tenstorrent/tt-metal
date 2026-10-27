@@ -21,6 +21,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 from ttnn.bringup._testing.mesh import MESH_PARAMS
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatExpert, FlatRoutedExpert
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
 H, I, E_GLOBAL = 4096, 2048, 256
 
@@ -83,8 +84,9 @@ def test_flat_expert_mesh(mesh_device, device_params):
         for _ in range(n_dev)
     ]
     impl = os.environ.get("MIMO_FLAT_IMPL", "cpp")  # cpp: the flat_routed_expert op; py: the generic_op builder
+    kw = dict(layout=LEGACY) if impl == "cpp" else {}  # (the research builder plans as LEGACY)
     fe = (FlatRoutedExpert if impl == "cpp" else FlatExpert)(
-        mesh_device, weights, m=m, H=H, I=I, gids=gids, n_global=E_GLOBAL, pin=1
+        mesh_device, weights, m=m, H=H, I=I, gids=gids, n_global=E_GLOBAL, pin=1, **kw
     )
     # per device: packed 32-row-aligned regions in local expert order, rows = the largest device's total
     offs = [[sum(-(-c // 32) * 32 for c in cl[:e]) for e in range(epc)] for cl in local]

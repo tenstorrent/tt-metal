@@ -16,6 +16,8 @@ namespace tt::tt_metal {
 class IDevice;
 }
 
+#include "flat_routed_expert_options.hpp"
+
 namespace ttnn::operations::bringup::flat_routed_expert {
 
 // Layout constants shared by the planner and the program factory.
@@ -55,6 +57,13 @@ struct FlatRoutedExpertConfig {
     // flat_with_program: the y writers (down cores, reader tails) report each local expert to the other op's
     // collector once its rows have landed; the 4 report args sit at this runtime-arg index (0: off)
     uint32_t cmb_rt = 0;
+    // the y writers' L1 hand-off args after the report args (flat_with_program with l1_args: SE_Y_L1)
+    bool y_l1 = false;
+    // combine overlap report protocol (flat_with_program): cumulative counts, no go handshake; steps in slot order
+    bool cmb_no_go = false;
+    bool cmb_slot_order = false;
+    // the caller's layout / program choices (typed; part of the plan key and the program hashes)
+    FlatLayoutOptions layout;
     // DeepSeek-V4.1 option (off: the program above, unchanged). weights_nk: the weight tiles hold the nn.Linear
     // [N, K] blocks (each tile the transpose of the x @ W tile) and every weight matmul transposes its in1 tile back
     // (a bfp8 tile then shares its exponents along K: exact for e2m1 x ue8m0 weights); no plan change. (FIX.9 removed
@@ -78,9 +87,13 @@ struct FlatRoutedExpertConfig {
         "y_bf16",
         "math_fidelity",
         "cmb_rt",
+        "y_l1",
+        "cmb_no_go",
+        "cmb_slot_order",
+        "layout",
         "weights_nk");
     auto attribute_values() const {
-        return std::forward_as_tuple(
+        return std::make_tuple(
             hidden,
             intermediate,
             experts_per_chip,
@@ -97,6 +110,10 @@ struct FlatRoutedExpertConfig {
             y_bf16,
             math_fidelity,
             cmb_rt,
+            y_l1,
+            cmb_no_go,
+            cmb_slot_order,
+            layout.key(),
             weights_nk);
     }
 };
@@ -121,10 +138,11 @@ struct FlatRoutedExpertPlan {
     // g), pair-sets ps0[r] .., to gate/up cores gu[gu_off[r] ..]; each bank's readers together hold the bank's even
     // share. Even plans: rgs = rg, ps0 = (r % n_rd_sg) * rg, gu_off = r * r_
     bool uneven = false;
-    // half-width gate / up tiles (MIMO_FL_HG): a pair's two weight tiles hold [gate | up] of its h tile's left / right
-    // 16 columns (the activation runs face-wise, se_glu_faces.hpp); the split granularity of 16 columns builds on it
+    // half-width gate / up tiles (layout.half_width): a pair's two weight tiles hold [gate | up] of its h tile's left /
+    // right 16 columns (the activation runs face-wise, se_glu_faces.hpp); the split granularity of 16 columns builds on
+    // it
     bool hg = false;
-    // 16-column units (MIMO_FL_HG_NU = units per core, HG only; np is then 0): a core's gate/up block is nu weight
+    // 16-column units (layout.hg_units = units per core, HG only; np is then 0): a core's gate/up block is nu weight
     // tiles a row ([gate | up] of units cg nu ..), its h a run of hpc h tiles from K tile cg nu / 2, the first / last
     // one half its own when cg nu / (cg + 1) nu is odd. Generic widths: gwt weight tiles a row (2 np / nu), hpc h tiles
     // a row (np / (nu + 1) / 2), ngrp column groups (It / np / 2 It / nu)
@@ -142,9 +160,18 @@ struct FlatRoutedExpertPlan {
     // gate/up fp32 in a full-sync DST (the whole sub-block in one K loop, x freed block by block: with bf16 x the x
     // ring holds one sub-block's blocks, row passes would keep them until the last pass and stall the relays)
     bool gu_full_sync = false;
+    // gate/up K blocks per CB handshake in the row-pass K loop (layout.gu_kgroup; 1 without row passes)
+    uint32_t gu_kg = 1;
     bool hl_in_arena = false;  // gate/up h_local (CB 3) in the arena (bf16 x / h), else a static CB
+    // the program's static (non-arena) CBs, bytes a core at most: meta (6), counts / regions / ids (7), the schedule
+    // inputs (9), gate/up CB 16 and h_local (3) when not in the arena. A caller sizing the arena leaves this much L1
+    // below it (the program factory checks its CBs against it)
+    uint32_t static_l1_bytes = 0;
+    // even split (layout.even_split): whether the gate/up split is the even one; false: the older searches picked it
+    // (no even split for this I, or the even split did not apply - see flat_routed_expert_plan.cpp)
+    bool even_gu = false;
     bool group_rect = false;
-    // DRISC mode (MIMO_FL_DRISC, flat_drisc.hpp): the DRAM cores send the gate/up weights, the readers only post jobs
+    // DRISC mode (layout.drisc, flat_drisc.hpp): the DRAM cores send the gate/up weights, the readers only post jobs
     bool drisc = false;
     // DRISC mode: the one Tensix core that posts every slot's job (the readers' cells are free: the down cores take
     // them; MIMO_FL_DRISC_RD_DOWN=0 leaves them idle)
@@ -152,12 +179,15 @@ struct FlatRoutedExpertPlan {
     // DRISC mode: reader slots 0 .. drisc_n - 1 stream from the DRAM cores, the rest keep their Tensix reader +
     // forwarder (MIMO_FL_DRISC_SLOTS; a DRISC tile sends one slot per bank at full rate)
     uint32_t drisc_n = 0;
-    // dual (MIMO_FL_DRISC_DUAL, default): the DRISC slots keep their Tensix reader too; per call (every kernel the same
+    // dual (layout.drisc_dual, default): the DRISC slots keep their Tensix reader too; per call (every kernel the same
     // rule) counts <= SE_DRISC_MAXCNT stream from the DRAM cores, larger ones from the Tensix readers
     bool dual = false;
     // x read once with forwarding (MIMO_FL_XFWD): the relays' forward ring (FW_SLOTS super-blocks at fw_off)
     bool xfwd = false;
     uint32_t fw_off = 0, fw_slots = 2;
+    // x read once by the helpers (probe MIMO_FL_XDUAL): each rectangle's helper reads / tilizes half of x and writes
+    // every super-block into both primaries' landing rings (two rings a primary); the primaries read nothing
+    bool xdual = false;
     // the relays' copy of the call's token index (indexed x): 4 B per capacity row at ti_off, read once per call
     uint32_t ti_off = 0;
     bool drisc_slot(uint32_t r) const { return drisc && r < drisc_n; }
@@ -176,6 +206,8 @@ struct FlatRoutedExpertPlan {
     uint32_t x_off = 0, p_off = 0, hl_off = 0, rd_off = 0, h_off = 0, o_off = 0, sb_off = 0, land_off = 0,
              arena_tiles = 0;
     uint32_t rd_slots = 2;
+    // arena bytes each role uses (the arena is max of them: the rest of a role core's arena is free)
+    uint32_t gu_bytes = 0, dn_bytes = 0, relay_bytes = 0;
     // weight regions (bytes per core region)
     uint32_t region_bytes = 0, wd_region = 0, wr_region = 0;
     // the down cores' weight blocks rotate over the banks (default; MIMO_FL_DW_ROT=0: one bank per core): block k of
