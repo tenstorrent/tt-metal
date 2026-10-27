@@ -676,6 +676,103 @@ inline void _llk_pack_block_closed_(
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }
 
+namespace pack_block_dense_internal
+{
+// Replay slots 17 and up: the closed fast block records slots 0 to 16 and small tiles never use it.
+constexpr std::uint32_t REPLAY_START = 17;
+
+inline std::uint32_t pacr_word(const std::uint32_t face_r_dim, const std::uint32_t addr_mod, const std::uint32_t last)
+{
+    const std::uint32_t intf = face_r_dim == 1 ? p_pacr::SINGLE_INTF_ACTIVE : (face_r_dim == 2 ? p_pacr::TWO_INTFS_ACTIVE : p_pacr::ALL_INTF_ACTIVE);
+    return TT_OP_PACR(
+        p_pacr::CFG_CTXT_0,
+        p_pacr::NO_ROW_PAD_ZERO,
+        p_pacr::DST_ACCESS_NORMAL_MODE,
+        addr_mod,
+        p_pacr::ADDR_CNT_CTXT_0,
+        p_pacr::P_ZERO_OUTPUT_DISABLED,
+        intf,
+        0,
+        0,
+        0,
+        0,
+        last);
+}
+
+inline std::uint32_t pacrs_per_tile(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
+{
+    return num_faces * (face_r_dim < 4 ? 1 : face_r_dim >> 2);
+}
+} // namespace pack_block_dense_internal
+
+/**
+ * Opt-in setup of _llk_pack_block_dense_ for tiles of one to four faces of 1 to 16 rows, at most eight PACRs (a 16x32 tile), known at run time.
+ * Call it after the default pack init, and again after any program that replaces the replay buffer.
+ * Records one tile: its PACRs (the last one steps to the next face slot without closing), the step to the next tile in DEST and the face reset.
+ */
+inline void _llk_pack_block_dense_init_(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
+{
+    using namespace pack_block_dense_internal;
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    const std::uint32_t pacrs = pacrs_per_tile(face_r_dim, num_faces);
+    LLK_ASSERT(pacrs >= 1 && pacrs <= 8, "The dense block pack records at most eight PACRs per tile");
+    const std::uint32_t per_face = pacrs / num_faces;
+    const std::uint32_t row      = pacr_word(face_r_dim, ADDR_MOD_0, 0);
+    const std::uint32_t face     = pacr_word(face_r_dim, ADDR_MOD_2, 0);
+
+    lltt::record<lltt::NoExec>(REPLAY_START, pacrs + 2);
+    for (std::uint32_t f = 0; f < num_faces; f++)
+    {
+        for (std::uint32_t r = 1; r < per_face; r++)
+        {
+            TT_INSN(row);
+        }
+        TT_INSN(face);
+    }
+    TTI_INCADCZW(p_setadc::PAC, 0, 0, 1, 0);
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);
+}
+
+/**
+ * Pack num_tiles consecutive small tiles to dense L1, each tile right after the previous one, with one close (Last) for the whole run
+ * (needs _llk_pack_block_dense_init_ for the same tile shape). The per-tile tile close and the data converter restart of the closed block
+ * are paid once. Not for block-float outputs and padded pages: use _llk_pack_block_closed_ there.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_dense_(
+    const std::uint32_t start_tile_index,
+    const std::uint32_t address,
+    const std::uint32_t num_tiles,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t num_faces)
+{
+    using namespace pack_block_dense_internal;
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    const std::uint32_t pacrs = pacrs_per_tile(face_r_dim, num_faces);
+
+    set_dst_write_addr(start_tile_index);
+
+    program_packer_destination(address);
+
+    const std::uint32_t tile_replay = lltt::replay_insn(REPLAY_START, pacrs + 2);
+    for (std::uint32_t tile = 1; tile < num_tiles; tile++)
+    {
+        TT_INSN(tile_replay);
+    }
+    // The last tile closes on its last PACR
+    if (pacrs > 1)
+    {
+        TT_INSN(lltt::replay_insn(REPLAY_START, pacrs - 1));
+    }
+    TT_INSN(pacr_word(face_r_dim, ADDR_MOD_1, 1));
+    TTI_INCADCZW(p_setadc::PAC, 0, 0, 1, 0);
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+}
+
 template <bool zero_output, std::uint32_t addr_mod, std::uint32_t last>
 TT_ALWAYS_INLINE void pack_block_fast_pacr_()
 {

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Test: Pack tiny tiles from sparse DEST (Tile32x32 slots) to dense L1
-// using _llk_pack_block_contiguous_ (tiny_pack_mode 0), _llk_pack_block_closed_ (1) or _llk_pack_ per tile (2).
+// using _llk_pack_block_contiguous_ (tiny_pack_mode 0), _llk_pack_block_closed_ (1), _llk_pack_ per tile (2) or _llk_pack_block_dense_ (3).
 //
 // Math uses standard datacopy (Tile32x32 DEST addressing — sparse).
 // Pack uses the new block-contiguous MOP that reads from sparse DEST
@@ -154,6 +154,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _llk_pack_block_contiguous_mop_config_<>(params.TEST_FACE_R_DIM, params.num_faces);
     }
+    else if constexpr (tiny_pack_mode == 3)
+    {
+        _llk_pack_block_dense_init_(params.TEST_FACE_R_DIM, params.num_faces);
+    }
 #endif
 
     for (int block = 0; block < num_blocks; block++)
@@ -171,6 +175,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t tile_stride = (L1_ADDRESS(params.buffer_Res[1]) - L1_ADDRESS(params.buffer_Res[0])) << 4;
             _llk_pack_block_closed_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
                 0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block, tile_stride, params.num_faces);
+        }
+        else if constexpr (tiny_pack_mode == 3)
+        {
+            _llk_pack_block_dense_<DstSync::SyncHalf, is_fp32_dest_acc_en>(
+                0, L1_ADDRESS(params.buffer_Res[block * num_tiles_in_block]), num_tiles_in_block, params.TEST_FACE_R_DIM, params.num_faces);
         }
         else
 #endif

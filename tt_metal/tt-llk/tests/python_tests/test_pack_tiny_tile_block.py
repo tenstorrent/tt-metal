@@ -12,6 +12,7 @@ Tile32x32 DEST slots, and _llk_pack_block_contiguous_ performs the
 sparse-to-dense packing into a contiguous L1 block.
 """
 
+import pytest
 import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -40,6 +41,7 @@ from helpers.tile_constants import calculate_tile_size_bytes, get_tile_params
 from helpers.utils import passed_test
 
 FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+FORMATS_F32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
 
 
 def _make_config(
@@ -134,7 +136,7 @@ def _make_config(
 
 @skip_for_wormhole
 @parametrize(
-    formats=FORMATS,
+    formats=[FORMATS, FORMATS_F32],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[
         (1, 32),  # face_r_dim=1,  num_faces=2
@@ -146,7 +148,7 @@ def _make_config(
         (32, 32),  # face_r_dim=16, num_faces=4 (baseline)
     ],
     num_tiles=[1, 2, 4, 8],
-    pack_mode=[0, 1, 2],
+    pack_mode=[0, 1, 2, 3],
 )
 def test_pack_tiny_tile_block(
     formats,
@@ -155,6 +157,8 @@ def test_pack_tiny_tile_block(
     num_tiles,
     pack_mode,
 ):
+    if pack_mode == 3 and tile_dims == (32, 32):
+        pytest.skip("The dense block pack records at most eight PACRs per tile")
     configuration, golden_tensor, torch_format = _make_config(
         tile_dims, num_tiles, formats, dest_acc, pack_mode
     )

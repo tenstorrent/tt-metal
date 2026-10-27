@@ -196,7 +196,32 @@ inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
     return get_local_cb_interface(output_id).fifo_page_size < 0x1000;
 }
 
-template <bool is_fp32_dest_acc_en>
+// Small tiles (one to four faces of 1 to 16 rows, at most eight PACRs): plain format, full tile width, one tile per CB page.
+inline bool llk_pack_block_is_dense(const std::uint32_t output_id) {
+    const std::uint32_t dst_format = pack_dst_format[output_id];
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    if (IS_BFP_FORMAT(dst_format) || get_output_tile_c_dim(output_id) != TILE_C_DIM) {
+        return false;
+    }
+    if (num_faces * (face_r_dim < 4 ? 1 : face_r_dim >> 2) > 8) {
+        return false;
+    }
+    const std::uint32_t tile_words = (num_faces * face_r_dim * FACE_C_DIM * datum_size_in_bytes(dst_format)) >> 4;
+    return get_local_cb_interface(output_id).fifo_page_size == tile_words;
+}
+
+// Records the tile body that llk_pack_block<is_fp32_dest_acc_en, true> replays for the small tiles of this output; call it after the pack init
+// and again after any program that replaces the replay buffer.
+inline void llk_pack_block_dense_init(const std::uint32_t output) {
+    const std::uint8_t output_id = get_output_id(output);
+    if (llk_pack_block_is_dense(output_id)) {
+        _llk_pack_block_dense_init_(get_output_face_r_dim(output_id), get_output_num_faces(output_id));
+    }
+}
+
+// dense_small: the caller called llk_pack_block_dense_init for this output, small tiles then run back to back with one close.
+template <bool is_fp32_dest_acc_en, bool dense_small = false>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
 
@@ -222,6 +247,13 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             get_local_cb_interface(output_id).fifo_page_size * ntiles;
         _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(
             start_tile_index, pack_tile_addr, ntiles);
+    } else if (dense_small && ntiles > 1 && llk_pack_block_is_dense(output_id)) {
+        std::uint32_t pack_tile_addr =
+            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+        get_local_cb_interface(output_id).fifo_wr_tile_ptr +=
+            get_local_cb_interface(output_id).fifo_page_size * ntiles;
+        _llk_pack_block_dense_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+            start_tile_index, pack_tile_addr, ntiles, get_output_face_r_dim(output_id), get_output_num_faces(output_id));
     } else if (ntiles > 1 && llk_pack_block_is_closable(output_id)) {
         const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
         std::uint32_t pack_tile_addr =
