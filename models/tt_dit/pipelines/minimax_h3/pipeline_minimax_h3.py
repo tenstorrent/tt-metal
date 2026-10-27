@@ -413,6 +413,50 @@ def resolve_mesh_preset(mesh_shape: tuple[int, ...], *, required: bool = True) -
     return preset
 
 
+# Tensix kernel-config ring: the L1 window between the firmware and the allocatable region, where
+# dispatch stages each program's kernel binaries, runtime args, semaphores and CB configs. A program
+# larger than the ring aborts at compile ("Program size (...) too large for kernel config buffer").
+# Both architectures default to 69 KB (70656 B). On Wormhole the Qwen3-VL vision tower's ring_joint_sdpa
+# overflowed it twice -- 70816 B on 2026-10-16, 70864 B after tt-metal#56754 (+292 B in the pack thread)
+# -- and SFPI 7.91.0 then cut it to 68816 B at its tightest shape: kernel text moves by kilobytes with
+# LLK and toolchain changes, in either direction. Blackhole sits ~6 KB lower. The ring grows by exactly
+# the bytes `worker_l1_size` gives up, so every MiniMax-H3 mesh opens with `minimax_h3_worker_l1_size()`:
+# 2 KB of each core's ~1.4 MB of allocatable L1, for ~3.9 KB of headroom on that program at SFPI 7.91.0.
+# Wormhole Llama3-70B Galaxy serving runs with a ring 47.5 KB larger. Servers and the test fixtures
+# (tests/models/minimax_h3/conftest.py) both open with this value, so the Memory Test checks the
+# layout that is deployed, and the pipeline refuses a mesh opened with a smaller ring.
+MINIMAX_H3_KERNEL_CONFIG_RING_BYTES = 71 * 1024
+
+
+def minimax_h3_worker_l1_size() -> int:
+    """`worker_l1_size` to open every MiniMax-H3 mesh with, on either architecture.
+
+    The allocatable L1 left above a `MINIMAX_H3_KERNEL_CONFIG_RING_BYTES` ring. Pass it with the
+    preset's fabric settings to `ttnn.open_mesh_device(..., worker_l1_size=...)`.
+    """
+    return ttnn.device.get_max_worker_l1_unreserved_size() - MINIMAX_H3_KERNEL_CONFIG_RING_BYTES
+
+
+def kernel_config_ring_bytes(mesh_device: ttnn.MeshDevice) -> int:
+    """The kernel-config ring an open mesh has: from its base to the start of allocatable L1."""
+    info = ttnn._ttnn.reports.get_device_info(mesh_device)
+    # `worker_l1_size` here is the core's whole L1, which starts at 0 on Wormhole and Blackhole.
+    kernel_config_base = info.worker_l1_size - ttnn.device.get_max_worker_l1_unreserved_size()
+    return info.address_at_first_l1_cb_buffer - kernel_config_base
+
+
+def check_kernel_config_ring(mesh_device: ttnn.MeshDevice) -> None:
+    """Raise unless `mesh_device` was opened with at least MiniMax-H3's kernel-config ring."""
+    ring = kernel_config_ring_bytes(mesh_device)
+    if ring < MINIMAX_H3_KERNEL_CONFIG_RING_BYTES:
+        msg = (
+            f"this mesh has a {ring} B kernel-config ring; MiniMax-H3 needs "
+            f"{MINIMAX_H3_KERNEL_CONFIG_RING_BYTES} B, or its largest programs fail to compile. Open the mesh "
+            f"with worker_l1_size=minimax_h3_worker_l1_size() ({minimax_h3_worker_l1_size()} B on this device)."
+        )
+        raise ValueError(msg)
+
+
 def draw_request_latents(
     generator: torch.Generator,
     *,
@@ -522,6 +566,7 @@ class MiniMaxH3Pipeline:
         adaln_slot_roles: tuple[str, ...] | None = None,
         warmup: bool = True,
     ) -> None:
+        check_kernel_config_ring(mesh_device)
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
         self.video_shift = VIDEO_SHIFT if video_shift is None else float(video_shift)

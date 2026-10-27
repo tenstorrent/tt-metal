@@ -354,6 +354,15 @@ say plainly:
   precision levers above tripled it. Reaching 4x end to end needs denoise at ~50 s *and* something
   done about those 31 s.
 
+### Opening the mesh
+
+Every H3 mesh, on every architecture, opens with `worker_l1_size=minimax_h3_worker_l1_size()` (from
+`pipelines/minimax_h3/pipeline_minimax_h3.py`), next to the fabric settings `resolve_mesh_preset` gives.
+It trades 2 KB of allocatable L1 per core for a 71 KB kernel-config ring instead of the 69 KB default:
+the vision tower's ring attention otherwise overflows the ring on Wormhole. `MiniMaxH3Pipeline` raises on
+a mesh opened with a smaller ring, and the test fixtures (`tests/models/minimax_h3/conftest.py`) open with
+the same value, so the Memory Test checks the deployed layout.
+
 ### Running on the quad
 
 `tt-run` with `32x4_quad_bh_galaxy_rank_bindings.yaml` and the four hosts in physical ring order

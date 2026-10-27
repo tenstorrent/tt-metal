@@ -16,6 +16,9 @@ pipeline can hit are raised on the host, so the mock reproduces them with silico
   - Kernel-config overflow: raised at compile when a program's kernel binaries and arguments exceed the
     kernel-config ring buffer. The mock builds the real binaries, so it fires in whichever warm first compiles
     that program; the t2va prompt-encoder warm reaches vision-tower attention shapes ref2va's does not.
+    The ring is the deployed one: this directory's conftest opens every mesh with
+    `minimax_h3_worker_l1_size()` (`MINIMAX_H3_KERNEL_CONFIG_RING_BYTES`), and both L1 checks run against
+    the allocatable L1 that leaves.
 Any of them fails the test at once. A pass is the warmup completing. The mock cannot see hangs, timing
 or data-dependent behaviour, and it allocates no kernel-binary DRAM, so its headroom reads about 60 MB per
 device higher than silicon.
