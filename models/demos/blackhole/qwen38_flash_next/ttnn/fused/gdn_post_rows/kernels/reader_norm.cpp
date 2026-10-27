@@ -13,6 +13,8 @@
 // Runtime args: 0-4 those addresses, 5 chunks (NC), 6 history, 7 units on this core, 8 first unit.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 namespace {
@@ -48,21 +50,28 @@ void kernel_main() {
     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
     const auto scalars = TensorAccessor(scalars_args, scalars_addr);
     const auto projected = TensorAccessor(projected_args, projected_addr);
+    const Noc noc;
 
     {
-        cb_reserve_back(cb_gamma, head_tiles);
-        const uint32_t g_l1 = get_write_ptr(cb_gamma);
+        CircularBuffer(cb_gamma).reserve_back(head_tiles);
         for (uint32_t d = 0; d < head_tiles; ++d) {
-            noc_async_read_page(d, gamma, g_l1 + d * bf16_tile_bytes);
+            noc.async_read(
+                gamma,
+                CircularBuffer(cb_gamma),
+                gamma.get_aligned_page_size(),
+                {.page_id = d},
+                {.offset_bytes = d * bf16_tile_bytes});
         }
-        cb_reserve_back(cb_scaler, 1);
-        noc_async_read_page(0, scalars, get_write_ptr(cb_scaler));
-        cb_reserve_back(cb_eps, 1);
-        noc_async_read_page(1, scalars, get_write_ptr(cb_eps));
-        noc_async_read_barrier();
-        cb_push_back(cb_gamma, head_tiles);
-        cb_push_back(cb_scaler, 1);
-        cb_push_back(cb_eps, 1);
+        CircularBuffer(cb_scaler).reserve_back(1);
+        noc.async_read(
+            scalars, CircularBuffer(cb_scaler), scalars.get_aligned_page_size(), {.page_id = 0}, {.offset_bytes = 0});
+        CircularBuffer(cb_eps).reserve_back(1);
+        noc.async_read(
+            scalars, CircularBuffer(cb_eps), scalars.get_aligned_page_size(), {.page_id = 1}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        CircularBuffer(cb_gamma).push_back(head_tiles);
+        CircularBuffer(cb_scaler).push_back(1);
+        CircularBuffer(cb_eps).push_back(1);
     }
 
     for (uint32_t i = 0; i < units; ++i) {
@@ -71,28 +80,39 @@ void kernel_main() {
         const uint32_t chunk = unit - head * chunks;
 
         {
-            cb_reserve_back(cb_x, head_tiles);
-            cb_reserve_back(cb_sig, head_tiles);
-            const uint32_t x_l1 = get_write_ptr(cb_x);
-            const uint32_t s_l1 = get_write_ptr(cb_sig);
+            CircularBuffer(cb_x).reserve_back(head_tiles);
+            CircularBuffer(cb_sig).reserve_back(head_tiles);
             for (uint32_t d = 0; d < head_tiles; ++d) {
-                noc_async_read_page(unit * head_tiles + d, o16, x_l1 + d * bf16_tile_bytes);
-                noc_async_read_page(chunk * value_tiles + head * head_tiles + d, sig, s_l1 + d * bf16_tile_bytes);
+                noc.async_read(
+                    o16,
+                    CircularBuffer(cb_x),
+                    o16.get_aligned_page_size(),
+                    {.page_id = unit * head_tiles + d},
+                    {.offset_bytes = d * bf16_tile_bytes});
+                noc.async_read(
+                    sig,
+                    CircularBuffer(cb_sig),
+                    sig.get_aligned_page_size(),
+                    {.page_id = chunk * value_tiles + head * head_tiles + d},
+                    {.offset_bytes = d * bf16_tile_bytes});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_x, head_tiles);
-            cb_push_back(cb_sig, head_tiles);
+            noc.async_read_barrier();
+            CircularBuffer(cb_x).push_back(head_tiles);
+            CircularBuffer(cb_sig).push_back(head_tiles);
         }
 
         if (history != 0 && chunk + 1 == chunks && head < history_heads) {
-            cb_reserve_back(cb_proj, history_columns);
-            const uint32_t p_l1 = get_write_ptr(cb_proj);
+            CircularBuffer(cb_proj).reserve_back(history_columns);
             for (uint32_t j = 0; j < history_columns; ++j) {
-                noc_async_read_page(
-                    chunk * projection_tiles + head * history_columns + j, projected, p_l1 + j * bf16_tile_bytes);
+                noc.async_read(
+                    projected,
+                    CircularBuffer(cb_proj),
+                    projected.get_aligned_page_size(),
+                    {.page_id = chunk * projection_tiles + head * history_columns + j},
+                    {.offset_bytes = j * bf16_tile_bytes});
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_proj, history_columns);
+            noc.async_read_barrier();
+            CircularBuffer(cb_proj).push_back(history_columns);
         }
     }
 }

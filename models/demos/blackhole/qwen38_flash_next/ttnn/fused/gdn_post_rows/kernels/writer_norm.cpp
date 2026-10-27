@@ -8,13 +8,16 @@
 //
 // The history (``commit_rows_full``): the units of the last tile row with head < 10 each take eight of the
 // projection's 80 q|k|v column tiles (columns 8h .. 8h + 7) from cb_proj, copy their rows 29..31 into rows 0..2 of a
-// zeroed tile and write it to page col of ``history_next`` [1, 1, 32, 2560].  A bf16 tile row r is two 32-byte
-// segments: face (r >> 4) * 2 + {0, 1} at element offset (r & 15) * 16.
+// zeroed tile and write each to its column's page of ``history_next`` [1, 1, 32, 2560].  A bf16 tile row r is two
+// 32-byte segments: face (r >> 4) * 2 + {0, 1} at element offset (r & 15) * 16.
 // CBs: cb_proj (5, the projection tiles), cb_out (16, the gated tiles), cb_hist (17, the history scratch).
 // Compile-time args: TensorAccessorArgs of gated, history_next, chained from 0.  Runtime args: 0 gated address,
 // 1 history_next address, 2 chunks (NC), 3 rows, 4 history, 5 units on this core, 6 first unit.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 namespace {
@@ -30,33 +33,33 @@ constexpr uint32_t face_bytes = 512;     // 16 x 16 bf16
 constexpr uint32_t half_row_bytes = 32;  // 16 bf16 of one tile row inside one face
 constexpr uint32_t half_row_words = half_row_bytes / 4;
 
-// byte offset of the left (segment 0) or right (segment 1) half of tile row r inside a bf16 tile
+// byte offset of the left (segment 0) or right (segment 1) half of tile row `row` inside a bf16 tile
 constexpr uint32_t row_half(uint32_t row, uint32_t segment) {
     return ((row >> 4) * 2 + segment) * face_bytes + (row & 15) * half_row_bytes;
 }
 
-void fill_words(uint32_t l1, uint32_t words, uint32_t value) {
-    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
+void fill_words(uint32_t l1_addr, uint32_t words, uint32_t value) {
+    CoreLocalMem<volatile uint32_t> dst(l1_addr);
     for (uint32_t k = 0; k < words; ++k) {
-        p[k] = value;
+        dst[k] = value;
     }
 }
 
-void copy_words(uint32_t dst, uint32_t src, uint32_t words) {
-    volatile tt_l1_ptr uint32_t* d = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
-    volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
+void copy_words(uint32_t dst_addr, uint32_t src_addr, uint32_t words) {
+    CoreLocalMem<volatile uint32_t> dst(dst_addr);
+    CoreLocalMem<volatile uint32_t> src(src_addr);
     for (uint32_t k = 0; k < words; ++k) {
-        d[k] = s[k];
+        dst[k] = src[k];
     }
 }
 }  // namespace
 
 void kernel_main() {
-    constexpr auto out_args = TensorAccessorArgs<0>();
-    constexpr auto history_next_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr auto gated_args = TensorAccessorArgs<0>();
+    constexpr auto history_next_args = TensorAccessorArgs<gated_args.next_compile_time_args_offset()>();
 
     uint32_t arg = 0;
-    const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t gated_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t history_next_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t chunks = get_arg_val<uint32_t>(arg++);
     const uint32_t rows = get_arg_val<uint32_t>(arg++);
@@ -64,55 +67,67 @@ void kernel_main() {
     const uint32_t units = get_arg_val<uint32_t>(arg++);
     const uint32_t first_unit = get_arg_val<uint32_t>(arg++);
 
-    const auto out = TensorAccessor(out_args, out_addr);
+    const auto gated = TensorAccessor(gated_args, gated_addr);
     const auto history_next = TensorAccessor(history_next_args, history_next_addr);
-    cb_reserve_back(cb_hist, history_columns);
-    const uint32_t hist_l1 = get_write_ptr(cb_hist);
+    const Noc noc;
+    // The history scratch: reserved once and never pushed, so its write pointer is stable for the whole kernel.
+    CircularBuffer(cb_hist).reserve_back(history_columns);
+    const uint32_t history_l1 = CircularBuffer(cb_hist).get_write_ptr();
 
     for (uint32_t i = 0; i < units; ++i) {
         const uint32_t unit = first_unit + i;
         const uint32_t head = unit / chunks;
         const uint32_t chunk = unit - head * chunks;
 
-        cb_wait_front(cb_out, head_tiles);
-        const uint32_t l1 = get_read_ptr(cb_out);
+        CircularBuffer(cb_out).wait_front(head_tiles);
+        const uint32_t gated_l1 = CircularBuffer(cb_out).get_read_ptr();
         const uint32_t start_row = chunk * tile_rows;
         const uint32_t valid = rows <= start_row ? 0 : (rows - start_row < tile_rows ? rows - start_row : tile_rows);
         if (valid < tile_rows) {
             for (uint32_t d = 0; d < head_tiles; ++d) {
-                for (uint32_t r = valid; r < tile_rows; ++r) {
-                    fill_words(l1 + d * bf16_tile_bytes + row_half(r, 0), half_row_words, 0);
-                    fill_words(l1 + d * bf16_tile_bytes + row_half(r, 1), half_row_words, 0);
+                for (uint32_t row = valid; row < tile_rows; ++row) {
+                    fill_words(gated_l1 + d * bf16_tile_bytes + row_half(row, 0), half_row_words, 0);
+                    fill_words(gated_l1 + d * bf16_tile_bytes + row_half(row, 1), half_row_words, 0);
                 }
             }
         }
         {
             for (uint32_t d = 0; d < head_tiles; ++d) {
-                noc_async_write_page(chunk * value_tiles + head * head_tiles + d, out, l1 + d * bf16_tile_bytes);
+                noc.async_write(
+                    CircularBuffer(cb_out),
+                    gated,
+                    gated.get_aligned_page_size(),
+                    {.offset_bytes = d * bf16_tile_bytes},
+                    {.page_id = chunk * value_tiles + head * head_tiles + d});
             }
-            noc_async_write_barrier();
+            noc.async_write_barrier();
         }
-        cb_pop_front(cb_out, head_tiles);
+        CircularBuffer(cb_out).pop_front(head_tiles);
 
         if (history != 0 && chunk + 1 == chunks && head < history_heads) {
-            cb_wait_front(cb_proj, history_columns);
-            const uint32_t p_l1 = get_read_ptr(cb_proj);
+            CircularBuffer(cb_proj).wait_front(history_columns);
+            const uint32_t projected_l1 = CircularBuffer(cb_proj).get_read_ptr();
             for (uint32_t j = 0; j < history_columns; ++j) {
-                const uint32_t tile = hist_l1 + j * bf16_tile_bytes;
-                fill_words(tile, bf16_tile_bytes / 4, 0);
-                for (uint32_t r = 0; r < history_rows; ++r) {
-                    const uint32_t source = tile_rows - history_rows + r;
+                const uint32_t history_tile = history_l1 + j * bf16_tile_bytes;
+                fill_words(history_tile, bf16_tile_bytes / 4, 0);
+                for (uint32_t row = 0; row < history_rows; ++row) {
+                    const uint32_t source_row = tile_rows - history_rows + row;
                     for (uint32_t segment = 0; segment < 2; ++segment) {
                         copy_words(
-                            tile + row_half(r, segment),
-                            p_l1 + j * bf16_tile_bytes + row_half(source, segment),
+                            history_tile + row_half(row, segment),
+                            projected_l1 + j * bf16_tile_bytes + row_half(source_row, segment),
                             half_row_words);
                     }
                 }
-                noc_async_write_page(head * history_columns + j, history_next, tile);
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(history_tile),
+                    history_next,
+                    history_next.get_aligned_page_size(),
+                    {},
+                    {.page_id = head * history_columns + j});
             }
-            noc_async_write_barrier();
-            cb_pop_front(cb_proj, history_columns);
+            noc.async_write_barrier();
+            CircularBuffer(cb_proj).pop_front(history_columns);
         }
     }
 }
