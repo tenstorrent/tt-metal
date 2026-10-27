@@ -552,8 +552,10 @@ json eriscs_json(const std::vector<manifest::Erisc>& eriscs) {
     return out;
 }
 
+// Every name of a label type: an enum's enumerators, or the field kinds of Content's alternatives.
 template <typename E>
-json enum_names_json() {
+    requires std::is_enum_v<E>
+json label_names_json(std::type_identity<E>) {
     json out = json::array();
     for (const auto value : enchantum::values<E>) {
         out.push_back(lower_enum_name(value));
@@ -562,32 +564,21 @@ json enum_names_json() {
 }
 
 template <typename... Contents>
-json kind_names_json(std::type_identity<std::variant<Contents...>>) {
+json label_names_json(std::type_identity<std::variant<Contents...>>) {
     return json::array({kind_name<Contents>()...});
 }
 
-// Every name each label can hold, so readers know every value a label key can take without a copy of the C++ enums.
-// Each list is named for what the label is (a channel's status is channel_status); the schema shows which key uses
-// which list. These are names the manifest writes as strings; enum values read from the device are in types.enums.
+// Every name each label can hold (manifest::k_vocabulary_lists), so readers know every value a label key can take
+// without a copy of the C++ enums.
 json make_vocabulary_json() {
     json out;
-    out["arch"] = enum_names_json<tt::ARCH>();
-    out["fabric_config"] = enum_names_json<FabricConfig>();
-    out["reliability_mode"] = enum_names_json<FabricReliabilityMode>();
-    out["tensix_config"] = enum_names_json<FabricTensixConfig>();
-    out["udm_mode"] = enum_names_json<FabricUDMMode>();
-    out["fabric_manager_mode"] = enum_names_json<FabricManagerMode>();
-    out["fabric_topology"] = enum_names_json<Topology>();
-    out["credit_backing"] = enum_names_json<manifest::CreditBacking>();
-    out["l1_credit_counter_reason"] = enum_names_json<L1CreditCounterReason>();
-    out["z_port_role"] = enum_names_json<ZPortRole>();
-    out["edge_capability"] = enum_names_json<EdgeCapability>();
-    out["credit_counter_indexed_by"] = enum_names_json<manifest::CreditCounterIndexedBy>();
-    out["stream_register"] = enum_names_json<manifest::StreamRegister>();
-    out["field_category"] = enum_names_json<manifest::FieldCategory>();
-    out["field_kind"] = kind_names_json(std::type_identity<manifest::Content>{});
-    out["channel_status"] = enum_names_json<manifest::ChannelStatus>();
-    out["erisc_processor"] = enum_names_json<tt::tt_metal::DataMovementProcessor>();
+    std::apply(
+        [&out](const auto&... lists) {
+            ((out[std::string(lists.name)] =
+                  label_names_json(std::type_identity<typename std::decay_t<decltype(lists)>::type>{})),
+             ...);
+        },
+        manifest::k_vocabulary_lists);
     return out;
 }
 
