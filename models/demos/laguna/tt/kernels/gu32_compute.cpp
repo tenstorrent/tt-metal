@@ -90,7 +90,7 @@ void kernel_main() {
             const uint32_t m = act[a];
             reconfig_data_format(cb_u, cb_wv);
             tile_regs_acquire();
-            mul_bcast_cols_init_short(cb_u, cb_wv);
+            mul_bcast_cols_init(cb_u, cb_wv);
             mul_tiles_bcast_cols(cb_u, cb_wv, a, m, 1);
             copy_tile_init(cb_g);
             copy_tile(cb_g, a, 0);

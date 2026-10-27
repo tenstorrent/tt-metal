@@ -35,7 +35,7 @@ void kernel_main() {
         // sq_j = x_j * x_j
         reconfig_data_format(cb_x, cb_x);
         pack_reconfig_data_format(cb_sq);
-        mul_tiles_init(cb_x, cb_x);
+        mul_init(cb_x, cb_x);
         cb_reserve_back(cb_sq, 4);
         for (uint32_t j = 0; j < 4; ++j) {
             tile_regs_acquire();
@@ -73,7 +73,7 @@ void kernel_main() {
         cb_wait_front(cb_inv, 1);
         reconfig_data_format(cb_x, cb_inv);
         pack_reconfig_data_format(cb_n);
-        mul_bcast_cols_init_short(cb_x, cb_inv);
+        mul_bcast_cols_init(cb_x, cb_inv);
         cb_reserve_back(cb_n, 4);
         for (uint32_t j = 0; j < 4; ++j) {
             tile_regs_acquire();
@@ -91,7 +91,7 @@ void kernel_main() {
         cb_wait_front(cb_n, 4);
         reconfig_data_format(cb_n, cb_w);
         pack_reconfig_data_format(cb_y);
-        mul_bcast_rows_init_short(cb_n, cb_w);
+        mul_bcast_rows_init(cb_n, cb_w);
         cb_reserve_back(cb_y, 4);
         for (uint32_t j = 0; j < 4; ++j) {
             tile_regs_acquire();
@@ -115,10 +115,10 @@ void kernel_main() {
             if (j < rd_tiles) {
                 const uint32_t p = j < half ? j + half : j - half;
                 reconfig_data_format(cb_y, cb_cos);
-                mul_bcast_rows_init_short(cb_y, cb_cos);
+                mul_bcast_rows_init(cb_y, cb_cos);
                 mul_tiles_bcast_rows(cb_y, cb_cos, j, j, 0);
                 reconfig_data_format(cb_y, cb_sin);
-                mul_bcast_rows_init_short(cb_y, cb_sin);
+                mul_bcast_rows_init(cb_y, cb_sin);
                 mul_tiles_bcast_rows(cb_y, cb_sin, p, j, 1);
                 if (j < half) {
                     sub_binary_tile_init();

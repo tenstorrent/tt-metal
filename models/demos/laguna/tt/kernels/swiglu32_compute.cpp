@@ -27,7 +27,7 @@ void kernel_main() {
 #define SW_STAGE 9
 #endif
 #if SW_STAGE >= 2
-        mul_bcast_cols_init_short(cb_u, cb_w);
+        mul_bcast_cols_init(cb_u, cb_w);
         mul_tiles_bcast_cols(cb_u, cb_w, 0, 0, 1);
 #endif
         copy_tile_init(cb_g);

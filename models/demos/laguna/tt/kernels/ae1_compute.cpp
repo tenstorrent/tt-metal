@@ -34,7 +34,7 @@ void kernel_main() {
 
     cb_wait_front(cb_attn, TJ);
     cb_wait_front(cb_gsp, 1);
-    mul_bcast_cols_init_short(cb_attn, cb_gsp);
+    mul_bcast_cols_init(cb_attn, cb_gsp);
     tile_regs_acquire();
     for (uint32_t j = 0; j < TJ; ++j) {
         mul_tiles_bcast_cols(cb_attn, cb_gsp, j, 0, j);
