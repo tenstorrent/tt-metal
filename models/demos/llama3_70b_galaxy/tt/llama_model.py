@@ -209,13 +209,7 @@ class TtTransformer(LightweightModule):
 
     def setup_prefill(self, mesh_sub_device_manager_id_prefill=None):
         if self.prefetcher_setup is not None:
-            # Programs compiled in decode embed the first GCB addresses, so every later
-            # decode setup recreates the GCB there instead of wherever L1 is free.
-            global_cb_addresses = self.prefetcher_setup.release_global_cb()
-            # A failed decode setup can leave a prefill setup with no GCB installed.
-            # Returning to prefill must not clear the first decode addresses.
-            if self._global_cb_addresses is None:
-                self._global_cb_addresses = global_cb_addresses
+            self.prefetcher_setup.release_global_cb()
         # BH unfused-CCL path: prefill uses the fused all_gather_minimal_matmul + interleaved weights, never
         # the ring matmuls or the prefetcher global CB (those are decode-only). Run prefill exactly like the
         # no-prefetcher path (default sub-device, no custom manager). Loading the prefetcher's prefill
@@ -1012,6 +1006,12 @@ class TtTransformer(LightweightModule):
     ):
         if mode == "decode" and self.use_prefetcher:
             self.prefetcher_setup.create_global_cb()
+            if self._global_cb_addresses is None:
+                # Cached decode programs keep the GCB addresses of their first compile, so every
+                # later decode setup recreates the GCB there. A GCB that no program has read yet
+                # can still move; fixing it earlier would reserve an address prefill may need.
+                global_cb = self.prefetcher_setup.global_circular_buffer
+                self._global_cb_addresses = (global_cb.buffer_address(), global_cb.config_address())
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
                 num_layers=self.n_layers,
