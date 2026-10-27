@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from typing import List, Optional
 
 import torch
+import ttml
 import ttnn
 from ttnn import distributed_context_recv_bytes as _mpi_recv_bytes
 from ttnn import distributed_context_send_bytes as _mpi_send_bytes
@@ -51,6 +52,11 @@ def _require_distributed_context(owner: str) -> int:
             "(sender) before constructing the bridge."
         )
     return int(ttnn.distributed_context_get_rank())
+
+
+def duplicate_distributed_context():
+    """Collective: both ranks must call it in the same order."""
+    return ttml.autograd.AutoContext.get_instance().get_distributed_context().duplicate()
 
 
 def _check_role_rank(owner: str, role: str, local_rank: int) -> None:
