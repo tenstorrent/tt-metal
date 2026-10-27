@@ -9,6 +9,7 @@ Nothing in this file runs inside a forward pass.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -17,15 +18,32 @@ import ttnn
 
 TEXT_PREFIX = "language_model."
 
+# Hub revision every stage was validated on (E1-E5). Hub `main` later moved to 21ad7b3a, which has
+# the same weights and config.json but no README.md (the test corpus) and no chat_template.jinja
+# (the multimodal demo). Override with EMBEDDING_GEMMA2_REVISION (e.g. "main").
+DEFAULT_REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b"
+# config / tokenizer / processor / sentence-transformers json, weights, test corpus, chat template
+SNAPSHOT_PATTERNS = ["*.json", "*.safetensors", "tokenizer*", "README.md", "*.jinja"]
 
-def resolve_snapshot(model_id_or_path: str) -> Path:
-    """Local directory holding config.json + model.safetensors for `model_id_or_path`."""
+
+def model_revision() -> str:
+    return os.environ.get("EMBEDDING_GEMMA2_REVISION", DEFAULT_REVISION)
+
+
+def resolve_snapshot(model_id_or_path: str, revision: str | None = None) -> Path:
+    """Local directory holding config.json + model.safetensors for `model_id_or_path`.
+
+    A local directory is used as is. A hub id resolves to the pinned `revision`
+    (default `model_revision()`), so a moved hub `main` does not change what is loaded.
+    """
     p = Path(model_id_or_path)
     if p.is_dir():
         return p
     from huggingface_hub import snapshot_download
 
-    return Path(snapshot_download(model_id_or_path, allow_patterns=["*.json", "*.safetensors", "tokenizer*"]))
+    return Path(
+        snapshot_download(model_id_or_path, revision=revision or model_revision(), allow_patterns=SNAPSHOT_PATTERNS)
+    )
 
 
 def load_text_config_dict(snapshot: Path) -> dict:

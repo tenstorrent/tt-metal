@@ -64,7 +64,10 @@ emb = enc.encode(batch["input_ids"], batch["attention_mask"], traced=True)  # tr
 
 Open the device with a trace region (`trace_region_size=128 MiB` is what the tests use).
 Logical lengths run in the smallest power-of-two bucket >= L (32 ... 65536); `capture_all`
-explains why every trace is captured in one call.
+explains why every trace is captured in one call. The HF-validated maximum is 32768 tokens
+(`test_text_model[b1_s32768]` vs the HF fp32 reference). The 65536 bucket has no HF reference: it
+is validated only by padding equivalence against 32768 (a 32768-token prompt in bucket 32768 and
+padded into 65536 give the same embedding, cosine 1.000000).
 
 ## Layout
 
@@ -116,7 +119,9 @@ Traced device time per forward on one P150a (burst median; sustained after a 10 
 
 Policy: bfp8 weights + HiFi2 matmuls with measured program configs, HiFi2 SDPA with per-shape
 chunks, bfp4 additive masks (with an SDPA block map at buckets >= 4096), intermediates and the
-residual stream in L1 up to 4096 tokens. The largest bucket is now 65536 (was 32768).
+residual stream in L1 up to 4096 tokens. The largest bucket is now 65536 (was 32768); 65536 has
+no HF reference (validated by padding equivalence vs 32768 only), so the HF-validated maximum
+stays 32768.
 
 ## Vision tower
 
