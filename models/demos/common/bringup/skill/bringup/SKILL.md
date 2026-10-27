@@ -192,7 +192,11 @@ minutes, check whether an existing result can be reused: `python -m models.demos
 the same code is reused by itself, F150; `--fresh` / `verify --force` only for a deliberate re-check); the A/B sides
 (`orchestrator measure`, F116); the profiles kept outside the repo. Never re-run for an administrative reason (a commit
 hook, a file size, a log, a missing commit). When a re-run cannot be avoided, tell the owner what re-runs, why and for
-how long, before starting it. After a fix for a gate failure, follow the gate rules above: `gate --unit` on the failed
+how long, before starting it. This holds for the overseer's own launches as much as for the orchestrator's: a
+verification, a baseline, a fork-test or rebase check (owner, 2026-10-27: a strict all-fork run of ~1 h started on a
+pushed baseline without asking, when nearly all of it had run on the same code that day: "what justifies spending
+1 hour of my time?"). Before any such launch, list what already ran on the same code, run only the delta, and say
+the duration and the reason first; a full re-run of what already passed needs the owner's yes. After a fix for a gate failure, follow the gate rules above: `gate --unit` on the failed
 unit, then `gate --continue` (DeepSeek-V4.1 FIX.10, 2026-10-22: four whole-gate re-runs of ~40 min each, two of which
 failed on something the single unit would have shown in 4 minutes). Across tasks (another task's gate reusing a
 stamp), a passed unit keeps its result unless something it reads changed (F162): the model's
