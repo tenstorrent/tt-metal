@@ -387,12 +387,13 @@ TABLE = {
         "sums: bit-identical runs; DS41's routed sums peak at 5.4, under 2^24 x 2^-19 = 32)",
     ),
     "MOE_TAIL": Setting(
-        "ops",
+        "fused",
         ("ops", "fused"),
         "MOE_IMPL=block only (tt/MOE_BLOCK.md): the MoE block's tail, the combine's owner rows back to [S/SP, H/TP]. ops "
         "= a program a stage: tilize, + the shared expert's owner rows, all_to_all_async_generic over TP. fused = Marko "
-        "Staletovic's TailA2A (models/demos/moe_block/tt/tail_a2a.py; owner asked 2026-10-27 to try it; ops stays the "
-        "default until the owner has seen the A/B): the same three in one program a chip, the tilize and add under the "
+        "Staletovic's TailA2A (models/demos/moe_block/tt/tail_a2a.py; the default, owner decision 2026-10-27 after the 2x2 "
+        "A/B: device 61.2 vs 61.97 ms / chunk, alternating clean walls 110.8 / 110.8 vs 120.0 / 125.2, ladder "
+        "metrics identical): the same three in one program a chip, the tilize and add under the "
         "sends; the same output (bf16 TILE, then GLUE_FOLD's typecast as for ops)",
     ),
     # ---- mHC (tt/mhc.py, tt/residual.py)
