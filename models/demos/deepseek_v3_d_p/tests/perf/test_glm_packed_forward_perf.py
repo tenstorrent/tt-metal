@@ -60,8 +60,10 @@ def _metadata_msg(mesh_device, words):
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("forward_chunks", [1, 2, 4], ids=["f1", "f2", "f4"])
 @pytest.mark.parametrize("num_layers", [3, 4], ids=["L3", "L4"])
+# Two links is what the galaxy runs; one is the shared LoudBox block-test default.
+@pytest.mark.parametrize("num_links", [1, 2], ids=["link1", "link2"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params",
     [
         pytest.param(
             (2, 4),
@@ -70,7 +72,6 @@ def _metadata_msg(mesh_device, words):
                 l1_small_size=GLM53Adapter.l1_small_size,
                 trace_region_size=_TRACE_REGION_SIZE,
             ),
-            1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="loudbox-fabric2d-2x4",
         ),
@@ -176,7 +177,123 @@ def test_glm_packed_forward_perf(
 
     median_ms = statistics.median(times_ms)
     logger.warning(
-        f"GLM_PACKED_PERF mesh={sp}x{mesh_device.shape[1]} layers={num_layers} forward_chunks={forward_chunks} "
+        f"GLM_PACKED_PERF mesh={sp}x{mesh_device.shape[1]} links={num_links} layers={num_layers} forward_chunks={forward_chunks} "
         f"chunk={chunk} depth={start} forward_ms={median_ms:.2f} per_chunk_ms={median_ms / forward_chunks:.2f} "
         f"runs_ms={' '.join(f'{t:.2f}' for t in times_ms)}"
     )
+
+
+# Device profile of one eager forward, for `python -m tracy -r -p -v -m pytest ... -k profile`. The measured
+# forward sits between PROFILE_MEASURE_START / PROFILE_MEASURE_END signposts and the transformer's
+# forward_layer_{i}_start / _end signposts, so per-op device time can be split by layer.
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("forward_chunks", [1, 4], ids=["f1", "f4"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM53Adapter.l1_small_size
+            ),
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="loudbox-fabric2d-2x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+def test_glm_packed_forward_profile(variant, config_only, mesh_device, device_params, num_links, forward_chunks):
+    from tracy import signpost
+
+    num_layers = 4
+    sp = mesh_device.shape[0]
+    chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
+    seq_cache = (_DEPTH_CHUNKS + 1) * chunk
+    start = _DEPTH_CHUNKS * chunk
+    config = copy.deepcopy(config_only)
+    config.max_seq_len = seq_cache
+    rt_config = TtPrefillRuntimeConfig(
+        num_layers=num_layers,
+        max_seq_len=seq_cache,
+        mesh_shape=tuple(mesh_device.shape),
+        chunk_size=chunk,
+        forward_tokens_budget=forward_chunks * chunk,
+        num_users=forward_chunks,
+        num_links=num_links,
+        topology=per_axis_topology(device_params["fabric_config"]),
+        capacity_factor=8,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        model_cfg=GLM53Config,
+        routing_use_l1_small_for_semaphores=GLM53Adapter.routing_use_l1_small_for_semaphores,
+        sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
+        tp_shard_kv=True,
+    )
+    mesh_device.enable_program_cache()
+    state_dict = glm_random_transformer_state_dict(config, GLM53Config, num_layers)
+    runtime = TtPrefillRuntime(mesh_device, config, state_dict, rt_config)
+    del state_dict
+    mesh_shape = list(mesh_device.shape)
+    caches = MlaKvCaches(
+        kvpe=init_mla_kv_cache(
+            cache_format=MlaKvCacheFormat.BF16_RM,
+            hf_config=config,
+            mesh_device=mesh_device,
+            seq_len=seq_cache,
+            mesh_shape=mesh_shape,
+            sp_axis=0,
+            tp_axis=1,
+            num_kvpe_cache_layers=num_layers,
+            num_users=forward_chunks,
+        ),
+        index=init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=seq_cache,
+            mesh_shape=mesh_shape,
+            sp_axis=0,
+            tp_axis=1,
+            num_kvpe_cache_layers=full_indexer_rank(config, num_layers),
+            num_users=forward_chunks,
+            dtype=ttnn.bfloat8_b,
+        ),
+    )
+    g = torch.Generator().manual_seed(7)
+
+    def run(chunk_start):
+        # The model directly, with read_profiler: the device profiler is flushed after every layer, so a
+        # packed forward (4x the ops of a chunk) cannot overflow its buffer and drop records.
+        tokens = [torch.randint(0, config.vocab_size, (chunk,), generator=g).tolist() for _ in range(forward_chunks)]
+        if forward_chunks == 1:
+            inp = runtime.make_chunk_input(tokens[0])
+            runtime.model.forward(
+                inp,
+                caches.kvpe,
+                actual_isl=chunk,
+                actual_start=chunk_start,
+                actual_end=chunk_start + chunk,
+                cache_user_id=0,
+                index_kv_cache=caches.index,
+                read_profiler=True,
+            )
+        else:
+            chunks = [PrefillChunk(u, chunk_start, chunk_start + chunk) for u in range(forward_chunks)]
+            inp = runtime.make_forward_input(tokens, [c.actual_start for c in chunks])
+            runtime.model.forward(
+                inp, caches.kvpe, actual_isl=chunk, chunks=chunks, index_kv_cache=caches.index, read_profiler=True
+            )
+        ttnn.deallocate(inp)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.ReadDeviceProfiler(mesh_device)
+
+    try:
+        for c in range(_DEPTH_CHUNKS):
+            run(c * chunk)
+        run(start)  # one more at the measured depth, so the measured forward is a program-cache hit
+        signpost("PROFILE_MEASURE_START")
+        run(start)
+        signpost("PROFILE_MEASURE_END")
+    finally:
+        runtime.model.release_sub_device_managers()
