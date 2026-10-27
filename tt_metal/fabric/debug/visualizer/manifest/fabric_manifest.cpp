@@ -14,6 +14,7 @@
 #include <llrt/tt_cluster.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_accessor.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -33,6 +34,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -66,28 +68,44 @@ std::string utc_now_iso8601() {
     return buffer;
 }
 
-// Returns a JSON object with the "run" information for the fabric instance.
-json make_run_json(const ControlPlane& control_plane, const tt::Cluster& cluster) {
+// This process and the build it runs: ranks, when the manifest was written, and the commit built from.
+json make_run_json(const ControlPlane& control_plane) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     json run;
-    run["arch"] = lower_enum_name(cluster.arch());
-    run["fabric_config"] = lower_enum_name(control_plane.get_fabric_config());
-    run["reliability_mode"] = lower_enum_name(control_plane.get_fabric_reliability_mode());
-    run["tensix_config"] = lower_enum_name(control_plane.get_fabric_tensix_config());
-    run["udm_mode"] = lower_enum_name(control_plane.get_fabric_udm_mode());
     run["host_rank"] = *control_plane.get_local_host_rank_id_binding();
     run["mpi_rank"] = *distributed_context->rank();
     run["world_size"] = *distributed_context->size();
     run["written_at"] = utc_now_iso8601();
-    const auto build = manifest::get_build_identity();
-    run["git_sha"] = std::string(build.git_sha);
-    run["git_dirty"] = build.git_dirty;
+    const auto build_identity = manifest::get_build_identity();
+    json build;
+    build["git_sha"] = std::string(build_identity.git_sha);
+    build["git_dirty"] = build_identity.git_dirty;
+    run["build"] = std::move(build);
     return run;
 }
 
-// Returns a JSON object with the fabric context block information.
-json make_fabric_context_json(const FabricContext& fabric_context) {
+// This run's fabric: the settings it was set up with (config, SetFabricConfig's arguments), and what FabricContext
+// derived from them.
+json make_fabric_json(const ControlPlane& control_plane, const FabricContext& fabric_context) {
     json block;
+    json config;
+    config["fabric_config"] = lower_enum_name(control_plane.get_fabric_config());
+    config["reliability_mode"] = lower_enum_name(control_plane.get_fabric_reliability_mode());
+    // The most routing planes fabric opens per link, or null when it opens all of them. The environment keeps the
+    // largest count any SetFabricConfig call asked for, with no limit stored as the uint8_t maximum.
+    const uint8_t num_routing_planes = tt::tt_metal::MetalEnvAccessor(tt::tt_metal::MetalContext::instance().get_env())
+                                           .impl()
+                                           .get_num_fabric_active_routing_planes();
+    config["num_routing_planes"] =
+        num_routing_planes == std::numeric_limits<uint8_t>::max() ? json(nullptr) : json(num_routing_planes);
+    config["tensix_config"] = lower_enum_name(control_plane.get_fabric_tensix_config());
+    config["udm_mode"] = lower_enum_name(control_plane.get_fabric_udm_mode());
+    config["fabric_manager"] = lower_enum_name(control_plane.get_fabric_manager_mode());
+    const auto& max_payload = control_plane.get_fabric_router_config().max_packet_payload_size_bytes;
+    json router_config;
+    router_config["max_packet_payload_size_bytes"] = max_payload.has_value() ? json(*max_payload) : json(nullptr);
+    config["router_config"] = std::move(router_config);
+    block["config"] = std::move(config);
     block["topology"] = lower_enum_name(fabric_context.get_fabric_topology());
     block["is_2d_routing"] = fabric_context.is_2D_routing_enabled();
     block["packet_header_size_bytes"] = fabric_context.get_fabric_packet_header_size_bytes();
@@ -117,7 +135,8 @@ json make_credit_transport_json(const FabricBuilderContext& builder_context, Mes
             reasons.push_back(lower_enum_name(reason));
         }
         json entry;
-        entry["backing"] = plan.vc_uses_counters(vc) ? "l1_counter" : "stream_register";
+        entry["backing"] = lower_enum_name(
+            plan.vc_uses_counters(vc) ? manifest::CreditBacking::L1_COUNTER : manifest::CreditBacking::STREAM_REGISTER);
         entry["reasons"] = std::move(reasons);
         transport[fmt::format("vc{}", vc)] = std::move(entry);
     }
@@ -205,7 +224,7 @@ json core_registers_json(const manifest::CoreRegisters& registers) {
 }
 
 // Each struct by name, with its members in order.
-json types_json(const std::vector<manifest::StructType>& types) {
+json structs_json(const std::vector<manifest::StructType>& types) {
     json out = json::object();
     for (const auto& type : types) {
         const std::string name(type.name);
@@ -224,8 +243,8 @@ json types_json(const std::vector<manifest::StructType>& types) {
     return out;
 }
 
-// Keyed by architecture, which run.arch names.
-json make_archs_json(const manifest::Arch& arch) {
+// What the architecture fixes on every router core: L1 areas at the HAL's addresses, and the register blocks.
+json make_arch_json(const manifest::Arch& arch) {
     const auto& areas = arch.areas;
     json areas_json;
     areas_json["heartbeat"] = heartbeat_json(areas.heartbeat);
@@ -237,12 +256,12 @@ json make_archs_json(const manifest::Arch& arch) {
     areas_json["base_fw_retrain_count"] = optional_l1_json(areas.base_fw_retrain_count);
     areas_json["base_fw_rx_link_up"] = optional_l1_json(areas.base_fw_rx_link_up);
     areas_json["base_fw_postcode"] = optional_l1_json(areas.base_fw_postcode);
-    json archs;
-    archs[lower_enum_name(arch.arch)]["areas"] = std::move(areas_json);
-    archs[lower_enum_name(arch.arch)]["stream_registers"] = stream_registers_json(arch.stream_registers);
-    archs[lower_enum_name(arch.arch)]["core_registers"] = core_registers_json(arch.core_registers);
-    archs[lower_enum_name(arch.arch)]["types"] = types_json(arch.types);
-    return archs;
+    json out;
+    out["name"] = lower_enum_name(arch.arch);
+    out["l1_areas"] = std::move(areas_json);
+    out["stream_registers"] = stream_registers_json(arch.stream_registers);
+    out["core_registers"] = core_registers_json(arch.core_registers);
+    return out;
 }
 
 // ============ Enums and schemas ============
@@ -262,12 +281,20 @@ json make_enums_json() {
     return out;
 }
 
-// Every struct and enum schema in `node` names a type in `types` or `enums`, so decode can read everything the
-// manifest hands it.
-void check_schemas_resolve(const json& node, const json& types, const json& enums) {
+// The type catalog: every struct and enum a schema names (struct:<Name>, enum:<Name>).
+json make_types_json(const manifest::Arch& arch) {
+    json types;
+    types["structs"] = structs_json(arch.types);
+    types["enums"] = make_enums_json();
+    return types;
+}
+
+// Every struct and enum schema in `node` names a type in `structs` or `enums` (types.structs, types.enums), so decode
+// can read everything the manifest hands it.
+void check_schemas_resolve(const json& node, const json& structs, const json& enums) {
     if (node.is_array()) {
         for (const auto& element : node) {
-            check_schemas_resolve(element, types, enums);
+            check_schemas_resolve(element, structs, enums);
         }
         return;
     }
@@ -276,7 +303,7 @@ void check_schemas_resolve(const json& node, const json& types, const json& enum
     }
     for (const auto& [key, value] : node.items()) {
         if (key != "schema" || !value.is_string()) {
-            check_schemas_resolve(value, types, enums);
+            check_schemas_resolve(value, structs, enums);
             continue;
         }
         const auto& schema = value.get_ref<const std::string&>();
@@ -284,7 +311,7 @@ void check_schemas_resolve(const json& node, const json& types, const json& enum
             return schema.starts_with(prefix) && !described.contains(schema.substr(prefix.size()));
         };
         const bool unresolved =
-            names_missing(manifest::k_struct_schema, types) || names_missing(manifest::k_enum_schema, enums);
+            names_missing(manifest::k_struct_schema, structs) || names_missing(manifest::k_enum_schema, enums);
         TT_FATAL(
             !unresolved,
             "Fabric manifest: the schema {} names a type the manifest does not describe; add it to "
@@ -347,20 +374,26 @@ json router_shape_json(const manifest::RouterShape& shape) {
     return out;
 }
 
-// index_space says whose sender channels an element belongs to: the to_sender arrays are indexed by this router's
+// indexed_by says whose sender channel each element belongs to: the to_sender arrays are indexed by this router's
 // sender compact index, and the receiver arrays by the peer router's sender compact index.
 json credit_counters_json(const manifest::L1CreditCounters& counters) {
     using manifest::CreditCounterArray;
+    using manifest::CreditCounterIndexedBy;
     json out;
-    const auto add = [&out](CreditCounterArray array, const manifest::content::L1& l1, const char* index_space) {
+    const auto add = [&out](
+                         CreditCounterArray array, const manifest::content::L1& l1, CreditCounterIndexedBy indexed_by) {
         json entry = l1_json(l1);
-        entry["index_space"] = index_space;
+        entry["indexed_by"] = lower_enum_name(indexed_by);
         out[lower_enum_name(array)] = std::move(entry);
     };
-    add(CreditCounterArray::TO_SENDER_ACK, counters.to_sender_ack, "own_sender_compact");
-    add(CreditCounterArray::TO_SENDER_COMPLETION, counters.to_sender_completion, "own_sender_compact");
-    add(CreditCounterArray::RECEIVER_ACK, counters.receiver_ack, "peer_sender_compact");
-    add(CreditCounterArray::RECEIVER_COMPLETION, counters.receiver_completion, "peer_sender_compact");
+    add(CreditCounterArray::TO_SENDER_ACK, counters.to_sender_ack, CreditCounterIndexedBy::OWN_SENDER_CHANNEL);
+    add(CreditCounterArray::TO_SENDER_COMPLETION,
+        counters.to_sender_completion,
+        CreditCounterIndexedBy::OWN_SENDER_CHANNEL);
+    add(CreditCounterArray::RECEIVER_ACK, counters.receiver_ack, CreditCounterIndexedBy::PEER_SENDER_CHANNEL);
+    add(CreditCounterArray::RECEIVER_COMPLETION,
+        counters.receiver_completion,
+        CreditCounterIndexedBy::PEER_SENDER_CHANNEL);
     return out;
 }
 
@@ -533,12 +566,28 @@ json kind_names_json(std::type_identity<std::variant<Contents...>>) {
     return json::array({kind_name<Contents>()...});
 }
 
-// Every category and kind a field can have, so readers can group and read fields without a copy of the enums.
+// Every name each label can hold, so readers know every value a label key can take without a copy of the C++ enums.
+// Each list is named for what the label is (a channel's status is channel_status); the schema shows which key uses
+// which list. These are names the manifest writes as strings; enum values read from the device are in types.enums.
 json make_vocabulary_json() {
     json out;
-    out["categories"] = enum_names_json<manifest::FieldCategory>();
-    out["kinds"] = kind_names_json(std::type_identity<manifest::Content>{});
-    out["z_port_roles"] = enum_names_json<ZPortRole>();
+    out["arch"] = enum_names_json<tt::ARCH>();
+    out["fabric_config"] = enum_names_json<FabricConfig>();
+    out["reliability_mode"] = enum_names_json<FabricReliabilityMode>();
+    out["tensix_config"] = enum_names_json<FabricTensixConfig>();
+    out["udm_mode"] = enum_names_json<FabricUDMMode>();
+    out["fabric_manager_mode"] = enum_names_json<FabricManagerMode>();
+    out["fabric_topology"] = enum_names_json<Topology>();
+    out["credit_backing"] = enum_names_json<manifest::CreditBacking>();
+    out["l1_credit_counter_reason"] = enum_names_json<L1CreditCounterReason>();
+    out["z_port_role"] = enum_names_json<ZPortRole>();
+    out["edge_capability"] = enum_names_json<EdgeCapability>();
+    out["credit_counter_indexed_by"] = enum_names_json<manifest::CreditCounterIndexedBy>();
+    out["stream_register"] = enum_names_json<manifest::StreamRegister>();
+    out["field_category"] = enum_names_json<manifest::FieldCategory>();
+    out["field_kind"] = kind_names_json(std::type_identity<manifest::Content>{});
+    out["channel_status"] = enum_names_json<manifest::ChannelStatus>();
+    out["erisc_processor"] = enum_names_json<tt::tt_metal::DataMovementProcessor>();
     return out;
 }
 
@@ -673,13 +722,13 @@ void serialize_fabric_manifest_to_file(
 
     json manifest;
     manifest["manifest_version"] = FABRIC_MANIFEST_VERSION;
-    manifest["kind"] = "fabric_manifest";
-    manifest["run"] = make_run_json(control_plane, cluster);
-    manifest["fabric_context"] = make_fabric_context_json(fabric_context);
-    manifest["vocabulary"] = make_vocabulary_json();
+    manifest["file_kind"] = "fabric_manifest";
+    manifest["run"] = make_run_json(control_plane);
+    manifest["fabric"] = make_fabric_json(control_plane, fabric_context);
     const manifest::Arch arch = describe_arch(tt::tt_metal::MetalContext::instance().hal());
-    manifest["archs"] = make_archs_json(arch);
-    manifest["enums"] = make_enums_json();
+    manifest["arch"] = make_arch_json(arch);
+    manifest["types"] = make_types_json(arch);
+    manifest["vocabulary"] = make_vocabulary_json();
 
     auto mesh_ids = control_plane.get_mesh_graph().get_all_mesh_ids();
     std::ranges::sort(mesh_ids, {}, [](const MeshId& mesh_id) { return *mesh_id; });
@@ -688,8 +737,7 @@ void serialize_fabric_manifest_to_file(
         meshes[mesh_key(mesh_id)] = make_mesh_json(control_plane, cluster, builder_context, fabric_type, mesh_id);
     }
     manifest["meshes"] = std::move(meshes);
-    check_schemas_resolve(
-        manifest, manifest.at("archs").at(lower_enum_name(arch.arch)).at("types"), manifest.at("enums"));
+    check_schemas_resolve(manifest, manifest.at("types").at("structs"), manifest.at("types").at("enums"));
 
     std::filesystem::create_directories(output_file_path.parent_path());
     const std::filesystem::path temporary_path =
