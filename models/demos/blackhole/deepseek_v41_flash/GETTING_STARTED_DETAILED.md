@@ -9,21 +9,18 @@ What changed in this release is in `RELEASE_NOTES.md`.
 
 | | |
 |---|---|
-| Image | `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0655530-4743e01` |
-| Size | 22.4 GB on disk (5.7 GB compressed), built 2026-10-19 |
-| tt-metal | `0655530d60388057829d20dee426063ea51712ee` |
-| tt-inference-server | `4743e018f94f274465731ae16189301368305f57` |
-| vllm-tt-plugin | `ff71d290df8e95e5e956d49ba860478db2cb034c` |
-| vLLM | 0.31.0 (torch 2.11.0+cpu, transformers 5.12.1) |
-| Model | [`deepseek-ai/DeepSeek-V4.1-Flash`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash) (476 GB, 48 shards) |
+| Image | `dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6` (local build, not pushed to ghcr.io) |
+| Size | TODO (docker images), built 2026-10-27 |
+| tt-metal | `afb78699c8b15104e8e9239d2bd1545a882091d9` (branch `ssinghal/dsv4p1-rebase-1017-v3`) |
+| tt-inference-server | `5b6f9268ac7a36a19766425c6cc721503efe7646` (branch `ssinghal/dsv4p1-rebase-1017`) |
+| vllm-tt-plugin | `dd4fbc6230610c4d12a436eaa29d45f7d2bc6c29` (branch `ssinghal/dsv4p1-replay-v3`) |
+| vLLM | TODO: stack versions of this image (previous release: 0.31.0, torch 2.11.0+cpu, transformers 5.12.1); read them from the image (`BUILD_INFO`, pip list) |
+| Model | [`deepseek-ai/DeepSeek-V4.1-Flash-1017`](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017) (476 GB checkpoint) |
 | Hardware | 1x Blackhole Galaxy |
 
-All branches are `ssinghal/dsv4p1`.
 `BUILD_INFO` in the image records the three commits.
-The image is an overlay on the previous image (`0.24.0-8cfe120-84b529b`): only `models/` differs (the default runtime specs in `assets/`, compared with `0.24.0-9bf06a9-84b529b`).
-The compiled tt-metal and the Python environment are reused.
-`models/`, the tt-inference-server tree and the plugin package come from the commits above.
-The `assets/` folder inside the image is older than the one in the repo: take runtime specs from the repo.
+The image is built from the three commits above without the documentation commits of branch `ssinghal/dsv4p1-rebase-1017-v3-docs` (documentation only; the `assets/` runtime specs in the image and in the repo are identical).
+The compiled tt-metal and the Python environment are reused from the previous build; `models/`, the tt-inference-server tree and the plugin package come from the commits above.
 
 The image has no weights and no caches.
 The checkpoint and the two caches are mounted from the host (step 3).
@@ -46,14 +43,14 @@ Everything else in the launch stays the same.
 | 4 users, 1M, prefix caching + chunked prefill, no images (opt-in) | `runtime_spec_b4_k5_1048576_apc.json` | 4 | 1,048,576 | no |
 | 4 users, 524,288, prefix caching + chunked prefill (opt-in) | `runtime_spec_b4_k5_524288_vision_apc.json` | 4 | 524,288 | yes |
 
-The specs without `_apc` run with prefix caching off and a chunked-prefill token budget (`max_num_batched_tokens`) of 67,584 (the measured value of the former `_noapc` specs). The `_apc` specs keep the previous defaults: prefix caching on, budget 4,096.
+The 262,144-token and 1,048,576-token specs run with prefix caching and paged prefill on (`DSV41_APC=1`, `DSV41_PF_PAGED=read`) and the bounded prefill replay (`DSV41_PF_REPLAY`, default 2,560). The chunked-prefill token budget (`max_num_batched_tokens`) is 16,384 with `long-prefill-token-threshold` 4,096 at 4 users and 1,048,576 tokens, 67,584 at 16 users and 262,144 tokens. The `_apc` copies differ only at 16 users (budget 4,096). The 131,072-token specs keep prefix caching and paged prefill off (`DSV41_APC=0`, `DSV41_PF_PAGED=0`).
 
-The image's own catalog (tt-inference-server `4743e018`) carries the same defaults as the runtime specs without `_apc`: a launch without a runtime spec (`--model deepseek-ai/DeepSeek-V4.1-Flash --tt-device blackhole_galaxy`, or `--impl deepseek-v41-flash-1m`) serves 16 users at 262,144 tokens, or 4 users at 1,048,576 tokens, with prefix caching off and a chunk budget of 67,584 (k = 5, image input). Prefix caching is opt-in: use an `_apc` spec.
+The image's own catalog (tt-inference-server `5b6f9268`) has four entries, all with prefix caching on, paged prefill on and image input: `deepseek-v41-flash` and `deepseek-v41-flash-vlm` (16 users, 262,144 tokens, budget 67,584) and `deepseek-v41-flash-1m` and `deepseek-v41-flash-vlm-1m` (4 users, 1,048,576 tokens, budget 16,384). A launch without a runtime spec (`--model deepseek-ai/DeepSeek-V4.1-Flash --tt-device blackhole_galaxy`) serves the 4-user 1,048,576-token entry (`deepseek-v41-flash-1m` is the default implementation); `--impl deepseek-v41-flash` selects the 16-user entry. The catalog entries do not set `long-prefill-token-threshold` 4,096 in `vllm_args` the way the runtime specs do (TODO: check against the server log of the catalog launch whether the threshold is applied; the verification of this image booted the catalog default).
 
 Shared settings:
 - Speculative decoding: 5 draft tokens per round, lossless.
 - Sampling on the device: temperature, top-k, top-p, per-request seed.
-- KV cache: fp8 pool. Prefix caching is off in every spec by default (chunked-prefill token budget 67,584); the `_apc` copies of the 262,144 / 524,288 / 1,048,576-token specs switch it on with a budget of 4,096.
+- KV cache: bf16 pool in the paged-prefill specs (prefix caching needs it), fp8 pool in the 131,072-token specs. Prefix caching is on in the 262,144 / 524,288 / 786,432 / 1,048,576-token specs; the `_apc` copies differ in the token budget at 16 users and 524,288 tokens (4,096).
 - Chat template: non-thinking.
 - More requests than users wait in the vLLM queue.
 
@@ -73,13 +70,13 @@ It is 131,584 by default and 262,144 in the 16-user long-context spec.
 - Keep both caches on a local disk.
 - Docker, and access to ghcr.io.
 
-### 2. Pull the image (optional)
+### 2. Load the image
 
-`docker run` pulls it on first use.
+The image is a local build: load the offline copy (TODO: tar path in GETTING_STARTED.md). It is not on ghcr.io yet.
 
 ```bash
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0655530-4743e01
-docker pull $IMAGE
+export IMAGE=dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6   # local image: load the offline copy (TODO: tar path), there is nothing to pull
+docker load -i <tar>
 ```
 
 ### 3. Prepare checkpoint, caches and spec
@@ -89,7 +86,7 @@ export CKPT=/path/to/deepseek-v41-flash-1017        # the checkpoint (read-only 
 export CACHE=/path/to/dsv41_cache_1017              # weights/ and kernels/, reused across starts
 export STATE=/path/to/dsv41_state              # scratch dirs the server writes to
 export SPEC=$PWD/assets/runtime_spec_b16_k5_262144_vision.json   # run from models/demos/blackhole/deepseek_v41_flash/ in tt-metal
-export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0655530-4743e01
+export IMAGE=dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 
@@ -291,9 +288,11 @@ Other points on an earlier tree (plain decode, not re-run on this image):
 
 ## Prefix caching and chunked prefill
 
-Opt-in: on in `runtime_spec_b16_k5_262144_vision_apc.json`, `runtime_spec_b4_k5_524288_vision_apc.json`, `runtime_spec_b4_k5_1048576_apc.json` and `runtime_spec_b4_k5_1048576_vision_apc.json`; the specs without `_apc` have it off.
-The `_apc` specs set `enable-prefix-caching`, `DSV41_APC=1` and a token budget of 4,096 per step.
-The 131,072-token specs keep both off.
+On by default in the 262,144-token, 524,288-token, 786,432-token and 1,048,576-token specs (`enable-prefix-caching`, `DSV41_APC=1`, paged prefill `DSV41_PF_PAGED=read`); `--no-enable-prefix-caching` (or `DSV41_APC=0`) turns it off.
+The token budget per step is 16,384 (`long-prefill-token-threshold` 4,096) at 4 users and 1,048,576 tokens and 67,584 at 16 users; the `_apc` copies at 16 users and 524,288 tokens use 4,096.
+The 131,072-token specs keep prefix caching off.
+The measured numbers below are from earlier images (APC was opt-in then); see `RELEASE_NOTES.md` and `RELEASE_DETAILS.md` for this image.
+With the bounded prefill replay (`DSV41_PF_REPLAY`, default 2,560) a prefix-cache hit on an 8k prompt is slower than without it (3.84 s against 2.91 s), see Known issues in `RELEASE_NOTES.md`.
 
 What it does:
 - Requests that share a prefix (a system prompt, few-shot examples, a long document) skip the shared part.
@@ -319,7 +318,11 @@ Limits:
 
 ## Performance
 
-The tables below were measured on the previous image (`0.24.0-799a223-ffd1a57`); the benchmark workflow was re-run on this image only for the default 16-user 262,144-token spec and the 4-user 786,432-token and 1,048,576-token image specs (the tables marked with this image tag). The prefix-caching and chunked-prefill numbers are in their own section.
+### Benchmark tables of this image (TODO)
+
+TODO: ISL x OSL tables up to 1,048,576 tokens with speculative decoding on (sources: `dsv4-logs/bench_1m/cache_root*/workflow_logs/reports_output/benchmarks/` once the runs of this image are done; the runs finished so far were taken on the previous image `7ca53f64776-5b6f9268-15bcbd6`, see `bench_1m/PATHS.md`, and must be re-run or labelled as such) and plain decode (speculation off; `dsv4-logs/bench_1m_nospec/`, running). Method as below: `vllm bench serve` from the `benchmarks` workflow of the image, random prompts, 1M catalog default.
+
+The tables below were measured on earlier images; the heading of each table names its image. They are kept as the long-form record and are not the numbers of this image. The prefix-caching and chunked-prefill numbers are in their own section.
 
 Method for all tables:
 - GSM8K 8-shot prompts, about 700 tokens, 256 output tokens.
@@ -504,16 +507,16 @@ See the README there.
 
 ## Build the image from the repos
 
-Use this to run commits that are not in a published image.
+Use this to run commits that are not in a published image. The commits of the image `afb78699c8b-5b6f9268-dd4fbc6` (below) exist only in the local repositories of the build host at the time of writing (branches `ssinghal/dsv4p1-rebase-1017-v3`, `ssinghal/dsv4p1-rebase-1017`, `ssinghal/dsv4p1-replay-v3`; nothing is pushed): TODO replace the checkout lines by pushed branch names once they are pushed.
 
 ```bash
 mkdir -p ~/dsv41 && cd ~/dsv41
 git clone https://github.com/tenstorrent/tt-metal.git
 git clone https://github.com/tenstorrent/tt-inference-server.git
 git clone https://github.com/tenstorrent/vllm-tt-plugin.git
-git -C tt-metal checkout ssinghal/dsv4p1 && git -C tt-metal submodule update --init --recursive
-git -C tt-inference-server checkout ssinghal/dsv4p1
-git -C vllm-tt-plugin checkout ssinghal/dsv4p1
+git -C tt-metal checkout afb78699c8b && git -C tt-metal submodule update --init --recursive
+git -C tt-inference-server checkout 5b6f9268
+git -C vllm-tt-plugin checkout dd4fbc6
 
 cd ~/dsv41/tt-inference-server
 TT_METAL_DIR=~/dsv41/tt-metal TTIS_DIR=~/dsv41/tt-inference-server \

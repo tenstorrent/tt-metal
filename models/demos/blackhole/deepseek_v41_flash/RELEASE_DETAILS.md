@@ -1,5 +1,72 @@
 # DeepSeek-V4.1-Flash on Blackhole Galaxy: release details (test logs, bisect tables, long-form findings; the short release notes are in RELEASE_NOTES.md)
 
+## This release: image `afb78699c8b-5b6f9268-dd4fbc6`
+
+| | |
+|---|---|
+| Image | `dsv41-flash-local:afb78699c8b-5b6f9268-dd4fbc6` (local build, not pushed to ghcr.io; TODO tar path, size, hosts it is loaded on) |
+| tt-metal | `afb78699c8b15104e8e9239d2bd1545a882091d9` (branch `ssinghal/dsv4p1-rebase-1017-v3`; the image is built from this commit, the documentation commits of branch `ssinghal/dsv4p1-rebase-1017-v3-docs` come after it and change documentation only) |
+| tt-inference-server | `5b6f9268ac7a36a19766425c6cc721503efe7646` (branch `ssinghal/dsv4p1-rebase-1017`) |
+| vllm-tt-plugin | `dd4fbc6230610c4d12a436eaa29d45f7d2bc6c29` (branch `ssinghal/dsv4p1-replay-v3`: `15bcbd6` prefill_final plus `dd4fbc6` prefill_total) |
+| Checkpoint | `deepseek-ai/DeepSeek-V4.1-Flash-1017` |
+| Stack | TODO: vLLM, torch, transformers versions of this image (previous release: vLLM 0.31.0, torch 2.11.0+cpu, transformers 5.12.1) |
+| Previous release | `0.24.0-0655530-4743e01` (section "Previous release" below). Images in between, not released: `a58ff4b5c2b-acf66ceb-6066a1e` (production image of the earlier checkpoint), `81284183e99-*` (1017 checkpoint), `74727b7f7ee-5b6f9268-15bcbd6` (v2, mHC and ids sort), `7ca53f64776-5b6f9268-15bcbd6` (v2.1, adaptive-k probe fix) |
+| Build | `scripts/build_local_dsv41_image.sh` with the three commits above; the compiled tt-metal is reused, `models/`, the plugin and the tt-inference-server tree are replaced. Verification started on the image built without the documentation commits. |
+
+<!-- sources: dsv4-logs/image_v3b/TAG, MS, PS, build.sh; ttis sha = git rev-parse in wt/ttis_rebase; intermediate images: dsv4-logs/image_tests/*/results.md headers, memory production image -->
+
+### What is new since `0.24.0-0655530-4743e01`
+
+| Feature | Status | How to turn it off | Measured |
+|---|---|---|---|
+| Bounded prefill replay | **New**, on by default (`DSV41_PF_REPLAY=2560`): layers 21-39 run only on the last 2,560 tokens of a cold prompt; exact | `DSV41_PF_REPLAY=0`; live switch `DSV41_PF_REPLAY_FILE` | 4 concurrent cold prompts, batch TTFT 8k / 32k / 64k / 128k: 6.66 / 19.65 / 37.94 / 75.02 s against 8.41 / 32.07 / 64.24 / 129.60 s (-21 to -42 %); needle 64k / 131k / 600k 25.8 / 50.7 / 231.1 s |
+| Fused decode indexer score | **New**, default (`DSV41_IDX_FUSED=1`): one program replaces the key-slab slice, two matmuls, slice, untilize and mask of the speculative indexer | `DSV41_IDX_FUSED=0` | 8-layer verify window at position 65,536: k = 3 23.955 -> 20.679 ms, k = 5 27.935 -> 23.648 ms; 40-layer round at 64k about -9 to -12 ms |
+| Drafter | **New**, default: no layout and gather round trips in the drafter round | `DSV41_DRAFT_ROUTER=chain DSV41_DRAFT_KEEP_PAD=0 DSV41_DRAFT_X_RM=0 DSV41_DRAFT_SAMPLE_RM=0 DSV41_DRAFT_CONF_RM=0 DSV41_SAMPLE_V2=0` | drafter alone k = 3 6.32 -> 4.86 ms, k = 5 6.35 -> 4.88 ms; round -1.4 ms |
+| Attention front (qk norm and heads) | **New**, default | `DSV41_ATTN_QKPOST=0` (both), `DSV41_ATTN_QKNORM=0`, `DSV41_ATTN_QKHEADS=0` | 40-layer round -1.52 / -1.37 ms (GSM8K / 64k needle), bit-identical |
+| Lean CCLs | **New**, default | `DSV41_CCL_LEAN=0` | 40-layer verify round k = 3 -0.232 ms, k = 5 -0.836 ms |
+| mHC blocks (T-aware, fused front) | **New** (in the 1017 images), default | `DSV41_MHC_TAWARE=0`, `DSV41_MHC_PRE=0` | whole-layer mHC chain at T = 6 (k = 5 verify) 354.4 -> 120.2 us, T = 1 (plain decode) 174.8 -> 79.7 us; 8-layer window k = 5 -2.5 ms |
+| ids sort of the selected index entries | **New** (in the 1017 images), default | `DSV41_IDX_SORT=0` | exactness: plain step and verify block read the same keys in the same order (64k boundary) |
+| Adaptive k probe | **Fixed** (v2.1): the scheduler re-measures the other k every 128 rounds | `DSV41_SPEC_PROBE_EVERY=0` (old behaviour) | GSM8K eval: k = 5 in 95.5 % of the rounds (0.5 % before), acceptance length 4.18 (3.32), client decode at 4 concurrent greedy requests +11.5 % |
+| Host-side server prefill | **New**, default | `DSV41_PF_RETURN_LAG=-1` (wait for the last window), `DSV41_PF_OVERLAP=0` | time outside the device in a 4 x 64k prefill 10.7 -> 1.35 s at 2,048 / 512 |
+| 1017 checkpoint, APC and paged prefill on, single chunk trace, per-row chunk starts, budget 16,384 / 4,096 | Defaults of the specs and the catalog | see `RELEASE_NOTES.md` | see `OPTIMIZATIONS.md` sections 1 and 2 |
+
+<!-- sources: replay: dsv4-logs/replay_study/RESULTS_phase3.md and OPTIMIZATIONS.md 8.6; indexer, drafter, qkpost, lean CCL: OPTIMIZATIONS.md 8.1-8.4; mHC: dsv4-logs/levers/mhc/README.md; ids sort: tt/indexer.py canonical_ids; probe: OPTIMIZATIONS.md 8.5 and image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md; host-side prefill: OPTIMIZATIONS.md P17; switch names checked in the code of afb78699c8b (tt/replay_cfg.py, tt/spec_paged.py, tt/mtp.py, tt/attention.py, tt/ccl_lean.py, tt/mhc.py, tt/indexer.py, tt/spec_adapt.py) -->
+
+### Switches that restore the previous behaviour
+
+All switches are environment variables of the server (`-e NAME=value` in the `docker run`, or `env_vars` of the runtime spec). Defaults are the values of this release.
+
+| Switch | Default | Value that restores the previous behaviour | Effect |
+|---|---|---|---|
+| `DSV41_PF_REPLAY` | 2560 | `0` | all 40 layers on every prefill chunk (values below 2414 are not exact) |
+| `DSV41_PF_REPLAY_FILE` | unset | file holding `0` | live switch for A/B runs of one server (needs a server booted with replay on) |
+| `DSV41_IDX_FUSED` | 1 | `0` | the chain of ops in the speculative indexer |
+| `DSV41_DRAFT_ROUTER` / `DSV41_DRAFT_KEEP_PAD` / `DSV41_DRAFT_X_RM` / `DSV41_DRAFT_SAMPLE_RM` / `DSV41_DRAFT_CONF_RM` / `DSV41_SAMPLE_V2` | fused / 1 / 1 / 1 / 1 / 1 | `chain` / 0 / 0 / 0 / 0 / 0 | old drafter path (set all six) |
+| `DSV41_ATTN_QKPOST` (`DSV41_ATTN_QKNORM`, `DSV41_ATTN_QKHEADS`) | 1 | `0` | old attention-front ops |
+| `DSV41_CCL_LEAN` | 1 | `0` | stock all-reduce and combine all-gather |
+| `DSV41_SPEC_PROBE_EVERY` | 128 | `0` | the scheduler never re-measures the other k |
+| `DSV41_MHC_TAWARE` / `DSV41_MHC_PRE` | 1 / 1 | `0` / `0` | padded mHC wrappers / separate programs |
+| `DSV41_IDX_SORT` | 1 | `0` | unsorted selected ids |
+| `DSV41_PF_RETURN_LAG` | 1 | `-1` | a prefill step waits for its last window before it returns |
+
+<!-- sources: defaults read in the code of afb78699c8b: tt/replay_cfg.py (2560), tt/spec_paged.py (IDX_FUSED "1"), tt/mtp.py (DRAFT_ROUTER "fused", DRAFT_KEEP_PAD "1"), tt/attention.py (QKPOST "1"), tt/ccl_lean.py (CCL_LEAN "1"), tt/spec_adapt.py (PROBE_EVERY "128"), tt/mhc.py (MHC_TAWARE, MHC_PRE "1"), tt/indexer.py (IDX_SORT "1"); restore values and the DRAFT_X_RM / DRAFT_SAMPLE_RM / DRAFT_CONF_RM / SAMPLE_V2 defaults of 1: OPTIMIZATIONS.md 8.1; DSV41_PF_RETURN_LAG default 1 read in tt/dsv41_model.py (windows allowed in flight), -1 restores the wait: OPTIMIZATIONS.md P17; DSV41_PF_OVERLAP default 1 in tt/dsv41_model.py; DRAFT_X_RM / SAMPLE_RM / CONF_RM / SAMPLE_V2 default 1 in tt/mtp.py and tt/device_head.py -->
+
+### Measurements of this release
+
+- Merged tree, 4 users, 1M build, 40 layers, 1017 checkpoint, adaptive k with a frozen time table (3:47, 5:58 ms): see the table in `RELEASE_NOTES.md`; all four scenarios reproduce plain greedy decoding for 4 of 4 users, with the same accepted tokens per round and k mix as the v2 image (source `dsv4-logs/levers/merged/MERGED.md`).
+- Bounded prefill replay, server level (host .45, catalog default B=4 / 1M build): `dsv4-logs/replay_study/RESULTS_phase3.md`. Exactness gates (all pass): last-token logits bit-identical (4 x 8k and 4 x 32k, 40 layers; 8-layer server path for equal, mixed, piecewise, staggered and short prompts), server cold = APC hit = repeat for 32k / 64k late question / 128k needle, GSM8K 8-shot first 256 questions 253 / 256 for replay on and off with identical completions, needles 64k / 131k / 600k found, API suite 23 / 23, vision tests pass. Limits: R must be 2,414 or more; the zone is per mesh row (one prefill slot per row, `DSV41_PREFILL_UP=1`, the default); a request whose total length the plugin does not pass (plugin older than `dd4fbc6`) is treated as no skip.
+- Not run for replay: the B=16 / 262,144 build, full GSM8K / GPQA / tau3 with replay on the server (the verification of this image runs them, see below), 1M needle, B=8.
+
+### Testing done on this image
+
+TODO: fill from `dsv4-logs/image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md` when the verification finishes (lane A: boot, GSM8K, GPQA; lane B: needles 64k / 128k / 600k / 1M, determinism, 4-concurrent cold TTFT, stall; lane C: API, overload, APC, multi-turn, vision, tools, sampling, bench). Reference rows of the previous images are in `dsv4-logs/image_tests/7ca53f64776-5b6f9268-15bcbd6/results.md` (v2.1: GSM8K 96.21, bench B=4 ISL 1,024 1659 ms / 29.9 ms and ISL 8,192 6701 ms / 31.7 ms, needles 54 / 104 / 431 / 718 s, 4-concurrent cold TTFT 21.25 / 42.3 / 86.05 s, stall 5.34 s, API and vision suites pass; GPQA and tau3 not run on v2.1; v2: GPQA 80.81, tau3 72.0 %).
+
+The verification lanes boot the B=4 / 1,048,576-token catalog default (`lane.sh`); the B=16 / 262,144 configuration is not part of them. TODO: say here whether a B=16 boot was added.
+
+### Benchmark tables of this image
+
+TODO: ISL x OSL tables up to 1,048,576 tokens, speculation on (`dsv4-logs/bench_1m/` runs 1 to 3; they were taken on the v2.1 image `7ca53f64776-5b6f9268-15bcbd6` according to `bench_1m/PATHS.md`: re-run on this image or label them) and plain decode (speculation off, `dsv4-logs/bench_1m_nospec/`, running). One v2.1 point already exists: 1,048,320-token prompt, 128 output tokens, TTFT 732.6 s (c = 1) and 733.7 s (c = 4), TPOT 75.6 / 134.2 ms (`bench_1m/cache_root_b/workflow_logs/reports_output/benchmarks/report_*.md`).
+
 ## Single chunk trace, per-row chunk starts, no admission window (branch `ssinghal/dsv4p1-single`)
 
 | Item | What it is | Switch | Measured (4 users, 1,048,576 tokens, adaptive speculative k, APC on, trace region 1.2 GB) |
@@ -21,7 +88,7 @@
 
 The remaining difference to an aligned call is the per-step host work of a call (about 0.2-0.3 s: Engram hashing and uploads of the first window, APC snapshot reads, key export), which a larger step amortises; a larger step lengthens the decode stall.
 
-## This release: image `0.24.0-0655530-4743e01` (vLLM 0.31.0)
+## Previous release: image `0.24.0-0655530-4743e01` (vLLM 0.31.0)
 
 | | |
 |---|---|
