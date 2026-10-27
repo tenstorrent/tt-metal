@@ -26,7 +26,11 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, moe_fabric_payload
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    moe_fabric_payload,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.glm_synthetic_weights import glm_random_transformer_state_dict
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import full_indexer_rank
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -43,6 +47,9 @@ from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk
 _REPLAYS = int(os.environ.get("GLM_PACKED_PERF_REPLAYS", "5"))
 _TRACE_REGION_SIZE = 512 * 1024 * 1024
 _DEPTH_CHUNKS = 1  # KV prefix each timed chunk attends to, in chunks
+# Profile only: the prefix each profiled chunk attends to, in tokens (default one chunk). Timing does not depend
+# on the prefix's values, so it is left unwritten: 40960 profiles the workload test's depth without 20 fills.
+_PROFILE_DEPTH = int(os.environ.get("GLM_PROFILE_DEPTH", "0"))
 
 
 def _metadata_msg(mesh_device, words):
@@ -188,7 +195,9 @@ def test_glm_packed_forward_perf(
 # forward_layer_{i}_start / _end signposts, so per-op device time can be split by layer.
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
-@pytest.mark.parametrize("forward_chunks", [1, 4], ids=["f1", "f4"])
+@pytest.mark.parametrize("forward_chunks", [1, 2, 4], ids=["f1", "f2", "f4"])
+# Rows per chip of one chunk: 640 is the production chunk (5K on 8x4); 256 is 8x4's 2,048-token chunk.
+@pytest.mark.parametrize("rows_per_chip", [PREFILL_CHUNK_TOKENS_PER_CHIP, 256], ids=["r640", "r256"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
@@ -201,18 +210,30 @@ def test_glm_packed_forward_perf(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="loudbox-fabric2d-2x4",
         ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config), l1_small_size=GLM53Adapter.l1_small_size
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="galaxy-8x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
-def test_glm_packed_forward_profile(variant, config_only, mesh_device, device_params, num_links, forward_chunks):
+def test_glm_packed_forward_profile(
+    variant, config_only, mesh_device, device_params, num_links, rows_per_chip, forward_chunks
+):
     from tracy import signpost
 
     num_layers = 4
     sp = mesh_device.shape[0]
-    chunk = PREFILL_CHUNK_TOKENS_PER_CHIP * sp
-    seq_cache = (_DEPTH_CHUNKS + 1) * chunk
-    start = _DEPTH_CHUNKS * chunk
+    chunk = rows_per_chip * sp
+    start = _PROFILE_DEPTH or _DEPTH_CHUNKS * chunk
+    assert start % chunk == 0, f"GLM_PROFILE_DEPTH={start} must be a whole number of {chunk}-token chunks"
+    seq_cache = start + chunk
     config = copy.deepcopy(config_only)
     config.max_seq_len = seq_cache
     rt_config = TtPrefillRuntimeConfig(
@@ -289,8 +310,9 @@ def test_glm_packed_forward_profile(variant, config_only, mesh_device, device_pa
         ttnn.ReadDeviceProfiler(mesh_device)
 
     try:
-        for c in range(_DEPTH_CHUNKS):
-            run(c * chunk)
+        if not _PROFILE_DEPTH:
+            for c in range(_DEPTH_CHUNKS):
+                run(c * chunk)
         run(start)  # one more at the measured depth, so the measured forward is a program-cache hit
         signpost("PROFILE_MEASURE_START")
         run(start)
