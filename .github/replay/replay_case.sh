@@ -60,23 +60,23 @@ LH=$(tree "$HEAD") || { echo "failed" > "$OUT/status"; echo "head tree failed"; 
 echo "trees ready $(date -u +%T)"
 
 T0=$(date +%s)
-measure_suite "$LB" "s1-$CASE"
-measure_suite "$LH" "s1-$CASE"
+measure_suite "$LB" "s1b-$CASE"
+measure_suite "$LH" "s1h-$CASE"
 echo "stage1_seconds=$(( $(date +%s) - T0 ))" > "$OUT/timing"
-for L in "$LB" "$LH"; do
-  if [[ -z $(find "$L/perf_data/runs/s1-$CASE" -name '*.csv' 2>/dev/null | head -1) ]]; then
-    echo "failed" > "$OUT/status"; echo "stage 1 measured nothing in $L"; exit 1
+for T in "$LB/perf_data/runs/s1b-$CASE" "$LH/perf_data/runs/s1h-$CASE"; do
+  if [[ -z $(find "$T" -name '*.csv' 2>/dev/null | head -1) ]]; then
+    echo "failed" > "$OUT/status"; echo "stage 1 measured nothing in $T"; exit 1
   fi
 done
 
 python3 "$LH/perf/regression_compare.py" --threshold 0.02 --min-cycles 30 --module-threshold "" \
-  --current "$LH/perf_data/runs/s1-$CASE/**/*.csv" --baseline "$LB/perf_data/runs/s1-$CASE/**/*.csv" \
+  --current "$LH/perf_data/runs/s1h-$CASE/**/*.csv" --baseline "$LB/perf_data/runs/s1b-$CASE/**/*.csv" \
   --run-types L1_TO_L1 --arch "$ARCH" --report "$OUT/stage1.md" > /dev/null
 echo "stage 1: $(sed -n 's/.*\*\*\([0-9]*\) regressed point.*/\1/p' "$OUT/stage1.md" | head -1) regressed points"
 
 if [[ -s $OUT/stage1.regressions.csv ]]; then
   python3 "$LH/perf/placement_check.py" nodes --candidates "$OUT/stage1.regressions.csv" \
-    --map "$LH/perf_data/runs/s1-$CASE/**/*.windowhash" --cap "$CAP" --out "$OUT/nodes.txt"
+    --map "$LH/perf_data/runs/s1h-$CASE/**/*.windowhash" --cap "$CAP" --out "$OUT/nodes.txt"
   T1=$(date +%s)
   for side in base head; do
     L=$LB; [[ $side == head ]] && L=$LH
