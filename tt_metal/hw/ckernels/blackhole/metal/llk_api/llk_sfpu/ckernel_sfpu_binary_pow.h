@@ -250,7 +250,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // z = pow*log2(base) as an unevaluated double-float (z_hi, z_lo) and cancel the
     // large integer part against k=round(z) before the tail is ever rounded away.
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
-    constexpr float LN2 = 0.693147180559945309f;
 
     // Step 2: base**pow = 2**(pow*log2(base)).
     // The residual after the two-sum is the fp32 rounding of pow*exp_f32 itself:
@@ -259,8 +258,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // them. exp_f32 is a small integer, so a Veltkamp split of pow makes both partial
     // products exact (12-bit half * <=7-bit integer fits a 24-bit significand); the low
     // half pow_lo*exp_f32 rides in z_lo so none of the integer term's bits are lost.
-    constexpr float VELTKAMP_SPLIT = 4097.0f;  // 2**12 + 1
-    sfpi::vFloat pc = pow * VELTKAMP_SPLIT;
+    sfpi::vFloat pc = pow * 4096.0f + pow;
     sfpi::vFloat pow_hi = pc - (pc - pow);
     sfpi::vFloat pow_lo = pow - pow_hi;
 
@@ -288,7 +286,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vFloat frac = (s - k) + e;
 
     // 2**frac via the accurate exp helper (frac is small), then scale by 2**k.
-    sfpi::vFloat y = _sfpu_exp_fp32_accurate_unsafe_(frac * LN2);
+    sfpi::vFloat y = _sfpu_exp_fp32_accurate_<true, true>(frac);
     // setexp writes the 8-bit exponent field and wraps instead of saturating, so an
     // overflowing magnitude silently becomes a finite value. Detect overflow from the
     // biased exponent about to be written (>= 255 is the inf field) and clamp explicitly.
