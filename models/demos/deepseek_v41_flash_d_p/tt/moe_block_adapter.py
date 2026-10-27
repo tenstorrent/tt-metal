@@ -72,8 +72,9 @@ def block_model(cfg):
 
 
 def block_options():
-    """The owner's choices (D2 x gathered, D4 ops head, D7 fixed combine order); the tail as Marko ran DS41 (ops).
-    MOE_HEAD=fused: the fused head on the column split, the combine snapped (bit-identical runs)."""
+    """MOE_HEAD=fused (the default, owner 2026-10-27): the fused head on the column split, the combine snapped (owner
+    2026-10-27: keep the snap; bit-identical runs). ops: D2 x gathered, D4 ops head, D7 fixed combine order. The tail
+    as Marko ran DS41 (ops)."""
     from models.demos.moe_block.moe_block import MoEOptions
 
     if settings.get("MOE_HEAD") == "fused":
