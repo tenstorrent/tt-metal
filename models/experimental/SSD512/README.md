@@ -85,8 +85,8 @@ pytest models/experimental/SSD512/tests/pcc/test_ssd.py
 
 ### Performance
 ### Single Device (BS=1):
-- Device perf is `49.9` FPS
-- E2E perf (with trace + 2CQ) is `~39` FPS
+- Device perf is `65.1` FPS
+- E2E perf (with trace + 2CQ) is `~51` FPS
 
 ### Run Device Performance Test
 ```bash
