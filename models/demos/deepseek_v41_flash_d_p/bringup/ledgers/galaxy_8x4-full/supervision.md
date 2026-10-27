@@ -228,3 +228,8 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
 - 07:44 owner: push the branch (the QB does not see /data). Push FAILED: no GitHub credentials on this node (https
   asks for a username; no ssh key; gh not logged in). Asked the owner.
 - 07:48 owner logged gh in on this node (account djordjenTT); pushed dnijemcevic/model_bringup 34d20d4ee70..655d1d2716a (fast-forward, 16 commits up to FIX.4) for the QB re-verify of FIX.1, FIX.2, W.1 fabric.
+- 08:01 M.1 PASS 03a4bcb9dab on the precheck (no agent; retry after the cold-cache timeout, 1144 s with the cache
+  warm). Rung s10240, all 40 layers on 8x4: 105 metrics, 0 failures; top5_overlap 1.0 (>= 0.994); err_final_hidden
+  0.189 (limit 0.256, 74 %); tightest err_state_window_kv_L27 78 % of its limit, err_layer_L30 72 %; errors grow with
+  depth as expected (L00 0.025 -> L30 0.147); host_transfers_per_layer 0. Commit holds records only (no code change).
+  L.s10240 started. Dashboard republished (milestone).
