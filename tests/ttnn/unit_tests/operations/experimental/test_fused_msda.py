@@ -102,7 +102,7 @@ def _locations_from_offsets(reference_points, sampling_offsets, spatial_shapes, 
 # ---------------------------------------------------------------------------
 # Row at which the Blackhole split gather hands a block's rows from the reader
 # to the writer. Must equal fused_msda_gather::SPLIT_ROW in msda_gather_rows.hpp.
-SPLIT_ROW = 15
+SPLIT_ROW = 16
 
 
 def _pack_locations(loc: torch.Tensor) -> torch.Tensor:

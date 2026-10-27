@@ -46,13 +46,13 @@ constexpr uint32_t POINT_ARGS_WORDS = sizeof(PointArgs) / sizeof(uint32_t);
 // Split gather: the reader takes rows [0, SPLIT_ROW), the writer the rest. A
 // tail block with v_rows <= SPLIT_ROW leaves the writer only zeroing.
 //
-// The reader also builds the next point's geometry tiles while the writer
-// gathers, so it takes fewer rows. 15 is measured on Blackhole (nuscenes_base,
-// D = 32, test_fused_msda_perf.py); the time is not linear in the split, so
-// re-measure rather than derive it. test_fused_msda_v1_masks_out_of_bounds_corners
+// 16 is measured on Blackhole (D = 32: SCA in test_encoder_layer_perf.py
+// bev_100x100 and nuscenes_base in test_fused_msda_perf.py); 15 and 17 are 1-10%
+// slower. The time is not linear in the split, so re-measure rather than derive
+// it. test_fused_msda_v1_masks_out_of_bounds_corners
 // puts v_rows on SPLIT_ROW and SPLIT_ROW + 1 through its own copy of this value;
 // change both together.
-constexpr uint32_t SPLIT_ROW = 15;
+constexpr uint32_t SPLIT_ROW = 16;
 static_assert(SPLIT_ROW > 0 && SPLIT_ROW < fused_msda_tile_layout::TILE_MAX_ROWS);
 
 // Split-gather handshake. Per point, in the same (tile, level, point) order on
@@ -106,9 +106,22 @@ inline void zero_words(uint32_t l1_addr, uint32_t words) {
 // NUM_HEADS, VALUE_PACKED (packed (B, S, H*D) vs canonical (B, S, H, D)) and
 // STICK_NBYTES. The stick must be exactly D*2 bytes (row-major staging packs
 // the four slots back to back).
+//
+// Kept out of line: the reader's main loop keeps far more values live than the
+// writer's, and inlined there the corner loop spills its NoC register pointers
+// and level fields to the stack. Everything the loop reads is copied into
+// locals: the NoC command-register stores are volatile, so a field read through
+// a reference would be reloaded on every read.
 template <typename Cfg, typename ValueAccessor>
-inline void gather_rows(
-    Noc& noc, const ValueAccessor& value_acc, const PointArgs& a, uint32_t r_begin, uint32_t r_end) {
+__attribute__((noinline)) void gather_rows(
+    Noc& caller_noc, const ValueAccessor& value_acc_ref, const PointArgs& a, uint32_t r_begin, uint32_t r_end) {
+    Noc noc(caller_noc.get_noc_id());
+    const ValueAccessor value_acc = value_acc_ref;
+    const uint32_t block_l1 = a.block_l1;
+    const uint32_t corner_l1 = a.corner_l1;
+    const uint32_t v_rows = a.v_rows;
+    const uint32_t width = a.width;
+    const uint32_t head = a.head;
     constexpr uint32_t STICK = Cfg::STICK_NBYTES;
     constexpr uint32_t SLOT_WORDS = STICK / sizeof(uint32_t);
     constexpr uint32_t ROW_NBYTES = 4 * STICK;
@@ -118,16 +131,16 @@ inline void gather_rows(
     namespace cw = fused_msda_corner_word;
     // (b, s) row of the NW corner is nw_base + index. It wraps below zero only
     // for an out-of-bounds NW, which is never read.
-    const uint32_t nw_base = a.batch * Cfg::NUM_KEYS + a.start_index - (a.width + 1);
+    const uint32_t nw_base = a.batch * Cfg::NUM_KEYS + a.start_index - (width + 1);
 
     for (uint32_t r = r_begin; r < r_end; ++r) {
-        const uint32_t row_l1 = a.block_l1 + r * ROW_NBYTES;
-        if (r >= a.v_rows) {
+        const uint32_t row_l1 = block_l1 + r * ROW_NBYTES;
+        if (r >= v_rows) {
             zero_words(row_l1, ROW_WORDS);
             continue;
         }
         const auto c = cw::decode(
-            CoreLocalMem<volatile uint32_t>(a.corner_l1 + fused_msda_tile_layout::tile_col16_offset_fp32(r))[0]);
+            CoreLocalMem<volatile uint32_t>(corner_l1 + fused_msda_tile_layout::tile_col16_offset_fp32(r))[0]);
         const uint32_t nw = nw_base + c.index;
 
         // NW, NE, SW, SE, in lockstep with the four scalar packs in
@@ -144,14 +157,14 @@ inline void gather_rows(
                     zero_words(slot_l1, SLOT_WORDS);
                     continue;
                 }
-                const uint32_t bs = nw + dy * a.width + dx;
+                const uint32_t bs = nw + dy * width + dx;
                 uint32_t page;
                 uint32_t offset_bytes;
                 if constexpr (PACKED) {
                     page = bs;
-                    offset_bytes = a.head * (Cfg::D * 2u);
+                    offset_bytes = head * (Cfg::D * 2u);
                 } else {
-                    page = bs * Cfg::NUM_HEADS + a.head;
+                    page = bs * Cfg::NUM_HEADS + head;
                     offset_bytes = 0;
                 }
                 noc.async_read(
