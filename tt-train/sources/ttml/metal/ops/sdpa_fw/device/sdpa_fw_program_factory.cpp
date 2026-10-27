@@ -25,13 +25,6 @@ constexpr auto kWriterKernelPath =
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/compute/sdpa_fw_compute_kernel.cpp";
 
-// reader runtime args
-constexpr uint32_t kQueryBufferIdx = 0;
-constexpr uint32_t kKeyBufferIdx = 1U;
-constexpr uint32_t kValueBufferIdx = 2U;
-constexpr uint32_t kMaskBufferIdx = 3U;
-constexpr uint32_t kGateBufferIdx = 4U;
-
 // writer runtime args
 constexpr uint32_t kOutputBufferIdx = 0;
 constexpr uint32_t kIntermediateBufferIdx = 1U;
@@ -67,8 +60,8 @@ const std::string kHasGateDefKey = "HAS_GATE";
 
 // One matmul_block call produces a rectangle of output tiles (block_rows x block_cols) that must fit
 // in DST (dst_size tiles). The full output is rows x cols tiles, so the rectangle sides must divide
-// those. Take the biggest rectangle; between equal sizes take the wider one, because the tiles of
-// one output row are consecutive in memory and a wider rectangle re-reads the left operand less.
+// those. Take the biggest rectangle; between equal sizes take the wider one, so the tiles of one
+// output row are packed consecutively (the LLK unpacks min(rows, cols) + rows * cols tiles either way).
 struct MatmulBlockDims {
     uint32_t block_rows;
     uint32_t block_cols;
@@ -192,24 +185,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     const uint32_t num_available_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
-    const uint64_t l1_budget_bytes =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-
     // The program config in tiles: Sq_chunk_t query tile-rows of heads_per_item heads are processed
     // together against one pass over K/V, Sk_chunk_t K/V tiles per step. Unset knobs are picked by the
     // cost model (sdpa_fw_config.cpp); the ring SDPA path builds the program directly, so the knobs are
     // checked here as well as in validate.
-    const SDPAForwardShape shape{
-        .batch = qB,
-        .q_heads = qNH,
-        .kv_heads = kNH,
-        .St = St,
-        .qWt = qWt,
-        .vWt = vWt,
-        .mask_type = mask_type,
-        .has_gate = args.has_gate,
-        .return_intermediates = args.return_intermediates};
-    const SDPAForwardChunks chunks = resolve_chunks(args.program_config, shape, l1_budget_bytes, num_available_cores);
+    const SDPAForwardShape shape = shape_of(query, key, value, mask_type, args.has_gate, args.return_intermediates);
+    const SDPAForwardChunks chunks =
+        resolve_chunks(args.program_config, shape, l1_budget_bytes(device), num_available_cores);
     const uint32_t Sq_chunk_t = chunks.Sq_chunk_t;
     const uint32_t Sk_chunk_t = chunks.Sk_chunk_t;
     const uint32_t heads_per_item = chunks.heads_per_item;
@@ -558,13 +540,13 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
         // Update input buffers for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kQueryBufferIdx] = query_buffer->address();
-            runtime_args[kKeyBufferIdx] = key_buffer->address();
-            runtime_args[kValueBufferIdx] = value_buffer->address();
+            runtime_args[kReaderArgQuery] = query_buffer->address();
+            runtime_args[kReaderArgKey] = key_buffer->address();
+            runtime_args[kReaderArgValue] = value_buffer->address();
             // For causal mask, mask is generated on-chip (mask_buffer is nullptr)
             // For DRAM mask, use actual mask buffer address
-            runtime_args[kMaskBufferIdx] = (mask_buffer != nullptr) ? mask_buffer->address() : 0;
-            runtime_args[kGateBufferIdx] = (gate_buffer != nullptr) ? gate_buffer->address() : 0;
+            runtime_args[kReaderArgMask] = (mask_buffer != nullptr) ? mask_buffer->address() : 0;
+            runtime_args[kReaderArgGate] = (gate_buffer != nullptr) ? gate_buffer->address() : 0;
         }
 
         // Update output buffer for the writer kernel
