@@ -111,11 +111,10 @@ protected:
     }
 
     void SetUp() override {
+        // kDualHostMeshDesc and kDualHostMeshEthCoords describe an 8-chip 2x4 mesh; only T3K has those chips.
         if (::tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-                ::tt::tt_metal::ClusterType::T3K and
-            ::tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-                ::tt::tt_metal::ClusterType::N300_2x2) {
-            GTEST_SKIP() << "Skipping test for non-T3K or N300_2x2 cluster";
+            ::tt::tt_metal::ClusterType::T3K) {
+            GTEST_SKIP() << "Skipping test for non-T3K cluster";
         }
     }
 };

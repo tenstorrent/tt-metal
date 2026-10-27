@@ -202,8 +202,18 @@ public:
     tt::llrt::TargetSelection saved_target_selection[tt::llrt::RunTimeDebugFeatureCount];
 
     std::map<CoreType, std::vector<CoreCoord>> delayed_cores;
+    bool skipped_ = false;
+    uint32_t saved_watcher_debug_delay_ = 0;
 
     void SetUp() override {
+        // Debug delays are compiled into the fabric ERISC router on multi-chip systems and overflow
+        // ERISC_APP_KERNEL_CODE; the failed device open breaks later tests, so skip before changing any state.
+        if (tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().size() > 1) {
+            skipped_ = true;
+            GTEST_SKIP() << "Watcher debug delays overflow the fabric ERISC router kernel on multi-chip systems";
+        }
+
+        saved_watcher_debug_delay_ = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_debug_delay();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_debug_delay(5000000);
         delayed_cores[CoreType::WORKER] = {{0, 0}, {1, 1}};
 
@@ -223,6 +233,10 @@ public:
     }
 
     void TearDown() override {
+        if (skipped_) {
+            return;
+        }
+
         // Call parent
         MeshWatcherFixture::TearDown();
 
@@ -230,6 +244,7 @@ public:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureReadDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureReadDebugDelay]);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureWriteDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureWriteDebugDelay]);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_targets(tt::llrt::RunTimeDebugFeatureAtomicDebugDelay, saved_target_selection[tt::llrt::RunTimeDebugFeatureAtomicDebugDelay]);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_debug_delay(saved_watcher_debug_delay_);
     }
 };
 
