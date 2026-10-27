@@ -585,9 +585,6 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
         real_len = min(real_len, golden_cap)
-    if hasattr(ADAPTER, "read_slot_kv_and_check_pcc"):
-        # The adapter owns its KV layout read-back (e.g. mixed per-layer KV shapes); returns {"k": min, "v": min}.
-        return ADAPTER.read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir, NUM_LAYERS)
     if ADAPTER.name == "gemma4_d_p":
         from models.demos.gemma4_d_p.tt.runners.kv_validation import read_slot_kv_and_check_pcc
 
@@ -596,7 +593,7 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "llama_3p1_8b":
         return _read_slot_kv_and_check_pcc_llama(table, device_map, slot_id, real_len, trace_dir)
-    if ADAPTER.name in ("gpt_oss_d_p", "ernie45_d_p"):  # same GQA K/V layout (one KV head per TP column)
+    if ADAPTER.name == "gpt_oss_d_p":
         return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
@@ -778,9 +775,6 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
     for m in range(rotary_dim):
         perm[m] = half * (m % 2) + (m // 2)
     perm = torch.tensor(perm, dtype=torch.long)
-    if getattr(ADAPTER, "golden_k_rope_layout", "hf") == "interleaved":
-        # Golden K is already in the device's interleaved (Meta) RoPE order (e.g. ERNIE-4.5): no permutation.
-        perm = torch.arange(head_dim)
 
     read_len = ((real_len + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK - 1) // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK) * (
         NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
