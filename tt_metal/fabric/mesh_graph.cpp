@@ -303,10 +303,14 @@ static std::vector<std::pair<ChipId, ChipId>> expand_express_link_edges(
 }
 
 void MeshGraph::initialize_from_mgd(
-    const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
-    // MGD_DEFAULT is resolved per mesh below (each mesh takes its own declared dim_types); a concrete config is a
-    // process-wide override applied to every mesh. The resolution never special-cases an owned mesh, so every rank
-    // builds an identical graph.
+    const MeshGraphDescriptor& mgd,
+    std::optional<FabricConfig> fabric_config,
+    bool is_ubb_galaxy,
+    const std::map<MeshId, FabricConfig>& per_mesh_fabric_config) {
+    // Each mesh's fabric config is resolved the same way on every rank below: per_mesh_fabric_config[mesh] wins when
+    // present (a different config per mesh / per rank, gathered so every rank agrees), else the single fabric_config
+    // applies to every mesh, else MGD_DEFAULT -- which means that mesh takes its own declared dim_types. No rank
+    // special-cases an owned mesh, so every rank builds an identical graph.
     // Intentionally leaked: a control plane (and thus a MeshGraph) can be constructed from the atexit
     // teardown path, after a plain function-local static's destructor has already run.
     static const auto& proto_arch_to_arch = *new std::unordered_map<const proto::Architecture, tt::ARCH>{
@@ -462,10 +466,19 @@ void MeshGraph::initialize_from_mgd(
         //   - a concrete config: a process-wide override applied to every mesh.
         FabricType mgd_fabric_type = MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc);
         FabricType effective_fabric_type = mgd_fabric_type;
-        if (fabric_config.has_value()) {
-            const FabricConfig mesh_fabric_config = (*fabric_config == FabricConfig::MGD_DEFAULT)
+        // Pick this mesh's requested config: its own entry in the gathered per-mesh map first, then the single
+        // process-wide fabric_config, then MGD_DEFAULT.
+        std::optional<FabricConfig> requested_fabric_config;
+        if (auto it = per_mesh_fabric_config.find(mesh_id); it != per_mesh_fabric_config.end()) {
+            requested_fabric_config = it->second;
+        } else {
+            requested_fabric_config = fabric_config;
+        }
+        if (requested_fabric_config.has_value()) {
+            // MGD_DEFAULT means "this mesh keeps its own declared dim_types"; resolve it from the descriptor.
+            const FabricConfig mesh_fabric_config = (*requested_fabric_config == FabricConfig::MGD_DEFAULT)
                                                         ? mgd.default_fabric_config_from_dim_types(mesh_id)
-                                                        : *fabric_config;
+                                                        : *requested_fabric_config;
             effective_fabric_type = get_fabric_type(mesh_fabric_config, is_ubb_galaxy);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(effective_fabric_type, mgd_fabric_type, mesh_shape)) {
@@ -1044,9 +1057,12 @@ FabricConfig fabric_config_matching_type(FabricType fabric_type) {
 }  // namespace
 
 MeshGraph::MeshGraph(
-    const MeshGraphDescriptor& mesh_graph_descriptor, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) :
+    const MeshGraphDescriptor& mesh_graph_descriptor,
+    std::optional<FabricConfig> fabric_config,
+    bool is_ubb_galaxy,
+    const std::map<MeshId, FabricConfig>& per_mesh_fabric_config) :
     mesh_graph_descriptor_(mesh_graph_descriptor) {
-    initialize_from_mgd(*mesh_graph_descriptor_, fabric_config, is_ubb_galaxy);
+    initialize_from_mgd(*mesh_graph_descriptor_, fabric_config, is_ubb_galaxy, per_mesh_fabric_config);
 }
 
 MeshGraph MeshGraph::generate_mesh_graph_of_shape(

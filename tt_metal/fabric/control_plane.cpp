@@ -403,21 +403,24 @@ void ControlPlane::init_control_plane(
     int rank = *distributed_context->rank();
 
     const MeshGraphDescriptor mgd(std::filesystem::path(mesh_graph_desc_file), /*backwards_compatible=*/true);
-    const bool fabric_config_from_mgd = (config_.fabric_config == FabricConfig::MGD_DEFAULT);
-    if (fabric_config_from_mgd) {
+
+    // Resolve the owned mesh's config (MGD_DEFAULT -> this mesh's declared default) before it is gathered, so the
+    // control plane and every peer see a concrete config for this mesh.
+    if (config_.fabric_config == FabricConfig::MGD_DEFAULT) {
         config_.fabric_config = mgd.default_fabric_config_from_dim_types(config_.mesh_id);
     }
-    // Every rank must resolve EVERY mesh's fabric type the same way, or the per-mesh edge-port maps diverge and
-    // cross-rank inter-mesh validation throws (the controller places a connection on an edge port that a
-    // non-owner rank reserved for a torus it never requested). Two cases, both identical on every rank:
-    //   - MGD_DEFAULT: hand MeshGraph MGD_DEFAULT and let it pull each mesh's own default straight from the
-    //     descriptor (default_fabric_config_from_dim_types per mesh), so meshes stay heterogeneous while every rank
-    //     agrees on each one.
-    //   - A concrete config is a process-wide override; it applies uniformly to every mesh (not just the owned one),
-    //     so the owned/non-owned split that broke the edge-port maps disappears.
-    std::optional<FabricConfig> mesh_graph_fabric_config =
-        fabric_config_from_mgd ? FabricConfig::MGD_DEFAULT : config_.fabric_config;
-    this->mesh_graph_ = std::make_unique<MeshGraph>(mgd, mesh_graph_fabric_config, cluster.is_ubb_galaxy());
+
+    // Gather every rank's FabricConfigDescriptor ONCE, up front (reused by validate_fabric_config_compatibility(),
+    // no second collective), then build each mesh's config from it. This is what lets a different fabric config be
+    // chosen per mesh -- even a different concrete override per rank -- while every rank still builds an identical
+    // mesh graph (inter-mesh validation resolves both ends of a connection, including meshes this rank does not own).
+    this->gather_fabric_config_descriptors();
+    std::map<MeshId, FabricConfig> per_mesh_fabric_config;
+    for (const auto& descriptor : gathered_fabric_configs_) {
+        per_mesh_fabric_config[descriptor.mesh_id] = descriptor.fabric_config;
+    }
+    this->mesh_graph_ = std::make_unique<MeshGraph>(
+        mgd, /*fabric_config=*/std::nullopt, cluster.is_ubb_galaxy(), per_mesh_fabric_config);
     this->validate_system_health_against_mesh_graph_policy();
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
@@ -554,9 +557,8 @@ void ControlPlane::init_control_plane_auto_discovery() {
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = this->rtoptions_.get();
-    TT_FATAL(
-        config_.fabric_config != FabricConfig::MGD_DEFAULT,
-        "FabricConfig::MGD_DEFAULT needs a mesh graph descriptor; auto-discovery has none to take the default from");
+    // MGD_DEFAULT is allowed here: auto-discovery generates its own mesh graph descriptor below, and the owned
+    // mesh's default is taken from that generated descriptor once it exists.
 
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
@@ -589,10 +591,13 @@ void ControlPlane::init_control_plane_auto_discovery() {
             this->config_.reliability_mode));
     this->validate_system_health_against_mesh_graph_policy();
 
-    // Before the topology mapper uses this process's mesh binding: check every rank's binding against the mesh
-    // graph descriptor and enforce consistent fabric settings, ahead of inter-mesh setup, routing tables,
-    // FabricContext, or router launch.
-    this->validate_fabric_config_compatibility();
+    // Resolve MGD_DEFAULT from the descriptor auto-discovery just generated (the owned mesh's declared default).
+    if (config_.fabric_config == FabricConfig::MGD_DEFAULT && this->mesh_graph_->has_mesh_graph_descriptor()) {
+        config_.fabric_config =
+            this->mesh_graph_->get_mesh_graph_descriptor().default_fabric_config_from_dim_types(config_.mesh_id);
+    }
+    // Auto-discovery is single-host (world_size == 1 is asserted above): there are no peers to cross-check, so
+    // there is nothing to gather or validate -- config_.fabric_config is used directly.
 
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
     if (topology_mapping_timeout.count() <= 0.0f) {
@@ -719,22 +724,33 @@ ControlPlane::ControlPlane(
     initialize_fabric_context();
 }
 
-void ControlPlane::validate_fabric_config_compatibility() {
-    // Gather every rank's FabricConfigDescriptor (raw bytes; the sending rank is its index in the gather).
-    // Every rank always takes part in this all_gather -- including ranks whose fabric is DISABLED -- so the
-    // collective stays symmetric and so the DISABLED state itself can be cross-checked below.
+void ControlPlane::gather_fabric_config_descriptors() {
+    // Gather every rank's FabricConfigDescriptor (raw bytes; the sending rank is its index in the gather). Every rank
+    // takes part -- including ranks whose fabric is DISABLED -- so the collective stays symmetric and the DISABLED
+    // state can be cross-checked in validate_fabric_config_compatibility().
     const auto& distributed_context = this->distributed_context_.get();
     const auto world_size = static_cast<uint32_t>(*distributed_context.size());
-
-    std::vector<tt_metal::FabricConfigDescriptor> configs(world_size);
+    gathered_fabric_configs_.assign(world_size, tt_metal::FabricConfigDescriptor{});
     distributed_context.all_gather(
         ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricConfigDescriptor>{&this->config_, 1}),
-        ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricConfigDescriptor>{configs.data(), configs.size()}));
+        ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricConfigDescriptor>{
+            gathered_fabric_configs_.data(), gathered_fabric_configs_.size()}));
+}
 
-    // Fabric DISABLED must be unanimous. A DISABLED control plane runs no fabric, so once every rank agrees
-    // on DISABLED there is nothing further to validate and we exit early -- but a split where some ranks
-    // disabled fabric while others kept it live is a hard failure (the live ranks would route into dead
-    // peers). Every rank sees the same gathered configs, so this fatals identically everywhere.
+void ControlPlane::validate_fabric_config_compatibility() {
+    // Reuse the descriptors gathered once in gather_fabric_config_descriptors() (called from init_control_plane
+    // before the mesh graph is built), so there is no second all_gather of the same data.
+    const auto& distributed_context = this->distributed_context_.get();
+    const auto world_size = static_cast<uint32_t>(*distributed_context.size());
+    TT_FATAL(
+        gathered_fabric_configs_.size() == world_size,
+        "validate_fabric_config_compatibility: fabric config descriptors were not gathered first");
+    const auto& configs = gathered_fabric_configs_;
+
+    // Fabric DISABLED must be unanimous: a split where some ranks disabled fabric while others kept it live is a
+    // hard failure (the live ranks would route into dead peers). Every rank sees the same gathered configs, so this
+    // fatals identically everywhere. When it IS unanimous, the checks below pass trivially (every descriptor
+    // matches), so no special-casing is needed here.
     const bool any_disabled = std::any_of(
         configs.begin(), configs.end(), [](const auto& c) { return c.fabric_config == FabricConfig::DISABLED; });
     if (any_disabled) {
@@ -752,8 +768,6 @@ void ControlPlane::validate_fabric_config_compatibility() {
                 enchantum::to_string(configs[rank].fabric_config),
                 observed_states);
         }
-        this->validated_fabric_config_ = this->config_.fabric_config;
-        return;
     }
 
     // vc2 / mesh pass-through come from rtoptions rather than FabricConfigDescriptor; bit 0 = vc2, bit 1 =
@@ -888,17 +902,11 @@ void ControlPlane::validate_fabric_config_compatibility() {
             mismatches,
             mesh_graph_path);
     }
-
-    this->validated_fabric_config_ = this->config_.fabric_config;
 }
 
 void ControlPlane::initialize_fabric_context() {
-    // Defensive check for callers that drive Fabric initialization directly: the config the routers are
-    // about to be built with must be the one all ranks agreed on.
-    TT_FATAL(
-        this->validated_fabric_config_.has_value() && *this->validated_fabric_config_ == this->config_.fabric_config,
-        "FabricConfig {} was not validated for consistency across ranks before fabric initialization",
-        enchantum::to_string(this->config_.fabric_config));
+    // config_.fabric_config is the one every rank agreed on: validate_fabric_config_compatibility() already fataled
+    // if ranks disagreed, so the routers are built directly from it.
     if (tt::tt_fabric::is_tt_fabric_config(config_.fabric_config)) {
         this->fabric_context_ = std::make_unique<FabricContext>(
             *this, hal_, cluster_, rtoptions_, config_.fabric_config, config_.router_config);

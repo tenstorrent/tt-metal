@@ -121,8 +121,11 @@ using RequestedIntermeshPorts =
 
 class MeshGraph {
 public:
-    // fabric_config == MGD_DEFAULT (or nullopt) lets each mesh take its own declared dim_types; a concrete config is
-    // a process-wide override applied to every mesh.
+    // Per-mesh fabric config resolution, identical on every rank:
+    //   - per_mesh_fabric_config[mesh] wins when present (lets a different config be chosen per mesh / per rank;
+    //     the owning ranks gather the map so every rank sees every mesh's config);
+    //   - else the single fabric_config applies to every mesh (uniform override / single-mesh / tests);
+    //   - MGD_DEFAULT (or nullopt) means that mesh takes its own declared dim_types.
     explicit MeshGraph(
         tt::tt_metal::ClusterType cluster_type,
         const std::string& mesh_graph_desc_file_path,
@@ -136,7 +139,8 @@ public:
     explicit MeshGraph(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         std::optional<FabricConfig> fabric_config = std::nullopt,
-        bool is_ubb_galaxy = false);
+        bool is_ubb_galaxy = false,
+        const std::map<MeshId, FabricConfig>& per_mesh_fabric_config = {});
     ~MeshGraph() = default;
 
     void print_connectivity() const;
@@ -250,7 +254,10 @@ private:
         const MeshCoordinateRange& mesh_coord_range,
         FabricType fabric_type) const;
     void initialize_from_mgd(
-        const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy);
+        const MeshGraphDescriptor& mgd,
+        std::optional<FabricConfig> fabric_config,
+        bool is_ubb_galaxy,
+        const std::map<MeshId, FabricConfig>& per_mesh_fabric_config = {});
 
     void add_to_connectivity(
         MeshId src_mesh_id,

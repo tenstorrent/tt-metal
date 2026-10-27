@@ -413,6 +413,11 @@ private:
     // built and before the topology mapper, routing tables or FabricContext use the binding.
     void validate_fabric_config_compatibility();
 
+    // All-gather every rank's FabricConfigDescriptor into gathered_fabric_configs_. Done once, up front in
+    // init_control_plane, so both the per-mesh MeshGraph build and validate_fabric_config_compatibility() share one
+    // collective instead of each issuing its own.
+    void gather_fabric_config_descriptors();
+
     // Initialize fabric context if fabric is enabled
     void initialize_fabric_context();
 
@@ -427,9 +432,9 @@ private:
     // fewer routing planes according to which links are available.
     tt_metal::FabricConfigDescriptor config_;
 
-    // FabricConfig that was agreed on by all ranks in validate_fabric_config_compatibility(). Fabric
-    // initialization is only allowed to proceed with this value.
-    std::optional<tt_fabric::FabricConfig> validated_fabric_config_;
+    // Every rank's FabricConfigDescriptor, gathered once in gather_fabric_config_descriptors(). Indexed by rank.
+    // Used to build each mesh's config in MeshGraph and to cross-check compatibility, without a second all-gather.
+    std::vector<tt_metal::FabricConfigDescriptor> gathered_fabric_configs_;
 
     // Coordinate along that ring's axis of the neighbor reached by `direction`.
     std::optional<int> ring_coord_of_neighbor(

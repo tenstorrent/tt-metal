@@ -323,6 +323,63 @@ TEST_F(ControlPlaneFixture, TestLlamaLinePerMeshFabricConfig) {
     }
 }
 
+// Regression (#per-mesh heterogeneous): a genuinely DIFFERENT concrete fabric config per mesh / per rank must
+// build a control plane that is consistent on every rank. Each process overrides ITS own mesh with that mesh's
+// declared default as a concrete config -- so on the llama line the 4x8 meshes take FABRIC_2D_TORUS_Y and the 4x2
+// meshes take FABRIC_2D. init_control_plane gathers these per-mesh configs before building the MeshGraph, so every
+// rank builds every mesh identically. Without that gather a rank would apply its own mesh's concrete config to
+// every mesh -- asking the 4x2 mesh for a torus it cannot provide (requires_more_connectivity throw) or diverging
+// the per-mesh edge-port maps (unordered_map::at / MPI_ERR_TRUNCATE in inter-mesh validation).
+TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigDiffersPerRank) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        per_rank_owned_mesh_default_fabric_config(),
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    // Building the control plane without a cross-rank throw is the regression. Also confirm every rank agrees on
+    // the full set of meshes and each mesh's declared per-mesh config.
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto mesh_ids = mesh_graph.get_mesh_ids();
+    EXPECT_EQ(mesh_ids.size(), 4u);
+    for (const auto mesh_id : mesh_ids) {
+        const auto num_chips = mesh_graph.get_chip_ids(mesh_id).size();
+        const auto expected =
+            num_chips == 32 ? tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y : tt::tt_fabric::FabricConfig::FABRIC_2D;
+        EXPECT_EQ(mesh_graph.get_mesh_graph_descriptor().default_fabric_config_from_dim_types(mesh_id), expected)
+            << "mesh " << *mesh_id << " (" << num_chips << " chips)";
+    }
+}
+
+// Regression (#per-mesh heterogeneous): "FROM MGD" (FabricConfig::MGD_DEFAULT) -- each mesh takes its OWN declared
+// dim_types config, resolved identically on every rank from the descriptor (4x8 meshes -> FABRIC_2D_TORUS_Y, 4x2
+// meshes -> FABRIC_2D). Companion to TestPerMeshHeterogeneousConfigDiffersPerRank (which sets the per-mesh config
+// manually via SetFabricConfig); both must build a control plane that is consistent across ranks.
+TEST_F(ControlPlaneFixture, TestPerMeshHeterogeneousConfigFromMgd) {
+    tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::MGD_DEFAULT,
+        tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    expect_mesh_graph_host_topology_matches_runtime(control_plane);
+
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto mesh_ids = mesh_graph.get_mesh_ids();
+    EXPECT_EQ(mesh_ids.size(), 4u);
+    for (const auto mesh_id : mesh_ids) {
+        const auto num_chips = mesh_graph.get_chip_ids(mesh_id).size();
+        const auto expected =
+            num_chips == 32 ? tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y : tt::tt_fabric::FabricConfig::FABRIC_2D;
+        EXPECT_EQ(mesh_graph.get_mesh_graph_descriptor().default_fabric_config_from_dim_types(mesh_id), expected)
+            << "mesh " << *mesh_id << " (" << num_chips << " chips)";
+    }
+}
+
 // Galaxy corner folding: mesh endpoints (first/last logical chips) must map to tray-corner ASICs.
 TEST_F(ControlPlaneFixture, TestGalaxyCornerPins) {
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
