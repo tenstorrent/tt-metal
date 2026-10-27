@@ -91,8 +91,9 @@ def test_row_bcast_walk_transitions_on_cache_hits(device, dtype_name):
     for i, a_shape in enumerate(WALKS):
         check(device, ttnn.multiply, a_shape, [1, 1, 1, a_shape[-1]], dtype, torch_dtype)
         if i == 0:
-            entries = device.cache_entries_counter.total
-        assert device.cache_entries_counter.total == entries
+            entries = device.num_program_cache_entries()
+            assert entries > 0, "The initial calls must populate the program cache"
+        assert device.num_program_cache_entries() == entries, "Walk transitions must reuse existing programs"
 
 
 # Height-sharded A keeps the page-order walk.
