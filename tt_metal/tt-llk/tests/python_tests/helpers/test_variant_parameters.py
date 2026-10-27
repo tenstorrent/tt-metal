@@ -2563,3 +2563,13 @@ class GATED_REDUCE_SCALARS(RuntimeParameter):
             "\n".join(f"std::uint32_t {name.upper()};" for name in vars(self)),
             "IIII",
         )
+
+
+@dataclass
+class PACK_SRC_FROM_OUTPUT(TemplateParameter):
+    """The packer input of a block float input from a 16-bit DEST follows the output format family, as in production (data_format.cpp)."""
+
+    pack_src_from_output = True
+
+    def convert_to_cpp(self) -> str:
+        return ""

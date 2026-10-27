@@ -43,6 +43,7 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
+    PACK_SRC_FROM_OUTPUT,
     DEST_INDEX,
     DEST_SYNC,
     LOOP_FACTOR,
@@ -207,6 +208,7 @@ def test_pack(
             TILIZE(),
             DEST_SYNC(dest_sync),
             PACK_BLOCK(pack_block),
+            PACK_SRC_FROM_OUTPUT(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
