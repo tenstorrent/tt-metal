@@ -723,10 +723,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     # fast-dispatch hang). Do not publish a wider list than what is warmed.
     tt_supported_decode_batch_sizes = SUPPORTED_PREFILL_BATCH_SIZES
 
-    # Set True once ``warmup_model_decode`` has captured its traces. Previously
-    # the presence of ``tt_warmed_decode_batch_sizes`` doubled as this sentinel;
-    # that attribute is gone, so the signal is now explicit.
+    # Set True at the end of each ``warmup_model_decode`` call (the plugin runs
+    # an eager pass and a trace pass), once every bucket of that call ran.
+    # Previously the presence of ``tt_warmed_decode_batch_sizes`` doubled as
+    # this sentinel; that attribute is gone, so the signal is now explicit.
     _decode_warmup_complete = False
+    # True while ``warmup_model_decode`` runs its buckets: a page-table buffer
+    # realloc inside that loop (the wider bucket growing the buffers the first
+    # bucket allocated) is part of warmup, not a serving-time event.
+    _g4_decode_warmup_active = False
 
     # Hybrid vLLM kv-cache groups: env-gated via ``GEMMA4_HYBRID_KV_CACHE_GROUPS``
     # (default OFF). Toggle from the tt-inference-server model-spec env so the KV
@@ -875,25 +880,29 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # attribute — an unwarmed bucket is simply not supported (review on
         # tenstorrent/vllm#455).
         self.tt_supported_decode_batch_sizes = tuple(sizes)
-        self._decode_warmup_complete = True
         # Smallest → largest so the final batch leaves sampling traces bound to
         # max_batch logits (sampling capture is skipped for smaller buckets).
-        for batch in sorted(sizes):
-            # Drop sampling traces from the previous batch — they bind logits
-            # tensor identity/batch and will ValueError on the next size.
-            for m in self.model:
-                sampling = getattr(m, "sampling", None)
-                if sampling is not None and hasattr(sampling, "reset_trace"):
-                    sampling.reset_trace()
-            logger.info("Gemma4 vLLM: decode warmup batch_size={}", batch)
-            super().warmup_model_decode(
-                kv_cache=kv_cache,
-                enable_trace=enable_trace,
-                max_batch_size=batch,
-                num_blocks=num_blocks,
-                can_sample_on_device=can_sample_on_device,
-                **kwargs,
-            )
+        self._g4_decode_warmup_active = True
+        try:
+            for batch in sorted(sizes):
+                # Drop sampling traces from the previous batch — they bind logits
+                # tensor identity/batch and will ValueError on the next size.
+                for m in self.model:
+                    sampling = getattr(m, "sampling", None)
+                    if sampling is not None and hasattr(sampling, "reset_trace"):
+                        sampling.reset_trace()
+                logger.info("Gemma4 vLLM: decode warmup batch_size={}", batch)
+                super().warmup_model_decode(
+                    kv_cache=kv_cache,
+                    enable_trace=enable_trace,
+                    max_batch_size=batch,
+                    num_blocks=num_blocks,
+                    can_sample_on_device=can_sample_on_device,
+                    **kwargs,
+                )
+        finally:
+            self._g4_decode_warmup_active = False
+        self._decode_warmup_complete = True
         # Baseline for the decode-trace allocation guard: the level right after the captures, before
         # any request can leave a persistent allocation in the traces' scratch range.
         if enable_trace:
@@ -2993,25 +3002,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             ):
                 for m, pt_for_submesh in zip(self.model, per_submesh):
                     self._install_per_layer_page_tables(m, pt_for_submesh, writer="decode")
-        # If persistent page-table buffers grew after decode-trace capture,
-        # drop the stale Metal traces so the next step recaptures against
-        # the new addresses (see Gemma4Model._page_tables_to_ttnn).
-        # Under async decode this must not happen after warmup — a grow while
-        # a prior step is still in flight rebinds buffers the pending read
-        # still references (#51186).
-        if any(getattr(m, "_invalidate_decode_traces_after_page_table_realloc", False) for m in self.model):
-            after_warmup = bool(getattr(self, "_decode_warmup_complete", False))
-            for m in self.model:
-                m._invalidate_decode_traces_after_page_table_realloc = False
-            suffix = " [AFTER WARMUP — unsafe under async_scheduling]" if after_warmup else ""
-            what = ", ".join(sorted({str(getattr(m, "_g4_page_table_realloc_reason", "grow")) for m in self.model}))
-            reason = f"per-layer page-table buffer realloc ({what}; addresses changed){suffix}"
-            # Release the stale Metal traces as the trace guard does: forgetting only their
-            # ids leaked the trace-region buffers (a 1.2 GB region was spent after 45
-            # re-captures, TT_FATAL at the next capture) and dropped the sampled-token
-            # feedback binding the helper keeps.
-            self._g4_release_decode_traces(reason)
-            (logger.error if after_warmup else logger.warning)("Gemma4 vLLM: cleared decode traces after {}", reason)
+        self._g4_note_page_table_realloc()
         t0 = time.perf_counter()
         with self._route_per_layer_page_tables(per_submesh):
             # Route through ``ChunkedPrefillPageTableGuardMixin.decode_forward``
@@ -3063,6 +3054,45 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                     getattr(self, "_prev_decode_batch", None),
                 )
         return out
+
+    def _g4_note_page_table_realloc(self):
+        """Drop the decode traces after a per-layer page-table buffer realloc, graded by when it happened.
+
+        The model raises ``_invalidate_decode_traces_after_page_table_realloc``
+        when the persistent buffers grew or a new batch key allocated
+        (``Gemma4Model._page_tables_to_ttnn``): captured replays would read the
+        old addresses, so the traces are released and the next step
+        re-captures. Inside ``warmup_model_decode`` that is the wider bucket
+        growing what the first bucket allocated (INFO). After warmup it is a
+        serving-time event: with traces captured it is an ERROR, because
+        under async decode a grow while a step is in flight rebinds buffers
+        the pending read still references (#51186); with none captured it is
+        a WARNING. The traces are released rather than forgotten: forgetting
+        only their ids leaked the trace-region buffers (a 1.2 GB region was
+        spent after 45 re-captures, TT_FATAL at the next capture) and dropped
+        the sampled-token feedback binding the helper keeps.
+        """
+        if not any(getattr(m, "_invalidate_decode_traces_after_page_table_realloc", False) for m in self.model):
+            return
+        in_warmup = bool(self._g4_decode_warmup_active)
+        after_warmup = bool(self._decode_warmup_complete) and not in_warmup
+        for m in self.model:
+            m._invalidate_decode_traces_after_page_table_realloc = False
+        what = ", ".join(sorted({str(getattr(m, "_g4_page_table_realloc_reason", "grow")) for m in self.model}))
+        reason = f"per-layer page-table buffer realloc ({what}; addresses changed)"
+        released = self._g4_release_decode_traces(reason, in_warmup=in_warmup)
+        if in_warmup:
+            logger.info(
+                "Gemma4 vLLM: decode warmup grew the per-layer page tables ({}); {} trace(s) dropped", what, released
+            )
+        elif after_warmup and released:
+            logger.error(
+                "Gemma4 vLLM: cleared {} decode trace(s) after {} [AFTER WARMUP — unsafe under async_scheduling]",
+                released,
+                reason,
+            )
+        else:
+            logger.warning("Gemma4 vLLM: {}; {} decode trace(s) released", reason, released)
 
     @property
     def kv_head_shard_devices(self):

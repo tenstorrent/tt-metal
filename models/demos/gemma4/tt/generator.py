@@ -3234,8 +3234,14 @@ class ChunkedPrefillPageTableGuardMixin:
         )
         return True
 
-    def _g4_release_decode_traces(self, reason: str) -> None:
-        """Release every captured decode trace (and the sampling traces bound to its logits)."""
+    def _g4_release_decode_traces(self, reason: str, *, in_warmup: bool = False) -> int:
+        """Release every captured decode trace (and the sampling traces bound to its logits).
+
+        Returns the number of traces released. ``in_warmup`` marks a release
+        the decode warmup itself caused (its buckets reallocating the
+        per-layer page tables), logged at INFO; any other release is a
+        WARNING.
+        """
         released = 0
         for _key, tids in list(self.trace_ids_decode.items()):
             if not tids:
@@ -3262,7 +3268,8 @@ class ChunkedPrefillPageTableGuardMixin:
         self.prev_page_table = None
         self._g4_trace_alloc_baseline = {}
         self._g4_recapture_without_precompile = True
-        logger.warning("Gemma4: released {} decode trace(s): {}", released, reason)
+        (logger.info if in_warmup else logger.warning)("Gemma4: released {} decode trace(s): {}", released, reason)
+        return released
 
     def _decode_forward_trace_text(
         self,

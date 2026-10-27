@@ -120,13 +120,32 @@ def test_release_drops_every_trace_and_resets_sampling(monkeypatch):
     g._prev_decode_batch = 128  # the feedback buffer is found through this key: it must survive the release
     g.trace_output_decode["a"] = [SimpleNamespace()]  # dropped, never freed by the release
     g._g4_trace_alloc_baseline["a"] = (1, 2)
-    g._g4_release_decode_traces("test")
+    assert g._g4_release_decode_traces("test") == 2
     assert sorted(released) == [11, 12]
     assert resets == [1]
     assert not g.trace_ids_decode["a"] and not g.trace_output_decode["a"]
     assert g._g4_trace_alloc_baseline == {}
     assert g._g4_recapture_without_precompile  # the live request's sampler state must not be touched
     assert g._prev_decode_batch == 128
+
+
+def test_a_release_the_decode_warmup_caused_is_logged_at_info(monkeypatch):
+    import models.demos.gemma4.tt.generator as generator_module
+
+    levels = {ttnn.BufferType.DRAM: 1000, ttnn.BufferType.L1: 10}
+    g = _guard(monkeypatch, levels)
+    g.model[0].sampling.reset_trace = lambda: None
+    logged = []
+    for level in ("info", "warning"):
+        monkeypatch.setattr(
+            generator_module.logger, level, lambda message, *a, _l=level, **k: logged.append((_l, message.format(*a)))
+        )
+    assert g._g4_release_decode_traces("warmup bucket grew the tables", in_warmup=True) == 0
+    assert g._g4_release_decode_traces("serving-time grow") == 0
+    assert [(level, text.split(":")[-1].strip()) for level, text in logged] == [
+        ("info", "warmup bucket grew the tables"),
+        ("warning", "serving-time grow"),
+    ]
 
 
 # ===== merged from tests/unit/test_trace_guard_arming_host.py: Host-only: when the decode-trace allocation guard walks the allocator (``ChunkedPrefillPageTableGuardMixin``).
