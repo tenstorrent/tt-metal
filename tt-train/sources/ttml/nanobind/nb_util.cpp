@@ -13,7 +13,6 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "tt-metalium/bfloat16.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -159,7 +158,7 @@ ttnn::Tensor create_tensor_from_span(
     if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
         return row_major_tensor;
     }
-    return ttnn::tilize_with_zero_padding(row_major_tensor);
+    return row_major_tensor /* TODO(nuked-op tilize_with_zero_padding): passthrough */;
 }
 
 [[noreturn]] void throw_exception(
