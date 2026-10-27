@@ -22,6 +22,15 @@ before packing. NVIDIA-swizzled scale buffers must be rearranged first.
 [NVIDIA's format description](https://docs.nvidia.com/deeplearning/transformer-engine/features/low_precision_training/nvfp4/nvfp4.html)
 details the two scale levels.
 
+## Reconstruction accuracy
+
+See [the accuracy survey and proposed verification contract](ACCURACY.md)
+for exhaustive scalar coverage, BF16/BFP8/BFP4 comparisons, and simulator
+findings. The relaxed path can exceed BFP8's aggregate error on targeted
+tensor scales. All paths, including the precise path, can flush BF16
+subnormal results at extreme tensor scales; the ordinary rounding results
+assume no such underflow or overflow.
+
 ## Preparing and converting data
 
 Prepare codes once when loading weights. `pack` rearranges codes; it does not
