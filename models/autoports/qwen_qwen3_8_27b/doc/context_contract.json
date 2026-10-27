@@ -1092,6 +1092,50 @@
       "capability_reduction": false,
       "persistent_allocation_delta_bytes": 0,
       "note": "Selected terminal suppression changes no cache, trace or persistent metadata allocations; batched snapshot candidate rejected after flat measured latency."
+    },
+    "swe-20261027-grouped-recurrence": {
+      "status": "local_fixed_work_pass_serving_pending",
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "native_context_evidence": "Inherited selected native-context B1 evidence; grouped path never applies at B1. No new native-context measurement.",
+      "selection": "QWEN38_GROUPED_RECURRENCE=1 opt-in; default off",
+      "changed_path": "Non-prefill length1 decode, resident batch greater than worker cores/12 and <=32",
+      "persistent_allocation_delta_bytes": 0,
+      "state_dtype_layout_change": false,
+      "full_attention_kv_change": false,
+      "collective_contract_change": false,
+      "local_full64_batches": [
+        16,
+        32
+      ],
+      "local_timing_logical_input": 4096,
+      "local_timing_output": 128,
+      "local_cache_fixture": 8192,
+      "local_physical_prefill_chunk": 256,
+      "state_continuation_prefix": 4097,
+      "state_continuation_phases": [
+        {
+          "tokens": 7,
+          "rows": "even"
+        },
+        {
+          "tokens": 7,
+          "rows": "odd"
+        },
+        {
+          "tokens": 129,
+          "rows": "all",
+          "start_position": 4104
+        }
+      ],
+      "state_comparison_receipts_per_phase": 384,
+      "state_and_final_logits_exact": true,
+      "evidence": [
+        "swe_optimization/full-b32-clean-comparison.json",
+        "swe_optimization/full-b32-state-comparison-v2.json",
+        "swe_optimization/GROUPED_RECURRENCE.md"
+      ],
+      "memory_scope": "No new persistent model allocation. Peak serving memory and B16/block512 capacity remain pending; no batch/native-context Cartesian-product claim."
     }
   },
   "stage05_prefill_policy": {
