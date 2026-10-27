@@ -1093,3 +1093,18 @@ glue A/Bs with their logits gates.
 
 Honest expectation for the decode step after the validation flips the defaults: 83.1 -> ~78 ms at 32 users (A3 + B7),
 plus the EP32 32-user path 71 -> ~60-69 ms with the T<32 reduce-scatter combine; the larger items (A1, MTP and B5 after their device tests) remain.
+
+## 2026-10-27 serving bring-up on the 8x4 (vLLM 0.30 + plugin main)
+
+Smokes r2-r6 (`_logs/mesh/serve_smoke_glm53_*.log`): r2 died at boot (plugin main needs vLLM 0.30: `vllm.entrypoints.launchers`), r3
+at the 0.30 runner check (`is_vllm_model`: the adapter's `__init__` must accept `vllm_config`), r4 = the first served run (exact first
+tokens, 64 K needles 4/4; the chat endpoint hid thinking text; the 64 K random bench killed the engine), r5 died at the first weight
+write (the mesh was wedged by r4's hang: a (2,4) block stage passing after a full-mesh device timeout proves nothing about the other
+chips; one reset), r6 = a/b/c PASS + the profile: per decode step `vllm_config.check_row` ~50 ms per live user (Python iteration of a
+[32768] block-table row; fixed), replay, `update_decode_positions` (11 uploads x 32 chips), `_read` (32-chip readback); engine step
+375 ms vs adapter 156 ms under the 32-request bench, ~30 ms outside the adapter in the 4-request stages (window profile queued). The
+64 K random prompt hang reproduced (2/2) with a tt-triage capture: devices 0/4/8/12 in `reader_writer_reduce_affine_transforms` ->
+`synchronize_head_stage<4>` -> `ready.wait_min` while the other 28 devices are on the next op (AutoTriage in progress; the ttnn op is
+outside this directory). Stage verdicts of the day: B5 off (chip-0 capture-determinism assert + 0.9995 < 0.9998 block gate in both
+modes), block knob set a no-op (78.3 vs 78.4 ms), MTP block rerun 2/3 (reject-all commit m=0 ring rows pcc 0.50), prefix-incremental
+long test dies in a page-table bound (non-default path), ABLOCK flip waits for the two queued 8x4 gates.
