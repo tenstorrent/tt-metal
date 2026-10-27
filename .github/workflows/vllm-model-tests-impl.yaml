@@ -245,9 +245,10 @@ jobs:
               popd
             fi
             # Per-model Python deps when the model directory pins versions that
-            # differ from the docker image (Gemma4 needs transformers==5.5.0).
+            # differ from the docker image (Gemma4 needs transformers==5.5.0, GLM-5.3-Flash 5.20.2).
             case "${{ matrix.test-group.model }}" in
               google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
+              zai-org/GLM-5.3-Flash*) uv pip install -r models/demos/glm53_flash/requirements.txt ;;
             esac
 
       - name: ⬇️ Checkout vLLM benchmark sources
