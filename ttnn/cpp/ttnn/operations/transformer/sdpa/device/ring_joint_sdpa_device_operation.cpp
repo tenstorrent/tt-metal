@@ -565,9 +565,11 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!args.is_causal && !args.is_balanced, "Sol-Attn mode is non-causal only");
         TT_FATAL(!has_joint_tensors, "Sol-Attn mode does not support joint attention tensors");
         TT_FATAL(!has_latent_v, "Sol-Attn mode does not support latent-V");
+        // A local Q shorter than K is allowed only as the non-causal cross shape (is_cross), which the multi-pass
+        // resident driver uses to attend a range of the local Q rows against the whole K/V; chunked prefill is not.
         TT_FATAL(
-            !args.has_sliding_window() && !tensor_args.is_chunked(args.kv_stripe_split),
-            "Sol-Attn mode: no sliding window / chunked prefill");
+            !args.has_sliding_window() && (!tensor_args.is_chunked(args.kv_stripe_split) || args.is_cross),
+            "Sol-Attn mode: no sliding window / chunked prefill (a shorter Q needs is_cross)");
         TT_FATAL(!tensor_args.attention_sink.has_value(), "Sol-Attn mode does not support attention_sink");
         TT_FATAL(
             !get_fp32_dest_acc_en(args.compute_kernel_config),

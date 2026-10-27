@@ -7,7 +7,7 @@
 Same recipe as `test_minimax_h3_transformer_block_perf` (compile run, then one warm run between the
 `start`/`stop` signposts), at the packed 10 s / 768p geometry with the 39-token calibrated prompt, random
 block weights/inputs. Sol config from env: SOL_BP_MODE (dense | gather | chunk | compact | resident), SOL_BP_TAU (1.0),
-SOL_BP_DENSE_PREFIX (0/1, default 0), SOL_BP_DURATION (10), SOL_BP_FUSED (0/1, default 1: fused pre-pass).
+SOL_BP_DENSE_PREFIX (0/1, default 0), SOL_BP_DURATION (10), SOL_BP_FUSED (0/1, default 1: fused pre-pass), SOL_BP_CHUNKS (Q or QxK chunk override).
 
     python -m tracy -r -p --no-web-server -m pytest \
         models/tt_dit/tests/models/minimax_h3/test_sol_block_perf_minimax_h3.py -s -k 4x8
@@ -25,7 +25,7 @@ from tracy import signpost
 
 import ttnn
 
-from ....models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
+from ....models.transformers.minimax_h3.attention_minimax_h3 import MiniMaxH3Attention, prepare_rope_tables
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
@@ -58,6 +58,14 @@ def test_sol_block_perf(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topol
     tau = float(os.environ.get("SOL_BP_TAU", "1.0"))
     dense_prefix = os.environ.get("SOL_BP_DENSE_PREFIX", "0") == "1"
     duration_s = float(os.environ.get("SOL_BP_DURATION", "10"))
+    # SOL_BP_CHUNKS="Q" or "QxK": override the module's per-length SDPA chunk sizes for this run (Q rows, K keys; K keeps
+    # the measured value when only Q is given). 64 makes the Q chunk one 64-token block, the finest Sol-Attn granularity.
+    chunks_env = os.environ.get("SOL_BP_CHUNKS")
+    if chunks_env:
+        parts = [int(x) for x in chunks_env.split("x")]
+        MiniMaxH3Attention.measured_sdpa_chunk_sizes = {
+            k: (parts[0], parts[1] if len(parts) > 1 else kc) for k, (_, kc) in MiniMaxH3Attention.measured_sdpa_chunk_sizes.items()
+        }
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
@@ -67,7 +75,8 @@ def test_sol_block_perf(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topol
     sink_tokens = sizes["num_text"] + sizes["num_audio"]  # t2va prefix: text + audio precede the video rows
     logger.info(
         f"{duration_s:g}s: seq_len {seq_len} padded {padded_len} ({padded_len // sp_factor} rows/device), "
-        f"sink {sink_tokens}, mode {mode}, tau {tau}, dense_prefix {dense_prefix}"
+        f"sink {sink_tokens}, mode {mode}, tau {tau}, dense_prefix {dense_prefix}, chunks {chunks_env or 'measured'}, "
+        f"resident passes {os.environ.get('SOL_RESIDENT_PASSES', '1')} k_chunk {os.environ.get('SOL_RESIDENT_K_CHUNK', '0')}"
     )
 
     num_timesteps = 2
@@ -152,6 +161,10 @@ def test_sol_block_perf(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topol
     local = local_device_to_torch(tt_out).float()
     assert torch.isfinite(local).all(), "block output contains NaN or Inf"
     logger.info(f"output {tuple(tt_out.shape)}, local shard std={local.std().item():.4f}")
+    # SOL_BP_SAVE=<path>: save the local shard of the block output (torch, fp32) to compare runs (e.g. pass counts).
+    if os.environ.get("SOL_BP_SAVE"):
+        torch.save(local, os.environ["SOL_BP_SAVE"])
+        logger.info(f"saved local output to {os.environ['SOL_BP_SAVE']}")
 
     # Host-vs-device check (SOL_BP_HOST_REPS=N): enqueue N blocks back to back without syncing and time the host
     # enqueue alone, then sync and time the whole thing. If enqueue/block ~= wall/block the loop is host-bound.

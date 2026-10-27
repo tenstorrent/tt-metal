@@ -331,7 +331,13 @@ class MiniMaxH3Attention(Module):
     # ------------------------------------------------------------------ helpers
 
     def _sdpa_program_config(
-        self, seq_local: int, *, ring: bool, windowed: bool = False, q_chunk: int | None = None
+        self,
+        seq_local: int,
+        *,
+        ring: bool,
+        windowed: bool = False,
+        q_chunk: int | None = None,
+        k_chunk: int | None = None,
     ) -> ttnn.SDPAProgramConfig:
         """Ring SDPA chunk sizes for a given per-device sequence length.
 
@@ -360,11 +366,11 @@ class MiniMaxH3Attention(Module):
 
         `windowed` caps k at 256 so the on-device mask CB fits in L1.
         """
-        key = (seq_local, ring, windowed, q_chunk)
+        key = (seq_local, ring, windowed, q_chunk, k_chunk)
         if key not in self._sdpa_program_configs:
             tile = ttnn.TILE_SIZE
             measured = self.measured_sdpa_chunk_sizes.get(seq_local)
-            q_override = q_chunk
+            q_override, k_override = q_chunk, k_chunk
             if measured is not None:
                 q_chunk, k_chunk = measured
             else:
@@ -372,6 +378,8 @@ class MiniMaxH3Attention(Module):
                 k_chunk = max(tile, min(512, (seq_local // tile) * tile))
             if q_override is not None:
                 q_chunk = q_override  # Sol resident mode: the 64-row query block is the compute unit
+            if k_override is not None:
+                k_chunk = k_override  # Sol resident multi-pass: a smaller K/V piece frees L1 for more resident chunks
             if windowed:
                 k_chunk = min(k_chunk, 256)
             grid = (
@@ -771,6 +779,14 @@ class MiniMaxH3Attention(Module):
     # the mask is the block-form one the "compact" pre-pass produces (block 0 of every shard forced), and the bias
     # is generated on device. SOL_RESIDENT_Q_CHUNK overrides the resident query chunk size (default 64).
     _SOL_RESIDENT_Q_CHUNK = int(os.environ.get("SOL_RESIDENT_Q_CHUNK", "64"))
+    # Multi-pass resident mode: the core's resident chunks must all fit L1 at once, which bounds the local sequence
+    # length (about 5 s at this head count). SOL_RESIDENT_PASSES=P splits the local Q rows into P contiguous ranges at
+    # 64-row boundaries and runs the ring op once per range with that range's rows of the block mask, so each pass
+    # holds 1/P of the chunks; the K/V stream (all-gather and chain) repeats per pass, the compute does not.
+    # SOL_RESIDENT_K_CHUNK overrides the K/V piece size for resident mode (0 = the measured per-length value); a
+    # smaller piece shrinks the fixed part of the L1 budget.
+    _SOL_RESIDENT_PASSES = int(os.environ.get("SOL_RESIDENT_PASSES", "1"))
+    _SOL_RESIDENT_K_CHUNK = int(os.environ.get("SOL_RESIDENT_K_CHUNK", "0"))
 
     @property
     def _sol_prepass_mode(self) -> str:
@@ -788,6 +804,87 @@ class MiniMaxH3Attention(Module):
         """Drop the block mask held for reuse, so the next sparse call routes afresh (start of every generation)."""
         if self._sol_prepass is not None and hasattr(self._sol_prepass, "reset_mask_reuse"):
             self._sol_prepass.reset_mask_reuse()
+
+    @property
+    def _sol_k_chunk(self) -> int | None:
+        if self.sol_mode != "resident" or self._SOL_RESIDENT_K_CHUNK <= 0:
+            return None
+        return self._SOL_RESIDENT_K_CHUNK
+
+    def _ring_attention(
+        self, q_BHNE, k_BHNE, v_BHNE, logical_n, program_config, sol_kwargs: dict, **op_kwargs
+    ) -> ttnn.Tensor:
+        """One ring-joint SDPA call over the local Q rows (dense, or Sol-Attn with `sol_kwargs`)."""
+        spatial_BHNE, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            q_BHNE,
+            k_BHNE,
+            v_BHNE,
+            self.dummy_joint_input,
+            self.dummy_joint_input,
+            self.dummy_joint_input,
+            persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
+                k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
+            ),
+            persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
+                v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
+            ),
+            joint_strategy="rear",
+            logical_n=logical_n,
+            program_config=program_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
+            num_links=self.ccl_manager.num_links,
+            cluster_axis=self.sp_mesh_axis,
+            mesh_device=self.mesh_device,
+            topology=self.ccl_manager.topology,
+            subdevice_id=self.ccl_manager.ccl_sub_device_id,
+            ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
+            use_column_major_ccl=True,
+            **sol_kwargs,
+            **op_kwargs,
+        )
+        return spatial_BHNE
+
+    def _sol_resident_multipass(self, q_BHNE, k_BHNE, v_BHNE, logical_n, sol_kwargs: dict) -> ttnn.Tensor:
+        """Resident mode in `_SOL_RESIDENT_PASSES` passes over contiguous 64-row-aligned ranges of the local Q rows.
+
+        Pass p attends rows [r0, r1) with rows [c0, c1) of the block mask (one row per 64-row Q chunk), so the op sees a
+        shorter local Q and 1/P of the resident chunks per core; K/V and the pooled tensors are the same for every pass.
+        A local Q shorter than K is the op's cross-attention shape (`is_cross=True`: non-causal short Q against long
+        K/V), which takes the logical length as a host int (`sol_logical_n`), not the tensor. The outputs are
+        concatenated along the sequence.
+        """
+        assert self.sol_logical_n is not None, "multi-pass resident mode needs sol_logical_n (host int)"
+        passes = self._SOL_RESIDENT_PASSES
+        rows, H, D = q_BHNE.shape[2], q_BHNE.shape[1], q_BHNE.shape[3]
+        qc = self._sol_q_chunk
+        nqc = -(-rows // qc)
+        mask = sol_kwargs["sol_block_mask"]
+        outs = []
+        for p in range(passes):
+            c0, c1 = nqc * p // passes, nqc * (p + 1) // passes
+            r0, r1 = c0 * qc, min(rows, c1 * qc)
+            assert c1 > c0 and (r1 - r0) % ttnn.TILE_SIZE == 0, (rows, passes, p)
+            q_p = ttnn.slice(q_BHNE, [0, 0, r0, 0], [1, H, r1, D])
+            mask_p = ttnn.slice(mask, [0, 0, c0, 0], [1, mask.shape[1], c1, mask.shape[3]])
+            kw = dict(sol_kwargs, sol_block_mask=mask_p)
+            out_p = self._ring_attention(
+                q_p,
+                k_BHNE,
+                v_BHNE,
+                int(self.sol_logical_n),
+                self._sdpa_program_config(r1 - r0, ring=True, q_chunk=qc, k_chunk=self._sol_k_chunk),
+                kw,
+                is_cross=True,
+            )
+            ttnn.deallocate(q_p)
+            ttnn.deallocate(mask_p)
+            outs.append(out_p)
+        out = ttnn.concat(outs, dim=2)
+        for t in outs:
+            ttnn.deallocate(t)
+        return out
 
     # ------------------------------------------------------------------ forward
 
@@ -912,36 +1009,22 @@ class MiniMaxH3Attention(Module):
             sol_kwargs = {}
             if self.sol_attn and self.sol_active:
                 sol_kwargs = self._sol_tensors(q_BHNE, k_BHNE, v_BHNE)
-            spatial_BHNE, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-                q_BHNE,
-                k_BHNE,
-                v_BHNE,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
-                ),
-                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
-                ),
-                joint_strategy="rear",
-                logical_n=logical_n,
-                program_config=self._sdpa_program_config(
-                    q_BHNE.shape[2], ring=True, q_chunk=self._sol_q_chunk if sol_kwargs else None
-                ),
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-                dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
-                num_links=self.ccl_manager.num_links,
-                cluster_axis=self.sp_mesh_axis,
-                mesh_device=self.mesh_device,
-                topology=self.ccl_manager.topology,
-                subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
-                use_column_major_ccl=True,
-                **sol_kwargs,
-            )
+            if sol_kwargs and self.sol_mode == "resident" and self._SOL_RESIDENT_PASSES > 1:
+                spatial_BHNE = self._sol_resident_multipass(q_BHNE, k_BHNE, v_BHNE, logical_n, sol_kwargs)
+            else:
+                spatial_BHNE = self._ring_attention(
+                    q_BHNE,
+                    k_BHNE,
+                    v_BHNE,
+                    logical_n,
+                    self._sdpa_program_config(
+                        q_BHNE.shape[2],
+                        ring=True,
+                        q_chunk=self._sol_q_chunk if sol_kwargs else None,
+                        k_chunk=self._sol_k_chunk if sol_kwargs else None,
+                    ),
+                    sol_kwargs,
+                )
             if sol_kwargs and self.sol_prefix_mode == "separate":
                 spatial_BHNE = self._sol_prefix_dense_rows(q_BHNE, k_BHNE, v_BHNE, spatial_BHNE)
         else:
