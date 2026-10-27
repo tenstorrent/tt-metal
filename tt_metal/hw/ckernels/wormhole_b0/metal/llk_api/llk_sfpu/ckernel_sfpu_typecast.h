@@ -84,8 +84,15 @@ inline void calculate_typecast_fp32_to_uint16() {
         // calculate_typecast_uint32_to_fp32 fires macro 2 with VD = LREG7).
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            int v = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-            TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_2, v >> 2);
+            // Alternate between p_sfpu::LREG0 and p_sfpu::LREG1. `d & 1` is a constant after the full
+            // unroll, so each arm folds to an immediate TTI_ push (no runtime encode + sw per row).
+            if (d & 1) {
+                TTI_SFPLOADMACRO(
+                    (0 << 2) | (p_sfpu::LREG1 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_2, p_sfpu::LREG1 >> 2);
+            } else {
+                TTI_SFPLOADMACRO(
+                    (0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_2, p_sfpu::LREG0 >> 2);
+            }
             TTI_SFPNOP;
         }
         TTI_SFPNOP;
@@ -131,8 +138,12 @@ inline void calculate_typecast_uint16_to_fp16b() {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        int v = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::LO16, ADDR_MOD_2, v >> 2);
+        // Alternate between p_sfpu::LREG0 and p_sfpu::LREG1 (constant arms after the full unroll).
+        if (d & 1) {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG1 & 3), InstrModLoadStore::LO16, ADDR_MOD_2, p_sfpu::LREG1 >> 2);
+        } else {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::LO16, ADDR_MOD_2, p_sfpu::LREG0 >> 2);
+        }
     }
     TTI_SFPNOP;
     TTI_SFPNOP;
@@ -185,9 +196,14 @@ inline void calculate_typecast_int32_to_fp16b() {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
-        TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_2, v >> 2);
-        TT_SFPABS(0, v, t, 0);
+        // Alternate between p_sfpu::LREG2 and p_sfpu::LREG3 (constant arms after the full unroll).
+        if (d & 1) {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG3 & 3), InstrModLoadStore::INT32, ADDR_MOD_2, p_sfpu::LREG3 >> 2);
+            TTI_SFPABS(0, p_sfpu::LREG3, t, 0);
+        } else {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG2 & 3), InstrModLoadStore::INT32, ADDR_MOD_2, p_sfpu::LREG2 >> 2);
+            TTI_SFPABS(0, p_sfpu::LREG2, t, 0);
+        }
         TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
         TTI_SFPCAST(t, t, 0);
     }
@@ -384,9 +400,14 @@ inline void calculate_typecast_int32_to_fp32() {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
-        TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_2, v >> 2);
-        TT_SFPABS(0, v, t, 0);
+        // Alternate between p_sfpu::LREG2 and p_sfpu::LREG3 (constant arms after the full unroll).
+        if (d & 1) {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG3 & 3), InstrModLoadStore::INT32, ADDR_MOD_2, p_sfpu::LREG3 >> 2);
+            TTI_SFPABS(0, p_sfpu::LREG3, t, 0);
+        } else {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG2 & 3), InstrModLoadStore::INT32, ADDR_MOD_2, p_sfpu::LREG2 >> 2);
+            TTI_SFPABS(0, p_sfpu::LREG2, t, 0);
+        }
         TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
         TTI_SFPCAST(t, t, 0);
     }
@@ -438,10 +459,16 @@ inline void calculate_typecast_uint32_to_fp16b() {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
-        TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_2, v >> 2);
-        TT_SFPSHFT2(v, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
-        TT_SFPSETSGN(0, v, v, 1);
+        // Alternate between p_sfpu::LREG2 and p_sfpu::LREG3 (constant arms after the full unroll).
+        if (d & 1) {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG3 & 3), InstrModLoadStore::INT32, ADDR_MOD_2, p_sfpu::LREG3 >> 2);
+            TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+            TTI_SFPSETSGN(0, p_sfpu::LREG3, p_sfpu::LREG3, 1);
+        } else {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG2 & 3), InstrModLoadStore::INT32, ADDR_MOD_2, p_sfpu::LREG2 >> 2);
+            TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
+            TTI_SFPSETSGN(0, p_sfpu::LREG2, p_sfpu::LREG2, 1);
+        }
     }
     TTI_SFPNOP;
     TTI_SFPNOP;
@@ -483,16 +510,21 @@ inline void calculate_typecast_uint32_to_fp32() {
     // The final MAD is issued explicitly; the remaining operations are macros.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        const int h = d & 1;
-        const int l = 2 + (d & 1);
-        TT_SFPLOADMACRO((0 << 2) | (h & 3), InstrModLoadStore::INT32, ADDR_MOD_3, h >> 2);
-        TT_SFPLOADMACRO((1 << 2) | (l & 3), InstrModLoadStore::INT32, ADDR_MOD_2, l >> 2);
-        if (d == 0) {
-            TTI_SFPNOP;
+        // Row d loads h into LREG0/LREG1 and l into LREG2/LREG3 (alternating with d & 1), then issues
+        // row d-1's MAD on the other pair. `d & 1` is a constant after the full unroll, so each arm
+        // folds to immediate TTI_ pushes.
+        if (d & 1) {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG1 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, p_sfpu::LREG1 >> 2);
+            TTI_SFPLOADMACRO((1 << 2) | (p_sfpu::LREG3 & 3), InstrModLoadStore::INT32, ADDR_MOD_2, p_sfpu::LREG3 >> 2);
+            TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG2, p_sfpu::LREG2, 0);
         } else {
-            const int prev_h = (d - 1) & 1;
-            const int prev_l = 2 + ((d - 1) & 1);
-            TT_SFPMAD(prev_h, p_sfpu::LREG13, prev_l, prev_l, 0);
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, p_sfpu::LREG0 >> 2);
+            TTI_SFPLOADMACRO((1 << 2) | (p_sfpu::LREG2 & 3), InstrModLoadStore::INT32, ADDR_MOD_2, p_sfpu::LREG2 >> 2);
+            if (d == 0) {
+                TTI_SFPNOP;
+            } else {
+                TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG13, p_sfpu::LREG3, p_sfpu::LREG3, 0);
+            }
         }
     }
     if constexpr (ITERATIONS > 0) {
@@ -605,9 +637,14 @@ inline void calculate_typecast_int32_to_uint16() {
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        int a = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::INT32, ADDR_MOD_2, a >> 2);
-        TT_SFPCAST(a, a, 0);
+        // Alternate between p_sfpu::LREG0 and p_sfpu::LREG1 (constant arms after the full unroll).
+        if (d & 1) {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG1 & 3), InstrModLoadStore::INT32, ADDR_MOD_2, p_sfpu::LREG1 >> 2);
+            TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, 0);
+        } else {
+            TTI_SFPLOADMACRO((0 << 2) | (p_sfpu::LREG0 & 3), InstrModLoadStore::INT32, ADDR_MOD_2, p_sfpu::LREG0 >> 2);
+            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        }
         TTI_SFPNOP;
     }
     TTI_SFPNOP;
