@@ -47,6 +47,7 @@ import os
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -292,6 +293,8 @@ class TtKDA(LightweightModule):
         self.gate_lower_bound = float(self.kcfg.gate_lower_bound)
         self._scalars: dict[int, ttnn.Tensor] = {}
         self._const_cache: dict = {}
+        self.chrono_scalar(0, "start")  # allocate the mesh's chronology pair before any trace capture
+        self.chrono_scalar(0, "end")
         if fused_decode is None:
             self.fused_decode = KDA_FUSED_DEFAULT
         elif isinstance(fused_decode, bool):
@@ -368,12 +371,50 @@ class TtKDA(LightweightModule):
                 self.lin_g2 = decode_linear_for(device, self.w_g2, "G2")
 
     def scalar(self, value: int) -> ttnn.Tensor:
-        """Cached replicated UINT32 device scalar (ttKDA's actual_start / actual_end)."""
+        """Cached replicated UINT32 device scalar for a CONSTANT the traced prefill keeps (``scalar(0)``). Never
+        allocated after a trace capture: the 2026-10-27 served hang was scalar(49152) allocated after the captures and
+        clobbered by ~1200 decode replays (ttKDA then saw an interval longer than its capacity and wedged the mesh).
+        Per-chunk values go through ``chrono_scalar``."""
         if value not in self._scalars:
+            if self.mesh.allocations_frozen[0]:
+                raise RuntimeError(
+                    f"KDA scalar({value}) would allocate a device constant after a trace capture (replays clobber it): "
+                    "use chrono_scalar for per-chunk values or allocate it in the warm-up"
+                )
             self._scalars[value] = self.mesh.upload(
                 torch.tensor([[[[int(value)]]]], dtype=torch.int32), ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
             )
         return self._scalars[value]
+
+    def chrono_scalar(self, value: int, role: str) -> ttnn.Tensor:
+        """The eager prefill's per-chunk ``actual_start`` / ``actual_end``: ONE persistent replicated uint32 tensor per
+        role, shared by every KDA layer of the mesh (``GLMMesh.chrono``; allocated by the first layer's construction,
+        before any capture) and rewritten in place with ``copy_host_to_device_tensor`` (in order on the command queue
+        ahead of the chunk's ops) only when the value changes: two tiny writes per chunk instead of a fresh buffer per
+        new value. The traced prefill keeps its own ``trace.end`` tensors and ``scalar(0)``."""
+        if role not in ("start", "end"):
+            raise ValueError(f"chrono_scalar role {role!r} is not 'start' / 'end'")
+        ch = self.mesh.chrono
+        if "tensors" not in ch:
+            if self.mesh.allocations_frozen[0]:
+                raise RuntimeError("KDA chronology scalars must be allocated before the first trace capture")
+            ch["tensors"] = {
+                r: self.mesh.upload(
+                    torch.zeros((1, 1, 1, 1), dtype=torch.int32), ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+                for r in ("start", "end")
+            }
+            ch["values"] = {"start": 0, "end": 0}
+        if ch["values"][role] != int(value):
+            host = ttnn.from_torch(
+                torch.tensor([[[[int(value)]]]], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.mesh.shard_2d(None, None),
+            )
+            ttnn.copy_host_to_device_tensor(host, ch["tensors"][role])
+            ch["values"][role] = int(value)
+        return ch["tensors"][role]
 
     # ------------------------------------------------------------------ state
     def allocate_state(self, batch_size: int = 1) -> KdaState:
@@ -491,6 +532,11 @@ class TtKDA(LightweightModule):
             raise ValueError(f"active_seq_len must be a multiple of {ttnn.TILE_SIZE}, got {active_seq_len}")
         layer = self._prefill_layers.get(active_seq_len)
         if layer is None:
+            if self.mesh.allocations_frozen[0]:
+                logger.warning(
+                    f"KDA prefill layer for {active_seq_len} rows built after a trace capture: its device buffers can be "
+                    "clobbered by replays; warm this chunk length up before capturing (bucket the chunk lengths)"
+                )
             kw = {}
             if self.mesh.rows > 1:
                 # sequence-parallel over the rows: the grouped scan needs summary_group_chunks to divide the
