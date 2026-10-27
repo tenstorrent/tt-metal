@@ -332,3 +332,12 @@ shapes, mesh, row-major y).
 - Files: `CMakeLists.txt`, `flat_routed_expert.{hpp,cpp}`, `flat_routed_expert_nanobind.cpp`,
   `device/flat_routed_expert_program_factory.{hpp,cpp}`, `device/flat_routed_expert_plan.hpp` (comment),
   `device/kernels/se_cmb_done.hpp` (comment), `README.md`
+
+### Combine trailer hang fix from Marko (9fef7b00dd1), ahead of the full sync
+- What: se_yrm.hpp stages a row-major tile's combine trailers in L1, then a `fence`, before the NoC writes read them
+  (they were written row by row next to the NoC writes). No option: a fix.
+- Why: a trailer write could carry the stage's previous words (a zeroed tr[7]); the row was never taken at its home and
+  the combine hung (~1 in 10 GLM prefills on Marko's side). Perf ~0.5-0.8% lower there.
+- Checked (2x2, 2026-10-27): the fork's model cases 4/4 (determinism included); DeepSeek-V4.1 L.s4096 / L.last PASS,
+  32 err metrics bit-identical to before.
+- Files: device/kernels/se_yrm.hpp (applied by hand: our copy uses noc_index where Marko's has ynoc)
