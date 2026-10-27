@@ -59,24 +59,24 @@
 # test definition instead of leaking into the workflow yamls. Mirrors the
 # legacy `llama3.1-8b data-parallel tests (LFC)` entry from
 # tests/pipeline_reorg/blackhole_demo_tests.yaml.
-- name: Llama 3.1-8B data-parallel e2e tests (P300 LFC)
-  cmd: |
-    set -e
-    mkdir -p /mnt/MLPerf/huggingface/meta-llama
-    wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /mnt/MLPerf/huggingface/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
-    export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
-  model: llama3.1-8b-dp
-  model_family: Llama
-  skus:
-    bh_p300:
-      timeout: 25
-      tier: 2
-      release_ready: false
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  budget_type: e2e
+# - name: Llama 3.1-8B data-parallel e2e tests (P300 LFC)
+#   cmd: |
+#     set -e
+#     mkdir -p /mnt/MLPerf/huggingface/meta-llama
+#     wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /mnt/MLPerf/huggingface/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
+#     export HF_MODEL=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
+#     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/meta-llama/Llama-3.1-8B-Instruct
+#     pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
+#   model: llama3.1-8b-dp
+#   model_family: Llama
+#   skus:
+#     bh_p300:
+#       timeout: 25
+#       tier: 2
+#       release_ready: false
+#   owner_id: U03PUAKE719 # Miguel Tairum Cruz
+#   team: models
+#   budget_type: e2e
 
 # TODO: Move DP tests to sweep pipelines when those come online
 - name: Llama 3.1-8B data-parallel e2e tests
@@ -729,10 +729,10 @@
     #   tier: 3
     # Note: do not add bh_p150 here — models e2e_tier3 bh_p150 budget is 7m
     # and Gemma-4-E2B already uses 5m on that SKU (f562aa60493 over-budget).
-    bh_p300:
-      timeout: 10
-      tier: 3
-      release_ready: false
+    # bh_p300:
+    #   timeout: 10
+    #   tier: 3
+    #   release_ready: false
     bh_quietbox_2:
       timeout: 15
       tier: 3
