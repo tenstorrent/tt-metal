@@ -105,26 +105,28 @@ class NemotronReranker:
         return next(b for b in SEQ_BUCKETS if b >= n)
 
     def prepare_host_inputs(self, batch_ids, seq_len=None):
-        """Token id lists -> host tensors (tokens, mask, pool, block map) plus real lengths."""
+        """Token id lists -> host tensors (tokens, valid, block map) plus real lengths.
+
+        ``valid`` [B, 1, 32, S] is 1 on real tokens and 0 on padding (all 32 rows equal). The
+        device turns it into the [B, 1, S, S] padding mask and uses it as the pooling vector,
+        so the host never builds or converts an S x S tensor per request.
+        """
         lens = [len(x) for x in batch_ids]
         S = seq_len or self.bucket(max(lens))
         B = len(batch_ids)
         qc, kc = sdpa_chunks(B, S)
         tokens = torch.full((B, S), PAD_TOKEN_ID, dtype=torch.int32)
-        mask = torch.zeros(B, 1, S, S)
-        pool = torch.zeros(B, 1, 32, S)
+        valid = torch.zeros(B, 1, 32, S, dtype=torch.bfloat16)
         # (q chunk, k chunk) blocks holding at least one real query row and one real key.
         block_map = torch.zeros(B, 1, (S + qc - 1) // qc, (S + kc - 1) // kc, dtype=torch.int32)
         for b, ids in enumerate(batch_ids):
             n = len(ids)
             tokens[b, :n] = torch.tensor(ids, dtype=torch.int32)
-            mask[b, :, :, n:] = MASK_NEG
-            pool[b, 0, 0, :n] = 1.0
+            valid[b, :, :, :n] = 1.0
             block_map[b, 0, : (n + qc - 1) // qc, : (n + kc - 1) // kc] = 1
         host = (
             ttnn.from_torch(tokens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-            ttnn.from_torch(mask, dtype=self.cfg.mask_dtype, layout=ttnn.TILE_LAYOUT),
-            ttnn.from_torch(pool, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            ttnn.from_torch(valid, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
             ttnn.from_torch(block_map, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
         )
         return host, lens
@@ -304,10 +306,20 @@ class NemotronReranker:
         ttnn.deallocate(a)
         return out
 
-    def forward(self, tokens, mask, pool, block_map):
+    def _padding_mask(self, valid, S):
+        """valid [B, 1, 32, S] (1 real / 0 pad) -> additive mask [B, 1, S, S]: 0 on real keys, MASK_NEG on padding."""
+        rows = ttnn.repeat(valid, ttnn.Shape([1, 1, S // 32, 1]))
+        mask = ttnn.multiply(
+            ttnn.subtract(rows, 1.0), -MASK_NEG, dtype=self.cfg.mask_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(rows)
+        return mask
+
+    def forward(self, tokens, valid, block_map):
         """Device inputs from ``prepare_host_inputs`` -> [B, 1, 32, 32] fp32 tile, score sum at [b, 0, 0, 0]."""
         B, S = tokens.shape[0], tokens.shape[1]
         cos, sin = self.rot_mats(S)
+        mask = self._padding_mask(valid, S)
         x = ttnn.embedding(tokens, self.embed, layout=ttnn.TILE_LAYOUT, dtype=self.cfg.act_dtype)
         x = ttnn.reshape(x, [1, 1, B * S, self.cfg.dim])
         if self.cfg.fuse_add_norm and B * S >= self.cfg.fuse_add_norm_min_rows:
@@ -344,8 +356,10 @@ class NemotronReranker:
         t = self._linear(xn, self.score_w, "score", dtype=ttnn.float32)
         ttnn.deallocate(xn)
         t = ttnn.reshape(t, [B, 1, S, 32])
-        pooled = ttnn.matmul(pool, t, dtype=ttnn.float32, compute_kernel_config=self.mm_ckc)
+        # valid's rows are identical, so every output row holds the sum; row 0 is read.
+        pooled = ttnn.matmul(valid, t, dtype=ttnn.float32, compute_kernel_config=self.mm_ckc)
         ttnn.deallocate(t)
+        ttnn.deallocate(mask)
         return pooled
 
     def scores_from_output(self, out, lens):
