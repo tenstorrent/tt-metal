@@ -352,46 +352,10 @@ class TtExperts:
         groups). Built once per layer; the plan is the op's for this chip's grid (16-column units). The column's
         planner numbers the column's experts from 0 (chip r holds [r epc, (r + 1) epc) of its column's Eg;
         ExpertMapping column-major), counts are [1, Eg]; an expert sees at most every token of its column once."""
-        from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
-        from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
-
         from .weighted_combine import weighted_combine
 
-        rows, cols = self.dgs, self.ngroups
-        gids = [[r * self.epc + le for le in range(self.epc)] for r in range(rows) for c in range(cols)]
-        self.flat_cap = max(256, _ceil(self.max_chunk, TILE))  # (the op is built for >= 256 rows per expert)
-        self.fe = FlatRoutedExpert(
-            self.mesh,
-            flat_w,  # (a callable: called only when the weight cache misses)
-            m=self.flat_cap,
-            H=self.H,
-            I=self.I,
-            gids=gids,
-            n_global=self.Eg,
-            wdtype={"bfp8": "bf8", "bfp4": "bf4"}[self.impl],
-            act="clamped_silu",
-            pin=1,
-            # EXPERTS_PRECISION=glm: bfp8 x / h tiles, as GLM-5.3 runs the op (GLM_AG_XBF16 / _HBF16 default 0)
-            x_bf16=self.precision == "full",
-            h_bf16=self.precision == "full",
-            weights_nk=True,
-            # (no second exactness pass: a laid-out tile row is 32 consecutive K values of one stored row, the same
-            # 16-value groups _bfp8_exact asserted on the [N, K] matrices above)
-            check_exact=False,
-            cache_prefix=cache_prefix,
-            # EXPERTS_LAYOUT: legacy = the flat op's plan before its DRISC-only / even-split defaults (the cached
-            # weight layout, FIX.4); marko = his defaults + moe_block.layout_of's rows_hint / x_helpers
-            layout=(
-                LEGACY
-                if settings.get("EXPERTS_LAYOUT") == "legacy"
-                else dict(rows_hint=round(self.max_chunk * self.K / self.E), x_helpers=1)
-            ),
-        )
-        logger.info(
-            f"EXPERTS_FLAT layer={self.layer} plan nu={self.fe.plan['nu']} np={self.fe.plan['np']} "
-            f"mt={self.fe.plan['mt']} gate/up={len(self.fe.plan['gu'])} down={self.fe.plan['nd']} cap={self.flat_cap} "
-            f"precision={self.precision}"
-        )
+        rows = self.dgs
+        self.fe = self.flat_op(flat_w, cache_prefix)
         rows_ = self.max_chunk // rows
         self.wc = weighted_combine(
             self.mesh,
@@ -416,6 +380,50 @@ class TtExperts:
             f"EXPERTS_WEIGHTED layer={self.layer} COMBINE_ACC={self.combine_acc} passes={self.wc.P} x {self.wc.S_pass} "
             f"COMBINE_PLANNER={self.combine_planner} ({self.wc.planner_desc})"
         )
+
+    def flat_op(self, flat_w, cache_prefix=None):
+        """The layer's FlatRoutedExpert: the weights laid out once (or loaded from the weight cache). Also used by
+        tt/moe_block_adapter.py (MOE_IMPL=block): the same arguments, so the same cache files."""
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+        from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
+
+        rows, cols = self.dgs, self.ngroups
+        gids = [[r * self.epc + le for le in range(self.epc)] for r in range(rows) for c in range(cols)]
+        self.flat_cap = max(256, _ceil(self.max_chunk, TILE))  # (the op is built for >= 256 rows per expert)
+        # EXPERTS_LAYOUT: legacy = the flat op's plan before its DRISC-only / even-split defaults (the cached
+        # weight layout, FIX.4); marko = his defaults + moe_block.layout_of's rows_hint / x_helpers
+        self.flat_layout = (
+            dict(LEGACY)
+            if settings.get("EXPERTS_LAYOUT") == "legacy"
+            else dict(rows_hint=round(self.max_chunk * self.K / self.E), x_helpers=1)
+        )
+        fe = FlatRoutedExpert(
+            self.mesh,
+            flat_w,  # (a callable: called only when the weight cache misses)
+            m=self.flat_cap,
+            H=self.H,
+            I=self.I,
+            gids=gids,
+            n_global=self.Eg,
+            wdtype={"bfp8": "bf8", "bfp4": "bf4"}[self.impl],
+            act="clamped_silu",
+            pin=1,
+            # EXPERTS_PRECISION=glm: bfp8 x / h tiles, as GLM-5.3 runs the op (GLM_AG_XBF16 / _HBF16 default 0)
+            x_bf16=self.precision == "full",
+            h_bf16=self.precision == "full",
+            weights_nk=True,
+            # (no second exactness pass: a laid-out tile row is 32 consecutive K values of one stored row, the same
+            # 16-value groups _bfp8_exact asserted on the [N, K] matrices above)
+            check_exact=False,
+            cache_prefix=cache_prefix,
+            layout=self.flat_layout,
+        )
+        logger.info(
+            f"EXPERTS_FLAT layer={self.layer} plan nu={fe.plan['nu']} np={fe.plan['np']} "
+            f"mt={fe.plan['mt']} gate/up={len(fe.plan['gu'])} down={fe.plan['nd']} cap={self.flat_cap} "
+            f"precision={self.precision}"
+        )
+        return fe
 
     def partial(
         self, x: ttnn.Tensor, dense: ttnn.Tensor | None, idx: ttnn.Tensor | None = None, wts: ttnn.Tensor | None = None
