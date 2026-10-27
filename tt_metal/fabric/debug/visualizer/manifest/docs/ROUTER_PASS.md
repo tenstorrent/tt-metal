@@ -63,7 +63,7 @@ receivers the kernel doesn't loop over, or leave out ones it does.
 
 **Credit counters** (`credit_counters`): the router's four L1 arrays of credit counters, from the kernel's
 `TO_SENDER_REMOTE_ACK_COUNTERS_BASE_ADDR`, `TO_SENDER_REMOTE_COMPLETION_COUNTERS_BASE_ADDR`,
-`LOCAL_RECEIVER_ACK_COUNTERS_BASE_ADDR` and `LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR`. The kernel sends each pair to the peer in one packet, so it relies on the arrays being back to back and the same size, and the size comes from  
+`LOCAL_RECEIVER_ACK_COUNTERS_BASE_ADDR` and `LOCAL_RECEIVER_COMPLETION_COUNTERS_BASE_ADDR`. The kernel sends each pair to the peer in one packet, so it relies on the arrays being back to back and the same size, and the size comes from
 that spacing. The router pass fails if they aren't. Each array is `u32`s, one per sender channel, indexed by the
 channel's compact index. The `to_sender` arrays count this router's own sender channels, and the `receiver` arrays the
 sender channels of the router on the other end of the link. The writer records which as `indexed_by`.

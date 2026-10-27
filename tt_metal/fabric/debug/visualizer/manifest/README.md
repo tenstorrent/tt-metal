@@ -13,7 +13,7 @@ to turn those bytes into values, and the viewer uses it to draw the fabric.
 
 ## What it is
 
-One JSON file per MPI rank, written at fabric init. It describes every mesh and chip in the fabric. Chips this rank  
+One JSON file per MPI rank, written at fabric init. It describes every mesh and chip in the fabric. Chips this rank
 opened (its local chips) also list their routers. The top level blocks are described below.
 
 | Block        | What it holds                                                                                                                        |
@@ -105,29 +105,29 @@ flowchart LR
 
 ### The parts
 
-**Struct layouts and descriptions** ([docs/STRUCT_LAYOUTS.md](docs/STRUCT_LAYOUTS.md)). 
+**Struct layouts and descriptions** ([docs/STRUCT_LAYOUTS.md](docs/STRUCT_LAYOUTS.md)).
 
 C++ can't list a struct's fields, so each struct the manifest describes has a hand-written layout (`fabric_struct_layouts.hpp`), checked against the real struct at compile time. The build turns each layout into a description. Every type in the manifest points to its description, which is how `types` gets written.
 
-**Builder hooks** ([docs/BUILDER_HOOKS.md](docs/BUILDER_HOOKS.md)). 
+**Builder hooks** ([docs/BUILDER_HOOKS.md](docs/BUILDER_HOOKS.md)).
 
 The few places fabric's builders hand facts to the manifest: each router records what it passed to `CreateKernel`, each router builder answers `collect_manifest_router`, and each chip's `FabricBuilder` publishes its routers to `PublishedChips`, which outlives the builders.
 
 **Field tables** ([docs/FIELD_TABLES.md](docs/FIELD_TABLES.md), generated reference in [docs/FIELDS.md](docs/FIELDS.md)). Most of what a router records is a value the kernel was fed: an L1 address, a stream id, a flag. Each such field is one table entry saying which argument feeds it and how to read it. Every argument and define fed to the kernel must be read by a table or the router pass, or listed with a reason.
 
-**Router pass** ([docs/ROUTER_PASS.md](docs/ROUTER_PASS.md)). 
+**Router pass** ([docs/ROUTER_PASS.md](docs/ROUTER_PASS.md)).
 
 Runs per router during the build. It reads the field tables, and computes the facts that need logic: the router's shape, each channel's status and who services it, credits, and the edges to its sibling routers.
 
-**Topology pass** ([docs/TOPOLOGY_PASS.md](docs/TOPOLOGY_PASS.md)). 
+**Topology pass** ([docs/TOPOLOGY_PASS.md](docs/TOPOLOGY_PASS.md)).
 
 Runs at write time. It lays out every mesh and chip, decides which chips are local, and resolves each published router's Ethernet channels into the routers they name: its key, its peer on the other end of the link, whether the link wraps or crosses hosts, and its sibling producers.
 
-**Describe** ([docs/DESCRIBE.md](docs/DESCRIBE.md)). 
+**Describe** ([docs/DESCRIBE.md](docs/DESCRIBE.md)).
 
 Runs at write time. It describes the blocks stated once per manifest: the run, the fabric settings, the architecture, and each local mesh's credit transport.
 
-**Writer and type collector** ([docs/WRITER.md](docs/WRITER.md)). 
+**Writer and type collector** ([docs/WRITER.md](docs/WRITER.md)).
 
 Turns `ManifestFacts` into the JSON. The writer is the one place that decides key names and shape. Every schema it writes passes its type to a `TypeCollector`, which follows each type to the types it names, and `types` is written from what it collected.
 
@@ -182,6 +182,6 @@ manifests from real devices.
 
 ## Limits and future work
 
-**UDM isn't described.** 
+**UDM isn't described.**
 
 A UDM run (`fabric.config.udm_mode`) writes a manifest, but not its UDM-specific parts: the tensix mux and relay cores and their L1, a receiver's path into its relay, and which routers have a relay. The VC0 worker channel's `producer` may also read `"worker"` where a tensix mux feeds it. Covering UDM needs a UDM mock fixture, the relay path as one more of a receiver's outputs (with the three UDM arguments [docs/FIELDS.md](docs/FIELDS.md) lists as not yet described becoming fields), a per-router relay flag, and the tensix mux and relay cores.
