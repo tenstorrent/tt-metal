@@ -120,6 +120,11 @@ optests: |
   activations, goldens or weights). Follow `models/demos/common/bringup/skill/bringup-fork-tests/SKILL.md`. The gate
   records the calls in `$bringup_dir/results/fork_calls.json` and its log lists the ones with no case (sig, op). Add
   cases for those; never remove or loosen another model's case. The gate then runs every test of every fork used.
+  Task F.1 (F199) runs every fork's every test (unit suites, every model's cases, the original op's tests) and lists
+  each failure: fix the cause (the fork, or a test that checks the wrong thing, with the reason in the fork's
+  CHANGELOG). Never skip, delete, filter out or loosen a test to make it pass, and never call a failure acceptable
+  because it failed before; a failure you cannot fix is the owner's (stop with the evidence; only the owner adds a
+  `tests.fork_waivers` entry).
 assemble: |
   Role: assemble. Every step of every block type has passed on the device, but through the hybrid harness
   (`$model_dir/bringup/hooks.py`: the CPU reference with host in / host out around each device step). Build the model

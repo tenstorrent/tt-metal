@@ -23,9 +23,10 @@ shape, cached), so a selection recorded on one box runs on a bigger one. A TT_VI
 
 ``--record`` runs the selection twice, on the original op (no swap) and on the fork, and writes
 ``tests/source_baseline.json`` (per test: the original's and the fork's outcome). A check runs it on the fork and
-fails if a test that passed on the fork at baseline no longer does; it lists tests that newly pass. Where the original
-passes and the fork fails at baseline, the fork does not cover that case (the report lists them); that is known, not a
-regression.
+fails if any test does not pass on the fork (F198, owner 2026-10-27: a failing test is never accepted because it failed
+at baseline too); each failure says whether it is a regression, a new test or one that fails at baseline too, skips
+are listed. A test the fork can never pass by design (its change) is filtered out of the entry's ``k`` with the reason
+in the manifest, not left failing.
 
 The swap is a pytest plugin (``-p models.demos.common.bringup.testing.fork_source``, env ``BRINGUP_FORK_SWAP``: a
 JSON dict): each original attribute (``ttnn.<...>``) is replaced by the fork's object for the session, so tests and the
@@ -255,14 +256,34 @@ def main(argv=None) -> int:
     base = json.loads(base_path.read_text())["tests"]
     if a.entry:  # only the tests of the entries that ran
         base = {k: v for k, v in base.items() if k in fork}
-    broke = [k for k, v in base.items() if v["fork"] == "passed" and fork.get(k) != "passed"]
-    fixed = [k for k, v in base.items() if v["fork"] != "passed" and fork.get(k) == "passed"]
-    print(f"{a.fork}: {len(fork)} tests; regressions vs baseline {len(broke)}; newly passing {len(fixed)}")
-    for k in broke:
-        print(f"  REGRESSION {k}: {fork.get(k, 'missing')}")
-    for k in fixed[:20]:
+    return 1 if report(base, fork, a.fork) else 0
+
+
+def report(base: dict, fork: dict, name: str) -> int:
+    """F198: every test of the fork run that did not pass is a failure, whatever the baseline says (a test that fails on
+    the original too, or that never produced a result, is listed as such, never accepted). Skips are listed. Returns
+    the number of failures."""
+    keys = sorted(set(base) | set(fork))
+    out = {k: fork.get(k, "missing") for k in keys}
+    failing = [k for k in keys if out[k] not in ("passed", "skipped")]
+    skipped = [k for k in keys if out[k] == "skipped"]
+    n_pass = sum(v == "passed" for v in out.values())
+    print(f"{name}: {len(keys)} tests: passed {n_pass}, failing {len(failing)}, skipped {len(skipped)}")
+    for k in failing:
+        b = base.get(k)
+        why = (
+            "new test"
+            if b is None
+            else "regression (passed at baseline)"
+            if b["fork"] == "passed"
+            else f"failing at baseline too (original {b['original']})"
+        )
+        print(f"  FAIL {k}: {out[k]}, {why}")
+    for k in skipped:
+        print(f"  skipped {k}")
+    for k in [k for k, v in base.items() if v["fork"] != "passed" and out.get(k) == "passed"][:20]:
         print(f"  newly passing {k}")
-    return 1 if broke else 0
+    return len(failing)
 
 
 if __name__ == "__main__":
