@@ -16,6 +16,7 @@
 #include <tt-metalium/math.hpp>
 
 #include <algorithm>
+#include <numeric>
 #include <variant>
 #include <vector>
 using namespace tt::tt_metal;
@@ -337,6 +338,12 @@ bool hits_bh_col_bcast_bf16_to_fp32_hang(
     return arch == tt::ARCH::BLACKHOLE && is_col_bcast && fp32_dest_acc_en && has_bf16_input;
 }
 
+// Row broadcast: widest column group, and the tiles per core that select it. A one-column walk whose row stride
+// shares a factor with the DRAM bank count keeps each core on a few banks, so it switches earlier.
+constexpr uint32_t kMaxColGroup = 4;
+constexpr uint32_t kColGroupMinTiles = 128;
+constexpr uint32_t kColGroupFewBanksMinTiles = 48;
+
 bool is_llk_bcast(
     const tt::ARCH arch,
     const SubtileBroadcastType subtile_broadcast_type,
@@ -417,7 +424,37 @@ using RuntimeArgList = std::vector<std::variant<uint32_t, Buffer*>>;
 // override_runtime_arguments re-applies every slot (buffer slots via their current address), so nothing
 // is left frozen regardless of how the partition shifts.
 //
-// Calls fn(core, reader_args, writer_args, compute_args) once per core, in the order create_descriptor()
+// Caches the last interleaved work split; grid and tile count rarely change between calls.
+struct InterleavedSplit {
+    tt::tt_metal::CoreRangeSet grid;
+    uint32_t tiles = 0;
+    bool row_major = true;
+    bool valid = false;
+    uint32_t num_cores = 0;
+    tt::tt_metal::CoreRangeSet all_cores, group_1, group_2;
+    uint32_t tiles_1 = 0, tiles_2 = 0;
+    std::vector<CoreCoord> cores;
+};
+
+const InterleavedSplit& interleaved_split(const tt::tt_metal::CoreRangeSet& grid, uint32_t tiles, bool row_major) {
+    thread_local InterleavedSplit split;
+    const bool same_cores = split.valid && split.row_major == row_major && split.grid == grid;
+    if (same_cores && split.tiles == tiles) {
+        return split;
+    }
+    std::tie(split.num_cores, split.all_cores, split.group_1, split.group_2, split.tiles_1, split.tiles_2) =
+        tt::tt_metal::split_work_to_cores(grid, tiles, row_major);
+    if (!same_cores) {
+        split.cores = tt::tt_metal::corerange_to_cores(grid, {}, row_major);
+        split.grid = grid;
+        split.row_major = row_major;
+        split.valid = true;
+    }
+    split.tiles = tiles;
+    return split;
+}
+
+// Calls fn(core, reader_args, writer_args, compute_args, has_work) once per core, in the order create_descriptor()
 // populates them.  The three lists are scratch buffers reused across cores (no per-core allocation on
 // the cache-hit path), so they are only valid for the duration of each call.
 template <typename Fn>
@@ -426,7 +463,8 @@ void for_each_core_runtime_args(
     const Tensor& a,
     const std::optional<Tensor>& b,
     const Tensor& c,
-    const Fn& fn) {
+    const Fn& fn,
+    bool fill_noop_args = true) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -487,9 +525,10 @@ void for_each_core_runtime_args(
         zero_start_grid ? compute_with_storage_grid.x * compute_with_storage_grid.y : all_device_cores.num_cores();
 
     uint32_t num_tiles_per_core_group_1{}, num_tiles_per_core_group_2{};
-    CoreRangeSet all_cores, core_group_1, core_group_2;
+    CoreRangeSet all_cores, core_group_1_storage, core_group_2_storage;
     uint32_t num_cores;
-    std::vector<CoreCoord> cores;
+    std::vector<CoreCoord> cores_storage;
+    const InterleavedSplit* split = nullptr;
 
     const bool row_major_inputs =
         CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, rt_has_sharding);
@@ -567,7 +606,7 @@ void for_each_core_runtime_args(
                                shard_specs->a_shard_spec == shard_specs->c_shard_spec;
 
     if (rt_has_sharding) {
-        core_group_1 = grid;
+        core_group_1_storage = grid;
         a_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->a_shard_spec, a);
         if (b.has_value()) {
             b_shard_shape_generator = CMAKE_UNIQUE_NAMESPACE::ShardShapeGenerator(shard_specs->b_shard_spec, *b);
@@ -579,27 +618,36 @@ void for_each_core_runtime_args(
             shard_specs->c_shard_spec, CMAKE_UNIQUE_NAMESPACE::get_memory_layout(a, b, c));
 
         if (zero_start_grid) {
-            auto bbox = core_group_1.bounding_box();
-            cores = grid_to_cores_with_noop(
+            auto bbox = core_group_1_storage.bounding_box();
+            cores_storage = grid_to_cores_with_noop(
                 bbox.end_coord.x,
                 bbox.end_coord.y,
                 compute_with_storage_grid.x,
                 compute_with_storage_grid.y,
                 row_major);
         } else {
-            cores = grid_to_cores_with_noop(core_group_1, all_device_cores, row_major);
+            cores_storage = grid_to_cores_with_noop(core_group_1_storage, all_device_cores, row_major);
         }
     } else if (zero_start_grid) {
         std::tie(
-            num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
+            num_cores,
+            all_cores,
+            core_group_1_storage,
+            core_group_2_storage,
+            num_tiles_per_core_group_1,
+            num_tiles_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid, rt_c_num_tiles, row_major);
-        cores = grid_to_cores(num_cores_total, compute_with_storage_grid.x, compute_with_storage_grid.y, row_major);
+        cores_storage =
+            grid_to_cores(num_cores_total, compute_with_storage_grid.x, compute_with_storage_grid.y, row_major);
     } else {
-        std::tie(
-            num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(all_device_cores, rt_c_num_tiles, row_major);
-        cores = corerange_to_cores(all_device_cores, {}, row_major);
+        split = &interleaved_split(all_device_cores, rt_c_num_tiles, row_major);
+        num_cores = split->num_cores;
+        num_tiles_per_core_group_1 = split->tiles_1;
+        num_tiles_per_core_group_2 = split->tiles_2;
     }
+    const auto& core_group_1 = split ? split->group_1 : core_group_1_storage;
+    const auto& core_group_2 = split ? split->group_2 : core_group_2_storage;
+    const auto& cores = split ? split->cores : cores_storage;
 
     // Core-invariant values, computed once rather than per work core.
     const bool rt_is_quant_op = operation_attributes.is_quant_op;
@@ -625,10 +673,23 @@ void for_each_core_runtime_args(
     const uint32_t packed_scalar =
         b.has_value() ? 0u : pack_scalar_runtime_arg(*operation_attributes.scalar, a.dtype(), rt_is_quant_op);
 
+    // Row broadcast column group: 1 for small shares, kMaxColGroup for large; 0 = page order.
+    const uint32_t col_group = [&] {
+        if (!b.has_value() || row_major_inputs || rt_has_sharding || cHt < 2 ||
+            operation_attributes.subtile_broadcast_type != SubtileBroadcastType::ROW_B) {
+            return 0u;
+        }
+        const uint32_t tiles_per_core = tt::div_up(rt_c_num_tiles, std::max(num_cores, 1u));
+        const uint32_t dram_banks = a.device()->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+        const uint32_t min_tiles = std::gcd(cWt, dram_banks) > 1 ? CMAKE_UNIQUE_NAMESPACE::kColGroupFewBanksMinTiles
+                                                                 : CMAKE_UNIQUE_NAMESPACE::kColGroupMinTiles;
+        return tiles_per_core >= min_tiles ? CMAKE_UNIQUE_NAMESPACE::kMaxColGroup : 1u;
+    }();
+
     // Noop cores get zero-filled runtime args, sized to match the active kernel variant so unused cores
     // neither inflate the per-kernel max runtime-arg allocation nor change slot count when a core flips
     // between noop and work across differently-shaped cache hits.
-    const size_t noop_reader_len = row_major_inputs ? 26 : 23;
+    const size_t noop_reader_len = row_major_inputs ? 26 : 24;
     const size_t noop_writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
     const size_t noop_compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
 
@@ -652,10 +713,12 @@ void for_each_core_runtime_args(
         } else if (core_group_2.contains(core)) {
             c_num_tiles_core = num_tiles_per_core_group_2;
         } else {
-            reader_runtime_args.assign(noop_reader_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
-            writer_runtime_args.assign(noop_writer_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
-            compute_runtime_args.assign(noop_compute_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
-            fn(core, reader_runtime_args, writer_runtime_args, compute_runtime_args);
+            if (fill_noop_args) {
+                reader_runtime_args.assign(noop_reader_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
+                writer_runtime_args.assign(noop_writer_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
+                compute_runtime_args.assign(noop_compute_len, std::variant<uint32_t, Buffer*>{uint32_t{0}});
+            }
+            fn(core, reader_runtime_args, writer_runtime_args, compute_runtime_args, /*has_work=*/false);
             continue;
         }
 
@@ -708,7 +771,17 @@ void for_each_core_runtime_args(
                     writer_stride_size_bytes};
             } else {
                 writer_runtime_args = {
-                    c.buffer(), c_start_id, c_num_tiles_core, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u};
+                    c.buffer(),
+                    c_start_id,
+                    c_num_tiles_core,
+                    c_current_shard_width,
+                    cD,
+                    cN,
+                    cC,
+                    cHt,
+                    cWt,
+                    cND,
+                    col_group};
             }
 
             auto [freq, counter] = CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(
@@ -825,10 +898,11 @@ void for_each_core_runtime_args(
                 b_num_tiles,
                 aWt,
                 bWt,
+                col_group,
             };
         }
 
-        fn(core, reader_runtime_args, writer_runtime_args, compute_runtime_args);
+        fn(core, reader_runtime_args, writer_runtime_args, compute_runtime_args, /*has_work=*/true);
 
         start_tile_id += c_num_tiles_core;
         if (row_major_inputs) {
@@ -1230,6 +1304,33 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         writer_kernel = KernelName::WriterNoBcastNg;
     }
 
+    // Interleaved row broadcast: walk C in column groups and hold one B tile per column in L1 (c_7), so each B tile
+    // is read once per core. Flat 32x32 tiles hold only row 0 (two face rows); block-float tiles are held whole.
+    if (!inputs_row_major && !has_sharding && b.has_value() &&
+        operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
+        const auto& b_tile = b->tensor_spec().tile();
+        const bool b_flat = b_tile.get_height() == tt::constants::TILE_HEIGHT &&
+                            b_tile.get_width() == tt::constants::TILE_WIDTH &&
+                            (b_dtype == DataType::BFLOAT16 || b_dtype == DataType::FLOAT32 ||
+                             b_dtype == DataType::INT32 || b_dtype == DataType::UINT32);
+        const uint32_t row_bytes = 2 * 16 * (b_single_tile_size / tt::constants::TILE_HW);
+        const uint32_t slot_bytes = b_flat ? row_bytes : b_single_tile_size;
+        if (b_flat) {
+            reader_defines["B_ROW_WORDS"] = std::to_string(row_bytes / 2 / sizeof(uint32_t));
+        }
+        reader_defines["COL_GROUP_B"] = std::to_string(CMAKE_UNIQUE_NAMESPACE::kMaxColGroup);
+        writer_defines["COL_GROUP_B"] = std::to_string(CMAKE_UNIQUE_NAMESPACE::kMaxColGroup);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = slot_bytes * CMAKE_UNIQUE_NAMESPACE::kMaxColGroup,
+            .core_ranges = all_device_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
+                .data_format = b_data_format,
+                .page_size = slot_bytes,
+            }}},
+        });
+    }
+
     // WRITER KERNEL DESCRIPTOR
     std::vector<uint32_t> writer_compile_time_args;
     std::vector<uint32_t> writer_common_runtime_args;
@@ -1429,7 +1530,8 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         [&](const CoreCoord& core,
             const RuntimeArgList& reader_args,
             const RuntimeArgList& writer_args,
-            const RuntimeArgList& compute_args) {
+            const RuntimeArgList& compute_args,
+            bool /*has_work*/) {
             reader_desc.emplace_runtime_args(core, reader_args);
             writer_desc.emplace_runtime_args(core, writer_args);
             compute_desc.emplace_runtime_args(core, compute_args);
@@ -1486,20 +1588,20 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
         return table[core.x][core.y];
     };
 
+    // One size check, then raw writes: runs for every core on every call.
     auto apply = [](tt::tt_metal::RuntimeArgsData& data, const RuntimeArgList& args) {
         TT_FATAL(
             args.size() <= data.size(),
             "binary_ng runtime-arg override writes {} args into a slot of {}",
             args.size(),
             data.size());
-        for (uint32_t arg_idx = 0; arg_idx < static_cast<uint32_t>(args.size()); ++arg_idx) {
-            const auto& slot = args[arg_idx];
-            data[arg_idx] = std::holds_alternative<tt::tt_metal::Buffer*>(slot)
-                                ? static_cast<uint32_t>(std::get<tt::tt_metal::Buffer*>(slot)->address())
-                                : std::get<uint32_t>(slot);
+        uint32_t* dst = data.data();
+        for (const auto& slot : args) {
+            *dst++ = std::holds_alternative<tt::tt_metal::Buffer*>(slot)
+                         ? static_cast<uint32_t>(std::get<tt::tt_metal::Buffer*>(slot)->address())
+                         : std::get<uint32_t>(slot);
         }
     };
-
     for_each_core_runtime_args(
         operation_attributes,
         a,
@@ -1508,11 +1610,22 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
         [&](const CoreCoord& core,
             const RuntimeArgList& reader_args,
             const RuntimeArgList& writer_args,
-            const RuntimeArgList& compute_args) {
-            apply(core_args(reader_args_by_core, core), reader_args);
-            apply(core_args(writer_args_by_core, core), writer_args);
-            apply(core_args(compute_args_by_core, core), compute_args);
-        });
+            const RuntimeArgList& compute_args,
+            bool has_work) {
+            // Idle cores only need zeroed args.
+            const auto write = [&](auto& table, const RuntimeArgList& args) {
+                auto& data = core_args(table, core);
+                if (has_work) {
+                    apply(data, args);
+                } else {
+                    std::fill_n(data.data(), data.size(), 0u);
+                }
+            };
+            write(reader_args_by_core, reader_args);
+            write(writer_args_by_core, writer_args);
+            write(compute_args_by_core, compute_args);
+        },
+        /*fill_noop_args=*/false);
 
     // Re-point tensor-backed (globally-allocated) circular buffers at the CURRENT buffers, by CBIndex.
     // binary_ng convention: c_0 = input_a, c_1 = input_b, c_2 = output.  Addressing by CBIndex (not by
