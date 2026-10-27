@@ -311,6 +311,11 @@ class GRPOConfig:
             )
         if self.weight_sync_every < 1:
             raise ValueError(f"grpo_config: 'weight_sync_every' must be >= 1 (got {self.weight_sync_every}).")
+        if self.backend.in_process and self.weight_sync_every != 1:
+            raise ValueError(
+                f"grpo_config: 'weight_sync_every' does not apply to rollout_backend={self.rollout_backend!r}, "
+                f"which shares the trainer's model (got {self.weight_sync_every})."
+            )
         if not self.backend.in_process and self.remote_rollout is None:
             raise ValueError(
                 f"grpo_config: rollout_backend={self.rollout_backend!r} needs a top-level "
