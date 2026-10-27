@@ -4,8 +4,8 @@
     Blackhole (p100)
 
 ## Introduction
-This directory runs BEVFormer end to end on device, base by default and tiny or small with
-`BEVFORMER_VARIANT` (see Testing): six camera images through the ResNet backbone (ResNet101-DCN
+This directory runs BEVFormer end to end on device, base by default and tiny or small through the
+bundled configs in `config/`: six camera images through the ResNet backbone (ResNet101-DCN
 for base and small, ResNet50 for tiny) and FPN, the perception transformer around the BEVFormer
 encoder, the detection decoder and the head with its NMS-free box coder, ending in 3D boxes.
 
@@ -15,20 +15,49 @@ previous frame's BEV.
 https://arxiv.org/abs/2203.17270
 
 ## Prerequisites
+
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
-## How to Run
-- Use the following command to run the detector end to end over two frames against the reference:
+## Demo
+
+The sequence demo accepts the model variant/config, weights, and dataset independently. It runs
+one preparation frame followed by 10 output frames by default. From the repository root, a
+synthetic smoke run is:
+
 ```sh
-pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer.py
+python -m models.experimental.bevformer.demo.demo \
+  --config models/experimental/bevformer/config/bevformer_tiny.json \
+  --weights random \
+  --dataset-format synthetic \
+  --num-frames 10
 ```
 
-### Performance
+For a real sequence, pass the three independent inputs explicitly:
+
+```sh
+python -m models.experimental.bevformer.demo.demo \
+  --config /path/to/model.json \
+  --weights /path/to/checkpoint.pth \
+  --checkpoint-format mmdet3d \
+  --dataset-format manifest \
+  --dataset /path/to/sequence.json \
+  --dataset-root /path/to/dataset \
+  --num-frames 10
+```
+
+See [`demo/README.md`](demo/README.md) for the config and manifest schemas, metadata conversion,
+scene selection, score filtering, and output format.
+
+## Performance
+
 - For the detector's device ops, one live frame with a previous BEV between Tracy's `start` and
-  `stop` signposts:
+  `stop` signposts by default. Set `BEVFORMER_PERF_FRAMES=10` for ten consecutive measured frames;
+  either run has one preparation frame outside the signposts:
+
 ```sh
 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
+BEVFORMER_PERF_FRAMES=10 python -m tracy -p -r -v -m "pytest models/experimental/bevformer/tests/perf/test_bevformer_perf.py"
 tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
 ```
 - The per-stage harnesses in `tests/perf/` (`test_backbone_fpn_perf.py`, `test_decoder_perf.py`,
@@ -36,12 +65,16 @@ tt-perf-report <ops_perf_results.csv> --start-signpost start --end-signpost stop
   `test_encoder_perf.py`, `test_encoder_layer_perf.py` and `test_fused_msda_perf.py` run live.
 
 ## Testing
+
 - Use the following command to run every PCC test:
+
 ```sh
 pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 ```
 - `BEVFORMER_VARIANT=tiny|small|base` (default `base`) selects upstream's configuration, read once
-  when `model_config.py` is first imported. The backbone and FPN tests (`test_resnet.py`,
+  from `config/bevformer_<variant>.json` when `model_config.py` is first imported. A normalized
+  local config can instead be selected with `BEVFORMER_CONFIG=/path/to/config.json`. The backbone
+  and FPN tests (`test_resnet.py`,
   `test_fpn.py`, `test_backbone_fpn.py`), `test_perception_transformer.py`, `test_bevformer.py` and
   the backbone and detector harnesses in `tests/perf/` run the selected variant;
   `test_perception_transformer.py` keeps fixed BEV grids, and the other tests' `*_base` and `*_tiny`
@@ -58,16 +91,24 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 - `test_decoder.py`: the six-layer detection decoder and its reference-point refinement.
 - `test_head.py`: the detection head, and the coder on its outputs.
 - `test_nms_free_coder.py`: the box coder's exact top-k, decoding and filters.
-- `test_bevformer.py`: the detector end to end over two frames.
+- `test_bevformer.py`: the detector end to end over two frames against the reference. Run it
+  independently with:
+
+```sh
+pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer.py
+```
 
 ## Project Structure
 
 ```
 models/experimental/bevformer/
-├── model_config.py     # BEVFormer's configuration per variant and the port's precision and memory choices
+├── config/             # Validated tiny, small and base inference configs and their loader
+├── demo/               # Sequence CLI, checkpoint and dataset adapters
+├── model_config.py     # Compatibility facade plus the port's precision and memory choices
 ├── reference/          # PyTorch reference implementation
 ├── tests/
-│   ├── common.py       # Test helpers: camera rigs, dataset presets, dummy weights, random inputs
+│   ├── common.py       # Test helpers: dataset presets, dummy weights and random inputs
+│   ├── fixtures/       # Deterministic synthetic camera geometry used only by tests
 │   ├── pcc/            # Unit tests for individual components
 │   └── perf/           # Device-perf harnesses, one per stage and one for the detector
 └── tt/                 # TTNN implementation; model_preprocessing.py prepares every part's parameters

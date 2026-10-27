@@ -4,16 +4,16 @@
 """Tracy harness for the detector end to end: images to class logits, boxes, the frame's BEV and the
 3D detections, on device; dropping the invalid boxes on the host after it is timed apart.
 
-Dummy weights and nuScenes' six-camera rig, three frames, at the selected variant's image size and
-BEV grid (base's 1600x928 and 200x200 by default).
-The first frame, which has no previous BEV, runs eagerly; the second is the warmup and the PCC
-gate, then runs once more between Tracy's ``start`` and ``stop``, so the stage signposts and the
-host dispatch are in the report. The detector runs live, not under a trace: the encoder projects
-the cameras and reads their visibility on the host inside its forward. The third frame refills
-the frame's inputs with the ego driving backwards and twice as far, turning the other way, and
-checks the outputs once more.
+Dummy weights and nuScenes' six-camera rig, at the selected variant's image size and BEV grid
+(base's 1600x928 and 200x200 by default). ``BEVFORMER_PERF_FRAMES`` selects 1 or 10 consecutive
+profiled frames and defaults to 1. One preceding frame, which has no previous BEV, establishes the
+temporal state outside the measured region. The first profiled frame also runs once as a warmup and
+PCC gate, then the complete sequence runs between Tracy's ``start`` and ``stop``. The detector runs
+live, not under a trace: the encoder projects the cameras and reads their visibility on the host
+inside its forward.
 """
 
+import os
 import time
 
 import pytest
@@ -34,6 +34,9 @@ from models.experimental.bevformer.tt.model_preprocessing import create_bevforme
 from models.experimental.bevformer.tt.tt_bevformer import TTBEVFormer
 
 PCC_THRESHOLD = 0.99
+NUM_PROFILED_FRAMES = int(os.environ.get("BEVFORMER_PERF_FRAMES", "1"))
+if NUM_PROFILED_FRAMES not in (1, 10):
+    raise ValueError(f"BEVFORMER_PERF_FRAMES is {NUM_PROFILED_FRAMES}, expected 1 or 10")
 
 
 def _check(expected, tt_outputs):
@@ -44,45 +47,50 @@ def _check(expected, tt_outputs):
 
 
 @torch.no_grad()
-# The reference runs the backbone on six images on the CPU four times, once to record the conv
-# shapes and once per frame: base's 928x1600 take most of this.
-@pytest.mark.timeout(1800)
+# The reference runs the backbone on six images on the CPU once to record the conv shapes and once
+# per logical frame: base's 928x1600 take most of this.
+@pytest.mark.timeout(1800 if NUM_PROFILED_FRAMES == 1 else 5400)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32 * 1024}], indirect=True)
 def test_bevformer_perf(device, reset_seeds):
     torch_model = build_reference_bevformer((BEV_H, BEV_W))
     img = random_image_batch()[None]
-    frames = frame_metas(1, 3, torch.Generator().manual_seed(0), motion=(1, -2))
+    frames = frame_metas(1, NUM_PROFILED_FRAMES + 1, torch.Generator().manual_seed(0))
 
-    expected, torch_prev = [], None
-    for metas in frames:
+    expected_first = expected_last = torch_prev = None
+    for frame_index, metas in enumerate(frames):
         outputs = torch_model(img, metas, prev_bev=torch_prev)
-        expected.append(outputs)
+        if frame_index == 1:
+            expected_first = outputs
+        if frame_index == NUM_PROFILED_FRAMES:
+            expected_last = outputs
         *_, torch_prev = outputs
 
     tt_model = TTBEVFormer(create_bevformer_parameters(torch_model, img, device), device)
     # Uploaded once so the profiled run measures the detector, not the transfer.
     tt_img = to_conv_layout(img.flatten(0, 1), device, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    # Each measured frame is prepared up front so the signposted region contains only detector
+    # execution. Separate buffers let the measured loop advance frames without host-side refills.
+    tt_frames = [tt_model.prepare_frame(metas) for metas in frames]
 
-    frame = tt_model.prepare_frame(frames[0])
-    *_, prev_bev = tt_model(tt_img, frame)
-    tt_model.prepare_frame(frames[1], frame)
+    *_, initial_prev_bev = tt_model(tt_img, tt_frames[0])
 
-    def run():
-        """The detector and its detections: images to 3D boxes, all but the host compaction."""
+    def run_frame(frame, prev_bev):
+        """One detector frame and its detections, all but the host compaction."""
         outputs = tt_model(tt_img, frame, prev_bev=prev_bev)
         return (*outputs, tt_model.detect(*outputs[:2]))
 
-    # Doubles as the warmup of the path with a previous BEV.
-    _check(expected[1], run())
-    tt_outputs = signposted_forward(device, run)
-    _check(expected[1], tt_outputs)
+    # Warm the path with a previous BEV without advancing the state used by the measured sequence.
+    _check(expected_first, run_frame(tt_frames[1], initial_prev_bev))
 
-    start = time.perf_counter()
-    tt_model.prepare_frame(frames[2], frame)
-    logger.info(f"prepare_frame refill on the host: {(time.perf_counter() - start) * 1e3:.1f} ms")
-    prev_bev = tt_outputs[2]
-    tt_outputs = run()
-    _check(expected[2], tt_outputs)
+    def run_sequence():
+        prev_bev = initial_prev_bev
+        for frame in tt_frames[1:]:
+            outputs = run_frame(frame, prev_bev)
+            prev_bev = outputs[2]
+        return outputs
+
+    tt_outputs = signposted_forward(device, run_sequence)
+    _check(expected_last, tt_outputs)
     scores, labels, _, boxes, valid = tt_outputs[3]
     start = time.perf_counter()
     tt_model.get_bboxes(scores, labels, boxes, valid)
