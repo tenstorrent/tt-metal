@@ -1269,3 +1269,15 @@ routing, traced prefill carries a persistent [T,32] mask input), GLM53_DISPATCH_
 naming the call site). Device: one chip over-budget dense+nan RETURN with the flag (2/2), no regression on well-formed routings (4/4);
 on the block the guard named the served spec v1's MTP prompt fill (all 128 rows over budget after a traced prefill: a layout bug in that
 branch, not the pad rows). Note: the served plain path was exposed too (any prompt shorter than its trace bucket).
+
+20:40 Evening status. Served short prompts validated on the head with the dispatch fix (`serve_smoke_glm53_r16_short`: 40 / 100 / 128-token
+prompts x 4 through the padded traced prefill, zero guard trips, 10.2-10.5 tok/s per user). The served speculative path v1's block
+failure was the late-collective trap again: the MTP prompt fill at the traced length was the first MTP prefill at that shape and ran
+after the captures (fixed on arg/glm53_served_spec_fix b3623daede5: the fill is warmed at every padded chunk length before any capture);
+spec v2 (partitioned caches + sparse-range verify, arg/glm53_served_spec_long e520dbf659a) is rebased on it; both wait for their block
+runs. The 1 M x 4 concurrent served point: the persistent prefix staging buffer (arg/glm53_prefix_staging, block-validated bit-identical)
+plus the dense slabs (arg/glm53_prefill_peak, modelled MoE-phase peak 762 -> 510 MB) survived 100 chunks without an out-of-memory where
+staging alone died at chunk 19, but the slabs cost ~6x on the prefill (40-47 s per 16 K chunk vs 7.4 s: eager launch overhead) and the
+run hit the 90-minute bound inside request 1; neither is a default. The served 1 M profile stays at two of four concurrent 1 M
+requests completing; the next levers are a bfp8 latent cache (halves the 11.7 GiB of caches), the regions MoE output pair (306 MB)
+and a 4096-token served chunk, and honest admission (2 concurrent at 1 M) until one lands.
