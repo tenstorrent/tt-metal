@@ -13,7 +13,8 @@
 //
 // No float arithmetic happens here. The dataflow RISC has no FPU, so every
 // float operation would cost ~140 cycles of soft-float emulation. This file
-// moves bit patterns and decodes the floored corner with integer shifts.
+// moves bit patterns; compute hands back each corner already bounds-tested and
+// indexed as an integer word (msda_corner_word.hpp).
 // geom_x/geom_y are float32 when REF_FP32 is set and compute unpacks them
 // straight into its 32-bit DST, so the reference point reaches the SFPU
 // unrounded; every other tile here is bf16.
@@ -25,11 +26,11 @@
 // compute is idle through every gather. Where the push sits depends on the
 // gather:
 //
-//   reader-only gather: push j+1; wait x0/y0(j); gather j.
-//   split gather:       wait x0/y0(j); post j to the writer; push j+1; gather
+//   reader-only gather: push j+1; wait corner(j); gather j.
+//   split gather:       wait corner(j); post j to the writer; push j+1; gather
 //                       the reader's rows of j.
 //
-// The split order cannot deadlock: compute produces x0/y0(j) before it waits
+// The split order cannot deadlock: compute produces corner(j) before it waits
 // for j+1's tiles and holds at most one point ahead, so the CB depths in
 // fused_msda_program_factory.cpp cover both orders.
 //
@@ -37,9 +38,9 @@
 // from points to blocks. The reader NoC-reads a block's offsets and attn rows
 // into a row-major page and writes the reference tile only when the query
 // block changes; compute tilizes them, solves every point at once and returns
-// one x0 and one y0 tile per block, x0_j in column 16 + j. Block t+1 is staged
-// as soon as block t's x0/y0 arrive and published after the first gather
-// barrier of block t, so compute can solve it early in block t.
+// one corner tile per block, point j's word in column 16 + j. Block t+1 is
+// staged as soon as block t's corner tile arrives and published after the
+// first gather barrier of block t, so compute can solve it early in block t.
 //
 // Tile face layout is documented in ../msda_tile_layout.hpp. bf16 tiles are
 // 2048 B; geom_x/geom_y are 4096 B when REF_FP32 is set (per-point path only).
@@ -51,17 +52,17 @@
 //     bf16 otherwise). The other columns are zeroed
 //     once per CB slot at startup so an uninitialised L1 bit pattern never
 //     reaches the SFPU as a NaN.
-//   * x0/y0 tiles come back with floor(px) in column 16 (msda_geometry.hpp).
+//   * corner tiles come back float32 with the corner word in column 16
+//     (msda_geometry.hpp).
 //   * tiled geometry instead: rows < v_rows of the staged page are NoC-read,
 //     the reference tile is rewritten for rows < v_rows when the query block
 //     changes, and every other row keeps a previous block's values (zero at
 //     startup), so those rows' scalars are not zero. That is harmless: rows
 //     never mix, and the writer emits only rows < v_rows.
 //   * input tile: rows that are in range AND in bounds hold the gathered value
-//     stick; every other row is explicitly zeroed. The scalar is built by the
-//     compute kernel, which has no bounds information, so nothing downstream can
-//     annihilate a stale row, and on the tiled geometry rows >= v_rows carry a
-//     live scalar.
+//     stick; every other row is explicitly zeroed. Compute does not mask the
+//     scalars by the bounds flags it hands the gathers, so the zeroed slot is
+//     the only thing that cancels an out-of-bounds corner of a row < v_rows.
 //   * with RM_STAGING the four corners of a point go over as one row-major
 //     block (row r = [NW | NE | SW | SE], D bf16 each) that compute tilizes;
 //     the same rule applies per corner slot. With SPLIT_GATHER the writer
@@ -73,9 +74,10 @@
 //   [2]                 sampling_locations (V1) / sampling_offsets (V2) address
 //   [3]                 reference_points address (V2; 0 for V1)
 //   [4]                 num_output_tiles
-//   [5 .. 5+3L)         per level l: H_l, W_l, level_start_index_l
-//   [5+3L .. 5+9L)      TILED_GEOMETRY only: per level l, the fp32 bit patterns
-//                       of (primary, secondary, bias) for x, then for y
+//   [5 .. 5+3L)         per level l: H_l (unread; compute bounds the corner),
+//                       W_l, level_start_index_l
+//   [5+3L .. 5+11L)     TILED_GEOMETRY only: per level l, the fp32 bit patterns
+//                       of (primary, secondary, bias, extent) for x, then for y
 //   [...]               per output tile: b, head, q_start, v_rows
 
 // NOTE: kernels are JIT-compiled as C++17. No abbreviated function templates
@@ -92,6 +94,7 @@
 #include "api/core_local_mem.h"
 #include "api/semaphore.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_corner_word.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tile_layout.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tiled_geometry.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/dataflow/msda_gather_rows.hpp"
@@ -139,20 +142,19 @@ struct ReaderGatherCfg {
 constexpr uint32_t geom_x_cb_index = get_compile_time_arg_val(22);
 constexpr uint32_t geom_y_cb_index = get_compile_time_arg_val(23);
 constexpr uint32_t attn_tile_cb_index = get_compile_time_arg_val(24);
-constexpr uint32_t x0_cb_index = get_compile_time_arg_val(25);
-constexpr uint32_t y0_cb_index = get_compile_time_arg_val(26);
-constexpr uint32_t geom_cb_pages = get_compile_time_arg_val(27);
-constexpr bool RM_STAGING = get_compile_time_arg_val(28) != 0;
-constexpr bool SPLIT_GATHER = get_compile_time_arg_val(29) != 0;
-constexpr uint32_t gather_ready_sem_id = get_compile_time_arg_val(30);
-constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(31);
-constexpr uint32_t gather_mailbox_cb_index = get_compile_time_arg_val(32);
-constexpr uint32_t gather_mailbox_nbytes = get_compile_time_arg_val(33);  // allocated page; 0 without SPLIT_GATHER
-constexpr bool TILED_GEOMETRY = get_compile_time_arg_val(34) != 0;
-constexpr uint32_t geom_rm_cb_index = get_compile_time_arg_val(35);
-constexpr uint32_t ref_tile_cb_index = get_compile_time_arg_val(36);
-constexpr uint32_t const_cb_index = get_compile_time_arg_val(37);
-constexpr uint32_t MSDA_LAST_SCALAR_CT_ARG = 37;
+constexpr uint32_t corner_cb_index = get_compile_time_arg_val(25);
+constexpr uint32_t geom_cb_pages = get_compile_time_arg_val(26);
+constexpr bool RM_STAGING = get_compile_time_arg_val(27) != 0;
+constexpr bool SPLIT_GATHER = get_compile_time_arg_val(28) != 0;
+constexpr uint32_t gather_ready_sem_id = get_compile_time_arg_val(29);
+constexpr uint32_t gather_done_sem_id = get_compile_time_arg_val(30);
+constexpr uint32_t gather_mailbox_cb_index = get_compile_time_arg_val(31);
+constexpr uint32_t gather_mailbox_nbytes = get_compile_time_arg_val(32);  // allocated page; 0 without SPLIT_GATHER
+constexpr bool TILED_GEOMETRY = get_compile_time_arg_val(33) != 0;
+constexpr uint32_t geom_rm_cb_index = get_compile_time_arg_val(34);
+constexpr uint32_t ref_tile_cb_index = get_compile_time_arg_val(35);
+constexpr uint32_t const_cb_index = get_compile_time_arg_val(36);
+constexpr uint32_t MSDA_LAST_SCALAR_CT_ARG = 36;
 constexpr uint32_t MSDA_TENSOR_ACCESSOR_ARG_BASE = MSDA_LAST_SCALAR_CT_ARG + 1;
 
 // ---------------------------------------------------------------------------
@@ -194,22 +196,15 @@ constexpr uint32_t MSDA_MAX_LEVELS = 8;
 namespace fused_msda {
 
 struct LevelGeom {
-    uint32_t height;       // H_l
     uint32_t width;        // W_l
     uint32_t start_index;  // sum_{k<l} H_k * W_k
 };
 
-using fused_msda_gather::bf16_exact_int;
-
-// Per-row corner indices and bounds flags for one (level, point), reused across
-// the four corners.
+// Per-row NW corner and bounds flags for one (level, point), reused across the
+// four corners.
 struct RowGeometry {
-    int32_t x0[TILE_MAX_ROWS];
-    int32_t y0[TILE_MAX_ROWS];
-    bool x0_valid[TILE_MAX_ROWS];
-    bool x1_valid[TILE_MAX_ROWS];
-    bool y0_valid[TILE_MAX_ROWS];
-    bool y1_valid[TILE_MAX_ROWS];
+    uint32_t nw[TILE_MAX_ROWS];  // (b, s) row of the NW corner
+    uint8_t flags[TILE_MAX_ROWS];
 };
 
 // Reads the raw bf16 attention_weights[.., l, p] for row r out of the staged arena.
@@ -336,12 +331,12 @@ constexpr uint16_t BF16_ONE = 0x3F80;
 inline uint32_t ref_index(uint32_t l, uint32_t p) { return (REF_MODE == 0) ? l : (p % NUM_REFS); }
 
 // Readies everything the tiled geometry keeps across blocks: writes and pushes
-// the constants CB (M_off, M_ref, E_j; see msda_tiled_geometry.hpp), and zeroes
-// the reference tile, setting its bias column, and the row-major staging page.
-// Staging writes only rows < v_rows, so the rest must hold finite values from
-// the start: their weights multiply the zeroed input rows past v_rows, and
-// 0 * NaN is NaN. `arg` is the first per-level constant runtime arg, fp32 bit
-// patterns whose low halves the factory has checked to be zero.
+// the constants CB (M_off, M_ref, M_extent, E_j; see msda_tiled_geometry.hpp),
+// and zeroes the reference tile, setting its bias column, and the row-major
+// staging page. Staging writes only rows < v_rows; the rest keep what an
+// earlier block left, which never reaches the output (see the contract at the
+// top of this file). `arg` is the first per-level constant runtime arg, fp32
+// bit patterns whose low halves the factory has checked to be zero.
 inline void init_tiled_geometry(Noc& noc, uint32_t arg) {
     namespace tg = fused_msda_tiled_geometry;
     CircularBuffer const_cb(const_cb_index);
@@ -359,20 +354,24 @@ inline void init_tiled_geometry(Noc& noc, uint32_t arg) {
 
     const uint32_t m_off = const_cb.get_write_ptr() + tg::CONST_M_OFF * TILE_NBYTES;
     const uint32_t m_ref = const_cb.get_write_ptr() + tg::CONST_M_REF * TILE_NBYTES;
+    const uint32_t m_extent = const_cb.get_write_ptr() + tg::CONST_M_EXTENT * TILE_NBYTES;
     for (uint32_t j = 0; j < POINTS_PER_BLOCK; ++j) {
         const uint32_t l = j / NUM_POINTS;
         const uint32_t p = j - l * NUM_POINTS;
         const uint32_t k = ref_index(l, p);
-        auto level_bf16 = [&](uint32_t i) {
-            return static_cast<uint16_t>(get_arg_val<uint32_t>(arg + tg::CONSTANTS_PER_LEVEL * l + i) >> 16);
+        // (primary, secondary, bias, extent) of axis 0 = x, 1 = y.
+        auto level_bf16 = [&](uint32_t axis, uint32_t i) {
+            return static_cast<uint16_t>(
+                get_arg_val<uint32_t>(arg + tg::CONSTANTS_PER_LEVEL * l + tg::CONSTANTS_PER_AXIS * axis + i) >> 16);
         };
-        // (primary, secondary, bias) for x, then for y.
-        write_tile_elem(m_ref, k, j, level_bf16(0));
-        write_tile_elem(m_off, 2 * j, j, level_bf16(1));
-        write_tile_elem(m_ref, tg::BIAS_COL, j, level_bf16(2));
-        write_tile_elem(m_ref, 16 + k, 16 + j, level_bf16(3));
-        write_tile_elem(m_off, 2 * j + 1, 16 + j, level_bf16(4));
-        write_tile_elem(m_ref, tg::BIAS_COL, 16 + j, level_bf16(5));
+        write_tile_elem(m_ref, k, j, level_bf16(0, 0));
+        write_tile_elem(m_off, 2 * j, j, level_bf16(0, 1));
+        write_tile_elem(m_ref, tg::BIAS_COL, j, level_bf16(0, 2));
+        write_tile_elem(m_ref, 16 + k, 16 + j, level_bf16(1, 0));
+        write_tile_elem(m_off, 2 * j + 1, 16 + j, level_bf16(1, 1));
+        write_tile_elem(m_ref, tg::BIAS_COL, 16 + j, level_bf16(1, 2));
+        write_tile_elem(m_extent, tg::BIAS_COL, j, level_bf16(1, 3));
+        write_tile_elem(m_extent, tg::BIAS_COL, 16 + j, level_bf16(0, 3));
         write_tile_elem(const_cb.get_write_ptr() + (tg::CONST_E_FIRST + j) * TILE_NBYTES, j, 0, BF16_ONE);
     }
     const_cb.push_back(tg::CONST_TILES);
@@ -467,7 +466,6 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
 
     LevelGeom levels[MSDA_MAX_LEVELS];
     for (uint32_t l = 0; l < NUM_LEVELS; ++l) {
-        levels[l].height = get_arg_val<uint32_t>(5 + 3 * l);
         levels[l].width = get_arg_val<uint32_t>(5 + 3 * l + 1);
         levels[l].start_index = get_arg_val<uint32_t>(5 + 3 * l + 2);
     }
@@ -479,8 +477,7 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
     CircularBuffer geom_x_cb(geom_x_cb_index);
     CircularBuffer geom_y_cb(geom_y_cb_index);
     CircularBuffer attn_tile_cb(attn_tile_cb_index);
-    CircularBuffer x0_cb(x0_cb_index);
-    CircularBuffer y0_cb(y0_cb_index);
+    CircularBuffer corner_cb(corner_cb_index);
 
     // Scratch CBs are reserved once and used as fixed linear L1 arenas; they
     // are never pushed, so nothing downstream waits on them.
@@ -581,19 +578,16 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
         const uint32_t q_start = u.q_start;
         const uint32_t v_rows = u.v_rows;
 
-        [[maybe_unused]] uint32_t block_x0_l1 = 0;
-        [[maybe_unused]] uint32_t block_y0_l1 = 0;
+        [[maybe_unused]] uint32_t block_corner_l1 = 0;
         [[maybe_unused]] bool next_staged = false;
         [[maybe_unused]] bool next_refs_restaged = false;
         if constexpr (TILED_GEOMETRY) {
-            x0_cb.wait_front(1);
-            y0_cb.wait_front(1);
+            corner_cb.wait_front(1);
             // Read across the whole block, and wait_front does not invalidate
             // the RISC L1 data cache, which may hold this page from two blocks
             // ago.
             invalidate_l1_cache();
-            block_x0_l1 = x0_cb.get_read_ptr();
-            block_y0_l1 = y0_cb.get_read_ptr();
+            block_corner_l1 = corner_cb.get_read_ptr();
             if (t + 1 < num_output_tiles) {
                 next_refs_restaged = stage_block(t + 1);
                 next_staged = true;
@@ -666,11 +660,10 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
             attn_tile_cb.push_back(1);
         };
 
-        // x0/y0 of a tiled block stay at the front until its last point.
+        // A tiled block's corner tile stays at the front until its last point.
         auto release_corners = [&](uint32_t j) {
             if (!TILED_GEOMETRY || j + 1 == POINTS_PER_BLOCK) {
-                x0_cb.pop_front(1);
-                y0_cb.pop_front(1);
+                corner_cb.pop_front(1);
             }
         };
 
@@ -694,32 +687,25 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
 
             const uint32_t l = j / NUM_POINTS;
             const LevelGeom& g = levels[l];
-            // Corners solved on the SFPU; only integer decode, bounds tests and
-            // page indices are left to the data-movement RISCs. The gathers
-            // read x0 at x0_l1 + tile_col16_offset(r), so a tiled block's
-            // point j is its tile shifted by j columns.
-            uint32_t x0_l1;
-            uint32_t y0_l1;
+            // The gathers read row r's word at corner_l1 +
+            // tile_col16_offset_fp32(r), so a tiled block's point j is its
+            // tile shifted by j columns.
+            uint32_t corner_l1;
             if constexpr (TILED_GEOMETRY) {
-                x0_l1 = block_x0_l1 + j * sizeof(uint16_t);
-                y0_l1 = block_y0_l1 + j * sizeof(uint16_t);
+                corner_l1 = block_corner_l1 + j * sizeof(uint32_t);
             } else {
-                x0_cb.wait_front(1);
-                y0_cb.wait_front(1);
-                x0_l1 = x0_cb.get_read_ptr();
-                y0_l1 = y0_cb.get_read_ptr();
+                corner_cb.wait_front(1);
+                corner_l1 = corner_cb.get_read_ptr();
             }
 
             if constexpr (RM_STAGING) {
                 input_tile_cb.reserve_back(4 * N_D_TILES);
                 const fused_msda_gather::PointArgs pt{
-                    .x0_l1 = x0_l1,
-                    .y0_l1 = y0_l1,
+                    .corner_l1 = corner_l1,
                     .block_l1 = input_tile_cb.get_write_ptr(),
                     .v_rows = v_rows,
                     .start_index = g.start_index,
                     .width = g.width,
-                    .height = g.height,
                     .batch = b,
                     .head = head,
                 };
@@ -732,8 +718,8 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                     fused_msda_gather::gather_rows<ReaderGatherCfg>(
                         noc, value_acc, pt, 0, fused_msda_gather::SPLIT_ROW);
                     noc.async_read_barrier();
-                    // The writer also decodes this point's x0/y0 tiles, so
-                    // x0_cb/y0_cb are popped only after done.
+                    // The writer also reads this point's corner tile, so it is
+                    // popped only after done.
                     gather_done.wait(gather_seq);
                 } else {
                     fused_msda_gather::gather_rows<ReaderGatherCfg>(noc, value_acc, pt, 0, TILE_MAX_ROWS);
@@ -744,54 +730,46 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                 release_corners(j);
                 input_tile_cb.push_back(4 * N_D_TILES);
             } else {
-                const int32_t w_i = static_cast<int32_t>(g.width);
-                const int32_t h_i = static_cast<int32_t>(g.height);
+                namespace cw = fused_msda_corner_word;
+                // nw_base + index is the NW corner's (b, s) row. Unsigned
+                // wraparound keeps every in-bounds sum exact; the sum itself
+                // wraps below zero only for an out-of-bounds NW, never read.
+                const uint32_t nw_base = value_batch_base + g.start_index - (g.width + 1);
                 for (uint32_t r = 0; r < v_rows; ++r) {
-                    const uint32_t col16 = fused_msda_tile_layout::tile_col16_offset(r);
-                    CoreLocalMem<volatile uint16_t> x0_src(x0_l1 + col16);
-                    CoreLocalMem<volatile uint16_t> y0_src(y0_l1 + col16);
-                    const int32_t x0 = bf16_exact_int(x0_src[0]);
-                    const int32_t y0 = bf16_exact_int(y0_src[0]);
-                    geom.x0[r] = x0;
-                    geom.y0[r] = y0;
-                    geom.x0_valid[r] = (x0 >= 0) && (x0 < w_i);
-                    geom.x1_valid[r] = (x0 + 1 >= 0) && (x0 + 1 < w_i);
-                    geom.y0_valid[r] = (y0 >= 0) && (y0 < h_i);
-                    geom.y1_valid[r] = (y0 + 1 >= 0) && (y0 + 1 < h_i);
+                    const auto w = cw::decode(CoreLocalMem<volatile uint32_t>(
+                        corner_l1 + fused_msda_tile_layout::tile_col16_offset_fp32(r))[0]);
+                    geom.nw[r] = nw_base + w.index;
+                    geom.flags[r] = static_cast<uint8_t>(w.flags);
                 }
                 release_corners(j);
 
                 for (uint32_t c = 0; c < 4; ++c) {
-                    // Hoist the row-invariant selectors: c picks the (dy, dx) step to
-                    // the corner and which validity arrays gate it.
-                    //
                     // c = 0, 1, 2, 3 is NW, NE, SW, SE, and must stay in lockstep
                     // with the four scalar packs in msda_geometry.hpp::point
                     // that build the matching scalar tiles.
-                    const int32_t dy_off = (c < 2) ? 0 : 1;
-                    const int32_t dx_off = (c & 1) ? 1 : 0;
-                    const bool* yv = (c < 2) ? geom.y0_valid : geom.y1_valid;
-                    const bool* xv = (c & 1) ? geom.x1_valid : geom.x0_valid;
+                    const uint32_t dy = c >> 1;
+                    const uint32_t dx = c & 1;
+                    const uint32_t need = (cw::FLAG_Y0 << dy) | (cw::FLAG_X0 << dx);
+                    const uint32_t step = dy * g.width + dx;
+                    auto in_bounds = [&](uint32_t r) { return (geom.flags[r] & need) == need; };
 
                     input_tile_cb.reserve_back(N_D_TILES);
                     const uint32_t tile_l1 = input_tile_cb.get_write_ptr();
 
                     for (uint32_t r = 0; r < v_rows; ++r) {
-                        if (!(yv[r] && xv[r])) {
+                        if (!in_bounds(r)) {
                             continue;
                         }
-                        const uint32_t cy = static_cast<uint32_t>(geom.y0[r] + dy_off);
-                        const uint32_t cx = static_cast<uint32_t>(geom.x0[r] + dx_off);
                         // Canonical (B, S, H, D): one page per (b, s, h).
                         // Packed (B, S, H*D): one page per (b, s), head at byte offset h*D*2.
-                        const uint32_t s = g.start_index + cy * g.width + cx;
+                        const uint32_t bs = geom.nw[r] + step;
                         uint32_t page;
                         uint32_t offset_bytes;
                         if constexpr (VALUE_PACKED) {
-                            page = value_batch_base + s;
+                            page = bs;
                             offset_bytes = head * (D * 2u);
                         } else {
-                            page = (value_batch_base + s) * NUM_HEADS + head;
+                            page = bs * NUM_HEADS + head;
                             offset_bytes = 0;
                         }
                         CoreLocalMem<uint32_t> dst(value_arena_l1 + r * value_stick_nbytes);
@@ -818,7 +796,7 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                     // map, so a stale row would be multiplied by a live weight — a
                     // high-error-ratio bug that a PCC gate passes.
                     for (uint32_t r = 0; r < TILE_MAX_ROWS; ++r) {
-                        if (r >= v_rows || !(yv[r] && xv[r])) {
+                        if (r >= v_rows || !in_bounds(r)) {
                             zero_input_row(tile_l1, r);
                             continue;
                         }

@@ -1067,13 +1067,11 @@ def test_fused_msda_rejects_too_many_levels(device, expect_error):
 
 
 @pytest.mark.parametrize("shapes", [[(257, 4)], [(4, 257)]], ids=["h", "w"])
-def test_fused_msda_rejects_spatial_shape_beyond_bf16_exact_integers(device, expect_error, shapes):
-    """A feature map larger than bf16 counts exactly must be refused, not mis-sampled.
+def test_fused_msda_rejects_spatial_shape_beyond_extent_limit(device, expect_error, shapes):
+    """A feature map past the tested extent must be refused, not run.
 
-    The SFPU geometry hands the reader floor(px) as bf16, which represents every
-    integer up to 256 and only some beyond it. At 257 the decoded corner would
-    round to a *different, still in-bounds* pixel -- a silently wrong sample
-    rather than a failure -- so the op rejects the shape instead.
+    256 per axis is the largest extent the op is tested at; past it nothing pins
+    the corner word or the geometry, so the op rejects the shape.
 
     Both axes are parametrized because one `TT_FATAL` tests both, so a refactor
     that drops the `w` half would otherwise go unnoticed.
@@ -1083,13 +1081,11 @@ def test_fused_msda_rejects_spatial_shape_beyond_bf16_exact_integers(device, exp
         ttnn.experimental.fused_msda(value_t, loc_t, attn_t, shapes)
 
 
-def test_fused_msda_accepts_spatial_shape_at_the_bf16_exact_limit(device):
-    """256 is the largest exactly-representable corner index, so it must be accepted.
+def test_fused_msda_accepts_spatial_shape_at_extent_limit(device):
+    """A 256-pixel axis, the largest the op accepts, must sample correctly.
 
     The companion to the rejection test above: it pins the boundary itself, so a
-    `<` where the code means `<=` fails here rather than silently narrowing the
-    op. It is also the only case that exercises the bf16 corner decode at its
-    stated limit.
+    `<` where the code means `<=` fails here rather than silently narrowing the op.
     """
     spatial_shapes = [(256, 4)]
     B, Q, H, L, P, D = 1, 8, 1, 1, 4, 32

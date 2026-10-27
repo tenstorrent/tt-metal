@@ -21,8 +21,11 @@
 //   M_off, M_ref   px | py = offsets @ M_off + ref @ M_ref, with the per-level
 //                  scales and bias as entries. The FPU applies them exactly
 //                  only because each is bf16-exact (the factory checks) and the
-//                  kernel runs at HiFi4: lower fidelities drop SrcB mantissa
-//                  bits, and in0 (the data) is SrcB
+//                  kernel runs at HiFi4: lower fidelities drop low mantissa
+//                  bits of SrcB (the data) or SrcA (the constants)
+//   M_extent       row BIAS_COL = H_l(j) in column j, W_l(j) in 16 + j, so
+//                  ref @ M_extent = H_j | W_j on every row (the corner word's
+//                  bounds, msda_corner_word.hpp)
 //   E_j            1 at (j, 0): w @ E_j moves column j of a weight tile w to
 //                  column 0, where the COL broadcast of the reduction reads
 //                  its scalar
@@ -49,7 +52,8 @@ static_assert(16 + MAX_REFS <= BIAS_COL, "ref y columns must not reach the bias 
 // Tile order of the constants CB, written once by the reader and never popped.
 constexpr uint32_t CONST_M_OFF = 0;
 constexpr uint32_t CONST_M_REF = 1;
-constexpr uint32_t CONST_E_FIRST = 2;
+constexpr uint32_t CONST_M_EXTENT = 2;
+constexpr uint32_t CONST_E_FIRST = 3;
 constexpr uint32_t CONST_TILES = CONST_E_FIRST + POINTS;
 
 // One block's staged operands, row-major, tilized by compute into OFF_TILE and
@@ -63,21 +67,23 @@ constexpr uint32_t OFF_TILE = 0;
 constexpr uint32_t ATTN_TILE = 1;
 static_assert(RM_ATTN_OFFSET == TILE_ROW_NBYTES, "the offsets stick must fill exactly one tile row");
 
-// CB depths, in pages. The reader stages block t+1 only after block t's x0/y0
-// arrive, and compute pops block t's staged page before pushing them, so one
-// block of staging is enough. The reader holds block t's x0/y0 for the whole
-// block while compute solves block t+1, and compute solves block t+1 while
-// still extracting block t's weights, so those hold two blocks. The reference
-// tile is one page so that a block whose reference points did not change can
-// push it again without rewriting it.
+// CB depths, in pages. The reader stages block t+1 only after block t's corner
+// tile arrives, and compute pops block t's staged page before it pushes block
+// t's corner tile, so one block of staging is enough. The reader holds block t's corner tile for
+// the whole block while compute solves block t+1, and compute solves block t+1
+// while still extracting block t's weights, so those hold two blocks. The
+// reference tile is one page so that a block whose reference points did not
+// change can push it again without rewriting it.
 constexpr uint32_t RM_CB_PAGES = RM_TILES;
 constexpr uint32_t CORNER_CB_PAGES = 2;
 constexpr uint32_t WEIGHT_TILES = 4;  // w_NW, w_NE, w_SW, w_SE
 constexpr uint32_t WEIGHT_CB_PAGES = 2 * WEIGHT_TILES;
 constexpr uint32_t REF_TILE_CB_PAGES = 1;
 
-// Per-level constants the reader writes into M_off / M_ref, as fp32 bit
-// patterns in its runtime args: (primary, secondary, bias) for x then y.
-constexpr uint32_t CONSTANTS_PER_LEVEL = 6;
+// Per-level constants as fp32 bit patterns in the runtime args: (primary,
+// secondary, bias, extent) for x then y. Compute reads them on every path; the
+// reader writes them into M_off / M_ref / M_extent on the tiled one.
+constexpr uint32_t CONSTANTS_PER_AXIS = 4;
+constexpr uint32_t CONSTANTS_PER_LEVEL = 2 * CONSTANTS_PER_AXIS;
 
 }  // namespace fused_msda_tiled_geometry

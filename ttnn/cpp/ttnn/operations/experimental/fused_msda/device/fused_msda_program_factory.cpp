@@ -62,6 +62,9 @@ struct TileAssignment {
 // [0, 1] rows, which is why `secondary_scale` is 1 except on a singleton
 // align_corners axis.
 //
+// `extent` is the axis' W or H, which bounds the floored corner on the SFPU
+// (kernels/msda_corner_word.hpp).
+//
 // Must stay in step with `AxisConstants` in msda_geometry.hpp, which consumes
 // them, and with kAxisConstantsPerLevel below, which is how many uint32 one
 // level ships as.
@@ -69,9 +72,10 @@ struct AxisConstants {
     uint32_t primary_scale;    // fp32 bit pattern
     uint32_t secondary_scale;  // fp32 bit pattern
     uint32_t bias;             // fp32 bit pattern
+    uint32_t extent;           // fp32 bit pattern
 };
 
-constexpr uint32_t kAxisConstantsPerLevel = 6;  // (primary, secondary, bias) x (x, y)
+constexpr uint32_t kAxisConstantsPerLevel = 8;  // (primary, secondary, bias, extent) x (x, y)
 static_assert(kAxisConstantsPerLevel == fused_msda_tiled_geometry::CONSTANTS_PER_LEVEL);
 
 // Appends each level's constants in kAxisConstantsPerLevel order, the layout
@@ -83,6 +87,7 @@ void append_axis_constants(Args& args, const std::vector<AxisConstants>& kx, con
             args.push_back(k.primary_scale);
             args.push_back(k.secondary_scale);
             args.push_back(k.bias);
+            args.push_back(k.extent);
         }
     }
 }
@@ -130,7 +135,8 @@ AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_spac
     return {
         std::bit_cast<uint32_t>(primary_scale),
         std::bit_cast<uint32_t>(secondary_scale),
-        std::bit_cast<uint32_t>(bias)};
+        std::bit_cast<uint32_t>(bias),
+        std::bit_cast<uint32_t>(e)};
 }
 
 // CB depths for the geometry pipeline. Both the reader and the compute kernel
@@ -149,7 +155,7 @@ AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_spac
 // its maximum outstanding (2).
 // Deepening the lookahead means scaling all of them.
 constexpr uint32_t kGeomCbPages = 4;    // reader -> compute operand tiles
-constexpr uint32_t kCornerCbPages = 3;  // compute -> reader floored corners
+constexpr uint32_t kCornerCbPages = 3;  // compute -> reader corner words
 constexpr uint32_t kScalarCbPages = 8;  // two points of four corners each
 constexpr uint32_t kInputCbGroups = 8;  // ditto, in corner groups of n_d_tiles
 // The tiled geometry's depths are in msda_tiled_geometry.hpp, which the
@@ -167,13 +173,12 @@ constexpr uint8_t input_tile_cb = tt::CBIndex::c_3;
 constexpr uint8_t scalar_tile_cb = tt::CBIndex::c_4;
 constexpr uint8_t output_scratch_cb = tt::CBIndex::c_5;
 constexpr uint8_t ref_scratch_cb = tt::CBIndex::c_6;
-// The geometry pipeline (README.md §6). geom/attn go reader -> compute,
-// x0/y0 come back compute -> reader.
+// The geometry pipeline (README.md §6). geom/attn go reader -> compute, the
+// corner words come back compute -> reader.
 constexpr uint8_t geom_x_cb = tt::CBIndex::c_7;
 constexpr uint8_t geom_y_cb = tt::CBIndex::c_8;
 constexpr uint8_t attn_tile_cb = tt::CBIndex::c_11;
-constexpr uint8_t x0_cb = tt::CBIndex::c_12;
-constexpr uint8_t y0_cb = tt::CBIndex::c_13;
+constexpr uint8_t corner_cb = tt::CBIndex::c_12;
 constexpr uint8_t output_tile_cb = tt::CBIndex::c_16;
 constexpr uint8_t tiled_input_cb = tt::CBIndex::c_17;
 constexpr uint8_t gather_mailbox_cb = tt::CBIndex::c_18;
@@ -239,8 +244,8 @@ bool uses_tiled_geometry(
     bool constants_exact = true;
     for (uint32_t l = 0; l < s.num_levels; ++l) {
         for (const auto& k : {c.kx[l], c.ky[l]}) {
-            constants_exact =
-                constants_exact && bf16_exact(k.primary_scale) && bf16_exact(k.secondary_scale) && bf16_exact(k.bias);
+            constants_exact = constants_exact && bf16_exact(k.primary_scale) && bf16_exact(k.secondary_scale) &&
+                              bf16_exact(k.bias) && bf16_exact(k.extent);
         }
     }
     return s.locations_packed && s.weights_packed && s.num_levels * s.num_points == tg::POINTS &&
@@ -499,6 +504,9 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     const bool ref_fp32 = attrs.from_offsets && args.reference_points->dtype() == DataType::FLOAT32;
     const auto primary_format = ref_fp32 ? datatype_to_dataformat_converter(DataType::FLOAT32) : data_format;
     const uint32_t primary_tile_nbytes = tt::tile_size(primary_format);
+    // The corner word needs 24 exact bits (kernels/msda_corner_word.hpp).
+    const auto corner_format = datatype_to_dataformat_converter(DataType::FLOAT32);
+    const uint32_t corner_tile_nbytes = tt::tile_size(corner_format);
     if (tiled_geometry) {
         namespace tg = fused_msda_tiled_geometry;
         push(geom_rm_cb, tg::RM_CB_PAGES, tile_nbytes, data_format);
@@ -506,14 +514,12 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
         push(ref_tile_cb, tg::REF_TILE_CB_PAGES, tile_nbytes, data_format);
         push(const_cb, tg::CONST_TILES, tile_nbytes, data_format);
         push(weight_cb, tg::WEIGHT_CB_PAGES, tile_nbytes, data_format);
-        push(x0_cb, tg::CORNER_CB_PAGES, tile_nbytes, data_format);
-        push(y0_cb, tg::CORNER_CB_PAGES, tile_nbytes, data_format);
+        push(corner_cb, tg::CORNER_CB_PAGES, corner_tile_nbytes, corner_format);
     } else {
         push(geom_x_cb, kGeomCbPages, primary_tile_nbytes, primary_format);
         push(geom_y_cb, kGeomCbPages, primary_tile_nbytes, primary_format);
         push(attn_tile_cb, kGeomCbPages, tile_nbytes, data_format);
-        push(x0_cb, kCornerCbPages, tile_nbytes, data_format);
-        push(y0_cb, kCornerCbPages, tile_nbytes, data_format);
+        push(corner_cb, kCornerCbPages, corner_tile_nbytes, corner_format);
     }
     // Compute -> writer, double-buffered.
     push(output_tile_cb, 2 * n_d_tiles, tile_nbytes, output_format);
@@ -660,8 +666,7 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         geom_x_cb,
         geom_y_cb,
         attn_tile_cb,
-        x0_cb,
-        y0_cb,
+        corner_cb,
         kGeomCbPages,
         static_cast<uint32_t>(rm_staging),
         static_cast<uint32_t>(split_gather),
@@ -705,8 +710,7 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         geom_x_cb,
         geom_y_cb,
         attn_tile_cb,
-        x0_cb,
-        y0_cb,
+        corner_cb,
         s.num_levels,
         s.num_points,
         static_cast<uint32_t>(attrs.from_offsets),

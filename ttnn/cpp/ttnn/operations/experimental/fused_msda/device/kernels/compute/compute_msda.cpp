@@ -9,8 +9,8 @@
 //
 //   GEOMETRY   msda_geometry.hpp, on the SFPU. Per sampling point it turns the
 //              staged (location | reference + offset) and attn tiles into
-//              floor(px), floor(py) — handed back to the reader, which
-//              bounds-tests them and gathers the corners — and the four
+//              the corner word — the in-bounds flags and in-level index of
+//              the floored corner, handed back to the gathers — and the four
 //              `attn * bilinear_corner_coefficient` scalar tiles.
 //              With TILED_GEOMETRY the operands arrive once per block instead
 //              (msda_tiled_geometry.hpp): one window solves every point of the
@@ -36,7 +36,7 @@
 // them. Solving one point ahead of the reduction is what keeps both busy: while
 // the reader gathers point j, the SFPU is already solving point j+1. The tiled
 // geometry solves a block ahead instead: block t+1 right after block t's first
-// reduction (SOLVE_NEXT_BLOCK_AT), so its x0/y0 are ready long before the
+// reduction (SOLVE_NEXT_BLOCK_AT), so its corner tile is ready long before the
 // reader finishes block t.
 //
 // Reader contract (see fused_msda_reader_common.hpp):
@@ -73,28 +73,27 @@ constexpr uint32_t output_cb_index = get_compile_time_arg_val(2);
 constexpr uint32_t n_d_tiles = get_compile_time_arg_val(3);  // = ceil(D / 32)
 
 // Geometry pipes. The reader stages the operands here and takes back the
-// floored corner per axis.
+// corner word.
 constexpr uint32_t geom_x_cb_index = get_compile_time_arg_val(4);
 constexpr uint32_t geom_y_cb_index = get_compile_time_arg_val(5);
 constexpr uint32_t attn_tile_cb_index = get_compile_time_arg_val(6);
-constexpr uint32_t x0_cb_index = get_compile_time_arg_val(7);
-constexpr uint32_t y0_cb_index = get_compile_time_arg_val(8);
+constexpr uint32_t corner_cb_index = get_compile_time_arg_val(7);
 
-constexpr uint32_t NUM_LEVELS = get_compile_time_arg_val(9);
-constexpr uint32_t NUM_POINTS = get_compile_time_arg_val(10);
-constexpr bool FROM_OFFSETS = get_compile_time_arg_val(11) != 0;
+constexpr uint32_t NUM_LEVELS = get_compile_time_arg_val(8);
+constexpr uint32_t NUM_POINTS = get_compile_time_arg_val(9);
+constexpr bool FROM_OFFSETS = get_compile_time_arg_val(10) != 0;
 // Row-major staging (see fused_msda_reader_common.hpp): the reader hands over a
 // point's four corners as one row-major block, tilized here into tiled_cb.
-constexpr bool RM_STAGING = get_compile_time_arg_val(12) != 0;
-constexpr uint32_t tiled_cb_index = get_compile_time_arg_val(13);
+constexpr bool RM_STAGING = get_compile_time_arg_val(11) != 0;
+constexpr uint32_t tiled_cb_index = get_compile_time_arg_val(12);
 constexpr uint32_t mul_cb_index = RM_STAGING ? tiled_cb_index : input_cb_index;
 
-constexpr bool TILED_GEOMETRY = get_compile_time_arg_val(14) != 0;
-constexpr uint32_t geom_rm_cb_index = get_compile_time_arg_val(15);
-constexpr uint32_t geom_operand_cb_index = get_compile_time_arg_val(16);
-constexpr uint32_t ref_tile_cb_index = get_compile_time_arg_val(17);
-constexpr uint32_t const_cb_index = get_compile_time_arg_val(18);
-constexpr uint32_t weight_cb_index = get_compile_time_arg_val(19);
+constexpr bool TILED_GEOMETRY = get_compile_time_arg_val(13) != 0;
+constexpr uint32_t geom_rm_cb_index = get_compile_time_arg_val(14);
+constexpr uint32_t geom_operand_cb_index = get_compile_time_arg_val(15);
+constexpr uint32_t ref_tile_cb_index = get_compile_time_arg_val(16);
+constexpr uint32_t const_cb_index = get_compile_time_arg_val(17);
+constexpr uint32_t weight_cb_index = get_compile_time_arg_val(18);
 
 constexpr uint32_t POINTS_PER_BLOCK = NUM_LEVELS * NUM_POINTS;
 static_assert(!TILED_GEOMETRY || POINTS_PER_BLOCK == fused_msda_tiled_geometry::POINTS);
@@ -104,10 +103,9 @@ static_assert(!TILED_GEOMETRY || POINTS_PER_BLOCK == fused_msda_tiled_geometry::
 constexpr uint32_t SOLVE_NEXT_BLOCK_AT = 1;
 static_assert(!TILED_GEOMETRY || SOLVE_NEXT_BLOCK_AT < POINTS_PER_BLOCK);
 
-// Runtime args: [0] output tiles, then AXIS_CONSTANTS_PER_LEVEL uint32 per
-// level. Must stay in step with the emission loop in
-// fused_msda_program_factory.cpp.
-constexpr uint32_t AXIS_CONSTANTS_PER_LEVEL = 6;
+// Runtime args: [0] output tiles, then CONSTANTS_PER_LEVEL uint32 per level,
+// in the order fused_msda_program_factory.cpp::append_axis_constants emits.
+constexpr uint32_t CONSTANTS_PER_AXIS = fused_msda_tiled_geometry::CONSTANTS_PER_AXIS;
 
 void kernel_main() {
     compute_kernel_hw_startup(input_cb_index, scalar_cb_index, output_cb_index);
@@ -119,22 +117,25 @@ void kernel_main() {
     // branch on device. See fused_msda_program_factory.cpp::axis_constants.
     fused_msda_geometry::AxisConstants kx[NUM_LEVELS];
     fused_msda_geometry::AxisConstants ky[NUM_LEVELS];
+    auto axis_constants = [](uint32_t a) {
+        return fused_msda_geometry::AxisConstants{
+            .primary_scale = get_arg_val<uint32_t>(a + 0),
+            .secondary_scale = get_arg_val<uint32_t>(a + 1),
+            .bias = get_arg_val<uint32_t>(a + 2),
+            .extent = get_arg_val<uint32_t>(a + 3),
+        };
+    };
     for (uint32_t l = 0; l < NUM_LEVELS; ++l) {
-        const uint32_t base = 1 + AXIS_CONSTANTS_PER_LEVEL * l;
-        kx[l].primary_scale = get_arg_val<uint32_t>(base + 0);
-        kx[l].secondary_scale = get_arg_val<uint32_t>(base + 1);
-        kx[l].bias = get_arg_val<uint32_t>(base + 2);
-        ky[l].primary_scale = get_arg_val<uint32_t>(base + 3);
-        ky[l].secondary_scale = get_arg_val<uint32_t>(base + 4);
-        ky[l].bias = get_arg_val<uint32_t>(base + 5);
+        const uint32_t base = 1 + fused_msda_tiled_geometry::CONSTANTS_PER_LEVEL * l;
+        kx[l] = axis_constants(base);
+        ky[l] = axis_constants(base + CONSTANTS_PER_AXIS);
     }
 
     constexpr fused_msda_geometry::GeometryPipes geometry_cb{
         .geom_x = geom_x_cb_index,
         .geom_y = geom_y_cb_index,
         .attn = attn_tile_cb_index,
-        .x0 = x0_cb_index,
-        .y0 = y0_cb_index,
+        .corner = corner_cb_index,
         .scalar = scalar_cb_index,
     };
 
@@ -144,8 +145,7 @@ void kernel_main() {
         .ref = ref_tile_cb_index,
         .consts = const_cb_index,
         .weights = weight_cb_index,
-        .x0 = x0_cb_index,
-        .y0 = y0_cb_index,
+        .corner = corner_cb_index,
     };
 
     CircularBuffer input_cb(input_cb_index);

@@ -33,20 +33,18 @@
 // operand of each pair:
 //
 //   DST slot  in (col 0 | col 16)     out (col 0 | col 16)
-//   0         primary x | secondary x  w_NW | x0
+//   0         primary x | secondary x  w_NW | corner word
 //   1         primary y | secondary y  w_NE | y0
 //   2         attn      | -            w_SW | -
 //   3         -         | -            w_SE | -
 //
-// One copy per operand tile, one acquire window, six packs. The fractions never
+// One copy per operand tile, one acquire window, five packs. The fractions never
 // leave DST.
 //
-// x0/y0 leave as bf16 and the reader decodes them with integer shifts, doing the
-// corner indexing and the bounds test itself. Nothing here needs int32 tiles, a
-// typecast, or a sentinel for an out-of-bounds corner. The constraint that buys
-// is exactness: bf16 holds every integer up to 256, so each level's H and W must
-// be at or below that. `derive_shapes` in fused_msda_device_operation.cpp
-// rejects anything larger.
+// The gathers get the corner word (msda_corner_word.hpp): the bounds tests and
+// the NW corner's index within its level, built here from the floored corner and
+// the level's extent. Each gather only adds the per-corner step and the level's
+// base.
 //
 // fp32_dest_acc_en is required, not an optimization. px reaches the feature
 // map's extent, and bf16's ulp at 200 is 1.0 — in a 16-bit destination
@@ -69,6 +67,7 @@
 #include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
 
+#include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_corner_word.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/fused_msda/device/kernels/msda_tiled_geometry.hpp"
 
 namespace fused_msda_geometry {
@@ -77,7 +76,7 @@ namespace fused_msda_geometry {
 // the way out. Four is the entire budget a 32-bit destination allows under
 // DstSync::Half (`dest_size = is_fp32_dest_acc_en ? 4 : 8` in
 // api/compute/tilize.h).
-constexpr uint32_t DST_X = 0;  // in: primary | secondary x; out: w_NW | x0
+constexpr uint32_t DST_X = 0;  // in: primary | secondary x; out: w_NW | corner word
 constexpr uint32_t DST_Y = 1;  // in: primary | secondary y; out: w_NE | y0
 constexpr uint32_t DST_ATTN = 2;
 constexpr uint32_t DST_NW = DST_X;
@@ -89,25 +88,26 @@ static_assert(DST_SE < DST_FP32_CAPACITY, "geometry uses a DST slot a 32-bit des
 
 // The host-folded normalized -> pixel mapping for one axis of one level:
 //   px = primary * primary_scale + secondary * secondary_scale + bias
+// and the axis' extent (W or H), which bounds the floored corner.
 // `secondary_scale` is unused when the op runs without sampling offsets. All
-// three are fp32 bit patterns; must stay in step with `AxisConstants` in
+// four are fp32 bit patterns; must stay in step with `AxisConstants` in
 // fused_msda_program_factory.cpp, which builds them.
 struct AxisConstants {
     uint32_t primary_scale;
     uint32_t secondary_scale;
     uint32_t bias;
+    uint32_t extent;
 };
 
 // The circular buffers one geometry pass moves through. Grouped rather than
 // passed positionally: same-typed CB indices in a row let a transposition
-// (x0 for y0) compile cleanly and produce transposed sampling that PCC
+// (geom_x for geom_y) compile cleanly and produce transposed sampling that PCC
 // survives on symmetric shapes.
 struct GeometryPipes {
     uint32_t geom_x;  // reader -> compute, primary x | secondary x
     uint32_t geom_y;
-    uint32_t attn;  // reader -> compute
-    uint32_t x0;    // compute -> reader, floor(px) in column 16
-    uint32_t y0;
+    uint32_t attn;    // reader -> compute
+    uint32_t corner;  // compute -> reader, float32, the corner word in column 16
     uint32_t scalar;  // compute -> compute, consumed by the reduction
 };
 
@@ -184,6 +184,54 @@ inline void corner_weights() {
     }
 }
 
+// The corner word (msda_corner_word.hpp) of floored corner (x, y) on a w x h
+// level.
+inline sfpi::vFloat corner_word(sfpi::vFloat x, sfpi::vFloat y, sfpi::vFloat w, sfpi::vFloat h) {
+    namespace cw = fused_msda_corner_word;
+    // SFPSWAP orders float32 by its sign-magnitude bits, so the clamps are
+    // total: NaN and infinity land on an end of the range. The bounds tests
+    // then compare finite integers. The SFPU compares against a constant by
+    // subtracting it and testing the sign bit, which -0 has set; the tests run
+    // on x + 2 and y + 2, whose differences are never -0.
+    x = sfpi::max(sfpi::min(x, w), -2.0f);
+    y = sfpi::max(sfpi::min(y, h), -2.0f);
+    sfpi::vFloat word = (sfpi::max(y, -1.0f) + 1.0f) * w + (sfpi::max(x, -1.0f) + (1.0f + cw::BIAS));
+    const sfpi::vFloat xs = x + 2.0f;
+    const sfpi::vFloat ys = y + 2.0f;
+    constexpr float UNIT = static_cast<float>(1u << cw::INDEX_BITS);
+    v_if(xs >= 2.0f && xs < w + 2.0f) { word += UNIT * cw::FLAG_X0; }
+    v_endif;
+    v_if(xs >= 1.0f && xs < w + 1.0f) { word += UNIT * cw::FLAG_X1; }
+    v_endif;
+    v_if(ys >= 2.0f && ys < h + 2.0f) { word += UNIT * cw::FLAG_Y0; }
+    v_endif;
+    v_if(ys >= 1.0f && ys < h + 1.0f) { word += UNIT * cw::FLAG_Y1; }
+    v_endif;
+    return word;
+}
+
+// The corner word of the floored corner at X0 / Y0 into OUT, for one level.
+template <uint32_t X0, uint32_t Y0, uint32_t OUT>
+inline void corner_word_level(uint32_t width, uint32_t height) {
+    const sfpi::vFloat w = as_vfloat(width);
+    const sfpi::vFloat h = as_vfloat(height);
+#pragma GCC unroll 0
+    for (uint32_t d = 0; d < FACE; ++d) {
+        sfpi::dst_reg[OUT] = corner_word(sfpi::dst_reg[X0], sfpi::dst_reg[Y0], w, h);
+        sfpi::dst_reg++;
+    }
+}
+
+// As above, with each lane's extent read from DST at W / H.
+template <uint32_t X0, uint32_t Y0, uint32_t W, uint32_t H, uint32_t OUT>
+inline void corner_word_lanes() {
+#pragma GCC unroll 0
+    for (uint32_t d = 0; d < FACE; ++d) {
+        sfpi::dst_reg[OUT] = corner_word(sfpi::dst_reg[X0], sfpi::dst_reg[Y0], sfpi::dst_reg[W], sfpi::dst_reg[H]);
+        sfpi::dst_reg++;
+    }
+}
+
 }  // namespace sfpu
 #endif
 
@@ -198,33 +246,30 @@ inline void copy_from(uint32_t new_cb, uint32_t& srca_cb) {
     srca_cb = new_cb;
 }
 
-// Geometry for one sampling point: x0/y0 for the reader, then the four corner
-// scalars in the order NW, NE, SW, SE.
+// Geometry for one sampling point: the corner word for the gathers, then the
+// four corner scalars in the order NW, NE, SW, SE.
 //
 // That order is a contract with both gathers: the four scalar tiles pushed here
 // are consumed against the corner slots of fused_msda_gather::gather_rows
 // (row-major block [NW | NE | SW | SE], whose pair zeroing relies on NW|NE and
 // SW|SE being adjacent) and against the input-tile groups of the tile-scatter
-// path (`dy_off = (c < 2) ? 0 : 1; dx_off = (c & 1) ? 1 : 0` in
-// fused_msda_reader_common.hpp). The orders must agree element for element or
+// path (`dy = c >> 1; dx = c & 1` in fused_msda_reader_common.hpp). The orders must agree element for element or
 // every sample is silently wrong.
 //
-// Every pack target holds bf16 32x32 tiles, so one packer configuration serves
-// all six packs of the window.
+// The corner tile is float32 and every other pack target bf16, so the packer is
+// reconfigured around the corner pack and left on the scalar CB's format.
 template <bool FROM_OFFSETS>
 inline void point(const GeometryPipes& cb, const AxisConstants& kx, const AxisConstants& ky, uint32_t& srca_cb) {
     CircularBuffer geom_x(cb.geom_x);
     CircularBuffer geom_y(cb.geom_y);
     CircularBuffer attn(cb.attn);
-    CircularBuffer x0_out(cb.x0);
-    CircularBuffer y0_out(cb.y0);
+    CircularBuffer corner_out(cb.corner);
     CircularBuffer scalar_out(cb.scalar);
 
     geom_x.wait_front(1);
     geom_y.wait_front(1);
     attn.wait_front(1);
-    x0_out.reserve_back(1);
-    y0_out.reserve_back(1);
+    corner_out.reserve_back(1);
     scalar_out.reserve_back(4);
 
     tile_regs_acquire();
@@ -251,15 +296,18 @@ inline void point(const GeometryPipes& cb, const AxisConstants& kx, const AxisCo
     MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::floor_to<Y, Y + F>, 0, VectorMode::C)));
     MATH((_llk_math_eltwise_unary_sfpu_params_(
         sfpu::corner_weights<X, X + F, Y, Y + F, DST_ATTN * sfpu::TILE>, 0, VectorMode::C)));
+    // After the weights: the word overwrites the x0 they read.
+    MATH((_llk_math_eltwise_unary_sfpu_params_(
+        sfpu::corner_word_level<X + F, Y + F, X + F>, 0, VectorMode::C, kx.extent, ky.extent)));
 
     tile_regs_commit();
     tile_regs_wait();
-    // x0/y0 are handed over before the scalars are packed: the reader waits on
-    // them, the reduction does not need the scalars until after the gather.
-    pack_tile<true>(DST_X, cb.x0, 0);
-    pack_tile<true>(DST_Y, cb.y0, 0);
-    x0_out.push_back(1);
-    y0_out.push_back(1);
+    // The corner goes before the scalars: the reader waits on it, the
+    // reduction does not need the scalars until after the gather.
+    pack_reconfig_data_format(cb.scalar, cb.corner);
+    pack_tile<true>(DST_X, cb.corner, 0);
+    corner_out.push_back(1);
+    pack_reconfig_data_format(cb.corner, cb.scalar);
     pack_tile<true>(DST_NW, cb.scalar, 0);
     pack_tile<true>(DST_NE, cb.scalar, 1);
     pack_tile<true>(DST_SW, cb.scalar, 2);
@@ -278,15 +326,17 @@ inline void point(const GeometryPipes& cb, const AxisConstants& kx, const AxisCo
 //   DST slot  in (cols 0..15 | 16..31)   out (cols 0..15 | 16..31)
 //   0         px_j | py_j                 w_NW_j | py_j
 //   1         attn_j | staging padding    w_NE_j | 0
-//   2         -                           w_SW_j | x0_j
-//   3         -                           w_SE_j | y0_j
+//   2         y0_j | x0_j (floored)       w_SW_j | x0_j
+//   3         H_j | W_j                   w_SE_j | corner word_j
 //
-// px | py come out of two matmuls that accumulate in the fp32 destination, so
-// they never pass through a 19-bit source register. Slots 2 and 3 go to the
-// reader as the block's x0 and y0 tiles, and all four to the weights CB, from
-// which `extract` moves one point's column at a time to column 0. Every column
-// a weight tile carries besides the weights is finite, because E_j multiplies
-// it by zero and 0 * NaN is NaN.
+// Slots 0 and 3 come out of matmuls that accumulate in the fp32 destination,
+// so px | py never pass through a 19-bit source register. The staging padding
+// is only copied, never multiplied: it may hold any bit pattern. Slots 2 and 3
+// put y on the left: the weights overwrite the left faces, and the corner word
+// must survive in the right face. Slot 3 goes to the reader as the block's
+// corner tile, and all four to the weights CB, from which `extract` moves one
+// point's column at a time to column 0. E_j's zeros cancel every other column
+// of a weight tile; Blackhole's FPU multiplies inf and NaN by zero to zero.
 // ---------------------------------------------------------------------------
 struct BlockPipes {
     uint32_t rm;        // reader -> compute, row-major [offsets | attn] rows
@@ -294,16 +344,15 @@ struct BlockPipes {
     uint32_t ref;       // reader -> compute, the reference tile
     uint32_t consts;    // reader -> compute once, never popped
     uint32_t weights;   // compute -> compute, w_NW w_NE w_SW w_SE
-    uint32_t x0;        // compute -> reader, x0_j in column 16 + j
-    uint32_t y0;
+    uint32_t corner;    // compute -> reader, float32, corner word_j in column 16 + j
 };
 
 // Slot names for the table above. The outputs land where `corner_weights`
 // writes them, so they alias DST_NW..DST_SE.
-constexpr uint32_t BLK_PXPY = DST_NW;  // out: w_NW | py
-constexpr uint32_t BLK_ATTN = DST_NE;  // out: w_NE | 0
-constexpr uint32_t BLK_X0 = DST_SW;    // out: w_SW | x0
-constexpr uint32_t BLK_Y0 = DST_SE;    // out: w_SE | y0
+constexpr uint32_t BLK_PXPY = DST_NW;    // out: w_NW | py
+constexpr uint32_t BLK_ATTN = DST_NE;    // out: w_NE | 0
+constexpr uint32_t BLK_FLOOR = DST_SW;   // out: w_SW | x0
+constexpr uint32_t BLK_EXTENT = DST_SE;  // out: w_SE | corner word
 
 inline void block(const BlockPipes& cb, uint32_t& srca_cb) {
     namespace tg = fused_msda_tiled_geometry;
@@ -311,8 +360,7 @@ inline void block(const BlockPipes& cb, uint32_t& srca_cb) {
     CircularBuffer operands(cb.operands);
     CircularBuffer ref(cb.ref);
     CircularBuffer weights(cb.weights);
-    CircularBuffer x0_out(cb.x0);
-    CircularBuffer y0_out(cb.y0);
+    CircularBuffer corner_out(cb.corner);
 
     rm.wait_front(tg::RM_TILES);
     operands.reserve_back(tg::RM_TILES);
@@ -325,8 +373,7 @@ inline void block(const BlockPipes& cb, uint32_t& srca_cb) {
     operands.wait_front(tg::RM_TILES);
     ref.wait_front(1);
     weights.reserve_back(tg::WEIGHT_TILES);
-    x0_out.reserve_back(1);
-    y0_out.reserve_back(1);
+    corner_out.reserve_back(1);
 
     tile_regs_acquire();
 
@@ -336,6 +383,7 @@ inline void block(const BlockPipes& cb, uint32_t& srca_cb) {
     matmul_tiles(cb.operands, cb.consts, tg::OFF_TILE, tg::CONST_M_OFF, BLK_PXPY);
     matmul_init(cb.ref, cb.consts);
     matmul_tiles(cb.ref, cb.consts, 0, tg::CONST_M_REF, BLK_PXPY);
+    matmul_tiles(cb.ref, cb.consts, 0, tg::CONST_M_EXTENT, BLK_EXTENT);
     srca_cb = cb.consts;  // matmul unpacks in1 to SrcA
 
     copy_from(cb.operands, srca_cb);
@@ -345,21 +393,25 @@ inline void block(const BlockPipes& cb, uint32_t& srca_cb) {
     constexpr uint32_t F = sfpu::FACE;
     constexpr uint32_t PX = BLK_PXPY * T;
     constexpr uint32_t PY = BLK_PXPY * T + F;
-    constexpr uint32_t X0 = BLK_X0 * T + F;
-    constexpr uint32_t Y0 = BLK_Y0 * T + F;
+    constexpr uint32_t X0 = BLK_FLOOR * T + F;
+    constexpr uint32_t Y0 = BLK_FLOOR * T;
+    constexpr uint32_t W = BLK_EXTENT * T + F;
+    constexpr uint32_t H = BLK_EXTENT * T;
     rounding_op_tile_init();
     MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::floor_to<PX, X0>, 0, VectorMode::C)));
     MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::floor_to<PY, Y0>, 0, VectorMode::C)));
+    // Before the weights, which overwrite H.
+    MATH((_llk_math_eltwise_unary_sfpu_params_(sfpu::corner_word_lanes<X0, Y0, W, H, W>, 0, VectorMode::C)));
     MATH((_llk_math_eltwise_unary_sfpu_params_(
         sfpu::corner_weights<PX, X0, PY, Y0, BLK_ATTN * T, true>, 0, VectorMode::C)));
 
     tile_regs_commit();
     tile_regs_wait();
-    // x0/y0 first: the reader is waiting on them, the reduction is not.
-    pack_tile<true>(BLK_X0, cb.x0, 0);
-    pack_tile<true>(BLK_Y0, cb.y0, 0);
-    x0_out.push_back(1);
-    y0_out.push_back(1);
+    // The corner tile first: the reader is waiting on it, the reduction is not.
+    pack_reconfig_data_format(cb.weights, cb.corner);
+    pack_tile<true>(BLK_EXTENT, cb.corner, 0);
+    corner_out.push_back(1);
+    pack_reconfig_data_format(cb.corner, cb.weights);
     pack_tile<true>(DST_NW, cb.weights, 0);
     pack_tile<true>(DST_NE, cb.weights, 1);
     pack_tile<true>(DST_SW, cb.weights, 2);

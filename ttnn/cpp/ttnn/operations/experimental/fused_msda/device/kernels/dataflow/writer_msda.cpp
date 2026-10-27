@@ -117,7 +117,7 @@ void kernel_main() {
             // gathered, so helping with every point first costs no overlap.
             for (uint32_t j = 0; j < POINTS_PER_BLOCK; ++j) {
                 // The wait invalidates the RISC L1 data cache on every poll, so
-                // the mailbox and the x0/y0 tiles read after it are the
+                // the mailbox and the corner tile read after it are the
                 // reader's and compute's current writes.
                 gather_ready.wait(++gather_seq);
                 const auto pt = fused_msda_gather::fetch_point(gather_mailbox_l1);
