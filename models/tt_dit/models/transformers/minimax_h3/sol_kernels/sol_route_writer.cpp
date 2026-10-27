@@ -139,7 +139,23 @@ void kernel_main() {
             }
 
             for (uint32_t sp = sp_lo; sp < sp_hi; ++sp) {
-                // ---- mask tiles of this shard
+                // ---- mask of this shard
+                if constexpr (UNITS_PER_SHARD) {
+                    // (head, shard) units: compute delivers the 32 mask rows of (it, sp) row-major (uint32, NBP words
+                    // per row) in one page; each row is one NoC copy into the mask tensor row.
+                    cbm.wait_front(1);
+                    const uint32_t rbase = cbm.get_read_ptr();
+                    for (uint32_t r = 0; r < 32; ++r) {
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(rbase + r * NBP * 4),
+                            mk,
+                            NBP * 4,
+                            {},
+                            {.page_id = h * NQCP + it * 32 + r, .offset_bytes = sp * NBP * 4});
+                    }
+                    noc.async_write_barrier();
+                    cbm.pop_front(1);
+                } else {
                 cbm.wait_front(MASK_T);
                 const uint32_t mbase = cbm.get_read_ptr();
                 if constexpr (MODE == 0) {
@@ -150,9 +166,7 @@ void kernel_main() {
                         }
                     }
                 } else {
-                    // (head, shard) units: the reader builds rows 16..31 from its own copy of the mask tiles.
-                    constexpr uint32_t R_END = UNITS_PER_SHARD ? 16 : 32;
-                    for (uint32_t r = 0; r < R_END; ++r) {
+                    for (uint32_t r = 0; r < 32; ++r) {
                         if (ring_used != 0 && (ring_used % RING_PAGES) == 0) {
                             noc.async_write_barrier();  // the ring wraps
                         }
@@ -168,6 +182,7 @@ void kernel_main() {
                     }
                 }
                 cbm.pop_front(MASK_T);
+                }
 
                 // ---- union-row tiles of this shard (MODE 2) into the row buffer
                 if constexpr (MODE == 2) {

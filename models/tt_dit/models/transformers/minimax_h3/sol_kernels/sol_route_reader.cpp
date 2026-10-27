@@ -10,7 +10,7 @@
 // Per core, once: the ones-row tile, the Q-chunk selector (qsel), the block->chunk selector (ksel) and, only when the
 // bias is emitted, the 32 row-broadcast selectors (erow). They are read after the first unit's pooled K and Q: every
 // core needs the same few constant pages, and compute's first phases (the moments) need only the pooled K, so the data
-// goes first and the constants land while the moments are summed. Per unit: the head's pooled K in D-major tile order
+// goes first and the constants land while the moments are summed. Per unit: the head's pooled K in column-major tile order
 // (position n*KCT + c holds tile (c, n), so compute can use it as a transposed matmul operand): the whole head [NBG, D]
 // (KCT = NBGT) with (head, it) units, only the unit's shard [NBP, D] (KCT = NBPT) with (head, shard) units; and the
 // head's pooled Q [NBP, D]; then per (Q-chunk tile row it, column shard sp) of the unit: the constant OR-mask tiles
@@ -27,9 +27,8 @@
 // from common runtime args 10..10+N-1 (x | y << 8 per logical core index). Needs UNITS <= NCORES (one unit per core,
 // so the gather tiles are written once per launch) and S <= 8.
 //
-// Mask rows ((head, shard) units): this thread is idle once the exchange is done, so it builds and writes mask rows
-// 16..31 of each (it, sp) from a second copy of the mask tiles (cb_mask2, packed by compute alongside cb_mask_out)
-// while the writer does rows 0..15; the same word-wise row build as the writer (tile_row_to_words).
+// (The mask rows are now row-major uint32 pages from compute and stored by the writer alone; the reader's row path
+// of 2026-10-23 is gone. The mask accessor and common arg 8 are kept so the argument layout does not change.)
 //
 // Compile-time args: 0 H, 1 S, 2 NBPT, 3 DT, 4 NQCT, 5 NKCLT, 6 NQC, 7 NKC, 8 NKCP, 9 MODE, 10 EMIT_BIAS, 11 TAU,
 // 12 EPS2, 13 NEG, 14 INV_NV, 15 TQ, 16 DEBUG, 17 NX, 18 NY, 19 UNITS, 20 UNITS_PER_SHARD, then TensorAccessorArgs of
@@ -48,27 +47,9 @@
 
 namespace {
 constexpr uint32_t cb_kc = 0, cb_q = 1, cb_ones = 2, cb_qsel = 3, cb_ksel = 4, cb_erow = 5, cb_constor = 6, cb_colc = 7,
-                   cb_recv = 23, cb_pl = 24, cb_mask2 = 26, cb_rring = 27, cb_shsel = 29;
+                   cb_recv = 23, cb_pl = 24, cb_shsel = 29;
 constexpr uint32_t PART_T = 8;  // partial-moment tiles per shard: DT sums + DT sums of squares (DT <= 4)
-constexpr uint32_t RING_PAGES = 8;
 
-// Row r of ntiles consecutive 32x32 bf16 tiles -> 32*ntiles uint32 words (1 where the element is nonzero) at out_addr;
-// two elements per L1 word along the contiguous face rows (the writer's copy of this helper is the reference).
-inline void tile_row_to_words(uint32_t tiles_addr, uint32_t r, uint32_t ntiles, uint32_t out_addr) {
-    CoreLocalMem<volatile uint32_t> w(out_addr);
-    const uint32_t row_bytes = (((r >> 4) << 1) * 256 + (r & 15) * 16) * 2;
-    uint32_t k = 0;
-    for (uint32_t t = 0; t < ntiles; ++t) {
-        for (uint32_t f = 0; f < 2; ++f) {
-            CoreLocalMem<volatile uint32_t> e(tiles_addr + t * 2048 + row_bytes + f * 512);
-            for (uint32_t i = 0; i < 8; ++i) {
-                const uint32_t v = e[i];
-                w[k++] = (v & 0xFFFFu) != 0 ? 1u : 0u;
-                w[k++] = (v >> 16) != 0 ? 1u : 0u;
-            }
-        }
-    }
-}
 constexpr uint32_t TILE_BYTES = 2048;
 }  // namespace
 
@@ -82,6 +63,7 @@ void kernel_main() {
     constexpr uint32_t UNITS_PER_SHARD_ = get_compile_time_arg_val(20);
     constexpr uint32_t KCT = UNITS_PER_SHARD_ ? NBPT : NBGT;  // pooled-K column tiles per unit (see the header)
     constexpr uint32_t KC_T = KCT * DT;
+    constexpr uint32_t Q_T = NBPT * DT;
     constexpr uint32_t EMIT_BIAS = get_compile_time_arg_val(10);
     constexpr uint32_t DEBUG = get_compile_time_arg_val(16);
     constexpr bool NEED_EROW = EMIT_BIAS == 1 && DEBUG == 0;  // the only consumer of erow is the bias expansion
@@ -109,18 +91,30 @@ void kernel_main() {
     const uint32_t ci = static_cast<uint32_t>(get_absolute_logical_y()) * NX + get_absolute_logical_x();
     const uint32_t unit_start = ci * UNITS / NCORES;
     const uint32_t unit_count = (ci + 1) * UNITS / NCORES - unit_start;
-    if (unit_count == 0) {
+    // Constants sender ((head, shard) units): the highest logical core index that holds no unit under the
+    // [ci*U/N, (ci+1)*U/N) rule (there is one when UNITS < NCORES); high indices sit on the grid rows with the fastest
+    // DRAM access.
+    constexpr uint32_t SENDER = []() constexpr {
+        uint32_t c = NCORES;
+        while (c > 0) {
+            --c;
+            if (c * UNITS / NCORES == (c + 1) * UNITS / NCORES) {
+                return c;
+            }
+        }
+        return NCORES;  // none (UNITS >= NCORES): no sender
+    }();
+    static_assert(UNITS_PER_SHARD == 0 || SENDER < NCORES, "the constants sender must be a core without a unit");
+    if (unit_count == 0 && !(UNITS_PER_SHARD && ci == SENDER)) {
         return;
     }
     // Receive buffer for the peers' partial moments: reserved once, before any peer can write into it; its address is
     // the same on every core of the grid (one CB configuration), which is what the peers write to.
-    CircularBuffer cbrecv(cb_recv), cbpl(cb_pl), cbm2(cb_mask2), cbrr(cb_rring);
-    uint32_t recv_base = 0, rring_base = 0, ring_used = 0;
+    CircularBuffer cbrecv(cb_recv), cbpl(cb_pl);
+    uint32_t recv_base = 0;
     if constexpr (UNITS_PER_SHARD) {
         cbrecv.reserve_back(GT);
         recv_base = cbrecv.get_write_ptr();  // the gather tiles; the peers write their rows into these
-        cbrr.reserve_back(RING_PAGES);
-        rring_base = cbrr.get_write_ptr();  // RING_PAGES pages of NBPT*32*4 bytes
     }
     const auto qb = TensorAccessor(qb_args, get_common_arg_val<uint32_t>(0));
     const auto kc = TensorAccessor(kc_args, get_common_arg_val<uint32_t>(1));
@@ -130,7 +124,7 @@ void kernel_main() {
     const auto ks = TensorAccessor(ks_args, get_common_arg_val<uint32_t>(5));
     const auto er = TensorAccessor(er_args, get_common_arg_val<uint32_t>(6));
     const auto on = TensorAccessor(on_args, get_common_arg_val<uint32_t>(7));
-    const auto mk = TensorAccessor(mk_args, get_common_arg_val<uint32_t>(8));
+    [[maybe_unused]] const auto mk = TensorAccessor(mk_args, get_common_arg_val<uint32_t>(8));
     const auto sl = TensorAccessor(sl_args, get_common_arg_val<uint32_t>(9));
 
     Noc noc;
@@ -144,7 +138,107 @@ void kernel_main() {
         cb.push_back(count);
     };
 
-    CircularBuffer cbkc(cb_kc), cbco(cb_constor), cbcc(cb_colc);
+    // Constants multicast ((head, shard) units). Sender = SENDER above, a core that holds no unit:
+    // it reads the constant tiles into its own CBs and multicasts each CB's pages to the worker grid, given by the
+    // host as NoC rectangles in the common runtime args after the core coordinates (10 + NCORES: count, then
+    // x_start, y_start, x_end, y_end, cores per rectangle). Every core's CBs sit at the same L1 addresses (one CB
+    // configuration), so the multicast lands in place; semaphore 1 (set by multicast after the data barrier) tells
+    // the receivers to push the pages. Receivers reset it for the next launch.
+    constexpr uint32_t CONST_PAGES[5] = {1, NQCT * NBPT, NBPT * NKCLT, NEED_EROW ? 32u : 0u, 8};
+    constexpr uint32_t CONST_CBS[5] = {cb_ones, cb_qsel, cb_ksel, cb_erow, cb_shsel};
+    auto receive_constants = [&]() {
+        volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(1));
+        for (uint32_t k = 0; k < 5; ++k) {
+            if (CONST_PAGES[k] != 0) {
+                CircularBuffer(CONST_CBS[k]).reserve_back(CONST_PAGES[k]);
+            }
+        }
+        noc_semaphore_wait(sem, 1);
+        noc_semaphore_set(sem, 0);
+        for (uint32_t k = 0; k < 5; ++k) {
+            if (CONST_PAGES[k] != 0) {
+                CircularBuffer(CONST_CBS[k]).push_back(CONST_PAGES[k]);
+            }
+        }
+    };
+    auto send_constants = [&]() {
+        const uint32_t rect_base = 10 + NCORES;
+        const uint32_t n_rects = get_common_arg_val<uint32_t>(rect_base);
+        // Read into my own CBs (same addresses as everyone's), then multicast each CB's pages.
+        auto read_const = [&](auto& acc, uint32_t cb_id, uint32_t count) {
+            CircularBuffer cb(cb_id);
+            cb.reserve_back(count);
+            for (uint32_t i = 0; i < count; ++i) {
+                noc.async_read(acc, cb, TILE_BYTES, {.page_id = i}, {.offset_bytes = i * TILE_BYTES});
+            }
+        };
+        read_const(on, cb_ones, 1);
+        read_const(qs, cb_qsel, NQCT * NBPT);
+        read_const(ks, cb_ksel, NBPT * NKCLT);
+        if constexpr (NEED_EROW) {
+            read_const(er, cb_erow, 32);
+        }
+        read_const(sl, cb_shsel, 8);
+        noc.async_read_barrier();
+        // A multicast never reaches the issuing core itself: the rectangle that contains this core gets the plain
+        // multicast with one destination fewer (this core already holds the data), the others get it with every cell
+        // counted. The destination count must match the cells written or the write barrier never settles.
+        const uint32_t my_xy = get_common_arg_val<uint32_t>(10 + ci);
+        const uint32_t my_x = my_xy & 0xFF, my_y = (my_xy >> 8) & 0xFF;
+        const MulticastEndpoint grid;
+        auto rect = [&](uint32_t r, uint32_t& xs, uint32_t& ys, uint32_t& xe, uint32_t& ye, uint32_t& nd) {
+            xs = get_common_arg_val<uint32_t>(rect_base + 1 + r * 5);
+            ys = get_common_arg_val<uint32_t>(rect_base + 2 + r * 5);
+            xe = get_common_arg_val<uint32_t>(rect_base + 3 + r * 5);
+            ye = get_common_arg_val<uint32_t>(rect_base + 4 + r * 5);
+            nd = get_common_arg_val<uint32_t>(rect_base + 5 + r * 5);
+            const bool inside = xs <= my_x && my_x <= xe && ys <= my_y && my_y <= ye;
+            if (inside) {
+                --nd;
+            }
+            return nd;
+        };
+        for (uint32_t r = 0; r < n_rects; ++r) {
+            uint32_t xs, ys, xe, ye, nd;
+            if (rect(r, xs, ys, xe, ye, nd) == 0) {
+                continue;  // a rectangle holding only this core
+            }
+            for (uint32_t k = 0; k < 5; ++k) {
+                if (CONST_PAGES[k] == 0) {
+                    continue;
+                }
+                const uint32_t addr = CircularBuffer(CONST_CBS[k]).get_write_ptr();
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(addr),
+                    grid,
+                    CONST_PAGES[k] * TILE_BYTES,
+                    nd,
+                    {},
+                    {.noc_x_start = xs, .noc_y_start = ys, .noc_x_end = xe, .noc_y_end = ye, .addr = addr});
+            }
+        }
+        noc.async_write_barrier();  // all data has landed before the flag moves
+        const uint32_t sem_addr = get_semaphore(1);
+        volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+        noc_semaphore_set(sem, 1);
+        for (uint32_t r = 0; r < n_rects; ++r) {
+            uint32_t xs, ys, xe, ye, nd;
+            if (rect(r, xs, ys, xe, ye, nd) == 0) {
+                continue;
+            }
+            noc_semaphore_set_multicast(sem_addr, get_noc_multicast_addr(xs, ys, xe, ye, sem_addr), nd);
+        }
+        noc.async_write_barrier();
+        noc_async_read_set_trid(0, noc.get_noc_id());
+    };
+    if constexpr (UNITS_PER_SHARD) {
+        if (ci == SENDER) {
+            send_constants();
+            return;
+        }
+    }
+
+    CircularBuffer cbkc(cb_kc), cbq(cb_q), cbco(cb_constor), cbcc(cb_colc);
     for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
         // Unit decode: one of the two ranges below is a singleton, the loops run the same code either way.
         const uint32_t h = UNITS_PER_SHARD ? u / S : u / NQCT;
@@ -153,42 +247,55 @@ void kernel_main() {
         const uint32_t sp_lo = UNITS_PER_SHARD ? u % S : 0;
         const uint32_t sp_hi = UNITS_PER_SHARD ? sp_lo + 1 : S;
 
-        // Pooled K of the head (whole head, or the unit's shard only), D-major tile order.
+        // Pooled K of the head (whole head, or the unit's shard only), COLUMN-major tile order (tile c*DT + n = column
+        // tile c, dims tile n): every column's reads carry their own transaction id and are pushed as soon as they
+        // land, so compute's moment sums start on column 0 while the rest is in flight. Q is issued right behind K
+        // (its own id) instead of after K's barrier.
         cbkc.reserve_back(KC_T);
         {
             const uint32_t cg0 = UNITS_PER_SHARD ? sp_lo * NBPT : 0;
-            uint32_t issued = 0;
-            for (uint32_t n = 0; n < DT; ++n) {
-                for (uint32_t c = 0; c < KCT; ++c) {
-                    noc.async_read(
+            for (uint32_t c = 0; c < KCT; ++c) {
+                for (uint32_t n = 0; n < DT; ++n) {
+                    noc.async_read<NocOptions::TXN_ID>(
                         kc,
                         cbkc,
                         TILE_BYTES,
                         {.page_id = (h * NBGT + cg0 + c) * DT + n},
-                        {.offset_bytes = (n * KCT + c) * TILE_BYTES});
-                    if (++issued == 32) {
-                        noc.async_read_barrier();
-                        issued = 0;
-                    }
+                        {.offset_bytes = (c * DT + n) * TILE_BYTES},
+                        {.trid = 1 + (c % 7)});
                 }
             }
-            noc.async_read_barrier();
         }
-        cbkc.push_back(KC_T);
-
-        read_pages(qb, cb_q, h * NBPT * DT, NBPT * DT);
-
-        // Per-core constants, once, after the first unit's data (see the header). Both CBs above hold a whole unit, so
-        // the pushes before this point never block on compute, which waits for the constants only after the moments.
-        if (u == unit_start) {
-            read_pages(on, cb_ones, 0, 1);
-            read_pages(qs, cb_qsel, 0, NQCT * NBPT);
-            read_pages(ks, cb_ksel, 0, NBPT * NKCLT);
-            if constexpr (NEED_EROW) {
-                read_pages(er, cb_erow, 0, 32);
+        cbq.reserve_back(Q_T);
+        for (uint32_t i = 0; i < Q_T; ++i) {
+            noc.async_read<NocOptions::TXN_ID>(
+                qb, cbq, TILE_BYTES, {.page_id = h * NBPT * DT + i}, {.offset_bytes = i * TILE_BYTES}, {.trid = 8});
+        }
+        for (uint32_t c = 0; c < KCT; ++c) {
+            if (c >= 7) {  // ids wrap every 7 columns (never at the 5 s..15 s geometries, KCT = NBPT <= 7)
+                noc.async_read_barrier();
+            } else {
+                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 1 + c});
             }
+            cbkc.push_back(DT);
+        }
+        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 8});
+        cbq.push_back(Q_T);
+
+        // Per-core constants (ones, qsel, ksel, [erow], [shsel]): the same tiles on every core. With (head, shard)
+        // units they are read from DRAM once by the idle sender core and multicast into every core's CBs (see
+        // receive_constants / send_constants below); otherwise every core reads them itself, after its first unit's
+        // data (both CBs above hold a whole unit, so nothing before this point blocks on compute).
+        if (u == unit_start) {
             if constexpr (UNITS_PER_SHARD) {
-                read_pages(sl, cb_shsel, 0, 8);
+                receive_constants();
+            } else {
+                read_pages(on, cb_ones, 0, 1);
+                read_pages(qs, cb_qsel, 0, NQCT * NBPT);
+                read_pages(ks, cb_ksel, 0, NBPT * NKCLT);
+                if constexpr (NEED_EROW) {
+                    read_pages(er, cb_erow, 0, 32);
+                }
             }
         }
 
@@ -266,30 +373,9 @@ void kernel_main() {
                 noc.async_read_barrier();
                 cbco.push_back(NBPT);
                 cbcc.push_back(3 * NBPT);
-
-                // Mask rows 16..31 of this (it, sp) (see the header); the writer does 0..15.
-                if constexpr (UNITS_PER_SHARD) {
-                    constexpr uint32_t NBP = NBPT * 32, NQCP = NQCT * 32;
-                    cbm2.wait_front(NBPT);  // MASK_T = NBPT with (head, shard) units (MODE 1)
-                    const uint32_t mbase = cbm2.get_read_ptr();
-                    for (uint32_t r = 16; r < 32; ++r) {
-                        if (ring_used != 0 && (ring_used % RING_PAGES) == 0) {
-                            noc.async_write_barrier();  // the ring wraps
-                        }
-                        const uint32_t saddr = rring_base + (ring_used % RING_PAGES) * (NBP * 4);
-                        tile_row_to_words(mbase, r, NBPT, saddr);
-                        noc.async_write(
-                            CoreLocalMem<uint32_t>(saddr),
-                            mk,
-                            NBP * 4,
-                            {},
-                            {.page_id = h * NQCP + it * 32 + r, .offset_bytes = sp * NBP * 4});
-                        ++ring_used;
-                    }
-                    noc.async_write_barrier();
-                    cbm2.pop_front(NBPT);
-                }
             }
         }
     }
+    // The NoC packet tag is sticky per command buffer: leave it at 0 for whatever kernel runs next on this core.
+    noc_async_read_set_trid(0, noc.get_noc_id());
 }

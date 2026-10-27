@@ -91,7 +91,7 @@ def build_fused_constants(
     # Shard-row selectors for the route moment exchange ((head, shard) units): gather tile t holds shard ps = 4t + q at
     # rows q*8 + n (n = moment tile 0..7: DT sums, DT sums of squares); selector tile n has ones at row 0, columns
     # q*8 + n, so selector[n] @ gather[t] puts the sum over that tile's shards of moment n in row 0, accumulated over t.
-    assert S <= 4 or S == 8, S  # 5..7 would leave garbage rows in the second gather tile
+    assert S in (4, 8), S  # other counts leave never-written rows in the gather tiles (0 * stale NaN = NaN)
     shsel = torch.zeros(1, 1, 8 * TILE, TILE)
     for n in range(8):
         for q in range(min(4, S)):
@@ -184,6 +184,9 @@ class SolPrepassFused:
         self.emit_bias = (os.environ.get("TT_SOL_EMIT_BIAS", "1") == "1") if emit_bias is None else bool(emit_bias)
         self.emit_chunk_union = bool(emit_chunk_union) and mode != "chunk"
         self.debug_moments = bool(debug_moments)  # route program writes mean/E2/var tiles into the bias tensor (tests)
+        # The debug tiles go through the bias accessor (16 tiles per unit): without a real bias tensor they would
+        # overrun the 1-tile placeholder.
+        assert not self.debug_moments or self.emit_bias, "debug_moments needs emit_bias (the tiles use the bias tensor)"
         # Route-program unit = (head, shard) instead of (head, Q-chunk tile row): H*S units instead of H*NQCT, which
         # keeps the core grid filled when NQCT is small. None -> SOL_ROUTE_UNITS_PER_SHARD (default 1); 0 selects the
         # (head, Q-chunk tile row) unit. Applies to the gather-form mask (MODE 1) only, see _route_program.
@@ -462,6 +465,26 @@ class SolPrepassFused:
         # 26 holds the reader's copy of the mask tiles and 29 the shard-row selectors.
         core_xy = self._core_noc_xy(nx, ny) if units_per_shard else []
         st["route_core_xy"] = core_xy
+        # Constants multicast ((head, shard) units, sol_route_reader.cpp): the idle last logical core multicasts the
+        # constant tiles to the grid as NoC rectangles of worker cores (physical columns come in contiguous runs with
+        # non-worker columns between them). NoC 0 order: start <= end. Common args after the core coordinates:
+        # count, then (x_start, y_start, x_end, y_end, cores) per rectangle.
+        rects: list[int] = []
+        if units_per_shard:
+            assert H * S < nx * ny, "the constants sender must be a core without a unit"
+            xs = sorted({core_xy[lx] & 0xFF for lx in range(nx)})
+            ys = sorted({(core_xy[ly * nx] >> 8) & 0xFF for ly in range(ny)})
+            assert ys == list(range(ys[0], ys[0] + ny)), ys  # one contiguous run of physical rows
+            runs: list[list[int]] = []
+            for x in xs:
+                if runs and x == runs[-1][-1] + 1:
+                    runs[-1].append(x)
+                else:
+                    runs.append([x])
+            for run in runs:
+                rects += [run[0], ys[0], run[-1], ys[-1], len(run) * ny]
+            rects = [len(runs)] + rects
+        st["route_rects"] = rects
         sizes = {
             0: (NBPT if units_per_shard else NBGT) * DT,
             1: NBPT * DT,
@@ -485,26 +508,33 @@ class SolPrepassFused:
             20: DT,
             21: NKCLT,
         }
-        if units_per_shard:  # 23: gather tiles, 24: this shard's reduced tiles, 26: reader's mask copy, 29: shsel
-            sizes.update({23: (S + 3) // 4, 24: 8, 26: mask_t, 29: 8})
+        mask_rows_bytes = 32 * geo.nb_pad * 4  # (head, shard) units: one page = the 32 row-major uint32 mask rows of (it, sp)
+        if units_per_shard:  # 23: gather tiles, 24: this shard's reduced tiles, 29: shsel; 16 becomes the row page
+            sizes.update({23: (S + 3) // 4, 24: 8, 29: 8})
+            del sizes[16]
         cbs = [self._cb(i, n, cores) for i, n in sizes.items()]
+        if units_per_shard:
+            cbs.append(self._cb(16, 2, cores, page_size=mask_rows_bytes, dtype=ttnn.uint32))
         row_bytes = geo.nkc_pad * 4  # chunk-form row buffer: 32 complete rows
         cbs.append(self._cb(19, 32, cores, page_size=row_bytes, dtype=ttnn.uint32))
         cbs.append(self._cb(22, SCRATCH_PAGES, cores, page_size=geo.nb_pad * 4, dtype=ttnn.uint32))  # gather-form ring
-        if units_per_shard:  # the reader's own row ring (it writes mask rows 16..31)
-            cbs.append(self._cb(27, SCRATCH_PAGES, cores, page_size=geo.nb_pad * 4, dtype=ttnn.uint32))
         total = sum(n for n in sizes.values()) * TILE_BYTES + 32 * row_bytes + SCRATCH_PAGES * geo.nb_pad * 4
+        total += 2 * mask_rows_bytes if units_per_shard else 0
         if total > L1_CB_BUDGET:
             raise ValueError(f"sol_route circular buffers need {total} B of L1 (> {L1_CB_BUDGET}); geometry too large")
         acc_extra = [a for t in (mask, st["shsel"]) for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
         reader = self._kernel(
             "sol_route_reader.cpp", cores, ct + acc_in + acc_extra, [],
-            [0] * 10 + core_xy,
+            [0] * 10 + core_xy + rects,
             ttnn.ReaderConfigDescriptor(),
         )
         writer = self._kernel("sol_route_writer.cpp", cores, ct + acc_out, [], [0, 0, 0], ttnn.WriterConfigDescriptor())
         compute = self._kernel("sol_route_compute.cpp", cores, ct, [], [], self._compute_config(full_sync=True))
-        sems = [ttnn.SemaphoreDescriptor(id=0, core_ranges=cores, initial_value=0)] if units_per_shard else []
+        sems = (
+            [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in (0, 1)]
+            if units_per_shard
+            else []
+        )
         return ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=sems, cbs=cbs)
 
     def _core_noc_xy(self, nx: int, ny: int) -> list[int]:
@@ -573,6 +603,7 @@ class SolPrepassFused:
             [t.buffer_address() for t in ins]
             + [mask.buffer_address(), st["shsel"].buffer_address()]
             + st["route_core_xy"]
+            + st["route_rects"]
         )
         prog.kernels[1].common_runtime_args = [mask.buffer_address(), bias.buffer_address(), union.buffer_address()]
         t2 = time.perf_counter()

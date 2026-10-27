@@ -13,7 +13,10 @@
 //      hold shard ps's moment n), so phase C selects and sums them with the host's shard-row selector tiles (cb_shsel:
 //      selector n has ones at row 0, columns q*8 + n) accumulated over the gather tiles, and C..D continue unchanged.
 //      Phases E..G run per Q-chunk tile row and H..L once per (it, sp). MODE 1 only: the chunk-form rows (MODE 0
-//      mask, MODE 2 union row) are assembled from every shard in the writer's L1 row buffer.
+//      mask, MODE 2 union row) are assembled from every shard in the writer's L1 row buffer. The mask leaves compute
+//      as 32 ROW-MAJOR uint32 rows per (it, sp) (phase I': block01 tiles typecast to uint32 on the SFPU and packed
+//      untilized into one cb_mask_out page), so the writer stores them with 32 straight NoC copies instead of
+//      building the words on the RISC (13 us per unit before).
 // See sol_route_reader.cpp for the inputs.
 //
 // Per unit (all math in fp32 DST, operands bf16 tiles):
@@ -45,8 +48,10 @@
 #include "api/compute/eltwise_unary/comp.h"
 #include "api/compute/eltwise_unary/relu.h"
 #include "api/compute/eltwise_unary/sqrt.h"
+#include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
+#include "api/compute/pack_untilize.h"
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
@@ -55,7 +60,7 @@ namespace {
 constexpr uint32_t cb_kc = 0, cb_q = 1, cb_ones = 2, cb_qsel = 3, cb_ksel = 4, cb_erow = 5, cb_constor = 6, cb_colc = 7,
                    cb_part = 8, cb_mom = 9, cb_qsq = 10, cb_thrcol = 11, cb_thr = 12, cb_exact = 13, cb_block01 = 14,
                    cb_chunk2 = 15, cb_mask_out = 16, cb_brow = 17, cb_bias_out = 18, cb_var = 20, cb_union_out = 21,
-                   cb_recv = 23, cb_pl = 24, cb_mask2 = 26, cb_shsel = 29;
+                   cb_recv = 23, cb_pl = 24, cb_shsel = 29;
 constexpr uint32_t PART_T = 8;  // partial-moment tiles: DT sums + DT sums of squares (DST 0..3 and 4..7)
 constexpr uint32_t HALF_NEG = 0xBF000000u;  // -0.5f
 // SFPU unary ops (binop-with-scalar, sqrt, relu, gtz) applied to fp32 DST tiles >= 4 do not take effect on device,
@@ -111,8 +116,7 @@ void kernel_main() {
     CircularBuffer kcb(cb_kc), qb(cb_q), ones(cb_ones), qsel(cb_qsel), ksel(cb_ksel), erow(cb_erow),
         constor(cb_constor), colc(cb_colc), part(cb_part), mom(cb_mom), qsq(cb_qsq), thrcol(cb_thrcol), thr(cb_thr),
         exact(cb_exact), block01(cb_block01), chunk2(cb_chunk2), mask_out(cb_mask_out), brow(cb_brow),
-        bias_out(cb_bias_out), var(cb_var), union_out(cb_union_out), recv(cb_recv), pl(cb_pl),
-        mask2(cb_mask2), shsel(cb_shsel);
+        bias_out(cb_bias_out), var(cb_var), union_out(cb_union_out), recv(cb_recv), pl(cb_pl), shsel(cb_shsel);
     constexpr uint32_t GT = (S + 3) / 4;  // gather tiles: 4 shards x 8 moment rows each
 
     for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
@@ -121,21 +125,22 @@ void kernel_main() {
         const uint32_t it_hi = UNITS_PER_SHARD ? NQCT : it_lo + 1;
         const uint32_t sp_lo = UNITS_PER_SHARD ? u % S : 0;
         const uint32_t sp_hi = UNITS_PER_SHARD ? sp_lo + 1 : S;
-        kcb.wait_front(KC_T);
-        qb.wait_front(Q_T);
-
         // ---- A/B: tile-wise partial sums and sums of squares over the pooled K in cb_kc (whole head, or this shard).
+        // cb_kc is column-major (tile c*DT + n) and the reader pushes it column by column, so the sums start on
+        // column 0 while the others are still in flight.
         part.reserve_back(8);
         tile_regs_acquire();
         copy_init(cb_kc);
-        for (uint32_t n = 0; n < DT; ++n) {
-            copy_tile(cb_kc, n * KCT, n);
-        }
         add_binary_tile_init();
-        for (uint32_t c = 1; c < KCT; ++c) {
+        for (uint32_t c = 0; c < KCT; ++c) {
+            kcb.wait_front((c + 1) * DT);
             for (uint32_t n = 0; n < DT; ++n) {
-                copy_tile(cb_kc, n * KCT + c, 4);
-                add_binary_tile(n, 4, n);
+                if (c == 0) {
+                    copy_tile(cb_kc, n, n);
+                } else {
+                    copy_tile(cb_kc, c * DT + n, 4);
+                    add_binary_tile(n, 4, n);
+                }
             }
         }
         tile_regs_commit();
@@ -149,7 +154,7 @@ void kernel_main() {
         tile_regs_acquire();
         copy_init(cb_kc);
         for (uint32_t n = 0; n < DT; ++n) {
-            copy_tile(cb_kc, n * KCT, n);
+            copy_tile(cb_kc, n, n);
         }
         mul_binary_tile_init();
         for (uint32_t n = 0; n < DT; ++n) {
@@ -157,7 +162,7 @@ void kernel_main() {
         }
         for (uint32_t c = 1; c < KCT; ++c) {
             for (uint32_t n = 0; n < DT; ++n) {
-                copy_tile(cb_kc, n * KCT + c, 4);
+                copy_tile(cb_kc, c * DT + n, 4);
                 mul_binary_tile_init();
                 mul_binary_tile(4, 4, 4);
                 add_binary_tile_init();
@@ -274,6 +279,7 @@ void kernel_main() {
         }
         var.push_back(DT);
         var.wait_front(DT);
+        qb.wait_front(Q_T);  // Q is first needed by phase E (the reader issues it right behind K)
 
         if constexpr (DEBUG == 1) {  // moments out: batch 1 = mom tiles 0..7, batch 2 = var tiles 0..DT-1 (+ mom 0..3
                                      // again)
@@ -330,29 +336,45 @@ void kernel_main() {
             qsq.push_back(TQ * DT);
             qsq.wait_front(TQ * DT);
 
-            // ---- F: the threshold column per Q-block tile row.
+            // ---- F: the threshold column per Q-block tile row, two rows per DST section (slots 2k, 2k+1; the unary
+            // SFPU ops stay on DST 0..3).
             thrcol.reserve_back(TQ);
-            for (uint32_t tt = 0; tt < nt; ++tt) {
+            for (uint32_t tt0 = 0; tt0 < nt; tt0 += 2) {
+                const uint32_t ntt = min_u(2, nt - tt0);
                 tile_regs_acquire();
                 matmul_init(cb_q, cb_mom, 1);
-                for (uint32_t n = 0; n < DT; ++n) {
-                    matmul_tiles(cb_q, cb_mom, (t0 + tt) * DT + n, n, 0);
+                for (uint32_t k = 0; k < ntt; ++k) {
+                    for (uint32_t n = 0; n < DT; ++n) {
+                        matmul_tiles(cb_q, cb_mom, (t0 + tt0 + k) * DT + n, n, 2 * k);
+                    }
                 }
                 matmul_init(cb_qsq, cb_var, 1);
-                for (uint32_t n = 0; n < DT; ++n) {
-                    matmul_tiles(cb_qsq, cb_var, tt * DT + n, n, 1);
+                for (uint32_t k = 0; k < ntt; ++k) {
+                    for (uint32_t n = 0; n < DT; ++n) {
+                        matmul_tiles(cb_qsq, cb_var, (tt0 + k) * DT + n, n, 2 * k + 1);
+                    }
                 }
                 binop_with_scalar_tile_init();
-                add_unary_tile(1, EPS2);
+                for (uint32_t k = 0; k < ntt; ++k) {
+                    add_unary_tile(2 * k + 1, EPS2);
+                }
                 sqrt_tile_init();
-                sqrt_tile(1);
+                for (uint32_t k = 0; k < ntt; ++k) {
+                    sqrt_tile(2 * k + 1);
+                }
                 binop_with_scalar_tile_init();
-                mul_unary_tile(1, TAU);
+                for (uint32_t k = 0; k < ntt; ++k) {
+                    mul_unary_tile(2 * k + 1, TAU);
+                }
                 add_binary_tile_init();
-                add_binary_tile(0, 1, 0);
+                for (uint32_t k = 0; k < ntt; ++k) {
+                    add_binary_tile(2 * k, 2 * k + 1, 2 * k);
+                }
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile<true>(0, cb_thrcol, tt);
+                for (uint32_t k = 0; k < ntt; ++k) {
+                    pack_tile<true>(2 * k, cb_thrcol, tt0 + k);
+                }
                 tile_regs_release();
             }
             thrcol.push_back(TQ);
@@ -390,7 +412,7 @@ void kernel_main() {
                         matmul_init(cb_q, cb_kc, 1);
                         for (uint32_t cc = 0; cc < nc; ++cc) {
                             for (uint32_t n = 0; n < DT; ++n) {
-                                const uint32_t kci = n * KCT + (UNITS_PER_SHARD ? 0 : sp * NBPT) + c0 + cc;
+                                const uint32_t kci = ((UNITS_PER_SHARD ? 0 : sp * NBPT) + c0 + cc) * DT + n;
                                 matmul_tiles(cb_q, cb_kc, (t0 + tt) * DT + n, kci, cc);
                             }
                         }
@@ -415,11 +437,8 @@ void kernel_main() {
 
                 // ---- I: OR over the Q blocks of each Q chunk, OR the constant mask, AND full blocks.
                 block01.reserve_back(NBPT);
-                if constexpr (MODE != 0) {
+                if constexpr (MODE != 0 && !UNITS_PER_SHARD) {
                     mask_out.reserve_back(MASK_T);
-                }
-                if constexpr (UNITS_PER_SHARD) {  // second copy of the mask tiles for the reader (rows 16..31)
-                    mask2.reserve_back(MASK_T);
                 }
                 for (uint32_t c0 = 0; c0 < NBPT; c0 += SLAB) {
                     const uint32_t nc = min_u(SLAB, NBPT - c0);
@@ -455,22 +474,44 @@ void kernel_main() {
                     tile_regs_wait();
                     for (uint32_t cc = 0; cc < nc; ++cc) {
                         pack_tile<true>(cc, cb_block01, c0 + cc);
-                        if constexpr (MODE != 0) {
+                        if constexpr (MODE != 0 && !UNITS_PER_SHARD) {
                             pack_tile<true>(cc, cb_mask_out, c0 + cc);
-                        }
-                        if constexpr (UNITS_PER_SHARD) {
-                            pack_tile<true>(cc, cb_mask2, c0 + cc);
                         }
                     }
                     tile_regs_release();
                 }
                 block01.push_back(NBPT);
                 block01.wait_front(NBPT);
-                if constexpr (MODE != 0) {
+                if constexpr (MODE != 0 && !UNITS_PER_SHARD) {
                     mask_out.push_back(MASK_T);
                 }
+
+                // ---- I': the mask as row-major uint32 rows: block01 tiles back into DST, typecast fp32 -> uint32 on
+                // the SFPU (DST 0..UT-1 only, see SLAB), packed untilized into one page of cb_mask_out (32 rows x
+                // NBPT*32 words). Tiles go in blocks of UT = NBPT when NBPT <= 3, else one at a time (pack-untilize
+                // needs every block the same width and the width to divide NBPT).
                 if constexpr (UNITS_PER_SHARD) {
-                    mask2.push_back(MASK_T);
+                    constexpr uint32_t UT = (NBPT <= SLAB) ? NBPT : 1;
+                    static_assert(NBPT % UT == 0, "untilize block width must divide the row width");
+                    mask_out.reserve_back(1);
+                    pack_untilize_dest_init<UT, NBPT>(cb_mask_out);
+                    for (uint32_t c0 = 0; c0 < NBPT; c0 += UT) {
+                        tile_regs_acquire();
+                        copy_init(cb_block01);
+                        for (uint32_t cc = 0; cc < UT; ++cc) {
+                            copy_tile(cb_block01, c0 + cc, cc);
+                        }
+                        typecast_tile_init<static_cast<uint32_t>(DataFormat::Float32), static_cast<uint32_t>(DataFormat::UInt32)>();
+                        for (uint32_t cc = 0; cc < UT; ++cc) {
+                            typecast_tile<static_cast<uint32_t>(DataFormat::Float32), static_cast<uint32_t>(DataFormat::UInt32)>(cc);
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_untilize_dest<UT, NBPT>(cb_mask_out, 1, c0 / UT);
+                        tile_regs_release();
+                    }
+                    pack_untilize_uninit(cb_block01);  // back to tilized bf16 packing for the phases that follow
+                    mask_out.push_back(1);
                 }
 
                 // ---- J: chunk union (MODE 0: the mask, MODE 2: the union row).
