@@ -5357,6 +5357,7 @@ def determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
     dram_grid_size = mesh_device.dram_grid_size()  # CoreCoord with (x, y)
 
     # Quasar has no product names yet. It takes the Blackhole names, so it also gets the configs keyed on them.
+    # TODO: when Quasar products get names, give Quasar its own entries and update the configs keyed on them.
     if ttnn.device.is_blackhole(mesh_device) or mesh_device.arch() == ttnn.device.Arch.QUASAR:
         dict_device_names = {
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
