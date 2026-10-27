@@ -61,13 +61,21 @@ void queue_tensor_prefetcher_request(
     inputs.reserve(tensors.size());
     for (const auto& item : tensors) {
         // (tensor, block_count) defaults to batched (empty rotation); (tensor, block_count,
-        // rotation) supplies the per-receiver streaming rotation table for that tensor.
+        // rotation) supplies the per-receiver streaming rotation table for that tensor, and a fourth
+        // element the mask selecting which of a grouped weight's groups to stream.
         if (const auto* pair = std::get_if<std::pair<ttnn::Tensor, uint32_t>>(&item)) {
             inputs.push_back({pair->first.mesh_tensor(), pair->second, /*rotation=*/{}});
-        } else {
-            const auto& [tensor, block_count, rotation] =
-                std::get<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>(item);
+        } else if (const auto* triple = std::get_if<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>(&item)) {
+            const auto& [tensor, block_count, rotation] = *triple;
             inputs.push_back({tensor.mesh_tensor(), block_count, rotation});
+        } else {
+            const auto& [tensor, block_count, rotation, selector] =
+                std::get<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>, ttnn::Tensor>>(item);
+            inputs.push_back(
+                {tensor.mesh_tensor(),
+                 block_count,
+                 rotation,
+                 tt::tt_metal::experimental::TensorPrefetcherGroupSelector{selector.mesh_tensor()}});
         }
     }
     // There is no cq_id parameter to consult: a `cq_id`/`queue_id` keyword is consumed by

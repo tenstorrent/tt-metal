@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 from loguru import logger
-from models.common.utility_functions import skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

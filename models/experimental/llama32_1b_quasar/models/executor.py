@@ -37,6 +37,7 @@ from models.experimental.llama32_1b_quasar.models.module_input_validation import
 )
 from models.experimental.llama32_1b_quasar.sampling.sampling_params import SamplingParams
 from models.experimental.llama32_1b_quasar.tests.demos.cleanup_utils import cleanup_ttnn_value
+from models.experimental.llama32_1b_quasar.utility_functions import is_quasar
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
@@ -1148,7 +1149,9 @@ class EagerLLMExecutor:
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        gathered = ttnn.matmul(
+        # Quasar: the Quasar fork's matmul, which runs the unified matmul with no program config.
+        matmul = ttnn.experimental.quasar.matmul if is_quasar() else ttnn.matmul
+        gathered = matmul(
             sel_tt,
             hidden,
             dtype=ttnn.bfloat16,

@@ -30,11 +30,18 @@ class GLM53Config:
     # routed-expert matmul shape, expert count and activation (6144x2048, 256 experts, top-8, no
     # pre-projection, SiLU). Re-measure if any of those change.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+    # Opts this model into TtMoe's routed expert / combine_fabric2d overlap (Blackhole, traced only). Every
+    # config that does not name it runs the routed expert then combine as separate ops.
+    ROUTED_EXPERT_COMBINE_OVERLAP = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
+    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
+    # what it trades. Measured 8x4 over 1x-64x: 16 costs this model 4.3% on hot_expert traffic and
+    # nothing on balanced, for 40 -> 20 MB a chip.
+    COMBINE_FWD_REDUCTION = 16
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
@@ -123,8 +130,9 @@ def glm_5_3_hf_config(max_seq: int = 8192):
         index_head_dim=GLM53Config.INDEX_HEAD_DIM,
         index_topk=GLM53Config.INDEX_TOPK,
         index_rope_interleave=True,
-        # Full indexer layers overlap their local TopK on 80 cores with the sparse-KV SP gather on
-        # the remaining 30 (QB2) or 40 (LoudBox/Galaxy) cores. Shared layers reuse those indices.
+        # Full indexer layers overlap their local TopK with the sparse-KV SP gather, which runs on the
+        # worker row below the Ethernet row (11 cores on QB2, 12 on LoudBox/Galaxy); TopK gets the other
+        # nine rows. Shared layers reuse those indices.
         sparse_mla_overlap_profile="auto",
         # Indexer reuse: the per-layer full/shared map (length NUM_LAYERS) plus the params it derives
         # from. Consumers read `indexer_types` by layer index; absent -> all layers full.

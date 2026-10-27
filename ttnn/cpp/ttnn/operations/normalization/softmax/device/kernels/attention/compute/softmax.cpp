@@ -26,12 +26,20 @@ namespace ckl = compute_kernel_lib;
 // The buffer for the att mask is currently sized as (1t,Wt) so we only reuse it for one HtWt-sized batch of x
 // then read another Wt tiles of mask for the next batch
 
-template <std::uint32_t dfb_in, std::uint32_t dfb_max_scaler, std::uint32_t dfb_max, std::uint32_t dfb_out>
+template <
+    const auto& dfb_in,
+    const auto& dfb_max_scaler,
+    const auto& dfb_max,
+    const auto& dfb_out,
+    typename DFB0,
+    typename DFB1,
+    typename DFB2,
+    typename DFB3>
 void calc_numeric_stable(
-    DataflowBuffer& dfb_in_obj,
-    DataflowBuffer& dfb_max_scaler_obj,
-    DataflowBuffer& dfb_max_obj,
-    DataflowBuffer& dfb_out_obj,
+    DFB0& dfb_in_obj,
+    DFB1& dfb_max_scaler_obj,
+    DFB2& dfb_max_obj,
+    DFB3& dfb_out_obj,
     std::uint32_t Wt,
     std::uint32_t ndst) {
     // calculate max val per row
@@ -71,7 +79,8 @@ void calc_numeric_stable(
 // After a partial row (Wt not a multiple of the CB capacity), rd/wr sit at that offset.
 // Push/pop `pad` tiles to complete the cycle and return pointers to the CB base.
 // Same cycle as the copy in softmax_large_tensor.cpp, run through the kernel's DataflowBuffer object.
-ALWI void cycle_dfb_pad(DataflowBuffer& dfb, std::uint32_t pad) {
+template <typename DFB0>
+ALWI void cycle_dfb_pad(DFB0& dfb, std::uint32_t pad) {
     if (pad == 0) {
         return;
     }
@@ -82,7 +91,8 @@ ALWI void cycle_dfb_pad(DataflowBuffer& dfb, std::uint32_t pad) {
 }
 
 // Same, for CBs whose padding tiles the reader already pushed: only consume them.
-ALWI void drain_dfb_pad(DataflowBuffer& dfb, std::uint32_t pad) {
+template <typename DFB0>
+ALWI void drain_dfb_pad(DFB0& dfb, std::uint32_t pad) {
     if (pad == 0) {
         return;
     }
@@ -117,11 +127,11 @@ void kernel_main() {
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
-    constexpr auto dfb_max_scaler = dfb::max_scaler;
+    static constexpr auto dfb_max_scaler = dfb::max_scaler;
     constexpr auto dfb_sum_scaler = dfb::sum_scaler;
-    constexpr auto dfb_exps = dfb::exps;
+    static constexpr auto dfb_exps = dfb::exps;
     constexpr auto dfb_recipsumexps = dfb::recip_sum_exps;
-    constexpr auto dfb_in0 = dfb::in0;
+    static constexpr auto dfb_in0 = dfb::in0;
     constexpr auto dfb_out0 = dfb::out0;
 #ifdef FUSED_SCALE_MASK
     constexpr auto dfb_fused_scale = dfb::fused_scale;
@@ -136,7 +146,7 @@ void kernel_main() {
     constexpr auto dfb_mask_padded = dfb::mask_padded;
 #endif
 #ifdef NUMERIC_STABLE
-    constexpr auto dfb_max = dfb::max;
+    static constexpr auto dfb_max = dfb::max;
 #endif
     DataflowBuffer dfb_max_scaler_obj(dfb_max_scaler);
     DataflowBuffer dfb_sum_scaler_obj(dfb_sum_scaler);
@@ -161,13 +171,13 @@ void kernel_main() {
 #if defined(FUSED_SCALE_MASK) || defined(MASK_PADDED_DATA)
     // dfb_x is a distinct intermediate (c_10) only on the numeric-stable paths that post-process a masked
     // buffer; otherwise the reads go straight from dfb_in0 (see the calc_numeric_stable<dfb_in0,...> call).
-    constexpr auto dfb_x = dfb::x;
+    static constexpr auto dfb_x = dfb::x;
     DataflowBuffer dfb_x_obj(dfb_x);
 #endif
 #else
     // Without numeric_stable, dfb_x aliases dfb_exps (Same-FIFO reuse) so exp results circulate in one buffer.
-    constexpr auto dfb_x = dfb_exps;
-    DataflowBuffer& dfb_x_obj = dfb_exps_obj;
+    static constexpr auto dfb_x = dfb_exps;
+    auto& dfb_x_obj = dfb_exps_obj;
 #endif
 
     dfb_max_scaler_obj.wait_front(1);  // comes from the reader
@@ -410,10 +420,12 @@ void kernel_main() {
     }
 #endif  // !CAUSAL_MASK
 #endif  // FUSED_SCALE_MASK
-#if defined(MASK_PADDED_DATA) && !defined(FUSED_SCALE_MASK)
-    // The padding mask is a single tile pushed once by the reader and re-waited on the last column
-    // tile of every row; pop it once here so the buffer is left balanced. Only the non-fused path
-    // applies this mask, so the pop carries the same pair of conditions as the wait.
+#ifdef MASK_PADDED_DATA
+    // The padding mask is a single tile pushed once by the writer and re-waited on the last column
+    // tile of every row (by both the fused and the non-fused path); pop it once here so the buffer is
+    // left balanced. Wait first: a zero-work core never waited for it.
+    dfb_mask_padded_obj.wait_front(1);
+    dummy_unpack(dfb_mask_padded);
     dfb_mask_padded_obj.pop_front(1);
 #endif
 }

@@ -5,6 +5,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 #include "api/tensor/tensor_accessor.h"
@@ -45,8 +47,20 @@ void kernel_main() {
     // DH].
     constexpr bool out_concat_heads = get_compile_time_arg_val(22) == 1;
 
+    // Causal K/V chains (kv chain mode 3): this writer forwards the K/V slots the reader queues on the ctrl CB.
+    constexpr uint32_t sender_semaphore_id = get_compile_time_arg_val(23);
+    constexpr uint32_t receiver_semaphore_id = get_compile_time_arg_val(24);
+    constexpr uint32_t valid_semaphore_id = get_compile_time_arg_val(25);
+    constexpr uint32_t fwd_done_semaphore_id = get_compile_time_arg_val(26);
+    constexpr bool causal_chain = get_compile_time_arg_val(27) == 3;
+    // Q-head crossing with out_concat_heads: NQH counts packed heads of gqa_pack query heads x gqa_pack_sqt row tiles
+    // each. Both are 1 otherwise.
+    constexpr uint32_t gqa_pack = get_compile_time_arg_val(28);
+    constexpr uint32_t gqa_pack_sqt = get_compile_time_arg_val(29);
+    constexpr bool packed_concat = out_concat_heads && gqa_pack > 1;
+
     // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
-    constexpr auto out_args = TensorAccessorArgs<23>();
+    constexpr auto out_args = TensorAccessorArgs<30>();
     constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     // Per-device Q offset accessor, chained after cu_window so the offset chain stays intact.
     constexpr auto q_offset_args = TensorAccessorArgs<cu_window_args.next_compile_time_args_offset()>();
@@ -82,6 +96,15 @@ void kernel_main() {
         q_tok_offset_addr = get_arg_val<uint32_t>(12);
     }
 
+    // Causal chain tail: the host pushes it from kv chain mode 2 on, only mode 3 reads it.
+    uint32_t is_chain_participant = 0;
+    uint32_t next_physical_x = 0;
+    uint32_t next_physical_y = 0;
+    if constexpr (causal_chain) {
+        is_chain_participant = get_arg_val<uint32_t>(13);
+        next_physical_x = get_arg_val<uint32_t>(14);
+        next_physical_y = get_arg_val<uint32_t>(15);
+    }
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;  // non-streaming drain only
 
     constexpr uint32_t cb_arg_offset = q_offset_args.next_compile_time_args_offset();
@@ -95,14 +118,20 @@ void kernel_main() {
     // Dedicated 1-tile CB for the per-device Q-offset tensor; allocated only when that tensor is passed
     // (q_in otherwise, same fallback rule as cb_cu_window_in), and only touched behind the runtime guard.
     constexpr uint32_t cb_windowed_q_offset = get_compile_time_arg_val(cb_arg_offset + 6);
+    // Causal chains: reader -> writer forward requests (see post_kv_forward in the reader).
+    constexpr uint32_t cb_id_kv_fwd_ctrl = get_compile_time_arg_val(cb_arg_offset + 7);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
+    // Packed, the output is [B, 1, gqa_pack_sqt, NQH*gqa_pack*vDH], and a Q chunk may run into the next query head of
+    // its group (q chunk not dividing Sq); the drain wraps those rows (head_wrap_tile_skip).
     const auto out_tile_shape =
-        out_concat_heads ? TensorTileShape(B, 1, valid_Sqt, NQH * vDHt) : TensorTileShape(B, NQH, valid_Sqt, vDHt);
-    constexpr uint32_t out_row_stride = out_concat_heads ? NQH * vDHt : vDHt;
+        out_concat_heads ? TensorTileShape(B, 1, packed_concat ? gqa_pack_sqt : valid_Sqt, NQH * gqa_pack * vDHt)
+                         : TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    constexpr uint32_t out_row_stride = out_concat_heads ? NQH * gqa_pack * vDHt : vDHt;
+    constexpr uint32_t head_rows = packed_concat ? gqa_pack_sqt : 0;  // 0 = rows never wrap to another head
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
@@ -226,13 +255,54 @@ void kernel_main() {
                 cu_window_seqlens_eles,
                 q_tok_offset);
 
+            // Forwards before the drain: the reader queues all of them before compute can push this Q chunk's output.
+            if constexpr (causal_chain) {
+                if (is_chain_participant) {
+                    CircularBuffer cb_kv_fwd(cb_id_kv_fwd_ctrl);
+                    cb_kv_fwd.wait_front(1);
+                    const uint32_t fwd_entries =
+                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_kv_fwd.get_read_ptr());
+                    cb_kv_fwd.pop_front(1);
+                    Semaphore<> sender_sem(sender_semaphore_id);
+                    for (uint32_t n = 0; n < fwd_entries; ++n) {
+                        cb_kv_fwd.wait_front(1);
+                        volatile tt_l1_ptr uint32_t* entry =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_kv_fwd.get_read_ptr());
+                        const uint32_t src_address = entry[0];
+                        const uint32_t bytes = entry[1];
+                        cb_kv_fwd.pop_front(1);
+                        // the receiver posts its slot address as the ready signal
+                        sender_sem.wait_min(1);
+                        const uint32_t dst_address = sender_sem.value();
+                        sender_sem.set(0);
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(src_address),
+                            UnicastEndpoint{},
+                            bytes,
+                            {},
+                            {.noc_x = next_physical_x, .noc_y = next_physical_y, .addr = dst_address});
+                        noc.async_writes_flushed();
+                        Semaphore<>(valid_semaphore_id)
+                            .relay_unicast(noc, Semaphore<>(receiver_semaphore_id), next_physical_x, next_physical_y);
+                        Semaphore<>(fwd_done_semaphore_id).up(1);
+                    }
+                }
+            }
+
             // Determine how many rows of OUT will be written. Both start and end rows are
             // capped by valid_Sqt, since Sq padding is independent of Sk padding.
             const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
             uint32_t out_tile_id;
-            if constexpr (out_concat_heads) {
+            uint32_t first_row_in_head = 0;
+            if constexpr (packed_concat) {
+                // packed row r of packed head nq is row r % gqa_pack_sqt of query head nq * gqa_pack + r / gqa_pack_sqt
+                const uint32_t packed_row = write_offset + out_row_start_tile;
+                first_row_in_head = packed_row % gqa_pack_sqt;
+                out_tile_id =
+                    out_tile_shape.id_of(nb, 0, first_row_in_head, (nq * gqa_pack + packed_row / gqa_pack_sqt) * vDHt);
+            } else if constexpr (out_concat_heads) {
                 out_tile_id = out_tile_shape.id_of(nb, 0, write_offset + out_row_start_tile, nq * vDHt);
             } else {
                 out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
@@ -241,7 +311,7 @@ void kernel_main() {
                 // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
                 // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
                 // are padding and get popped without being written.
-                write_block_row_grouped(
+                write_block_row_grouped<head_rows>(
                     noc,
                     out_writer,
                     cb_out,
@@ -252,9 +322,10 @@ void kernel_main() {
                     tile_bytes,
                     out_subblock_h,
                     barrier_threshold,
-                    out_row_stride);
+                    out_row_stride,
+                    first_row_in_head);
             } else {
-                write_block(
+                write_block<head_rows>(
                     noc,
                     out_writer,
                     cb_out,
@@ -264,7 +335,8 @@ void kernel_main() {
                     out_tile_id,
                     tile_bytes,
                     barrier_threshold,
-                    out_row_stride);
+                    out_row_stride,
+                    first_row_in_head);
             }
         }
     }  // close phase

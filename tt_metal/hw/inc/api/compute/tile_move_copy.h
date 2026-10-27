@@ -128,7 +128,7 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
     LLK_SAN_FUNCTION();
 #endif
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        in_cb_id, in_tile_index)));
+        in_cb_id, in_tile_index, dst_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 }
@@ -168,7 +168,7 @@ ALWI void copy_block(
     LLK_SAN_FUNCTION();
 #endif
     UNPACK((llk_unpack_A_block<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        in_cb_id, start_in_tile_index, ntiles)));
+        in_cb_id, start_in_tile_index, ntiles, start_dst_tile_index)));
     MATH((llk_math_eltwise_unary_datacopy_block<
           DataCopyType::A2D,
           is_fp32_dest_acc_en,

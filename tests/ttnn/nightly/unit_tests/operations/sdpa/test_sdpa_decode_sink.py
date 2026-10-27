@@ -4,7 +4,7 @@
 
 import ttnn
 import pytest
-from models.common.utility_functions import skip_for_blackhole
+from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_sdpa_decode_sink_impl,
