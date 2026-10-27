@@ -53,6 +53,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0031 | Cut end-to-end latency of the 1-chip 20-stream demo further | 2026-10-27 | DONE: capture-to-results 10.9 ms for every camera (was 17-40 ms by group), on screen 23.2 ms (was 43.4), 30.0 FPS kept; staggered capture, earlier hand-over, event-driven render |
 | YOLO26-0032 | Batch 20 (all 20 cameras in one pass) on 1 chip: minimize its latency | 2026-10-27 | DONE: capture-to-results 61.7 → 44.0 ms (all cameras alike), on screen 66.0 → 52.4 ms with live view, 30.0 FPS; batch 4 also 10.9 → 9.4 ms / 23.2 → 20.7 ms |
 | YOLO26-0033 | How did batch 4 reach ~9.4 ms per camera group? Is it async? (summary of 0026-0032) | 2026-10-27 | ANSWERED: pipelined across processes and both command queues; no group queues behind another; chip work unchanged (~6 ms per batch of 4) |
+| YOLO26-0034 | Batch 20 before / after table; how batch 20 combines L1 and DRAM | 2026-10-27 | ANSWERED: 108.3 → 44.6 ms (all cameras), on screen 110.7 → 53.0 ms; every layer computes in L1 in groups (4 above 20×20, 8 at 20×20), DRAM only holds full-batch stage tensors |
 
 ## Entries
 
@@ -1069,3 +1070,40 @@ Caveats:
   which made the old figure lower than it would be now, so 50.9 → 21.4 ms is not overstated.
 - The ~12 ms between results and screen are the transfer to the render process, tile / panel drawing and the ~6 ms
   JPEG encode of the 2340×1152 mosaic.
+
+### YOLO26-0034 — batch 20: before / after, and how it combines L1 and DRAM (appended 2026-10-27)
+
+Before / after (MEASURED, 1 chip, 20 streams × 30 FPS, batch 20 = all 20 cameras in one pass; capture-to-results
+is the same for every camera):
+| cameras (batch in tick) | before (YOLO26-0030) | after (60 s recording, YOLO26-0032 code) |
+|---|---|---|
+| CAM 01-20 (one pass) | 108.3 ms | 44.6 ms |
+| on screen (all cameras) | 110.7 ms | 53.0 ms |
+| throughput | 598.4 images/s (29.9 FPS) | 599.9 images/s (30.0 FPS) |
+Recording: `yolo26_demo_outputs/multistream/yolo26s_20streams_1chip_batch20.mp4` (1830 frames, 61.0 s).
+Path: 108 → 61.7 ms from the shared changes of YOLO26-0031 (early hand-over, per-pass rendering); 61.7 → 44.6 ms
+from YOLO26-0032 (no 65 MB `from_torch` copy, one-pass-per-tick device loop, prep split over 4 workers). The before
+run was saturated (29.9 FPS, frames queued); the after run holds 30.0 FPS without queueing. On-screen method differs
+as in YOLO26-0033 (before: per tick, before the JPEG encode; after: per result, after it), so the drop is not
+overstated.
+
+How batch 20 combines L1 and DRAM (READ, `tt/ttnn_yolo26.py`, `TtYOLO26._forward_grouped`, used when the uint8
+batch > `MAX_L1_BATCH` = 4): no layer computes from DRAM. Every layer runs in L1 with a program sized for a group;
+DRAM only holds full-batch tensors between stages.
+- Input: `input_memory_config` returns DRAM above batch 4, so the 20-image uint8 input (65.5 MB) stays in DRAM; each
+  group of 4 is sliced out and sharded into L1 by the batch-4 `preprocess` on its way in.
+- Stages above 20×20, in 5 groups of 4 with the batch-4 L1 programs: backbone stem .. model.7, neck model.13 /
+  model.16 / model.17 / model.19 / model.20 (40×40 and 80×80 path), heads at 80×80 and 40×40. A group's L1 use is
+  that of batch 4.
+- 20×20 stages, in groups of `LOW_RES_BATCH` = 8 (8, 8, 4 for batch 20): model.8, SPPF, C2PSA (model.10),
+  model.22, 20×20 head. Larger groups keep the cores busier here (20×20 was 35 % of batch-4 time, YOLO26-0030);
+  8 is the largest that fits (at 16 SPPF's first conv clashes with L1).
+- Parked in DRAM between the two: P3 (80×80), P4 (40×40), model.7 output, C2PSA output, model.20 output, and the
+  per-group head outputs; each group writes its slice and the slices are concatenated in DRAM when a stage needs
+  the batch (or at the end).
+- Order of one pass: groups 1-5 backbone → 20×20 in groups of 8 → groups 1-5 neck + 80×80 / 40×40 heads → 20×20
+  model.22 + head in groups of 8 → outputs joined.
+- The layer sharding is chosen as at batch 4 (`min(batch, 4)` rows) so larger groups keep the validated layouts.
+- REFUTED earlier (YOLO26-0030 attempt 1): computing the large layers from DRAM (DRAM-sliced convs, DRAM adds /
+  concats): batch 8 at 213.9 FPS, dominated by reshapes and DRAM ↔ L1 copies. Grouping: batch 8 731.3, batch 20
+  716.4 FPS model-only (batch 4: 683.1), PCC unchanged.
