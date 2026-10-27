@@ -15,6 +15,7 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA,
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
+    KDA_DECAY_LOGITS_L1_BYTES_PER_CORE,
     KDA_HISTORY_EXCHANGE_ROWS,
     KDA_HISTORY_EXCHANGE_SEMAPHORES,
     KDA_NORM_OUTPUT_L1_BYTES_PER_CORE,
@@ -266,18 +267,25 @@ class ttKDA:
             if program_config.tuned_projection_matmuls
             else (None, None)
         )
-        # The bounded gate's per-head scale is folded into the decay projection, which then applies the sigmoid.
         decay_width = self.config.num_heads * self.config.head_k_dim
         self.decay_program_config = decay_projection_program_config(
             mesh_device.compute_with_storage_grid_size(),
             self.active_seq_len_local,
             self.config.head_k_dim,
             decay_width,
-            ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID) if self._bounded_gate else None,
         )
         # The prepared chunk terms read the decay gate; L1 spares its DRAM round trip.
         self.decay_memory_config = l1_when_it_fits(
             mesh_device, self.active_seq_len_local * decay_width * 2, KDA_DECAY_L1_BYTES_PER_CORE
+        )
+        # The bounded gate's FP32 logits (4 bytes per element) between the projection and the offset add.
+        self.decay_logits_memory_config = l1_when_it_fits(
+            mesh_device, self.active_seq_len_local * decay_width * 4, KDA_DECAY_LOGITS_L1_BYTES_PER_CORE
+        )
+        # The offset add reads the FP32 gate offset row for every output tile; an L1 copy (one tile row, a few KiB per
+        # core) spares those reads their DRAM round trip.
+        self.decay_offset = (
+            ttnn.to_memory_config(self.weights.decay_bias_flat, ttnn.L1_MEMORY_CONFIG) if self._bounded_gate else None
         )
         # Experimental KDA operations reject packer_l1_acc=True because their kernels do not
         # accumulate through L1. Keep this separate from projection matmuls, which accept the flag.
@@ -411,16 +419,39 @@ class ttKDA:
         The low-rank activations are read in place from the fused projection's columns at ``decay_rank_offset``.
         """
         weights = self.weights
-        gate = ttnn.linear(
+        if not self._bounded_gate:
+            gate = ttnn.linear(
+                projected,
+                weights.decay_output_projection,
+                bias=weights.decay_bias_flat,
+                program_config=self.decay_program_config,
+                memory_config=self.decay_memory_config,
+                compute_kernel_config=self.compute_config,
+                in0_column_offset=decay_rank_offset,
+            )
+            return self._softplus_decay(gate)
+        # sigmoid(r @ (A f_b) + A dt_bias), with A folded into the weights (tt/kda/weights.py): FP32 logits and the
+        # FP32 offset A dt_bias, rounded once to the BF16 gate; chunk preparation applies the lower bound. The offset is
+        # a separate FP32 add because as the matmul bias it left a mean dG/G of +2e-3 against ~1e-5
+        # (tt_metal_tracker-g1b.4.13).
+        logits = ttnn.linear(
             projected,
             weights.decay_output_projection,
-            bias=weights.decay_bias_flat,
             program_config=self.decay_program_config,
-            memory_config=self.decay_memory_config,
+            dtype=ttnn.float32,
+            memory_config=self.decay_logits_memory_config,
             compute_kernel_config=self.compute_config,
             in0_column_offset=decay_rank_offset,
         )
-        return gate if self._bounded_gate else self._softplus_decay(gate)
+        gate = ttnn.add(
+            logits,
+            self.decay_offset,
+            activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID)],
+            dtype=ttnn.bfloat16,
+            memory_config=self.decay_memory_config,
+        )
+        ttnn.deallocate(logits)
+        return gate
 
     def _softplus_decay(self, gate: ttnn.Tensor) -> ttnn.Tensor:
         return ttnn.multiply(
