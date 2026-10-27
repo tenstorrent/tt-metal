@@ -289,6 +289,13 @@ FORCE_INLINE void init_stream_reg_if_used(uint32_t value) {
     }
 }
 
+template <uint32_t STREAM_ID>
+FORCE_INLINE void init_packets_sent_credit_if_used() {
+    if constexpr (STREAM_ID != tt::tt_fabric::k_unused_stream_id) {
+        init_packets_sent_credit<STREAM_ID>();
+    }
+}
+
 // For 2D fabric: maps compact index to downstream direction for each my_direction
 // For 1D fabric: only 1 downstream direction per router (EAST forwards to WEST in 1D linear topology)
 constexpr uint32_t MAX_DOWNSTREAM_EDM_COUNT = 4;
@@ -478,7 +485,7 @@ FORCE_INLINE void send_next_data(
 
     while (SenderLinkTransport::is_busy()) {
     };
-    SenderLinkTransport::remote_update_ptr_val<to_receiver_pkts_sent_id>(1U);
+    send_packets_sent_credit<to_receiver_pkts_sent_id>();
 }
 
 /////////////////////////////////////////////
@@ -1054,7 +1061,7 @@ FORCE_INLINE void update_telemetry(
     if constexpr (FABRIC_TELEMETRY_HEARTBEAT_RX) {
         bool receiver_idle = false;
         if (!rx_progress) {
-            receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
+            receiver_idle = (get_packets_sent_unprocessed<to_receiver_packets_sent_streams[0]>() == 0);
         }
         if (rx_progress || receiver_idle) {
             volatile RiscTimestampV2* rx_heartbeat_addr =
@@ -1336,7 +1343,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     LocalTelemetryT& local_fabric_telemetry) {
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
-    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
+    auto pkts_received_since_last_check = get_packets_sent_unprocessed<to_receiver_pkts_sent_id>();
 
     bool unwritten_packets;
     if constexpr (enable_first_level_ack) {
@@ -1349,7 +1356,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         if (can_send_ack) {
             // currently only support processing one packet at a time, so we only decrement by 1
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-            increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+            consume_packets_sent_credit<to_receiver_pkts_sent_id>();
 
             uint8_t src_ch_id;
             if constexpr (skip_src_ch_id_update) {
@@ -1512,9 +1519,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 }
             }
             wr_sent_counter.increment();
-            // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
+            // the current packet has been processed.
             if constexpr (!enable_first_level_ack) {
-                increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
+                consume_packets_sent_credit<to_receiver_pkts_sent_id>();
             }
         }
     }
@@ -2666,7 +2673,7 @@ void kernel_main() {
     // Initialize stream register state for credit management across the Ethernet link.
     // We make sure to do this before we handshake to guarantee that the registers are
     // initialized before the other side has any possibility of modifying them.
-    init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
+    init_packets_sent_credit<to_receiver_packets_sent_streams[0]>();
     init_stream_reg_if_used<to_sender_packets_acked_streams[0]>(0);
     init_stream_reg_if_used<to_sender_packets_acked_streams[1]>(0);
     init_stream_reg_if_used<to_sender_packets_completed_streams[0]>(0);
@@ -2688,8 +2695,8 @@ void kernel_main() {
     if constexpr (is_2d_fabric) {
         // Receiver channels 1 and 2 are only populated when a VC densifies onto them, so guard the
         // init rather than writing through an unassigned entry.
-        init_stream_reg_if_used<to_receiver_packets_sent_streams[1]>(0);
-        init_stream_reg_if_used<to_receiver_packets_sent_streams[2]>(0);
+        init_packets_sent_credit_if_used<to_receiver_packets_sent_streams[1]>();
+        init_packets_sent_credit_if_used<to_receiver_packets_sent_streams[2]>();
         init_stream_reg_if_used<to_sender_packets_acked_streams[2]>(0);
         init_stream_reg_if_used<to_sender_packets_acked_streams[3]>(0);
         init_stream_reg_if_used<to_sender_packets_acked_streams[4]>(0);
