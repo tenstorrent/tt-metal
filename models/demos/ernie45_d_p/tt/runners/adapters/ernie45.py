@@ -95,9 +95,10 @@ class Ernie45PrefillRuntime:
         assert actual_start + len(input_tensor) <= self.config.max_seq_len, "chunk overruns the user slot"
         sink = self._sink
 
-        def on_layer(i, _h, request_id=request_id):
+        def on_layer(i, _h):
             if sink is not None:
-                sink(i, request_id)  # global layer index (single rank: local == global)
+                # global layer index (single rank: local == global)
+                sink.layers_completed(i, i + 1, slot_id, actual_start, actual_end)
 
         h = self.model.prefill_chunk(
             input_tensor,

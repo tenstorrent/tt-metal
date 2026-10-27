@@ -26,7 +26,7 @@ Per chunk (prefill_chunk):
      positions before actual_start (a follow-up starts inside the slot's earlier prompt); begin_chunk sends the rows
   3. layer by layer: the layer writes its records (window rows, compressed / index rows, the last record's pad rows
      zero) through update_padded_kv_cache; then the ack: host sink = ttnn.synchronize_device, then
-     sink(first_layer_idx + k, request_id) (K-71); D2H (d2h_service given) = outbound_socket_service_sync on the same
+     sink.layers_completed(g, g + 1, slot, actual_start, actual_end) with g = first_layer_idx + k (K-71); D2H (d2h_service given) = outbound_socket_service_sync on the same
      command queue, no host sync
 No host round trip inside a layer (the ladder gates host_transfers_per_layer at 0).
 
@@ -196,7 +196,7 @@ class DS41PrefillRuntime:
         nat[end - start :] = PAD_ID
         return nat
 
-    def _run(self, inp, kv, slot, start, end, request_id, acks: bool, d2h_service=None, metadata_msg=None):
+    def _run(self, inp, kv, slot, start, end, acks: bool, d2h_service=None, metadata_msg=None):
         ttnn = self._ttnn
         model = self.model
         sink = self._sink if acks else None
@@ -222,7 +222,8 @@ class DS41PrefillRuntime:
             elif sink is not None:
                 # the ack promises the layer's KV is in DRAM (the KV Manager reads it out of band): wait for it (K-71)
                 ttnn.synchronize_device(self.mesh_device)
-                sink(self.config.first_layer_idx + k, request_id)
+                g = self.config.first_layer_idx + k
+                sink.layers_completed(g, g + 1, slot, start, end)
         model.free(h)
 
     def compile(self, kv_cache: DS41KvCaches) -> None:
@@ -232,7 +233,7 @@ class DS41PrefillRuntime:
         assert kv_cache.layer_ids == self.layer_ids, (kv_cache.layer_ids, self.layer_ids)
         c = self.config.chunk_size
         ids = self.make_chunk_input([0] * c, 0)
-        self._run(ids, kv_cache, 0, 0, c, 0, acks=False)
+        self._run(ids, kv_cache, 0, 0, c, acks=False)
         ttnn.deallocate(ids)
         ttnn.synchronize_device(self.mesh_device)
 
@@ -262,7 +263,6 @@ class DS41PrefillRuntime:
             int(slot_id),
             start,
             end,
-            request_id,
             acks=True,
             d2h_service=d2h_service,
             metadata_msg=metadata_msg,

@@ -136,7 +136,8 @@ Build:
   (prefill_reader.cpp:121-160, 177-211). Every layer owns 0_window_kv, so every layer acks: no `kv_slot_layer_ids`.
 - **Before layer k's ack, its records are final in DRAM:** window rows, its compressed / index rows, pad rows zeroed.
   An early ack ships stale KV (K-71).
-- **Both transports.** Host sink: `set_layer_completion_sink(sink)`, then `sink(global_layer_idx, request_id)` after
+- **Both transports.** Host sink: `set_layer_completion_sink(sink)`, then
+  `sink.layers_completed(g, g + 1, slot_id, actual_start, actual_end)` (g the global layer) after
   `ttnn.synchronize_device` (prefill_runner.py:856-870). Shipped manifests leave PREFILL_LAYER_ACK_D2H unset, which
   selects the sink (engine/tools/manifests/deepseek/runner_1rank_migrate.yaml). D2H (PREFILL_LAYER_ACK_D2H=1):
   `prefill_chunk` gets `d2h_service` and `metadata_msg`; enqueue

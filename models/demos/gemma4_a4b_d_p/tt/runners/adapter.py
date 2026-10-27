@@ -107,18 +107,18 @@ class Gemma4PrefillRuntime:
             ),
         )
 
-    def _run(self, ids, kv_cache, slot, start, request_id, acks: bool):
+    def _run(self, ids, kv_cache, slot, start, end, acks: bool):
         import ttnn
 
         sink = self._sink if acks else None
         mesh = self.mesh_device
 
-        def on_layer(i, request_id=request_id):
+        def on_layer(i):
             if sink is None:
                 return
             # The ack promises the layer's KV is in the migratable cache: wait until the device has finished it.
             ttnn.event_synchronize(ttnn.record_event(mesh, 0))
-            sink(i, request_id)  # global layer index (single rank: local == global)
+            sink.layers_completed(i, i + 1, slot, start, end)  # global layer index (single rank: local == global)
 
         contract = kv_cache.contract
         h = self.model.prefill_chunk(
@@ -137,7 +137,7 @@ class Gemma4PrefillRuntime:
         c = self.config.chunk_size
         for start in range(0, self.config.max_seq_len, c):
             ids = self.make_chunk_input([0] * c)
-            self._run(ids, kv_cache, 0, start, 0, acks=False)
+            self._run(ids, kv_cache, 0, start, start + c, acks=False)
             ttnn.deallocate(ids)
         ttnn.synchronize_device(self.mesh_device)
 
@@ -160,7 +160,7 @@ class Gemma4PrefillRuntime:
         assert tuple(input_tensor.shape)[-1] * self.config.mesh_shape[0] == c, input_tensor.shape
         # Rows >= actual_end are pad (engine fills 0xFFFFFFFF): the embedding masks them in range, and being after
         # every real row they never reach a real position through causal attention.
-        self._run(input_tensor, kv_cache, slot_id, actual_start, request_id, acks=True)
+        self._run(input_tensor, kv_cache, slot_id, actual_start, actual_end, acks=True)
         return None  # last/single rank: the populated cache is the output
 
     # --- migration hooks ---

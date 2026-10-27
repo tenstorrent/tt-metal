@@ -12,7 +12,8 @@ layer-ack channel, the shutdown sentinel) is the producer's own code:
     (whose follow-ups start at a 32-aligned end and whose last chunk is never pulled back)
   - payload: PAD_ID past actual_end and ring_sdpa_reshuffle by actual_start (server_rules.server_payload) instead of
     the producer's real-token padding and rotation
-  - acks: counted here, PREFILL_NUM_LAYERS per chunk (layers_per_chunk), and waited for before each snapshot
+  - acks: the producer's own completion-ring drain consumes them; counted here off its span-summed total,
+    PREFILL_NUM_LAYERS per chunk (layers_per_chunk), and waited for before each snapshot
   - verify: off (the parent test reads the dumps with the server's own comparer)
 
 Turns: server_rules.RUNNER_TURNS (slot 0 1000 then 4000 over 960, pulled back; slot 1 1500 then 3500 over 1472), or
@@ -70,7 +71,7 @@ def main(out: str) -> int:
     layers = list(range(n_layers))
     plan = R.interleave(TURNS)
     rec = {"plan": [vars(p) for p in plan], "acks_drained": 0, "errors": [], "snapshots": {}}
-    st = {"ch": None, "drained": 0, "dead": False}
+    st = {"ch": None, "drain": None, "drained": 0, "dead": False}
 
     class Service:
         """H2D service whose chunk payload is the server's (PAD_ID tail, ring_sdpa_reshuffle)."""
@@ -103,38 +104,50 @@ def main(out: str) -> int:
         return np.asarray(tokens, dtype=np.int64).astype(np.uint32).reshape(R.SP, 1, R.W)
 
     P._h2d_rows = natural_rows
-    connect = P._connect_layer_ack_channel
+    # The completion ring is bounded: the producer's own drain thread (started before the first push) consumes it;
+    # the waits here read its span-summed count.
+    connect, start_drain = P.connect_layer_completion_channel, P.start_layer_completion_drain
 
     def connect_acks(timeout_s):
         st["ch"] = connect(timeout_s)
         return st["ch"]
 
-    P._connect_layer_ack_channel = connect_acks
+    def start_acks(completion_channel, *, num_layers, chunk_layers):
+        st["drain"] = start_drain(completion_channel, num_layers=num_layers, chunk_layers=chunk_layers)
+        return st["drain"]
+
+    P.connect_layer_completion_channel = connect_acks
+    P.start_layer_completion_drain = start_acks
+    os.environ["PREFILL_PRODUCER_WARMUP_CHUNKS"] = "0"  # the server sends no warm-up chunks
 
     def wait_acks(n: int) -> bool:
         if st["dead"]:
             return False
-        t0 = time.perf_counter()
-        while st["drained"] < n:
-            if st["ch"] is None:
-                rec["errors"].append("no layer-ack channel")
-                return False
-            st["drained"] += st["ch"].try_consume_all()
-            if time.perf_counter() - t0 > ACK_TIMEOUT_S:
-                rec["errors"].append(
-                    f"layer acks: {st['drained']} < {n} after {ACK_TIMEOUT_S:.0f} s ({n_layers} per chunk)"
-                )
-                st["dead"] = True
-                return False
-            time.sleep(0.005)
-        return True
+        drain = st.get("drain")
+        if drain is None:
+            rec["errors"].append("no layer-ack channel")
+            st["dead"] = True
+            return False
+        try:
+            st["drained"] = drain.wait_for(n, timeout_s=ACK_TIMEOUT_S)
+            return True
+        except TimeoutError:
+            st["drained"] = drain.reader.total_layers
+            rec["errors"].append(
+                f"layer acks: {st['drained']} < {n} after {ACK_TIMEOUT_S:.0f} s ({n_layers} per chunk)"
+            )
+        except Exception as e:  # a span out of bounds / overlapping, or the drain thread died
+            st["drained"] = drain.reader.total_layers
+            rec["errors"].append(f"layer acks: {type(e).__name__}: {e}")
+        st["dead"] = True
+        return False
 
-    def drain(ack_channel, expected, timeout_s=600.0):  # the server's count (layers_per_chunk x chunks)
+    def drain_final(drain, expected_layers, *, timeout_s=600.0):  # the server's count (layers_per_chunk x chunks)
         wait_acks(n_layers * len(plan))
         rec["acks_drained"] = st["drained"]
         return st["drained"]
 
-    P._drain_layer_acks = drain
+    P.wait_for_layer_completions = drain_final
     P._verify_resident_slots = lambda *a, **k: True
 
     def server_schedule(cfg, *, push_fn, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None):
