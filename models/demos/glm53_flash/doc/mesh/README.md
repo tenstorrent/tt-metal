@@ -1222,3 +1222,19 @@ caches. `reserve_bytes` now takes a 16 K chunk's dense working set (four such bu
 28 users per row (7 slots per chip; 29-31 cost the same 8th slot). Catalog (dev + prod) set to 28 (TIS 08bd78693). The branch carried
 two pushes with a failing memory-plan test while the term was being calibrated (d19071b2769, e536042d715); green again at d8b60d56ff2.
 Re-queued: `serve_bench_glm53_128k_r3` (128/128 c1 + c28) and `_r4` (65536/128 c28) after the 1 M-profile bench.
+
+14:45 Served targets rewritten per profile (TIS 8d8a6cde7, rows keyed by `impl`): 1 M profile 128/128 c1 TPOT 94.2 ms = 10.6 tok/s per
+user (TTFT 272 ms), c4 103.4 ms = 9.7 (TTFT 545 ms mean), 65536/128 c4 TPOT 412 ms = 2.4 (TTFT 68.6 s); 128 K profile (28 users per
+row = 224 slots) 128/128 c1 150.9 ms = 6.6 (TTFT 228 ms: every request pays the 224-slot traced step), c28 172.8 ms = 5.8 / 141.8 tok/s
+output (TTFT mean 3.3 s), 65536/128 c28 completed 28/28 (the first 64 K random bench since the r10 hang: no hang) at TPOT 2967 ms =
+0.34 tok/s per user, TTFT 389 s. The long-context served TPOT is scheduler-bound: the engine runs a step as all-prefill or all-decode
+and interleaves 2 prefill steps (16 K chunks, ~7.5 s each) per decode step (plugin `decode_interleave_*` in the tt additional config),
+so a decoding request waits ~15 s per token while the other requests prefill. Levers: the interleave ratio (catalog) and per-row
+prefill ownership (8 parallel prefills).
+14:45 Served 1 M prefill: the diagnosis run (adapter DRAM log) shows the resident DRAM after the warm-up = the planner's weights +
+caches (3748 vs 3754 MiB per bank), 2.05 GiB free, no per-chunk leak (<1 MiB per 16 K chunk), the largest free hole shrinking from
+289 to 123 MiB per bank over the chunks; the request died at ~196 K on a 201 MB allocation = a [2048, pools] bf16 score block: the
+served path ran the scorer's 2048-row default while every harness 1 M run set `GLM53_PREFILL_QBLOCK=512` (1.07 GB vs 0.27 GB at 1 M;
+the planner assumed 512). Fix 413b3d9dceb: the score block follows the slot length (2048 up to 256 K, 1024 at 512 K, 512 at 1 M;
+the env still overrides), and the planner's reserve uses the same rule. Diag `serve_diag_glm53_1m_qblock` (wt_frozen22, default
+path, one 1 M request) queued.
