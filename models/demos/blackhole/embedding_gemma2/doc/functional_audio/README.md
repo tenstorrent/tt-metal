@@ -149,7 +149,9 @@ norms; weights still bf16). Results (same jsonl, `act: fp32`):
 | tone3 | 0.99806 -> 0.99976 | 0.97527 -> 0.99564 |
 
 fp32 activations raise soft PCC on every case. They do not fix the worst token of s30 (0.753),
-which HF-bf16 also gets wrong (0.820). That token is ill-conditioned in the model itself. The
+which HF-bf16 also gets wrong (0.820). [guess] That token (and s10 token 126) may be
+ill-conditioned in the model itself. This is not proven: no input-perturbation or per-layer
+sensitivity check was run. That sensitivity check is scheduled for the datatype-sweep stage. The
 cost is +16 % at 10 s and +20 % at 30 s of device time (Performance). bf16 stays the default,
 as in E1/E2. The choice belongs to the E6 datatype sweep.
 

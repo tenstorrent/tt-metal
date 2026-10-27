@@ -115,7 +115,7 @@ from the committed `e2/final_results.jsonl` (`test_vision_model.py::test_soft_to
   (0.97943 vs 0.98440), small (0.99593 vs 0.99878), tiny (0.98892 vs 0.99448) and 5 of 8 video
   frames (0, 1, 3, 6, 7). TT is higher on portrait (0.94289 vs 0.86620) and 3 of 8 frames (2, 4,
   5; frame 4: 0.92725 vs 0.81484). So TT's worst token is not uniformly as good as HF-bf16's; it
-  is worse on most cases, by up to 0.0146 (landscape) in cosine.
+  is worse on most cases, by up to 0.0143 (landscape: 0.94131 - 0.92698) in cosine.
 
 A fp32 residual stream was tried (scratch, not kept): landscape soft PCC 0.99878 ->
 0.99963, but portrait 0.99908 -> 0.99910 and video frames mixed (0.99833-0.99923). So the residual

@@ -182,7 +182,9 @@ pytest models/demos/blackhole/embedding_gemma2/tests/pcc/audio/test_audio_perf.p
 
 Measured on real in-tree speech (0.64 s to 30 s, and a padded batch of 2): per-layer-kind PCC
 >= 0.9997, and soft-token PCC 0.9984-0.9999 per clip vs the HF fp32 reference. HF's own bf16 run
-scores 0.9985-0.9999 against the same reference. Traced latency is 23.7 ms for a 10 s clip,
+scores 0.9985-0.9999 against the same reference. The worst single soft token is much lower:
+per-token cosine 0.764 (s10 token 126) and 0.773 (s30 token 267), against 0.851 and 0.820 for
+HF-bf16 on the same tokens. Traced latency is 23.7 ms for a 10 s clip,
 47.8 ms for 30 s, and 80.5 ms for 4 x 10 s. Details, the fp32-activation precision lever and
 limitations are in `doc/functional_audio/README.md`.
 
