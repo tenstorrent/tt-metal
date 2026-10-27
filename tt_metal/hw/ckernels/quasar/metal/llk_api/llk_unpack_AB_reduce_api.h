@@ -79,6 +79,8 @@ inline void llk_unpack_AB_reduce_uninit(const std::uint32_t operandA) {
  *
  * @brief Unpacks binary operands to SrcA & SrcB for reduce kernels
  *
+ * @tparam pool_type: Type of reduce pool op, values = [MAX, SUM, AVG]
+ * @tparam reduce_dim: Sets the reduce dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
  * @param operandA: The srcA operand circular buffer identifier
  * @param operandB: The srcB operand circular buffer identifier
  * @param tile_index_a: The L1 index in the input DFB to read from, tile_index_a -> UNPACKER0 -> SRCA
@@ -88,6 +90,7 @@ inline void llk_unpack_AB_reduce_uninit(const std::uint32_t operandA) {
  * to srcA and UNPACKER1 unpacks a single face from the input DFB to srcB.
  *
  */
+template <PoolType pool_type, ReduceDim reduce_dim>
 inline void llk_unpack_AB_reduce(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -117,6 +120,6 @@ inline void llk_unpack_AB_reduce(
         local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b;
 
     WAYPOINT("UABW");
-    _llk_unpack_reduce_(l1_tile_index_a, l1_tile_index_b, tensor_shape);
+    _llk_unpack_reduce_<pool_type, reduce_dim>(l1_tile_index_a, l1_tile_index_b, tensor_shape);
     WAYPOINT("UABD");
 }

@@ -68,6 +68,11 @@ mathop_mapping = {
 
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
 
+# Int8 data accumulates in an Int32 Dest. An Int8 output only holds a max without overflow.
+INT_REDUCE_FORMATS = [
+    InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
+    InputOutputFormat(DataFormat.Int8, DataFormat.Int8),
+]
 
 # Float32 joins only through the two pairs the shared perf matrix uses.
 REDUCE_FORMATS = (
@@ -77,6 +82,7 @@ REDUCE_FORMATS = (
         InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
     ]
     + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+    + INT_REDUCE_FORMATS
 )
 
 
@@ -85,10 +91,26 @@ def reduce_dest_sync_modes(*, is_perf=False):
 
 
 def reduce_dest_acc_modes(formats):
+    if formats.input_format.is_integer():
+        return [DestAccumulation.Yes]
     return get_valid_dest_accumulation_modes(formats)
 
 
+def reduce_pool_types(formats, reduce_dim):
+    if not formats.input_format.is_integer():
+        return POOL_TYPES
+    # The integer scaler is 1, so there is no AVG. The scalar SUM partials do not fit back into SrcA.
+    if (
+        formats.output_format != DataFormat.Int32
+        or reduce_dim == ReduceDimension.Scalar
+    ):
+        return [ReducePool.Max]
+    return [ReducePool.Max, ReducePool.Sum]
+
+
 def reduce_tile_dimensions(formats, *, is_perf=False):
+    if formats.input_format.is_integer():
+        return [(32, 32)]
     functional_tile_sizes = [
         td
         for td in SUPPORTED_TILE_SIZES
@@ -130,7 +152,7 @@ def reduce_math_fidelities(formats, pool_type):
     ),
     dest_acc=reduce_dest_acc_modes,
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type=POOL_TYPES,
+    pool_type=reduce_pool_types,
     math_fidelity=reduce_math_fidelities,
     is_reduce_to_one=reduce_is_reduce_to_one_modes,
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
