@@ -188,6 +188,8 @@ class TT_CCL:
         self.combine_overlap_semaphores = None
         # The same overlap's DRAM forwarding buffer, one per shape; see get_combine_forwarding_buffer.
         self.combine_forwarding_buffers = {}
+        # ready/data_valid pair for MLA's TP high_bw_all_gather calls; see get_mla_high_bw_gather_semaphores.
+        self.mla_high_bw_gather_semaphores = None
 
     def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
         key = (
@@ -492,6 +494,23 @@ class TT_CCL:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         return self.mla_high_bw_all_gather_buffers[key]
+
+    def get_mla_high_bw_gather_semaphores(self):
+        """ready and data_valid counters shared by MLA's TP high_bw_all_gather calls.
+
+        Without them each gather program allocates its own pair on its first (cache-miss) call, mid-forward, under
+        whatever L1 activation is live at that moment; that pair outlives the activation and can land inside a later
+        op's static CB range. Call this at model construction so the pair sits at the top of an empty L1 heap.
+        """
+        if self.mla_high_bw_gather_semaphores is None:
+            l1_small_view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL)
+            buffer_type = ttnn.BufferType.L1_SMALL if l1_small_view.total_bytes_per_bank > 0 else ttnn.BufferType.L1
+            self.mla_high_bw_gather_semaphores = tuple(
+                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0, buffer_type) for _ in range(2)
+            )
+            # Every chip must have zeroed its copies before any neighbour bumps them.
+            ttnn.synchronize_device(self.mesh_device)
+        return self.mla_high_bw_gather_semaphores
 
     def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
         """Return the persistent full-K output buffer for the fused ring indexer.
