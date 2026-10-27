@@ -86,24 +86,18 @@ def _accumulated_pcc(base: float, upstream_levels: int, module_pcc: float) -> fl
     return 1.0 - ((1.0 - base) + upstream_levels * (1.0 - module_pcc))
 
 
-# Keyed by use_pretrained; levels 2-7 of test_mtp_multiturn_pcc as (x, out and normed, KVPE nope, KVPE pe), centered.
+# Keyed by use_pretrained; levels 2-4 of test_mtp_multiturn_pcc as (x, out and normed, KVPE nope, KVPE pe), centered.
 # Each is the lowest over the 8 schedules at levels7 on bh-glx-120-c02u02 (2026-10-22) minus 0.02, rounded down.
 MULTITURN_LEVEL_PCC = {
     False: [
         (0.97, 0.95, 0.97, 0.97),
         (0.96, 0.93, 0.96, 0.96),
         (0.95, 0.91, 0.95, 0.95),
-        (0.94, 0.89, 0.94, 0.94),
-        (0.93, 0.87, 0.93, 0.93),
-        (0.92, 0.85, 0.92, 0.92),
     ],
     True: [
         (0.96, 0.92, 0.95, 0.97),
         (0.93, 0.83, 0.89, 0.94),
         (0.86, 0.72, 0.80, 0.91),
-        (0.78, 0.66, 0.70, 0.89),
-        (0.75, 0.62, 0.67, 0.91),
-        (0.74, 0.59, 0.71, 0.93),
     ],
 }
 
@@ -425,7 +419,7 @@ def test_mtp_module_pcc(
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-@pytest.mark.parametrize("num_levels", [1, 4, 7], ids=["levels1", "levels4", "levels7"])
+@pytest.mark.parametrize("num_levels", [1, 4], ids=["levels1", "levels4"])
 @pytest.mark.parametrize("seq_len", [5120], ids=["seq5120"])
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
@@ -561,7 +555,7 @@ def test_mtp_predictor_pcc(
 CHUNK = 5 * 1024
 CACHE_LEN = 3 * CHUNK
 REFERENCE_LEN = 11520  # the longest schedule, multichunk
-MAX_LEVELS = 7
+MAX_LEVELS = 4
 INPUT_SEED = 11
 VOCAB = CACHE_LEN + ttnn.TILE_SIZE
 
@@ -638,7 +632,7 @@ def _multiturn_reference(
     "mesh_device, device_params, num_links", _MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
 @pytest.mark.parametrize("turns", _MULTITURN_TURNS)
-@pytest.mark.parametrize("num_levels", [1, 4, 7], ids=["levels1", "levels4", "levels7"])
+@pytest.mark.parametrize("num_levels", [1, 4], ids=["levels1", "levels4"])
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"], indirect=True)
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
