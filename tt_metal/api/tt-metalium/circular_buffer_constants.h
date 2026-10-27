@@ -14,7 +14,7 @@
 
 // Host compilation context:
 //   - ARCH_WORMHOLE is NEVER defined
-//   - NUM_CIRCULAR_BUFFERS is the maximum across all architectures (a storage bound, not the device limit)
+//   - NUM_CIRCULAR_BUFFERS is the maximum across all architectures
 //   - Host-side arrays/vectors are sized for this maximum
 //
 // Why this works safely:
