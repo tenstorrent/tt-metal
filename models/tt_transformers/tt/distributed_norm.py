@@ -68,7 +68,7 @@ class DistributedNorm(LightweightModule):
     def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None, enable_all_gather=True):
         if norm is None and TG:
             raise NotImplementedError("Gather-only DistributedNorm (norm=None) is not supported on Galaxy (TG)")
-        self.norm = norm
+        self.norm_type = norm.norm_type
         self.args = args
         self.tt_ccl = tt_ccl
         self.prefetcher = prefetcher
@@ -105,7 +105,7 @@ class DistributedNorm(LightweightModule):
                 packer_l1_acc=False,
             )
         self.TG = TG
-        self.is_layernorm = isinstance(self.norm, LayerNorm)
+        self.is_layernorm = isinstance(self.norm_type, LayerNorm)
 
     def update(self, *, weight: ttnn.Tensor) -> None:
         """Pass-through to the wrapped ``RMSNorm.update`` (``DistributedNorm``

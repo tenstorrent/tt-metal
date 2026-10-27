@@ -1391,7 +1391,7 @@ class Attention(LightweightModule):
                     chunk_start_idx_tensor=chunk_start_idx,
                     compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                     program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, 0, None),
-                    sliding_window=self.sliding_window,
+                    sliding_window_size=self.sliding_window,
                 )
             else:
                 attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
