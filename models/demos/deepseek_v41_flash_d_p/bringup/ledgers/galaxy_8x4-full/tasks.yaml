@@ -145,16 +145,15 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
   brief:
-    details: 'REOPENED by the overseer (owner order): the hangs are fixed (677bc394faf, keep it), but the job is not
-      done: tests/unit/ of ttnn/ttnn/bringup/flat_routed_expert_ttnn still has 14 failures on one Galaxy chip. Make
-      every one pass. (a) 12 x TT_FATAL ''p.nsg == 1'' in the TP2 / TP4 subgrid cases (failing since the fork''s
-      import, DS41-63; never root-caused): find which side is wrong (the op refusing a subgrid plan it should run, or
-      the tests calling an entry point that supports one subgrid only) and fix it. (b) mimo indexed_perf and k2
-      indexed_rm time bands fail slow on the Galaxy chip (1843456 / 1838520 ns vs upper 1826488; 1573274 / 1575501 vs
-      1572413): bands calibrated on a QuietBox p150 are wrong here: fix how the band is set (per arch / grid, or a
-      baseline measured on the box), not one Galaxy number. No skip, no xfail, no ''known failure'', no ''identical to
-      the baseline'' exception. The gate now runs tests/unit/ on a Galaxy chip as well as W.1; the model''s own calls
-      must not change.'
+    details: 'REOPENED by the overseer (owner order): the hangs are fixed (677bc394faf, keep it), but the job is not done:
+      tests/unit/ of ttnn/ttnn/bringup/flat_routed_expert_ttnn still has 14 failures on one Galaxy chip. Make every one pass.
+      (a) 12 x TT_FATAL ''p.nsg == 1'' in the TP2 / TP4 subgrid cases (failing since the fork''s import, DS41-63; never root-caused):
+      find which side is wrong (the op refusing a subgrid plan it should run, or the tests calling an entry point that supports
+      one subgrid only) and fix it. (b) mimo indexed_perf and k2 indexed_rm time bands fail slow on the Galaxy chip (1843456
+      / 1838520 ns vs upper 1826488; 1573274 / 1575501 vs 1572413): bands calibrated on a QuietBox p150 are wrong here: fix
+      how the band is set (per arch / grid, or a baseline measured on the box), not one Galaxy number. No skip, no xfail,
+      no ''known failure'', no ''identical to the baseline'' exception. The gate now runs tests/unit/ on a Galaxy chip as
+      well as W.1; the model''s own calls must not change.'
     gate_tasks:
     - W.1
 - id: FIX.3
@@ -191,6 +190,40 @@ tasks:
       to start before a perf task relies on it. Record the cause and fix in known_issues.'
     gate_tasks:
     - B.1
+    - W.1
+- id: FIX.4
+  title: 'Routed-expert weights: use the flat-expert fork''s laid-out weight cache and a fast miss path'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - W.1
+  gate:
+    cmd: BRINGUP_TASK=W.1 BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  brief:
+    details: 'Every test process spends ~113 s PER LAYER in TtExperts._load_block/_load_flat (M.1 precheck log 2026-10-26
+      22:07-22:15: between create_global_expert_idx_table and EXPERTS_FLAT, 113 s each of L00..L03; everything else of a layer
+      ~5 s). 40 layers = ~75 min of host work before every M.1 / ladder / K.1 / X.* run. Cause: tt/experts.py builds every
+      expert with fp4_dequant + per-tensor torch.equal asserts + _bfp8_exact in Python, then FlatRoutedExpert packs and uploads
+      the layout, with no cache. The fork already supports it (ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py: cache_prefix=
+      and weights as a CALLABLE only called on a cache miss; plan-hashed file names; GLM-5.3 models/demos/glm53_flash_d_p/tt/experts_ag.py:325
+      uses it). Do: (1) pass cache_prefix (under the run''s weight-cache dir, keyed by the checkpoint actually loaded: revision
+      + scaled/real + layer + EXPERTS_IMPL) and a callable that does the current dequant + checks, so a hit skips all host
+      dequant/packing; on a bfp4 hit keep bfp4_stats correct (cache them next to the weights) or document why not needed;
+      (2) profile the miss path (one layer, CPU, nice 19) and cut its cost honestly (vectorised dequant over all experts of
+      a chip, one exactness check per stacked tensor instead of per matrix, no repeated .float() copies); no change to values
+      or layout (bit-identical tensors; the exactness asserts stay on the miss path). Same check for dense weights (DENSE_BFP8,
+      ~5 s/layer) only if cheap. Report: per-layer load time miss before/after and hit, W.1 load wall time miss vs hit. Gate:
+      W.1 must still pass; run it twice (second run must hit the cache).'
+    gate_tasks:
     - W.1
 - id: M.1
   title: Every layer (40) on 8x4 at this run's size, from the ported blocks

@@ -972,9 +972,11 @@ def _device_step_fn(mesh, spec, layer, step, ck, cfg, shared=None):
 
         return _kv_host_fn(mesh, build_kv(mesh, ck, cfg, layer, _max_seq(spec)))
     if step == "experts":
-        from models.demos.deepseek_v41_flash_d_p.tt.experts import build_experts
+        from models.demos.deepseek_v41_flash_d_p.tt.experts import build_experts, expert_cache_dir
 
-        return _experts_host_fn(mesh, build_experts(mesh, ck, cfg, layer, _chunk(spec)))
+        return _experts_host_fn(
+            mesh, build_experts(mesh, ck, cfg, layer, _chunk(spec), cache_dir=expert_cache_dir(spec))
+        )
     if step == "shared_expert":
         from models.demos.deepseek_v41_flash_d_p.tt.shared_expert import build_shared_expert
 
@@ -1277,9 +1279,18 @@ def device_model(mesh, spec, layers, lm_head=True):
     if settings.get("DEVICE_MODEL") == "hybrid":
         return HybridDeviceModel(mesh, spec, layers, lm_head=lm_head)
     from models.demos.common.bringup.reference.golden import hf_path
+    from models.demos.deepseek_v41_flash_d_p.tt.experts import expert_cache_dir
     from models.demos.deepseek_v41_flash_d_p.tt.model import TtDS41Model
 
-    return TtDS41Model(mesh, hf_path(spec), layers, max_seq=_max_seq(spec), chunk=_chunk(spec), lm_head=lm_head)
+    return TtDS41Model(
+        mesh,
+        hf_path(spec),
+        layers,
+        max_seq=_max_seq(spec),
+        chunk=_chunk(spec),
+        lm_head=lm_head,
+        weight_cache=expert_cache_dir(spec),
+    )
 
 
 def settings():

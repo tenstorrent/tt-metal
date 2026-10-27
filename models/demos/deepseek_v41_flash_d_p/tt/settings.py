@@ -277,6 +277,17 @@ TABLE = {
         "bfp4-rounded weights 0.0202 (the device path as exact as bfp8's; the rest is bfloat4_b's rounding of the "
         "weights, DS41-74). FIX.9 deleted the per-chunk fp4_decode value and the loop / unified kernels (EXPERTS_KERNEL)",
     ),
+    "EXPERTS_WEIGHT_CACHE": Setting(
+        "on",
+        ("on", "off"),
+        "FIX.4 (overseer): the routed experts' laid-out weights (the flat op's bank layout, EXPERTS_IMPL's block "
+        "format) cached on disk by FlatRoutedExpert(cache_prefix=) under the run's tt_cache "
+        "(<art>/tt_cache/<mesh>[-scaled]/<version>/experts-<revision>/, tt/experts.py:expert_cache_prefix: keyed by "
+        "the layer's stored expert tensors, the layer and EXPERTS_IMPL; the fork's file names add the dtype and the "
+        "layout's hash), with a completion marker that also keeps bfp4_stats. A hit skips the host dequant, checks "
+        "and packing. off = build from the checkpoint every time (the miss path, no files). 8x4 layer 0, bfp4: see "
+        "BREADCRUMBS FIX.4 for miss / hit times; 7.6 GB of disk per layer (bfp4), 13.6 GB (bfp8)",
+    ),
     "EXPERTS_PRECISION": Setting(
         "glm",
         ("full", "glm"),

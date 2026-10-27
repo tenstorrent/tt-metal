@@ -155,3 +155,42 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
   without x (mode 0640, /tmp/ompi.<host>.4338): chmod 700, umask 022 added to the run scripts. Overseer files now live
   in /scratch/dnijemcevic (seedprof/), not the /tmp scratchpad. 18:39 seed profile restarted (tmux seedprof).
 2026-10-26 19:36:47 node drained for scheduled maintenance (Retimer FW + BusBar test, vincentdu) at 19:05, rebooted 19:07; reservation 153825 lost; run paused before FIX.3, resumable; uncommitted ledger files backed up to /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/ledger_backup_20261026T1936
+
+## 2026-10-26 21:47 new overseer session after the maintenance reboot (slurm job 155336, node bh-glx-120-b06u08)
+- 21:44:54 autoresume: launch preflight passed with NO IOMMU warning. Box check (infra): 32 chips in /dev/tenstorrent; every
+  card's IOMMU group now DMA-FQ (chips 7 / 10 no longer identity: the reboot fixed DS41-120's cause, so the admins'
+  tt-iommu-domains restart is no longer needed); kernel cmdline iommu=pt. B.1 test_box.py re-ran fresh in FIX.3's gate
+  (box rebooted -> not reused): PASS 19 s. RT profiler: M.1's precheck opened the full 8x4 mesh (4x8_Mesh_flat, all 32
+  chips) at 21:45 with no "Real-time profiler" error (before the reboot every 8x4 open logged it for 7 / 10). X.1 profile
+  will confirm device time from all 32 chips; the F194 "one device-profiler layer on 7 / 10" check becomes moot if X.1 has
+  all 32.
+- 21:45 FIX.3 PASS 89e622744f9 (B.1 fresh + W.1 reused; records only, as classified: framework, no agent). FIX.3 done.
+- 21:45 M.1 started: precheck runs the s10240 ladder (40 layers). Watch + heartbeat cron (:07/:37) armed; Stop hook present.
+- 21:47 stopped the run (kill + resume, F95) 4 min into M.1's precheck: the owner's 18:10 order (seed-layer device time before M.1) never ran (killed 18:40 by the /tmp wipe; results empty). Seed profile restarted in tmux seedprof (log /scratch/dnijemcevic/seed_profile.log), ~18 min; then resume -> M.1.
+- 22:06 seed profile DONE (owner 18:10 order; results /scratch/dnijemcevic/seedprof/results/W.1_profile.json, ops
+  W.1_ops.json.gz; outside the ledger). Rung seed, layers 0 1 2 3 14 20 21 24, chunk 5120 at 5120 (the second chunk
+  ends at 10240), profiler rt, BRINGUP_PROFILE_OPS=1. All 32 chips report device time, 7 / 10 included and not slower
+  (experts 21.8 / 27.2 ms vs a 18.2-30.3 range; attention 15.2 / 16.7 vs 14.5-17.9): the F194 single-layer
+  device-profiler check on 7 / 10 is MOOT. Device kernel time, max over chips per section, summed: ~70.6 ms
+  (experts 33.2, attention 17.9, ffn_norm 2.1, q_a 2.1, indexer 1.9, compressor 1.9, moe_add 1.7, attn_hc 1.6,
+  router 1.4, ffn_hc 1.3, shared_expert 1.18, ffn_residual 1.0, engram_add 0.9, attn_norm 0.9, attn_residual 0.85,
+  engram_kv 0.59, kv 0.18). Critical chip 29: kernel 55.7 ms against a 5726 ms device timeline; host dispatch 5544 ms
+  over 697 calls (gaps 5639 ms). Wall time is all host dispatch (no trace yet; for X.*). Expert time varies by chip
+  (18-30 ms): load imbalance across expert chips, for X.*.
+
+## 2026-10-27 05:39 new overseer session (slurm job 155944, node bh-glx-120-b06u08) after an INFRA interruption
+- INFRA: slurm job 155336 (previous overseer) ended 2026-10-26 22:17:55 UTC; no reboot (uptime 10:32 at 05:39); every
+  process of this user got SIGHUP ~11 min into M.1's precheck. Most likely Slurm preemption (partition
+  PreemptMode=CANCEL; another user held the node until 04:24 UTC); Slurm accounting is off, so unconfirmed. Lost: ~7.3 h
+  of run time (22:17 -> 05:38). Classification: infrastructure; no model or framework cause.
+- Just before the SIGHUP (22:17:50) the previous session queued FIX.4 (gate W.1): routed-expert weight load is ~113 s
+  per layer (M.1 precheck log 22:07-22:15), ~75 min of host work before every M.1 / ladder / K.1 / X.* run; use the
+  flat-expert fork's cache_prefix + callable weights (GLM-5.3 experts_ag.py does) and cut the miss path honestly
+  (bit-identical tensors). Endorsed: it pays for itself on the first M.1 re-run. Not in the 22:06 entry, logged here.
+- 05:38:56 autoresume (job 155944): FIX.4 placed before M.1, overseer attempt 1 started.
+- Box health (SAFE_PYTEST had marked all 32 cards dirty on the SIGHUP; the markers lived in /tmp, which the new job
+  wiped, so no automatic reset would follow): 05:40 test_box.py on the full 8x4 mesh PASS (17 s, log
+  /scratch/dnijemcevic/boxcheck_0540.log), run next to FIX.4's first minute (agent still reading code). Box trusted.
+  Framework gap noted: a card's dirty state kept only in /tmp does not survive a node's /tmp cleanup (the 18:37 wipe and
+  this job start); candidate F-entry at the next boundary (keep the markers under /scratch or check the box at launch).
+- Watch + heartbeat cron (:07/:37) armed; Stop hook present in ~/.claude/settings.json.

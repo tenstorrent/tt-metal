@@ -3278,3 +3278,46 @@ gate FIX.2 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4
 - Fork docs: CHANGELOG.md entry, README.md Limits, INDEX.md entry; DS41-63 rewritten.
 Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.2 --spec
 models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## FIX.4 (overseer): routed-expert weights through the flat fork's laid-out cache, faster miss path
+
+- What: `tt/experts.py` passes FlatRoutedExpert `cache_prefix=` and a weights callable (`_host_weights`, called by the
+  fork only on a miss). Prefix `expert_cache_prefix`: `<art>/tt_cache/<mesh>[-scaled]/<cache_version>/experts-<hf
+  revision[:12]>/<rows>x<cols>/L<layer>.<EXPERTS_IMPL>.<sha1 of the layer's stored expert tensors (file, dtype, shape,
+  offset, bytes): real vs scaled differ>`; the fork's names add `.flat.bf4.lay<plan layout hash>.{w_gu,w_d}.tensorbin`.
+  `_CacheMarker` (`<prefix>.done.json`): written after the fork dumped, lists the files with their sizes and holds
+  `bfp4_stats` (so a hit logs the same EXPERTS_BFP4 line, `(cached)`). The fork dumps straight to the final names (no
+  tmp + rename), so every `<prefix>.flat.*` file not in the marker with its size is deleted before the fork looks
+  (a run killed mid-dump repacks instead of loading a truncated file; DS41-121). No fork change.
+- Wiring: Setting `EXPERTS_WEIGHT_CACHE` on / off (default on). `expert_cache_dir(spec)` from hooks (`device_model`
+  -> `TtDS41Model(weight_cache=)`, `_device_step_fn` experts for component / hybrid), the adapter's
+  `weight_cache_path()` (was None) -> `DS41PrefillRuntime` -> `TtDS41Model(weight_cache=params.weight_cache_path)`.
+  perf_experts.py's tests build without a cache (unchanged).
+- Miss path (`_host_weights`): each slot's 32-chip stack read with 8 threads, dequantized in one fp4_dequant call
+  (the same per-element arithmetic), one bf16-exactness check per stacked tensor (low 16 bits of the fp32 words zero
+  + aminmax finite; was torch.equal per matrix), bfp8 `_bfp8_exact` / bfp4 `_bfp4_change` on the fp32 stacks (no
+  .float() / slice copies); `_bfp4_round` and `_bfp8_exact` take max |v| as max(max, -min) (no |g| copy). Values,
+  order and layout unchanged: `tt/perf_experts_load.py::test_host_weights_identical` (8x4, layer 0, all 384 experts):
+  every (W1, W3, W2) bf16 tensor torch.equal to the old per-expert loop's, same chip / slot order, same changed count
+  2262393486 / 13589544960, same worst matrix (122, w3) 0.11965. Batched vs per-matrix dequant measured equal
+  (synthetic 32 x 2304 x 5120: 0.67 vs 0.70 s a stack); kept batched.
+- Numbers (8x4, layer 0, bfp4, nice 19): old miss 118.9 s (cProfile: from_torch bfp4 packing 54.8 s,
+  flat_weight_regions 22.4 s, _bfp4_change 20.2 s, _load_block loop 7.7 s, fp4_dequant 2.9 s); host part old 49-55 s
+  -> new 31.7 s (same process, same page cache); new off (no cache) 127.1 s under cProfile, miss (packs + dumps)
+  119.9 s (host_weights 24.4 s), **hit 1.0 s** (warm page cache; device tensors of devices 0 / 31 torch.equal to the
+  miss's, bfp4_stats equal). 7.12 GiB of disk per layer (bfp4; 40 layers ~285 GiB; /scratch had 2.2 TB free). W.1
+  gate run 1 (seed layers, L00 cached by the perf test): L01..L24 misses 116-130 s each, L00 hit 1.2 s; PASS, every
+  err metric equal to the previous W.1's to the last digit; model_load_s 1057.3 s (old code, 8 misses) -> 887.7 s.
+  `gate --check --rerun W.1` did not re-run it ("reused: same code, not run", F150), so the hit side was measured by
+  `perf_experts_load.py::test_cache_hits` (the seed rung's 8 layers, as the ladder builds them): all hits, 1.0-1.23 s
+  each, 8.3 s total (vs ~950 s of expert load on a miss): a W.1 with every layer hit loads in ~70 s (887.7 - 7 x
+  ~117 + 7 x 1). The final gate check (after that test was added under tt/) re-ran W.1: all 8 layers hit (1.0-1.2
+  s), PASS, metrics identical, **model_load_s 65.6 s** (was 1057.3 s), W.1 command 119 s (run 1: 956 s).
+- Left: the miss is now ~75 % the fork's host packing (ttnn.from_torch bfp4 55 s, flat_weight_regions' 18880
+  torch.cat 17 s); a fork-side change (parallel per-device packing, vectorised region building) is the next cut, not
+  done here (needs the fork's regression). Dense weights (DENSE_BFP8, ~5 s / layer): not cached (not cheap: no
+  cache path in the dense modules; the expert cache removes ~95 % of the load).
+- Profile / check: `PYTHONPATH=$PWD nice -n 19 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tt/perf_experts_load.py -s`.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.4 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check` (`--rerun W.1` for the hit run).
