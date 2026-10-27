@@ -248,8 +248,12 @@ constexpr bool matmul_row_end_fold_k = true;
 #else
 constexpr bool matmul_row_end_fold_k = false;
 #endif
+#ifndef MATMUL_KEY_IN0
+#define MATMUL_KEY_IN0 DataFormat::Invalid
+#define MATMUL_KEY_IN1 DataFormat::Invalid
+#endif
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && !defined(MATMUL_FORCE_FORM_CHAR)
-constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT, MATMUL_KEY_IN0, MATMUL_KEY_IN1>();
 #else
 constexpr bool matmul_half_end_fold_k = false;
 #endif

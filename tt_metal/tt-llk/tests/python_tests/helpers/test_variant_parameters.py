@@ -424,9 +424,11 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         self.unfused_post = unfused_post
         self.force_form = force_form
         self.keep_flip = False
+        self.in0 = None
+        self.in1 = None
 
     def __repr__(self) -> str:
-        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', keep_flip' if self.keep_flip else ''}{', force ' + self.force_form if self.force_form else ''})"
+        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', keep_flip' if self.keep_flip else ''}{', in ' + self.in0.name + ' ' + self.in1.name if self.in0 is not None else ''}{', force ' + self.force_form if self.force_form else ''})"
 
     def convert_to_cpp(self) -> str:
         return (
@@ -436,6 +438,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             + ("\n#define MATMUL_ROW_LE_8" if self.row_le_8 else "")
             + ("\n#define MATMUL_UNFUSED_POST" if self.unfused_post else "")
             + ("\n#define MATMUL_KEEP_FLIP_WRITE" if self.keep_flip else "")
+            + (f"\n#define MATMUL_KEY_IN0 DataFormat::{self.in0.name}\n#define MATMUL_KEY_IN1 DataFormat::{self.in1.name}" if self.in0 is not None else "")
             + (f"\n#define MATMUL_FORCE_FORM_CHAR '{self.force_form}'" if self.force_form else "")
         )
 
@@ -446,6 +449,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         keep = formats.output_format == DataFormat.Bfp8_b and math_fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2)
         for k in keys:
             k.keep_flip = keep
+            k.in0, k.in1 = formats.input_format_B, formats.input_format
         return keys
 
     @staticmethod

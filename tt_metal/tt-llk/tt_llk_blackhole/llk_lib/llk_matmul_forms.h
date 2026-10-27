@@ -107,11 +107,15 @@ constexpr char matmul_default_form()
 }
 // Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi2 with a 16-bit DEST and one k step per
 // section, Float16_b or Bfp8_b output. Elsewhere at half sync the earlier release of the held source read slower (unpack bound cells).
-template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format>
+template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format, DataFormat in0 = DataFormat::Invalid, DataFormat in1 = DataFormat::Invalid>
 constexpr bool matmul_half_end_fold()
 {
-    return dst_sync == DstSync::SyncHalf && math_fidelity == MathFidelity::HiFi2 && !fp32_dest && kt_per_section == 1 &&
-           (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b);
+    // HiFi3 and HiFi4 take it on 16-bit and 32-bit operands only: with a block float operand, and at HiFi3 with a 32-bit DEST, the earlier release of the held source reads slower
+    constexpr bool wide_operands = (in0 == DataFormat::Float16_b || in0 == DataFormat::Float16 || in0 == DataFormat::Float32) &&
+                                   (in1 == DataFormat::Float16_b || in1 == DataFormat::Float16 || in1 == DataFormat::Float32);
+    return dst_sync == DstSync::SyncHalf &&
+           ((math_fidelity == MathFidelity::HiFi2 && !fp32_dest && kt_per_section == 1 && (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b)) ||
+            ((math_fidelity == MathFidelity::HiFi4 || (math_fidelity == MathFidelity::HiFi3 && !fp32_dest)) && wide_operands));
 }
 // Cells where the keys of the ttnn matmul kernels (the format each DEST section is packed to, the row MOP rule) pick a form that reads
 // slower than main's tile MOP and per-row unpack on the tt-llk sweep (perf_matmul_forms: every form of every perf_matmul Half cell,
