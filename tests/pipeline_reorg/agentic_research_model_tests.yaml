@@ -358,3 +358,16 @@
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   budget_type: agentic_research
+
+- name: Granite 4.2 30B QB2 cache, GPQA subset and serving
+  cmd: bash models/demos/granite42_30b_qb2/tests/run_ci.sh
+  model: granite42-30b-qb2
+  model_family: Granite
+  skus:
+    bh_quietbox_2:
+      # Includes startup and thinking GPQA, with headroom above the 35-minute run.
+      timeout: 45
+      tier: 3
+  owner_id: U08BGTAMU1W # Marina Vasiljevic
+  team: models
+  budget_type: agentic_research

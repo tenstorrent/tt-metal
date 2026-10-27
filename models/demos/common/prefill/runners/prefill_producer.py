@@ -576,7 +576,9 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
     )
 
 
-def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, num_ranks: int | None = None
+):
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
         real_len = min(real_len, golden_cap)
@@ -589,7 +591,7 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     if ADAPTER.name == "llama_3p1_8b":
         return _read_slot_kv_and_check_pcc_llama(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
-        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir, num_ranks)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -754,12 +756,15 @@ def _check_mtp_kv_slots(
     return min_pcc
 
 
-def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc_gpt_oss(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, num_ranks: int | None = None
+):
     from pathlib import Path
 
     from safetensors import safe_open
 
     from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from models.demos.gpt_oss_d_p.tt.runners.acceptance import validate_kv_for_pcc
     from tests.ttnn.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
@@ -803,6 +808,8 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
             g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :][..., perm]
             g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
 
+        validate_kv_for_pcc(g_k, dev_k)
+        validate_kv_for_pcc(g_v, dev_v)
         pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
         pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
         mins["k"], mins["v"] = min(mins["k"], pcc_k), min(mins["v"], pcc_v)
@@ -815,6 +822,9 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
     )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
+    # A single rank holds every layer, so a layer missing from its device map is a broken map, not another rank's.
+    if num_ranks == 1 and checked != NUM_LAYERS:
+        raise RuntimeError(f"slot {slot_id}: only {checked}/{NUM_LAYERS} layers resolved against the device map")
     return mins
 
 
@@ -1358,7 +1368,9 @@ def _verify_resident_slots(
         real_len = res.real_len
         if real_len <= 0:
             continue
-        slot_mins = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, slot_traces[slot_id])
+        slot_mins = _read_slot_kv_and_check_pcc(
+            kv_table, device_map, slot_id, real_len, slot_traces[slot_id], num_ranks=num_ranks
+        )
         for cache, value in slot_mins.items():
             per_cache[cache] = value if cache not in per_cache else min(per_cache[cache], value)
         pcc = min(slot_mins.values())
@@ -1644,7 +1656,8 @@ def main() -> None:
         service.barrier()
         # One completion per layer per chunk; chunk_layers is what the runner emits (KV-writing layers plus
         # MTP/DFlash extras), not NUM_LAYERS. The count is cumulative, so it includes the warm-up.
-        wait_for_layer_completions(drain, chunk_layers * (max(warmup_chunks, 0) + stats.total_pushes))
+        expected_completions = chunk_layers * (max(warmup_chunks, 0) + stats.total_pushes)
+        received_completions = wait_for_layer_completions(drain, expected_completions)
     finally:
         if drain is not None:
             drain.stop()
@@ -1672,6 +1685,9 @@ def main() -> None:
             verify_ok = False
     elif cfg.verify:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
+        verify_ok = False
+    if cfg.verify and ADAPTER.verify_layer_completions and received_completions != expected_completions:
+        logger.error(f"[producer] layer completions: received {received_completions}/{expected_completions}")
         verify_ok = False
 
     if world_size > 1:

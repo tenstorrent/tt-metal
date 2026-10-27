@@ -516,8 +516,8 @@ std::vector<Pair> find_pairs(distributed::MeshDevice& mesh_device, const Chips& 
             if (id_a >= id_b || !tt::tt_fabric::are_intra_mesh_neighbors(mesh_device, chip_a.node, chip_b.node)) {
                 continue;
             }
-            const auto links_ab = tt::tt_fabric::get_forwarding_link_indices(chip_a.node, chip_b.node);
-            const auto links_ba = tt::tt_fabric::get_forwarding_link_indices(chip_b.node, chip_a.node);
+            const auto links_ab = tt::tt_fabric::get_forwarding_link_indices(mesh_device, chip_a.node, chip_b.node);
+            const auto links_ba = tt::tt_fabric::get_forwarding_link_indices(mesh_device, chip_b.node, chip_a.node);
             TT_FATAL(!links_ab.empty() && !links_ba.empty(), "no fabric link between chips {} and {}", id_a, id_b);
             pairs.push_back(
                 {End{.chip = id_a, .core = take_worker(id_a), .link = links_ab.front()},

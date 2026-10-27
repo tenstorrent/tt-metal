@@ -362,3 +362,54 @@
   team: ttnn
   budget_type: sanity
   owner_id: U0976495SLU # Nikola Ostojic
+
+# ---------------------------------------------------------------------------------------------
+# Quasar simulator coverage. Every entry runs on the two-compute-node grid,
+# TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2"; the generated suites are executed with the `-m emulator`
+# switch.
+#
+# See tests/pipeline_reorg/ttsim-skip-list.yaml for the tests currently excluded from these runs.
+#
+# The sim leg runs each entry with xdist (-n 4). The model-op suites take a per-device lock in their
+# conftest, so their workers cannot share the device: they run serially (-n 0), which overrides the -n 4.
+# ---------------------------------------------------------------------------------------------
+
+- name: "ttnn quasar resnet50 ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape_tiled.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_padded_slice.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_reallocate.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_reshape.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_sharded_to_interleaved.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_slice_write.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_tilize.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_layout.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_to_memory_config.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_untilize_with_unpadding.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_add.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_linear.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_avg_pool2d.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_global_avgpool.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer3_downsample_split.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_conv2d_layer_conv2_modelcfg.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_1x3.py models/demos/vision/classification/resnet50/quasar/tests/ops/test_max_pool2d_strided_reduce.py
+  skus:
+    sim_quasar:
+      timeout: 5
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn quasar llama32_1b graph ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" MESH_DEVICE=N150 pytest --timeout 600 -v -n 0 -m emulator models/experimental/llama32_1b_quasar/tests/graph_ops/
+  skus:
+    sim_quasar:
+      timeout: 10
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn quasar qwen3_vl ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v -n 0 -m emulator models/experimental/ops/quasar/tests/qwen3_vl_ops/
+  skus:
+    sim_quasar:
+      timeout: 10
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn quasar yolo ops"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v -n 0 -m emulator models/experimental/ops/quasar/tests/yolo_ops/
+  skus:
+    sim_quasar:
+      timeout: 20
+  team: ttnn
+  budget_type: sanity
+  owner_id: U084B1CES7M # Borys Bradel

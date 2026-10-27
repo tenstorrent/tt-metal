@@ -24,8 +24,7 @@ the packed scalar is baked into the program, so it must participate in the cache
 
 Run on the Quasar simulator:
     unset TT_METAL_DISABLE_SFPLOADMACRO
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_scalar.py
 
 Run on real Wormhole / Blackhole (first-silicon validation of the DFB path):
@@ -35,12 +34,12 @@ import pytest
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _on_quasar,
     _run_scalar,
     _block_sharded_config,
     _height_sharded_config,
     _dram_height_sharded_config,
 )
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 
 @pytest.mark.parametrize("op_name", ["add", "subtract"])
@@ -134,7 +133,7 @@ _SCALAR_ROUTER_ND = ttnn.MemoryConfig(
 )
 
 
-@pytest.mark.skipif(_on_quasar(), reason="bfloat8_b tensor-scalar routes to the descriptor path, which Quasar lacks")
+@pytest.mark.skipif(is_quasar(), reason="bfloat8_b tensor-scalar routes to the descriptor path, which Quasar lacks")
 @pytest.mark.parametrize(
     "a_mem,out_mem",
     [

@@ -13,7 +13,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics
 
 REDUCE_OPS = {
     "sum": (ttnn.sum, lambda t, dim, keepdim: torch.sum(t, dim=dim, keepdim=keepdim)),
@@ -492,3 +492,55 @@ def test_reduce_h_legacy_width_sharded_output_outside_sub_core_grids_is_rejected
 
     with expect_error(RuntimeError, "must be contained in program core grid"):
         ttnn.sum(input_tensor, dim=-2, keepdim=True, memory_config=output_config, sub_core_grids=_row_grid(0, 3))
+
+
+@pytest.mark.parametrize(
+    "input_config, output_config, sub_core_grids",
+    [
+        # Height-sharded input and output. The W reduce takes the sharded fast path.
+        (
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_row_grid(0, 1), (32, 64), ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(_row_grid(0, 1), (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+            None,
+        ),
+        # DRAM input, L1 output, on a sub-device grid that does not start at (0, 0).
+        (
+            ttnn.DRAM_MEMORY_CONFIG,
+            ttnn.L1_MEMORY_CONFIG,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 3))}),
+        ),
+    ],
+)
+@pytest.mark.parametrize("op_name", ["sum", "max", "min"])
+def test_reduce_uint32_sharded_and_sub_core_grids(device, op_name, input_config, output_config, sub_core_grids):
+    """UINT32 sum/max/min must be exact on sharded tensors and sub-device grids and keep the output config."""
+    torch.manual_seed(0)
+    ttnn_op, torch_op = REDUCE_OPS[op_name]
+    torch_input_tensor = torch.randint(0, 2**32, (1, 1, 64, 64), dtype=torch.int64)
+    torch_input_tensor.view(-1)[:4] = torch.tensor([0, 2**31 - 1, 2**31, 2**32 - 1])
+    # UINT32 sum wraps mod 2^32. Max and min are already below 2^32.
+    torch_output_tensor = torch_op(torch_input_tensor, -1, True) % 2**32
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor.to(torch.uint32),
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_config,
+    )
+
+    output_tensor = ttnn_op(
+        input_tensor, dim=-1, keepdim=True, memory_config=output_config, sub_core_grids=sub_core_grids
+    )
+
+    assert output_tensor.dtype == ttnn.uint32
+    assert output_tensor.memory_config().memory_layout == output_config.memory_layout
+    assert output_tensor.memory_config().buffer_type == output_config.buffer_type
+    assert_equal(torch_output_tensor, ttnn.to_torch(output_tensor).to(torch.int64))
