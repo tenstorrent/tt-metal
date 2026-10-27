@@ -23,6 +23,7 @@ void kernel_main() {
     constexpr auto weight_format = mode == 1 ? DataFormat::Bfp8_b : DataFormat::Float16_b;
     using Activation = experimental::LLKOperand<DataFormat::Float16_b, TensorShape{rows, 16, 1, 2}>;
     using Weight = experimental::LLKOperand<weight_format, TensorShape{16, 16, 2, 2}>;
+    using Output = experimental::LLKOperand<DataFormat::Float16_b, TensorShape{rows, 16, 1, 2}>;  // c_16
     CircularBuffer activation(tt::CBIndex::c_0);
     CircularBuffer weight(tt::CBIndex::c_1);
     CircularBuffer output(tt::CBIndex::c_16);
@@ -72,7 +73,7 @@ void kernel_main() {
         } else {
             if constexpr (mixed) {
                 custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
-                    tt::CBIndex::c_0, Weight(b_base), tt::CBIndex::c_16, producer_ct);
+                    tt::CBIndex::c_0, Weight(b_base), Output(0), producer_ct);
                 custom_mm_block<CustomMmDestLayout::Dense>(tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 2, producer_ct);
             } else {
                 custom_mm_block_init_short<false, CustomMmDestLayout::Dense>(
@@ -104,5 +105,9 @@ void kernel_main() {
             custom_mm_reuse_dest_srcb_pack_uninit();
         }
     }
-    custom_mm_block_uninit<CustomMmDestLayout::Dense>(tt::CBIndex::c_16);
+    if constexpr (mixed) {
+        custom_mm_block_uninit<CustomMmDestLayout::Dense>(Output(0));
+    } else {
+        custom_mm_block_uninit<CustomMmDestLayout::Dense>(tt::CBIndex::c_16);
+    }
 }
