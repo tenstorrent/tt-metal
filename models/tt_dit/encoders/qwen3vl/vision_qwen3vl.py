@@ -480,7 +480,12 @@ class Qwen3VlVisionMLP(Module):
     ) -> None:
         super().__init__()
         self._p = parallel or VisionParallel()
-        self._act = hidden_act
+        if hidden_act in ("gelu_pytorch_tanh", "gelu_new"):
+            act = "gelu_tanh"
+        elif hidden_act.startswith("gelu"):
+            act = "gelu"
+        else:
+            act = "silu"
 
         if self._p.tp:
             if intermediate_size % self._p.tp_factor != 0:
@@ -492,21 +497,15 @@ class Qwen3VlVisionMLP(Module):
                 ccl_manager=self._p.ccl_manager,
                 compute_kernel_config=linear_compute_kernel_config,
             )
-            self.linear_fc1 = ColParallelLinear(hidden_size, intermediate_size, bias=True, **kw)
+            self.linear_fc1 = ColParallelLinear(hidden_size, intermediate_size, bias=True, activation_fn=act, **kw)
             self.linear_fc2 = RowParallelLinear(intermediate_size, hidden_size, bias=True, **kw)
         else:
             kw = dict(mesh_device=mesh_device, compute_kernel_config=linear_compute_kernel_config)
-            self.linear_fc1 = Linear(hidden_size, intermediate_size, bias=True, **kw)
+            self.linear_fc1 = Linear(hidden_size, intermediate_size, bias=True, activation_fn=act, **kw)
             self.linear_fc2 = Linear(intermediate_size, hidden_size, bias=True, **kw)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x = self.linear_fc1.forward(x)
-        if self._act in ("gelu_pytorch_tanh", "gelu_new"):
-            x = ttnn.gelu(x, variant=ttnn.GeluVariant.Tanh)
-        elif self._act.startswith("gelu"):
-            x = ttnn.gelu(x)
-        else:
-            x = ttnn.silu(x)
         # `RowParallelLinear` reduce-scatters, so its result is fractured on columns; the residual add
         # and the next LayerNorm both need the full width back (cf. `Qwen3VlMlp` in model_qwen3vl.py).
         return _row_parallel_seq_forward(self.linear_fc2, x, self._p)
