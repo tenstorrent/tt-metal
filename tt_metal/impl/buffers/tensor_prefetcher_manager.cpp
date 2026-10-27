@@ -2282,8 +2282,8 @@ void TensorPrefetcherManager::stop() {
     if (!failed_senders.empty()) {
         const std::string failed_sender_list = fmt::format("{}", fmt::join(failed_senders, "; "));
         TT_THROW(
-            "Tensor prefetcher: {} sender(s) ended Failed, so their requests were not all delivered ({} request pages "
-            "dropped after they exited): {}",
+            "Tensor prefetcher: {} sender(s) ended Failed, so their requests were not all delivered ({} more request "
+            "pages never fit in an exited sender's ring and were dropped): {}",
             failed_senders.size(),
             dropped_request_pages,
             failed_sender_list);
@@ -2321,17 +2321,27 @@ std::vector<std::string> TensorPrefetcherManager::failed_cce_senders() const {
     if (prefetcher_traits_for(mesh_device_->arch()).transport != RequestTransportKind::Tl1Ring) {
         return failed_senders;
     }
-    for (IDevice* device : devices_) {
-        for (const CoreCoord& sender_logical : sender_logical_cores_) {
+    for (uint32_t d = 0; d < devices_.size(); ++d) {
+        IDevice* device = devices_[d];
+        for (uint32_t s = 0; s < num_senders_; ++s) {
+            const CoreCoord& sender_logical = sender_logical_cores_[s];
             try {
                 const CceSenderStatus status =
                     read_cce_sender_status(*mesh_device_, device, sender_logical, cce_control_base_);
                 if (status.state == static_cast<uint32_t>(CceSenderState::Failed)) {
+                    std::string unread_pages;
+                    try {
+                        unread_pages = std::to_string(transport_->unconsumed_pages((d * num_senders_) + s));
+                    } catch (const std::exception&) {
+                        unread_pages = "an unknown number of";
+                    }
                     failed_senders.push_back(fmt::format(
-                        "sender {} on device {}: {}",
+                        "sender {} on device {}: {}; {} request page(s) left unread in its ring, counting stop's "
+                        "DRAIN and STOP",
                         sender_logical.str(),
                         device->id(),
-                        format_cce_sender_status(status)));
+                        format_cce_sender_status(status),
+                        unread_pages));
                 }
             } catch (const std::exception& error) {
                 failed_senders.push_back(fmt::format(

@@ -38,6 +38,10 @@ public:
     // Whether the sender at `endpoint` has exited, so it will take no more pages.
     virtual bool target_exited(uint32_t endpoint) = 0;
 
+    // Pages sent to `endpoint` that its sender never consumed. Only meaningful once the sender has exited and no
+    // more pages are being sent; throws if the device cannot be read.
+    virtual uint32_t unconsumed_pages(uint32_t endpoint) const = 0;
+
     // Bytes of one request page as it is sent.
     virtual uint32_t page_bytes() const = 0;
 };
@@ -55,6 +59,7 @@ public:
 
     bool try_write(uint32_t endpoint, std::vector<uint8_t>& page) override;
     bool target_exited(uint32_t endpoint) override;
+    uint32_t unconsumed_pages(uint32_t endpoint) const override;
     uint32_t page_bytes() const override;
 
     // The socket config address the sender kernel at `endpoint` reads.
@@ -77,6 +82,7 @@ public:
 
     bool try_write(uint32_t endpoint, std::vector<uint8_t>& page) override;
     bool target_exited(uint32_t endpoint) override;
+    uint32_t unconsumed_pages(uint32_t endpoint) const override;
     uint32_t page_bytes() const override;
 
 private:

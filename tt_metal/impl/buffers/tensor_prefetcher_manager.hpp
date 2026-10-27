@@ -150,11 +150,12 @@ public:
         MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
 
     // Stops the senders and releases this session. If waiting for the senders throws, it logs their
-    // statuses, releases everything but the DRISC L1 ranges a DRAIN was reading, and rethrows. If the
-    // worker gave up on a sender whose request ring took no page, it logs the statuses, keeps those ranges
-    // too, and throws once everything else is released. If a Quasar CCE sender ended Failed, or its status
-    // cannot be read, it logs the statuses and throws once everything is released, naming each such sender
-    // and how many request pages the worker dropped after it exited.
+    // statuses, releases everything but the DRISC L1 ranges a DRAIN was reading and the DRAM receiver
+    // zones their senders write, and rethrows. If the worker gave up on a sender whose request ring took
+    // no page, it logs the statuses, keeps those ranges too, and throws once everything else is released.
+    // If a Quasar CCE sender ended Failed, or its status cannot be read, it logs the statuses and throws
+    // once everything is released, naming each such sender with the request pages left unread in its ring,
+    // and how many more the worker dropped after it exited.
     void stop();
 
     // stop() for the destructor and device close: a failure is logged, not thrown, and the worker thread is

@@ -112,6 +112,8 @@ bool H2DSocketTransport::try_write(uint32_t endpoint, std::vector<uint8_t>& page
 
 bool H2DSocketTransport::target_exited(uint32_t /*endpoint*/) { return false; }
 
+uint32_t H2DSocketTransport::unconsumed_pages(uint32_t /*endpoint*/) const { return 0; }
+
 uint32_t H2DSocketTransport::page_bytes() const { return page_bytes_; }
 
 uint32_t H2DSocketTransport::config_buffer_address(uint32_t endpoint) const {
@@ -203,6 +205,20 @@ bool Tl1RingTransport::target_exited(uint32_t endpoint_index) {
         }
         return false;
     }
+}
+
+// The kernel acks a page only once it has handled it, Failed included, so the device's count, not the cached one,
+// marks where the sender stopped reading.
+uint32_t Tl1RingTransport::unconsumed_pages(uint32_t endpoint_index) const {
+    const Endpoint& endpoint = endpoints_[endpoint_index];
+    const uint32_t bytes_acked = read_sender_words(
+                                     mesh_device_,
+                                     endpoint.device,
+                                     endpoint.sender_logical,
+                                     control_base_ + kCceRingMetaOffset + offsetof(RingMeta, bytes_acked),
+                                     1)
+                                     .front();
+    return (endpoint.bytes_sent - bytes_acked) / kRequestPageBytes;
 }
 
 uint32_t Tl1RingTransport::page_bytes() const { return kRequestPageBytes; }

@@ -2445,7 +2445,11 @@ TEST(MimirPrefetcher, MM7T4CreditTimeoutD2d1To3) {
         const std::string stop_error = lifecycle_error([&session]() { session.stop(); });
         EXPECT_NE(stop_error.find("ended Failed"), std::string::npos) << stop_error;
         // The last further request, the DRAIN and the STOP.
-        EXPECT_NE(stop_error.find("(3 request pages dropped"), std::string::npos) << stop_error;
+        EXPECT_NE(stop_error.find("(3 more request pages never fit"), std::string::npos) << stop_error;
+        EXPECT_NE(
+            stop_error.find(fmt::format("{} request page(s) left unread in its ring", kCceRequestRingSlots)),
+            std::string::npos)
+            << stop_error;
         const uint64_t ring_meta_address = distributed::cce_sender_control_base(*mesh) + kCceRingMetaOffset;
         const uint32_t bytes_sent =
             read_cce_tl1(device, 1, ring_meta_address + offsetof(RingMeta, bytes_sent), sizeof(uint32_t)).front();
