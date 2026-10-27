@@ -62,13 +62,15 @@ class MuseGlimmerForConditionalGeneration:
         "max_device_top_k": 32,
     }
 
-    def __init__(self, model: MuseGlimmerModel):
+    # vLLM's registry checks that __init__ takes vllm_config / prefix; the plugin builds the adapter through
+    # initialize_vllm_model instead.
+    def __init__(self, model: MuseGlimmerModel = None, *, vllm_config=None, prefix=""):
         self.model = model
-        self.args = model.args
-        self.mesh_device = model.mesh_device
+        self.args = model.args if model is not None else None
+        self.mesh_device = model.mesh_device if model is not None else None
         self.batch_size = DECODE_B_PAD
-        self.n_blocks = self.args.max_num_blocks_per_user
-        self.buckets = prefill_buckets(self.args.max_prefill_len)
+        self.n_blocks = self.args.max_num_blocks_per_user if model is not None else None
+        self.buckets = prefill_buckets(self.args.max_prefill_len) if model is not None else None
         self.decode_inputs = None
         self.trace_ids = {}
         self.trace_outputs = {}
