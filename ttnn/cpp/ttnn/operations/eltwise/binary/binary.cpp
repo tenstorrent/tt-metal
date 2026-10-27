@@ -490,16 +490,29 @@ inline bool is_layout_or_scalar([[maybe_unused]] unary::ScalarVariant input, [[m
     return true;
 }
 
-inline Tensor to_layout(const Tensor& input, Layout layout) {
+inline Tensor to_layout(
+    const Tensor& input, Layout layout, const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
     if (detail::is_layout_or_scalar(input, layout)) {
         return input;
     }
 
-    return ttnn::to_layout(input, layout);
+    // A sharded tensor is converted where its shards live; the tilize/untilize factories reject a grid for it.
+    return ttnn::to_layout(
+        input, layout, std::nullopt, std::nullopt, input.is_sharded() ? std::nullopt : sub_core_grids);
 }
 
-inline float to_layout(float input, [[maybe_unused]] Layout layout) { return input; }
-inline unary::ScalarVariant to_layout(unary::ScalarVariant input, [[maybe_unused]] Layout layout) { return input; }
+inline float to_layout(
+    float input,
+    [[maybe_unused]] Layout layout,
+    [[maybe_unused]] const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    return input;
+}
+inline unary::ScalarVariant to_layout(
+    unary::ScalarVariant input,
+    [[maybe_unused]] Layout layout,
+    [[maybe_unused]] const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
+    return input;
+}
 
 constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
@@ -833,8 +846,8 @@ inline auto invoke_binary_ng_impl(
         return dispatch(lhs_eff, rhs_eff);
     }
     // Either one or both are tiles
-    const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE);
-    const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE);
+    const auto input_a = operations::binary::detail::to_layout(lhs_eff, Layout::TILE, sub_core_grids);
+    const auto input_b = operations::binary::detail::to_layout(rhs_eff, Layout::TILE, sub_core_grids);
 
     auto result = dispatch(input_a, input_b);
 
@@ -842,7 +855,7 @@ inline auto invoke_binary_ng_impl(
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
     // since it leads to better perf
     if (input_a_rm and input_b_rm) {
-        return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR);
+        return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR, sub_core_grids);
     }
 
     return result;
@@ -950,8 +963,8 @@ Tensor invoke_binary_ng_isclose(
             equal_nan);
     }
 
-    const auto input_a = operations::binary::detail::to_layout(fa, Layout::TILE);
-    const auto input_b = operations::binary::detail::to_layout(fb, Layout::TILE);
+    const auto input_a = operations::binary::detail::to_layout(fa, Layout::TILE, sub_core_grids);
+    const auto input_b = operations::binary::detail::to_layout(fb, Layout::TILE, sub_core_grids);
     auto result = ttnn::prim::binary_ng(
         input_a,
         input_b,
@@ -974,7 +987,7 @@ Tensor invoke_binary_ng_isclose(
     // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
     // since it leads to better perf
     if (input_a_rm && input_b_rm) {
-        return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR);
+        return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR, sub_core_grids);
     }
     return result;
 }

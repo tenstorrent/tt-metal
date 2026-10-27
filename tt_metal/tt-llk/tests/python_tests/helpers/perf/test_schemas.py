@@ -277,11 +277,12 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_unary_sfpu": {
-        "version": 4,
+        "version": 5,
         "columns": [
             "approx_mode",
             "clamp_negative",
             "dest_acc",
+            "dest_sync",
             "fast_mode",
             "formats.input_A",
             "formats.input_B",
@@ -813,11 +814,12 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_ternary": "perf_sfpu_ternary"},
     },
     "perf_vif_targets": {
-        "version": 2,
+        "version": 3,
         "columns": [
             "approx_mode",
             "clamp_negative",
             "dest_acc",
+            "dest_sync",
             "fast_mode",
             "formats.input_A",
             "formats.input_B",
@@ -1205,6 +1207,40 @@ PERF_TEST_SCHEMAS_QSR = {
             "perf_eltwise_unary_sfpu_quasar": "perf_eltwise_unary_sfpu_quasar"
         },
     },
+    "perf_eltwise_unary_typecast_quasar": {
+        "version": 2,
+        "columns": [
+            "approx_mode",
+            "data_copy_type",
+            "dest_acc",
+            "dest_sync",
+            "dst_index",
+            "face_c_dim",
+            "face_r_dim",
+            "formats.input_A",
+            "formats.input_B",
+            "formats.output",
+            "formats.register_A",
+            "formats.register_B",
+            "formats.sfpu_src",
+            "formats.sfpu_dst",
+            "input_format",
+            "loop_factor",
+            "marker",
+            "mathop",
+            "num_faces",
+            "num_faces_A",
+            "num_faces_B",
+            "output_format",
+            "tile_cnt",
+            "unpack_to_dest",
+            "unpacker_engine_sel",
+        ],
+        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "test_name_aliases": {
+            "perf_eltwise_unary_typecast_quasar": "perf_eltwise_unary_typecast_quasar"
+        },
+    },
     "perf_fused_quasar": {
         "version": 1,
         "columns": [
@@ -1363,7 +1399,7 @@ PERF_TEST_SCHEMAS_QSR = {
         "test_name_aliases": {"perf_pack_untilize_quasar": "perf_pack_untilize_quasar"},
     },
     "perf_reduce_quasar": {
-        "version": 5,
+        "version": 6,
         "columns": [
             "block_ct_dim",
             "block_rt_dim",
@@ -1380,6 +1416,7 @@ PERF_TEST_SCHEMAS_QSR = {
             "formats.sfpu_dst",
             "full_ct_dim",
             "full_rt_dim",
+            "is_reduce_to_one",
             "loop_factor",
             "marker",
             "math_fidelity",
@@ -1432,8 +1469,9 @@ PERF_TEST_SCHEMAS_QSR = {
         },
     },
     "perf_sfpu_exp_parallel_matmul_quasar": {
-        "version": 4,
+        "version": 5,
         "columns": [
+            "approx_mode",
             "c_dimm",
             "dest_acc",
             "dest_sync",
@@ -1454,12 +1492,15 @@ PERF_TEST_SCHEMAS_QSR = {
             "num_faces_A",
             "num_faces_B",
             "r_dimm",
-            "sfpu_srcs_impl",
+            "sfpu_impl",
             "tile_cnt",
             "unpack_to_dest",
             "unpack_transpose_faces",
         ],
-        "aliases": {"formats.sfpu_math": "formats.sfpu_src"},
+        "aliases": {
+            "formats.sfpu_math": "formats.sfpu_src",
+            "sfpu_srcs_impl": "sfpu_impl",
+        },
         "test_name_aliases": {
             "perf_sfpu_exp_parallel_matmul_quasar": "perf_sfpu_exp_parallel_matmul_quasar"
         },

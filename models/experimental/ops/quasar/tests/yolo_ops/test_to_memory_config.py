@@ -132,6 +132,7 @@ def test_to_memory_config_to_height_sharded(ttnn_mesh_device, reset_seeds, varia
 )
 def test_to_memory_config_dtype_cast(ttnn_mesh_device, reset_seeds, shape):
     """relocation fused with bf16->bfloat8_b cast (ttnn_yolov8l.py:751,754)."""
+    U.skip_bfp_on_quasar()
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(shape)
     # Source in DRAM (tilize into DRAM works for these odd shapes). The cast must ride a

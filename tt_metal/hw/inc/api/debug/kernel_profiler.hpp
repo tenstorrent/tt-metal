@@ -159,6 +159,15 @@ __attribute__((noinline)) void init_profiler(
     profiler_control_buffer[PROFILER_DONE] = 0;
     if constexpr (NON_DROPPING) {
         profiler_control_buffer[DROPPED_ZONES] = 0;
+        if constexpr (!DO_ACCUMULATE) {
+            // finish_profiler pushes every RISC whose DEVICE_BUFFER_END_INDEX is set, so a RISC that does not run in
+            // this program would have its previous program's L1 pushed to DRAM again as a new chunk. The debug-dump
+            // host never rewrites these indices while kernels may be running, so clear them here, before any
+            // subordinate RISC of this program starts.
+            for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+                profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + riscID] = 0;
+            }
+        }
     }
     if (runCounter == 0) {
         for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {

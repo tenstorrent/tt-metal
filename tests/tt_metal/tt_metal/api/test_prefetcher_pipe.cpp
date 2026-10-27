@@ -194,7 +194,8 @@ struct SenderKernelParams {
     uint32_t entry_size = 256;
     uint32_t num_entries = 4;
     // See prefetcher_pipe_sender.cpp: 0=broadcast, 1=strided, 2=write_to_receiver + push_back,
-    // 3=per-receiver credit, 4=decoupled broadcast, 5=entry-major per-receiver credit.
+    // 3=per-receiver credit, 4=decoupled broadcast, 5=entry-major per-receiver credit,
+    // 6=write_strided_and_push_back.
     uint32_t write_primitive = 0;
     uint32_t do_barrier = 0;
     uint32_t num_threads = 1;
@@ -1426,6 +1427,35 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteStrided_1to4) {
         4u);
 
     mesh_device->clear_loaded_sub_device_manager();
+}
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteStridedAndPushBack_1to4) {
+    if (const auto reason = insufficient_worker_grid_reason(5); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    auto mesh_device = devices_[0];
+    auto pipe = make_pipe(mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {4, 0})), 1024);
+    prefetcher_pipe_test::zero_receiver_rings(*mesh_device, pipe);
+    EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, 256, 4, /*write_primitive=*/6), 4u);
+}
+
+TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteStrided_PageLargerThanBurst_1to2) {
+    if (const auto reason = insufficient_worker_grid_reason(3); !reason.empty()) {
+        GTEST_SKIP() << reason;
+    }
+    // Each page is one entry, larger than a NoC burst on Wormhole (8 KiB) and Blackhole (16 KiB) and a
+    // multiple of neither, so it goes out as several packets, the last one partial.
+    constexpr uint32_t entry_size = 25 * 1024;
+    constexpr uint32_t num_entries = 2;
+    auto mesh_device = devices_[0];
+    auto pipe = make_pipe(
+        mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0}, {2, 0})), num_entries * entry_size);
+    // Each run fills the ring exactly, so the next one starts again at the ring base.
+    for (const uint32_t write_primitive : {1u, 6u}) {
+        SCOPED_TRACE("write_primitive=" + std::to_string(write_primitive));
+        prefetcher_pipe_test::zero_receiver_rings(*mesh_device, pipe);
+        EXPECT_EQ(run_persistent_1toN_cross_program(mesh_device, pipe, entry_size, num_entries, write_primitive), 2u);
+    }
 }
 
 TEST_F(PrefetcherPipeFixture, PrefetcherPipe_WriteToReceiver_ReceiverContiguous) {

@@ -15,7 +15,6 @@
 #include <hostdevcommon/common_values.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "device_impl.hpp"
-#include "impl/context/context_types.hpp"
 #include "impl/context/metal_env_impl.hpp"
 
 namespace tt::tt_metal {
@@ -25,7 +24,6 @@ class DispatchContext;
 }  // namespace experimental
 
 class ContextDescriptor;
-class IDevice;
 class FirmwareInitializer;
 enum class InitializerKey;
 
@@ -43,12 +41,12 @@ public:
         bool initialize_fabric_and_dispatch_fw,
         const std::shared_ptr<ContextDescriptor>& descriptor);
 
-    IDevice* get_active_device(ChipId device_id) const;
-    std::vector<IDevice*> get_all_active_devices() const;
+    Device* get_active_device(ChipId device_id) const;
+    std::vector<Device*> get_all_active_devices() const;
     bool close_device(ChipId device_id);
     std::vector<ChipId> get_all_active_device_ids() const;
     std::unordered_map<ChipId, std::vector<uint32_t>> get_all_command_queue_event_infos() const;
-    bool close_devices(const std::vector<IDevice*>& devices, bool skip_synchronize = false);
+    bool close_devices(const std::vector<Device*>& devices, bool skip_synchronize = false);
     bool is_device_active(ChipId id) const;
     // Records the dispatch mode on the first call and fails if a later call passes a different mode: mixing fast and
     // slow dispatch is prohibited.
@@ -102,14 +100,12 @@ private:
     std::unordered_set<ChipId> rt_profiler_device_init_complete_;
     void init_firmware_on_active_devices();
     void activate_device(ChipId id);
-    Device* get_active_device_internal(ChipId device_id) const;
 
     // Open requested devices, configure fabric, and initialize firmware.
     void open_devices(const std::vector<ChipId>& device_ids);
 
     void add_devices_to_pool(const std::vector<ChipId>& device_ids);
     Device* get_device(ChipId id) const;
-    std::vector<Device*> get_all_active_devices_impl() const;
 
     friend class experimental::DispatchContext;
 };

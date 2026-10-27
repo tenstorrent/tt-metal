@@ -3532,10 +3532,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 neighbour.has_value(),
                 "Sliding halo hop {} has no fabric neighbour",
                 halo_exchanges[direction_exchanges[direction][0]].hop);
-            const uint32_t links_available =
-                tt::tt_fabric::get_forwarding_link_indices(
-                    mesh_device->get_fabric_node_id(coord), mesh_device->get_fabric_node_id(neighbour.value()))
-                    .size();
+            const uint32_t links_available = tt::tt_fabric::get_forwarding_link_indices(
+                                                 *mesh_device,
+                                                 mesh_device->get_fabric_node_id(coord),
+                                                 mesh_device->get_fabric_node_id(neighbour.value()))
+                                                 .size();
             TT_FATAL(links_available >= 1, "Chunked sliding halo found no forwarding fabric link");
             // Every predecessor must use the same link count, or arrival counts would not match.
             TT_FATAL(
