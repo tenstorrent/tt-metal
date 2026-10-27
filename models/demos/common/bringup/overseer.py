@@ -48,6 +48,8 @@ from pathlib import Path
 
 import yaml
 
+from models.demos.common.bringup.core.hangdump import wait_triage as _wait_triage
+
 FILE = "overseer.yaml"
 AGENT_FILE = "AGENT.json"  # in the run dir while an agent works: {pid, pgid, task, role, attempt}
 ABORT_FILE = "ABORT.json"  # in the run dir: the overseer's abort of the agent at work
@@ -260,7 +262,7 @@ def take_abort(run_dir: Path) -> dict | None:
     return rec
 
 
-def abort(ledger_dir: Path, run_dir: Path, reason: str, tasks=None, kill=os.killpg) -> dict:
+def abort(ledger_dir: Path, run_dir: Path, reason: str, tasks=None, kill=os.killpg, wait_triage=None) -> dict:
     """Stop the agent at work: record the reason, add it as a note for its task, end its process group."""
     p = Path(run_dir) / AGENT_FILE
     if not p.exists():
@@ -272,6 +274,7 @@ def abort(ledger_dir: Path, run_dir: Path, reason: str, tasks=None, kill=os.kill
         tasks or [agent["task"]],
     )
     (Path(run_dir) / ABORT_FILE).write_text(json.dumps({**agent, "reason": reason, "note": note["id"], "at": now()}))
+    (wait_triage or _wait_triage)()  # F201: a hang dump being written is never cut off
     try:
         kill(agent["pgid"], signal.SIGTERM)
     except ProcessLookupError:

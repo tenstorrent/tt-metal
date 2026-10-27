@@ -2183,3 +2183,16 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   /tt_prefill_layer_acks_<id>: with the old name the engine waited out its 30 min connect timeout while the runner
   waited for its first chunk. Selftest test_the_engine_attaches_to_the_runners_completion_ring. Other models' plans
   (xing40 serve/server.py, contract test) still name the old channel: fix at their next run.
+
+## F201: a hang's triage and Inspector dump survive the next run and every framework kill (DeepSeek-V4.1 galaxy_8x4, 2026-10-27)
+Problem: the K.1 runner-smoke decode hang lost its evidence twice in a row: run 2's generated/tt-triage was wiped by
+run 3, and run 3's was cut off by a kill while tt-triage was still writing. Both dirs (generated/tt-triage, rewritten by
+the next hang; generated/inspector, rewritten by every mesh open) live at fixed repo paths; the gate kept only
+triage.txt, and only at the gate's end, after later units had reopened the mesh.
+Fix: core/hangdump.py. keep() copies both dirs whole into <logs>/<log stem>.hang-<unit>-<time>/ the moment a unit
+returns the safe runner's HANG (it returns only after triage finished), before the next unit runs; a single-command
+gate keeps it at its end; the gate's result names the dir. wait_triage() blocks (up to 300 s) while a tt-triage.py
+of this user runs, before every framework kill: overseer abort, an agent's timeout, a stopped orchestrator (_killpg).
+Selftest test_hangdump.py (a three-unit gate whose middle unit hangs and whose next unit rewrites inspector; abort
+waits before it kills). Overseer side (skill): never kill a device run by hand while tt-triage runs; diagnostic runs
+outside a gate go through a serialized wrapper that copies the same dirs before the next run (diag/run.sh on the node).

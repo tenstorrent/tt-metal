@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from models.demos.common.bringup.core import freeze
+from models.demos.common.bringup.core import freeze, hangdump
 from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core import stamps
 from models.demos.common.bringup.core.ledger import Ledger, fixed_accuracy, satisfied
@@ -659,6 +659,10 @@ def run_units(
             seen = {p: p.stat().st_mtime_ns for p in outputs_in(results, task) if p.exists()}
             t0 = time.time()
             rc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=uenv, stdout=f, stderr=subprocess.STDOUT).returncode
+            if rc == SAFE_HANG_RC and _uses_safe_runner(cmd):  # F201: before the next unit's mesh open wipes it
+                kept = hangdump.keep(spec.repo, hangdump.dest_for(log, u))
+                f.write(f"\n# {u}: HANG; triage + inspector kept in {kept}\n")
+                f.flush()
             if store is not None:
                 got = {k: v for k, v in M.load(tid, results).items() if before.get(k) != v}
                 ok = unit_ok(limits, got, len(plan) == 1)
@@ -848,6 +852,11 @@ def run_gate(
     if hang and (spec.repo / TRIAGE).exists():
         shutil.copy(spec.repo / TRIAGE, log.with_suffix(".triage.txt"))
         head.append(f"  triage: {log.with_suffix('.triage.txt')}")
+    kept = sorted(log.parent.glob(f"{log.stem}.hang-*"), key=lambda p: p.stat().st_mtime) if hang else []
+    if hang and not kept:  # F201: a single-command gate (no unit loop) keeps its dump here
+        kept = [hangdump.keep(spec.repo, hangdump.dest_for(log, tid))]
+    if kept and kept[-1]:
+        head.append(f"  hang dump (triage + inspector, F201): {kept[-1]}")
     if record and reuse is None and verdict != "PASS":  # F169: where the gate stopped, for --continue and the overseer
         head += progress_lines(spec, ledger, tid)
     res = GateResult(tid, verdict, rc, head + lines + [f"  MISSING artifact {a}" for a in missing], log, None, dur)
