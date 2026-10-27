@@ -85,10 +85,11 @@ prompts), greedy determinism across rounds through the chat template (thinking o
 (TTFT 26.5 / 52.6 / 78.6 / 104.8 s: the sequence-parallel prefill serves prompts one after another at ~2.5 K tok/s), `vllm bench`
 128 x 128 tokens at 32 requests (4 at a time) 32/32.
 
-Served decode (2026-10-27, `vllm bench` 128 x 128 tokens, 32 requests 4 at a time): 192 ms per token = 5.2 tok/s per user after
-the Python page-table check was removed (372 ms before). The step is the traced replay at the 1 M-capacity model (148 ms) plus ~41 ms
-of host work (32-chip id readback and 11 per-step position uploads to every chip: one packed upload and one read per row under
-`GLM53_DECODE_PACKED_INPUTS=1`, device validation pending). The replay costs 148 ms against 65 ms in the harness at a short cache,
+Served decode (2026-10-27, `vllm bench` 128 x 128 tokens, 32 requests 4 at a time): 174.6 ms per token = 5.7 tok/s per user with
+the packed per-step inputs (`GLM53_DECODE_PACKED_INPUTS=1`, the default since smoke r12: one upload and one read per row instead of
+the 32-chip id readback and 11 position uploads; 192 ms before, 372 before the Python page-table check was removed). The step is
+the traced replay at the 1 M-capacity model (148 ms on that snapshot: the regions fallback below) plus ~26 ms of host work; the
+regions-sourced streaming decode (next paragraph) takes the replay to ~76 ms and is validated served in smoke r14. The replay costs 148 ms against 65 ms in the harness at a short cache,
 and the harness reproduces it: the same 45-layer traced step at a 1 M cache with the served (user-partitioned) layout is 152 ms
 for a 128-token prompt (`GLM53_MODEL_MAX_SEQ_LEN=1048576 GLM53_PARTITION_USERS=1`), so serving adds nothing to the device step.
 The gap is a threshold, not capacity scaling: 256 K per user replays in 70.9 ms, 512 K and 1 M in ~152 ms. Above ~256 K x 4 users

@@ -83,7 +83,7 @@ def packed_inputs_enabled() -> bool:
     """``GLM53_DECODE_PACKED_INPUTS=1``: one packed host->device upload per decode step (``tt/packed_inputs.py``)
     instead of the per-field refreshes. Default off until validated on the device
     (``tests/test_decode_packed_inputs_mesh.py``)."""
-    return os.environ.get(PACKED_INPUTS_ENV, "0") == "1"
+    return os.environ.get(PACKED_INPUTS_ENV, "1") == "1"  # default on since 2026-10-27 (smoke r12)
 
 
 class PackedDecodeInputs:
