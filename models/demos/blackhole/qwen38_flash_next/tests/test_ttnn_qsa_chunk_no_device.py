@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prefill chunk (32 rows) of the QSA layer: the chunk inputs, constants and RoPE rows, without a device.
+"""Prefill chunks (32 and 128 rows) of the QSA layer: the chunk inputs, constants and RoPE rows, without a device.
 
 The chunk inputs are the 1-row position-generic derivation on same-shape templates: the torch emulation of
-row j must equal the 1-row emulation at P + j field for field.  The two bf16 select tiles (block-mean pooling
-and the per-block row pick) are checked under the device's matmul arithmetic model.
+row j must equal the 1-row emulation at P + j field for field, the 128-row emulation the four 32-row emulations.
+The two bf16 select tiles (block-mean pooling and the per-block row pick) are checked under the device's matmul
+arithmetic model.
 """
 
 from __future__ import annotations
@@ -15,9 +16,19 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (
+    BF16,
+    CHUNK_UINT32_TEMPLATES,
+    I32,
+    RESIDENT_BLOCKS,
+    U32,
+    IntContract,
+    int_u32,
+    make_int_ttnn,
+)
 from models.demos.blackhole.qwen38_flash_next.ttnn import contracts as contracts_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS, LONG_CHUNK_ROWS
 from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import (
     ALL_ONES_U32,
     BLOCK_TOPK,
@@ -32,7 +43,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import (
     qsa_chunk_constant_rows,
 )
 
-RESIDENT_BLOCKS = 32768 // COMPRESS_RATIO
 CHUNK_POSITIONS = (0, 32, 64, 2016, 2048, 2080, 8160, 32736)
 CHUNK_INPUT_FIELDS = ("kv_block_start", "block_index_i32", "indexer_neg_mask", "row_keep_bits", "row_fill")
 
@@ -66,6 +76,23 @@ def test_chunk_emulation_rejects_unaligned_positions(expect_error) -> None:
             emulate_qsa_chunk_inputs(position, allocated_compressed_blocks=RESIDENT_BLOCKS)
 
 
+@pytest.mark.parametrize("position", (0, 128, 1920, 2016, 2048, 8064, 32640))
+def test_long_chunk_emulation_is_the_four_chunk_emulations_stacked(position: int) -> None:
+    long = emulate_qsa_chunk_inputs(position, allocated_compressed_blocks=RESIDENT_BLOCKS, rows=LONG_CHUNK_ROWS)
+    short = [
+        emulate_qsa_chunk_inputs(position + CHUNK_ROWS * tile, allocated_compressed_blocks=RESIDENT_BLOCKS)
+        for tile in range(LONG_CHUNK_ROWS // CHUNK_ROWS)
+    ]
+    assert torch.equal(long["kv_block_start"], short[0]["kv_block_start"])
+    # The four 32-row chunks write compressed blocks P/4 .. P/4 + 31 one by one; the 128-row chunk writes them as the
+    # cache's tile P/128 in one page (no per-block indices).
+    assert [t.item() for chunk in short for t in chunk["block_index_i32"]] == [position // 4 + b for b in range(32)]
+    assert long["block_index_i32"] == () and long["compressed_tile_i32"].tolist() == [[position // 128]]
+    assert long["compressed_tile_i32"].dtype == torch.int32 and "compressed_tile_i32" not in short[0]
+    for name in ("indexer_neg_mask", "row_keep_bits", "row_fill"):
+        assert torch.equal(long[name], torch.cat([chunk[name] for chunk in short], dim=2)), name
+
+
 # --- constants: host images and the two select tiles under the matmul arithmetic model -----
 
 
@@ -89,6 +116,20 @@ def test_chunk_constant_rows_carry_the_row_index_templates_and_the_block_lanes()
     # templates, 3.16 MB.
     total = sum(host[name].numel() * 4 for name in host if host[name].dtype == torch.int64)
     assert total == 4 * 32 * (2 * RESIDENT_BLOCKS + 3 * SPARSE_INDEX_CAPACITY + TOKEN_BUDGET + 32 + 2)
+    # The 128-row chunk: 128 row lanes, 32 block starts, a [32, 128] pool and 32 row picks; its first rows are the
+    # 32-row chunk's.
+    long = qsa_chunk_constant_rows(RESIDENT_BLOCKS, LONG_CHUNK_ROWS)
+    assert long["arange32_lanes"].shape == (1, 1, 4, 32)
+    assert long["arange32_lanes"].reshape(-1).tolist() == list(range(128))
+    assert long["block_start_lanes"].reshape(-1).tolist() == [4 * i for i in range(32)]
+    assert long["pool_select"].shape == (1, 1, 32, 128) and long["row_selects"].shape == (32, 1, 1, 32, 32)
+    for block in range(32):
+        assert long["pool_select"][0, 0, block].nonzero().reshape(-1).tolist() == list(range(4 * block, 4 * block + 4))
+        assert long["row_selects"][block, 0, 0, 0, block] == 1.0 and long["row_selects"][block].sum() == 1.0
+    for name in ("row_index_blocks", "arange_blocks_rows", "row_index_slots", "arange_slots_rows", "all_ones_rows"):
+        assert long[name].shape[2] == 128, name
+    assert torch.equal(long["pool_select"][..., :8, :32], host["pool_select"][..., :8, :])
+    assert torch.equal(long["row_index_slots"][:, :, :32], host["row_index_slots"])
 
 
 def _select_matmul(select: torch.Tensor, rows: torch.Tensor) -> torch.Tensor:
@@ -155,9 +196,6 @@ def test_chunk_constants_and_inputs_declare_the_device_fields() -> None:
     assert CHUNK_BLOCKS == 8 and CHUNK_ROWS == 32 and CHUNK_ROWS % COMPRESS_RATIO == 0
 
 
-# --- the device position: advance_by's count -------------------------------------------
-
-
 def test_device_position_advance_by_refuses_a_count_that_is_not_a_positive_int(expect_error) -> None:
     shell = object.__new__(contracts_module.Qwen38TTNNDevicePosition)
     for count in (0, -1, True, 2.0, "32"):
@@ -165,230 +203,97 @@ def test_device_position_advance_by_refuses_a_count_that_is_not_a_positive_int(e
             shell.advance_by(count)
 
 
-# --- P > 0: the device derivation after k chunk advances, on an exact-integer fake ------------
-# The chain runs on a torch model of the integer ops after k in-trace ``advance_by(32)`` calls, so every P % 32 == 0
+# --- the device derivation after k chunk advances, on an exact-integer fake ------------
+# The chain runs on a torch model of the integer ops after k in-trace ``advance_by(rows)`` calls, so every chunk start
 # the model reaches by replaying (a tile crossing at P = 128, the top-k regime at 2048, the cache's last chunk) is
-# pinned field for field.
+# pinned field for field; the 64k/128k/256k options at each context's top chunk and its 32k/64k/128k boundaries.
 
-ADVANCED_CHUNKS = (1, 2, 4, 63, 64, 127, 254, 255, 1023)
-
-
-class _Tag:
-    def __init__(self, name: str) -> None:
-        self.name = name
-
-    def __repr__(self) -> str:
-        return self.name
-
-
-U32, I32, BF16_TAG = _Tag("uint32"), _Tag("int32"), _Tag("bfloat16")
-ROW_MAJOR_TAG, TILE_TAG = _Tag("ROW_MAJOR_LAYOUT"), _Tag("TILE_LAYOUT")
-
-
-class _IntTensor:
-    """One device tensor of the integer fake: int64 storage for UINT32/INT32, bf16 for the mask; tagged dtype/layout."""
-
-    _ids = iter(range(1, 10**9))
-
-    def __init__(self, value: torch.Tensor, dtype: _Tag, layout: _Tag) -> None:
-        self.value, self.dtype, self.layout = value, dtype, layout
-        self.tensor_id = next(self._ids)
-        self.alive = True
-
-    @property
-    def shape(self):
-        return tuple(self.value.shape)
-
-    def _read(self) -> torch.Tensor:
-        assert self.alive, "read of a deallocated tensor"
-        return self.value
-
-
-def _operand(x):
-    return x._read() if isinstance(x, _IntTensor) else x
-
-
-def _int_op(torch_op):
-    def op(a, b, *, memory_config=None, dtype=None):
-        result = torch_op(a._read(), _operand(b))
-        tag = dtype or a.dtype
-        if tag is BF16_TAG:
-            result = result.to(torch.bfloat16)
-        elif result.dtype != torch.int64:
-            result = result.to(torch.int64)
-        return _IntTensor(result, tag, a.layout)
-
-    return op
-
-
-def _integer_fake() -> SimpleNamespace:
-    def typecast(tensor, dtype, *, memory_config=None):
-        value = tensor._read()
-        return _IntTensor(value.to(torch.bfloat16) if dtype is BF16_TAG else value.clone(), dtype, tensor.layout)
-
-    def from_torch(host, *, dtype, layout, device=None, memory_config=None, mesh_mapper=None):
-        return _IntTensor(host.to(torch.int64) if dtype is U32 else host.to(torch.bfloat16), dtype, layout)
-
-    def copy(source, target):
-        target._read().copy_(source._read())
-        return target
-
-    def deallocate(tensor):
-        assert tensor.alive, "double deallocation"
-        tensor.alive = False
-
-    return SimpleNamespace(
-        uint32=U32,
-        int32=I32,
-        bfloat16=BF16_TAG,
-        ROW_MAJOR_LAYOUT=ROW_MAJOR_TAG,
-        TILE_LAYOUT=TILE_TAG,
-        TILE_SIZE=32,
-        DRAM_MEMORY_CONFIG="DRAM",
-        bitwise_and=_int_op(torch.bitwise_and),
-        bitwise_or=_int_op(torch.bitwise_or),
-        bitwise_right_shift=_int_op(torch.bitwise_right_shift),
-        bitwise_left_shift=_int_op(torch.bitwise_left_shift),
-        add=_int_op(torch.add),
-        subtract=_int_op(torch.sub),
-        multiply=_int_op(torch.mul),
-        minimum=_int_op(lambda a, b: torch.clamp(a, max=b)),
-        lt=_int_op(torch.lt),
-        ge=_int_op(torch.ge),
-        rsub=_int_op(lambda a, b: b - a),
-        typecast=typecast,
-        reshape=lambda t, shape, memory_config=None: _IntTensor(t._read().reshape(tuple(shape)), t.dtype, t.layout),
-        from_torch=from_torch,
-        copy_host_to_device_tensor=copy,
-        copy=copy,
-        deallocate=deallocate,
-    )
-
-
-class _IntContract:
-    def validate_tensor(self, tensor, *, placement, shard_dim=None, require_device=True) -> None:
-        assert tensor.alive
-
-
-def _u32(values: torch.Tensor) -> _IntTensor:
-    return _IntTensor(values.to(torch.int64).clone(), U32, ROW_MAJOR_TAG)
+DERIVE_CASES = [(CHUNK_ROWS, 32_768, CHUNK_ROWS * k) for k in (1, 2, 4, 63, 64, 127, 254, 255, 1023)]
+DERIVE_CASES += [(CHUNK_ROWS, 65_536, 32_768), (CHUNK_ROWS, 65_536, 65_504), (CHUNK_ROWS, 131_072, 65_536)]
+DERIVE_CASES += [(CHUNK_ROWS, 131_072, 131_040), (CHUNK_ROWS, 262_144, 131_072), (CHUNK_ROWS, 262_144, 262_112)]
+DERIVE_CASES += [(LONG_CHUNK_ROWS, 32_768, position) for position in (0, 2048, 32640)]
 
 
 @pytest.fixture
 def integer_fake(monkeypatch):
-    fake = _integer_fake()
+    fake = make_int_ttnn()
     monkeypatch.setattr(qsa_module, "ttnn", fake)
     monkeypatch.setattr(contracts_module, "ttnn", fake)
     monkeypatch.setattr(contracts_module, "replicate_tensor_2d_mesh_mapper", lambda device: "replicate")
     return fake
 
 
-# The 64k/128k/256k options: the chunk derivation against the emulation at each context's top chunk (position
-# allocated_context - 32) and its 32k/64k/128k boundaries, and the 32k default's top chunk.
-CONTEXT_POSITIONS = (
-    (32_768, 32_736),
-    (65_536, 32_768),
-    (65_536, 65_504),
-    (131_072, 65_536),
-    (131_072, 131_040),
-    (262_144, 131_072),
-    (262_144, 262_112),
-)
-
-
-@pytest.mark.parametrize(("allocated_context", "position"), CONTEXT_POSITIONS)
-def test_chunk_inputs_at_the_long_context_positions_are_the_emulation(
-    expect_error, integer_fake, allocated_context: int, position: int
-):
+@pytest.mark.parametrize(("rows", "allocated_context", "position"), DERIVE_CASES)
+def test_chunk_inputs_after_advancing_the_device_position_are_the_emulation(
+    expect_error, integer_fake, rows: int, allocated_context: int, position: int
+) -> None:
     blocks = allocated_context // COMPRESS_RATIO
-    scalar = _u32(torch.full((1, 1, 1, 1), position))
-    host = qsa_chunk_constant_rows(blocks)
-    constants = SimpleNamespace(
-        allocated_compressed_blocks=blocks,
-        high27_mask=_u32(torch.full((1, 1, 1, 1), qsa_module.KV_BLOCK_START_MASK)),
-    )
-    chunk = SimpleNamespace(
-        allocated_compressed_blocks=blocks,
-        rows=CHUNK_ROWS,
-        **{name: _u32(host[name]) for name in CHUNK_UINT32_TEMPLATES},
-    )
-    inputs = qsa_module.derive_qsa_chunk_inputs(scalar, constants, chunk)
-    expected = emulate_qsa_chunk_inputs(position, allocated_compressed_blocks=blocks)
-    assert inputs.kv_block_start._read().tolist() == expected["kv_block_start"].tolist() == [[[[position]]]]
-    assert [t._read().tolist() for t in inputs.block_index_i32] == [e.tolist() for e in expected["block_index_i32"]]
-    assert inputs.indexer_neg_mask.shape == (1, 1, CHUNK_ROWS, blocks)
-    assert torch.equal(inputs.indexer_neg_mask._read(), expected["indexer_neg_mask"])
-    assert torch.equal(inputs.row_keep_bits._read(), expected["row_keep_bits"])
-    assert torch.equal(inputs.row_fill._read(), expected["row_fill"])
-    # The last row's block count: the chunk completes blocks up to (position + 32) / 4, inside the allocation.
-    unmasked = (expected["indexer_neg_mask"][0, 0] == 0).sum(dim=-1).tolist()
-    assert unmasked[-1] == position // 4 + 8 <= blocks
-    with expect_error(ValueError):  # allow-pytest.raises: pure contract test
-        qsa_module.derive_qsa_chunk_inputs(
-            scalar, SimpleNamespace(allocated_compressed_blocks=blocks // 2, high27_mask=constants.high27_mask), chunk
-        )
-
-
-@pytest.mark.parametrize("chunks", ADVANCED_CHUNKS)
-def test_chunk_inputs_after_advancing_the_device_position_are_the_emulation(integer_fake, chunks: int) -> None:
-    position = contracts_module.Qwen38TTNNDevicePosition(
-        scalar=_u32(torch.zeros(1, 1, 1, 1)),
-        ones_row=_u32(torch.ones(1, 1, 1, CHUNK_ROWS)),
-        block_start_mask_row=_u32(torch.full((1, 1, 1, CHUNK_ROWS), contracts_module.BLOCK_START_LANE_MASK)),
+    device_position = contracts_module.Qwen38TTNNDevicePosition(
+        scalar=int_u32(torch.zeros(1, 1, 1, 1)),
+        ones_row=int_u32(torch.ones(1, 1, 1, CHUNK_ROWS)),
+        block_start_mask_row=int_u32(torch.full((1, 1, 1, CHUNK_ROWS), contracts_module.BLOCK_START_LANE_MASK)),
         mesh_device="mesh",
-        mesh_contract=_IntContract(),
+        mesh_contract=IntContract(),
     )
-    for _ in range(chunks):
-        position.advance_by(CHUNK_ROWS)  # the chunk body's last op, once per replay
-    expected_position = CHUNK_ROWS * chunks
-    assert position.scalar._read().reshape(-1).tolist() == [expected_position]
+    for _ in range(position // rows):
+        device_position.advance_by(rows)  # the chunk body's last op, once per replay
+    assert device_position.scalar._read().reshape(-1).tolist() == [position]
 
-    host = qsa_chunk_constant_rows(RESIDENT_BLOCKS)
+    host = qsa_chunk_constant_rows(blocks, rows)
     constants = SimpleNamespace(
-        allocated_compressed_blocks=RESIDENT_BLOCKS,
-        high27_mask=_u32(torch.full((1, 1, 1, 1), qsa_module.KV_BLOCK_START_MASK)),
+        allocated_compressed_blocks=blocks,
+        high27_mask=int_u32(torch.full((1, 1, 1, 1), qsa_module.KV_BLOCK_START_MASK)),
     )
     chunk = SimpleNamespace(
-        allocated_compressed_blocks=RESIDENT_BLOCKS,
-        rows=CHUNK_ROWS,
-        **{name: _u32(host[name]) for name in CHUNK_UINT32_TEMPLATES},
+        allocated_compressed_blocks=blocks, rows=rows, **{name: int_u32(host[name]) for name in CHUNK_UINT32_TEMPLATES}
     )
-    inputs = qsa_module.derive_qsa_chunk_inputs(position.scalar, constants, chunk)
-    expected = emulate_qsa_chunk_inputs(expected_position, allocated_compressed_blocks=RESIDENT_BLOCKS)
-    assert inputs.kv_block_start._read().tolist() == expected["kv_block_start"].tolist() == [[[[expected_position]]]]
-    assert [t.dtype for t in inputs.block_index_i32] == [I32] * CHUNK_BLOCKS
-    assert [t._read().tolist() for t in inputs.block_index_i32] == [e.tolist() for e in expected["block_index_i32"]]
-    assert inputs.indexer_neg_mask.dtype is BF16_TAG and inputs.indexer_neg_mask.shape == (
-        1,
-        1,
-        CHUNK_ROWS,
-        RESIDENT_BLOCKS,
-    )
+    inputs = qsa_module.derive_qsa_chunk_inputs(device_position.scalar, constants, chunk)
+    expected = emulate_qsa_chunk_inputs(position, allocated_compressed_blocks=blocks, rows=rows)
+    assert inputs.rows == rows
+    assert inputs.kv_block_start._read().tolist() == expected["kv_block_start"].tolist() == [[[[position]]]]
+    assert [(t.dtype, t._read().tolist()) for t in inputs.block_index_i32] == [
+        (I32, e.tolist()) for e in expected["block_index_i32"]
+    ]
+    assert inputs.indexer_neg_mask.dtype is BF16 and inputs.indexer_neg_mask.shape == (1, 1, rows, blocks)
     assert torch.equal(inputs.indexer_neg_mask._read(), expected["indexer_neg_mask"])
     for name in ("row_keep_bits", "row_fill"):
         actual = getattr(inputs, name)
-        assert actual.dtype is U32 and actual.shape == (1, 1, CHUNK_ROWS, SPARSE_INDEX_CAPACITY)
+        assert actual.dtype is U32 and actual.shape == (1, 1, rows, SPARSE_INDEX_CAPACITY)
         assert torch.equal(actual._read(), expected[name]), name
-    # The RoPE index rows of the same replay: lane j = P + j; the block-start lanes P + 4i (i < 8), P past them.
-    index_row = position.index_row()
+    # The last row's block count: the chunk completes blocks up to (position + rows) / 4, inside the allocation.
+    unmasked = (expected["indexer_neg_mask"][0, 0] == 0).sum(dim=-1).tolist()
+    assert unmasked[-1] == (position + rows) // 4 <= blocks
+    with expect_error(ValueError):  # allow-pytest.raises: pure contract test
+        qsa_module.derive_qsa_chunk_inputs(
+            device_position.scalar,
+            SimpleNamespace(allocated_compressed_blocks=blocks // 2, high27_mask=constants.high27_mask),
+            chunk,
+        )
+    if rows == LONG_CHUNK_ROWS:
+        # The 128-row chunk writes its 32 compressed rows as one tile: the page table P / 128, no per-block indices.
+        assert expected["block_index_i32"] == ()
+        assert inputs.compressed_tile_i32._read().tolist() == expected["compressed_tile_i32"].tolist()
+        assert expected["compressed_tile_i32"].tolist() == [[position // 128]]
+        assert inputs.compressed_tile_i32.dtype is I32 and inputs.compressed_tile_i32.shape == (1, 1)
+        # The layer's admission of the 128-row inputs: the page table, no per-block indices.
+        layer = qsa_module.Qwen38TTNNQSA.__new__(qsa_module.Qwen38TTNNQSA)
+        layer.allocated_compressed_blocks = blocks
+        layer._validate_chunk_inputs(inputs)
+        with expect_error(ValueError):  # allow-pytest.raises: the 128-row inputs without their page table
+            layer._validate_chunk_inputs(
+                Qwen38TTNNQSAChunkInputs(
+                    rows, inputs.kv_block_start, (), inputs.indexer_neg_mask, inputs.row_keep_bits, inputs.row_fill
+                )
+            )
+    # The RoPE index rows of the same replay: lane j = P + j; the block-start lanes P + 4i (i < rows / 4), P past them.
+    index_row = device_position.index_row()
     index_rows = integer_fake.add(index_row, chunk.arange32_lanes)
     block_start_rows = integer_fake.add(index_row, chunk.block_start_lanes)
-    assert index_rows._read().reshape(-1).tolist() == [expected_position + j for j in range(CHUNK_ROWS)]
+    assert index_rows._read().reshape(-1).tolist() == [position + j for j in range(rows)]
     assert block_start_rows._read().reshape(-1).tolist() == [
-        expected_position + (4 * i if i < CHUNK_BLOCKS else 0) for i in range(CHUNK_ROWS)
+        position + (4 * i if i < rows // 4 else 0) for i in range(CHUNK_ROWS)
     ]
-    # The hand-off's host reset lands any position, as finish_prefill does after the padded tail.
-    position.reset(expected_position - 5)
-    assert position.scalar._read().reshape(-1).tolist() == [expected_position - 5]
+    # The hand-off's host reset lands any position, as finish_prefill does after a padded tail (5 pad rows here).
+    device_position.reset(position + rows - 5)
+    assert device_position.scalar._read().reshape(-1).tolist() == [position + rows - 5]
     assert inputs.kv_block_start.alive and inputs.row_fill.alive
-
-
-CHUNK_UINT32_TEMPLATES = (
-    "arange32_lanes",
-    "block_start_lanes",
-    "row_index_blocks",
-    "arange_blocks_rows",
-    "row_index_slots",
-    "arange_slots_rows",
-    "all_ones_rows",
-)

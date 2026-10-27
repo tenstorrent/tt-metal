@@ -12,17 +12,14 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_device import (
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa: F401  (pytest fixture)
     BF16,
-    TILE,
-    TP,
     FakeTensor,
-    _bf16,
-    _cat,
-)
-from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step5_verify_no_device import (  # noqa: F401
-    _mtp_input,
-    fake,
+    bf16_randn,
+    cat_shards,
+    make_mtp_input,
+    sharded,
+    verify_fake,
 )
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session_module
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_prefill_driver as driver_module
@@ -31,41 +28,35 @@ from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_v2
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROW_COUNTS, CHUNK_ROWS, LONG_CHUNK_ROWS
 
 
-def _shard(host: torch.Tensor) -> FakeTensor:
-    return FakeTensor([piece.clone() for piece in torch.chunk(host, TP, dim=3)], BF16, TILE, 3)
-
-
 def _rows(tensor: FakeTensor, start: int, stop: int) -> torch.Tensor:
-    return _cat(tensor, 3)[:, :, start:stop].contiguous()
+    return cat_shards(tensor, 3)[:, :, start:stop].contiguous()
 
 
 # --------------------------------------------------------------------------- the input mixer at 128 rows
 
 
-def test_mtp_input_mixer_128_rows_are_bitwise_the_32_row_form_per_tile_and_the_one_row_mixer_per_row(fake) -> None:
+def test_mtp_input_mixer_rows_are_bitwise_the_32_row_form_per_tile_and_the_one_row_mixer_per_row(
+    expect_error, verify_fake
+) -> None:
     """The 128-row form's row j is the one-row mixer's result for row j and the 32-row form's row j % 32 on its tile:
-    the norms are per row and the projections run per 32-row tile."""
+    the norms are per row and the projections run per 32-row tile. The rows forms admit the chunk row counts only."""
 
-    mixer = _mtp_input(fake)
+    mixer = make_mtp_input(verify_fake)
     torch.manual_seed(95)
-    embedding, residual = _bf16(1, 1, LONG_CHUNK_ROWS, 2560), _bf16(1, 4, LONG_CHUNK_ROWS, 2560)
-    rows = mixer.rows(_shard(embedding), _shard(residual))
+    embedding, residual = bf16_randn(1, 1, LONG_CHUNK_ROWS, 2560), bf16_randn(1, 4, LONG_CHUNK_ROWS, 2560)
+    rows = mixer.rows(sharded(embedding), sharded(residual))
     assert rows.shape == (1, 4, LONG_CHUNK_ROWS, 640) and rows.dtype is BF16
     for tile in range(LONG_CHUNK_ROWS // CHUNK_ROWS):
         start, stop = tile * CHUNK_ROWS, (tile + 1) * CHUNK_ROWS
-        short = mixer.rows(_shard(embedding[:, :, start:stop]), _shard(residual[:, :, start:stop]))
+        short = mixer.rows(sharded(embedding[:, :, start:stop]), sharded(residual[:, :, start:stop]))
         assert short.shape == (1, 4, CHUNK_ROWS, 640)
-        assert torch.equal(_rows(rows, start, stop).view(torch.int16), _cat(short, 3).view(torch.int16)), tile
-    for row in (0, 1, 31, 32, 63, 64, 95, 96, 127):
-        one = mixer(_shard(embedding[:, :, row : row + 1]), _shard(residual[:, :, row : row + 1]))
-        assert torch.equal(_rows(rows, row, row + 1).view(torch.int16), _cat(one, 3).view(torch.int16)), row
-
-
-def test_mtp_input_mixer_rows_admit_the_chunk_row_counts_only(expect_error, fake) -> None:
-    mixer = _mtp_input(fake)
+        assert torch.equal(_rows(rows, start, stop).view(torch.int16), cat_shards(short, 3).view(torch.int16)), tile
+    for row in (*range(CHUNK_ROWS), 32, 63, 64, 95, 96, 127):  # every row of the first tile
+        one = mixer(sharded(embedding[:, :, row : row + 1]), sharded(residual[:, :, row : row + 1]))
+        assert torch.equal(_rows(rows, row, row + 1).view(torch.int16), cat_shards(one, 3).view(torch.int16)), row
     assert CHUNK_ROW_COUNTS == (32, 128)
     with expect_error(ValueError, match="token rows"):  # allow-pytest.raises: pure contract test
-        mixer.rows(_shard(_bf16(1, 1, 64, 2560)), _shard(_bf16(1, 4, 64, 2560)))
+        mixer.rows(sharded(bf16_randn(1, 1, 64, 2560)), sharded(bf16_randn(1, 4, 64, 2560)))
 
 
 # --------------------------------------------------------------------------- the chunk extension's 128-row twin
@@ -102,17 +93,13 @@ class _FakeEmbedding:
         return SimpleNamespace(shape=(1, 1, token_row.rows, 640), name="embedding")
 
 
-def _alignment(layer: _FakeLayer):
+def _extension_fixtures(monkeypatch):
+    layer = _FakeLayer()
     mixer = SimpleNamespace(calls=[])
     mixer.rows = lambda embedding, residual: mixer.calls.append((embedding.shape, residual.shape)) or SimpleNamespace(
         shape=residual.shape, name="mixed"
     )
-    return SimpleNamespace(layer=layer, input_mixer=mixer, generic_state="generic")
-
-
-def _extension_fixtures(monkeypatch):
-    layer = _FakeLayer()
-    alignment = _alignment(layer)
+    alignment = SimpleNamespace(layer=layer, input_mixer=mixer, generic_state="generic")
     embedding = _FakeEmbedding()
     copies: list = []
 

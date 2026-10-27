@@ -13,27 +13,29 @@ from __future__ import annotations
 import pytest
 import torch
 
-from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_device import (  # noqa: F401  (pytest fixture)
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (  # noqa: F401  (pytest fixtures)
     BF16,
-    FP32,
     ROW_MAJOR,
     TILE,
     TP,
     FakeContract,
     FakeTensor,
-    _cat,
-    _clone_state,
-    _gdn_module,
-    _hidden_sharded,
-    _output_tolerance,
-    _ple_module,
-    _residual_rows,
-    _seed_ple_state,
-    _seed_state,
-    _sequential,
-    _state_tolerance,
-    fake,
+    cat_shards,
+    clone_gdn_state,
+    fill_in_place,
+    gdn_output_tolerance,
+    gdn_ring_history,
+    gdn_rows_selectors,
+    gdn_state_tolerance,
     gdn_weights,
+    hidden_sharded,
+    make_gdn_module,
+    make_ple_module,
+    residual_rows,
+    rows_fake,
+    run_gdn_steps,
+    seed_gdn_state,
+    seed_ple_state,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
@@ -42,11 +44,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS
 TAIL_ROWS = (0, 1, 2, 8, 9, 31)
 PREFILL_CASES = [(tail, tail + 32 * chunks) for tail in TAIL_ROWS for chunks in range(3)]
 PAD_TOKEN = 0
-
-
-def _selectors(accepted: int, constants):
-    accepted_tensor = FakeTensor([torch.full((1, 1, 1, 1), float(accepted)) for _ in range(TP)], FP32, TILE)
-    return gdn_module.build_rows_selectors(accepted_tensor, constants)
 
 
 def _chunk_plan(count: int) -> list[int]:
@@ -61,52 +58,54 @@ def _chunk_plan(count: int) -> list[int]:
 
 @pytest.mark.parametrize("decoded", (0, 32))
 @pytest.mark.parametrize("tail,count", PREFILL_CASES)
-def test_gdn_chunks_tail_and_handoff_match_the_one_row_steps(fake, gdn_weights, tail: int, count: int, decoded: int):
+def test_gdn_chunks_tail_and_handoff_match_the_one_row_steps(
+    rows_fake, gdn_weights, tail: int, count: int, decoded: int
+):
     _, weights = gdn_weights
-    module = _gdn_module(weights)
+    module = make_gdn_module(weights)
     constants = module.allocate_rows_constants(CHUNK_ROWS)
     torch.manual_seed(1000 + count)
     hidden = torch.randn(1, decoded + count, 2560).to(torch.bfloat16)
     pad_hidden = torch.randn(1, 1, 2560).to(torch.bfloat16)
-    state_step = _seed_state(module, 50 + count)
-    state_rows = _clone_state(module, state_step)
+    state_step = seed_gdn_state(module, 50 + count)
+    state_rows = clone_gdn_state(module, state_step)
 
     # The alignment steps (teacher-forced 1-row decode) run on both sides before the chunks.
-    _sequential(module, state_step, hidden[:, :decoded])
-    _sequential(module, state_rows, hidden[:, :decoded])
+    run_gdn_steps(module, state_step, hidden[:, :decoded])
+    run_gdn_steps(module, state_rows, hidden[:, :decoded])
     # The reverse seed: the chunk carry from the decode ring (the reset path after decode steps).
     rows_state = module.allocate_rows_state(constants)
     module.sync_rows_history_from_state(state_rows, rows_state)
 
-    _sequential(module, state_step, hidden[:, decoded:])
+    run_gdn_steps(module, state_step, hidden[:, decoded:])
     for chunk, accepted in enumerate(_chunk_plan(count)):
         rows = hidden[:, decoded + CHUNK_ROWS * chunk : decoded + CHUNK_ROWS * (chunk + 1)]
         if rows.shape[1] < CHUNK_ROWS:
             rows = torch.cat([rows, pad_hidden.expand(1, CHUNK_ROWS - rows.shape[1], 2560)], dim=1)
-        result = module.forward_rows(_hidden_sharded(rows), state_rows, rows_state)
-        module.commit_rows(state_rows, rows_state, _selectors(accepted, constants))
-        fake.ttnn.deallocate(result.final_state)
+        result = module.forward_rows(hidden_sharded(rows), state_rows, rows_state)
+        module.commit_rows(state_rows, rows_state, gdn_rows_selectors(accepted, constants))
+        rows_fake.ttnn.deallocate(result.final_state)
     prefilled = decoded + count
     state_rows.conv_phase = prefilled % gdn_module.CONV_KERNEL_SIZE
     module.sync_state_from_rows_history(rows_state, state_rows)
 
-    expected_state = _cat(state_step.recurrent, 1)
-    state_err = (_cat(state_rows.recurrent, 1) - expected_state).abs().max().item()
+    expected_state = cat_shards(state_step.recurrent, 1)
+    state_err = (cat_shards(state_rows.recurrent, 1) - expected_state).abs().max().item()
     print(
-        f"r={tail} N={count} decoded={decoded}: state max abs {state_err:.2e} (tol {_state_tolerance(expected_state):.2e})"
+        f"r={tail} N={count} decoded={decoded}: state max abs {state_err:.2e} "
+        f"(tol {gdn_state_tolerance(expected_state):.2e})"
     )
-    assert state_err <= _state_tolerance(expected_state)
+    assert state_err <= gdn_state_tolerance(expected_state)
     assert state_rows.conv_phase == state_step.conv_phase == prefilled % 4
-    for index, (slot, expected_slot) in enumerate(zip(state_rows.conv_window()[:3], state_step.conv_window()[:3])):
-        assert torch.equal(_cat(slot, 3), _cat(expected_slot, 3)), f"history slot {index}"
+    assert torch.equal(gdn_ring_history(state_rows), gdn_ring_history(state_step))
 
     torch.manual_seed(2000 + count)
     next_hidden = torch.randn(1, 1, 2560).to(torch.bfloat16)
-    step_next = _sequential(module, state_step, next_hidden)[0]
-    rows_next = _sequential(module, state_rows, next_hidden)[0]
-    assert (rows_next.float() - step_next.float()).abs().max().item() <= _output_tolerance(step_next)
+    step_next = run_gdn_steps(module, state_step, next_hidden)[0]
+    rows_next = run_gdn_steps(module, state_rows, next_hidden)[0]
+    assert (rows_next.float() - step_next.float()).abs().max().item() <= gdn_output_tolerance(step_next)
     for slot, expected_slot in zip(state_rows.conv, state_step.conv):
-        assert torch.equal(_cat(slot, 3), _cat(expected_slot, 3))
+        assert torch.equal(cat_shards(slot, 3), cat_shards(expected_slot, 3))
 
 
 # --------------------------------------------------------------------------- PLE
@@ -114,19 +113,21 @@ def test_gdn_chunks_tail_and_handoff_match_the_one_row_steps(fake, gdn_weights, 
 
 @pytest.mark.parametrize("decoded", (0, 32))
 @pytest.mark.parametrize("tail,count", PREFILL_CASES)
-def test_ple_chunks_tail_and_handoff_match_the_one_row_steps(fake, tail: int, count: int, decoded: int) -> None:
-    module = _ple_module()
+def test_ple_chunks_tail_and_handoff_match_the_one_row_steps(rows_fake, tail: int, count: int, decoded: int) -> None:
+    module = make_ple_module()
     constants = gdn_module.Qwen38TTNNGDNRowsConstants.allocate("mesh", module.mesh_contract, rows=CHUNK_ROWS)
     torch.manual_seed(3000 + count)
     residual = torch.randn(decoded + count, 4, 2560).to(torch.bfloat16)
     pad_residual = torch.randn(1, 4, 2560).to(torch.bfloat16)
     tokens = tuple(int(v) for v in torch.randint(0, 200_000, (decoded + count,)))
-    state_step = _seed_ple_state(module)
-    state_rows = _seed_ple_state(module)  # seeds itself: the same nine slots on both sides
+    state_step = seed_ple_state(module)
+    state_rows = seed_ple_state(module)  # seeds itself: the same nine slots on both sides
 
     def step(state, row: int):
         prepared = module.prepare_decode_input(torch.tensor([[tokens[row]]], dtype=torch.long), state)
-        return _cat(module.forward_prepared(_residual_rows(residual[row : row + 1]), prepared, state).residual_delta, 3)
+        return cat_shards(
+            module.forward_prepared(residual_rows(residual[row : row + 1]), prepared, state).residual_delta, 3
+        )
 
     for row in range(decoded):
         step(state_step, row)
@@ -145,19 +146,19 @@ def test_ple_chunks_tail_and_handoff_match_the_one_row_steps(fake, tail: int, co
             rows = torch.cat([rows, pad_residual.expand(CHUNK_ROWS - len(chunk_tokens), 4, 2560)], dim=0)
             chunk_tokens = chunk_tokens + (PAD_TOKEN,) * (CHUNK_ROWS - len(chunk_tokens))
         # The driver looks the 32 rows up from the running context and keeps contexts[accepted + 1].
-        host_rows, contexts = module.host_rows(chunk_tokens, context)
+        _, contexts = module.host_rows(chunk_tokens, context)
         assert contexts[0] == context
         prepared = module.prepare_rows_input(chunk_tokens, rows_state)
         assert prepared.contexts == contexts
-        module.forward_prepared_rows(_residual_rows(rows), prepared, rows_state)
-        module.commit_rows(rows_state, _selectors(accepted, constants))
+        module.forward_prepared_rows(residual_rows(rows), prepared, rows_state)
+        module.commit_rows(rows_state, gdn_rows_selectors(accepted, constants))
         module.commit_rows_host(rows_state, prepared, accepted)
         context = contexts[accepted + 1]
         assert rows_state.token_context == context
     rows_state.store_to_state(state_rows)
 
     for index, (slot, expected_slot) in enumerate(zip(state_rows.conv, state_step.conv)):
-        assert torch.equal(_cat(slot, 3), _cat(expected_slot, 3)), f"PLE slot {index}"
+        assert torch.equal(cat_shards(slot, 3), cat_shards(expected_slot, 3)), f"PLE slot {index}"
     if decoded + count == 0:
         assert state_rows.token_context is None and state_step.token_context is None
     else:
@@ -170,7 +171,9 @@ def test_ple_chunks_tail_and_handoff_match_the_one_row_steps(fake, tail: int, co
     deltas = []
     for state in (state_step, state_rows):
         prepared = module.prepare_decode_input(torch.tensor([[next_token]], dtype=torch.long), state)
-        deltas.append(_cat(module.forward_prepared(_residual_rows(next_residual), prepared, state).residual_delta, 3))
+        deltas.append(
+            cat_shards(module.forward_prepared(residual_rows(next_residual), prepared, state).residual_delta, 3)
+        )
     assert torch.equal(deltas[0], deltas[1])
 
 
@@ -180,15 +183,9 @@ QSA_CONTEXT = 128
 
 
 @pytest.fixture
-def fake_qsa(fake, monkeypatch):
-    def fill(tensor, value, *, output_tensor=None, memory_config=None):
-        assert output_tensor is tensor
-        for local in tensor.torch_shards():
-            local.fill_(value)
-        return tensor
-
-    fake.ttnn.fill = fill
-    monkeypatch.setattr(qsa_module, "ttnn", fake.ttnn)
+def fake_qsa(rows_fake, monkeypatch):
+    rows_fake.ttnn.fill = fill_in_place
+    monkeypatch.setattr(qsa_module, "ttnn", rows_fake.ttnn)
     module = object.__new__(qsa_module.Qwen38TTNNQSA)
     module.mesh_device = "mesh"
     module.mesh_contract = FakeContract()

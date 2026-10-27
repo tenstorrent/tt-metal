@@ -1,144 +1,96 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The batched-lanes GDN step, the lane resets, the final mixer rows and the lane bodies' source pins, no device.
+"""The batched-lanes GDN step and PLE lanes, the lane resets, the final mixer rows and the lane bodies' source pins.
 
 The fake computes every matmul per (lane, head) tile in float64 rounded once, so no result depends on the batch it
-sits in; B separate 1-row ``forward_decode`` chains are the reference.
+sits in; B separate 1-row chains are the reference.
 """
 
 from __future__ import annotations
 
 import ast
-import importlib.util
 import inspect
 import textwrap
-from pathlib import Path
 
 import pytest
 import torch
 
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_ttnn import (
+    BF16,
+    FP32,
+    ROW_MAJOR,
+    TILE,
+    TP,
+    FakeContract,
+    FakeTensor,
+    assert_rows_bitwise,
+    bf16_randn,
+    bits_equal,
+    cat_shards,
+    device_gdn_weights,
+    fake_row,
+    function_calls,
+    gdn_oracle_weights,
+    hidden_sharded,
+    make_final_mixer_ttnn,
+    make_gdn_lanes_ttnn,
+    make_gdn_module,
+    make_ple_module,
+    ordered_calls,
+    patch_ttnn,
+    residual_rows,
+    use_tile_padding,
+)
 from models.demos.blackhole.qwen38_flash_next.ttnn import contracts as contracts_module
+from models.demos.blackhole.qwen38_flash_next.ttnn import embedding as embedding_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import final_mixer as mixer_module
+from models.demos.blackhole.qwen38_flash_next.ttnn import fused
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
-from models.demos.blackhole.qwen38_flash_next.ttnn import gr as gr_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import layer as layer_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import model as model_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import ple as ple_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import GDN_RESIDUE_CLASSES, Qwen38TTNNDevicePositionRow
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import GDN_RESIDUE_CLASSES
 from models.demos.blackhole.qwen38_flash_next.ttnn.final_mixer import (
     FLAT_LOCAL_WIDTH,
     RESIDUAL_RANK,
     Qwen38TTNNFinalMixer,
     Qwen38TTNNFinalMixerWeights,
 )
+from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_step as gdn_step_module
 
-TESTS = Path(__file__).resolve().parent
-TP = 4
 STEPS = 12
 ADMISSION_STEP = 8  # phase 0 again: a fresh lane (position 0) joins at a step of its residue class
 LANE_COUNTS = (1, 2, 4, 8)
-
-
-def _load(name: str):
-    spec = importlib.util.spec_from_file_location(name, TESTS / f"{name}.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-step4 = _load("test_mtp_v2_step4_rows_no_device")
-gr_test = _load("test_gr_rows_no_device")
-lanes_test = _load("test_batched_lanes_no_device")
-BF16, FP32, TILE = step4.BF16, step4.FP32, step4.TILE
-FakeContract, FakeTensor = step4.FakeContract, step4.FakeTensor
+HOST_IO = ("ttnn.from_torch", "ttnn.to_torch", "ttnn.copy_host_to_device_tensor", "torch.")
 
 
 # --------------------------------------------------------------------------- the fake
 
 
-def _matmul_per_tile(a, b, *, memory_config=None, dtype=None, program_config=None, compute_kernel_config=None):
-    """Every (batch) matmul as its own float64 2-D product rounded once: the same call for a tile in a 1-row
-    operand and for the same tile at batch index u of a lanes operand."""
-
-    out_dtype = dtype or a.dtype
-    results = []
-    for x, y in zip(a.torch_shards(), b.torch_shards()):
-        xs, ys = x.double().reshape(-1, *x.shape[-2:]), y.double().reshape(-1, *y.shape[-2:])
-        if ys.shape[0] == 1 and xs.shape[0] > 1:
-            ys = ys.expand(xs.shape[0], -1, -1)
-        product = torch.stack([xi @ yi for xi, yi in zip(xs, ys)])
-        results.append(product.reshape(*x.shape[:-2], x.shape[-2], y.shape[-1]).to(out_dtype.torch))
-    return FakeTensor(results, out_dtype, a.layout)
-
-
-def _multiply_device_zero(base_multiply):
-    """The step-4 multiply with binary_ng's rule: the product is +0.0 whenever an input is zero (so the keep-mask
-    reset of a lane leaves +0.0, the zero source's bits, as the device does; torch alone gives -0.0 for x < 0)."""
-
-    def op(a, b, **kwargs):
-        result = base_multiply(a, b, **kwargs)
-        for index, x in enumerate(result.torch_shards()):
-            if x.dtype.is_floating_point:
-                a_shard = a.torch_shards()[index]
-                zero = a_shard == 0
-                if isinstance(b, FakeTensor):
-                    zero = zero | (b.torch_shards()[index] == 0)
-                elif b == 0:
-                    zero = torch.ones_like(zero)
-                x.copy_(torch.where(zero, torch.zeros_like(x), x))
-        return result
-
-    return op
-
-
 @pytest.fixture
 def fake(monkeypatch):
     monkeypatch.setenv("QWEN38_FUSED_OFF", "ple")  # the fused PLE lane body serves by default; the fake runs the chain
-    chunk = step4.FakeChunk()
-    fake_ttnn = step4.make_fake_ttnn(chunk)
-    fake_ttnn.matmul = _matmul_per_tile
-    fake_ttnn.multiply = _multiply_device_zero(fake_ttnn.multiply)
-    fake_ttnn.empty_like = lambda t, dtype=None, layout=None, memory_config=None: FakeTensor(
-        [torch.empty_like(x) for x in t.torch_shards()], dtype or t.dtype, layout or t.layout
-    )
-    base_reshape = fake_ttnn.reshape
-    # A same-shape reshape is a view of its input on the device: the fake hands the input back, so releasing it
-    # after the reshape is a read of a deallocated tensor here too.
-    fake_ttnn.reshape = lambda t, shape, **kwargs: t if tuple(shape) == t.shape else base_reshape(t, shape, **kwargs)
-    for module in (gdn_module, ple_module):
-        monkeypatch.setattr(module, "ttnn", fake_ttnn)
-        monkeypatch.setattr(module, "replicate_tensor_2d_mesh_mapper", lambda device: "replicate", raising=False)
+    fake_ttnn = make_gdn_lanes_ttnn()
+    patch_ttnn(monkeypatch, fake_ttnn, gdn_module, ple_module)
     return fake_ttnn
 
 
 @pytest.fixture(scope="module")
 def gdn():
-    return step4._gdn_module(step4._device_gdn_weights(step4._gdn_oracle_weights()))
-
-
-def _bits(tensor: torch.Tensor) -> torch.Tensor:
-    return tensor.view(torch.int32) if tensor.dtype == torch.float32 else tensor.view(torch.int16)
-
-
-def _equal(actual: torch.Tensor, expected: torch.Tensor) -> bool:
-    return actual.shape == expected.shape and bool(torch.equal(_bits(actual), _bits(expected)))
+    return make_gdn_module(device_gdn_weights(gdn_oracle_weights()))
 
 
 def _lane_image(state: gdn_module.Qwen38TTNNGDNState, lane: int) -> dict[str, torch.Tensor]:
     """Lane u of a lanes state in the 1-row state's shapes (the recurrent over the four head shards, the ring rows)."""
 
-    recurrent = step4._cat(state.recurrent, 1)[lane : lane + 1]
-    slots = [step4._cat(slot, 3)[:, :, lane : lane + 1] for slot in state.conv]
+    recurrent = cat_shards(state.recurrent, 1)[lane : lane + 1]
+    slots = [cat_shards(slot, 3)[:, :, lane : lane + 1] for slot in state.conv]
     return {"recurrent": recurrent, **{f"conv[{index}]": slot for index, slot in enumerate(slots)}}
 
 
-def _one_row_image(state: gdn_module.Qwen38TTNNGDNState) -> dict[str, torch.Tensor]:
-    return _lane_image(state, 0)
-
-
-# --------------------------------------------------------------------------- the lanes step against B chains
+# --------------------------------------------------------------------------- the GDN lanes step against B chains
 
 
 @pytest.mark.parametrize("lanes", LANE_COUNTS)
@@ -159,25 +111,27 @@ def test_gdn_lanes_equal_b_one_row_chains_over_twelve_steps_with_an_aligned_admi
             chains[admitted] = gdn.allocate_state()
             image = _lane_image(lane_state, admitted)
             assert all(int(torch.count_nonzero(value)) == 0 for value in image.values())
-        result = gdn.forward_decode_lanes(step4._hidden_sharded(hidden[step : step + 1]), lane_state)
+        result = gdn.forward_decode_lanes(hidden_sharded(hidden[step : step + 1]), lane_state)
         assert result.state is lane_state and lane_state.conv_phase == (step + 1) % GDN_RESIDUE_CLASSES
-        output_lanes = step4._cat(result.hidden_sharded, 3)
+        output_lanes = cat_shards(result.hidden_sharded, 3)
         assert output_lanes.shape == (1, 1, lanes, 2560)
         for lane, chain in enumerate(chains):
-            reference = gdn.forward_decode(step4._hidden_sharded(hidden[step : step + 1, lane : lane + 1]), chain)
+            reference = gdn.forward_decode(hidden_sharded(hidden[step : step + 1, lane : lane + 1]), chain)
             assert chain.conv_phase == lane_state.conv_phase
-            assert _equal(output_lanes[:, :, lane : lane + 1], step4._cat(reference.hidden_sharded, 3)), (step, lane)
-            lane_image, chain_image = _lane_image(lane_state, lane), _one_row_image(chain)
+            reference_hidden = cat_shards(reference.hidden_sharded, 3)
+            assert bits_equal(output_lanes[:, :, lane : lane + 1], reference_hidden), (step, lane)
+            lane_image, chain_image = _lane_image(lane_state, lane), _lane_image(chain, 0)
             for name, value in chain_image.items():
-                assert _equal(lane_image[name], value), (step, lane, name)
+                assert bits_equal(lane_image[name], value), (step, lane, name)
     if lanes > 1:
         # The lanes differ from each other (the comparison is not vacuous) and the 1-row body refuses the state.
-        assert not _equal(_lane_image(lane_state, 0)["recurrent"], _lane_image(lane_state, 1)["recurrent"])
-        with expect_error(ValueError, match="the 1-row GDN decode body admits a batch-1 state"):
-            gdn.forward_decode(step4._hidden_sharded(hidden[:1, :1]), lane_state)
+        assert not bits_equal(_lane_image(lane_state, 0)["recurrent"], _lane_image(lane_state, 1)["recurrent"])
+        with expect_error(ValueError, match=f"the 1-row GDN decode body admits a batch-1 state, got batch {lanes}"):
+            gdn.forward_decode(hidden_sharded(hidden[:1, :1]), lane_state)
 
 
-def test_misaligned_admission_differs_and_the_position_row_refuses_it(fake, gdn, monkeypatch, expect_error) -> None:
+def test_misaligned_admission_differs_from_a_fresh_session(fake, gdn) -> None:
+    # The position row refuses this admission (test_batched_lanes_no_device); here is why.
     torch.manual_seed(7)
     hidden = torch.randn(STEPS, 2, 2560).to(torch.bfloat16)
     lane_state = gdn.allocate_lane_state(2)
@@ -188,31 +142,34 @@ def test_misaligned_admission_differs_and_the_position_row_refuses_it(fake, gdn,
             assert lane_state.conv_phase == 1
             lane_state.reset_lane_inplace(1)
             fresh = gdn.allocate_state()  # phase 0: the chain a fresh session would run
-        gdn.forward_decode_lanes(step4._hidden_sharded(hidden[step : step + 1]), lane_state)
+        gdn.forward_decode_lanes(hidden_sharded(hidden[step : step + 1]), lane_state)
         if fresh is not None:
-            gdn.forward_decode(step4._hidden_sharded(hidden[step : step + 1, 1:2]), fresh)
-    lane_image, fresh_image = _lane_image(lane_state, 1), _one_row_image(fresh)
-    assert not all(_equal(lane_image[name], fresh_image[name]) for name in fresh_image)
-    # The rule that forbids it: the position row admits a lane only at a step of its residue class.
-    lane_fake = lanes_test.make_lane_fake()
-    monkeypatch.setattr(contracts_module, "ttnn", lane_fake)
-    monkeypatch.setattr(contracts_module, "replicate_tensor_2d_mesh_mapper", lambda device: "replicate")
-    row = Qwen38TTNNDevicePositionRow.allocate("mesh", FakeContract(), [5, 5], lanes=2)
-    with expect_error(ValueError, match="residue 0, expected the row's residue 1; admit it 3 steps later"):
-        row.admit(1, 0)
-    for _ in range(3):
-        row.advance()
-    row.admit(1, 0)
-    assert row.positions[:2] == [8, 0] and row.residue == 0
+            gdn.forward_decode(hidden_sharded(hidden[step : step + 1, 1:2]), fresh)
+    lane_image, fresh_image = _lane_image(lane_state, 1), _lane_image(fresh, 0)
+    assert not all(bits_equal(lane_image[name], fresh_image[name]) for name in fresh_image)
 
 
-# --------------------------------------------------------------------------- lane resets and the snapshot at B
+# --------------------------------------------------------------------------- GDN state, lane resets, the snapshot at B
 
 
-def test_lane_reset_zeroes_one_lane_and_keeps_the_others_bitwise(fake, gdn, expect_error) -> None:
+def test_gdn_lane_state_layout_and_lane_reset_keep_the_other_lanes_bitwise(fake, gdn, expect_error) -> None:
     lanes = 4
     torch.manual_seed(3)
     state = gdn.allocate_lane_state(lanes)
+    assert state.recurrent.shape == (lanes, 12, 128, 128) and state.recurrent.dtype is FP32
+    assert all(slot.shape == (1, 1, lanes, 2560) and slot.dtype is BF16 for slot in state.conv)
+    one = gdn.allocate_state()
+    assert one.batch_size == 1 and one.recurrent.shape == (1, 12, 128, 128) and one.conv[0].shape == (1, 1, 1, 2560)
+    for bad in (0, 33):
+        with expect_error(ValueError, match=r"GDN state batch size must be in \[1,32\]"):  # allow-pytest.raises
+            gdn_module.Qwen38TTNNGDNState.allocate("mesh", gdn.mesh_contract, layer_index=0, batch_size=bad)
+    state.batch_size = lanes + 1
+    with expect_error(
+        RuntimeError,
+        match=r"GDN recurrent state \(batch 5\) local shape must be \(5, 12, 128, 128\), got \(4, 12, 128, 128\)",
+    ):
+        state.validate()
+    state.batch_size = lanes
     for local in state.recurrent.locals:
         local.copy_(torch.randn(lanes, 12, 128, 128) * 0.3)
     for slot in state.conv:
@@ -226,7 +183,7 @@ def test_lane_reset_zeroes_one_lane_and_keeps_the_others_bitwise(fake, gdn, expe
             if lane == 2:
                 assert int(torch.count_nonzero(value)) == 0 and not bool(torch.signbit(value).any()), name
             else:
-                assert _equal(value, before[lane][name]), (lane, name)
+                assert bits_equal(value, before[lane][name]), (lane, name)
     for bad in (-1, 4, True, 1.0):
         with expect_error(ValueError, match=r"lane must be an int in \[0,4\)"):  # allow-pytest.raises: contract
             state.reset_lane_inplace(bad)
@@ -235,113 +192,127 @@ def test_lane_reset_zeroes_one_lane_and_keeps_the_others_bitwise(fake, gdn, expe
     assert snapshot.batch_size == lanes and snapshot.recurrent.shape == (lanes, 12, 128, 128)
     state.capture_into(snapshot)
     state.reset_inplace()
+    assert state.conv_phase == 0 and len(state.conv_window()) == 4
     assert all(int(torch.count_nonzero(v)) == 0 for lane in range(lanes) for v in _lane_image(state, lane).values())
     state.restore_from(snapshot)
     for lane in range(lanes):
         for name, value in _lane_image(state, lane).items():
-            assert _equal(value, before[lane][name]) if lane != 2 else int(torch.count_nonzero(value)) == 0, name
+            assert bits_equal(value, before[lane][name]) if lane != 2 else int(torch.count_nonzero(value)) == 0, name
     snapshot.batch_size = 1
     with expect_error(RuntimeError, match=r"GDN snapshot recurrent state local shape must be \(1, 12, 128, 128\)"):
         snapshot.validate(state.mesh_contract)
 
 
-class _LaneLookup(step4._FakeResidentLookup):
-    def lookup_lanes(self, tokens, contexts):
-        payloads, next_contexts = zip(
-            *(self.lookup_token(int(token), context) for token, context in zip(tokens, contexts))
-        )
-        return bytearray().join(payloads), tuple(next_contexts)
+# --------------------------------------------------------------------------- PLE lanes
 
 
-def test_ple_lanes_at_one_lane_equal_the_one_row_path(fake) -> None:
-    """B = 1: the lane is the 1-row path bitwise over three steps (a same-shape reshape is a view)."""
+@pytest.mark.parametrize("lanes", [1, 3])
+def test_ple_lanes_equal_the_one_row_path_per_lane_with_independent_contexts(fake, expect_error, lanes: int) -> None:
+    """Lane u is the 1-row path on its own stream, bitwise (at B = 1 a same-shape reshape is a view)."""
 
-    module = step4._ple_module()
-    module._resident_lookup = _LaneLookup()
-    module.host_embedding = module._resident_lookup
-    torch.manual_seed(5)
-    lanes_state = module.allocate_lanes_state(1)
-    chain = module.allocate_state()
-    for step, token in enumerate((17, 20, 16)):
-        residual = torch.randn(1, 4, 2560).to(torch.bfloat16)
-        prepared = module.prepare_lanes_input([token], lanes_state)
-        delta = module.forward_prepared_lanes(step4._residual_rows(residual), prepared, lanes_state)
-        one = module.prepare_decode_input(torch.tensor([[token]], dtype=torch.long), chain)
-        reference = module.forward_prepared(step4._residual_rows(residual), one, chain)
-        assert _equal(step4._cat(delta, 3), step4._cat(reference.residual_delta, 3)), step
-        for index in range(ple_module.CONV_STATE_LENGTH):
-            assert _equal(step4._cat(lanes_state.conv[index], 3), step4._cat(chain.conv[index], 3)), (step, index)
-        assert lanes_state.token_contexts == (tuple(int(v) for v in chain.token_context[0]),)
+    module = make_ple_module()
+    steps = 3
+    streams = ((17, 15, 16), (16, 95859, 17), (20, 17, 17))  # lane u's tokens, step by step
+    torch.manual_seed(24)
+    residual = torch.randn(steps, lanes, 4, 2560).to(torch.bfloat16)
+
+    # 1-row references: one fresh state per lane, threaded through its nine slots and its host context.
+    states = [module.allocate_state() for _ in range(lanes)]
+    deltas = [[None] * lanes for _ in range(steps)]
+    contexts = [[None] * lanes for _ in range(steps)]
+    for step in range(steps):
+        for lane, state in enumerate(states):
+            prepared = module.prepare_decode_input(torch.tensor([[streams[lane][step]]], dtype=torch.long), state)
+            result = module.forward_prepared(residual_rows(residual[step, lane : lane + 1]), prepared, state)
+            deltas[step][lane] = cat_shards(result.residual_delta, 3)
+            contexts[step][lane] = tuple(int(v) for v in state.token_context[0])
+
+    lanes_state = module.allocate_lanes_state(lanes)
+    assert lanes_state.token_contexts == (None,) * lanes and lanes_state.conv[0].shape == (1, lanes, 4, 640)
+    for step in range(steps):
+        prepared = module.prepare_lanes_input([streams[lane][step] for lane in range(lanes)], lanes_state)
+        assert prepared.embedding_rows.shape == (1, 1, lanes, 640) and prepared.embedding_rows.layout == ROW_MAJOR
+        delta_lanes = cat_shards(module.forward_prepared_lanes(residual_rows(residual[step]), prepared, lanes_state), 3)
+        assert delta_lanes.shape == (1, lanes, 4, 2560)
+        for lane in range(lanes):
+            assert bits_equal(delta_lanes[:, lane : lane + 1], deltas[step][lane]), (step, lane)
+        assert lanes_state.token_contexts == tuple(contexts[step]), step
         prepared.release()
+    for index in range(ple_module.CONV_STATE_LENGTH):
+        lane_slots = cat_shards(lanes_state.conv[index], 3)
+        for lane, state in enumerate(states):
+            assert bits_equal(lane_slots[:, lane : lane + 1], cat_shards(state.conv[index], 3)), (index, lane)
+    if lanes == 1:
+        return
+    # The streams differ, so the per-lane comparison is not vacuous.
+    assert not torch.equal(deltas[2][1], deltas[2][2])
 
-
-def test_ple_lane_reset_zeroes_one_lane_and_clears_its_context(fake, expect_error) -> None:
-    module = step4._ple_module()
-    module._resident_lookup = _LaneLookup()
-    module.host_embedding = module._resident_lookup
-    lanes = 3
-    torch.manual_seed(4)
-    state = module.allocate_lanes_state(lanes)
-    for step in range(2):
-        prepared = module.prepare_lanes_input([17 + step, 20 + step, 16], state)
-        delta = module.forward_prepared_lanes(
-            step4._residual_rows(torch.randn(lanes, 4, 2560).to(torch.bfloat16)), prepared, state
-        )
-        prepared.release()
-        del delta
-    before = [step4._cat(slot, 3) for slot in state.conv]
-    contexts = state.token_contexts
-    assert all(context is not None for context in contexts)
-    state.reset_lane_inplace(1)
-    for index, slot in enumerate(state.conv):
-        after = step4._cat(slot, 3)
+    # The lane reset zeroes lane 1 and clears its context; the other lanes keep their slots bitwise.
+    before = [cat_shards(slot, 3) for slot in lanes_state.conv]
+    lane_contexts = lanes_state.token_contexts
+    lanes_state.reset_lane_inplace(1)
+    for index, slot in enumerate(lanes_state.conv):
+        after = cat_shards(slot, 3)
         assert int(torch.count_nonzero(after[:, 1])) == 0, index
-        assert _equal(after[:, 0], before[index][:, 0]) and _equal(after[:, 2], before[index][:, 2]), index
-    assert state.token_contexts == (contexts[0], None, contexts[2])
+        assert bits_equal(after[:, 0], before[index][:, 0]) and bits_equal(after[:, 2], before[index][:, 2]), index
+    assert lanes_state.token_contexts == (lane_contexts[0], None, lane_contexts[2])
     with expect_error(ValueError, match=r"PLE lane must be an int in \[0,3\), got 3"):  # allow-pytest.raises
-        state.reset_lane_inplace(3)
+        lanes_state.reset_lane_inplace(3)
+
+    # Contracts: token count, stale prepared input, lane count.
+    with expect_error(ValueError, match=r"needs 3 tokens \(one per lane\), got 2"):
+        module.prepare_lanes_input([1, 2], lanes_state)
+    stale = module.prepare_lanes_input([1, 2, 3], lanes_state)
+    lanes_state.token_contexts = ((1, 1),) * lanes
+    with expect_error(RuntimeError, match="prepared PLE lanes were looked up from contexts"):
+        module.forward_prepared_lanes(residual_rows(residual[0]), stale, lanes_state)
+    with expect_error(ValueError, match=r"PLE lanes must be in \[1,32\], got 33"):  # allow-pytest.raises: contract
+        module.allocate_lanes_state(33)
+
+
+def test_ple_inject_lanes_adds_the_permuted_delta_to_the_branch_major_rows(expect_error, fake) -> None:
+    module = make_ple_module()
+    lanes = 2
+    torch.manual_seed(25)
+    residual = torch.randn(lanes, 4, 2560).to(torch.bfloat16)
+    tokens = [17, 20]
+    lanes_state = module.allocate_lanes_state(lanes)
+    prepared = module.prepare_lanes_input(tokens, lanes_state)
+    delta = cat_shards(module.forward_prepared_lanes(residual_rows(residual), prepared, lanes_state), 3)
+    fresh = module.allocate_lanes_state(lanes)
+    branch_major = residual.reshape(1, lanes, 4, 2560).permute(0, 2, 1, 3).contiguous()
+    injected = module.inject_lanes(
+        FakeTensor([p.clone() for p in torch.chunk(branch_major, TP, dim=3)], BF16, TILE, 3),
+        module.prepare_lanes_input(tokens, fresh),
+        fresh,
+    )
+    assert injected.shape == (1, 4, lanes, 640)
+    expected = (branch_major.float() + delta.permute(0, 2, 1, 3).float()).to(torch.bfloat16)
+    assert torch.equal(cat_shards(injected, 3).view(torch.int16), expected.view(torch.int16))
+    with expect_error(ValueError, match=r"lanes residual must be BF16 TILE \(1, 4, 2, 640\)"):
+        module.inject_lanes(residual_rows(residual), module.prepare_lanes_input(tokens, fresh), fresh)
 
 
 # --------------------------------------------------------------------------- final mixer rows
 
 
-def _mixer_fake():
-    fake = gr_test._gr_fake()
-
-    def all_reduce(tensor, *, cluster_axis, memory_config=None, topology=None):
-        total = gr_test._sequential_sum(torch.stack(tensor.torch_shards()), 0).squeeze(0)
-        return FakeTensor([total.clone() for _ in range(TP)], tensor.dtype, tensor.layout)
-
-    fake.all_reduce = all_reduce
-    return fake
-
-
-def _mixer_module(fake) -> Qwen38TTNNFinalMixer:
+@pytest.mark.parametrize("rows", [1, 3, 8, 32])
+def test_final_mixer_rows_equal_the_one_row_mixer_row_for_row(monkeypatch, rows: int, expect_error) -> None:
+    use_tile_padding(monkeypatch)
+    fake = make_final_mixer_ttnn()
+    monkeypatch.setattr(mixer_module, "ttnn", fake)
     torch.manual_seed(9)
+    width, rank = FLAT_LOCAL_WIDTH, RESIDUAL_RANK
     weights = Qwen38TTNNFinalMixerWeights(
-        norm_scale=gr_test.FakeTensor(
-            [(torch.randn(1, 4, 1, 640) * 0.1 + 0.25) for _ in range(TP)], gr_test.FP32, gr_test.TILE, 3
-        ),
-        down=gr_test.FakeTensor(
-            [gr_test._bf16(1, 1, FLAT_LOCAL_WIDTH, RESIDUAL_RANK, scale=FLAT_LOCAL_WIDTH**-0.5) for _ in range(TP)],
-            gr_test.BF16,
-            gr_test.TILE,
-            2,
-        ),
-        up=gr_test.FakeTensor(
-            [gr_test._bf16(1, 1, RESIDUAL_RANK, FLAT_LOCAL_WIDTH, scale=RESIDUAL_RANK**-0.5) for _ in range(TP)],
-            gr_test.BF16,
-            gr_test.TILE,
-            3,
-        ),
-        replicated_anchor=gr_test.FakeTensor(
-            [torch.zeros(1, 1, 1, 1, dtype=torch.bfloat16) for _ in range(TP)], gr_test.BF16, gr_test.TILE
-        ),
+        norm_scale=FakeTensor([(torch.randn(1, 4, 1, 640) * 0.1 + 0.25) for _ in range(TP)], FP32, TILE, 3),
+        down=FakeTensor([bf16_randn(1, 1, width, rank, scale=width**-0.5) for _ in range(TP)], BF16, TILE, 2),
+        up=FakeTensor([bf16_randn(1, 1, rank, width, scale=rank**-0.5) for _ in range(TP)], BF16, TILE, 3),
+        replicated_anchor=FakeTensor([torch.zeros(1, 1, 1, 1, dtype=torch.bfloat16) for _ in range(TP)], BF16, TILE),
         namespace="backbone",
     )
     module = object.__new__(Qwen38TTNNFinalMixer)
     module.mesh_device = "mesh"
-    module.mesh_contract = gr_test.FakeContract()
+    module.mesh_contract = FakeContract()
     module.weights = weights
     module.collective_topology = "linear"
     module.compute_config = "compute"
@@ -350,69 +321,31 @@ def _mixer_module(fake) -> Qwen38TTNNFinalMixer:
     module.down_program_config = "down"
     module.up_act_memory_config = fake.DRAM_MEMORY_CONFIG
     module.up_program_config = "up"
-    module.norm_scale_flat = fake.experimental.view(weights.norm_scale, (1, 1, 1, FLAT_LOCAL_WIDTH))
-    return module
-
-
-@pytest.mark.parametrize("rows", [1, 3, 8, 32])
-def test_final_mixer_rows_equal_the_one_row_mixer_row_for_row(monkeypatch, rows: int, expect_error) -> None:
-    fake = _mixer_fake()
-    monkeypatch.setattr(mixer_module, "ttnn", fake)
-    module = _mixer_module(fake)
+    module.norm_scale_flat = fake.experimental.view(weights.norm_scale, (1, 1, 1, width))
     torch.manual_seed(20 + rows)
-    residual = gr_test.FakeTensor([gr_test._bf16(1, 4, rows, 640) for _ in range(TP)], gr_test.BF16, gr_test.TILE, 3)
+    residual = FakeTensor([bf16_randn(1, 4, rows, 640) for _ in range(TP)], BF16, TILE, 3)
     output = module.rows(residual)
-    assert output.shape == (1, 1, rows, 640) and output.dtype is gr_test.BF16
-    for row in range(rows):
-        one = module(gr_test._rows(residual, row))
-        assert one.shape == (1, 1, 1, 640)
-        gr_test._equal(
-            gr_test.FakeTensor([x[:, :, row : row + 1] for x in output.torch_shards()], output.dtype, output.layout),
-            [one],
-            dim=2,
-            label=f"final mixer rows row {row}",
-        )
-    with expect_error(
-        ValueError, match=r"final mixer residual rows must be in \[1,32\], got 33"
-    ):  # allow-pytest.raises
-        module.rows(
-            gr_test.FakeTensor([gr_test._bf16(1, 4, 33, 640) for _ in range(TP)], gr_test.BF16, gr_test.TILE, 3)
-        )
+    assert output.shape == (1, 1, rows, 640) and output.dtype is BF16
+    per_row = [module(fake_row(residual, row)) for row in range(rows)]
+    assert_rows_bitwise(output, per_row, dim=2, label=f"final mixer {rows} rows")
+    with expect_error(ValueError, match=r"final mixer residual rows must be in \[1,32\], got 33"):
+        module.rows(FakeTensor([bf16_randn(1, 4, 33, 640) for _ in range(TP)], BF16, TILE, 3))
     with expect_error(ValueError, match=r"must be rank 4"):  # allow-pytest.raises: contract
-        module.rows(gr_test.FakeTensor([gr_test._bf16(4, 1, 640) for _ in range(TP)], gr_test.BF16, gr_test.TILE, 2))
+        module.rows(FakeTensor([bf16_randn(4, 1, 640) for _ in range(TP)], BF16, TILE, 2))
 
 
 # --------------------------------------------------------------------------- source pins
 
 
 def _self_walk(function, receiver: str = "self") -> list[str]:
-    lines = inspect.getsource(function).splitlines()
-    indent = len(lines[0]) - len(lines[0].lstrip())
-    tree = ast.parse("\n".join(line[indent:] for line in lines))
-    return [
-        ast.unparse(node.func).removeprefix(f"{receiver}.")
-        for node in sorted(
-            (n for n in ast.walk(tree) if isinstance(n, ast.Call)), key=lambda n: (n.lineno, n.col_offset)
-        )
-        if ast.unparse(node.func).startswith(f"{receiver}.")
-    ]
-
-
-def _calls(function) -> list[str]:
-    lines = inspect.getsource(function).splitlines()
-    indent = len(lines[0]) - len(lines[0].lstrip())
-    tree = ast.parse("\n".join(line[indent:] for line in lines))
-    return [ast.unparse(node.func) for node in ast.walk(tree) if isinstance(node, ast.Call)]
-
-
-HOST_IO = ("ttnn.from_torch", "ttnn.to_torch", "ttnn.copy_host_to_device_tensor", "torch.")
+    calls = ordered_calls(ast.parse(textwrap.dedent(inspect.getsource(function))))
+    return [call.removeprefix(f"{receiver}.") for call in calls if call.startswith(f"{receiver}.")]
 
 
 def test_gdn_lanes_body_is_the_one_row_walk_with_the_lanes_suffix_and_the_one_row_body_is_untouched() -> None:
-    from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_step as gdn_step_module
-
-    one_row = [name for name in _self_walk(gdn_module.Qwen38TTNNGDN.forward_decode) if name.startswith("_")]
-    lanes = [name for name in _self_walk(gdn_module.Qwen38TTNNGDN.forward_decode_lanes) if name.startswith("_")]
+    cls = gdn_module.Qwen38TTNNGDN
+    one_row = [name for name in _self_walk(cls.forward_decode) if name.startswith("_")]
+    lanes = [name for name in _self_walk(cls.forward_decode_lanes) if name.startswith("_")]
     # The 1-row body resolves its projection -> gated-output step through the fused registry; the composed chain is
     # the walk the lane stages mirror.
     assert one_row == ["_validate_state", "_all_gather_hidden", "_project", "_gdn_step", "_out_project"]
@@ -440,38 +373,42 @@ def test_gdn_lanes_body_is_the_one_row_walk_with_the_lanes_suffix_and_the_one_ro
     )
     assert [lane_names[-1] for _, lane_names in stages] == lanes[1:]
     for one_names, lane_names in stages:
-        one_calls = {
-            c for name in one_names for c in _calls(getattr(gdn_module.Qwen38TTNNGDN, name)) if c.startswith("ttnn.")
-        }
-        lane_calls = {
-            c for name in lane_names for c in _calls(getattr(gdn_module.Qwen38TTNNGDN, name)) if c.startswith("ttnn.")
-        }
+        one_calls, lane_calls = (
+            {call for name in names for call in function_calls(getattr(cls, name)) if call.startswith("ttnn.")}
+            for names in (one_names, lane_names)
+        )
         assert one_calls == lane_calls, (one_names, lane_names)
-    assert _self_walk(gdn_module.Qwen38TTNNGDN._project_lanes)[0] == "_project_lanes_unsplit"
-    assert _self_walk(gdn_module.Qwen38TTNNGDN._gate_and_project_lanes)[-1] == "_out_project_lanes"
+    assert _self_walk(cls._project_lanes)[0] == "_project_lanes_unsplit"
+    assert _self_walk(cls._gate_and_project_lanes)[-1] == "_out_project_lanes"
+    # The lane bodies touch no host: no host I/O, no per-lane host ints.
     for function in (
-        gdn_module.Qwen38TTNNGDN.forward_decode_lanes,
-        *(getattr(gdn_module.Qwen38TTNNGDN, name) for name in lanes),
-        gdn_module.Qwen38TTNNGDN._project_lanes_unsplit,
-        gdn_module.Qwen38TTNNGDN._out_project_lanes,
-        gdn_module.Qwen38TTNNGDN._forward_decode_lanes_fused,
+        cls.forward_decode_lanes,
+        *(getattr(cls, name) for name in lanes),
+        cls._project_lanes_unsplit,
+        cls._out_project_lanes,
+        cls._forward_decode_lanes_fused,
         layer_module.Qwen38TTNNDecoderLayer.forward_decode_lanes,
         model_module.Qwen38TTNNTextModel.forward_decode_lanes,
         model_module.Qwen38TTNNTextModel._embed_residual_lanes_from_device_token,
         model_module.Qwen38TTNNTextModel.resolve_lane_tokens,
         mixer_module.Qwen38TTNNFinalMixer.rows,
+        contracts_module.Qwen38TTNNDevicePositionRow.advance,
+        contracts_module.Qwen38TTNNDevicePositionRow.index_row,
+        embedding_module.resolve_greedy_lanes_on_device,
+        ple_module.Qwen38TTNNPLE.forward_prepared_lanes,
+        ple_module.Qwen38TTNNPLE._convolve_lanes,
     ):
-        assert not any(call.startswith(HOST_IO) for call in _calls(function)), function.__qualname__
-    assert "Advance one true-global-B1 token" in inspect.getsource(gdn_module.Qwen38TTNNGDN.forward_decode)
-    assert "admits a batch-1 state" in inspect.getsource(gdn_module.Qwen38TTNNGDN._validate_state)
-    assert "lanes" not in inspect.getsource(gdn_module.Qwen38TTNNGDN._recurrent_decode)
+        assert not any(call.startswith(HOST_IO) for call in function_calls(function)), function.__qualname__
+    assert "Advance one true-global-B1 token" in inspect.getsource(cls.forward_decode)
+    assert "admits a batch-1 state" in inspect.getsource(cls._validate_state)
+    assert "lanes" not in inspect.getsource(cls._recurrent_decode)
     # The lane resets are keep-mask multiplies landed in place (eager host uploads), never the trace body's ops.
     for function in (
         gdn_module.Qwen38TTNNGDNState.reset_lane_inplace,
         ple_module.Qwen38TTNNPLELanesState.reset_lane_inplace,
         qsa_module.Qwen38TTNNQSA.reset_lane_inplace,
     ):
-        calls = _calls(function)
+        calls = function_calls(function)
         assert "ttnn.multiply" in calls and "ttnn.from_torch" in calls, function
         assert "ttnn.copy" in calls or "_copy_inplace" in calls, function
 
@@ -479,9 +416,6 @@ def test_gdn_lanes_body_is_the_one_row_walk_with_the_lanes_suffix_and_the_one_ro
 def test_gdn_fused_lanes_body_is_the_one_row_fused_walk_on_b_rows_and_binds_under_the_switch() -> None:
     """The fused lane body is ``forward_decode``'s walk around the ``gdn_step`` program at rows = B, in the composed
     lanes body's ring order; it is bound at construction only when the kernel is on."""
-
-    from models.demos.blackhole.qwen38_flash_next.ttnn import fused
-    from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_step as gdn_step_module
 
     cls = gdn_module.Qwen38TTNNGDN
     fused_body = cls._forward_decode_lanes_fused
@@ -491,7 +425,7 @@ def test_gdn_fused_lanes_body_is_the_one_row_fused_walk_on_b_rows_and_binds_unde
         "_project_lanes_unsplit",
         "_out_project_lanes",
     ]
-    calls = _calls(fused_body)
+    calls = function_calls(fused_body)
     assert "fused.gdn_step.gdn_step" in calls and "state.conv_window" in calls and "state.advance_conv_window" in calls
     assert not any(call.startswith("ttnn.") for call in calls)  # every device op is in the helpers or the program
     assert not any(call.startswith(HOST_IO) for call in calls)
@@ -525,9 +459,9 @@ def test_gdn_fused_lanes_body_is_the_one_row_fused_walk_on_b_rows_and_binds_unde
     assert "the last slot receives that token" in inspect.getsource(gdn_module.Qwen38TTNNGDNState.conv_window)
     # The unsplit projection writes no ring slot and takes no z/a/b slice (the program does both); the out-projection
     # is the one reduce-scatter of the lanes body.
-    unsplit = _calls(cls._project_lanes_unsplit)
+    unsplit = function_calls(cls._project_lanes_unsplit)
     assert "ttnn.slice" not in unsplit and unsplit.count("ttnn.linear") == 1
-    assert _calls(cls._out_project_lanes).count("ttnn.reduce_scatter") == 1
+    assert function_calls(cls._out_project_lanes).count("ttnn.reduce_scatter") == 1
     assert "lanes" in fused.kernel("gdn_step").replaces and "_forward_decode_lanes_fused" in gdn_step_module.__doc__
     # The binding: the one ``if fused.enabled("gdn_step")`` of the constructor assigns the partial over the class
     # attribute; QWEN38_FUSED_OFF=gdn_step unbinds it and the class body runs the lane chain.
@@ -562,12 +496,12 @@ def test_layer_and_model_lane_bodies_are_the_generic_walk_over_lanes() -> None:
     assert [name for name in layer_walk if name in order] == order
     source = inspect.getsource(layer_module.Qwen38TTNNDecoderLayer.forward_decode_lanes)
     # The lane GR reads and the final mixer rows walk branch-major <-> flat rows through views (the same tile pages
-    # for 1..32 rows: no permute or relayout kernel in the lane body); the rows forms keep the permutes by default.
+    # for 1..32 rows: no permute or relayout kernel in the lane body); the rows forms keep the permutes by default
+    # (the GR rows pins: test_gr_rows_no_device).
     assert source.count("read_rows(residual, flat_views=True)") == 2
-    for function in (gr_module.Qwen38TTNNGatedResidual.read_rows, mixer_module.Qwen38TTNNFinalMixer.rows):
-        calls = _calls(function)
-        assert calls.count("ttnn.experimental.view") == 2 and calls.count("ttnn.permute") == 2, function.__qualname__
-        assert inspect.signature(function).parameters["flat_views"].default is False, function.__qualname__
+    mixer_calls = function_calls(mixer_module.Qwen38TTNNFinalMixer.rows)
+    assert mixer_calls.count("ttnn.experimental.view") == 2 and mixer_calls.count("ttnn.permute") == 2
+    assert inspect.signature(mixer_module.Qwen38TTNNFinalMixer.rows).parameters["flat_views"].default is False
     assert "state.moe.forward(mlp_input, packed_experts[0], packed_experts[1])" in source
     assert "state.ple.token_contexts = (None,) * lanes" in source  # the caller owns the n-gram contexts
     assert "output_tensor=state.attention_rows" in source  # the QSA 32-row output lands in the persistent rows
