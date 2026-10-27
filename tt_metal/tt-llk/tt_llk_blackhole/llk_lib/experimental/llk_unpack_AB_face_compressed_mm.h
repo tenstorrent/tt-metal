@@ -360,11 +360,6 @@ inline void _llk_unpack_AB_face_compressed_mm_(const std::uint32_t base_address_
     wait_for_next_context(1);
     reset_config_context();
 
-    // Start the call from a clean unpacker. The format-switch stall is encoded per face only within a call: index
-    // word 0 bit 0 replicates the first face's own format, never the format of whatever unpacked before -- the
-    // previous call's last face, or a previous op's. So issue the stall here, the same S an in-call switch gets,
-    // ahead of the first face.
-    TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::CLR_SRC);
     if constexpr (clear_src)
     {
         TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC);
