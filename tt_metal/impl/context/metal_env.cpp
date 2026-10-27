@@ -460,6 +460,9 @@ bool MetalEnvImpl::set_fabric_config(
         }
         system_mesh_.reset();
         this->initialize_control_plane_impl();
+    } else if (this->fabric_config_ == tt_fabric::FabricConfig::MGD_DEFAULT) {
+        // Resolve now so the routing setup below sees the concrete config.
+        this->get_control_plane();
     }
 
     // Active tt-fabric: refresh routing tables (control plane rebuild is not enough).
@@ -607,6 +610,7 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             mesh_graph_desc_path.string(),
             this->control_plane_config());
     }
+    fabric_config_ = control_plane_->get_fabric_config();
 }
 
 void MetalEnvImpl::construct_control_plane() {
@@ -620,6 +624,7 @@ void MetalEnvImpl::construct_control_plane() {
     log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
     control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
         get_cluster(), *rtoptions_, get_hal(), *distributed_context_, this->control_plane_config());
+    fabric_config_ = control_plane_->get_fabric_config();
 }
 
 FabricConfigDescriptor MetalEnvImpl::control_plane_config() const {

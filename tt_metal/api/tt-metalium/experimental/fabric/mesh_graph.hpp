@@ -121,8 +121,8 @@ using RequestedIntermeshPorts =
 
 class MeshGraph {
 public:
-    // fabric_config is a single override owned by one mesh (local_mesh_id); other meshes derive their config
-    // from their own MGD dim_types. local_mesh_id = nullopt applies the override to every mesh (legacy).
+    // fabric_config is a single override owned by one mesh (local_mesh_id); other meshes use their own MGD
+    // dim_types. local_mesh_id = nullopt applies the override to every mesh (legacy).
     explicit MeshGraph(
         tt::tt_metal::ClusterType cluster_type,
         const std::string& mesh_graph_desc_file_path,
@@ -133,6 +133,12 @@ public:
         const tt::Cluster& cluster,
         const std::string& mesh_graph_desc_file_path,
         std::optional<FabricConfig> fabric_config = std::nullopt);
+
+    explicit MeshGraph(
+        const MeshGraphDescriptor& mesh_graph_descriptor,
+        std::optional<FabricConfig> fabric_config = std::nullopt,
+        bool is_ubb_galaxy = false,
+        std::optional<MeshId> local_mesh_id = std::nullopt);
     ~MeshGraph() = default;
 
     void print_connectivity() const;
@@ -198,11 +204,6 @@ public:
         tt::ARCH arch,
         std::uint32_t num_connections_per_direction);
 
-    explicit MeshGraph(
-        const MeshGraphDescriptor& mesh_graph_descriptor,
-        std::optional<FabricConfig> fabric_config = std::nullopt,
-        bool is_ubb_galaxy = false);
-
     // Get the number of active channels the user has requested between meshes
     const RequestedIntermeshConnections& get_requested_intermesh_connections() const;
 
@@ -238,7 +239,9 @@ public:
     }
 
     // File path when the graph was loaded from textproto; unset for programmatic / auto-discovered MGDs.
-    std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const { return mesh_graph_desc_file_path_; }
+    std::optional<std::filesystem::path> get_mesh_graph_descriptor_path() const {
+        return mesh_graph_descriptor_.has_value() ? mesh_graph_descriptor_->get_file_path() : std::nullopt;
+    }
 
 private:
     MeshGraph() = default;
@@ -288,9 +291,6 @@ private:
 
     // Store the MeshGraphDescriptor instance if created from a descriptor file
     std::optional<MeshGraphDescriptor> mesh_graph_descriptor_;
-
-    // Store the file path if MeshGraph was created from a descriptor file
-    std::optional<std::filesystem::path> mesh_graph_desc_file_path_;
 };
 
 }  // namespace tt::tt_fabric

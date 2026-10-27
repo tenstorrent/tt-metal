@@ -396,6 +396,10 @@ private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
 
+    // Meshes this process owns: config_.mesh_id, or every mesh in the mesh graph for a single-process run
+    // (single-host multi-mesh, used by tests), since no other process exists to own them.
+    std::vector<MeshId> owned_mesh_ids() const;
+
     void init_control_plane(
         const std::string& mesh_graph_desc_file,
         std::optional<std::reference_wrapper<const std::map<FabricNodeId, ChipId>>>
@@ -403,9 +407,10 @@ private:
 
     void init_control_plane_auto_discovery();
 
-    // Gathers the FabricConfigDescriptor of every rank and enforces one FabricConfig per logical mesh and identical
-    // other settings on every rank (only fabric_config, mesh_id and host_rank may differ). Must run after the local
-    // mesh binding and distributed contexts are known, and before routing tables or FabricContext are built.
+    // Gathers the FabricConfigDescriptor of every rank and checks that each rank's mesh_id / host_rank exist in the
+    // mesh graph descriptor, that ranks of a logical mesh share one FabricConfig, and that all other settings are
+    // identical on every rank (only fabric_config, mesh_id and host_rank may differ). Must run after the mesh graph is
+    // built and before the topology mapper, routing tables or FabricContext use the binding.
     void validate_fabric_config_compatibility();
 
     // Initialize fabric context if fabric is enabled
@@ -601,9 +606,6 @@ private:
 
     void assign_direction_to_fabric_eth_core(
         const FabricNodeId& fabric_node_id, const tt::tt_metal::CoreCoord& eth_core, RoutingDirection direction);
-
-    // Check that config_.mesh_id / config_.host_rank exist in the mesh graph descriptor.
-    void validate_local_mesh_binding() const;
 
     // Top level function responsible for generating intermesh connectivity
     // based on the MGD and Physical State of the system.

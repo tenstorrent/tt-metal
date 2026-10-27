@@ -312,29 +312,13 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
     }
 }
 
-void ControlPlane::validate_local_mesh_binding() const {
-    // Each process owns exactly one mesh, given by config_.mesh_id / config_.host_rank.
-    log_debug(tt::LogDistributed, "Local mesh binding: mesh_id: {}, host_rank: {}", config_.mesh_id, config_.host_rank);
-
-    const auto mesh_ids = this->mesh_graph_->get_all_mesh_ids();
-    TT_FATAL(
-        std::find(mesh_ids.begin(), mesh_ids.end(), config_.mesh_id) != mesh_ids.end(),
-        "Invalid mesh_id: local mesh binding mesh_id {} not found in mesh graph descriptor",
-        *config_.mesh_id);
-
-    const auto& host_ranks = this->mesh_graph_->get_host_ranks(config_.mesh_id).values();
-    TT_FATAL(
-        std::find(host_ranks.begin(), host_ranks.end(), config_.host_rank) != host_ranks.end(),
-        "Invalid host_rank: local mesh binding host_rank {} not found for mesh {} in mesh graph descriptor",
-        *config_.host_rank,
-        *config_.mesh_id);
-}
-
 void ControlPlane::initialize_distributed_contexts() {
     const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     if (*global_context->size() == 1) {
         host_local_context_ = global_context;
-        distributed_contexts_.emplace(config_.mesh_id, global_context);
+        for (const auto& mesh_id : this->owned_mesh_ids()) {
+            distributed_contexts_.emplace(mesh_id, global_context);
+        }
         return;
     }
 
@@ -413,23 +397,29 @@ void ControlPlane::init_control_plane(
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = this->rtoptions_.get();
-    auto fabric_config = this->get_fabric_config();
 
     // Number of hosts
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
 
-    // Create mesh_graph first. fabric_config is this process's override; it belongs to the mesh this process owns
-    // (config_.mesh_id), so other meshes derive their config from their own MGD dim_types.
+    const MeshGraphDescriptor mgd(std::filesystem::path(mesh_graph_desc_file), /*backwards_compatible=*/true);
+    if (config_.fabric_config == FabricConfig::MGD_DEFAULT) {
+        config_.fabric_config = mgd.default_fabric_config_from_dim_types(config_.mesh_id);
+    }
+    // The fabric config belongs to the mesh this process owns (config_.mesh_id); other meshes use their own MGD
+    // dim_types.
     this->mesh_graph_ =
-        std::make_unique<MeshGraph>(cluster.get_cluster_type(), mesh_graph_desc_file, fabric_config, config_.mesh_id);
+        std::make_unique<MeshGraph>(mgd, config_.fabric_config, cluster.is_ubb_galaxy(), config_.mesh_id);
     this->validate_system_health_against_mesh_graph_policy();
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
     auto psd = tt::tt_metal::run_physical_system_discovery(
         *driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
-    this->validate_local_mesh_binding();
+    // Before the topology mapper uses this process's mesh binding: check every rank's binding against the mesh
+    // graph descriptor and enforce consistent fabric settings, ahead of inter-mesh setup, routing tables,
+    // FabricContext, or router launch.
+    this->validate_fabric_config_compatibility();
 
     // Before the mapper: when a factory descriptor is configured, that is what the mesh is placed on.
     this->ingest_factory_system_descriptor();
@@ -523,10 +513,6 @@ void ControlPlane::init_control_plane(
     // Initialize distributed contexts after topology_mapper is created so we can use its helper function
     this->initialize_distributed_contexts();
 
-    // Mesh and rank identity are known at this point; enforce one consistent FabricConfig before
-    // inter-mesh setup, routing table configuration, FabricContext, or router launch.
-    this->validate_fabric_config_compatibility();
-
     // Initialize routing table generator after validation to ensure no rank computes routing tables
     // with a FabricConfig that differs from peers.
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(*this->topology_mapper_);
@@ -560,6 +546,9 @@ void ControlPlane::init_control_plane_auto_discovery() {
     const auto& driver = cluster.get_driver();
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     const auto& rtoptions = this->rtoptions_.get();
+    TT_FATAL(
+        config_.fabric_config != FabricConfig::MGD_DEFAULT,
+        "FabricConfig::MGD_DEFAULT needs a mesh graph descriptor; auto-discovery has none to take the default from");
 
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
@@ -592,7 +581,10 @@ void ControlPlane::init_control_plane_auto_discovery() {
             this->config_.reliability_mode));
     this->validate_system_health_against_mesh_graph_policy();
 
-    this->validate_local_mesh_binding();
+    // Before the topology mapper uses this process's mesh binding: check every rank's binding against the mesh
+    // graph descriptor and enforce consistent fabric settings, ahead of inter-mesh setup, routing tables,
+    // FabricContext, or router launch.
+    this->validate_fabric_config_compatibility();
 
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
     if (topology_mapping_timeout.count() <= 0.0f) {
@@ -654,10 +646,6 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Initialize distributed contexts after topology_mapper is created so we can use its helper function
     this->initialize_distributed_contexts();
-
-    // Mesh and rank identity are known at this point; enforce one consistent FabricConfig before
-    // inter-mesh setup, routing table configuration, FabricContext, or router launch.
-    this->validate_fabric_config_compatibility();
 
     // Initialize routing table generator after validation to ensure no rank computes routing tables
     // with a FabricConfig that differs from peers.
@@ -756,6 +744,32 @@ void ControlPlane::validate_fabric_config_compatibility() {
             *c.host_rank,
             rank,
             enchantum::to_string(c.fabric_config));
+    }
+
+    // Each process owns exactly one mesh, given by its mesh_id / host_rank. Every rank checks every binding, so an
+    // invalid one fails the same way everywhere.
+    log_debug(tt::LogDistributed, "Local mesh binding: mesh_id: {}, host_rank: {}", config_.mesh_id, config_.host_rank);
+    const auto mesh_ids = this->mesh_graph_->get_all_mesh_ids();
+    for (uint32_t rank = 0; rank < world_size; ++rank) {
+        const auto& c = configs[rank];
+        TT_FATAL(
+            std::find(mesh_ids.begin(), mesh_ids.end(), c.mesh_id) != mesh_ids.end(),
+            "Invalid mesh_id: rank {} is bound to mesh_id {}, which is not in the mesh graph descriptor. MGD path: "
+            "{}. Observed:{}",
+            rank,
+            *c.mesh_id,
+            mesh_graph_path,
+            observed_values);
+        const auto& host_ranks = this->mesh_graph_->get_host_ranks(c.mesh_id).values();
+        TT_FATAL(
+            std::find(host_ranks.begin(), host_ranks.end(), c.host_rank) != host_ranks.end(),
+            "Invalid host_rank: rank {} is bound to host_rank {}, which is not in mesh {} of the mesh graph "
+            "descriptor. MGD path: {}. Observed:{}",
+            rank,
+            *c.host_rank,
+            *c.mesh_id,
+            mesh_graph_path,
+            observed_values);
     }
 
     // Every rank owning a given mesh must report the same config; different meshes may differ. (The
@@ -3161,12 +3175,23 @@ void sort_intermesh_exit_peer_fabric_node_id_pairs(
 }
 }  // namespace
 
+std::vector<MeshId> ControlPlane::owned_mesh_ids() const {
+    if (*this->distributed_context_.get().size() == 1) {
+        return this->mesh_graph_->get_all_mesh_ids();
+    }
+    return {config_.mesh_id};
+}
+
 std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     const auto& user_mesh_ids = this->get_user_physical_mesh_ids();
-    TT_FATAL(
-        std::find(user_mesh_ids.begin(), user_mesh_ids.end(), config_.mesh_id) != user_mesh_ids.end(),
-        "No local mesh ids found");
-    return {config_.mesh_id};
+    std::vector<MeshId> local_mesh_ids;
+    for (const auto& mesh_id : this->owned_mesh_ids()) {
+        if (std::find(user_mesh_ids.begin(), user_mesh_ids.end(), mesh_id) != user_mesh_ids.end()) {
+            local_mesh_ids.push_back(mesh_id);
+        }
+    }
+    TT_FATAL(!local_mesh_ids.empty(), "No local mesh ids found");
+    return local_mesh_ids;
 }
 
 MeshHostRankId ControlPlane::get_local_host_rank_id_binding() const {
@@ -3197,7 +3222,10 @@ MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scop
     return this->topology_mapper_->get_coord_range(mesh_id, local_host_rank_id);
 }
 
-bool ControlPlane::is_local_mesh(MeshId mesh_id) const { return mesh_id == config_.mesh_id; }
+bool ControlPlane::is_local_mesh(MeshId mesh_id) const {
+    const auto owned = this->owned_mesh_ids();
+    return std::find(owned.begin(), owned.end(), mesh_id) != owned.end();
+}
 
 const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& ControlPlane::get_distributed_context(
     MeshId mesh_id) const {
@@ -4534,7 +4562,7 @@ AnnotatedIntermeshConnections ControlPlane::generate_intermesh_connections_on_lo
         return (1 << *src_mesh_id) | (1 << *dst_mesh_id);
     };
 
-    for (const auto local_mesh_id : {config_.mesh_id}) {
+    for (const auto local_mesh_id : this->owned_mesh_ids()) {
         const auto& mesh_edges = mesh_graph.get_mesh_edge_ports_to_chip_id().at(*local_mesh_id);
 
         std::unordered_set<FabricNodeId> exit_nodes;

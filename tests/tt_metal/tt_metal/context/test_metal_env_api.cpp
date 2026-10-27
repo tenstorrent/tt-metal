@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <filesystem>
 #include <limits>
 #include <stdexcept>
 #include <tt-metalium/experimental/context/metal_env.hpp>
@@ -305,6 +306,40 @@ TEST(MetalEnv, AccessorFabricConfigMatchesRequest) {
     MetalEnvImpl& accessor = MetalEnvAccessor(env).impl();
     EXPECT_EQ(accessor.get_fabric_config(), tt_fabric::FabricConfig::FABRIC_1D_RING);
     EXPECT_EQ(accessor.get_fabric_udm_mode(), tt_fabric::FabricUDMMode::ENABLED);
+}
+
+// MGD_DEFAULT is resolved by the control plane from the mesh's dim_types and stored back as soon as the control plane
+// is built. After that the usual override rule applies to the concrete config: re-setting it rebuilds (and
+// re-validates) the control plane, anything else must go through DISABLED.
+TEST(MetalEnv, MgdDefaultFabricConfigResolvesAndReset) {
+    MetalEnv env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 8)});
+    MetalEnvImpl& impl = MetalEnvAccessor(env).impl();
+    const auto mgd_path = std::filesystem::path(impl.get_rtoptions().get_root_dir()) /
+                          "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
+    impl.set_custom_fabric_topology(mgd_path.string(), {});
+    const auto relaxed = tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
+    impl.set_fabric_config(tt_fabric::FabricConfig::MGD_DEFAULT, relaxed);
+
+    const auto resolved = impl.get_fabric_config();
+    EXPECT_NE(resolved, tt_fabric::FabricConfig::MGD_DEFAULT);
+    EXPECT_EQ(
+        resolved,
+        impl.get_control_plane().get_mesh_graph().get_mesh_graph_descriptor().default_fabric_config_from_dim_types(
+            tt_fabric::MeshId{0}));
+
+    EXPECT_NO_THROW(impl.set_fabric_config(resolved, relaxed));
+    EXPECT_EQ(impl.get_fabric_config(), resolved);
+    EXPECT_EQ(impl.get_control_plane().get_fabric_config(), resolved);
+
+    EXPECT_THROW(impl.set_fabric_config(tt_fabric::FabricConfig::MGD_DEFAULT, relaxed), std::runtime_error);
+    EXPECT_THROW(impl.set_fabric_config(tt_fabric::FabricConfig::FABRIC_1D, relaxed), std::runtime_error);
+    EXPECT_EQ(impl.get_fabric_config(), resolved);
+
+    impl.set_fabric_config(tt_fabric::FabricConfig::DISABLED);
+    impl.set_fabric_config(tt_fabric::FabricConfig::MGD_DEFAULT, relaxed);
+    EXPECT_EQ(impl.get_fabric_config(), resolved);
+
+    impl.set_fabric_config(tt_fabric::FabricConfig::DISABLED);
 }
 
 // --- System mesh tests ---

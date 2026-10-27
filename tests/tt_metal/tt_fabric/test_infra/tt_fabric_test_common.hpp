@@ -255,7 +255,12 @@ public:
         }
 
         FabricConfig new_fabric_config;
-        if (topology == Topology::Torus) {
+        if (fabric_setup.fabric_config_from_mgd) {
+            // topology: FromMgd -- the control plane resolves this rank's config from its mesh's dim_types. We pass
+            // MGD_DEFAULT straight through and read the resolved topology back from the control plane after init
+            // (below); the yaml's topology/torus_config are unused in this mode.
+            new_fabric_config = tt::tt_fabric::FabricConfig::MGD_DEFAULT;
+        } else if (topology == Topology::Torus) {
             const auto& torus_config = fabric_setup.torus_config.value();
             auto it = torus_topology_to_fabric_config_map.find({topology, torus_config});
             TT_FATAL(
@@ -336,7 +341,19 @@ public:
                     tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_trimming_profile_path());
             }
 
-            topology_ = topology;
+            if (fabric_setup.fabric_config_from_mgd) {
+                // open_devices_internal set MGD_DEFAULT and re-initialized the control plane, which resolved this
+                // rank's concrete config from its mesh's dim_types. Read it back (single source of truth) to drive
+                // the test's own traffic logic, rather than re-deriving it here.
+                const auto resolved = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_config();
+                const bool is_torus = resolved == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+                                      resolved == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+                                      resolved == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+                topology_ = is_torus ? Topology::Torus : Topology::Mesh;
+                log_info(tt::LogTest, "topology: FromMgd resolved to {} (topology_ = {})", resolved, topology_);
+            } else {
+                topology_ = topology;
+            }
             current_channel_trimming_ = trimming;
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
@@ -2094,6 +2111,7 @@ private:
             router_config.max_packet_payload_size_bytes = fabric_setup.max_packet_size.value();
         }
 
+        // For topology: FromMgd, fabric_config is MGD_DEFAULT and the control plane resolves it per rank.
         tt::tt_fabric::SetFabricConfig(
             fabric_config,
             reliability_mode,

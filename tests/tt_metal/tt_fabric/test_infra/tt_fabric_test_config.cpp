@@ -407,7 +407,19 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
     TT_FATAL(fabric_setup_yaml["topology"], "Fabric setup missing Topolgy key");
     TestFabricSetup fabric_setup;
     auto topology_str = parse_scalar<std::string>(fabric_setup_yaml["topology"]);
-    fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
+
+    // topology: FromMgd is a test-infra-only marker (not a tt_fabric::Topology value) -- it hands
+    // FabricConfig::MGD_DEFAULT to SetFabricConfig so the control plane resolves this rank's config from its mesh's
+    // dim_types. We handle it here before the enum mapper so the core Topology enum stays untouched;
+    // apply_mgd_default_fabric_setup then overwrites topology/torus_config with the resolved concrete values the
+    // test's own traffic logic needs.
+    if (topology_str == "FromMgd") {
+        // Don't set a topology here: the fabric config is MGD_DEFAULT, and apply_mgd_default_fabric_setup fills in
+        // fabric_setup.topology/torus_config per rank (from the resolved config) for the test's own traffic logic.
+        fabric_setup.fabric_config_from_mgd = true;
+    } else {
+        fabric_setup.topology = detail::topology_mapper.from_string(topology_str, "Topology");
+    }
 
     if (fabric_setup_yaml["fabric_tensix_config"]) {
         auto fabric_type_str = parse_scalar<std::string>(fabric_setup_yaml["fabric_tensix_config"]);
@@ -940,10 +952,6 @@ std::string CmdlineParser::get_built_tests_dump_file_name(const std::string& def
     return dump_file;
 }
 
-bool CmdlineParser::fabric_config_from_mgd() {
-    return test_args::has_command_option(input_args_, "--fabric-config-from-mgd");
-}
-
 bool CmdlineParser::has_help_option() { return test_args::has_command_option(input_args_, "--help"); }
 
 void CmdlineParser::print_help() {
@@ -998,10 +1006,6 @@ void CmdlineParser::print_help() {
         LogTest,
         "  --hung-confirmation-rounds <N>               Consecutive stall rounds before confirming hung (default: "
         "3).");
-    log_info(
-        LogTest,
-        "  --fabric-config-from-mgd                     Ignore each test's fabric_setup topology and use the local "
-        "mesh's MGD dim_types default fabric config.");
     log_info(
         LogTest,
         "  --wait-on-hang                               Block indefinitely on confirmed hang (interactive bringup "

@@ -366,6 +366,36 @@ TEST(MeshGraphValidation, TestT3kCollapsedTorusYRetainsMeshDirections) {
     EXPECT_EQ(edge_ports.at({RoutingDirection::W, 0}), 0);
 }
 
+// The MGD's dim_types default builds the same graph as no override, and differs from an explicit FABRIC_2D, which
+// restricts the galaxy's declared E/W torus to a mesh and frees its edge ports.
+TEST(MeshGraphValidation, TestMgdDefaultMatchesDimTypes) {
+    const std::filesystem::path torus_x_mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_torus_x_graph_descriptor.textproto";
+    const auto default_config = tt::tt_fabric::MeshGraphDescriptor(torus_x_mgd_path, /*backwards_compatible=*/true)
+                                    .default_fabric_config_from_dim_types(MeshId{0});
+    EXPECT_EQ(default_config, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X);
+
+    auto from_dim_types = make_mesh_graph(torus_x_mgd_path);
+    auto mgd_default = make_mesh_graph(torus_x_mgd_path, default_config);
+    auto mesh_2d = make_mesh_graph(torus_x_mgd_path, tt::tt_fabric::FabricConfig::FABRIC_2D);
+
+    EXPECT_EQ(
+        mgd_default.get_mesh_edge_ports_to_chip_id().at(0), from_dim_types.get_mesh_edge_ports_to_chip_id().at(0));
+    EXPECT_NE(mgd_default.get_mesh_edge_ports_to_chip_id().at(0), mesh_2d.get_mesh_edge_ports_to_chip_id().at(0));
+
+    const auto& expected = from_dim_types.get_intra_mesh_connectivity().at(0);
+    const auto& actual = mgd_default.get_intra_mesh_connectivity().at(0);
+    ASSERT_EQ(actual.size(), expected.size());
+    for (size_t chip = 0; chip < expected.size(); ++chip) {
+        ASSERT_EQ(actual[chip].size(), expected[chip].size()) << "chip " << chip;
+        for (const auto& [neighbor, edge] : expected[chip]) {
+            ASSERT_TRUE(actual[chip].contains(neighbor)) << "chip " << chip << " neighbor " << neighbor;
+            EXPECT_EQ(actual[chip].at(neighbor).port_direction, edge.port_direction);
+        }
+    }
+}
+
 // Torus edge-port reservation is decided per axis by who declared the torus (issue #54650), pinned
 // on the mixed-origin case: the 4-stage 2x2 pipeline-ring MGD declares dim_types [RING, LINE], and
 // FABRIC_2D_TORUS_XY is requested on top. Axis 0's torus is MGD-declared, so it keeps its boundary
@@ -670,6 +700,29 @@ INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphControlPlaneTests,
     T3kCustomMeshGraphControlPlaneFixture,
     ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
+
+// A ControlPlane built with MGD_DEFAULT reports the owned mesh's dim_types default, not MGD_DEFAULT.
+TEST_F(ControlPlaneFixture, TestMgdDefaultResolvesToDimTypes) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+        GTEST_SKIP() << "Needs a (mock) WH galaxy";
+    }
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.textproto";
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
+        tt::tt_metal::MetalContext::instance().get_cluster(),
+        tt::tt_metal::MetalContext::instance().rtoptions(),
+        tt::tt_metal::MetalContext::instance().hal(),
+        tt::tt_metal::MetalContext::instance().full_world_distributed_context(),
+        mgd_path.string(),
+        tt::tt_fabric::fabric_router_tests::make_control_plane_config(
+            tt::tt_fabric::FabricConfig::MGD_DEFAULT, kReliabilityMode));
+    EXPECT_EQ(
+        control_plane->get_fabric_config(),
+        control_plane->get_mesh_graph().get_mesh_graph_descriptor().default_fabric_config_from_dim_types(MeshId{0}));
+    EXPECT_NE(control_plane->get_fabric_config(), tt::tt_fabric::FabricConfig::MGD_DEFAULT);
+    EXPECT_EQ(control_plane->get_mesh_graph().get_mesh_graph_descriptor_path(), mgd_path);
+}
 
 TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     const std::filesystem::path single_galaxy_mesh_graph_desc_path =

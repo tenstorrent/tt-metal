@@ -597,7 +597,9 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY;
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY ||
+           // dim_types defaults are always FABRIC_2D or a 2D torus.
+           fabric_config == tt::tt_fabric::FabricConfig::MGD_DEFAULT;
 }
 
 namespace experimental {

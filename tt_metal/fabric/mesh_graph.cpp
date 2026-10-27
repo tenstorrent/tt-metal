@@ -151,9 +151,7 @@ MeshGraph::MeshGraph(
     std::optional<MeshId> local_mesh_id) {
     log_debug(tt::LogFabric, "mesh_graph_desc_file_path: {}", mesh_graph_desc_file_path);
     if (mesh_graph_desc_file_path.ends_with(".textproto")) {
-        auto filepath = std::filesystem::path(mesh_graph_desc_file_path);
-        mesh_graph_desc_file_path_ = filepath;
-        mesh_graph_descriptor_.emplace(filepath, true);
+        mesh_graph_descriptor_.emplace(std::filesystem::path(mesh_graph_desc_file_path), true);
         this->initialize_from_mgd(
             mesh_graph_descriptor_.value(), fabric_config, tt::Cluster::is_ubb_galaxy(cluster_type), local_mesh_id);
     } else {
@@ -310,6 +308,9 @@ void MeshGraph::initialize_from_mgd(
     std::optional<FabricConfig> fabric_config,
     bool is_ubb_galaxy,
     std::optional<MeshId> local_mesh_id) {
+    TT_FATAL(
+        fabric_config != FabricConfig::MGD_DEFAULT,
+        "FabricConfig::MGD_DEFAULT must be resolved to a concrete config before building a MeshGraph");
     // Intentionally leaked: a control plane (and thus a MeshGraph) can be constructed from the atexit
     // teardown path, after a plain function-local static's destructor has already run.
     static const auto& proto_arch_to_arch = *new std::unordered_map<const proto::Architecture, tt::ARCH>{
@@ -460,38 +461,35 @@ void MeshGraph::initialize_from_mgd(
             }
         }
 
-        // Build intra-mesh connectivity based on FabricConfig override (if provided) or the config derived from
-        // the MGD's dim_types
+        // Build intra-mesh connectivity based on FabricConfig override (if provided) or MGD's fabric type.
+        // The override belongs to the local mesh (this process owns one mesh); every other mesh uses its own
+        // dim_types. local_mesh_id = nullopt applies the override to every mesh.
         FabricType mgd_fabric_type = MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc);
-        // The single fabric_config override belongs to the local mesh (this process owns one mesh); every other
-        // mesh derives its config from its own dim_types, so a heterogeneous system reserves the right torus edge
-        // ports per mesh. local_mesh_id = nullopt keeps the legacy "override applies to all meshes" behavior.
-        const bool override_applies =
-            fabric_config.has_value() && (!local_mesh_id.has_value() || mesh_id == *local_mesh_id);
-        const FabricConfig mesh_fabric_config =
-            override_applies ? *fabric_config : mgd.default_fabric_config_from_dim_types(mesh_id);
-        FabricType effective_fabric_type = get_fabric_type(mesh_fabric_config, is_ubb_galaxy);
-        // Validate that FabricConfig doesn't try to create connections that don't exist
-        if (requires_more_connectivity(effective_fabric_type, mgd_fabric_type, mesh_shape)) {
-            TT_THROW(
-                "FabricConfig {} requests topology {} which requires more connectivity than MGD provides {}. "
-                "FabricConfig can only restrict topology (e.g., torus→mesh), not create new connections.",
-                enchantum::to_string(mesh_fabric_config),
-                enchantum::to_string(effective_fabric_type),
-                enchantum::to_string(mgd_fabric_type));
-        }
+        FabricType effective_fabric_type = mgd_fabric_type;
+        if (fabric_config.has_value() && (!local_mesh_id.has_value() || mesh_id == *local_mesh_id)) {
+            effective_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
+            // Validate that FabricConfig doesn't try to create connections that don't exist
+            if (requires_more_connectivity(effective_fabric_type, mgd_fabric_type, mesh_shape)) {
+                TT_THROW(
+                    "FabricConfig {} requests topology {} which requires more connectivity than MGD provides {}. "
+                    "FabricConfig can only restrict topology (e.g., torus→mesh), not create new connections.",
+                    enchantum::to_string(*fabric_config),
+                    enchantum::to_string(effective_fabric_type),
+                    enchantum::to_string(mgd_fabric_type));
+            }
 
-        // A 1D fabric config is single-mesh only (1D routing has no inter-mesh story).
-        const bool is_1d = mesh_fabric_config == FabricConfig::FABRIC_1D ||
-                           mesh_fabric_config == FabricConfig::FABRIC_1D_RING ||
-                           mesh_fabric_config == FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE;
-        TT_FATAL(
-            !is_1d || all_meshes.size() <= 1,
-            "A 1D FabricConfig ({}) cannot be used with more than one mesh ({} compute meshes present): mesh M{} "
-            "requested a 1D config. 1D fabric is single-mesh only.",
-            enchantum::to_string(mesh_fabric_config),
-            all_meshes.size(),
-            *mesh_id);
+            // A 1D fabric config is single-mesh only (1D routing has no inter-mesh story).
+            const bool is_1d = *fabric_config == FabricConfig::FABRIC_1D ||
+                               *fabric_config == FabricConfig::FABRIC_1D_RING ||
+                               *fabric_config == FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE;
+            TT_FATAL(
+                !is_1d || all_meshes.size() <= 1,
+                "A 1D FabricConfig ({}) cannot be used with more than one mesh ({} compute meshes present): mesh M{} "
+                "requested a 1D config. 1D fabric is single-mesh only.",
+                enchantum::to_string(*fabric_config),
+                all_meshes.size(),
+                *mesh_id);
+        }
 
         // Build connectivity using effective_fabric_type
         MeshCoordinateRange mesh_coord_range(mesh_shape);
@@ -1047,9 +1045,12 @@ FabricConfig fabric_config_matching_type(FabricType fabric_type) {
 }  // namespace
 
 MeshGraph::MeshGraph(
-    const MeshGraphDescriptor& mesh_graph_descriptor, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) :
+    const MeshGraphDescriptor& mesh_graph_descriptor,
+    std::optional<FabricConfig> fabric_config,
+    bool is_ubb_galaxy,
+    std::optional<MeshId> local_mesh_id) :
     mesh_graph_descriptor_(mesh_graph_descriptor) {
-    initialize_from_mgd(*mesh_graph_descriptor_, fabric_config, is_ubb_galaxy);
+    initialize_from_mgd(*mesh_graph_descriptor_, fabric_config, is_ubb_galaxy, local_mesh_id);
 }
 
 MeshGraph MeshGraph::generate_mesh_graph_of_shape(
