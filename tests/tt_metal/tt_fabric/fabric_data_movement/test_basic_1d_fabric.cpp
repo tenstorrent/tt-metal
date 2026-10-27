@@ -617,7 +617,7 @@ void run_unicast_test_bw_chips(
     }
 
     // append the EDM connection rt args
-    const auto& available_links = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id);
+    const auto& available_links = get_forwarding_link_indices(*sender_device, src_fabric_node_id, dst_fabric_node_id);
     EXPECT_EQ(!available_links.empty(), true);
 
     uint32_t link_idx = available_links[0];
@@ -994,7 +994,7 @@ void RunTestMCastConnAPI(
         dst_chip_id = left_first_hop_phys_chip_id;
     }
     link_idx = get_forwarding_link_indices(
-        src_fabric_node_id, control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
+        *sender_device, src_fabric_node_id, control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
     const auto left_dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     append_fabric_connection_rt_args(
         src_fabric_node_id,
@@ -1014,7 +1014,7 @@ void RunTestMCastConnAPI(
         dst_chip_id = right_first_hop_phys_chip_id;
     }
     link_idx = get_forwarding_link_indices(
-        src_fabric_node_id, control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
+        *sender_device, src_fabric_node_id, control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id))[0];
     const auto right_dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
     append_fabric_connection_rt_args(
         src_fabric_node_id,
@@ -1443,7 +1443,7 @@ void RunTest2DMCastConnAPI(
     uint32_t link_idx;
     if (north_hops > 0) {
         if (north_branch_east_hops > 0) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_east_fabric_node_id)[0];
+            link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, north_east_fabric_node_id)[0];
             append_fabric_connection_rt_args(
                 src_fabric_node_id,
                 north_east_fabric_node_id,
@@ -1452,7 +1452,7 @@ void RunTest2DMCastConnAPI(
                 {sender_logical_core},
                 sender_runtime_args);
         } else if (north_branch_west_hops) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_west_fabric_node_id)[0];
+            link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, north_west_fabric_node_id)[0];
             append_fabric_connection_rt_args(
                 src_fabric_node_id,
                 north_west_fabric_node_id,
@@ -1461,7 +1461,7 @@ void RunTest2DMCastConnAPI(
                 {sender_logical_core},
                 sender_runtime_args);
         } else {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, north_fabric_node_id)[0];
+            link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, north_fabric_node_id)[0];
             append_fabric_connection_rt_args(
                 src_fabric_node_id,
                 north_fabric_node_id,
@@ -1485,7 +1485,7 @@ void RunTest2DMCastConnAPI(
 
     if (south_hops > 0) {
         if (south_branch_west_hops > 0) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_west_fabric_node_id)[0];
+            link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, south_west_fabric_node_id)[0];
             append_fabric_connection_rt_args(
                 src_fabric_node_id,
                 south_west_fabric_node_id,
@@ -1494,7 +1494,7 @@ void RunTest2DMCastConnAPI(
                 {sender_logical_core},
                 sender_runtime_args);
         } else if (south_branch_east_hops > 0) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_east_fabric_node_id)[0];
+            link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, south_east_fabric_node_id)[0];
             append_fabric_connection_rt_args(
                 src_fabric_node_id,
                 south_east_fabric_node_id,
@@ -1503,7 +1503,7 @@ void RunTest2DMCastConnAPI(
                 {sender_logical_core},
                 sender_runtime_args);
         } else {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, south_fabric_node_id)[0];
+            link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, south_fabric_node_id)[0];
             append_fabric_connection_rt_args(
                 src_fabric_node_id,
                 south_fabric_node_id,
@@ -1526,7 +1526,7 @@ void RunTest2DMCastConnAPI(
     sender_runtime_args.push_back(right_fabric_node_id.chip_id);
     sender_runtime_args.push_back((west_hops << 16) | east_hops);
     if (west_hops > 0) {
-        link_idx = get_forwarding_link_indices(src_fabric_node_id, left_fabric_node_id)[0];
+        link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, left_fabric_node_id)[0];
         append_fabric_connection_rt_args(
             src_fabric_node_id,
             left_fabric_node_id,
@@ -1545,7 +1545,7 @@ void RunTest2DMCastConnAPI(
             sender_runtime_args);
     }
     if (east_hops > 0) {
-        link_idx = get_forwarding_link_indices(src_fabric_node_id, right_fabric_node_id)[0];
+        link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, right_fabric_node_id)[0];
         append_fabric_connection_rt_args(
             src_fabric_node_id,
             right_fabric_node_id,
@@ -1765,7 +1765,7 @@ void RunTestChipMCast1D(BaseFabricFixture* fixture, RoutingDirection dir, uint32
     // append the EDM connection rt args for fwd connection
     ChipId dst_chip_id = first_hop_phys_chip_id;
     const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_chip_id);
-    uint32_t link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
+    uint32_t link_idx = get_forwarding_link_indices(*sender_device, src_fabric_node_id, dst_fabric_node_id)[0];
     append_fabric_connection_rt_args(
         src_fabric_node_id, dst_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
 

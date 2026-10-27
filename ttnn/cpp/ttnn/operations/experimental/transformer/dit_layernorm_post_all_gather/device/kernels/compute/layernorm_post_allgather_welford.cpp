@@ -112,7 +112,7 @@ void kernel_main() {
 
             // 2) normalize: (x-mean) * inv_std
             constexpr uint32_t norm_target_dfb_id = (do_gamma || do_beta) ? dfb_intermediate_id : dfb_out_id;
-            DataflowBuffer& norm_target_dfb = (do_gamma || do_beta) ? dfb_intermediate : dfb_out;
+            auto& norm_target_dfb = (do_gamma || do_beta) ? dfb_intermediate : dfb_out;
             dfb_recip_sqrt_var.wait_front(1);
             // Note that compute and pack are separated because it's possible that
             // norm_target_dfb_id == dfb_intermediate_id (in the case of no gamma/beta), so this
@@ -133,7 +133,7 @@ void kernel_main() {
             // 3) optional gamma
             if constexpr (do_gamma) {
                 constexpr uint32_t gamma_out_dfb_id = do_beta ? dfb_intermediate_id : dfb_out_id;
-                DataflowBuffer& gamma_out_dfb = do_beta ? dfb_intermediate : dfb_out;
+                auto& gamma_out_dfb = do_beta ? dfb_intermediate : dfb_out;
                 dfb_gamma.wait_front(col_tile + block_size);
                 ckl::eltwise_chain(
                     ckl::IterationShape::tiles(block_size).block_size(/*block_size=*/block_size),

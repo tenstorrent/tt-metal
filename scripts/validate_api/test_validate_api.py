@@ -38,7 +38,10 @@ class ApiValidationTests(unittest.TestCase):
 
     def populate_prefixes(self):
         includes = [
-            "umd/device/types/arch.hpp" if prefix == "umd" else f"{prefix}/example.hpp" for prefix in ALLOWED_PREFIXES
+            {"tt-umd": "tt-umd/types/arch.hpp", "tt-umd-utils": "tt-umd-utils/semver.hpp"}.get(
+                prefix, f"{prefix}/example.hpp"
+            )
+            for prefix in ALLOWED_PREFIXES
         ]
         return self.header(
             "internal/allowlist.hpp", "#pragma once\n" + "".join(f"#include <{name}>\n" for name in includes)
@@ -411,7 +414,7 @@ class ApiValidationTests(unittest.TestCase):
             with self.subTest(include=include):
                 self.header("tt-metalium/a.hpp", f"#pragma once\n#include <{include}>\n")
                 self.assertEqual(self.errors(), [])
-        self.header("tt-metalium/a.hpp", "#pragma once\n#include <umd/device/new_header.hpp>\n")
+        self.header("tt-metalium/a.hpp", "#pragma once\n#include <tt-umd/new_header.hpp>\n")
         self.assertTrue(any("New UMD include not allowed" in error for error in self.errors()))
 
     def test_legacy_skip_list_only_exempts_include_style(self):

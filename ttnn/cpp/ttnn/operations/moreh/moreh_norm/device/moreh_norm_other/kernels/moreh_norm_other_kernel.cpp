@@ -30,19 +30,20 @@ void kernel_main() {
     constexpr uint32_t dfb_x_id = tt::CBIndex::c_0;
     constexpr uint32_t dfb_one_id = tt::CBIndex::c_1;
     DataflowBuffer dfb_one_obj(dfb_one_id);
-    constexpr uint32_t dfb_decimal_id = tt::CBIndex::c_2;
+    static constexpr uint32_t dfb_decimal_id = tt::CBIndex::c_2;
     DataflowBuffer dfb_decimal_obj(dfb_decimal_id);
-    constexpr uint32_t dfb_recip_p_decimal_id = tt::CBIndex::c_3;  // recip_p_decimal
+    static constexpr uint32_t dfb_recip_p_decimal_id = tt::CBIndex::c_3;  // recip_p_decimal
     DataflowBuffer dfb_recip_p_decimal_obj(dfb_recip_p_decimal_id);
 
-    constexpr uint32_t dfb_y_id = tt::CBIndex::c_16;
+    static constexpr uint32_t dfb_y_id = tt::CBIndex::c_16;
 
-    constexpr uint32_t dfb_xabs_id = tt::CBIndex::c_24;          // |x|
-    constexpr uint32_t dfb_xpow_id = tt::CBIndex::c_25;          // |x|^p
-    constexpr uint32_t dfb_logx_id = tt::CBIndex::c_26;          // log(|x|)
-    constexpr uint32_t dfb_exp_lxmd_id = tt::CBIndex::c_27;      // exp(log(|x|) * decimal)
-    constexpr uint32_t dfb_correct_xpow_id = tt::CBIndex::c_28;  // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
-    constexpr uint32_t dfb_xpowadd_id = tt::CBIndex::c_29;       // Add(|x + decimal|^p)
+    static constexpr uint32_t dfb_xabs_id = tt::CBIndex::c_24;      // |x|
+    static constexpr uint32_t dfb_xpow_id = tt::CBIndex::c_25;      // |x|^p
+    static constexpr uint32_t dfb_logx_id = tt::CBIndex::c_26;      // log(|x|)
+    static constexpr uint32_t dfb_exp_lxmd_id = tt::CBIndex::c_27;  // exp(log(|x|) * decimal)
+    static constexpr uint32_t dfb_correct_xpow_id =
+        tt::CBIndex::c_28;                                         // |x|^p * exp(log(|x|) * decimal)(==|x + decimal|^p)
+    static constexpr uint32_t dfb_xpowadd_id = tt::CBIndex::c_29;  // Add(|x + decimal|^p)
 
     DataflowBuffer dfb_x_obj(dfb_x_id);
     DataflowBuffer dfb_y_obj(dfb_y_id);

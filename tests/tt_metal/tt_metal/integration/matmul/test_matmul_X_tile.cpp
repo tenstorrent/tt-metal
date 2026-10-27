@@ -348,9 +348,6 @@ static void matmul_tile_block(
         {"WITH_DT", cfg.with_dt ? "1" : "0"},
         {"TEST_INIT_SHORT", cfg.test_init_short ? "1" : "0"},
     };
-    if (cfg.fp32_dest_acc_en) {
-        compute_defines.emplace("DST_ACCUM_MODE", "1");
-    }
 
     experimental::ComputeHardwareConfig compute_hw_config;
     compute_hw_config = experimental::ComputeHardwareConfig{
@@ -578,9 +575,6 @@ static void matmul_tile(
     std::map<std::string, std::string> compute_defines;
     compute_defines["WITH_DT"] = cfg.with_dt ? "1" : "0";
     compute_defines["TEST_INIT_SHORT"] = cfg.test_init_short ? "1" : "0";
-    if (cfg.fp32_dest_acc_en) {
-        compute_defines["DST_ACCUM_MODE"] = "1";
-    }
 
     auto mm_reader_kernel = tt_metal::CreateKernel(
         program_,

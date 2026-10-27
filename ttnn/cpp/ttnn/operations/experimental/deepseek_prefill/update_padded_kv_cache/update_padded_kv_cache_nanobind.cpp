@@ -87,6 +87,10 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                     is BF16 (64 values), ROW_MAJOR or TILE. Tiled RoPE is untilized inside this
                     operation using LLK. Cache is ROW_MAJOR FP8_E4M3 with 656-byte
                     rows containing the three fields. All fields share leading shapes.
+                input_row_offset (int, optional, tensor form): first input row (token, multiple of 32)
+                    to write; with ``input_rows``, write rows ``[input_row_offset, input_row_offset +
+                    input_rows)`` of every head as if that slice were the input. Plain page copy only.
+                input_rows (int, optional, tensor form): rows in the window (multiple of 32).
 
             Returns:
                 ttnn.Tensor: handle to `cache` with the new slab written in place.
@@ -129,7 +133,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 const std::optional<Tensor>&,
                 std::optional<uint32_t>,
                 const std::optional<Tensor>&,
-                const std::optional<Tensor>&>(&update_padded_kv_cache),
+                const std::optional<Tensor>&,
+                uint32_t,
+                std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx").noconvert(),
@@ -140,7 +146,9 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("valid_global").noconvert() = nb::none(),
             nb::arg("tp_axis") = nb::none(),
             nb::arg("rope").noconvert() = nb::none(),
-            nb::arg("scales").noconvert() = nb::none()));
+            nb::arg("scales").noconvert() = nb::none(),
+            nb::arg("input_row_offset") = 0,
+            nb::arg("input_rows") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail

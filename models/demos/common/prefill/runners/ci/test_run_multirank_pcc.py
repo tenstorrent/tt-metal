@@ -45,6 +45,10 @@ if name == "sleep":
     time.sleep(0.02)
 elif name.startswith("mpirun"):
     record("mpi")
+    if "--output-filename" in args:
+        log = Path(args[args.index("--output-filename") + 1]) / "1" / "rank.0" / "stdout"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("stub rank log\n")
     os.environ["TEST_MPI_HOST"] = args[args.index("--host") + 1] if "--host" in args else ""
     os.environ["OMPI_COMM_WORLD_RANK"] = "0"
     if "bash" in args:
@@ -289,9 +293,17 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_perf_gate_fails_outside_margin(self):
-        result, _ = self.run_harness("mistral4", extra_env={"TEST_TPS": "10000", "PREFILL_EXPECTED_TPS": "17000"})
+        result, _ = self.run_harness(
+            "mistral4", extra_env={"TEST_TPS": "10000", "PREFILL_EXPECTED_TPS": "17000", "GITHUB_ACTIONS": "true"}
+        )
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("TPS GATE FAIL", result.stdout + result.stderr)
+        self.assertIn("::error title=Prefill perf gate::TPS GATE FAIL", result.stdout)
+        # Log summaries read the tail: the failed gate must come after the rank-log dump.
+        tail = result.stdout.rsplit("==================== gate verdicts ====================", 1)
+        self.assertEqual(len(tail), 2, result.stdout)
+        self.assertIn("ranklog tails", tail[0])
+        self.assertIn("TPS GATE FAIL", tail[1])
+        self.assertNotIn("ranklog tails", tail[1])
 
     def test_perf_gate_reports_when_no_baseline_is_set(self):
         # The state the CI leg ships in: measure and print, do not compare.

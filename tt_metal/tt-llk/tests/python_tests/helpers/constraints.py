@@ -4,6 +4,7 @@
 
 from typing import List
 
+import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -210,7 +211,8 @@ def is_valid_data_format_conversion(fmt: InputOutputFormat) -> bool:
         - Cannot convert between integer and float formats
 
     Constraints (Quasar only):
-        - Int16 input can only output to Int16
+        - Int16 input can only output to Int16, and Int16 output needs Int16 input
+        - Int4/UInt4 are L1 input-only formats; the packer cannot output them
     """
     chip_arch = get_chip_architecture()
     in_fmt, out_fmt = fmt.input_format, fmt.output_format
@@ -219,7 +221,9 @@ def is_valid_data_format_conversion(fmt: InputOutputFormat) -> bool:
         return False
 
     if chip_arch == ChipArchitecture.QUASAR:
-        if in_fmt == DataFormat.Int16 and out_fmt != DataFormat.Int16:
+        if (in_fmt == DataFormat.Int16) ^ (out_fmt == DataFormat.Int16):
+            return False
+        if out_fmt.is_4bit_integer():
             return False
 
     return True
@@ -266,6 +270,8 @@ _QUASAR_UNPACK_TO_DEST_FORMATS = {
     DataFormat.Int16: {DataFormat.Int16},
     DataFormat.Int8: {DataFormat.Int8},
     DataFormat.UInt8: {DataFormat.UInt8},
+    DataFormat.Int4: {DataFormat.Int8},
+    DataFormat.UInt4: {DataFormat.Int8, DataFormat.UInt8},
 }
 
 # SrcA/B additionally permit a TF32 result for narrow floating-point inputs.
@@ -425,3 +431,19 @@ def is_valid_quasar_packer_conversion(
     hardware_input = _quasar_sfpu_hardware_format(pack_input_format)
     hardware_output = _quasar_sfpu_hardware_format(output_format)
     return hardware_output in _QUASAR_PACK_OUTPUTS.get(hardware_input, set())
+
+
+def skip_reason_32bit_input_without_dest_acc(formats, dest_acc):
+    """Why :func:`skip_if_32bit_input_without_dest_acc` skips this variant, or ``None``.
+    The exact-op guard in hardware_free/accuracy/test_sfpu_accuracy_budget.py asks it
+    too, so its exclusions cannot drift from the skip."""
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        return "32-bit inputs need a 32-bit Dest (dest_acc=Yes)"
+    return None
+
+
+def skip_if_32bit_input_without_dest_acc(formats, dest_acc):
+    """32-bit inputs need a 32-bit Dest (dest_acc=Yes)."""
+    reason = skip_reason_32bit_input_without_dest_acc(formats, dest_acc)
+    if reason:
+        pytest.skip(reason)

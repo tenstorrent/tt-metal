@@ -19,6 +19,7 @@ shared core (build_run_batch):
                        for each csv:
                          _test_name_from_csv      name from filename
                          pd.read_csv              read the text table
+                         apply_column_aliases     legacy col -> current, diagnostics: RENAMED
                          cols not in schema    -> diagnostics: DROPPED
                          _coerce_frame_to_schema
                            text -> int / float / bool
@@ -62,6 +63,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..chip_architecture import ChipArchitecture
+from .test_schemas import PERF_TEST_SCHEMAS, PERF_TEST_SCHEMAS_QSR
 from .wide_schema import DB_SCHEMA, DROPPED_COLUMNS, MANDATORY, PROVENANCE
 
 
@@ -90,6 +92,35 @@ def dropped_columns_for_arch(arch: ChipArchitecture) -> set:
     if arch in (ChipArchitecture.WORMHOLE, ChipArchitecture.BLACKHOLE):
         return DROPPED_COLUMNS
     raise ValueError(f"Unsupported architecture: {arch!r}")
+
+
+def legacy_column_aliases(arch: ChipArchitecture, test_name: str) -> dict:
+    """Catalog ``aliases`` (old column -> current) of ``test_name``, which may be a previous test name."""
+    catalog = (
+        PERF_TEST_SCHEMAS_QSR if arch == ChipArchitecture.QUASAR else PERF_TEST_SCHEMAS
+    )
+    entry = catalog.get(test_name) or next(
+        (
+            e
+            for cur, e in catalog.items()
+            if e.get("test_name_aliases", {}).get(test_name) == cur
+        ),
+        {},
+    )
+    # An old name that is still a live column of this test is not an alias any more.
+    live = set(entry.get("columns", ()))
+    return {
+        old: new for old, new in entry.get("aliases", {}).items() if old not in live
+    }
+
+
+def apply_column_aliases(df, aliases):
+    """Rename legacy columns to their current names; a column is never dropped or overwritten."""
+    renames = {}
+    for old, new in aliases.items():
+        if old in df.columns and new not in df.columns and new not in renames.values():
+            renames[old] = new
+    return df.rename(columns=renames), renames
 
 
 _BOOL_MAP = {
@@ -283,21 +314,27 @@ def convert_csvs_to_parquet(
     build_run_batch to align + stamp provenance + compact. ``provenance["arch"]``
     selects the published table (WH/BH vs Quasar).
 
+    Legacy column names (catalog ``aliases``) are renamed to current names first and reported.
+
     With strict=True (default) the conversion must be lossless: if any column
     would be dropped (not in the schema) or any value coerced to NULL, it raises
     BEFORE writing and no file is produced. Pass strict=False for a best-effort
     conversion that writes anyway. Either way it returns the diagnostics: per
-    test, the dropped columns and the coerced values.
+    test, the dropped columns, the coerced values and the renamed columns.
     """
     arch = ChipArchitecture.from_string(provenance.get("arch"))
     columns = schema_for_arch(arch)
     dropped = dropped_columns_for_arch(arch)
     schema_by_name = {c.name: c for c in columns}
     frames = {}
-    diagnostics = {"unknown_columns": {}, "coerced_values": {}}
+    diagnostics = {"unknown_columns": {}, "coerced_values": {}, "renamed_columns": {}}
     for path in csv_paths:
         name = _test_name_from_csv(path)
         df = pd.read_csv(path)
+        # Legacy names first, so the checks below see current names.
+        df, renamed = apply_column_aliases(df, legacy_column_aliases(arch, name))
+        if renamed:
+            diagnostics["renamed_columns"].setdefault(name, {}).update(renamed)
         # Drop columns the published table intentionally omits (see
         # DROPPED_COLUMNS on the arch schema), before the unknown-column check
         # so they are not flagged as accidental drift.

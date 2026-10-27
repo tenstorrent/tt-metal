@@ -17,7 +17,7 @@ import torch.nn.functional as F
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 
 PCC_THRESHOLD = 0.95
 

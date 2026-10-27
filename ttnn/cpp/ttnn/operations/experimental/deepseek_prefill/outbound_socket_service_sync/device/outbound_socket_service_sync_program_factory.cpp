@@ -34,6 +34,7 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
     const CoreCoord service_phys = mesh_device->worker_core_from_logical_core(service_logical);
     const uint32_t data_ready_addr = args.data_ready_addrs[idx];
     const uint32_t metadata_l1_addr = has_metadata ? args.metadata_addrs[idx] : 0;
+    const uint32_t termination_addr = args.termination_addrs.empty() ? 0 : args.termination_addrs[idx];
 
     const uint32_t page_size = args.page_size;
     const uint32_t num_pages = args.num_pages;
@@ -76,6 +77,9 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
         args.scratch_cb_index,
         args.metadata_size_bytes,
         static_cast<uint32_t>(args.metadata_only ? 1u : 0u),
+        args.metadata_ring_slots,
+        args.metadata_slot_stride,
+        args.metadata_data_offset,
     };
     TensorAccessorArgs(input_buffer).append_to(ct_args);
     if (has_metadata) {
@@ -116,6 +120,7 @@ ProgramDescriptor OutboundSocketServiceSyncProgramFactory::create_descriptor(
         if (has_metadata) {
             rt_args.push_back(metadata_buffer);   // 7: metadata input base
             rt_args.push_back(metadata_l1_addr);  // 8: service-core metadata L1
+            rt_args.push_back(termination_addr);  // 9: service-core control words (ring only)
         }
         writer.emplace_runtime_args(workers[i], rt_args);
     }

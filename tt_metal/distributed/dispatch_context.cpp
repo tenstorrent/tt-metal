@@ -19,8 +19,8 @@
 #include <string>
 #include <vector>
 
-#include "impl/context/context_types.hpp"
 #include "mesh_device_impl.hpp"
+#include "mesh_device_view_impl.hpp"
 #include "mesh_command_queue.hpp"
 #include "fd_mesh_command_queue.hpp"
 #include "sd_mesh_command_queue.hpp"
@@ -168,7 +168,7 @@ DispatchContext& DispatchContext::get() {
 bool DispatchContext::is_fast_dispatch_session_active() const { return num_fd_inits_ > 0; }
 
 DispatchCoreAxis DispatchContext::get_dispatch_core_axis(distributed::MeshDevice* mesh_device) const {
-    return MetalContext::instance(extract_context_id(mesh_device)).get_dispatch_core_config().get_dispatch_core_axis();
+    return mesh_device->impl().metal_context().get_dispatch_core_config().get_dispatch_core_axis();
 }
 
 void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_device) {
@@ -196,7 +196,7 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
     std::function<void(distributed::MeshDevice*)> collect_views = [&](distributed::MeshDevice* mesh) {
         // A remote-only view (including one not yet fully initialized) has no
         // local devices, SubDeviceManagerTracker, or allocator on this host.
-        if (mesh->is_initialized() && !mesh->get_view().get_devices().empty()) {
+        if (mesh->is_initialized() && !mesh->get_device_ids().empty()) {
             mesh_views.push_back(mesh);
         }
         for (const auto& submesh : mesh->get_submeshes()) {
@@ -206,12 +206,10 @@ std::vector<FdL1Conflict> find_fd_l1_conflicts(
     collect_views(root);
 
     std::vector<FdL1Conflict> conflicts;
-    // Walk through the IDevice interface: everything this preflight needs (id, allocator_impl) is
-    // public there, while Device keeps allocator_impl private.
-    for (IDevice* device : devices) {
+    for (auto* device : devices) {
         std::vector<distributed::MeshDevice*> views_over_device;
         for (distributed::MeshDevice* view : mesh_views) {
-            for (IDevice* view_device : view->get_view().get_devices()) {
+            for (auto* view_device : view->get_view().impl().get_devices()) {
                 if (view_device->id() == device->id()) {
                     views_over_device.push_back(view);
                     break;
@@ -287,7 +285,7 @@ void DispatchContext::unwind_failed_fd_setup(
 void DispatchContext::initialize_fast_dispatch(
     distributed::MeshDevice* mesh_device, const FastDispatchSetupOptions& options) {
     // If the mesh device is inactive, do not attempt to initialize fast dispatch.
-    if (mesh_device->impl().view_->get_devices().empty()) {
+    if (mesh_device->get_device_ids().empty()) {
         return;
     }
 
@@ -318,7 +316,7 @@ void DispatchContext::initialize_fast_dispatch(
         "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.");
 
     const auto& device_manager = metal_context.device_manager();
-    const auto& active_devices = device_manager->get_all_active_devices_impl();
+    const auto& active_devices = device_manager->get_all_active_devices();
 
     // Every active device must be MMIO-attached. Dispatch then uses the single-chip topology, whose roles
     // are all assigned by init_command_queue_host(), before the L1 preflight below. A remote chip's
@@ -402,7 +400,7 @@ void DispatchContext::initialize_fast_dispatch(
 
 void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_device) {
     // If the mesh device is inactive, do not attempt to terminate fast dispatch.
-    if (mesh_device->impl().view_->get_devices().empty()) {
+    if (mesh_device->get_device_ids().empty()) {
         return;
     }
 
@@ -420,7 +418,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     TT_FATAL(num_fd_inits_ == 1, "Fast Dispatch termination requires exactly one active manual Fast Dispatch session.");
 
     const auto& device_manager = metal_context.device_manager();
-    const auto& active_devices = device_manager->get_all_active_devices_impl();
+    const auto& active_devices = device_manager->get_all_active_devices();
 
     mesh_device_impl.mesh_command_queues_.clear();
 

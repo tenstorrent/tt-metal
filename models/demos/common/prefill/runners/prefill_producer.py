@@ -21,6 +21,11 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.chunk_layout import rotate_chunk_tokens
+from models.demos.common.prefill.runners.layer_completion_ring_reader import (
+    connect_layer_completion_channel,
+    start_layer_completion_drain,
+    wait_for_layer_completions,
+)
 from models.demos.common.prefill.runners.migration import (
     is_per_host_storage,
     migration_table_path,
@@ -95,22 +100,21 @@ CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
 
 def _load_env_config() -> None:
     global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
+    global MTP_DECODE_LEVELS
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
     MTP_LEVELS = int(os.environ.get("PREFILL_MTP_LEVELS", 0))
+    # Decode's level count: the levels past MTP_LEVELS are table aliases of level 0's rows, acked with it.
+    MTP_DECODE_LEVELS = int(os.environ.get("PREFILL_MTP_DECODE_LEVELS", MTP_LEVELS))
     MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
     # Default from the adapter's own depth (see prefill_runner.py's MODEL_CFG.NUM_LAYERS
     # pattern) rather than a literal -- a hardcoded default silently under-covers any model
     # deeper than that literal when a manifest omits PREFILL_NUM_LAYERS.
     NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", ADAPTER.model_config.NUM_LAYERS))
-    # One ack fires per layer that WRITES KV, not per layer. Dense stacks are the same number, but a
-    # hybrid one is not: Kimi-K3 at 93 layers acks only its 24 full-attention layers, so draining
-    # NUM_LAYERS * pushes waits for acks that are never sent and burns the full 600 s timeout twice,
-    # once after warmup and once after the measured request.
-    NUM_ACK_LAYERS = getattr(ADAPTER, "num_kv_cache_layers", lambda n: n)(NUM_LAYERS)
+    NUM_ACK_LAYERS = NUM_LAYERS
 
 
 _load_env_config()
@@ -275,55 +279,26 @@ def _read_device_map(timeout_s: int, rank: int | None = None, num_ranks: int = 1
     return device_map
 
 
-def _connect_layer_ack_channel(timeout_s: int):
-    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    shm_name = f"/tt_prefill_layer_acks_{service_id}"
-    try:
-        channel = ttnn.InterProcessCounterChannel.connect(shm_name, connect_timeout_ms=timeout_s * 1000)
-    except Exception as e:
-        logger.warning(f"[producer] could not connect LayerAck channel {shm_name}: {e}; skipping ack wait.")
-        return None
-    logger.info(f"[producer] connected LayerAck channel {shm_name}")
-    return channel
-
-
-def _ack_layers_per_chunk(kv_table) -> int:
-    """Layer acks one chunk produces across all ranks.
+def _completion_layers_per_chunk(kv_table) -> int:
+    """Layer completions one chunk produces across all ranks.
 
     NUM_ACK_LAYERS counts only what the model's own layers emit; DFlash acks the drafter's context K/V
-    past the verifier's last layer, so the runner emits more. Read the wider count off the published
-    table rather than re-deriving the drafter's depth here: a drafter config spans the same global layer
-    axis the acks are numbered on, and the table is the only thing this device-less process and the
-    runner both see.
+    past the verifier's last layer, so the runner emits more. The drafter config's rows continue the model's
+    layer axis, so its depth is the config's extent past NUM_LAYERS -- read off the published table, the only
+    thing this device-less process and the runner both see.
     """
-    base = NUM_ACK_LAYERS + MTP_LEVELS
+    base = NUM_ACK_LAYERS + MTP_DECODE_LEVELS
     if kv_table is None:
         return base
     dflash = [name for name in _config_names(kv_table) if name.startswith("dflash_")]
     if not dflash:
         return base
-    return kv_table.config(kv_table.config_id_of(dflash[0])).num_layers
+    return base + kv_table.config(kv_table.config_id_of(dflash[0])).num_layers - NUM_LAYERS
 
 
-def _drain_layer_acks(ack_channel, expected: int, timeout_s: float = 600.0) -> int:
-    if ack_channel is None:
-        return 0
-    drained = 0
-    last_logged = -1
-    start = time.perf_counter()
-    while drained < expected:
-        drained += ack_channel.try_consume_all()
-        if drained != last_logged:
-            logger.info(f"[producer] layer acks {drained}/{expected}")
-            last_logged = drained
-        if drained >= expected:
-            break
-        if time.perf_counter() - start > timeout_s:
-            logger.warning(f"[producer] timed out at {drained}/{expected} acks after {timeout_s}s")
-            break
-        time.sleep(0.01)
-    logger.info(f"[producer] drained {drained}/{expected} layer acks in {(time.perf_counter() - start):.2f}s")
-    return drained
+def _completion_layer_bound(chunk_layers: int) -> int:
+    """Global ack-layer axis per chunk: the model's layers plus the rows acked past them (MTP, DFlash)."""
+    return NUM_LAYERS + (chunk_layers - NUM_ACK_LAYERS)
 
 
 def _decode_bfp8_chunk(raw: bytes, head_dim: int) -> torch.Tensor:
@@ -601,7 +576,9 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
     )
 
 
-def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, num_ranks: int | None = None
+):
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
         real_len = min(real_len, golden_cap)
@@ -614,7 +591,7 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     if ADAPTER.name == "llama_3p1_8b":
         return _read_slot_kv_and_check_pcc_llama(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
-        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
+        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir, num_ranks)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
 
 
@@ -679,11 +656,24 @@ def _check_mtp_kv_slots(
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import _load_golden_kv_post, kvpe_golden_present
 
     declared = table.config(0).num_layers
-    assert declared == NUM_LAYERS + MTP_LEVELS, (
-        f"PREFILL_MTP_LEVELS={MTP_LEVELS} but config 0 declares {declared} layers, not "
-        f"{NUM_LAYERS}+{MTP_LEVELS}. The runner sized its KV cache / migration stage without the MTP "
+    assert declared == NUM_LAYERS + MTP_DECODE_LEVELS, (
+        f"PREFILL_MTP_DECODE_LEVELS={MTP_DECODE_LEVELS} but config 0 declares {declared} layers, not "
+        f"{NUM_LAYERS}+{MTP_DECODE_LEVELS}. The runner sized its KV cache / migration stage without the MTP "
         f"tail, so every slot but 0 addresses the wrong region."
     )
+    # Decode levels past the computed ones share level 0's cache, so their rows must be its addresses.
+    for k in range(MTP_LEVELS, MTP_DECODE_LEVELS):
+        for pos in range(first_pos, read_end, table.config(0).chunk_n_tokens):
+            alias, source = table.lookup(NUM_LAYERS + k, pos, slot_id), table.lookup(NUM_LAYERS, pos, slot_id)
+            assert (alias.noc_addr, alias.size_bytes, alias.device_group_index) == (
+                source.noc_addr,
+                source.size_bytes,
+                source.device_group_index,
+            ), f"MTP decode level {k} (layer {NUM_LAYERS + k}) is not an alias of level 0's row at position {pos}"
+    if MTP_DECODE_LEVELS > MTP_LEVELS:
+        logger.info(
+            f"[producer] slot {slot_id} MTP: decode levels {MTP_LEVELS}..{MTP_DECODE_LEVELS - 1} alias level 0's rows"
+        )
     per_level = []
     for k in range(MTP_LEVELS):
         layer = NUM_LAYERS + k
@@ -713,6 +703,23 @@ def _check_mtp_kv_slots(
         f"[producer] slot {slot_id} MTP: {len(per_level)}/{MTP_LEVELS} local level slots written and "
         f"pairwise distinct"
     )
+    # Decode reads its later levels through their own rows, so read them that way too: they must return
+    # level 0's KV bit for bit, which is what the golden scores below.
+    level0_kv = dict(per_level).get(0)
+    if level0_kv is not None and MTP_DECODE_LEVELS > MTP_LEVELS:
+        for k in range(MTP_LEVELS, MTP_DECODE_LEVELS):
+            layer = NUM_LAYERS + k
+            alias_kv = _read_kv_slice(
+                table, device_map, 0, layer, slot_id, read_end, head_dim, _decode_kv_chunk, start=first_pos
+            )[skip_rows : skip_rows + cmp_len]
+            assert torch.equal(alias_kv, level0_kv), (
+                f"MTP decode level {k} (layer {layer}) reads back different KV than level 0's row over {span}, "
+                f"though the table gives both the same addresses: something wrote that memory between the reads."
+            )
+        logger.info(
+            f"[producer] slot {slot_id} MTP: decode levels {MTP_LEVELS}..{MTP_DECODE_LEVELS - 1} read back "
+            f"through their own rows bit-identical to level 0's KV over {span}"
+        )
 
     if not per_level:
         return None
@@ -749,12 +756,15 @@ def _check_mtp_kv_slots(
     return min_pcc
 
 
-def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc_gpt_oss(
+    table, device_map: dict, slot_id: int, real_len: int, trace_dir, num_ranks: int | None = None
+):
     from pathlib import Path
 
     from safetensors import safe_open
 
     from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+    from models.demos.gpt_oss_d_p.tt.runners.acceptance import validate_kv_for_pcc
     from tests.ttnn.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
@@ -798,6 +808,8 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
             g_k = h.get_tensor(f"key_cache_layer_{layer}").float()[0, :, :real_len, :][..., perm]
             g_v = h.get_tensor(f"value_cache_layer_{layer}").float()[0, :, :real_len, :]
 
+        validate_kv_for_pcc(g_k, dev_k)
+        validate_kv_for_pcc(g_v, dev_v)
         pcc_k = float(comp_pcc(g_k, dev_k, 0.0)[1])
         pcc_v = float(comp_pcc(g_v, dev_v, 0.0)[1])
         mins["k"], mins["v"] = min(mins["k"], pcc_k), min(mins["v"], pcc_v)
@@ -810,6 +822,9 @@ def _read_slot_kv_and_check_pcc_gpt_oss(table, device_map: dict, slot_id: int, r
     )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
+    # A single rank holds every layer, so a layer missing from its device map is a broken map, not another rank's.
+    if num_ranks == 1 and checked != NUM_LAYERS:
+        raise RuntimeError(f"slot {slot_id}: only {checked}/{NUM_LAYERS} layers resolved against the device map")
     return mins
 
 
@@ -1353,7 +1368,9 @@ def _verify_resident_slots(
         real_len = res.real_len
         if real_len <= 0:
             continue
-        slot_mins = _read_slot_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, slot_traces[slot_id])
+        slot_mins = _read_slot_kv_and_check_pcc(
+            kv_table, device_map, slot_id, real_len, slot_traces[slot_id], num_ranks=num_ranks
+        )
         for cache, value in slot_mins.items():
             per_cache[cache] = value if cache not in per_cache else min(per_cache[cache], value)
         pcc = min(slot_mins.values())
@@ -1586,8 +1603,9 @@ def main() -> None:
 
     kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
 
-    ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
-    if cfg.verify and ack_channel is None:
+    # Without verification the completions are left to whatever consumer owns the channel.
+    completion_channel = connect_layer_completion_channel(timeout_s) if cfg.verify else None
+    if cfg.verify and completion_channel is None:
         logger.error(
             "[producer] CHECK_PCC=1 but LayerAck channel missing — UMD read would race the runner's "
             "prefill (H2D push return ≠ layers done). The master rank always owns this channel, so "
@@ -1596,11 +1614,13 @@ def main() -> None:
         sys.exit(1)
     if not cfg.verify:
         logger.info(
-            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
-            "channel (pure token feeder; the runner's migration self-test owns it)"
+            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the completion "
+            "channel (pure token feeder; the real consumer owns it). Some consumer must be attached, or "
+            "the runner waits on its full completion ring."
         )
 
-    ack_layers = _ack_layers_per_chunk(kv_table)
+    chunk_layers = _completion_layers_per_chunk(kv_table)
+    layer_bound = _completion_layer_bound(chunk_layers)
     slot_traces, slot_lengths, pools_by_trace = _resolve_slot_prompts(cfg)
     cfg.slot_lengths = slot_lengths
 
@@ -1619,18 +1639,28 @@ def main() -> None:
         )
         return (time.perf_counter() - push_start) * 1000.0
 
-    warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
-    if warmup_chunks > 0:
-        logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
-        for cidx in range(warmup_chunks):
-            push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
-        service.barrier()
-        if ack_channel is not None:
-            _drain_layer_acks(ack_channel, ack_layers * warmup_chunks)
-        logger.info("[producer] warmup complete; starting the measured request")
+    # Drains from the first push to the last barrier: the completion rings are bounded, so a drain that waited
+    # for the barrier would leave the runner blocked on a full ring and the barrier waiting on the runner.
+    drain = start_layer_completion_drain(completion_channel, num_layers=layer_bound, chunk_layers=chunk_layers)
+    try:
+        warmup_chunks = int(os.environ.get("PREFILL_PRODUCER_WARMUP_CHUNKS", "0"))
+        if warmup_chunks > 0:
+            logger.info(f"[producer] warmup: {warmup_chunks} throwaway chunk(s) on slot 0 (not timed, not verified)")
+            for cidx in range(warmup_chunks):
+                push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE, warmup_chunks * CHUNK_SIZE)
+            service.barrier()
+            wait_for_layer_completions(drain, chunk_layers * warmup_chunks)
+            logger.info("[producer] warmup complete; starting the measured request")
 
-    stats = run_schedule(cfg, push_fn=push_chunk)
-    service.barrier()
+        stats = run_schedule(cfg, push_fn=push_chunk)
+        service.barrier()
+        # One completion per layer per chunk; chunk_layers is what the runner emits (KV-writing layers plus
+        # MTP/DFlash extras), not NUM_LAYERS. The count is cumulative, so it includes the warm-up.
+        expected_completions = chunk_layers * (max(warmup_chunks, 0) + stats.total_pushes)
+        received_completions = wait_for_layer_completions(drain, expected_completions)
+    finally:
+        if drain is not None:
+            drain.stop()
 
     sorted_ms = sorted(stats.push_ms)
     total_tokens = stats.total_pushes * CHUNK_SIZE
@@ -1640,8 +1670,6 @@ def main() -> None:
         f"push_ms p50={_percentile(sorted_ms, 0.5):.1f} p90={_percentile(sorted_ms, 0.9):.1f} "
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
-
-    _drain_layer_acks(ack_channel, ack_layers * stats.total_pushes)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)
@@ -1657,6 +1685,9 @@ def main() -> None:
             verify_ok = False
     elif cfg.verify:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
+        verify_ok = False
+    if cfg.verify and ADAPTER.verify_layer_completions and received_completions != expected_completions:
+        logger.error(f"[producer] layer completions: received {received_completions}/{expected_completions}")
         verify_ok = False
 
     if world_size > 1:
