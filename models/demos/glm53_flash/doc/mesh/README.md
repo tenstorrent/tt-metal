@@ -1165,3 +1165,11 @@ the stacked tensors). Expected: 1 M x 4 users 152 -> ~71 ms, served 6.6 -> ~14 t
 regions-sourced dispatch ops. Host tests green (planner vs an independent page map, kernel ABI, plumbing); the
 one-chip op A/B and the (2,4) block test (one-copy vs regions fallback vs stacked, bit-identity asserted) are written
 and not yet run.
+
+10:22 `e2e_8x4_B4_cap1m_regions_stream` (wt_frozen18 = 0a3feca356a, 1 M x 4 users/row, `GLM53_REGIONS_DECODE=stream`): traced step
+75.72 ms = 13.2 tok/s per user, 423 aggregate (was 152.2), TTFT 143 ms for 128 tokens (was 264: the short prefill goes through the
+dispatch ops instead of the regions kernel), chain pcc 0.861457 = the stacked-copy value (bit-identical path; the one-chip A/B 4/4
+and the (2,4) block S1==T1==T2 passed before it). The 4.8 ms over the 256 K stacked point (70.9) = the unbounded sparse-decode
+capacity loops (~3.6 ms, `GLM53_SPARSE_DECODE_BOUND=1` not set in this run) + residual; `e2e_8x4_B4_cap256k_default` measures the
+stream vs stacked residual on the 8x4. Default flipped to `stream` (the path is bit-identical to the gated stacked path, so the
+stacked path's accuracy gate carries over; `GLM53_REGIONS_DECODE=off` restores the old rule).
