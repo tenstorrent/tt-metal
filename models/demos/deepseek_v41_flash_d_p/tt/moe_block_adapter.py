@@ -13,6 +13,10 @@ One call replaces the router, experts, shared_expert and moe_add steps:
        in one program; + shared, TP all-to-all back
     -> routed + shared [1, 1, S/SP, H/TP] bf16 (fp32 under GLUE_FOLD=off): what moe_add returns on the flat path
 
+MOE_HEAD=fused: x is ffn_norm's column split [1, 1, S/SP, H/TP] (the fused head gathers it on its ports), the head is
+one program (x gather, shared expert engine + row reduce-scatter, router, routing exchange + planner, dispatch prep),
+the combine snaps its terms to COMBINE_SNAP (the head's planner has no fixed order); the tail as above.
+
 Expert numbering. The block holds expert b on chip b // epc in row-major chip order. Our routed weights (and their
 weight cache) hold checkpoint expert gtab[c, r, le] in slot le of chip (r, c) (ExpertMapping column-major,
 tt/experts.py). The block's experts are numbered by those slots, b = (r C + c) epc + le, and the router's rows (gate
@@ -41,6 +45,7 @@ from .experts import TtExperts
 from .settings import settings
 
 LINKS = 2  # links per direction (the block's exchange plans its ports for 2)
+COMBINE_SNAP = 2.0**-19  # (MOE_HEAD=fused: order-independent sums below 2^24 x 2^-19 = 32; routed sums peak at 5.4)
 _BLOCKS: dict = {}  # (id(mesh), chunk) -> (mesh, MoEBlock)
 _DONE: dict = {}  # id(mesh) -> (mesh, the done words every layer's flat op shares; each launch leaves them zero)
 
@@ -67,9 +72,12 @@ def block_model(cfg):
 
 
 def block_options():
-    """The owner's choices (D2 x gathered, D4 ops head, D7 fixed combine order); the tail as Marko ran DS41 (ops)."""
+    """The owner's choices (D2 x gathered, D4 ops head, D7 fixed combine order); the tail as Marko ran DS41 (ops).
+    MOE_HEAD=fused: the fused head on the column split, the combine snapped (bit-identical runs)."""
     from models.demos.moe_block.moe_block import MoEOptions
 
+    if settings.get("MOE_HEAD") == "fused":
+        return MoEOptions(head="fused", tail="ops", combine_snap=COMBINE_SNAP)
     return MoEOptions(head="ops", tail="ops", x_gathered=True, combine_deterministic=True)
 
 
@@ -186,10 +194,13 @@ class TtMoEBlockLayer:
             )
 
         self.weights = MoELayer.build(mesh, g, m, host, self.dtypes, routed_op=op, layout=self.layout)
-        self.weights.ops()  # (router and shared expert on the device now: no host work in the forward)
+        self.head = settings.get("MOE_HEAD")
+        if self.head == "ops":  # (router and shared expert on the device now: no host work in the forward)
+            self.weights.ops()
+        # (fused: the head lays out this layer's router and shared expert at the layer's first call - it needs the head)
         logger.info(
             f"MOE_BLOCK layer={layer} experts={m.num_experts} ({epc} a chip) chunk={self.chunk} cap={op.m} "
-            f"layout={settings.get('EXPERTS_LAYOUT')} {self.layout} shared_fidelity=LoFi"
+            f"layout={settings.get('EXPERTS_LAYOUT')} {self.layout} head={self.head} shared_fidelity=LoFi"
         )
 
     def block(self):
@@ -213,8 +224,8 @@ class TtMoEBlockLayer:
         return hit[1]
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """x: ffn_norm [1, 1, S/SP, H] TILE (bf16, or fp32: cast here) -> [1, 1, S/SP, H/TP] bf16 (GLUE_FOLD=off: fp32,
-        as moe_add's output)."""
+        """x: ffn_norm [1, 1, S/SP, H] TILE (MOE_HEAD=fused: [1, 1, S/SP, H/TP]; bf16, or fp32: cast here) ->
+        [1, 1, S/SP, H/TP] bf16 (GLUE_FOLD=off: fp32, as moe_add's output)."""
         assert x.layout == ttnn.TILE_LAYOUT
         xb = cast(x, ttnn.bfloat16)
         y = self.block()(xb, layer=self.weights)

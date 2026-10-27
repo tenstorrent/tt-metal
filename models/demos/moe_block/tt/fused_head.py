@@ -36,6 +36,7 @@ class RouterSpec:
     # (a row tile's experts over two router cores - the fin and the top-K over half the tiles each, merged on the
     # first: router_stream's split; the logits on the engine, the second cores in the column left of the movers)
     split: bool = False
+    score: str = "sigmoid"  # (the scores: "sigmoid", or "sqrtsoftplus" - DeepSeek-V4's sqrt(softplus), fp32)
 
 
 @dataclass(frozen=True)
@@ -401,6 +402,7 @@ class HeadSE3:
                 ordered=router.ordered,
                 fold=router.fold,
                 split=router.split,
+                score=router.score,
                 arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
                 words=int(self.mbox.buffer_address()) + 4 * self.lw_off,
                 port_words=self.port_words,

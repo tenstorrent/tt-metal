@@ -1243,7 +1243,7 @@ class SeEngine3:
         GY=10,
         MT=1,
         KB=None,
-        KBD=8,
+        KBD=None,
         fidelity=ttnn.MathFidelity.HiFi2,
         w_dtype=ttnn.bfloat8_b,
         shards=1,
@@ -1315,6 +1315,8 @@ class SeEngine3:
             self.wd = [[pw for _, pw, _ in rs.column_passes(0, c)] for c in range(GX)]
             self.NPD = len(self.wd[0])
             assert all(len(wd) == self.NPD for wd in self.wd)
+        # (the down's K step: 8, or the largest divisor of I's tiles under it - DeepSeek-V4.1's 36 a chip: 6)
+        KBD = KBD or max(d for d in range(1, 9) if self.HT % d == 0)
         self.KBD = KBD
         assert self.HT % KBD == 0
         self.NSD = self.HT // KBD if down else 0
