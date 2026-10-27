@@ -1,0 +1,8 @@
+{
+  "_doc": "Round-0 provisional floors (CONTRACT §3, D0 Q3, PLAN v1.20: absolute pcc_normalized / pcc_final floors on every suite and bench case, both precisions). Band, row, inactive and abs_err_max floors and the drift budgets are proposed at G1 from the round-0 record and set by decision.",
+  "floors": {
+    "*/accuracy": {"pcc_normalized": 0.999, "pcc_final": 0.99},
+    "*/performance": {"pcc_normalized": 0.995, "pcc_final": 0.98}
+  },
+  "drift": {}
+}
