@@ -155,11 +155,11 @@ _emit_device_timing() {
         # JSON-escape test_path: backslash first, then double-quote.
         esc_path="${TT_TIMING_TEST_PATH//\\/\\\\}"
         esc_path="${esc_path//\"/\\\"}"
-        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d,"precompile_mode":"%s","precompile_reason":"%s","precompile_s":%d,"precompile_programs":%d,"precompile_built":%d,"phase_pre_ms":%d,"phase_pytest_ms":%d,"phase_post_ms":%d%s}\n' \
+        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d,"precompile_mode":"%s","precompile_reason":"%s","precompile_s":%d,"precompile_programs":%d,"precompile_built":%d,"phase_pre_ms":%d,"phase_pytest_ms":%d,"phase_post_ms":%d,"warm":"%s"%s}\n' \
             "$TT_TIMING_SOURCE" "$$" "$TT_TIMING_ENTRY_MS" "$wait_ms" "$run_ms" "$esc_path" "$ec" \
             "$TT_TIMING_PRECOMPILE_MODE" "$TT_TIMING_PRECOMPILE_REASON" "$TT_TIMING_PRECOMPILE_S" \
             "$TT_TIMING_PRECOMPILE_PROGRAMS" "$TT_TIMING_PRECOMPILE_BUILT" \
-            "$pre_ms" "$pytest_ms" "$post_ms" "${TT_TIMING_PHASES:+,$TT_TIMING_PHASES}" \
+            "$pre_ms" "$pytest_ms" "$post_ms" "${WARM:-off}" "${TT_TIMING_PHASES:+,$TT_TIMING_PHASES}" \
             >> "$TT_DEVICE_TIMING_LOG" 2>/dev/null || true
     fi
     return $ec
@@ -380,6 +380,29 @@ fi
 # (incl. ccache state) by construction. We never override it.
 PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
 
+# --- Warm process (scripts/safe_pytest_warm.py) ---
+# One long-lived process per checkout keeps torch/ttnn imported and the device open between calls
+# and runs each call's pytest session in-process; its docstring lists the state it resets between
+# sessions. While it is up it holds the device lock, and it lets go as soon as anyone else waits.
+# WARM records the route a call took:
+#   attach   - a warm process for this checkout was up; the call ran there (no flock here)
+#   spawn    - this call took the lock, started the warm process and ran there
+#   fallback - the warm process refused or was gone; the call ran cold
+#   off      - not eligible: simulator, --dev, --profile, SAFE_PYTEST_WARM=0, device reuse off
+# The runtime reads the dispatch-timeout command once per process, so warm calls share a fixed
+# triage log path instead of a per-call one.
+WARM=off
+WARM_ELIGIBLE=false
+if [[ "$SIM_MODE" == false && "$DEV_MODE" == false && "$PROFILE_MODE" == false \
+      && "${SAFE_PYTEST_WARM:-1}" != 0 && "${SAFE_PYTEST_REUSE_DEVICE:-1}" != 0 ]]; then
+    WARM_ELIGIBLE=true
+    WARM_PY="$REPO_DIR/scripts/safe_pytest_warm.py"
+    WARM_KEY=$(printf %s "$REPO_DIR" | sha1sum | cut -c1-12)
+    WARM_LOG="/tmp/safe-pytest-warm-${WARM_KEY}.log"
+    WARM_PID_FILE="/tmp/safe-pytest-warm-${WARM_KEY}.pid"
+    TRIAGE_LOG="/tmp/safe-pytest-triage-warm-${WARM_KEY}.log"
+fi
+
 
 # --- Profiler CSV reporting (--profile) ---
 # Newest ops_perf_results CSV before the run; snapshotted just before pytest (below).
@@ -417,7 +440,9 @@ _print_total_runtime() {
 trap _print_total_runtime EXIT
 
 # --- Acquire flock (hardware only) ---
-if [[ "$SIM_MODE" == false ]]; then
+# A function so a call that ran in the warm process can still take the lock later: to run cold
+# when the warm process refused, or to reset the device after it.
+_lock_device() {
     exec 9>"$LOCK_FILE"
 
     echo "SAFE_PYTEST: Waiting for device lock..."
@@ -466,12 +491,27 @@ if [[ "$SIM_MODE" == false ]]; then
             echo "$TS SAFE_PYTEST: waiting for device (${LOCK_WAIT_TOTAL}s) — holder unknown"
         fi
     done
-    TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
     echo "SAFE_PYTEST: Device lock acquired"
-
     # Start the total-run clock the moment we own the device. The lock-wait above is
-    # idle queueing behind other runners and is deliberately excluded.
+    # idle queueing behind other runners and is deliberately excluded. A second call (after a
+    # warm run) keeps the first start.
+    if [[ "$TT_TIMING_LOCK_ACQUIRED_MS" -eq 0 ]]; then
+        TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
+        RUN_START=$(date +%s)
+    fi
+}
+
+_warm_up() {
+    [[ "$WARM_ELIGIBLE" == true ]] && python3 "$WARM_PY" ping --repo "$REPO_DIR" 2>/dev/null
+}
+
+if [[ "$SIM_MODE" == false ]] && _warm_up; then
+    WARM=attach
+    TT_TIMING_LOCK_ACQUIRED_MS=$(date +%s%3N)
     RUN_START=$(date +%s)
+    echo "SAFE_PYTEST: warm process holds the device; running there"
+elif [[ "$SIM_MODE" == false ]]; then
+    _lock_device
 
     # --- Check if device needs reset from previous hang ---
     if [[ -f "$DIRTY_FLAG" ]]; then
@@ -748,15 +788,85 @@ trap '_signal_cleanup INT'  SIGINT
 # grep for the libttsim watchdog message after a sim hang. Process substitution
 # leaves $! pointing at pytest itself (not tee), so the signal trap still kills
 # the right process tree.
+_run_logged() {
+    "$@" > >(tee "$PYTEST_STDOUT_LOG") 2>&1 &
+    CHILD_PID=$!
+    wait "$CHILD_PID"
+    EXIT_CODE=$?
+    wait 2>/dev/null  # let tee flush before we grep
+    CHILD_PID=
+}
+
 TT_TIMING_PYTEST_LAUNCH_MS=$(date +%s%3N)
 export SAFE_PYTEST_LAUNCH_MS="$TT_TIMING_PYTEST_LAUNCH_MS"
-"${PYTEST_CMD[@]}" > >(tee "$PYTEST_STDOUT_LOG") 2>&1 &
-CHILD_PID=$!
-wait "$CHILD_PID"
-EXIT_CODE=$?
+if [[ "$WARM_ELIGIBLE" == true ]]; then
+    # The same command with the warm client in place of `pytest`; env assignments before it stay
+    # and reach the warm session through the client's environment.
+    WARM_CMD=()
+    _spliced=false
+    for _a in "${PYTEST_CMD[@]}"; do
+        if [[ "$_spliced" == false && "$_a" == pytest ]]; then
+            WARM_CMD+=(python3 "$WARM_PY" run --repo "$REPO_DIR")
+            [[ "$WARM" == off ]] && WARM_CMD+=(--wait-start 180 "$WARM_PID_FILE")
+            WARM_CMD+=(--)
+            _spliced=true
+        else
+            WARM_CMD+=("$_a")
+        fi
+    done
+    if [[ "$WARM" == off ]]; then
+        # This call holds the lock: start the warm process. It inherits fd 9, so the lock stays
+        # held after this script exits, for as long as the warm process keeps the device.
+        rm -f "$WARM_PID_FILE"
+        setsid -f bash -c 'echo $$ > "$1"; exec python3 "$2" worker --repo "$3" --lock-fd 9' _ \
+            "$WARM_PID_FILE" "$WARM_PY" "$REPO_DIR" </dev/null >>"$WARM_LOG" 2>&1
+        WARM=spawn
+    fi
+    _run_logged "${WARM_CMD[@]}"
+    if [[ $EXIT_CODE -eq 75 ]]; then
+        # Nothing ran in the warm process (refused, or gone). Run cold, holding the lock.
+        echo "SAFE_PYTEST: warm process unavailable; running cold"
+        [[ "$WARM" == attach ]] && _lock_device
+        WARM=fallback
+        _run_logged "${PYTEST_CMD[@]}"
+    fi
+else
+    _run_logged "${PYTEST_CMD[@]}"
+fi
 TT_TIMING_PYTEST_END_MS=$(date +%s%3N)
-wait 2>/dev/null  # let tee flush before we grep
-CHILD_PID=
+
+# Before any reset this call must hold the lock and the warm process must have closed the
+# device. After a session that did not pass, the warm process exits on its own; otherwise it is
+# asked to stop. A call that started it shares its lock and waits for the process to be gone.
+_own_device() {
+    [[ "$WARM" == attach || "$WARM" == spawn ]] || return 0
+    python3 "$WARM_PY" stop --repo "$REPO_DIR" >/dev/null 2>&1 || true
+    if [[ "$WARM" == attach ]]; then
+        _lock_device
+    else
+        local pid _i
+        pid=$(cat "$WARM_PID_FILE" 2>/dev/null)
+        for _i in $(seq 600); do
+            [[ -n "$pid" && -d /proc/$pid ]] || break
+            sleep 0.1
+        done
+    fi
+    WARM_OWNED=true
+}
+
+# The warm process died during the session: the device may be in any state. Reset it now.
+if [[ ($WARM == attach || $WARM == spawn) && $EXIT_CODE -eq 70 ]]; then
+    echo "SAFE_PYTEST: warm process died during the run; resetting device..."
+    _own_device
+    if tt-smi -r; then
+        sleep 2
+        rm -f "$DIRTY_FLAG"
+        echo "SAFE_PYTEST: Device reset complete"
+    else
+        echo "SAFE_PYTEST: Device reset FAILED; leaving device marked dirty"
+    fi
+    EXIT_CODE=1
+fi
 
 # Splice the plugin's fragment into the timing record, only if it is exactly the shape the plugin
 # writes ("phase_x_ms":N,...), so a truncated file can never break the JSON line.
@@ -811,6 +921,7 @@ fi
 _clear_dirty_flag() {
     if [[ "$ETH_STUCK" == true ]]; then
         echo "SAFE_PYTEST: Active Ethernet cores stuck after the run, resetting device..."
+        [[ "${WARM_OWNED:-false}" == true ]] || _own_device
         if tt-smi -r; then
             sleep 2
             rm -f "$DIRTY_FLAG"
@@ -870,6 +981,7 @@ fi
 if [[ "$IS_HANG" == true ]]; then
     if [[ "$SIM_MODE" == false ]]; then
         echo "SAFE_PYTEST: Resetting device..."
+        [[ "${WARM_OWNED:-false}" == true ]] || _own_device
         if tt-smi -r; then
             sleep 2
             rm -f "$DIRTY_FLAG"
