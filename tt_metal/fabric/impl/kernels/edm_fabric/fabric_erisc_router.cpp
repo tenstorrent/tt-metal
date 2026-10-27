@@ -351,7 +351,8 @@ FORCE_INLINE volatile uint32_t* downstream_read_counter_address(size_t vc, size_
         return nullptr;
     }
     size_t slot = (vc == 0 ? 0 : VC0_DOWNSTREAM_EDM_SIZE) + compact_index;
-    return reinterpret_cast<volatile uint32_t*>(local_downstream_read_counters_base_address + slot * 16);
+    return reinterpret_cast<volatile uint32_t*>(
+        local_downstream_read_counters_base_address + slot * software_counter_slot_bytes);
 }
 
 static_assert(
@@ -372,7 +373,8 @@ static_assert(
 
 // Sender-channel slots, producer -> this router on one chip. With stream registers the producer subtracts 1
 // from the channel's free-slots register per packet and the router adds 1 back per packet it sends. Without,
-// the channel interface counts the producers' published writes against the packets this router took.
+// the channel interface counts the producers' published writes against the packets this router sent on, which
+// send_next_data() counts.
 template <typename WorkerInterfaceT>
 FORCE_INLINE bool sender_channel_has_unsent_packet(
     const WorkerInterfaceT& worker_interface, uint32_t free_slots_stream_id) {
@@ -385,12 +387,9 @@ FORCE_INLINE bool sender_channel_has_unsent_packet(
     }
 }
 
-template <typename WorkerInterfaceT>
-FORCE_INLINE void sender_channel_take_packet(WorkerInterfaceT& worker_interface, uint32_t free_slots_stream_id) {
+FORCE_INLINE void sender_channel_take_packet(uint32_t free_slots_stream_id) {
     if constexpr (stream_registers_available) {
         increment_local_update_ptr_val(free_slots_stream_id, 1);
-    } else {
-        worker_interface.take_packet();
     }
 }
 
@@ -1323,7 +1322,7 @@ FORCE_INLINE
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
-        sender_channel_take_packet(local_sender_channel_worker_interface, sender_channel_free_slots_stream_id);
+        sender_channel_take_packet(sender_channel_free_slots_stream_id);
     }
 
     // Process COMPLETIONs from receiver
@@ -1616,7 +1615,6 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 }
             }
             wr_sent_counter.increment();
-            // the current packet has been processed.
             if constexpr (!enable_first_level_ack) {
                 consume_packets_sent_credit<to_receiver_pkts_sent_id>();
             }

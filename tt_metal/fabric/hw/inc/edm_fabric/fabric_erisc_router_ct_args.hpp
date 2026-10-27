@@ -688,7 +688,8 @@ constexpr size_t to_receiver_packets_sent_counters_base_address =
     NAMED_CT_ARG("TO_RECEIVER_PACKETS_SENT_COUNTERS_BASE_ADDR");
 constexpr size_t local_sender_packets_sent_counters_base_address =
     NAMED_CT_ARG("LOCAL_SENDER_PACKETS_SENT_COUNTERS_BASE_ADDR");
-constexpr size_t packets_sent_counter_slot_bytes = ETH_WORD_SIZE_BYTES;
+// Every software-counter slot another agent writes: one Ethernet word.
+constexpr size_t software_counter_slot_bytes = ETH_WORD_SIZE_BYTES;
 static_assert(
     stream_registers_available ||
         (to_receiver_packets_sent_counters_base_address != 0 && local_sender_packets_sent_counters_base_address != 0),

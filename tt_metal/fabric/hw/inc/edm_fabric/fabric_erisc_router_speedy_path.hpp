@@ -165,7 +165,7 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
-        sender_channel_take_packet(local_sender_channel_worker_interface, sender_channel_free_slots_stream_id);
+        sender_channel_take_packet(sender_channel_free_slots_stream_id);
     }
 
     // We only want to actually bother checking for completions after a certain number of sent packets are outstanding
