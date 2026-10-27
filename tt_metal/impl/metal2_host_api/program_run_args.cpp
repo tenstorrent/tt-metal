@@ -568,7 +568,8 @@ void PatchPerNodeBindingRtas(
             auto a_it = node_addresses.find(node);
             TT_FATAL(
                 a_it != node_addresses.end(),
-                "Kernel '{}' runs on node {}, where the tensor bound to per-node TensorParameter '{}' has no shard.",
+                "Internal error: kernel '{}' runs on node {}, where the tensor bound to per-node TensorParameter '{}' "
+                "has no shard (validation should have caught this).",
                 kernel_name,
                 node.str(),
                 handle.tensor_parameter_name);
