@@ -1,0 +1,44 @@
+[ttq] submitted job 951 (cpu); reattach with: ttq wait 951
+[ttq] job 951 queued (0s): 0 ahead; waiting for a free slot
+n/a  floor fallback/accuracy spread_ratio_p50: not applicable (n_active=7)
+n/a  floor fallback/accuracy spread_ratio_p01: not applicable (n_active=7)
+n/a  floor fallback/accuracy spread_ratio_p99: not applicable (n_active=7)
+ok   floor fallback/accuracy spread_ratio_min 0.996994 >= 0.92
+ok   floor fallback/accuracy spread_ratio_max 1.0045 <= 1.08
+ok   floor fallback/accuracy inactive_max_err 0.00247073 <= 0.05
+ok   floor fallback/performance pcc_normalized 0.999941 >= 0.995
+ok   floor fallback/performance pcc_final 0.999834 >= 0.98
+ok   floor fallback/performance pcc_row_min 0.995507 >= 0.7
+ok   floor fallback/performance pcc_final_spread 0.999974 >= 0.995
+ok   floor fallback/performance pcc_row_min_active 0.99989 >= 0.97
+n/a  floor fallback/performance spread_ratio_p50: not applicable (n_active=7)
+n/a  floor fallback/performance spread_ratio_p01: not applicable (n_active=7)
+n/a  floor fallback/performance spread_ratio_p99: not applicable (n_active=7)
+ok   floor fallback/performance spread_ratio_min 0.970242 >= 0.92
+ok   floor fallback/performance spread_ratio_max 1.01329 <= 1.08
+ok   floor fallback/performance inactive_max_err 0.00640607 <= 0.3
+ok   floor horizon4/accuracy pcc_normalized 0.999971 >= 0.999
+ok   floor horizon4/accuracy pcc_final 0.999927 >= 0.99
+ok   floor horizon4/accuracy pcc_row_min 0.999899 >= 0.98
+ok   floor horizon4/accuracy pcc_final_spread 0.999994 >= 0.999
+ok   floor horizon4/accuracy pcc_row_min_active 0.999899 >= 0.998
+n/a  floor horizon4/accuracy spread_ratio_p50: not applicable (n_active=4)
+n/a  floor horizon4/accuracy spread_ratio_p01: not applicable (n_active=4)
+n/a  floor horizon4/accuracy spread_ratio_p99: not applicable (n_active=4)
+ok   floor horizon4/accuracy spread_ratio_min 0.996934 >= 0.92
+ok   floor horizon4/accuracy spread_ratio_max 1.004 <= 1.08
+ok   floor horizon4/accuracy inactive_max_err 0 <= 0.05
+ok   floor horizon4/performance pcc_normalized 0.999598 >= 0.995
+ok   floor horizon4/performance pcc_final 0.999009 >= 0.98
+ok   floor horizon4/performance pcc_row_min 0.998652 >= 0.7
+ok   floor horizon4/performance pcc_final_spread 0.999866 >= 0.995
+ok   floor horizon4/performance pcc_row_min_active 0.998652 >= 0.97
+n/a  floor horizon4/performance spread_ratio_p50: not applicable (n_active=4)
+n/a  floor horizon4/performance spread_ratio_p01: not applicable (n_active=4)
+n/a  floor horizon4/performance spread_ratio_p99: not applicable (n_active=4)
+ok   floor horizon4/performance spread_ratio_min 0.977292 >= 0.92
+ok   floor horizon4/performance spread_ratio_max 1.03055 <= 1.08
+ok   floor horizon4/performance inactive_max_err 0 <= 0.3
+0 failure(s)
+[ttq] job 951 done rc=0 in 0s (queued 0s) on cpu pool
+[ttq] log /home/andy/.local/share/ttq/jobs/000951/output.log

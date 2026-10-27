@@ -1,0 +1,16 @@
+{
+  "_doc": "G1 floor proposal from round 0 (D1 rulings 3/5, PLAN v1.9, v1.16, v1.17, v1.20). Not binding until a decision adopts it; gates.json stays the provisional set. Accuracy floors sit at about the bf16 noise level the round-0 record shows; performance floors allow the LoFi/bf8 spread v1.9 describes. spread_ratio_p50 (>= 8 active rows) and spread_ratio_min/max (any active row) are the uniform-band checks; inactive_max_err is the inactive-collapse check. single_long gets a case-specific pcc floor (narrow band: q0.1-q0.9 half-width is 0.8 % of the series scale, see doc/optimize/iter_00/floors_g1.md).",
+  "floors": {
+    "*/accuracy": {"pcc_normalized": 0.999, "pcc_final": 0.99, "pcc_row_min": 0.98, "pcc_final_spread": 0.999, "pcc_row_min_active": 0.998,
+                   "spread_ratio_p50": [0.98, 1.02], "spread_ratio_p01": [0.95, 1.05], "spread_ratio_p99": [0.95, 1.05],
+                   "spread_ratio_min": 0.92, "spread_ratio_max": 1.08, "inactive_max_err": 0.05},
+    "*/performance": {"pcc_normalized": 0.995, "pcc_final": 0.98, "pcc_row_min": 0.7, "pcc_final_spread": 0.995, "pcc_row_min_active": 0.97,
+                      "spread_ratio_p50": [0.95, 1.05], "spread_ratio_p01": [0.85, 1.15], "spread_ratio_p99": [0.85, 1.15],
+                      "spread_ratio_min": 0.92, "spread_ratio_max": 1.08, "inactive_max_err": 0.3},
+    "paper/performance": {"spread_ratio_min": 0.6, "spread_ratio_max": 1.35},
+    "long_horizon/performance": {"spread_ratio_min": 0.6, "spread_ratio_max": 1.35},
+    "single_long/accuracy": {"pcc_normalized": 0.997, "pcc_final": 0.997, "pcc_final_spread": 0.997, "pcc_row_min_active": 0.997},
+    "single_long/performance": {"pcc_normalized": 0.99, "pcc_final": 0.99, "pcc_final_spread": 0.99, "pcc_row_min_active": 0.99}
+  },
+  "drift": {}
+}

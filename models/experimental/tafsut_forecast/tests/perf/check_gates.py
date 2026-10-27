@@ -149,7 +149,9 @@ def check(
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("candidate", type=Path)
-    ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
+    ap.add_argument(
+        "--baseline", type=lambda s: Path(s) if s else None, default=DEFAULT_BASELINE, help="'' = floors only"
+    )
     ap.add_argument("--gates", type=Path, default=DEFAULT_GATES)
     ap.add_argument("--allow-unstamped", action="store_true", help="admit records without git_head (pre-v1.16)")
     args = ap.parse_args()

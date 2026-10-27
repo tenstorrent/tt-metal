@@ -47,7 +47,7 @@ def broken(g_head):
     wide = idx[width.argsort(descending=True)[:k]]
     inact = M.collapsed(g_head).clone()
     inact[act] = g_head[act]
-    return {
+    out = {
         "collapsed": (M.collapsed(g_head), "all rows"),
         "inactive_collapsed": (inact, f"{int((~act).sum())} inactive rows"),
         "active1pct_0.3x": (scale_band(g_head, wide, 0.3), f"{k} of {len(idx)} active rows"),
@@ -55,6 +55,9 @@ def broken(g_head):
         "all_1.12x": (scale_band(g_head, slice(None), 1.12), "all rows"),
         "sign_flip": (-g_head, "all rows"),
     }
+    if not bool((~act).any()):  # no inactive rows: the "broken" output is the golden itself
+        del out["inactive_collapsed"]
+    return out
 
 
 def case_inputs(name):
