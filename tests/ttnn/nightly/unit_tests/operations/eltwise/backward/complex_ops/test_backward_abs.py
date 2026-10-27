@@ -125,7 +125,9 @@ def test_level2_abs_bw_extreme_exponent_range(scale_exp, device, function_level_
 
     assert not torch.isnan(tt_dev[0]).any()
     assert not torch.isinf(tt_dev[0]).any()
-    passing_r, out_r = comp_allclose(golden.real, tt_dev[0].real, rtol=2e-2, atol=1e-2)
-    passing_i, out_i = comp_allclose(golden.imag, tt_dev[0].imag, rtol=2e-2, atol=1e-2)
+    tt_dev_real = tt_dev[0][..., :input_shape[-1]]
+    tt_dev_imag = tt_dev[0][..., input_shape[-1]:]
+    passing_r, out_r = comp_allclose(golden.real.float(), tt_dev_real.float(), rtol=2e-2, atol=1e-2)
+    passing_i, out_i = comp_allclose(golden.imag.float(), tt_dev_imag.float(), rtol=2e-2, atol=1e-2)
     logger.info(f"{out_r} | {out_i}")
     assert passing_r and passing_i
