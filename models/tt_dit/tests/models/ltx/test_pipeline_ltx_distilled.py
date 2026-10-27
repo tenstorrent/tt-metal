@@ -62,11 +62,6 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
     return False
 
 
-# (lower, upper) seconds per stage of the traced steady-state pass (gen #2) of Fast T2V, keyed by
-# (mesh shape, height, width, frames): 0.7x the fastest / 1.3x the slowest observation (encoder and
-# latent upsample, tiny and noisy: 0.5x / 2x). PROVISIONAL: from 7 standard-pool bh_sc1 runs
-# (2026-10-19..27), which split into ~6.5 s and ~8.0 s host clusters; the CI leg now runs on
-# bh_sc1_high_power and these get re-derived from those runs.
 FAST_T2V_TIMING_LIMITS = {
     ((4, 8), 1088, 1920, 153): {
         "Encoder": (0.23, 0.96),

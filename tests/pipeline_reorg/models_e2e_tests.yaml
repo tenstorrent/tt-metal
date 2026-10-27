@@ -1700,7 +1700,6 @@
   model_family: Wan
   skus:
     bh_sc4:
-      # Standalone test step took 23.6 min on 2026-10-24 (weight conversion + single clip + VBench).
       timeout: 40
       tier: 1
       release_ready: false
@@ -1741,7 +1740,6 @@
   skus:
     # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
     bh_sc4_high_power:
-      # perf test + 4 traced gate clips + CPU scoring of 5 metrics; the whole job took 42-45 min with 8 clips
       timeout: 75
       tier: 1
       release_ready: false
@@ -1776,8 +1774,6 @@
   model_family: Wan
   skus:
     bh_sc4:
-      # Standalone it converts the weights itself (on main the perf step did): 20 min was killed at the
-      # start of inference on 2026-10-24 after ~6.5 min of conversion and ~4 min of mesh setup.
       timeout: 35
       tier: 1
       release_ready: false
@@ -1818,7 +1814,6 @@
   skus:
     # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
     bh_sc4_high_power:
-      # perf test + 4 traced gate clips + CPU scoring of 2 metrics; the whole job took 35-40 min with 8 clips
       timeout: 50
       tier: 1
       release_ready: false
