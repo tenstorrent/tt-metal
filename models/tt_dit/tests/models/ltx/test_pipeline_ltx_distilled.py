@@ -243,11 +243,7 @@ def test_pipeline_distilled(
         if thresholds is None:
             pytest.skip(f"no VBench thresholds calibrated for height {height}")
 
-        # One prompt over `num_seeds` seeds: a single clip's VBench score is too noisy to gate on
-        # (dynamic_degree is near-binary per clip). The clip at `seed` is already rendered; the rest
-        # are cheap warm replays.
-        # VBENCH_TEMPORAL_WIDTH scores motion_smoothness / dynamic_degree on a reduced-width lossless
-        # copy so the 1080p clips fit the CI budget (models/tt_dit/tests/models/ltx/vbench_gate.md).
+        # VBENCH_TEMPORAL_WIDTH > 0 scores the temporal metrics on a reduced-width copy (see vbench_gate.md).
         temporal_width = int(os.environ.get("VBENCH_TEMPORAL_WIDTH", "0"))
         scorer = (
             {

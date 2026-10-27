@@ -35,8 +35,7 @@ DEVICE_PARAMS = {"trace_region_size": 150000000}
 
 # VBench quality gate (RUN_VBENCH=1): one prompt per model, rendered at every seed after the timed runs;
 # the prompt's mean over the seeds must clear its floors (models/tt_dit/utils/vbench_bundle.py). Many seeds
-# of one prompt rather than several prompts keeps the gate's render and scoring time down. dynamic_degree
-# is binary per clip, so its floor on the mean sets how many seeds must move.
+# of one prompt rather than several prompts keeps the gate's render and scoring time down.
 VBENCH_SEEDS = [42, 43, 44, 45]
 VBENCH_GATE = {
     # Motion is the content, so every seed should clear dynamic_degree.
