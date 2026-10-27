@@ -18,11 +18,29 @@ SEQ_BUCKETS = (128, 256, 512, 1024, 2048, 4096, 8192)
 # (HiFi2, fp32 accumulation, so subblock_h * subblock_w <= 4).
 # A row count not listed uses the largest listed M that is <= it.
 MM_CONFIGS = {
-    "qkv": {512: (4, 8, 8, 1, 4), 4096: (16, 8, 4, 1, 4), 16384: (8, 16, 4, 1, 4)},
-    "wo": {512: (4, 8, 8, 2, 2), 4096: (16, 8, 4, 2, 2), 16384: (8, 8, 8, 1, 4)},
-    "ff13s": {512: (4, 16, 8, 2, 2), 4096: (4, 16, 8, 1, 4), 16384: (4, 16, 8, 1, 4)},
+    "qkv": {
+        512: (4, 8, 8, 1, 4),
+        2048: (8, 8, 8, 1, 4),
+        4096: (16, 8, 4, 1, 4),
+        8192: (8, 16, 4, 1, 4),
+        16384: (8, 16, 4, 1, 4),
+    },
+    "wo": {
+        512: (4, 8, 8, 2, 2),
+        2048: (8, 8, 8, 2, 2),
+        4096: (16, 8, 4, 2, 2),
+        8192: (4, 8, 8, 1, 4),
+        16384: (8, 8, 8, 1, 4),
+    },
+    "ff13s": {512: (4, 16, 8, 2, 2), 2048: (4, 16, 8, 1, 4), 4096: (4, 16, 8, 1, 4), 16384: (4, 16, 8, 1, 4)},
     "ff13": {512: (4, 8, 8, 1, 4), 4096: (4, 16, 16, 1, 4), 16384: (8, 16, 8, 1, 4)},
-    "ff2": {512: (4, 8, 8, 2, 2), 4096: (16, 8, 4, 1, 4), 16384: (8, 16, 4, 1, 4)},
+    "ff2": {
+        512: (4, 8, 8, 2, 2),
+        2048: (4, 8, 8, 2, 2),
+        4096: (16, 8, 4, 1, 4),
+        8192: (4, 16, 4, 1, 4),
+        16384: (8, 16, 4, 1, 4),
+    },
     "score": {512: (4, 8, 1, 4, 1)},
 }
 
@@ -67,6 +85,12 @@ class RerankConfig:
     w2_dtype: object = ttnn.bfloat8_b
     # Activation dtype between ops.
     act_dtype: object = ttnn.bfloat16
+    # dtype of the SwiGLU product (FF2's input). bfp8: FF2 at 32x512 38.7 -> 28.0 M cycles
+    # (minimal_matmul runs best with in0 and weight in one dtype); MIRACL Pearson 0.99966.
+    ff2_in_dtype: object = ttnn.bfloat8_b
+    # dtype of the RMSNorm outputs that feed QKV and FF1/FF3 (the final norm, feeding the score head, stays bf16).
+    # bfp8: 32x512 256.5 -> 251.7 M cycles; MIRACL Pearson 0.99956 (b1, b8) / 0.99963 (b32).
+    norm_out_dtype: object = ttnn.bfloat8_b
     # Matmul math fidelity.
     mm_fidelity: object = ttnn.MathFidelity.HiFi2
     # Matmul kinds (qkv, wo, ff13s, ff13, ff2) that run at LoFi instead of mm_fidelity, comma separated.
@@ -120,13 +144,13 @@ class RerankConfig:
             setattr(c, k, v)
         return c
 
-    def compute_config(self, fidelity, fp32_acc=True):
+    def compute_config(self, fidelity, fp32_acc=True, packer_l1_acc=True):
         return ttnn.init_device_compute_kernel_config(
             ttnn.device.Arch.BLACKHOLE,
             math_fidelity=fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=fp32_acc,
-            packer_l1_acc=True,
+            packer_l1_acc=packer_l1_acc,
         )
 
 

@@ -493,7 +493,9 @@ void kernel_main() {
             const bool use_row_map =
                 use_mask_block_map && !(chain_ignores_map && nb == chain_batch && chain_key == chain_head);
             if constexpr (use_mask_block_map) {
-                if (use_row_map) {
+                {
+                    // Loaded even when the K/V chains ignore the map for skipping: a value of 2 marks a
+                    // fully visible block whose mask tiles are zero-filled locally instead of read from DRAM.
                     const uint32_t map_row =
                         ((broadcast_provided_mask_batch ? 0 : nb) * (broadcast_provided_mask_heads ? 1 : NQH) +
                          (broadcast_provided_mask_heads ? 0 : nq)) *
@@ -508,18 +510,20 @@ void kernel_main() {
                         {});
                     noc.async_read_barrier();
                     block_map = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(map_l1);
-                    block_map_active = 0;
-                    block_map_first = k_num_chunks;
-                    for (uint32_t k = 0; k < k_num_chunks; ++k) {
-                        if (block_map[k] != 0) {
-                            block_map_first = block_map_first == k_num_chunks ? k : block_map_first;
-                            ++block_map_active;
+                    if (use_row_map) {
+                        block_map_active = 0;
+                        block_map_first = k_num_chunks;
+                        for (uint32_t k = 0; k < k_num_chunks; ++k) {
+                            if (block_map[k] != 0) {
+                                block_map_first = block_map_first == k_num_chunks ? k : block_map_first;
+                                ++block_map_active;
+                            }
                         }
-                    }
-                    block_map_all_masked = block_map_active == 0;
-                    if (block_map_all_masked) {
-                        block_map_active = 1;
-                        block_map_first = 0;
+                        block_map_all_masked = block_map_active == 0;
+                        if (block_map_all_masked) {
+                            block_map_active = 1;
+                            block_map_first = 0;
+                        }
                     }
                 }
             }
@@ -831,6 +835,10 @@ void kernel_main() {
                 // without waiting for the whole Sq_chunk_t x Sk_chunk_t block (matches the per-subblock
                 // wait/pop in compute_streaming.hpp).
                 if constexpr (use_provided_mask) {
+                    bool block_full = false;
+                    if constexpr (use_mask_block_map) {
+                        block_full = block_map != nullptr && block_map[k_chunk] == 2;
+                    }
                     uint32_t mask_row_start = mask_batch_offset + q_chunk * Sq_chunk_t * valid_Skt;
                     if constexpr (!broadcast_provided_mask_heads) {
                         mask_row_start += nq * valid_Sqt * valid_Skt;
@@ -845,7 +853,9 @@ void kernel_main() {
                         for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
                             const uint32_t global_k_tile = k_chunk * Sk_chunk_t + col;
                             const bool k_valid = !use_padded_mask || (global_k_tile < valid_Skt);
-                            if (q_valid && k_valid) {
+                            if (block_full) {
+                                fill_zeros_async(noc, cb_mask_in, mask_tile_bytes, col * mask_tile_bytes);
+                            } else if (q_valid && k_valid) {
                                 noc.async_read(
                                     mask_reader,
                                     CoreLocalMem<uint32_t>(mask_write_ptr),
@@ -863,6 +873,9 @@ void kernel_main() {
                             }
                         }
                         noc.async_read_barrier();
+                        if (block_full) {
+                            noc.write_zeros_l1_barrier();
+                        }
                         cb_mask.push_back(Sk_chunk_t);
                         if (q_valid) {
                             mask_row_start += valid_Skt;

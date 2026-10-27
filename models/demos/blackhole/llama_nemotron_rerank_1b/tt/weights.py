@@ -80,15 +80,18 @@ class WeightLoader:
 
         return make_add_norm_constants(self._get(key).float(), self.cfg.norm_eps, self.device)
 
-    def linear(self, name, keys, dtype, permute_heads=None):
-        """[out, in] HF rows (concatenated over ``keys``) -> [1, 1, in, out] device weight."""
+    def linear(self, name, keys, dtype, permute_heads=None, scales=None):
+        """[out, in] HF rows (concatenated over ``keys``) -> [1, 1, in, out] device weight.
+        ``scales`` multiplies each key's rows (e.g. the attention scale folded into Q)."""
         host = None
         if self.sd is not None:
             parts = []
-            for k, heads in zip(keys, permute_heads or [None] * len(keys)):
+            for k, heads, sc in zip(keys, permute_heads or [None] * len(keys), scales or [None] * len(keys)):
                 w = self._get(k).float()
                 if heads is not None:
                     w = reverse_permute(w, heads, w.shape[0], w.shape[1])
+                if sc is not None:
+                    w = w * sc
                 parts.append(w)
             host = torch.cat(parts, dim=0).T.contiguous().unsqueeze(0).unsqueeze(0)
         return self._as_tensor(name, host, dtype)

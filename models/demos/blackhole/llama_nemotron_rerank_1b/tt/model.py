@@ -48,10 +48,14 @@ class Layer:
             self.attn_norm_consts = loader.norm_consts(p + "input_layernorm.weight")
             self.ffn_norm_consts = loader.norm_consts(p + "post_attention_layernorm.weight")
         self.wqkv = loader.linear(
-            f"l{i}_wqkv",
+            f"l{i}_wqkv_qscaled",
             [p + "self_attn.q_proj.weight", p + "self_attn.k_proj.weight", p + "self_attn.v_proj.weight"],
             cfg.wqkv_dtype,
             permute_heads=[cfg.n_heads, cfg.n_kv_heads, None],
+            # softmax(Q K^T / sqrt(d)): 1/sqrt(64) = 1/8 is a power of two, so folding it into Wq is exact
+            # and SDPA runs at scale 1. At any other scale ttnn's SDPA wrapper multiplies the mask by
+            # 1/scale on every call (one extra [B, 1, S, S] pass per layer).
+            scales=[1.0 / math.sqrt(cfg.head_dim), None, None],
         )
         self.wo = loader.linear(f"l{i}_wo", [p + "self_attn.o_proj.weight"], cfg.wo_dtype)
         if cfg.fuse_swiglu:
@@ -79,7 +83,8 @@ class NemotronReranker:
         self.mm_ckc = cfg.compute_config(cfg.mm_fidelity)
         self.mm_ckc_lofi = cfg.compute_config(ttnn.MathFidelity.LoFi)
         self.lofi_kinds = {k for k in cfg.lofi_kinds.split(",") if k}
-        self.sdpa_ckc = cfg.compute_config(cfg.sdpa_fidelity, fp32_acc=False)
+        # packer_l1_acc off: SDPA accumulates in its own CBs; with it on, 32x512 SDPA took 2.5 vs 1.6 M cycles.
+        self.sdpa_ckc = cfg.compute_config(cfg.sdpa_fidelity, fp32_acc=False, packer_l1_acc=False)
         self.norm_ckc = cfg.compute_config(ttnn.MathFidelity.HiFi4)
         self.trans_mat = ttnn.from_torch(
             get_rot_transformation_mat(cfg.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
@@ -117,13 +122,17 @@ class NemotronReranker:
         qc, kc = sdpa_chunks(B, S)
         tokens = torch.full((B, S), PAD_TOKEN_ID, dtype=torch.int32)
         valid = torch.zeros(B, 1, 32, S, dtype=torch.bfloat16)
-        # (q chunk, k chunk) blocks holding at least one real query row and one real key.
+        # (q chunk, k chunk) blocks: 0 = no real query row or no real key (skipped), 1 = partly padded keys,
+        # 2 = all keys real.
         block_map = torch.zeros(B, 1, (S + qc - 1) // qc, (S + kc - 1) // kc, dtype=torch.int32)
         for b, ids in enumerate(batch_ids):
             n = len(ids)
             tokens[b, :n] = torch.tensor(ids, dtype=torch.int32)
             valid[b, :, :, :n] = 1.0
             block_map[b, 0, : (n + qc - 1) // qc, : (n + kc - 1) // kc] = 1
+            # 2 = every key in the k chunk is real, so the block's mask is all zeros: the patched SDPA
+            # reader zero-fills those mask tiles in L1 instead of reading them from DRAM.
+            block_map[b, 0, : (n + qc - 1) // qc, : n // kc] = 2
         host = (
             ttnn.from_torch(tokens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
             ttnn.from_torch(valid, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
@@ -175,9 +184,10 @@ class NemotronReranker:
         )
         return ttnn.reshape(out, [1, 1, rows, out.shape[-1]]) if out.shape[1] != 1 else out
 
-    def _norm(self, x, w):
+    def _norm(self, x, w, dtype=None):
         rows, width = x.shape[-2] * x.shape[-3], x.shape[-1]
         mem = self._mem(rows, width)
+        dtype = dtype or self.cfg.act_dtype
         if rows <= self.cfg.sharded_norm_max_rows:
             shard, pc = self._norm_shard(rows, width)
             xs = ttnn.interleaved_to_sharded(x, shard)
@@ -190,9 +200,10 @@ class NemotronReranker:
                 memory_config=shard,
             )
             ttnn.deallocate(xs)
-            out = ttnn.sharded_to_interleaved(y, mem)
+            out = ttnn.sharded_to_interleaved(y, mem, output_dtype=dtype)
             ttnn.deallocate(y)
             return out
+        # The interleaved rms_norm has no output dtype argument; this path stays bf16.
         return ttnn.rms_norm(
             x, epsilon=self.cfg.norm_eps, weight=w, compute_kernel_config=self.norm_ckc, memory_config=mem
         )
@@ -221,9 +232,15 @@ class NemotronReranker:
             self._norm_cfgs[key] = (shard, pc)
         return self._norm_cfgs[key]
 
-    def _add_norm(self, x, delta, consts):
+    def _add_norm(self, x, delta, consts, out_dtype=None):
         """(x + delta, rmsnorm(x + delta)) in one op."""
-        return fused_add_rmsnorm(x, delta, consts, memory_config=self._mem(x.shape[-2] * x.shape[-3], x.shape[-1]))
+        return fused_add_rmsnorm(
+            x,
+            delta,
+            consts,
+            out_dtype=out_dtype or self.cfg.norm_out_dtype,
+            memory_config=self._mem(x.shape[-2] * x.shape[-3], x.shape[-1]),
+        )
 
     def _attention(self, layer, xn, B, S, mask, block_map, cos, sin):
         """xn: the attention-normed residual [1, 1, B * S, dim]."""
@@ -264,7 +281,7 @@ class NemotronReranker:
             attn_mask=mask,
             attn_mask_block_map=block_map if self.cfg.sdpa_block_map else None,
             output_concat_heads=cfg.sdpa_concat_heads,
-            scale=1.0 / math.sqrt(cfg.head_dim),
+            scale=1.0,
             compute_kernel_config=self.sdpa_ckc,
             memory_config=self._mem(B * S, cfg.dim),
             program_config=ttnn.SDPAProgramConfig(
@@ -289,7 +306,7 @@ class NemotronReranker:
     def _mlp(self, layer, h):
         """h: the ffn-normed residual [1, 1, rows, dim]."""
         if self.cfg.fuse_swiglu:
-            a = self._linear(h, layer.w13, "ff13s", fuse_swiglu=True)
+            a = self._linear(h, layer.w13, "ff13s", fuse_swiglu=True, dtype=self.cfg.ff2_in_dtype)
         else:
             g = self._linear(h, layer.w1, "ff13")
             u = self._linear(h, layer.w3, "ff13")
@@ -323,7 +340,7 @@ class NemotronReranker:
         x = ttnn.embedding(tokens, self.embed, layout=ttnn.TILE_LAYOUT, dtype=self.cfg.act_dtype)
         x = ttnn.reshape(x, [1, 1, B * S, self.cfg.dim])
         if self.cfg.fuse_add_norm and B * S >= self.cfg.fuse_add_norm_min_rows:
-            xn = self._norm(x, self.layers[0].attn_norm)
+            xn = self._norm(x, self.layers[0].attn_norm, self.cfg.norm_out_dtype)
             for i, layer in enumerate(self.layers):
                 a = self._attention(layer, xn, B, S, mask, block_map, cos, sin)
                 ttnn.deallocate(xn)
@@ -333,19 +350,20 @@ class NemotronReranker:
                 m = self._mlp(layer, h)
                 ttnn.deallocate(h)
                 nxt = self.layers[i + 1].attn_norm_consts if i + 1 < len(self.layers) else self.final_norm_consts
-                x, xn = self._add_norm(x_new, m, nxt)
+                last = i + 1 == len(self.layers)
+                x, xn = self._add_norm(x_new, m, nxt, out_dtype=self.cfg.act_dtype if last else None)
                 ttnn.deallocate(x_new)
                 ttnn.deallocate(m)
             ttnn.deallocate(x)
         else:
             for layer in self.layers:
-                xn = self._norm(x, layer.attn_norm)
+                xn = self._norm(x, layer.attn_norm, self.cfg.norm_out_dtype)
                 a = self._attention(layer, xn, B, S, mask, block_map, cos, sin)
                 ttnn.deallocate(xn)
                 x_new = ttnn.add(x, a, memory_config=self._mem(B * S, self.cfg.dim))
                 ttnn.deallocate(x)
                 ttnn.deallocate(a)
-                h = self._norm(x_new, layer.ffn_norm)
+                h = self._norm(x_new, layer.ffn_norm, self.cfg.norm_out_dtype)
                 m = self._mlp(layer, h)
                 ttnn.deallocate(h)
                 x = ttnn.add(x_new, m, memory_config=self._mem(B * S, self.cfg.dim))
