@@ -2262,3 +2262,119 @@ def test_native_prediction_tables_cover_their_cases():
         _L1_INTERLEAVED_RULE_SPLITS
     )
     assert left_out == {"l1_100_pad", "l1_250_pad"}, f"L1-interleaved cases in no prediction table: {left_out}"
+
+
+# The ops the native gate admits besides add, subtract, multiply and divide. Each is an add, subtract or multiply with
+# activations on a, b or the result, or one SFPU op, so it runs the native kernels unchanged and must give exactly the
+# Metal 2.0 factory's output. rsub has no SFPU tile function on Quasar in fp32, on either factory.
+_MORE_OPS = [
+    "rsub",
+    "maximum",
+    "minimum",
+    "squared_difference",
+    "hypot",
+    "logical_and",
+    "logical_or",
+    "logical_xor",
+    "ldexp",
+    "logaddexp",
+    "logaddexp2",
+    "bias_gelu",
+    "pow",
+]
+# DRAM interleaved runs the per-tile rule beside DRAM, L1 interleaved the batched NoC path, and the height shard the
+# borrowed path with the compute batch.
+_MORE_OPS_PLACEMENTS = {
+    "dram": ("dram", None, None, (4 * 32, 32 * 32)),
+    "l1": ("l1", None, None, (4 * 32, 32 * 32)),
+    "height16": ("height", [4 * 32, 4 * 32], (0, 0, 0, 3), (4 * 4 * 32, 4 * 32)),
+}
+# Activations around the op's own: RELU on the result of maximum, and on a before logaddexp's own EXP.
+_MORE_OPS_ACTS = [("maximum", "post_relu"), ("logaddexp", "lhs_relu")]
+
+# Runs every case of ARM_CASES, (op, dtype, placement, act), and saves each output's raw bits to ARM_BITS. Every
+# binary_ng kernel the process binds must come from the ARM_EXPECT tree, so a fallback cannot pass for native.
+_MORE_OPS_SRC = """
+import json, os, pathlib
+import torch, ttnn
+
+CASES = json.loads(os.environ["ARM_CASES"])
+PLACEMENTS = json.loads(os.environ["ARM_PLACEMENTS"])
+EXPECT = os.environ["ARM_EXPECT"]
+STRATEGY = {"height": ttnn.ShardStrategy.HEIGHT}
+INTERLEAVED = {"l1": ttnn.L1_MEMORY_CONFIG, "dram": ttnn.DRAM_MEMORY_CONFIG}
+RELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
+ACTS = {None: {}, "post_relu": {"activations": [RELU]}, "lhs_relu": {"input_tensor_a_activations": [RELU]}}
+root = pathlib.Path(os.environ.get("TT_METAL_LOGS_PATH") or os.environ.get("TT_METAL_HOME") or os.getcwd())
+
+bits = {}
+device = ttnn.open_device(device_id=0)
+try:
+    for i, (op, dtype, placement, act) in enumerate(CASES):
+        strategy, shard_shape, rng, shape = PLACEMENTS[placement]
+        if strategy in INTERLEAVED:
+            mem = INTERLEAVED[strategy]
+        else:
+            x0, y0, x1, y1 = rng
+            mem = ttnn.create_sharded_memory_config(
+                shard_shape, core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((x0, y0), (x1, y1))}),
+                strategy=STRATEGY[strategy], use_height_and_width_as_shard_shape=True)
+        dt = ttnn.bfloat16 if dtype == "bfloat16" else ttnn.float32
+        cfg = dict(dtype=dt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mem)
+        torch.manual_seed(i)
+        # (0.5, 2.5) keeps log, pow and divide finite; a and b differ, so a pairing error shows.
+        ta = ttnn.from_torch(torch.rand(shape) * 2 + 0.5, **cfg)
+        tb = ttnn.from_torch(torch.rand(shape) * 2 + 0.5, **cfg)
+        out = getattr(ttnn.experimental.quasar, op)(ta, tb, memory_config=mem, **ACTS[act])
+        got = ttnn.to_torch(out).contiguous()
+        bits["/".join(str(x) for x in (op, dtype, placement, act))] = got.view(
+            torch.int16 if dtype == "bfloat16" else torch.int32)
+finally:
+    ttnn.close_device(device)
+
+sources = [ln.split("source:", 1)[1].strip()
+           for ln in (root / "generated" / "inspector" / "kernels.yaml").read_text().splitlines()
+           if "source:" in ln]
+binary_ng = [s for s in sources if "/binary_ng/device/kernels" in s]
+wrong = [s for s in binary_ng if "kernels_" + EXPECT + "/" not in s]
+if wrong or not binary_ng:
+    print("FAIL: expected every op on kernels_{}, also bound {}".format(EXPECT, sorted(set(wrong))))
+    raise SystemExit(1)
+torch.save(bits, os.environ["ARM_BITS"])
+print("OK over {} cases".format(len(bits)))
+"""
+
+
+def _run_more_ops(cases, expect, bits_path, knobs, timeout=1800):
+    env = {k: v for k, v in os.environ.items() if not k.startswith("TTNN_QSR_")}
+    env.update(
+        {
+            "ARM_CASES": json.dumps(cases),
+            "ARM_PLACEMENTS": json.dumps(_MORE_OPS_PLACEMENTS),
+            "ARM_EXPECT": expect,
+            "ARM_BITS": str(bits_path),
+            **knobs,
+        }
+    )
+    p = subprocess.run([sys.executable, "-c", _MORE_OPS_SRC], env=env, capture_output=True, text=True, timeout=timeout)
+    assert p.returncode == 0, f"{expect} arm failed:\n{p.stdout}\n{p.stderr[-2000:]}"
+
+
+# Every admitted op, on every path, must run native and match the Metal 2.0 factory bit for bit.
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+def test_native_more_ops_match_the_metal_v2_factory(dtype, tmp_path):
+    import torch
+
+    cases = [
+        (op, dtype, placement, None)
+        for op in _MORE_OPS
+        if not (op == "rsub" and dtype == "float32")
+        for placement in _MORE_OPS_PLACEMENTS
+    ]
+    cases += [(op, dtype, placement, act) for op, act in _MORE_OPS_ACTS for placement in ("dram", "height16")]
+    _run_more_ops(cases, "qsr", tmp_path / "native.pt", {"TTNN_QSR_NATIVE": "1"})
+    _run_more_ops(cases, "dfb", tmp_path / "metal_v2.pt", {"TTNN_QSR_NATIVE": "0"})
+    native, metal_v2 = torch.load(tmp_path / "native.pt"), torch.load(tmp_path / "metal_v2.pt")
+    differ = {name: int((native[name] != metal_v2[name]).sum()) for name in metal_v2}
+    assert not any(differ.values()), f"native output differs from the Metal 2.0 factory's, elements per case: {differ}"
