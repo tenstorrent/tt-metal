@@ -59,6 +59,7 @@ class RMSNorm(LightweightModule):
         super().__init__()
         self.device = device
         self.eps = eps
+        self._short_prefill_configs = {}
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
         self.tt_ccl = tt_ccl
@@ -225,9 +226,15 @@ class RMSNorm(LightweightModule):
             return x
 
     def _short_prefill_block_config(self, x):
-        seq, dim = x.shape[-2], x.shape[-1]
         if x.is_sharded() or x.layout != ttnn.TILE_LAYOUT or x.shape[0] * x.shape[1] != 1:
             return None
+        key = (x.shape[-2], x.shape[-1])
+        if key not in self._short_prefill_configs:
+            self._short_prefill_configs[key] = self._build_short_prefill_block_config(x)
+        return self._short_prefill_configs[key]
+
+    def _build_short_prefill_block_config(self, x):
+        seq, dim = x.shape[-2], x.shape[-1]
         if seq % ttnn.TILE_SIZE or dim % ttnn.TILE_SIZE or seq // ttnn.TILE_SIZE > 4:
             return None
         grid = x.device().compute_with_storage_grid_size()
