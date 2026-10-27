@@ -19,8 +19,17 @@ _force_codegen = ttnn._ttnn.operations.data_movement.untilize_force_codegen
 
 
 def _make_input(shape, dtype):
-    if dtype in (ttnn.int32, ttnn.uint32):
-        return torch.randint(0, 100, shape, dtype=torch.int32)
+    # Integer values span the dtype's whole range, with the sign-bit edge patterns planted at the
+    # first three datums: 0x80000000 is the one pattern a sign-magnitude DEST cannot round-trip,
+    # and a random draw never produces it.
+    if dtype == ttnn.uint32:
+        x = torch.randint(0, 2**32, shape, dtype=torch.uint32)
+        x.view(-1)[:3] = torch.tensor([2**31, 2**31 - 1, 2**32 - 1], dtype=torch.uint32)
+        return x
+    if dtype == ttnn.int32:
+        x = torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+        x.view(-1)[:3] = torch.tensor([-(2**31), 2**31 - 1, -1], dtype=torch.int32)
+        return x
     return torch.rand(shape, dtype=torch.bfloat16)
 
 
@@ -428,3 +437,80 @@ def test_untilize_codegen_rank5_unpadded_height(device, shape):
         assert out.layout == ttnn.ROW_MAJOR_LAYOUT
         assert list(out.shape) == shape
         assert_equal(x, ttnn.to_torch(out))
+
+
+# Hand-added: 32-bit integer dtypes, the two the codegen gate admits beyond bf16/bf8_b. Values span
+# the whole 32-bit range (see _make_input) so that a kernel which quietly lowered them through a
+# 16-bit path, or treated uint32 as int32, could not pass. Shapes cover every builder the program
+# factory dispatches to, each with its cliff (uneven split) where it has one: single tile,
+# per-tile-row split and its cliff, 2D column split, column-parallel single tile-row and its cliff
+# (Wt above the core count on every grid), and the with-unpadding writer on width, height, both,
+# and a height cliff.
+_INT_DTYPES = [ttnn.int32, ttnn.uint32]
+_INT_DTYPE_IDS = ["int32", "uint32"]
+_INT_SHAPES = [
+    ([1, 1, 32, 32], "aligned_single_tile"),
+    ([1, 1, 64, 64], "aligned_2x2"),
+    ([1, 1, 128, 32], "aligned_tile_rows"),
+    ([2, 3, 96, 256], "aligned_2d_column_split"),
+    ([1, 1, 32, 1024], "aligned_column_parallel"),
+    ([1, 1, 32, 4800], "aligned_column_parallel_cliff"),
+    ([1, 1, 7136, 32], "aligned_cliff"),
+    ([1, 1, 64, 16], "unpadded_width_16"),
+    ([1, 1, 50, 64], "unpadded_height"),
+    ([1, 3, 50, 45], "unpadded_both"),
+    ([1, 1, 7130, 32], "unpadded_height_cliff"),
+    ([1, 2, 8, 1, 768], "rank5_unpadded_height_1"),
+    ([1, 2, 8, 16, 768], "rank5_unpadded_height_16"),
+]
+_INT_MEM_CONFIGS = [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG]
+_INT_MEM_CONFIG_IDS = ["dram", "l1"]
+
+
+def _as_int64(tensor):
+    return ttnn.to_torch(tensor).to(torch.int64)
+
+
+@pytest.mark.parametrize("dtype", _INT_DTYPES, ids=_INT_DTYPE_IDS)
+@pytest.mark.parametrize("mem_config", _INT_MEM_CONFIGS, ids=_INT_MEM_CONFIG_IDS)
+@pytest.mark.parametrize("shape", [s for s, _ in _INT_SHAPES], ids=[i for _, i in _INT_SHAPES])
+def test_untilize_codegen_int32_uint32(device, shape, dtype, mem_config):
+    x = _make_input(shape, dtype)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {"memory_config": mem_config}
+    expected = x.to(torch.int64)
+
+    golden = _force_native(xt, **kwargs)
+    assert_equal(expected, _as_int64(golden))
+
+    # Native is warm, so a program-cache growth on the auto call means auto did not serve native;
+    # the forced-codegen call afterwards leaving the cache unchanged pins that program as codegen's.
+    entries_before = device.num_program_cache_entries()
+    auto = ttnn.untilize(xt, **kwargs)
+    entries_after_auto = device.num_program_cache_entries()
+    assert entries_after_auto > entries_before, "auto served an in-scope 32-bit case with native"
+
+    forced = _force_codegen(xt, **kwargs)
+    assert device.num_program_cache_entries() == entries_after_auto, "auto and forced codegen ran different programs"
+
+    assert forced.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert forced.dtype == dtype
+    assert list(forced.shape) == shape
+    assert forced.padded_shape == golden.padded_shape
+    assert_equal(expected, _as_int64(forced))
+    assert_equal(expected, _as_int64(auto))
+
+
+def test_forced_codegen_refuses_float32(device, expect_error):
+    # float32 would need the input CB unpacked straight to the 32-bit DEST to be exact, which the
+    # codegen program factory does not configure, so it stays out of scope and on native.
+    x = torch.rand([1, 1, 64, 64], dtype=torch.float32)
+    xt = ttnn.from_torch(x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
+    golden = ttnn.to_torch(_force_native(xt, **kwargs))
+    entries_before = device.num_program_cache_entries()
+    out = ttnn.untilize(xt, **kwargs)
+    assert_equal(golden, ttnn.to_torch(out))
+    assert device.num_program_cache_entries() == entries_before, "auto routed float32 to codegen"
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, **kwargs)

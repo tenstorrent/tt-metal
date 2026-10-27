@@ -28,9 +28,10 @@ namespace ttnn::operations::data_movement::untilize_codegen {
 // via get_max_l1_space().
 uint32_t usable_l1_bytes(const tt::tt_metal::distributed::MeshDevice& device);
 
-// Correctness-only: true iff the codegen build_untilize_tile path can produce a bit-exact
-// result for this (input, output_mem_config) case. Consulted by the free function's forced
-// "codegen" branch and by prim::untilize_codegen's validate -- never gated on performance.
+// Correctness-only: true iff a codegen builder (build_untilize_tile's variants or
+// build_with_unpadding) can produce a bit-exact result for this (input, output_mem_config) case.
+// Consulted by the free function's forced "codegen" branch and by prim::untilize_codegen's
+// validate -- never gated on performance.
 //
 // MUST stay a pure function of static tensor/memory-config properties (layout, dtype, shape,
 // sharding, and static device geometry). It is evaluated independently at three call sites --
