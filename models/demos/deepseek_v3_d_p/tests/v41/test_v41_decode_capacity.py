@@ -22,6 +22,10 @@ rotation: the served c1 shape at ``b = 1``) step ``V41_CAP_STEPS`` replays from 
 idle (a zero row that writes nothing). Each phase records the replays' device time (sorted), the wall and the host
 split (``inputs_s``, ``stage_s``, ``read_s``) as medians, and the capture replayed back to back without host work
 (``replay_device_only_s``), under ``phases``; the first phase's position and live count are the top-level fields.
+``V41_CAP_PROFILE=1``: under ``TT_METAL_DEVICE_PROFILER=1`` with the C++ post-process and
+mid-run dumps, the profiler is read after every join, the fill and every step, so a 40-layer session's device
+buffers never overflow and the replays' per-op rows land in ``cpp_device_perf_report.csv`` by trace id.
+
 A production session is ``V41_CAP_SEQ=1054720 V41_CAP_CHUNK=5120`` (the served ``max_seq_len`` and chunk) with
 the catalog's flags; the prefill traces the server captures at warm-up are not captured here (eager prefills of
 short prompts join the slots), so the trace region holds the decode capture alone.
@@ -99,6 +103,15 @@ def test_v41_decode_capacity(mesh_device, device_params):
     graph_mb = int(os.environ.get("V41_CAP_GRAPH_MB", 64))
     live_counts = [int(b) for b in os.environ.get("V41_CAP_LIVE", "").split(",") if b]  # per phase; [] = all slots
     position_list = [int(p) for p in os.environ.get("V41_CAP_POSITIONS", "").split(",") if p]  # [] = cap - margin
+    # V41_CAP_PROFILE=1: under the device profiler, read the profiler after every join, the
+    # fill and every step, so the device buffers never overflow and (with TT_METAL_PROFILER_MID_RUN_DUMP=1) the
+    # host's marker set stays bounded; the replays are told apart in the C++ report by their trace columns
+    profile = os.environ.get("V41_CAP_PROFILE", "0") == "1"
+
+    def drain() -> None:
+        if profile:
+            ttnn.ReadDeviceProfiler(mesh_device)
+
     ckpt = resolve_checkpoint()
     if ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
@@ -179,6 +192,7 @@ def test_v41_decode_capacity(mesh_device, device_params):
         for carry in state.carry_buffers.values():
             for t in carry:
                 ttnn.deallocate(t)
+        drain()
     result["prefill_join_s"] = round(time.time() - t0, 1)
     result["dram_after_join_bytes"] = _dram_bytes(mesh_device)
 
@@ -192,6 +206,7 @@ def test_v41_decode_capacity(mesh_device, device_params):
         for src, t in pool.index_k_blocks.items():
             writes += _fill(mesh_device, t, FILL_ROWS // BLOCK_ROWS, g, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.synchronize_device(mesh_device)
+        drain()
         result["fill_s"] = round(time.time() - t0, 1)
         result["fill_writes"] = writes
         # (the compressed KV rows stay as the join left them: zeros past the prompt; the attention reads the same
@@ -235,6 +250,7 @@ def test_v41_decode_capacity(mesh_device, device_params):
                 result["trace_after_capture_bytes"] = _trace_bytes(mesh_device)
             out.append(entry)
             logger.info(f"capacity step {i} ({tag}): {json.dumps(entry)}")
+            drain()
         return out
 
     def summarise(entries: list) -> dict:
@@ -259,6 +275,7 @@ def test_v41_decode_capacity(mesh_device, device_params):
         out.update(summarise(detail))
         if out["replay_steps"]:  # the capture replayed on the phase's last staged inputs, no host work
             out["replay_device_only_s"] = decoder.replay_device_time(repeats=7)
+            drain()
         logger.info(
             f"capacity phase position {top} live {len(stepping)}: "
             f"{json.dumps({k: v for k, v in out.items() if k != 'steps_detail'})}"
