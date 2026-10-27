@@ -11,7 +11,7 @@ inside ``TTVibeVoiceGenerator.generate()`` when ``VV_PROFILE_SPEECH_FRAME=1``
 Standalone Tracy capture::
 
     VV_TRACE_SEGMENT=0 VV_PROFILE_SPEECH_FRAME=1 VV_PROFILE_SPEECH_FRAME_EXIT=1 \\
-    python -m tracy -p -v -r --dump-device-data-mid-run --op-support-count 100000 -m pytest \\
+    python -m tracy --no-web-server -p -v -r --dump-device-data-mid-run --op-support-count 100000 -m pytest \\
         models/experimental/vibevoice/tests/perf/test_profile_single_step_decode.py \\
         ::test_profile_single_step_decode -v
 

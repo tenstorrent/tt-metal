@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Per-cell composite bench for the ttnn.topk -> topk_large_indices routing
 boundary questions (review #53464): pow2-4096 arm and tiny-width large-k
-floor. One cell per invocation; run under `python -m tracy -r -v` and sum
+floor. One cell per invocation; run under `python -m tracy --no-web-server -r -v` and sum
 DEVICE KERNEL DURATION over the report CSV.
 
 Usage: _topk_route_cells_bench.py <H> <W> <k> <routed|stock>

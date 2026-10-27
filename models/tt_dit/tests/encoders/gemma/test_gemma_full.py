@@ -244,7 +244,7 @@ def _flush_after(mod, mesh_device):
 
 @pytest.mark.skipif(
     os.environ.get("GEMMA_PROF") != "1",
-    reason="Tracy profiling harness — run: GEMMA_PROF=1 python -m tracy -p -r -m pytest "
+    reason="Tracy profiling harness — run: GEMMA_PROF=1 python -m tracy --no-web-server -p -r -m pytest "
     "'<file>::test_prof_gemma_ltx_devicetime[2x4]' -s",
 )
 @pytest.mark.parametrize(

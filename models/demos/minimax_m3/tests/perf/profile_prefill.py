@@ -66,7 +66,7 @@ Manual equivalent:
   export HF_MODEL=/mnt/weka/model-weights/llm/minimax/MiniMax-M3
   export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
   PROFILE_CACHE=25600 PREFILL_TRACE_DIR=<golden> \
-    python3 -m tracy -v -r -p models/demos/minimax_m3/tests/perf/profile_prefill.py
+    python3 -m tracy --no-web-server -v -r -p models/demos/minimax_m3/tests/perf/profile_prefill.py
 
 Add --collect-noc-traces to the tracy invocation for measured DRAM BW UTIL (%) / NOC UTIL (%) per op
 (requires tt-npe installed); the parser picks those columns up automatically when present.
