@@ -90,11 +90,14 @@ the Python page-table check was removed (372 ms before). The step is the traced 
 of host work (32-chip id readback and 11 per-step position uploads to every chip: one packed upload and one read per row under
 `GLM53_DECODE_PACKED_INPUTS=1`, device validation pending). The replay costs 148 ms against 65 ms in the harness at a short cache,
 and the harness reproduces it: the same 45-layer traced step at a 1 M cache with the served (user-partitioned) layout is 152 ms
-for a 128-token prompt (`GLM53_MODEL_MAX_SEQ_LEN=1048576 GLM53_PARTITION_USERS=1`), so serving adds nothing to the device step and
-the gap is the model's cache-capacity scaling: the sparse-decode index scorer and segmented top-k loop over the pool CAPACITY
-(262 400 pools at 1 M) instead of the live pools, +0.94 ms per DSA layer per step at short positions (per-op profiles under
-`_logs/mesh/profiler/`); a per-step live-pool bound for both ops (`GLM53_SPARSE_DECODE_BOUND=1`) is under device validation, and
-the remaining share of the gap (the KDA layers and the partitioned layout) is being measured.
+for a 128-token prompt (`GLM53_MODEL_MAX_SEQ_LEN=1048576 GLM53_PARTITION_USERS=1`), so serving adds nothing to the device step.
+The gap is a threshold, not capacity scaling: 256 K per user replays in 70.9 ms, 512 K and 1 M in ~152 ms. Above ~256 K x 4 users
+the memory planner drops the second, DRAM-bank-sharded expert copy that the decode streaming op reads (it does not fit beside the
+caches: `GLM53_REGIONS_KEEP_STACKED`), and decode falls back to the prefill regions lists (per-expert matmuls): ~+80 ms per step
+over the 42 MoE layers. The 128 K x 32-users profile runs the same fallback. Levers under test: a streaming decode that sources
+the one resident expert copy directly (`GLM53_REGIONS_DECODE`, in progress), and bfp4 experts so both copies fit at 1 M (accuracy
+gate pending). The sparse-decode scorer and top-k also looped over the pool capacity (+0.94 ms per DSA layer per step); a per-step
+live-pool bound (`GLM53_SPARSE_DECODE_BOUND=1`) is validated bit-identical on the block and on the 8x4 (152.2 -> 148.6 ms).
 
 Open: (1) the KDA chronology scalars were allocated after the trace captures and clobbered by decode replays (the served 64 K random
 prompt hung the ttnn KDA `reduce_affine_transforms` op twice, wedging the mesh): fixed with persistent per-mesh scalars written in
