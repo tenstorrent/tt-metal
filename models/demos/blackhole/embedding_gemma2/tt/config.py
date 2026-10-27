@@ -25,7 +25,7 @@ FULL = "full_attention"
 
 # Physical sequence buckets. A logical length L runs in the smallest bucket >= L; the
 # padding keys are masked and padded rows are never read back.
-SEQ_BUCKETS = (32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+SEQ_BUCKETS = (32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536)
 
 # Additive mask value for keys a query must not see (finite: -inf * 0 style NaNs are avoided).
 MASK_NEG = -1.0e9

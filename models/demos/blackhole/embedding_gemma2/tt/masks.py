@@ -50,10 +50,15 @@ BLOCK_MAP_MIN_SEQ = int(os.environ.get("EG2_BLOCK_MAP_MIN_SEQ", "4096"))
 
 
 def band_mask(seq_len: int, radius: int) -> torch.Tensor:
-    idx = torch.arange(seq_len)
-    dist = (idx[:, None] - idx[None, :]).abs()
-    band = torch.zeros(seq_len, seq_len, dtype=torch.float32)
-    band[dist > radius] = MASK_NEG
+    """[1, 1, S, S] bf16: 0 where |q - k| <= radius else MASK_NEG. Built in row blocks so the host
+    peak stays at the bf16 output (8 GiB at S = 65536) instead of an S x S int64 distance matrix."""
+    band = torch.full((seq_len, seq_len), MASK_NEG, dtype=torch.bfloat16)
+    rows = 1024
+    k = torch.arange(seq_len)
+    for r0 in range(0, seq_len, rows):
+        q = torch.arange(r0, min(r0 + rows, seq_len))
+        keep = (q[:, None] - k[None, :]).abs() <= radius
+        band[r0 : r0 + len(q)][keep] = 0.0
     return band.reshape(1, 1, seq_len, seq_len)
 
 
