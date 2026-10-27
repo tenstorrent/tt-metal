@@ -11,7 +11,6 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/compute/experimental/reg_api.h"
 #include "api/compute/transpose.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -42,7 +41,7 @@ void kernel_main() {
 
         tile_regs_wait();
         pack_tile(0, cb_out);
-        tile_regs_release_lean();
+        tile_regs_release();
 
         dfb_out.push_back(1);
         dfb_in.pop_front(1);

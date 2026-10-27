@@ -13,7 +13,6 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
-#include "api/compute/experimental/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
@@ -55,7 +54,7 @@ void kernel_main() {
             dfb_in.pop_front(1);
             dfb_out.push_back(1);
 
-            tile_regs_release_lean();
+            tile_regs_release();
         }
     });
 }

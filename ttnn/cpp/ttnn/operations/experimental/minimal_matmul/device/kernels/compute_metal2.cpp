@@ -34,8 +34,8 @@ inline void retarget_packer([[maybe_unused]] uint32_t ocb) {
 #endif
 }
 
-void copy_and_pack_block(
-    DFBBindingToken in_dfb, DFBBindingToken out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+template <typename InTok, typename OutTok>
+void copy_and_pack_block(InTok in_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);
     reconfig_data_format_srca(in_dfb);
     pack_reconfig_data_format(out_dfb);
@@ -73,12 +73,18 @@ void copy_and_pack_block(
 // and added via row-broadcast before silu/mul: out = silu(gate + bias_gate) * (up + bias_up).
 //
 // N_block_tiles must be even (enforced host-side).
-void swiglu_block(
-    DFBBindingToken in_dfb,
+template <
+    typename InTok,
 #ifdef FUSE_BIAS
-    DFBBindingToken bias_dfb,
+    typename BiasTok,
 #endif
-    DFBBindingToken out_dfb,
+    typename OutTok>
+void swiglu_block(
+    InTok in_dfb,
+#ifdef FUSE_BIAS
+    BiasTok bias_dfb,
+#endif
+    OutTok out_dfb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);
@@ -143,12 +149,8 @@ void swiglu_block(
  *   - true: Pushes tiles one row at a time (for intermediate output to next stage)
  *   - false: Pushes all tiles at end (for final output)
  */
-void add_bias_block(
-    DFBBindingToken in_dfb,
-    DFBBindingToken bias_dfb,
-    DFBBindingToken out_dfb,
-    uint32_t M_block_tiles,
-    uint32_t N_block_tiles) {
+template <typename InTok, typename BiasTok, typename OutTok>
+void add_bias_block(InTok in_dfb, BiasTok bias_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     DataflowBuffer dfb_out(out_dfb);
     reconfig_data_format(in_dfb, bias_dfb);
     pack_reconfig_data_format(out_dfb);
@@ -175,15 +177,23 @@ void add_bias_block(
 }
 #endif  // FUSE_BIAS
 
-void add_bias_and_addcmul_block(
-    DFBBindingToken intermediate_dfb,
+template <
+    typename IntermediateTok,
 #ifdef FUSE_BIAS
-    DFBBindingToken bias_dfb,
+    typename BiasTok,
 #endif
-    DFBBindingToken ternary_a_dfb,
-    DFBBindingToken ternary_b_dfb,
+    typename TernaryATok,
+    typename TernaryBTok,
+    typename OutTok>
+void add_bias_and_addcmul_block(
+    IntermediateTok intermediate_dfb,
+#ifdef FUSE_BIAS
+    BiasTok bias_dfb,
+#endif
+    TernaryATok ternary_a_dfb,
+    TernaryBTok ternary_b_dfb,
     uint32_t scalar_value,
-    DFBBindingToken out_dfb,
+    OutTok out_dfb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles,
     uint32_t broadcast_ternary_b) {
@@ -388,11 +398,11 @@ void add_bias_and_addcmul_block(
 }
 
 // Slightly modified from compute_common.hpp
-template <bool row_mop>
+template <typename In0Tok, typename In1Tok, typename OutTok>
 void matmul_blocks(
-    const DFBBindingToken in0_dfb,
-    const DFBBindingToken in1_dfb,
-    const DFBBindingToken out_dfb,
+    const In0Tok in0_dfb,
+    const In1Tok in1_dfb,
+    const OutTok out_dfb,
     const uint32_t M_block_tiles,
     const uint32_t N_block_tiles,
     const uint32_t full_N_block_tiles,
@@ -411,7 +421,7 @@ void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block<row_mop>(
+                matmul_block(
                     in0_dfb,
                     in1_dfb,
                     in0_index,
@@ -452,12 +462,12 @@ void matmul_blocks(
 // subblock, and no epilogue pass re-reads the intermediate (which cost ~2100 cycles per output tile on the math
 // thread). The out tiles land row-major in a half-width block, as swiglu_block writes them. block_float_output selects
 // the cheaper sigmoid (swiglu_sfpu.hpp).
-template <bool block_float_output, bool row_mop>
+template <bool block_float_output, typename In0Tok, typename In1Tok, typename IntermTok, typename OutTok>
 void matmul_blocks_swiglu(
-    const DFBBindingToken in0_dfb,
-    const DFBBindingToken in1_dfb,
-    const DFBBindingToken interm_dfb,
-    const DFBBindingToken out_dfb,
+    const In0Tok in0_dfb,
+    const In1Tok in1_dfb,
+    const IntermTok interm_dfb,
+    const OutTok out_dfb,
     const uint32_t M_block_tiles,
     const uint32_t N_block_tiles,
     const uint32_t full_N_block_tiles,
@@ -474,7 +484,7 @@ void matmul_blocks_swiglu(
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block<row_mop>(
+                matmul_block(
                     in0_dfb,
                     in1_dfb,
                     in0_index,
@@ -499,8 +509,7 @@ void matmul_blocks_swiglu(
                     }
                 }
                 reconfig_data_format_srca(interm_dfb, in1_dfb);
-                matmul_block_init<row_mop>(
-                    in0_dfb, in1_dfb, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
+                matmul_block_init(in0_dfb, in1_dfb, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
             }
             tile_regs_commit();
 
@@ -543,12 +552,6 @@ void kernel_main() {
     constexpr auto N_blocks_per_core = get_arg(args::N_blocks_per_core);
     constexpr auto subblock_h = get_arg(args::subblock_h);
     constexpr auto subblock_w = get_arg(args::subblock_w);
-#if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
-    // not with a fused activation: its SFPU init runs once, before the matmul inits that rewrite ADDR_MOD_3, 6 and 7
-    constexpr bool row_mop = subblock_h * subblock_w >= 8 && K_block_tiles > 1;
-#else
-    constexpr bool row_mop = false;
-#endif
     // SwiGLU without a bias, applied on the pack thread in each output block's last K block
     constexpr bool swiglu_in_k_loop = get_arg(args::swiglu_in_k_loop) == 1;
     constexpr bool swiglu_block_float_output = get_arg(args::swiglu_block_float_output) == 1;
@@ -620,7 +623,7 @@ void kernel_main() {
             reconfig_data_format(dfb::in1, dfb::in0);
             pack_reconfig_data_format(dfb::intermediate);
             retarget_packer(dfb::intermediate);
-            matmul_block_init<row_mop>(
+            matmul_block_init(
                 dfb::in0,
                 dfb::in1,
                 false /*transpose*/,
@@ -642,7 +645,7 @@ void kernel_main() {
                     pack_reconfig_data_format(dfb::out);
                     // SwiGLU collapses the interleaved gate/up block to half its N width.
                     dfb_out.reserve_back(out_block_num_tiles >> 1);
-                    matmul_blocks_swiglu<swiglu_block_float_output, row_mop>(
+                    matmul_blocks_swiglu<swiglu_block_float_output>(
                         dfb::in0,
                         dfb::in1,
                         dfb::intermediate,
@@ -659,7 +662,7 @@ void kernel_main() {
                         dfb_intermediate.pop_front(out_block_num_tiles);
                     }
                 } else {
-                    matmul_blocks<row_mop>(
+                    matmul_blocks(
                         dfb::in0,
                         dfb::in1,
                         dfb::intermediate,
