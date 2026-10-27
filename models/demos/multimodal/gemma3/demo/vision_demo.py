@@ -513,6 +513,7 @@ def test_multimodal_demo_text(
     total_inference_decode_time = _decode_time_s
     avg_ttft = total_inference_prefill_time / num_batches  # One first token per batch
     avg_prefill_t_s = _num_prefill_tokens / total_inference_prefill_time
+    assert _num_decode_tokens > 0, "No decode step was timed: every batch stopped on its first token"
     avg_decode_t_s = _num_decode_tokens / total_inference_decode_time
     avg_decode_t_s_u = _num_decode_tokens / total_inference_decode_time / max_batch_size
 
