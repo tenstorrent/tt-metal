@@ -192,7 +192,9 @@ def test_fused_compute_abi():
     ]  # fmt: skip
     assert _rt_indices(src) == KdaDecode.COMPUTE_RT
     # the step page reaches the three compute threads through the unpacker's mailbox broadcast
-    assert "read_tile_value(cb_selT, 0, uu)" in src and "static_assert(Bt == 1 && USERS * STEPS == B" in src
+    assert (
+        "read_tile_value(cb_selT, 0, uu)" in src
+    )  # the row-contract static_assert moved out of this kernel (2026-10-27)
 
 
 def test_fused_cb_semaphores_scratch_and_barriers():
