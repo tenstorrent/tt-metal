@@ -1924,7 +1924,7 @@
   model_family: LTX
   skus:
     bh_sc1_high_power:
-      timeout: 35
+      timeout: 45
       tier: 1
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee

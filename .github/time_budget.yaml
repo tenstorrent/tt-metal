@@ -372,7 +372,7 @@ models:
     bh_quietbox_2: 434
     bh_galaxy: 78
     bh_sc1: 180
-    bh_sc1_high_power: 175
+    bh_sc1_high_power: 185
     bh_sc4: 75
     bh_sc4_high_power: 125
   e2e_tier2:
