@@ -21,6 +21,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    DEST_SYNC_TILE_LIMITS,
     generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
@@ -56,6 +57,11 @@ UNPACK_TILIZE_TILE_SIZES = [
     (2, 32),
 ]
 
+# Rows the SrcA/SrcB tilize takes in more than one MOP run: full_ct_dim -> block_ct_dim, a
+# proper divisor (the init asserts block_ct_dim divides full_ct_dim), so each run past the
+# first starts at a nonzero l1_tile_idx.
+MULTI_RUN_BLOCK_CT_DIM = {2: 1, 4: 2, 8: 4, 16: 8}
+
 
 def generate_unpack_tilize_combinations(
     formats_list: List[FormatConfig],
@@ -71,7 +77,8 @@ def generate_unpack_tilize_combinations(
     Args: List of input-output format pairs
 
     Returns: List of (format, dest_acc, dest_sync, unpacker_sel, input_dimensions,
-             tile_dimensions) tuples
+             tile_dimensions, block_ct_dim) tuples; block_ct_dim is None for a run per row,
+             otherwise the SrcA/SrcB run length, a divisor of the row
     """
     combinations = []
 
@@ -140,8 +147,39 @@ def generate_unpack_tilize_combinations(
                                     unpacker_sel,
                                     dimensions,
                                     tile_dims,
+                                    None,
                                 )
                             )
+                        # Several runs per row: one row of the DEST capacity and two half rows, 32x32 only.
+                        if (
+                            not is_perf
+                            and in_fmt
+                            in (
+                                DataFormat.Float16_b,
+                                DataFormat.Float32,
+                                DataFormat.Int32,
+                            )
+                            and tile_dims == (32, 32)
+                        ):
+                            capacity = DEST_SYNC_TILE_LIMITS[dest_sync] // (
+                                2 if dest_acc == DestAccumulation.Yes else 1
+                            )
+                            for rows, cols in ((1, capacity), (2, capacity // 2)):
+                                if cols in MULTI_RUN_BLOCK_CT_DIM:
+                                    combinations.append(
+                                        (
+                                            fmt,
+                                            dest_acc,
+                                            dest_sync,
+                                            unpacker_sel,
+                                            [
+                                                rows * tile_shape.total_row_dim(),
+                                                cols * tile_shape.total_col_dim(),
+                                            ],
+                                            tile_dims,
+                                            MULTI_RUN_BLOCK_CT_DIM[cols],
+                                        )
+                                    )
 
     return combinations
 
@@ -196,6 +234,7 @@ def test_unpack_tilize_quasar(
         unpacker_sel,
         input_dimensions,
         tile_dimensions,
+        block_ct_dim,
     ) = combination
 
     tile_shape = construct_tile_shape(tile_dimensions)
@@ -233,7 +272,10 @@ def test_unpack_tilize_quasar(
         "formats": formats,
         "templates": [
             generate_input_dim(
-                input_dimensions, input_dimensions, tile_dimensions=tile_dimensions
+                input_dimensions,
+                input_dimensions,
+                block_ct_dim=block_ct_dim,
+                tile_dimensions=tile_dimensions,
             ),
             UNPACKER_ENGINE_SEL(unpacker_sel),
             DATA_COPY_TYPE(
