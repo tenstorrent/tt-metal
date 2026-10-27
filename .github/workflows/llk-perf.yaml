@@ -18,6 +18,7 @@ jobs:
     needs: build-images
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         case: ${{ fromJSON(inputs.cases) }}
     name: "replay ${{ matrix.case }}"
