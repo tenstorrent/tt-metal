@@ -47,6 +47,7 @@ void kernel_main() {
         TensorAccessorArgs<intermediates_args.next_compile_time_args_offset()>();
 #ifdef SPLIT_UNITS
     constexpr uint32_t partial_row_tiles = vWt + 2U;
+    constexpr uint32_t kPartialRowsPerBatch = (rows % 2U == 0U) ? 2U : 1U;  // batches must not straddle the CB end
     const uint32_t partial_tile_bytes = get_tile_size(cb_partial_out);
     const auto scratch_addr_generator = TensorAccessor(scratch_args, scratch_addr, partial_tile_bytes);
 #endif
@@ -121,14 +122,14 @@ void kernel_main() {
                 get_compile_time_arg_val(6),
                 get_compile_time_arg_val(7),
                 get_compile_time_arg_val(8)};
-            for (uint32_t r = 0; r < rows; ++r) {
+            for (uint32_t r = 0; r < rows; r += kPartialRowsPerBatch) {
                 write_tiles_by_row(
                     cb_partial_out,
                     scratch_addr_generator,
                     (unit.slot * rows + r) * partial_row_tiles,
-                    partial_row_tiles,
+                    kPartialRowsPerBatch * partial_row_tiles,
                     partial_tile_bytes,
-                    partial_row_tiles);
+                    kPartialRowsPerBatch * partial_row_tiles);
             }
             noc_semaphore_inc(get_noc_addr(unit.merger_x, unit.merger_y, get_semaphore(sem_ids[unit.sem_idx])), 1);
             noc_async_atomic_barrier();  // the kernel must not end with the increment in flight
