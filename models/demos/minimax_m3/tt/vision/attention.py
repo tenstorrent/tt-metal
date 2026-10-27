@@ -37,7 +37,12 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import hifi4_compute_config, mesh_mapper, next_tile_multiple
+from models.demos.minimax_m3.tt.vision.common import (
+    hifi4_compute_config,
+    mesh_mapper,
+    next_tile_multiple,
+    sdpa_program_config,
+)
 from models.demos.minimax_m3.tt.vision.rope import rope_rotate_matrix
 
 
@@ -172,6 +177,7 @@ class M3VLAttention(LightweightModule):
         )
 
         self.compute_kernel_config = hifi4_compute_config()
+        self.sdpa_program_config = sdpa_program_config(mesh_device)
 
     @classmethod
     def from_torch(
@@ -291,6 +297,7 @@ class M3VLAttention(LightweightModule):
             v_heads,
             is_causal=False,
             scale=self.scale,
+            program_config=self.sdpa_program_config,
             compute_kernel_config=self.compute_kernel_config,
         )
         ttnn.deallocate(q_heads)

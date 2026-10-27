@@ -4,9 +4,9 @@
 """Shared host-side helpers for the MiniMax-M3-VL ttnn modules.
 
 Small utilities that every submodule needs: the mesh mapper, the
-torch->ttnn Linear weight/bias converters, the head-dim tile rounding, and
-the standard compute-kernel config. Centralised here so the modules don't
-each copy them.
+torch->ttnn Linear weight/bias converters, the head-dim tile rounding, the
+standard compute-kernel config and the SDPA program config. Centralised here
+so the modules don't each copy them.
 """
 from __future__ import annotations
 
@@ -64,4 +64,17 @@ def hifi4_compute_config(fp32_dest_acc: bool = True):
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_dest_acc,
         packer_l1_acc=False,
+    )
+
+
+def sdpa_program_config(mesh_device, chunk_size: int = 128):
+    """SDPA program config: q and k chunks of chunk_size on the device's whole compute grid.
+
+    Without a program config the op takes chunks of 32; chunks of 128 run a 672x672 image (2304 patches) faster.
+    exp_approx_mode stays unset, so SDPA keeps the op's default (approximate) exp either way.
+    """
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
+        q_chunk_size=chunk_size,
+        k_chunk_size=chunk_size,
     )
