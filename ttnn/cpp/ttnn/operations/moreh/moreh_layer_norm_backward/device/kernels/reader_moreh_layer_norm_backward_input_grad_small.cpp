@@ -33,6 +33,8 @@ void read_mean_rstd(
     uint32_t l1_write_addr = dfb.get_write_ptr();
     CoreLocalMem<volatile uint16_t> l1_ptr(l1_write_addr);
     if (normalized_dims == 1) {
+        uint32_t row_lo = 0;
+        uint32_t row_hi = 0;
         for (uint32_t src_h = 0; src_h < 2; src_h++) {
             auto tile_idx = tile_offset + outer_idx;
 
@@ -48,22 +50,21 @@ void read_mean_rstd(
             auto ht = h / TILE_HEIGHT;
             auto noc_id = n * Ht * Wt + ht * Wt + wt;
 
-            auto src_idx = get_tilized_idx(0, src_h * FACE_WIDTH);
+            (src_h == 0 ? row_lo : row_hi) = tilized_idx;
 
             noc.async_read(
                 addrg,
                 dfb,
                 dtype_bytes * FACE_HEIGHT,
                 {.page_id = noc_id, .offset_bytes = tilized_idx * dtype_bytes},
-                {.offset_bytes = src_idx * dtype_bytes});
-
-            noc.async_read_barrier();
+                {.offset_bytes = tilized_idx * dtype_bytes});
         }
+        noc.async_read_barrier();
 
-        // rotate data
+        // rotate data: row -> column 0 of faces 0 and 2 (increasing i reads each source before overwriting it)
         for (uint32_t i = 0; i < 16; i++) {
-            l1_ptr[i * FACE_WIDTH] = l1_ptr[i];
-            l1_ptr[i * FACE_WIDTH + 256 * 2] = l1_ptr[i + 256];
+            l1_ptr[i * FACE_WIDTH] = l1_ptr[row_lo + i];
+            l1_ptr[i * FACE_WIDTH + 256 * 2] = l1_ptr[row_hi + i];
         }
     } else {
         auto idx = tile_offset + outer_idx;
