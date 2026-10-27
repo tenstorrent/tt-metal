@@ -12,6 +12,8 @@
 // One matmul_init, then two products of the same tiles: in0 @ in1 -> [exp] -> pack, and in0 @ in1 -> pack, with no
 // second matmul_init. With EXP_BETWEEN the second product runs after an exp_tile_init / exp_tile, so it must not
 // depend on anything the exp leaves behind (the FPU's replay slots, which hold matmul's recorded MVMUL sequence).
+// With EXP_SCALE as well (an fp16b immediate) the exp is the scaled exp_tile<false, true>, whose bf16-DEST body is one
+// word longer than the unscaled one.
 void kernel_main() {
     constexpr uint32_t in0 = tt::CBIndex::c_0;
     constexpr uint32_t in1 = tt::CBIndex::c_1;
@@ -30,7 +32,11 @@ void kernel_main() {
     matmul_tiles(in0, in1, 0, 0, 0);
 #ifdef EXP_BETWEEN
     exp_tile_init();
+#ifdef EXP_SCALE
+    exp_tile<false, true /*scale_en*/>(0, VectorMode::RC, EXP_SCALE);
+#else
     exp_tile(0);
+#endif
 #endif
     tile_regs_commit();
     tile_regs_wait();
