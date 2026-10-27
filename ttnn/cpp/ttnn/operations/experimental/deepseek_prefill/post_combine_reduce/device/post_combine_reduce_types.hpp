@@ -14,6 +14,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::post_combine_reduce 
 struct PostCombineReduceParams {
     uint32_t expert_dim;
     tt::tt_metal::MemoryConfig output_memory_config;
+    // L1 address the circular buffers must end below (0: the whole L1); with a residual that would not fit, the
+    // residual input is single-buffered. Sizes the CBs, so part of the program-cache key.
+    uint32_t l1_end = 0;
 };
 
 struct PostCombineReduceInputs {

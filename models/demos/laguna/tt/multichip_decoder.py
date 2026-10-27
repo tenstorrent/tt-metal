@@ -1278,6 +1278,7 @@ class MultichipDecoder(OptimizedDecoder):
             expert_dim=3,
             output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             residual=shared_partial if fold else None,
+            l1_end=int(self.device.lowest_occupied_compute_l1_address() or 0),
         )
         local_output = ttnn.reshape(local_output, (1, 1, seq_len, cfg.hidden))
         ttnn.deallocate(combined_slots)

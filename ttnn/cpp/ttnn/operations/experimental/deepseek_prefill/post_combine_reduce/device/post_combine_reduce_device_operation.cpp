@@ -162,12 +162,13 @@ ttnn::Tensor post_combine_reduce(
     const std::optional<ttnn::Tensor>& expert_dispatch_table,
     uint32_t expert_dim,
     const tt::tt_metal::MemoryConfig& output_memory_config,
-    const std::optional<ttnn::Tensor>& residual) {
+    const std::optional<ttnn::Tensor>& residual,
+    uint32_t l1_end) {
     namespace pcr = ttnn::operations::experimental::deepseek_prefill::post_combine_reduce;
     using OperationType = pcr::PostCombineReduceDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        pcr::PostCombineReduceParams{expert_dim, output_memory_config},
+        pcr::PostCombineReduceParams{expert_dim, output_memory_config, l1_end},
         pcr::PostCombineReduceInputs{combine_output, weights, indices, expert_dispatch_table, residual});
 }
 

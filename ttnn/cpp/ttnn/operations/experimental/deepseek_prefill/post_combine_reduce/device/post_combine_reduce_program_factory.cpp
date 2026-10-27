@@ -245,6 +245,23 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
         }}},
     });
 
+    // l1_end: buffers the caller keeps resident in L1 start there. If the CBs would end past it, hold one chunk of
+    // residual tiles instead of two (the reader reserves exactly one chunk's tiles at a time).
+    if (operation_attributes.l1_end != 0 && has_residual) {
+        const uint64_t l1_base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        uint64_t cb_bytes = 0;
+        for (const auto& cb : desc.cbs) {
+            cb_bytes += tt::round_up(cb.total_size, 64u);
+        }
+        if (l1_base + cb_bytes > operation_attributes.l1_end) {
+            for (auto& cb : desc.cbs) {
+                if (cb.format_descriptors[0].buffer_index == static_cast<uint8_t>(tt::CBIndex::c_5)) {
+                    cb.total_size /= 2;
+                }
+            }
+        }
+    }
+
     auto* combine_buffer = combine_output.buffer();
     auto* weight_buffer = weights.buffer();
     auto* output_buffer = tensor_return_value.buffer();
