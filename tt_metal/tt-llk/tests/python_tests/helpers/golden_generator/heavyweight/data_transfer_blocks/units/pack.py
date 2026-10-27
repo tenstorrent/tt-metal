@@ -15,13 +15,13 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import PackerReluType, StochasticRounding
 
 from ..l1_support import L1Support
-from ..pack_effects import (
+from ..storage import to_dest_storage
+from .pack_effects import (
     STOCH_RND_EFFECTS,
     PackEdgeMask,
     apply_pack_effects,
     is_deterministic,
 )
-from ..storage import to_dest_storage
 
 
 class UnmodelledHardwareWarning(RuntimeWarning):
@@ -155,7 +155,7 @@ class Pack:
         configuration it is comparing against, but any mode other than ``No``
         **warns** rather than being silently ignored -- including ``Fpu``, which
         randomises the Dest write rather than this block's. See
-        :func:`..pack_effects.is_deterministic`.
+        :func:`.pack_effects.is_deterministic`.
         """
         self.l1.check_dest_format(dest_format)
         self.check_pack_pair(dest_format, l1_format)

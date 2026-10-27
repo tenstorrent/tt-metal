@@ -30,11 +30,11 @@ overrides a transfer — see [Where an architecture plugs in](#where-an-architec
 | `l1_support.py` | `L1Support` — an architecture's L1 format set, the support checks, and the L1 read/write path. Shared by the unpacker and the packer, so it belongs to neither. |
 | `storage.py` | The precision rules as pure functions: what a src datum, a Dest slot and the feedback path each hold. Directly testable without an architecture. |
 | `l1_codec.py` | `pack_to_l1` / `unpack_from_l1` — the bytes boundary |
-| `pack_effects.py` | ReLU, edge masking, and what stochastic rounding costs us |
 | `units/unpack.py` | `Unpack` — L1 → SrcA/SrcB/SrcS/Dest, both legality tables, and the Dest-format derivation |
 | `units/fpu.py` | `Fpu` — the arithmetic, the multiplier's mantissa split, the write to Dest, and Dest back to a src register |
 | `units/fidelity.py` | The multiplier's fidelity decomposition: phase tables, the mantissa split, the pre-carry denormal flush. Applied by `Fpu`, touched by no other unit. |
 | `units/pack.py` | `Pack` — Dest → L1, the pack legality table and the edge-mask polarity |
+| `units/pack_effects.py` | ReLU, edge masking, and what stochastic rounding costs us. Applied by `Pack`, touched by no other unit. |
 
 There is no `units/sfpu.py`: nothing here models the SFPU, so the class would be
 empty and every architecture would have to supply a no-op. It arrives with the
@@ -470,7 +470,7 @@ has no bfloat16 and most packers go straight to `.numpy()`.
 
 ---
 
-# `pack_effects.py`
+# `units/pack_effects.py`
 
 The packer does more than convert format. Three knobs change the values that
 reach L1, and the hardware applies them in this order:

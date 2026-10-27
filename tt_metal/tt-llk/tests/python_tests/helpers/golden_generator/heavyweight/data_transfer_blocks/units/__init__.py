@@ -10,8 +10,11 @@ implementation -- see :mod:`..arch`.
 
 Not every module here is a unit. :mod:`.fidelity` is the FPU multiplier's
 decomposition -- the phase tables, the mantissa split, the pre-carry flush --
-which :class:`.Fpu` applies and no other unit touches. It sits beside the FPU
-because that is whose behaviour it describes.
+and :mod:`.pack_effects` is the packer's ReLU, edge masking and stochastic
+rounding. Each is applied by one unit and touched by no other, so each sits
+beside the unit whose behaviour it describes. A module belongs at the package
+root instead when more than one unit needs it, which is why
+:mod:`..l1_support` and :mod:`..storage` are up there.
 
 There is no SFPU unit yet: nothing in this golden models the SFPU, so the class
 would be empty and every architecture would have to supply a no-op. It gets
