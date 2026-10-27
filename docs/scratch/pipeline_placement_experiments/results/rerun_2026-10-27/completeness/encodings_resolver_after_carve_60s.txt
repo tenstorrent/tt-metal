@@ -1,0 +1,15 @@
+engine: pipeline_builder.cpp resolver on the slots of each footprint carve; cap 60 s per solve
+8x8: 1x1, 14x 2x2, 1x1                                                  16 stages | resolver-after-carve yes    0.000s
+8x8: 1x1, 15x 2x2, 3x 1x1 (fills)                                       19 stages | resolver-after-carve yes    0.000s
+8x8 ring of 64 x 1x1 (fills)                                            64 stages | resolver-after-carve yes    0.004s
+8x16: 1x1, 30x 2x2, 1x1                                                 32 stages | resolver-after-carve yes    0.001s
+8x16: 1x1, 2x4 x14, 2x2 x3, 1x1 (fills)                                 20 stages | resolver-after-carve yes    0.000s
+8x16 ring of 128 x 1x1 (fills)                                         128 stages | resolver-after-carve yes    0.029s
+16x16: 1x1, 62x 2x2, 1x1                                                64 stages | resolver-after-carve yes    0.004s
+random 8x8: 30 stages                                                   30 stages | resolver-after-carve yes    0.001s
+random 8x8: 29 stages                                                   29 stages | resolver-after-carve yes    0.001s
+random 8x8: 31 stages                                                   31 stages | resolver-after-carve yes    0.001s
+random 8x8: 34 stages                                                   34 stages | resolver-after-carve yes    0.001s
+random 8x8: 37 stages                                                   37 stages | resolver-after-carve yes    0.001s
+random 8x16 s1.0: 37 stages                                             37 stages | resolver-after-carve yes    0.001s
+random 8x16 s1.2: 32 stages                                             32 stages | resolver-after-carve yes    0.001s

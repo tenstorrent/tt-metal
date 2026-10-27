@@ -1,0 +1,30 @@
+carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap 60 s per solve; brute force on <= 8 stages; SAT conflict cap 2000000000
+carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap 60 s per solve; brute force on <= 8 stages; SAT conflict cap 2000000000
+no-1x1 domino 2 meshes 4x8, 1 cables/pair, 32 stages 64/64, seed 0  64/64    56 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 domino 2 meshes 4x8, 1 cables/pair, 32 stages 64/64, seed 1  64/64    56 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 domino 2 meshes 4x8, 2 cables/pair, 32 stages 64/64, seed 0  64/64    56 pos | brute -   | auto(?) -      0.000s | sat yes   19.767s | dfs yes    0.012s
+no-1x1 domino 2 meshes 4x8, 2 cables/pair, 32 stages 64/64, seed 1  64/64    56 pos | brute -   | auto(?) -      0.000s | sat yes   35.505s | dfs cap   60.000s
+no-1x1 domino 2 meshes 4x8, 4 cables/pair, 32 stages 64/64, seed 0  64/64    56 pos | brute -   | auto(?) -      0.000s | sat yes    1.237s | dfs yes    0.011s
+no-1x1 domino 2 meshes 4x8, 4 cables/pair, 32 stages 64/64, seed 1  64/64    56 pos | brute -   | auto(?) -      0.000s | sat yes    1.984s | dfs yes    0.550s
+no-1x1 domino 4 meshes 4x8, 1 cables/pair, 64 stages 128/128, seed 0 128/128  112 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 domino 4 meshes 4x8, 1 cables/pair, 64 stages 128/128, seed 1 128/128  112 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 domino 4 meshes 4x8, 2 cables/pair, 64 stages 128/128, seed 0 128/128  112 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 domino 4 meshes 4x8, 2 cables/pair, 64 stages 128/128, seed 1 128/128  112 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 domino 4 meshes 4x8, 4 cables/pair, 64 stages 128/128, seed 0 128/128  112 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 domino 4 meshes 4x8, 4 cables/pair, 64 stages 128/128, seed 1 128/128  112 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 domino 8 meshes 4x8, 4 cables/pair, 128 stages 256/256, seed 0 256/256  224 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 domino 8 meshes 4x8, 4 cables/pair, 128 stages 256/256, seed 1 256/256  224 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 mixed 2 meshes 4x8, 1 cables/pair, 15 stages 60/64, seed 0  60/64   176 pos | brute -   | auto(?) -      0.000s | sat yes    0.031s | dfs yes    0.004s
+no-1x1 mixed 2 meshes 4x8, 1 cables/pair, 16 stages 64/64, seed 1  64/64   176 pos | brute -   | auto(?) -      0.000s | sat no     0.813s | dfs no     1.920s
+no-1x1 mixed 2 meshes 4x8, 2 cables/pair, 17 stages 58/64, seed 0  58/64   120 pos | brute -   | auto(?) -      0.000s | sat yes    0.022s | dfs yes    1.113s
+no-1x1 mixed 2 meshes 4x8, 2 cables/pair, 17 stages 58/64, seed 1  58/64   176 pos | brute -   | auto(?) -      0.000s | sat yes    0.051s | dfs yes    0.089s
+no-1x1 mixed 2 meshes 4x8, 4 cables/pair, 13 stages 58/64, seed 0  58/64   176 pos | brute -   | auto(?) -      0.000s | sat yes    0.004s | dfs yes    0.229s
+no-1x1 mixed 2 meshes 4x8, 4 cables/pair, 19 stages 60/64, seed 1  60/64   176 pos | brute -   | auto(?) -      0.000s | sat yes    0.035s | dfs yes    2.513s
+no-1x1 mixed 4 meshes 4x8, 1 cables/pair, 30 stages 118/128, seed 0 118/128  352 pos | brute -   | auto(?) -      0.000s | sat yes    4.931s | dfs cap   60.000s
+no-1x1 mixed 4 meshes 4x8, 1 cables/pair, 26 stages 118/128, seed 1 118/128  352 pos | brute -   | auto(?) -      0.000s | sat yes    0.347s | dfs cap   60.000s
+no-1x1 mixed 4 meshes 4x8, 2 cables/pair, 30 stages 118/128, seed 0 118/128  352 pos | brute -   | auto(?) -      0.000s | sat yes    1.912s | dfs cap   60.000s
+no-1x1 mixed 4 meshes 4x8, 2 cables/pair, 28 stages 116/128, seed 1 116/128  352 pos | brute -   | auto(?) -      0.000s | sat yes    0.785s | dfs cap   60.000s
+no-1x1 mixed 4 meshes 4x8, 4 cables/pair, 30 stages 122/128, seed 0 122/128  352 pos | brute -   | auto(?) -      0.000s | sat yes    1.274s | dfs cap   60.000s
+no-1x1 mixed 4 meshes 4x8, 4 cables/pair, 30 stages 116/128, seed 1 116/128  352 pos | brute -   | auto(?) -      0.000s | sat yes    0.556s | dfs cap   60.000s
+no-1x1 mixed 8 meshes 4x8, 4 cables/pair, 62 stages 232/256, seed 0 232/256  704 pos | brute -   | auto(?) -      0.000s | sat yes   24.580s | dfs cap   60.000s
+no-1x1 mixed 8 meshes 4x8, 4 cables/pair, 56 stages 232/256, seed 1 232/256  704 pos | brute -   | auto(?) -      0.000s | sat yes   35.723s | dfs cap   60.000s

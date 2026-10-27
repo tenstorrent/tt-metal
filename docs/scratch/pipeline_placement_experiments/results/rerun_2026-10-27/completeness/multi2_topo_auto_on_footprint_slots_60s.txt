@@ -1,0 +1,12 @@
+engines: topo-sat, topo-dfs (solve_topology_mapping) on the slots of each carve; cap 60 s per solve
+2 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 1             64 stages/ 64 slots | topo-auto yes    0.012s | topo-sat -      0.000s | topo-dfs -      0.000s
+2 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 0             64 stages/ 64 slots | topo-auto yes    0.012s | topo-sat -      0.000s | topo-dfs -      0.000s
+2 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 1             64 stages/ 64 slots | topo-auto yes    0.012s | topo-sat -      0.000s | topo-dfs -      0.000s
+4 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 0            128 stages/128 slots | topo-auto yes    0.057s | topo-sat -      0.000s | topo-dfs -      0.000s
+4 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 1            128 stages/128 slots | topo-auto yes    0.057s | topo-sat -      0.000s | topo-dfs -      0.000s
+8 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 0            256 stages/256 slots | topo-auto yes    0.325s | topo-sat -      0.000s | topo-dfs -      0.000s
+2 32-rank meshes line, 1 cable/pair, 32/32 per mesh, seed 0             64 stages/ 64 slots | topo-auto yes    0.012s | topo-sat -      0.000s | topo-dfs -      0.000s
+2 32-rank meshes line, 4 cable/pair, 32/32 per mesh, seed 0             64 stages/ 64 slots | topo-auto yes    0.012s | topo-sat -      0.000s | topo-dfs -      0.000s
+4 32-rank meshes line, 4 cable/pair, 32/32 per mesh, seed 0            128 stages/128 slots | topo-auto yes    0.056s | topo-sat -      0.000s | topo-dfs -      0.000s
+2 32-rank meshes ring, 2 cable/pair, 24/32 per mesh, seed 0             48 stages/ 48 slots | topo-auto yes    0.006s | topo-sat -      0.000s | topo-dfs -      0.000s
+4 32-rank meshes ring, 2 cable/pair, 24/32 per mesh, seed 0             96 stages/ 96 slots | topo-auto yes    0.029s | topo-sat -      0.000s | topo-dfs -      0.000s

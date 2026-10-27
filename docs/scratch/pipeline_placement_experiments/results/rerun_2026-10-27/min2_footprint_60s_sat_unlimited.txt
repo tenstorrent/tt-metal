@@ -1,0 +1,46 @@
+carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap 60 s per solve; brute force on <= 8 stages; SAT conflict cap 2000000000
+no-1x1 4x8 fill60 s20: 3 stages 20/32             20/32    36 pos | brute yes | auto(?) -      0.000s | sat yes    0.010s | dfs yes    0.000s
+no-1x1 4x8 fill60 s21: 5 stages 22/32             22/32    60 pos | brute yes | auto(?) -      0.000s | sat yes    0.001s | dfs yes    0.000s
+no-1x1 4x8 fill80 s20: 6 stages 28/32             28/32    88 pos | brute yes | auto(?) -      0.000s | sat yes    0.009s | dfs yes    0.000s
+no-1x1 4x8 fill80 s21: 6 stages 26/32             26/32    60 pos | brute yes | auto(?) -      0.000s | sat yes    0.001s | dfs yes    0.000s
+no-1x1 4x8 fill95 s20: 7 stages 30/32             30/32    88 pos | brute no  | auto(?) -      0.000s | sat no     0.019s | dfs no     0.002s
+no-1x1 4x8 fill95 s21: 7 stages 30/32             30/32    60 pos | brute yes | auto(?) -      0.000s | sat yes    0.001s | dfs yes    0.000s
+no-1x1 8x4 fill60 s20: 5 stages 24/32             24/32    56 pos | brute no  | auto(?) -      0.000s | sat no     0.001s | dfs no     0.000s
+no-1x1 8x4 fill60 s21: 4 stages 20/32             20/32    59 pos | brute no  | auto(?) -      0.000s | sat no     0.001s | dfs no     0.000s
+no-1x1 8x4 fill80 s20: 6 stages 28/32             28/32    56 pos | brute no  | auto(?) -      0.000s | sat no     0.006s | dfs no     0.000s
+no-1x1 8x4 fill80 s21: 5 stages 28/32             28/32    59 pos | brute no  | auto(?) -      0.000s | sat no     0.001s | dfs no     0.000s
+no-1x1 8x4 fill95 s20: 7 stages 32/32             32/32    56 pos | brute yes | auto(?) -      0.000s | sat yes    0.001s | dfs yes    0.000s
+no-1x1 8x4 fill95 s21: 7 stages 32/32             32/32    59 pos | brute no  | auto(?) -      0.000s | sat no     0.006s | dfs no     0.000s
+no-1x1 2x16 fill60 s20: 5 stages 24/32            24/32    74 pos | brute no  | auto(?) -      0.000s | sat no     0.001s | dfs no     0.000s
+no-1x1 2x16 fill60 s21: 5 stages 22/32            22/32    29 pos | brute no  | auto(?) -      0.000s | sat no     0.001s | dfs no     0.000s
+no-1x1 2x16 fill80 s20: 6 stages 28/32            28/32    74 pos | brute no  | auto(?) -      0.000s | sat no     0.006s | dfs no     0.000s
+no-1x1 2x16 fill80 s21: 7 stages 26/32            26/32    59 pos | brute no  | auto(?) -      0.000s | sat no     0.001s | dfs no     0.000s
+no-1x1 2x16 fill95 s20: 7 stages 30/32            30/32    74 pos | brute no  | auto(?) -      0.000s | sat no     0.001s | dfs no     0.000s
+no-1x1 2x16 fill95 s21: 9 stages 32/32            32/32    74 pos | brute -   | auto(?) -      0.000s | sat no     0.001s | dfs no     0.001s
+no-1x1 8x8 fill60 s20: 11 stages 40/64            40/64   196 pos | brute -   | auto(?) -      0.000s | sat yes    0.004s | dfs yes    0.001s
+no-1x1 8x8 fill60 s21: 9 stages 40/64             40/64   196 pos | brute -   | auto(?) -      0.000s | sat yes    0.004s | dfs yes    0.001s
+no-1x1 8x8 fill80 s20: 14 stages 54/64            54/64   196 pos | brute -   | auto(?) -      0.000s | sat yes    0.005s | dfs yes    0.001s
+no-1x1 8x8 fill80 s21: 12 stages 54/64            54/64   196 pos | brute -   | auto(?) -      0.000s | sat yes    0.005s | dfs yes    0.002s
+no-1x1 8x8 fill95 s20: 16 stages 62/64            62/64   196 pos | brute -   | auto(?) -      0.000s | sat yes    0.829s | dfs yes    8.332s
+no-1x1 8x8 fill95 s21: 15 stages 62/64            62/64   196 pos | brute -   | auto(?) -      0.000s | sat yes    0.059s | dfs yes    0.002s
+no-1x1 8x16 fill60 s20: 20 stages 82/128          82/128  428 pos | brute -   | auto(?) -      0.000s | sat yes    0.018s | dfs yes    0.005s
+no-1x1 8x16 fill60 s21: 22 stages 80/128          80/128  428 pos | brute -   | auto(?) -      0.000s | sat yes    0.053s | dfs yes    0.005s
+no-1x1 8x16 fill80 s20: 24 stages 106/128        106/128  428 pos | brute -   | auto(?) -      0.000s | sat yes    0.146s | dfs yes    0.006s
+no-1x1 8x16 fill80 s21: 28 stages 104/128        104/128  428 pos | brute -   | auto(?) -      0.000s | sat yes    0.028s | dfs yes    0.007s
+no-1x1 8x16 fill95 s20: 30 stages 122/128        122/128  428 pos | brute -   | auto(?) -      0.000s | sat yes    2.802s | dfs cap   60.000s
+no-1x1 8x16 fill95 s21: 32 stages 126/128        126/128  428 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 4x8 ring of 16 x 1x2                       32/32    28 pos | brute -   | auto(?) -      0.000s | sat yes    0.037s | dfs yes    0.000s
+no-1x1 4x8 ring of 16 x 2x1                       32/32    24 pos | brute -   | auto(?) -      0.000s | sat yes    0.002s | dfs yes    0.000s
+no-1x1 4x8 ring: 8x 1x2, 8x 2x1                   32/32    52 pos | brute -   | auto(?) -      0.000s | sat yes    0.011s | dfs yes    0.004s
+no-1x1 8x8 ring of 32 x 1x2                       64/64    56 pos | brute -   | auto(?) -      0.000s | sat yes    0.316s | dfs yes    0.002s
+no-1x1 8x8 ring of 16 x 2x2                       64/64    49 pos | brute -   | auto(?) -      0.000s | sat yes    0.125s | dfs yes    0.001s
+no-1x1 8x8 ring: 8x 2x2, 16x 1x2                  64/64   105 pos | brute -   | auto(?) -      0.000s | sat yes    1.590s | dfs yes    0.001s
+no-1x1 8x8 ring: 4x 2x4, 8x 2x2, 8x 1x2           80/64   140 pos | brute -   | auto(?) -      0.000s | sat no     1.258s | dfs no    34.116s
+no-1x1 8x16 ring of 64 x 1x2                     128/128  120 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 8x16 ring of 32 x 2x2                     128/128  105 pos | brute -   | auto(?) -      0.000s | sat yes    9.423s | dfs yes    0.005s
+no-1x1 8x16 ring: 8x 2x4, 16x 2x2, 16x 1x2       160/128  316 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 16x16 ring of 64 x 2x2                    256/256  225 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 16x16 ring of 128 x 1x2                   256/256  240 pos | brute -   | auto(?) -      0.000s | sat cap   60.000s | dfs cap   60.000s
+no-1x1 5x8 ring of 20 x 1x2 (odd rows)            40/40    35 pos | brute -   | auto(?) -      0.000s | sat yes    0.354s | dfs yes    0.000s
+no-1x1 6x6 ring: 9x 2x2 (area 36, 3x3 of 2x2: odd cycle)  36/36    25 pos | brute -   | auto(?) -      0.000s | sat no     0.110s | dfs no     0.014s
+no-1x1 7x8: 14x 2x2 (only 12 fit)                 56/56    42 pos | brute -   | auto(?) -      0.000s | sat no     9.453s | dfs no     2.521s

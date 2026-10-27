@@ -1,0 +1,46 @@
+engine: blaze carve planner (C++ port) then pipeline_builder.cpp resolver on its slots; cap 60 s per case
+no-1x1 4x8 fill60 s20: 3 stages 20/32                                    3 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 4x8 fill60 s21: 5 stages 22/32                                    5 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 4x8 fill80 s20: 6 stages 28/32                                    6 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 4x8 fill80 s21: 6 stages 26/32                                    6 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 4x8 fill95 s20: 7 stages 30/32                                    7 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 4x8 fill95 s21: 7 stages 30/32                                    7 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x4 fill60 s20: 5 stages 24/32                                    5 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x4 fill60 s21: 4 stages 20/32                                    4 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x4 fill80 s20: 6 stages 28/32                                    6 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x4 fill80 s21: 5 stages 28/32                                    5 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x4 fill95 s20: 7 stages 32/32                                    7 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x4 fill95 s21: 7 stages 32/32                                    7 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 2x16 fill60 s20: 5 stages 24/32                                   5 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 2x16 fill60 s21: 5 stages 22/32                                   5 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 2x16 fill80 s20: 6 stages 28/32                                   6 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 2x16 fill80 s21: 7 stages 26/32                                   7 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 2x16 fill95 s20: 7 stages 30/32                                   7 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 2x16 fill95 s21: 9 stages 32/32                                   9 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x8 fill60 s20: 11 stages 40/64                                  11 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x8 fill60 s21: 9 stages 40/64                                    9 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x8 fill80 s20: 14 stages 54/64                                  14 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x8 fill80 s21: 12 stages 54/64                                  12 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x8 fill95 s20: 16 stages 62/64                                  16 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x8 fill95 s21: 15 stages 62/64                                  15 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x16 fill60 s20: 20 stages 82/128                                20 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x16 fill60 s21: 22 stages 80/128                                22 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x16 fill80 s20: 24 stages 106/128                               24 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x16 fill80 s21: 28 stages 104/128                               28 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x16 fill95 s20: 30 stages 122/128                               30 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x16 fill95 s21: 32 stages 126/128                               32 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 4x8 ring of 16 x 1x2                                             16 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 4x8 ring of 16 x 2x1                                             16 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 4x8 ring: 8x 1x2, 8x 2x1                                         16 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x8 ring of 32 x 1x2                                             32 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x8 ring of 16 x 2x2                                             16 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x8 ring: 8x 2x2, 16x 1x2                                        24 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x8 ring: 4x 2x4, 8x 2x2, 8x 1x2                                 20 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x16 ring of 64 x 1x2                                            64 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x16 ring of 32 x 2x2                                            32 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 8x16 ring: 8x 2x4, 16x 2x2, 16x 1x2                              40 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 16x16 ring of 64 x 2x2                                           64 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 16x16 ring of 128 x 1x2                                         128 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 5x8 ring of 20 x 1x2 (odd rows)                                  20 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 6x6 ring: 9x 2x2 (area 36, 3x3 of 2x2: odd cycle)                 9 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+no-1x1 7x8: 14x 2x2 (only 12 fit)                                       14 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s

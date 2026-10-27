@@ -1,0 +1,42 @@
+carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap 20 s per solve; brute force on <= 8 stages
+4x4: 1x1, 3x 2x2 (blaze: no-cycle-13)             13/16    25 pos | brute yes | auto(sat) yes    0.001s
+    auto plan: 1x1@m0(1,2) 2x2@m0(0,0) 2x2@m0(2,0) 2x2@m0(2,2)
+4x4: 1x1, 3x 2x2, 1x1                             14/16    25 pos | brute yes | auto(sat) yes    0.001s
+    auto plan: 1x1@m0(3,3) 2x2@m0(2,1) 2x2@m0(0,0) 2x2@m0(0,2) 1x1@m0(2,3)
+4x4: 1x1, 2x 2x2, 1x1                             10/16    25 pos | brute yes | auto(sat) yes    0.000s
+    auto plan: 1x1@m0(3,3) 2x2@m0(2,1) 2x2@m0(0,2) 1x1@m0(2,3)
+4x6: 1x1, 4x 2x2, 1x1 (blaze: no-alignment)       18/24    39 pos | brute yes | auto(sat) yes    0.001s
+    auto plan: 1x1@m0(3,5) 2x2@m0(2,3) 2x2@m0(2,1) 2x2@m0(0,2) 2x2@m0(0,4) 1x1@m0(2,5)
+4x8: 1x1, 6x 2x2, 1x1 (blaze: no-alignment)       26/32    53 pos | brute yes | auto(sat) yes    0.001s
+    auto plan: 1x1@m0(3,7) 2x2@m0(2,5) 2x2@m0(2,3) 2x2@m0(2,1) 2x2@m0(0,2) 2x2@m0(0,4) 2x2@m0(0,6) 1x1@m0(2,7)
+4x8: 1x1, 2x4, 2x4, 2x2, 1x1                      22/32    68 pos | brute yes | auto(sat) yes    0.001s
+    auto plan: 1x1@m0(3,7) 2x4@m0(2,3) 2x4@m0(0,2) 2x2@m0(0,6) 1x1@m0(2,7)
+5x5: 1x1, 5x 2x2 (only 4 fit)                     21/25    41 pos | brute no  | auto(sat) no     0.011s
+6x6: 1x1, 9x 2x2 (area 37 > 36)                   37/36    61 pos | brute -   | auto(sat) no     0.092s
+6x6 fork: r 1x1, r-a1-a2-r, r-b1-b2-r (2x2 branches)  17/36    61 pos | brute yes | auto(sat) yes    0.008s
+    auto plan: 1x1@m0(2,2) 2x2@m0(3,2) 2x2@m0(2,0) 2x2@m0(1,3) 2x2@m0(0,1)
+carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap 20 s per solve; brute force on <= 8 stages
+mixed4 (P,R): cables A0-B0, A2-B2                  6/8     14 pos | brute yes | auto(sat) yes    0.000s
+    auto plan: 1x1@m1(0,2) 1x2@m1(0,0) 1x2@m0(0,0) 1x1@m0(0,2)
+mixed4 (P,Q): cables A0-B0, A3-B3                  6/8     14 pos | brute no  | auto(sat) no     0.000s
+mixed4 Case B: crossings only on A0-B0             6/8     14 pos | brute no  | auto(sat) no     0.001s
+two 4x4: 1x1, 6x 2x2, 1x1, cables (0,0),(0,1)     26/32    50 pos | brute no  | auto(sat) no     0.014s
+two 4x4 ring of 32 x 1x1, cables (0,0),(0,1)      32/32    32 pos | brute -   | auto(sat) yes    0.004s
+    auto plan: 1x1@m0(0,0) 1x1@m1(0,0) 1x1@m1(1,0) 1x1@m1(2,0) 1x1@m1(3,0) 1x1@m1(3,1) 1x1@m1(3,2) 1x1@m1(3,3) 1x1@m1(2,3) 1x1@m1(2,2) 1x1@m1(2,1) 1x1@m1(1,1) 1x1@m1(1,2) 1x1@m1(1,3) 1x1@m1(0,3) 1x1@m1(0,2) 1x1@m1(0,1) 1x1@m0(0,1) 1x1@m0(1,1) 1x1@m0(2,1) 1x1@m0(2,2) 1x1@m0(1,2) 1x1@m0(0,2) 1x1@m0(0,3) 1x1@m0(1,3) 1x1@m0(2,3) 1x1@m0(3,3) 1x1@m0(3,2) 1x1@m0(3,1) 1x1@m0(3,0) 1x1@m0(2,0) 1x1@m0(1,0)
+carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap 20 s per solve; brute force on <= 8 stages
+4x8 ring of 32 x 1x1 (fills)                      32/32    32 pos | brute -   | auto(sat) yes    0.004s
+    auto plan: 1x1@m0(0,0) 1x1@m0(1,0) 1x1@m0(2,0) 1x1@m0(3,0) 1x1@m0(3,1) 1x1@m0(3,2) 1x1@m0(3,3) 1x1@m0(3,4) 1x1@m0(3,5) 1x1@m0(3,6) 1x1@m0(3,7) 1x1@m0(2,7) 1x1@m0(2,6) 1x1@m0(2,5) 1x1@m0(2,4) 1x1@m0(2,3) 1x1@m0(2,2) 1x1@m0(2,1) 1x1@m0(1,1) 1x1@m0(1,2) 1x1@m0(1,3) 1x1@m0(1,4) 1x1@m0(1,5) 1x1@m0(1,6) 1x1@m0(1,7) 1x1@m0(0,7) 1x1@m0(0,6) 1x1@m0(0,5) 1x1@m0(0,4) 1x1@m0(0,3) 1x1@m0(0,2) 1x1@m0(0,1)
+2x16 ring of 32 x 1x1 (fills)                     32/32    32 pos | brute -   | auto(sat) yes    0.003s
+    auto plan: 1x1@m0(0,0) 1x1@m0(1,0) 1x1@m0(1,1) 1x1@m0(1,2) 1x1@m0(1,3) 1x1@m0(1,4) 1x1@m0(1,5) 1x1@m0(1,6) 1x1@m0(1,7) 1x1@m0(1,8) 1x1@m0(1,9) 1x1@m0(1,10) 1x1@m0(1,11) 1x1@m0(1,12) 1x1@m0(1,13) 1x1@m0(1,14) 1x1@m0(1,15) 1x1@m0(0,15) 1x1@m0(0,14) 1x1@m0(0,13) 1x1@m0(0,12) 1x1@m0(0,11) 1x1@m0(0,10) 1x1@m0(0,9) 1x1@m0(0,8) 1x1@m0(0,7) 1x1@m0(0,6) 1x1@m0(0,5) 1x1@m0(0,4) 1x1@m0(0,3) 1x1@m0(0,2) 1x1@m0(0,1)
+5x5 ring of 25 x 1x1 (odd: none)                  25/25    25 pos | brute -   | auto(sat) no     0.003s
+4x8: 1x1, 1x2 x6, 2x2 x4, 1x1                     30/32    81 pos | brute -   | auto(sat) yes    0.011s
+    auto plan: 1x1@m0(2,4) 1x2@m0(3,4) 1x2@m0(3,2) 1x2@m0(3,0) 1x2@m0(2,0) 1x2@m0(1,0) 1x2@m0(0,0) 2x2@m0(0,2) 2x2@m0(0,4) 2x2@m0(0,6) 2x2@m0(2,6) 1x1@m0(2,5)
+8x4: 1x1, 2x1 x6, 2x2 x4, 1x1                     30/32    81 pos | brute -   | auto(sat) yes    0.002s
+    auto plan: 1x1@m0(7,3) 2x1@m0(6,2) 2x1@m0(6,1) 2x1@m0(6,0) 2x1@m0(4,0) 2x1@m0(4,1) 2x1@m0(2,1) 2x2@m0(0,0) 2x2@m0(0,2) 2x2@m0(2,2) 2x2@m0(4,2) 1x1@m0(6,3)
+2x16: 1x1, 1x2 x15, 1x1                           32/32    62 pos | brute -   | auto(sat) yes    0.003s
+    auto plan: 1x1@m0(1,15) 1x2@m0(0,14) 1x2@m0(0,12) 1x2@m0(0,10) 1x2@m0(0,8) 1x2@m0(0,6) 1x2@m0(0,4) 1x2@m0(0,2) 1x2@m0(0,0) 1x2@m0(1,0) 1x2@m0(1,2) 1x2@m0(1,4) 1x2@m0(1,6) 1x2@m0(1,8) 1x2@m0(1,10) 1x2@m0(1,12) 1x1@m0(1,14)
+2x16: 1x1, 2x2 x7, 1x1 (fills 30/32)              30/32    47 pos | brute -   | auto(sat) no     0.008s
+4x8: 2x4 x4 (fills, ring of 4)                    32/32    15 pos | brute yes | auto(sat) yes    0.001s
+    auto plan: 2x4@m0(2,4) 2x4@m0(2,0) 2x4@m0(0,0) 2x4@m0(0,4)
+8x8: 1x1, 14x 2x2, 1x1                            58/64   113 pos | brute -   | auto(sat) yes    0.005s
+    auto plan: 1x1@m0(7,7) 2x2@m0(6,5) 2x2@m0(6,3) 2x2@m0(6,1) 2x2@m0(4,2) 2x2@m0(4,4) 2x2@m0(2,4) 2x2@m0(2,2) 2x2@m0(3,0) 2x2@m0(1,0) 2x2@m0(0,2) 2x2@m0(0,4) 2x2@m0(0,6) 2x2@m0(2,6) 2x2@m0(4,6) 1x1@m0(6,7)

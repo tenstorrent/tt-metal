@@ -1,0 +1,13 @@
+engine: blaze carve planner (C++ port) then pipeline_builder.cpp resolver on its slots; cap 60 s per case; stage-0 rule off
+hetero 2 meshes 4x8, 2 cables/pair, 16 stages 56/64, seed 0             16 stages | planner no     0.043s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.043s
+hetero 2 meshes 4x8, 2 cables/pair, 20 stages 56/64, seed 1             20 stages | planner no     0.043s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.043s
+hetero 2 meshes 4x8, 2 cables/pair, 23 stages 58/64, seed 2             23 stages | planner no     0.042s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.042s
+hetero 2 meshes 4x8, 4 cables/pair, 12 stages 58/64, seed 0             12 stages | planner no     0.005s (2300 exp, 64 cyc) no-alignment | resolver -          | total    0.005s
+hetero 2 meshes 4x8, 4 cables/pair, 19 stages 57/64, seed 1             19 stages | planner no     0.043s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.043s
+hetero 2 meshes 4x8, 4 cables/pair, 13 stages 58/64, seed 2             13 stages | planner no     0.041s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.041s
+hetero 4 meshes 4x8, 2 cables/pair, 34 stages 116/128, seed 0           34 stages | planner no     0.045s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.045s
+hetero 4 meshes 4x8, 2 cables/pair, 34 stages 116/128, seed 1           34 stages | planner no     0.049s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.049s
+hetero 4 meshes 4x8, 2 cables/pair, 34 stages 116/128, seed 2           34 stages | planner no     0.047s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.047s
+hetero 4 meshes 4x8, 4 cables/pair, 33 stages 111/128, seed 0           33 stages | planner no     0.043s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.043s
+hetero 4 meshes 4x8, 4 cables/pair, 28 stages 113/128, seed 1           28 stages | planner no     0.041s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.041s
+hetero 4 meshes 4x8, 4 cables/pair, 29 stages 111/128, seed 2           29 stages | planner no     0.010s (1918 exp, 64 cyc) no-alignment | resolver -          | total    0.010s

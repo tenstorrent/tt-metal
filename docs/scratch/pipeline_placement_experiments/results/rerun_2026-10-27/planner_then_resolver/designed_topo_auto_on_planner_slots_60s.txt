@@ -1,0 +1,4 @@
+engines: topo-sat, topo-dfs (solve_topology_mapping) on the slots of each carve; cap 60 s per solve
+4x4: 1x1, 3x 2x2, 1x1                                                    5 stages/  7 slots | topo-auto yes    0.000s | topo-sat -      0.000s | topo-dfs -      0.000s
+4x4: 1x1, 2x 2x2, 1x1                                                    4 stages/ 10 slots | topo-auto yes    0.000s | topo-sat -      0.000s | topo-dfs -      0.000s
+4x8: 1x1, 2x4, 2x4, 2x2, 1x1                                             5 stages/ 15 slots | topo-auto yes    0.000s | topo-sat -      0.000s | topo-dfs -      0.000s

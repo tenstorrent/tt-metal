@@ -1,0 +1,13 @@
+2 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 0  64/64    64 pos | brute -   | auto(?) -      0.000s | sat cap  600.000s | dfs -      0.000s
+4 32-rank meshes line, 1 cable/pair, 32/32 per mesh, seed 0 128/128  128 pos | brute -   | auto(?) -      0.000s | sat cap  600.000s | dfs -      0.000s
+4 32-rank meshes line, 4 cable/pair, 32/32 per mesh, seed 0 128/128  128 pos | brute -   | auto(?) -      0.000s | sat yes  170.291s | dfs -      0.000s
+4 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 0 128/128  128 pos | brute -   | auto(?) -      0.000s | sat cap  600.000s | dfs -      0.000s
+4 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 1 128/128  128 pos | brute -   | auto(?) -      0.000s | sat cap  600.000s | dfs -      0.000s
+4 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 1 128/128  128 pos | brute -   | auto(?) -      0.000s | sat yes   66.050s | dfs -      0.000s
+8 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 0 256/256  256 pos | brute -   | auto(?) -      0.000s | sat cap  600.000s | dfs -      0.000s
+8 32-rank meshes ring, 1 cable/pair, 32/32 per mesh, seed 1 256/256  256 pos | brute -   | auto(?) -      0.000s | sat cap  600.000s | dfs -      0.000s
+8 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 0 256/256  256 pos | brute -   | auto(?) -      0.000s | sat cap  600.000s | dfs -      0.000s
+8 32-rank meshes ring, 4 cable/pair, 32/32 per mesh, seed 1 256/256  256 pos | brute -   | auto(?) -      0.000s | sat yes  322.456s | dfs -      0.000s
+random 8x16 s1.1: 32 stages                      127/128  556 pos | brute -   | auto(?) -      0.000s | sat cap  600.000s | dfs -      0.000s
+random 8x8: 29 stages                             64/64   225 pos | brute -   | auto(?) -      0.000s | sat yes   63.137s | dfs -      0.000s
+random 8x8: 30 stages                             64/64   225 pos | brute -   | auto(?) -      0.000s | sat yes  120.420s | dfs -      0.000s

@@ -14,7 +14,8 @@ disjoint, k touches k+1, last touches first). Four encodings:
   cell+sym  cell with the same stage-0 pinning
 
 Each solve runs in a child process killed after CARVE_TIMEOUT seconds (default 30).
-Usage: carve_bench_encodings.py [quick|big|sizes]; sizes prints variable/clause counts only.
+Usage: carve_bench_encodings.py [quick|big|open|file|sizes]; sizes prints variable/clause counts only;
+file reads the cases from CARVE_CASES (the format topo/carve_encoding_cases.txt uses).
 """
 import os
 import random
@@ -98,7 +99,9 @@ def build_cell(R, C, shapes, sym=False):
     clauses = []
     for k in range(n):
         # exactly one anchor per stage
-        clauses += CardEnc.equals([a[k, i] for i in range(len(pos[k]))], 1, vpool=pool, encoding=EncType.seqcounter).clauses
+        clauses += CardEnc.equals(
+            [a[k, i] for i in range(len(pos[k]))], 1, vpool=pool, encoding=EncType.seqcounter
+        ).clauses
         covering = {b: [] for b in range(R * C)}
         for i, m in enumerate(pos[k]):
             for b in range(R * C):
@@ -151,7 +154,7 @@ def build_sub(R, C, shapes, sym=False, bidir=True, touch="port"):
     for b in range(N):
         clauses += _amo([x[v, b] for v in subs if (v, b) in x], pool)
     # rigidity: (k,i,j)@(r,c) -> (k,i,j+1)@(r,c+1) and (k,i+1,j)@(r+1,c)
-    for (k, i, j) in subs:
+    for k, i, j in subs:
         h, w = shapes[k]
         for b in allowed[(k, i, j)]:
             r, c = divmod(b, C)
@@ -180,7 +183,9 @@ def build_sub(R, C, shapes, sym=False, bidir=True, touch="port"):
             port = {mine[0]: None}
         else:
             port = {v: pool.id(("port", v)) for v in mine}
-            clauses += CardEnc.equals(list(port.values()), 1, vpool=pool, encoding=EncType.pairwise if len(mine) <= 6 else EncType.seqcounter).clauses
+            clauses += CardEnc.equals(
+                list(port.values()), 1, vpool=pool, encoding=EncType.pairwise if len(mine) <= 6 else EncType.seqcounter
+            ).clauses
         for v in mine:
             for b in allowed[v]:
                 head = [-x[v, b]] if port[v] is None else [-port[v], -x[v, b]]
@@ -248,7 +253,9 @@ def run(name, R, C, shapes):
             res.append(f"{label} ???  >{TIMEOUT:.0f}s      ")
         else:
             # solve time excludes clause construction; (+b) is the Python build time
-            res.append(f"{label} {'yes' if ok else 'no '} {dt - build:7.3f}s" + (f" (+{build:.1f}b)" if build else "       "))
+            res.append(
+                f"{label} {'yes' if ok else 'no '} {dt - build:7.3f}s" + (f" (+{build:.1f}b)" if build else "       ")
+            )
     area = sum(h * w for h, w in shapes)
     print(f"{name:<40} {area:>3}/{R*C:<3} | " + " | ".join(res), flush=True)
 
@@ -259,7 +266,9 @@ def sizes(name, R, C, shapes):
         t0 = time.perf_counter()
         pool, clauses = b(R, C, shapes)
         lits = sum(len(c) for c in clauses)
-        out.append(f"{label} vars {pool.top:>6} clauses {len(clauses):>7} lits {lits:>8} build {time.perf_counter()-t0:5.2f}s")
+        out.append(
+            f"{label} vars {pool.top:>6} clauses {len(clauses):>7} lits {lits:>8} build {time.perf_counter()-t0:5.2f}s"
+        )
     print(f"{name:<40} | " + " | ".join(out), flush=True)
 
 
@@ -298,19 +307,24 @@ def wide_random_cases(R, C, seed, count, target_fill=0.95):
     return cases
 
 
-QUICK = [
-    ("8x8: 1x1, 14x 2x2, 1x1", 8, 8, [S1] + [B] * 14 + [S1]),
-    ("8x8: 1x1, 15x 2x2, 3x 1x1 (fills)", 8, 8, [S1] + [B] * 15 + [S1] * 3),
-    ("8x8 ring of 64 x 1x1 (fills)", 8, 8, [S1] * 64),
-    ("8x16: 1x1, 30x 2x2, 1x1", 8, 16, [S1] + [B] * 30 + [S1]),
-    ("8x16: 1x1, 2x4 x14, 2x2 x3, 1x1 (fills)", 8, 16, [S1] + [W] * 14 + [B] * 3 + [S1] * 2),
-    ("8x16 ring of 128 x 1x1 (fills)", 8, 16, [S1] * 128),
-    ("16x16: 1x1, 62x 2x2, 1x1", 16, 16, [S1] + [B] * 62 + [S1]),
-] + [c for c in repo_random_cases() if c[1] == 8 and c[2] == 8] + wide_random_cases(8, 16, 1, 3) + [
-    # infeasible references
-    ("7x7: 1x1, 10x 2x2 (only 9 fit)", 7, 7, [S1] + [B] * 10),
-    ("5x5 ring of 25 x 1x1 (odd: none)", 5, 5, [S1] * 25),
-]
+QUICK = (
+    [
+        ("8x8: 1x1, 14x 2x2, 1x1", 8, 8, [S1] + [B] * 14 + [S1]),
+        ("8x8: 1x1, 15x 2x2, 3x 1x1 (fills)", 8, 8, [S1] + [B] * 15 + [S1] * 3),
+        ("8x8 ring of 64 x 1x1 (fills)", 8, 8, [S1] * 64),
+        ("8x16: 1x1, 30x 2x2, 1x1", 8, 16, [S1] + [B] * 30 + [S1]),
+        ("8x16: 1x1, 2x4 x14, 2x2 x3, 1x1 (fills)", 8, 16, [S1] + [W] * 14 + [B] * 3 + [S1] * 2),
+        ("8x16 ring of 128 x 1x1 (fills)", 8, 16, [S1] * 128),
+        ("16x16: 1x1, 62x 2x2, 1x1", 16, 16, [S1] + [B] * 62 + [S1]),
+    ]
+    + [c for c in repo_random_cases() if c[1] == 8 and c[2] == 8]
+    + wide_random_cases(8, 16, 1, 3)
+    + [
+        # infeasible references
+        ("7x7: 1x1, 10x 2x2 (only 9 fit)", 7, 7, [S1] + [B] * 10),
+        ("5x5 ring of 25 x 1x1 (odd: none)", 5, 5, [S1] * 25),
+    ]
+)
 
 BIG = [
     ("8x8: 1x1, 2x4 x4, 2x2 x7", 8, 8, [S1] + [W] * 4 + [B] * 7),
@@ -320,13 +334,21 @@ BIG = [
 
 # The quick cases every solver capped at 60 s: rerun with a long cap to learn whether they are
 # feasible at all (CARVE_TIMEOUT=600 CARVE_ENCODINGS=dfs,pos carve_bench_encodings.py open).
-OPEN = [c for c in QUICK if c[0] in ("random 8x8: 30 stages", "random 8x8: 34 stages") or c[0].startswith("random 8x16")]
+OPEN = [
+    c for c in QUICK if c[0] in ("random 8x8: 30 stages", "random 8x8: 34 stages") or c[0].startswith("random 8x16")
+]
 
 
 def main(argv):
     global ENCODINGS
     mode = argv[0] if argv else "quick"
     cases = {"big": BIG, "open": OPEN}.get(mode, QUICK)
+    if mode == "file":  # CARVE_CASES: name<TAB>R<TAB>C<TAB>h w;h w;... (shared with topo/carve_footprint_bench.cpp)
+        cases = []
+        for line in open(os.environ["CARVE_CASES"]):
+            if line.strip():
+                name, R, C, sh = line.rstrip("\n").split("\t")
+                cases.append((name, int(R), int(C), [tuple(map(int, p.split())) for p in sh.split(";")]))
     only = os.environ.get("CARVE_ENCODINGS")
     if only:
         ENCODINGS = [(l, f) for l, f in ENCODINGS if l in only.split(",")]

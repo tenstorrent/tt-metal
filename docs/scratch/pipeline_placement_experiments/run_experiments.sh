@@ -4,7 +4,8 @@
 #   ./run_experiments.sh setup       # venv + generated protobuf module + MGD list (once)
 #   ./run_experiments.sh quick       # every experiment at its small size (a few minutes)
 #   ./run_experiments.sh <name>      # one experiment: tier_b | tier_b_designed | tier_b_timing |
-#                                    #   carve | carve_repo | planner | resolver | resolver_sat
+#                                    #   carve | carve_repo | planner | resolver | resolver_sat |
+#                                    #   topo [all|multi|multi2|slots] | carve_footprint [quick|multi|repo|all]
 #   ./run_experiments.sh <name> big  # carve, carve_repo, resolver, resolver_sat: the slow cases.
 #                                    #   Minutes to hours; run on a spare machine, not a shared box.
 #
@@ -98,6 +99,22 @@ topo() {
     fi
 }
 
+# The carve as a footprint mapping through solve_topology_mapping (Auto, SAT, DFS): one global node
+# per stage-shape position, the pipeline as the target, a resource constraint for disjointness.
+# Built like topo_solver_bench; leaves the topo group untouched so the two can be compared.
+carve_footprint() {
+    local bdir="${TOPO_BUILD_DIR:-$TT_METAL_HOME/build_RelWithDebInfo}"
+    local group="${1:-quick}"  # quick | multi | repo | all | multi2 | file
+    # file: the carve_bench_encodings.py QUICK cases, exported once to topo/carve_encoding_cases.txt
+    # (regenerate with: cd carve && ../.out/venv/bin/python -c 'from carve_bench_encodings import QUICK;
+    #  [print(n, R, C, ";".join(f"{h} {w}" for h, w in s), sep="\t") for n, R, C, s in QUICK]').
+    # CARVE_CONFLICT_CAP=2000000000 removes the SAT conflict budget so a "no" is a proof (README 5).
+    export CARVE_CASES="${CARVE_CASES:-$HERE/topo/carve_encoding_cases.txt}"
+    log "carve as footprint mapping, group $group (${TOPO_TIMEOUT:-20} s cap per solve; engines ${CARVE_ENGINES:-auto,sat,dfs}; SAT budget ${CARVE_CONFLICT_CAP:-default})"
+    "$HERE/topo/make_topo_bench.sh" "$bdir" "$OUT/carve_footprint_bench" carve_footprint_bench.cpp
+    "$OUT/carve_footprint_bench" "$group" | grep -v "| info" | tee "$OUT/carve_footprint_$group.txt"
+}
+
 planner() {
     : "${TT_BLAZE:?set TT_BLAZE to a tt-blaze checkout}"
     log "Blaze carve planner vs a brute-force ring of rectangles (TT_BLAZE=$TT_BLAZE)"
@@ -169,8 +186,9 @@ case "$cmd" in
         need_setup
         "$cmd" "${@:2}"
         ;;
+    carve_footprint) "$cmd" "${@:2}" ;;  # C++ only, no venv needed
     *)
-        sed -n '2,12p' "$0"
+        sed -n '2,13p' "$0"
         exit 1
         ;;
 esac

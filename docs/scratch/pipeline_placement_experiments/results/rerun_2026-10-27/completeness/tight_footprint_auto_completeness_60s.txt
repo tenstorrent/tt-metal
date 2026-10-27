@@ -1,0 +1,21 @@
+carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap 60 s per solve; brute force on <= 8 stages; SAT conflict cap 2000000000
+no-1x1 8x4 fill95 s20: 7 stages 32/32             32/32    56 pos | brute yes | auto(sat) yes    0.005s | sat -      0.000s | dfs -      0.000s
+no-1x1 2x16 fill95 s21: 9 stages 32/32            32/32    74 pos | brute -   | auto(sat) no     0.001s | sat -      0.000s | dfs -      0.000s
+no-1x1 4x8 ring of 16 x 1x2                       32/32    28 pos | brute -   | auto(sat) yes    0.002s | sat -      0.000s | dfs -      0.000s
+no-1x1 4x8 ring of 16 x 2x1                       32/32    24 pos | brute -   | auto(sat) yes    0.002s | sat -      0.000s | dfs -      0.000s
+no-1x1 4x8 ring: 8x 1x2, 8x 2x1                   32/32    52 pos | brute -   | auto(sat) yes    0.002s | sat -      0.000s | dfs -      0.000s
+no-1x1 8x8 ring of 32 x 1x2                       64/64    56 pos | brute -   | auto(sat) yes    0.009s | sat -      0.000s | dfs -      0.000s
+no-1x1 8x8 ring of 16 x 2x2                       64/64    49 pos | brute -   | auto(sat) yes    0.005s | sat -      0.000s | dfs -      0.000s
+no-1x1 8x8 ring: 8x 2x2, 16x 1x2                  64/64   105 pos | brute -   | auto(sat) yes    0.030s | sat -      0.000s | dfs -      0.000s
+no-1x1 8x16 ring of 64 x 1x2                     128/128  120 pos | brute -   | auto(sat) yes    0.044s | sat -      0.000s | dfs -      0.000s
+no-1x1 8x16 ring of 32 x 2x2                     128/128  105 pos | brute -   | auto(sat) yes    0.024s | sat -      0.000s | dfs -      0.000s
+no-1x1 16x16 ring of 64 x 2x2                    256/256  225 pos | brute -   | auto(sat) yes    0.127s | sat -      0.000s | dfs -      0.000s
+no-1x1 16x16 ring of 128 x 1x2                   256/256  240 pos | brute -   | auto(sat) yes    0.233s | sat -      0.000s | dfs -      0.000s
+no-1x1 5x8 ring of 20 x 1x2 (odd rows)            40/40    35 pos | brute -   | auto(sat) yes    0.003s | sat -      0.000s | dfs -      0.000s
+8x8: 1x1, 15x 2x2, 3x 1x1 (fills)                 64/64   113 pos | brute -   | auto(sat) yes    0.026s | sat -      0.000s | dfs -      0.000s
+8x8 ring of 64 x 1x1 (fills)                      64/64    64 pos | brute -   | auto(sat) yes    0.014s | sat -      0.000s | dfs -      0.000s
+8x16 ring of 128 x 1x1 (fills)                   128/128  128 pos | brute -   | auto(sat) yes    0.068s | sat -      0.000s | dfs -      0.000s
+random 8x8: 30 stages                             64/64   225 pos | brute -   | auto(sat) yes    0.600s | sat -      0.000s | dfs -      0.000s
+random 8x8: 29 stages                             64/64   225 pos | brute -   | auto(sat) yes    0.123s | sat -      0.000s | dfs -      0.000s
+random 8x8: 34 stages                             64/64   225 pos | brute -   | auto(sat) yes    0.037s | sat -      0.000s | dfs -      0.000s
+random 8x8: 37 stages                             64/64   225 pos | brute -   | auto(sat) yes    0.105s | sat -      0.000s | dfs -      0.000s

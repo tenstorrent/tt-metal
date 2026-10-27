@@ -1,0 +1,15 @@
+engines: topo-sat, topo-dfs (solve_topology_mapping) on the slots of each carve; cap 60 s per solve
+8x8: 1x1, 14x 2x2, 1x1                                                  16 stages/ 16 slots | topo-auto yes    0.000s | topo-sat -      0.000s | topo-dfs -      0.000s
+8x8: 1x1, 15x 2x2, 3x 1x1 (fills)                                       19 stages/ 19 slots | topo-auto yes    0.000s | topo-sat -      0.000s | topo-dfs -      0.000s
+8x8 ring of 64 x 1x1 (fills)                                            64 stages/ 64 slots | topo-auto yes    0.013s | topo-sat -      0.000s | topo-dfs -      0.000s
+8x16: 1x1, 30x 2x2, 1x1                                                 32 stages/ 32 slots | topo-auto yes    0.003s | topo-sat -      0.000s | topo-dfs -      0.000s
+8x16: 1x1, 2x4 x14, 2x2 x3, 1x1 (fills)                                 20 stages/ 20 slots | topo-auto yes    0.000s | topo-sat -      0.000s | topo-dfs -      0.000s
+8x16 ring of 128 x 1x1 (fills)                                         128 stages/128 slots | topo-auto yes    0.059s | topo-sat -      0.000s | topo-dfs -      0.000s
+16x16: 1x1, 62x 2x2, 1x1                                                64 stages/ 64 slots | topo-auto yes    0.010s | topo-sat -      0.000s | topo-dfs -      0.000s
+random 8x8: 30 stages                                                   30 stages/ 30 slots | topo-auto yes    0.001s | topo-sat -      0.000s | topo-dfs -      0.000s
+random 8x8: 29 stages                                                   29 stages/ 29 slots | topo-auto yes    0.001s | topo-sat -      0.000s | topo-dfs -      0.000s
+random 8x8: 31 stages                                                   31 stages/ 31 slots | topo-auto yes    0.001s | topo-sat -      0.000s | topo-dfs -      0.000s
+random 8x8: 34 stages                                                   34 stages/ 34 slots | topo-auto yes    0.000s | topo-sat -      0.000s | topo-dfs -      0.000s
+random 8x8: 37 stages                                                   37 stages/ 37 slots | topo-auto yes    0.001s | topo-sat -      0.000s | topo-dfs -      0.000s
+random 8x16 s1.0: 37 stages                                             37 stages/ 37 slots | topo-auto yes    0.001s | topo-sat -      0.000s | topo-dfs -      0.000s
+random 8x16 s1.2: 32 stages                                             32 stages/ 32 slots | topo-auto yes    0.001s | topo-sat -      0.000s | topo-dfs -      0.000s

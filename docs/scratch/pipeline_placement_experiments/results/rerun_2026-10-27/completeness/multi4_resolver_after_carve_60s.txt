@@ -1,0 +1,23 @@
+engine: pipeline_builder.cpp resolver on the slots of each footprint carve; cap 60 s per solve
+no-1x1 domino 2 meshes 4x8, 2 cables/pair, 32 stages 64/64, seed 0      32 stages | resolver-after-carve yes    0.002s
+no-1x1 domino 2 meshes 4x8, 2 cables/pair, 32 stages 64/64, seed 1      32 stages | resolver-after-carve yes    0.001s
+no-1x1 domino 2 meshes 4x8, 4 cables/pair, 32 stages 64/64, seed 0      32 stages | resolver-after-carve yes    0.001s
+no-1x1 domino 2 meshes 4x8, 4 cables/pair, 32 stages 64/64, seed 1      32 stages | resolver-after-carve yes    0.001s
+no-1x1 domino 4 meshes 4x8, 2 cables/pair, 64 stages 128/128, seed 1    64 stages | resolver-after-carve yes    0.005s
+no-1x1 domino 4 meshes 4x8, 4 cables/pair, 64 stages 128/128, seed 0    64 stages | resolver-after-carve yes    0.004s
+no-1x1 domino 4 meshes 4x8, 4 cables/pair, 64 stages 128/128, seed 1    64 stages | resolver-after-carve yes    0.004s
+no-1x1 domino 8 meshes 4x8, 4 cables/pair, 128 stages 256/256, seed 0  128 stages | resolver-after-carve yes    0.030s
+no-1x1 domino 8 meshes 4x8, 4 cables/pair, 128 stages 256/256, seed 1  128 stages | resolver-after-carve yes    0.036s
+no-1x1 mixed 2 meshes 4x8, 1 cables/pair, 15 stages 60/64, seed 0       15 stages | resolver-after-carve yes    0.000s
+no-1x1 mixed 2 meshes 4x8, 2 cables/pair, 17 stages 58/64, seed 0       17 stages | resolver-after-carve yes    0.000s
+no-1x1 mixed 2 meshes 4x8, 2 cables/pair, 17 stages 58/64, seed 1       17 stages | resolver-after-carve yes    0.001s
+no-1x1 mixed 2 meshes 4x8, 4 cables/pair, 13 stages 58/64, seed 0       13 stages | resolver-after-carve yes    0.000s
+no-1x1 mixed 2 meshes 4x8, 4 cables/pair, 19 stages 60/64, seed 1       19 stages | resolver-after-carve yes    0.001s
+no-1x1 mixed 4 meshes 4x8, 1 cables/pair, 30 stages 118/128, seed 0     30 stages | resolver-after-carve yes    0.001s
+no-1x1 mixed 4 meshes 4x8, 1 cables/pair, 26 stages 118/128, seed 1     26 stages | resolver-after-carve yes    0.000s
+no-1x1 mixed 4 meshes 4x8, 2 cables/pair, 30 stages 118/128, seed 0     30 stages | resolver-after-carve yes    0.002s
+no-1x1 mixed 4 meshes 4x8, 2 cables/pair, 28 stages 116/128, seed 1     28 stages | resolver-after-carve yes    0.001s
+no-1x1 mixed 4 meshes 4x8, 4 cables/pair, 30 stages 122/128, seed 0     30 stages | resolver-after-carve yes    0.001s
+no-1x1 mixed 4 meshes 4x8, 4 cables/pair, 30 stages 116/128, seed 1     30 stages | resolver-after-carve yes    0.001s
+no-1x1 mixed 8 meshes 4x8, 4 cables/pair, 62 stages 232/256, seed 0     62 stages | resolver-after-carve yes    0.004s
+no-1x1 mixed 8 meshes 4x8, 4 cables/pair, 56 stages 232/256, seed 1     56 stages | resolver-after-carve yes    0.003s

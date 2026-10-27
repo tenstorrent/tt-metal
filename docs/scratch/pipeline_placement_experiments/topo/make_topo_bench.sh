@@ -6,14 +6,16 @@
 # MeshGraph and the PSD are never called by the benchmark, so they are dropped by --gc-sections
 # instead of being linked against the library.
 #
-# Usage: make_topo_bench.sh <build_dir> <output_binary>
+# Usage: make_topo_bench.sh <build_dir> <output_binary> [source.cpp]
 #   <build_dir> supplies third_party/libcadical.a (RelWithDebInfo/Release: optimized).
+#   [source.cpp] defaults to topo_solver_bench.cpp; carve_footprint_bench.cpp builds the same way.
 # Header-only dependencies: taken from the CPM cache when present, else from $TOPO_DEPS, a
 # directory holding checkouts of fmt (11.1.4), spdlog (v1.15.2), tt-logger (v1.1.8), enchantum
 # (8ca5b0e) and cadical (rel-2.2.1; header only). TT_METAL_HOME must point at the checkout.
 set -euo pipefail
 BUILD_DIR="${1:?build dir}"
 OUT_BIN="${2:?output binary}"
+SRC="${3:-topo_solver_bench.cpp}"
 : "${TT_METAL_HOME:?set TT_METAL_HOME}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPS="${TOPO_DEPS:-$HERE/../.out/deps}"
@@ -45,14 +47,15 @@ INC=(-I "$TT_METAL_HOME/tt_metal/api" -I "$TT_METAL_HOME/tt_stl" -I "$TT_METAL_H
 DEFS=(-DFMT_HEADER_ONLY -DSPDLOG_FMT_EXTERNAL)
 CXX="${CXX:-clang++-20}"
 OBJ="$(dirname "$OUT_BIN")/topo_obj"
+BENCH_OBJ="$OBJ/$(basename "$SRC" .cpp).o"
 mkdir -p "$OBJ"
 pids=()
 for f in topology_solver topology_solver_sat topology_solver_sat_solver; do
     "$CXX" -std=c++20 -O2 -ffunction-sections -fdata-sections -c "${DEFS[@]}" "${INC[@]}" -o "$OBJ/$f.o" "$TT_METAL_HOME/tt_metal/fabric/$f.cpp" &
     pids+=($!)
 done
-"$CXX" -std=c++20 -O2 -ffunction-sections -fdata-sections -c "${DEFS[@]}" "${INC[@]}" -o "$OBJ/bench.o" "$HERE/topo_solver_bench.cpp" &
+"$CXX" -std=c++20 -O2 -ffunction-sections -fdata-sections -c "${DEFS[@]}" "${INC[@]}" -o "$BENCH_OBJ" "$HERE/$SRC" &
 pids+=($!)
 for p in "${pids[@]}"; do wait "$p"; done
-"$CXX" -fuse-ld=lld -Wl,--gc-sections -o "$OUT_BIN" "$OBJ/bench.o" "$OBJ/topology_solver.o" "$OBJ/topology_solver_sat.o" "$OBJ/topology_solver_sat_solver.o" "$LIB" -lpthread
+"$CXX" -fuse-ld=lld -Wl,--gc-sections -o "$OUT_BIN" "$BENCH_OBJ" "$OBJ/topology_solver.o" "$OBJ/topology_solver_sat.o" "$OBJ/topology_solver_sat_solver.o" "$LIB" -lpthread
 echo "built $OUT_BIN"

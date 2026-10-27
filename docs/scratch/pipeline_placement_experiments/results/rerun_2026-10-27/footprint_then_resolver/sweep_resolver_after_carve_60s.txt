@@ -1,0 +1,23 @@
+engine: pipeline_builder.cpp resolver on the slots of each footprint carve; cap 60 s per solve
+sweep 4x8 fill60 s10: 8 stages 21/32                                     8 stages | resolver-after-carve yes    0.000s
+sweep 4x8 fill60 s11: 6 stages 21/32                                     6 stages | resolver-after-carve yes    0.000s
+sweep 4x8 fill80 s10: 10 stages 29/32                                   10 stages | resolver-after-carve yes    0.000s
+sweep 4x8 fill80 s11: 8 stages 27/32                                     8 stages | resolver-after-carve yes    0.000s
+sweep 4x8 fill95 s10: 11 stages 31/32                                   11 stages | resolver-after-carve yes    0.000s
+sweep 4x8 fill95 s11: 9 stages 29/32                                     9 stages | resolver-after-carve yes    0.000s
+sweep 8x4 fill60 s10: 8 stages 21/32                                     8 stages | resolver-after-carve yes    0.000s
+sweep 8x4 fill60 s11: 6 stages 21/32                                     6 stages | resolver-after-carve yes    0.000s
+sweep 8x4 fill80 s10: 10 stages 29/32                                   10 stages | resolver-after-carve yes    0.000s
+sweep 8x4 fill80 s11: 8 stages 27/32                                     8 stages | resolver-after-carve yes    0.000s
+sweep 8x4 fill95 s11: 9 stages 29/32                                     9 stages | resolver-after-carve yes    0.000s
+sweep 8x8 fill60 s10: 12 stages 39/64                                   12 stages | resolver-after-carve yes    0.000s
+sweep 8x8 fill60 s11: 12 stages 45/64                                   12 stages | resolver-after-carve yes    0.000s
+sweep 8x8 fill80 s10: 17 stages 52/64                                   17 stages | resolver-after-carve yes    0.000s
+sweep 8x8 fill80 s11: 15 stages 52/64                                   15 stages | resolver-after-carve yes    0.000s
+sweep 8x8 fill95 s11: 19 stages 61/64                                   19 stages | resolver-after-carve yes    0.000s
+sweep 8x16 fill60 s10: 26 stages 78/128                                 26 stages | resolver-after-carve yes    0.000s
+sweep 8x16 fill60 s11: 22 stages 81/128                                 22 stages | resolver-after-carve yes    0.001s
+sweep 8x16 fill80 s10: 33 stages 104/128                                33 stages | resolver-after-carve yes    0.001s
+sweep 8x16 fill80 s11: 28 stages 110/128                                28 stages | resolver-after-carve yes    0.001s
+sweep 8x16 fill95 s10: 36 stages 122/128                                36 stages | resolver-after-carve yes    0.001s
+sweep 8x16 fill95 s11: 30 stages 122/128                                30 stages | resolver-after-carve yes    0.001s

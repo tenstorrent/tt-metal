@@ -1,0 +1,19 @@
+encodings: ['dfs', 'dfs2', 'pos']  timeout 60s
+8x8: 1x1, 14x 2x2, 1x1                    58/64  | dfs yes   0.002s        | dfs2 yes   0.001s        | pos yes   0.010s (+0.0b)
+8x8: 1x1, 15x 2x2, 3x 1x1 (fills)         64/64  | dfs yes   0.171s        | dfs2 yes   0.247s        | pos yes   0.362s (+0.0b)
+8x8 ring of 64 x 1x1 (fills)              64/64  | dfs yes   0.003s        | dfs2 yes   0.003s        | pos yes   0.014s (+0.1b)
+8x16: 1x1, 30x 2x2, 1x1                  122/128 | dfs yes   0.015s        | dfs2 yes   0.004s        | pos yes   3.984s (+0.1b)
+8x16: 1x1, 2x4 x14, 2x2 x3, 1x1 (fills)  127/128 | dfs yes   9.910s        | dfs2 yes  37.776s        | pos yes   4.526s (+0.1b)
+8x16 ring of 128 x 1x1 (fills)           128/128 | dfs yes   0.010s        | dfs2 yes   0.013s        | pos yes   0.059s (+0.3b)
+16x16: 1x1, 62x 2x2, 1x1                 250/256 | dfs ???  >60s       | dfs2 ???  >60s       | pos yes   0.485s (+0.6b)
+random 8x8: 30 stages                     64/64  | dfs yes  35.733s        | dfs2 yes  36.184s        | pos yes  59.281s (+0.0b)
+random 8x8: 29 stages                     64/64  | dfs yes   3.241s        | dfs2 yes   0.020s        | pos yes  15.129s (+0.0b)
+random 8x8: 31 stages                     63/64  | dfs yes   1.809s        | dfs2 yes   0.129s        | pos yes   3.129s (+0.0b)
+random 8x8: 34 stages                     64/64  | dfs yes  43.702s        | dfs2 yes   0.159s        | pos yes  49.192s (+0.0b)
+random 8x8: 37 stages                     64/64  | dfs yes   0.067s        | dfs2 yes   1.378s        | pos yes   0.523s (+0.0b)
+random 8x16 s1.0: 37 stages              121/128 | dfs yes  41.053s        | dfs2 yes  29.959s        | pos yes  13.052s (+0.1b)
+random 8x16 s1.1: 32 stages              127/128 | dfs ???  >60s       | dfs2 ???  >60s       | pos ???  >60s
+random 8x16 s1.2: 32 stages              122/128 | dfs yes   0.079s        | dfs2 yes  11.244s        | pos yes  13.619s (+0.1b)
+7x7: 1x1, 10x 2x2 (only 9 fit)           lattice pre-check rejects: lattice 2x2: stages need 10 marked cells, grid has 9
+7x7: 1x1, 10x 2x2 (only 9 fit)            41/49  | dfs no    2.211s        | dfs2 no    0.001s        | pos no    1.910s (+0.0b)
+5x5 ring of 25 x 1x1 (odd: none)          25/25  | dfs no    0.621s        | dfs2 no    0.251s        | pos no    0.008s (+0.0b)

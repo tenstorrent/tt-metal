@@ -1,0 +1,9 @@
+4x4: 1x1, 3x 2x2 (blaze: no-cycle-13)	4 4		1 1;2 2;2 2;2 2	ring
+4x4: 1x1, 3x 2x2, 1x1	4 4		1 1;2 2;2 2;2 2;1 1	ring
+4x4: 1x1, 2x 2x2, 1x1	4 4		1 1;2 2;2 2;1 1	ring
+4x6: 1x1, 4x 2x2, 1x1 (blaze: no-alignment)	4 6		1 1;2 2;2 2;2 2;2 2;1 1	ring
+4x8: 1x1, 6x 2x2, 1x1 (blaze: no-alignment)	4 8		1 1;2 2;2 2;2 2;2 2;2 2;2 2;1 1	ring
+4x8: 1x1, 2x4, 2x4, 2x2, 1x1	4 8		1 1;2 4;2 4;2 2;1 1	ring
+5x5: 1x1, 5x 2x2 (only 4 fit)	5 5		1 1;2 2;2 2;2 2;2 2;2 2	ring
+6x6: 1x1, 9x 2x2 (area 37 > 36)	6 6		1 1;2 2;2 2;2 2;2 2;2 2;2 2;2 2;2 2;2 2	ring
+6x6 fork: r 1x1, r-a1-a2-r, r-b1-b2-r (2x2 branches)	6 6		1 1;2 2;2 2;2 2;2 2	other

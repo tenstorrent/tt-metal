@@ -1,0 +1,49 @@
+encodings: ['dfs', 'dfs2', 'pos']  timeout 60s
+no-1x1 4x8 fill60 s20: 3 stages 20/32     20/32  | dfs yes   0.000s        | dfs2 yes   0.000s        | pos yes   0.001s (+0.0b)
+no-1x1 4x8 fill60 s21: 5 stages 22/32     22/32  | dfs yes   0.001s        | dfs2 yes   0.000s        | pos yes   0.002s (+0.0b)
+no-1x1 4x8 fill80 s20: 6 stages 28/32     28/32  | dfs yes   0.001s        | dfs2 yes   0.000s        | pos yes   0.003s (+0.0b)
+no-1x1 4x8 fill80 s21: 6 stages 26/32     26/32  | dfs yes   0.001s        | dfs2 yes   0.000s        | pos yes   0.001s (+0.0b)
+no-1x1 4x8 fill95 s20: 7 stages 30/32     30/32  | dfs no    0.003s        | dfs2 no    0.002s        | pos no    0.009s (+0.0b)
+no-1x1 4x8 fill95 s21: 7 stages 30/32     30/32  | dfs yes   0.001s        | dfs2 yes   0.000s        | pos yes   0.008s (+0.0b)
+no-1x1 8x4 fill60 s20: 5 stages 24/32     24/32  | dfs no    0.003s        | dfs2 no    0.001s        | pos no    0.002s (+0.0b)
+no-1x1 8x4 fill60 s21: 4 stages 20/32     20/32  | dfs no    0.003s        | dfs2 no    0.001s        | pos no    0.001s (+0.0b)
+no-1x1 8x4 fill80 s20: 6 stages 28/32     28/32  | dfs no    0.002s        | dfs2 no    0.001s        | pos no    0.002s (+0.0b)
+no-1x1 8x4 fill80 s21: 5 stages 28/32     28/32  | dfs no    0.003s        | dfs2 no    0.001s        | pos no    0.001s (+0.0b)
+no-1x1 8x4 fill95 s20: 7 stages 32/32     32/32  | dfs yes   0.001s        | dfs2 yes   0.000s        | pos yes   0.001s (+0.0b)
+no-1x1 8x4 fill95 s21: 7 stages 32/32     32/32  | dfs no    0.003s        | dfs2 no    0.003s        | pos no    0.001s (+0.0b)
+no-1x1 2x16 fill60 s20: 5 stages 24/32    24/32  | dfs no    0.002s        | dfs2 no    0.001s        | pos no    0.001s (+0.0b)
+no-1x1 2x16 fill60 s21: 5 stages 22/32    22/32  | dfs no    0.001s        | dfs2 no    0.000s        | pos no    0.001s (+0.0b)
+no-1x1 2x16 fill80 s20: 6 stages 28/32    28/32  | dfs no    0.001s        | dfs2 no    0.001s        | pos no    0.002s (+0.0b)
+no-1x1 2x16 fill80 s21: 7 stages 26/32    26/32  | dfs no    0.001s        | dfs2 no    0.000s        | pos no    0.002s (+0.0b)
+no-1x1 2x16 fill95 s20: 7 stages 30/32    30/32  | dfs no    0.001s        | dfs2 no    0.001s        | pos no    0.002s (+0.0b)
+no-1x1 2x16 fill95 s21: 9 stages 32/32    32/32  | dfs no    0.001s        | dfs2 no    0.000s        | pos no    0.002s (+0.0b)
+no-1x1 8x8 fill60 s20: 11 stages 40/64    40/64  | dfs yes   0.003s        | dfs2 yes   0.001s        | pos yes   0.006s (+0.0b)
+no-1x1 8x8 fill60 s21: 9 stages 40/64     40/64  | dfs yes   0.002s        | dfs2 yes   0.001s        | pos yes   0.009s (+0.0b)
+no-1x1 8x8 fill80 s20: 14 stages 54/64    54/64  | dfs yes   0.008s        | dfs2 yes   0.014s        | pos yes   0.015s (+0.0b)
+no-1x1 8x8 fill80 s21: 12 stages 54/64    54/64  | dfs yes   0.013s        | dfs2 yes   0.005s        | pos yes   0.008s (+0.0b)
+no-1x1 8x8 fill95 s20: 16 stages 62/64    62/64  | dfs yes   1.473s        | dfs2 yes   2.118s        | pos yes   1.182s (+0.0b)
+no-1x1 8x8 fill95 s21: 15 stages 62/64    62/64  | dfs yes   0.018s        | dfs2 yes   0.002s        | pos yes   0.093s (+0.0b)
+no-1x1 8x16 fill60 s20: 20 stages 82/128  82/128 | dfs yes   0.015s        | dfs2 yes   0.004s        | pos yes   0.052s (+0.1b)
+no-1x1 8x16 fill60 s21: 22 stages 80/128  80/128 | dfs yes   0.736s        | dfs2 yes   0.004s        | pos yes   0.027s (+0.1b)
+no-1x1 8x16 fill80 s20: 24 stages 106/128 106/128 | dfs yes   0.026s        | dfs2 yes   0.004s        | pos yes   0.217s (+0.1b)
+no-1x1 8x16 fill80 s21: 28 stages 104/128 104/128 | dfs yes   2.614s        | dfs2 yes   0.005s        | pos yes   0.191s (+0.1b)
+no-1x1 8x16 fill95 s20: 30 stages 122/128 122/128 | dfs yes   5.033s        | dfs2 yes   0.265s        | pos yes   3.929s (+0.1b)
+no-1x1 8x16 fill95 s21: 32 stages 126/128 126/128 | dfs ???  >60s       | dfs2 ???  >60s       | pos ???  >60s
+no-1x1 4x8 ring of 16 x 1x2               32/32  | dfs yes   0.002s        | dfs2 yes   0.001s        | pos yes   0.025s (+0.0b)
+no-1x1 4x8 ring of 16 x 2x1               32/32  | dfs yes   0.001s        | dfs2 yes   0.001s        | pos yes   0.002s (+0.0b)
+no-1x1 4x8 ring: 8x 1x2, 8x 2x1           32/32  | dfs yes   0.014s        | dfs2 yes   0.003s        | pos yes   0.006s (+0.0b)
+no-1x1 8x8 ring of 32 x 1x2               64/64  | dfs yes   6.051s        | dfs2 yes   0.191s        | pos yes   1.484s (+0.0b)
+no-1x1 8x8 ring of 16 x 2x2               64/64  | dfs yes   0.008s        | dfs2 yes   0.002s        | pos yes   0.162s (+0.0b)
+no-1x1 8x8 ring: 8x 2x2, 16x 1x2          64/64  | dfs yes   0.041s        | dfs2 yes   0.002s        | pos yes   0.981s (+0.0b)
+no-1x1 8x8 ring: 4x 2x4, 8x 2x2, 8x 1x2  lattice pre-check rejects: lattice 1x2: stages need 40 marked cells, grid has 32
+no-1x1 8x8 ring: 4x 2x4, 8x 2x2, 8x 1x2   80/64  | dfs no    0.002s        | dfs2 no    0.001s        | pos no    2.073s (+0.0b)
+no-1x1 8x16 ring of 64 x 1x2             128/128 | dfs ???  >60s       | dfs2 ???  >60s       | pos ???  >60s
+no-1x1 8x16 ring of 32 x 2x2             128/128 | dfs yes   3.937s        | dfs2 yes   0.006s        | pos yes  10.047s (+0.1b)
+no-1x1 8x16 ring: 8x 2x4, 16x 2x2, 16x 1x2 lattice pre-check rejects: lattice 1x2: stages need 80 marked cells, grid has 64
+no-1x1 8x16 ring: 8x 2x4, 16x 2x2, 16x 1x2 160/128 | dfs no    0.006s        | dfs2 no    0.003s        | pos ???  >60s
+no-1x1 16x16 ring of 64 x 2x2            256/256 | dfs ???  >60s       | dfs2 ???  >60s       | pos ???  >60s
+no-1x1 16x16 ring of 128 x 1x2           256/256 | dfs ???  >60s       | dfs2 ???  >60s       | pos ???  >60s
+no-1x1 5x8 ring of 20 x 1x2 (odd rows)    40/40  | dfs yes   0.013s        | dfs2 yes   0.003s        | pos yes   0.030s (+0.0b)
+no-1x1 6x6 ring: 9x 2x2 (area 36, 3x3 of 2x2: odd cycle)  36/36  | dfs no    0.024s        | dfs2 no    0.011s        | pos no    0.145s (+0.0b)
+no-1x1 7x8: 14x 2x2 (only 12 fit)        lattice pre-check rejects: lattice 2x2: stages need 14 marked cells, grid has 12
+no-1x1 7x8: 14x 2x2 (only 12 fit)         56/56  | dfs no    1.193s        | dfs2 no    0.001s        | pos no   16.312s (+0.0b)

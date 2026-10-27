@@ -1,0 +1,10 @@
+engine: blaze carve planner (C++ port) then pipeline_builder.cpp resolver on its slots; cap 60 s per case
+4x8 ring of 32 x 1x1 (fills)                                            32 stages | planner yes    0.038s (188556 exp, 64 cyc) | resolver yes    0.001s | total    0.039s
+2x16 ring of 32 x 1x1 (fills)                                           32 stages | planner no     0.035s (200001 exp, 6 cyc) budget-exhausted | resolver -          | total    0.035s
+5x5 ring of 25 x 1x1 (odd: none)                                        25 stages | planner no     0.037s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.037s
+4x8: 1x1, 1x2 x6, 2x2 x4, 1x1                                           12 stages | planner no     0.020s (78239 exp, 64 cyc) no-alignment | resolver -          | total    0.020s
+8x4: 1x1, 2x1 x6, 2x2 x4, 1x1                                           12 stages | planner no     0.030s (152797 exp, 64 cyc) no-alignment | resolver -          | total    0.030s
+2x16: 1x1, 1x2 x15, 1x1                                                 17 stages | planner no     0.037s (200001 exp, 6 cyc) budget-exhausted | resolver -          | total    0.037s
+2x16: 1x1, 2x2 x7, 1x1 (fills 30/32)                                     9 stages | planner no     0.036s (200001 exp, 12 cyc) budget-exhausted | resolver -          | total    0.036s
+4x8: 2x4 x4 (fills, ring of 4)                                           4 stages | planner no     0.000s (0 exp, 0 cyc) input-infeasible | resolver -          | total    0.000s
+8x8: 1x1, 14x 2x2, 1x1                                                  16 stages | planner no     0.043s (200001 exp, 0 cyc) budget-exhausted | resolver -          | total    0.043s

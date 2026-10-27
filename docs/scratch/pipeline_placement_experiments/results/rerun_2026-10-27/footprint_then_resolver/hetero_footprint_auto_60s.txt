@@ -1,0 +1,13 @@
+carve as footprint mapping (solve_topology_mapping): engines auto, sat, dfs; cap 60 s per solve; brute force on <= 8 stages; SAT conflict cap 2000000000
+hetero 2 meshes 4x8, 2 cables/pair, 16 stages 56/64, seed 0  56/64   240 pos | brute -   | auto(sat) yes    0.026s | sat -      0.000s | dfs -      0.000s
+hetero 2 meshes 4x8, 2 cables/pair, 20 stages 56/64, seed 1  56/64   240 pos | brute -   | auto(sat) yes    0.007s | sat -      0.000s | dfs -      0.000s
+hetero 2 meshes 4x8, 2 cables/pair, 23 stages 58/64, seed 2  58/64   210 pos | brute -   | auto(sat) yes    0.246s | sat -      0.000s | dfs -      0.000s
+hetero 2 meshes 4x8, 4 cables/pair, 12 stages 58/64, seed 0  58/64   176 pos | brute -   | auto(sat) yes    0.022s | sat -      0.000s | dfs -      0.000s
+hetero 2 meshes 4x8, 4 cables/pair, 19 stages 57/64, seed 1  57/64   240 pos | brute -   | auto(sat) yes    0.007s | sat -      0.000s | dfs -      0.000s
+hetero 2 meshes 4x8, 4 cables/pair, 13 stages 58/64, seed 2  58/64   240 pos | brute -   | auto(sat) yes    0.004s | sat -      0.000s | dfs -      0.000s
+hetero 4 meshes 4x8, 2 cables/pair, 34 stages 116/128, seed 0 116/128  480 pos | brute -   | auto(sat) yes    0.834s | sat -      0.000s | dfs -      0.000s
+hetero 4 meshes 4x8, 2 cables/pair, 34 stages 116/128, seed 1 116/128  480 pos | brute -   | auto(sat) yes    1.345s | sat -      0.000s | dfs -      0.000s
+hetero 4 meshes 4x8, 2 cables/pair, 34 stages 116/128, seed 2 116/128  480 pos | brute -   | auto(sat) yes    2.201s | sat -      0.000s | dfs -      0.000s
+hetero 4 meshes 4x8, 4 cables/pair, 33 stages 111/128, seed 0 111/128  480 pos | brute -   | auto(sat) yes    0.458s | sat -      0.000s | dfs -      0.000s
+hetero 4 meshes 4x8, 4 cables/pair, 28 stages 113/128, seed 1 113/128  480 pos | brute -   | auto(sat) yes    0.440s | sat -      0.000s | dfs -      0.000s
+hetero 4 meshes 4x8, 4 cables/pair, 29 stages 111/128, seed 2 111/128  480 pos | brute -   | auto(sat) yes    0.126s | sat -      0.000s | dfs -      0.000s

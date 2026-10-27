@@ -1,0 +1,6 @@
+engine: blaze carve planner (C++ port) then pipeline_builder.cpp resolver on its slots; cap 60 s per case
+mixed4 (P,R): cables A0-B0, A2-B2                                        4 stages | planner yes    0.000s (0 exp, 1 cyc) | resolver yes    0.000s | total    0.000s
+mixed4 (P,Q): cables A0-B0, A3-B3                                        4 stages | planner no     0.000s (0 exp, 0 cyc) no-cycle-of-length-6 | resolver -          | total    0.000s
+mixed4 Case B: crossings only on A0-B0                                   4 stages | planner no     0.000s (0 exp, 0 cyc) no-cycle-of-length-6 | resolver -          | total    0.000s
+two 4x4: 1x1, 6x 2x2, 1x1, cables (0,0),(0,1)                            8 stages | planner no     0.004s (8974 exp, 64 cyc) no-alignment | resolver -          | total    0.004s
+two 4x4 ring of 32 x 1x1, cables (0,0),(0,1)                            32 stages | planner yes    0.033s (199411 exp, 64 cyc) | resolver yes    0.001s | total    0.034s

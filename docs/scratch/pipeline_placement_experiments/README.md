@@ -35,6 +35,7 @@ cd docs/scratch/pipeline_placement_experiments
 | `resolver` | `resolver/bench.cpp`: the resolver search, groups `feas` and `cables` | about 6 s |
 | `resolver_sat` | `resolver/sat.cpp`: a CaDiCaL encoding of the same placement | needs a tt-metal build for CaDiCaL; capped at 60 s |
 | `topo` | `topo/`: the same instances through the resolver and through `solve_topology_mapping` (SAT and DFS engines): single-slice rings (`all`), rings and chains over 2 to 8 meshes of 32 ranks (`multi2`), and pre-carved slots with 2x2, 2x4 and mixed stages (`slots`) | the solver half is built by `topo/make_topo_bench.sh` from the solver's own sources plus `libcadical.a` from a tt-metal build (`TOPO_BUILD_DIR`), with the header-only deps from the CPM cache or `TOPO_DEPS`; 60 s cap per solve, `all` about 25 min, `multi2` about 40 min, `slots` seconds |
+| `carve_footprint` | `topo/carve_footprint_bench.cpp`: the carve as a footprint mapping through `solve_topology_mapping` (Auto, SAT and DFS engines), no solver change; groups `quick` (the rings blaze rejects, infeasible counting and area cases, a fork), `multi` (`mixed4` cablings, two 4x4 meshes), `repo` (repo slice grids from `carve_repo`), `all`, `multi2` (the same 32-rank multi-mesh instances as `topo multi2`), `file` (the Python `carve_bench_encodings` cases from `topo/carve_encoding_cases.txt`, so the Python tables and this one are the same instances) | built like `topo` (`make_topo_bench.sh <build> <bin> carve_footprint_bench.cpp`); no venv needed; `TOPO_TIMEOUT` per solve (default 20 s); `CARVE_ENGINES=sat,dfs` picks engines; `CARVE_CONFLICT_CAP=2000000000` removes the SAT conflict budget so a "no" is a proof (see section 5); `quick` and `multi` about a second each, `file` and `multi2` up to 40 min at a 60 s cap |
 
 The folder is self-contained and can be copied anywhere. Outside a tt-metal checkout, set
 `TT_METAL_HOME` to one (it supplies the MGD files and `mesh_graph_descriptor.proto`). Needs
@@ -190,11 +191,121 @@ path through every slot between two given slots exists has a constant-time answe
 Papadimitriou and Szwarcfiter, 1982): mostly a colour check, with exceptions for grids one to
 three wide.
 
+## 5. The carve as a footprint mapping (`carve_footprint`)
+
+**What is checked.** Whether the carve can run on tt-metal's own topology solver unchanged, the
+way the mesh seating does: one **global node per position** (a place one stage shape fits inside
+one mesh, in host slices), an edge between two positions that do not overlap and border each
+other (grid inside a mesh, or a cable between meshes), and the **pipeline as the target graph**
+(ring, chain or fork). `add_required_constraint` keeps each stage on positions of its own shape;
+`add_resource_constraint` (position to covered slices) keeps chosen positions disjoint. A mapping
+is then exactly a carve. Every returned carve is re-checked independently (own shape, disjoint,
+every pipeline edge touching), and on cases with at most 8 stages the yes/no is compared with a
+brute-force search; a disagreement prints `MISMATCH`.
+
+**How it differs from `topo`.** `topo_solver_bench.cpp` maps one node per slice of every stage
+with fixed ports, which is exact only for single-slice stages. This encoding is exact for
+multi-slice stages, forks and several meshes. Both stay runnable for comparison:
+
+```bash
+./run_experiments.sh topo slots            # the old encoding, pre-carved slots
+./run_experiments.sh carve_footprint all   # this one; repo is the comparison with carve_repo
+```
+
+**First result** (`results/rerun_2026-10-23/carve_footprint_quick_multi_10s_cap.txt`, 10 s cap):
+every case decided by all three engines in under 0.1 s and in agreement with brute force,
+including the three rings blaze's planner rejects (4x4 13-slice, 4x6, 4x8), the `mixed4`
+cablings from the design doc ((P,R) accept, (P,Q) and Case B reject), a 6x6 fork and two 4x4
+meshes joined by cables. `Auto` picked SAT on every case: `topology_mapping_should_use_sat_engine`
+(`topology_solver.tpp`) returns SAT whenever a resource constraint is set, unless DFS is forced,
+so for this encoding `Auto` means SAT. The `dfs` column is the forced DFS engine.
+
+**Against the Python encodings and the C++ engines** (60 s cap, files
+`carve_footprint_encodings_cases_*`, `carve_footprint_repo_*`, `carve_footprint_multi2_*`; the
+tables are in the report, section 3b "The carve as a footprint mapping"). The footprint SAT is
+the fastest carve solver measured: 20x faster than the best Python column on the 8x8 fill, 25x
+on the 16x16 ring of 62 2x2 stages, first to solve the 8x16 2x4 fill (2.8 s) and the 8x16
+random 37-stage case (5.6 s) under 60 s, and 3x to 40x faster than the per-slice encoding on
+the multi-mesh rings it solves. It loses to `dfs2` on two random 8x8 fills and caps on two
+multi-mesh cases the per-slice SAT finished. Nothing finishes the 1-cable 4-mesh rings or the
+8-mesh rings.
+
+**A SAT "no" is undecided unless the budget is removed.** The solver runs every SAT solve under
+a conflict budget (`kDefaultConflictCap`, 300k in `topology_solver_sat.cpp`) and reports a
+budget-exhausted solve as "no mapping". The first 60 s run returned "no" on three cases the
+Python DFS had carved. `CARVE_CONFLICT_CAP=2000000000` runs the solve through
+`TopologyMappingEnumerationSession`, the only API that takes the budget, and those cases become
+"cap" (undecided). The `*_sat_unlimited_budget.txt` files are the ones to read for proofs; any
+integration must treat budget exhaustion as unknown, which today needs the session API or a new
+flag on `MappingResult`.
+
+**Which is best** (the 2026-10-27 rerun, `results/rerun_2026-10-27/`, budget removed, 60 s cap;
+600 s results in brackets). Seconds:
+
+| Case | Best Python carve | Resolver | Per-slice SAT | Footprint SAT | Footprint DFS |
+|---|---|---|---|---|---|
+| 8x8 fill, 15x 2x2 | 4.0 | – | – | **0.22** | 0.59 |
+| 16x16, 62x 2x2 | 3.4 | – | – | **0.13** | cap |
+| 8x16 fill, 14x 2x4 | cap | – | – | **2.8** | cap |
+| random 8x16, 37 stages | cap [183] | – | – | **5.6** | 25 |
+| random 8x8, 29 stages | **0.6** (`dfs2`) | – | – | cap [63] | cap |
+| repo grids | – | – | – | **≤ 0.02** | ≤ 4.4 |
+| sweep, 60 to 95% fill | ≤ 0.02 (`dfs2`) | – | – | ≤ 0.03; 8x16 at 95%: 9 to 14 | caps on 3 |
+| heterogeneous, 4 meshes, 28 to 34 stages | – | – | – | **0.13 to 2.2** | caps on 5 of 6 |
+| 2 meshes, 4 cables/pair, ring of 64 | – | 0.2 to 1.1 | 0.4 to 0.5 | **0.015** | 0.09 to 0.44 |
+| 4 meshes, 4 cables/pair, ring of 128, seeds 0 / 1 | – | cap | 3.0 / **22** | **0.071** / cap [66] | cap |
+| 4 meshes, 4 cables/pair, chain of 128 | – | cap | **7.4** | cap [170] | cap |
+| 1-cable rings, fully used (infeasible) | – | cap | cap | cap [cap] | cap |
+
+The footprint SAT is the one to use: fastest on every designed, repo-shaped, heterogeneous and
+partly used multi-mesh case. Three things go with it. First, the colour test
+(`multi2_colour.txt`, `multi3_colour.txt`) proves every capped 1-cable case infeasible, and no
+solver does, so it runs before the solve. Second, an exhausted conflict budget has to come back as
+"undecided", never "reject"; today it is reported as "no mapping", so this needs a flag on
+`MappingResult` (design doc P5). Third, the resolver runs afterwards for
+links and core slots; at slot level it and the topology solver are both fast
+(`resolver_slots2_60s.txt`, `topo_slots2_60s_sat_unlimited.txt`). `dfs2` remains faster on
+random tight single-mesh fills, so it is the candidate second engine if such fills occur. The
+design doc, section 4.2 "Which approach is fastest", has the full table.
+
+## 6. 2026-10-27: verification, sweeps, no 1x1, the carve-requiring comparison
+
+Report section 5. New files under `topo/` and `results/rerun_2026-10-27/`:
+
+| File | What |
+|---|---|
+| `topo/carve_planner_port.hpp` | C++ port of tt-blaze's ring carve planner (`plan_ring_carve`), same algorithm and budgets |
+| `topo/resolver_same_cases.cpp` modes `planner`, `plan` | planner then resolver on its slots (`CARVE_CASES=<casedefs>`, `PLANNER_PLAN_OUT`, `PLANNER_ALLOW_WIDE_STAGE0=1`); resolver on a carve's slots (`CARVE_PLAN=<plan>`) |
+| `topo/topo_solver_bench.cpp` mode `plan`, `TOPO_ENGINES`, `TOPO_CONFLICT_CAP` | topology solver on a carve's slots; Auto column; unlimited SAT budget; DFS limit as `lim` |
+| `topo/carve_footprint_bench.cpp` modes `multi3`, `multi4`, `hetero`, `rings`, `file`; `CARVE_CONFLICT_CAP`, `CARVE_ENGINES`, `CARVE_ONLY`, `CARVE_PLAN_OUT`, `CARVE_CASE_OUT` | the wider groups; carve export for the resolver; case export for the planner harness |
+| `topo/carve_sweep_cases.txt`, `topo/carve_min2_cases.txt`, `topo/carve_tight_cases.txt` | the heterogeneous, no-1x1 and tight single-mesh case lists (format of `carve_encoding_cases.txt`; Python reads them with `carve_bench_encodings.py file`) |
+| `topo/multi_colour_test.py` | exact feasibility of the tight 1-cable multi-mesh cases by the colour test |
+| `topo/case_catalogue.py`, `topo/carve_comparison.py` | the two generated tables in the results directory |
+| `topo/resource_completeness.patch` | the env-gated encoder change (`TT_TOPOLOGY_SAT_RESOURCE_COMPLETENESS=1`), not applied to the tree by the commit |
+
+Every harness re-checks every returned solution (`BAD` on failure), every SAT run has the conflict
+budget removed, and a DFS call-limit failure prints as `lim`. To reproduce the carve-requiring
+comparison from a tt-metal checkout with `libcadical.a` in a build:
+
+```bash
+cd docs/scratch/pipeline_placement_experiments && export TT_METAL_HOME=$PWD/../../..
+B=$TT_METAL_HOME/build_RelWithDebInfo
+topo/make_topo_bench.sh $B .out/fp carve_footprint_bench.cpp; topo/make_topo_bench.sh $B .out/topo
+g++ -O2 -std=c++20 -I .out/resolver -I topo -o .out/res topo/resolver_same_cases.cpp   # after ./run_experiments.sh resolver (extracts search_body.inc)
+export CARVE_ENGINES=auto CARVE_CONFLICT_CAP=2000000000 TOPO_ENGINES=auto TOPO_CONFLICT_CAP=2000000000 TOPO_TIMEOUT=60
+CARVE_CASES=topo/carve_min2_cases.txt CARVE_CASE_OUT=min2.cases CARVE_PLAN_OUT=min2.plan .out/fp file   # footprint carve
+CARVE_PLAN=min2.plan .out/res plan                                                                     # resolver on its slots
+CARVE_CASES=min2.cases .out/res planner                                                                # blaze planner port, then resolver
+TT_TOPOLOGY_SAT_RESOURCE_COMPLETENESS=1 ...                                                             # with the patch applied
+```
+
 ## What the experiments suggest
 
 - **Tier B:** binding, capacity and a connectivity walk; no search. Placement stays in Tier C.
-- **Carve:** search stage rectangles directly rather than slice cycles; DFS with a memo; cheap
-  exact pre-checks (area, lattice, colour) before the search. No SAT for now.
+- **Carve:** search stage rectangles directly rather than slice cycles, as a footprint mapping
+  through tt-metal's topology solver with the SAT engine (section 5), with an exhausted conflict
+  budget reported as undecided. Run the cheap exact pre-checks (area, lattice, colour) before the solve.
+  A port of `dfs2` is the fallback for random tight single-mesh fills.
 - **Resolver:** keep its DFS; add the colour pre-check for fully used meshes between fixed cable
   slots.
 - **Blaze:** its planner rejects carves that exist; tt-blaze

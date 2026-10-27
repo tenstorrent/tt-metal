@@ -130,3 +130,122 @@ inline std::vector<SlotCase> slot_cases() {
     }
     return out;
 }
+
+// The same level with no slot smaller than two slices: meshes tiled into 1x2 or 2x1 dominoes, or
+// 2x2 on the top half and 1x2 on the bottom half, on one mesh and across 2 or 4 meshes.
+inline std::vector<SlotCase> slot_cases_min2() {
+    std::vector<SlotCase> out;
+    const std::pair<int, int> H{1, 2}, V{2, 1}, B{2, 2};
+    auto east_west_cables = [](SlotCase& c, int a, int b, int k) {
+        for (int r = 0; r < k; ++r) {
+            c.cables.push_back({a, r, 7, b, r, 0});
+        }
+    };
+    auto tile_half = [](SlotCase& c, int mesh, int R, int C) {  // top half 2x2, bottom half 1x2
+        for (int r = 0; r + 2 <= R / 2; r += 2) {
+            for (int col = 0; col + 2 <= C; col += 2) {
+                c.slots.push_back({mesh, r, col, 2, 2});
+            }
+        }
+        for (int r = R / 2; r < R; ++r) {
+            for (int col = 0; col + 2 <= C; col += 2) {
+                c.slots.push_back({mesh, r, col, 1, 2});
+            }
+        }
+    };
+    {
+        SlotCase c{"no-1x1 4x8 tiled 1x2: ring of 16 x 1x2", {{4, 8}}};
+        tile_uniform(c, 0, 4, 8, 1, 2);
+        c.stage_shapes.assign(16, H);
+        out.push_back(c);
+    }
+    {
+        SlotCase c{"no-1x1 4x8 tiled 2x1: ring of 16 x 2x1", {{4, 8}}};
+        tile_uniform(c, 0, 4, 8, 2, 1);
+        c.stage_shapes.assign(16, V);
+        out.push_back(c);
+    }
+    {
+        SlotCase c{"no-1x1 8x8 tiled 1x2: ring of 32 x 1x2", {{8, 8}}};
+        tile_uniform(c, 0, 8, 8, 1, 2);
+        c.stage_shapes.assign(32, H);
+        out.push_back(c);
+    }
+    {
+        SlotCase c{"no-1x1 8x8 tiled 1x2: ring of 31 x 1x2 (1 spare slot)", {{8, 8}}};
+        tile_uniform(c, 0, 8, 8, 1, 2);
+        c.stage_shapes.assign(31, H);
+        out.push_back(c);
+    }
+    {
+        SlotCase c{"no-1x1 8x8 half 2x2 / half 1x2: ring of 8 x 2x2 then 16 x 1x2", {{8, 8}}};
+        tile_half(c, 0, 8, 8);
+        c.stage_shapes.assign(8, B);
+        c.stage_shapes.insert(c.stage_shapes.end(), 16, H);
+        out.push_back(c);
+    }
+    {
+        SlotCase c{
+            "no-1x1 8x8 half 2x2 / half 1x2: ring alternating 2x2,1x2 (none: 2x2 slots touch only 2 of 16 dominoes "
+            "each)",
+            {{8, 8}}};
+        tile_half(c, 0, 8, 8);
+        for (int i = 0; i < 8; ++i) {
+            c.stage_shapes.push_back(B);
+            c.stage_shapes.push_back(H);
+            c.stage_shapes.push_back(H);
+        }
+        out.push_back(c);
+    }
+    {
+        SlotCase c{"no-1x1 16x16 tiled 1x2: ring of 128 x 1x2", {{16, 16}}};
+        tile_uniform(c, 0, 16, 16, 1, 2);
+        c.stage_shapes.assign(128, H);
+        out.push_back(c);
+    }
+    for (int n : {2, 4}) {
+        for (int k : {1, 4}) {
+            SlotCase c{
+                "no-1x1 " + std::to_string(n) + " meshes of 4x8 tiled 1x2, " + std::to_string(k) +
+                    " cables/pair: ring of " + std::to_string(16 * n) + " x 1x2",
+                {}};
+            for (int m = 0; m < n; ++m) {
+                c.meshes.push_back({4, 8});
+                tile_uniform(c, m, 4, 8, 1, 2);
+            }
+            for (int m = 0; m < n; ++m) {
+                east_west_cables(c, m, (m + 1) % n, k);
+            }
+            c.stage_shapes.assign(16 * n, H);
+            out.push_back(c);
+        }
+    }
+    {
+        SlotCase c{"no-1x1 4 meshes of 4x8 tiled 2x1, 4 cables/pair: chain of 64 x 2x1", {}};
+        for (int m = 0; m < 4; ++m) {
+            c.meshes.push_back({4, 8});
+            tile_uniform(c, m, 4, 8, 2, 1);
+        }
+        for (int m = 0; m + 1 < 4; ++m) {
+            east_west_cables(c, m, m + 1, 4);
+        }
+        c.stage_shapes.assign(64, V);
+        c.ring = false;
+        out.push_back(c);
+    }
+    {
+        SlotCase c{
+            "no-1x1 2 meshes of 4x8 half 2x2 / half 1x2, 4 cables/pair: ring of 2 x (4 x 2x2, 8 x 1x2)",
+            {{4, 8}, {4, 8}}};
+        tile_half(c, 0, 4, 8);
+        tile_half(c, 1, 4, 8);
+        east_west_cables(c, 0, 1, 4);
+        east_west_cables(c, 1, 0, 4);
+        for (int m = 0; m < 2; ++m) {
+            c.stage_shapes.insert(c.stage_shapes.end(), 4, B);
+            c.stage_shapes.insert(c.stage_shapes.end(), 8, H);
+        }
+        out.push_back(c);
+    }
+    return out;
+}

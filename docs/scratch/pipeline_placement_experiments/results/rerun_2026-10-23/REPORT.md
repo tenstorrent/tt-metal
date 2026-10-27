@@ -287,7 +287,9 @@ to top-left of k+1) every step moves right or down, so a ring can never close: t
 had the resolver cap on "8x8: 1x1, 14x 2x2, 1x1" for that reason, not a carve reason. "Some
 slice of k touches some slice of k+1" has no node-to-node encoding in either engine, so the
 exact comparison is rings of single-slice stages, on one mesh and across cables, which is also
-what both engines exist for. The multi-slice carve stays a separate step (the design's C1).
+what both engines exist for. That limitation is one of the encoding, not of the solver: the
+footprint encoding below ("The carve as a footprint mapping") maps stages to positions instead
+of slices to slices and is exact for multi-slice stages.
 
 Same loaded 32-core box as the tables above; 60 s cap per solve.
 
@@ -392,22 +394,135 @@ and all three prove it quickly at this size. This is the strongest argument for 
 order of operations: carve in C1, then resolve, rather than asking any engine to do both at slice
 granularity.
 
+### The carve as a footprint mapping through the topology solver (`carve_footprint_*.txt`)
+
+`topo/carve_footprint_bench.cpp` is a second encoding of the carve for `solve_topology_mapping`,
+and the one that removes the fixed-port limitation. The global graph has one node per
+**position**: a place one stage shape fits inside one mesh, in host slices. Two positions are
+adjacent when they do not overlap and some slice of one borders some slice of the other, by grid
+adjacency inside a mesh or by a cable. The target graph is the pipeline itself, one node per
+stage. A required constraint keeps each stage on positions of its own shape, and a resource
+constraint (position to the slices it covers) keeps the chosen positions disjoint. A mapping is
+then exactly a carve, for any stage shape, for forks and across meshes. The solver is unchanged;
+the per-slice encoding of the tables above stays as the comparison. Every returned carve is
+re-checked independently (own shape, disjoint, every edge touching), and cases of up to 8
+stages are also decided by brute force; no run produced a `BAD` or `MISMATCH` line.
+
+Three groups, same box, 60 s cap per solve. `Auto` always selects SAT when a resource
+constraint is present (`topology_mapping_should_use_sat_engine`), so the columns are the
+forced `Sat` and `Dfs` engines.
+
+**A "no" from the SAT engine is not a proof by default.** Every SAT solve runs under a
+conflict budget (`kDefaultConflictCap`, 300k) and `solve_limited` returning anything but SAT is
+reported as "no mapping", so budget exhaustion and UNSAT look the same to the caller. The
+first run returned "no" on three cases the Python DFS had already carved (random 8x8 with 29
+and 30 stages, 47 s and 441 s) or that were open (random 8x16 s1.1), and on the 2-mesh 1-cable
+ring, after 17 to 50 s each. Rerun through `TopologyMappingEnumerationSession` with the budget
+set to 2e9 (`CARVE_CONFLICT_CAP`), all four run to the 60 s cap instead. The SAT columns below
+are from that run, so "no" is a proof and "cap" is undecided. The default-budget files are kept
+beside them. For C2 this means a budget-exhausted SAT solve must be read as "unknown", never as
+"reject"; `solve_topology_mapping` does not expose the budget and `MappingResult` does not flag
+exhaustion, so an integration needs either the session API with a large budget under a
+wall-clock cap, or a flag on the result.
+
+**Single-mesh carve cases, the same instances as the Python tables** (seconds; Python column is
+the best of `dfs`, `dfs2` and `pos` across the three 60 s runs, 600 s results in brackets):
+
+| Case | Best Python | Footprint SAT | Footprint DFS |
+|---|---|---|---|
+| 8x8: 1x1, 14x 2x2, 1x1 | 0.004 (dfs2) | 0.015 | 0.001 |
+| 8x8: 1x1, 15x 2x2, 3x 1x1 (fills 64/64) | 4.0 (dfs) | 0.22 | 0.59 |
+| 8x8 ring of 64 x 1x1 | 0.09 (dfs) | 0.015 | 0.005 |
+| 8x16: 1x1, 30x 2x2, 1x1 | 0.10 (dfs2) | 0.024 | 0.004 |
+| 8x16: 1x1, 2x4 x14, 2x2 x3, 1x1 (fills 127/128) | cap (cell 31) | 2.8 | cap |
+| 8x16 ring of 128 x 1x1 | 0.10 (dfs) | 0.069 | 0.066 |
+| 16x16: 1x1, 62x 2x2, 1x1 | 3.4 (pos) | 0.13 | cap |
+| random 8x8: 30 stages | cap [dfs 441] | cap | cap |
+| random 8x8: 29 stages | 0.6 (dfs2) | cap | cap |
+| random 8x8: 31 stages (63/64) | 3.1 (dfs2) | 1.2 | cap |
+| random 8x8: 34 stages | 4.5 (dfs2) | 1.4 | 21 |
+| random 8x8: 37 stages | 1.5 (dfs) | 0.21 | cap |
+| random 8x16 s1.0: 37 stages (121/128) | cap [pos 183] | 5.6 | 25 |
+| random 8x16 s1.1: 32 stages (127/128) | cap [open] | cap | cap |
+| random 8x16 s1.2: 32 stages (122/128) | 1.5 (dfs) | 0.36 | cap |
+| 7x7: 1x1, 10x 2x2 (infeasible) | 0.09 (dfs2) | no 2.1 | no 0.66 |
+| 5x5 ring of 25 (infeasible, odd) | 0.10 (pos) | no 0.003 | no 4.4 |
+
+On the designed cases the footprint SAT is the fastest solver measured so far: 20x on the 8x8
+fill, 25x on the 16x16 ring of 2x2 against the best SAT encoding, and it is the first to solve
+the 8x16 2x4 fill under 60 s (2.8 s against a 60 s cap for every Python column but `cell`) and
+the 8x16 random 37-stage case (5.6 s against 183 s). On the random 8x8 fills it loses to
+`dfs2` on 29 stages (capped against 0.6 s) and is undecided on 30, where only the original DFS
+found a carve, at 441 s. The footprint DFS engine is fast on the easy cases and caps on most hard
+ones; `dfs2` remains the better DFS. The two infeasible cases are proved: 7x7 in 2.1 s, 5x5 in
+3 ms.
+
+The repo-shaped grids (`carve_footprint_repo_60s_cap_default_budget.txt`: 4x8, 8x4, 2x16 with
+1x2, 2x1, 2x2 and 2x4 stages, the odd 5x5, the 8x8 ring of 14 2x2) are all decided in at most
+0.02 s by SAT and in at most 4.4 s by DFS, agreeing with the Python `carve_repo` run. The
+author's first run (`carve_footprint_quick_multi_10s_cap.txt`) covers the three rings blaze's
+planner rejects, the `mixed4` cablings from the design doc, a 6x6 fork and two 4x4 meshes:
+every one decided by all engines in under 0.1 s and agreeing with brute force.
+
+**The multi-mesh rings, against the C++ engines** (the `multi2` instances of the two tables
+above; seconds, 60 s cap):
+
+| Case | Resolver | Topo SAT, per slice | Topo DFS | Footprint SAT | Footprint DFS |
+|---|---|---|---|---|---|
+| 2 meshes ring, 1 cable/pair, seed 0 | cap | cap | cap | cap | cap |
+| 2 meshes ring, 1 cable/pair, seed 1 | 9.8 | 2.3 | cap | 0.85 | cap |
+| 2 meshes ring, 4 cables/pair, seed 0 | 1.1 | 0.50 | 0.40 | 0.015 | 0.087 |
+| 2 meshes ring, 4 cables/pair, seed 1 | 0.20 | 0.40 | 2.5 | 0.015 | 0.44 |
+| 4 meshes ring, 1 cable/pair, seeds 0 and 1 | cap | cap | cap | cap | cap |
+| 4 meshes ring, 4 cables/pair, seed 0 | cap | 3.0 | cap | 0.071 | cap |
+| 4 meshes ring, 4 cables/pair, seed 1 | cap | 22.0 | cap | cap | cap |
+| 8 meshes ring, 1 or 4 cables/pair, both seeds | cap | cap | cap | cap | cap |
+| 2 meshes line, 1 cable/pair | 0.20 | 3.1 | cap | 4.2 | cap |
+| 2 meshes line, 4 cables/pair | 0.10 | 0.30 | 5.4 | 0.015 | 1.8 |
+| 4 meshes line, 1 cable/pair | cap | cap | cap | cap | cap |
+| 4 meshes line, 4 cables/pair | cap | 7.4 | cap | cap | cap |
+| 2 meshes ring, 24/32 used, 2 cables/pair | 0.10 | 0.30 | 0.001 | 0.011 | 0.003 |
+| 4 meshes ring, 24/32 used, 2 cables/pair | cap | 0.80 | cap | 0.051 | cap |
+
+Same solver, same instances, so this column pair isolates the encoding. The footprint SAT is
+3x to 40x faster than the per-slice SAT on the rings it solves, and capped on two cases the
+per-slice SAT finished: the 4-mesh 4-cable ring with seed 1 (22 s) and the 4-mesh 4-cable chain
+(7.4 s). On single-slice stages the two encodings describe the same graph, so the difference is
+the resource constraint: it routes the solve through a different encoder path and adds a
+clause set that is redundant for 1x1 stages. Nothing finishes the 1-cable 4-mesh rings or any
+8-mesh ring. The single-mesh single-slice rings from the first table (4x8, 8x8, 8x16, 5x5)
+are also in the repo group: 0.018, 0.015, 0.069 and 0.003 s under the footprint SAT, against
+0.009, 0.21, 1.6 and 0.007 s per slice.
+
+**What this changes.** The question in section 2 was whether a SAT encoding could beat the
+DFS on the carve. In Python none did. Through the topology solver's own SAT engine, with the
+carve written as stage-to-position instead of slice-to-slice, it does on every designed case
+and on most random ones, inside the repo's C++ with no solver change. For Tier C that makes the
+footprint encoding the candidate for the carve step itself (C1's planned-carve search), not
+only for choosing crossings: one solve per seating decides stage rectangles, joint stages and
+cable crossings together, and the resolver then takes the resulting slots for links and core
+slots. Two things stand between that and use: the undecided-versus-infeasible distinction
+above, which needs a result flag or the session API, and the random-fill cases where `dfs2`
+still wins, which argue for keeping it as the second member of a portfolio.
+
 ### Integration: resolver or topology solver
 
 | | Resolver (`detail::resolve_graph_layout_with_connections`) | Topology solver (`solve_topology_mapping`) |
 |---|---|---|
 | Exists today for | stage -> submesh, link per edge, core slots, entry/exit chips, host I/O | node -> node embedding with edge support, pinnings, trait constraints, enumeration with blocking clauses, soft edges |
 | Granularity it needs | pre-carved submeshes (one node per stage, chip count must match) | any graph; one node per slice works |
-| Carve of multi-slice stages | not modelled (needs C1 first) | not expressible (fixed-port problem above) |
+| Carve of multi-slice stages | not modelled (needs C1 first) | yes, with the footprint encoding (stage to position, resource constraint over slices) |
 | Capacity, core slots, chip-level links | yes | no |
 | Multi-mesh with cables | yes, via `DirectLinks` | yes, as global-graph edges |
-| Infeasibility proofs | exponential (needs the colour pre-check) | SAT engine learns; see table |
+| Infeasibility proofs | exponential (needs the colour pre-check) | SAT engine learns; see tables. A "no" is a proof only when the conflict budget is not the cause |
 | Failure reporting | one message string (design 3.1 asks for a structured reason) | `failure_stage`, warnings, stats |
 | Shared with runtime | yes, Tier D calls the same function | no |
 | Integration into Tier C | call with `DirectLinks` from the candidate seating; already planned (design 4.2) | would need a new target/global graph builder plus a translation of its node mapping back to stages and chips, then the resolver anyway for links and slots |
 
-Both engines need the carve done first. The question "resolver or topology solver" is therefore
-only about the stage-to-slot step. At that level (the slots table) every engine is fast, so the
+With the footprint encoding the topology solver can do the carve, so the question "resolver or
+topology solver" splits in two. For the carve, the footprint SAT is the fastest engine measured
+(table above). For the stage-to-slot step after the carve, both engines are fast and the
+resolver models what the solver does not. At that level (the slots table) every engine is fast, so the
 resolver, which already models links, core slots and host I/O and is shared with the runtime, is
 the one to call, as the design says. The case for the topology solver's SAT engine is the
 slice-granularity problem: full rings of single-rank stages across several meshes, where it is
@@ -510,6 +625,167 @@ and caps on 4-mesh rings and on 1-cable 2-mesh rings. That path needs the pre-ch
 the resolver (the colour and segment test from design 4.2), or the topology solver's SAT engine
 on the slice graph to choose the crossings first, and the resolver after it for links and
 slots. Neither changes what the resolver is; both are callers.
+
+
+## 5. 2026-10-27: same box, wider sweeps, no 1x1, verification, and the carve-requiring comparison
+
+Everything in this section was run on one box on 2026-10-27 (64 cores, lightly loaded). That box
+is 5x to 50x faster than the one sections 2 to 3b were measured on (compare the resolver's 8.8 s
+on the 16x16 ring there with 0.24 s here), so **speed comparisons between this section and the
+earlier ones are not valid**; within this section every engine ran on the same machine, and the
+Python encodings were rerun here for that reason. Result files are in
+`results/rerun_2026-10-27/`; the two generated tables, `case_catalogue.md` (every instance, its
+definition, verdict and every engine's time) and `carve_comparison.md` (the carve-requiring
+comparison below, every row), are produced by `topo/case_catalogue.py` and
+`topo/carve_comparison.py` from those files.
+
+### 5.1 Every solution is checked, and what a "no" is worth
+
+All three C++ harnesses now re-check every returned solution independently, and print `BAD`
+on a failure: the footprint bench checks own shape, disjoint slices, every pipeline edge
+touching, and that every touch is a grid step inside one mesh or one of the declared cables
+(it lists the cables each carve crosses on); the resolver harness checks distinct submeshes,
+every resolved edge on a link in the table, every cross-mesh edge on a declared cable, and the
+host I/O chips inside stage 0; the topology harness checks every target node mapped once and
+every target edge on a logical edge. Across the roughly 1,100 solves of this section there is no
+`BAD` line. The solvers are only ever given the logical topology (grid adjacency of the MESH
+device topology, no wraps, and the declared cables), so a physical-only link cannot be used; the
+check makes that a verified property rather than an argument.
+
+Two engine answers turned out not to mean what they say:
+
+- The SAT engine's "no mapping" under its default 300k conflict budget is budget exhaustion as
+  often as it is UNSAT. Every SAT run here goes through `TopologyMappingEnumerationSession`
+  with the budget set to 2e9 (`CARVE_CONFLICT_CAP`, `TOPO_CONFLICT_CAP`), so a "no" inside the
+  wall-clock cap is a proof.
+- The DFS engine's 10 million call limit is also reported as failure. It said "no" on two
+  feasible cases the SAT engine solved. The harnesses print it as `lim` (undecided) when the
+  solver's message says so, and the catalogue marks any DFS "no" contradicted by a "yes".
+
+`cap` in every table is the harness's wall-clock limit, 60 s unless noted; it is not a verdict.
+
+### 5.2 Which cases are solvable
+
+The colour test from design 4.2 decides every tight multi-mesh case with one cable per adjacent
+pair exactly (`topo/multi_colour_test.py`): the ring must use every cable once, so each mesh is
+crossed by one Hamiltonian path between its two cable slices, which exists on a 4x8 grid iff
+they have opposite colours. Of the 18 original and 57 wider multi-mesh instances, that proves
+17 infeasible and certifies 41 feasible before any solve; every case all three engines capped
+on at 60 s is in the first set, except the 8-mesh 4-cable rings, which are feasible and were
+found later (section 5.4). On the single-mesh side, every verdict agrees across the Python
+encodings and the footprint engines on all 92 cases, 46 of them infeasible, and `case_catalogue.md`
+lists each with how it was decided. Still open after everything: the 8x16 random fill at 127 of
+128 (`s1.1`), the no-1x1 8x16 fill at 126 of 128, the 4-mesh domino rings with 1 and 2 cables
+per pair (seed 0), and the 8-mesh rings with 1 or 2 cables per pair where the colour test does
+not apply.
+
+### 5.3 The carve-requiring comparison
+
+Most real pipelines have stages wider than one host slice, so this is the table that matters.
+For every carve-requiring case, three ways of getting from the pipeline to a placed layout:
+
+1. **footprint**: the topology solver under `Auto` (which is SAT on every case here) with the
+   footprint encoding, carving and ordering in one solve; then the resolver on the carve's
+   slots (the design's C2 after C1), and separately the topology solver on the same slots.
+2. **planner then resolver**: a C++ port of tt-blaze's ring carve planner
+   (`topo/carve_planner_port.hpp`: leaf prune, degree-2 contraction, exact-length cycle search
+   with blaze's 200k-expansion and 64-cycle budgets, crossings-first cycle order, canonical walk
+   and rotations for grouping), then the resolver on its slots. The repo has no C++ planner;
+   this port is what design 3.2 would produce. It reproduces blaze's recorded verdicts on the
+   designed cases (`no-cycle-13`, the two `no-alignment` rings, the three `mixed4` cablings).
+3. **planner then topology**: the topology solver on the planner's slots.
+
+Groups: the original 17 carve cases, the 30-case heterogeneous sweep (stages 1x1 to 2x4 on
+4x8, 8x4, 2x16, 8x8 and 8x16 at 60, 80 and 95% fill), the 45 no-1x1 single-mesh cases (random
+fills from 1x2, 2x1, 2x2, 2x4 plus 15 designed rings), the 12 heterogeneous multi-mesh rings and
+the 28 no-1x1 multi-mesh rings (2 to 8 meshes of 4x8, 1 to 4 cables per pair, all-domino or
+mixed). 132 cases, 60 s cap. Full rows in `carve_comparison.md`; the summary:
+
+| Group | Cases | Verdicts | footprint Auto, decided | with completeness (5.4) | planner, decided | resolver after a carve, worst | topology after a carve, worst |
+|---|---|---|---|---|---|---|---|
+| original 17 | 17 | 14 feasible, 2 infeasible, 1 open | 11 (3 only at 600 s) | 16 | 0 (17 budget-exhausted) | 0.029 s | 0.059 s |
+| heterogeneous sweep | 30 | 21 feasible, 9 infeasible | 30 | 30 | 0 (30 budget-exhausted) | 0.001 s | 0.001 s |
+| no-1x1 single mesh | 45 | 29 feasible, 12 infeasible, 4 open | 39 | 43 | 0 (45 stage-0 rule; rule off: 2 found, 12 `no-alignment` on feasible cases, 29 budget) | 0.029 s | 0.004 s |
+| heterogeneous multi-mesh | 12 | 12 feasible | 12 | 12 | 0 (11 stage-0 rule; rule off: 10 budget, 2 `no-alignment`) | 0.001 s | 0.001 s |
+| no-1x1 multi-mesh | 28 | 22 feasible, 4 infeasible, 2 open | 16 | 26 | 0 (28 stage-0 rule; rule off: 26 budget, 2 `no-alignment`) | 0.036 s | 0.004 s |
+
+What the table says:
+
+- **The planner path never completes on these instances.** Blaze's planner rule that stage 0
+  must be one slice rejects every no-1x1 case up front (85 of the 132). With that rule lifted
+  it exhausts its 200k-expansion budget on every 8x8 or larger grid and every multi-mesh case,
+  and where it does find cycles its first-fit grouping reports `no-alignment` on 16 cases the
+  footprint carves in milliseconds. The reason is structural: contraction finds no degree-2
+  chains in a grid-shaped slice graph (interior slices have degree 4), so the cycle search is a
+  raw depth-first Hamiltonian-cycle search, which the budget was never sized for. Blaze's real
+  fabrics are rings of columns, where contraction does the work (its comment cites ~900
+  expansions for SC16). On meshes shaped like these, the planner is not a usable C1.
+- **The footprint is the only carver that works on them**, deciding 108 of 132 within 60 s as
+  first run, and 127 with the completeness clauses of 5.4. Its own carve is the whole cost: the
+  resolver then places every one of its carves in at most 36 ms, and the topology solver at
+  slot level in at most 59 ms. So the design's C1 then C2 order holds with the footprint as C1,
+  and C2 is noise.
+- **Infeasibility is still the hard part**, as everywhere in this report: the 34 infeasible
+  cases that have a counting or colour proof are decided in milliseconds, and the rest take the
+  SAT engine seconds to tens of seconds.
+
+### 5.4 Why the footprint was slow on tight cases, and the fix
+
+The footprint lost badly to the per-slice encoding on tight single-slice rings (66 s against
+0.41 s on a 4-mesh ring, 170 s against 0.38 s on a 4-mesh chain, 322 s against 36 s on an
+8-mesh ring) although it is the same solver on the same graph. The cause is in the encoder:
+`topology_solver_sat.cpp` step 5b, bijection completeness, adds "some target lands here" for
+every global node when the counts match, which its comment describes as the pigeonhole
+propagation that makes permutation-shaped instances tractable. It is skipped whenever a
+resource constraint is present, because mesh seating wants spare seats empty. The footprint
+always carries a resource constraint, so it never gets it, even when it is the identical graph.
+
+The resource analogue, **resource completeness**: when the stages' footprints add up to exactly
+the slice count, every slice must be covered, so add one at-least-one clause per slice over the
+positions covering it. About 20 lines after the resource at-most-one loop, a no-op when the
+carve is not tight, gated by `TT_TOPOLOGY_SAT_RESOURCE_COMPLETENESS=1`, off by default, saved as
+`topo/resource_completeness.patch` and **not committed**. With it (`completeness/`):
+
+| Case | footprint before | with completeness | per-slice topology |
+|---|---|---|---|
+| 4 meshes ring, 4 cables, seed 1 | 66 s | 0.59 s | 0.41 s |
+| 4 meshes line, 4 cables | 170 s | 0.32 s | 0.33 s |
+| 8 meshes ring, 4 cables, seed 0 | open at 600 s | 53 s | cap |
+| 2 meshes line, 1 cable | 4.1 s | 0.34 s | 0.12 s |
+| 8x8 fill, 15x 2x2 + 1x1s | 0.22 s | 0.026 s | n/a |
+| 8x8 ring of 32 dominoes | 0.32 s | 0.009 s | n/a |
+| 8x16 ring of 32x 2x2 | 9.4 s | 0.024 s | n/a |
+| 8x16 ring of 64 dominoes | cap | 0.044 s | n/a |
+| 16x16 ring of 64x 2x2 | cap | 0.13 s | n/a |
+| 16x16 ring of 128 dominoes | cap | 0.23 s | n/a |
+| random 8x8: 29 / 30 stages | 63 / 120 s | 0.12 / 0.60 s | n/a |
+| domino rings, 2 meshes, 2 or 4 cables | 1.2 to 36 s | 0.009 to 1.1 s | n/a |
+| domino rings, 4 meshes, 4 cables | cap | 0.28 / 0.75 s | n/a |
+| domino rings, 8 meshes, 4 cables | cap | 2.6 / 22 s | n/a |
+| domino rings, 2 meshes, 1 cable (infeasible) | cap | proved, 8.0 / 8.1 s | n/a |
+
+Three cases open for every engine, Python included, decide in under a quarter of a second; the
+footprint matches the per-slice encoding on the 1x1 rings; and it proves infeasibility on
+64-slice domino rings, the first tight infeasibility proofs any engine managed. A verdict check
+of every designed, repo, ring and mixed-cable case with the flag on (`completeness/compl_check_*`)
+changed no answer, and brute force agrees wherever it applies. The limit is that the clauses
+bind only when the carve is tight; the fills at 126 and 127 of 128 get nothing. The extension is
+an "at most k slices uncovered" cardinality constraint for slack k.
+
+### 5.5 Recommendation, updated
+
+- **C1, the carve: the footprint encoding on the topology solver, with resource completeness.**
+  It is the only engine that carves grid-shaped meshes at all, it decides 127 of the 132
+  carve-requiring cases within 60 s, and with the completeness clauses it is at or near the
+  fastest engine on every tight case. Keep the colour pre-check in front of it for tight
+  multi-mesh rings; add an area pre-check (one no-1x1 ring with area 160 on 128 slices ran to
+  the cap). Treat budget exhaustion and the wall-clock cap as "unknown", never "reject".
+- **C2: the resolver, unchanged**, on the footprint's slots. Worst case 36 ms over 139 carves.
+- **The blaze planner** stays what it is: a planner for ring-of-columns fabrics, not for
+  these. Porting it to C++ (design 3.2) does not buy a C1 for grid meshes.
+- **The per-slice encoding** keeps one use: single-slice rings where the solver's bijection
+  clauses already apply, where it is the fastest engine (0.06 s on 4-mesh rings, 36 s on the
+  8-mesh ring the footprint needs 53 s for). With completeness the gap is small.
 
 ## 4. What was rerun and how it compares
 
