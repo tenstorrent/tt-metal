@@ -15,6 +15,7 @@ packs its output to bf16 (``Block.hc_pre``'s ``y.to(x.dtype)``), and hc_post tak
 an exact fp32 term, so no typecast op runs around a sublayer.
 """
 
+import os
 import struct
 
 import torch
@@ -51,6 +52,14 @@ def initial_pre_mix(mesh_device, config, tokens: int) -> ttnn.Tensor:
     )
 
 
+# the TP sum of the projection's one fp32 tile on the decode tile: ``all_reduce`` (``TtMHCWrap._tp_sum``:
+# ``all_reduce_async``, which for one tile is an all-broadcast, a concat, a reshape, a transpose and a sum: ~30 us
+# a site over nine ops) or ``gather`` (one all-gather of the tile over the TP chips along
+# dim 1 and the same ``ttnn.sum`` over that dim: ~11 us). Prefill shapes keep the all-reduce.
+_TP_SUM = os.environ.get("V41_MHC_TP_SUM", "all_reduce")
+assert _TP_SUM in ("all_reduce", "gather"), _TP_SUM
+
+
 class _V41Site(TtMHCWrap):
     """``TtMHCWrap`` with its split projection, collapse and hc_post as one fused op each (one pass over the streams).
 
@@ -63,6 +72,29 @@ class _V41Site(TtMHCWrap):
         assert self.mix_hc < 32, self.mix_hc
         fn = torch.cat([fn.float(), torch.zeros(32 - self.mix_hc, fn.shape[1])])
         super().__init__(device, cfg, fn, base, scale, **kwargs)
+
+    def _tp_sum(self, t):
+        """Sum the projection's fp32 ``[1, 1, T, 32]`` over the TP chips, the result on every chip (the module
+        comment on ``_TP_SUM``): on the decode tile (``T <= 32``) with ``V41_MHC_TP_SUM=gather``, one all-gather
+        along dim 1 (``[1, tp, T, 32]``) and ``ttnn.sum`` over it, the reduction the all-reduce composite ends
+        with on the same tiles in the same order (bit for bit, ``tests/v41/test_v41_mhc_tp_sum.py``). A concat
+        and ``reduce_scatter_minimal_async`` (two ops) was tried and dropped: it sums in bf16 whatever the
+        compute config (7e-4 of relative error on fp32 tiles, the TP chips disagreeing)."""
+        if _TP_SUM != "gather" or int(t.shape[-2]) > 32 or int(t.shape[1]) != 1:
+            return super()._tp_sum(t)
+        gathered = ttnn.experimental.all_gather_async(
+            t,
+            dim=1,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+            num_links=self.num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.topology,
+            cluster_axis=self.tp_axis,
+        )
+        out = ttnn.sum(gathered, dim=1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(gathered)
+        return out
 
     def project(self, x):
         tp_sum = self._tp_sum if self.tp_factor > 1 else None
