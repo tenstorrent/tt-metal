@@ -596,10 +596,10 @@ itself, and the request carries the mask page's location, not its contents.
 - **Contracts.** The mask must be in place when the prefetcher reaches the request and must not change
   until the matmul has run; otherwise the prefetcher and the matmul disagree on which experts arrive
   and the pipes deadlock. A host write is fenced with `wait_for_cq_on_tensor_prefetcher`. A mask an op
-  writes on device -- the MoE router, inside the same trace -- is ordered with an op signal:
-  `prefetch_and_sparse_matmul(..., signal_id=s)` raises signal `s` on the matmul's queue and queues a
-  wait on it ahead of the matmul's request, and both are captured with the rest (see "Ordering against device
-  work"). `nnz` keeps its
+  writes on device -- the MoE router, inside the same trace -- is ordered with an op signal: the router's
+  kernel raises signal `s` (or `signal_tensor_prefetcher` runs after the router), and the caller queues a
+  wait on `s` before calling the matmul, which puts it ahead of the matmul's request; in a trace both are
+  captured with the rest (see "Ordering against device work"). The matmul takes no part in it. `nnz` keeps its
   exact-count contract (#45943), and over pipes a wrong `nnz` also stalls the prefetcher, so prefer
   `nnz=None`. Mask mode only (no `indices`, no per-group `bias`), `is_input_b_sparse=True`, one mask
   page (no outer batch), interleaved activation and output, one output block per worker, and a ring
