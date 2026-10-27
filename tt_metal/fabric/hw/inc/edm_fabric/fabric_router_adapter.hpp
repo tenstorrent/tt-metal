@@ -237,7 +237,8 @@ private:
 
     uint32_t worker_credits_stream_id;
     // Local copy of the the free slots on the downstream router
-    // Downstream router will increment this when it frees up a slot
+    // Downstream router will increment this when it frees up a slot; without stream registers, the
+    // downstream router's read count, which it writes
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_read_ptr;
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_update_ptr;
     // Software credits: this adapter's write count.
@@ -245,8 +246,8 @@ private:
     size_t edm_buffer_remote_free_slots_update_addr;
     size_t edm_connection_handshake_l1_addr;
     size_t edm_worker_location_info_addr;
-    // Note that for persistent (fabric to fabric connections), this only gets read once and actually points to the free
-    // slots addr
+    // Note that with stream registers, for persistent (fabric to fabric connections), this only gets read once and
+    // actually points to the free slots addr
     size_t edm_copy_of_wr_counter_addr;
 
     volatile tt_l1_ptr uint32_t* worker_teardown_addr;
