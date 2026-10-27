@@ -50,6 +50,9 @@ KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
 KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE = 160 * 1024
 # Links high_bw_all_gather spreads the SP prefix summaries over; meshes with fewer on the SP axis keep ttnn.all_gather.
 KDA_HIGH_BW_PREFIX_GATHER_LINKS = 2
+# The bounded gate's FP32 logits stay in interleaved L1 between the decay projection and the offset add when each core's
+# share fits this budget (64 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
+KDA_DECAY_LOGITS_L1_BYTES_PER_CORE = 64 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
@@ -216,7 +219,7 @@ _DECAY_OUT_BLOCK_TILES = 32
 
 
 def decay_projection_program_config(
-    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int, fused_activation: ttnn.UnaryWithParam | None
+    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
 
@@ -242,6 +245,6 @@ def decay_projection_program_config(
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
-        fused_activation=fused_activation,
+        fused_activation=None,
         fuse_batch=True,
     )
