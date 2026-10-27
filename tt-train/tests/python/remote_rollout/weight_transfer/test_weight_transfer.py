@@ -42,19 +42,6 @@ from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, T
 # Pin fabric FABRIC_2D before either rank opens a device (both ranks must match).
 pytestmark = pytest.mark.usefixtures("_set_fabric_2d")
 
-# Skipped pending BH bring-up: after ``push_weights``, one batch slot on one
-# submesh produces a different completion than the others despite identical
-# prompt/weights/greedy decode ("post-push completion 5 diverged from
-# completion 0"). Deterministic and reproducible; needs weight-bridge /
-# per-submesh model-state investigation. Re-enable by removing the
-# ``@pytest.mark.skip`` decorator on the test function below.
-# (The earlier ttml-vs-ttnn asymmetric fabric-init deadlock is fixed by the
-# ``_set_fabric_2d`` fixture above plus ``_ttt_sampler_utils.open_device`` only
-# calling ``enable_fabric`` when fabric is currently ``DISABLED``.)
-_SKIP_REASON = (
-    "test_weight_transfer: per-submesh determinism regression on BH after " "push_weights — see module docstring."
-)
-
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
 PROMPT = "The capital of France is"
 MAX_NEW_TOKENS = 64
@@ -67,7 +54,8 @@ NUM_SUBMESHES = 4
 
 # Post-push RPC batch; TTT_MAX_BATCH_SIZE must be >= this.
 POST_PUSH_BATCH = 8
-TTT_MAX_BATCH_SIZE = 8
+# max_batch_size 8 makes some slots diverge on Blackhole (#55425).
+TTT_MAX_BATCH_SIZE = 16
 TTT_MAX_SEQ_LEN = 512
 
 
@@ -255,7 +243,6 @@ def _ttt_side() -> None:
 
 # Disable the repo-wide pytest-timeout default (long HF download + four builds).
 @pytest.mark.timeout(0)
-@pytest.mark.skip(reason=_SKIP_REASON)
 def test_ttml_to_ttt_weight_bridge_transfer() -> None:
     """End-to-end remote generate + 4->4 submesh bridge transfer + per-submesh verify."""
     if _MPI_RANK == TTML_RANK:
