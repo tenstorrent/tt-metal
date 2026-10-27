@@ -99,10 +99,18 @@ class TestPccValue:
         assert _pcc(golden, calculated) == pytest.approx(_reference_pcc(golden, calculated), abs=1e-12)
 
     def test_large_magnitude_float64(self):
-        # Without the n - 1 normalization, the variance product of 1e76 values overflows float64.
+        # Without dividing by n first, the variance product of 1e76 values overflows float64.
         golden, calculated = _noisy((4096,), torch.float64)
         golden, calculated = golden * 1e76, calculated * 1e76
         assert _pcc(golden, calculated) == pytest.approx(_reference_pcc(golden, calculated), abs=1e-12)
+
+    @pytest.mark.parametrize("scale", [7e76, 7e-82])
+    def test_float64_boundaries_match_np_ma_corrcoef(self, scale):
+        # np.ma.corrcoef divides each sum by n before the variance product. Dividing by n - 1
+        # overflows this pair at 7e76 (PCC 0.0) and leaves a subnormal denominator at 7e-82 (PCC 0.88).
+        golden = torch.tensor([-scale, scale], dtype=torch.float64)
+        passing, _, pcc = comparison_funcs.comp_and_get_pcc(golden, 2 * golden)
+        assert passing and pcc == 1.0
 
     def test_tiny_magnitude_uncorrelated_float32_fails(self):
         # float32 products of 1e-25 values underflow to zero; the float64 PCC must not.
