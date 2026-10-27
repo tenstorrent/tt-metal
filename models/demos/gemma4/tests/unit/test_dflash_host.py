@@ -12,6 +12,7 @@ computes on the device is not something a host test can attest.
 
 import ast
 import dataclasses
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -1739,3 +1740,91 @@ def test_a_changed_ladder_between_preparation_and_capture_is_refused(warm_model,
     model._spec_width_ladder = [1234]
     with expect_error_dflash_width_prepare(RuntimeError, "widths changed"):
         model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
+
+
+# -- the composed vision class: the taps capture around the multimodal prefill ----------------------
+
+
+def _mm_prefill(model, tokens, prompt_len, *, start=None, key=10, offsets=None, lengths=None, pixel_values=None):
+    """One multimodal prefill call as the plugin makes it: payload plus placeholder metadata per user."""
+    kwargs = dict(
+        tokens=tokens,
+        prompt_lens=[prompt_len],
+        empty_slots=[0],
+        page_table=_table([key]),
+        kv_cache=model.kv_cache,
+        warmup_prefill=False,
+        mm_placeholder_offsets=[offsets],
+        mm_placeholder_lengths=[lengths],
+    )
+    if pixel_values is not None:
+        kwargs["pixel_values"] = [pixel_values]
+    if start is not None:
+        kwargs["start_pos"] = [start]
+    return model.prefill_forward(**kwargs)
+
+
+def _image_prompt(prompt_len, offset, length, image_id=5):
+    tokens = torch.full((1, prompt_len), 7, dtype=torch.int32)
+    tokens[0, offset : offset + length] = image_id
+    return tokens
+
+
+def test_composed_vision_class_keeps_the_dflash_contract_above_the_multimodal_prefill(adapter):
+    cls = adapter.Gemma4DFlashContractVisionForConditionalGeneration
+    contract = adapter.Gemma4DFlashContractForCausalLM
+    mro = cls.__mro__
+    assert mro.index(contract) < mro.index(adapter.Gemma4SpecContractBase) < mro.index(adapter.Gemma4DFlashBase)
+    assert mro.index(adapter.Gemma4DFlashBase) < mro.index(adapter.Gemma4VisionForConditionalGeneration)
+    assert mro.index(adapter.Gemma4VisionForConditionalGeneration) < mro.index(adapter.Gemma4ForCausalLM)
+    assert adapter.SupportsMultiModal in mro
+    # The taps override is the class's prefill, and it reaches the multimodal staging by calling the
+    # base prefill by name, not through super(), so the vision class adds nothing on that path.
+    assert cls.prefill_forward is contract.prefill_forward
+    source = inspect.getsource(contract.prefill_forward)
+    assert "Gemma4ForCausalLM.prefill_forward(self" in source and "super().prefill_forward" not in source
+    assert cls.decode_forward is contract.decode_forward and cls.propose_draft_tokens is contract.propose_draft_tokens
+    assert cls.model_capabilities["supports_spec_decode"] is True
+    registry = sys.modules["vllm.multimodal"].MULTIMODAL_REGISTRY
+    if isinstance(registry, SimpleNamespace):
+        pytest.skip("vLLM absent: the registry is the conftest stub; registration is checked on the vLLM runners")
+    factory = cls.__dict__["_processor_factory"]
+    assert factory.info is adapter.Gemma4ProcessingInfo and factory.processor is adapter.Gemma4MultiModalProcessor
+
+
+def test_an_image_prefill_captures_taps_over_the_prefilled_rows_like_a_text_prefill(adapter, monkeypatch):
+    text = build_model(adapter, monkeypatch)
+    _prefill(text, prompt_len=8, key=10)
+    vision = build_model(adapter, monkeypatch, cls=adapter.Gemma4DFlashContractVisionForConditionalGeneration)
+    vision.is_multimodal = True
+    vision.image_token_id = 5
+    _mm_prefill(vision, _image_prompt(8, 1, 4), 8, offsets=[1], lengths=[4], pixel_values=[torch.zeros(4, 8)])
+    for model in (text, vision):
+        taps, end = model._spec_pending
+        assert end == 8 and [tap.shape for tap in taps] == [(1, 1, 8, 8), (1, 1, 8, 8)]
+        assert _names(model, "capture")[-2:] == [("capture", [1, 2]), ("capture", None)]
+    # The multimodal payload and placeholder metadata reached the base prefill untouched, eagerly.
+    assert {"pixel_values", "mm_placeholder_offsets", "mm_placeholder_lengths"} <= set(vision.prefill_kwargs[-1])
+    assert _names(vision, "prefill") == [("prefill", 1, [8], False)]
+
+
+def test_a_continuation_whose_restart_the_base_moves_into_a_vision_item_is_not_speculable(adapter, monkeypatch):
+    model = build_model(adapter, monkeypatch, cls=adapter.Gemma4DFlashContractVisionForConditionalGeneration)
+    model.is_multimodal = True
+    model.image_token_id = 5
+    _mm_prefill(model, _image_prompt(256, 10, 20), 256, offsets=[10], lengths=[20])
+    assert model._spec_pending[1] == 256
+    # A continuation at the SDPA-aligned 256 that cuts no item keeps the taps and extends them.
+    _mm_prefill(model, _image_prompt(400, 10, 20), 400, start=256, offsets=[10], lengths=[20])
+    taps, end = model._spec_pending
+    assert end == 400 and [tap.shape[2] for tap in taps] == [256, 256, 144, 144]
+    # A continuation at 256 cutting the image run [200, 300) is restarted at 128 by the base, which
+    # re-prefills rows 128..255: their taps would repeat, so the chunk runs without speculation.
+    model = build_model(adapter, monkeypatch, cls=adapter.Gemma4DFlashContractVisionForConditionalGeneration)
+    model.is_multimodal = True
+    model.image_token_id = 5
+    _mm_prefill(model, _image_prompt(256, 10, 20), 256, offsets=[10], lengths=[20])
+    _mm_prefill(model, _image_prompt(400, 200, 100), 400, start=256, offsets=[200], lengths=[100])
+    assert model._spec_pending is None
+    assert _names(model, "capture")[-1] == ("capture", None)
+    assert _names(model, "prefill")[-1] == ("prefill", 1, [400], False), "the base prefill still runs"

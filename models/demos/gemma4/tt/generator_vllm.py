@@ -5483,6 +5483,10 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
             # the chunk start, so their taps would appear twice and shift every
             # later row of the drafter's window.
             speculable = False
+        if speculable and cached > 0 and self._dflash_mm_restart_moves(kwargs, tokens, cached):
+            # Same duplication through the multimodal restart: the base moves a
+            # continuation's restart to the start of a vision item it cuts.
+            speculable = False
         if not speculable:
             self._dflash_drop_pending()
             self._dflash_disarm_taps()
@@ -5502,6 +5506,25 @@ class Gemma4DFlashContractForCausalLM(Gemma4SpecContractBase, Gemma4DFlashBase):
         self._spec_pending = (taps, end)
         self._spec_active = self._spec_active and self._dflash_live_owner is not None
         return out
+
+    def _dflash_mm_restart_moves(self, kwargs, tokens, cached):
+        """Whether the base prefill restarts this continuation below ``cached``.
+
+        ``Gemma4ForCausalLM.prefill_forward`` moves an SDPA-aligned restart
+        that cuts an image or video placeholder run to that run's start
+        (``gemma4_mm_restart_outside_vision_items``) and re-prefills the rows
+        between. Their taps would be captured a second time, so such a chunk
+        is served without speculation, like an unaligned one.
+        """
+        if not self.is_multimodal:
+            return False
+        vision_ids = [t for t in (self.image_token_id, getattr(self, "video_token_id", None)) if t is not None]
+        if not vision_ids:
+            return False
+        offsets = _per_slot_items(kwargs, "mm_placeholder_offsets", 1)
+        lengths = _per_slot_items(kwargs, "mm_placeholder_lengths", 1)
+        moved = gemma4_mm_restart_outside_vision_items([int(cached)], tokens, offsets, lengths, vision_ids)
+        return int(moved[0]) != int(cached)
 
     def _dflash_prompt_speculable(self, prompt_len):
         limit = int(os.environ.get("GEMMA4_DFLASH_MAX_SPEC_ISL", "0"))
@@ -7031,4 +7054,28 @@ class Gemma4MTPContractUnifiedVisionForConditionalGeneration(
     Same composition as ``Gemma4MTPContractVisionForConditionalGeneration``
     over ``Gemma4UnifiedVisionForConditionalGeneration``; the registration
     carries upstream's ``Gemma4UnifiedProcessingInfo``.
+    """
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Gemma4MultiModalProcessor,
+    info=Gemma4ProcessingInfo,
+    dummy_inputs=Gemma4DummyInputsBuilder,
+)
+class Gemma4DFlashContractVisionForConditionalGeneration(
+    Gemma4DFlashContractForCausalLM, Gemma4VisionForConditionalGeneration
+):
+    """Text + image/video serving with the dFlash drafter on the speculative contract (31B).
+
+    The dFlash prefill override captures the residual taps around an explicit
+    ``Gemma4ForCausalLM.prefill_forward`` call, which is where the multimodal
+    staging lives (``_stage_multimodal_prefill`` replaces the embedding step
+    by the merged ``[prompt_len, hidden]`` embeddings and forces the eager
+    prefill the dFlash rail forces anyway), followed by the lane router and
+    the chunk plan; the taps come from the decoder-layer loop and cover the
+    prefilled rows whatever produced their embeddings. The override adds one
+    multimodal rule: a continuation whose restart the base moves into a
+    vision item (``_dflash_mm_restart_moves``) is prefilled without taps.
+    The processor registration keys on this class, as it does for
+    ``Gemma4VisionForConditionalGeneration``.
     """

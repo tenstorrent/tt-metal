@@ -319,11 +319,19 @@ def drafter_module():
         yield _fresh_import(patch, "models.demos.gemma4.tt.dflash_drafter")
 
 
-def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
-    """A contract-rail model over recording stubs, after a solo-capable warmup."""
-    cls = adapter.Gemma4DFlashContractForCausalLM
+def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,), cls=None):
+    """A contract-rail model over recording stubs, after a solo-capable warmup.
+
+    ``cls`` selects the dFlash contract class to build (the text class by default, or its
+    composed vision class).
+    """
+    cls = cls or adapter.Gemma4DFlashContractForCausalLM
     model = cls.__new__(cls)
     model.events = []
+    model.prefill_kwargs = []
+    model.is_multimodal = False
+    model.image_token_id = None
+    model.video_token_id = None
     model.model = [Target(model.events, ring=ring)]
     attach_sampling_state(model)
     model.model_args = [SimpleNamespace(max_seq_len=1024, max_batch_size=32)]
@@ -372,6 +380,7 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,)):
     def prefill(self, *args, page_tables_per_layer=None, **kwargs):
         tokens = kwargs["tokens"]
         model.events.append(("prefill", int(tokens.shape[0]), kwargs.get("prompt_lens"), kwargs.get("enable_trace")))
+        model.prefill_kwargs.append(sorted(kwargs))
         model.last_prefill_tables = (kwargs.get("page_table"), page_tables_per_layer)
         target = model.model[0]
         if target.tap_layers is not None:
