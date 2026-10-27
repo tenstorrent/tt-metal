@@ -492,7 +492,9 @@ class ttMLA:
             )
         if self.tp_factor > 1:
             ready_semaphore, data_valid_semaphore = self.tt_ccl.get_mla_high_bw_gather_semaphores()
-            self._tp_gather_semaphores = dict(ready_semaphore=ready_semaphore, data_valid_semaphore=data_valid_semaphore)
+            self._tp_gather_semaphores = dict(
+                ready_semaphore=ready_semaphore, data_valid_semaphore=data_valid_semaphore
+            )
             if not self.kv_only and not self._merge_qkv_a:
                 self._q_a_latent_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
                     name="q_a_latent",
