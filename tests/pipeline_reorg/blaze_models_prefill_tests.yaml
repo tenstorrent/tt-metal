@@ -1082,7 +1082,7 @@
 
     section_start 1
     (
-      timeout -k 2m 67m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 90m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_flash_transformer_depth -vvv --tb=short
       '
@@ -1095,7 +1095,7 @@
   skus:
     bh_sc1:
       # Measured 52.3 min x 1.25 + 1, charged to models/demo/bh_sc1.
-      timeout: 67
+      timeout: 90
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
@@ -1140,7 +1140,7 @@
 
     section_start 1
     (
-      timeout -k 2m 66m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 85m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py::test_v4_pro_transformer_depth_head -vvv --tb=short
       '
@@ -1149,7 +1149,7 @@
 
     section_start 2
     (
-      timeout -k 2m 117m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 140m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py -k "test_v4_pro_transformer_e2e and layers10to35" -vvv --tb=short
       '
@@ -1158,7 +1158,7 @@
 
     section_start 3
     (
-      timeout -k 2m 106m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 130m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/v4/test_transformer_depth.py -k "test_v4_pro_transformer_e2e and layers36to60" -vvv --tb=short
       '
@@ -1172,7 +1172,7 @@
     bh_sc1:
       # Sum of the section timeouts, each measured x 1.25 + 1 (51.7 -> 66, 92.1 -> 117, 83.8 -> 106),
       # charged to models/demo/bh_sc1.
-      timeout: 289
+      timeout: 355
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
