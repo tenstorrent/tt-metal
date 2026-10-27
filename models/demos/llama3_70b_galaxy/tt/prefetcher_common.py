@@ -153,13 +153,11 @@ class TtLlamaPrefetcherSetup(LightweightModule):
     def release_global_cb(self):
         global_cb = getattr(self, "global_circular_buffer", None)
         if global_cb is None:
-            return self.global_cb_addresses
-        self.global_cb_addresses = (global_cb.buffer_address(), global_cb.config_address())
+            return
         # Layers and cached programs can still reference this GCB. Release its owned
         # memory explicitly before loading the prefill manager, whose static CBs need it.
         global_cb.deallocate()
         self.global_circular_buffer = None
-        return self.global_cb_addresses
 
     def insert_tensor(self, tensor: ttnn.Tensor):
         self.tensors.append(tensor)
