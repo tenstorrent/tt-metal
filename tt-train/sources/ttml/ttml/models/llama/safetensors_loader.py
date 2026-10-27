@@ -206,6 +206,10 @@ class _Rule:
     # fills the parameter. None for a single source, whose rows the parameter's shape already fixes.
     block_rows: tuple[int, ...] | None = None
 
+    def __post_init__(self) -> None:
+        if len(self.sources) > 1 and len(self.block_rows or ()) != len(self.sources):
+            raise ValueError(f"{self.param}: a fused rule needs block_rows for each of its {len(self.sources)} sources")
+
 
 def _load_plan(
     rule: _Rule, param, tp: _TpAxis | None, mesh_size: int, checkpoint: _Checkpoint
@@ -366,6 +370,7 @@ def load_from_safetensors(model: Llama, safetensors_path: str | os.PathLike) -> 
             - the checkpoint is missing a tensor, or is tied while the model is untied (or vice versa)
             - the checkpoint ships a bias the model has, which this loader can't load; any other lands in ``unused``
             - a tensor appears in two files, or is not 1-D or 2-D
+            - a tensor is stored as anything but F32, BF16 or F16 (a quantized checkpoint)
             - a tensor's shape differs from what the config implies (a transposed weight included)
             - a block of a fused parameter (q, k or v; gate or up) has other rows than the config implies
             - a parameter is sharded over a mesh axis other than 'tp', or over 'tp' on a dim other than rows or columns

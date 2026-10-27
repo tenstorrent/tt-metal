@@ -24,6 +24,8 @@ Tests exercise both NanoGPT (nanogpt config) and Llama (nanollama config).
 """
 
 import math
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -827,6 +829,55 @@ class TestLoraTrainEvalMode:
         lora_model.train()
         for block in lora_model.model.blocks:
             assert block.attention.qkv_linear.get_run_mode() == RunMode.TRAIN
+
+
+# =============================================================================
+# The LoRA example's --resume
+# =============================================================================
+
+
+def _lora_llama_example():
+    """sources/examples/lora_llama/train_lora_llama.py, which imports its sibling llama_config.py."""
+    example_dir = str(Path(__file__).resolve().parents[2] / "sources" / "examples" / "lora_llama")
+    if example_dir not in sys.path:
+        sys.path.insert(0, example_dir)
+    import train_lora_llama
+
+    return train_lora_llama
+
+
+class TestLoraLlamaExampleResume:
+    @staticmethod
+    def lora_llama(config):
+        return LoraModel(Llama(config), LoraConfig(rank=4, alpha=8.0, target_modules=["qkv_linear", "out_linear"]))
+
+    def test_resumes_every_adapter(self, toy_llama_config, tmp_path):
+        example = _lora_llama_example()
+        saved = self.lora_llama(toy_llama_config)
+        example.save_lora_checkpoint(saved, str(tmp_path), step=1)
+        resumed = self.lora_llama(toy_llama_config)
+
+        example.load_lora_checkpoint(resumed, str(tmp_path / "lora_step_1.safetensors"))
+
+        resumed_params = resumed.parameters()
+        for name, param in saved.parameters().items():
+            if not param.get_requires_grad():
+                continue
+            np.testing.assert_array_equal(
+                resumed_params[name].to_numpy(ttnn.DataType.FLOAT32), param.to_numpy(ttnn.DataType.FLOAT32), name
+            )
+
+    def test_refuses_adapters_saved_before_the_qkv_fusion(self, toy_llama_config, tmp_path, expect_error):
+        from safetensors.numpy import load_file, save_file
+
+        example = _lora_llama_example()
+        model = self.lora_llama(toy_llama_config)
+        example.save_lora_checkpoint(model, str(tmp_path), step=1)
+        path = str(tmp_path / "lora_step_1.safetensors")
+        save_file({name.replace("qkv_linear", "q_linear"): array for name, array in load_file(path).items()}, path)
+
+        with expect_error(RuntimeError, "not in the checkpoint: .*qkv_linear"):
+            example.load_lora_checkpoint(model, path)
 
 
 if __name__ == "__main__":

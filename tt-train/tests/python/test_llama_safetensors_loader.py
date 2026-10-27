@@ -235,7 +235,7 @@ class TestLoadPlan:
     def test_a_row_shard_expects_the_global_shape(self, placements):
         placements[:] = [ttnn.PlacementReplicate(), ttnn.PlacementShard(ROW_DIM)]
         tp = _TpAxis(index=1, size=2)
-        rule = _Rule("w_gate_up", ("gate", "up"))
+        rule = _Rule("w_gate_up", ("gate", "up"), block_rows=(64, 64))
         headers = HeadersOnly({"gate": (64, HIDDEN), "up": (64, HIDDEN)})
         assert _load_plan(rule, self.param(64, HIDDEN), tp, 2, headers) == (ROW_DIM, (128, HIDDEN))
 
@@ -255,6 +255,12 @@ class TestLoadPlan:
         headers = HeadersOnly({source: (n, MODEL_HIDDEN) for source, n in zip(rule.sources, rows)})
         with expect_error(RuntimeError, "the config implies"):
             _load_plan(rule, self.param(sum(rows), MODEL_HIDDEN), None, 1, headers)
+
+    @pytest.mark.parametrize("block_rows", [None, (64,)], ids=["none", "too few"])
+    def test_a_fused_rule_needs_the_rows_of_every_block(self, block_rows, expect_error):
+        """Without each block's rows, the check above would not run for that rule."""
+        with expect_error(ValueError, "needs block_rows for each of its 2 sources"):
+            _Rule("w_gate_up", ("gate", "up"), block_rows=block_rows)
 
 
 class TestHelpers:
@@ -745,7 +751,9 @@ class TestLoadIntoModel:
         load_from_safetensors(model, tmp_path)
         assert_every_parameter_loaded(model, hf)
 
-    @pytest.mark.parametrize("checkpoint_dtype", [np.float32, ml_dtypes.bfloat16], ids=["f32 file", "bf16 file"])
+    @pytest.mark.parametrize(
+        "checkpoint_dtype", [np.float32, ml_dtypes.bfloat16, np.float16], ids=["f32 file", "bf16 file", "f16 file"]
+    )
     @pytest.mark.parametrize("dtype", [ttnn.DataType.FLOAT32, ttnn.DataType.BFLOAT16], ids=["f32 model", "bf16 model"])
     def test_keeps_the_models_dtype(self, tmp_path, dtype, checkpoint_dtype):
         """The model decides the precision and the checkpoint supplies the values: an fp32 parameter

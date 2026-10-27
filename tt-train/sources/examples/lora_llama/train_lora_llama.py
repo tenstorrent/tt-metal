@@ -61,27 +61,29 @@ def save_lora_checkpoint(model: LoraModel, path: str, step: int) -> None:
 
 
 def load_lora_checkpoint(model: LoraModel, filepath: str) -> None:
-    """Restore LoRA parameters from a previously saved safetensors checkpoint."""
+    """Restore LoRA parameters from a previously saved safetensors checkpoint.
+
+    Raise before writing anything unless it holds exactly the model's trainable parameters."""
     import ml_dtypes
     from safetensors.numpy import load_file
 
     saved = load_file(filepath)
     parameters = model.parameters()
+    trainable = {name for name, param in parameters.items() if param.get_requires_grad()}
+    unknown = sorted(set(saved) - trainable)
+    missing = sorted(trainable - set(saved))
+    if unknown or missing:
+        raise RuntimeError(
+            f"{filepath} does not match the model's trainable parameters:"
+            + "".join(f"\n  not trainable in the model: {name}" for name in unknown)
+            + "".join(f"\n  not in the checkpoint: {name}" for name in missing)
+        )
 
-    loaded, skipped = 0, []
     for name, arr in saved.items():
-        if name not in parameters:
-            skipped.append(name)
-            continue
         restored = ttml.autograd.Tensor.from_numpy(arr.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE)
         parameters[name].assign(restored)
-        loaded += 1
 
-    print(f"Resumed {loaded} LoRA parameters from {filepath}")
-    if skipped:
-        print(f"Warning: {len(skipped)} saved tensors not found in model:")
-        for n in skipped:
-            print(f"  - {n}")
+    print(f"Resumed {len(saved)} LoRA parameters from {filepath}")
 
 
 def parse_args():
