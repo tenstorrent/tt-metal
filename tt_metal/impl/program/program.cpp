@@ -489,7 +489,7 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
 Program::Program(const ProgramDescriptor& descriptor) : Program() { populate_from_descriptor(descriptor); }
 
 Program::Program(distributed::MeshDevice& mesh_device, const ProgramDescriptor& descriptor) :
-    Program(std::make_shared<detail::ProgramImpl>(extract_context_id(&mesh_device))) {
+    Program(std::make_shared<detail::ProgramImpl>(mesh_device.impl().get_context_id())) {
     populate_from_descriptor(descriptor);
 }
 
