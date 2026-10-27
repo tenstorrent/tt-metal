@@ -1505,7 +1505,7 @@ constexpr float kCrossChunkingMeanAbsTol = 5e-4F;
     }
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Few items: most cores get one.
     run_chunk_knob_sweep(SDPATestConfig{
@@ -1519,7 +1519,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal) {
         .test_name = "ChunkKnobs_Causal"});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // 144 sequences, GQA: many items per core at every chunking.
     run_chunk_knob_sweep(SDPATestConfig{
@@ -1533,7 +1533,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_GQA_ManySeqs) {
         .test_name = "ChunkKnobs_Causal_GQA_ManySeqs"});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_NonPow2) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal_NonPow2) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // S = 12 tiles: 3-tile chunks give odd sub-blocks and a causal step count that is not a power of two.
     run_chunk_knob_sweep(
@@ -1549,7 +1549,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_NonPow2) {
         {{96, 96}, {32, 96}, {96, 32}, {128, 96}, {96, 384}});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_HeadStacking) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Causal_HeadStacking) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // GQA with 4 heads per group: stacks of 2 and 4 heads, with 1..4 Q rows each.
     run_chunk_knob_sweep(
@@ -1570,6 +1570,79 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary_HeadStacking) {
     // The (1, 1, S, S) mask is read once per step and shared by the stacked heads.
     run_chunk_knob_sweep(
         SDPATestConfig{
+// One blocking row per compiled variant (causal, arbitrary, no mask + gate); the full sweeps are nightly.
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Smoke) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 1U,
+            .sequence_length = 256U,
+            .query_dim = 128U,
+            .key_value_dim = 128U,
+            .num_query_heads = 2U,
+            .num_key_heads = 2U,
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .test_name = "ChunkKnobs_Smoke_Causal"},
+        {{128, 256, 1}});
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 1U,
+            .sequence_length = 256U,
+            .query_dim = 128U,
+            .key_value_dim = 64U,
+            .num_query_heads = 2U,
+            .num_key_heads = 1U,
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+            .test_name = "ChunkKnobs_Smoke_Arbitrary"},
+        {{64, 64, 2}});
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 1U,
+            .sequence_length = 256U,
+            .query_dim = 256U,
+            .key_value_dim = 256U,
+            .value_dim = 128U,
+            .num_query_heads = 2U,
+            .num_key_heads = 2U,
+            .mask_type = ttml::metal::AttentionMaskType::None,
+            .use_gate = true,
+            .test_name = "ChunkKnobs_Smoke_None_Gate"},
+        {{64, 128, 1}});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_NoIntermediates) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // The RETURN_INTERMEDIATES-less compile with explicit chunking, checked against the references.
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 1U,
+            .sequence_length = 256U,
+            .query_dim = 128U,
+            .key_value_dim = 128U,
+            .num_query_heads = 2U,
+            .num_key_heads = 2U,
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .return_intermediates = false,
+            .test_name = "ChunkKnobs_NoIntermediates"},
+        {{128, 256, 1}, {64, 64, 1}});
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Arbitrary_NonPow2) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // 3 x 2 mask tiles per step: the mask stamp's last DST pass is a 2-tile tail.
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 1U,
+            .sequence_length = 384U,
+            .query_dim = 128U,
+            .key_value_dim = 128U,
+            .num_query_heads = 2U,
+            .num_key_heads = 2U,
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+            .test_name = "ChunkKnobs_Arbitrary_NonPow2"},
+        {{96, 64, 1}, {96, 96, 1}});
+}
+
             .batch_size = 1U,
             .sequence_length = 256U,
             .query_dim = 256U,     // 4 heads * 64
@@ -1581,7 +1654,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary_HeadStacking) {
         {{64, 64, 2}, {32, 128, 4}});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_None_Gate_HeadStacking) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_None_Gate_HeadStacking) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // No mask, vWt < qWt, gate: the gate rows are stacked like the Q rows.
     run_chunk_knob_sweep(
@@ -1599,7 +1672,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_None_Gate_HeadStacking) {
         {{64, 128, 2}, {128, 64, 2}});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_Arbitrary) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     run_chunk_knob_sweep(SDPATestConfig{
         .batch_size = 1U,
@@ -1612,7 +1685,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary) {
         .test_name = "ChunkKnobs_Arbitrary"});
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_None_DiffVDim_Gate) {
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_None_DiffVDim_Gate) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // No mask, vWt < qWt, gate: non-square PV geometry.
     run_chunk_knob_sweep(SDPATestConfig{
