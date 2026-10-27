@@ -660,7 +660,9 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
         const ttml::metal::SDPAForwardProgramConfig pinned{
             .q_chunk_size = picked.Sq_chunk_t * 32U,
             .k_chunk_size = picked.Sk_chunk_t * 32U,
-            .heads_per_item = picked.heads_per_item};
+            .heads_per_item = picked.heads_per_item,
+            .max_pieces = config.program_config.max_pieces,  // same schedule too: the merge order is part of
+            .num_cores = config.program_config.num_cores};   // the numerics the two runs must share
         auto ungated = ttml::metal::sdpa_fw(
             query,
             key,
