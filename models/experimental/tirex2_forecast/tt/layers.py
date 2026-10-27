@@ -411,6 +411,14 @@ def log_sigmoid(x):
     return out
 
 
+class _Acts:
+    """Unary activations to fuse into binary ops."""
+
+    def __init__(self, ttnn):
+        for k in ("SIGMOID", "EXP", "TANH"):
+            setattr(self, k, ttnn.UnaryWithParam(getattr(ttnn.UnaryOpType, k)))
+
+
 def slstm_recurrence(
     device,
     WxT,
@@ -434,6 +442,7 @@ def slstm_recurrence(
 
     T, _, B, G = tuple(WxT.shape)
     D = G // 4
+    _act = _Acts(ttnn)
     f32 = ttnn.float32
     ys = []
     y_bf = c = n = m = None
@@ -450,39 +459,37 @@ def slstm_recurrence(
             free(ry, wx)
         pi, pf, pz, po = (ttnn.slice(pre, (0, 0, 0, j * D), (1, 1, B, (j + 1) * D)) for j in range(4))
         free(pre)
-        tz = ttnn.tanh(pz)
-        so = ttnn.sigmoid(po)
-        free(pz, po)
         if t == 0 and init is None:
             # n == 0 everywhere before the first step: m = pre_i, i = 1, c = tanh(z), n = 1
             free(pf)
-            m, c = pi, tz
+            m, c = pi, ttnn.tanh(pz)
+            free(pz)
             n = consts.full(1.0, (1, 1, B, D))
-            y = ttnn.multiply(so, c)
+            y = ttnn.multiply(c, po, input_tensor_b_activations=[_act.SIGMOID])
+            free(po)
         else:
+            # activations fused into the binary ops (not into the scalar maximum: it drops them)
             lf = log_sigmoid(pf)
             lfm = ttnn.add(lf, m)
             free(pf, lf)
             m_new = ttnn.maximum(pi, lfm)
-            ig = ttnn.exp(ttnn.subtract(pi, m_new))
-            fg = ttnn.exp(ttnn.subtract(lfm, m_new))
+            ig = ttnn.subtract(pi, m_new, activations=[_act.EXP])
+            fg = ttnn.subtract(lfm, m_new, activations=[_act.EXP])
             free(pi, lfm, m)
-            fc = ttnn.multiply(fg, c)
-            iz = ttnn.multiply(ig, tz)
-            free(c, tz)
-            c = ttnn.add(fc, iz)
-            free(fc, iz)
-            fn = ttnn.multiply(fg, n)
-            free(n, fg)
-            nn = ttnn.add(fn, ig)
-            free(fn, ig)
+            iz = ttnn.multiply(ig, pz, input_tensor_b_activations=[_act.TANH])
+            free(pz)
+            c_new = ttnn.addcmul(iz, fg, c)  # fg c + ig tanh z
+            free(iz, c)
+            c = c_new
+            nn = ttnn.addcmul(ig, fg, n)  # fg n + ig
+            free(n, fg, ig)
             n = ttnn.maximum(nn, 1.0)
             free(nn)
-            oc = ttnn.multiply(so, c)
+            oc = ttnn.multiply(c, po, input_tensor_b_activations=[_act.SIGMOID])
+            free(po)
             y = ttnn.divide(oc, n)
             free(oc)
             m = m_new
-        free(so)
         if record is not None:
             record.append(tuple(ttnn.to_torch(t).float()[0, 0] for t in (y, c, n, m)))
         if y_bf is not None and not y_fp32:
@@ -517,10 +524,8 @@ def slstm_prepare(x, w: TtSLSTM, precision: Precision):
     xn = rms_norm(x, df.NORM_EPS)
     xT = ttnn.transpose(xn, 0, 2)  # [T, 1, B, 512]
     free(xn)
-    wx = linear(xT, w.w_in, precision, dtype=ttnn.float32, config=precision.gate_config(), role="w_in")
+    WxT = linear(xT, w.w_in, precision, bias=w.bias, dtype=ttnn.float32, config=precision.gate_config(), role="w_in")
     free(xT)
-    WxT = ttnn.add(wx, w.bias)  # fp32 gate bias
-    free(wx)
     return WxT
 
 
