@@ -1334,6 +1334,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // Unused while STREAM_REGISTERS_AVAILABLE is 1.
     named_args["TO_RECEIVER_PACKETS_SENT_COUNTERS_BASE_ADDR"] = 0;
     named_args["LOCAL_SENDER_PACKETS_SENT_COUNTERS_BASE_ADDR"] = 0;
+    named_args["LOCAL_DOWNSTREAM_READ_COUNTERS_BASE_ADDR"] = 0;
 
     // --- Host signal args (defaults; compute_mesh_router_builder overrides when wait_for_host_signal) ---
     named_args["IS_LOCAL_HANDSHAKE_MASTER"] = 0;

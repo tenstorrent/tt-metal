@@ -1064,11 +1064,14 @@ struct SenderKernelTrafficConfig {
     bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
 
     FORCE_INLINE void setup_credit_update_noc_state(const EdmSenderT& adapter, uint8_t noc) {
-        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
-        const uint64_t noc_sem_addr =
-            get_noc_addr(adapter.edm_noc_x, adapter.edm_noc_y, adapter.edm_buffer_remote_free_slots_update_addr, noc);
-        noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
-            noc_sem_addr, packed_val, 0xf, adapter.sync_noc_cmd_buf, noc);
+        // Software credits publish a write count with a plain write; there is no credit state to program.
+        if constexpr (tt::tt_fabric::connection_interface::kernel_stream_registers_available) {
+            auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+            const uint64_t noc_sem_addr = get_noc_addr(
+                adapter.edm_noc_x, adapter.edm_noc_y, adapter.edm_buffer_remote_free_slots_update_addr, noc);
+            noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
+                noc_sem_addr, packed_val, 0xf, adapter.sync_noc_cmd_buf, noc);
+        }
     }
 
     template <bool BENCHMARK_MODE>

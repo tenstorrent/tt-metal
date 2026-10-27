@@ -52,6 +52,10 @@ static constexpr uint8_t kInvalidStatusReadTrid = 0xFF;
  */
 template <bool EAGER_STAGING = false, uint8_t NUM_BUFFERS = 0>
 class FabricMuxV2Sender {
+    static_assert(
+        connection_interface::kernel_stream_registers_available,
+        "Mux V2 takes its clients' credits in stream registers; it has no software-counter form");
+
 public:
     static constexpr bool USER_DEFINED_NUM_BUFFERS = NUM_BUFFERS != 0;
 

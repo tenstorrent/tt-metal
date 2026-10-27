@@ -112,8 +112,8 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     bool progress = false;
 
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
-    uint32_t free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
-    bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
+    bool has_unsent_packet =
+        sender_channel_has_unsent_packet(local_sender_channel_worker_interface, sender_channel_free_slots_stream_id);
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
@@ -165,7 +165,7 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
-        increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        sender_channel_take_packet(local_sender_channel_worker_interface, sender_channel_free_slots_stream_id);
     }
 
     // We only want to actually bother checking for completions after a certain number of sent packets are outstanding
