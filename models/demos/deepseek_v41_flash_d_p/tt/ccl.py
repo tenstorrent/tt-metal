@@ -45,10 +45,15 @@ _RS_LINKS: dict = {}
 _DEALLOC = [ttnn.deallocate]
 
 
+_PINNED: set = set()  # EXPERTS_XG_PINNED: buffer addresses of persistent tensors dealloc leaves alone
+
+
 def dealloc(t: ttnn.Tensor) -> None:
     """dealloc(t); GLUE_FOLD=on (P.19, set by ``configure`` at model load): the binding itself, without
     ttnn's FastOperation wrapper (its config reads, graph-capture check and try / except: ~1.3 us of ~6 us a call,
     ~1000 calls a chunk). The bring-up profiler's op sequences then skip these calls on both of its runs alike."""
+    if _PINNED and t.is_allocated() and t.buffer_address() in _PINNED:
+        return
     _DEALLOC[0](t)
 
 
@@ -170,7 +175,7 @@ def _fits(t: ttnn.Tensor, dim: int) -> bool:
     return d < rank - 2 or t.shape[d] % 32 == 0
 
 
-def all_gather(t: ttnn.Tensor, dim: int, cluster_axis: int) -> ttnn.Tensor:
+def all_gather(t: ttnn.Tensor, dim: int, cluster_axis: int, out: ttnn.Tensor | None = None) -> ttnn.Tensor:
     """ttnn.all_gather(t, dim, cluster_axis) into DRAM (a data move, exact), on fabric_all_gather when CCL_IMPL=fabric
     and its contract fits. Does not consume ``t``."""
     mesh = t.device()
@@ -179,7 +184,8 @@ def all_gather(t: ttnn.Tensor, dim: int, cluster_axis: int) -> ttnn.Tensor:
     g = mesh.shape[cluster_axis]
     shape = list(t.shape)
     shape[dim % len(shape)] *= g
-    out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), t.dtype, t.layout, mesh, DRAM)
+    if out is None:  # (EXPERTS_XG_PINNED: the caller's persistent output)
+        out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), t.dtype, t.layout, mesh, DRAM)
     s0, s1 = _sems(mesh)
     return ttnn.bringup.fabric_all_gather(
         t, dim, out, cluster_axis=cluster_axis, num_links=AG_LINKS, ready_semaphore=s0, data_valid_semaphore=s1

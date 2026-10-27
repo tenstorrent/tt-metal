@@ -50,6 +50,7 @@ import ttnn
 from . import ccl
 from .ccl import dealloc
 from .common import DRAM, SP_AXIS
+from .settings import settings
 
 TILE = 32
 LINKS = 2  # fabric links of the column's port (one port core per direction drives both: ports_per_direction)
@@ -426,7 +427,15 @@ class WeightedCombine:
     def gather_x(self, qx: ttnn.Tensor) -> ttnn.Tensor:
         """q(x) [1, 1, s, H] bf16 TILE of the mesh row -> the column's rows [R s, H] bf16 ROW_MAJOR."""
         xr = ttnn.to_layout(qx, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
-        g = ccl.all_gather(xr, 2, SP_AXIS) if self.R > 1 else xr
+        out = None
+        if self.R > 1 and settings.get("EXPERTS_XG_PINNED") == "on":  # one gather buffer for every call (see setting)
+            if getattr(self, "_xg_out", None) is None:
+                shape = list(xr.shape)
+                shape[2] *= self.R
+                self._xg_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), xr.dtype, xr.layout, self.mesh, DRAM)
+                ccl._PINNED.add(self._xg_out.buffer_address())
+            out = self._xg_out
+        g = ccl.all_gather(xr, 2, SP_AXIS, out=out) if self.R > 1 else xr
         if g is not xr:
             dealloc(xr)
         return ttnn.reshape(g, [g.shape[-2], self.H])

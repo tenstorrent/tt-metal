@@ -277,6 +277,14 @@ TABLE = {
         "bfp4-rounded weights 0.0202 (the device path as exact as bfp8's; the rest is bfloat4_b's rounding of the "
         "weights, DS41-74). FIX.9 deleted the per-chunk fp4_decode value and the loop / unified kernels (EXPERTS_KERNEL)",
     ),
+    "EXPERTS_XG_PINNED": Setting(
+        "off",
+        ("off", "on"),
+        "Overseer measurement hack (owner 2026-10-27, until the new flat expert op lands): on = the column gather of "
+        "the routed experts' x (weighted_combine.gather_x) writes one persistent DRAM buffer, so "
+        "flat_routed_expert_with_program (whose program key bakes xg's address) hits its program cache on every "
+        "warm run; off (shipped) = a new gather buffer a call (56 addresses over 5 runs: never warm, F196 census)",
+    ),
     "EXPERTS_WEIGHT_CACHE": Setting(
         "on",
         ("on", "off"),
