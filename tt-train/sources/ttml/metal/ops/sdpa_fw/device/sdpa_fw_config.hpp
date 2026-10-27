@@ -73,7 +73,7 @@ struct SDPAForwardCbTiles {
     uint32_t output;
     uint32_t reduction_scaler;  // the ones tile of the row reductions
     uint32_t matmul_reduce;     // the ones-column tile of the matmul row reduce and the lse mask
-    uint32_t partial;           // each of partial in / partial out (split units)
+    uint32_t partial;           // each of partial in / partial out (split units): four rows, two per NoC batch
     uint32_t alpha;             // the partial's rescale factor (split units)
 };
 

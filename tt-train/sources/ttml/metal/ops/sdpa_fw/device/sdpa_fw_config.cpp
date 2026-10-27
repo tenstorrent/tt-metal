@@ -153,7 +153,7 @@ SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChun
         .output = rows * shape.vWt,
         .reduction_scaler = 1U,
         .matmul_reduce = 1U,
-        .partial = with_partials ? 2U * partial_tiles_per_row(shape) : 0U,  // streamed row by row
+        .partial = with_partials ? 4U * partial_tiles_per_row(shape) : 0U,  // streamed two rows per barrier
         .alpha = with_partials ? rows : 0U};
 }
 

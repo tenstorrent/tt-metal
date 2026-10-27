@@ -69,6 +69,7 @@ void kernel_main() {
 #endif
 #ifdef SPLIT_UNITS
     constexpr uint32_t partial_row_tiles = vWt + 2U;  // per row: max, sum, vWt output tiles, all fp32
+    constexpr uint32_t kPartialRowsPerBatch = (rows % 2U == 0U) ? 2U : 1U;  // batches must not straddle the CB end
     const uint32_t partial_tile_bytes = get_tile_size(cb_partial_in);
     const auto scratch_address_generator = TensorAccessor(scratch_args, scratch_address, partial_tile_bytes);
 #endif
@@ -161,6 +162,7 @@ void kernel_main() {
         read_q_chunk(unit.item, unit.step_begin, unit.step_end);
 #ifdef SPLIT_UNITS
         if (unit.role == kUnitMerger) {
+            read_gate(unit.item);  // only needed by finalize, so it goes out before the wait
             // The senders bump this core's semaphore once each after their partial landed in scratch.
             static_assert(sdpa_fw_items::kMaxMergersPerCore == 4U, "the semaphore ids are compile args 8..11");
             const uint32_t sem_ids[sdpa_fw_items::kMaxMergersPerCore] = {
@@ -172,18 +174,19 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_ids[unit.sem_idx]));
             noc_semaphore_wait_min(sem, unit.num_partials);
             noc_semaphore_set(sem, 0);
+            // Partial rows come in kPartialRowsPerBatch at a time, one barrier each; cb_partial_in holds
+            // twice that, so the next batch is read while the merge works on this one.
             for (uint32_t p = 0; p < unit.num_partials; ++p) {
-                for (uint32_t r = 0; r < rows; ++r) {
+                for (uint32_t r = 0; r < rows; r += kPartialRowsPerBatch) {
                     read_tiles_by_row(
                         cb_partial_in,
                         scratch_address_generator,
                         ((unit.slot + p) * rows + r) * partial_row_tiles,
-                        partial_row_tiles,
+                        kPartialRowsPerBatch * partial_row_tiles,
                         partial_tile_bytes,
-                        partial_row_tiles);
+                        kPartialRowsPerBatch * partial_row_tiles);
                 }
             }
-            read_gate(unit.item);
         }
 #endif
     });
