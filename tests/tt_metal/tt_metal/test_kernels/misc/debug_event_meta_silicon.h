@@ -73,6 +73,7 @@ inline constexpr DefaultedMeta kDefaulted{"meta_defaulted"};
 // Every byte the assembler text has to escape: quotes, a backslash, a newline, a tab, UTF-8 and DEL.
 inline constexpr TwoStringsMeta kTwoStrings{"meta_two_strings", "line one\nline two\t\"quotes\" \\ \xC3\xA9 \x7F end"};
 inline constexpr uint32_t kColor = 0x42D4F4;
+inline constexpr uint8_t kVerbosity = 3;
 
 // The template site is instantiated with these values: equal values share one site, so two distinct sites.
 inline constexpr const char* kTemplatedName = "meta_templated";

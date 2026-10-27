@@ -56,27 +56,18 @@ static constexpr int kWallClockLowIdx = 0;
         }                                                                 \
     }
 
-// A metadata type of the kernel's own, the example in tools/profiler/STREAMING_PROFILER_ZONE_IDS_WALKTHROUGH.md. Tracy
-// takes a zone's colour only from ZoneColorMeta, so a zone carrying this type is drawn in its RISC's colour.
-struct ZoneVerbosityMeta {
-    const char* name;
-    uint32_t color;
-    uint8_t verbosity;
-};
-
 // ZONE_MODE == 0 keeps the wall-clock spin: it needs durations calibrated in microseconds, which a
 // nop-iteration count cannot express.
-// ZONE_C is a ZONE with a colour, carried to the host as the site's ZoneColorMeta; ZONE_V carries a ZoneVerbosityMeta.
+// ZONE_C is a ZONE with a colour, carried to the host as the site's ZoneColorMeta; ZONE_V adds a verbosity level
+// (ZoneVerbosityMeta), and is the example in tools/profiler/STREAMING_PROFILER_ZONE_IDS_WALKTHROUGH.md.
 #if ZONE_MODE
 #define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)
 #define ZONE_C(NAME, GRADUATED, COLOR) ZONE_NOPS_AS(DeviceZoneScopedNC(NAME, COLOR), ZONE_CYC)
-#define ZONE_V(NAME, GRADUATED, COLOR, VERBOSITY) \
-    ZONE_NOPS_AS(DeviceZoneScopedWith(ZoneVerbosityMeta{NAME, COLOR, VERBOSITY}), ZONE_CYC)
+#define ZONE_V(NAME, GRADUATED, COLOR, VERBOSITY) ZONE_NOPS_AS(DeviceZoneScopedNCV(NAME, COLOR, VERBOSITY), ZONE_CYC)
 #else
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
 #define ZONE_C(NAME, GRADUATED, COLOR) ZONE_WALL_AS(DeviceZoneScopedNC(NAME, COLOR), GRADUATED)
-#define ZONE_V(NAME, GRADUATED, COLOR, VERBOSITY) \
-    ZONE_WALL_AS(DeviceZoneScopedWith(ZoneVerbosityMeta{NAME, COLOR, VERBOSITY}), GRADUATED)
+#define ZONE_V(NAME, GRADUATED, COLOR, VERBOSITY) ZONE_WALL_AS(DeviceZoneScopedNCV(NAME, COLOR, VERBOSITY), GRADUATED)
 #endif
 
 // Marker-cost microbench (--bench): bursts of one marker kind, each burst timed against the wall clock, the totals

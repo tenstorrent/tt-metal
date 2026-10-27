@@ -40,6 +40,7 @@ namespace m = debug_event_meta_silicon;
 using tt::debug_event::SiteMeta;
 using tt::debug_event::ZoneColorMeta;
 using tt::debug_event::ZoneMeta;
+using tt::debug_event::ZoneVerbosityMeta;
 
 constexpr const char* kKernel = "tests/tt_metal/tt_metal/test_kernels/misc/debug_event_meta_silicon.cpp";
 constexpr int kRiscs = 5;
@@ -149,6 +150,8 @@ TEST(DebugEventMetaSilicon, EveryShapeRoundTripsOnEveryRisc) {
             expect_meta(*z.site, ZoneMeta{"meta_plain"});
         } else if (name == "meta_colored") {
             expect_meta(*z.site, ZoneColorMeta{"meta_colored", m::kColor});
+        } else if (name == "meta_verbose") {
+            expect_meta(*z.site, ZoneVerbosityMeta{"meta_verbose", m::kColor, m::kVerbosity});
         } else if (name == "meta_nested") {
             expect_meta(*z.site, m::kNested);
         } else if (name == "meta_deep") {
@@ -177,6 +180,7 @@ TEST(DebugEventMetaSilicon, EveryShapeRoundTripsOnEveryRisc) {
     const std::string_view once[] = {
         "meta_plain",
         "meta_colored",
+        "meta_verbose",
         "meta_nested",
         "meta_deep",
         "meta_all_widths",
