@@ -691,6 +691,52 @@ if want d1_t; then
     [ -d generated/profiler/.logs ] && cp -r generated/profiler/.logs "profile_d1_logs" 2>/dev/null
 fi
 
+# U1 (2026-10-27): no per-iteration member union. The M9 profile (re-read 2026-10-27) shows the busiest cores idle
+# ~1.3 ms in seven ~200 us gaps, one per ring iteration: the reader re-read every chain member's mask row (one DRAM
+# read with a barrier + a bit scan per chunk, ~70 per iteration) to build the union of the members' pieces, while
+# compute waited. Cores outside chains (no union) did not stall. The same code runs under D1, which is why D1 timed
+# the same as the chain. Now members stream every piece holding a full block of the shard (no reads);
+# TT_SOL_MEMBER_UNION=1 restores the union. Rebuild first (reader kernel + factory).
+# Gate (~10 min): 5 s parity at 3 and 2 pages, 1184 rows, one structured small case (1024 rows, 256-key pieces, tau 2).
+# Then traced (6 replays), each run independent: dense; the old best (M8 chain + union); M8 without the union;
+# D1 + union; D1 without the union at tau 1 / 2 / 3 and at 2 pages; and two profiles (D1 without the union, M8 with
+# it), each summarized to log_val_<name>_summary.txt on the machine (sol_profile_summary.py) so the 2.4 GB CSV
+# never needs copying.
+if want u1; then
+    if ! python -c "import diffusers.models.transformers.transformer_minimax_h3" > /dev/null 2>&1; then
+        echo "    u1: diffusers lacks transformer_minimax_h3; install the upgrade first (no timings possible)"
+        exit 1
+    fi
+    P="4x8 and resident_call_parity and r4736"
+    ok=1
+    run u1_parity 600 pytest "$T" -s -k "$P" || ok=0
+    run u1_parity_kv2 600 env TT_SOL_KV_PAGES=2 pytest "$T" -s -k "$P" || ok=0
+    run u1_r1184 900 pytest "$T" -s -k "4x8sp1tp0nl2 and resident_matches_compact and r1184k512" || ok=0
+    run u1_k256 600 pytest "$T" -s -k "4x8sp1tp0nl2 and resident_matches_compact and r1024k256 and tau2" || ok=0
+    if [ "$ok" != 1 ]; then
+        echo "    u1: a correctness run failed; skipping the timings"
+    else
+        S="4x8 and nl2 and 768p_5s and not dense and not agather"
+        TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off"
+        M8="TT_SOL_RES_MCAST=0 TT_SOL_CHAIN_CREDITS=0"
+        run u1_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 pytest "$B" -s -k "4x8 and nl2 and 768p_5s and dense"
+        run u1_trace_m8_union_tau1.0 900 env $TR SOL_TAU=1.0 $M8 TT_SOL_MEMBER_UNION=1 pytest "$B" -s -k "$S"
+        run u1_trace_m8_tau1.0 900 env $TR SOL_TAU=1.0 $M8 pytest "$B" -s -k "$S"
+        run u1_trace_d1_union_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_MEMBER_UNION=1 pytest "$B" -s -k "$S"
+        for tau in 1.0 2.0 3.0; do
+            run "u1_trace_tau${tau}" 900 env $TR SOL_TAU=$tau pytest "$B" -s -k "$S"
+        done
+        run u1_trace_kv2_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_KV_PAGES=2 pytest "$B" -s -k "$S"
+        PR="TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 SOL_BENCH_MODE=resident"
+        PR="$PR SOL_BENCH_PREFIX=off SOL_TAU=1.0"
+        CSV=generated/profiler/.logs/profile_log_device.csv
+        run u1_profile 900 env $PR pytest "$B" -s -k "$S"
+        [ -f "$CSV" ] && run u1_profile_summary 1200 python3 sol_profile_summary.py "$CSV"
+        run u1_profile_m8_union 900 env $PR $M8 TT_SOL_MEMBER_UNION=1 pytest "$B" -s -k "$S"
+        [ -f "$CSV" ] && run u1_profile_m8_union_summary 1200 python3 sol_profile_summary.py "$CSV"
+    fi
+fi
+
 # D1 timings (2026-10-27), no rebuild: the d1 job of 2026-10-27 (160 W, commit 13d1b96 = D1 with the review fixes)
 # passed every correctness run (512 / 1024 / 1184 rows, 5 s parity at 3 and 2 pages, PCC as M8) but lost all
 # timings to a missing diffusers patch. So: the import check first (seconds), one 5 s parity as a sanity check on

@@ -622,6 +622,11 @@ void kernel_main() {
     // producer's local source word for that set. The group arguments follow the Sol chain members.
     constexpr bool sol_res_mcast = get_named_compile_time_arg_val("sol_res_mcast") == 1;
     static_assert(!sol_res_mcast || (sol_resident && !sol_chain_credits), "group delivery is the resident stream");
+    // Resident chain / group members stream every piece that holds a full block of the shard instead of the union
+    // of the members' kept pieces. The union read every member's mask row each ring iteration (one DRAM read with
+    // a barrier and a bit scan per chunk, ~200 us per iteration in the M9 profile, while compute idled); at the
+    // densities this path runs, the union is nearly every piece anyway. Compute skips a piece it keeps no block of.
+    constexpr bool sol_res_full_union = get_named_compile_time_arg_val("sol_res_full_union") == 1;
     constexpr uint32_t cb_k_stage = get_named_compile_time_arg_val("cb_k_stage");
     constexpr uint32_t cb_v_stage = get_named_compile_time_arg_val("cb_v_stage");
     constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
@@ -1541,7 +1546,20 @@ void kernel_main() {
                     uhi |= res_hi[i1];
                     ++i1;
                 }
-                if (sol_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
+                if constexpr (sol_res_full_union) {
+                    if (sol_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
+                        // Every piece that holds a full block of this shard (block 0 forced, as in row_block_bits):
+                        // a superset of the members' union that needs no mask reads. The same on every member
+                        // (it depends on the shard only), and inside every live piece, so compute agrees.
+                        uint32_t words[kBlockWords];
+                        for (uint32_t w = 0; w < kBlockWords; ++w) {
+                            words[w] = full_bits[w];
+                        }
+                        words[0] |= 1u;
+                        piece_bits(words, ulo, uhi);
+                    }
+                } else if (sol_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
+                    SOL_ZONE("RD_RES_UNION");  // the members' mask rows: one DRAM read + bit scan per chunk
                     for (uint32_t m = 0; m < sol_n_members; ++m) {
                         const uint32_t m_start = get_arg_val<uint32_t>(sol_members_base + 2 * m);
                         const uint32_t m_count = get_arg_val<uint32_t>(sol_members_base + 2 * m + 1);

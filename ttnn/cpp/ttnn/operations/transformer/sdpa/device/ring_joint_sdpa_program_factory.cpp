@@ -3386,6 +3386,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"sol_chain_credits", sol_chain_credits ? 1u : 0u},
         // D1: resident group delivery by multicast (see sol_res_mcast above).
         {"sol_res_mcast", sol_res_mcast ? 1u : 0u},
+        // Resident members stream every piece holding a full block of the shard instead of reading every member's
+        // mask row per ring iteration for the union (~200 us per iteration in the M9 profile). TT_SOL_MEMBER_UNION=1
+        // restores the union for an A/B.
+        {"sol_res_full_union",
+         (sol_resident &&
+          !(std::getenv("TT_SOL_MEMBER_UNION") && std::string(std::getenv("TT_SOL_MEMBER_UNION")) == "1"))
+             ? 1u
+             : 0u},
         // M4 static row max (see sol_static_max above): 1 iff sol_row_max is present (resident only). The reader
         // then has a sol_row_max accessor right after sol_pv's and its address at rotated_args_base + 3, with the
         // bias / n_members / my_start / table / member words shifted up by one (no slot otherwise, so every other
