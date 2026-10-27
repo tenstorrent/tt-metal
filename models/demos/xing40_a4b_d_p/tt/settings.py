@@ -113,12 +113,4 @@ class _XingSettings(Settings):
         return super().get(name)
 
 
-# Component and swap tests run at these values (framework rule); the shipped defaults above are judged end to end.
-MAX_PRECISION = {
-    "KV_CACHE_DTYPE": "bf16",
-    "MLA_SDPA_FIDELITY": "HiFi4",
-    "MATMUL_FIDELITY": "HiFi4",
-    "EXPERTS_FIDELITY": "hifi4",
-}
-
-settings = _XingSettings("XING_", TABLE, max_precision=MAX_PRECISION)
+settings = _XingSettings("XING_", TABLE)

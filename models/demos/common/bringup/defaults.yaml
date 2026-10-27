@@ -45,6 +45,7 @@ tests:
   determinism_repeats: 5      # component and fork tests: A runs, A,B,A then A again, bit-identical to the first A
                               # (testing/determinism.py; 0 turns it off). About 5 extra calls per test.
   nondeterministic: {}        # component steps exempt from that check, {step: reason}
+  fork_waivers: {}            # F199: owner-accepted failing fork tests, {<test id as fork_suite prints it>: reason}; WAIVED
 
 box:
   test_timeout_s: 3600     # one device test, seconds (hang guard)

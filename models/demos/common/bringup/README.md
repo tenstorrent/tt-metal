@@ -75,6 +75,7 @@ Other commands: `$B status`, `$B rerun --from <task>` (resets it and everything 
 | perf | X.1, X.2, P.*, X.3 | script + person + agent | profile; each pick decided by the owner on its A/B report; final 56k check |
 | fork tests | O.1 | agent | a test case for every `ttnn.bringup` call the model makes |
 | settings | Z.1 | `settings-audit` agent (smaller model) | settings lint over the whole model, an accuracy rung, all contract tests |
+| all fork tests | F.1 | agent | every fork's every test (unit, every model's cases, original-op tests), strictly; a failure is fixed or owner-waived (F199) |
 
 ## Switches: one place each
 
@@ -162,7 +163,7 @@ model dir: one `tt/`, one CPU reference, one plan. The new run's spec is
 `seed` over the seed's layers; its tasks, state, results and approvals live in that folder (the seed's stay as they
 are). `plan.ledger_gen --spec <it> --write` writes the seeded graph: CK.1 checkpoint, G.<rung> imported goldens, B.1,
 W.1 (the seed's layers at real size on the new mesh), M.1 (every layer), then the ladder, smoke, contract, perf,
-O.1, Z.1. The seed's reference, contract and plan are carried (tasks.yaml `seed:`); its component and swap tests are
+O.1, Z.1, F.1. The seed's reference, contract and plan are carried (tasks.yaml `seed:`); its component and swap tests are
 for diagnosis only. Goldens are made where the checkpoint fits in RAM, indexed there
 (`reference.golden_import --rung <r> --index`), and copied, in part if the run's tests do not read everything; spec
 paths may be relative to the artifact root, so only `paths.art` changes per host.
