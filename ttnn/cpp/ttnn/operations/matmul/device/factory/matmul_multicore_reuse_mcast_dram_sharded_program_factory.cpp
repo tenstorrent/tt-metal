@@ -1928,6 +1928,9 @@ namespace {
 bool same_dram_bank_workers(
     const tt::tt_metal::distributed::MeshDevice& device, const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto coords = tensor_coords.coords();
+    if (coords.empty()) {
+        return true;
+    }
     for (const auto noc : {tt::tt_metal::NOC::NOC_0, tt::tt_metal::NOC::NOC_1}) {
         const auto reference = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, coords.front());
         for (const auto& coord : coords) {
@@ -1942,9 +1945,9 @@ bool same_dram_bank_workers(
 
 // A chip's best reader for a DRAM bank is the first unharvested worker column east of the bank, and logical columns
 // skip harvested ones, so on a mesh of differently harvested chips one placement for the whole mesh puts some chips'
-// readers far from their banks (a QuietBox 2 batch-32 decode's dense MoE matmuls ran ~35-50% slower on two of its
-// four chips with the first chip's placement). There each chip gets its own program with its own placement; a mesh
-// whose chips agree keeps one program per range.
+// readers west of their banks, where NOC0 brings the bank's data the long way round the row. There each chip gets its
+// own program with its own placement; a workload whose chips agree keeps one program per range, placed for those
+// chips.
 ttnn::device_operation::MeshWorkloadArtifacts
 MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_artifacts(
     const ttnn::prim::MatmulParams& operation_attributes,
@@ -1955,8 +1958,8 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_art
     const auto& device = *tensor_args.input_tensors.at(0).device();
     if (same_dram_bank_workers(device, tensor_coords)) {
         for (const auto& range : tensor_coords.ranges()) {
-            auto shared =
-                create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, nullptr);
+            const auto coord = range.start_coord();
+            auto shared = create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, &coord);
             artifacts.programs.push_back({
                 .range = range,
                 .spec = std::move(shared.spec),

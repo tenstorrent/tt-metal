@@ -400,8 +400,7 @@ bool use_dram_sharded_multicore(
 // per bank for the first num_banks banks, each the nearest free core (Manhattan distance in logical
 // coordinates, ties to the same row first) to that bank's NOC-optimal worker, taken round-robin over
 // the banks so every bank gets its nearest core first. coord: the chip the cores run on (its own per-bank
-// optimal workers: the chips of a mesh can be harvested differently); nullptr: the workers every chip of the
-// mesh can use.
+// optimal workers: the chips of a mesh can be harvested differently); nullptr: the first chip's.
 std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
@@ -434,7 +433,7 @@ void get_optimal_dram_bank_to_reader_assignment(
     tt::tt_metal::NOC noc);
 
 // coord: the mesh coordinate of the chip the readers run on (its own bank-to-worker placement: chips of one mesh can
-// be harvested differently); nullptr: the mesh-wide placement (the first local chip's).
+// be harvested differently); nullptr: the first chip's placement.
 std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,

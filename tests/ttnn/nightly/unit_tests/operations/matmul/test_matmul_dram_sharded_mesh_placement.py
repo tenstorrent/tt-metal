@@ -9,7 +9,8 @@ columns skip harvested ones, so on a mesh of differently harvested Blackhole chi
 whole mesh -- the first chip's -- puts other chips' readers west of their banks, where NoC 0 delivers the bank's data
 the long way round the row. Those chips then run the matmul 35-50% slower, and every collective after it waits for
 them. The op now builds one program per chip with that chip's own placement when the chips' placements differ (and
-one program when they agree), for the single-reader and the multi-reader (num_workers_per_dram_bank) pipelines.
+one program when they agree). Cases: one reader per bank, two readers per bank (num_workers_per_dram_bank=2), and the
+multi-core pipeline with two cores per bank (use_multicore_pipeline=True).
 
 This test measures each chip's device time with the real-time profiler and requires the slowest chip to be within
 _SPREAD of the fastest. On a mesh of identically harvested chips it passes either way. On a QuietBox 2 (2026-10-26)
@@ -35,7 +36,7 @@ _M, _K, _N = 32, 4096, 16384
 _GRID = (8, 8)  # in0 width-shard and output cores
 
 
-def _matmul_inputs(mesh_device, num_workers_per_dram_bank):
+def _matmul_inputs(mesh_device, num_workers_per_dram_bank, use_multicore_pipeline):
     banks = mesh_device.dram_grid_size().x
     assert _N % (banks * num_workers_per_dram_bank) == 0
     cores = _GRID[0] * _GRID[1]
@@ -71,6 +72,7 @@ def _matmul_inputs(mesh_device, num_workers_per_dram_bank):
         per_core_N=_N // cores // 32,
         fused_activation=None,
         num_workers_per_dram_bank=num_workers_per_dram_bank,
+        use_multicore_pipeline=use_multicore_pipeline,
     )
     compute = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
@@ -94,16 +96,20 @@ def _matmul_inputs(mesh_device, num_workers_per_dram_bank):
     return run, in0 @ in1
 
 
-@pytest.mark.parametrize("num_workers_per_dram_bank", [1, 2], ids=["one_worker", "two_workers"])
+@pytest.mark.parametrize(
+    "num_workers_per_dram_bank, use_multicore_pipeline",
+    [(1, False), (2, False), (2, True)],
+    ids=["one_worker", "two_workers", "two_workers_multicore"],
+)
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.requires_host_iommu
 @pytest.mark.skipif(not is_blackhole(), reason="per-chip DRAM reader placement matters on harvested Blackhole meshes")
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
-def test_dram_sharded_matmul_chips_balanced(mesh_device, num_workers_per_dram_bank):
+def test_dram_sharded_matmul_chips_balanced(mesh_device, num_workers_per_dram_bank, use_multicore_pipeline):
     require_realtime_profiler("DRAM-sharded matmul per-chip balance")
     torch.manual_seed(0)
-    run, expected = _matmul_inputs(mesh_device, num_workers_per_dram_bank)
+    run, expected = _matmul_inputs(mesh_device, num_workers_per_dram_bank, use_multicore_pipeline)
 
     # every chip computes the same product
     out = ttnn.sharded_to_interleaved(run(), ttnn.DRAM_MEMORY_CONFIG)
