@@ -97,9 +97,10 @@ class TTModulatedDeformConv2dPack:
             output_layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-    def __call__(self, x):
+    def __call__(self, x, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         """``x`` is a (1, 1, B*H*W, C_in) tensor in conv2d's layout. Returns the
-        (1, 1, B*H_out*W_out, C_out) output, also in conv2d's layout, and its height and width."""
+        (1, 1, B*H_out*W_out, C_out) output, also in conv2d's layout, interleaved in ``memory_config``,
+        and its height and width."""
         if self.input_memory_config is not None:
             x = ttnn.to_memory_config(x, self.input_memory_config)
             if x.layout != ttnn.ROW_MAJOR_LAYOUT:
@@ -121,7 +122,7 @@ class TTModulatedDeformConv2dPack:
 
         # At stride 1 the input has the output's height and width.
         x_nhwc = ttnn.reshape(x_dcn, (self.batch_size, out_h, out_w, x.shape[-1]))
-        out = self.device_dcn(x_nhwc, offset_mask)
+        out = self.device_dcn(x_nhwc, offset_mask, memory_config)
         ttnn.deallocate(x_nhwc)
         ttnn.deallocate(offset_mask)
         return out, out_h, out_w
@@ -566,7 +567,8 @@ class TTCameraBottleneck:
                 ttnn.deallocate(x)
                 staged = ttnn.reallocate(staged)
             ttnn.deallocate(x)
-            y, _, _ = self.dcn(staged)
+            # The group's output fits L1 next to the DCN's buffers, and the DCN writes it faster there.
+            y, _, _ = self.dcn(staged, ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(staged)
             return y
         y, [self.conv2_weight, self.conv2_bias] = ttnn.conv2d(
