@@ -105,7 +105,7 @@ std::unique_ptr<tt::tt_metal::Program> compile_fabric_program(
     tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::IDevice* device, FabricDeviceBuild build) {
     build.builder->create_kernels();
     if (env_impl.get_control_plane().get_fabric_context().get_rtoptions().get_generate_fabric_manifest()) {
-        build.builder->build_and_publish_manifest_chip();
+        build.builder->publish_manifest_chip();
     }
     build.program->impl().compile(
         device, env_impl.get_control_plane().get_fabric_context().get_rtoptions().get_fast_dispatch());
