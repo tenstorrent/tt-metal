@@ -1,0 +1,161 @@
+[ttq] submitted job 858 (cpu); reattach with: ttq wait 858
+[ttq] job 858 queued (0s): 0 ahead; waiting for a free slot
+[ttq] job 858 tirex2/cpu attempt 0 on cpu pool, 16 cores (cpus 16-31,48-63), timeout 3600s, started Mon Oct 26 17:37:26 2026
+[ttq] cwd /home/andy/bringup/tirex2
+[ttq] $ python models/experimental/tirex2_forecast/tests/perf/check_gates.py models/experimental/tirex2_forecast/doc/optimize/iter_01/r1_2fp/bench_69f1e61.json
+ok   floor paper/accuracy pcc_normalized 0.999975 >= 0.998
+ok   floor paper/accuracy pcc_spread 0.999943 >= 0.999
+ok   floor paper/accuracy pcc_row_p01_active 0.997118 >= 0.99
+ok   floor paper/accuracy pcc_row_min_active 0.989621 >= 0.98
+ok   floor paper/accuracy spread_ratio_p01 0.979034 >= 0.93
+ok   floor paper/accuracy spread_ratio_p99 1.04907 <= 1.08
+ok   floor paper/accuracy pcc_final 0.999994 >= 0.99
+ok   floor paper/accuracy pcc_final_spread 0.999925 >= 0.999
+ok   floor paper/accuracy median_err 0.114789 <= 0.15
+ok   floor paper/accuracy flat_max_err 0.0170581 <= 0.05
+ok   floor paper/accuracy spread_ratio_min 0.881196 >= 0.7
+ok   floor paper/accuracy spread_ratio_max 1.093 <= 1.43
+ok   floor paper/accuracy spread_ratio_p50 1.00291 in [0.98, 1.02]
+ok   floor paper/accuracy inactive_max_err 0.0208308 <= 0.05
+ok   drift paper/accuracy pcc_normalized 0.999975 >= 0.999475 (baseline 0.999975)
+ok   drift paper/accuracy pcc_spread 0.999943 >= 0.999443 (baseline 0.999943)
+ok   drift paper/accuracy pcc_final 0.999994 >= 0.999492 (baseline 0.999992)
+ok   drift paper/accuracy pcc_final_spread 0.999925 >= 0.999427 (baseline 0.999927)
+ok   drift paper/accuracy pcc_row_p01_active 0.997118 >= 0.987212 (baseline 0.997212)
+ok   drift paper/accuracy spread_ratio_p01 0.979034 >= 0.947257 (baseline 0.967257)
+ok   drift paper/accuracy spread_ratio_p99 1.04907 <= 1.06028 (baseline 1.04028)
+ok   drift paper/accuracy flat_max_err 0.0170581 <= 0.0276207 (baseline 0.0176207)
+ok   drift paper/accuracy median_err 0.114789 <= 0.129593 (baseline 0.117812)
+ok   drift paper/accuracy spread_ratio_p50 1.00291 within 0.01 of 1.00144
+ok   drift paper/accuracy abs_err_max 0.209604 <= 0.325988 (baseline 0.217325)
+ok   drift paper/accuracy inactive_max_err 0.0208308 <= 0.0285257 (baseline 0.0190171)
+ok   floor paper/performance pcc_normalized 0.9998 >= 0.998
+ok   floor paper/performance pcc_spread 0.999692 >= 0.997
+ok   floor paper/performance pcc_row_p01_active 0.98976 >= 0.98
+ok   floor paper/performance pcc_row_min_active 0.979345 >= 0.93
+ok   floor paper/performance spread_ratio_p01 0.938328 >= 0.9
+ok   floor paper/performance spread_ratio_p99 1.19899 <= 1.25
+ok   floor paper/performance spread_ratio_min 0.814143 >= 0.6
+ok   floor paper/performance spread_ratio_max 1.40204 <= 1.67
+ok   floor paper/performance spread_ratio_p50 1.01766 in [0.96, 1.04]
+ok   floor paper/performance pcc_final 0.999942 >= 0.99
+ok   floor paper/performance pcc_final_spread 0.999705 >= 0.998
+ok   floor paper/performance median_err 0.20693 <= 0.3
+ok   floor paper/performance flat_max_err 0.0827531 <= 0.1
+ok   floor paper/performance inactive_max_err 0.100376 <= 0.2
+ok   drift paper/performance pcc_normalized 0.9998 >= 0.99931 (baseline 0.99981)
+ok   drift paper/performance pcc_spread 0.999692 >= 0.999194 (baseline 0.999694)
+ok   drift paper/performance pcc_final 0.999942 >= 0.999448 (baseline 0.999948)
+ok   drift paper/performance pcc_final_spread 0.999705 >= 0.999213 (baseline 0.999713)
+ok   drift paper/performance pcc_row_p01_active 0.98976 >= 0.98053 (baseline 0.99053)
+ok   drift paper/performance spread_ratio_p01 0.938328 >= 0.918097 (baseline 0.938097)
+ok   drift paper/performance spread_ratio_p99 1.19899 <= 1.2059 (baseline 1.1659)
+ok   drift paper/performance flat_max_err 0.0827531 <= 0.096862 (baseline 0.086862)
+ok   drift paper/performance median_err 0.20693 <= 0.23192 (baseline 0.210836)
+ok   drift paper/performance spread_ratio_p50 1.01766 within 0.01 of 1.01548
+ok   drift paper/performance abs_err_max 0.421592 <= 0.632388 (baseline 0.421592)
+ok   floor long_context/accuracy pcc_normalized 0.99998 >= 0.998
+ok   floor long_context/accuracy pcc_spread 0.99995 >= 0.999
+ok   floor long_context/accuracy pcc_row_p01_active 0.998916 >= 0.99
+ok   floor long_context/accuracy pcc_row_min_active 0.998826 >= 0.98
+ok   floor long_context/accuracy spread_ratio_p01 0.98439 >= 0.93
+ok   floor long_context/accuracy spread_ratio_p99 1.05844 <= 1.08
+ok   floor long_context/accuracy pcc_final 0.999995 >= 0.99
+ok   floor long_context/accuracy pcc_final_spread 0.999952 >= 0.999
+ok   floor long_context/accuracy median_err 0.0568147 <= 0.15
+ok   floor long_context/accuracy flat_max_err 0.011771 <= 0.05
+ok   floor long_context/accuracy spread_ratio_min 0.98023 >= 0.7
+ok   floor long_context/accuracy spread_ratio_max 1.06751 <= 1.43
+ok   floor long_context/accuracy spread_ratio_p50 1.00225 in [0.98, 1.02]
+ok   floor long_context/accuracy inactive_max_err 0.011771 <= 0.05
+ok   drift long_context/accuracy pcc_normalized 0.99998 >= 0.999483 (baseline 0.999983)
+ok   drift long_context/accuracy pcc_spread 0.99995 >= 0.999451 (baseline 0.999951)
+ok   drift long_context/accuracy pcc_final 0.999995 >= 0.999494 (baseline 0.999994)
+ok   drift long_context/accuracy pcc_final_spread 0.999952 >= 0.999453 (baseline 0.999953)
+ok   drift long_context/accuracy pcc_row_p01_active 0.998916 >= 0.988923 (baseline 0.998923)
+ok   drift long_context/accuracy spread_ratio_p01 0.98439 >= 0.962978 (baseline 0.982978)
+ok   drift long_context/accuracy spread_ratio_p99 1.05844 <= 1.0805 (baseline 1.0605)
+ok   drift long_context/accuracy flat_max_err 0.011771 <= 0.0232808 (baseline 0.0132808)
+ok   drift long_context/accuracy median_err 0.0568147 <= 0.057925 (baseline 0.0526591)
+ok   drift long_context/accuracy spread_ratio_p50 1.00225 within 0.01 of 1.00067
+ok   drift long_context/accuracy abs_err_max 0.071115 <= 0.103025 (baseline 0.0686831)
+ok   drift long_context/accuracy inactive_max_err 0.011771 <= 0.0195138 (baseline 0.0130092)
+ok   floor long_context/performance pcc_normalized 0.99988 >= 0.998
+ok   floor long_context/performance pcc_spread 0.999768 >= 0.997
+ok   floor long_context/performance pcc_row_p01_active 0.996366 >= 0.98
+ok   floor long_context/performance pcc_row_min_active 0.995808 >= 0.93
+ok   floor long_context/performance spread_ratio_p01 0.954276 >= 0.9
+ok   floor long_context/performance spread_ratio_p99 1.09582 <= 1.25
+ok   floor long_context/performance spread_ratio_min 0.948368 >= 0.6
+ok   floor long_context/performance spread_ratio_max 1.1008 <= 1.67
+ok   floor long_context/performance spread_ratio_p50 1.00772 in [0.96, 1.04]
+ok   floor long_context/performance pcc_final 0.999968 >= 0.99
+ok   floor long_context/performance pcc_final_spread 0.999803 >= 0.998
+ok   floor long_context/performance median_err 0.0810655 <= 0.3
+ok   floor long_context/performance flat_max_err 0.0744436 <= 0.1
+ok   floor long_context/performance inactive_max_err 0.0744436 <= 0.1
+ok   drift long_context/performance pcc_normalized 0.99988 >= 0.999366 (baseline 0.999866)
+ok   drift long_context/performance pcc_spread 0.999768 >= 0.999273 (baseline 0.999773)
+ok   drift long_context/performance pcc_final 0.999968 >= 0.999464 (baseline 0.999964)
+ok   drift long_context/performance pcc_final_spread 0.999803 >= 0.99931 (baseline 0.99981)
+ok   drift long_context/performance pcc_row_p01_active 0.996366 >= 0.986563 (baseline 0.996563)
+ok   drift long_context/performance spread_ratio_p01 0.954276 >= 0.931908 (baseline 0.951908)
+ok   drift long_context/performance spread_ratio_p99 1.09582 <= 1.13024 (baseline 1.09024)
+ok   drift long_context/performance flat_max_err 0.0744436 <= 0.0785028 (baseline 0.0685028)
+ok   drift long_context/performance median_err 0.0810655 <= 0.100989 (baseline 0.0918084)
+ok   drift long_context/performance spread_ratio_p50 1.00772 within 0.01 of 1.00713
+ok   drift long_context/performance abs_err_max 0.109288 <= 0.163931 (baseline 0.109288)
+ok   floor multivariate/accuracy pcc_normalized 0.99993 >= 0.998
+ok   floor multivariate/accuracy pcc_spread 0.999742 >= 0.999
+ok   floor multivariate/accuracy pcc_row_p01_active 0.997469 >= 0.99
+ok   floor multivariate/accuracy pcc_row_min_active 0.992071 >= 0.98
+ok   floor multivariate/accuracy spread_ratio_p01 0.982194 >= 0.93
+ok   floor multivariate/accuracy spread_ratio_p99 1.0531 <= 1.08
+ok   floor multivariate/accuracy pcc_final 0.99999 >= 0.99
+ok   floor multivariate/accuracy pcc_final_spread 0.999807 >= 0.999
+ok   floor multivariate/accuracy median_err 0.152533 <= 0.18
+ok   floor multivariate/accuracy flat_max_err 0.0198714 <= 0.05
+ok   floor multivariate/accuracy spread_ratio_min 0.897277 >= 0.7
+ok   floor multivariate/accuracy spread_ratio_max 1.13172 <= 1.43
+ok   floor multivariate/accuracy spread_ratio_p50 1.00563 in [0.98, 1.02]
+ok   floor multivariate/accuracy inactive_max_err 0.0291138 <= 0.06
+ok   drift multivariate/accuracy pcc_normalized 0.99993 >= 0.999445 (baseline 0.999945)
+ok   drift multivariate/accuracy pcc_spread 0.999742 >= 0.999319 (baseline 0.999819)
+ok   drift multivariate/accuracy pcc_final 0.99999 >= 0.99949 (baseline 0.99999)
+ok   drift multivariate/accuracy pcc_final_spread 0.999807 >= 0.999311 (baseline 0.999811)
+ok   drift multivariate/accuracy pcc_row_p01_active 0.997469 >= 0.987124 (baseline 0.997124)
+ok   drift multivariate/accuracy spread_ratio_p01 0.982194 >= 0.952815 (baseline 0.972815)
+ok   drift multivariate/accuracy spread_ratio_p99 1.0531 <= 1.06522 (baseline 1.04522)
+ok   drift multivariate/accuracy flat_max_err 0.0198714 <= 0.0298714 (baseline 0.0198714)
+ok   drift multivariate/accuracy median_err 0.152533 <= 0.163489 (baseline 0.148627)
+ok   drift multivariate/accuracy spread_ratio_p50 1.00563 within 0.01 of 1.00355
+ok   drift multivariate/accuracy abs_err_max 1.29113 <= 2.03044 (baseline 1.35363)
+ok   drift multivariate/accuracy inactive_max_err 0.0291138 <= 0.0404483 (baseline 0.0269656)
+ok   floor multivariate/performance pcc_normalized 0.999585 >= 0.998
+ok   floor multivariate/performance pcc_spread 0.998825 >= 0.997
+ok   floor multivariate/performance pcc_row_p01_active 0.990994 >= 0.98
+ok   floor multivariate/performance pcc_row_min_active 0.973522 >= 0.93
+ok   floor multivariate/performance spread_ratio_p01 0.959557 >= 0.9
+ok   floor multivariate/performance spread_ratio_p99 1.19827 <= 1.25
+ok   floor multivariate/performance spread_ratio_min 0.881017 >= 0.6
+ok   floor multivariate/performance spread_ratio_max 1.40782 <= 1.67
+ok   floor multivariate/performance spread_ratio_p50 1.02396 in [0.96, 1.04]
+ok   floor multivariate/performance pcc_final 0.999961 >= 0.99
+ok   floor multivariate/performance pcc_final_spread 0.999364 >= 0.998
+ok   floor multivariate/performance median_err 0.210097 <= 0.3
+ok   floor multivariate/performance flat_max_err 0.072125 <= 0.1
+ok   floor multivariate/performance inactive_max_err 0.072125 <= 0.15
+ok   drift multivariate/performance pcc_normalized 0.999585 >= 0.999105 (baseline 0.999605)
+ok   drift multivariate/performance pcc_spread 0.998825 >= 0.998351 (baseline 0.998851)
+ok   drift multivariate/performance pcc_final 0.999961 >= 0.999466 (baseline 0.999966)
+ok   drift multivariate/performance pcc_final_spread 0.999364 >= 0.998914 (baseline 0.999414)
+ok   drift multivariate/performance pcc_row_p01_active 0.990994 >= 0.981872 (baseline 0.991872)
+ok   drift multivariate/performance spread_ratio_p01 0.959557 >= 0.937489 (baseline 0.957489)
+ok   drift multivariate/performance spread_ratio_p99 1.19827 <= 1.21975 (baseline 1.17975)
+ok   drift multivariate/performance flat_max_err 0.072125 <= 0.0743125 (baseline 0.0643125)
+ok   drift multivariate/performance median_err 0.210097 <= 0.2397 (baseline 0.217909)
+ok   drift multivariate/performance spread_ratio_p50 1.02396 within 0.01 of 1.02152
+ok   drift multivariate/performance abs_err_max 2.41646 <= 3.62468 (baseline 2.41646)
+0 failure(s)
+[ttq] job 858 done rc=0 in 0s (queued 0s) on cpu pool
+[ttq] log /home/andy/.local/share/ttq/jobs/000858/output.log
