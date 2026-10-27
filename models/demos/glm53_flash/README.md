@@ -70,6 +70,29 @@ image demo's 16 greedy tokens match HF. Targets are the design goals of `~/ashai
 tok/s per user at 256 / 32 / 8 users); the optimization phase is in progress (fused mHC pre-block, the EP32 exchange,
 the sparse decode at long context).
 
+## Serving (vLLM + tt-inference-server)
+
+Stack: stock vLLM 0.30.0 + `vllm-tt-plugin` main (the model is registered in the plugin's built-in map on branch
+`arg/glm53_registration`; until it merges the catalog passes
+`TT_MODEL_CLASS_OVERRIDES=Glm5NextForConditionalGeneration=models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForCausalLM`),
+transformers 5.20.2 (`glm5_next` exists from 5.16: `requirements.txt`). tt-inference-server catalog (branch `arg/glm53_flash_galaxy`):
+BLACKHOLE_GALAXY only; profiles `glm53_flash` = 1 M context x 4 distinct requests (users per row: the 32 slots are 8 replicas of 4
+prompts until per-row prefill ownership lands) and `glm53_flash_128k` = 128 K x 32; `TT_METAL_OPERATION_TIMEOUT_SECONDS=120` (the
+launcher's 5 s watchdog trips on 16 K prefill chunks at 64 K+ positions).
+
+Validated 2026-10-27 on the 8x4 (serving smoke, warm cache, boot 15 min): exact first tokens on the 1 M profile (both reference
+prompts), greedy determinism across rounds through the chat template (thinking on), 4 concurrent 65 514-token needles retrieved 4/4
+(TTFT 26.5 / 52.6 / 78.6 / 104.8 s: the sequence-parallel prefill serves prompts one after another at ~2.5 K tok/s), `vllm bench`
+128 x 128 tokens at 32 requests (4 at a time) 32/32.
+
+Open: (1) served decode = 372 ms per token at 4 users against the 65 ms traced device step: 156 ms inside the adapter (the Python
+page-table row check, fixed; per-step uploads of the ids and 11 position tensors to all 32 chips, replaced by one packed upload under
+`GLM53_DECODE_PACKED_INPUTS=1`, device validation pending; a 32-chip id readback, now one chip per row) and ~220 ms in the plugin
+runner under the 32-request benchmark (profiled next); (2) a 65 536-token `vllm bench` random prompt hangs the eager regions prefill
+in its 3rd 16 K chunk inside the ttnn KDA `reduce_affine_transforms` op (4 chips wait on a cross-chip semaphore while their row
+peers move on; tt-triage captured; natural-text prompts pass), so the 64 K random benchmark point is excluded until the op is fixed;
+(3) 32 distinct 1 M users need the per-row prefill ownership (`doc/mesh/row_ownership.md`).
+
 ## How to run
 
 ```
