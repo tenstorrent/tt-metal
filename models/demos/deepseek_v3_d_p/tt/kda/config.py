@@ -27,6 +27,10 @@ KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 # core; the rest of L1 holds the summary, prefix and scan buffers that run while the chunk terms are alive.
 # Single-device and longer-sequence geometries exceed the budget and would clash with those buffers.
 KDA_PREPARATION_L1_BYTES_PER_CORE = 320 * 1024
+# With the entry correction, the summary's emitted output terms also live in L1, and its circular buffers double on a
+# grid that splits each head's values over 2 cores instead of 4 (11x10): the chunk terms then stay in L1 only up to
+# Galaxy SP8xTP4's 256 KiB per core on its 12x10 grid.
+KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE = 256 * 1024
 # The decay gate stays in interleaved L1 from its projection until chunk preparation has read it when its share of
 # each worker core fits this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_DECAY_L1_BYTES_PER_CORE = 48 * 1024

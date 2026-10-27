@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_OUTPUT_MEMORY_CONFIG,
     KDA_PREP_OUTPUT_BF16_MASK,
     KDA_PREPARATION_L1_BYTES_PER_CORE,
+    KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE,
     KDARecurrenceProgramConfig,
     l1_when_it_fits,
     preparation_bytes,
@@ -712,17 +713,6 @@ class KDARecurrence:
         self._geometry = _RecurrenceGeometry(
             batch, local_rows, heads, key_dim, value_dim, KDA_CHUNK_SIZE, local_rows // KDA_CHUNK_SIZE
         )
-        # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
-        # and chunk preparation's DRAM writes.
-        preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
-        self._preparation_memory = l1_when_it_fits(device, preparation_size, KDA_PREPARATION_L1_BYTES_PER_CORE)
-        if self._preparation_memory.buffer_type != ttnn.BufferType.L1:
-            grid = device.compute_with_storage_grid_size()
-            logger.warning(
-                f"KDA chunk terms need {preparation_size // (grid.x * grid.y) // 1024} KiB per core, over the "
-                f"{KDA_PREPARATION_L1_BYTES_PER_CORE // 1024} KiB L1 budget; keeping them in DRAM, so chunk "
-                f"preparation and the scan run slower ({heads} heads, {local_rows} rows per device)."
-            )
         self._sequence_parallel_axis = sequence_parallel_axis
         self._sequence_parallel = (
             isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
@@ -808,6 +798,22 @@ class KDARecurrence:
                 )
                 # Every correction core reads its head's entry state: L1 spares those DRAM reads.
                 self._affine_relay.entry_memory_config = ttnn.L1_MEMORY_CONFIG
+        # Both scans read the chunk terms chunk by chunk; keeping them in L1 when they fit spares those DRAM reads
+        # and chunk preparation's DRAM writes.
+        preparation_size = preparation_bytes(batch * heads, local_rows // KDA_CHUNK_SIZE, key_dim, value_dim)
+        preparation_budget = (
+            KDA_PREPARATION_L1_BYTES_PER_CORE
+            if self._entry_correction is None
+            else KDA_PREPARATION_WITH_ENTRY_CORRECTION_L1_BYTES_PER_CORE
+        )
+        self._preparation_memory = l1_when_it_fits(device, preparation_size, preparation_budget)
+        if self._preparation_memory.buffer_type != ttnn.BufferType.L1:
+            grid = device.compute_with_storage_grid_size()
+            logger.warning(
+                f"KDA chunk terms need {preparation_size // (grid.x * grid.y) // 1024} KiB per core, over the "
+                f"{preparation_budget // 1024} KiB L1 budget; keeping them in DRAM, so chunk "
+                f"preparation and the scan run slower ({heads} heads, {local_rows} rows per device)."
+            )
         if self._sequence_parallel:
             self._execute = self._run_sp
         elif grouped:
