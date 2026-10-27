@@ -273,8 +273,6 @@ TEST(QuasarAttAetherUncappedConfig, WindowsAreDisjoint) {
 TEST(QuasarAttAetherUncappedConfig, OnlyTheDramRoleDiffersFromTheBaseMap) {
     constexpr const noc_att::MapData& base = quasar_aether_2x3_att_config::MAP;
     constexpr const noc_att::MapData& map = quasar_aether_2x3_uncapped_att_config::MAP;
-    static_assert(
-        quasar_aether_2x3_uncapped_att_config::LOCAL_WINDOW_BASE == quasar_aether_2x3_att_config::LOCAL_WINDOW_BASE);
     static_assert(noc_att::local_window_base(map) == noc_att::local_window_base(base));
     using noc_att::WindowClass;
     for (WindowClass role :
