@@ -14,6 +14,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -106,8 +107,10 @@ void kernel_main() {
         if constexpr (route_contiguous) {
             // one shard on one core: the rows lie at the shard's page pitch, one read per tensor
             route_words = indices.get_aligned_page_size() / 2;
-            noc_async_read(indices.get_noc_addr(0), route_indices_base, rows * 2 * route_words);
-            noc_async_read(scores.get_noc_addr(0), route_scores_base, rows * 2 * route_words);
+            noc.async_read(
+                indices, CoreLocalMem<uint32_t>(route_indices_base), rows * 2 * route_words, {.page_id = 0}, {});
+            noc.async_read(
+                scores, CoreLocalMem<uint32_t>(route_scores_base), rows * 2 * route_words, {.page_id = 0}, {});
         } else {
             for (uint32_t j = 0; j < rows; ++j) {
                 noc.async_read(
@@ -135,10 +138,10 @@ void kernel_main() {
         // deepseek_moe_fast_reduce_nc_fused_reader.cpp: tile k, column 0, row j = score[j][k] when the expert is on
         // this device's axis, else bf16 +0.0 (the zero seed; rows past the tokens stay +0.0); the other columns are
         // never read (COL broadcast)
-        volatile tt_l1_ptr uint16_t* owner_flags = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(owner_base);
-        volatile tt_l1_ptr uint16_t* route_indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(route_indices_base);
-        volatile tt_l1_ptr uint16_t* route_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(route_scores_base);
-        volatile tt_l1_ptr uint16_t* score_words = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(score_tiles_base);
+        const CoreLocalMem<volatile uint16_t> owner_flags(owner_base);
+        const CoreLocalMem<volatile uint16_t> route_indices(route_indices_base);
+        const CoreLocalMem<volatile uint16_t> route_scores(route_scores_base);
+        const CoreLocalMem<volatile uint16_t> score_words(score_tiles_base);
         for (uint32_t j = 0; j < 32; ++j) {
             owned[j] = 0;
         }
@@ -185,13 +188,18 @@ void kernel_main() {
                     const uint32_t src = stage_base + fragment * fragment_bytes;
                     const uint32_t dst =
                         act_base + k * tile_bytes + (j >> 4) * 2 * face_bytes + (j & 15) * face_row_bytes;
-                    noc_async_read(get_noc_addr(src), dst, face_row_bytes);
-                    noc_async_read(get_noc_addr(src + face_row_bytes), dst + face_bytes, face_row_bytes);
+                    noc.async_read(CoreLocalMem<uint32_t>(src), CoreLocalMem<uint32_t>(dst), face_row_bytes, {}, {});
+                    noc.async_read(
+                        CoreLocalMem<uint32_t>(src + face_row_bytes),
+                        CoreLocalMem<uint32_t>(dst + face_bytes),
+                        face_row_bytes,
+                        {},
+                        {});
                     ++fragment;
                 }
             }
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
     }
     act.push_back(top_k);
     stage.push_back(stage_pages);

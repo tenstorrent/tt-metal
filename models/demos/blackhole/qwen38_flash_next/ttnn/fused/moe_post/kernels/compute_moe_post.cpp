@@ -50,6 +50,9 @@ void kernel_main() {
     // ---- deepseek_moe_fast_reduce_nc_fused_compute.cpp ----
     compute_kernel_hw_startup(cb_act, cb_scores, cb_routed);
     bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(cb_act, cb_scores);
+    // Device 2.0 migration: legacy primitive retained: no Compute API broadcast init takes acc_to_dest (bcast_init and
+    // mul_bcast_cols_init leave it 0); this MATH re-init sets it so the top_k products accumulate in DST, as
+    // deepseek_moe_fast_reduce_nc_fused_compute.cpp does.
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MATH_FIDELITY>(
         cb_act, cb_scores, 1 /*acc_to_dest*/)));
     reconfig_data_format(cb_act, cb_scores);

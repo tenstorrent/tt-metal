@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
@@ -18,11 +19,12 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<0, 0>();
     const auto out = TensorAccessor(out_args, out_addr);
 
+    const Noc noc;
     DataflowBuffer out_tile(cb_out);
     {
         out_tile.wait_front(1);
-        noc_async_write(out_tile.get_read_ptr(), out.get_noc_addr(tile_col), tile_bytes);
-        noc_async_write_barrier();
+        noc.async_write(out_tile, out, tile_bytes, {}, {.page_id = tile_col});
+        noc.async_write_barrier();
     }
     out_tile.pop_front(1);
 }
