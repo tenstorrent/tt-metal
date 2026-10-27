@@ -26,10 +26,10 @@ std::vector<std::optional<ttnn::Tensor>> sdpa_fw(
         mask,
         dropout_probability,
         return_intermediates,
+        program_config,
         /*preallocated_intermediate=*/std::nullopt,
         /*preallocated_output=*/std::nullopt,
-        gate,
-        program_config);
+        gate);
 
     if (result.size() == 1U) {
         return {result[0], std::nullopt};
