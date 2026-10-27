@@ -35,7 +35,8 @@ _UNINIT_PAIR = [
 # maps its dense_packing flag to a layout; both pass the output CB's pack source format, which sets the stride units.
 _PACK_HELPER_ARGS = (
     r"<(?:layout|dense_packing \? CustomMmDestLayout::Dense : CustomMmDestLayout::Default)>"
-    r"\( ?pack_src_format\[get_output_id\(out_cb_id\)\]\)"
+    r"\( ?(?:pack_src_format\[get_output_id\(out_cb_id\)\]"
+    r"|infer_pack_reg_fmt\(FO, DST_ACCUM_MODE\))\)"
 )
 _UNINIT_CALL = re.compile(
     rf"PACK\(\(_llk_pack_custom_mm_uninit_{_PACK_HELPER_ARGS}\)\);"
