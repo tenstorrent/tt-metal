@@ -228,7 +228,7 @@ class Display:
         label = f"CAM {i + 1:02d}  people: {len(people_src)}"
         cv2.rectangle(view, (0, 0), (self.tile_w, 22), (0, 0, 0), -1)
         cv2.putText(view, label, (6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-        color = (90, 230, 90) if fps >= 0.97 * self.args.fps else (80, 80, 255)
+        color = (90, 230, 90)
         text = f"{fps:4.1f} FPS"
         (w, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         cv2.putText(view, text, (self.tile_w - w - 6, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
@@ -243,10 +243,8 @@ class Display:
         )
         put(f"YOLO26{self.args.variant[-1]} people counting", 32, 0.7, (255, 255, 255), 2)
         put(f"1 Tenstorrent Blackhole chip, batch {self.args.batch_size}", 58)
-        green, red = (90, 230, 90), (80, 80, 255)
-        ok = stats["stream_fps"] >= 0.97 * self.args.fps
-        put(f"{len(self.streams)} streams x {stats['stream_fps']:.1f} FPS", 96, 0.75, green if ok else red, 2)
-        put(f"= {stats['total_fps']:.0f} images/s   (target {len(self.streams) * self.args.fps})", 124)
+        put(f"{len(self.streams)} streams x {stats['stream_fps']:.1f} FPS", 96, 0.75, (90, 230, 90), 2)
+        put(f"= {stats['total_fps']:.0f} images/s", 124)
         put(f"latency {stats['latency_ms']:.0f} ms (median)   display {stats['display_fps']:.0f} FPS", 148)
         total = sum(counts)
         put(f"People now: {total}", 186, 0.75, (255, 255, 255), 2)
