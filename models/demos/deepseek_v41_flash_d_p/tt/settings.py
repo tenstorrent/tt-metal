@@ -369,7 +369,7 @@ TABLE = {
         "routed experts as our FlatRoutedExpert (bfp4, weights_nk, our weight cache, EXPERTS_LAYOUT: D6, marko = the "
         "block's own layout_of) in the block's "
         "token exchange (owner dispatch, flat experts + combine in one program) with the fixed combine order (D7: the "
-        "exchange's deterministic planner); EXPERTS_PRECISION=glm only (D8); FABRIC_2D lines (D10). MOE_HEAD picks the "
+        "exchange's deterministic planner); EXPERTS_PRECISION=glm only (D8); lines or a torus (D10 lines on the 2x2; D14 torus allowed, untested on DS41). MOE_HEAD picks the "
         "head",
     ),
     "MOE_HEAD": Setting(
