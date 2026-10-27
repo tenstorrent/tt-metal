@@ -40,12 +40,13 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
 
 import ttml
 import ttnn
 from datasets import Dataset
 from safetensors.numpy import save_file
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, LlamaConfig as HFLlamaConfig, LlamaForCausalLM
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.common.utils import build_mesh, repeat_interleave
@@ -362,6 +363,55 @@ def _assert_same_parameters(a, b):
         np.testing.assert_array_equal(
             pa[name].to_numpy(ttnn.DataType.FLOAT32), pb[name].to_numpy(ttnn.DataType.FLOAT32), err_msg=name
         )
+
+
+@pytest.mark.requires_device
+def test_weights_ref_hf_dict_matches_the_transfer_format(patch_llama_weight_loading):
+    """Checks the contract in LLAMA_WEIGHT_TRANSFER.md section 3 on a tiny Llama."""
+    model, _ = grpo_ttml_model.setup_ttml_model(TINY_TRANSFORMER_CONFIG, DEVICE_CONFIG, HF_MODEL_ID)
+    cfg = model.config
+    with torch.device("meta"):
+        hf_model = LlamaForCausalLM(
+            HFLlamaConfig(
+                vocab_size=cfg.vocab_size,
+                hidden_size=cfg.hidden_size,
+                intermediate_size=cfg.intermediate_size,
+                num_hidden_layers=cfg.num_hidden_layers,
+                num_attention_heads=cfg.num_attention_heads,
+                num_key_value_heads=cfg.num_key_value_heads,
+                tie_word_embeddings=True,
+            )
+        )
+    hf_shapes = {key: tuple(value.shape) for key, value in hf_model.state_dict().items()}
+    params = model.parameters()
+
+    exported = grpo_ttml_model.weights_ref_hf_dict(model)
+
+    assert exported.keys() == hf_shapes.keys()
+    assert len(exported) == 3 + 9 * cfg.num_hidden_layers
+    live_buffers = {param.get_value().buffer_address() for param in params.values()}
+    for key, tensor in exported.items():
+        assert isinstance(tensor, ttnn.Tensor), key
+        assert tensor.dtype == ttnn.bfloat16, key
+        assert tensor.layout == ttnn.TILE_LAYOUT, key
+        assert tensor.memory_config() == ttnn.DRAM_MEMORY_CONFIG, key
+        assert all(isinstance(p, ttnn.PlacementReplicate) for p in tensor.tensor_topology().placements()), key
+        hf_shape = hf_shapes[key]
+        assert tuple(tensor.shape) == (1,) * (4 - len(hf_shape)) + hf_shape, key
+        is_kv_slice = key.endswith(("k_proj.weight", "v_proj.weight"))
+        assert (tensor.buffer_address() in live_buffers) != is_kv_slice, key
+    assert exported["model.embed_tokens.weight"].buffer_address() == exported["lm_head.weight"].buffer_address()
+
+    def to_torch(tensor):
+        return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+
+    kv_dim = cfg.num_key_value_heads * cfg.hidden_size // cfg.num_attention_heads
+    for i in range(cfg.num_hidden_layers):
+        kv = to_torch(params[f"Llama/blocks/{i}/attention/kv_linear/weight"].get_value())
+        assert torch.equal(to_torch(exported[f"model.layers.{i}.self_attn.k_proj.weight"]), kv[:, :, :kv_dim])
+        assert torch.equal(to_torch(exported[f"model.layers.{i}.self_attn.v_proj.weight"]), kv[:, :, kv_dim:])
+
+    ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
 @pytest.mark.requires_device
