@@ -98,6 +98,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             num_kvpe_cache_layers=params.num_layers + mtp_levels,
             num_users=params.num_users,
             tp_axis=kv_tp_axis,
+            bank_aligned=True,
         )
         first_full = full_indexer_rank(hf_config, params.first_layer_idx)
         num_index_layers = (
@@ -113,6 +114,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             num_users=params.num_users,
             dtype=ttnn.bfloat8_b,
             tp_axis=kv_tp_axis,
+            bank_aligned=True,
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 
