@@ -59,9 +59,10 @@ def bench_shape(model, device, B, S, iters, do_signpost):
     ttnn.release_trace(device, tid)
     for t in dev_in:
         ttnn.deallocate(t)
-    med = statistics.median(times)
+    # Sustained: the board settles its clock under load, so the median skips the first half.
+    med = statistics.median(times[len(times) // 2 :])
     print(
-        f"B={B:<3} S={S:<5} median {med:8.2f} ms  min {min(times):8.2f} ms  "
+        f"B={B:<3} S={S:<5} sustained {med:8.2f} ms  min {min(times):8.2f} ms  "
         f"{B / med * 1e3:8.1f} seq/s  {B * S / med * 1e3:10.0f} tok/s  trace-vs-eager {maxdiff:.2e}"
     )
     return med
@@ -70,7 +71,7 @@ def bench_shape(model, device, B, S, iters, do_signpost):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--shapes", nargs="+", default=["1x128", "1x512", "8x512", "32x512"])
-    ap.add_argument("--iters", type=int, default=30)
+    ap.add_argument("--iters", type=int, default=30, help="replays; the second half gives the sustained median")
     ap.add_argument("--signpost", action="store_true")
     ap.add_argument("--cfg", nargs="*", default=[], help="RerankConfig overrides, key=value")
     args = ap.parse_args()

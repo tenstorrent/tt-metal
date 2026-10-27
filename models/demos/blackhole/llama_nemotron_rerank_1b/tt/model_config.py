@@ -27,6 +27,13 @@ MM_CONFIGS = {
 }
 
 
+def sdpa_chunks(batch, seq_len):
+    """(q_chunk, k_chunk) per shape, from perf_tools/sweep_sdpa.py and probe_mask.py on a P150."""
+    if seq_len <= 512:
+        return min(seq_len, 128), min(seq_len, 256 if batch == 1 else 512)
+    return 512, 256
+
+
 def mm_block_config(kind, rows):
     table = MM_CONFIGS[kind]
     keys = [m for m in sorted(table) if m <= rows] or [min(table)]
@@ -62,13 +69,24 @@ class RerankConfig:
     act_dtype: object = ttnn.bfloat16
     # Matmul math fidelity.
     mm_fidelity: object = ttnn.MathFidelity.HiFi2
+    # Matmul kinds (qkv, wo, ff13s, ff13, ff2) that run at LoFi instead of mm_fidelity, comma separated.
+    # MIRACL Pearson vs fp32: ff2 0.99959 (baseline 0.99962), ff13s 0.99928, qkv+wo 0.99920, all 0.99918.
+    lofi_kinds: str = "ff2"
+    # HiFi2 SDPA raised the MIRACL mean score error 0.23 -> 0.30 at no measurable speed gain.
     sdpa_fidelity: object = ttnn.MathFidelity.HiFi4
+    # Padding mask dtype. The mask holds only 0 and a large negative value, which bfp4 stores exactly;
+    # SDPA reads it once per (head, q chunk, k chunk), so its size is SDPA's main data movement.
+    mask_dtype: object = ttnn.bfloat4_b
+    # Pass attn_mask_block_map so SDPA skips (q chunk, k chunk) blocks that hold no real query or key.
+    sdpa_block_map: bool = True
+    # SDPA writes heads side by side ([B, 1, S, n_heads * head_dim]) so nlp_concat_heads is not needed.
+    sdpa_concat_heads: bool = True
     # minimal_matmul with the swept block sizes instead of ttnn.linear's own config.
     use_minimal_matmul: bool = True
     # FF1 + FF3 + silu(gate) * up as one minimal_matmul (fuse_swiglu) over an interleaved weight.
     fuse_swiglu: bool = True
     # Activations up to this many bytes are kept in L1 (interleaved) instead of DRAM; 0 = always DRAM.
-    l1_act_bytes: int = 0
+    l1_act_bytes: int = 8_500_000
     extra: dict = field(default_factory=dict)
 
     @classmethod
@@ -115,6 +133,8 @@ def config_from_overrides(items):
             new = float(val)
         elif isinstance(cur, ttnn.MathFidelity):
             new = getattr(ttnn.MathFidelity, val)
+        elif isinstance(cur, str):
+            new = val
         else:
             new = getattr(ttnn, val)
         setattr(cfg, key, new)

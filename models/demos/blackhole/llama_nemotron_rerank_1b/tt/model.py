@@ -26,6 +26,7 @@ from models.demos.blackhole.llama_nemotron_rerank_1b.tt.model_config import (
     SEQ_BUCKETS,
     RerankConfig,
     mm_block_config,
+    sdpa_chunks,
 )
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.weights import WeightLoader
 from models.tt_transformers.tt.common import gather_cos_sin, get_rot_transformation_mat, precompute_freqs
@@ -70,6 +71,8 @@ class NemotronReranker:
         self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
         self.grid = grid
         self.mm_ckc = cfg.compute_config(cfg.mm_fidelity)
+        self.mm_ckc_lofi = cfg.compute_config(ttnn.MathFidelity.LoFi)
+        self.lofi_kinds = {k for k in cfg.lofi_kinds.split(",") if k}
         self.sdpa_ckc = cfg.compute_config(cfg.sdpa_fidelity, fp32_acc=False)
         self.norm_ckc = cfg.compute_config(ttnn.MathFidelity.HiFi4)
         self.trans_mat = ttnn.from_torch(
@@ -95,22 +98,27 @@ class NemotronReranker:
         return next(b for b in SEQ_BUCKETS if b >= n)
 
     def prepare_host_inputs(self, batch_ids, seq_len=None):
-        """Token id lists -> host tensors (tokens, mask, pool) plus real lengths."""
+        """Token id lists -> host tensors (tokens, mask, pool, block map) plus real lengths."""
         lens = [len(x) for x in batch_ids]
         S = seq_len or self.bucket(max(lens))
         B = len(batch_ids)
+        qc, kc = sdpa_chunks(B, S)
         tokens = torch.full((B, S), PAD_TOKEN_ID, dtype=torch.int32)
         mask = torch.zeros(B, 1, S, S)
         pool = torch.zeros(B, 1, 32, S)
+        # (q chunk, k chunk) blocks holding at least one real query row and one real key.
+        block_map = torch.zeros(B, 1, (S + qc - 1) // qc, (S + kc - 1) // kc, dtype=torch.int32)
         for b, ids in enumerate(batch_ids):
             n = len(ids)
             tokens[b, :n] = torch.tensor(ids, dtype=torch.int32)
             mask[b, :, :, n:] = MASK_NEG
             pool[b, 0, 0, :n] = 1.0
+            block_map[b, 0, : (n + qc - 1) // qc, : (n + kc - 1) // kc] = 1
         host = (
             ttnn.from_torch(tokens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-            ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            ttnn.from_torch(mask, dtype=self.cfg.mask_dtype, layout=ttnn.TILE_LAYOUT),
             ttnn.from_torch(pool, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            ttnn.from_torch(block_map, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
         )
         return host, lens
 
@@ -140,7 +148,7 @@ class NemotronReranker:
                     compute_with_storage_grid_size=self.grid,
                 ),
                 fused_activation=None if activation is None else ttnn.UnaryWithParam(activation),
-                compute_kernel_config=self.mm_ckc,
+                compute_kernel_config=self.mm_ckc_lofi if kind in self.lofi_kinds else self.mm_ckc,
                 dtype=dtype or self.cfg.act_dtype,
                 memory_config=self._mem(rows, w.shape[-1] // (2 if fuse_swiglu else 1)),
                 fuse_swiglu=fuse_swiglu,
@@ -164,8 +172,9 @@ class NemotronReranker:
             x, epsilon=self.cfg.norm_eps, weight=w, compute_kernel_config=self.norm_ckc, memory_config=mem
         )
 
-    def _attention(self, layer, x, B, S, mask, cos, sin):
+    def _attention(self, layer, x, B, S, mask, block_map, cos, sin):
         cfg = self.cfg
+        qc, kc = sdpa_chunks(B, S)
         xn = self._norm(x, layer.attn_norm)
         qkv = self._linear(xn, layer.wqkv, "qkv")
         ttnn.deallocate(xn)
@@ -188,20 +197,25 @@ class NemotronReranker:
             v,
             is_causal=False,
             attn_mask=mask,
+            attn_mask_block_map=block_map if self.cfg.sdpa_block_map else None,
+            output_concat_heads=cfg.sdpa_concat_heads,
             scale=1.0 / math.sqrt(cfg.head_dim),
             compute_kernel_config=self.sdpa_ckc,
             memory_config=self._mem(B * S, cfg.dim),
             program_config=ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.grid,
-                q_chunk_size=min(S, 256),
-                k_chunk_size=min(S, 256),
+                q_chunk_size=qc,
+                k_chunk_size=kc,
                 exp_approx_mode=False,
             ),
         )
         for t in (q_r, k_r, v):
             ttnn.deallocate(t)
-        o = ttnn.experimental.nlp_concat_heads(attn, memory_config=self._mem(B * S, cfg.dim))
-        ttnn.deallocate(attn)
+        if cfg.sdpa_concat_heads:
+            o = attn
+        else:
+            o = ttnn.experimental.nlp_concat_heads(attn, memory_config=self._mem(B * S, cfg.dim))
+            ttnn.deallocate(attn)
         o = ttnn.reshape(o, [1, 1, B * S, o.shape[-1]])
         out = self._linear(o, layer.wo, "wo")
         ttnn.deallocate(o)
@@ -229,14 +243,14 @@ class NemotronReranker:
         ttnn.deallocate(a)
         return out
 
-    def forward(self, tokens, mask, pool):
+    def forward(self, tokens, mask, pool, block_map):
         """Device inputs from ``prepare_host_inputs`` -> [B, 1, 32, 32] fp32 tile, score sum at [b, 0, 0, 0]."""
         B, S = tokens.shape[0], tokens.shape[1]
         cos, sin = self.rot_mats(S)
         x = ttnn.embedding(tokens, self.embed, layout=ttnn.TILE_LAYOUT, dtype=self.cfg.act_dtype)
         x = ttnn.reshape(x, [1, 1, B * S, self.cfg.dim])
         for layer in self.layers:
-            a = self._attention(layer, x, B, S, mask, cos, sin)
+            a = self._attention(layer, x, B, S, mask, block_map, cos, sin)
             x_new = ttnn.add(x, a, memory_config=self._mem(B * S, self.cfg.dim))
             ttnn.deallocate(x)
             ttnn.deallocate(a)
