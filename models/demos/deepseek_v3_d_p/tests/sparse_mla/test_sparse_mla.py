@@ -967,30 +967,38 @@ def test_sparse_mla_rotated_chunked(
     )
 
 
-# Chunk size must not change the answer. The same 7,680-token sequence prefilled in 1,280- vs 2,560-token chunks
-# on the LoudBox (640 vs 1,280 query rows per chip; only 640 has tuned matmul configs), each against the same
-# single-shot CPU reference. The GLM-5.3 workload's KV diverges between chunk sizes after the first MoE layer;
-# this isolates the sparse MLA.
-@pytest.mark.parametrize("chunk", [1280, 2560], ids=["c1280", "c2560"])
+# Chunk size must not change the answer. One sequence prefilled at two chunk sizes, each against the same
+# single-shot CPU reference: 8x4 at 2,048 vs 5,120 (256 vs 640 query rows per chip, the workload test's
+# configs), 2x4 at 1,280 vs 2,560. The GLM-5.3 workload's KV diverges between chunk sizes after the first MoE
+# layer; this isolates the sparse MLA. The total is a whole number of chunks at both sizes.
+_CHUNK_SIZE_CASES = [
+    ((8, 4), 10240, [2048, 5120]),
+    ((2, 4), 7680, [1280, 2560]),
+]
+
+
 @pytest.mark.parametrize(
-    "variant, mesh_device, device_params",
+    "variant, mesh_device, device_params, total, chunk",
     [
         pytest.param(
             "glm_5_3",
-            (2, 4),
-            fabric2d_device_params(worker_l1_size=_worker_l1_size()),
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="glm_5_3-shape-2x4",
+            mesh,
+            _device_params_for_mesh(mesh),
+            total,
+            chunk,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=mesh, topology=f"mesh-{mesh[0]}x{mesh[1]}"),
+            id=f"glm_5_3-shape-{mesh[0]}x{mesh[1]}-c{chunk}",
         )
+        for mesh, total, chunks in _CHUNK_SIZE_CASES
+        for chunk in chunks
     ],
     indirect=["variant", "mesh_device", "device_params"],
 )
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_sparse_mla_chunk_size_vs_reference(
-    mesh_device, chunk, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
+    mesh_device, total, chunk, device_params, variant, config_only, ds_layer, ds_checkpoint, ds_repo
 ):
-    total = 7680
     run_sparse_mla_rotated_case(
         variant, config_only, mesh_device, [chunk] * (total // chunk), chunk, ds_layer, ds_checkpoint, ds_repo
     )
