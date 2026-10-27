@@ -73,17 +73,29 @@ def weights_bytes_estimate(
 
 
 def reserve_bytes(
-    isl: int, trace_mb: int = 512, regions_t: int = 2048, qblock: int = 512, k: int = 8, e_local: int = 72
+    isl: int,
+    trace_mb: int = 512,
+    regions_t: int = 2048,
+    qblock: int = 512,
+    k: int = 8,
+    e_local: int = 72,
+    chunk_tokens: int = 16384,
 ) -> float:
     """Working set beside the caches during a prefill chunk + the decode trace region."""
     trace = trace_mb * 2**20
     regions = 3 * (regions_t * k + e_local * TILE) * 4096 * 2  # region buffer, gather table, pick rows (bf16)
     score = qblock * (isl / 4) * 2  # the index scorer's [qblock, pools] bf16 block
     prefix_copy = isl * 576 * 2  # the per-chunk whole-prefix ROW_MAJOR latent copy (sparse_sdpa contract)
-    misc = 256 * 2**20
+    misc = 128 * 2**20
+    # the dense part of a device prefill chunk (mHC collapse / expand, fp32 at the mHC width 4096 + 288) keeps about
+    # three [chunk, 4384] fp32 buffers live beside the regions sub-chunk buffers: 862 MB at 16 K tokens. Two calibration
+    # points (2026-10-27): the 1 M x 4-users-per-row served profile boots and serves with ~50 MB of modelled spare, and the
+    # 128 K x 32-users boot (0.55 GiB modelled spare before this term) failed a 287 MB (= 16384 x 4384 x 4 B) allocation in
+    # the 32 K warm-up prompt with 613 MB free but fragmented -> 28 users per row (7 slots per chip) at 128 K.
+    chunk_ws = 3 * chunk_tokens * 4384 * 4
     # the regions buffers and the score block are released before the attention of a sub-block takes the whole-prefix
     # copy; the observed peak transient at 1 M (QBLOCK 512, regions 2048) was ~1.5 GB with ~1 GB left at the last chunk
-    return trace + misc + max(prefix_copy, regions + score)
+    return trace + misc + max(prefix_copy, regions + score + chunk_ws)
 
 
 @dataclass(frozen=True)
