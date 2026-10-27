@@ -1846,8 +1846,26 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_None_DiffVDim_Gate) {
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Few heavy items on many cores: the late items are heavier than a core's fair share, so the schedule
-    // cuts them into step ranges computed on different cores and merged. 2 heads, S=2048: 32 items of 128
-    // rows when pinned, 128 items of one tile-row when the shape rule picks (it shrinks Sq to fill the cores).
+    // cuts them into step ranges computed on different cores and merged. 2 heads, S=1024, 64-row chunks:
+    // 32 items, up to four pieces each; the same rows uncut, and on 32 cores so senders, whole items and
+    // mergers share cores.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 1024U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 2U,
+        .num_key_heads = 2U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_SplitUnits"};
+    run_chunk_knob_sweep(base, {{64, 128, 1, 4, 0}, {64, 128, 1, 1, 0}, {64, 128, 1, 0, 32}});
+    run_split_vs_unsplit(base, {64, 128, 1, 4, 0});
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_Long) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // S=2048: 128-row chunks of up to eight pieces, 64-row chunks of two, 128 one-tile-row items when the
+    // shape rule picks (it shrinks Sq to fill the cores), and on 48 cores.
     const SDPATestConfig base{
         .batch_size = 1U,
         .sequence_length = 2048U,
@@ -1856,10 +1874,26 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits) {
         .num_query_heads = 2U,
         .num_key_heads = 2U,
         .mask_type = ttml::metal::AttentionMaskType::Causal,
-        .test_name = "ChunkKnobs_SplitUnits"};
-    run_chunk_knob_sweep(
-        base, {{128, 256, 1, 4, 0}, {128, 256, 1, 8, 0}, {64, 128, 1, 2, 0}, {128, 256, 1, 0, 0}, {128, 256, 1, 1, 0}});
-    run_split_vs_unsplit(base, {128, 256, 1, 4, 0});
+        .test_name = "ChunkKnobs_SplitUnits_Long"};
+    run_chunk_knob_sweep(base, {{128, 256, 1, 4, 0}, {128, 256, 1, 8, 0}, {64, 128, 1, 2, 0}, {64, 128, 1, 0, 48}});
+    run_split_vs_unsplit(base, {128, 256, 1, 8, 0});
+}
+
+TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_SplitUnits_ManyPieces) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // One head with one K tile per step: items of up to 64 steps cut into up to 8 and 16 pieces, so a
+    // merger folds in more than three partials.
+    const SDPATestConfig base{
+        .batch_size = 1U,
+        .sequence_length = 2048U,
+        .query_dim = 64U,
+        .key_value_dim = 64U,
+        .num_query_heads = 1U,
+        .num_key_heads = 1U,
+        .mask_type = ttml::metal::AttentionMaskType::Causal,
+        .test_name = "ChunkKnobs_SplitUnits_ManyPieces"};
+    run_chunk_knob_sweep(base, {{128, 32, 1, 8, 0}, {128, 32, 1, 16, 0}});
+    run_split_vs_unsplit(base, {128, 32, 1, 16, 0});
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate) {
@@ -1867,7 +1901,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits_GQA_Gate) {
     // Splits with stacked heads, a different value dim and the gate; the gate is applied by the merger only.
     const SDPATestConfig base{
         .batch_size = 1U,
-        .sequence_length = 1024U,
+        .sequence_length = 512U,
         .query_dim = 512U,      // 4 heads * 128
         .key_value_dim = 256U,  // 2 kv heads * 128
         .value_dim = 128U,      // 2 kv heads * 64
