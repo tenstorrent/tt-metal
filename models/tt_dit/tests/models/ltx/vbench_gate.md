@@ -1,30 +1,16 @@
 # LTX CI quality gate
 
-The Fast T2V CI test generates five 145-frame, 1920×1088 clips. After pytest closes
+The Fast T2V CI test generates five 153-frame, 1920×1088 clips. After pytest closes
 the TT devices, the same worker runs `vbench_bundle evaluate` (`models/tt_dit/utils/vbench_bundle.py`)
 with up to five CPU processes, four Torch threads each. Generation and scoring share the existing
 35-minute test timeout. The commands live in `tests/pipeline_reorg/models_e2e_tests.yaml`.
 
-The evaluation policy splits metrics by their input needs:
-
-| Metrics | Input |
-| --- | --- |
-| Subject consistency, background consistency, imaging quality | Original clips, with VBench's normal preprocessing |
-| Motion smoothness, dynamic degree | 960×544 copies, all 145 frames, original frame rate |
-
-The temporal copies use PyAV in-process, with area downsampling and lossless RGB
-encoding; source frame timestamps are preserved and no OS command is launched. This reduces
-sensitivity to small spatial motion artifacts; it is **not equivalent to evaluating
-temporal quality at full resolution**. It preserves every seed, frame, metric and
-the existing mean thresholds. Resize fails if the frame count or frame rate changes.
+With `VBENCH_TEMPORAL_WIDTH=960` the test scores the clips with `vbench_cpu.score_clip_ci`:
+appearance metrics on the original clips, motion smoothness and dynamic degree on 960-wide copies.
+The policy and how the copies are made are documented in `models/tt_dit/utils/vbench_cpu.py`.
 Missing seeds, worker failures, missing metrics and non-finite scores all fail the gate.
 
-Dynamic degree uses VBench 0.1.5's original RAFT model, frame sampling, flow threshold
-and required positive-pair count. It stops once the remaining pairs cannot change
-the binary result. Unlike the spatial reduction, this early exit preserves the
-reference result exactly; exhaustive small cases test both passing and failing bounds.
-
-On 2026-09-18, the five actual CI clips from run 35334111844 passed this complete
+On 2026-09-18, the five actual CI clips (then 145 frames) from run 35334111844 passed this complete
 gate on g15blx02 in 343 seconds using the CI entry point and the in-process resize:
 
 | Metric | Mean | Required |
@@ -42,8 +28,4 @@ smoothness 0.9911, dynamic degree 1.0). Freezing its frames failed dynamic degre
 These measurements cover CPU scoring, not cold model startup. CI must also fit
 weight conversion, kernel compilation, generation and CLIP inside the total budget.
 
-`VBENCH_TEMPORAL_WIDTH=960` selects this policy: the LTX test records
-`vbench_cpu:score_clip_ci` with that width as the bundle's scorer, for both the CI export
-(`VBENCH_EXPORT_DIR`) and a local in-process run. A width of `0`, or none, uses the
-original full-resolution evaluation. Evaluator weights come from the
-worker's existing `VBENCH_CACHE_DIR`, `TORCH_HOME` and CLIP caches.
+Evaluator weights come from the worker's existing `VBENCH_CACHE_DIR`, `TORCH_HOME` and CLIP caches.
