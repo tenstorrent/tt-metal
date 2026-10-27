@@ -82,6 +82,7 @@ def test_full_model_decode_profile(mesh_device):
         f"FULL-PROFILE {len(layers)} layers on {MESH}, B={B}/row ({U} slots), max_seq_len {MAX_SEQ_LEN}, position {POS}"
     )
     walls: dict[str, list[float]] = {}
+    originals = []
     _drain(mesh_device)
     # per-layer labels + a profiler drain after every layer (keeps every core's marker buffer under its 12 000 entries)
     for i, dec in zip(layers, model.layers):
@@ -101,6 +102,7 @@ def test_full_model_decode_profile(mesh_device):
                 _drain(mesh_device)
 
         dec.decode_forward = wrapped
+        originals.append((dec, orig))
     ids = torch.randint(0, cfg.vocab_size, (U,), generator=torch.Generator().manual_seed(0))
     pos = [POS] * U
     model.warmup_decode(ids, pos)  # compiles every program (eager; drained per layer)
@@ -125,12 +127,16 @@ def test_full_model_decode_profile(mesh_device):
         kda = [ms for k, ms in rows if k.endswith("_KDA")]
         dsa = [ms for k, ms in rows if k.endswith("_DSA")]
         for k, ms in rows:
-            logger.info(f"LAYER-WALL {k}: {ms:.2f} ms (eager, synchronised)")
+            logger.info(
+                f"LAYER-WALL {k}: {ms:.2f} ms (eager, synchronised: host dispatch dominates; use the traced step)"
+            )
         logger.info(
             f"LAYER-WALL capacity {MAX_SEQ_LEN} position {POS}: KDA {sum(kda):.1f} ms over {len(kda)} layers "
             f"(mean {sum(kda) / max(1, len(kda)):.2f}), DSA {sum(dsa):.1f} ms over {len(dsa)} (mean "
             f"{sum(dsa) / max(1, len(dsa)):.2f}), eager step {sum(ms for _, ms in rows):.1f} ms"
         )
+        for dec, orig in originals:  # no synchronisation / reads inside the capture
+            dec.decode_forward = orig
         trace_id, touts = model.capture(ids, pos)
         for _ in range(3):
             model.replay(trace_id)
