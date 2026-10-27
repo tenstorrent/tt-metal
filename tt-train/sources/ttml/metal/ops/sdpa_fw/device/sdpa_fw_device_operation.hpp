@@ -37,9 +37,9 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardDeviceOperation::tensor_return_val
     const std::optional<ttnn::Tensor>& mask = std::nullopt,
     const float dropout_probability = 0.0F,
     const bool return_intermediates = false,
+    const ttml::metal::SDPAForwardProgramConfig& program_config = {},
     const std::optional<ttnn::Tensor>& preallocated_intermediate = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
-    const std::optional<ttnn::Tensor>& gate = std::nullopt,
-    const ttml::metal::SDPAForwardProgramConfig& program_config = {});
+    const std::optional<ttnn::Tensor>& gate = std::nullopt);
 
 }  // namespace ttnn::prim
