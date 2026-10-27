@@ -2159,3 +2159,16 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   when faster (owner); the shared helper tests/ttnn/profiling/realtime_profiler_utils.py (upstream) is used to measure
   only.
 - Selftests: test_fork_cases.py (the suite's waivers and totals; the skills name the rule).
+
+## F200: the clean wall is timed once the walls settle, not only once the program cache is warm (owner, 2026-10-27)
+- Symptom: DeepSeek-V4.1 2x2 MoE-block A/B: F196 called every run warm after 1 warm-up run (no new program), but the
+  host walls kept falling 10-25% over the next 5-6 runs (flat 142 -> 118 ms, the median 138.0 came mostly from the
+  falling part), and one configuration measured 102.2 / 120.0 / 125.2 ms in three processes.
+- testing/profile.py warm_up: after the cache is warm, it keeps running until the last WALL_SETTLE_WINDOW (5) walls
+  are within WALL_SETTLE_PCT (5%) of their median, at most WALL_MAX_SETTLE (30) runs; not settled is flagged
+  (chunk_wall_settled 0, "F200 NOT SETTLED"), not refused. Also records chunk_wall_cache_warm_runs and
+  chunk_wall_loadavg (other host load skews a wall).
+- Left: the spread between processes (the same setup 102 vs 120 ms) is not a warm-up effect; compare walls only from
+  back-to-back alternating runs (A, B, A, B) until that is understood.
+- Selftests: test_warm_wall.py (the flat path's real walls settle at run 12; never-settling walls are flagged; the
+  window rule).
