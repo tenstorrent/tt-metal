@@ -256,6 +256,144 @@ def spec_resident_bytes(cfg, rows: int, cols: int, users_per_row: int, max_seq_l
     return experts + dense + cache + buffers
 
 
+# ------------------------------------------------------------------------------------- the MTP prompt fill
+TILE = 32
+PREFILL_BUCKETS_ENV = "GLM53_PREFILL_BUCKETS"  # = mesh_model.PREFILL_BUCKETS_ENV (ttnn-free copies, pinned by a test)
+DEFAULT_PREFILL_BUCKETS = (256, 512, 1024, 2048, 16384)
+
+
+def prefill_buckets(env=None) -> tuple[int, ...]:
+    """``mesh_model.prefill_buckets`` without ttnn: the eager prefill's padded chunk lengths."""
+    env = os.environ if env is None else env
+    raw = str(env.get(PREFILL_BUCKETS_ENV, ""))
+    if raw.strip() == "0":
+        return ()
+    if not raw.strip():
+        return DEFAULT_PREFILL_BUCKETS
+    return tuple(sorted(int(v) for v in raw.split(",") if v.strip()))
+
+
+def eager_pad_length(seq_len: int, unit: int, buckets: tuple[int, ...] | None = None) -> int:
+    """``mesh_model.eager_pad_length`` without ttnn: the row unit's ceiling raised to the smallest bucket."""
+    T = -(-int(seq_len) // unit) * unit
+    for b in prefill_buckets() if buckets is None else buckets:
+        if b % unit:
+            raise ValueError(f"prefill bucket {b} is not a multiple of the row unit {unit}")
+        if T <= b:
+            return b
+    return T
+
+
+def pad_row_mask_host(T: int, seq_len: int) -> torch.Tensor:
+    """``moe.pad_row_mask_host`` without ttnn: ``[1, 1, T, 32]`` bf16, column 0 = 1.0 on rows < ``seq_len``."""
+    if not 0 <= seq_len <= T:
+        raise ValueError(f"seq_len {seq_len} outside [0, {T}]")
+    m = torch.zeros(1, 1, T, TILE, dtype=torch.bfloat16)
+    m[0, 0, :seq_len, 0] = 1.0
+    return m
+
+
+def pad_mask_ones_host(W: int) -> torch.Tensor:
+    """``moe.pad_mask_ones_host`` without ttnn: ``[1, 1, 32, W]`` bf16, row 0 all ones."""
+    o = torch.zeros(1, 1, TILE, W, dtype=torch.bfloat16)
+    o[0, 0, 0, :] = 1.0
+    return o
+
+
+@dataclass(frozen=True)
+class MtpFillPlan:
+    """The host side of one MTP prompt fill (``GLM53SpecEngine.prefill_fill``): one prefill chunk of ``seq_len``
+    tokens at ``start`` whose streams the main model left as ``rows`` slabs of ``t_loc`` rows (mesh row r holds chunk
+    rows ``[r t_loc, (r+1) t_loc)``; ``t_pad = rows * t_loc``, the eager ``eager_pad_length`` or the traced length).
+
+    * ``next_ids`` ``[1, 1, 1, t_pad]`` int32: the MTP's token of chunk row i = the chunk's token i + 1 (rows
+      ``0 .. seq_len - 2``), the chunk-end token ``first`` at row ``seq_len - 1`` (the prompt's first generated token
+      on the last chunk, the model's own guess of the next chunk's first token on an intermediate one), the pad id
+      past it; uploaded row-sharded on its last dim so mesh row r reads ``slab(r)`` next to its streams slab;
+    * ``row_mask`` ``[1, 1, t_pad, 32]`` bf16 (``pad_row_mask_host``; None when the chunk fills every row): the rows
+      past ``seq_len`` of the main model's streams are unspecified by contract (``TtDSA.prefill_forward``), so the
+      hidden handed to the drafter is zeroed there (an exact 0/1 matmul + ``ttnn.where``: NaN-safe, bit-identical
+      on the real rows) before the MTP's attention reads them as keys and its router routes them."""
+
+    rows: int
+    t_loc: int
+    seq_len: int
+    start: int
+    next_ids: torch.Tensor
+    row_mask: torch.Tensor | None
+
+    @property
+    def t_pad(self) -> int:
+        return self.rows * self.t_loc
+
+    @property
+    def masked(self) -> bool:
+        return self.row_mask is not None
+
+    @property
+    def owner_row(self) -> int:
+        """The mesh row holding the chunk's last real row."""
+        return (self.seq_len - 1) // self.t_loc
+
+    @property
+    def last_local_row(self) -> int:
+        return (self.seq_len - 1) % self.t_loc
+
+    def slab(self, row: int) -> torch.Tensor:
+        """Mesh row ``row``'s ``[t_loc]`` ids (what its chip receives)."""
+        return self.next_ids.reshape(-1)[row * self.t_loc : (row + 1) * self.t_loc]
+
+    def mask_slab(self, row: int) -> torch.Tensor | None:
+        return None if self.row_mask is None else self.row_mask[0, 0, row * self.t_loc : (row + 1) * self.t_loc, 0]
+
+
+def mtp_fill_plan(
+    chunk_ids: torch.Tensor, first: int, *, rows: int, t_loc: int, seq_len: int, start: int, pad_token_id: int
+) -> MtpFillPlan:
+    """The plan of one chunk (checks: ``chunk_ids`` holds exactly ``seq_len`` tokens, ``0 < seq_len <= t_pad``,
+    ``t_loc % 32 == 0``, ``start % 32 == 0``)."""
+    rows, t_loc, seq_len, start = int(rows), int(t_loc), int(seq_len), int(start)
+    ids = torch.as_tensor(chunk_ids).reshape(-1).long()
+    t_pad = rows * t_loc
+    if rows < 1 or t_loc < TILE or t_loc % TILE:
+        raise ValueError(f"a slab of {t_loc} rows on {rows} mesh rows: t_loc must be a positive multiple of {TILE}")
+    if not 0 < seq_len <= t_pad:
+        raise ValueError(f"seq_len {seq_len} outside (0, {t_pad}] (the chunk's padded rows)")
+    if int(ids.numel()) != seq_len:
+        raise ValueError(f"the chunk holds {ids.numel()} tokens for seq_len {seq_len}")
+    if start < 0 or start % TILE:
+        raise ValueError(f"chunk start {start} must be a non-negative multiple of {TILE}")
+    if int(first) < 0:
+        raise ValueError(f"chunk-end token {first} is not a token id")
+    nxt = torch.full((t_pad,), int(pad_token_id), dtype=torch.int32)
+    nxt[: seq_len - 1] = ids[1:].to(torch.int32)
+    nxt[seq_len - 1] = int(first)
+    mask = pad_row_mask_host(t_pad, seq_len) if seq_len < t_pad else None
+    return MtpFillPlan(rows, t_loc, seq_len, start, nxt.reshape(1, 1, 1, t_pad), mask)
+
+
+def mtp_fill_lengths(
+    traced_lengths: Sequence[int], *, rows: int, device_prefill_chunk: int, max_seq_len: int, buckets=None
+) -> list[int]:
+    """Every padded chunk length ``t_pad`` the served prefill can hand the MTP fill: the traced lengths (the replay's
+    streams are ``T`` rows) and the eager buckets up to the device chunk (``eager_pad_length`` of any eager chunk),
+    each a multiple of the row unit and within the caches. The adapter runs the fill at each of them BEFORE any
+    trace capture: the MTP's prefill collectives (``TtMTPBlock._prefill_rows_impl``: the row gather / reduce-scatter
+    of its attention) exist at no other shape, and a collective first compiled after a capture corrupts the
+    replays (the 2026-10-27 block run: the first traced prompt's fill at T=128 was the first MTP prefill at that
+    shape and its routing came back garbage on every row)."""
+    unit = TILE * int(rows)
+    max_rows = -(-int(max_seq_len) // unit) * unit
+    chunk = int(device_prefill_chunk)
+    out = {int(T) for T in traced_lengths}
+    bks = prefill_buckets() if buckets is None else tuple(buckets)
+    for b in bks:
+        if b <= chunk:
+            out.add(int(b))
+    out.add(eager_pad_length(chunk, unit, bks))
+    return sorted(T for T in out if T % unit == 0 and T <= max_rows)
+
+
 # ---------------------------------------------------------------------------------------- per-step policy
 @dataclass(frozen=True)
 class ServingSpecPolicy:

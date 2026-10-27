@@ -225,4 +225,25 @@ def test_served_spec_loop_matches_the_plain_decode(mesh_device, monkeypatch):
     assert a._spec_stats.fallbacks == fallbacks + 1 and runner.slots[0].drafts == [] and runner.slots[1].drafts == []
     got2 = runner.run(2)
     _compare("one-column verify", got2, ref2, gaps2)
+
+    # ---- the eager chunk form: the same prompts prefilled with enable_trace=False (the eager prefill pads them to
+    # the 256 bucket: 128-row slabs, 96-224 rows past seq_len) and the loop against the traced-form reference
+    a.model.reset_kda_states()
+    runner = SpecRunnerSim(a, K, wire=wire)
+    for slot in (0, 1):
+        ids = prompts[slot]
+        n = int(ids.numel())
+        out, _ = a.prefill_forward(
+            ids.reshape(1, n).to(torch.int32),
+            prompt_lens=[n],
+            start_pos=torch.tensor([0]),
+            empty_slots=[slot],
+            sampling_params=greedy_params(1),
+            enable_trace=False,
+        )
+        runner.add(slot, int(out[0, 0]), n)
+    got3 = runner.run(8)
+    _compare("eager-form prefill", got3, ref, gaps)
+    logger.info(f"MTP prompt fill warmed at {a.spec.warmed_fill_lengths} before the captures")
+    assert set(a.spec.warmed_fill_lengths) >= set(a.model.trace_prefill_lengths()), "every traced length must be warmed"
     a.release_persistent_capture()

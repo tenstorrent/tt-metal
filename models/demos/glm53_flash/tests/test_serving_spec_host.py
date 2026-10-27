@@ -177,6 +177,10 @@ class _FakeSpecEngine:
         for r in range(self.model.rows):
             self.state_pos[r * self.model.max_batch + user] = int(start) + int(seq_len)
 
+    def warmup_prefill_fill(self, lengths):
+        self.calls.append(("warmup_prefill_fill", tuple(int(T) for T in lengths)))
+        self.warmed_fill_lengths = list(lengths)
+
 
 def _spec_adapter(rows=2, cols=4, users_per_row=4, max_seq_len=65536, K=3, warm=True, max_dense_pos=None):
     model = _FakeMeshModel(rows, cols, users_per_row, max_seq_len)
@@ -352,18 +356,195 @@ def test_boot_order_with_spec():
     a, m, eng = _spec_adapter()
     kinds = [c[0] for c in eng.calls] + [c[0] for c in m.calls]
     seq = [c[0] for c in eng.calls]
-    assert seq.index("warmup_plain") < seq.index("prefill_fill") < seq.index("spec_warmup") < seq.index("capture_plain")
+    assert seq.index("warmup_plain") < seq.index("prefill_fill") < seq.index("warmup_prefill_fill")
+    assert seq.index("warmup_prefill_fill") < seq.index("spec_warmup") < seq.index("capture_plain")
     assert seq.index("capture_plain") < seq.index("spec_capture")
     mk = [c[0] for c in m.calls]
     assert mk.index("capture_prefill") < mk.index("capture")  # the prefill traces before the decode (P) trace
     assert "warmup_decode" in mk and mk.index("warmup_decode") < mk.index("prefill")
+    # the drafter's fill warm-up (every served chunk length) precedes the first capture of any kind: the engine's
+    # call count before ``capture_prefill`` is what the adapter made with every eager graph still uncompiled
+    before_capture = len([c for c in m.calls[: mk.index("capture_prefill")]])
+    assert before_capture > 0 and "warmup_prefill_fill" in seq[: seq.index("capture_plain")]
     assert a.trace_id == 7 and a._trace_outputs == (("logits_tr",), ("ids_tr",))
     assert a.tt_supported_decode_batch_sizes == (4,) and "capture_prefill" in kinds
     fills = [c for c in eng.calls if c[0] == "prefill_fill"]
     assert fills == [("prefill_fill", 0, 0, 128, fills[0][4])]  # the warm-up prompt fills the drafter too
-    assert "SPECULATIVE" in a.__class__.__name__ or True  # the log line is checked by eye in the engine log
+    warmed = [c for c in eng.calls if c[0] == "warmup_prefill_fill"]
+    # traced lengths 256..2048 (the fake's), the eager buckets up to the 16384 device chunk, within 65536 positions
+    assert warmed == [("warmup_prefill_fill", (256, 512, 1024, 2048, 16384))]
     a.release_persistent_capture()
     assert eng.calls[-1] == ("release",) and a.trace_id is None and a._trace_outputs is None
+
+
+def test_mtp_fill_plan_pins_the_row_contract():
+    """``MtpFillPlan`` for the traced form (a 32-token prompt in the T=128 trace on 2 mesh rows: 64-row slabs) and
+    the eager form (a 230-token chunk padded to 256: 128-row slabs; a 100-token continuation at start 16384): the
+    ids of mesh row r are the chunk's tokens shifted by one, rows ``r t_loc ..``, the chunk-end token at row
+    ``seq_len - 1`` (its mesh row = the owner row), the pad id past it; the row mask is 1 on rows < seq_len only."""
+    chunk = torch.arange(100, 132)  # 32 tokens
+    plan = vs.mtp_fill_plan(chunk, 999, rows=2, t_loc=64, seq_len=32, start=0, pad_token_id=PAD)
+    assert (plan.t_pad, plan.masked, plan.owner_row, plan.last_local_row) == (128, True, 0, 31)
+    assert tuple(plan.next_ids.shape) == (1, 1, 1, 128) and plan.next_ids.dtype == torch.int32
+    assert plan.slab(0).tolist() == list(range(101, 132)) + [999] + [PAD] * 32
+    assert plan.slab(1).tolist() == [PAD] * 64
+    assert tuple(plan.row_mask.shape) == (1, 1, 128, 32) and plan.row_mask.dtype == torch.bfloat16
+    assert plan.mask_slab(0).tolist() == [1.0] * 32 + [0.0] * 32 and plan.mask_slab(1).tolist() == [0.0] * 64
+    assert plan.row_mask[0, 0, :, 1:].abs().sum() == 0  # column 0 only (the ones-row matmul expands it)
+    # the eager form: 230 tokens padded to 256 (128 per mesh row): the chunk-end token sits on mesh row 1, row 101
+    chunk = torch.arange(1000, 1230)
+    plan = vs.mtp_fill_plan(chunk, 7, rows=2, t_loc=128, seq_len=230, start=0, pad_token_id=PAD)
+    assert (plan.t_pad, plan.owner_row, plan.last_local_row) == (256, 1, 101)
+    assert plan.slab(0).tolist() == list(range(1001, 1129))
+    assert plan.slab(1).tolist() == list(range(1129, 1230)) + [7] + [PAD] * 26
+    assert plan.mask_slab(0).tolist() == [1.0] * 128 and plan.mask_slab(1).tolist() == [1.0] * 102 + [0.0] * 26
+    # a continuation chunk: start 16384, 100 tokens, 128-row slabs; one mesh row: a 256-row slab is the whole chunk
+    plan = vs.mtp_fill_plan(torch.arange(100), 5, rows=2, t_loc=128, seq_len=100, start=16384, pad_token_id=PAD)
+    assert plan.start == 16384 and plan.slab(0).tolist() == list(range(1, 100)) + [5] + [PAD] * 28
+    one = vs.mtp_fill_plan(torch.arange(256), 5, rows=1, t_loc=256, seq_len=256, start=0, pad_token_id=PAD)
+    assert not one.masked and one.slab(0).tolist() == list(range(1, 256)) + [5]
+    for bad, message in (
+        (dict(rows=2, t_loc=64, seq_len=129, start=0), "outside"),  # beyond the padded rows
+        (dict(rows=2, t_loc=64, seq_len=0, start=0), "outside"),
+        (dict(rows=2, t_loc=48, seq_len=32, start=0), "multiple of 32"),  # a slab that is not a tile multiple
+        (dict(rows=2, t_loc=64, seq_len=32, start=16), "multiple of 32"),  # an unaligned start
+    ):
+        with expect_error(ValueError, message):
+            vs.mtp_fill_plan(torch.arange(bad["seq_len"]), 1, pad_token_id=PAD, **bad)
+    with expect_error(ValueError, "holds"):
+        vs.mtp_fill_plan(torch.arange(31), 1, rows=2, t_loc=64, seq_len=32, start=0, pad_token_id=PAD)
+
+
+def test_mtp_fill_lengths_cover_the_traced_and_eager_shapes():
+    """The lengths the fill is warmed at: the traced lengths plus every eager bucket up to the device chunk (and the
+    chunk's own padded length), each a multiple of the row unit and within the caches."""
+    assert vs.mtp_fill_lengths((128, 256), rows=2, device_prefill_chunk=16384, max_seq_len=256) == [128, 256]
+    assert vs.mtp_fill_lengths((256, 512, 1024, 2048), rows=8, device_prefill_chunk=16384, max_seq_len=2048) == [
+        256,
+        512,
+        1024,
+        2048,
+    ]
+    assert vs.mtp_fill_lengths((256, 512, 1024, 2048), rows=8, device_prefill_chunk=16384, max_seq_len=1 << 20) == [
+        256,
+        512,
+        1024,
+        2048,
+        16384,
+    ]
+    # a 4096-token device chunk pads to the 16384 bucket (the smallest bucket that holds it): warmed there, not at 4096
+    assert vs.mtp_fill_lengths((), rows=8, device_prefill_chunk=4096, max_seq_len=1 << 20) == [
+        256,
+        512,
+        1024,
+        2048,
+        16384,
+    ]
+    assert vs.mtp_fill_lengths((128,), rows=2, device_prefill_chunk=256, max_seq_len=1024, buckets=()) == [128, 256]
+    assert (
+        vs.eager_pad_length(230, 64) == 256
+        and vs.eager_pad_length(128, 64) == 256
+        and vs.eager_pad_length(17000, 64) == 17024
+    )
+    assert vs.prefill_buckets({"GLM53_PREFILL_BUCKETS": "0"}) == () and vs.prefill_buckets({}) == (
+        256,
+        512,
+        1024,
+        2048,
+        16384,
+    )
+    assert vs.prefill_buckets({"GLM53_PREFILL_BUCKETS": "512, 256"}) == (256, 512)
+
+
+class _Rec:
+    """A recorded device tensor of the stubbed fill."""
+
+    def __init__(self, tag, shape, dtype=None, extra=None):
+        self.tag, self.shape, self.dtype, self.extra = tag, tuple(shape), dtype, extra
+
+
+def test_prefill_fill_device_call_sequence(monkeypatch):
+    """``GLM53SpecEngine.prefill_fill`` with ttnn and the upload stubbed: the ids upload is the plan's ``[1,1,1,t_pad]``
+    uint32 row sharded on its last dim, the hidden is ``head.norm(head.collapse(streams))``, a chunk with rows past
+    seq_len uploads the ``[1,1,t_pad,32]`` mask row sharded on dim 2, expands it with the ones row and zeroes the
+    hidden through ``where`` (no mask when the chunk fills every row), ``mtp.prefill_cache`` gets ``user`` /
+    ``seq_len`` / ``start``, and every transient is deallocated."""
+    from models.demos.glm53_flash.tt import generator_vllm as gv
+
+    events = []
+    freed = []
+
+    class _Ttnn:
+        uint32, bfloat16, float32 = "u32", "bf16", "f32"
+        ROW_MAJOR_LAYOUT, TILE_LAYOUT, DRAM_MEMORY_CONFIG = "RM", "TILE", "DRAM"
+
+        @staticmethod
+        def deallocate(t):
+            freed.append(t.tag)
+
+        @staticmethod
+        def matmul(a, b, dtype=None, compute_kernel_config=None):
+            events.append(("matmul", a.tag, b.tag, dtype, compute_kernel_config))
+            return _Rec("full", (1, 1, a.shape[2], b.shape[3]), dtype)
+
+        @staticmethod
+        def where(cond, a, b):
+            events.append(("where", cond.tag, a.tag, b))
+            return _Rec("clean", a.shape, a.dtype)
+
+    def upload(mesh, t, dtype, layout, rows_dim=None):
+        events.append(("upload", tuple(t.shape), str(t.dtype), dtype, layout, rows_dim))
+        return _Rec("ids" if layout == "RM" else "mask", t.shape, dtype, t.clone())
+
+    monkeypatch.setattr(gv, "_ttnn", lambda: _Ttnn)
+    monkeypatch.setattr(gv, "_spec_upload", upload)
+
+    class _Head:
+        def collapse(self, s):
+            events.append(("collapse", s.tag, s.shape))
+            return _Rec("h", (1, 1, s.shape[2], 4096), "f32")
+
+        def norm(self, h):
+            events.append(("norm", h.tag))
+            return _Rec("hidden", h.shape, "bf16")
+
+    class _Mtp:
+        norm_compute = "hifi4-fp32"
+
+        def prefill_cache(self, ids, hidden, *, user, seq_len, start):
+            events.append(("prefill_cache", ids.tag, hidden.tag, user, seq_len, start))
+            return _Rec("out", hidden.shape)
+
+    eng = gv.GLM53SpecEngine.__new__(gv.GLM53SpecEngine)
+    eng.model = SimpleNamespace(mesh=SimpleNamespace(rows=2), head=_Head())
+    eng.mtp = _Mtp()
+    eng.pad_token_id = PAD
+    eng.mask_ones = _Rec("ones", (1, 1, 32, 4096), "bf16")
+    # the traced form: a 32-token prompt, T=128 streams (64-row slabs)
+    eng.prefill_fill(torch.arange(100, 132), 999, _Rec("streams", (1, 1, 64, 16384), "f32"), 2, 0, 32)
+    kinds = [e[0] for e in events]
+    assert kinds == ["upload", "collapse", "norm", "upload", "matmul", "where", "prefill_cache"]
+    up_ids, up_mask = events[0], events[3]
+    assert up_ids[1:] == ((1, 1, 1, 128), "torch.int32", "u32", "RM", 3)
+    assert up_mask[1:] == ((1, 1, 128, 32), "torch.bfloat16", "bf16", "TILE", 2)
+    assert events[4] == ("matmul", "mask", "ones", "bf16", "hifi4-fp32") and events[5] == (
+        "where",
+        "full",
+        "hidden",
+        0.0,
+    )
+    assert events[6] == ("prefill_cache", "ids", "clean", 2, 32, 0)
+    assert sorted(freed) == sorted(["h", "full", "mask", "hidden", "out", "clean", "ids"])
+    # the eager form on one mesh row with every row real: no mask, no where; the ids are not row sharded
+    events.clear()
+    freed.clear()
+    eng.model = SimpleNamespace(mesh=SimpleNamespace(rows=1), head=_Head())
+    eng.prefill_fill(torch.arange(256), 5, _Rec("streams", (1, 1, 256, 16384), "f32"), 0, 16384, 256)
+    assert [e[0] for e in events] == ["upload", "collapse", "norm", "prefill_cache"]
+    assert events[0][1:] == ((1, 1, 1, 256), "torch.int32", "u32", "RM", None)
+    assert events[3] == ("prefill_cache", "ids", "hidden", 0, 256, 16384)
+    assert sorted(freed) == sorted(["h", "hidden", "out", "ids"])
+    assert "ttnn" not in sys.modules
 
 
 def test_prefill_fills_the_drafter_per_chunk():

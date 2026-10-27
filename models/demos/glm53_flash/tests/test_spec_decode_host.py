@@ -146,6 +146,21 @@ def test_serving_draft_len_cap_mirrors_spec_draft_len():
     for B in (1, 2, 3, 4, 5, 8, 10, 16, 17, 32, 33):
         for k in (1, 3, 7, 31):
             assert draft_len_cap(B, k) == spec_draft_len(B, k), (B, k)
+    # the other ttnn-free mirrors of tt/vllm_spec.py: the eager prefill buckets / padding (tt/mesh_model.py) and the
+    # pad-row mask tensors (tt/moe.py) the drafter's prompt fill is planned and warmed with
+    from models.demos.glm53_flash.tt import vllm_spec as vs
+    from models.demos.glm53_flash.tt.mesh_model import DEFAULT_PREFILL_BUCKETS, eager_pad_length, prefill_buckets
+    from models.demos.glm53_flash.tt.moe import pad_mask_ones_host, pad_row_mask_host
+
+    assert vs.DEFAULT_PREFILL_BUCKETS == DEFAULT_PREFILL_BUCKETS
+    for env in ({}, {"GLM53_PREFILL_BUCKETS": "0"}, {"GLM53_PREFILL_BUCKETS": "512,256,4096"}):
+        assert vs.prefill_buckets(env) == prefill_buckets(env), env
+    for n in (1, 32, 128, 230, 256, 2048, 2049, 16384, 17000):
+        for unit in (32, 64, 256):
+            assert vs.eager_pad_length(n, unit) == eager_pad_length(n, unit), (n, unit)
+    for T, S in ((128, 32), (256, 230), (256, 256), (64, 1)):
+        assert torch.equal(vs.pad_row_mask_host(T, S), pad_row_mask_host(T, S)), (T, S)
+    assert torch.equal(vs.pad_mask_ones_host(4096), pad_mask_ones_host(4096))
 
 
 def test_draft_len_policy():

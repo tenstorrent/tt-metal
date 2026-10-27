@@ -102,7 +102,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import torch
 from loguru import logger
@@ -167,6 +167,14 @@ def _ttnn():
     import ttnn
 
     return ttnn
+
+
+def _spec_upload(mesh, t: torch.Tensor, dtype, layout, rows_dim: int | None = None):
+    """``spec_decode._upload`` (a persistent device tensor from host values, ``rows_dim`` split over the mesh rows),
+    imported on first device use; the host test substitutes a recorder."""
+    from models.demos.glm53_flash.tt.spec_decode import _upload
+
+    return _upload(mesh, t, dtype, layout, rows_dim)
 
 
 def _mesh_shape_from_env() -> tuple[int, int]:
@@ -356,6 +364,16 @@ class GLM53SpecEngine:
         self.N = self.dec.N  # user slots over the mesh (rows x users per row)
         self.commit_mode = self.dec.commit_mode
         self.max_dense_pos = self.dec.vin.max_dense_pos
+        self.hidden_size = int(model.cfg.hidden_size)
+        self.pad_token_id = int(model.cfg.pad_token_id)
+        # the prompt fill's pad-row mask expander: a [1,1,32,H] bf16 ones row (a mesh constant: allocated here, before
+        # any capture; ``TtMoE.pad_ones`` keyed by its own width)
+        ttnn = _ttnn()
+        self.mask_ones = model.mesh.const(
+            ("pad_mask_ones", self.hidden_size),
+            lambda: model.mesh.upload(vs.pad_mask_ones_host(self.hidden_size), ttnn.bfloat16),
+        )
+        self.warmed_fill_lengths: list[int] = []
 
     # ---- warm-up / capture (the adapter's boot order: every eager run before every capture)
     def warmup_plain(self, ids: torch.Tensor, positions: list[int]) -> None:
@@ -402,25 +420,76 @@ class GLM53SpecEngine:
     # ---- the prompt
     def prefill_fill(self, ids: torch.Tensor, first: int, streams, user: int, start: int, seq_len: int) -> None:
         """The MTP's cache / index rows ``[start, start + seq_len)`` of ``user`` from one prefill chunk: the main
-        model's normed hidden of the chunk's streams (this row's slab; ``head.collapse`` + ``head.norm``) and the
-        next token of every row (``ids`` shifted by one, the last row taking ``first`` = the chunk's greedy
-        chunk-end token: the prompt's first generated token on the last chunk, the model's own guess of the next
-        chunk's first token on an intermediate one). ``spec_decode.prefill_with_mtp`` per chunk."""
+        model's normed hidden of the chunk's streams (this row's slab ``[1,1,T_loc,4H]`` of the chunk's ``T_pad =
+        rows x T_loc`` rows, eager or traced; ``head.collapse`` + ``head.norm``), its rows past ``seq_len`` zeroed
+        (``MtpFillPlan.row_mask``: the main model leaves them unspecified), and the next token of every row
+        (``MtpFillPlan.next_ids``: ``ids`` shifted by one, the last real row taking ``first`` = the chunk's greedy
+        chunk-end token). ``spec_decode.prefill_with_mtp`` per chunk, with the mask."""
         ttnn = _ttnn()
-        from models.demos.glm53_flash.tt.spec_decode import _upload
-
         mesh = self.model.mesh
-        T_pad = int(streams.shape[-2]) * mesh.rows
-        next_ids = torch.cat([ids.reshape(-1).long()[1:], torch.tensor([int(first)], dtype=torch.long)])
-        host = self.model.embedding.tokens_to_host(next_ids, pad_to=T_pad)  # [1,1,1,T_pad]
-        ids_dev = _upload(mesh, host, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, 3 if mesh.rows > 1 else None)
+        plan = vs.mtp_fill_plan(
+            ids,
+            first,
+            rows=mesh.rows,
+            t_loc=int(streams.shape[-2]),
+            seq_len=int(seq_len),
+            start=int(start),
+            pad_token_id=self.pad_token_id,
+        )
+        rows_dim = 3 if mesh.rows > 1 else None
+        ids_dev = _spec_upload(mesh, plan.next_ids, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, rows_dim)
         h = self.model.head.collapse(streams)  # this row's slab [1,1,T_loc,H] fp32
         hidden = self.model.head.norm(h)  # bf16: the LM-head input of every prompt row
         if h is not streams:
             ttnn.deallocate(h)
-        out = self.mtp.prefill_cache(ids_dev, hidden, user=user, seq_len=int(seq_len), start=int(start))
+        if plan.masked:
+            # one exact 0/1 matmul (HiFi4, fp32 accumulation) + where: the rows past seq_len become 0 whatever they
+            # held (NaN included), the real rows are copied bit for bit (``TtMoE._mask_pad_rows``)
+            mask = _spec_upload(mesh, plan.row_mask, ttnn.bfloat16, ttnn.TILE_LAYOUT, 2 if mesh.rows > 1 else None)
+            full = ttnn.matmul(mask, self.mask_ones, dtype=ttnn.bfloat16, compute_kernel_config=self.mtp.norm_compute)
+            clean = ttnn.where(full, hidden, 0.0)
+            for t in (full, mask, hidden):
+                ttnn.deallocate(t)
+            hidden = clean
+        out = self.mtp.prefill_cache(ids_dev, hidden, user=user, seq_len=plan.seq_len, start=plan.start)
         for t in (out, hidden, ids_dev):
             ttnn.deallocate(t)
+
+    def warmup_prefill_fill(self, lengths: Sequence[int]) -> None:
+        """Run the prompt fill once at every padded chunk length the served prefill can produce (``vllm_spec.
+        mtp_fill_lengths``), on a zero streams slab into slot 0, with rows past ``seq_len`` (the mask path): compiles
+        the MTP's prefill programs and its row collectives at those shapes BEFORE any trace capture. The eager
+        warm-up ladder covers only the buckets its prompts pad to (128 tokens -> 256), and the traced lengths'
+        compile passes never run the drafter: on the 2026-10-27 (2,4) block run the first traced prompt's fill at
+        T=128 compiled the MTP's gather / reduce-scatter after every capture and its routing came back garbage on
+        every row (the late-collective trap). Writes placeholder rows into slot 0 (the next prompt overwrites them)."""
+        ttnn = _ttnn()
+        mesh = self.model.mesh
+        for T in lengths:
+            T = int(T)
+            if T % (TILE * mesh.rows) or T < TILE:
+                raise ValueError(f"fill length {T} is not a multiple of the row unit {TILE * mesh.rows}")
+            if T in self.warmed_fill_lengths:
+                continue
+            t_loc = T // mesh.rows
+            seq_len = T - TILE if T > TILE else T  # rows past seq_len: the mask path compiles too
+            streams = ttnn.zeros(
+                (1, 1, t_loc, 4 * self.hidden_size),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            dummy = torch.arange(seq_len, dtype=torch.long) % 1000 + 1000
+            t0 = time.perf_counter()
+            self.prefill_fill(dummy, 1000, streams, 0, 0, seq_len)
+            ttnn.deallocate(streams)
+            ttnn.synchronize_device(mesh.device)
+            self.warmed_fill_lengths.append(T)
+            logger.info(
+                f"GLM53 vLLM: MTP prompt fill warmed at T={T} ({t_loc} rows per chip, seq_len {seq_len}) in "
+                f"{time.perf_counter() - t0:.1f} s"
+            )
 
 
 class GLM53FlashForCausalLM:
@@ -977,10 +1046,16 @@ class GLM53FlashForCausalLM:
                 if self.vision is not None and _env_flag(WARMUP_MM_ENV, "1"):
                     self._warmup_multimodal()
                 if self.spec is not None:
-                    # the speculative graphs compile eagerly here, after the prefill ladder (the MTP prefill's row
-                    # collectives are compiled by it) and before ANY capture (a collective of a new shape compiled
-                    # after a capture corrupts the replays: the 2026-10-26 block hang); placeholder rows at 0..K
+                    # the drafter's prompt fill at EVERY padded chunk length the served prefill can produce (the
+                    # traced lengths + the eager buckets: the ladder above walked only the buckets its prompts pad
+                    # to), then the speculative graphs, all eagerly and before ANY capture (a collective of a new
+                    # shape compiled after a capture corrupts the replays: the 2026-10-26 block hang, and the
+                    # 2026-10-27 served-spec block run, whose first traced prompt's fill was the first MTP prefill at
+                    # T=128); placeholder rows at 0..K and in slot 0
                     t0 = time.perf_counter()
+                    fill_lengths = self._spec_fill_lengths()
+                    self.spec.warmup_prefill_fill(fill_lengths)
+                    logger.info(f"GLM53 vLLM: MTP prompt fill warmed at the chunk lengths {fill_lengths}")
                     self.spec.warmup([0] * U)
                     self.model.reset_kda_states()
                     self._sync()
@@ -1136,6 +1211,17 @@ class GLM53FlashForCausalLM:
         raw = os.environ.get("GLM53_VLLM_WARMUP_SLOTS", "all").strip().lower()
         n = B if raw in ("", "all") else max(1, min(B, int(raw)))
         return list(range(n))
+
+    def _spec_fill_lengths(self) -> list[int]:
+        """The padded chunk lengths the MTP prompt fill is warmed at (``vllm_spec.mtp_fill_lengths``): the traced
+        lengths and the eager buckets up to the device chunk, within the caches."""
+        g = self.geometry
+        return vs.mtp_fill_lengths(
+            g.traced_prefill_lengths,
+            rows=g.rows,
+            device_prefill_chunk=g.device_prefill_chunk,
+            max_seq_len=g.max_seq_len,
+        )
 
     def _warmup_prefill_lengths(self) -> list[int]:
         """The prompt lengths the eager warm-up walks. ``GLM53_VLLM_WARMUP_PREFILL`` = ``auto`` (default): every
