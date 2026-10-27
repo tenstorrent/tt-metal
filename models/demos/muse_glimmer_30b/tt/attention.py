@@ -464,11 +464,13 @@ class MuseGlimmerAttention:
                 q, ttnn.DRAM_MEMORY_CONFIG
             )  # paged SDPA decode mis-reads height-sharded q past the first core row
         grid = self.mesh_device.compute_with_storage_grid_size()
-        # k_chunk measured on QB2: 256 for the 2048-token window, 512 for full-context layers.
+        # k_chunk measured on QB2: 256 for the 2048-token window, 512 for full-context layers. It must divide the
+        # per-user page-table span, or the last chunk reads past the user's pages.
+        span = a.max_num_blocks_per_user * a.block_size
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
             q_chunk_size=32,
-            k_chunk_size=256 if self.is_sliding else 512,
+            k_chunk_size=math.gcd(span, 256 if self.is_sliding else 512),
             exp_approx_mode=False,
         )
         sdpa_kwargs = dict(
