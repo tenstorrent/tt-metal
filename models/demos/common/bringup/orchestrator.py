@@ -284,6 +284,9 @@ def agents_json(run_dir: Path, agent: str = "bringup-engineer") -> Path:
 
 
 def _killpg(pgid: int, sig) -> None:
+    from models.demos.common.bringup.core.hangdump import wait_triage
+
+    wait_triage()  # F201: an agent's device run that hung is writing its triage: never cut it off
     try:
         os.killpg(pgid, sig)
     except ProcessLookupError:
