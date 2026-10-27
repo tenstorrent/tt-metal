@@ -112,8 +112,6 @@ inline volatile uint32_t* tensix_global_sem(uint32_t idx) {
 // INIT sets the count and marks the semaphore initialized. POST on an uninitialized slot raises an error.
 inline void tensix_global_sem_init(uint32_t idx, uint32_t value) { *tensix_global_sem(idx) = value; }
 
-inline uint32_t tensix_global_sem_read(uint32_t idx) { return *tensix_global_sem(idx); }
-
 // A read at +4*(inc+8) posts `inc` (0..7) and returns the pre-increment value (same alias as the watcher ring
 // buffer). A post past 0xFFFF leaves the count unchanged and raises a semaphore error.
 inline uint32_t tensix_global_sem_fetch_add(uint32_t idx, uint32_t inc) {
@@ -125,6 +123,9 @@ inline uint32_t tensix_global_sem_fetch_add(uint32_t idx, uint32_t inc) {
 inline uint32_t tensix_global_sem_fetch_sub(uint32_t idx, uint32_t dec) {
     return *reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(tensix_global_sem(idx)) + 4 * dec);
 }
+
+// Reading the base may take from the count (#57759 saw a GET of 8): post 0 instead, as the watcher host does.
+inline uint32_t tensix_global_sem_read(uint32_t idx) { return tensix_global_sem_fetch_add(idx, 0); }
 
 #endif  // ARCH_QUASAR
 
