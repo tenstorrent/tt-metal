@@ -235,7 +235,7 @@ static ttnn::Tensor bound_matmul(
             input_tensor_b.logical_shape());
     }
 
-    if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
+    if (parameters.program_config.has_value() && (input_tensor_a.is_sharded() || input_tensor_b.is_sharded())) {
         TT_FATAL(
             !parameters.user_fused_activation.has_value(),
             "Sharded matmul run with {} activation: this should be placed in the program config's fused_activation "
@@ -320,11 +320,15 @@ static ttnn::Tensor bound_matmul(
         }
     }
 
-    // With a user core grid the activation is fused into the kernel, which would apply it before a
-    // post-processed bias. In that case keep it out of the kernel and apply it after the bias instead.
+    // The activation is fused into the kernel for a user core grid or a generated 2D-mcast sharded config; with a
+    // post-processed bias it would run before the bias, so it is applied after the bias instead.
     std::optional<UnaryWithParam> trailing_activation;
-    if (parameters.user_fused_activation.has_value() &&
-        (!parameters.user_core_coord.has_value() || post_process_bias)) {
+    const bool kernel_fuses_activation =
+        input_tensor_a_adjusted.is_sharded()
+            ? !parameters.program_config.has_value() &&
+                  std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(chosen_program_config)
+            : parameters.user_core_coord.has_value();
+    if (parameters.user_fused_activation.has_value() && (!kernel_fuses_activation || post_process_bias)) {
         trailing_activation = parameters.user_fused_activation;
         parameters.user_fused_activation = std::nullopt;
     }
