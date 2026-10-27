@@ -52,16 +52,15 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     // DataFormatConfigSet::DEFAULT. That latch keys on which config set is active, not on the
     // formats, so _configure_default_alu_data_format_state_ would early-return and leave the ALU
     // decoding 2x-packed SrcA as Float16_b. Program the ALU directly in that case; this is still the
-    // DEFAULT config shape (implied math format off, no dest-format override), so the latched
+    // DEFAULT config shape (no dest-format override), so the latched
     // DataFormatConfigSet::DEFAULT stays truthful and transpose-dest's restore contract holds.
     if (srcA_2x) {
         const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
                                           _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
-        _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(
+        _configure_alu_formats_<EN_32BIT_DEST>(
             srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
     } else {
-        _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(
-            srcA_format, srcB_format);
+        _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
     }
     _llk_math_reduce_init_<pool_type, reduce_dim, EN_32BIT_DEST, math_fidelity, is_int_fpu_en>(
         srcA_format, srcB_format, tensor_shape);
@@ -87,7 +86,7 @@ inline void llk_math_reduce_uninit(const std::uint32_t operandA) {
     // reprogramming both ALU srcs to operandA's table value is the correct restore.
     const DataFormat table_fmt = static_cast<DataFormat>(unpack_dst_format[operandA_id]);
     const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(table_fmt) && DST_ACCUM_MODE;
-    _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, DST_ACCUM_MODE>(
+    _configure_alu_formats_<DST_ACCUM_MODE>(
         table_fmt, table_fmt, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
 }
 

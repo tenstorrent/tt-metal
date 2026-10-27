@@ -175,7 +175,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_zero_dest_dvalid_handshake_for_sfpu();
         }
 
-        _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(math_format, math_format);
 
         if constexpr (!unpack_to_dest)
         {

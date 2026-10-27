@@ -26,7 +26,7 @@ def fidelity_source_formats(
 
 def hw_configure_math(dest_acc: str, math_fmt: DataFormat) -> str:
     return (
-        f"_llk_math_srcAB_hw_configure_<false, {dest_acc}>(\n"
+        f"_llk_math_srcAB_hw_configure_<{dest_acc}>(\n"
         f"    {math_fmt.cpp_enum_value}, {math_fmt.cpp_enum_value}\n"
         f");\n"
     )
@@ -37,10 +37,9 @@ def configure_math(
     old_math: DataFormat,
     new_math: DataFormat,
 ) -> str:
-    implied = "false" if new_math.is_integer() else "true"
     math_fmt = new_math.cpp_enum_value
     return (
-        f"_configure_alu_formats_<{implied}, {dest_acc}>(\n"
+        f"_configure_alu_formats_<{dest_acc}>(\n"
         f"    {math_fmt}, {math_fmt},\n"
         f"    _is_src_fmt_int32_dest_compatible_({math_fmt}) && {dest_acc}, DataFormat::Invalid\n"
         f");\n"
