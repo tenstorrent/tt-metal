@@ -222,6 +222,21 @@ RUN for tool in clang clang++ clang-tidy; do \
     done && \
     clang --version && clang-tidy --version
 
+# Install clang-tidy-23 alongside the clang-tidy-20 default above, so the
+# code-analysis clang-tidy-23 shadow scan (code-analysis.yaml
+# clang-tidy-version: "23") can use the binary already baked into the image
+# instead of installing it from apt.llvm.org at job start. clang-tidy-20
+# remains the default toolchain (see update-alternatives above); this does
+# not touch it.
+RUN . /etc/os-release && \
+    keyring=/usr/share/keyrings/llvm-snapshot.asc && \
+    curl -fsSL -o "$keyring" https://apt.llvm.org/llvm-snapshot.gpg.key && \
+    echo "deb [signed-by=$keyring] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-23 main" \
+        > /etc/apt/sources.list.d/llvm-23.list && \
+    apt-get update && apt-get install -y --no-install-recommends clang-tidy-23 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    clang-tidy-23 --version
+
 #############################################################
 # CI Build image
 #############################################################
