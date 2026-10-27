@@ -43,13 +43,19 @@ from typing import Any, Iterable, Sequence
 
 import torch
 from loguru import logger
-from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker, acknowledge_corruptible
+from ttnn.tools.trace_allocation_tracker import (
+    TraceAllocationTracker,
+    acknowledge_corruptible,
+    corruptible_allocation_scope,
+)
 
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_pack_plan as pack_plan
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import Qwen38TracedChain
 from models.demos.blackhole.qwen38_flash_next.ttnn import pack as pack_module
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import replicate_tensor_2d_mesh_mapper
+from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import SAMPLING_CANDIDATE_ROW_SHAPE
 from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import (
     Qwen38LaneHostPool,
     Qwen38TTNNLaneImporter,
@@ -209,6 +215,7 @@ class Qwen38PlainLaneDecoder:
         seed: int = 0,
         indexer_form: str | None = None,
         pack: bool | None = None,
+        candidates: bool = False,
     ) -> None:
         self.lanes = lanes
         # QSA lane indexer form, "wide" or "per_lane"; the argument beats QWEN38_LANE_INDEXER_FORM (default "wide")
@@ -241,6 +248,13 @@ class Qwen38PlainLaneDecoder:
         self.pack_buckets: tuple[int, ...] = pack_buckets_from_env(lanes=lanes) if self.pack_enabled else ()
         if self.pack_enabled:
             pack_plan.pack_force_enabled()  # QWEN38_PACK_FORCE is read per prefill call: refuse a bad value at start
+        # P3g-1: the candidate rows of every lane (``sampling_candidates`` over the lane logits, ``[1,1,lanes,256]`` fp32
+        # ROW_MAJOR) in a small second trace replayed after the lane replay, only on steps with a sampled row.  The buffer is
+        # allocated and the programs compiled in ``prepare``; ``capture`` captures the trace after the lane trace.
+        self.candidates = candidates
+        self.candidate_buffer = None
+        self.candidate_trace_id: int | None = None
+        self._candidate_scratch = None
         self.pack_state = None
         self.pack_traces: dict[int, tuple[int, Any]] = {}
         self.lander: Qwen38TTNNPackLander | None = None
@@ -301,6 +315,8 @@ class Qwen38PlainLaneDecoder:
         ttnn.synchronize_device(mesh)
         if self.warm_logits_gather:
             chain.sampling.read_full_logits_rows(output.logits)
+        if self.candidates:
+            self._prepare_candidates(chain, output.logits)
         output.release_tensors()
         for tensor in (
             token_row,
@@ -316,6 +332,71 @@ class Qwen38PlainLaneDecoder:
         self.timing["warm_s"] = time.perf_counter() - started
         if self.pack_enabled:
             self._prepare_pack(chain)
+
+    def _prepare_candidates(self, chain: Any, logits: Any) -> None:
+        """The candidate buffer (before any capture, like the pack state) and one eager ``sampling_candidates`` over the
+        warm pass's lane logits: every program of the candidate trace compiles here, and the host reads the row once to
+        compile its readback."""
+
+        mesh, lanes = self.mesh, self.lanes
+        shape = (1, 1, lanes, SAMPLING_CANDIDATE_ROW_SHAPE[3])
+        self.candidate_buffer = ttnn.from_torch(
+            torch.zeros(shape, dtype=torch.float32),
+            dtype=ttnn.float32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
+        )
+        row = self.model.model_io.lm_head.sampling_candidates(
+            logits, chain.sampling.constants, into=self.candidate_buffer
+        )
+        ttnn.synchronize_device(mesh)
+        ttnn.deallocate(row)
+        self._read_candidate_buffer()
+
+    def _read_candidate_buffer(self) -> torch.Tensor:
+        host = ttnn.to_torch(ttnn.get_device_tensors(self.candidate_buffer)[0])
+        return host.reshape(self.lanes, SAMPLING_CANDIDATE_ROW_SHAPE[3]).to(torch.float32)
+
+    def capture_candidates(self) -> None:
+        """The candidate trace, after the lane capture: ``sampling_candidates`` over the lane trace's persistent logits
+        into the persistent buffer (the programs compiled in :meth:`_prepare_candidates`; nothing allocates that lives
+        past the capture but the retained gather row)."""
+
+        chain, mesh, model = self.chain, self.mesh, self.model
+        logits = self.captures[0].output.logits
+        guard = lambda label: resident_decode.forbid_trace_body_host_io_and_sync(
+            phase=f"candidates {label}"
+        )  # noqa: E731
+        started = time.perf_counter()
+        before = self._dram_free()
+        with corruptible_allocation_scope(mesh):
+            trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+            with guard("capture"):
+                row = model.model_io.lm_head.sampling_candidates(
+                    logits, chain.sampling.constants, into=self.candidate_buffer
+                )
+            ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh)
+        self.candidate_trace_id, self._candidate_scratch = trace_id, row
+        acknowledge_corruptible(self.candidate_buffer)
+        acknowledge_corruptible(row)
+        self.timing["candidates_capture_s"] = time.perf_counter() - started
+        self.timing["candidates_trace_bytes"] = before - self._dram_free()
+
+    @property
+    def has_candidates(self) -> bool:
+        return self.candidate_trace_id is not None
+
+    def read_candidates(self) -> torch.Tensor:
+        """Replay the candidate trace over the last lane replay's logits and read the buffer: fp32 ``[lanes, 256]``,
+        row u = lane u's ``[values | global ids]`` packs of the four shards (``Qwen38CandidateRows`` parses it)."""
+
+        if self.candidate_trace_id is None:
+            raise RuntimeError("the candidate trace is not captured")
+        ttnn._ttnn_execute_trace(self.mesh, self.candidate_trace_id, cq_id=0, blocking=True)
+        return self._read_candidate_buffer()
 
     def _prepare_pack(self, chain: Any) -> None:
         """The multi-user pack inside the chain's warm hook (before any capture: its persistent buffers must exist before
@@ -402,9 +483,12 @@ class Qwen38PlainLaneDecoder:
             *self.pager_g.kv_stagings,
         ):
             acknowledge_corruptible(tensor)
+        if self.candidates:
+            self.capture_candidates()
         if self.pack_enabled:
             self.capture_pack()
-        for trace_id in (*chain.trace_ids(), *self.trace_ids, *self.pack_trace_ids()):
+        candidate_ids = [] if self.candidate_trace_id is None else [self.candidate_trace_id]
+        for trace_id in (*chain.trace_ids(), *self.trace_ids, *candidate_ids, *self.pack_trace_ids()):
             TraceAllocationTracker.verify_before_replay(mesh, trace_id)
         entries = resident_decode.program_cache_count(mesh)
         logger.info(f"program cache entries after the lane captures {entries} (chain {chain.program_cache_entries})")
@@ -734,6 +818,13 @@ class Qwen38PlainLaneDecoder:
             for trace_id in (*self.trace_ids, *self.pack_trace_ids()):
                 ttnn.release_trace(mesh, trace_id)
             self.trace_ids.clear()
+            if self.candidate_trace_id is not None:
+                ttnn.release_trace(mesh, self.candidate_trace_id)
+                self.candidate_trace_id = None
+            for tensor in (self._candidate_scratch, self.candidate_buffer):
+                if tensor is not None:
+                    ttnn.deallocate(tensor)
+            self._candidate_scratch = self.candidate_buffer = None
             for _trace_id, output in self.pack_traces.values():
                 output.release_tensors()
             self.pack_traces.clear()

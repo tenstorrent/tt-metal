@@ -101,6 +101,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     TP_SIZE,
     is_slab_rows,
 )
+from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import LOCAL_VOCAB_SIZE, SAMPLING_CANDIDATES_PER_DEVICE
 from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging
 
 OPTIMIZATIONS = (None, "performance", "accuracy")  # the plugin's tt.optimizations values; no effect on this chain
@@ -115,6 +116,8 @@ LONG_CHUNKS_VARIABLE = "QWEN38_LONG_CHUNKS"  # "1": the 128-row chunks without a
 PREFILL_SLAB_OFF = ("0", "off")
 BATCH_MAX_LANES = 32  # batch mode: max_num_seqs 2..32 (one 32-row tile)
 MAX_TOKENS_ALL_USERS_VARIABLE = "QWEN38_MAX_TOKENS_ALL_USERS"  # the KV token pool the plugin sizes its blocks from
+BATCH_CANDIDATES_VARIABLE = "QWEN38_BATCH_CANDIDATES"  # "1" (default) / "0": candidate rows for the sampled lanes
+CANDIDATE_FALLBACK_REASONS = ("top_k", "penalty", "guard", "nonfinite")
 DECODE_LOG_INTERVAL = 256  # batch mode: one adapter log line per this many decode calls
 BATCH_LANE_INDEXER_FORM = "wide"
 KV_BYTES_PER_TOKEN = 12 * 512 * 2  # 12 QSA layers x one 512-wide bf16 row, per device
@@ -292,6 +295,137 @@ def sample_from_row(
         keep = torch.cumsum(probs, 0) - probs < top_p
         keep[0] = True
         probs, indices = probs[keep], indices[keep]
+    noise = torch.empty_like(probs).exponential_(generator=generator)
+    return int(indices[(probs / noise).argmax()])
+
+
+def batch_candidates_enabled(environ: Mapping[str, str] | None = None) -> bool:
+    """``QWEN38_BATCH_CANDIDATES``: "1" or unset = the sampled lanes draw from the device candidate rows (P3g-1), "0" = every
+    sampled row reads the full gathered logits (the P2 path); anything else is refused."""
+
+    value = (os.environ if environ is None else environ).get(BATCH_CANDIDATES_VARIABLE)
+    if value is None:
+        return True
+    if value not in ("0", "1"):
+        raise ValueError(f"{BATCH_CANDIDATES_VARIABLE} must be 0 or 1, got {value!r}")
+    return value == "1"
+
+
+class CandidateFallback(Exception):
+    """A lane's candidate row cannot give :func:`sample_from_row`'s law exactly: the row draws over the full logits.
+    ``reason`` is one of ``CANDIDATE_FALLBACK_REASONS``; raised before any draw, so the generator is untouched."""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+        self.reason = reason
+
+
+def candidate_route(policy: Qwen38HostSamplingPolicy) -> str | None:
+    """The fallback reason fixed by the policy alone, else ``None`` (the row may draw from candidates): ``top_k`` outside
+    1 .. 32 (the plugin turns top_k <= 0 into the vocabulary size), or a penalty that raises logits (unread tokens would
+    become unbounded)."""
+
+    if not 0 < policy.top_k <= SAMPLING_CANDIDATES_PER_DEVICE:
+        return "top_k"
+    if policy.presence_penalty < 0 or policy.frequency_penalty < 0 or policy.repetition_penalty < 1.0:
+        return "penalty"
+    return None
+
+
+def parse_candidate_rows(rows: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """The device candidate rows fp32 ``[n, 256]`` to ``(values [n, 4, 32] fp32, ids [n, 4, 32] int64, valid [n] bool)``;
+    a row is valid when every lane is finite, the ids are integers inside their shard and a shard's ids do not repeat.
+    """
+
+    count = rows.shape[0]
+    k = SAMPLING_CANDIDATES_PER_DEVICE
+    packs = rows.reshape(count, TP_SIZE, 2, k)
+    values, ids_fp32 = packs[:, :, 0], packs[:, :, 1]
+    finite = torch.isfinite(rows).all(dim=1)
+    ids = torch.where(torch.isfinite(ids_fp32), ids_fp32, torch.zeros(())).to(torch.int64)
+    starts = torch.arange(TP_SIZE, dtype=torch.int64).reshape(1, TP_SIZE, 1) * LOCAL_VOCAB_SIZE
+    valid = finite & (ids.to(torch.float32) == ids_fp32).all(dim=(1, 2))
+    valid &= ((ids >= starts) & (ids < starts + LOCAL_VOCAB_SIZE)).all(dim=(1, 2))
+    ordered = torch.sort(ids, dim=-1).values
+    valid &= ~(ordered[..., 1:] == ordered[..., :-1]).any(dim=(1, 2))
+    return values, ids, valid
+
+
+def candidate_law(
+    values: torch.Tensor,
+    ids: torch.Tensor,
+    policy: Qwen38HostSamplingPolicy,
+    history: tuple[torch.Tensor, torch.Tensor] | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """:func:`sample_from_row`'s law for one lane from its candidate row (``values`` fp32 ``[4, 32]``, ``ids`` int64
+    ``[4, 32]``, each shard descending): ``(probabilities, token ids)`` of the kept set in the order the noise argmax
+    reads it.  The same top-k set (with every value tied to the k-th), temperature softmax and nucleus as the full-row
+    code, over 128 candidates; the penalties of :func:`apply_penalties` on the candidates only.
+
+    Raises :class:`CandidateFallback` (before any draw) where the row cannot be exact: ``top_k`` outside 1 .. 32 or a
+    penalty that raises logits (:func:`candidate_route`), a non-finite candidate, or the guard: the k-th kept score must
+    exceed the shard floor (the largest of the shards' 32nd values), else an unread token could belong to the kept set.
+    A penalty only lowers a score here, so every unread token stays at or under the floor."""
+
+    reason = candidate_route(policy)
+    if reason is not None:
+        raise CandidateFallback(reason, f"top_k {policy.top_k}" if reason == "top_k" else "penalty raises logits")
+    flat_values, flat_ids = values.reshape(-1), ids.reshape(-1)
+    if not bool(torch.isfinite(flat_values).all()):
+        raise CandidateFallback("nonfinite", "candidate row holds a non-finite value")
+    floor = values[:, -1].max()
+    scores = flat_values.clone()
+    scores[flat_ids >= TOKENIZER_SIZE] = float("-inf")  # the LM head's padding columns: masked on the full row too
+    if policy.penalized:
+        if history is None:
+            raise ValueError("a penalized policy needs the row's prompt and output history")
+        prompt_ids, output_ids = history
+        counts = (output_ids.reshape(-1, 1) == flat_ids.reshape(1, -1)).sum(dim=0)
+        seen = counts > 0
+        if policy.repetition_penalty != 1.0:  # apply_penalties' expressions on the candidates
+            penalized = seen | (prompt_ids.reshape(-1, 1) == flat_ids.reshape(1, -1)).any(dim=0)
+            penalty = torch.tensor(policy.repetition_penalty, dtype=scores.dtype)
+            scores[penalized] *= torch.where(scores[penalized] > 0, 1.0 / penalty, penalty)
+        if policy.frequency_penalty != 0.0:
+            scores -= policy.frequency_penalty * counts
+        if policy.presence_penalty != 0.0:
+            scores -= policy.presence_penalty * seen
+    if policy.greedy:  # a penalized greedy row: the penalized argmax, the lowest id among ties (torch.argmax's rule)
+        best = scores.max()
+        if not bool(best > floor):
+            raise CandidateFallback(
+                "guard", f"greedy score {float(best)} does not exceed the shard floor {float(floor)}"
+            )
+        return torch.ones(1), flat_ids[scores == best].min().reshape(1)
+    top_k = policy.top_k
+    top, positions = scores.topk(top_k)
+    extra = int((scores >= top[-1]).sum()) - top_k
+    if extra > 0:
+        top, positions = scores.topk(top_k + extra)
+    if not bool(top[-1] > floor):
+        raise CandidateFallback("guard", f"k-th score {float(top[-1])} does not exceed the shard floor {float(floor)}")
+    probs = torch.softmax(top / policy.temperature, 0)
+    indices = flat_ids[positions]
+    if policy.top_p < 1.0:
+        keep = torch.cumsum(probs, 0) - probs < policy.top_p
+        keep[0] = True
+        probs, indices = probs[keep], indices[keep]
+    return probs, indices
+
+
+def sample_from_candidates(
+    values: torch.Tensor,
+    ids: torch.Tensor,
+    policy: Qwen38HostSamplingPolicy,
+    generator: torch.Generator | None,
+    history: tuple[torch.Tensor, torch.Tensor] | None = None,
+) -> int:
+    """One lane's token from its candidate row: :func:`candidate_law`, then the exponential-noise argmax of
+    :func:`sample_from_row` with the same generator, so a seeded row draws the token the full-row path draws for the same
+    logits (up to the order of exactly tied values).  A greedy row reaches here only with a penalty (its penalized
+    argmax)."""
+
+    probs, indices = candidate_law(values, ids, policy, history)
     noise = torch.empty_like(probs).exponential_(generator=generator)
     return int(indices[(probs / noise).argmax()])
 
@@ -507,6 +641,16 @@ class Qwen38ForCausalLM:
         self.last_prefill_groups: list = []  # the groups of the last packed-mode prefill call (pack on)
         self._pending_note: dict[int, int] | None = None  # the moves decode_forward applied, not yet noted
         self.decode_calls = 0  # batch mode: decode calls so far (the periodic log line)
+        # P3g-1: sampled lanes draw from the device candidate rows (QWEN38_BATCH_CANDIDATES, default on); refused at start
+        self.batch_candidates = batch_candidates_enabled() if batch_lanes > 1 else False
+        # candidate-path counters: rows drawn from candidates, rows sent to the full-logits path per reason, the steps
+        # that paid the full gather for them
+        self.candidate_counters: dict[str, int] = {
+            "candidate_steps": 0,
+            "candidate_rows": 0,
+            "fallback_steps": 0,
+            **{f"fallback_{reason}": 0 for reason in CANDIDATE_FALLBACK_REASONS},
+        }
         self.decode_stats: deque[dict[str, float]] = deque(maxlen=4096)  # per decode call: total/step/gather seconds
         self.dram: dict[
             str, dict[str, int]
@@ -1028,6 +1172,7 @@ class Qwen38ForCausalLM:
             paging=paging,
             indexer_form=BATCH_LANE_INDEXER_FORM,
             pack=prefill_pack_enabled(lanes=self.lanes),  # on with >= 8 lanes (P3e); QWEN38_PREFILL_PACK wins
+            candidates=self.batch_candidates,
         )
         decoder.warm_logits_gather = True  # host-sampled rows and host logits read the lane logits under the miss guard
         self.decoder, self.block_size, self.num_blocks = decoder, block_size, num_blocks
@@ -1378,7 +1523,24 @@ class Qwen38ForCausalLM:
             raise
         gather_started = time.perf_counter()
         logits = None
-        if sampling_params is None or host_rows:
+        candidates_s = draw_s = fallback_s = 0.0
+        drawn: dict[int, int] = {}
+        use_candidates = (
+            self.batch_candidates
+            and sampling_params is not None
+            and bool(host_rows)
+            and getattr(decoder, "has_candidates", False)
+        )
+        if use_candidates:
+            drawn, fallback_rows, candidates_s, draw_s = self._draw_candidate_rows(
+                decoder, host_rows, policies, row_lanes, positions, histories
+            )
+            if fallback_rows:
+                fallback_started = time.perf_counter()
+                logits = self._read_lane_logits()
+                fallback_s = time.perf_counter() - fallback_started
+                self.candidate_counters["fallback_steps"] += 1
+        elif sampling_params is None or host_rows:
             logits = self._read_lane_logits()
         if sampling_params is None:
             out = torch.zeros(lanes, 1, VOCAB_SIZE, dtype=torch.float32)
@@ -1388,12 +1550,18 @@ class Qwen38ForCausalLM:
             out = torch.zeros(lanes, 1, dtype=torch.int32)
             for row in live_rows:
                 lane = row_lanes[row]
+                if row in drawn:
+                    out[row, 0] = drawn[row]
+                    continue
                 if row in host_rows:
+                    draw_started = time.perf_counter()
                     values = logits[lane]
                     if row in histories:
                         apply_penalties(values, *histories[row], policies[row])
                     generator = position_generator(policies[row].seed, positions[row])
                     out[row, 0] = sample_from_row(values, policies[row], generator)
+                    if use_candidates:
+                        fallback_s += time.perf_counter() - draw_started
                     continue
                 token = int(lane_ids[lane])
                 if not 0 <= token < TOKENIZER_SIZE:
@@ -1415,18 +1583,71 @@ class Qwen38ForCausalLM:
                 "step_s": step_s,
                 "gather_s": now - gather_started,
                 "overhead_s": (now - started) - step_s,
+                "candidates_s": candidates_s,
+                "draw_s": draw_s,
+                "fallback_s": fallback_s if use_candidates else (now - gather_started if host_rows else 0.0),
+                "sampled_rows": len(host_rows),
             }
         )
         self.decode_calls += 1
         if self.decode_calls % DECODE_LOG_INTERVAL == 0:
             recent = list(self.decode_stats)[-DECODE_LOG_INTERVAL:]
             mean = lambda key: sum(entry[key] for entry in recent) / len(recent)  # noqa: E731
+            counters = self.candidate_counters
             logger.info(
                 f"batch decode: {self.decode_calls} calls, last {len(recent)}: mean rows {mean('rows'):.2f}, "
                 f"total {mean('total_s') * 1e3:.2f} ms, replay {mean('step_s') * 1e3:.2f} ms, "
-                f"gather+sample {mean('gather_s') * 1e3:.2f} ms, overhead {mean('overhead_s') * 1e3:.2f} ms"
+                f"gather+sample {mean('gather_s') * 1e3:.2f} ms, overhead {mean('overhead_s') * 1e3:.2f} ms; "
+                f"split: candidates {mean('candidates_s') * 1e3:.2f} ms, host draw {mean('draw_s') * 1e3:.2f} ms, "
+                f"fallback gather {mean('fallback_s') * 1e3:.2f} ms, mean sampled rows {mean('sampled_rows'):.2f}; "
+                f"candidates {'on' if self.batch_candidates else 'off'}: {counters['candidate_rows']} rows drawn in "
+                f"{counters['candidate_steps']} steps, fallback steps {counters['fallback_steps']} (rows: top_k "
+                f"{counters['fallback_top_k']}, penalty {counters['fallback_penalty']}, guard "
+                f"{counters['fallback_guard']}, nonfinite {counters['fallback_nonfinite']})"
             )
         return out
+
+    def _draw_candidate_rows(
+        self,
+        decoder: Any,
+        host_rows: list[int],
+        policies: dict[int, Qwen38HostSamplingPolicy],
+        row_lanes: dict[int, int],
+        positions: list[int],
+        histories: dict[int, tuple[torch.Tensor, torch.Tensor]],
+    ) -> tuple[dict[int, int], list[int], float, float]:
+        """The step's sampled rows from the device candidate rows: one trace replay and a ``[lanes, 256]`` readback, then
+        per row the candidate law and the same generator as the full-row path (:func:`sample_from_candidates`).  Returns
+        ``(tokens by row, rows that need the full logits, candidate seconds, host draw seconds)``; a row whose policy or
+        candidates cannot be exact (:class:`CandidateFallback`) is counted per reason and left to the full-logits path.
+        """
+
+        counters = self.candidate_counters
+        started = time.perf_counter()
+        try:
+            rows = decoder.read_candidates()
+        except BaseException:
+            self.batch_failed = True
+            raise
+        candidates_s = time.perf_counter() - started
+        drawn_started = time.perf_counter()
+        values, ids, valid = parse_candidate_rows(rows)
+        drawn: dict[int, int] = {}
+        fallback_rows: list[int] = []
+        for row in host_rows:
+            lane = row_lanes[row]
+            policy = policies[row]
+            try:
+                if not bool(valid[lane]):
+                    raise CandidateFallback("nonfinite", f"lane {lane}'s candidate row is malformed")
+                generator = position_generator(policy.seed, positions[row])
+                drawn[row] = sample_from_candidates(values[lane], ids[lane], policy, generator, histories.get(row))
+            except CandidateFallback as fallback:
+                counters[f"fallback_{fallback.reason}"] += 1
+                fallback_rows.append(row)
+        counters["candidate_steps"] += 1
+        counters["candidate_rows"] += len(drawn)
+        return drawn, fallback_rows, candidates_s, time.perf_counter() - drawn_started
 
     def _read_lane_logits(self) -> torch.Tensor:
         """The last replay's logits of every lane, fp32 ``[lanes, VOCAB_SIZE]``, the LM head's padding masked."""
@@ -1484,6 +1705,8 @@ class Qwen38ForCausalLM:
             enable_trace=True,
             read_from_device=False,
         )
+        if self.batch_candidates and getattr(self.decoder, "has_candidates", False):
+            self.decoder.read_candidates()  # one candidate replay and readback under the closed miss guard
         self.release_request(0)
         self.lane_of_slot = list(range(self.lanes))
         self.lane_slots = [Qwen38VLLMSlot() for _ in range(self.lanes)]

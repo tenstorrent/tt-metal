@@ -565,6 +565,20 @@ tokens across the users (more routed experts). One user on a B=8 server pays the
 the single-slot server). Without the pack, TTFT grows with concurrency x ISL, because each request is prefilled alone and
 the prefills run one after another; the pack cuts this for prompts of up to 1024 tokens. A preempted request is re-prefilled: its greedy tokens can change at a near-tie.
 
+Sampled rows (`QWEN38_BATCH_CANDIDATES`, default on since 2026-10-27; `0` is the full-logits path): on a step with a sampled
+or penalized row, a second small trace runs `sampling_candidates` over the lane logits (per shard top-32, 128 candidates per
+lane) into a persistent `[1, 1, B, 256]` fp32 row, and the host reads that row (32 KB at B = 32) instead of the gathered full
+logits (31.8 MB).  Each row draws with the full-row path's law (top-k set with its ties, temperature, nucleus, penalties) and
+the same `(seed, position)` generator, so a seeded request still draws the same tokens alone and in a batch; tokens can differ
+from the full-row path only where the nucleus ends inside exactly tied values.  A row falls back to the full logits (one gather
+for all such rows of the step) when the law cannot be exact over the candidates: `top_k` outside 1..32 (the plugin sends
+`top_k <= 0` as the vocabulary size), a penalty that raises logits, the guard (the k-th kept score must exceed every shard's
+32nd value) or a malformed row.  The periodic `batch decode:` line carries the split and the fallback counts per reason.
+Greedy-only steps do not run it.  Measured (2026-10-27, `vllm bench serve` random 128/1024, 64 prompts, temperature 1.0, top-p
+0.95, top-k 20): B = 32 c32 271 -> 362 output tok/s, TPOT mean 116.3 -> 86.6 ms (greedy at B = 32: 387 tok/s, 81.1 ms); B = 8
+c8 144 -> 174 tok/s, TPOT 54.8 -> 45.1 ms.  Per B = 32 step: candidates 0.44 ms, host draw 2.05 ms, against 28.6-30.0 ms for the
+full gather and draw.
+
 Multi-user prefill pack (on by default with 8 or more lanes since 2026-10-26; `QWEN38_PREFILL_PACK=0` turns it off, `=1` turns it
 on with fewer lanes): the adapter plans each prefill call into packs (1..16 users
 of up to 128 / 256 / 512 / 1024 prompt tokens in one 0.65 s replay of the 2048-row slab) and single-path rows, and lands each packed
