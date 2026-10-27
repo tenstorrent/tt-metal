@@ -249,11 +249,12 @@ def test_scatter_codegen_tile_row_too_wide_for_interleaved_streams(device):
     # The interleaved TILE factory keeps a whole row of input and output tiles resident; a row the
     # per-core L1 cannot hold twice has to stream one tile at a time instead. The width comes from the
     # device so the row just overflows the budget on Wormhole and Blackhole alike. Two tile rows on a
-    # two-core grid fill the grid, so the row split alone would not have chosen streaming.
+    # two-core grid fill the grid, so the row split alone would not have chosen streaming, and the
+    # extra 8 elements keep the raw stick off a 32 B boundary so the row-major detour declines it.
     torch.manual_seed(0)
     budget = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
     tile_bytes = 32 * 32 * 2
-    width = 32 * (budget // (2 * tile_bytes) + 1)
+    width = 32 * (budget // (2 * tile_bytes) + 1) + 8
     rows, index_w = 32 * 2, 32
     grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))])
     # Unique positions per row without sorting a row this wide: stride the 32 columns across it and
