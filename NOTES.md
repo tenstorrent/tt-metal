@@ -27,3 +27,12 @@
   (g15blx02 or blx01 standard LTX e2e) once the A/B passes. t511-ab-r2 dropped once (482), but the runner logged 482 twice
   (drop + broker-kill after the reboot) in configs/t511-ltx25-ab, which would skip it after one real drop: deduped to one line.
   Runner (pid 12726) retries t511-ab-r2. If it drops again: skip blx03 for the A/B (weights exist only on blx03).
+- 2026-10-27 00:00 PDT (run 2142, blx04): ltx-rt moved 23 commits (models/ only) since f6547442b30. Re-cherry-picked a22dc027ee2
+  onto origin/ltx-rt 522ef26916b: clean, 3f3ce168ce8 on local branch ttp/t511-ltxrt-land; CPU test 4 passed.
+  blx04 tree ~/fasth3/t511/tt-metal checked out at 3f3ce168ce8 (same C++ as the t554 build). Conv VAE full sha256 matches 685b06ee...
+  A/B now runs one arm per process (memory #244: in-process env toggles can replay cached programs/traces):
+  tt-project/t511/{run511b4.sh off|on|e2e, spec-*.txt, blx04-submit.sh (guard: only FastH3 jobs count; TTP_NO_DEVICE=0 is not "no device"),
+  chain511b4.sh}. Chain (ttp detach chain511, run dir 2142): e2e (JIT fill + pre-push standard e2e) job 310, then off, then on; no retries.
+  Outputs: ~/fasth3/data/t511/out_{e2e,off,on}/ (run.log, ltx_av_fast_1920x1088_1.mp4 = replay gen, *_t3s.png).
+- Next: off vs on: grep noise_seed=20000 (only in out_on), Stage 2 denoise lines, md5 differ; ltx_eval video --vbench-ref; stills.
+  If ok: ttp push --detach from ttp/t511-ltxrt-land (ff onto origin/ltx-rt); e2e job 310 is the standard e2e on that commit.
