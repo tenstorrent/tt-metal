@@ -1382,14 +1382,15 @@
   sp_config: sc1
 
 
-# MiniMax-M3 16-stage pipeline-prefill perf matrix (new x cached tokens, tt-metal#57827), reduced 3x3 table: cached
-# 0 / 143360 (p50) / 552960 (p90) x new 640 (p25) / 5120 / 51200 (p99), idle (3 iters) + loaded (4 users x 240 chunks).
+# MiniMax-M3 16-stage pipeline-prefill perf matrix (new x cached tokens, tt-metal#57827), the 5x7 table of the #57827
+# comments: cached 0 / 61440 (p25) / 143360 (p50) / 312320 (p75, runs at 311296, a multiple of 2048) / 552960 (p90) x
+# new 640 (p25) / 1600 (p50) / 3072 (p75) / 5120 / 6900 (p90) / 32768 / 51200 (p99), idle (3 iters) + loaded (4 users x
+# 240 chunks). The 860160 (p99) row of the benchmark definition has never been measured and is left out, as there.
 # Config C of #57827 (2026-09-27, re-measured 2026-10-11): chunk 2048 and one dense layer alone on each of stages 0-2.
-# The full 6x7 table of #57827 runs through the same env knobs (see ci/run_matrix_ci.sh). 16 ranks of
-# [2,4] over the 4 galaxies, placed by tt-run discovery on the z-chain mesh graph. Perf is reported (job summary +
-# artifact), not gated. Like run_matrix.sh, each cached row gets its own runner launch with KV capacity cached + 51200,
-# so the numbers are comparable with #57827.
-- name: "(MiniMax-M3-428B) pipeline prefill perf matrix 3x3 16-stage, SC4"
+# 16 ranks of [2,4] over the 4 galaxies, placed by tt-run discovery on the z-chain mesh graph. Perf is reported (job
+# summary in the #57827 table layout + artifact), not gated. Like run_matrix.sh, each cached row gets its own runner
+# launch with KV capacity cached + 51200, so the numbers are comparable with #57827.
+- name: "(MiniMax-M3-428B) pipeline prefill perf matrix 5x7 16-stage, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1397,8 +1398,8 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    export CACHED=0,143360,552960
-    export NEW=640,5120,51200
+    export CACHED=0,61440,143360,312320,552960
+    export NEW=640,1600,3072,5120,6900,32768,51200
     export ITERS=3
     export USERS=4
     export TARGET_CHUNKS=240
@@ -1411,10 +1412,9 @@
   artifact_subdir: m3_prefill_matrix
   skus:
     bh_sc4:
-      # Smoke run 39584089519 (cached 0 x 2 cells, 2 users): 2m16s bring-up, 3m50s test step. Estimate for this table:
-      # ~15 min test step = 3 launches x ~3 min (bring-up + shutdown) + ~5 min of measurement (config C's ~45-95 ms
-      # chunk period, from the #57827 tables).
-      # Lower once measured.
+      # Run 39659921568 (3x3 table): first launch 2m18s to ready, later launches ~40 s, ~20-25 s per cell (idle +
+      # loaded), ~50 s shutdown, cached prefix ~20 s at 143k. Estimate for this table: ~25-30 min test step = 5 launches
+      # x ~4.5 min (bring-up, prefix, 7 cells, shutdown) + the first launch's discovery. Lower once measured.
       timeout: 60
       tier: 2
       release_ready: false

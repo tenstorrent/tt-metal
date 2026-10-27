@@ -107,8 +107,10 @@ Results: `OUT` holds one JSON line per idle iteration (`mode: idle`) and per loa
 (`mode: loaded`). Print the tables again with
 
 ```bash
-models/demos/minimax_m3/scripts/prefill_matrix/matrix_table.py <results.jsonl> [--iter0] [--csv out.csv]
+models/demos/minimax_m3/scripts/prefill_matrix/matrix_table.py <results.jsonl> [--iter0] [--csv out.csv] [--markdown]
 ```
+
+`--markdown` prints the tables in the layout of the #57827 comments (the CI job summary uses it), ready to paste there.
 
 Per-run artefacts in `WORK`: `runner*.log` (all ranks), `producer*.log`, `timing_*/rank<r>.csv`
 (one row per chunk per rank: `rank,c,compute_start,compute_ms`, from `PREFILL_SYNC_PER_CHUNK=1`),
@@ -123,7 +125,7 @@ in the ttnn-free `matrix_math.py`, unit-tested by
 ## CI (Blaze prefill, SC4)
 
 `ci/run_matrix_ci.sh` runs the same measurement (`matrix_producer.py`, unchanged) as a CI job on the 4-galaxy
-`bh_sc4` pool: `"(MiniMax-M3-428B) pipeline prefill perf matrix 3x3 16-stage, SC4"` in
+`bh_sc4` pool: `"(MiniMax-M3-428B) pipeline prefill perf matrix 5x7 16-stage, SC4"` in
 `tests/pipeline_reorg/blaze_models_prefill_tests.yaml`, `test_type: minimax_prefill_matrix`. Dispatch it alone with
 
 ```bash
@@ -141,13 +143,14 @@ How it differs from `run_matrix.sh`:
   so the numbers are comparable with the #57827 tables. The first launch forces tt-run discovery, and later rows reuse
   the placement it found. If a runner has to be killed (it did not exit on the SHUTDOWN sentinel), the remaining rows
   are skipped: there is no galaxy reset in the CI script.
-* It currently runs a reduced 3x3 table: cached 0 / 143360 / 552960 x new 640 / 5120 / 51200, 3 idle iterations,
-  4 users x 240 chunks loaded, in config C of #57827 (`CHUNK=2048`, `LAYER_COUNTS=1,1,1,5,5,5,5,5,4,4,4,4,4,4,4,4`).
-  The full table uses the same env knobs (`CACHED`, `NEW`, `ITERS`, `USERS`, `TARGET_CHUNKS`, `CHUNK`, `LAYER_COUNTS`) set in
-  the job's `cmd`.
-* Perf is reported, not gated. The tables go to the job summary. The JSONL, CSV, runner/producer/rank logs and timing
-  CSVs are uploaded as the `prefill-results-sc4-*` artifact (`m3_prefill_matrix/`). The job fails only when the run
-  breaks (bring-up, a producer error, missing chunks).
+* It runs the 5x7 table of the #57827 comments: cached 0 / 61440 / 143360 / 312320 (runs at 311296) / 552960 x new
+  640 / 1600 / 3072 / 5120 / 6900 / 32768 / 51200, 3 idle iterations, 4 users x 240 chunks loaded, in config C of #57827
+  (`CHUNK=2048`, `LAYER_COUNTS=1,1,1,5,5,5,5,5,4,4,4,4,4,4,4,4`). The table is set by the env knobs (`CACHED`, `NEW`,
+  `ITERS`, `USERS`, `TARGET_CHUNKS`, `CHUNK`, `LAYER_COUNTS`) in the job's `cmd`.
+* Perf is reported, not gated. The tables go to the job summary and the job log in the #57827 markdown layout
+  (`matrix_table.py --markdown`). The JSONL, CSV, runner/producer/rank logs and timing CSVs are uploaded as the
+  `prefill-results-sc4-*` artifact (`m3_prefill_matrix/`). The job fails only when the run breaks (bring-up, a producer
+  error, missing chunks).
 * `MATRIX_CI_DRY_RUN=1` prints the tt-run and producer commands without launching anything. `TTRUN_DIR` can point at
   a fake `hostfile` / `rankfile` for that.
 
