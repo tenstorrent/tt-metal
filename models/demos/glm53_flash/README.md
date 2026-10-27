@@ -94,9 +94,12 @@ for a 128-token prompt (`GLM53_MODEL_MAX_SEQ_LEN=1048576 GLM53_PARTITION_USERS=1
 The gap is a threshold, not capacity scaling: 256 K per user replays in 70.9 ms, 512 K and 1 M in ~152 ms. Above ~256 K x 4 users
 the memory planner drops the second, DRAM-bank-sharded expert copy that the decode streaming op reads (it does not fit beside the
 caches: `GLM53_REGIONS_KEEP_STACKED`), and decode falls back to the prefill regions lists (per-expert matmuls): ~+80 ms per step
-over the 42 MoE layers (confirmed: 256 K with the copy forced off replays in 148.9 ms with the 1 M numerics). The 128 K x 32-users profile runs the same fallback. Levers under test: a streaming decode that sources
-the one resident expert copy directly (`GLM53_REGIONS_DECODE`, in progress), and bfp4 experts so both copies fit at 1 M (accuracy
-gate pending). The sparse-decode scorer and top-k also looped over the pool capacity (+0.94 ms per DSA layer per step); a per-step
+over the 42 MoE layers (confirmed: 256 K with the copy forced off replays in 148.9 ms with the 1 M numerics). The 128 K x 32-users profile runs the same fallback. Fixed by the regions-sourced streaming decode (`GLM53_REGIONS_DECODE=stream`,
+the default since 2026-10-27; `custom_ops/expert_stream/regions.py`): the per-expert regions tensors already sit in the bank-local
+column layout the stream kernels read, so one expert copy serves prefill and decode and the stacked copy is never built. Bit-identical
+to the stacked path (one chip, the (2,4) block, and the 45-layer chain pcc 0.861457 = the stacked value); 1 M x 4 users per row
+152 -> 75.7 ms per step (13.2 tok/s per user, 423 aggregate; TTFT 143 ms for 128 tokens, was 264); the served 1 M profile follows in
+smoke r14. bfp4 experts stay a separate lever (accuracy gate pending). The sparse-decode scorer and top-k also looped over the pool capacity (+0.94 ms per DSA layer per step); a per-step
 live-pool bound (`GLM53_SPARSE_DECODE_BOUND=1`) is validated bit-identical on the block and on the 8x4 (152.2 -> 148.6 ms).
 
 Open: (1) the KDA chronology scalars were allocated after the trace captures and clobbered by decode replays (the served 64 K random
