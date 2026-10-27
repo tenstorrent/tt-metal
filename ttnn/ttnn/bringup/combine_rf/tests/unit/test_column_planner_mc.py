@@ -56,19 +56,26 @@ def _routing(kind, R, C, S_full, Eg, g):
     return ids.reshape(R, S_full, K), w.reshape(R, S_full, K)
 
 
+# uint16 ids are generated for one pass on 32 cores only.
+_PLANNER_CASES = [
+    pytest.param(idw, ncores, det, S_full, S, id=f"{iid}-{cid}-{did}-{sid}")
+    for idw, iid in [(4, "u32"), (2, "u16")]
+    for ncores, cid in [(32, "c32"), (8, "c8")]
+    for det, did in [(True, "det"), (False, "arrival")]
+    for (S_full, S), sid in [
+        ((1024, 1024), "S1024"),
+        ((512, 512), "S512"),
+        ((1024, 512), "S1024x512"),
+        ((1024, 342), "S1024x342"),
+    ]
+    if idw == 4 or (ncores == 32 and S_full == S)
+]
+
+
 @pytest.mark.timeout(2400)
 @MESH_PARAMS
-@pytest.mark.parametrize(
-    "S_full, S",
-    [(1024, 1024), (512, 512), (1024, 512), (1024, 342)],
-    ids=["S1024", "S512", "S1024x512", "S1024x342"],
-)
-@pytest.mark.parametrize("det", [True, False], ids=["det", "arrival"])
-@pytest.mark.parametrize("ncores", [32, 8], ids=["c32", "c8"])
-@pytest.mark.parametrize("idw", [4, 2], ids=["u32", "u16"])
+@pytest.mark.parametrize("idw, ncores, det, S_full, S", _PLANNER_CASES)
 def test_column_planner_mc(mesh_device, device_params, S_full, S, det, ncores, idw):
-    if idw == 2 and (ncores != 32 or S_full != S):
-        pytest.skip("uint16 ids: one pass, 32 cores")
     R, C = tuple(mesh_device.shape)
     Eg = R * EPC
     passes = -(-S_full // S)

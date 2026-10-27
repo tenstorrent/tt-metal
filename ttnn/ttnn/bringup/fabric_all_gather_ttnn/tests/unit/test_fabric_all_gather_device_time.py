@@ -476,16 +476,26 @@ _GLM_CONTEXTS = [
 _GLM_PAYLOADS = [int(p) for p in os.environ.get("FABRIC_ALL_GATHER_GLM_PAYLOADS", "6144,9216,13824").split(",")]
 
 
-@pytest.mark.parametrize("device_params", [_torus_param(p) for p in _GLM_PAYLOADS], indirect=True)
-@pytest.mark.parametrize("mesh_device", [_system_mesh()], indirect=True)
-@pytest.mark.parametrize("fmt", list(_KV_FORMATS))
+# At GLM's payload every format; the other payloads (what-ifs) are generated for bf16 only.
+_GLM_KV_CASES = [
+    pytest.param(
+        fmt,
+        _system_mesh(),
+        _device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY, p),
+        id=f"{fmt}-mesh_device0-torus_xy_{p}",
+    )
+    for fmt in _KV_FORMATS
+    for p in _GLM_PAYLOADS
+    if p == GLM_PAYLOAD or fmt == "bf16"
+]
+
+
+@pytest.mark.parametrize("fmt, mesh_device, device_params", _GLM_KV_CASES, indirect=["mesh_device", "device_params"])
 def test_glm_kv_gather(mesh_device, fmt, request):
     """The GLM sparse-KV cache gather (ND-sharded cache, one slot, full extent) at Galaxy per-chip shard sizes, on the
     two worker rows below the Ethernet row (the model's overlap region) and on the full grid. At GLM's payload
     (6144 B) every format and placement; at the other payloads bf16 on the top two rows only."""
     payload = int(_payload_id(request).split("_")[-1])
-    if payload != GLM_PAYLOAD and fmt != "bf16":
-        pytest.skip("payload what-if: bf16 only")
     G = mesh_device.get_num_devices()
     dtype, width, row_bytes = _KV_FORMATS[fmt]
     top_rows = _top_rows(mesh_device)

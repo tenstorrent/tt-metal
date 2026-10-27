@@ -128,7 +128,8 @@ def test_row_stripes_tp_dedup(mesh_device):
         assert not mism, f"chip {d}: {len(mism)} rows differ, first {mism[:8]}"
 
 
-@pytest.mark.parametrize("mesh_device", _mesh_cases(), indirect=True)
+# Only the 4-column meshes: the 10-tile input splits evenly over 2 columns.
+@pytest.mark.parametrize("mesh_device", [p for p in _mesh_cases() if p.values[0][1] == 4], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "require_exact_physical_num_devices": True}],
@@ -137,9 +138,6 @@ def test_row_stripes_tp_dedup(mesh_device):
 def test_row_stripes_tile_layout_still_refused(mesh_device, expect_error):
     """The TILE path keeps its 32-row unit: a 10-tile input over 4 columns is refused as before."""
     mesh = mesh_device
-    sp, tp = tuple(mesh.shape)
-    if tp != 4:
-        pytest.skip("the 10-tile input splits evenly over 2 columns")
     cache = ttnn.from_torch(
         torch.zeros(LAYERS, 1, 32 * 10 * 4, WIDTH),
         dtype=ttnn.bfloat16,
