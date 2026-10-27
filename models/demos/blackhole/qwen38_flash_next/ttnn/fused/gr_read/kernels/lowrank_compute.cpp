@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// GR read stage 3a, T low-rank column tiles per core: the D gathered fp32 partials summed with the zero tile in
-// device order (reduce_nc.cpp), RNE typecast to bf16 in the dest, staged bf16, then the bf16-dest silu of each tile
-// (unary silu on a bf16 tensor) and, for the injection tile, the bf16-dest sigmoid times 2.
-// CBs: 0 partials (fp32, T x D, device-minor), 1 zero (fp32, 1), 2 staged bf16 (T), 16 low rank (bf16, T),
-// 17 injection (bf16, 1).  Compile-time args: 0 T, 1 D, 2 the local index of the injection tile (>= T: none),
-// 3 the low-rank cb, 4 the injection cb.
+// GR read stage 3a, low_rank_tiles low-rank column tiles per core: the gathered fp32 partials of the `devices` devices
+// summed with the zero tile in device order (reduce_nc.cpp), RNE typecast to bf16 in the dest, staged bf16, then the
+// bf16-dest silu of each tile (unary silu on a bf16 tensor) and, for the injection tile, the bf16-dest sigmoid times 2.
+// CBs: 0 partials (fp32, low_rank_tiles x devices, device-minor), 1 zero (fp32, 1), 2 staged bf16 (low_rank_tiles),
+// 16 low rank (bf16, low_rank_tiles), 17 injection (bf16, 1).  Compile-time args: 0 low_rank_tiles, 1 devices, 2 the
+// local index of the injection tile (>= low_rank_tiles: none), 3 the low-rank cb, 4 the injection cb.
 
 #include <cstdint>
 
@@ -18,8 +18,8 @@
 #include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
-    constexpr uint32_t T = get_compile_time_arg_val(0);
-    constexpr uint32_t D = get_compile_time_arg_val(1);
+    constexpr uint32_t low_rank_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t devices = get_compile_time_arg_val(1);
     constexpr uint32_t inject = get_compile_time_arg_val(2);
     constexpr uint32_t c_pg = 0;
     constexpr uint32_t c_zero = 1;
@@ -32,40 +32,40 @@ void kernel_main() {
     compute_kernel_hw_startup(c_pg, c_zero, c_q);
     DataflowBuffer pg(c_pg);
     DataflowBuffer zero(c_zero);
-    DataflowBuffer q(c_q);
+    DataflowBuffer staged(c_q);
     DataflowBuffer lr(c_lr);
     DataflowBuffer inj(c_inj);
 
     {
         zero.wait_front(1);
-        pg.wait_front(T * D);
-        for (uint32_t t = 0; t < T; ++t) {
+        pg.wait_front(low_rank_tiles * devices);
+        for (uint32_t t = 0; t < low_rank_tiles; ++t) {
             add_init(c_pg, c_zero, true);
             reconfig_data_format(c_pg, c_zero);
             tile_regs_acquire();
-            for (uint32_t d = 0; d < D; ++d) {
-                add_tiles(c_pg, c_zero, t * D + d, 0, 0);
+            for (uint32_t d = 0; d < devices; ++d) {
+                add_tiles(c_pg, c_zero, t * devices + d, 0, 0);
             }
             typecast_tile_init<fp32, bf16>();
             typecast_tile<fp32, bf16>(0);
             tile_regs_commit();
-            q.reserve_back(1);
+            staged.reserve_back(1);
             tile_regs_wait();
             pack_reconfig_data_format(c_q);
             pack_tile(0, c_q);
             tile_regs_release();
-            q.push_back(1);
+            staged.push_back(1);
         }
-        pg.pop_front(T * D);
+        pg.pop_front(low_rank_tiles * devices);
         zero.pop_front(1);
     }
 
     {
-        q.wait_front(T);
+        staged.wait_front(low_rank_tiles);
         reconfig_data_format_srca(c_pg, c_q);
         copy_init(c_q);
         silu_tile_init();
-        for (uint32_t t = 0; t < T; ++t) {
+        for (uint32_t t = 0; t < low_rank_tiles; ++t) {
             tile_regs_acquire();
             copy_tile(c_q, t, 0);
             silu_tile<false>(0);
@@ -77,7 +77,7 @@ void kernel_main() {
             tile_regs_release();
             lr.push_back(1);
         }
-        if constexpr (inject < T) {
+        if constexpr (inject < low_rank_tiles) {
             tile_regs_acquire();
             copy_tile(c_q, inject, 0);
             sigmoid_tile_init<false>();
@@ -92,6 +92,6 @@ void kernel_main() {
             tile_regs_release();
             inj.push_back(1);
         }
-        q.pop_front(T);
+        staged.pop_front(low_rank_tiles);
     }
 }

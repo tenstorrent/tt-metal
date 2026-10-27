@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// GR read stage 1, one branch row-block per core: sum of squares of the Wt residual tiles as the bf16 stats tile.
-// The op sequence of rmsnorm_pre_allgather.cpp for a bf16 input under a 32-bit dest: x*x on the FPU packed to a
-// Float32 CB, then the row reduce against the 1.0 scaler tile, one bf16 rounding by the packer.
-// CBs: 0 residual (bf16, Wt), 1 scaler (fp32, 1), 2 x^2 (fp32, Wt), 16 stats (bf16, 1).  Compile-time arg 0: Wt.
+// GR read stage 1, one branch row-block per core: sum of squares of the width_tiles residual tiles as the bf16 stats
+// tile.  The op sequence of rmsnorm_pre_allgather.cpp for a bf16 input under a 32-bit dest: x*x on the FPU packed to
+// a Float32 CB, then the row reduce against the 1.0 scaler tile, one bf16 rounding by the packer.
+// CBs: 0 residual (bf16, width_tiles), 1 scaler (fp32, 1), 2 x^2 (fp32, width_tiles), 16 stats (bf16, 1).
+// Compile-time arg 0: width_tiles.
 
 #include <cstdint>
 
@@ -18,7 +19,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
+    constexpr uint32_t width_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t c_res = 0;
     constexpr uint32_t c_scaler = 1;
     constexpr uint32_t c_x2 = 2;
@@ -32,7 +33,7 @@ void kernel_main() {
     reconfig_data_format(c_res, c_res);
     pack_reconfig_data_format(c_x2);
     mul_init(c_res, c_res);
-    for (uint32_t wt = 0; wt < Wt; ++wt) {
+    for (uint32_t wt = 0; wt < width_tiles; ++wt) {
         res.wait_front(wt + 1);
         x2.reserve_back(1);
         tile_regs_acquire();
@@ -51,7 +52,7 @@ void kernel_main() {
         c_out,
         compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-        ReduceFp32Mode::Fast>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
-    res.pop_front(Wt);
+        ReduceFp32Mode::Fast>(compute_kernel_lib::ReduceInputBlockShape::row(width_tiles));
+    res.pop_front(width_tiles);
     scaler.pop_front(1);
 }

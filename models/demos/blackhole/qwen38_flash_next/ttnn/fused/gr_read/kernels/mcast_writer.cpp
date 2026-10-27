@@ -12,18 +12,18 @@
 
 #include "mcast_phase.h"
 
-constexpr uint32_t SRC_CB = get_compile_time_arg_val(0);
-constexpr uint32_t DST_CB = get_compile_time_arg_val(1);
-constexpr uint32_t NUM_TILES = get_compile_time_arg_val(2);
-constexpr uint32_t WRITE_TILES = get_compile_time_arg_val(3);
-constexpr uint32_t EXTRA_CB = get_compile_time_arg_val(4);
-constexpr uint32_t SEM_ID = get_compile_time_arg_val(5);
-constexpr uint32_t ACCESSOR_BASE = 6;
+constexpr uint32_t src_cb = get_compile_time_arg_val(0);
+constexpr uint32_t dst_cb = get_compile_time_arg_val(1);
+constexpr uint32_t num_tiles = get_compile_time_arg_val(2);
+constexpr uint32_t write_tiles = get_compile_time_arg_val(3);
+constexpr uint32_t extra_cb = get_compile_time_arg_val(4);
+constexpr uint32_t semaphore_id = get_compile_time_arg_val(5);
+constexpr uint32_t accessor_args_base = 6;
 
 void kernel_main() {
-    constexpr auto tiles_args = TensorAccessorArgs<ACCESSOR_BASE>();
+    constexpr auto tiles_args = TensorAccessorArgs<accessor_args_base>();
     constexpr auto extra_args = TensorAccessorArgs<tiles_args.next_compile_time_args_offset()>();
     {
-        mcast_phase<SRC_CB, DST_CB, NUM_TILES, WRITE_TILES, EXTRA_CB, SEM_ID>(tiles_args, extra_args, 0);
+        mcast_phase<src_cb, dst_cb, num_tiles, write_tiles, extra_cb, semaphore_id>(tiles_args, extra_args, 0);
     }
 }

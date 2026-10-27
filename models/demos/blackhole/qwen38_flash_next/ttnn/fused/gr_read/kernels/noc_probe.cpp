@@ -14,19 +14,19 @@ void kernel_main() {
     const uint32_t addr = get_arg_val<uint32_t>(0);
     const uint32_t slot = get_arg_val<uint32_t>(1);
     constexpr auto args = TensorAccessorArgs<0>();
-    constexpr uint32_t cb = 0;
-    DataflowBuffer dfb(cb);
-    dfb.reserve_back(1);
-    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
+    constexpr uint32_t cb_coordinates = 0;
+    DataflowBuffer coordinates(cb_coordinates);
+    coordinates.reserve_back(1);
+    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(coordinates.get_write_ptr());
     words[0] = my_x[0];
     words[1] = my_y[0];
     words[2] = my_x[1];
     words[3] = my_y[1];
-    dfb.push_back(1);
+    coordinates.push_back(1);
     const auto out = TensorAccessor(args, addr);
     Noc noc;
-    dfb.wait_front(1);
-    noc.async_write(dfb, out, 16, {.offset_bytes = 0}, {.page_id = slot});
+    coordinates.wait_front(1);
+    noc.async_write(coordinates, out, 16, {.offset_bytes = 0}, {.page_id = slot});
     noc.async_write_barrier();
-    dfb.pop_front(1);
+    coordinates.pop_front(1);
 }

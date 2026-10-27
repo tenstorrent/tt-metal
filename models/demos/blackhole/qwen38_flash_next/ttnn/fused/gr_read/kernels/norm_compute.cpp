@@ -4,9 +4,10 @@
 // GR read stage 2a, one branch row-block per core: the gathered stats tiles reduced against the AVG scaler,
 // + eps, rsqrt, x * rsqrt packed bf16 (rmsnorm_post_allgather_metal2.cpp without gamma), then the SFPU product of the
 // bf16 unit with the fp32 gamma/4 packed bf16 (eltwise_binary_sfpu_no_bcast.cpp under a 32-bit dest).
-// CBs: 0 residual (bf16, Wt), 1 stats (bf16, S), 2 scaler (bf16 or fp32, 1), 3 eps (bf16, 1), 4 gamma (fp32, Wt),
-// 5 var (fp32, 1), 6 rsqrt (fp32, 1), 7 unit (bf16, Wt), 16 normalized (bf16, Wt).
-// Compile-time args: 0 Wt, 1 S (stats tiles), 2 blk (tiles per multiply block, divides Wt), 3 the output cb.
+// CBs: 0 residual (bf16, width_tiles), 1 stats (bf16, stats_tiles), 2 scaler (bf16 or fp32, 1), 3 eps (bf16, 1),
+// 4 gamma (fp32, width_tiles), 5 var (fp32, 1), 6 rsqrt (fp32, 1), 7 unit (bf16, width_tiles), 16 normalized (bf16,
+// width_tiles).  Compile-time args: 0 width_tiles, 1 stats_tiles, 2 block_tiles (tiles per multiply block, divides
+// width_tiles), 3 the output cb.
 
 #include <cstdint>
 
@@ -24,19 +25,19 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
-ALWI void ACQ() {
+ALWI void acquire_and_wait_dst() {
     tile_regs_acquire();
     tile_regs_wait();
 }
-ALWI void REL() {
+ALWI void commit_and_release_dst() {
     tile_regs_commit();
     tile_regs_release();
 }
 
 void kernel_main() {
-    constexpr uint32_t Wt = get_compile_time_arg_val(0);
-    constexpr uint32_t S = get_compile_time_arg_val(1);
-    constexpr uint32_t blk = get_compile_time_arg_val(2);
+    constexpr uint32_t width_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t stats_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t block_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t c_res = 0;
     constexpr uint32_t c_stats = 1;
     constexpr uint32_t c_scaler = 2;
@@ -61,19 +62,19 @@ void kernel_main() {
     eps.wait_front(1);
 
     compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, c_stats, c_scaler, c_var>(
-        compute_kernel_lib::ReduceInputBlockShape::row(S));
+        compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles));
 
     var.wait_front(1);
     recip.reserve_back(1);
     reconfig_data_format(c_var, c_eps);
     pack_reconfig_data_format(c_recip);
     add_init(c_var, c_eps);
-    ACQ();
+    acquire_and_wait_dst();
     add_tiles(c_var, c_eps, 0, 0, 0);
     rsqrt_tile_init();
     rsqrt_tile(0);
     pack_tile(0, c_recip);
-    REL();
+    commit_and_release_dst();
     recip.push_back(1);
     var.pop_front(1);
 
@@ -81,26 +82,26 @@ void kernel_main() {
     pack_reconfig_data_format(c_unit);
     mul_bcast_cols_init(c_res, c_recip);
     recip.wait_front(1);
-    for (uint32_t wt = 0; wt < Wt; wt += blk) {
-        res.wait_front(blk);
-        unit.reserve_back(blk);
-        ACQ();
-        for (uint32_t wtr = 0; wtr < blk; ++wtr) {
+    for (uint32_t wt = 0; wt < width_tiles; wt += block_tiles) {
+        res.wait_front(block_tiles);
+        unit.reserve_back(block_tiles);
+        acquire_and_wait_dst();
+        for (uint32_t wtr = 0; wtr < block_tiles; ++wtr) {
             mul_tiles_bcast_cols(c_res, c_recip, wtr, 0, wtr);
             pack_tile(wtr, c_unit);
         }
-        REL();
-        unit.push_back(blk);
-        res.pop_front(blk);
+        commit_and_release_dst();
+        unit.push_back(block_tiles);
+        res.pop_front(block_tiles);
     }
     recip.pop_front(1);
 
     // unit (bf16) * gamma/4 (fp32) on the SFPU, both operands unpacked to the 32-bit dest, packed bf16.
-    unit.wait_front(Wt);
-    gamma.wait_front(Wt);
+    unit.wait_front(width_tiles);
+    gamma.wait_front(width_tiles);
     pack_reconfig_data_format(c_out);
     mul_binary_tile_init();
-    for (uint32_t i = 0; i < Wt; i += 2) {
+    for (uint32_t i = 0; i < width_tiles; i += 2) {
         out.reserve_back(2);
         tile_regs_acquire();
         reconfig_data_format_srca(c_gamma, c_unit);
@@ -120,8 +121,8 @@ void kernel_main() {
         tile_regs_release();
         out.push_back(2);
     }
-    unit.pop_front(Wt);
-    gamma.pop_front(Wt);
+    unit.pop_front(width_tiles);
+    gamma.pop_front(width_tiles);
     scaler.pop_front(1);
     eps.pop_front(1);
 }

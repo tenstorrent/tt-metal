@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// GR read stage 2b, one output column tile per core: the normalized row (Kt tiles) times the core's weight column,
-// accumulated in the 32-bit dest in K order, packed fp32.  Every `spill` K tiles the partial is packed to the fp32
-// intermediate CB and reloaded through SrcA (which rounds it), as the DRAM-sharded matmul does between K blocks.
-// CBs: in0 normalized row (bf16, Kt), in1 weight column (bf16, 2 x blk), interm (fp32, 1), out partial (fp32, 1).
-// Compile-time args: 0 Kt, 1 blk (weight tiles per push, divides Kt), 2-4 the cbs (row, weight, partial), 5 spill,
-// 6 the intermediate cb.
+// GR read stage 2b, one output column tile per core: the normalized row (k_tiles tiles) times the core's weight
+// column, accumulated in the 32-bit dest in K order, packed fp32.  Every `spill` K tiles the partial is packed to the
+// fp32 intermediate CB and reloaded through SrcA (which rounds it), as the DRAM-sharded matmul does between K blocks.
+// CBs: in0 normalized row (bf16, k_tiles), in1 weight column (bf16, 2 x block_tiles), interm (fp32, 1), out partial
+// (fp32, 1).  Compile-time args: 0 k_tiles, 1 block_tiles (weight tiles per push, divides k_tiles), 2-4 the cbs (row,
+// weight, partial), 5 spill, 6 the intermediate cb.
 
 #include <cstdint>
 
@@ -16,8 +16,8 @@
 #include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
-    constexpr uint32_t Kt = get_compile_time_arg_val(0);
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
+    constexpr uint32_t k_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t block_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t c_in0 = get_compile_time_arg_val(2);
     constexpr uint32_t c_in1 = get_compile_time_arg_val(3);
     constexpr uint32_t c_out = get_compile_time_arg_val(4);
@@ -33,16 +33,16 @@ void kernel_main() {
     DataflowBuffer out(c_out);
 
     {
-        in0.wait_front(Kt);
+        in0.wait_front(k_tiles);
         tile_regs_acquire();
-        for (uint32_t k = 0; k < Kt; k += blk) {
-            in1.wait_front(blk);
-            for (uint32_t kk = 0; kk < blk; ++kk) {
+        for (uint32_t k = 0; k < k_tiles; k += block_tiles) {
+            in1.wait_front(block_tiles);
+            for (uint32_t kk = 0; kk < block_tiles; ++kk) {
                 matmul_block(c_in0, c_in1, k + kk, kk, 0, 0, 1, 1, 1);
             }
-            in1.pop_front(blk);
-            const uint32_t next = k + blk;
-            if (next % spill == 0 && next < Kt) {
+            in1.pop_front(block_tiles);
+            const uint32_t next = k + block_tiles;
+            if (next % spill == 0 && next < k_tiles) {
                 tile_regs_commit();
                 interm.reserve_back(1);
                 tile_regs_wait();
@@ -66,6 +66,6 @@ void kernel_main() {
         pack_tile(0, c_out);
         tile_regs_release();
         out.push_back(1);
-        in0.pop_front(Kt);
+        in0.pop_front(k_tiles);
     }
 }
