@@ -74,13 +74,40 @@ What differs from the ops head:
 - Fits the 2x2 as is: 2 links a direction (what the block uses), `l1_small_size` 24576 (arena 1256 KB of the device's
   1279 KB cap).
 
-Measured on the 2x2 (chunk 2048, 8 layers, rung `last`, chunk [53248, 55296)):
+Measured on the 2x2 (chunk 2048, 8 layers, rung `last`, chunk [53248, 55296); the fused tail's table below adds
+repeated wall runs):
 
 | path | device ms / chunk | MoE section ms | clean wall ms / chunk |
 |---|---|---|---|
 | flat (MOE_IMPL=flat) | 65.74 | - | 138.0 |
 | block, ops head | 66.9 | 22.03 | 160.6 |
 | block, fused head | 61.97 | 17.45 | 102.2 |
+
+### The fused tail (MOE_TAIL=fused)
+
+Setting `MOE_TAIL` (env `DS41_MOE_TAIL`, read only under `MOE_IMPL=block`): `ops` (default, provisional until the owner
+has seen the A/B) or `fused` - Marko's TailA2A (models/demos/moe_block/tt/tail_a2a.py): the combine's row-major owner
+rows tilized, + the shared expert's owner rows, the TP all-to-all into `[S/SP, H/TP]`, one program a chip (20 worker
+cores, the tilize and add under the sends). Its output is the ops tail's (bf16 TILE, DRAM; GLUE_FOLD's typecast after,
+in the adapter, as before). Fits DS41 as is (H/TP 80 tiles, 512 owned rows a chip); no code change in the block.
+Bit-identical to the ops tail: every one of the ladder's 95 metrics equal.
+
+All on the 2x2, chunk 2048, 8 layers, rung `last` (device: plain profile; MoE = the experts section, the whole block):
+
+| path | device ms / chunk | MoE section ms | clean wall ms / chunk (runs) |
+|---|---|---|---|
+| flat | 65.74 | - | 138.0 (1 run) |
+| block, ops head + ops tail | 66.9 | 22.03 | 160.6 (1 run) |
+| block, fused head + ops tail | 61.97 | 17.45 | 102.2, 120.0, 125.2 (3 runs) |
+| block, fused head + fused tail | 61.2 | 16.69 | 126.3, 113.2, 110.8, 110.8 (4 runs) |
+
+Every clean wall is the same test and procedure (test_profile.py, BRINGUP_PROFILE_WALL=1: warm-up until a run adds no
+program-cache entry - 1 run for every path here - then 10 timed runs with cache misses refused, their median). The
+same configuration gives 102-125 ms in different processes, and within a run the 10 timed runs still fall by 10-20 ms
+(host-side, not program builds): one sample per path (flat, ops head) is +-10 ms. The paired runs
+(walls_ab/: ops tail, fused tail, ops tail, fused tail) put the fused tail ~10 ms a chunk ahead (120.0 / 125.2 vs
+110.8 / 110.8). The fused tail's host cost is ~0.5 ms a call (its descriptor cache, keyed on the fresh output's
+address, rebuilds on some calls: 17 of 80).
 
 The profiler's real-time mode charges programs by device-operation id, and `run_prepared` launches through
 `device_operation::launch`: the head's program shows in the experts section as "(other)" (2 programs a chip,
