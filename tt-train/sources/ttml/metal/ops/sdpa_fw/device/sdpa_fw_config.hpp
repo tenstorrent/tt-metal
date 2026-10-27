@@ -114,8 +114,7 @@ uint32_t partial_tiles_per_row(const SDPAForwardShape& shape);  // a sender's ro
 
 struct SDPAForwardSchedule {
     std::vector<CoreUnits> per_core;
-    uint32_t num_slots = 0;     // scratch slots (one per sender)
-    double predicted_us = 0.0;  // busiest core as placed, 0 when the lists came from the contiguous fallback
+    uint32_t num_slots = 0;  // scratch slots (one per sender)
 };
 
 // Work for num_cores cores. Causal: items heavier than a core's fair share are cut into up to
@@ -125,13 +124,6 @@ struct SDPAForwardSchedule {
 // lists would not fit the runtime args.
 SDPAForwardSchedule make_schedule(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t max_pieces);
-
-// Predicted time of the busiest core in microseconds (Blackhole constants; the ranking is what matters).
-double predict_us(
-    const SDPAForwardShape& shape,
-    const SDPAForwardChunks& chunks,
-    const SDPAForwardSchedule& schedule,
-    uint32_t num_cores);
 
 uint32_t effective_max_pieces(const SDPAForwardProgramConfig& config);
 bool may_split(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape);

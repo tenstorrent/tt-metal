@@ -369,11 +369,6 @@ SDPAForwardSchedule schedule_pieces(
         loads[best] = best_end;
         ++mergers[best];
     }
-    double makespan = 0.0;
-    for (const double load : loads) {
-        makespan = std::max(makespan, load);
-    }
-
     // Scratch slots (consecutive per item) and semaphores (per merger on its core).
     SDPAForwardSchedule schedule;
     std::vector<uint32_t> sem_on_core(num_cores, 0U);
@@ -413,7 +408,6 @@ SDPAForwardSchedule schedule_pieces(
     if (!fits_runtime_args(schedule.per_core)) {
         return {};
     }
-    schedule.predicted_us = makespan;
     return schedule;
 }
 
@@ -435,27 +429,6 @@ SDPAForwardSchedule make_schedule(
         }
     }
     return SDPAForwardSchedule{.per_core = split_items_contiguous(total_items, std::min(num_cores, total_items))};
-}
-
-double predict_us(
-    const SDPAForwardShape& shape,
-    const SDPAForwardChunks& chunks,
-    const SDPAForwardSchedule& schedule,
-    uint32_t num_cores) {
-    if (schedule.predicted_us > 0.0) {
-        return schedule.predicted_us;  // from the placement, includes the mergers' waits
-    }
-    const double step = step_us(shape, chunks, num_cores);
-    const double fixed = item_fixed_us(shape, chunks, num_cores);
-    double busiest = 0.0;
-    for (const auto& units : schedule.per_core) {
-        double core_us = 0.0;
-        for (const auto& unit : units) {
-            core_us += unit_us(shape, chunks, unit, step, fixed, num_cores);
-        }
-        busiest = std::max(busiest, core_us);
-    }
-    return busiest;
 }
 
 namespace {
