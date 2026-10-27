@@ -135,16 +135,16 @@ void kernel_main() {
                     if (kept == candidates && key <= candidate_keys[candidates - 1]) {
                         continue;
                     }
-                    uint32_t j = kept < candidates ? kept : candidates - 1;
-                    while (j > 0 && candidate_keys[j - 1] < key) {
-                        candidate_keys[j] = candidate_keys[j - 1];
-                        candidate_bits[j] = candidate_bits[j - 1];
-                        candidate_ids[j] = candidate_ids[j - 1];
-                        --j;
+                    uint32_t insert_at = kept < candidates ? kept : candidates - 1;
+                    while (insert_at > 0 && candidate_keys[insert_at - 1] < key) {
+                        candidate_keys[insert_at] = candidate_keys[insert_at - 1];
+                        candidate_bits[insert_at] = candidate_bits[insert_at - 1];
+                        candidate_ids[insert_at] = candidate_ids[insert_at - 1];
+                        --insert_at;
                     }
-                    candidate_keys[j] = key;
-                    candidate_bits[j] = bits;
-                    candidate_ids[j] = (first + t) * lanes_per_tile + lane;
+                    candidate_keys[insert_at] = key;
+                    candidate_bits[insert_at] = bits;
+                    candidate_ids[insert_at] = (first + t) * lanes_per_tile + lane;
                     if (kept < candidates) {
                         ++kept;
                     }

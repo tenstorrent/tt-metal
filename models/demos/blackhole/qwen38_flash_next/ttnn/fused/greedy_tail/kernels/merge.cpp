@@ -47,8 +47,8 @@ FORCE_INLINE uint32_t key_of(uint32_t fp32_bits) {
 }
 
 union IdFp32 {
-    float f;
-    uint32_t u;
+    float value;
+    uint32_t word;
 };
 
 void kernel_main() {
@@ -88,9 +88,9 @@ void kernel_main() {
         }
         tile[0] = best_bits >> 16;  // lane (0, 0) of the value tile
         IdFp32 id_fp32;
-        id_fp32.f = static_cast<float>(best_id);  // the chain's typecast: exact below 2^24 (soft-float int -> fp32)
+        id_fp32.value = static_cast<float>(best_id);  // the chain's typecast: exact below 2^24 (soft-float int -> fp32)
         words[stage_out / 4] = best_bits;
-        words[stage_out / 4 + 1] = id_fp32.u;
+        words[stage_out / 4 + 1] = id_fp32.word;
         words[stage_out / 4 + 2] = 0;
         words[stage_out / 4 + 3] = 0;
         words[stage_out / 4 + 4] = best_id;
@@ -127,13 +127,13 @@ void kernel_main() {
             // lane (r, 0) of the value tile: face (r >> 4) * 2, row r & 15 (16-bit word (r >> 4) * 512 + (r & 15) * 16)
             tile[(r >> 4) * 512 + (r & 15) * 16] = best_bits >> 16;
             IdFp32 id_fp32;
-            id_fp32.f = static_cast<float>(best_id);
+            id_fp32.value = static_cast<float>(best_id);
             const uint32_t packed_words = (stage_packed + r * packed_row_bytes) / 4;
             for (uint32_t k = 0; k < packed_row_bytes / 4; ++k) {
                 words[packed_words + k] = 0;
             }
             words[packed_words] = best_bits;
-            words[packed_words + 1] = id_fp32.u;
+            words[packed_words + 1] = id_fp32.word;
             words[stage_indices / 4 + r] = best_id;
             noc.async_write(
                 stage,
@@ -175,9 +175,9 @@ void kernel_main() {
         CoreLocalMem<volatile uint32_t> list_words(base + stage_lists);
         CoreLocalMem<volatile uint32_t> out_row(base + stage_row);
         IdFp32 start;
-        start.u = words[stage_start / 4];
+        start.word = words[stage_start / 4];
         const uint32_t start_id =
-            static_cast<uint32_t>(start.f);  // the shard's first global id (a multiple of the shard width)
+            static_cast<uint32_t>(start.value);  // the shard's first global id (a multiple of the shard width)
         uint32_t next_entry[cores];
         for (uint32_t c = 0; c < cores; ++c) {
             next_entry[c] = 0;
@@ -200,14 +200,15 @@ void kernel_main() {
             // vocabulary's width
             if (best_core == cores) {
                 out_row[i] = 0;
-                global_id.f = 0.0f;
-                out_row[candidates + i] = global_id.u;
+                global_id.value = 0.0f;
+                out_row[candidates + i] = global_id.word;
                 continue;
             }
             const uint32_t entry = next_entry[best_core]++;
             out_row[i] = list_words[best_core * 2 * candidates + entry];
-            global_id.f = static_cast<float>(list_words[best_core * 2 * candidates + candidates + entry] + start_id);
-            out_row[candidates + i] = global_id.u;
+            global_id.value =
+                static_cast<float>(list_words[best_core * 2 * candidates + candidates + entry] + start_id);
+            out_row[candidates + i] = global_id.word;
         }
         noc.async_write(stage, row, 8 * candidates, {.offset_bytes = stage_row}, {.page_id = 0, .offset_bytes = 0});
         noc.async_write_barrier();
