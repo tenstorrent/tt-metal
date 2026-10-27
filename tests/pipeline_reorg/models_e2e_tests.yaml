@@ -1722,7 +1722,7 @@
     test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
-    # The perf test renders the VBench gate (2 prompts x 4 seeds) into the shared NFS staging dir;
+    # The perf test renders the VBench gate (1 prompt x 4 seeds) into the shared NFS staging dir;
     # it is scored on CPU after the devices are closed.
     export RUN_VBENCH=1 VBENCH_EXPORT_DIR="${PIPELINE_DIR}/vbench"
     python3 "${TTRUN_PY}" \
@@ -1741,7 +1741,7 @@
   skus:
     # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
     bh_sc4_high_power:
-      # perf ~20 min + 8 traced gate clips + CPU scoring of 5 metrics; unmeasured
+      # perf test + 4 traced gate clips + CPU scoring of 5 metrics; the whole job took 42-45 min with 8 clips
       timeout: 75
       tier: 1
       release_ready: false
@@ -1799,7 +1799,7 @@
     test -f "${PERF_TEST}" || { echo "ERROR: missing ${PERF_TEST}"; exit 1; }
 
     cd "${TTRUN_CWD}"
-    # The perf test renders the VBench gate (2 prompts x 4 seeds) into the shared NFS staging dir;
+    # The perf test renders the VBench gate (1 prompt x 4 seeds) into the shared NFS staging dir;
     # it is scored on CPU after the devices are closed.
     export RUN_VBENCH=1 VBENCH_EXPORT_DIR="${PIPELINE_DIR}/vbench"
     python3 "${TTRUN_PY}" \
@@ -1818,7 +1818,7 @@
   skus:
     # Perf-gated: the high-power (14 kW) pool, where the timing limits are calibrated.
     bh_sc4_high_power:
-      # perf ~24 min + 8 traced gate clips + CPU scoring of 2 metrics; unmeasured
+      # perf test + 4 traced gate clips + CPU scoring of 2 metrics; the whole job took 35-40 min with 8 clips
       timeout: 50
       tier: 1
       release_ready: false
