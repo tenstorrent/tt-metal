@@ -445,8 +445,8 @@ targets:
               # across runs, well beyond the validator's 15% upper-tolerance
               # band. The metric needs to be anchored to a fixed seq_len
               # (see PR #43982 description) before it can gate CI usefully.
-              decode_t/s/u: 5.3
-              decode_t/s: 5.3
+              decode_t/s/u: 15.8
+              decode_t/s: 15.8
               decode_t_s_tolerance: 0.25
               decode_t_s_u_tolerance: 0.25
             accuracy: {}
@@ -479,8 +479,8 @@ targets:
             status: active
             perf:
               prefill_t/s: 54.80
-              decode_t/s/u: 7.02
-              decode_t/s: 7.02
+              decode_t/s/u: 36.7
+              decode_t/s: 36.7
               prefill_t_s_tolerance: 0.3
               decode_t_s_tolerance: 0.2
               decode_t_s_u_tolerance: 0.2
