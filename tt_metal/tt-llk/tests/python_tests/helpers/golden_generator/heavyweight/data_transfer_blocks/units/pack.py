@@ -70,9 +70,12 @@ class Pack:
         """Refuse a ``Dest -> L1`` pair this architecture's packer cannot do.
 
         The unpack side has ``Unpack.is_valid_src_format`` for the mirror of
-        this. Without it a Float32 Dest packed to Float16_b, or an Int32 Dest
+        this. Without it a Float16 Dest packed to Float32, or an Int32 Dest
         packed to a float, returns bytes that decode to believable numbers for
-        a conversion the hardware refuses to perform.
+        a conversion the hardware refuses to perform. Narrowing on the way out
+        is the ordinary case and always legal -- a Float32 Dest reaches every
+        float and MX format; it is *widening*, and crossing between integer
+        and float, that the packer cannot do.
         """
         if not self.to_l1_formats:
             return
