@@ -47,23 +47,27 @@ run() {
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
 
-# Profile summary: find the device CSV the last profiled run wrote (the path has moved between builds), summarize
-# it to log_val_<name>.txt with sol_profile_summary.py, and log where it looked, so the CSV never needs copying.
+# Profile summary: the device profiler writes $TT_METAL_PROFILER_DIR/.logs/profile_log_device.csv, else
+# $TT_METAL_HOME/generated/profiler/.logs/ -- on the cluster TT_METAL_HOME is the node-local /tmp copy, not this
+# directory, which is why earlier jobs found no CSV to copy. Summarize it to log_val_<name>.txt with
+# sol_profile_summary.py (the CSV never needs copying) and log which file was read, or what was found instead.
 summarize_profile() {
-    local name=$1 csv
-    csv=$(find generated "${TT_METAL_PROFILER_DIR:-generated}" -name 'profile_log_device.csv' -newer "log_val_$2.txt" \
-        2>/dev/null | head -1)
+    local name=$1 csv="" d
+    for d in "${TT_METAL_PROFILER_DIR:-}" "${TT_METAL_HOME:+$TT_METAL_HOME/generated/profiler}" generated/profiler; do
+        if [ -n "$d" ] && [ -f "$d/.logs/profile_log_device.csv" ]; then
+            csv="$d/.logs/profile_log_device.csv"
+            break
+        fi
+    done
     if [ -z "$csv" ]; then
-        csv=$(find generated "${TT_METAL_PROFILER_DIR:-generated}" -name 'profile_log_device.csv' 2>/dev/null | head -1)
-    fi
-    if [ -z "$csv" ]; then
-        { echo "no profile_log_device.csv found; csv files under generated/ by time:"
-          find generated -name '*.csv' -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' 2>/dev/null | sort | tail -20; } \
-            > "log_val_$name.txt"
+        { echo "no profile_log_device.csv in TT_METAL_PROFILER_DIR='${TT_METAL_PROFILER_DIR:-}'," \
+               "TT_METAL_HOME='${TT_METAL_HOME:-}'/generated/profiler or ./generated/profiler; found:"
+          find "${TT_METAL_HOME:-.}" generated -name 'profile_log_device.csv' -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' \
+              2>/dev/null | sort | tail -10; } > "log_val_$name.txt"
         echo "=== $name: no device CSV found (see log_val_$name.txt)"
         return 1
     fi
-    echo "csv: $csv ($(du -h "$csv" | cut -f1))" > "log_val_$name.txt"
+    echo "csv: $csv ($(du -h "$csv" | cut -f1), $(date -r "$csv"))" > "log_val_$name.txt"
     run "${name}_tmp" 1200 python3 sol_profile_summary.py "$csv"
     cat "log_val_${name}_tmp.txt" >> "log_val_$name.txt" && rm -f "log_val_${name}_tmp.txt"
 }
