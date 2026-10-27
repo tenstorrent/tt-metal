@@ -1529,20 +1529,42 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule host_schedule(const SDPAT
     return make_schedule(shape, chunks, num_cores, max_pieces);
 }
 
-// split and unsplit outputs of the same inputs: two bf16 ULP per element, far closer on average.
+uint32_t max_partials(const ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule& schedule) {
+    uint32_t most = 0;
+    for (const auto& units : schedule.per_core) {
+        for (const auto& unit : units) {
+            most = std::max(most, unit.num_partials);
+        }
+    }
+    return most;
+}
+
+// Split and unsplit outputs of the same inputs. Each merge pass multiplies the fp32 partials on the FPU,
+// whose inputs are 19-bit (TF32): 2^-11 relative per partial folded in, so the gap grows with the number
+// of partials. With the default four pieces (three partials) it is a few bf16 ULP per element and under
+// 1e-3 on average; the bounds scale with num_partials beyond that.
 void expect_split_matches_unsplit(
-    const xt::xarray<float>& split_output, const xt::xarray<float>& unsplit_output, const std::string& name) {
+    const xt::xarray<float>& split_output,
+    const xt::xarray<float>& unsplit_output,
+    uint32_t num_partials,
+    const std::string& name) {
     constexpr float kUlpRel = 2.0F * 7.8125e-3F;  // two bf16 ULP of the mantissa
-    constexpr float kAtol = 1e-3F;  // cancellation noise: a row's terms are ~0.1 while its result can be ~0
-    constexpr float kMeanRelTol = 2e-3F;
+    // Cancellation noise: a row's terms are ~0.1 while its result can be ~0, so an absolute floor.
+    const float atol = 1e-3F * (1.0F + static_cast<float>(num_partials) / 4.0F);
+    const float mean_rel_tol = 1e-3F * (1.0F + static_cast<float>(num_partials));
     const xt::xarray<float> gap = xt::abs(split_output - unsplit_output);
-    const xt::xarray<float> bound = kUlpRel * xt::abs(unsplit_output) + kAtol;
+    const xt::xarray<float> bound = kUlpRel * xt::abs(unsplit_output) + atol;
     const float max_excess = xt::amax(gap - bound)();
     const float mean_rel = xt::mean(gap)() / xt::mean(xt::abs(unsplit_output))();
     fmt::print(
-        "{}: split vs unsplit max excess over 2 ULP {:.3e}, mean relative gap {:.3e}\n", name, max_excess, mean_rel);
+        "{}: {} partials, split vs unsplit max excess over 2 ULP {:.3e}, mean relative gap {:.3e} (bound {:.1e})\n",
+        name,
+        num_partials,
+        max_excess,
+        mean_rel,
+        mean_rel_tol);
     EXPECT_LE(max_excess, 0.0F) << name << ": a split element is more than two bf16 ULP off the unsplit run";
-    EXPECT_LT(mean_rel, kMeanRelTol) << name << ": split and unsplit runs differ by " << mean_rel << " on average";
+    EXPECT_LT(mean_rel, mean_rel_tol) << name << ": split and unsplit runs differ by " << mean_rel << " on average";
 }
 
 // A split schedule folds the partials into the merger's running state in fp32, in a different order than one
@@ -1564,7 +1586,8 @@ void run_split_vs_unsplit(SDPATestConfig base, const ChunkKnobs& knobs) {
     const SDPATestConfig split = arm(knobs.max_pieces, "_split");
     const SDPATestConfig unsplit = arm(1U, "_unsplit");
     // The split arm must really split, or the check proves nothing.
-    ASSERT_GT(host_schedule(split).num_slots, 0U) << split.test_name << " schedules no split units";
+    const auto split_schedule = host_schedule(split);
+    ASSERT_GT(split_schedule.num_slots, 0U) << split.test_name << " schedules no split units";
     ASSERT_EQ(host_schedule(unsplit).num_slots, 0U) << unsplit.test_name << " schedules split units";
 
     xt::xarray<float> split_output;
@@ -1577,7 +1600,7 @@ void run_split_vs_unsplit(SDPATestConfig base, const ChunkKnobs& knobs) {
         SCOPED_TRACE(unsplit.test_name);
         run_sdpa_test(unsplit, &unsplit_output);
     }
-    expect_split_matches_unsplit(split_output, unsplit_output, base.test_name);
+    expect_split_matches_unsplit(split_output, unsplit_output, max_partials(split_schedule), base.test_name);
 }
 
 void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep = kChunkKnobSweep) {
@@ -2267,11 +2290,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     const metal::SDPAForwardProgramConfig a{.q_chunk_size = 64U, .k_chunk_size = 128U};
     const metal::SDPAForwardProgramConfig a_unsplit{.q_chunk_size = 64U, .k_chunk_size = 128U, .max_pieces = 1U};
     const metal::SDPAForwardProgramConfig b{.q_chunk_size = 128U, .k_chunk_size = 256U};
-    {
-        SDPATestConfig split_config = shape_config;
-        split_config.program_config = a;
-        ASSERT_GT(host_schedule(split_config).num_slots, 0U) << "the twice-run config must split";
-    }
+    SDPATestConfig split_config = shape_config;
+    split_config.program_config = a;
+    const auto split_schedule = host_schedule(split_config);
+    ASSERT_GT(split_schedule.num_slots, 0U) << "the twice-run config must split";
     const auto entries0 = device->num_program_cache_entries();
     const xt::xarray<float> out_a = run(a, first);
     const auto entries_a = device->num_program_cache_entries();
@@ -2287,7 +2309,8 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     // The hit on the second inputs must have read them (not the first inputs) and merged them right.
     const xt::xarray<float> out_a_second_unsplit = run(a_unsplit, second);
     EXPECT_FALSE(xt::all(xt::equal(out_a_second, out_a))) << "the hit must read the new inputs";
-    expect_split_matches_unsplit(out_a_second, out_a_second_unsplit, "ProgramCacheMissAndHit_second_inputs");
+    expect_split_matches_unsplit(
+        out_a_second, out_a_second_unsplit, max_partials(split_schedule), "ProgramCacheMissAndHit_second_inputs");
 
     // The mask address is a reader runtime arg of its own: a hit with a second live mask tensor (same shape,
     // other values and address) must read the new mask, not the first one.
@@ -2300,11 +2323,12 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     const ttnn::Tensor causal_mask = core::from_xtensor(lower, device);
     const ttnn::Tensor anticausal_mask = core::from_xtensor(upper, device);  // both stay alive
     const auto entries_before_masked = device->num_program_cache_entries();  // the uploads cache their own ops
+    // Mask-tensor programs are never cut, so the run is held against the uncut run on the same inputs.
     auto run_masked = [&](const ttnn::Tensor& mask) {
         return core::to_xtensor(metal::sdpa_fw(
-                                    first.query,
-                                    first.key,
-                                    first.value,
+                                    second.query,
+                                    second.key,
+                                    second.value,
                                     metal::AttentionMaskType::Arbitrary,
                                     mask,
                                     0.0F,
@@ -2318,7 +2342,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     EXPECT_EQ(entries_masked, entries_before_masked + 1U) << "the mask tensor variant is its own program";
     const xt::xarray<float> out_anticausal = run_masked(anticausal_mask);
     EXPECT_EQ(device->num_program_cache_entries(), entries_masked) << "the second mask must hit";
-    EXPECT_LT(xt::mean(xt::abs(out_causal - out_a))(), kCrossChunkingMeanAbsTol)
+    EXPECT_LT(xt::mean(xt::abs(out_causal - out_a_second_unsplit))(), kCrossChunkingMeanAbsTol)
         << "the lower-triangular mask tensor must agree with the causal kernel mask";
     EXPECT_FALSE(xt::allclose(out_anticausal, out_causal, 1e-3F, 1e-3F))
         << "hit reproduced the first mask: stale mask address";
