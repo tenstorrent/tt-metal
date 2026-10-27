@@ -23,8 +23,10 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     // Where a is a polynomial coefficient used in the approximation of the error function (and reused in inverse error
     // function)
 
-    // Compute log(1 - x^2)
-    sfpi::vFloat log_value = calculate_log_body<false, false, false>(1.0f - x * x, 0);
+    // Compute log(1 - x^2). FAST_APPROX skips only the log's -0.0/subnormal normalisation
+    // (a * 1 + 0): 1 - x^2 comes out of an SFPMAD, which flushes subnormals and returns +0.0 for the
+    // exact cancellation at x = +/-1 (verified on silicon), so the normalisation changes no lane.
+    sfpi::vFloat log_value = calculate_log_body<true, false, false>(1.0f - x * x, 0);
 
     // Paper sets a constant a = 0.147.
     // This constant is used to compute two constant expressions:
