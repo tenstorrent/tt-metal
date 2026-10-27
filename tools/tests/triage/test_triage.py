@@ -487,6 +487,7 @@ class TestTriage:
 
     def test_check_binary_integrity(self):
         self.run_triage_script("check_binary_integrity.py")
+        self.run_triage_script("check_binary_integrity.py", argv=["--dump-mismatch"])
 
     def test_check_cb_inactive(self):
         self.run_triage_script("check_cb_inactive.py")
