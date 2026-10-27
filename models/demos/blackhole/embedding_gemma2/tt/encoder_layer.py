@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""EncoderLayer (HF `EmbeddingGemma2EncoderLayer`): sandwich norms + PLE block + layer_scalar.
+
+    h = x + post_attn_norm( attn( input_norm(x), mask ) )
+    h = h + post_ff_norm( mlp( pre_ff_norm(h) ) )
+    h = h + post_pli_norm( W_proj( gelu_tanh(W_gate h) * pli_i ) )
+    h = h * layer_scalar[i]           (learned scalar, 0.115 .. 0.969; scales the residual too)
+
+Contract
+    input   x [B, 1, S, hidden] bf16 TILE DRAM, per_layer_input [B, 1, S, P] bf16 TILE DRAM,
+            mask [B, 1, S, S] additive bf16 TILE DRAM for this layer's kind
+    output  [B, 1, S, hidden] bf16 TILE DRAM
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import torch
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.demos.blackhole.embedding_gemma2.tt.attention import Attention
+from models.demos.blackhole.embedding_gemma2.tt.config import EncoderLayerConfig, RMSNormConfig
+from models.demos.blackhole.embedding_gemma2.tt.mlp import MLP
+from models.demos.blackhole.embedding_gemma2.tt.per_layer_input import PerLayerInputBlock
+from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
+from models.demos.blackhole.embedding_gemma2.tt.rope import RotaryTables
+from models.demos.blackhole.embedding_gemma2.tt.weights import substate
+
+_NORMS = ("input_layernorm", "post_attention_layernorm", "pre_feedforward_layernorm", "post_feedforward_layernorm")
+
+
+class EncoderLayer(LightweightModule):
+    def __init__(
+        self,
+        config: EncoderLayerConfig,
+        norms: dict[str, RMSNorm],
+        attention: Attention,
+        mlp: MLP,
+        ple_block: PerLayerInputBlock,
+        layer_scalar: float,
+    ):
+        super().__init__()
+        self.config = config
+        self.input_layernorm = norms["input_layernorm"]
+        self.post_attention_layernorm = norms["post_attention_layernorm"]
+        self.pre_feedforward_layernorm = norms["pre_feedforward_layernorm"]
+        self.post_feedforward_layernorm = norms["post_feedforward_layernorm"]
+        self.self_attn = attention
+        self.mlp = mlp
+        self.ple_block = ple_block
+        self.layer_scalar = layer_scalar
+
+    @classmethod
+    def from_state_dict(
+        cls,
+        state_dict: dict[str, torch.Tensor],
+        config: EncoderLayerConfig,
+        device,
+        rope: RotaryTables,
+        *,
+        cache_dir: Path | None = None,
+    ) -> "EncoderLayer":
+        """`state_dict` holds the HF `layers.<i>.` sub-state."""
+        i = config.layer_idx
+        prefix = f"layers.{i}"
+        norm_cfg = RMSNormConfig(dim=config.hidden_size, eps=config.rms_norm_eps)
+        norms = {
+            n: RMSNorm.from_state_dict(
+                substate(state_dict, n), norm_cfg, device, cache_dir=cache_dir, name=f"{prefix}.{n}"
+            )
+            for n in _NORMS
+        }
+        attention = Attention.from_state_dict(
+            substate(state_dict, "self_attn"),
+            config.attention,
+            device,
+            rope,
+            cache_dir=cache_dir,
+            name=f"{prefix}.self_attn",
+        )
+        mlp = MLP.from_state_dict(
+            substate(state_dict, "mlp"), config.mlp, device, cache_dir=cache_dir, name=f"{prefix}.mlp"
+        )
+        ple_block = PerLayerInputBlock.from_state_dict(
+            substate(state_dict, "ple_block"), config, device, cache_dir=cache_dir, name=f"{prefix}.ple_block"
+        )
+        scalar = state_dict["layer_scalar"]
+        if scalar.numel() != 1:
+            raise ValueError(f"{prefix}.layer_scalar: expected 1 element, got {tuple(scalar.shape)}")
+        return cls(config, norms, attention, mlp, ple_block, float(scalar.float().item()))
+
+    def forward(self, x: ttnn.Tensor, per_layer_input: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        h = self.input_layernorm(x)
+        a = self.self_attn(h, mask)
+        ttnn.deallocate(h)
+        a_n = self.post_attention_layernorm(a)
+        ttnn.deallocate(a)
+        h1 = ttnn.add(x, a_n, memory_config=dram)
+        ttnn.deallocate(a_n)
+
+        f = self.pre_feedforward_layernorm(h1)
+        m = self.mlp(f)
+        ttnn.deallocate(f)
+        m_n = self.post_feedforward_layernorm(m)
+        ttnn.deallocate(m)
+        h2 = ttnn.add(h1, m_n, memory_config=dram)
+        ttnn.deallocate(h1)
+        ttnn.deallocate(m_n)
+
+        h3 = self.ple_block(h2, per_layer_input)
+        ttnn.deallocate(h2)
+        out = ttnn.multiply(h3, self.layer_scalar, memory_config=dram)
+        ttnn.deallocate(h3)
+        return out

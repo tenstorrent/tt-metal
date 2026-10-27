@@ -1,0 +1,27 @@
+{
+  "model": "google/embeddinggemma-2",
+  "snapshot": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+  "component": "text tower (EmbeddingGemma2TextModel + mean pooling + L2 normalize)",
+  "hardware": "1x Blackhole P150a (grid 13x10, 32 GB DRAM)",
+  "hf_max_position_embeddings": 262144,
+  "model_card_context": 8192,
+  "sliding_window_radius": 512,
+  "supported_max_seq_len": 32768,
+  "largest_tested_seq_len": 32768,
+  "largest_tested_evidence": "tests/pcc/test_text_model.py::test_text_model[b1_s32768] (last-hidden PCC and embedding cosine vs HF fp32)",
+  "physical_buckets": [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768],
+  "logical_lengths_tested": [1, 7, 31, 33, 64, 77, 100, 129, 257, 300, 400, 480, 511, 512, 513, 700, 1025, 1500, 2000, 8192, 32768],
+  "decode": "not applicable: encoder, no KV cache or decode step",
+  "reduction_reason": {
+    "summary": "The functional attention bakes the |q-k|<=512 band and key padding into dense additive [B,1,S,S] bf16 masks (TT SDPA cannot combine sliding_window_size with attn_mask). Mask memory grows as S^2.",
+    "device_bytes": {
+      "per_mask_bf16_at_32768": 2147483648,
+      "per_mask_bf16_at_65536": 8589934592,
+      "masks_live_per_forward": "3 (band constant, full mask, sliding mask) => 6 GiB at 32768, 24 GiB at 65536 of 32 GiB device DRAM, before intermediates (repeat/add outputs) and activations",
+      "per_mask_bf16_at_262144": 137438953472
+    },
+    "reference_bytes": "HF fp32 CPU reference at 32768 peaked at 24.0 GB RSS (/usr/bin/time -v, Maximum resident set size 23982524 kB); 65536 would need about 4x, above the 61 GB host RAM, so no reference could validate it",
+    "sdpa_note": "models/demos/gemma4/tt/attention/operations.py documents a 32768-token Q limit for the non-chunked SDPA path",
+    "path_to_close_gap": "E5 optimize: native sliding_window_size for no-padding batches, attn_mask_block_map / bfp4 masks, or chunked Q with per-chunk masks; a CPU reference that streams attention (or stored goldens) for > 32768"
+  }
+}
