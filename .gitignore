@@ -15,6 +15,10 @@ tt_debug
 .build/
 build
 build_*
+# The `build_*` pattern above is meant for build output dirs. This op's
+# directory *and* its files start with `build_`, so re-include both.
+!ttnn/cpp/ttnn/operations/experimental/deepseek/build_candidate_pool/
+!ttnn/cpp/ttnn/operations/experimental/deepseek/build_candidate_pool/**
 /python_env/
 CMakeUserPresets.json
 .session
