@@ -102,15 +102,16 @@ class RolloutSampler(ABC):
 class RolloutBackend:
     sampler: str
     in_process: bool
-    sync: bool
     weight_push_before_training: bool
+    num_command_queues: int = 1
 
 
 ROLLOUT_BACKENDS = {
-    "ttml_in_process_sync": RolloutBackend(
-        sampler="ttml", in_process=True, sync=True, weight_push_before_training=False
+    "ttml_in_process_sync": RolloutBackend(sampler="ttml", in_process=True, weight_push_before_training=False),
+    "ttt_remote_sync": RolloutBackend(sampler="ttt", in_process=False, weight_push_before_training=True),
+    "ttt_remote_async": RolloutBackend(
+        sampler="ttt", in_process=False, weight_push_before_training=True, num_command_queues=2
     ),
-    "ttt_remote_sync": RolloutBackend(sampler="ttt", in_process=False, sync=True, weight_push_before_training=True),
 }
 
 
@@ -168,13 +169,15 @@ def build_rollout_sampler(
 
 @dataclass
 class RemoteRolloutConfig:
-    """Rollout rank settings for rollout_backend="ttt_remote_sync"."""
+    """Rollout rank settings for rollout_backend="ttt_remote_sync" and "ttt_remote_async"."""
 
     mesh_shape: List[int]
     max_batch_size: int
     max_seq_len: int
     top_k: int = 32
     top_p: float = 1.0
+    # remote_async: scored batches buffered on each rank.
+    rollout_queue_capacity: int = 2
 
 
 @dataclass
@@ -208,6 +211,7 @@ class GRPOConfig:
     # Which engine generates rollouts and how they reach the trainer (see ROLLOUT_BACKENDS above).
     # "ttml_in_process_sync": TTMLRolloutSampler with the trainer's policy model, same process.
     # "ttt_remote_sync": tt-transformers on rank 1 of a 2-rank tt-run job, on request.
+    # "ttt_remote_async": tt-transformers on rank 1, generating and scoring continuously with the newest pushed weights.
     rollout_backend: str
     # LR schedule; values follow TRL's ``lr_scheduler_type``:
     #   "constant"             -> flat at base_lr; ``warmup_steps`` is ignored.
@@ -241,6 +245,8 @@ class GRPOConfig:
     weight_sync_every: int = 1
     # ttt_remote_sync: rollout rank settings, from the top-level remote_rollout_config yaml section.
     remote_rollout: Optional[RemoteRolloutConfig] = None
+    # remote_async: drop a batch generated with weights more than max_staleness optimizer steps older than the policy.
+    max_staleness: int = 0
 
     def __post_init__(self) -> None:
         # num_generations is the GRPO group size: each prompt must produce at least
@@ -317,6 +323,8 @@ class GRPOConfig:
                 f"grpo_config: 'weight_sync_every' does not apply to rollout_backend={self.rollout_backend!r}, "
                 f"which shares the trainer's model (got {self.weight_sync_every})."
             )
+        if self.max_staleness < 0:
+            raise ValueError(f"grpo_config: 'max_staleness' must be >= 0 (got {self.max_staleness}).")
         if not self.backend.in_process and self.remote_rollout is None:
             raise ValueError(
                 f"grpo_config: rollout_backend={self.rollout_backend!r} needs a top-level "
@@ -1024,6 +1032,11 @@ def _validate_remote_inputs(config: GRPOConfig, transformer_config: Any, device_
             f"GRPOTrainer: rollout_backend={config.rollout_backend!r} does not support FSDP: "
             "the weight push needs replicated parameters."
         )
+    if config.rollout_backend == "ttt_remote_async" and device_config.total_devices() != 1:
+        raise ValueError(
+            f"GRPOTrainer: rollout_backend={config.rollout_backend!r} trains on one device, "
+            f"got {device_config.total_devices()}."
+        )
     if os.path.exists(model_source):
         raise ValueError(
             f"GRPOTrainer: rollout_backend={config.rollout_backend!r} needs a HuggingFace Hub model id, "
@@ -1069,7 +1082,8 @@ class GRPOTrainer:
         With ``rollout_backend="ttt_remote_sync"`` the same script runs on both tt-run ranks. Rank
         1 only opens the rollout mesh and builds its :class:`RolloutSampler`
         and RPC server; it never calls ``dataset_func``, and ``train()``
-        serves rollouts there.
+        serves rollouts there. In ``remote_async`` mode rank 1 also calls
+        ``dataset_func`` and generates and scores its batches in a loop.
         """
         if optimizer_dict is None:
             raise ValueError("GRPOTrainer: 'optimizer_dict' is required.")
@@ -1121,7 +1135,7 @@ class GRPOTrainer:
         if is_rollout_rank(config):
             # Rank 0 is blocked waiting for the handshake, terminating processes on a failure before handshake.
             with exit_on_error():
-                self._init_remote_rollout()
+                self._init_remote_rollout(dataset_func)
         else:
             self._build_policy(transformer_config, device_config, dataset_func)
 
@@ -1154,31 +1168,47 @@ class GRPOTrainer:
             )
             self._setup(dataset_func())
         else:
-            from .remote_rollout.mpi_rollout import MPIRolloutClient
-            from .remote_rollout.weight_bridge import TTT_RANK, HostWeightBridge
-
             # Rank 1 is blocked waiting for the handshake, terminating processes on a failure before handshake.
             with exit_on_error():
                 autograd_ctx = ttml.autograd.AutoContext.get_instance()
                 autograd_ctx.initialize_distributed_context(*sys.argv)
-                self.model, self.tokenizer = setup_ttml_model(transformer_config, device_config, self.model_source)
+                self.model, self.tokenizer = setup_ttml_model(
+                    transformer_config, device_config, self.model_source, cfg.backend.num_command_queues
+                )
                 self._batch_layout = resolve_batch_layout()
-                bridge = HostWeightBridge.init_sender(mesh=autograd_ctx.get_device(), peer_rank=TTT_RANK)
-                self._rollout_client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
+                self._rollout_client = self._build_rollout_client(autograd_ctx.get_device())
             try:
                 self._setup(dataset_func())
             except BaseException:
                 self._rollout_client.shutdown()
                 raise
 
-    def _init_remote_rollout(self) -> None:
-        from .remote_rollout.mpi_rollout import MPIRolloutServer
-        from .remote_rollout.weight_bridge import TTML_RANK, HostWeightBridge
+    def _build_rollout_client(self, mesh_device: Any) -> Any:
+        from .remote_rollout.async_rollout import AsyncRolloutClient
+        from .remote_rollout.mpi_rollout import MPIRolloutClient
+        from .remote_rollout.rollout_queue import RolloutQueue
+        from .remote_rollout.threaded_weight_bridge import ThreadedWeightBridge
+        from .remote_rollout.weight_bridge import TTT_RANK, HostWeightBridge
 
+        cfg = self.config
+        match cfg.rollout_backend:
+            case "ttt_remote_sync":
+                bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
+                return MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
+            case "ttt_remote_async":
+                return AsyncRolloutClient(
+                    bridge=ThreadedWeightBridge.sender(peer_rank=TTT_RANK, mesh_device=mesh_device),
+                    queue=RolloutQueue.consumer(peer_rank=TTT_RANK, capacity=cfg.remote_rollout.rollout_queue_capacity),
+                )
+        raise ValueError(f"unsupported rollout_backend {cfg.rollout_backend!r}")
+
+    def _init_remote_rollout(self, dataset_func: Callable[[], Any]) -> None:
         cfg = self.config
         rr = cfg.remote_rollout
         self._rollout_mesh = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(*rr.mesh_shape), offset=ttnn.MeshCoordinate(0, 0)
+            mesh_shape=ttnn.MeshShape(*rr.mesh_shape),
+            offset=ttnn.MeshCoordinate(0, 0),
+            num_command_queues=cfg.backend.num_command_queues,
         )
         self.rollout_sampler = build_rollout_sampler(
             cfg.backend.sampler,
@@ -1189,10 +1219,46 @@ class GRPOTrainer:
             temperature=cfg.temperature,
             completions_per_prompt=cfg.num_generations,
         )
-        bridge = HostWeightBridge.init_receiver(
-            mesh=self._rollout_mesh, peer_rank=TTML_RANK, submeshes=self.rollout_sampler.submeshes
-        )
-        self._rollout_server = MPIRolloutServer(peer_rank=TTML_RANK, bridge=bridge, sampler=self.rollout_sampler)
+        self._rollout_server = self._build_rollout_server(dataset_func)
+
+    def _build_rollout_server(self, dataset_func: Callable[[], Any]) -> Any:
+        from transformers import AutoTokenizer
+
+        from .remote_rollout.async_rollout import AsyncRolloutServer
+        from .remote_rollout.mpi_rollout import MPIRolloutServer
+        from .remote_rollout.rollout_queue import RolloutQueue
+        from .remote_rollout.threaded_weight_bridge import ThreadedWeightBridge
+        from .remote_rollout.weight_bridge import TTML_RANK, HostWeightBridge
+
+        cfg = self.config
+        match cfg.rollout_backend:
+            case "ttt_remote_sync":
+                bridge = HostWeightBridge.init_receiver(
+                    mesh=self._rollout_mesh, peer_rank=TTML_RANK, submeshes=self.rollout_sampler.submeshes
+                )
+                return MPIRolloutServer(peer_rank=TTML_RANK, bridge=bridge, sampler=self.rollout_sampler)
+            case "ttt_remote_async":
+                ttml.autograd.AutoContext.get_instance().initialize_distributed_context(*sys.argv)
+                self.tokenizer = AutoTokenizer.from_pretrained(self.model_source, trust_remote_code=True)
+                prompts, extra_columns, batch_prompts = self._prompt_batches(
+                    dataset_func(), self.tokenizer, num_devices=1
+                )
+                return AsyncRolloutServer(
+                    bridge=ThreadedWeightBridge.receiver(
+                        peer_rank=TTML_RANK, mesh_device=self._rollout_mesh, submeshes=self.rollout_sampler.submeshes
+                    ),
+                    queue=RolloutQueue.producer(
+                        peer_rank=TTML_RANK, capacity=cfg.remote_rollout.rollout_queue_capacity
+                    ),
+                    sampler=self.rollout_sampler,
+                    prompts=prompts,
+                    extra_columns=extra_columns,
+                    batch_prompts=batch_prompts,
+                    tokenizer=self.tokenizer,
+                    reward_funcs=self.reward_funcs,
+                    num_generations=cfg.num_generations,
+                )
+        raise ValueError(f"unsupported rollout_backend {cfg.rollout_backend!r}")
 
     def _init_rewards(
         self,
@@ -1413,6 +1479,7 @@ class GRPOTrainer:
         self.metrics["min_completion_len"] = min(lens) if lens else 0
         self.metrics["max_completion_len"] = max(lens) if lens else 0
         self.metrics["rollout_weight_version"] = rollout.weight_version
+        self.metrics["rollouts_dropped"] = scored.rollouts_dropped
 
         cfg = self.config
         if cfg.log_completions and cfg.num_completions_to_print > 0:
@@ -1647,6 +1714,7 @@ class GRPOTrainer:
             self._rollout_server.serve_forever()
         finally:
             self._rollout_server = None
+            self.rollout_sampler.close()
             self.rollout_sampler = None
             gc.collect()
             ttnn.close_mesh_device(self._rollout_mesh)

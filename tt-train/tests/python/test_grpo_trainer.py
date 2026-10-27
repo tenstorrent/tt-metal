@@ -62,11 +62,13 @@ from ttml.trainers.grpo_trainer import (
 )
 from ttml.trainers.grpo_trainer import grpo_trainer as grpo_trainer_module
 from ttml.trainers.grpo_trainer.remote_rollout import (
+    async_remote_rollout_batch_source,
     async_rollout,
     mpi_rollout,
     rollout_queue,
     sync_remote_rollout_batch_source,
 )
+from ttml.trainers.grpo_trainer.remote_rollout.async_remote_rollout_batch_source import AsyncRemoteRolloutBatchSource
 from ttml.trainers.grpo_trainer.remote_rollout.rollout_queue import RolloutQueue
 from ttml.trainers.grpo_trainer.remote_rollout.sync_remote_rollout_batch_source import SyncRemoteRolloutBatchSource
 from ttml.trainers.grpo_trainer.remote_rollout.weight_bridge import TTML_RANK, TTT_RANK
@@ -522,6 +524,11 @@ def test_grpo_config_requires_rollout_backend(expect_error):
 def test_grpo_config_rejects_unknown_rollout_backend(expect_error):
     with expect_error(ValueError, "'rollout_backend' must be one of"):
         GRPOConfig(**_GRPO_CONFIG_FIELDS, rollout_backend="vllm")
+
+
+def test_grpo_config_rejects_negative_max_staleness(expect_error):
+    with expect_error(ValueError, "'max_staleness' must be >= 0"):
+        GRPOConfig(**_GRPO_CONFIG_FIELDS, rollout_backend="ttml_in_process_sync", max_staleness=-1)
 
 
 def test_get_grpo_config_reads_rollout_backend():
@@ -1511,6 +1518,67 @@ def test_async_rollout_client_and_server_check_their_rank(monkeypatch, expect_er
     with expect_error(RuntimeError, "AsyncRolloutServer must run on TTT_RANK=1"):
         _async_rollout_server(bridge, queue_, _EchoSampler(), [])
     assert not bridge.connected and not queue_.connected
+
+
+class _FakeAsyncClient:
+    """pop() returns batches generated at the scripted versions, then None; records the pushed versions."""
+
+    def __init__(self, versions):
+        self._batches = [_scored_batch(version) for version in versions]
+        self.pushed = []
+
+    def pop(self):
+        return self._batches.pop(0) if self._batches else None
+
+    def send_weights(self, weights, *, version):
+        self.pushed.append(version)
+
+    def shutdown(self):
+        pass
+
+
+def _async_source(monkeypatch, client, num_batches, max_staleness):
+    monkeypatch.setattr(async_remote_rollout_batch_source, "weights_ref_hf_dict", lambda model: {})
+    return AsyncRemoteRolloutBatchSource(
+        client=client,
+        num_batches=num_batches,
+        num_generations=2,
+        max_completion_length=4,
+        weight_sync_every=1,
+        max_staleness=max_staleness,
+    )
+
+
+def _drive_async_source(source, steps_per_batch):
+    """Push version 0, then consume every batch and push the step reached, as GRPOTrainer._train_policy does."""
+    source.update_weights(None, 0)
+    consumed = []
+    for batch_index, scored in enumerate(source, start=1):
+        consumed.append((scored.rollout.weight_version, scored.rollouts_dropped))
+        source.update_weights(None, batch_index * steps_per_batch)
+    return consumed
+
+
+def test_async_remote_source_drops_stale_rollouts(monkeypatch):
+    client = _FakeAsyncClient([0, 0, 1, 1, 2])
+    source = _async_source(monkeypatch, client, num_batches=3, max_staleness=0)
+
+    assert _drive_async_source(source, steps_per_batch=1) == [(0, 0), (1, 1), (2, 1)]
+    assert client.pushed == [0, 1, 2]
+
+
+def test_async_remote_source_counts_staleness_in_optimizer_steps(monkeypatch):
+    client = _FakeAsyncClient([0, 0, 2, 4])
+    source = _async_source(monkeypatch, client, num_batches=3, max_staleness=1)
+
+    assert _drive_async_source(source, steps_per_batch=2) == [(0, 0), (2, 1), (4, 0)]
+    assert client.pushed == [0, 2, 4]
+
+
+def test_async_remote_source_raises_when_the_queue_closes(monkeypatch, expect_error):
+    source = _async_source(monkeypatch, _FakeAsyncClient([]), num_batches=1, max_staleness=0)
+    with expect_error(RuntimeError, "rollout rank closed the rollout queue"):
+        next(iter(source))
 
 
 QWEN3_MODEL_ID = "Qwen/Qwen3-0.6B"
