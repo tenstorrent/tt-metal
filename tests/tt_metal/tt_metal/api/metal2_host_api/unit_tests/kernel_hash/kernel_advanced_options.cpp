@@ -32,7 +32,7 @@ using test_helpers::ProgramSpecTestGen1;
 TEST_F(ProgramSpecTestGen1, CPU_TensorBindingSequenceMemberPartitionAffectsKernelHash) {
     // Same bindings {a, ab, bc, c}; sequences differ only by member partition {"a","bc"} vs {"ab","c"}.
     // Without per-member length delimiting those would hash identically.
-    auto make_spec = [](std::vector<std::string> members) {
+    auto make_spec = [](std::vector<AccessorName> members) {
         ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
         spec.tensor_parameters = {
             MakeMinimalTensorParameter("t_a"),

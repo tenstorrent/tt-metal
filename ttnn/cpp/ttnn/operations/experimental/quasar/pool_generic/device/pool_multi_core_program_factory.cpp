@@ -1127,8 +1127,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
 
     // Per-kernel RTA schemas: readers consume core_nhw_index (+ start_row/start_col for
     // mpwi); compute consumes out_nhw_this_core (+ start_row/start_col for mpwi).
-    Group<std::string> reader_rta_names = {"core_nhw_index"};
-    Group<std::string> compute_rta_names = {"out_nhw_this_core"};
+    Group<ArgName> reader_rta_names = {"core_nhw_index"};
+    Group<ArgName> compute_rta_names = {"out_nhw_this_core"};
     if (return_indices) {
         reader_rta_names.push_back("start_row");
         reader_rta_names.push_back("start_col");

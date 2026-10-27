@@ -273,7 +273,7 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
             .dfb_spec_name = SUM_SCALER, .accessor_name = "sum_scaler", .endpoint_type = DFBEndpointType::PRODUCER},
     };
     Group<TensorBinding> reader_tensor_bindings;
-    std::vector<std::string> reader_rta_names;
+    std::vector<ArgName> reader_rta_names;
     KernelSpec::CompileTimeArgs reader_cta;
     if (mask_padded_data) {
         reader_bindings.push_back(DFBBinding{

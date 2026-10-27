@@ -118,7 +118,7 @@ ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_progr
         .hw_config = std::move(reader_hw),
     };
 
-    reader.runtime_arg_schema.runtime_arg_names = m2::Group<std::string>{"total_size_bytes"};
+    reader.runtime_arg_schema.runtime_arg_names = m2::Group<m2::ArgName>{"total_size_bytes"};
 
     spec.kernels.push_back(reader);
 

@@ -329,7 +329,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     Group<DFBBinding> reader_dfb_bindings;
     Group<TensorBinding> reader_tensor_bindings;
     KernelSpec::CompileTimeArgs reader_ct_args;
-    Group<std::string> reader_rta_names;
+    Group<ArgName> reader_rta_names;
     std::string reader_source;
     std::map<std::string, std::string> reader_defines_map = reduce_defines;
     if (rm_path) {
@@ -430,7 +430,7 @@ ReduceDeviceOperation::ReduceMultiCoreWProgramFactory::create_program_artifacts(
     // data_movement/sharded writers; their binding vocabulary is the forks', not this op's.
     std::string writer_source;
     KernelSpec::CompileTimeArgs writer_ct_args;
-    Group<std::string> writer_rta_names;
+    Group<ArgName> writer_rta_names;
     Group<TensorBinding> writer_tensor_bindings;
     if (rm_path) {
         writer_source =

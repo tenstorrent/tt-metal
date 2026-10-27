@@ -103,7 +103,7 @@ ttnn::device_operation::ProgramArtifacts accum_build_program(
     // The reader and the writer address the same tile sequence, one on the input and one on the
     // output, so they take the same argument list. Kept local: a global std::vector would need a
     // non-trivial destructor at namespace scope.
-    const Group<std::string> dataflow_rta_names{
+    const Group<ArgName> dataflow_rta_names{
         "num_rows_per_core",
         "tiles_per_row",
         "input_tile_offset",

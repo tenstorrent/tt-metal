@@ -172,7 +172,7 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
             semaphore_binding.semaphore_spec_name,
             total_binder_harts);
         out.emplace(
-            semaphore_binding.accessor_name,
+            semaphore_binding.accessor_name.str(),
             tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope, total_binder_harts});
     }
     return out;

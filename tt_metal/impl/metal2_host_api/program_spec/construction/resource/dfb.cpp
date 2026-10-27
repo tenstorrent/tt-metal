@@ -125,7 +125,7 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         }
         // A self-loop pair may bind one DFB as PRODUCER and as CONSUMER under the same accessor name; that is one
         // handle, on both sides.
-        auto [it, inserted] = out.try_emplace(dfb_binding.accessor_name, handle);
+        auto [it, inserted] = out.try_emplace(dfb_binding.accessor_name.str(), handle);
         if (!inserted) {
             it->second.produces |= handle.produces;
             it->second.consumes |= handle.consumes;

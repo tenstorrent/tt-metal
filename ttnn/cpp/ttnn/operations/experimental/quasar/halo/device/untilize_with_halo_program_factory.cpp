@@ -506,7 +506,7 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         // Tiled path: total_blocks (same per-core value as the compute's) lets each reader pop every
         // block the compute untilizes for it and lets reader0 push exactly the src pages the compute
         // pops, so the Quasar ~DataflowBuffer() drains balance.
-        Group<std::string> reader_rta_names;
+        Group<ArgName> reader_rta_names;
         if (config_tensors_in_dram) {
             reader_rta_names.emplace_back("config_read_index");
         }

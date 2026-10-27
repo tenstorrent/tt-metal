@@ -93,7 +93,7 @@ inline ProgramRunArgs MakeRunArgsForMinimalSpec(
 
 // Make a ProgramSpec where the DM kernel has a named-RTA / named-CRTA schema.
 inline ProgramSpec MakeSpecWithNamedArgs(
-    const NodeCoord& node, const std::vector<std::string>& named_rtas, const std::vector<std::string>& named_crtas) {
+    const NodeCoord& node, const std::vector<ArgName>& named_rtas, const std::vector<ArgName>& named_crtas) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
     spec.kernels[0].runtime_arg_schema.runtime_arg_names = named_rtas;
     spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = named_crtas;

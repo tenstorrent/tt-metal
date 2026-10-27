@@ -362,18 +362,18 @@ void ValidatePrefetcherPipeBindings(const KernelSpec& kernel) {
     // handle alias, not a binding).
     std::unordered_set<PrefetcherPipeParamName> bound_pipes;
     for (const auto& binding : kernel.advanced_options.prefetcher_pipe_bindings) {
-        auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+        auto [it, inserted] = accessor_names.insert(binding.accessor_name.str());
         TT_FATAL(
             inserted,
             "Kernel '{}' has duplicate PrefetcherPipe accessor_name '{}'",
             kernel.unique_id,
             binding.accessor_name);
         TT_FATAL(
-            IsValidCppIdentifier(binding.accessor_name),
+            IsValidCppIdentifier(binding.accessor_name.view()),
             "Kernel '{}' PrefetcherPipe accessor_name '{}' must be a valid C++ identifier",
             kernel.unique_id,
             binding.accessor_name);
-        ValidateAccessorNameLength(kernel.unique_id, "PrefetcherPipe", binding.accessor_name);
+        ValidateAccessorNameLength(kernel.unique_id, "PrefetcherPipe", binding.accessor_name.view());
         TT_FATAL(
             !binding.pipe_parameter_names.empty(),
             "Kernel '{}' PrefetcherPipe accessor '{}' names no PrefetcherPipeParameter",

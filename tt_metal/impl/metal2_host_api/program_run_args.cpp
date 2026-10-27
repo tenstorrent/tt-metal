@@ -386,7 +386,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 
         // Validate named RTAs: every declared name set per-node, no extras.
         const auto& named_rta_names = schema->runtime_arg_names;
-        const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
+        const std::unordered_set<ArgName> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
 
         std::unordered_map<NodeCoord, size_t> named_rta_count_per_node;
         for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
@@ -736,7 +736,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                         "kernel reports prior runtime args. Internal invariant violation.",
                         kernel_name,
                         node.str());
-                    rta[s->second] = value;
+                    rta[s->second] = value.to_uint32();
                 }
             }
             for (const auto& [node, vals] : kernel_runtime_varargs(kernel_params)) {
@@ -771,7 +771,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                         name,
                         kernel_name,
                         node.str());
-                    named_rtas_by_node[node].emplace_back(s->second, value);
+                    named_rtas_by_node[node].emplace_back(s->second, value.to_uint32());
                 }
             }
             std::unordered_map<NodeCoord, const std::vector<uint32_t>*> varargs_by_node;
@@ -829,7 +829,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                 "Internal error: named CRTA '{}' missing for kernel '{}'.",
                 name,
                 kernel_name);
-            combined_crtas.push_back(v_it->second);
+            combined_crtas.push_back(v_it->second.to_uint32());
         }
         append_binding_crtas(binding_handles, combined_crtas);
         append_scratchpad_crtas(kernel->scratchpad_binding_handles(), combined_crtas);
@@ -1108,7 +1108,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
 
         // --- Named RTAs: any may be omitted. Supplied names must be declared (no extras) and their
         //     target nodes must belong to the kernel. ---
-        const std::unordered_set<std::string> named_rta_name_set(
+        const std::unordered_set<ArgName> named_rta_name_set(
             schema->runtime_arg_names.begin(), schema->runtime_arg_names.end());
         for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
             TT_FATAL(
@@ -1127,7 +1127,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
         }
 
         // --- Named CRTAs: any may be omitted. Supplied names must be declared (no extras). ---
-        const std::unordered_set<std::string> named_crta_name_set(
+        const std::unordered_set<ArgName> named_crta_name_set(
             schema->common_runtime_arg_names.begin(), schema->common_runtime_arg_names.end());
         for (const auto& [name, _value] : kernel_params.common_runtime_arg_values) {
             (void)_value;
@@ -1246,7 +1246,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                         kernel_name,
                         node.str());
                     RuntimeArgsData& rta = kernel->runtime_args_data(node);
-                    rta[it->second] = value;
+                    rta[it->second] = value.to_uint32();
                 }
             }
         }
@@ -1288,7 +1288,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                         "Internal error: named CRTA '{}' not in schema for kernel '{}'.",
                         name,
                         kernel_name);
-                    crta[it->second] = value;
+                    crta[it->second] = value.to_uint32();
                 }
             }
             if (!cvarargs.empty()) {

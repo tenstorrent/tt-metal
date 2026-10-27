@@ -127,7 +127,7 @@ std::vector<uint32_t> run_dfb_scoped_lock_cache_test(distributed::MeshDevice& me
     const auto consumer_pattern = (p.cap == dfb::AccessPattern::ALL) ? experimental::DFBAccessPattern::ALL
                                                                      : experimental::DFBAccessPattern::STRIDED;
 
-    const std::vector<std::string> rta_names = {
+    const std::vector<experimental::ArgName> rta_names = {
         "is_active", "test_mode", "lock_n", "num_entries", "ring_base", "result_addr", "new_val", "num_rounds"};
 
     experimental::KernelSpec producer_spec{

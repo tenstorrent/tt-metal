@@ -67,7 +67,7 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         const ScratchpadSpec* scratchpad_spec = scratchpad_by_name.at(binding.scratchpad_spec_name);
 
         ScratchpadBindingHandle handle;
-        handle.accessor_name = binding.accessor_name;
+        handle.accessor_name = binding.accessor_name.str();
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
         handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);

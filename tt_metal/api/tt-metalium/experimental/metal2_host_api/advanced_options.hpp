@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include <tt-metalium/experimental/metal2_host_api/accessor_name.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/prefetcher_pipe_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
@@ -148,12 +149,13 @@ struct KernelAdvancedOptions {
     // Constraints:
     //   - Every `members` entry is a TensorBinding::accessor_name on this kernel
     //   - No duplicate members within a sequence (one binding may appear in several sequences)
-    //   - `sequence_name` is a valid C++ identifier, unique in this kernel's `tensor::` namespace
+    //   - `sequence_name` is a valid C++ identifier, at most MAX_ACCESSOR_NAME_LENGTH characters, unique in this
+    //     kernel's `tensor::` namespace
     //   - An empty members list is legal; this produces an empty std::tuple<>.
 
     struct TensorBindingSequence {
-        std::string sequence_name;         // device: tensor::<sequence_name>
-        std::vector<std::string> members;  // TensorBinding::accessor_name; order is the device tuple order
+        AccessorName sequence_name;         // device: tensor::<sequence_name>
+        std::vector<AccessorName> members;  // TensorBinding::accessor_name; order is the device tuple order
     };
     Group<TensorBindingSequence> tensor_binding_sequences;
 
@@ -186,7 +188,7 @@ struct KernelAdvancedOptions {
         // PrefetcherPipeParameters (within the ProgramSpec) reachable through this accessor.
         // Non-empty. Typically one; several when they tile the kernel's nodes (see above).
         Group<PrefetcherPipeParamName> pipe_parameter_names;
-        std::string accessor_name;  // pipe accessor name (used in the kernel source code)
+        AccessorName accessor_name;  // pipe accessor name (used in the kernel source code)
     };
     Group<PrefetcherPipeBinding> prefetcher_pipe_bindings;
 };

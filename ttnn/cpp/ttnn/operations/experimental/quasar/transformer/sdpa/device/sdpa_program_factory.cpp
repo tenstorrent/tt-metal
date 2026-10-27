@@ -1372,7 +1372,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         TensorBinding{.tensor_parameter_name = T_V_IN, .accessor_name = "v_in"},
     };
     Group<SemaphoreBinding> reader_sems;
-    Group<std::string> reader_rta_names = {
+    Group<ArgName> reader_rta_names = {
         "core_id",
         "num_phases",
         "chunked_q_chunk_offset_phase_1",
@@ -1519,7 +1519,7 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         TensorBinding{.tensor_parameter_name = T_OUT, .accessor_name = "out"},
     };
     KernelSpec::CompilerOptions::Defines writer_defines = base_defines;
-    Group<std::string> writer_rta_names = {
+    Group<ArgName> writer_rta_names = {
         "core_id",
         "num_phases",
         "use_chunk_start_idx_tensor",

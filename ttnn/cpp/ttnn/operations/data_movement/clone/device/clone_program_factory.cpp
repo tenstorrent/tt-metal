@@ -160,12 +160,12 @@ ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_art
 
     // Reader / writer runtime-arg schema (buffer addresses now ride the TensorBinding;
     // the interleaved paths carry a per-node start_id, the sharded paths do not).
-    Group<std::string> rta_names;
+    Group<ArgName> rta_names;
     if (tilized) {
-        rta_names = is_sharded ? Group<std::string>{"num_tiles"} : Group<std::string>{"num_tiles", "start_id"};
+        rta_names = is_sharded ? Group<ArgName>{"num_tiles"} : Group<ArgName>{"num_tiles", "start_id"};
     } else {
-        rta_names = is_sharded ? Group<std::string>{"stick_size", "num_sticks"}
-                               : Group<std::string>{"stick_size", "num_sticks", "start_id"};
+        rta_names = is_sharded ? Group<ArgName>{"stick_size", "num_sticks"}
+                               : Group<ArgName>{"stick_size", "num_sticks", "start_id"};
     }
 
     // ---------------------------------------------------------------------

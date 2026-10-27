@@ -33,6 +33,14 @@ void ValidateKernelArguments(const KernelSpec& kernel) {
             kernel.unique_id,
             kind,
             name);
+        TT_FATAL(
+            name.size() <= MAX_ACCESSOR_NAME_LENGTH,
+            "KernelSpec '{}' {} name '{}' is {} characters; a name must be at most {} characters.",
+            kernel.unique_id,
+            kind,
+            name,
+            name.size(),
+            MAX_ACCESSOR_NAME_LENGTH);
         auto [it, inserted] = seen.try_emplace(name, kind);
         TT_FATAL(
             inserted,
@@ -43,14 +51,14 @@ void ValidateKernelArguments(const KernelSpec& kernel) {
             kind);
     };
     for (const auto& name : kernel.runtime_arg_schema.runtime_arg_names) {
-        check_name(name, "named RTA");
+        check_name(name.str(), "named RTA");
     }
     for (const auto& name : kernel.runtime_arg_schema.common_runtime_arg_names) {
-        check_name(name, "named CRTA");
+        check_name(name.str(), "named CRTA");
     }
     for (const auto& [name, value] : kernel.compile_time_args) {
         (void)value;
-        check_name(name, "named CTA");
+        check_name(name.str(), "named CTA");
     }
 }
 

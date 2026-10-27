@@ -256,7 +256,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsRMProgramFactory::create_prog
         embedding_defines.insert({"OUTPUT_SHARDED", "1"});
     }
 
-    Group<std::string> reader_rta_names = {"batch_offset", "weights_offset", "num_rows", "index_idx"};
+    Group<ArgName> reader_rta_names = {"batch_offset", "weights_offset", "num_rows", "index_idx"};
     if (embeddings_type == EmbeddingsType::PADDED) {
         reader_rta_names.push_back("pad_token");
     }
