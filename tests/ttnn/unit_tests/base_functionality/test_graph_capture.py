@@ -9,6 +9,7 @@ import torch
 import ttnn
 from ttnn.graph_tracer_utils import GraphTracerUtils
 from ttnn.operations.conv2d import Conv2dConfig
+from tt_py_test_utils_common.utility_functions import skip_for_slow_dispatch
 
 
 @pytest.mark.parametrize("scalar", [3])
@@ -691,3 +692,30 @@ def test_graph_capture_records_program_factory(device):
         assert "::" in params["program_factory_type"]
         assert isinstance(params["program_factory_index"], int)
         assert isinstance(params["program_cache_hit"], bool)
+
+
+@skip_for_slow_dispatch()
+def test_graph_capture_places_a_program_on_the_sub_device_of_its_kernels(device):
+    """Metal 2.0 programs allocate dataflow buffers rather than circular buffers; they are placed by their kernels."""
+    grid = device.compute_with_storage_grid_size()
+    rest = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 2, grid.y - 1))})
+    last_column = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(grid.x - 1, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
+    )
+    manager = device.create_sub_device_manager([ttnn.SubDevice([rest]), ttnn.SubDevice([last_column])], 0)
+    device.load_sub_device_manager(manager)
+    try:
+        # Four tiles: typecast's program runs on four cores of the first column, which sub-device 0 holds.
+        tt_input = ttnn.from_torch(
+            torch.rand((1, 1, 32, 128), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+        )
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        ttnn.typecast(tt_input, ttnn.float32)
+        captured_graph = ttnn.graph.end_graph_capture()
+    finally:
+        ttnn.synchronize_device(device)
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+    executions = [node["params"] for node in captured_graph if node["node_type"] == "program_execution"]
+    assert [execution.get("sub_device_id") for execution in executions] == [0]
