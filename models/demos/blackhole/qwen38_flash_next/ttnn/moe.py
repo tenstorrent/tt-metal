@@ -168,7 +168,7 @@ def _ignore_phase(_phase: str) -> None:
 class Qwen38TTNNMoERowContract:
     """Exact logical shapes for ordinary decode (1 row), target verification (5) or a prefill chunk (32).
 
-    ``admitted_rows`` widens ``SUPPORTED_ROWS`` for this instance alone (an explicit diagnostic override).
+    ``admitted_rows`` widens ``SUPPORTED_ROWS`` for this instance alone (the prefill slab and MTP verify rows).
     """
 
     rows: int = 1
@@ -1955,30 +1955,7 @@ class Qwen38TTNNMoE:
                 raise_deferred_phase_error()
             return result
         except BaseException as forward_error:
-            # A diagnostic may install this private failure-only hook to drain
-            # asynchronous work before exception cleanup releases its owners.
-            # Without that proof, resident async retains every live wrapper and
-            # poisons the instance instead of enqueueing uncertain cleanup.
-            diagnostic_before_cleanup = getattr(self, "_diagnostic_before_exception_cleanup", None)
-            if diagnostic_before_cleanup is not None:
-                if not callable(diagnostic_before_cleanup):
-                    raise RuntimeError("MoE diagnostic exception-cleanup hook is not callable") from forward_error
-                try:
-                    diagnostic_before_cleanup(forward_error, temporaries)
-                except BaseException as diagnostic_drain_error:
-                    # Do not release potentially in-flight owners after a drain
-                    # failure.  Mesh teardown is the only safe recovery.
-                    self._retain_async_failure_owners(
-                        diagnostic_drain_error,
-                        hidden_sharded,
-                        packed_w0_w1,
-                        packed_w2,
-                        *temporaries.values(),
-                    )
-                    raise RuntimeError(
-                        "MoE forward failed and its diagnostic pre-cleanup drain also failed; cleanup skipped"
-                    ) from diagnostic_drain_error
-            elif self.synchronization_policy is Qwen38TTNNMoESyncPolicy.RESIDENT_ASYNC:
+            if self.synchronization_policy is Qwen38TTNNMoESyncPolicy.RESIDENT_ASYNC:
                 # No host drain has established completion.  Retain borrowed
                 # producers and every still-live result instead of submitting
                 # cleanup to a queue whose ownership is now ambiguous.  The

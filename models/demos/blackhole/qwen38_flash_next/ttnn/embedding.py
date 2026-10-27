@@ -195,15 +195,6 @@ def _deallocate(*tensors) -> None:
             ttnn.deallocate(tensor)
 
 
-def _diagnostic_stage(callback: Callable[[str], None] | None, event: str) -> None:
-    """Emit an opt-in queue discriminator event without changing production scheduling."""
-
-    if callback is not None:
-        if not callable(callback):
-            raise TypeError("embedding diagnostic stage callback must be callable")
-        callback(event)
-
-
 def _all_reduce_owner_select_hidden(
     local_partial, *, mesh_contract: Qwen38MeshContract, replicated_reference, collective_topology, rows: int = 1
 ):
@@ -261,7 +252,6 @@ def _all_gather_owner_select_hidden_fallback(
     collective_topology,
     synchronization_policy: Qwen38TTNNEmbeddingSyncPolicy = Qwen38TTNNEmbeddingSyncPolicy.CORRECTNESS_FENCED,
     _retain_async_failure_owners: Callable[..., None] | None = None,
-    _diagnostic_stage_callback: Callable[[str], None] | None = None,
 ):
     """S=1 fallback that selects the exact vocabulary owner.
 
@@ -322,7 +312,6 @@ def _all_gather_owner_select_hidden_fallback(
     all_gather_drained = owner_slice_drained = partition_drained = False
     completed = False
     try:
-        _diagnostic_stage(_diagnostic_stage_callback, "before-all-gather-async")
         gathered = ttnn.experimental.all_gather_async(
             local_partial,
             persistent_output_buffer=None,
@@ -336,14 +325,11 @@ def _all_gather_owner_select_hidden_fallback(
             num_workers_per_link=1,
             num_buffers_per_channel=2,
         )
-        _diagnostic_stage(_diagnostic_stage_callback, "after-all-gather-async-enqueue")
         retained_locals += tuple(ttnn.get_device_tensors(local_partial))
         retained_locals += tuple(ttnn.get_device_tensors(gathered))
-        _diagnostic_stage(_diagnostic_stage_callback, "before-all-gather-async-synchronize")
         if not resident_async:
             ttnn.synchronize_device(mesh_device)
         all_gather_drained = True
-        _diagnostic_stage(_diagnostic_stage_callback, "after-all-gather-async-synchronize")
         if _shape(gathered) != (1, 1, 1, TP_SIZE * HIDDEN_SIZE) or _padded_shape(gathered) != (
             1,
             1,
@@ -365,7 +351,6 @@ def _all_gather_owner_select_hidden_fallback(
         # validated owner is a logical column, never a physical device ID.
         owner_start = active_vocab_shard * HIDDEN_SIZE
         owner_end = owner_start + HIDDEN_SIZE
-        _diagnostic_stage(_diagnostic_stage_callback, "before-owner-contribution-slice")
         selected = ttnn.slice(
             gathered,
             (0, 0, 0, owner_start),
@@ -373,13 +358,10 @@ def _all_gather_owner_select_hidden_fallback(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             pad_value=0.0,
         )
-        _diagnostic_stage(_diagnostic_stage_callback, "after-owner-contribution-slice-enqueue")
         retained_locals += tuple(ttnn.get_device_tensors(selected))
-        _diagnostic_stage(_diagnostic_stage_callback, "before-owner-contribution-slice-synchronize")
         if not resident_async:
             ttnn.synchronize_device(mesh_device)
         owner_slice_drained = True
-        _diagnostic_stage(_diagnostic_stage_callback, "after-owner-contribution-slice-synchronize")
         if (
             _shape(selected) != (1, 1, 1, HIDDEN_SIZE)
             or _padded_shape(selected) != (1, 1, TILE_SIZE, HIDDEN_SIZE)
@@ -390,20 +372,16 @@ def _all_gather_owner_select_hidden_fallback(
             raise RuntimeError("embedding owner contribution must be BF16 TILE DRAM [1,1,1,2560]")
         mesh_contract.validate_tensor(selected, placement=TensorPlacement.REPLICATED)
 
-        _diagnostic_stage(_diagnostic_stage_callback, "before-mesh-partition")
         hidden = ttnn.mesh_partition(
             selected,
             dim=3,
             cluster_axis=TP_AXIS,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        _diagnostic_stage(_diagnostic_stage_callback, "after-mesh-partition-enqueue")
         retained_locals += tuple(ttnn.get_device_tensors(hidden))
-        _diagnostic_stage(_diagnostic_stage_callback, "before-mesh-partition-synchronize")
         if not resident_async:
             ttnn.synchronize_device(mesh_device)
         partition_drained = True
-        _diagnostic_stage(_diagnostic_stage_callback, "after-mesh-partition-synchronize")
         if _shape(hidden) != (1, 1, 1, LOCAL_HIDDEN_SIZE) or _padded_shape(hidden) != (
             1,
             1,
@@ -1295,8 +1273,6 @@ class Qwen38TTNNTokenEmbedding:
     def upload_tokens(
         self,
         input_ids: torch.Tensor,
-        *,
-        _diagnostic_stage_callback: Callable[[str], None] | None = None,
     ) -> Qwen38ValidatedTokens:
         """Range-check CPU IDs, localize all four shards, and upload once."""
 
@@ -1309,7 +1285,6 @@ class Qwen38TTNNTokenEmbedding:
             active_vocab_shard, active_vocab_coordinate = _single_token_vocab_owner(host)
             host = _pad_single_decode_local_indices(host)
             physical_sequence = TILE_SIZE
-        _diagnostic_stage(_diagnostic_stage_callback, "before-token-h2d")
         tokens = ttnn.from_torch(
             host,
             dtype=ttnn.uint32,
@@ -1318,10 +1293,6 @@ class Qwen38TTNNTokenEmbedding:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 1)),
         )
-        # The diagnostic callback may fence here while ``host`` and ``tokens``
-        # are both still strongly owned.  Production returns ownership of the
-        # uploaded local indices to the model/session caller.
-        _diagnostic_stage(_diagnostic_stage_callback, "after-token-h2d-enqueue")
         self.mesh_contract.validate_tensor(tokens, placement=TensorPlacement.VOCAB_SHARDED, shard_dim=1)
         expected_upload = (1, 1, physical_sequence)
         if _shape(tokens) != expected_upload:
@@ -1548,8 +1519,6 @@ class Qwen38TTNNTokenEmbedding:
     def __call__(
         self,
         validated: Qwen38ValidatedTokens,
-        *,
-        _diagnostic_stage_callback: Callable[[str], None] | None = None,
     ):
         self._require_healthy()
         if not isinstance(validated, Qwen38ValidatedTokens):
@@ -1574,7 +1543,6 @@ class Qwen38TTNNTokenEmbedding:
         )
 
         expected_partial = (1, 1, physical_sequence, HIDDEN_SIZE)
-        _diagnostic_stage(_diagnostic_stage_callback, "before-local-embedding")
         resident_async_result = False
         if sequence == 1:
             # The embedding wrapper picks EmbeddingsFusedProgramFactory only when the ROW_MAJOR index width and table
@@ -1587,7 +1555,6 @@ class Qwen38TTNNTokenEmbedding:
                 )
             if _padded_shape(self.sentinel_weight)[-1] % TILE_SIZE:
                 raise RuntimeError("sentinel embedding width is not TILE aligned for fused output")
-            _diagnostic_stage(_diagnostic_stage_callback, "before-fused-padded-local-embedding")
             embedded_base = ttnn.embedding(
                 local_indices,
                 self.sentinel_weight,
@@ -1595,7 +1562,6 @@ class Qwen38TTNNTokenEmbedding:
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            _diagnostic_stage(_diagnostic_stage_callback, "after-fused-padded-local-embedding-enqueue")
         else:
             embedded_base = ttnn.embedding(
                 local_indices,
@@ -1607,17 +1573,14 @@ class Qwen38TTNNTokenEmbedding:
         embedded = embedded_base
         if len(embedded_base.shape) == 3:
             embedded = ttnn.unsqueeze_to_4D(embedded_base)
-        _diagnostic_stage(_diagnostic_stage_callback, "after-local-embedding-enqueue")
         if _shape(embedded) != expected_partial:
             raise RuntimeError(f"local embedding partial has shape {_shape(embedded)}, expected {expected_partial}")
         if embedded.dtype != ttnn.bfloat16 or embedded.layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("local embedding partial must be TILE BF16")
         embedded_padded = embedded
         if sequence == 1:
-            # Give the collective the proven logical S=1 contract while
-            # retaining the complete 32-row fused-embedding allocation.  Both
-            # ``embedded_base`` and these metadata views stay strongly owned
-            # until the diagnostic callback has drained the collective.
+            # Give the collective the logical S=1 shape while retaining the complete 32-row fused-embedding
+            # allocation.
             embedded = ttnn.reshape(
                 embedded_padded,
                 ttnn.Shape((1, 1, 1, HIDDEN_SIZE)),
@@ -1628,7 +1591,6 @@ class Qwen38TTNNTokenEmbedding:
                     "logical decode embedding view must be [1,1,1,2560] "
                     f"backed by {expected_partial}, got {_shape(embedded)}/{_padded_shape(embedded)}"
                 )
-            _diagnostic_stage(_diagnostic_stage_callback, "after-logical-sequence-view")
         expected_collective_input = (1, 1, sequence, HIDDEN_SIZE)
         self.mesh_contract.mark_local_partial(
             embedded,
@@ -1638,7 +1600,6 @@ class Qwen38TTNNTokenEmbedding:
         if sequence == 1:
             # S=1: all-gather the four partials, slice the range-checked CPU token's owner row and mesh-partition it
             # back to the hidden-sharded topology. The helper consumes ``embedded`` after producer-safe fences.
-            _diagnostic_stage(_diagnostic_stage_callback, "before-owner-select-hidden-reducer")
             hidden_shard = _all_gather_owner_select_hidden_fallback(
                 embedded,
                 active_vocab_shard=validated.active_vocab_shard,
@@ -1650,13 +1611,11 @@ class Qwen38TTNNTokenEmbedding:
                 collective_topology=self.collective_topology,
                 synchronization_policy=synchronization_policy,
                 _retain_async_failure_owners=self._retain_async_failure_owners,
-                _diagnostic_stage_callback=_diagnostic_stage_callback,
             )
             resident_async_result = synchronization_policy is Qwen38TTNNEmbeddingSyncPolicy.RESIDENT_ASYNC
         else:
             # Multi-token embedding uses the whole-line collective; tt_all_reduce consumes its input tensor, including
             # any metadata view's backing allocation.
-            _diagnostic_stage(_diagnostic_stage_callback, "before-tt-ccl-reduce-scatter")
             hidden_shard = tt_all_reduce(
                 embedded,
                 self.mesh_device,
@@ -1666,10 +1625,7 @@ class Qwen38TTNNTokenEmbedding:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.collective_topology,
             )
-            _diagnostic_stage(_diagnostic_stage_callback, "after-tt-ccl-reduce-scatter-enqueue")
         try:
-            if sequence == 1:
-                _diagnostic_stage(_diagnostic_stage_callback, "after-owner-select-hidden-reducer-return")
             expected_output = (1, 1, sequence, LOCAL_HIDDEN_SIZE)
             if _shape(hidden_shard) != expected_output:
                 raise RuntimeError(

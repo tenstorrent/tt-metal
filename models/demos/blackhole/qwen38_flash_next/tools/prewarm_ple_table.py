@@ -7,7 +7,7 @@ The 128 table parts of checkpoint layer 1 live in 33 safetensors files.  A decod
 token reads sixteen 320 B rows from them; on a cold cache each row is an NVMe
 page-in.  One sequential pass over the files makes every later row a page-cache
 hit, and the residency report labels a run cold or warm.  Nothing is written; no
-model tensor is decoded.  Diagnostic only.
+model tensor is decoded.
 """
 
 from __future__ import annotations
