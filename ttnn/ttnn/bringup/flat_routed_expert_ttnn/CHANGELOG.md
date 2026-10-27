@@ -394,3 +394,19 @@ shapes, mesh, row-major y).
 - Files: device/flat_routed_expert_plan.{hpp,cpp}, flat_routed_expert.{hpp,cpp}, flat_routed_expert_nanobind.cpp,
   flat_expert.py, tests/weighted_case.py, tests/test_flat_routed_expert_ttnn.py, tests/unit/test_with_program_patch.py,
   tests/unit/test_max_y_writers.py, README.md
+
+### Tests: hot-expert routings through flat_routed_expert_with_program (2026-10-27, deepseek_v41_flash_d_p K.1 hang, overseer-directed fix)
+- What: tests/unit/test_hot_experts.py: the model's wiring (tests/weighted_case.py, patch_addresses, bf16 sums, multi
+  planner, LoFi, max_y_writers 32) on the box's mesh (BRINGUP_TEST_MESH), one bfp4-exact expert in every slot, the
+  call's arena and the 16 KB below it filled with random bits first; routings: pad6 (the K.1 call's PAD pattern: 128
+  real tokens, every other token on the same 6 experts, ~4900 of a column's 5120 rows each), one_chip (every token on 6
+  experts of one chip: 30720 rows, rows_cap 31104), full_column (every column's tokens on experts of that column), and
+  a captured routing (HOT_CAPTURE=<moe dump .pt>). Every chip's combine output vs the CPU model (with one expert in
+  every slot: sum of the token's weights on the column's experts x ffn(x)). No op change.
+- Why: the K.1 stand-in decode hung on its first MoE call (hot experts from PAD rows were suspected). The op passes
+  every such routing on a correctly opened mesh; the cause was the mesh's fabric payload (combine_rf CHANGELOG
+  2026-10-27, deepseek_v41_flash_d_p DS41-127). Kept as the regression test for hot routings.
+- Results (Galaxy 8x4, bh-glx-110): 3 / 3 synthetic + the captured K.1 routing, min PCC 0.99989 on every chip, ~6-9 s a
+  case; with the mesh at the router default payload the captured replay hangs with the model's triage signature.
+- Needed by: deepseek_v41_flash_d_p K.1
+- Files: tests/unit/test_hot_experts.py, README.md

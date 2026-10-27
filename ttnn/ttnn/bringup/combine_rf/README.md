@@ -169,8 +169,9 @@ All from ../flat_routed_expert_ttnn/FLAT_COMBINE_OVERLAP_WORKLOG.md (LoudBox 2 x
 - Tests in this tree: tests/unit/test_column_planner.py (the one-core planner's column / pass options vs
   plan_reference, det order lists), tests/unit/test_column_planner_mc.py (the column multi-core planner vs the one-core
   planner, every output bit-identical) and tests/unit/test_acc_dtype.py (acc_dtype: sizing, refusal math, bf16 vs fp32
-  sums vs float64 on the standalone combine); the harnesses named in the docstrings / worklog (scratch_flat_combine_rf.py,
-  scratch_k3_moe_layer.py, zz_scratch_*.py) are on the source branch only.
+  sums vs float64 on the standalone combine), tests/unit/test_fabric_payload.py (the fabric payload refusal); the
+  harnesses named in the docstrings / worklog (scratch_flat_combine_rf.py, scratch_k3_moe_layer.py, zz_scratch_*.py)
+  are on the source branch only.
 - axis=0: the one-core planner, or the column multi-core planner with `cores` (tile_in only; N <= 8 column chips,
   A <= 16, NG < 255 column experts with det, N S < 65536; chunk core counts N ceil(S / CT)); the column's chips must
   fit the accumulators' rings (R - 1 per accumulator); the fp32 accumulators hold every home token in L1 (W x 4 B a token): a caller with
@@ -187,7 +188,9 @@ All from ../flat_routed_expert_ttnn/FLAT_COMBINE_OVERLAP_WORKLOG.md (LoudBox 2 x
   grows with K and with rows that cancel); fp32 output of bf16 sums is exact but not more precise. There is no 8-bit tile limit: the earlier "255-tile hang" was the local ring
   grant deadlock fixed in P.8 (CHANGELOG).
 - sparse_combine_rf: N <= 32 chips, A <= 16 accumulators (assert); with the L1 hand-off a row must fit one piece:
-  SPC_PIECE >= row bytes and fabric payload >= row + 32 B, else a hang (assert in sparse_combine_rf_prepare);
+  SPC_PIECE >= row bytes (assert in sparse_combine_rf_prepare); every piece is one fabric packet of piece + 32 B and
+  sparse_combine_rf_prepare refuses a mesh whose fabric payload is smaller (a mesh opened without the caller's
+  fabric_router_config hung the combine before the check, deepseek_v41_flash_d_p DS41-127);
   acc_on_ports / deterministic / ports_per_direction need the L1 hand-off; the arena must not move between calls (the
   kernels bake its address).
 - lin2d: M % 32 == 0, 2 <= M/32 <= grid rows, K/32 % kb == 0, nb even and <= 8 (asserts).
