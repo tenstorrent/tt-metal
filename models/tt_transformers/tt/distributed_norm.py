@@ -140,17 +140,11 @@ class DistributedNorm(LightweightModule):
 
         # Distributed norm already performs a gather
         if self.args.is_multichip and not self.args.is_distributed_norm(mode):
-            x = ttnn.experimental.all_gather_async(
-                x,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            ag_kw = dict(
                 num_links=self.args.model_config[self.ag_config_key]["num_links"]
                 if self.ag_config_key and mode == "decode"
                 else self.tt_ccl.get_num_links(1),
                 topology=self.args.ccl_topology(),
-                memory_config=input_mem_cfg,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=self.args.model_config[self.ag_config_key]["chunks_per_sync"]
                 if self.ag_config_key and mode == "decode"
                 else 10,
@@ -158,7 +152,21 @@ class DistributedNorm(LightweightModule):
                 if self.ag_config_key and mode == "decode"
                 else 2,
                 num_buffers_per_channel=2,
+            )
+            if mode == Mode.DECODE:
+                # QWEN36_DECODE_{CCL,AG}_* env knobs (ccl.decode_ccl_overrides); unset = the values above
+                from models.tt_transformers.tt.ccl import decode_ccl_overrides
+
+                ag_kw.update(decode_ccl_overrides("AG"))
+            x = ttnn.experimental.all_gather_async(
+                x,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                memory_config=input_mem_cfg,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+                **ag_kw,
             )
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)

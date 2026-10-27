@@ -96,7 +96,10 @@ class Qwen36MTP:
         if self.num_devices > 1:
             from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
-            self._fc_compute_cfg = tpc.COMPUTE_HIFI2
+            # Shipped: bfloat8_b + COMPUTE_HIFI2. QWEN36_EXACT_PROFILE=1 (args.exact_profile): args.weight_dtype (bf16)
+            # + COMPUTE_EXACT (HiFi2, fp32 accumulation, no approximations, no packer L1 accumulation), like every
+            # other TP weight under that profile (tpc.exact_weight_dtype / exact_compute_cfg).
+            self._fc_compute_cfg = tpc.exact_compute_cfg(args)
             # Column-parallel: transpose to [2*dim, dim] then shard dim=-1 -> [2*dim, dim/tp] per device.
             self.fc = tpc.shard_w(
                 fc_w,
@@ -104,13 +107,13 @@ class Qwen36MTP:
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cache_path=(mtp_cache / "fc" if mtp_cache is not None else None),
-                dtype=ttnn.bfloat8_b,
+                dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
             )
         else:
             self._fc_compute_cfg = None
             self.fc = ttnn.as_tensor(
                 fc_w.T.contiguous(),  # [2*dim, dim]
-                dtype=ttnn.bfloat8_b,
+                dtype=args.weight_dtype if getattr(args, "exact_profile", False) else ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

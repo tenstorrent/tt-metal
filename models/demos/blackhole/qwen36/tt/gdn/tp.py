@@ -277,7 +277,12 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dim=0,
         )
         tw["ab"] = tpc.shard_w(
-            ab, mesh, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=c("ab"), dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b)
+            ab,
+            mesh,
+            dim=-1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_path=c("ab"),
+            dtype=tpc.exact_weight_dtype(args, ttnn.bfloat8_b),
         )
     # Row-parallel out projection: DRAM-width-sharded (like the in-proj) — decode tput win.
     _out_sharded = getattr(args, "gdn_out_weight_memcfg", None) is not None
@@ -396,6 +401,14 @@ class TPGatedDeltaNet:
         # QWEN36_GDN_FUSED_DECODE=1 selects it for plain decode too (full batch only): one device op in place of
         # the ~13-op composite recurrence (M10 upsampler op-count work, 2026-10-22; audited vs the CPU oracle).
         self.use_fused_recurrent_decode = os.environ.get("QWEN36_GDN_FUSED_DECODE") == "1"
+        # QWEN36_GDN_FUSED_STEP=1: the whole decode step between the in- and out-projections as ONE device program
+        # (fused_step/gdn_step.py; batch 1, fused qkvzab projection, fp32 state). Default off: composite path.
+        self.use_fused_step = os.environ.get("QWEN36_GDN_FUSED_STEP") == "1"
+        self._fused_step = None
+        # QWEN36_GDN_FUSED_VERIFY=1: the batch-1 spec verify (and its seed) as the fused v2 decode arithmetic, T rows in
+        # ONE program (fused_step/gdn_verify_v2.py; row t bit-identical to a fused v2 decode step). Default off: composite.
+        self.use_fused_verify = os.environ.get("QWEN36_GDN_FUSED_VERIFY") == "1"
+        self._fused_verify = None
         self.conv_carry = None  # cross-chunk prefill conv carry [1, K-1, qkv_dim_tp]
         # Which causal conv runs the single-sequence prefill when valid_len is None (masked buckets always
         # keep the MAC FIR, whose one-hot new_state selection they need):
@@ -649,7 +662,12 @@ class TPGatedDeltaNet:
                     tuning=getattr(self.args, "prefill_tuning", None),
                 )
                 return ttnn.linear(
-                    x, weight, compute_kernel_config=self.cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG, **dt
+                    x,
+                    weight,
+                    compute_kernel_config=self.cfg,
+                    program_config=pc,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    **dt,
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG, **dt)
         return tpc.sharded_decode_matmul(
@@ -1439,6 +1457,9 @@ class TPGatedDeltaNet:
         # works at any width. The B==Bmax path is byte-identical to before.
         B = x.shape[-2]
 
+        if self.use_fused_step:
+            return self._forward_decode_fused(x, B)
+
         qkv, z, a, b = self._project_qkvzab(x, B, out_mc=_L1)
 
         # Conv1d shift-register + weighted sum + SiLU.
@@ -1547,6 +1568,36 @@ class TPGatedDeltaNet:
         partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
         out = tpc.reduce_partials(partial, self.mesh, self.tt_ccl, self.args.ccl_topology())
         return out
+
+    def _forward_decode_fused(self, x, B):
+        """forward_decode with the conv / gates / recurrence / gated norm as ONE program (fused_step), batch 1."""
+        assert B == 1 and self.B == 1, "the fused decode step is batch 1"
+        assert self._fuse_ab, "the fused decode step reads the fused qkvzab projection"
+        _L1 = ttnn.L1_MEMORY_CONFIG
+        self.sync_conv_taps()
+        if getattr(self.args, "proj_1d_decode", False):
+            proj = tpc.matmul_1d_decode(
+                x, self.tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=_L1
+            )
+        else:
+            proj = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvzab_progcfg, out_memory_config=_L1)
+        if self._fused_step is None:
+            if os.environ.get("QWEN36_GDN_FUSED_STEP_V2") == "1":
+                # v2: Vt cores per value head, dense per-token vectors (fused_step/gdn_step_v2.py); default off
+                from models.demos.blackhole.qwen36.tt.gdn.fused_step.gdn_step_v2 import GDNFusedDecodeStepV2
+
+                self._fused_step = GDNFusedDecodeStepV2(self)
+            else:
+                from models.demos.blackhole.qwen36.tt.gdn.fused_step import GDNFusedDecodeStep
+
+                self._fused_step = GDNFusedDecodeStep(self)
+        gated = self._fused_step(proj)
+        ttnn.deallocate(proj)
+        self._conv_win_stale = True
+        partial = self._row_proj(gated, self.tw["out"])
+        ttnn.deallocate(gated)
+        partial = ttnn.reshape(partial, (1, 1, B, partial.shape[-1]))
+        return tpc.reduce_partials(partial, self.mesh, self.tt_ccl, self.args.ccl_topology())
 
     # ------------------------------------------------------------------ #
     # Batched (multi-user) speculative verify
@@ -1757,6 +1808,10 @@ class TPGatedDeltaNet:
             f"spec buffers are sized for {self._spec_shape}, verify asked for {(n_users, T)}; "
             "call prepare_spec_verify(n_users, T) before capture"
         )
+        if self.use_fused_verify:
+            from models.demos.blackhole.qwen36.tt.gdn.fused_step.gdn_verify_v2 import fused_verify_forward
+
+            return fused_verify_forward(self, x, valid_len, pre_gathered, T, state_blk_idx)
         qkv_all, z_all, a_all, b_all, bucket = self._verify_project(x, valid_len, pre_gathered)
         return self._verify_fullbatch(qkv_all, z_all, a_all, b_all, T, n_users, bucket, state_blk_idx, conv_sel)
 
@@ -1828,6 +1883,10 @@ class TPGatedDeltaNet:
         assert n_users == self.B, f"the seed runs the whole decode batch: n_users={n_users}, B={self.B}"
         assert valid_len == n_users, f"the seed is one row per user: valid_len={valid_len}, n_users={n_users}"
         assert n_users <= tpc.TILE_SIZE, f"{n_users} users exceeds the {tpc.TILE_SIZE}-row decode tile"
+        if self.use_fused_verify:
+            from models.demos.blackhole.qwen36.tt.gdn.fused_step.gdn_verify_v2 import fused_seed_forward
+
+            return fused_seed_forward(self, x, valid_len, pre_gathered)
         qkv_all, z_all, a_all, b_all, bucket = self._verify_project(x, valid_len, pre_gathered)
         return self._seed_fullbatch(qkv_all, z_all, a_all, b_all, n_users, bucket)
 

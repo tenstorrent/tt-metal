@@ -109,6 +109,46 @@ class TT_CCL:
         return self.rs_semaphore_handles[semaphore_index][current_idx]
 
 
+# Decode-collective env knobs (Qwen3.5/3.6 TP decode, FLUX 3 Klein upsampler; 2026-10-26 ccl-links-workers).
+# Unset = the call site's own value (today's behaviour). QWEN36_DECODE_CCL_<K> applies to every decode collective kind;
+# QWEN36_DECODE_<KIND>_<K> (KIND = RS: out-proj reduce-scatter, AG: norm all-gather, LMHEAD: logits all-gather) wins.
+#   <K>: LINKS -> num_links, WORKERS -> num_workers_per_link, CHUNKS -> chunks_per_sync,
+#        BUFFERS -> num_buffers_per_channel, TOPOLOGY (Ring|Linear) -> topology;
+#        AG / LMHEAD only: QWEN36_DECODE_{AG,LMHEAD}_BROADCAST=1 -> use_broadcast=True (all-gather via broadcast)
+_DECODE_CCL_KEYS = (
+    ("LINKS", "num_links", int),
+    ("WORKERS", "num_workers_per_link", int),
+    ("CHUNKS", "chunks_per_sync", int),
+    ("BUFFERS", "num_buffers_per_channel", int),
+    ("TOPOLOGY", "topology", lambda v: getattr(ttnn.Topology, v.strip().capitalize())),
+)
+# per-kind only (no QWEN36_DECODE_CCL_ form): all-gather via broadcast (all_gather_async use_broadcast), AG / LMHEAD
+_DECODE_CCL_KIND_KEYS = {
+    "AG": (("BROADCAST", "use_broadcast", lambda v: v.strip().lower() in ("1", "true", "yes")),),
+    "LMHEAD": (("BROADCAST", "use_broadcast", lambda v: v.strip().lower() in ("1", "true", "yes")),),
+}
+_DECODE_CCL_LOGGED = set()
+
+
+def decode_ccl_overrides(kind):
+    """{kwarg: value} from the QWEN36_DECODE_{CCL,<kind>}_* env knobs for one decode collective kind; {} when unset."""
+    import os
+
+    out = {}
+    for env_key, kwarg, conv in _DECODE_CCL_KEYS:
+        v = os.environ.get(f"QWEN36_DECODE_{kind}_{env_key}", os.environ.get(f"QWEN36_DECODE_CCL_{env_key}", ""))
+        if v.strip():
+            out[kwarg] = conv(v)
+    for env_key, kwarg, conv in _DECODE_CCL_KIND_KEYS.get(kind, ()):
+        v = os.environ.get(f"QWEN36_DECODE_{kind}_{env_key}", "")
+        if v.strip():
+            out[kwarg] = conv(v)
+    if out and (kind, tuple(sorted(map(str, out.items())))) not in _DECODE_CCL_LOGGED:
+        _DECODE_CCL_LOGGED.add((kind, tuple(sorted(map(str, out.items())))))
+        print(f"RECORD decode_ccl_overrides {kind}: {out}", flush=True)
+    return out
+
+
 _DEFAULT_RS_MEMORY_CONFIG = object()
 
 
@@ -292,6 +332,10 @@ def tt_all_gather(
     topology=ttnn.Topology.Linear,
     dtype=ttnn.bfloat16,
     subdevice_id=None,
+    chunks_per_sync=10,
+    num_workers_per_link=2,
+    num_buffers_per_channel=2,
+    use_broadcast=False,
 ):
     """
     Perform an all-gather operation across devices in a mesh.
@@ -340,10 +384,11 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
             subdevice_id=subdevice_id,
+            use_broadcast=use_broadcast,
         )
     else:
         gathered = ttnn.experimental.all_gather_async(
@@ -356,10 +401,11 @@ def tt_all_gather(
             topology=topology,
             memory_config=memory_config,
             barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
             subdevice_id=subdevice_id,
+            use_broadcast=use_broadcast,
         )
     input_tensor.deallocate(True)
     return gathered

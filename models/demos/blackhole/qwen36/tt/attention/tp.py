@@ -13,7 +13,18 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_decode, apply_partial_rope_prefill
-from models.tt_transformers.tt.ccl import tt_all_reduce
+
+
+def spec_exact_sdpa_mode():
+    """QWEN36_SPEC_EXACT=1 (default off; read per call, so a trace bakes the mode it was captured under): the spec
+    verify skips the fused spec_multi_pos_tiles SDPA and takes the legacy B-row decode SDPA call (the decode program
+    config, each candidate row a batch row with its own page-table row and cur_pos). Measured 2026-10-27 (job 157610,
+    pup TP8, T=4): every row of that call is bit-identical to the B=1 decode step's SDPA, while the fused grouped
+    call splits the KV reduction differently (attention out up to 1e-2 off, logits up to 0.25). Returns None when
+    off, else "legacy"."""
+    if os.environ.get("QWEN36_SPEC_EXACT") != "1":
+        return None
+    return "legacy"
 
 
 def _probe_kv_group_write():
@@ -340,7 +351,9 @@ class TPAttention:
                     memory_config=tpc.prefill_act_mem(x.shape[-2], ttnn.L1_MEMORY_CONFIG),
                     **dt,
                 )
-            return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG, **dt)
+            return ttnn.linear(
+                x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG, **dt
+            )
         return tpc.sharded_decode_matmul(
             x,
             weight,
@@ -935,9 +948,10 @@ class TPAttention:
             # Per-user candidate count: the fused split and its L1 budget are keyed on it, not on
             # the total row count.
             _spec_T = B // spec_n_users if spec_verify_mode else B
+            _spec_exact = spec_exact_sdpa_mode() if spec_verify_mode else None
             _spec_plan = (
                 self._spec_sdpa_plan(_spec_T, spec_n_users)
-                if (spec_verify_mode and self.spec_sdpa_enabled(_spec_T))
+                if (spec_verify_mode and _spec_exact is None and self.spec_sdpa_enabled(_spec_T))
                 else None
             )
             if _spec_plan is not None:

@@ -51,6 +51,25 @@ def spec_kv_write_conflicts(page_tables, positions, T, block_size):
     return conflicts
 
 
+def topn_from_gathered(vals, local_ids, n_dev, top_n, shard_width, rows):
+    """Host side of the verify top-N tail (Qwen36Model._spec_tail_topn). Pure torch, no device.
+
+    ``vals`` [.., R', n_dev*top_n] (bf16 or float) and ``local_ids`` [.., R', n_dev*top_n] (int): device d's top_n
+    (value, local column) pairs in columns [d*top_n, (d+1)*top_n), d in mesh order (the order the vocab-sharded LM
+    head is split in). Returns (vals float32 [rows, C], ids int64 [rows, C], thresh float32 [rows]) with
+    ids = local + d * shard_width and thresh[r] = max_d min(vals[r, d-block]). Raises ValueError on a local id
+    outside [0, shard_width) (a padded column won: the pad floor beat a real logit, i.e. a broken shard)."""
+    C = int(n_dev) * int(top_n)
+    v = torch.as_tensor(vals).reshape(-1, C)[: int(rows)].to(torch.float32)
+    loc = torch.as_tensor(local_ids).reshape(-1, C)[: int(rows)].to(torch.int64)
+    if bool(((loc < 0) | (loc >= int(shard_width))).any()):
+        raise ValueError(f"top-N local ids outside [0, {shard_width}): {loc.min().item()}..{loc.max().item()}")
+    dev = torch.arange(C, dtype=torch.int64) // int(top_n)
+    ids = loc + dev.reshape(1, C) * int(shard_width)
+    thresh = v.reshape(-1, int(n_dev), int(top_n)).amin(dim=-1).amax(dim=-1)
+    return v, ids, thresh
+
+
 def _page_table_rows(page_tables):
     """int32 contiguous [B, nb] torch rows from a tensor or array-like (1-D is one user's row)."""
     pt = torch.as_tensor(page_tables)
@@ -533,6 +552,37 @@ class Qwen36Model:
         BASE argmax, so that call must stay byte-identical. The MTP drafter passes float32: its
         argmax only has to rank candidates, and at bf16 4.7-5.5% of draft rejections at 8k/32k were
         EXACT ties in the drafter's own logits, i.e. tokens thrown away to a rounding coin flip."""
+        kw, ccl_kw = self._lm_head_matmul_kw(out_dtype)
+        logits = ttnn.linear(x, self.lm_head_weight, **kw)
+        if self._lmhead_vocab_sharded:
+            from models.tt_transformers.tt.ccl import decode_ccl_overrides, tt_all_gather
+
+            # QWEN36_DECODE_{CCL,LMHEAD}_* env knobs (ccl.decode_ccl_overrides); unset = tt_all_gather's defaults
+            lm_kw = decode_ccl_overrides("LMHEAD")
+            topology = lm_kw.pop("topology", self.args.ccl_topology())
+            logits = tt_all_gather(
+                logits,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=None,
+                dim=len(logits.shape) - 1,
+                topology=topology,
+                **ccl_kw,
+                **lm_kw,
+            )
+        return logits
+
+    def _lm_head_shard(self, x):
+        """This device's vocab shard of the base LM head, [1,1,R,vocab/tp] bf16: the SAME matmul (weight, kwargs,
+        output dtype) ``_lm_head(x)`` runs with out_dtype None, minus its all-gather. The all-gather is pure data
+        movement, so shard d of this output is bit-identical to columns [d*vocab/tp, (d+1)*vocab/tp) of the gathered
+        ``_lm_head`` row (the spec verify's top-N tail, prepare_verify_trace(output="topn"))."""
+        assert self._lmhead_vocab_sharded, "the sharded LM-head output needs a vocab-sharded LM head"
+        kw, _ = self._lm_head_matmul_kw(None)
+        return ttnn.linear(x, self.lm_head_weight, **kw)
+
+    def _lm_head_matmul_kw(self, out_dtype):
+        """(matmul kwargs, all-gather dtype kwargs) of ``_lm_head`` for ``out_dtype`` (see its docstring)."""
         kw, ccl_kw = {}, {}
         if out_dtype is None and getattr(self.args, "exact_profile", False):
             # QWEN36_EXACT_PROFILE=1: bf16 lm_head weight, HiFi2 with fp32 dest accumulation (the exact-profile
@@ -562,20 +612,7 @@ class Qwen36Model:
             # the fp32 -> bf16 cast on this [1,1,B,vocab/tp] tensor actually returns garbage (the
             # drafter's argmax came back with an out-of-range id). Gather at the head's own dtype.
             ccl_kw = dict(dtype=out_dtype)
-        logits = ttnn.linear(x, self.lm_head_weight, **kw)
-        if self._lmhead_vocab_sharded:
-            from models.tt_transformers.tt.ccl import tt_all_gather
-
-            logits = tt_all_gather(
-                logits,
-                self.mesh_device,
-                self.tt_ccl,
-                cluster_axis=None,
-                dim=len(logits.shape) - 1,
-                topology=self.args.ccl_topology(),
-                **ccl_kw,
-            )
-        return logits
+        return kw, ccl_kw
 
     def _final_norm_decode(self, x):
         """Final RMSNorm before the LM head (TP decode).
@@ -1013,7 +1050,8 @@ class Qwen36Model:
         x = self._final_norm_decode(x)
         if self._ondev_argmax:
             # Pre-gather vocab-sharded logits; caller argmaxes shards, skips all-gather + readback.
-            logits = ttnn.linear(x, self.lm_head_weight)
+            # Same matmul kwargs as _lm_head (fp32 accumulation under QWEN36_EXACT_PROFILE=1; {} otherwise).
+            logits = ttnn.linear(x, self.lm_head_weight, **self._lm_head_matmul_kw(None)[0])
         else:
             logits = self._lm_head(x)
         ttnn.deallocate(x)
@@ -1049,8 +1087,9 @@ class Qwen36Model:
         hidden = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_hidden else None
         x = self._final_norm_decode(x)
         if sharded_lm_head or self._ondev_argmax:
-            # Pre-gather vocab-sharded logits (on-device sampling / greedy argmax).
-            logits = ttnn.linear(x, self.lm_head_weight)
+            # Pre-gather vocab-sharded logits (on-device sampling / greedy argmax). Same matmul kwargs as _lm_head
+            # (fp32 accumulation under QWEN36_EXACT_PROFILE=1; {} otherwise).
+            logits = ttnn.linear(x, self.lm_head_weight, **self._lm_head_matmul_kw(None)[0])
         else:
             logits = self._lm_head(x)
         ttnn.deallocate(x)
@@ -1318,6 +1357,14 @@ class Qwen36Model:
         sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
         return cos, sin
 
+    def _spec_final_norm(self, rows):
+        """Final norm of the spec verify / seed rows (not consumed). Default: the PREFILL norm. QWEN36_SPEC_EXACT=1
+        (default off): the plain decode step's final norm (_final_norm_decode, the lm_head DECODE norm config), so each
+        row's LM-head input is the decode step's; on a copy, because that norm frees a DRAM input."""
+        if os.environ.get("QWEN36_SPEC_EXACT") == "1":
+            return self._final_norm_decode(ttnn.clone(rows, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+        return self.norm(rows, mode=Mode.PREFILL)
+
     def _spec_tail(self, x):
         """Shared tail of the verify and seed bodies: residual ``x`` [1,1,R,dim] (freed here) ->
         (logits [1,1,R,vocab] replicated per device, feed [1,1,R,dim/tp] fractured).
@@ -1327,13 +1374,64 @@ class Qwen36Model:
         self.norm call."""
         rows = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
-        normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,R,dim]
+        normed = self._spec_final_norm(rows)  # -> full [1,1,R,dim]
         logits = self._lm_head(normed)
         ttnn.deallocate(normed)
         feed = self.spec_feed_rows(rows)
         if feed is not rows:
             ttnn.deallocate(rows)
         return logits, feed
+
+    # Pad / floor for the top-N tail's power-of-two pad (Qwen36MTP._NEG_FLOOR): below any real logit, never added to.
+    _TOPN_NEG_FLOOR = -1.0e30
+
+    def _spec_tail_topn(self, x, top_n, feed=True):
+        """Top-N tail of the verify body (prepare_verify_trace(output="topn")): residual ``x`` [1,1,R,dim/tp] (freed
+        here) -> (shard, feed, vals, ids).
+
+        * ``shard`` [1,1,R,vocab/tp] bf16, per device: ``_lm_head_shard`` of the same final-norm output ``_spec_tail``
+          computes, i.e. bit-identical to this device's columns of the gathered verify logits. Kept as a trace output
+          for the full-row fallback (read_verify_logit_rows).
+        * ``vals`` [1,1,R,n_dev*top_n] bf16, replicated: every device's ``ttnn.topk(shard, top_n)`` values (pure data
+          movement: the exact bf16 logits), all-gathered in mesh order.
+        * ``ids`` [1,1,R,n_dev*top_n] int32, replicated: the matching LOCAL column indices (device d's block is
+          columns [d*top_n, (d+1)*top_n); the host adds d * vocab/tp).
+        * ``feed``: spec_feed_rows(rows) as ``_spec_tail`` (None when ``feed`` is False: no MTP drafter).
+        Every token a device did not return has a logit <= the smallest value it did return (topk returns the
+        top_n largest, whatever its tie order), which is the bound the host certifies its argmax against."""
+        from models.tt_transformers.tt.ccl import tt_all_gather
+
+        rows = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x)
+        normed = self._spec_final_norm(rows)  # -> full [1,1,R,dim]
+        shard = self._lm_head_shard(normed)  # [1,1,R,vocab/tp] bf16
+        ttnn.deallocate(normed)
+        w = int(shard.shape[-1])
+        w2 = 1 << (w - 1).bit_length()  # power-of-two width (the sampler's pad_logits_to_power_of_2)
+        padded = (
+            ttnn.pad(shard, [(0, 0), (0, 0), (0, 0), (0, w2 - w)], value=self._TOPN_NEG_FLOOR) if w2 != w else shard
+        )
+        v, i = ttnn.topk(padded, k=int(top_n), dim=-1)
+        if padded is not shard:
+            ttnn.deallocate(padded)
+        i32 = ttnn.typecast(i, ttnn.int32)
+        ttnn.deallocate(i)
+        topo = self.args.ccl_topology()
+        # dtype passed explicitly: tt_all_gather typecasts anything that is not its dtype (default bf16) on the way in.
+        vg = tt_all_gather(v, self.mesh_device, self.tt_ccl, cluster_axis=None, dim=3, topology=topo, dtype=v.dtype)
+        ig = tt_all_gather(
+            i32, self.mesh_device, self.tt_ccl, cluster_axis=None, dim=3, topology=topo, dtype=ttnn.int32
+        )
+        ttnn.deallocate(v)
+        ttnn.deallocate(i32)
+        fd = None
+        if feed:
+            fd = self.spec_feed_rows(rows)
+            if fd is not rows:
+                ttnn.deallocate(rows)
+        else:
+            ttnn.deallocate(rows)
+        return shard, fd, vg, ig
 
     def _forward_verify_bucket_tp(self, n_users):
         """Trace body: recurrent verify over the persistent B*T-row bucket buffers -> per-position
@@ -1389,6 +1487,9 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
+        if getattr(self, "_vfy_output", "argmax") == "topn":
+            # (shard, feed, top-N values, top-N local ids): see _spec_tail_topn; no full-row gather / argmax.
+            return self._spec_tail_topn(x, self._vfy_top_n, feed=self._vfy_feed)
         logits, rows_out = self._spec_tail(x)  # [1,1,B*T,vocab] replicated, drafter feed [1,1,B*T,dim/tp]
         # Greedy acceptance compares token ids, so argmax the verify rows inside the trace and read back
         # B*T uint32 instead of B*T x 151936 floats. ttnn.argmax needs ROW_MAJOR input (a TILE tensor
@@ -1473,7 +1574,7 @@ class Qwen36Model:
         self.prepare_verify_trace(page_tables, T, warm_positions)
         self.record_verify_trace()
 
-    def prepare_verify_trace(self, page_tables, T, warm_positions):
+    def prepare_verify_trace(self, page_tables, T, warm_positions, output="argmax", top_n=32, feed=True):
         """Allocate and compile everything the verify trace needs without capturing (warmup phase 1);
         record_verify_trace captures it (phase 2); verify_traced replays it.
         Bucket is a fixed B x T (T = len([pending] + drafts) per user, B = max_batch_size users).
@@ -1485,6 +1586,10 @@ class Qwen36Model:
         Capture happens after prompt prefill (so those programs cannot clobber the parked trace), so
         point the writes past each user's prompt frontier; the first real verify overwrites them.
         Idempotent for the same (B, T, nb); a different key releases any live trace first.
+        ``output``: "argmax" (default: the in-trace argmax ids + full logits, verify_traced) or "topn" (per-device
+        top-``top_n`` (value, id) of the bit-exact bf16 logits + the per-device shards for a full-row fallback,
+        verify_traced_topn / read_verify_logit_rows; see _spec_tail_topn). ``feed`` (topn only): False skips the
+        drafter feed rows (no MTP drafter), so _vfy_rows_out is None.
         """
         from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
@@ -1515,7 +1620,12 @@ class Qwen36Model:
         # through decode flash as pseudo-users: write all K/V, then one SDPA-decode with per-row
         # cur_pos so row u*T+j attends [0, p_u+j]. Causality is free and the KV scan spreads over
         # the full grid.
-        key = (B, T, nb)
+        assert output in ("argmax", "topn"), f"verify output {output!r} not in ('argmax', 'topn')"
+        if output == "topn":
+            assert self._lmhead_vocab_sharded, "the top-N verify tail needs a vocab-sharded LM head"
+            # whole 32-wide tiles per device, so the dim-3 gathers are tile concats (Qwen36MTP._LANES)
+            assert int(top_n) in (32, 64), f"top_n {top_n} not in (32, 64)"
+        key = (B, T, nb) if output == "argmax" else (B, T, nb, output, int(top_n), bool(feed))
         if getattr(self, "_vfy_prepared_key", None) == key and getattr(self, "_vfy_token_buf", None) is not None:
             return
         dev = self.device
@@ -1527,6 +1637,9 @@ class Qwen36Model:
         self._vfy_prepared_key = None
         self._vfy_T, self._vfy_B = T, B
         self._vfy_nb = nb
+        self._vfy_output = output
+        self._vfy_top_n = int(top_n)
+        self._vfy_feed = True if output == "argmax" else bool(feed)
 
         # Persistent per-replay input buffers (addresses baked into the trace).
         self._vfy_token_buf = ttnn.from_torch(
@@ -1614,7 +1727,8 @@ class Qwen36Model:
         # the spec loop calls dn.seed_spec_state() after capture, which re-initialises token-slot 0 from
         # the live decode state, and the first replay then runs at mi = 0.
         for t in self._forward_verify_bucket_tp(n_users=B):
-            ttnn.deallocate(t)
+            if t is not None:
+                ttnn.deallocate(t)
         ttnn.synchronize_device(dev)
         self._vfy_att0 = _att0
         self._vfy_prepared_key = key
@@ -1633,17 +1747,29 @@ class Qwen36Model:
         _kv_grouped = self._vfy_kv_grouped
 
         self._vfy_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
-        (
-            self._vfy_logits_out,
-            self._vfy_rows_out,
-            self._vfy_ids_out,
-            self._vfy_logits_rm_out,
-        ) = self._forward_verify_bucket_tp(n_users=B)
+        if getattr(self, "_vfy_output", "argmax") == "topn":
+            (
+                self._vfy_shard_out,
+                self._vfy_rows_out,
+                self._vfy_topv_out,
+                self._vfy_topi_out,
+            ) = self._forward_verify_bucket_tp(n_users=B)
+            self._vfy_logits_out = self._vfy_ids_out = self._vfy_logits_rm_out = None
+        else:
+            (
+                self._vfy_logits_out,
+                self._vfy_rows_out,
+                self._vfy_ids_out,
+                self._vfy_logits_rm_out,
+            ) = self._forward_verify_bucket_tp(n_users=B)
+            self._vfy_shard_out = self._vfy_topv_out = self._vfy_topi_out = None
         ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
         self._vfy_capture_count = getattr(self, "_vfy_capture_count", 0) + 1
         # Fused grouped SDPA read (spec_multi_pos_tiles) or the legacy per-row call; a T with no
         # L1-fitting split (7, 11, ...) stays legacy.
-        _fused = _att0.spec_sdpa_enabled(T)
+        from models.demos.blackhole.qwen36.tt.attention.tp import spec_exact_sdpa_mode
+
+        _fused = _att0.spec_sdpa_enabled(T) and spec_exact_sdpa_mode() is None  # QWEN36_SPEC_EXACT: legacy call
         _how = (
             f"FUSED spec_multi_pos_tiles ({_spec_groups} groups x Tg={rows // _spec_groups})"
             if _fused
@@ -1654,9 +1780,14 @@ class Qwen36Model:
             if self._vfy_kv_grouped
             else f"per-row ({rows} calls per K/V per layer)"
         )
+        _tail = (
+            f"top-{self._vfy_top_n} per device + shard (feed {'on' if self._vfy_feed else 'off'})"
+            if getattr(self, "_vfy_output", "argmax") == "topn"
+            else "argmax"
+        )
         logger.info(
             f"Verify trace (B={B} users x T={T} = {rows} rows) captured "
-            f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}"
+            f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}; tail: {_tail}"
         )
 
     def verify_traced(self, tokens, positions, mi_prev, read_logits=False, page_tables=None, inactive=None):
@@ -1687,6 +1818,49 @@ class Qwen36Model:
         before the next replay (the spec loop reads its anchor rows and reseeds the drafter within
         the iteration).
         """
+        assert getattr(self, "_vfy_output", "argmax") == "argmax", "verify trace was prepared with output='topn'"
+        self._verify_replay(tokens, positions, mi_prev, page_tables=page_tables, inactive=inactive)
+        rows = self._vfy_B * self._vfy_T
+
+        # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
+        # and it is B*T uint32 instead of B*T x vocab floats.
+        ids = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_ids_out)[0]).reshape(-1)
+        ids = [int(v) for v in ids[:rows]]
+        lt = None
+        if read_logits:
+            lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
+            lt = lt.reshape(-1, self.vocab_size)[:rows]
+        return ids, self._vfy_rows_out, lt
+
+    def verify_traced_topn(self, tokens, positions, mi_prev, page_tables=None, inactive=None):
+        """verify_traced for a trace prepared with output="topn". Same inputs and staging.
+
+        Returns ((vals, ids, thresh), feed_rows): vals float32 [B*T, C] (the exact bf16 logits, cast), ids int64
+        [B*T, C] global token ids, thresh float32 [B*T], C = n_dev * top_n. Every token id not in ids[r] has a logit
+        <= thresh[r] in row r (thresh = max over devices of the smallest value that device returned). ids are unique
+        per row and in [0, vocab). feed_rows as verify_traced (None when the trace was prepared with feed=False)."""
+        assert getattr(self, "_vfy_output", "argmax") == "topn", "verify trace was not prepared with output='topn'"
+        self._verify_replay(tokens, positions, mi_prev, page_tables=page_tables, inactive=inactive)
+        rows = self._vfy_B * self._vfy_T
+        v = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_topv_out)[0])
+        g = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_topi_out)[0])
+        shard = int(self._vfy_shard_out.shape[-1])
+        return topn_from_gathered(v, g, self.num_devices, self._vfy_top_n, shard, rows), self._vfy_rows_out
+
+    def read_verify_logit_rows(self, rows):
+        """Full fp32 logit rows [len(rows), vocab] of the LAST top-N verify replay (the fallback when the host cannot
+        certify a row's argmax from the top-N candidates). Concatenates the per-device shards in mesh order: values
+        are the same bf16 logits the top-N read returned."""
+        assert getattr(self, "_vfy_output", "argmax") == "topn", "read_verify_logit_rows needs a top-N verify trace"
+        idx = [int(r) for r in rows]
+        R = self._vfy_B * self._vfy_T
+        assert all(0 <= r < R for r in idx), f"rows {idx} outside [0, {R})"
+        parts = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(self._vfy_shard_out)]
+        full = torch.cat([p.reshape(-1, p.shape[-1])[:R] for p in parts], dim=-1)
+        return full[idx, : self.vocab_size].float()
+
+    def _verify_replay(self, tokens, positions, mi_prev, page_tables=None, inactive=None):
+        """Stage one verify replay's inputs into the trace's persistent buffers and execute it (blocking)."""
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
 
         assert getattr(self, "_vfy_trace_id", None) is not None, "call record_verify_trace first"
@@ -1757,16 +1931,6 @@ class Qwen36Model:
 
         ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)
-
-        # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
-        # and it is B*T uint32 instead of B*T x vocab floats.
-        ids = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_ids_out)[0]).reshape(-1)
-        ids = [int(v) for v in ids[:rows]]
-        lt = None
-        if read_logits:
-            lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
-            lt = lt.reshape(-1, self.vocab_size)[:rows]
-        return ids, self._vfy_rows_out, lt
 
     def _forward_seed_bucket_tp(self, token_buf, kvpos, kvpt, cos, sin, n_users):
         """``_forward_verify_bucket_tp`` at T = 1: the seed's device body, one row per user.
@@ -3758,11 +3922,16 @@ class Qwen36Model:
         self._allocate_mtp_kv_cache(kv_cache_shape, dtype, batch_size, replicate=True)
         return kv_caches
 
-    def _prefill_paged_tp(self, token_ids, page_table, valid_len=None, vision_tokens=None, gdn_collect=False):
+    def _prefill_paged_tp(
+        self, token_ids, page_table, valid_len=None, vision_tokens=None, gdn_collect=False, return_hidden=False
+    ):
         """TP (num_devices>1) paged prefill, B=1. Mirrors the demo prefill_tp but routes
         the full-attention layers through the paged KV cache (forward_prefill_paged) so
         decode can read it via page_table. GDN layers capture their recurrent/conv state
         as in the demo. Returns logits [1, 1, vocab] at position valid_len-1.
+        ``return_hidden``: also return a DRAM clone of the last decoder layer's output (the residual BEFORE the final
+        norm, [1,1,T,dim/tp] fractured, every row incl. padding) as ``(logits, hidden)``; the caller owns it. The
+        spec engine feeds it to the MTP prompt warm (MTPSpecEngine.adopt_prefill). Default False: unchanged.
         """
         B, T = token_ids.shape
         assert B == 1, "TP prefill is single-sequence (B=1); batched serving prefills one user at a time"
@@ -3803,11 +3972,15 @@ class Qwen36Model:
                 chunk_start_idx=0,
                 gdn_collect=gdn_collect,
             )
+        hidden = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG) if return_hidden else None
         x = self.norm(x, mode=Mode.PREFILL)
         x_last = x[:, :, vlen - 1 : vlen, :]
         logits = self._lm_head(x_last)
         ttnn.deallocate(x)
-        return ttnn.reshape(logits, (1, 1, logits.shape[-1]))
+        logits = ttnn.reshape(logits, (1, 1, logits.shape[-1]))
+        if return_hidden:
+            return logits, hidden
+        return logits
 
     def prefill_paged_peruser(self, token_ids_list, page_table, valid_lens=None):
         """Batched per-user TP prefill (the batched serving contract).
@@ -4031,7 +4204,7 @@ class Qwen36Model:
                 xn_b = ttnn.reshape(xn, (1, Bg, bucket, xn.shape[-1]))
                 for i, u in enumerate(grp):
                     x_last = xn_b[:, i : i + 1, vlens[u] - 1 : vlens[u], :]  # [1,1,1,full] (slice copy)
-                    lg = ttnn.linear(x_last, self.lm_head_weight)
+                    lg = ttnn.linear(x_last, self.lm_head_weight, **self._lm_head_matmul_kw(None)[0])
                     ttnn.deallocate(x_last)
                     host_logits[u] = (
                         ttnn.to_torch(lg, mesh_composer=comp).reshape(1, 1, -1)[:, :, : self.args.vocab_size].clone()

@@ -86,8 +86,25 @@ def reduce_partials(partial, mesh, tt_ccl, topology, memory_config=ttnn.DRAM_MEM
         if args is not None:
             out = tp_reduce_scatter(partial, mesh, tt_ccl, args, dim=3, memory_config=memory_config)
         else:
+            # decode (no args): QWEN36_DECODE_{CCL,RS}_* env knobs (models/tt_transformers/tt/ccl.py
+            # decode_ccl_overrides); unset = tt_all_reduce's own values (Ring from the caller, links from
+            # tt_ccl.get_num_links(0), chunks 10, 2 workers, 2 buffers).
+            from models.tt_transformers.tt.ccl import decode_ccl_overrides
+
+            kw = decode_ccl_overrides("RS")
+            if "num_links" in kw:
+                kw["num_reduce_scatter_links"] = kw.pop("num_links")
+            topology = kw.pop("topology", topology)
             out = tt_all_reduce(
-                partial, mesh, tt_ccl, cluster_axis=0, dim=3, topology=topology, memory_config=memory_config, dtype=partial.dtype
+                partial,
+                mesh,
+                tt_ccl,
+                cluster_axis=0,
+                dim=3,
+                topology=topology,
+                memory_config=memory_config,
+                dtype=partial.dtype,
+                **kw,
             )
         return reduce_to_residual(out)
     x = partial if len(partial.shape) == 4 else ttnn.reshape(partial, (1, 1, partial.shape[-2], partial.shape[-1]))
@@ -115,7 +132,9 @@ def reduce_partials(partial, mesh, tt_ccl, topology, memory_config=ttnn.DRAM_MEM
         ttnn.deallocate(acc)
         acc = nxt
     ttnn.deallocate(gathered)
-    block = ttnn.mesh_partition(acc, dim=3, cluster_axis=1 if shape[0] == 1 else 0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    block = ttnn.mesh_partition(
+        acc, dim=3, cluster_axis=1 if shape[0] == 1 else 0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     ttnn.deallocate(acc)
     out = ttnn.typecast(block, ttnn.bfloat16, memory_config=memory_config)
     ttnn.deallocate(block)
@@ -374,7 +393,9 @@ def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, f
     )
 
 
-def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG, out_dtype=None):
+def matmul_1d_decode(
+    x, weight, decode_1d_progcfg, compute_cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG, out_dtype=None
+):
     """Small-grid 1D (mcast_in0) decode matmul on an interleaved weight; interleaves the K-sharded
     activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep."""
     x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)

@@ -393,9 +393,53 @@ def _device_bytes(t):
 class MTPSpecEngine:
     """MTP speculative decode engine over B users (see module docstring)."""
 
-    def __init__(self, model, batch_size, draft_len):
-        assert model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
+    # Class-level defaults of the opt-in options (__init__ sets them per instance): engines and stand-ins built
+    # without __init__ (host tests) keep the Qwen3.6 serving behaviour.
+    use_mtp = True
+    external_prefill = False
+    verify_output = "argmax"
+    top_n = 32
+    mtp_prefill_chunk = 2048
+
+    def __init__(
+        self,
+        model,
+        batch_size,
+        draft_len,
+        *,
+        use_mtp=True,
+        external_prefill=False,
+        verify_output="argmax",
+        top_n=32,
+        require_fused_decode=True,
+        mtp_prefill_chunk=2048,
+    ):
+        """Defaults are the Qwen3.6 serving engine, unchanged. The keyword-only options (the FLUX 3 Klein pup's
+        PupSpecEngine, spec_pup.py, sets them):
+
+        * ``use_mtp`` False: no MTP drafter. The caller supplies drafts (n-gram); no MTP head, KV, anchor, reseed or
+          drafter trace, and ``propose`` raises.
+        * ``external_prefill`` True: the caller prefills with its own forward and hands the engine the last-layer
+          hidden through ``adopt_prefill``; ``prepare_prefill`` only allocates the persistent buffers and compiles
+          the MTP prompt-warm programs (no dummy prompts, no recorded chunk prefill), and ``prefill`` raises.
+        * ``verify_output`` "topn": the verify trace's tail is per-device top-``top_n`` (value, id) + the logit
+          shards (Qwen36Model._spec_tail_topn); ``verify`` then returns ((vals, ids, thresh), None) instead of
+          (ids, logits), and ``read_verify_rows`` reads full rows of the last verify. B == 1 only (no join).
+        * ``require_fused_decode`` False: skip the plain-decode/verify GDN math assert, for a process that never runs
+          plain decode while the engine is live.
+        * ``mtp_prefill_chunk``: external prefill only, the row chunk of the MTP prompt warm (multiple of 128).
+        """
+        assert verify_output in ("argmax", "topn"), f"verify_output {verify_output!r} not in ('argmax', 'topn')"
+        assert not use_mtp or model.mtp is not None, "model has no MTP head (has_mtp / mtp.* weights?)"
         assert model.num_devices > 1, "MTPSpecEngine is TP-only for now"
+        self.use_mtp = bool(use_mtp)
+        self.external_prefill = bool(external_prefill)
+        self.verify_output = verify_output
+        self.top_n = int(top_n)
+        self.mtp_prefill_chunk = int(mtp_prefill_chunk)
+        assert self.mtp_prefill_chunk > 0 and self.mtp_prefill_chunk % 128 == 0, "mtp_prefill_chunk % 128 != 0"
+        if verify_output == "topn":
+            assert int(batch_size) == 1, "the top-N verify output is B == 1 only (no join/park support)"
         self.model = model
         self.mesh = model.mesh_device
         self.args = model.args
@@ -412,11 +456,11 @@ class MTPSpecEngine:
             f"decode tile. Lower K or the batch."
         )
         # Verify runs the fused GDN op; plain decode must use the same math or greedy near-ties flip.
-        assert model.gdn_fused_decode, (
+        assert not require_fused_decode or model.gdn_fused_decode, (
             "MTPSpecEngine needs model.set_gdn_fused_decode(True) before construction: verify runs the "
             "fused GDN op, and decode must use the same math"
         )
-        self.mtp = model.mtp
+        self.mtp = model.mtp if getattr(self, "use_mtp", True) else None
         self._gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
         # One-hot selects are matmuls and must be exact: HiFi4 + fp32 acc (packer_l1_acc off: it rounds in bf16).
         self._anchor_cc = ttnn.init_device_compute_kernel_config(
@@ -456,6 +500,17 @@ class MTPSpecEngine:
         self._vfeed = None  # the verify trace's own output rows; valid until the next replay
         # A/B + safety switch: 1 = run the drafter eagerly even when its trace is recorded
         self.recorded_drafter = os.environ.get("QWEN36_SPEC_EAGER_DRAFTER", "0") != "1"
+        # Draft presence penalty (B == 1, per-shard drafter argmax): when > 0 the drafter picks every draft under the
+        # base sampler's presence rule (penalty subtracted from each id already generated, plus the earlier drafts of
+        # the same chain), so it stops proposing the repeats the target suppresses. Drafts only: verify arbitrates
+        # every token, so this changes acceptance, never the output. Set before prepare (the value is captured);
+        # requests turn it on/off with _pen_active (an off request never marks an id, so its bias stays zero).
+        self.draft_penalty = float(os.environ.get("QWEN36_SPEC_DRAFT_PENALTY", "0"))
+        self._pen_active = True
+        self._pen_ids = None  # [1,1,B,vocab] int32 sharded on W: each device holds the ids of its LM-head shard
+        self._pen_bias = None  # [1,1,B,vocab] fp32 sharded on W: -penalty at every generated id, else 0
+        self._pen_zero = None  # zeros twin of _pen_bias (request reset)
+        self._pen_new = None  # [B, T] uint32 replicated ROW_MAJOR: ids committed since the last draft (pad = vocab)
         self._dr_bufs = []  # persistent drafter-trace inputs (all of the _dr_* tensors below)
         self._dr_tok0 = None  # [B,1] uint32 pending tokens
         self._dr_pos, self._dr_cos, self._dr_sin = [], [], []  # per draft step k: [B] int32, [1,B,1,rd] bf16 x2
@@ -517,6 +572,8 @@ class MTPSpecEngine:
             self._stage(pt[u : u + 1].contiguous(), self._mtp_pt_rows[u], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
     def _check_scratch(self, pt):
+        if not getattr(self, "use_mtp", True):
+            return  # the scratch block is the MTP cache's
         assert int(pt.max()) < self._scratch_block, (
             f"page table names block {int(pt.max())}, but the MTP cache's scratch block is "
             f"{self._scratch_block}; the MTP cache needs one block past every block the tables use"
@@ -546,6 +603,14 @@ class MTPSpecEngine:
             return
         t0 = time.perf_counter()
         assert not self.captured and getattr(model, "_vfy_trace_id", None) is None, "prepare after capture"
+        if getattr(self, "external_prefill", False):
+            self._prepare_external_prefill(pt0, width)
+            self.prefill_prepared = True
+            logger.info(
+                f"[spec_engine] external prefill prepared B={B} K={self.K} nb={self.nb} block={self.block_size} "
+                f"use_mtp={self.use_mtp} warm buckets={sorted(self._last_sel)} in {time.perf_counter() - t0:.1f}s"
+            )
+            return
         # The B=1 GDN prefill scratch's first bind can free spec buffers, so it must come first.
         if B > 1:
             model.warmup_gdn_slot_ops()
@@ -610,6 +675,8 @@ class MTPSpecEngine:
         assert self.prefill_prepared, "record_prefill before prepare_prefill"
         if self.prefill_recorded:
             return
+        if getattr(self, "external_prefill", False):
+            return  # the caller prefills: no chunk trace, prefill_recorded stays False
         if self.B == 1:
             self.model.record_prefill_trace_chunked(self.mesh)
         self.prefill_recorded = True
@@ -630,7 +697,12 @@ class MTPSpecEngine:
         ttnn.copy(r0, r1)
         for t in (r0, r1):
             ttnn.deallocate(t)
-        model.prepare_verify_trace(self._prep_pt, T, warm_positions=[0] * B)
+        if getattr(self, "verify_output", "argmax") == "argmax":
+            model.prepare_verify_trace(self._prep_pt, T, warm_positions=[0] * B)
+        else:
+            model.prepare_verify_trace(
+                self._prep_pt, T, warm_positions=[0] * B, output="topn", top_n=self.top_n, feed=self.use_mtp
+            )
         if B > 1:  # compile the join programs (per-user seed, feed merge)
             self._join_take = self._alloc_host_replicated(
                 torch.zeros(1, 1, B * T, B, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
@@ -656,6 +728,11 @@ class MTPSpecEngine:
             ttnn.deallocate(rows_w)
             ttnn.synchronize_device(self.mesh)
         ttnn.deallocate(f)
+        if not getattr(self, "use_mtp", True):  # caller-supplied drafts: no drafter programs
+            ttnn.synchronize_device(self.mesh)
+            self.prepared = True
+            logger.info(f"[spec_engine] decode prepared (no MTP drafter) in {time.perf_counter() - t0:.1f}s")
+            return
 
         # Drafter programs.
         zrow = ttnn.zeros(
@@ -670,6 +747,7 @@ class MTPSpecEngine:
         self._reseed_warmup(B * T, self._dim_frac, self._feed_dtype)
         self._eager_warmup()
         self._draft_warmup([0] * B, self._hp_buf, [0] * B)
+        self._alloc_draft_penalty()
         if self.recorded_drafter:
             self._alloc_drafter_inputs()
             z = ttnn.zeros(
@@ -704,7 +782,9 @@ class MTPSpecEngine:
         try:
             with trace_allocation_tracker.corruptible_allocation_scope(self.mesh):
                 self.model.record_verify_trace()
-                if self.recorded_drafter:  # ids outputs are read right after each replay
+                if not getattr(self, "use_mtp", True):
+                    logger.info("[spec_engine] no MTP drafter: verify trace only")
+                elif self.recorded_drafter:  # ids outputs are read right after each replay
                     feed = self.model._vfy_rows_out
                     self._dr_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
                     self._dr_outs = self._drafter_body(feed)
@@ -860,6 +940,8 @@ class MTPSpecEngine:
         """Eager prefill into state slot ``slot``, warming its MTP KV; returns host float logits [vocab].
         Replays the recorded chunk trace when B == 1 and record_prefill ran, else the eager path.
         The GDN seed and the MTP KV of slot Tp-1 are written by the first ``verify``."""
+        if getattr(self, "external_prefill", False):
+            raise RuntimeError("external_prefill engine: prefill with the caller's forward, then adopt_prefill")
         reset_draft_skip(self, slot)
         self._parked.pop(slot, None)
         self._fresh_dirty.discard(slot)
@@ -903,6 +985,140 @@ class MTPSpecEngine:
         self._fresh[slot] = Tp
         self._active.add(slot)
         return lt.reshape(-1)[: self.vocab].float()
+
+    # --------------------------------------------------------------------- #
+    # External prefill (the caller's own forward; see __init__ external_prefill)
+    # --------------------------------------------------------------------- #
+    def _base_block_size(self):
+        caches = self.model._paged_kv_caches
+        assert caches is not None, "allocate_kv_caches first"
+        return int(caches[0][0].shape[-2])
+
+    def _prepare_external_prefill(self, pt0, width):
+        """prepare_prefill for external_prefill: persistent buffers + the MTP prompt-warm programs, nothing else.
+        ``pt0`` is the warm/capture table (the caller passes an all-null-block table, so the warm writes and the
+        verify/seed warm passes of prepare_decode land in block 0)."""
+        model, B = self.model, self.B
+        self.nb = width
+        self.nb_prefill = spec_round_up(width)
+        pt = self._fit(pt0)
+        self._prep_pt = pt
+        self.block_size = self._base_block_size()
+        self._last_sel = {}
+        if not getattr(self, "use_mtp", True):
+            return
+        assert int(self.mtp.attention.paged_k.shape[-2]) == self.block_size, "MTP and base KV block sizes differ"
+        self._scratch_block = int(self.mtp.attention.paged_k.shape[0]) - 1
+        self._check_scratch(pt)
+        self._last_hidden = [
+            ttnn.zeros(
+                [1, 1, 1, self._dim_frac],
+                device=self.mesh,
+                dtype=self._feed_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for _ in range(B)
+        ]
+        cap = width * self.block_size
+        # adopt_prefill warms the MTP KV in chunks of mtp_prefill_chunk rows; the prompt is padded to a multiple of
+        # 128 (the GDN chunk), so every chunk length is a multiple of 128 up to the chunk size.
+        buckets = [b for b in range(128, min(self.mtp_prefill_chunk, spec_round_up(cap, 128)) + 1, 128)]
+        self._last_sel = {
+            b: self._alloc_host_replicated(
+                torch.zeros(1, 1, 1, b, dtype=torch.bfloat16), ttnn.bfloat16, ttnn.TILE_LAYOUT
+            )
+            for b in buckets
+        }
+        self._mtp_pt = self._alloc_host_replicated(pt, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self._mtp_pt_rows = [
+            self._alloc_host_replicated(pt[u : u + 1].contiguous(), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT) for u in range(B)
+        ]
+        self._anchor_warmup(self._dim_frac, self._feed_dtype)
+        self._external_prefill_warmup(buckets, pt[0:1])
+
+    def _external_prefill_warmup(self, buckets, pt_row):
+        """Compile adopt_prefill's per-bucket programs before any capture: the feed norm, the MTP prompt-warm forward
+        (every KV write on the MTP scratch block: valid_len 0) and the last-row select. ``pt_row``: [1, nb] warm
+        table (null blocks)."""
+        model = self.model
+        for b in buckets:
+            z = ttnn.zeros(
+                [1, 1, b, self._dim_frac],
+                device=self.mesh,
+                dtype=self._feed_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            feed = model.spec_feed_rows(z)
+            model.ttnn_mtp_prefill_forward(feed, torch.zeros(1, b, dtype=torch.int32), 0, pt_row, valid_len=0)
+            self._capture_last_row(feed, 0, 0)
+            if feed is not z:
+                ttnn.deallocate(feed)
+            ttnn.deallocate(z)
+        ttnn.synchronize_device(self.mesh)
+
+    def adopt_prefill(self, slot, prompt_ids, page_table_row, hidden):
+        """Register a prompt the CALLER prefilled into state slot ``slot`` (external_prefill engines).
+
+        ``hidden``: the base model's last-layer residual (pre final norm) over the padded prompt, [1,1,Tpad,dim/tp]
+        fractured, Tpad >= Tp (Qwen36Model._prefill_paged_tp(return_hidden=True)); not freed here. With the MTP
+        drafter: the prompt's MTP KV is warmed (slot i fuses (feed_i, token_{i+1}), i < Tp-1) in chunks of
+        mtp_prefill_chunk rows and feed row Tp-1 becomes the slot's last hidden (its MTP slot Tp-1 is written by the
+        seed). ``hidden`` may be None without the drafter. The prefill must have left the GDN state and the base KV
+        exactly as the engine's own prefill would (B == 1: the live decode state)."""
+        assert getattr(self, "external_prefill", False), "adopt_prefill is for external_prefill engines"
+        assert self.prefill_prepared, "adopt_prefill before prepare"
+        assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
+        model = self.model
+        reset_draft_skip(self, slot)
+        self._parked.pop(slot, None)
+        self._fresh_dirty.discard(slot)
+        prompt_list = [int(t) for t in torch.as_tensor(prompt_ids).reshape(-1)]
+        Tp = len(prompt_list)
+        assert Tp >= 1, "empty prompt"
+        assert Tp + self.T <= table_capacity(
+            self.nb, self.block_size
+        ), f"prompt {Tp} + {self.T} verify rows does not fit {self.nb} blocks x {self.block_size}"
+        pt_row = model._fit_spec_page_table(page_table_row, self.nb)
+        assert pt_row.shape[0] == 1, "adopt_prefill takes ONE page-table row"
+        self._check_scratch(pt_row)
+        if getattr(self, "use_mtp", True):
+            assert hidden is not None, "the MTP prompt warm needs the prefill hidden"
+            Tpad = int(hidden.shape[-2])
+            assert Tpad >= Tp and Tpad % 128 == 0, f"hidden has {Tpad} rows for a {Tp}-token prompt (want % 128)"
+            assert (
+                int(hidden.shape[-1]) == self._dim_frac
+            ), f"hidden width {hidden.shape[-1]} != dim/tp {self._dim_frac}"
+            C = self.mtp_prefill_chunk
+            captured = False
+            for cs in range(0, Tpad, C):
+                if cs > Tp - 1:
+                    break  # padding-only chunk: nothing to warm, slot Tp-1 already captured
+                n = min(C, Tpad - cs)
+                h = (
+                    hidden
+                    if (cs == 0 and n == Tpad)
+                    else ttnn.slice(hidden, (0, 0, cs, 0), (1, 1, cs + n, self._dim_frac))
+                )
+                feed = model.spec_feed_rows(h)
+                self._warm_mtp_chunk(feed, cs, min(n, Tp - cs), prompt_list, pt_row)
+                if cs + n >= Tp:  # the chunk holding slot Tp-1
+                    self._capture_last_row(feed, Tp - 1 - cs, slot)
+                    captured = True
+                if feed is not h:
+                    ttnn.deallocate(feed)
+                if h is not hidden:
+                    ttnn.deallocate(h)
+            assert captured, f"adopt_prefill never reached slot {Tp - 1}"
+        self._prompts[slot] = (prompt_list, pt_row.clone())
+        self._fresh[slot] = Tp
+        self._active.add(slot)
+
+    def read_verify_rows(self, rows):
+        """Full fp32 rows [len(rows), vocab] of the last top-N verify (verify_output "topn")."""
+        assert getattr(self, "verify_output", "argmax") == "topn", "read_verify_rows needs verify_output='topn'"
+        return self.model.read_verify_logit_rows(rows)
 
     def _reprefill(self, slot):
         """Re-run a fresh slot's prefill (a seed overwrote its prefill GDN state while it was left out)."""
@@ -987,10 +1203,12 @@ class MTPSpecEngine:
                 if u in self._fresh_dirty:
                     self._reprefill(u)
             # Each fresh user's slot Tp-1 MTP KV, then the seed (its filler rows are never run).
-            self._stage_mtp_tables(pt)
+            if getattr(self, "use_mtp", True):
+                self._stage_mtp_tables(pt)
             for u, Tp in sorted(fresh_now.items()):
                 assert int(start_pos[u]) == Tp, f"slot {u}: start_pos {int(start_pos[u])} != prompt length {Tp}"
-                self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u])
+                if getattr(self, "use_mtp", True):
+                    self._warm_mtp_last(self._last_hidden[u], int(tokens[u, 0]), Tp - 1, self._mtp_pt_rows[u])
             fresh = sorted(fresh_now)
             for u in fresh:
                 del self._fresh[u]
@@ -1001,6 +1219,12 @@ class MTPSpecEngine:
             return self._join(tokens, start_pos, mi_prev, vpt, active, fresh, read_logits)
 
         args = (tokens.tolist(), start_pos.tolist(), mi_prev.tolist())
+        if getattr(self, "verify_output", "argmax") == "topn":
+            kw = dict(page_tables=vpt, inactive=(~active).tolist())
+            fn = self.model.verify_traced_topn
+            topn, vfeed = self._verify_split(*args, fn=fn, **kw) if self._timing else fn(*args, **kw)
+            self._vfeed = vfeed
+            return topn, None
         kw = dict(read_logits=read_logits, page_tables=vpt, inactive=(~active).tolist())
         if self._timing:
             ids, vfeed, lt = self._verify_split(*args, **kw)
@@ -1039,9 +1263,10 @@ class MTPSpecEngine:
         lt, feed = self.model.seed_spec_step(tokens[:, 0].tolist(), start_pos.tolist(), pt)
         for dn in self._gdn:
             dn.seed_spec_state()
-        rows = self._seed_rows(feed)
-        ttnn.copy(rows, self.model._vfy_rows_out)
-        ttnn.deallocate(rows)
+        if self.model._vfy_rows_out is not None:  # None: a top-N trace without drafter feed (use_mtp False)
+            rows = self._seed_rows(feed)
+            ttnn.copy(rows, self.model._vfy_rows_out)
+            ttnn.deallocate(rows)
         ttnn.deallocate(feed)
         self._vfeed = self.model._vfy_rows_out
         lt = lt[:, : self.vocab]
@@ -1078,6 +1303,7 @@ class MTPSpecEngine:
     def _join(self, tokens, start_pos, mi_prev, pt, active, fresh, read_logits):
         """Mixed step: verify the running rows, seed the fresh ones (see _seed), merge their feed rows.
         Returns (ids, logits) like verify()."""
+        assert getattr(self, "verify_output", "argmax") == "argmax", "join (B > 1) runs the argmax verify output only"
         B, T = self.B, self.T
         fmask = torch.zeros(B, dtype=torch.bool)
         fmask[fresh] = True
@@ -1127,6 +1353,8 @@ class MTPSpecEngine:
         validation. Returns VerifyResult."""
         if spec_mode not in SPEC_MODES:
             raise ValueError(f"spec_mode {spec_mode!r} not in {SPEC_MODES}")
+        if getattr(self, "verify_output", "argmax") != "argmax":
+            raise RuntimeError("decode_forward is the runner contract over the argmax verify output")
         clean, start0, active = sanitize_verify_block(tokens, start_pos, num_valid_drafts, self.K)
         if clean.shape[0] != self.B:
             raise ValueError(f"block has {clean.shape[0]} rows, engine has B={self.B}")
@@ -1153,9 +1381,9 @@ class MTPSpecEngine:
         )
         return VerifyResult(spec_mode, mask_unused_columns(ids, num_valid_drafts), logits)
 
-    def _verify_split(self, tokens, positions, mi_prev, **kw):
-        """verify_traced with the readback timed separately (hooks ttnn.get_device_tensors);
-        sets ``last_verify_timing``."""
+    def _verify_split(self, tokens, positions, mi_prev, fn=None, **kw):
+        """verify_traced (or ``fn``, e.g. verify_traced_topn) with the readback timed separately (hooks
+        ttnn.get_device_tensors); sets ``last_verify_timing``."""
         orig = ttnn.get_device_tensors
         mark = []
 
@@ -1167,7 +1395,7 @@ class MTPSpecEngine:
         ttnn.get_device_tensors = hooked
         t0 = time.perf_counter()
         try:
-            out = self.model.verify_traced(tokens, positions, mi_prev, **kw)
+            out = (self.model.verify_traced if fn is None else fn)(tokens, positions, mi_prev, **kw)
         finally:
             ttnn.get_device_tensors = orig
         ttnn.synchronize_device(self.mesh)
@@ -1195,6 +1423,8 @@ class MTPSpecEngine:
         slot's MTP KV, so a row offered drafts again later drafts from a complete history.
         ``cap_blocks``: the caller's real table width (default: page_table's).
         Returns torch.int32 [B, K]."""
+        if not getattr(self, "use_mtp", True):
+            raise RuntimeError("propose needs the MTP drafter (engine built with use_mtp=False)")
         assert self.captured and self._vfeed is not None, "propose needs a verify first"
         B, T, K = self.B, self.T, self.K
         ctok = self._ints(committed_tokens, (B, T))
@@ -1214,6 +1444,8 @@ class MTPSpecEngine:
         m_kv = [mu + int(d and k) for mu, d, k in zip(m, decline, keep)]
         pt = self._fit(page_table)
         self._check_scratch(pt)
+        if self.draft_penalty > 0:
+            self._stage_pen_new(ctok.tolist(), accepted_counts)
         eager = B == 1 and p[0] > self.eager_reseed_len
         if self.recorded_drafter and self.captured and self._dr_trace is not None and not all(decline) and not eager:
             dpt = pt
@@ -1253,6 +1485,8 @@ class MTPSpecEngine:
         the table of the last verify. Rows whose
         window would leave the paged KV decline (num_valid 0). Returns DraftResult."""
         B, T, K = self.B, self.T, self.K
+        if not getattr(self, "use_mtp", True):
+            raise RuntimeError("propose_draft_tokens needs the MTP drafter (engine built with use_mtp=False)")
         if int(num_drafts) != K:
             raise ValueError(f"num_drafts {num_drafts} != engine K {K}")
         if page_table is None:
@@ -1311,10 +1545,10 @@ class MTPSpecEngine:
         )
         owned_tok = [tok_tt]
         h = anchor_hidden
+        bias = self._pen_absorb_new() if self.draft_penalty > 0 else None
         for k in range(self.K):
             logits, h_next = self.model.ttnn_mtp_decode_forward(h, tok_tt, [pu + k for pu in p], self._mtp_pt)
-            idx = draft_argmax(self.mtp, logits)  # [1,1,B,1] uint32 ROW_MAJOR
-            ttnn.deallocate(logits)
+            idx, bias = self._draft_pick(logits, bias, k < self.K - 1)  # [1,1,B,1] uint32 ROW_MAJOR
             tok_tt = ttnn.reshape(idx, (B, 1))
             owned_tok.append(tok_tt)
             if h is not anchor_hidden:
@@ -1322,6 +1556,8 @@ class MTPSpecEngine:
             h = h_next
         if h is not anchor_hidden:
             ttnn.deallocate(h)
+        if bias is not None and bias is not self._pen_bias:
+            ttnn.deallocate(bias)
         steps = [self._id_to_host(t) for t in owned_tok[1:]]  # steps[k][u]
         for t in owned_tok:
             ttnn.deallocate(t)
@@ -1356,6 +1592,113 @@ class MTPSpecEngine:
             self._dr_rs_sin,
         ]
 
+    def _alloc_draft_penalty(self):
+        """Persistent draft-penalty buffers (before any capture; no-op when off or already allocated)."""
+        if self.draft_penalty <= 0 or self._pen_bias is not None:
+            return
+        if self.B != 1 or not getattr(self.mtp, "_sharded_argmax", False):
+            logger.warning(
+                "QWEN36_SPEC_DRAFT_PENALTY ignored: needs B == 1 and the per-shard drafter argmax "
+                f"(B={self.B}, sharded={getattr(self.mtp, '_sharded_argmax', False)})"
+            )
+            self.draft_penalty = 0.0
+            return
+        B, T, V = self.B, self.T, int(self.model.args.vocab_size)
+        shard = ttnn.ShardTensorToMesh(self.mesh, dim=3)  # same block order as the LM head / _shard_off
+
+        def dev(host, dtype, layout, mapper):
+            return ttnn.from_torch(
+                host.contiguous(),
+                dtype=dtype,
+                layout=layout,
+                device=self.mesh,
+                mesh_mapper=mapper,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        ids = torch.arange(V, dtype=torch.int32).reshape(1, 1, 1, V).repeat(1, 1, B, 1)
+        zero = torch.zeros(1, 1, B, V, dtype=torch.float32)
+        self._pen_ids = dev(ids, ttnn.int32, ttnn.TILE_LAYOUT, shard)
+        self._pen_bias = dev(zero, ttnn.float32, ttnn.TILE_LAYOUT, shard)
+        self._pen_zero = dev(zero, ttnn.float32, ttnn.TILE_LAYOUT, shard)
+        self._pen_new = dev(
+            torch.full((B, T), V, dtype=torch.int32),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        logger.info(f"[spec_engine] draft presence penalty {self.draft_penalty} on (vocab {V}, {T} new ids per draft)")
+
+    def reset_draft_penalty(self):
+        """New request: forget every generated id (eager; outside any trace)."""
+        if self._pen_bias is not None:
+            ttnn.copy(self._pen_zero, self._pen_bias)
+
+    def _stage_pen_new(self, committed_tokens, accepted_counts):
+        """Stage the ids committed since the last draft (row u: its first accepted_counts[u]; pad = vocab, which
+        matches no id). A request with _pen_active False stages padding only, so its bias stays zero."""
+        V = int(self.model.args.vocab_size)
+        new = torch.full((self.B, self.T), V, dtype=torch.int32)
+        if self._pen_active:
+            for u in range(self.B):
+                n = int(accepted_counts[u])
+                new[u, :n] = torch.as_tensor(committed_tokens[u][:n]).to(torch.int32)
+        self._stage(new, self._pen_new, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+
+    def _id_col(self, ids_rm):
+        """[1,1,B,1] (or [B,1]) uint32 ROW_MAJOR ids -> [1,1,B,1] int32 TILE, the compare operand of _pen_absorb."""
+        r = ttnn.reshape(ids_rm, (1, 1, self.B, 1))
+        t = ttnn.to_layout(r, ttnn.TILE_LAYOUT)
+        i = ttnn.typecast(t, ttnn.int32)
+        ttnn.deallocate(t)
+        return i
+
+    def _pen_absorb(self, bias, col):
+        """min(bias, -penalty at column ``col`` [1,1,B,1] int32 of the device owning that id): idempotent, so an id
+        absorbed twice is still penalised once (presence, not frequency). Returns a new tensor."""
+        hit = ttnn.eq(self._pen_ids, col)  # int32 1/0, column broadcast over W (as mtp._argmax_sharded's ne)
+        hf = ttnn.typecast(hit, ttnn.float32)
+        ttnn.deallocate(hit)
+        oh = ttnn.multiply(hf, -float(self.draft_penalty))
+        ttnn.deallocate(hf)
+        out = ttnn.minimum(bias, oh)
+        ttnn.deallocate(oh)
+        return out
+
+    def _pen_absorb_new(self):
+        """Fold the staged _pen_new ids into the persistent bias (device only; traced or eager). Returns _pen_bias."""
+        bias = self._pen_bias
+        for j in range(self.T):
+            c = ttnn.slice(self._pen_new, [0, j], [self.B, j + 1])  # [B,1] uint32 ROW_MAJOR
+            col = self._id_col(c)
+            ttnn.deallocate(c)
+            nb = self._pen_absorb(bias, col)
+            ttnn.deallocate(col)
+            if bias is not self._pen_bias:
+                ttnn.deallocate(bias)
+            bias = nb
+        ttnn.copy(bias, self._pen_bias)
+        ttnn.deallocate(bias)
+        return self._pen_bias
+
+    def _draft_pick(self, logits, bias, more):
+        """draft_argmax of ``logits`` under the draft penalty ``bias`` (None = off); frees ``logits``.
+        Returns (idx [1,1,B,1] uint32 ROW_MAJOR, bias for the next step: with ``more``, idx absorbed too)."""
+        if bias is not None:
+            lp = ttnn.add(logits, bias)
+            ttnn.deallocate(logits)
+            logits = lp
+        idx = draft_argmax(self.mtp, logits)
+        ttnn.deallocate(logits)
+        if bias is None or not more:
+            return idx, bias
+        col = self._id_col(idx)
+        nb = self._pen_absorb(bias, col)
+        ttnn.deallocate(col)
+        if bias is not self._pen_bias:
+            ttnn.deallocate(bias)
+        return idx, nb
+
     def _drafter_body(self, feed):
         """Anchor gather from ``feed`` [1,1,B*T,dim/tp], batched reseed, K chained draft steps; every input is a
         persistent buffer (device-input twin of _set_anchor + _reseed_mtp_batched + _draft). Returns the K ids
@@ -1377,16 +1720,18 @@ class MTPSpecEngine:
         )
         ttnn.deallocate(hn)
         h, tok, outs = self._hp_buf, self._dr_tok0, []
+        bias = self._pen_absorb_new() if self.draft_penalty > 0 else None
         for k in range(self.K):
             logits, hn = mtp.forward_decode(h, tok, self._dr_pos[k], self._dr_cos[k], self._dr_sin[k], self._mtp_pt)
-            idx = draft_argmax(mtp, logits)
-            ttnn.deallocate(logits)
+            idx, bias = self._draft_pick(logits, bias, k < self.K - 1)
             tok = ttnn.reshape(idx, (B, 1))
             outs.append(idx)
             if h is not self._hp_buf:
                 ttnn.deallocate(h)
             h = hn
         ttnn.deallocate(h)
+        if bias is not None and bias is not self._pen_bias:
+            ttnn.deallocate(bias)
         return outs
 
     def _propose_recorded(self, ctok, cpos, m, pending, p, pt, m_kv=None):
