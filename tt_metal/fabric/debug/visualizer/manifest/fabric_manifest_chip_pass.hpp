@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/fabric/fabric_types.hpp>
+#include <vector>
 
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 
@@ -12,24 +12,16 @@ namespace tt {
 class Cluster;
 }
 
-namespace tt::tt_metal {
-class Hal;
-}
-
 namespace tt::tt_fabric {
-
 class ControlPlane;
-
-// Fills in what only ControlPlane, the cluster, and the chip's other routers know.
-manifest::Chip join_chip(
-    manifest::Chip chip,
-    const ControlPlane& control_plane,
-    const tt::Cluster& cluster,
-    FabricType fabric_type,
-    FabricNodeId node,
-    ChipId physical_chip_id);
-
-// The areas (L1, registers, etc) the HAL fixes on every router core, and the layout of every struct a schema names.
-manifest::Arch describe_arch(const tt::tt_metal::Hal& hal);
-
+class FabricBuilderContext;
 }  // namespace tt::tt_fabric
+
+namespace tt::tt_fabric::manifest {
+
+// Describes every mesh in the mesh graph and its chips, resolving each local chip's published routers against what
+// only ControlPlane, the cluster, and the chip's other routers know.
+std::vector<Mesh> describe_meshes(
+    const ControlPlane& control_plane, const tt::Cluster& cluster, const FabricBuilderContext& builder_context);
+
+}  // namespace tt::tt_fabric::manifest
