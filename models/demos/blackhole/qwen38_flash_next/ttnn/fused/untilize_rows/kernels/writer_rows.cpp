@@ -16,40 +16,40 @@ void kernel_main() {
     const uint32_t count = get_arg_val<uint32_t>(1);
     const uint32_t start = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t elem_bytes = get_compile_time_arg_val(0);
+    constexpr uint32_t element_bytes = get_compile_time_arg_val(0);
     constexpr uint32_t rows = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
     constexpr uint32_t cb_id = 0;
-    constexpr uint32_t face = 16;
-    constexpr uint32_t face_bytes = face * face * elem_bytes;
-    constexpr uint32_t half_row_bytes = face * elem_bytes;
+    constexpr uint32_t face_size = 16;
+    constexpr uint32_t face_bytes = face_size * face_size * element_bytes;
+    constexpr uint32_t half_row_bytes = face_size * element_bytes;
     constexpr uint32_t tile_row_bytes = 2 * half_row_bytes;
 
     const auto dst = TensorAccessor(dst_args, dst_addr);
     Noc noc;
-    DataflowBuffer dfb(cb_id);
+    DataflowBuffer row_tiles(cb_id);
 
     for (uint32_t tile = start; tile < start + count; ++tile) {
-        dfb.wait_front(1);
-        const uint32_t col_bytes = tile * tile_row_bytes;
+        row_tiles.wait_front(1);
+        const uint32_t column_bytes = tile * tile_row_bytes;
         for (uint32_t r = 0; r < rows; ++r) {
             const uint32_t left_face = (r >> 4) * 2;
-            const uint32_t in_face = (r & (face - 1)) * half_row_bytes;
+            const uint32_t in_face = (r & (face_size - 1)) * half_row_bytes;
             noc.async_write(
-                dfb,
+                row_tiles,
                 dst,
                 half_row_bytes,
                 {.offset_bytes = left_face * face_bytes + in_face},
-                {.page_id = r, .offset_bytes = col_bytes});
+                {.page_id = r, .offset_bytes = column_bytes});
             noc.async_write(
-                dfb,
+                row_tiles,
                 dst,
                 half_row_bytes,
                 {.offset_bytes = (left_face + 1) * face_bytes + in_face},
-                {.page_id = r, .offset_bytes = col_bytes + half_row_bytes});
+                {.page_id = r, .offset_bytes = column_bytes + half_row_bytes});
         }
         noc.async_write_barrier();
-        dfb.pop_front(1);
+        row_tiles.pop_front(1);
     }
 }
