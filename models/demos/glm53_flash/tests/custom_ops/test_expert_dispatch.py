@@ -126,10 +126,12 @@ def over_budget_routing(T: int, E: int, kind: str, seed: int) -> torch.Tensor:
 @pytest.mark.parametrize("kind", ["dense", "nan"])
 def test_expert_dispatch_over_budget_returns(mesh_device, kind):
     """An over-budget routing (33 rows x 72 non-zeros at T = 128, E = 72, I = 1024: the block's shapes, P = 104 <
-    the 144+ passes of the raw enumeration) must RETURN: the kernels truncate the enumeration to the budget
-    (``clamp_passes``), flag it in the pass table, and the output of the rows the truncated enumeration still serves
-    equals the truncated golden (the NaN rows' own outputs are NaN by construction and excluded). On the kernels
-    before the budget this case hangs the chip (the triage signature: compute at ``cb_wait_front(cb_a)``, packer at
+    the 144 passes of the raw enumeration) must RETURN: the kernels truncate the enumeration to the budget
+    (``clamp_passes``: experts 0..51 keep their passes, 52..71 are dropped), flag it in the pass table, and every
+    finite output row equals the golden of what the kernels sum (``dispatch_contributions``: the surviving passes,
+    and per token its first MAX_PICKS contributions in expert order -- the down writer's gather slots; the 33 dense
+    rows keep experts 0..7). The NaN rows' own outputs are NaN by construction and excluded. On the kernels before
+    the budget this case hangs the chip (the triage signature: compute at ``cb_wait_front(cb_a)``, packer at
     ``cb_reserve_back(cb_h)``, writer in phase 2): run it on the fixed kernels only."""
     T, I, E = 128, 1024, 72
     w13, w2, w13_q, w2_q = upload(mesh_device, E, I)
@@ -157,11 +159,15 @@ def test_expert_dispatch_over_budget_returns(mesh_device, kind):
         assert got == (len(rows), e, rows), (k, got, (len(rows), e, rows[:8]))
     _, y_ref, _ = expert_dispatch_golden(x, r, w13_q, w2_q, p_max=op.P)
     y = ttnn.to_torch(out).float().reshape(T, H)
-    clean = torch.isfinite(y_ref).all(-1)
-    assert int(clean.sum()) >= T - 33
+    clean = torch.isfinite(y_ref).all(-1)  # the NaN rows (nan case) are NaN in the golden too
+    assert int(clean.sum()) == (T if kind == "dense" else T - 33)
     assert torch.isfinite(y[clean]).all(), "a clean token's row is not finite"
     p = pcc(y_ref[clean], y[clean])
-    logger.info(f"over-budget {kind}: {int(clean.sum())} clean rows, out pcc {p:.6f} vs the truncated golden")
+    capped = pcc(y_ref[T - 33 :], y[T - 33 :]) if kind == "dense" else float("nan")
+    logger.info(
+        f"over-budget {kind}: {int(clean.sum())} finite rows, out pcc {p:.6f} vs the golden of the kept contributions "
+        f"(the 33 slot-capped rows alone: {capped:.6f})"
+    )
     assert p > 0.9999, p
 
 
