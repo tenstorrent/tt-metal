@@ -136,9 +136,6 @@ jobs:
           fi
 
       - name: Print clang-tidy version
-        # CI image bakes in both clang-tidy-20 and clang-tidy-23; print the
-        # version here (every run, not just non-default ones) so it's obvious
-        # from the log which one actually ran.
         env:
           LLVM_VERSION: ${{ inputs.clang-tidy-version }}
         run: |

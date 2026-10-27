@@ -191,9 +191,6 @@ RUN git config --global --add safe.directory '*'
 # Install extra ci apt requirements
 # Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
 # clang-tidy-23 comes from the llvm-23 apt repo added in install_dependencies.sh
-# (base stage); it's baked in alongside clang-tidy-20 (the default, see
-# update-alternatives below) so the clang-tidy-23 shadow scan in
-# code-analysis.yaml doesn't need to install it from apt.llvm.org at job start.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
