@@ -49,6 +49,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0027 | Demo says batch 4: are the 20 streams run 4 at a time, in sequence? | 2026-10-27 | ANSWERED: yes, each 33.3 ms tick runs 5 batch-4 traces back to back (~30 ms of compute); panel changes and v2/v3 recordings |
 | YOLO26-0028 | 80 streams × 30 FPS on all 4 QB2 chips (same 20 clips on each chip), live demo + recording | 2026-10-27 | DONE: dp=4 mesh, batch 4/chip, outputs packed on device, host prep in worker processes: 2399.2 images/s = 30.0 FPS per stream for 60 s with recording; ceiling 2598.5 images/s (32.5 FPS/stream); capture hang hit 2× (OPEN, see YOLO26-0025) |
 | YOLO26-0029 | Per-camera-group latency of the multiplexed demo; cut it | 2026-10-27 | DONE (1 chip): CAM 17-20 46.9 → 39.6 ms, on screen 50.9 → 43.4 ms at 600 images/s; 4 chips: on screen 57-61 ms, unchanged within noise (device at ~92 % of its ceiling) |
+| YOLO26-0030 | Batch > 4 on one chip using DRAM (8 / 16 / 20); does 20 streams x 30 FPS hold at batch 20? | 2026-10-27 | DONE (branch yolov26_dram_batch): hybrid grouped forward, model-only b8 731.3 / b16 729.8 / b20 716.4 FPS vs b4 683.1, PCC intact; demo at b20 29.9 FPS but 108 ms latency (b4: 30.0 FPS, 39 ms) |
 
 ## Entries
 
@@ -865,3 +866,67 @@ with the previous tick when the next tick's first pass is ready (start ~11 ms af
 Also fixed: the end-of-run summary measured elapsed time after the prep workers had shut down (585 images/s
 reported for 18000 images in 30 s); elapsed is now taken when the device loop ends. The per-pass latency medians
 are now part of the demos' summary log.
+
+### YOLO26-0030 — batch 8 / 16 / 20 on one chip with DRAM (appended 2026-10-27, branch `sdawle/tvardhineni/yolov26_dram_batch`)
+
+Question: batch 4 is the L1 limit (YOLO26-0024). Moving the large activations to DRAM, can batch 16 and 20 run, and
+does 20 streams × 30 FPS still hold?
+
+METHOD unless noted: `scratchpad/bench/quickb.py <variant> <batch>` (PCC per image vs Ultralytics one2one on bus /
+zidane and mirrors, then traced model-only time, mean of 200), yolo26s, 1 chip, chip reset before each run.
+
+MEASURED baseline: batch 8 with the batch-4 code fails at the stem conv (`TT_FATAL Out of Memory: ... 52459520 B L1
+buffer`, the 8 × 320 × 320 × 32 bf16 stem output).
+
+Attempt 1 — REFUTED, layer-level DRAM (saved as `scratchpad/bench/ttnn_yolo26_layer_dram_v7.py`): above batch 4,
+every layer whose input exceeds a pixel threshold keeps activations in DRAM: input typecast / re-page in DRAM, 3×3
+convs with `Conv2dDRAMSliceHeight` (auto slices), adds / concats / upsample DRAM interleaved. Defects on the way:
+- 1×1 convs ignore the DRAM slice config (they run as a matmul) and wrote their whole output to L1 (`dataflow buffers
+  ... clash with L1 buffers`, model.2.cv2) → ran them in groups of 4 images.
+- model.5 (80×80) and the 40×40 head depthwise conv: circular buffers 1668544 B > 1572864 B → threshold lowered to
+  batch-4-at-40×40.
+- model.9.cv2: at batch 8 the rows / channels ratio flips the sharding heuristic to height sharding, which puts the
+  whole 1×1 1024 → 512 weight (1 MB) on every core → layout now chosen as at batch 4 (`min(batch, 4)`; kept).
+- The neck's 80×80 upsample / concat in L1 → upsample in DRAM at large sizes.
+MEASURED: batch 8 runs, PCC cls 0.99780–0.99848, but 37.397 ms per batch = 213.9 FPS (batch 4: 683.1). Device profile
+(tracy, kernel sum 37.2 ms): reshape 10.9 ms (4.1 ms re-paging the DRAM input to 8-channel sticks; ~0.16–0.57 ms per
+DRAM-sliced conv, which reshapes [1, 1, NHW, C] tile ↔ [1, B·H, W, C] with W padded to tiles), interleaved→sharded
+8.4 ms (6.2 ms loading the stem input as 16-byte sticks), conv 5.0 ms, matmul 3.5, concat 2.8, slice 2.6.
+
+Where batching can gain (MEASURED, tracy, kernel time by output size per image):
+| stage | batch 1 µs/img | batch 4 µs/img | share at batch 4 |
+|---|---|---|---|
+| 320×320 | 80 | 67 | 4.7 % |
+| 160×160 | 254 | 170 | 12.1 % |
+| 80×80 | 476 | 340 | 24.1 % |
+| 40×40 | 810 | 338 | 24.0 % |
+| 20×20 | 713 | 496 | 35.2 % |
+
+Attempt 2 — hybrid grouped forward (`TtYOLO26._forward_grouped`, used when the uint8 batch > `MAX_L1_BATCH` = 4;
+batch ≤ 4 unchanged): every image is independent, so the stages above 20×20 (input prep, backbone to model.7, the
+neck's 40×40 / 80×80 path, the 80×80 / 40×40 heads) run in groups of 4 with the batch-4 programs entirely in L1, and
+the 20×20 stages (model.8, SPPF, C2PSA, model.22, 20×20 head) in groups of `LOW_RES_BATCH` = 8. Stage outputs that
+cross between the two (P3, P4, model.7 / model.20 outputs, the C2PSA output, head outputs) wait in DRAM. The model's
+input stays in DRAM (`input_memory_config` returns DRAM above batch 4); each group is sharded on its way in.
+- Full-batch 20×20 at 16 or 20: SPPF's first conv `dataflow buffers ... clash with L1 buffers` → groups of 8.
+- Batch 20 trace: 8404992 B > the 8 MB trace region → demos' `trace_region_size` 8 MB → 16 MB.
+
+MEASURED (model-only, traced; PCC min over all images in the batch):
+| batch | ms per batch | FPS | vs batch 4 | min cls / box PCC |
+|---|---|---|---|---|
+| 4 (unchanged path) | 5.856 | 683.1 | — | 0.99790 / 0.99898 |
+| 8 | 10.939 (10.927) | 731.3 (732.1) | +7.1 % | 0.99780 / 0.99896 |
+| 16 | 21.924 | 729.8 | +6.8 % | 0.99780 / 0.99896 |
+| 20 | 27.917 | 716.4 | +4.9 % | 0.99780 / 0.99896 |
+Batch 20 is lower because its third 20×20 group has only 4 images. `tests/pcc` 17/17.
+
+20 streams × 30 FPS, 1-chip demo (`multistream_demo.py --batch-size B`, 30 s, no recording; MEASURED):
+- batch 20 (one pass per tick): 17960 images = 598.4 images/s = 29.9 FPS per stream; capture-to-results 108.3 ms,
+  on screen 110.7 ms.
+- batch 4 (5 passes per tick): 18000 images = 599.9 images/s = 30.0 FPS; CAM 01-04 14.3 ms … CAM 17-20 38.7 ms,
+  on screen 42.6 ms.
+- Ceiling (`--fps 40`, 20 s): batch 20 682.4 images/s (34.1 FPS per stream), batch 4 650.4 (32.5).
+INFERRED: at a paced 30 FPS a tick's 20 frames exist only when the tick starts, so the 20-image upload (~65 MB of the
+8-channel input) cannot overlap the previous pass; upload + a ~28 ms pass fill the 33.3 ms tick, the queue fills and
+latency rises to ~3 ticks. The +5 % ceiling only shows when inputs queue ahead (as with `--fps 40`). Batch 4 keeps
+30 FPS with less than half the latency; batch 8 (if the stream count is a multiple of 8) would be the next to try.

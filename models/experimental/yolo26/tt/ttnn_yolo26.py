@@ -50,6 +50,12 @@ SOFTMAX_COMPUTE_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
 # image can be sharded by rows and viewed as one stick per pixel without any data movement (see TtYOLO26.preprocess)
 UINT8_INPUT_CHANNELS = 8
 
+# Largest batch that runs the whole network in L1. Larger batches run the 640..40 resolution stages in groups of this
+# many images and the 20x20 stages in groups of up to LOW_RES_BATCH (see TtYOLO26._forward_grouped).
+MAX_L1_BATCH = 4
+# Largest batch of the 20x20 stages that fits L1 (at 16, SPPF's first conv no longer fits next to its input)
+LOW_RES_BATCH = 8
+
 
 def uint8_input_from_torch(images: torch.Tensor) -> torch.Tensor:
     """uint8 images [B, H, W, 3] -> host layout of the uint8 model input, [B, 1, H, W * UINT8_INPUT_CHANNELS]."""
@@ -107,6 +113,10 @@ def _height_sharded_like(ref: ttnn.Tensor, width: int) -> ttnn.MemoryConfig:
         ttnn.BufferType.L1,
         ttnn.ShardSpec(spec.grid, [spec.shape[0], width], spec.orientation),
     )
+
+
+def _in_dram(x: ttnn.Tensor) -> bool:
+    return x.memory_config().buffer_type == ttnn.BufferType.DRAM
 
 
 def _is_height_sharded(x: ttnn.Tensor) -> bool:
@@ -274,8 +284,10 @@ class TtConvBNSiLU:
 
     def _get_sharding_strategy(self, batch_size: int, height: int, width: int):
         """Determine optimal sharding strategy based on tensor dimensions."""
-        # Output rows: a stride-2 conv's work is a quarter of its input rows
-        nhw = batch_size * height * width // (self.stride * self.stride)
+        # Output rows: a stride-2 conv's work is a quarter of its input rows. Above MAX_L1_BATCH the layout is chosen
+        # as at MAX_L1_BATCH: more rows would flip e.g. model.9.cv2 to height sharding, which puts all its weights
+        # (1x1, 1024 -> 512) on every core
+        nhw = min(batch_size, MAX_L1_BATCH) * height * width // (self.stride * self.stride)
         ratio = nhw / self.out_channels if self.out_channels > 0 else float("inf")
 
         # Height sharding for tall outputs, block sharding otherwise (output-NHW threshold swept over 2..16 on
@@ -1900,8 +1912,11 @@ class TtYOLO26:
         """L1 height sharding of the uint8 input [B, 1, H, W * C] by image rows (B * H wide pages over the grid).
 
         A traced runner can keep its persistent input in this layout and copy each new image straight into it,
-        so the trace starts from L1 (see preprocess).
+        so the trace starts from L1 (see preprocess). Above MAX_L1_BATCH the input stays in DRAM and each group of
+        images is sharded on its way in (see _forward_grouped).
         """
+        if batch_size > MAX_L1_BATCH:
+            return ttnn.DRAM_MEMORY_CONFIG
         rows = batch_size * height
         grid = self.device.compute_with_storage_grid_size()
         rows_per_core = -(-rows // (grid.x * grid.y))
@@ -1953,6 +1968,8 @@ class TtYOLO26:
         Returns:
             Dict with 'boxes' and 'scores': one (tensor, h, w) per scale (P3, P4, P5)
         """
+        if self.uint8_input and x.shape[0] > MAX_L1_BATCH:
+            return self._forward_grouped(x)
         if self.uint8_input:
             x, batch_size, height, width = self.preprocess(x)
             deallocate_input = True  # x is now the model's own preprocessed copy
@@ -1968,6 +1985,132 @@ class TtYOLO26:
         outputs = self.head(n3_data, n4_data, n5_data, batch_size)
 
         return outputs
+
+    def _forward_grouped(self, x: ttnn.Tensor) -> Dict[str, List[Tuple[ttnn.Tensor, int, int]]]:
+        """
+        Batch above MAX_L1_BATCH (uint8 input [B, 1, H, W * C] in DRAM). The network is the same per image, so the
+        stages above 20x20 run in groups of MAX_L1_BATCH images with the batch-4 programs (all in L1), and the 20x20
+        stages (model.8-10, model.22, the 20x20 head), where a larger batch keeps the cores busier, in groups of
+        LOW_RES_BATCH. Stage outputs that cross between the two (P3, P4, model.7 / model.20 outputs, the C2PSA
+        output, the head outputs) wait in DRAM, so a group's L1 holds no more than at batch 4 / LOW_RES_BATCH.
+        """
+        bb, nk, hd = self.backbone, self.neck, self.head
+        batch_size = x.shape[0]
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        groups = [(first, min(MAX_L1_BATCH, batch_size - first)) for first in range(0, batch_size, MAX_L1_BATCH)]
+        low_groups = [(first, min(LOW_RES_BATCH, batch_size - first)) for first in range(0, batch_size, LOW_RES_BATCH)]
+
+        def park(t):
+            out = ttnn.to_memory_config(t, dram) if (t.is_sharded() or not _in_dram(t)) else t
+            if out is not t:
+                _free(t)
+            return out
+
+        def rows_of(t, first, n, h, w):
+            """Images first .. first + n of a flattened [1, 1, B * h * w, C] tensor, L1 interleaved."""
+            return ttnn.slice(
+                t,
+                [0, 0, first * h * w, 0],
+                [1, 1, (first + n) * h * w, t.shape[3]],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+
+        def join(parts):
+            out = ttnn.concat(parts, dim=2, memory_config=dram) if len(parts) > 1 else parts[0]
+            if len(parts) > 1:
+                _free(*parts)
+            return out
+
+        # Backbone above 20x20, per group: P3 (80x80), P4 (40x40) and model.7's 20x20 output are kept
+        p3s, p4s, x5s = [], [], []
+        for first, n in groups:
+            xg = ttnn.slice(x, [first, 0, 0, 0], [first + n, x.shape[1], x.shape[2], x.shape[3]], memory_config=dram)
+            x0, n, h, w = self.preprocess(xg)
+            _free(xg)
+            t, h, w = bb.stem(x0, n, h, w)
+            _free(x0)
+            t1, h, w = bb.conv1(t, n, h, w)
+            _free(t)
+            t2, h, w = bb.c2f_1(t1, n, h, w)
+            _free(t1)
+            t3, h, w = bb.conv2(t2, n, h, w)
+            _free(t2)
+            p3, p3_h, p3_w = bb.c2f_2(t3, n, h, w)
+            _free(t3)
+            t4, h, w = bb.conv3(p3, n, p3_h, p3_w)
+            p4, p4_h, p4_w = bb.c3k2_3(t4, n, h, w)
+            _free(t4)
+            x5, p5_h, p5_w = bb.conv4(p4, n, p4_h, p4_w)
+            p3s.append(park(p3))
+            p4s.append(park(p4))
+            x5s.append(park(x5))
+
+        # 20x20 in groups of LOW_RES_BATCH: model.8, SPPF, C2PSA
+        x5 = join(x5s)
+        p5_outs = []
+        for first, n in low_groups:
+            xl = rows_of(x5, first, n, p5_h, p5_w) if len(low_groups) > 1 else x5
+            x6, h, w = bb.c3k2_4(xl, n, p5_h, p5_w)
+            if xl is not x5:
+                _free(xl)
+            p5, h, w = bb.sppf(x6, n, h, w)
+            _free(x6)
+            t, h, w = nk.c2psa_10(p5, n, h, w)
+            _free(p5)
+            p5_outs.append(park(t))
+        _free(x5)
+        p5_out = join(p5_outs)
+
+        # Neck and heads above 20x20, per group; model.20's 20x20 output is kept
+        n4_downs, box3, cls3, box4, cls4 = [], [], [], [], []
+        for (first, n), p3, p4 in zip(groups, p3s, p4s):
+            p5g = rows_of(p5_out, first, n, p5_h, p5_w)
+            up, _, _ = nk.upsample(p5g, n, p5_h, p5_w, p5g.shape[3])
+            _free(p5g)
+            cat = concat([up, p4])
+            _free(up, p4)
+            f_p4, f_h, f_w = nk.c3k2_13(cat, n, p4_h, p4_w)
+            _free(cat)
+            up, _, _ = nk.upsample(f_p4, n, f_h, f_w, f_p4.shape[3])
+            cat = concat([up, p3])
+            _free(up, p3)
+            n3, n3_h, n3_w = nk.c3k2_16(cat, n, p3_h, p3_w)
+            _free(cat)
+            t, h, w = nk.conv_17(n3, n, n3_h, n3_w)
+            cat = concat([t, f_p4])
+            _free(t, f_p4)
+            n4, n4_h, n4_w = nk.c3k2_19(cat, n, f_h, f_w)
+            _free(cat)
+            t, h, w = nk.conv_20(n4, n, n4_h, n4_w)
+            n4_downs.append(park(t))
+            b, c, h3, w3 = hd.head_n3(n3, n, n3_h, n3_w)
+            _free(n3)
+            box3.append(park(b))
+            cls3.append(park(c))
+            b, c, h4, w4 = hd.head_n4(n4, n, n4_h, n4_w)
+            _free(n4)
+            box4.append(park(b))
+            cls4.append(park(c))
+
+        # 20x20 in groups of LOW_RES_BATCH: model.22 and its head
+        n4_down = join(n4_downs)
+        box5, cls5 = [], []
+        for first, n in low_groups:
+            parts = [rows_of(t, first, n, p5_h, p5_w) for t in (n4_down, p5_out)]
+            cat = concat(parts)
+            _free(*parts)
+            n5, h, w = nk.c3k2_22(cat, n, p5_h, p5_w)
+            _free(cat)
+            b, c, h5, w5 = hd.head_n5(n5, n, h, w)
+            _free(n5)
+            box5.append(park(b))
+            cls5.append(park(c))
+        _free(n4_down, p5_out)
+
+        return {
+            "boxes": [(join(box3), h3, w3), (join(box4), h4, w4), (join(box5), h5, w5)],
+            "scores": [(join(cls3), h3, w3), (join(cls4), h4, w4), (join(cls5), h5, w5)],
+        }
 
 
 def create_yolo26_model(

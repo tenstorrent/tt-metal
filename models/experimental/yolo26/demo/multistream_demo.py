@@ -670,7 +670,7 @@ def main():
     ap.add_argument("--device-id", type=int, default=0)
     args = ap.parse_args()
     device = ttnn.open_device(
-        device_id=args.device_id, l1_small_size=YOLO26_L1_SMALL_SIZE, trace_region_size=8000000, num_command_queues=2
+        device_id=args.device_id, l1_small_size=YOLO26_L1_SMALL_SIZE, trace_region_size=16000000, num_command_queues=2
     )
     try:
         run_pipeline(device, args, 1, args.streams, Display)

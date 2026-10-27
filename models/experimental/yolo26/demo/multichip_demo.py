@@ -108,7 +108,7 @@ def main():
     device = ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(1, args.chips),
         l1_small_size=YOLO26_L1_SMALL_SIZE,
-        trace_region_size=8000000,
+        trace_region_size=16000000,
         num_command_queues=2,
     )
     try:
