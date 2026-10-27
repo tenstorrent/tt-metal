@@ -156,8 +156,31 @@ bool supported_execution_controls(bool use_multicore, const std::optional<CoreRa
 // Perf-demote ledger: cases supported_by_codegen() accepts (correct under codegen) that a device
 // kernel-duration comparison found slower than native. Populate only from device kernel
 // durations, never from an end-to-end timing: dispatch overhead dominates these single-digit-
-// microsecond kernels, so an end-to-end number says nothing about the kernel. Empty: every
-// in-scope case runs on codegen under auto.
-bool is_demoted(const Tensor& /*input*/, const tt::tt_metal::MemoryConfig& /*output_mem_config*/) { return false; }
+// microsecond kernels, so an end-to-end number says nothing about the kernel.
+//
+// Demoted, on blackhole only: a tile-aligned, one-tile-wide int32/uint32 input written to DRAM
+// with 256 or more tile rows. Measured on p150b (device kernel duration, median of 5), codegen is
+// 2% slower than native at 255-256 tile rows (7.6 vs 7.5 us, from height or from batch alike),
+// 10-12% slower at 384-512 rows, and level at 1024 rows; below the bound it is 6-19% faster at
+// 32-240 rows, with one 2% dip at 192. The margins are small and host-dependent (a second p150b
+// put 256-263 rows 2-6% behind, 512 rows 11% behind), so the bound marks where codegen stops
+// winning rather than a cliff. bf16 inputs (24% faster at 256 rows), 32-bit inputs two or more
+// tiles wide (7-8% faster at 256-512 rows) and L1 outputs (16% faster at 256 rows) stay on
+// codegen. Non-tile-aligned inputs are not demoted: native serves them through its unpadding
+// path, several times slower. Wormhole is unmeasured and keeps codegen.
+bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    using tt::tt_metal::DataType;
+    namespace plan = ttnn::prim::untilize_codegen_detail;
+    constexpr uint64_t kNarrow32BitDramTileRowLimit = 256;
+
+    const DataType dtype = input.dtype();
+    if ((dtype != DataType::INT32 && dtype != DataType::UINT32) ||
+        output_mem_config.buffer_type() != tt::tt_metal::BufferType::DRAM ||
+        input.device()->arch() != tt::ARCH::BLACKHOLE) {
+        return false;
+    }
+    const auto g = plan::padded_grid(input);
+    return g.tile_aligned && g.wt == 1 && g.total_tile_rows >= kNarrow32BitDramTileRowLimit;
+}
 
 }  // namespace ttnn::operations::data_movement::untilize_codegen

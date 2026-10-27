@@ -514,3 +514,38 @@ def test_forced_codegen_refuses_float32(device, expect_error):
     assert device.num_program_cache_entries() == entries_before, "auto routed float32 to codegen"
     with expect_error(RuntimeError, "does not support"):
         _force_codegen(xt, **kwargs)
+
+
+# Hand-added: the perf demotion (is_demoted), a blackhole-only ledger. A one-tile-wide int32/uint32
+# input written to DRAM routes to native from 256 tile rows on, however the rows are made up; one
+# tile row under the bound, with an L1 output, two tiles wide, or through the unpadding path on
+# either axis, the same heights stay on codegen. Forced codegen still serves the demoted case: only
+# auto's choice changes.
+_DEMOTION_CASES = [
+    ([1, 1, 8192, 32], ttnn.DRAM_MEMORY_CONFIG, True, "256_tile_rows_dram"),
+    ([4, 1, 2048, 32], ttnn.DRAM_MEMORY_CONFIG, True, "256_tile_rows_from_batch_dram"),
+    ([1, 1, 8160, 32], ttnn.DRAM_MEMORY_CONFIG, False, "255_tile_rows_dram"),
+    ([1, 1, 8192, 32], ttnn.L1_MEMORY_CONFIG, False, "256_tile_rows_l1"),
+    ([1, 1, 8192, 64], ttnn.DRAM_MEMORY_CONFIG, False, "two_tiles_wide_dram"),
+    ([1, 1, 8190, 32], ttnn.DRAM_MEMORY_CONFIG, False, "unpadded_height_dram"),
+    ([1, 1, 8192, 16], ttnn.DRAM_MEMORY_CONFIG, False, "unpadded_width_dram"),
+]
+
+
+@pytest.mark.parametrize("dtype", _INT_DTYPES, ids=_INT_DTYPE_IDS)
+@pytest.mark.parametrize("shape,mem_config,demoted,case_id", _DEMOTION_CASES, ids=[c[3] for c in _DEMOTION_CASES])
+def test_untilize_int32_dram_demotion(device, dtype, shape, mem_config, demoted, case_id):
+    if not ttnn.device.is_blackhole(device):
+        pytest.skip("the demotion ledger is blackhole-only; every arch else keeps codegen")
+    x = _make_input(shape, dtype)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {"memory_config": mem_config}
+    expected = x.to(torch.int64)
+    # Primes the native program, so only a route to codegen grows the cache on the auto call.
+    _force_native(xt, **kwargs)
+    entries_before = device.num_program_cache_entries()
+    auto = ttnn.untilize(xt, **kwargs)
+    routed_to_codegen = device.num_program_cache_entries() > entries_before
+    assert routed_to_codegen != demoted, f"{case_id}: auto {'kept' if demoted else 'demoted'} the case"
+    assert_equal(expected, _as_int64(auto))
+    assert_equal(expected, _as_int64(_force_codegen(xt, **kwargs)))

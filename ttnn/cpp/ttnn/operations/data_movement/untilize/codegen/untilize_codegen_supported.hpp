@@ -67,9 +67,9 @@ bool codegen_cb_plan_fits_live_l1(const Tensor& input, const tt::tt_metal::Memor
 // the codegen prim carries no such fields, so its validate has nothing to check.
 bool supported_execution_controls(bool use_multicore, const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
 
-// Perf-only: true for the enumerated set of in-scope cases where codegen is correct but does
-// not beat native on device. Consulted ONLY by ttnn::untilize's routing, alongside
-// supported_by_codegen(); never by validate, and never by untilize_force_codegen.
+// Perf-only: true for in-scope cases where codegen is correct but does not beat native on device.
+// Consulted ONLY by ttnn::untilize's routing, alongside supported_by_codegen(); never by validate,
+// and never by untilize_force_codegen.
 bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 }  // namespace ttnn::operations::data_movement::untilize_codegen
