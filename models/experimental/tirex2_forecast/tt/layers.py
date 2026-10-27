@@ -544,11 +544,14 @@ def slstm_finish(
     import ttnn
 
     T, _, B, _ = tuple(x.shape) if time_major else (x.shape[2], 1, x.shape[0], 1)
-    steps = len(ys)
+    steps = sum(y.shape[0] for y in ys)
     if steps < T:
         ys = [*ys, consts.full(0.0, (T - steps, 1, B, ys[0].shape[-1]))]
-    Y = ttnn.concat(ys, dim=0)  # [T, 1, B, 512] fp32
-    free(*ys)
+    if len(ys) == 1:
+        Y = ys[0]
+    else:
+        Y = ttnn.concat(ys, dim=0)  # [T, 1, B, 512] fp32
+        free(*ys)
     yn = head_layer_norm(device, Y, w.w_gnorm, head_mean)
     free(Y)
     if time_major:
@@ -560,6 +563,10 @@ def slstm_finish(
     out = ttnn.add(x, y)
     free(y)
     return out
+
+
+# fused sLSTM step kernel (ops/slstm_step) where the loop starts from zero state; TIREX2_SLSTM_KERNEL=0 turns it off
+SLSTM_KERNEL = os.environ.get("TIREX2_SLSTM_KERNEL", "1") != "0"
 
 
 def slstm_layer(
@@ -579,9 +586,15 @@ def slstm_layer(
     ``init``: the state before the first step (see ``slstm_recurrence``). ``time_major``: ``x`` (and the result)
     is ``[T, 1, B, 512]``."""
     WxT = slstm_prepare(x, w, precision, time_major)
-    ys, (c, n, m) = slstm_recurrence(
-        device, WxT, w.r, steps, consts, step_hook=step_hook, y_fp32=precision.y_fp32, init=init
-    )
+    if SLSTM_KERNEL and init is None and not precision.y_fp32 and steps == WxT.shape[0]:
+        from models.experimental.tirex2_forecast.ops.slstm_step.op import slstm_steps
+
+        Y, c, n, m = slstm_steps(WxT, w.r, steps)  # fused step kernel, one launch for every step
+        ys = [Y]
+    else:
+        ys, (c, n, m) = slstm_recurrence(
+            device, WxT, w.r, steps, consts, step_hook=step_hook, y_fp32=precision.y_fp32, init=init
+        )
     free(WxT, c, n, m)
     return slstm_finish(device, x, ys, w, head_mean, consts, debug=debug, time_major=time_major)
 
