@@ -33,7 +33,7 @@ struct RouterKernelInputs {
     std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args;
 };
 
-// Everything the collector reads about one router.
+// Everything the router pass reads about one router.
 struct ManifestRouterInputs {
     const FabricEriscDatamoverBuilder& erisc_builder;
     const RouterVcShape& vc_shape;
