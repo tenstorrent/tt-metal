@@ -520,23 +520,29 @@ def head_layer_norm(device, y, w_gnorm, head_mean, eps: float = df.NORM_EPS):
     return out
 
 
-def slstm_prepare(x, w: TtSLSTM, precision: Precision):
-    """``Wx`` time-major ``[T, 1, B, 2048]`` fp32 (gate bias folded) from the residual stream ``x``."""
+def slstm_prepare(x, w: TtSLSTM, precision: Precision, time_major: bool = False):
+    """``Wx`` time-major ``[T, 1, B, 2048]`` fp32 (gate bias folded) from the residual stream ``x``
+    (``[B, 1, T, 512]``, or ``[T, 1, B, 512]`` when ``time_major``)."""
     import ttnn
 
     xn = rms_norm(x, df.NORM_EPS)
-    xT = ttnn.transpose(xn, 0, 2)  # [T, 1, B, 512]
-    free(xn)
+    if time_major:
+        xT = xn
+    else:
+        xT = ttnn.transpose(xn, 0, 2)  # [T, 1, B, 512]
+        free(xn)
     WxT = linear(xT, w.w_in, precision, bias=w.bias, dtype=ttnn.float32, config=precision.gate_config(), role="w_in")
     free(xT)
     return WxT
 
 
-def slstm_finish(device, x, ys, w: TtSLSTM, head_mean, consts: DeviceConsts, debug: dict | None = None):
-    """``x + GroupNorm(y)`` from the per-step outputs ``ys`` (padded with zeros to ``T``)."""
+def slstm_finish(
+    device, x, ys, w: TtSLSTM, head_mean, consts: DeviceConsts, debug: dict | None = None, time_major: bool = False
+):
+    """``x + GroupNorm(y)`` from the per-step outputs ``ys`` (padded with zeros to ``T``), in ``x``'s layout."""
     import ttnn
 
-    B, _, T, _ = tuple(x.shape)
+    T, _, B, _ = tuple(x.shape) if time_major else (x.shape[2], 1, x.shape[0], 1)
     steps = len(ys)
     if steps < T:
         ys = [*ys, consts.full(0.0, (T - steps, 1, B, ys[0].shape[-1]))]
@@ -544,8 +550,11 @@ def slstm_finish(device, x, ys, w: TtSLSTM, head_mean, consts: DeviceConsts, deb
     free(*ys)
     yn = head_layer_norm(device, Y, w.w_gnorm, head_mean)
     free(Y)
-    y = ttnn.transpose(yn, 0, 2)  # [B, 1, T, 512]
-    free(yn)
+    if time_major:
+        y = yn
+    else:
+        y = ttnn.transpose(yn, 0, 2)  # [B, 1, T, 512]
+        free(yn)
     _keep(debug, "y", y)
     out = ttnn.add(x, y)
     free(y)
@@ -563,31 +572,48 @@ def slstm_layer(
     debug: dict | None = None,
     step_hook=None,
     init=None,
+    time_major: bool = False,
 ):
     """``x + GroupNorm(sLSTM(RMSNorm(x)))``; the recurrence runs time-major. ``debug`` (tests) collects host copies.
-    ``init``: the state before the first step (see ``slstm_recurrence``)."""
-    WxT = slstm_prepare(x, w, precision)
+    ``init``: the state before the first step (see ``slstm_recurrence``). ``time_major``: ``x`` (and the result)
+    is ``[T, 1, B, 512]``."""
+    WxT = slstm_prepare(x, w, precision, time_major)
     ys, (c, n, m) = slstm_recurrence(
         device, WxT, w.r, steps, consts, step_hook=step_hook, y_fp32=precision.y_fp32, init=init
     )
     free(WxT, c, n, m)
-    return slstm_finish(device, x, ys, w, head_mean, consts, debug=debug)
+    return slstm_finish(device, x, ys, w, head_mean, consts, debug=debug, time_major=time_major)
 
 
 # ---------------------------------------------------------------------------------------- variate mixer
 
 
-def variate_block(device, x, w: TtVariate, precision: Precision, vmask, keep, debug: dict | None = None):
+def variate_block(
+    device,
+    x,
+    w: TtVariate,
+    precision: Precision,
+    vmask,
+    keep,
+    debug: dict | None = None,
+    tm_in: bool = False,
+    tm_out: bool = False,
+):
     """Attention across rows (variates) at every token, inside 32-row blocks that hold whole groups.
+    ``tm_in`` / ``tm_out``: ``x`` / the result are time-major ``[T, 1, B, 512]`` (else ``[B, 1, T, 512]``).
 
     ``vmask [1, nb * 4, 32, 32]`` (0 / -1e9: same group, covariate queries never read target keys),
     ``keep [1, nb, 32, 1]`` (1 for rows of groups with more than one row; others pass through unchanged).
     """
     import ttnn
 
-    B, _, T, Dm = tuple(x.shape)
+    if tm_in:
+        T, _, B, Dm = tuple(x.shape)
+        xT = x
+    else:
+        B, _, T, Dm = tuple(x.shape)
+        xT = ttnn.transpose(x, 0, 2)  # [T, 1, B, 512]
     nb = B // 32
-    xT = ttnn.transpose(x, 0, 2)  # [T, 1, B, 512]
     xb = ttnn.reshape(xT, (T * nb, 1, 32, Dm))
     xn = rms_norm(xb, df.NORM_EPS)
     qkv = linear(xn, w.w_qkv, precision, role="variate")
@@ -622,7 +648,11 @@ def variate_block(device, x, w: TtVariate, precision: Precision, vmask, keep, de
     kept = ttnn.multiply(ttnn.reshape(delta, (T, nb, 32, Dm)), keep)
     free(delta)
     out_t = ttnn.add(ttnn.reshape(kept, (T, 1, B, Dm)), xT)
-    free(kept, xT)
+    free(kept)
+    if not tm_in:
+        free(xT)
+    if tm_out:
+        return out_t
     out = ttnn.transpose(out_t, 0, 2)
     free(out_t)
     return out

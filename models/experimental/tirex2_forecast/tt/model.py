@@ -247,7 +247,36 @@ class TtTiRex2:
         return layers.residual_block(inputs.tokens, self.weights.embed, self.precision, "embed")
 
     def run_block(self, block: tw.TtBlock, x, inputs: DeviceInputs):
-        init = self.pad_state(inputs.cut, x.shape[0], block) if inputs.cut else None
+        """One block on the batch-major stream ``[B, 1, T, 512]``."""
+        out, tm = self.run_block_tm(block, x, inputs, False)
+        return self.to_batch_major(out) if tm else out
+
+    @staticmethod
+    def to_batch_major(x):
+        import ttnn
+
+        out = ttnn.transpose(x, 0, 2)
+        layers.free(x)
+        return out
+
+    def run_block_tm(self, block: tw.TtBlock, x, inputs: DeviceInputs, tm: bool):
+        """One block; ``tm``: ``x`` is time-major ``[T, 1, B, 512]``. Returns ``(out, out is time-major)``.
+
+        With a variate mixer (multivariate) the stream stays time-major from an mLSTM block's variate mixer
+        through the next sLSTM block (sLSTM and the variate mixer both run time-major): 2 transposes per block
+        pair instead of 6. Otherwise everything is batch-major."""
+        import ttnn
+
+        mv = inputs.vmask is not None
+        own = None
+        if df.is_mlstm(block.index) and tm:
+            x = own = ttnn.transpose(x, 0, 2)
+            tm = False
+        elif not df.is_mlstm(block.index) and mv and not tm:
+            x = own = ttnn.transpose(x, 0, 2)
+            tm = True
+        B = x.shape[2] if tm else x.shape[0]
+        init = self.pad_state(inputs.cut, B, block) if inputs.cut else None
         if df.is_mlstm(block.index):
             y = layers.mlstm_layer(self.device, x, block.cell, self.precision, self.consts, init=init)
         else:
@@ -261,14 +290,19 @@ class TtTiRex2:
                 self.consts,
                 step_hook=self.step_hook,
                 init=init,
+                time_major=tm,
             )
+        layers.free(own)
         out = layers.ffn_residual(y, block.ffn, self.precision)
         layers.free(y)
-        if inputs.vmask is not None:
-            mixed = layers.variate_block(self.device, out, block.variate, self.precision, inputs.vmask, inputs.keep)
+        if mv:
+            tm_out = df.is_mlstm(block.index)
+            mixed = layers.variate_block(
+                self.device, out, block.variate, self.precision, inputs.vmask, inputs.keep, tm_in=tm, tm_out=tm_out
+            )
             layers.free(out)
-            out = mixed
-        return out
+            out, tm = mixed, tm_out
+        return out, tm
 
     def head(self, x, cut: int = 0):
         import ttnn
@@ -283,10 +317,13 @@ class TtTiRex2:
 
     def forward_device(self, inputs: DeviceInputs, blocks=None):
         x = self.embed(inputs)
+        tm = False
         for block in self.weights.blocks if blocks is None else blocks:
-            y = self.run_block(block, x, inputs)
+            y, tm = self.run_block_tm(block, x, inputs, tm)
             layers.free(x)
             x = y
+        if tm:
+            x = self.to_batch_major(x)
         out = self.head(x, inputs.cut)
         layers.free(x)
         return out
