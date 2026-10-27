@@ -501,7 +501,7 @@ def head_layer_norm(device, y, w_gnorm, head_mean, eps: float = df.NORM_EPS):
     import ttnn
 
     shape = tuple(y.shape)
-    yh = ttnn.reshape(y, (*shape[:-1], shape[-1] // 128, 128))  # [..., 4, 128] head-split view
+    yh = ttnn.reshape(y, (*shape[:-2], shape[-2] * (shape[-1] // 128), 128))  # each row as 4 head rows, no tile padding
     zh = ttnn.layer_norm(yh, epsilon=eps, compute_kernel_config=exact_config())
     z = ttnn.reshape(zh, shape)
     free(zh)
