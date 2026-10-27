@@ -26,3 +26,15 @@ void push_mask_padded_tile(DataflowBuffer& dfb_mask_padded) {
     fill_pad_tile<std::uint16_t, num_datum_unpadded, 32>(ptr, mask_val);
     dfb_mask_padded.push_back(1);
 }
+
+// Zeroes the padding columns [last_tile_w, 32) of a row's last tile, read into dfb_id at l1_addr. The -inf mask
+// above turns NaN or +inf into NaN, which poisons the row max and sum, and implicit tile padding may hold either.
+// last_tile_w == 0 means there is no padding, or the tile is not 32x32 and the mask does not apply.
+template <std::uint32_t dfb_id, std::uint32_t last_tile_w>
+void zero_last_tile_padding(std::uint32_t l1_addr) {
+    if constexpr (last_tile_w > 0) {
+        constexpr DataFormat data_format = get_dataformat(dfb_id);
+        // pad_last_ktile zeroes the same columns of matmul's last K tile.
+        pad_last_ktile<data_format, last_tile_w>(l1_addr);
+    }
+}

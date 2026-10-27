@@ -487,6 +487,71 @@ def test_softmax_with_padded_tile_layout_large(device):
     )
 
 
+def _assert_matches_despite_padding(expected, output):
+    # comp_pcc zeroes non-finite values before correlating, so check them, and the error, directly.
+    assert torch.isfinite(output).all(), "non-finite tile padding reached the logical output"
+    assert (output - expected).abs().max().item() < 0.02
+    assert_with_pcc(expected, output, 0.999)
+
+
+@pytest.mark.parametrize("pad_value", [float("nan"), float("inf")])
+@pytest.mark.parametrize("numeric_stable", [True, False])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 64, 4, 4),  # one padded tile per row
+        (1, 1, 32, 20),
+        (1, 1, 32, 32020),  # wide enough for the streaming large kernel
+    ],
+)
+def test_softmax_non_finite_tile_padding(device, shape, dtype, numeric_stable, pad_value):
+    """Implicit tile padding is undefined and may hold NaN or inf; the logical row's softmax must not see it."""
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, pad_value)
+    output = ttnn.to_torch(ttnn.softmax(input_tensor, dim=-1, numeric_stable=numeric_stable)).float()
+    _assert_matches_despite_padding(torch.softmax(ttnn.to_torch(input_tensor).float(), dim=-1), output)
+
+
+@pytest.mark.parametrize("pad_value", [float("nan"), float("inf")])
+@pytest.mark.parametrize("numeric_stable", [True, False])
+@pytest.mark.parametrize(
+    "causal, input_shape",
+    [
+        (False, (1, 1, 64, 20)),
+        (False, (1, 1, 32, 32020)),  # wide enough for the streaming large kernel
+        (True, (1, 1, 20, 20)),
+    ],
+)
+def test_scale_mask_softmax_non_finite_tile_padding(device, causal, input_shape, numeric_stable, pad_value):
+    """The input's and the attention mask's implicit tile padding must not reach the logical row."""
+    torch.manual_seed(0)
+    scale = 0.75
+    W = input_shape[-1]
+    mask_shape = (1, 1, W, W) if causal else (1, 1, 32, W)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    attention_mask = torch.zeros(mask_shape, dtype=torch.bfloat16)
+    attention_mask[torch.rand_like(attention_mask, dtype=torch.float32) < 0.2] = float("-inf")
+    attention_mask[..., 0] = 0  # keep every row's max finite
+    golden_mask = attention_mask if causal else attention_mask[:, :, :1, :]
+    expected = torch.softmax(torch_input.float() * scale + golden_mask.float(), dim=-1)
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device)
+    mask_tensor = ttnn.from_torch(attention_mask, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, pad_value)
+    mask_tensor = ttnn.fill_implicit_tile_padding(mask_tensor, pad_value)
+    if causal:
+        # scale_mask_softmax rejects a square mask; the causal path is reachable in place only
+        output = ttnn.scale_mask_softmax_in_place(
+            input_tensor, scale, mask_tensor, is_causal_mask=True, numeric_stable=numeric_stable
+        )
+    else:
+        output = ttnn.scale_mask_softmax(input_tensor, scale, mask_tensor, numeric_stable=numeric_stable)
+    _assert_matches_despite_padding(expected, ttnn.to_torch(output).float())
+
+
 @pytest.mark.skip(reason="#4629: softmax pcc at 0.948 when comparing to torch")
 def test_specific_tensor_combination(device):
     current_dir = os.path.dirname(os.path.realpath(__file__))

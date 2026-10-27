@@ -80,6 +80,8 @@ SoftmaxDeviceOperation::SoftmaxShardedProgramFactoryAttentionOptimized::create_p
 
     // A last dimension that is not a multiple of the tile width leaves padding columns in the last tile of every
     // row. The reader pushes a -inf padding tile that the compute adds to that tile, as the interleaved path does.
+    // Unlike the interleaved readers, these do not zero the padding first: in0 is the caller's shard, so NaN or
+    // +inf in its implicit padding still reaches the row.
     const std::uint32_t W_unpadded = input_tensor.logical_shape()[-1];
     const bool mask_padded_data = shape[3] > W_unpadded;
     const std::uint32_t num_datum_padded = shape[3] - W_unpadded;

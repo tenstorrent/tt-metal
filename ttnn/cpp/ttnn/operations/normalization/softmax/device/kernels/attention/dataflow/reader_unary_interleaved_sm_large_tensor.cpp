@@ -9,6 +9,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "experimental/kernel_args.h"
+#include "mask_padded_tile.hpp"
 
 void kernel_main() {
     const std::uint32_t blk = get_arg(args::blk);
@@ -17,6 +18,8 @@ void kernel_main() {
     const std::uint32_t Wt = get_arg(args::Wt);
     // Capacity shared by the streamed CBs; a partial last pass is padded up to it.
     constexpr std::uint32_t dfb_length_t = get_arg(args::dfb_length);
+    // Logical width of each row's last tile; see zero_last_tile_padding.
+    constexpr std::uint32_t in0_last_tile_w = get_arg(args::in0_last_tile_w);
 
     constexpr std::uint32_t dfb_id_in0 = dfb::in0;
 
@@ -130,6 +133,14 @@ void kernel_main() {
 #endif
                 }
                 noc.async_read_barrier();
+                if (wt + rem == Wt) {
+                    zero_last_tile_padding<dfb_id_in0, in0_last_tile_w>(
+                        dfb_id_in0_obj.get_write_ptr() + write_offset - src0_tile_bytes);
+#ifdef FUSED_SCALE_MASK
+                    zero_last_tile_padding<dfb_id_attn, in0_last_tile_w>(
+                        dfb_id_attn_obj.get_write_ptr() + mask_write_offset - mask_tile_bytes);
+#endif
+                }
                 dfb_id_in0_obj.push_back(static_cast<uint16_t>(rem));
 #ifdef FUSED_SCALE_MASK
                 dfb_id_attn_obj.push_back(rem);

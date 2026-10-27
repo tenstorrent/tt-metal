@@ -399,6 +399,10 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         }
     }
     KernelSpec::CompileTimeArgs reader_cta;
+    // Same boundary as the writer's -inf padding-mask tile, which is built for 32x32 tiles only.
+    const bool zero_last_tile_padding =
+        mask_padded_data && num_datum_padded < tile_width && tile_width == 32 && tile_height == 32;
+    reader_cta.insert({"in0_last_tile_w", zero_last_tile_padding ? tile_width - num_datum_padded : 0u});
     if (use_large_kernel) {
         // The large reader pads in0/fused_attn so each streamed pass ends on the fifo base.
         reader_cta.insert({"dfb_length", dfb_length});
