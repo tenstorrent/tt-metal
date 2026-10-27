@@ -17,8 +17,6 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
-// Spec names. Op-scoped namespace rather than an anonymous one: the experimental matmul factories
-// share a CMake target, where same-named anonymous-namespace constants collide under a unity build.
 namespace group_attn_matmul_metal2 {
 const KernelSpecName READER{"reader"};
 const KernelSpecName WRITER{"writer"};
