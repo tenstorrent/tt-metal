@@ -15,7 +15,7 @@
 
 // Software credits: write a producer's free-running write count @p write_count into the SenderChannelProducerCursor
 // write_counter at L1 address @p write_counter_addr on core (@p noc_x, @p noc_y), once every non-posted write this core
-// issued on @p noc has landed. Posted writes are not covered.
+// issued on @p noc has departed (noc_async_writes_flushed()). Posted writes are not covered.
 FORCE_INLINE void fabric_publish_producer_write_count(
     uint8_t noc_x, uint8_t noc_y, uint32_t write_counter_addr, uint32_t write_count, uint8_t noc = noc_index) {
     noc_async_writes_flushed(noc);
