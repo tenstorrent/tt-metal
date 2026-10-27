@@ -41,15 +41,16 @@ The types at L1 addresses come from the struct layouts in `fabric_struct_layouts
 
 | Key | Contents |
 | --- | --- |
-| `manifest_version`, `kind` | `1` and `"fabric_manifest"` |
-| `run` | Architecture, fabric, reliability, tensix and UDM configs, host rank, MPI rank and world size, `written_at`, and the commit the build came from (`git_sha`, `git_dirty`) |
-| `fabric_context` | Topology, packet header, payload and channel buffer sizes, the route buffer size, `multi_txq` |
-| `vocabulary` | Every field `category` and `kind`, and every chip `z_port_role` |
-| `archs.<arch>.areas` | L1 areas the architecture fixes: heartbeat, telemetry, routing table, Ethernet firmware mailbox, base firmware link status |
-| `archs.<arch>.stream_registers` | Where the stream registers are and how wide their values are: `base`, `stride`, `count`, and each register's `offset` and `bits`, from the HAL |
-| `archs.<arch>.core_registers` | The soft reset and wall clock registers, in the order they are read, with each physical ERISC's reset bit |
-| `archs.<arch>.types` | Every struct a schema names, with its size and members in order |
-| `enums` | Every enum a schema names, with its values |
+| `manifest_version`, `file_kind` | `1` and `"fabric_manifest"`. `file_kind` names which of the visualizer's files this is |
+| `run` | This process and the build it runs: host rank, MPI rank and world size, `written_at`, and `build` (the commit the build came from: `git_sha`, `git_dirty`) |
+| `fabric` | This run's fabric: `config` (the settings it was set up with, `SetFabricConfig`'s arguments: fabric config, reliability mode, routing plane limit, tensix config, UDM mode, fabric manager mode and router config), and what FabricContext derived from them: topology, packet header, payload and channel buffer sizes, the route buffer size, `multi_txq` |
+| `arch.name` | The architecture, for example `wormhole_b0` |
+| `arch.l1_areas` | L1 areas the architecture fixes on every router core: heartbeat, telemetry, routing table, Ethernet firmware mailbox, base firmware link status |
+| `arch.stream_registers` | Where the stream registers are and how wide their values are: `base`, `stride`, `count`, and each register's `offset` and `bits`, from the HAL |
+| `arch.core_registers` | The soft reset and wall clock registers, in the order they are read, with each physical ERISC's reset bit |
+| `types.structs` | Every struct a schema names, with its size and members in order |
+| `types.enums` | Every enum a schema names, with its values. These decode integers read from the device |
+| `vocabulary` | Every name each label can hold, so a reader knows all of a label's values without the C++ enums. Each list is named for what the label is, and the schema shows which key uses which list: `arch` (`arch.name`); `fabric_config`, `reliability_mode`, `tensix_config`, `udm_mode`, `fabric_manager_mode` (`fabric.config`); `fabric_topology`; `credit_backing` and `l1_credit_counter_reason` (a mesh's credit transport); `z_port_role`; `edge_capability`; `credit_counter_indexed_by`; `stream_register`; `field_category` and `field_kind`; `channel_status`; `erisc_processor`. These are names the manifest writes as strings, so nothing appears both here and in `types.enums` |
 | `meshes` | Each mesh, its chips, and each local chip's routers |
 
 ### Paths
@@ -82,11 +83,11 @@ path:
   `size_per_element`. `cleared_by_host` means the host zeroes it before launch.
 - A **stream register** is `{stream_id, register, schema}`. `register` is `buf_space_available` (the
   increment-on-write count) or `remote_src` (a plain read-write register). Its address is
-  `base + stream_id * stride + registers[register].offset`, from `archs.<arch>.stream_registers`, and `stream_id` is
+  `base + stream_id * stride + registers[register].offset`, from `arch.stream_registers`, and `stream_id` is
   below its `count`. Its value is the word's low `registers[register].bits` bits: the bits above
   `buf_space_available`'s count can hold other state.
-- A **schema** is an integer (`u8` to `u32`, `i8` to `i32`), `struct:<Name>` (in `archs.<arch>.types`),
-  `enum:<Name>` (in `enums`), `bytes` or `pad`. `bytes` marks data a reader interprets by its own rules, such as a
+- A **schema** is an integer (`u8` to `u32`, `i8` to `i32`), `struct:<Name>` (in `types.structs`),
+  `enum:<Name>` (in `types.enums`), `bytes` or `pad`. `bytes` marks data a reader interprets by its own rules, such as a
   table packed below byte granularity. Every `struct:` and `enum:` schema resolves: the writer throws otherwise.
 
 ### Fields
@@ -130,8 +131,10 @@ entries.
   backing for the VC says. A stream register is null when the builder did not allocate one.
 - **Credit transport** (`meshes.M<n>.credit_transport`): each VC's backing (`stream_register` or `l1_counter`) and the
   reasons the builder put it on counters.
-- **Credit counters** (`credit_counters`): the router's four L1 counter arrays, always reserved. `index_space` says
-  whose sender channels index them: the router's own (`own_sender_compact`) or its peer's (`peer_sender_compact`).
+- **Credit counters** (`credit_counters`): the router's four L1 counter arrays, always reserved. Each element counts
+  credits for one sender channel, indexed by the channel's compact index (sender channels numbered densely across
+  VCs). `indexed_by` says whose: the router's own sender channels (`own_sender_channel`, the `to_sender` arrays) or
+  those of the router on the other end of the link (`peer_sender_channel`, the `receiver` arrays).
 - **Receiver forwards on** (`forwards_on`): the VC whose downstream edges the receiver's step is given, `vc<n>`. VC1
   for receiver 0 of a router that crosses VC0 traffic over to VC1. Null when no ERISC runs the step, or when the
   step forwards to no sibling (VC2, and VC0 in speedy mode).
@@ -144,13 +147,13 @@ entries.
   with bit N set for the router on Ethernet channel N. Null when the chip has no routers.
 - **Leftover L1** (`leftover_l1`): the L1 from the end of the channel buffers to the end of loadable L1, or null when
   there is none.
-- **Architecture areas** (`archs.<arch>.areas`): the heartbeat word with its magic, mask and period, and the HAL's
+- **Architecture areas** (`arch.l1_areas`): the heartbeat word with its magic, mask and period, and the HAL's
   areas, typed from the HAL. On Blackhole the heartbeat word is base firmware's own heartbeat, which the router
   writes over while it runs.
 - **Base firmware link status** (`base_fw_port_status`, `base_fw_train_status`, `base_fw_retrain_count`,
-  `base_fw_rx_link_up` and `base_fw_postcode` in `archs.<arch>.areas`): the words base firmware keeps about its
+  `base_fw_rx_link_up` and `base_fw_postcode` in `arch.l1_areas`): the words base firmware keeps about its
   Ethernet link, each a `u32` at the address the HAL gives. Each is null where the HAL gives none, as on Wormhole.
-- **Core registers** (`archs.<arch>.core_registers`): `soft_reset`, `wall_clock_low` and `wall_clock_high`, each a
+- **Core registers** (`arch.core_registers`): `soft_reset`, `wall_clock_low` and `wall_clock_high`, each a
   `u32` at its HAL address. The array keeps the read order: reading the low word latches the high word.
   `soft_reset.reset_masks` is UMD's reset bit for each of the HAL's physical ERISCs on the Ethernet core, one on
   Wormhole and two on Blackhole, whether or not the ERISC mode runs a processor on it.
@@ -158,14 +161,14 @@ entries.
   which indexes `reset_masks`. It is the processor's index, except in Blackhole single-ERISC mode, where base
   firmware keeps ERISC0 and the one processor runs on ERISC1. The HAL compiles the same value into Blackhole kernels
   as `PHYSICAL_AERISC_ID`.
-- **Build identity** (`run.git_sha`, `run.git_dirty`): the commit tt-metal was built from, and whether tracked files
+- **Build identity** (`run.build.git_sha`, `run.build.git_dirty`): the commit tt-metal was built from, and whether tracked files
   had uncommitted changes, from the version header CMake refreshes on every build (`cmake/version.cmake`). With
   uncommitted changes, the SHA doesn't say exactly what code ran. `git_sha` is empty when the source tree is neither a
   git checkout nor a `git archive` export.
 
 ## What the manifest doesn't cover
 
-**UDM.** A UDM run (`run.udm_mode`) writes a manifest, but its UDM-specific parts aren't described:
+**UDM.** A UDM run (`fabric.config.udm_mode`) writes a manifest, but its UDM-specific parts aren't described:
 
 - the tensix mux and relay cores, and their L1;
 - a receiver's path into its relay: the connection, the relay's free slots stream (id 30), the relay's buffer count and
@@ -194,7 +197,8 @@ names what to update. By kind of change:
 | New struct in L1 | The build, when a field's content names a struct with no `StructLayout`; the writer, when its schema does not resolve | A `StructLayout<T>` and an entry in `DescribedStructs` (`fabric_struct_layouts.hpp`) |
 | New enum | The writer, when a schema names it | An entry in `DescribedEnums` (`fabric_manifest_type_catalog.hpp`) |
 | New enum value | Nothing for enums enchantum reads; the build for `EDMStatus` | `FABRIC_MANIFEST_EDM_STATUSES` for `EDMStatus` |
-| New or renamed field category, field kind or Z port role | The schema check, on the name in `vocabulary` | Its list in `fabric_manifest_schema.json` (`category`, `kind` or `z_port_role`) |
+| New or renamed field category, field kind, Z port role or channel status | The schema check, on the name in `vocabulary` | Its list in `fabric_manifest_schema.json` (`field_category`, `field_kind`, `z_port_role` or `channel_status`) |
+| New label key (a key whose value is one of a fixed set of names) | Nothing | A list in `make_vocabulary_json` (`fabric_manifest.cpp`) named for what the label is, and the same name in the schema's `vocabulary` |
 | New computed fact | Nothing | The model, the collector or chip pass, the writer, the tests, a paragraph above, and the schema |
 | A change to the JSON's shape | The schema check | `fabric_manifest_schema.json` |
 | A field table or unrecorded list change | `ManifestDocs.UpToDate` | Regenerate `FIELDS.md` (below) |
