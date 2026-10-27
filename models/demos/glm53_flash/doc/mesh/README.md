@@ -1146,3 +1146,8 @@ The numerics flip with the step (chain pcc 0.8615 below the threshold, 0.9497 ab
 ~256 K x 4 (and at 128 K x 32) it is dropped and decode runs the regions per-expert lists (`_stream_serves` False), ~+80 ms over 42
 MoE layers. Per-op profiling of multi-layer models at 1 M is impossible on this stack (the 1 M build floods the device profiler;
 the host capture tool crashes on 45 layers); the single-layer harness keeps the copy, which is why it never showed the gap.
+
+09:37 CONFIRMED: `e2e_8x4_B4_cap256k_onecopy` (256 K per user, `GLM53_REGIONS_KEEP_STACKED=0`) replays in 148.9 ms with chain pcc
+0.949673 = exactly the 1 M step and the 1 M numerics (with the copy: 70.9 ms / 0.861457). The full-wall harness at position 1024
+agrees: 73.1 ms at 256 K, 159.2 ms at 1 M (per-layer eager walls dispatch-bound on both). Next: `e2e_8x4_B4_cap1m_bfp4` (do both copies
+fit with bfp4 experts?) and the one-copy streaming decode (`GLM53_REGIONS_DECODE`).
