@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Scatter writer (BRISC): dual-RISC pattern (mirrors gather_writer).
-// 1) Reads full input data row (Wt_output tiles) from DRAM into cb_input.
-// 2) Writes completed output tiles from cb_output to DRAM.
+// 1) Reads full input data row (Wt_output tiles) from the input buffer into cb_input.
+// 2) Writes completed output tiles from cb_output to the output buffer.
 //
 // This runs on BRISC while the reader (NCRISC) reads index/src tiles and does
-// the element-level scatter. Both RISCs do DRAM ops concurrently.
+// the element-level scatter. Both RISCs move data concurrently.
 //
 // Multicore: strided row assignment, same as reader.
 //
@@ -37,14 +37,16 @@ void kernel_main() {
     constexpr auto input_ta_args = TensorAccessorArgs<4>();
     constexpr auto output_ta_args = TensorAccessorArgs<input_ta_args.next_compile_time_args_offset()>();
 
+    // Tiles per barrier. Any depth up to the CB's tile count is correct, since each burst is clamped
+    // against the tiles left in the row; 4 is the gather port's measured choice.
     constexpr uint32_t READ_BATCH = 4;
     constexpr uint32_t WRITE_BATCH = 4;
 
-    // Input tensor accessor (for DRAM reads)
+    // Input tensor accessor
     constexpr uint32_t input_tile_bytes = get_tile_size(cb_input);
     const auto input_accessor = TensorAccessor(input_ta_args, input_addr, input_tile_bytes);
 
-    // Output tensor accessor (for DRAM writes)
+    // Output tensor accessor
     constexpr uint32_t output_tile_bytes = get_tile_size(cb_output);
     const auto output_accessor = TensorAccessor(output_ta_args, output_addr, output_tile_bytes);
 
@@ -75,7 +77,7 @@ void kernel_main() {
             tiles_read += batch;
         }
 
-        // --- Phase 2: Write completed output tiles to DRAM ---
+        // --- Phase 2: Write completed output tiles to the output buffer ---
         uint32_t tiles_written = 0;
         while (tiles_written < Wt_output) {
             uint32_t batch = (Wt_output - tiles_written < WRITE_BATCH) ? (Wt_output - tiles_written) : WRITE_BATCH;

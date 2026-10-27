@@ -32,9 +32,10 @@ uint32_t scatter_page_rank(const ttnn::Shape& shape, bool tiled);
 
 // Builds the fixed-width logical-prefix page map shared by every reader: [rank, input_dims
 // (zero-padded to kScatterMaxPageRank with 1s), index_dims (likewise)]. `tiled` selects between the
-// TILE folding (H collapsed to tile-rows) and the ROW_MAJOR folding (no collapse). TT_FATALs if
-// either tensor's page rank exceeds kScatterMaxPageRank; supported_by_codegen() must reject that
-// case first so this never fires under normal routing.
+// TILE folding (H collapsed to tile-rows) and the ROW_MAJOR folding (no collapse). Clamps a page
+// rank past kScatterMaxPageRank rather than failing: it runs ahead of the prim's own checks
+// (through build_scatter_codegen_params), and the device operation's cache-miss checks are where
+// the equal-rank and max-rank TT_FATALs live.
 ScatterPageMap compute_scatter_page_map(const ttnn::Shape& input_shape, const ttnn::Shape& index_shape, bool tiled);
 
 // Tile-page geometry, computed from the (already dim==-1, already-normalized) input/index/src
@@ -46,7 +47,7 @@ struct ScatterTileGeometry {
     uint32_t output_logical_w = 0;
     uint32_t idx_valid_h_last = 0;
     uint32_t idx_valid_w_last = 0;
-    uint32_t Ht_per_batch_src = 0;
+    uint32_t Ht_per_batch_index = 0;
 };
 ScatterTileGeometry compute_scatter_tile_geometry(
     const Tensor& input_tensor, const Tensor& index_tensor, const Tensor& src_tensor);
@@ -79,15 +80,17 @@ uint64_t scatter_output_aligned_page_size(
 // dimension the stick was drawn from.
 uint64_t scatter_rm_stick_page_bytes(const Tensor& tensor, uint32_t stick_elems);
 
-// The device's STATIC per-core CB budget (the allocator-managed L1 window, ignoring what is live in
-// it). The only budget a routing gate may plan against: supported_by_codegen() is evaluated at the
-// router and again at the codegen prim's validate, with this call's own create_output_tensors() in
-// between, so an L1 output tensor must not change the answer between those two evaluations.
+// The STATIC per-core CB budget: the allocator-managed L1 bank, ignoring what is live in it, so a
+// buffer allocated between two evaluations cannot change the answer. What supported_by_codegen()
+// plans against, because it is evaluated at the router and again in the prim's validate with this
+// call's own create_output_tensors() in between; the forced entry and direct prim callers see
+// nothing else.
 uint64_t scatter_static_l1(const Tensor& input_tensor);
 
-// The device's real per-core CB ceiling, accounting for live L1 occupancy (e.g. this call's own
-// output when placed in L1). Confined to the program factory and the program-cache hash, which both
-// run once per cache miss with nothing else moving underneath them.
+// The per-core CB ceiling the next program will actually find: the static budget less whatever is
+// live in L1 right now. Read by the routing gates that deduct this call's own pending allocations
+// (is_demoted()'s detour check, codegen_plan_fits_live_l1), by compute_program_hash on every call so
+// a moved frontier keys a fresh plan, and by the factories that size CBs from it.
 uint64_t scatter_usable_l1(const Tensor& input_tensor);
 
 // Whether the TILE interleaved plan's four-CB footprint -- Wt_output-deep output and input, one-tile
@@ -106,19 +109,21 @@ bool scatter_interleaved_fits_l1(
 uint64_t scatter_rm_fixed_bytes(uint64_t input_page_bytes, uint64_t output_page_bytes, bool bf16_reduce);
 
 // RM: whether the smallest viable plan -- scatter_rm_fixed_bytes() plus the smallest
-// NOC-alignment-safe index/src chunk (32 elements) -- fits the device's STATIC per-core L1 window. The sticks stay
-// fully resident by construction (no shallower RM plan exists to scale down to), so a call this rejects has no feasible
-// RM dispatch at all and the routing gate must send it to native.
+// NOC-alignment-safe index/src chunk (32 elements) -- fits `l1_budget`, the static bank for the
+// scope gate or the live frontier less pending allocations for the routing gates. The sticks stay
+// fully resident by construction (no shallower RM plan exists to scale down to), so a call this
+// rejects has no feasible RM dispatch at all and the caller must send it to native.
 bool scatter_rm_min_plan_fits_l1(
-    uint64_t static_l1, uint64_t input_page_bytes, uint32_t index_elem_size, uint32_t src_elem_size, bool bf16_reduce);
+    uint64_t l1_budget, uint64_t input_page_bytes, uint32_t index_elem_size, uint32_t src_elem_size, bool bf16_reduce);
 
 // RM: index/src CB depth in elements, scaled down from the 8192-element default to whatever the live
 // L1 frontier leaves once the fully-resident input/output pages (and, for bf16_reduce, the FP32
 // accumulator page) are seated. Rounded to a multiple of 32 once scaling is actually needed, so every
 // chunk boundary offset stays NOC-aligned on Wormhole (32 B) and Blackhole (64 B) for the 2- and
-// 4-byte dtypes in scope, then floored to that same 32-element minimum so a live frontier tighter than the static
-// ceiling supported_by_codegen() validated at routing time can never round the result down to zero (which would stall
-// the reader kernels' chunk loop instead of failing).
+// 4-byte dtypes in scope, then floored to that same 32-element minimum so a frontier tighter than
+// what the caller planned against (the forced entry and direct prim callers only check the static
+// bank) can never round the result down to zero (which would stall the reader kernels' chunk loop
+// instead of failing).
 uint32_t scatter_rm_chunk_elems(
     uint64_t usable_l1,
     uint64_t fixed_bytes,
@@ -126,7 +131,8 @@ uint32_t scatter_rm_chunk_elems(
     uint32_t index_elem_size,
     uint32_t src_elem_size);
 
-// TILE, full input/src row resident in L1.
+// TILE, full input/src row resident in L1. "Interleaved" is the name the gather port gave this
+// row-resident plan; every factory here reads interleaved (non-sharded) buffers.
 struct ScatterCodegenProgramFactoryInterleaved {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
         const ScatterCodegenParams& attributes, const ScatterCodegenInputs& tensor_args, Tensor& output_tensor);

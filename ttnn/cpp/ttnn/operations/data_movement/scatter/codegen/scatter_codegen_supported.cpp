@@ -8,7 +8,6 @@
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
-#include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
 
 #include "scatter_codegen_program_factory.hpp"
@@ -266,7 +265,8 @@ bool prefers_row_major_strategy(
     const Tensor& src_tensor,
     const ttnn::Shape& working_input,
     const ttnn::Shape& working_index,
-    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    bool transposed_copies_pending) {
     if (input_tensor.layout() != Layout::TILE) {
         return false;
     }
@@ -304,14 +304,16 @@ bool prefers_row_major_strategy(
     // free now, less the three untilized operands and the output this call still allocates ahead
     // of it (each counted only if placed in L1). The TILE dispatch's own footprint is a small,
     // fixed number of tile pages regardless of row width, so it remains the safe fallback whenever
-    // the sticks would not fit. From is_demoted() this runs on the untransposed operands, so the
-    // transposed copy of an operand living in L1 is not counted there; the dispatch asks again on
-    // the transposed tensors themselves.
+    // the sticks would not fit. The untilized operands and the transposed copies they are cut from
+    // have the same working shape, so one more charge per operand covers the copies when they are
+    // still pending.
     const uint64_t input_page_bytes = ttnn::prim::scatter_rm_stick_page_bytes(input_tensor, stick_elems);
-    const uint64_t pending_bytes =
+    const uint64_t operand_bytes =
         pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), input_tensor.memory_config()) +
         pending_l1_bytes(input_tensor, working_index, index_tensor.dtype(), index_tensor.memory_config()) +
-        pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), src_tensor.memory_config()) +
+        pending_l1_bytes(input_tensor, working_index, src_tensor.dtype(), src_tensor.memory_config());
+    const uint64_t pending_bytes =
+        (transposed_copies_pending ? 2 * operand_bytes : operand_bytes) +
         pending_l1_bytes(input_tensor, working_input, input_tensor.dtype(), output_mem_config);
     return ttnn::prim::scatter_rm_min_plan_fits_l1(
         rm_live_l1_budget(input_tensor, pending_bytes),
@@ -389,9 +391,14 @@ bool is_demoted(
     if (input_tensor.dtype() == DataType::BFLOAT16 && input_tensor.layout() == Layout::TILE) {
         const ttnn::Shape working_input = codegen_working_shape(input_tensor.logical_shape(), axis);
         const ttnn::Shape working_index = codegen_working_shape(index_tensor.logical_shape(), axis);
-        if (working_input[-2] == 1 &&
-            !prefers_row_major_strategy(
-                input_tensor, index_tensor, src_tensor, working_input, working_index, output_mem_config)) {
+        if (working_input[-2] == 1 && !prefers_row_major_strategy(
+                                          input_tensor,
+                                          index_tensor,
+                                          src_tensor,
+                                          working_input,
+                                          working_index,
+                                          output_mem_config,
+                                          /*transposed_copies_pending=*/axis != rank - 1)) {
             return true;
         }
     }
