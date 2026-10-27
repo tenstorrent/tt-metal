@@ -156,7 +156,7 @@ class TtMoEBlockLayer:
         self.fold = ccl.glue_fold()
         m = self.model = block_model(cfg)
         g = self.g = Geometry.of(mesh, m, self.chunk, LINKS, zigzag=False)
-        assert not (g.sp_wraps or g.tp_wraps), "MOE_IMPL=block: FABRIC_2D lines (owner decision D10), not a torus"
+        # (lines or a torus: the block reads the wraps from the open fabric; torus untested on DS41, owner D14)
         self.dtypes = block_dtypes()
         epc = g.experts_per_chip
         # routed experts: our load and cache (weights_nk, bfp4) in DS41's EXPERTS_LAYOUT (D6: marko by default, the

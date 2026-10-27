@@ -134,7 +134,8 @@ scripts: /localdev/dnijemcevic/bringup/fused_head_2026-10-27/.
 | D7 | fixed combine order (ops head); superseded for the fused head by the combine snap (owner 2026-10-27: keep the snap) | fused: adapter `COMBINE_SNAP` 2^-19 -> `MoEOptions.combine_snap`; ops: moe_block.py `MoEOptions.combine_deterministic` -> `TokenExchange(deterministic=)` -> `TtK3TokenSplitMoE(deterministic=True)` (the exchange's det planner); adapter `block_options()` |
 | D8 | EXPERTS_PRECISION=glm only | adapter `TtMoEBlockLayer.__init__` refuses `full` with the decision in the message (the exchange calls the flat op at LoFi, bfp8 x / h) |
 | D9 | carry prepared_program, not the generic_op by-reference change, not mcast_v1 | `ttnn/ttnn/bringup/prepared_program/` (+ 2 lines in bringup_nanobind.cpp, CHANGELOG, README, INDEX.md) |
-| D10 | FABRIC_2D lines | adapter asserts the open fabric does not wrap (the block reads it: `Geometry.of`) |
+| D10 | FABRIC_2D lines on the 2x2 | the block reads the open fabric's wraps (`Geometry.of`) |
+| D14 | torus allowed (owner 2026-10-27): the adapter no longer refuses a wrapping fabric | untested on DS41 (no torus on the 2x2); the Galaxy bring-up verifies it (Marko ran the block on an 8x4 torus and a 1x4 ring) |
 
 Other changes to Marko's code (defaults keep his behaviour): the exchange's fused experts call passes the op's
 `weights_nk` (ours lays out `[N, K]` weights); `MoELayer.build` / `RoutedExperts` take the caller's `layout`;
