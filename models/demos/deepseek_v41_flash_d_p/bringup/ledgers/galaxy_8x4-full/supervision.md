@@ -233,3 +233,4 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
   0.189 (limit 0.256, 74 %); tightest err_state_window_kv_L27 78 % of its limit, err_layer_L30 72 %; errors grow with
   depth as expected (L00 0.025 -> L30 0.147); host_transfers_per_layer 0. Commit holds records only (no code change).
   L.s10240 started. Dashboard republished (milestone).
+- 08:10 L.s10240 PASS 9960b0b018b (523 s). L.last started.
