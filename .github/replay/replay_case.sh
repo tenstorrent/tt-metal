@@ -3,17 +3,18 @@
 # stack fixes + stage-2 harness on both commits, stage 1 at 2 % / 30 cycles on this board,
 # then stage 2 (5 code positions + loop fingerprint) for the stage-1 regressions.
 #
-# Usage: replay_case.sh <arch> <case id> <base sha12> <head sha12> [cap]
+# Usage: replay_case.sh <arch> <case id> <base sha12> <head sha12> [modules]
+# modules: comma-separated test modules to measure in stage 1 (the ones the gate report flagged); blank = whole suite.
 # Trees are the branches perf-trial/replay/<sha12> (commit + stack + harness).
 set -uo pipefail
-export PATH="$HOME/.local/bin:$PATH"
-ARCH=$1 CASE=$2 BASE=$3 HEAD=$4 CAP=${5:-900}
+export PATH="${REPLAY_ROOT:-/tmp/replay}/venv/bin:$HOME/.local/bin:$PATH"
+ARCH=$1 CASE=$2 BASE=$3 HEAD=$4 MODULES=${5:-} CAP=900
 W=${REPLAY_ROOT:-/tmp/replay}
 REPO=$W/repo
 OUT=$W/out/$CASE
 mkdir -p "$OUT"
 exec > >(tee -a "$OUT/log.txt") 2>&1
-echo "=== $(date -u +%FT%TZ) case $CASE arch $ARCH base $BASE head $HEAD"
+echo "=== $(date -u +%FT%TZ) case $CASE arch $ARCH base $BASE head $HEAD modules ${MODULES:-all}"
 echo "running" > "$OUT/status"
 
 if [[ ! -d $REPO ]]; then
@@ -39,9 +40,18 @@ tree() {  # tree <sha12> -> path of a sparse worktree with sfpi installed
 measure_suite() {  # measure_suite <llk dir> <tag>
   local L=$1
   rm -rf "$L/perf_data/runs/$2"
-  (cd "$L" && SPEED_OF_LIGHT=false LLK_PERF_RUN_TYPES=L1_TO_L1 TT_LLK_DISABLE_ASSERTS=1 \
-     LLK_PERF_EXITFIRST=false PERF_RUN_TAG=$2 RUNNER_TEMP=$W/tmp/$CASE-$2 \
-     ./tests/run_llk_perf_${ARCH}.sh 1 1 > "$OUT/$2.pytest.log" 2>&1)
+  export SPEED_OF_LIGHT=false LLK_PERF_RUN_TYPES=L1_TO_L1 TT_LLK_DISABLE_ASSERTS=1 LLK_PERF_EXITFIRST=false \
+    PERF_RUN_TAG=$2 RUNNER_TEMP=$W/tmp/$CASE-$2
+  if [[ -z $MODULES ]]; then
+    (cd "$L" && ./tests/run_llk_perf_${ARCH}.sh 1 1 > "$OUT/$2.pytest.log" 2>&1)
+  else
+    local files=() m
+    for m in ${MODULES//,/ }; do files+=("$m.py"); done
+    (cd "$L/tests/python_tests" && mkdir -p perf_data && {
+      pytest -q --override-ini=log_cli=false --compile-producer -n 10 -m "perf and not accuracy" --timeout=60 "${files[@]}"
+      pytest -q --override-ini=log_cli=false --compile-consumer --dist loadgroup -n 15 -m "perf and not accuracy" --timeout=60 "${files[@]}"
+    } > "$OUT/$2.pytest.log" 2>&1)
+  fi
   echo "measured $2: $(find "$L/perf_data/runs/$2" -name '*.csv' | wc -l) csv"
 }
 
