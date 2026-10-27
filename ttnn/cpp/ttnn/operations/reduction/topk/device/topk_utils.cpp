@@ -5,6 +5,7 @@
 #include <limits>
 #include "ttnn/operations/reduction/topk/device/topk_constants.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -343,6 +344,40 @@ bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool 
 bool is_uint32_index_required(const ttnn::Tensor& input_tensor, int8_t dim) {
     const bool is_fp32 = input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32;
     return padded_width_needs_uint32_indices(input_tensor.padded_shape()[dim]) || is_fp32;
+}
+
+bool topk_reader_fills_width_padding(const ttnn::Tensor& input) {
+    const auto& tile = input.tensor_spec().tile();
+    return (input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32) &&
+           tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH &&
+           input.padded_shape()[-1] == tt::round_up(input.logical_shape()[-1], tt::constants::TILE_WIDTH);
+}
+
+uint32_t topk_reader_pad_tiles(const ttnn::Tensor& input) {
+    const uint32_t padded_width = input.padded_shape()[-1];
+    if (padded_width >= constants::min_dim_per_core || !topk_reader_fills_width_padding(input)) {
+        return 0;
+    }
+    return (constants::min_dim_per_core - padded_width) / tt::constants::TILE_WIDTH;
+}
+
+std::vector<std::pair<std::string, std::string>> topk_width_padding_defines(const ttnn::Tensor& input, bool largest) {
+    const uint32_t last_tile_width = input.logical_shape()[-1] % tt::constants::TILE_WIDTH;
+    const uint32_t pad_tiles = topk_reader_pad_tiles(input);
+    if ((last_tile_width == 0 && pad_tiles == 0) || !topk_reader_fills_width_padding(input)) {
+        return {};
+    }
+    const bool fp32 = input.dtype() == tt::tt_metal::DataType::FLOAT32;
+    const uint32_t pad_bits = fp32 ? (largest ? 0xFF800000u : 0x7F800000u) : (largest ? 0xFF80u : 0x7F80u);
+    std::vector<std::pair<std::string, std::string>> defines = {
+        {"TOPK_PAD_VALUE", std::to_string(pad_bits) + "u"}, {"TOPK_PAD_FP32", fp32 ? "1" : "0"}};
+    if (last_tile_width != 0) {
+        defines.emplace_back("TOPK_PAD_LAST_TILE_W", std::to_string(last_tile_width));
+    }
+    if (pad_tiles != 0) {
+        defines.emplace_back("TOPK_PAD_TILES", std::to_string(pad_tiles));
+    }
+    return defines;
 }
 
 }  // namespace ttnn::prim

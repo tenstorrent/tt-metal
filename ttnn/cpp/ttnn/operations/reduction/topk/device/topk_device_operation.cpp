@@ -168,7 +168,8 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     const auto input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
     TT_FATAL(
-        input_shape[-1] >= ttnn::prim::constants::min_dim_per_core,
+        input_shape[-1] >= ttnn::prim::constants::min_dim_per_core ||
+            (topk_reader_pad_tiles(input_tensor) > 0 && !indices_tensor.has_value()),
         "Input shape inner dim {} must be >= {}, pad with +/-infinity if necessary",
         input_shape[-1],
         ttnn::prim::constants::min_dim_per_core);
@@ -371,6 +372,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(can_run, "Not enough cores or cache size available to run TopK operation");
 }
 
+// Every miss check depends only on hashed attributes, tensor specs or device constants.
+void TopKDeviceOperation::validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&) {}
+
 TopKDeviceOperation::spec_return_value_t TopKDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
@@ -385,7 +389,7 @@ TopKDeviceOperation::spec_return_value_t TopKDeviceOperation::compute_output_spe
 
     // Compute output specifications dynamically
     auto output_shape = input_tensor.logical_shape();
-    output_shape[-1] = args.k;  // Set last dimension to K (number of top elements)
+    output_shape[-1] = args.output_k.value_or(args.k);  // Set last dimension to K (number of top elements)
 
     // Create values tensor specification (same data type as input)
     const auto values_spec = tt::tt_metal::TensorSpec(
@@ -424,10 +428,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> topk(
     const tt::tt_metal::MemoryConfig& memory_config,
     const tt::tt_metal::CoreRangeSet& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
-    const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors) {
+    const std::optional<std::tuple<Tensor, Tensor>>& preallocated_output_tensors,
+    std::optional<uint32_t> output_k) {
     return ttnn::device_operation::launch<TopKDeviceOperation>(
         TopkParams{
             .k = k,
+            .output_k = output_k,
             .dim = dim,
             .largest = largest,
             .sorted = sorted,
