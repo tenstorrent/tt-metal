@@ -380,8 +380,8 @@
 # (4x8 meshes -> FABRIC_2D_TORUS_Y, 4x2 meshes -> FABRIC_2D); the dedicated heterogeneous yaml's groups
 # (topology: FromMgd) make each process run its own mesh's config. HW counterpart of
 # the CPU-only ControlPlaneFixture.TestLlamaLinePerMeshFabricConfig unit test,
-# and the SC4 analog of galaxy-fabric-per-mesh-torus-yx. --filter name.MgdDefaultHeterogeneous runs the
-# single per-mesh heterogeneous group (unicast neighbor_exchange + all_to_all, intra & inter mesh).
+# and the SC4 analog of galaxy-fabric-per-mesh-torus-yx. --filter 'name.HeterogeneousFabric*' runs every per-mesh group:
+# unicast neighbor_exchange + all_to_all (intra & inter mesh) plus multicast all_to_all (intra only).
 - name: "Fabric per-mesh heterogeneous-config sanity (SC4)"
   cmd: |
     MGD="${TT_METAL_HOME}/tests/tt_metal/tt_fabric/custom_mesh_descriptors/llama8b_audio_4mesh_line_mesh_graph_descriptor.textproto"
@@ -395,6 +395,10 @@
     test -f "${FABRIC_CFG}" || { echo "ERROR: missing ${FABRIC_CFG}"; exit 1; }
 
     cd "${TTRUN_CWD}"
+    LOG="${PIPELINE_DIR}/permesh_heterogeneous.log"
+    # tt_run.py does NOT propagate the test binary's exit code (an mpirun SIGABRT
+    # from a TT_THROW returns 0), so assert test_tt_fabric's own success marker
+    # rather than trusting the shell exit status.
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
       --tcp-interface ens5f0np0 \
@@ -403,10 +407,19 @@
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
       "${FABRIC_BIN}" \
       --test_config "${FABRIC_CFG}" \
-      --filter name.MgdDefaultHeterogeneous
+      --filter 'name.HeterogeneousFabric*' 2>&1 | tee "${LOG}"
+    if grep -qiE "Boundary exceeded|exited on signal|caught signal|signal 6|Aborted|terminate called|what\(\):|\bFATAL\b" "${LOG}"; then
+      echo "::error::per-mesh heterogeneous run crashed/aborted"; exit 1
+    fi
+    if grep -qE "Tests: [0-9]+ executed, [1-9][0-9]* failed|Result: FAILED" "${LOG}"; then
+      echo "::error::per-mesh heterogeneous run reported test failures"; exit 1
+    fi
+    if ! grep -q "All tests completed successfully" "${LOG}"; then
+      echo "::error::per-mesh heterogeneous run did not reach the success marker (incomplete/crashed)"; exit 1
+    fi
   skus:
     bh_sc4:
-      timeout: 15
+      timeout: 25
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
   budget_type: e2e
