@@ -17,6 +17,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 constexpr uint32_t cb_stage = get_named_compile_time_arg_val("cb_stage");
@@ -43,7 +44,7 @@ void kernel_main() {
     const auto token = TensorAccessor(token_args, get_arg_val<uint32_t>(4));
     const auto into = TensorAccessor(into_args, get_arg_val<uint32_t>(5));
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer stage(cb_stage);
     stage.reserve_back(1);
     const uint32_t base = stage.get_write_ptr();
@@ -65,12 +66,11 @@ void kernel_main() {
     }
 
     {
-        volatile tt_l1_ptr float* tie_break = reinterpret_cast<volatile tt_l1_ptr float*>(base + stage_tie);
-        volatile tt_l1_ptr float* vocab_starts = reinterpret_cast<volatile tt_l1_ptr float*>(base + stage_starts);
-        volatile tt_l1_ptr float* token_tile = reinterpret_cast<volatile tt_l1_ptr float*>(base + stage_tile);
+        CoreLocalMem<volatile float> tie_break(base + stage_tie);
+        CoreLocalMem<volatile float> vocab_starts(base + stage_starts);
+        CoreLocalMem<volatile float> token_tile(base + stage_tile);
         for (uint32_t r = 0; r < rows; ++r) {
-            volatile tt_l1_ptr float* gathered_row =
-                reinterpret_cast<volatile tt_l1_ptr float*>(base + stage_gathered + r * gathered_row_bytes);
+            CoreLocalMem<volatile float> gathered_row(base + stage_gathered + r * gathered_row_bytes);
             uint32_t owner = 0;
             float best = gathered_row[0] - tie_break[0];
             for (uint32_t d = 1; d < devices; ++d) {

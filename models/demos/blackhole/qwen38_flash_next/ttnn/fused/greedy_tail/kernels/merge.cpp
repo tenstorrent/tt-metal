@@ -20,6 +20,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 constexpr uint32_t cb_stage = get_named_compile_time_arg_val("cb_stage");
@@ -62,12 +63,12 @@ void kernel_main() {
     const auto indices = TensorAccessor(indices_args, get_arg_val<uint32_t>(3));
     const auto packed = TensorAccessor(packed_args, get_arg_val<uint32_t>(4));
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer stage(cb_stage);
     stage.reserve_back(1);
     const uint32_t base = stage.get_write_ptr();
-    volatile tt_l1_ptr uint32_t* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
-    volatile tt_l1_ptr uint16_t* tile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base);
+    CoreLocalMem<volatile uint32_t> words(base);
+    CoreLocalMem<volatile uint16_t> tile(base);
     constexpr uint32_t stage_tile = 0, stage_pairs = bf16_tile_bytes;
     noc.async_read(zero, stage, bf16_tile_bytes, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = stage_tile});
     if constexpr (rows == 1 && packed_lanes == 2) {
@@ -171,8 +172,8 @@ void kernel_main() {
         noc.async_read(
             start_tile, stage, 64, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = stage_start});  // element (0, 0)
         noc.async_read_barrier();
-        volatile tt_l1_ptr uint32_t* list_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + stage_lists);
-        volatile tt_l1_ptr uint32_t* out_row = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + stage_row);
+        CoreLocalMem<volatile uint32_t> list_words(base + stage_lists);
+        CoreLocalMem<volatile uint32_t> out_row(base + stage_row);
         IdFp32 start;
         start.u = words[stage_start / 4];
         const uint32_t start_id =

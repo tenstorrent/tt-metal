@@ -20,6 +20,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
 constexpr uint32_t cb_stage = get_named_compile_time_arg_val("cb_stage");
@@ -57,11 +58,11 @@ void kernel_main() {
     const auto logits = TensorAccessor(logits_args, logits_addr);
     const auto pairs = TensorAccessor(pairs_args, pairs_addr);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer stage(cb_stage);
     stage.reserve_back(1);
     const uint32_t base = stage.get_write_ptr();
-    volatile tt_l1_ptr uint16_t* halves = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base);
+    CoreLocalMem<volatile uint16_t> halves(base);
     if constexpr (rows == 1 || lane_split) {
         // tile t of this core: the two 64-byte grains holding row `row` of faces (row >> 4) * 2 and + 1 land at 128 t
         // and 128 t + 64 (row 0 of faces 0 and 1 for the one-row step); an odd row sits 32 bytes into its grain
@@ -89,7 +90,7 @@ void kernel_main() {
         }
 
         const uint32_t out_offset = ((128 * count) + 15) & ~15u;
-        volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + out_offset);
+        CoreLocalMem<volatile uint32_t> out(base + out_offset);
 #ifndef GT_CANDIDATE_ROW
         {
             uint32_t best_key = 0, best_id = 0, best_bits = 0;
@@ -155,7 +156,7 @@ void kernel_main() {
             out[3] = 0;
             constexpr uint32_t list_bytes = 8 * candidates;
             const uint32_t list_offset = out_offset + 16;
-            volatile tt_l1_ptr uint32_t* list = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + list_offset);
+            CoreLocalMem<volatile uint32_t> list(base + list_offset);
             for (uint32_t i = 0; i < candidates; ++i) {
                 // the bf16 value widened to fp32 (exact); no id marks an unfilled slot (a core with under
                 // `candidates` lanes)
@@ -205,7 +206,7 @@ void kernel_main() {
         }
 
         const uint32_t out_offset = bf16_tile_bytes * count;  // 16-byte aligned
-        volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base + out_offset);
+        CoreLocalMem<volatile uint32_t> out(base + out_offset);
         for (uint32_t r = 0; r < rows; ++r) {
             uint32_t best_key = 0, best_id = 0, best_bits = 0;
             bool any = false;
