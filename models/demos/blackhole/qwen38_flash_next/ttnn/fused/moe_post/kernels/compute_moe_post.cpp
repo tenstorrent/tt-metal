@@ -43,7 +43,7 @@ void kernel_main() {
     DataflowBuffer scores(cb_scores);
     DataflowBuffer routed(cb_routed);
     DataflowBuffer shared(cb_shared);
-    DataflowBuffer sig(cb_sig);
+    DataflowBuffer sigmoid(cb_sig);
     DataflowBuffer gated(cb_gated);
     DataflowBuffer out(cb_out);
 
@@ -77,7 +77,7 @@ void kernel_main() {
         // ---- binary_ng SFPU multiply of the ungated shared partial by its broadcast sigmoid (has_sig) ----
         shared.wait_front(1);
         if constexpr (has_sig) {
-            sig.wait_front(1);
+            sigmoid.wait_front(1);
             gated.reserve_back(1);
             mul_binary_tile_init();
             tile_regs_acquire();
@@ -95,7 +95,7 @@ void kernel_main() {
             tile_regs_release();
             gated.push_back(1);
             shared.pop_front(1);
-            sig.pop_front(1);
+            sigmoid.pop_front(1);
             gated.wait_front(1);
         }
     }

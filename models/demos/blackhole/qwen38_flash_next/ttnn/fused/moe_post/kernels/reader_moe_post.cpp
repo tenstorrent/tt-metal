@@ -22,7 +22,7 @@ void kernel_main() {
     const uint32_t indices_addr = get_arg_val<uint32_t>(2);
     const uint32_t owner_addr = get_arg_val<uint32_t>(3);
     const uint32_t shared_addr = get_arg_val<uint32_t>(4);
-    const uint32_t sig_addr = get_arg_val<uint32_t>(5);
+    const uint32_t sigmoid_addr = get_arg_val<uint32_t>(5);
     const uint32_t tile_col = get_arg_val<uint32_t>(6);
     const uint32_t rows = get_arg_val<uint32_t>(7);
 
@@ -57,7 +57,7 @@ void kernel_main() {
         indices_args.next_common_runtime_args_offset()>();
     constexpr auto shared_args =
         TensorAccessorArgs<owner_args.next_compile_time_args_offset(), owner_args.next_common_runtime_args_offset()>();
-    constexpr auto sig_args = TensorAccessorArgs<
+    constexpr auto sigmoid_args = TensorAccessorArgs<
         shared_args.next_compile_time_args_offset(),
         shared_args.next_common_runtime_args_offset()>();
     const auto pages = TensorAccessor(pages_args, pages_addr);
@@ -65,7 +65,7 @@ void kernel_main() {
     const auto indices = TensorAccessor(indices_args, indices_addr);
     const auto owner = TensorAccessor(owner_args, owner_addr);
     const auto shared = TensorAccessor(shared_args, shared_addr);
-    const auto sig = TensorAccessor(sig_args, sig_addr);
+    const auto sigmoid = TensorAccessor(sigmoid_args, sigmoid_addr);
 
     Noc noc;
     DataflowBuffer act(cb_act);
@@ -74,9 +74,9 @@ void kernel_main() {
     DataflowBuffer route(cb_route);
     DataflowBuffer stage(cb_stage);
     DataflowBuffer shared_tile(cb_shared);
-    DataflowBuffer sig_tile(cb_sig);
+    DataflowBuffer sigmoid_tile(cb_sig);
 
-    uint32_t act_base, owner_base, idx_base, sc_base, stile_base, stage_base, n;
+    uint32_t act_base, owner_base, route_indices_base, route_scores_base, score_tiles_base, stage_base, fragment;
     uint32_t route_words = route_pitch / 2;  // uint16 per staged routing row
     uint32_t owned[32];
     {
@@ -85,8 +85,9 @@ void kernel_main() {
         noc.async_read(
             shared, CoreLocalMem<uint32_t>(shared_tile.get_write_ptr()), tile_bytes, {.page_id = tile_col}, {});
         if constexpr (has_sig) {
-            sig_tile.reserve_back(1);
-            noc.async_read(sig, CoreLocalMem<uint32_t>(sig_tile.get_write_ptr()), tile_bytes, {.page_id = 0}, {});
+            sigmoid_tile.reserve_back(1);
+            noc.async_read(
+                sigmoid, CoreLocalMem<uint32_t>(sigmoid_tile.get_write_ptr()), tile_bytes, {.page_id = 0}, {});
         }
         // every activation page starts as zeros (the composed chain's fill and tilize padding)
         act.reserve_back(top_k);
@@ -94,31 +95,39 @@ void kernel_main() {
         noc.async_write_zeros(CoreLocalMem<uint32_t>(act_base), top_k * tile_bytes, {});
         // and every score tile: the loop below writes only the owned (row, slot) scores
         score_tiles.reserve_back(top_k);
-        stile_base = score_tiles.get_write_ptr();
-        noc.async_write_zeros(CoreLocalMem<uint32_t>(stile_base), top_k * tile_bytes, {});
+        score_tiles_base = score_tiles.get_write_ptr();
+        noc.async_write_zeros(CoreLocalMem<uint32_t>(score_tiles_base), top_k * tile_bytes, {});
         owner_row.reserve_back(1);
         owner_base = owner_row.get_write_ptr();
         noc.async_read(owner, CoreLocalMem<uint32_t>(owner_base), owner_bytes, {.page_id = 0}, {});
         route.reserve_back(2);
-        idx_base = route.get_write_ptr();
-        sc_base = idx_base + 32 * route_pitch;
+        route_indices_base = route.get_write_ptr();
+        route_scores_base = route_indices_base + 32 * route_pitch;
         if constexpr (route_contiguous) {
             // one shard on one core: the rows lie at the shard's page pitch, one read per tensor
             route_words = indices.get_aligned_page_size() / 2;
-            noc_async_read(indices.get_noc_addr(0), idx_base, rows * 2 * route_words);
-            noc_async_read(scores.get_noc_addr(0), sc_base, rows * 2 * route_words);
+            noc_async_read(indices.get_noc_addr(0), route_indices_base, rows * 2 * route_words);
+            noc_async_read(scores.get_noc_addr(0), route_scores_base, rows * 2 * route_words);
         } else {
             for (uint32_t j = 0; j < rows; ++j) {
                 noc.async_read(
-                    indices, CoreLocalMem<uint32_t>(idx_base + j * route_pitch), route_bytes, {.page_id = j}, {});
+                    indices,
+                    CoreLocalMem<uint32_t>(route_indices_base + j * route_pitch),
+                    route_bytes,
+                    {.page_id = j},
+                    {});
                 noc.async_read(
-                    scores, CoreLocalMem<uint32_t>(sc_base + j * route_pitch), route_bytes, {.page_id = j}, {});
+                    scores,
+                    CoreLocalMem<uint32_t>(route_scores_base + j * route_pitch),
+                    route_bytes,
+                    {.page_id = j},
+                    {});
             }
         }
         noc.async_read_barrier();
         shared_tile.push_back(1);
         if constexpr (has_sig) {
-            sig_tile.push_back(1);
+            sigmoid_tile.push_back(1);
         }
     }
 
@@ -126,23 +135,23 @@ void kernel_main() {
         // deepseek_moe_fast_reduce_nc_fused_reader.cpp: tile k, column 0, row j = score[j][k] when the expert is on
         // this device's axis, else bf16 +0.0 (the zero seed; rows past the tokens stay +0.0); the other columns are
         // never read (COL broadcast)
-        volatile tt_l1_ptr uint16_t* owner_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(owner_base);
-        volatile tt_l1_ptr uint16_t* idx_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(idx_base);
-        volatile tt_l1_ptr uint16_t* sc_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(sc_base);
-        volatile tt_l1_ptr uint16_t* stile = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(stile_base);
+        volatile tt_l1_ptr uint16_t* owner_flags = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(owner_base);
+        volatile tt_l1_ptr uint16_t* route_indices = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(route_indices_base);
+        volatile tt_l1_ptr uint16_t* route_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(route_scores_base);
+        volatile tt_l1_ptr uint16_t* score_words = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(score_tiles_base);
         for (uint32_t j = 0; j < 32; ++j) {
             owned[j] = 0;
         }
         for (uint32_t j = 0; j < rows; ++j) {
-            const uint32_t col0 = (j < 16) ? j * 16 : 512 + (j - 16) * 16;
-            uint32_t mask = 0;
+            const uint32_t column0_element = (j < 16) ? j * 16 : 512 + (j - 16) * 16;
+            uint32_t row_owned = 0;
             for (uint32_t k = 0; k < top_k; ++k) {
-                if (owner_u16[idx_u16[j * route_words + k]] != 0) {
-                    stile[k * 1024 + col0] = sc_u16[j * route_words + k];
-                    mask |= 1u << k;
+                if (owner_flags[route_indices[j * route_words + k]] != 0) {
+                    score_words[k * 1024 + column0_element] = route_scores[j * route_words + k];
+                    row_owned |= 1u << k;
                 }
             }
-            owned[j] = mask;
+            owned[j] = row_owned;
         }
         score_tiles.push_back(top_k);
     }
@@ -152,33 +161,33 @@ void kernel_main() {
         // half into face (j / 16) * 2 and (j / 16) * 2 + 1, row j % 16, of the slot's tile
         stage.reserve_back(stage_pages);
         stage_base = (stage.get_write_ptr() + fragment_bytes - 1) & ~(fragment_bytes - 1);
-        n = 0;
+        fragment = 0;
         for (uint32_t j = 0; j < rows; ++j) {
             for (uint32_t k = 0; k < top_k; ++k) {
                 if (owned[j] & (1u << k)) {
                     noc.async_read(
                         pages,
-                        CoreLocalMem<uint32_t>(stage_base + n * fragment_bytes),
+                        CoreLocalMem<uint32_t>(stage_base + fragment * fragment_bytes),
                         fragment_bytes,
                         {.page_id = k * rows + j, .offset_bytes = tile_col * fragment_bytes},
                         {});
-                    ++n;
+                    ++fragment;
                 }
             }
         }
         noc.async_read_barrier();  // the zero pages and the fragments have landed
     }
     {
-        n = 0;
+        fragment = 0;
         for (uint32_t j = 0; j < rows; ++j) {
             for (uint32_t k = 0; k < top_k; ++k) {
                 if (owned[j] & (1u << k)) {
-                    const uint32_t src = stage_base + n * fragment_bytes;
+                    const uint32_t src = stage_base + fragment * fragment_bytes;
                     const uint32_t dst =
                         act_base + k * tile_bytes + (j >> 4) * 2 * face_bytes + (j & 15) * face_row_bytes;
                     noc_async_read(get_noc_addr(src), dst, face_row_bytes);
                     noc_async_read(get_noc_addr(src + face_row_bytes), dst + face_bytes, face_row_bytes);
-                    ++n;
+                    ++fragment;
                 }
             }
         }
