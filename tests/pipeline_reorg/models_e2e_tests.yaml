@@ -1940,7 +1940,8 @@
   model: ltx-2.3-fast-t2v
   model_family: LTX
   skus:
-    bh_sc1:
+    # Perf-gated (steady-state stage timings): the high-power (14 kW) pool, where the limits are calibrated.
+    bh_sc1_high_power:
       timeout: 35
       tier: 1
       release_ready: false
