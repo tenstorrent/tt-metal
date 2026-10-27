@@ -513,30 +513,33 @@ def test_forced_codegen_refuses_float32(device, expect_error):
         _force_codegen(xt, **kwargs)
 
 
-# Hand-added: the perf demotion (is_demoted), a blackhole-only ledger. A one-tile-wide int32/uint32
-# input written to DRAM routes to native from 256 tile rows on, however the rows are made up; one
-# tile row under the bound, with an L1 output, two tiles wide, or through the unpadding path on
-# either axis, the same heights stay on codegen. Forced codegen still serves the demoted case: only
-# auto's choice changes.
+# Hand-added: the perf demotion (is_demoted). A one-tile-wide int32/uint32 input written to DRAM
+# routes to native from 256 tile rows on, however the rows are made up, when the input is in DRAM
+# (any arch) or in L1 (blackhole only); one tile row under the bound, with an L1 output, two tiles
+# wide, or through the unpadding path on either axis, the same heights stay on codegen. Forced
+# codegen still serves the demoted case: only auto's choice changes.
 _DEMOTION_CASES = [
-    ([1, 1, 8192, 32], ttnn.DRAM_MEMORY_CONFIG, True, "256_tile_rows_dram"),
-    ([4, 1, 2048, 32], ttnn.DRAM_MEMORY_CONFIG, True, "256_tile_rows_from_batch_dram"),
-    ([1, 1, 8160, 32], ttnn.DRAM_MEMORY_CONFIG, False, "255_tile_rows_dram"),
-    ([1, 1, 8192, 32], ttnn.L1_MEMORY_CONFIG, False, "256_tile_rows_l1"),
-    ([1, 1, 8192, 64], ttnn.DRAM_MEMORY_CONFIG, False, "two_tiles_wide_dram"),
-    ([1, 1, 8190, 32], ttnn.DRAM_MEMORY_CONFIG, False, "unpadded_height_dram"),
-    ([1, 1, 8192, 16], ttnn.DRAM_MEMORY_CONFIG, False, "unpadded_width_dram"),
+    # shape, input placement, output placement, demoted on ("all" | "blackhole" | None), id
+    ([1, 1, 8192, 32], ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, "all", "256_tile_rows_dram"),
+    ([4, 1, 2048, 32], ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, "all", "256_tile_rows_from_batch_dram"),
+    ([1, 1, 8192, 32], ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, "blackhole", "256_tile_rows_l1_input_dram"),
+    ([1, 1, 8160, 32], ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, None, "255_tile_rows_dram"),
+    ([1, 1, 8192, 32], ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, None, "256_tile_rows_l1"),
+    ([1, 1, 8192, 64], ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, None, "two_tiles_wide_dram"),
+    ([1, 1, 8190, 32], ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, None, "unpadded_height_dram"),
+    ([1, 1, 8192, 16], ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, None, "unpadded_width_dram"),
 ]
 
 
 @pytest.mark.parametrize("dtype", _INT_DTYPES, ids=_INT_DTYPE_IDS)
-@pytest.mark.parametrize("shape,mem_config,demoted,case_id", _DEMOTION_CASES, ids=[c[3] for c in _DEMOTION_CASES])
-def test_untilize_int32_dram_demotion(device, dtype, shape, mem_config, demoted, case_id):
-    if not ttnn.device.is_blackhole(device):
-        pytest.skip("the demotion ledger is blackhole-only; every arch else keeps codegen")
+@pytest.mark.parametrize(
+    "shape,in_mem,out_mem,demoted_on,case_id", _DEMOTION_CASES, ids=[c[4] for c in _DEMOTION_CASES]
+)
+def test_untilize_int32_dram_demotion(device, dtype, shape, in_mem, out_mem, demoted_on, case_id):
+    demoted = demoted_on == "all" or (demoted_on == "blackhole" and ttnn.device.is_blackhole(device))
     x = _make_input(shape, dtype)
-    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    kwargs = {"memory_config": mem_config}
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mem)
+    kwargs = {"memory_config": out_mem}
     expected = x.to(torch.int64)
     # Primes the native program, so only a route to codegen grows the cache on the auto call.
     _force_native(xt, **kwargs)

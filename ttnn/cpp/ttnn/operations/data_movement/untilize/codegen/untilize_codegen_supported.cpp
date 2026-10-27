@@ -158,29 +158,32 @@ bool supported_execution_controls(bool use_multicore, const std::optional<CoreRa
 // durations, never from an end-to-end timing: dispatch overhead dominates these single-digit-
 // microsecond kernels, so an end-to-end number says nothing about the kernel.
 //
-// Demoted, on blackhole only: a tile-aligned, one-tile-wide int32/uint32 input written to DRAM
-// with 256 or more tile rows. Measured on p150b (device kernel duration, median of 5), codegen is
-// 2% slower than native at 255-256 tile rows (7.6 vs 7.5 us, from height or from batch alike),
-// 10-12% slower at 384-512 rows, and level at 1024 rows; below the bound it is 6-19% faster at
-// 32-240 rows, with one 2% dip at 192. The margins are small and host-dependent (a second p150b
-// put 256-263 rows 2-6% behind, 512 rows 11% behind), so the bound marks where codegen stops
-// winning rather than a cliff. bf16 inputs (24% faster at 256 rows), 32-bit inputs two or more
-// tiles wide (7-8% faster at 256-512 rows) and L1 outputs (16% faster at 256 rows) stay on
-// codegen. Non-tile-aligned inputs are not demoted: native serves them through its unpadding
-// path, several times slower. Wormhole is unmeasured and keeps codegen.
+// Demoted: a tile-aligned, one-tile-wide int32/uint32 input written to DRAM with 256 or more tile
+// rows, when the input is in DRAM on any arch, or in L1 on blackhole. Measured as forced codegen
+// over native (device kernel duration) at 263 tile rows: on N300 a DRAM input loses 16-17% while
+// an L1 input wins 21%; on P150 a DRAM input loses 2-3% and an L1 input 5-6%. On P150 the same
+// DRAM-to-DRAM case, swept by height (median of 5): 2% slower at 255-256 rows, 10-12% slower at
+// 384-512, level at 1024, and 6-19% faster at 32-240 rows with one 2% dip at 192, so the bound
+// marks where codegen stops winning rather than a cliff. L1 outputs (8-20% faster at 263 rows on
+// both archs), bf16 (24% faster at 256 rows) and rows two or more tiles wide (7-8% faster at
+// 256-512 rows) stay on codegen. Non-tile-aligned inputs are not demoted: native serves them
+// through its unpadding path, several times slower.
 bool is_demoted(const Tensor& input, const tt::tt_metal::MemoryConfig& output_mem_config) {
+    using tt::tt_metal::BufferType;
     using tt::tt_metal::DataType;
     namespace plan = ttnn::prim::untilize_codegen_detail;
     constexpr uint64_t kNarrow32BitDramTileRowLimit = 256;
 
     const DataType dtype = input.dtype();
     if ((dtype != DataType::INT32 && dtype != DataType::UINT32) ||
-        output_mem_config.buffer_type() != tt::tt_metal::BufferType::DRAM ||
-        input.device()->arch() != tt::ARCH::BLACKHOLE) {
+        output_mem_config.buffer_type() != BufferType::DRAM) {
         return false;
     }
     const auto g = plan::padded_grid(input);
-    return g.tile_aligned && g.wt == 1 && g.total_tile_rows >= kNarrow32BitDramTileRowLimit;
+    if (!g.tile_aligned || g.wt != 1 || g.total_tile_rows < kNarrow32BitDramTileRowLimit) {
+        return false;
+    }
+    return input.memory_config().buffer_type() == BufferType::DRAM || input.device()->arch() == tt::ARCH::BLACKHOLE;
 }
 
 }  // namespace ttnn::operations::data_movement::untilize_codegen
