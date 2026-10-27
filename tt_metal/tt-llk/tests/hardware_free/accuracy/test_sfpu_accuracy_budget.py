@@ -71,6 +71,14 @@ def _contracts(*rows: Row):
     return {row.key: row.contract for row in rows}
 
 
+def _op_wide_budget(monkeypatch, op):
+    """Hold *op* to 0 steps by one op-wide row, which binds on the table's own
+    architecture."""
+    monkeypatch.setitem(
+        _SFPU_ACCURACY_BUDGET, op, {BudgetKey(): AccuracyContract(max_ulp=0)}
+    )
+
+
 def _every_variant(op):
     """``(input_format, output_format, contract)`` for every variant of *op*, every
     dimension swept, ``None`` included where a caller may leave it unset."""
@@ -188,8 +196,9 @@ def test_the_binary_gate_enforces_the_whole_contract(arch, gated, monkeypatch):
     only on hardware, so this is the one host check that it takes the step budget: a
     one-step drift on SfpuElwEq, exact on the table's architecture, fails there and
     passes the tolerance it falls back to elsewhere. It also ranks subnormal outputs
-    flushed: under a 0-step SfpuElwsub budget (an op-wide row, which binds wherever the
-    table is read), an fp16-subnormal golden the pack writes as 0 is no step."""
+    flushed: under a 0-step SfpuElwsub budget (an op-wide row, which binds on the
+    table's own architecture), an fp16-subnormal golden the pack writes as 0 is no
+    step."""
     monkeypatch.setattr(chip, "get_chip_architecture", lambda: arch)
     bf16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     golden = torch.ones(_LANES, dtype=torch.bfloat16)
@@ -208,11 +217,7 @@ def test_the_binary_gate_enforces_the_whole_contract(arch, gated, monkeypatch):
         eq_gate()
 
     # The real fp16 row is a carried tolerance row on Blackhole, which never ranks.
-    monkeypatch.setitem(
-        _SFPU_ACCURACY_BUDGET,
-        MathOperation.SfpuElwsub,
-        {BudgetKey(): AccuracyContract(max_ulp=0)},
-    )
+    _op_wide_budget(monkeypatch, MathOperation.SfpuElwsub)
     fp16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
     golden = torch.ones(_LANES, dtype=torch.float16)
     golden[0] = float(torch.finfo(torch.float16).smallest_normal) / 2
@@ -335,11 +340,7 @@ def test_an_enrolled_op_keeps_todays_gate_on_a_format_the_sfpu_does_not_compute_
     monkeypatch,
 ):
     """An op-wide step budget, but a block float keeps its block-aware compare."""
-    monkeypatch.setitem(
-        _SFPU_ACCURACY_BUDGET,
-        MathOperation.Abs,
-        {BudgetKey(): AccuracyContract(max_ulp=0)},
-    )
+    _op_wide_budget(monkeypatch, MathOperation.Abs)
     query = dict(op=MathOperation.Abs, arch=MEASURED_ARCH)
     assert (
         accuracy_contract(output_format=DataFormat.Float16_b, **query).metric
@@ -356,11 +357,7 @@ def test_an_enrolled_op_keeps_todays_gate_when_the_input_is_not_a_compute_format
 ):
     """The input-axis twin: the row wildcards `input`, so only `steps_bind` reading
     the input format keeps a block-float input off the step budget."""
-    monkeypatch.setitem(
-        _SFPU_ACCURACY_BUDGET,
-        MathOperation.Abs,
-        {BudgetKey(): AccuracyContract(max_ulp=0)},
-    )
+    _op_wide_budget(monkeypatch, MathOperation.Abs)
     query = dict(
         op=MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
     )

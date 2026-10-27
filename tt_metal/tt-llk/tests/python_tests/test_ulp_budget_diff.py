@@ -632,7 +632,7 @@ def test_a_list_cell_that_lost_every_lane_is_a_regression():
     assert _verdicts(table, _tanh_measured([], lanes=0)) == [Verdict.NO_LANE]
 
 
-def test_headroom_exit_status(tmp_path):
+def test_headroom_exit_status(tmp_path, capsys):
     """0 within the figure, 1 past it or with nothing measured, 2 for records or a
     table that do not load."""
     table, measured = tmp_path / "table.yaml", tmp_path / "measured.jsonl"
@@ -644,7 +644,7 @@ def test_headroom_exit_status(tmp_path):
         assert main(argv) == status
     measured.write_text("")
     assert main(argv) == 1  # an empty file is a sweep that recorded nothing
-    absent = argv[:4] + [str(tmp_path / "absent.jsonl")]
+    absent = [*argv[:4], str(tmp_path / "absent.jsonl"), *argv[5:]]
     assert main(absent) == 2  # a missing one is an input that is not there
     for text in ("{\n", '{"op": "Abs", "key": {}}\n'):
         measured.write_text(text)
@@ -653,6 +653,8 @@ def test_headroom_exit_status(tmp_path):
     assert main(argv) == 2
     measured.write_text(_measured(1).to_json() + "\n")
     assert main(argv[:2] + [str(tmp_path / "absent.yaml")] + argv[3:]) == 2
+    # Each 2 is the input's, not the architecture check's that runs first.
+    assert "cannot tell which architecture" not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("arch", list(TABLE_PATHS), ids=lambda a: a.value)
@@ -663,9 +665,7 @@ def test_headroom_judges_a_table_by_the_architecture_its_file_names(tmp_path, ar
     table = tmp_path / TABLE_PATHS[arch].name
     write_table_file(_table(Row(output=F16B, measured=1)), table)
     measured = tmp_path / "measured.jsonl"
-    cell = BudgetKey(
-        input_format=F16B, output_format=F16B, approx_mode=NO, dest_acc=D_NO, arch=arch
-    )
+    cell = replace(_CELL, arch=arch)
     measured.write_text(Measurement(op=ABS, key=cell, worst=9, lanes=1).to_json())
     argv = ["headroom", "--table", str(table), "--measured", str(measured)]
     assert main(argv) == 1
@@ -682,13 +682,7 @@ def test_headroom_takes_records_from_a_chip_that_reads_the_table(tmp_path):
     table = tmp_path / TABLE_PATHS[ChipArchitecture.WORMHOLE].name
     write_table_file(_table(Row(output=F16B, measured=1)), table)
     measured = tmp_path / "measured.jsonl"
-    cell = BudgetKey(
-        input_format=F16B,
-        output_format=F16B,
-        approx_mode=NO,
-        dest_acc=D_NO,
-        arch=ChipArchitecture.QUASAR,
-    )
+    cell = replace(_CELL, arch=ChipArchitecture.QUASAR)
     measured.write_text(Measurement(op=ABS, key=cell, worst=9, lanes=1).to_json())
     assert main(["headroom", "--table", str(table), "--measured", str(measured)]) == 0
 
