@@ -22,7 +22,7 @@ DECODE_B_PAD = 32  # decode batch is always padded to one tile of rows
 
 
 class MuseGlimmerModel:
-    def __init__(self, args, mesh_device, ccl=None, use_weight_cache=True, kv_num_blocks=None):
+    def __init__(self, args, mesh_device, ccl=None, use_weight_cache=True, kv_num_blocks=None, allocate_kv=True):
         self.args = args
         self.mesh_device = mesh_device
         self.ccl = ccl if ccl is not None else MuseCCL(mesh_device)
@@ -71,7 +71,10 @@ class MuseGlimmerModel:
         )
         del lm
         gc.collect()
-        self.kv_caches = [allocate_kv_cache(args, mesh_device, kv_num_blocks) for _ in self.layers]
+        # allocate_kv=False: the caller (vLLM) owns the paged cache and assigns self.kv_caches.
+        self.kv_caches = None
+        if allocate_kv:
+            self.kv_caches = [allocate_kv_cache(args, mesh_device, kv_num_blocks) for _ in self.layers]
         self.sampling = None
         self._init_device_sampling()
 
@@ -184,14 +187,21 @@ class MuseGlimmerModel:
         full = ttnn.to_torch(logits_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
         return full[0, 0, :num_rows, : self.args.vocab_size].float()
 
-    def _prefill_hidden(self, tokens: torch.Tensor, user_id: int, page_table_tt):
-        """Run embedding + all layers for one prompt -> (hidden [1,1,S,H], s_real, S)."""
+    def _prefill_hidden(self, tokens: torch.Tensor, user_id: int, page_table_tt, pad_len=None):
+        """Run embedding + all layers for one prompt -> (hidden [1,1,S,H], s_real, S).
+
+        pad_len pads to a fixed bucket instead of the smallest valid length, so a server compiles a bounded set of
+        prefill shapes up front.
+        """
         a = self.args
         tokens = tokens.reshape(-1)
         s_real = tokens.shape[0]
         assert 0 < s_real <= a.max_prefill_len, f"prompt length {s_real} > max_prefill_len {a.max_prefill_len}"
         # Multiple of the 256-row prefill SDPA Q chunk: a partial last Q chunk gives wrong sliding-window rows.
         s = 128 if s_real <= 128 else -(-s_real // 256) * 256
+        if pad_len is not None:
+            assert pad_len >= s and (pad_len == 128 or pad_len % 256 == 0), f"invalid prefill pad_len {pad_len}"
+            s = pad_len
         assert s <= a.max_seq_len, f"padded prefill length {s} exceeds max_seq_len {a.max_seq_len}"
         pad_id = a.pad_token_id if a.pad_token_id is not None else 0
         padded = torch.full((1, s), pad_id, dtype=torch.int64)
@@ -213,10 +223,10 @@ class MuseGlimmerModel:
             x = nx
         return x, s_real, s
 
-    def prefill_forward_logits_tt(self, tokens: torch.Tensor, user_id: int, page_table_tt):
+    def prefill_forward_logits_tt(self, tokens: torch.Tensor, user_id: int, page_table_tt, pad_len=None):
         """Prefill one prompt -> softcapped logits [1,1,32,vocab_local] on device; the last real token is row 0."""
         a = self.args
-        x, s_real, _ = self._prefill_hidden(tokens, user_id, page_table_tt)
+        x, s_real, _ = self._prefill_hidden(tokens, user_id, page_table_tt, pad_len)
         last = ttnn.slice(x, (0, 0, s_real - 1, 0), (1, 1, s_real, a.hidden_size))
         ttnn.deallocate(x)
         hs = ttnn.pad(last, [(0, 0), (0, 0), (0, 31), (0, 0)], 0.0)
