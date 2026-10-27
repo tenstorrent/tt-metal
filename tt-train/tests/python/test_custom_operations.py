@@ -322,16 +322,16 @@ class TestGetLinks:
 class TestFunctionBase:
     """Tests for the Function base class."""
 
-    def test_forward_not_implemented(self):
+    def test_forward_not_implemented(self, expect_error):
         """Test that forward raises NotImplementedError."""
         ctx = FunctionContext()
-        with pytest.raises(NotImplementedError):
+        with expect_error(NotImplementedError, "Subclasses must implement forward"):
             Function.forward(ctx)
 
-    def test_backward_not_implemented(self):
+    def test_backward_not_implemented(self, expect_error):
         """Test that backward raises NotImplementedError."""
         ctx = FunctionContext()
-        with pytest.raises(NotImplementedError):
+        with expect_error(NotImplementedError, "Subclasses must implement backward"):
             Function.backward(ctx)
 
 
@@ -637,6 +637,47 @@ class TestCustomOperationsWithDevice:
         grad_tensor = input_tensor.get_grad_tensor()
         expected_grad = np.full_like(input_data, 2.0)
         np.testing.assert_array_almost_equal(grad_tensor.to_numpy(), expected_grad, decimal=5)
+
+    def test_needs_input_grad_skips_frozen_input(self):
+        """ctx.needs_input_grad marks which inputs need a grad, so backward can skip the rest."""
+
+        computed = []
+
+        class MulOp(Function):
+            @staticmethod
+            def forward(ctx, a, b, scale):
+                ctx.save_for_backward(a, b)
+                ctx.scale = scale
+                return ttnn.multiply(ttnn.multiply(a.get_value(), b.get_value()), scale)
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                a, b = ctx.saved_tensors
+                grad_output = ttnn.multiply(grad_output, ctx.scale)
+                grad_a = grad_b = None
+                if ctx.needs_input_grad[0]:
+                    computed.append("a")
+                    grad_a = ttnn.multiply(grad_output, b.get_value())
+                if ctx.needs_input_grad[1]:
+                    computed.append("b")
+                    grad_b = ttnn.multiply(grad_output, a.get_value())
+                return grad_a, grad_b
+
+        a_data = np.full((1, 1, 32, 32), 3.0, dtype=np.float32)
+        b_data = np.full((1, 1, 32, 32), 5.0, dtype=np.float32)
+        a_tensor = ttml.autograd.Tensor.from_numpy(a_data)
+        b_tensor = ttml.autograd.Tensor.from_numpy(b_data)
+        a_tensor.set_requires_grad(True)
+
+        output = MulOp.apply(a_tensor, b_tensor, 2.0)
+        output.backward(retain_graph=False)
+
+        # d/da(a * b * s) = b * s = 10.0
+        assert computed == ["a"]
+        np.testing.assert_array_almost_equal(
+            a_tensor.get_grad_tensor().to_numpy(), np.full_like(a_data, 10.0), decimal=5
+        )
+        assert not b_tensor.is_grad_initialized(), "Frozen input should have no gradient"
 
     def test_auto_wrap_ttnn_tensor(self):
         """Test that ttnn tensors returned from forward are auto-wrapped."""
@@ -963,7 +1004,7 @@ class TestCustomOperationsWithDevice:
         # qs should have gradient (q depends on qs)
         assert qs.is_grad_initialized(), "qs should have gradient when q is used"
 
-    def test_mixed_outputs_raises_error(self):
+    def test_mixed_outputs_raises_error(self, expect_error):
         """Test that forward() returning a mix of autograd and raw outputs raises RuntimeError.
 
         When forward() produces some outputs via ttml autograd ops (which set graph
@@ -988,7 +1029,7 @@ class TestCustomOperationsWithDevice:
         input_tensor = ttml.autograd.Tensor.from_numpy(input_data)
         input_tensor.set_requires_grad(True)
 
-        with pytest.raises(RuntimeError, match="returned a mix of outputs with and without autograd graph nodes"):
+        with expect_error(RuntimeError, "returned a mix of outputs with and without autograd graph nodes"):
             MixedOutputOp.apply(input_tensor)
 
 

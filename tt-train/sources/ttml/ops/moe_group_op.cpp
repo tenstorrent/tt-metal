@@ -124,6 +124,10 @@ MoEGroupOutputs moe_group_op(
     if (primary_node.has_value()) {
         grouped_scores_out->set_node(
             autograd::add_backward_node_always([]() {}, grouped_scores_out, dispatched, scores, grouped_out));
+        // Each output carries grad to one input only, so downstream ops skip the grad of an output whose input is
+        // frozen.
+        grouped_out->set_requires_grad(dispatched->get_requires_grad());
+        grouped_scores_out->set_requires_grad(scores->get_requires_grad());
     }
 
     return MoEGroupOutputs{
