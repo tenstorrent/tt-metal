@@ -52,7 +52,12 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test
     expert_weights,
 )
 
-pytestmark = pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart)
+pytestmark = [
+    pytest.mark.uncollect_if(pred=ci_pruning.no_production_counterpart),
+    # Every test here takes the function-scoped `device` fixture without parametrizing
+    # device_params, so the device is opened once per module rather than once per test.
+    pytest.mark.use_module_device,
+]
 
 # Which half serves an expert. Fixed rather than read from each model's own
 # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD, because the models that carry one all carry 320 and the
