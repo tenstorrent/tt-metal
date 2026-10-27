@@ -1257,3 +1257,15 @@ eager prefill with the MTP hidden capture (3.98 s for the 4 prefills of a row, e
 arg/glm53_served_spec 0c6ba7898b5 + 99435254322): the adapter implements the plugin's device-propose contract (P/V/C/D/D0 traces,
 MTP fill per prefill chunk, narrow decode, argmax_ids accept); limits: replicated caches only (the partitioned 1 M profile is refused),
 dense range only (anchor + K <= 2050), greedy only. Block test `served_spec_block` queued (wt_frozen27).
+
+18:52 Dispatch pass budget landed (mesh + upstream, from arg/glm53_dispatch_pass_budget: 617940b91fb, b931230374e, 1cc5eeeadb2). Root
+cause of the 17:15 block hang (tt-triage + autotriage, _logs/mesh/triage/AUTOTRIAGE_dispatch_pass_budget_20261027.md): the expert dispatch
+ops (33..256 gathered tokens) enumerate passes with a budget P = 8T/32 + E that only holds for <= 8 picks per row; a routing row with far
+more non-zeros (NaN / stale rows past seq_len handed to the router by the traced prefill's padding) exceeded it, the down writer clamped
+its own loop while the compute consumed unclamped metadata -> deadlock on columns 0-2 (column 3's stale rows differed), the gate_up op
+wrote past its L1 buffers. Every passing case before had zero pad rows. Fix: one clamp_passes in every dispatch kernel (flag in table
+word 63; the down op sums a token's first 8 contributions in expert order), GLM53_ROUTER_PAD_MASK=1 (rows past seq_len zeroed before
+routing, traced prefill carries a persistent [T,32] mask input), GLM53_DISPATCH_GUARD=1 (eager dispatch calls read the counts and raise
+naming the call site). Device: one chip over-budget dense+nan RETURN with the flag (2/2), no regression on well-formed routings (4/4);
+on the block the guard named the served spec v1's MTP prompt fill (all 128 rows over budget after a traced prefill: a layout bug in that
+branch, not the pad rows). Note: the served plain path was exposed too (any prompt shorter than its trace bucket).
