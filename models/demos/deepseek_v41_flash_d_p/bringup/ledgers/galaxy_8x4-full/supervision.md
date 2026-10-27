@@ -254,3 +254,39 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
   run_profile unchanged: warm, plain wall, one RT-profiler run). 500k fits: deploy.seq 1044480. One process per
   position. Framework gap: run_profile only profiles a golden rung's last chunk; a position profile with sections is
   what X.3's test_positions should record (wall only today) -> F-entry at the next boundary.
+- 08:44-09:36 owner: profile one 5120 chunk (all 40 layers) at context 0 / 50k / 100k / 200k / 500k: device total 329.9
+  / 350.6 / 360.0 / 372.7 / 403.7 ms; only the indexer grows (3.6 -> 63.9 ms, ~0.12 ms per 1k); attention 82 -> ~93 flat
+  from 50k; experts + moe_add ~181-186 flat. Results /scratch/dnijemcevic/posprof/results/POS*.json (FABRIC_2D).
+- 09:40 F196 (14b46baf60f): clean wall timed only after a run adds no program-cache entry, misses refused in the timed
+  runs. First use, position 0: NOT converging (249 -> 831 entries over ~30 runs, +20..40 a run; walls 15-43 s). Killed
+  10:03 (would run to 100). Census (overseer plugin posprof/census_plugin.py, 6 runs): every new entry is
+  ttnn.bringup.flat_routed_expert_with_program (+40/+40/+20/+40/+38/+20, i.e. 20-40 of 40 layers a run); its key bakes
+  every buffer address (flat_with_program_device_operation.hpp:33). ~0.5 s host per miss. => no host number so far is
+  warm. Owner: ignore host times until the op is fixed; profiling must always check cache entries before calling a run
+  warm -> F197 (record_warm: <run>_new_programs on the plain, profiled and position runs; NOT WARM printed).
+  FIX.5 queued (gate W.1): addresses as runtime args patched on a hit, out of the hash; bit-identical; F196 converges.
+- 10:08 owner: switch 8x4 to FABRIC_2D_TORUS_XY; spec edited, intake re-approved (owner's word). Then device-time
+  profile at the 5 positions on torus. Indexer ring hard-codes ttnn.Topology.Linear (tt/indexer.py:121): note for an
+  agent after torus is verified. Framework gap: the selftest suite took CHIP_IN_USE_0_PCIe (a box test waited on it).
+- 10:18 torus box test PASS (4x8_Mesh_flat_torus_xy, collectives exact; it first timed out at 300 s behind a chip lock
+  held by my selftest suite, PID 3690127: killed; cards reset by the next run). 10:19 torus position profile pos 0:
+  HANG at 10:25 ('device timeout in fetch queue wait'); triage: flat_routed_expert_with_program cores waiting
+  (se3/se6 compute, semaphore_read), DRISC 'ready, done 0'. Series stopped (STOP + kill). Classified MODEL / FORK (the
+  routed-expert path is not torus-safe), not infra: FIX.6 queued (gate B.1 + W.1 on torus; also the indexer's
+  Topology.Linear). FIX.5 set held until FIX.6 (its W.1 gate would hang on torus). Both need the orchestrator resumed:
+  owner's call (the run is paused for the rebase).
+- 10:3x owner: drop torus for now (a new flat expert op in the works fixes it; FIX.6 removed, spec back to FABRIC_2D,
+  intake re-approved); hack the cache misses, then pause for the rebase. Key log (posprof/keylog_plugin.py, 5 runs):
+  of the op's key only a(xg) moves (56 DRAM addresses; arena, words, relay_words, counts, token_index fixed). Hack
+  (owner-approved, overseer-written, default off): Setting EXPERTS_XG_PINNED; on = gather_x writes one persistent DRAM
+  buffer (ccl.all_gather out=, ccl.dealloc skips pinned addresses: the shared expert frees take_rows' rows).
+- 10:51 F196 warm wall, position 0, XG_PINNED=on: warm after 1 run (249 -> 249 entries), 10 timed runs with misses
+  refused all completed: median 860.5 ms (830-974). The 15-43 s before was program rebuilds. First verified warm host
+  number. Next: 500k device profile with the hack (vs 403.7 ms), accuracy of the hacked path, F197 suite, commit, push.
+- 10:57 500k device profile, XG_PINNED=on: 383.5 ms (plain + profiled runs built 0 programs: warm), was 403.7 ms with
+  misses (experts + moe_add 182.2 -> 166.9: collective waits from staggered program launches); warm plain wall 930 ms.
+- 11:0x accuracy of the hacked path: s10240 ladder with XG_PINNED=on: every metric identical to L.s10240 (9960b0b018b)
+  to the last digit (err_final_hidden 0.18905364, top5 1.0, L39 0.68742542). Selftests 607 passed (only the old xing40
+  failure). Committed F197 + the hack (default off) + records; pushed (owner: include the hack). PAUSED for the
+  owner's rebase onto latest tt-metal. Pending after the rebase: FIX.5 (proper op fix, or moot with the new op),
+  torus with the new op, K.1 (needs a current tt-d-gen), X.*.
