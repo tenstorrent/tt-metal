@@ -58,10 +58,7 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
         // Create SDPA forward operation with the effective mask type
         // No explicit mask tensor needed - SDPA kernel generates causal mask internally
         sdpa_fw::device::operation_attributes_t sdpa_attrs{
-            .return_intermediates = true,
-            .mask_type = effective_mask_type,
-            .dropout_probability = 0.0F,
-            .program_config = operation_attributes.program_config};
+            .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_fw::device::tensor_args_t sdpa_tensor_args{
             .query = query,
@@ -125,10 +122,7 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
         std::optional<ttnn::Tensor> mask_opt = std::nullopt;
         std::optional<ttnn::Tensor> gate_opt = std::nullopt;
         sdpa_fw::operation_attributes_t sdpa_attrs{
-            .return_intermediates = true,
-            .mask_type = effective_mask_type,
-            .dropout_probability = 0.0F,
-            .program_config = operation_attributes.program_config};
+            .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
 
         sdpa_fw::tensor_args_t sdpa_tensor_args{
             .query = query,
