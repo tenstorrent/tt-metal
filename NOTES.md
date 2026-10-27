@@ -65,3 +65,7 @@
 - Next: read PCC/PSNR + VBench (cand=on vs ref=off; no dim down >0.01) from q/eval.log. If ok: in branch
   ttp/t511-ltxrt-land (3f3ce168ce8), check origin/ltx-rt is still 522ef26916b (else re-cherry-pick + CPU test),
   then ttp push --detach (ff onto origin ltx-rt), note to sulphur not needed (not an HF change).
+- 2026-10-27 02:25 PDT (run 2155): eval511 rc=1 = expected PCC/PSNR gate fail (different samplers): pcc 0.97543
+  (min 0.93299), psnr 28.54 (min 24.11 @ f116). VBench on vs off: subject 0.9025 vs 0.9002, background 0.9297 vs 0.9185,
+  imaging 0.5433 vs 0.5471 (-0.0038), motion 0.9834 vs 0.9836. No dim down >0.01 -> verdict ok.
+  origin/ltx-rt still 522ef26916b; landing 3f3ce168ce8 is ff. Pushing via local branch ltx-rt + ttp push --own --detach.
