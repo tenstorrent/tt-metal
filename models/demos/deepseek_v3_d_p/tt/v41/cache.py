@@ -269,8 +269,9 @@ class V41ChunkTables:
         # (the first compressed row of the query's segment, [1, 1, rows, 1] fp32 tiled like ``_visible``), the
         # window-row table per layout (``window_rows``) and the packed host fills per layout; ``_segments`` is the
         # layout of the chunk being run (None: a single prompt, the graph of before)
+        self._pack = pack_enabled()
         self._base = {}
-        if pack_enabled():
+        if self._pack:
             self._base = {r: self._per_query_chip(torch.zeros(self.chunk, 1), ttnn.float32) for r in ratios if r > 0}
         self._pack_windows: dict[tuple, ttnn.Tensor] = {}
         self._pack_host: dict[tuple, list] = {}
@@ -431,7 +432,7 @@ class V41ChunkTables:
         count ``(i + 1) // r`` is unchanged: its segment's rows are at ``[offset / r, (i + 1) // r)``), the lower
         bound ``offset / r`` per query (``_base``) and the row indices as at start 0 (the pack's compressed rows
         are contiguous)."""
-        assert self.generic and self._base, "packed chunks need TT_V41_PACK=1 at the state's construction"
+        assert self.generic and self._pack, "packed chunks need TT_V41_PACK=1 at the state's construction"
         segments = tuple(segments)
         cached = self._pack_host.get(segments)
         if cached is not None:
