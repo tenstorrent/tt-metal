@@ -36,5 +36,9 @@ def test_memory_plan_8x4_table():
     assert not MemoryPlan.estimate(cfg, 8, 4, partition=False, keep_stacked=True).fits(1, 1048576)
     assert not MemoryPlan.estimate(cfg, 8, 4, partition=True, scratch_slot=True).fits(4, 1048576)
     assert MemoryPlan.estimate(cfg, 8, 4, partition=True, scratch_slot=False).fits(4, 1048576)
+    part = MemoryPlan.estimate(cfg, 8, 4, partition=True, scratch_slot=False)
+    # 2026-10-27: the 128 K x 32-users served boot ran out of DRAM in the 32 K warm-up prompt (fragmented 0.6 GB left);
+    # the chunk working-set term keeps >= 2 GiB after the caches: 28 users per row (7 slots per chip) is the 128 K profile
+    assert not part.fits(32, 131072) and part.fits(28, 131072) and part.max_users_per_row(131072) == 28
     assert rep.fits(4, 65536), "v22: 4 users per row at 64 K with both expert forms ran"
     assert MemoryPlan.estimate(cfg, 8, 4, partition=False, keep_stacked=True).fits(4, 65536)
