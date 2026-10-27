@@ -1,0 +1,13 @@
+{
+ "metrics": {
+  "smoke_device_ok": {
+   "t": "2026-10-27T08:58:52",
+   "value": 1
+  },
+  "smoke_device_tokens": {
+   "t": "2026-10-27T08:58:52",
+   "value": 11
+  }
+ },
+ "task": "L.smoke"
+}
