@@ -231,30 +231,44 @@ def build_text(status, rows, ctx):
             ]
         )
 
-    findings = _findings(rows)
-    worst = findings[:_TOP_N]
     lines = [
         f":rotating_light: *{gate}: regression* {subject}",
         f"{byline}  ·  {where}",
         *note,
         "",
-        f"*{len(rows)} point(s) regressed, in {len(findings)} finding(s).*",
     ]
     if ctx.get("pr_title"):
         lines.insert(2, f"_{_escape(ctx['pr_title'])}_")
+    lines += regression_body(rows, ctx)
+    return "\n".join(lines)
+
+
+def regression_body(rows, ctx, annotate=None):
+    """Count, worst findings, report links and a repro command for one arch.
+
+    ``annotate(row)`` may return one more line for a finding's worst point."""
+    run_link = f"<{ctx['run_url']}|gate run>" if ctx.get("run_url") else "gate run"
+    findings = _findings(rows)
+    worst = findings[:_TOP_N]
+    lines = [f"*{len(rows)} point(s) regressed, in {len(findings)} finding(s).*"]
     if worst:
         lines.append("")
         varying = _varying_keys([g[0] for g in worst])
-        lines += [_describe_finding(g, varying) for g in worst]
+        for group in worst:
+            lines.append(_describe_finding(group, varying))
+            extra = annotate(group[0]) if annotate else ""
+            if extra:
+                lines.append(f"      ↳ {extra}")
     if len(findings) > _TOP_N:
         lines.append(f"_… and {len(findings) - _TOP_N} more finding(s)._")
-    lines += ["", _report_line(ctx, run_link)]
     lines += [
+        "",
+        _report_line(ctx, run_link),
         "",
         "Reproduce the worst one locally:",
         f"```{_repro_command(rows, ctx.get('arch'), ctx.get('baseline_sha'))}```",
     ]
-    return "\n".join(lines)
+    return lines
 
 
 def _emit_outputs(**values):
@@ -302,6 +316,12 @@ def main(argv=None):
         default="true",
         help="false: post nothing when the gate passes; regressions and skips still post",
     )
+    ap.add_argument("--threshold", default="", help="for the combined post")
+    ap.add_argument("--module-thresholds", default="", help="for the combined post")
+    ap.add_argument(
+        "--part-out",
+        help="also write the verdict as JSON, for gate_slack_combine.py",
+    )
     ap.add_argument("--out", default="slack_payload.json")
     a = ap.parse_args(argv)
 
@@ -340,8 +360,22 @@ def main(argv=None):
         "gate_name": a.gate_name,
         "trigger": a.trigger,
         "note": a.note,
+        "threshold": a.threshold,
+        "module_thresholds": a.module_thresholds,
     }
     text = build_text(status, rows, ctx)
+
+    if a.part_out:
+        with open(a.part_out, "w") as fh:
+            json.dump(
+                {
+                    "status": status,
+                    "should_post": should_post,
+                    "rows": rows,
+                    "ctx": ctx,
+                },
+                fh,
+            )
 
     with open(a.out, "w") as fh:
         json.dump({"channel": a.channel, "text": text}, fh)
