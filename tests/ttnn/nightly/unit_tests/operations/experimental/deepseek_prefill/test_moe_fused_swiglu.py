@@ -25,13 +25,13 @@ from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import (
     ACTIVATION_SILU,
     ACTIVATION_SITU,
     ACTIVATION_SWIGLUOAI,
-    TorchExpert,
     apply_glu_activation,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     SINGLE_EXPERT_MODELS,
+    expert_golden,
     expert_weights,
     to_dram_nd_sharded,
 )
@@ -137,15 +137,7 @@ def run_moe_fused_swiglu(
 
     with torch.no_grad():
         if gate_bias is None:
-            torch_expert = TorchExpert(
-                emb_dim,
-                hidden_dim,
-                weights,
-                activation=torch_activation,
-                situ_beta=_SITU_BETA_GATE,
-                situ_linear_beta=_SITU_BETA_UP,
-            )
-            torch_output_active = torch_expert(torch_active)
+            _, torch_output_active = expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation)
         else:
             # TorchExpert carries no bias, and the bias terms sit outside apply_glu_activation's
             # contract anyway -- gate/up before the activation, down after the down matmul -- so a
@@ -312,11 +304,11 @@ def _isl_params(active_sweep, only_models=None):
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
+@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.parametrize(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     _isl_params(_ISL_FUNCTIONAL_SWEEP + _ISL_SHORT_BLOCK_SWEEP),
 )
-@pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
 @pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
 def test_moe_fused_swiglu_functional(
     device, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int, x_row_major: bool
@@ -358,8 +350,8 @@ def test_moe_fused_swiglu_isl_sweep(
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
-@pytest.mark.parametrize("active_tokens", _ISL_EXHAUSTIVE_SWEEP, ids=[f"t{t}" for t in _ISL_EXHAUSTIVE_SWEEP])
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+@pytest.mark.parametrize("active_tokens", _ISL_EXHAUSTIVE_SWEEP, ids=[f"t{t}" for t in _ISL_EXHAUSTIVE_SWEEP])
 @pytest.mark.skipif(not is_blackhole(), reason="SiTU-GLU is Blackhole-only")
 def test_moe_fused_swiglu_k3_situ(device, active_tokens: int, x_row_major: bool):
     """Kimi K3: SiTU-GLU at the post-projection dims, so K is ROUTED_EXPERT_HIDDEN_SIZE."""

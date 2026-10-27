@@ -103,6 +103,47 @@ def expert_weights(hidden_dim, emb_dim, weight_scale):
     return dict(weights)
 
 
+@functools.lru_cache(maxsize=1)
+def _cached_expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation):
+    """The activations and the torch reference output for one expert case, plus the trailing RNG state.
+
+    The reference is three fp32 CPU matmuls over the full active slice and profiles as the single
+    largest cost in these files -- larger than the device work they exist to grade. It depends only
+    on the dims, the scale and the activation, so every layout and weight-placement variation of the
+    same case recomputes an identical tensor.
+
+    maxsize=1 is enough only because the sweeps parametrize the layout axes ABOVE the dims, so the
+    variations sharing a reference run back to back. Moving the dims above them again would scatter
+    those repeats and silently turn this into a pure cost. See expert_weights for the RNG contract.
+    """
+    weights = expert_weights(hidden_dim, emb_dim, weight_scale)
+    torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
+    torch_expert = TorchExpert(
+        emb_dim,
+        hidden_dim,
+        weights,
+        activation=_TORCH_ACTIVATION[activation],
+        situ_beta=_SITU_BETA_GATE,
+        situ_linear_beta=_SITU_BETA_UP,
+    )
+    with torch.no_grad():
+        torch_output_active = torch_expert(torch_active)
+    return torch_active, torch_output_active, torch.get_rng_state()
+
+
+def expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation):
+    """Cached (activations, reference output) for one expert case.
+
+    Leaves the global RNG where drawing the activations inline would have. Both tensors are shared
+    between callers: read them, and copy before any in-place write.
+    """
+    torch_active, torch_output_active, rng_state = _cached_expert_golden(
+        hidden_dim, emb_dim, weight_scale, active_tokens, activation
+    )
+    torch.set_rng_state(rng_state)
+    return torch_active, torch_output_active
+
+
 def run_single_routed_expert(
     device,
     allocated_tokens: int,
@@ -167,27 +208,14 @@ def run_single_routed_expert(
 
     weights = expert_weights(hidden_dim, emb_dim, weight_scale)
 
-    # Create torch reference
-    torch_expert = TorchExpert(
-        emb_dim,
-        hidden_dim,
-        weights,
-        activation=torch_activation,
-        situ_beta=_SITU_BETA_GATE,
-        situ_linear_beta=_SITU_BETA_UP,
-    )
-
     # 2D input (allocated_tokens, emb_dim) — the single expert's dispatch buffer. The first
     # active_tokens rows hold real data; the rest is zero padding (a no-op when active==allocated).
-    torch_active = torch.randn(active_tokens, emb_dim, dtype=torch.float32)
+    torch_active, torch_output_active = expert_golden(hidden_dim, emb_dim, weight_scale, active_tokens, activation)
     torch_input = torch.zeros(allocated_tokens, emb_dim, dtype=torch.float32)
     torch_input[:active_tokens] = torch_active
     logger.debug(f"Input shape: {torch_input.shape}")
 
-    # Run torch reference over the active slice only.
-    logger.debug("Running torch reference...")
     with torch.no_grad():
-        torch_output_active = torch_expert(torch_active)
         if min_cap_frac is not None:
             # How far into each cap the inputs actually reach, so a saturation case can't
             # silently degrade into a near-linear run. Only the cases that assert it pay for the
@@ -408,14 +436,14 @@ def test_single_routed_expert_functional(
     )
 
 
-@pytest.mark.parametrize(
-    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
-    _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
-)
 @pytest.mark.parametrize("x_row_major", [True], ids=["x_rm"])
 # DRAM ND-sharded weights let the FFN read a whole K-row weight slice in one NoC request instead
 # of one per tile. Both layouts are swept so the interleaved default stays covered.
 @pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
+@pytest.mark.parametrize(
+    "allocated_tokens, active_tokens, emb_dim, hidden_dim",
+    _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
+)
 @pytest.mark.skipif(not is_blackhole(), reason="device-side count-aware sparsity is Blackhole-only")
 def test_single_routed_expert_isl_sweep(
     device,
