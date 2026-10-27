@@ -4,18 +4,21 @@
 """Serving contract, adapter test: the engine input, the per-layer acks (host sink) and the KV read through the
 table, in process (serving_contract.md "Input", "Acks", "Adapter and table").
 
-The adapter builds the served layers (caches.served_prefix) with 2 slots at chunk 2048 / max_seq 4096, exports its
-table the way the runner's migration path does, and gets the server's chunks as the H2D stream delivers them
-(server_rules.server_payload: PAD_ID tail, ring_sdpa_reshuffle by actual_start, [sp, 1, chunk / sp] uint32 sharded
-over mesh axis 0). Plan: server_rules.interleave(ACK_TURNS): slot 0 1000, then 3000 over its 960 resident prefix;
-slot 1 cold 3000 over two chunks: (0, 0, 1000), (1, 0, 2048), (0, 960, 3000), (1, 2048, 3000).
+The adapter builds the served layers (caches.served_prefix) with 2 slots at R.CHUNK / R.MAX_SEQ (the spec's golden
+rung: 2048 / 4096 on the seed, 5120 / 10240 on galaxy_8x4), exports its table the way the runner's migration path
+does, and gets the server's chunks as the H2D stream delivers them (server_rules.server_payload: PAD_ID tail,
+ring_sdpa_reshuffle by actual_start, [sp, 1, chunk / sp] uint32 sharded over mesh axis 0). Plan:
+server_rules.interleave(ACK_TURNS) (H = CHUNK / 2): slot 0 H - 24, then CHUNK + 952 over its H - 64 resident prefix;
+slot 1 cold CHUNK + 952 over two chunks. Seed: (0, 0, 1000), (1, 0, 2048), (0, 960, 3000), (1, 2048, 3000).
 
 Inside every ack (the host layer-completion sink: sink.layers_completed(layer_start, layer_end, slot_id, pos_start,
 pos_end), what prefill_runner's LayerCompletionRingWriter receives) the test reads that layer's records of the chunk
 through the table over UMD, as the KV Manager does. Pass:
   - acks: one per served layer per chunk, in layer order, naming the chunk (slot_id, actual_start, actual_end) the
     engine passed (prefill_reader.cpp:121-160: the k-th ack of a chunk migrates layer k)
-  - at each ack: the chunk's rows of every cache the layer owns vs the golden (server per-channel PCC >= 0.97), the pad
+  - at each ack: the chunk's rows of every cache the layer owns vs the golden (caches.golden_failures: every row of a
+    dumped layer and of the compressed caches; another layer's window KV at the positions its ring snapshots hold;
+    every served layer compared at least once, the per-layer mode printed) (server per-channel PCC >= 0.97), the pad
     rows of the last record zero; the same records re-read after the chunk returns and the mesh syncs hold the same
     bytes (an ack before the KV is in DRAM ships stale KV: K-71)
   - at the end: each slot's [0, end) vs the golden; slot 0's reused prefix [0, 960) byte-identical to what turn 1's
@@ -70,8 +73,7 @@ def test_adapter_acks(mesh_device, tmp_path):
             cur["reads"][(cfg["name"], layer_idx)] = recs
             shipped.setdefault((s, cur["turn"]), {}).setdefault(cfg["name"], {}).update(recs)
             got, pad = C.valid_and_pad(recs, cfg, layer_idx, lo, hi)
-            want = gk.rows(cfg, layer_idx, lo, hi)
-            cur["fails"] += C.pcc_failures(kvc, cfg, got, want, layer_idx, thr, f"ack slot {s} [{lo}, {hi})")
+            cur["fails"] += C.golden_failures(kvc, gk, cfg, got, layer_idx, lo, hi, thr, f"ack slot {s} [{lo}, {hi})")
             if pad.size and not (pad == 0).all():
                 cur["fails"].append(f"ack slot {s} {cfg['name']} layer {layer_idx}: pad rows after {hi} not zero")
 
@@ -121,9 +123,7 @@ def test_adapter_acks(mesh_device, tmp_path):
             recs = reader.records(cfg["name"], s, cfg["layers"], 0, e)
             for layer in cfg["layers"]:
                 got, _ = C.valid_and_pad(recs, cfg, layer, 0, e)
-                fails += C.pcc_failures(
-                    kvc, cfg, got, gk.rows(cfg, layer, 0, e), layer, thr, f"final slot {s} [0, {e})"
-                )
+                fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, e, thr, f"final slot {s} [0, {e})")
     t1, t2 = R.ACK_TURNS[0]
     prefix = R.follow_up_resident(t1, t2)
     for cfg in cfgs:
@@ -138,5 +138,7 @@ def test_adapter_acks(mesh_device, tmp_path):
         fails.append(
             f"device-group replicas differ at {len(reader.replica_mismatch)} records: {reader.replica_mismatch[:3]}"
         )
+    fails += gk.coverage_failures(cfgs, "golden")
+    print(f"[adapter acks] golden comparison per config and mode: {gk.coverage_summary()}")
     print(f"[adapter acks] layers {layers}, configs {[c['name'] for c in cfgs]}: {len(fails)} failures")
     assert not fails, "\n".join(fails[:40])

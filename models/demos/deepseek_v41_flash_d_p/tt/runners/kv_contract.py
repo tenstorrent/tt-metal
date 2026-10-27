@@ -187,33 +187,48 @@ def read_rows(table, device_map: dict, config_id: int, layer: int, slot: int, le
     return torch.cat(out).float() if out else torch.zeros(0, width)
 
 
-def golden_rows(golden, c: dict, layer: int, length: int) -> torch.Tensor:
-    """The golden rows of config ``c`` for the complete groups of tokens [0, length): window KV per position (the
-    chunks' "kv" boundary), compressed KV / index keys from the layer's final state."""
+def golden_rows(golden, c: dict, layer: int, length: int) -> tuple[torch.Tensor, int, str]:
+    """(golden rows, first row they stand for, comparison) of config ``c`` for the complete groups of tokens
+    [0, length). Window KV: a layer with per-chunk dumps (the golden's step_dump_layers) gives every position (the
+    chunks' "kv" boundary, comparison "full"); any other layer gives the last min(window, length) positions from its
+    ring state as of ``length`` (kv_cache/layer_i[_at_length]: position p at ring row p % window, comparison
+    "last-window"; the golden keeps no earlier window KV of that layer). Compressed KV / index keys: the layer's final
+    state, every complete group (comparison "full"). Test-side only: never called from the model path."""
     if c["kind"] == "window_kv":
-        kv = torch.cat([golden.layer(ch, layer)["kv"] for ch in range(golden.n_chunks)])
-        return kv[:length].float()
-    return golden.state(layer)[c["kind"]][: length // c["ratio"]].float()
+        if all(golden.has_layer(ch, layer) for ch in range(golden.n_chunks)):
+            kv = torch.cat([golden.layer(ch, layer)["kv"] for ch in range(golden.n_chunks)])
+            return kv[:length].float(), 0, "full"
+        ring = golden.state(layer, at=length)["window_kv"]  # snapshot at ``length`` (FileNotFoundError if none)
+        ring = ring.reshape(-1, ring.shape[-1])
+        n = min(ring.shape[0], length)
+        pos = torch.arange(length - n, length)
+        return ring[pos % ring.shape[0]].float(), length - n, "last-window"
+    return golden.state(layer)[c["kind"]][: length // c["ratio"]].float(), 0, "full"
 
 
 def read_slot_kv_and_check_pcc(table, device_map, slot_id: int, real_len: int, trace_dir, cfg, layer_ids) -> dict:
     """Min PCC per cache kind over [0, real_len) of every served layer vs the bring-up golden at ``trace_dir``
-    (table layer k = layer_ids[k]): {window_kv, compress_kv, index_k}."""
+    (table layer k = layer_ids[k]): {window_kv, compress_kv, index_k}. Every served layer is compared; the window KV of
+    a layer without per-chunk golden dumps over its last window only (golden_rows), logged per layer."""
     from loguru import logger
 
     from models.demos.common.bringup.reference.golden import Golden
 
     golden = Golden(trace_dir)
     names = [table.config_name(i) for i in range(table.num_configs())]
-    mins = {}
+    mins, modes = {}, {}
     for c in served_configs(cfg, list(layer_ids)):
         cid = names.index(c["name"])
         for k, layer in zip(c["engine"], c["layers"]):
-            want = golden_rows(golden, c, layer, real_len)
-            got = read_rows(table, device_map, cid, k, slot_id, real_len, c["width"])[: want.shape[0]]
+            want, lo, mode = golden_rows(golden, c, layer, real_len)
+            got = read_rows(table, device_map, cid, k, slot_id, real_len, c["width"])[lo : lo + want.shape[0]]
             assert got.shape == want.shape, (c["name"], layer, got.shape, want.shape)
             p = _pcc(got, want)
             mins[c["kind"]] = min(mins.get(c["kind"], 1.0), p)
-            logger.info(f"  {c['name']} layer {layer} (table layer {k}): PCC {p:.6f}")
+            modes.setdefault(f"{c['name']}:{mode}", []).append(layer)
+            logger.info(
+                f"  {c['name']} layer {layer} (table layer {k}): {mode} rows [{lo}, {lo + want.shape[0]}) PCC {p:.6f}"
+            )
+    logger.info(f"[ds41] slot {slot_id} KV comparison per config and kind: {modes}")
     logger.info(f"[ds41] slot {slot_id} KV PCC over [0, {real_len}) of layers {list(layer_ids)} -> {mins}")
     return mins

@@ -5,7 +5,7 @@
 (serving_contract.md, every section). Modelled on gemma4_d_p/tests/test_prefill_migration.py.
 
 A subprocess runs prefill_runner.main (runner_case.py) on the spec's mesh with its 2D fabric, for the served layers
-(caches.served_prefix: all 40 in a full run, 0-3 in this partial one) at chunk 2048 / max_seq 4096, 2 slots, D2H layer
+(caches.served_prefix: all 40 in a full run, 0-3 in a partial one) at R.CHUNK / R.MAX_SEQ, 2 slots, D2H layer
 acks (PREFILL_LAYER_ACK_D2H=1) and mock migration on the migration-enabled path (kv_migration_stages ->
 build_kv_chunk_table(..., stage_layouts), no KV Manager). The feeder (use_engine):
   engine    tt-d-gen's BackendRuntime (PREFILL role, device_prefill_pipeline on the runner's H2D service and
@@ -14,7 +14,7 @@ build_kv_chunk_table(..., stage_layouts), no KV Manager). The feeder (use_engine
             reuse and the interleave; the test checks what it did against server_rules
   producer  only with serving.require_engine: false (this spec: tt-d-gen does not run on the QuietBox) or BRINGUP_DGEN=0:
             producer_case.py, tt-metal's prefill_producer sending server_rules.interleave(RUNNER_TURNS):
-            (0, 0, 1000), (1, 0, 1500), (0, 960, 3008), (1, 1472, 3500), (0, 2048, 4000)
+            seed: (0, 0, 1000), (1, 0, 1500), (0, 960, 3008), (1, 1472, 3500), (0, 2048, 4000)
 The output names the feeder that ran.
 
 The KV is read through the exported table over UMD (what a KV Manager ships) and checked on the CPU with the server's
@@ -56,10 +56,12 @@ AFTER_FEEDER_S = float(os.environ.get("DS41_CONTRACT_AFTER_FEEDER_S", "180"))  #
 # The engine case: deterministic under tt-d-gen's engine (every prompt is a prefix of the one golden token stream;
 # a request admitted while the slot holding its prefix is busy goes cold: a prefill node never copies, so there is
 # one follow-up, on slot A):
-#   a   1000 cold                 -> (0, 1000)                    mid-record end
-#   a2  4096 after a, remount 960 -> (960, 3008), (2048, 4096)    a start off the SP period; the last chunk pulled back
-#   b   1500 after a, cold        -> (0, 1500) on another slot    interleaved with a2
-T1, B = 1000, 1500
+# (lengths from server_rules.RUNNER_TURNS, H = CHUNK / 2; the seed's numbers in brackets, galaxy_8x4's second)
+#   a   H - 24 cold [1000; 2536]                  -> (0, T1)                         mid-record end
+#   a2  MAX_SEQ after a, remount H - 64 [960; 2496] -> (H - 64, H - 64 + CHUNK), (MAX_SEQ - CHUNK, MAX_SEQ)
+#                                                   a start off the SP period; the last chunk pulled back
+#   b   H + 476 after a, cold [1500; 3036]        -> (0, B) on another slot          interleaved with a2
+T1, B = R.RUNNER_TURNS[0][0], R.RUNNER_TURNS[1][0]
 ENGINE_CASE = (("a", T1, None), ("a2", R.MAX_SEQ, "a"), ("b", B, "a"))
 A2_RES, A2_PLAN = R.follow_up(T1, R.MAX_SEQ)
 ENGINE_SNAPSHOTS = {  # taken by the runner right before the named chunk runs, on that chunk's slot
@@ -132,7 +134,7 @@ def use_engine(out: Path, env: dict, requests: list[dict], snapshots: dict, max_
         return f"prefill_producer (fallback: {why})"
     plan = {
         "service_id": env["PREFILL_H2D_SERVICE_ID"],
-        "ack_shm_name": f"/tt_prefill_layer_acks_{env['PREFILL_H2D_SERVICE_ID']}",  # prefill_runner.py:745
+        "ack_shm_name": D.ack_shm_name(env["PREFILL_H2D_SERVICE_ID"]),  # the runner's layer-completion ring
         "chunk_size": R.CHUNK,
         "layers_per_chunk": layers,  # one ack per served layer per chunk (prefill_reader.cpp:155-160)
         "sp_factor": R.SP,
@@ -288,7 +290,7 @@ def kv_checks(
                     ref = kvc.reassemble(d, layer, 0, e, dtype="bf16", width=cfg["width"], storage="row-major")
                     if not np.array_equal(ref, got):
                         fails.append(f"{cfg['name']} slot {s} layer {layer}: kv_dump_compare.reassemble disagrees")
-                fails += C.pcc_failures(kvc, cfg, got, gk.rows(cfg, layer, 0, e), layer, thr, f"slot {s} [0, {e})")
+                fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, e, thr, f"slot {s} [0, {e})")
                 if pad.size and not (pad == 0).all():
                     fails.append(f"{cfg['name']} slot {s} layer {layer}: pad rows after {e} not zero")
     if snaps.get("snap_s0_t0", {}).get("taken"):
@@ -297,7 +299,7 @@ def kv_checks(
             a = C.load_dump(out / "snap_s0_t0", cfg, slot_a)
             for layer in cfg["layers"]:
                 got, _ = C.valid_and_pad(a, cfg, layer, 0, t1)
-                fails += C.pcc_failures(kvc, cfg, got, gk.rows(cfg, layer, 0, t1), layer, thr, f"slot {slot_a} turn 1")
+                fails += C.golden_failures(kvc, gk, cfg, got, layer, 0, t1, thr, f"slot {slot_a} turn 1")
                 x, _ = C.valid_and_pad(a, cfg, layer, prefix, t1)
                 y, _ = C.valid_and_pad(finals[(slot_a, cfg["name"])], cfg, layer, prefix, t1)
                 fails += C.pcc_failures(kvc, cfg, y, x, layer, R.LAST_BLOCK_PCC, f"slot {slot_a} last block")
@@ -327,6 +329,8 @@ def kv_checks(
         fails += [f"the pulled-back chunk rewrote layer 0 [{lo}, {hi}) with other bytes: {x}" for x in f]
     elif overlap is not None:
         fails.append("snapshot snap_overlap not taken")
+    fails += gk.coverage_failures(C.served_configs(layers), "golden")
+    log(f"golden comparison per config and mode: {gk.coverage_summary()}")
     return fails
 
 
