@@ -35,6 +35,11 @@ LEN = int(os.environ.get("GLM53_BOUNDARY_LEN", "2176"))
 MAX_SEQ_LEN = int(os.environ.get("GLM53_BOUNDARY_MAX_SEQ_LEN", str(LEN + 256)))
 PREFILL_CHUNK = int(os.environ.get("GLM53_BOUNDARY_CHUNK", str(512 * MESH[0])))
 N_REPLAYS = int(os.environ.get("GLM53_BOUNDARY_REPLAYS", "3"))  # 25+ crosses the next pool boundary incrementally
+# slot reuse (the served sequence): a PRIOR prompt of this length is prefilled into the same slot and decoded for
+# GLM53_BOUNDARY_PRIOR_STEPS tokens first (leaving ring rows in the pool the main prompt ends on), then the main prompt
+# restarts the slot at position 0
+PRIOR_LEN = int(os.environ.get("GLM53_BOUNDARY_PRIOR_LEN", "0"))
+PRIOR_STEPS = int(os.environ.get("GLM53_BOUNDARY_PRIOR_STEPS", "32"))
 _DT = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b}
 EXPERT_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]
 EXPERT_DOWN_DTYPE = _DT[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]
@@ -72,6 +77,23 @@ def test_decode_after_pool_boundary_prompt(mesh_device):
         expert_down_dtype=EXPERT_DOWN_DTYPE,
     )
     U = model.total_users
+    if PRIOR_LEN:
+        t0 = time.perf_counter()
+        model.prefill_chunked(_ramp(PRIOR_LEN) + 7, user=0, chunk=PREFILL_CHUNK)
+        ppos = [PRIOR_LEN if u % B == 0 else 0 for u in range(U)]
+        pids = torch.full((U,), 1000, dtype=torch.long)
+        model.warmup_decode(pids, ppos)
+        for k in range(1, PRIOR_STEPS):
+            model.load_ids(pids)
+            model.set_positions([p + k if p else 0 for p in ppos])
+            outs = model.decode_step(model.ids_dev, model.positions)
+            for tt in outs:
+                if tt is not None:
+                    ttnn.deallocate(tt)
+        ttnn.synchronize_device(mesh_device)
+        logger.info(
+            f"BOUNDARY prior prompt {PRIOR_LEN} + {PRIOR_STEPS} eager decode steps in {time.perf_counter() - t0:.1f} s"
+        )
     t0 = time.perf_counter()
     model.prefill_chunked(_ramp(LEN), user=0, chunk=PREFILL_CHUNK)
     ttnn.synchronize_device(mesh_device)
