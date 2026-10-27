@@ -16,9 +16,9 @@ vLLM's host sampler owns codebook 0: temperature, top-k, the repetition penalty,
 the code predictor's sampling, which reads the checkpoint's `subtalker_*` settings.
 
 Up to `max_num_seqs` requests decode together, one per talker row: decode row i is device
-slot i. Host sampling, no plugin trace: the pipeline captures its own step traces after
-every prefill, and every prefill releases them first, so a request arriving mid-decode
-stalls the others for its prefill and the recapture. Plugin capabilities used:
+slot i. Host sampling, no plugin trace: the pipeline captures its own traces at warmup,
+the step's and a prefill's per prompt length, and keeps them, so a request arriving
+mid-decode stalls the others only for its prefill's replay. Plugin capabilities used:
 
     supports_stage_inputs   prefill_forward(stage_inputs=[additional_information])
     supports_stage_outputs  pop_stage_outputs() after every decode_forward
@@ -34,6 +34,18 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import Qwen3TTSPipeline
 
 # The talker's KV dtype. The plugin passes vLLM's torch dtype; the talker is bf16 throughout.
 KV_DTYPE = ttnn.bfloat16
+
+# The shortest prompt length the talker's prefill is traced at. Each next one doubles, so a
+# prompt is padded by less than itself, up to the context length.
+MIN_PREFILL_LENGTH = 128
+
+
+def _prefill_lengths(max_seq_len):
+    longest = -(-max_seq_len // 32) * 32
+    lengths = [min(MIN_PREFILL_LENGTH, longest)]
+    while lengths[-1] < longest:
+        lengths.append(min(lengths[-1] * 2, longest))
+    return lengths
 
 
 def _point_checkpoint_at(hf_config):
@@ -94,7 +106,12 @@ class Qwen3TTSTalkerForConditionalGeneration:
         kv_cache = [(make(), make()) for _ in range(num_layers)]
         # The pipeline sizes its talker for prompt room plus frames; this covers the context.
         self.pipeline = Qwen3TTSPipeline(
-            self.device, max_frames=self.max_seq_len, kv_cache=kv_cache, codec=False, batch=self.batch
+            self.device,
+            max_frames=self.max_seq_len,
+            kv_cache=kv_cache,
+            codec=False,
+            batch=self.batch,
+            prefill_lengths=_prefill_lengths(self.max_seq_len),
         )
         # On the host: a clip length the device encoders have not seen compiles for seconds,
         # stalling every request on this device.
@@ -102,10 +119,12 @@ class Qwen3TTSTalkerForConditionalGeneration:
         return kv_cache
 
     def warmup_model_prefill(self, kv_cache, can_sample_on_device, enable_trace):
-        """Nothing to do: each prefill compiles what it needs."""
+        """Nothing to do: `warmup_model_decode` captures the prefill traces with the steps'."""
 
     def warmup_model_decode(self, kv_cache, max_batch_size, num_blocks, can_sample_on_device, enable_trace, **kwargs):
-        """Nothing to do: the step traces are captured after the first prefill."""
+        """Capture the step and prefill traces, before any request: every trace must exist
+        before any replays, and eager work beside a live trace hangs the device."""
+        self.pipeline.capture()
 
     def release_request(self, slot):
         self._rows[slot] = None

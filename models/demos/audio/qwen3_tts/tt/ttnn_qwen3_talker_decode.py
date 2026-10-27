@@ -201,9 +201,13 @@ class TtTalkerCachedDecoder:
     its own row of the page table. Prefill fills one row at a time.
     """
 
-    def __init__(self, device, parameters, max_seq=512, kv_cache=None, batch=1):
+    def __init__(self, device, parameters, max_seq=512, kv_cache=None, batch=1, prefill_lengths=()):
         """`kv_cache`, when given, is one `(k, v)` pair per layer of paged caches the caller
-        owns; the caller then also supplies each request's blocks through `set_page_table`."""
+        owns; the caller then also supplies each request's blocks through `set_page_table`.
+
+        `prefill_lengths` are the prompt lengths, multiples of 32, a prefill is traced at;
+        `traced_prefill` pads a prompt to the shortest that holds it. Only with a caller's
+        cache: their warmup writes block 0, which vLLM keeps empty."""
         grid = device.compute_with_storage_grid_size()
         if not 1 <= batch <= grid.x:
             raise ValueError(f"a batch of {batch} rows: the step shards one row per core across {grid.x} columns")
@@ -298,6 +302,37 @@ class TtTalkerCachedDecoder:
 
         self.trace_id = None
         self._out = None
+
+        self.prefill_lengths = tuple(sorted(int(length) for length in prefill_lengths))
+        if self.prefill_lengths and self._owns_cache:
+            raise ValueError("a traced prefill needs a caller's cache, whose block 0 its warmup may write")
+        for length in self.prefill_lengths:
+            if length % TILE_ROWS or not 0 < length <= self.max_seq:
+                raise ValueError(f"a traced prefill of {length}: need a multiple of {TILE_ROWS} up to {self.max_seq}")
+        # One row of blocks, so one trace per length serves every batch row: `paged_fill_cache`
+        # takes its row index as a compile-time argument.
+        self._prefill_table = ttnn.from_torch(torch.zeros(1, self.max_blocks, dtype=torch.int32), device=device)
+        self._prefills = {length: self._prefill_inputs(length) for length in self.prefill_lengths}
+        self._prefill_traces = {}
+
+    def _prefill_inputs(self, length):
+        """A traced prefill's stable device inputs at one length. Positions are always 0..L-1,
+        so the rotary tables and the mask are constants."""
+        positions = torch.arange(length, dtype=torch.long).reshape(1, 1, length).expand(3, 1, length).contiguous()
+        cos, sin = rotary_tables(self.config, positions)
+        to_device = lambda tensor: ttnn.from_torch(
+            tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
+        return {
+            "x": to_device(torch.zeros(1, length, self.hidden)),
+            "cos": to_device(cos),
+            "sin": to_device(sin),
+            "mask": to_device(causal_mask(length)),
+            # Row 0 one-hot at the prompt's last position: picks the hidden state the next
+            # frame needs out of the padded prompt.
+            "select": to_device(torch.zeros(1, TILE_ROWS, length)),
+            "out": None,
+        }
 
     def _norm(self, x, layer, key):
         """Width-sharded RMSNorm when the plan fits, otherwise the interleaved one."""
@@ -432,7 +467,12 @@ class TtTalkerCachedDecoder:
         )
         x = to_device(embeddings) if not isinstance(embeddings, ttnn.Tensor) else embeddings
         cos_tt, sin_tt, mask_tt = to_device(cos), to_device(sin), to_device(causal_mask(length))
+        x = self._prefill_ops(x, cos_tt, sin_tt, mask_tt, length, self._page_table, row)
+        return ttnn.rms_norm(x, weight=self.p["norm"], epsilon=self.eps)
 
+    def _prefill_ops(self, x, cos_tt, sin_tt, mask_tt, length, page_table, row):
+        """The layers over a whole prompt, filling row `row` of `page_table`'s blocks. Returns
+        the last layer's output, before the final norm."""
         for index, layer in enumerate(self.p["layers"]):
             normed = ttnn.rms_norm(x, weight=layer["input_layernorm"], epsilon=self.eps)
             qkv = ttnn.linear(normed, layer["qkv"], compute_kernel_config=self.compute_config)
@@ -441,8 +481,8 @@ class TtTalkerCachedDecoder:
             query = self._rotate(ttnn.rms_norm(query, weight=layer["q_norm"], epsilon=self.eps), cos_tt, sin_tt)
             key = self._rotate(ttnn.rms_norm(key, weight=layer["k_norm"], epsilon=self.eps), cos_tt, sin_tt)
 
-            ttnn.experimental.paged_fill_cache(self.k_cache[index], key, self._page_table, batch_idx=row)
-            ttnn.experimental.paged_fill_cache(self.v_cache[index], value, self._page_table, batch_idx=row)
+            ttnn.experimental.paged_fill_cache(self.k_cache[index], key, page_table, batch_idx=row)
+            ttnn.experimental.paged_fill_cache(self.v_cache[index], value, page_table, batch_idx=row)
 
             repeats = self.heads // self.kv_heads
             attended = ttnn.matmul(
@@ -463,8 +503,41 @@ class TtTalkerCachedDecoder:
             x = ttnn.add(x, ttnn.linear(attended, layer["o_proj"], compute_kernel_config=self.compute_config))
             normed = ttnn.rms_norm(x, weight=layer["post_attention_layernorm"], epsilon=self.eps)
             x = ttnn.add(x, self._mlp(normed, layer))
+        return x
 
-        return ttnn.rms_norm(x, weight=self.p["norm"], epsilon=self.eps)
+    def _traced_prefill_ops(self, length):
+        """A prefill at `length` from its stable inputs, ending at the selected row, normed."""
+        inputs = self._prefills[length]
+        x = self._prefill_ops(inputs["x"], inputs["cos"], inputs["sin"], inputs["mask"], length, self._prefill_table, 0)
+        last = ttnn.matmul(inputs["select"], x, compute_kernel_config=self.compute_config)
+        return ttnn.rms_norm(last, weight=self.p["norm"], epsilon=self.eps)
+
+    def traced_prefill(self, embeddings, row):
+        """Prefill a prompt [1, P, hidden] into batch row `row`, whose page table is set, by
+        replaying the trace of the shortest `prefill_lengths` entry that holds it. Returns
+        the hidden state at position P-1, [hidden], on host.
+
+        The prompt is padded with zeros. Attention is causal, so the padding changes no
+        position before P; its cache writes land past P, in the row's last block, which the
+        row's own steps overwrite before reading, or in block 0.
+        """
+        prompt = embeddings.shape[1]
+        length = next((length for length in self.prefill_lengths if length >= prompt), None)
+        if length is None:
+            raise ValueError(f"prompt of {prompt}: the longest traced prefill is {self.prefill_lengths[-1:]}")
+        if not self._prefill_traces:
+            raise RuntimeError("the prefill traces are not captured; call capture first")
+        inputs = self._prefills[length]
+        padded = torch.zeros(1, length, self.hidden)
+        padded[:, :prompt] = embeddings
+        select = torch.zeros(1, TILE_ROWS, length)
+        select[0, 0, prompt - 1] = 1.0
+        to_host = lambda tensor: ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy_host_to_device_tensor(to_host(padded), inputs["x"])
+        ttnn.copy_host_to_device_tensor(to_host(select), inputs["select"])
+        ttnn.copy_host_to_device_tensor(ttnn.from_torch(self._tables[row : row + 1].clone()), self._prefill_table)
+        ttnn.execute_trace(self.device, self._prefill_traces[length], cq_id=0, blocking=False)
+        return ttnn.to_torch(inputs["out"]).float()[0, 0]
 
     # ── one cached step ─────────────────────────────────────────────────────
 
@@ -547,6 +620,9 @@ class TtTalkerCachedDecoder:
             ttnn.release_trace(self.device, self.trace_id)
             self.trace_id = None
             self._warmed = False
+        for trace_id in self._prefill_traces.values():
+            ttnn.release_trace(self.device, trace_id)
+        self._prefill_traces = {}
 
     def reset(self):
         """Clear the caches without allocating. Only for a cache this decoder owns."""
@@ -580,10 +656,16 @@ class TtTalkerCachedDecoder:
         capturing either. The warmup allocates a buffer per op, and a buffer allocated
         while another trace exists is corrupt once that trace runs unless released first.
         Warms at the last cache slot, which no real decode reaches, and leaves the cache
-        alone so this can follow `prefill`.
+        alone so this can follow `prefill`; the traced prefills warm through block 0.
         """
         self.set_position(self.max_seq - 1)
         self._step_ops(self._in)
+        # Through block 0 only, so no request's blocks are written.
+        if self.prefill_lengths:
+            empty = torch.zeros(1, self.max_blocks, dtype=torch.int32)
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(empty), self._prefill_table)
+        for length in self.prefill_lengths:
+            self._traced_prefill_ops(length)
         ttnn.synchronize_device(self.device)
         self._warmed = True
 
@@ -598,4 +680,9 @@ class TtTalkerCachedDecoder:
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         self._out = self._step_ops(self._in)
         ttnn.end_trace_capture(self.device, self.trace_id, cq_id=0)
+        for length in self.prefill_lengths:
+            trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            self._prefills[length]["out"] = self._traced_prefill_ops(length)
+            ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            self._prefill_traces[length] = trace_id
         ttnn.synchronize_device(self.device)
