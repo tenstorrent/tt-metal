@@ -47,6 +47,27 @@ run() {
 }
 want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
 
+# Profile summary: find the device CSV the last profiled run wrote (the path has moved between builds), summarize
+# it to log_val_<name>.txt with sol_profile_summary.py, and log where it looked, so the CSV never needs copying.
+summarize_profile() {
+    local name=$1 csv
+    csv=$(find generated "${TT_METAL_PROFILER_DIR:-generated}" -name 'profile_log_device.csv' -newer "log_val_$2.txt" \
+        2>/dev/null | head -1)
+    if [ -z "$csv" ]; then
+        csv=$(find generated "${TT_METAL_PROFILER_DIR:-generated}" -name 'profile_log_device.csv' 2>/dev/null | head -1)
+    fi
+    if [ -z "$csv" ]; then
+        { echo "no profile_log_device.csv found; csv files under generated/ by time:"
+          find generated -name '*.csv' -printf '%TY-%Tm-%Td %TH:%TM %s %p\n' 2>/dev/null | sort | tail -20; } \
+            > "log_val_$name.txt"
+        echo "=== $name: no device CSV found (see log_val_$name.txt)"
+        return 1
+    fi
+    echo "csv: $csv ($(du -h "$csv" | cut -f1))" > "log_val_$name.txt"
+    run "${name}_tmp" 1200 python3 sol_profile_summary.py "$csv"
+    cat "log_val_${name}_tmp.txt" >> "log_val_$name.txt" && rm -f "log_val_${name}_tmp.txt"
+}
+
 # 1. Baseline modes, the resolved tail-block tests, Q1 granularity. Expected: all pass.
 want base && run base 1800 pytest "$T" -s -k "4x8 and not q2 and not production and not timing"
 
@@ -729,12 +750,20 @@ if want u1; then
         run u1_trace_kv2_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_KV_PAGES=2 pytest "$B" -s -k "$S"
         PR="TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 SOL_BENCH_MODE=resident"
         PR="$PR SOL_BENCH_PREFIX=off SOL_TAU=1.0"
-        CSV=generated/profiler/.logs/profile_log_device.csv
         run u1_profile 900 env $PR pytest "$B" -s -k "$S"
-        [ -f "$CSV" ] && run u1_profile_summary 1200 python3 sol_profile_summary.py "$CSV"
+        summarize_profile u1_profile_summary u1_profile
         run u1_profile_m8_union 900 env $PR $M8 TT_SOL_MEMBER_UNION=1 pytest "$B" -s -k "$S"
-        [ -f "$CSV" ] && run u1_profile_m8_union_summary 1200 python3 sol_profile_summary.py "$CSV"
+        summarize_profile u1_profile_m8_union_summary u1_profile_m8_union
     fi
+fi
+
+# U1 profile only (no rebuild, ~5 min): the u1 job's D1 profile ran but its CSV was not where the script looked,
+# and the M8 profile's read-back aborted in the profiler (end marker without a start). One D1 profile at tau 1,
+# summarized on the machine; the summary log also records which CSV it read, or lists the CSVs it found instead.
+if want u1p; then
+    PR="TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 SOL_BENCH_MODE=resident"
+    run u1p_profile 900 env $PR SOL_BENCH_PREFIX=off SOL_TAU=1.0 pytest "$B" -s -k "4x8 and nl2 and 768p_5s and not dense and not agather"
+    summarize_profile u1p_profile_summary u1p_profile
 fi
 
 # D1 timings (2026-10-27), no rebuild: the d1 job of 2026-10-27 (160 W, commit 13d1b96 = D1 with the review fixes)
