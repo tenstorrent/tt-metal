@@ -19,7 +19,12 @@ from .experts_throughput import (
     ThroughputExperts,
     create_fused_moe_gpt_config,
 )
-from .fused_decode.config import DENSE_MOE_TOKENS, dense_moe_decode_supported, fused_decode_supported
+from .fused_decode.config import (
+    DENSE_MOE_TOKENS,
+    dense_moe_decode_supported,
+    fused_decode_supported,
+    routed_decode_weights_dtype,
+)
 from .topk import TopKRouter
 
 # dtype of the expert input rows that MLP.prefill_sequence_parallel all-gathers. bf8 measured TTFT 8K -3.3%, 32K -3.0%
@@ -180,6 +185,7 @@ class MLP:
                 tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
                 indexed_decode=self.indexed_decode,
                 dense_decode_tokens=DENSE_MOE_TOKENS if self.dense_decode else None,
+                decode_weight_dtype=routed_decode_weights_dtype(layer_idx),
             )
 
         # Routed top-k prefill experts (experts/prefill_routed.py): only the routed (token, expert) pairs are computed,

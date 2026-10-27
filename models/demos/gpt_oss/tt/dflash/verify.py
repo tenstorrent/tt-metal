@@ -180,6 +180,7 @@ class FusedVerify:
         self.down_bal, bal_plan = {}, None
         for li, L in enumerate(self.layers):
             e = L.mlp.experts
+            assert e.decode_weight_dtype == ttnn.bfloat4_b, "the DFlash union MoE streams BFP4 expert weights"
             self.down_bal[li], bal_plan = load_decode_down_bal(
                 mesh, e.config, e.mesh_config, e.decode_weights, e.weight_dtype, e.tensor_cache_path
             )

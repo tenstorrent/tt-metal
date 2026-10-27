@@ -541,8 +541,12 @@ class ExpertGateUpStream(_BankStreamOp):
     UINT16 / BF16 row-major buffers whose first k entries are the routed experts and their softmax weights; act: [k,
     I_pad] BF16 row-major L1, receives w_e * SwiGLU(gate_e, up_e) per routed expert e."""
 
-    def __init__(self, mesh_device, hidden, inter_pad, num_sel, swiglu_limit, alpha, readers):
+    def __init__(
+        self, mesh_device, hidden, inter_pad, num_sel, swiglu_limit, alpha, readers, weight_dtype=ttnn.bfloat4_b
+    ):
         super().__init__(mesh_device, readers, rot=EXPERT_BANK_ROT)
+        self.weight_dtype = weight_dtype
+        self.tile_bytes = TILE_BYTES[weight_dtype]
         self.kx = hidden // TILE
         self.kt = self.kx + 1
         self.num_sel = num_sel
@@ -551,9 +555,9 @@ class ExpertGateUpStream(_BankStreamOp):
         assert self.P % readers == 0, f"{self.P} pairs per bank do not split over {readers} readers"
         self.pairs = self.P // readers
         self.limit, self.alpha = swiglu_limit, alpha
-        self.col_bytes = self.kt * BFP4_TILE_BYTES
+        self.col_bytes = self.kt * self.tile_bytes
         self.expert_stride = 2 * self.P * self.col_bytes
-        self.page_bytes = _page_bytes(self.kt, BFP4_TILE_BYTES)
+        self.page_bytes = _page_bytes(self.kt, self.tile_bytes)
 
     def weight_rows(self, num_experts):
         return num_experts * 2 * self.P * self.kt * TILE
@@ -562,7 +566,7 @@ class ExpertGateUpStream(_BankStreamOp):
         cb_x, cb_w, cb_idx, cb_scr, cb_act = 0, 1, 2, 3, 16
         cbs = [
             self._cb(cb_x, ttnn.bfloat16, TINY_BYTES, self.kt, tiny=True),
-            self._cb(cb_w, ttnn.bfloat4_b, BFP4_TILE_BYTES, 3 * self.kt),
+            self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * self.kt),
             self._cb(cb_idx, ttnn.uint16, 64, 1),
             self._cb(cb_scr, ttnn.bfloat16, 64, 1),
             self._cb(cb_act, ttnn.bfloat16, TINY_BYTES, 4, tiny=True),
@@ -582,7 +586,7 @@ class ExpertGateUpStream(_BankStreamOp):
                 self.logical_bank(bank) * self.P + r * self.pairs,
                 scores.buffer_address(),
             ]
-        reader_ct = [cb_w, cb_idx, self.kt, 2 * self.pairs, self.num_sel, self.expert_stride, BFP4_TILE_BYTES]
+        reader_ct = [cb_w, cb_idx, self.kt, 2 * self.pairs, self.num_sel, self.expert_stride, self.tile_bytes]
         reader_ct += [self.page_bytes, 64] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
         writer_ct = [
             cb_x,
@@ -609,8 +613,10 @@ class ExpertDownStream(_BankStreamOp):
     sum_e w_e * (act_e @ Wd_e + bd_e) (one matmul per output column over the K = k segments [w_e * act_e | w_e] of
     the routed experts)."""
 
-    def __init__(self, mesh_device, hidden, inter_pad, num_sel, readers):
+    def __init__(self, mesh_device, hidden, inter_pad, num_sel, readers, weight_dtype=ttnn.bfloat4_b):
         super().__init__(mesh_device, readers, rot=EXPERT_BANK_ROT)
+        self.weight_dtype = weight_dtype
+        self.tile_bytes = TILE_BYTES[weight_dtype]
         self.hidden = hidden
         self.num_sel = num_sel
         self.inter_pad = inter_pad
@@ -618,8 +624,9 @@ class ExpertDownStream(_BankStreamOp):
         self.C = columns_per_bank(hidden, self.banks)
         assert self.C % readers == 0, f"{self.C} columns per bank do not split over {readers} readers"
         self.cols = self.C // readers
-        self.seg_bytes = self.seg_tiles * BFP4_TILE_BYTES
-        assert self.seg_bytes <= MAX_PACKET_BYTES, "one expert column segment must fit one NOC packet"
+        self.seg_bytes = self.seg_tiles * self.tile_bytes
+        # one NOC packet per expert column segment in BFP4 (25 tiles = 14.1 KB at TP 4); BFP8 splits it (5 x 5 tiles)
+        self.page_bytes = _page_bytes(self.seg_tiles, self.tile_bytes)
         self.expert_stride = self.C * self.seg_bytes
 
     def weight_rows(self, num_experts):
@@ -632,7 +639,7 @@ class ExpertDownStream(_BankStreamOp):
         kt = self.num_sel * self.seg_tiles
         cbs = [
             self._cb(cb_in0, ttnn.bfloat16, TINY_BYTES, kt, tiny=True),
-            self._cb(cb_w, ttnn.bfloat4_b, BFP4_TILE_BYTES, 3 * kt),
+            self._cb(cb_w, self.weight_dtype, self.tile_bytes, 3 * kt),
             self._cb(cb_idx, ttnn.uint16, 64, 1),
             self._cb(cb_scr, ttnn.bfloat16, 128, 1),
             self._cb(cb_out, ttnn.bfloat16, TINY_BYTES, 4, tiny=True),
@@ -652,8 +659,8 @@ class ExpertDownStream(_BankStreamOp):
                 out.buffer_address(),
                 self.logical_bank(bank) * self.C + r * self.cols,
             ]
-        reader_ct = [cb_w, cb_idx, self.seg_tiles, self.cols, self.num_sel, self.expert_stride, BFP4_TILE_BYTES]
-        reader_ct += ttnn.TensorAccessorArgs(ids).get_compile_time_args()
+        reader_ct = [cb_w, cb_idx, self.seg_tiles, self.cols, self.num_sel, self.expert_stride, self.tile_bytes]
+        reader_ct += [self.page_bytes] + ttnn.TensorAccessorArgs(ids).get_compile_time_args()
         writer_ct = [cb_in0, cb_out, cb_scr, self.seg_tiles, self.num_sel, NBIAS, self.cols, self.hidden // TILE]
         writer_ct += [self.inter_pad * 2]
         for t in (act, scores, out):

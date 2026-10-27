@@ -402,6 +402,11 @@ class ModelArgs:
             return False
         if fused_decode and meta.get("fused_decode_weights") != self.FUSED_DECODE_WEIGHTS_VERSION:
             return False
+        decode_bf8 = self._routed_decode_bf8_layers(fused_decode)
+        built = str(meta.get("routed_decode_bf8_layers", "")).split(";")
+        if decode_bf8 and decode_bf8 not in built and "all" not in built:  # "all" wrote every layer's bf8 streams
+            # bf8 decode expert streams (fused_decode/config.py) are extra cache files: cold-load once to write them
+            return False
         if dense_moe and meta.get("dense_moe_decode_weights") != self.DENSE_MOE_DECODE_WEIGHTS_VERSION:
             return False
         routed_version = self._routed_prefill_weights_version()
@@ -411,6 +416,13 @@ class ModelArgs:
             return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
+
+    @staticmethod
+    def _routed_decode_bf8_layers(fused_decode):
+        """GPT_OSS_ROUTED_DECODE_BF8_LAYERS when the fused decode streams are built, else ""."""
+        from models.demos.gpt_oss.tt.fused_decode.config import routed_decode_bf8_layers
+
+        return routed_decode_bf8_layers() if fused_decode else ""
 
     def _routed_prefill_weights_version(self):
         """Routed prefill expert weight-cache version when this model builds them (env flag + mesh), else None."""
@@ -469,6 +481,13 @@ class ModelArgs:
                         ),
                         "routed_prefill_weights": (
                             self._routed_prefill_weights_version() or previous.get("routed_prefill_weights", False)
+                        ),
+                        # every bf8 decode expert layer set this cache has been built with (";"-separated)
+                        "routed_decode_bf8_layers": ";".join(
+                            sorted(
+                                {v for v in str(previous.get("routed_decode_bf8_layers", "")).split(";") if v}
+                                | ({self._routed_decode_bf8_layers(fused_decode)} - {""})
+                            )
                         ),
                     }
                 )
