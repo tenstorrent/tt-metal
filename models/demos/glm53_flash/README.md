@@ -14,7 +14,7 @@ context, image input. Weights fp8 block-scaled on the hub, run as bfp8 experts /
 | Prefill | sequence-parallel over the rows (each row attends its own slab against the full prefix), 16 K chunks, the MoE "regions" path (the d_p routed-expert kernels on a fabric-free region buffer), per-length traced prefill for short prompts |
 | Decode | one traced step for all users of the mesh; fast exact mHC kernels, fused exact-fp32 router top-k, stream expert op; all custom kernels are model-local `ttnn.generic_op` programs |
 | Residual | 4 mHC streams packed `[1,1,T,4*4096]` fp32, exact fp32 mixing |
-| Vision | image features through the GLM vision tower on device, scattered at the image token id into the text prefill |
+| Vision | image and video features through the GLM vision tower on device (one window per image / 2-frame group), scattered at the image token id into the text prefill; served through vLLM's `SupportsMultiModal` + the upstream Glm5Next processor (`doc/vision/multimodal.md`) |
 
 Details, measurements and the evidence trail: `doc/mesh/README.md` (Galaxy bring-up log), `doc/mesh/sparse_1m.md`
 (1 M decode path and the user-partitioned cache), `doc/mesh/prefill_profile.md` (prefill cost model), `doc/reuse_map.md`
@@ -94,6 +94,16 @@ prompts until per-row prefill ownership lands) and `glm53_flash_128k` = 128 K x 
 prefill warm-up; `tt/memory_plan.py` reserves a 16 K chunk's dense working set); `TT_METAL_OPERATION_TIMEOUT_SECONDS=120` (the
 launcher's 5 s watchdog trips on 16 K prefill chunks at 64 K+ positions).
 
+Image + video serving (written device-free 2026-10-27, device validation pending): the catalog's override now names
+`GLM53FlashForConditionalGeneration` (vLLM `SupportsMultiModal` + the upstream `Glm5NextMultiModalProcessor`, so `image_url` /
+`video_url` chat content is accepted) and the adapter runs the vision tower on device at prefill, scattering the features into the
+eager stream prefill per 16 K device chunk (`doc/vision/multimodal.md`, "Served path"). Memory: the resident tower is 1.05 GiB per
+chip, which the 1 M x 4 point does not have, so the 1 M profile builds it per image request inside the prefill reserve
+(`GLM53_VLLM_VISION_RESIDENT=0`, one 448x448 window per tower call) and the 128 K profile keeps it resident (28 users per row still
+fit). `max_num_batched_tokens` is 32768 on both profiles so a video item (up to ~31.9 K tokens) is never split across engine chunks.
+Tests: `tests/test_serving_image_host.py` (host), `tests/test_serving_image_mesh.py` and `tests/test_multimodal_video_mesh.py` ((2,4)
+block).
+
 Validated 2026-10-27 on the 8x4 (serving smoke, warm cache, boot 15 min): exact first tokens on the 1 M profile (both reference
 prompts), greedy determinism across rounds through the chat template (thinking on), 4 concurrent 65 514-token needles retrieved 4/4
 (TTFT 26.5 / 52.6 / 78.6 / 104.8 s: the sequence-parallel prefill serves prompts one after another at ~2.5 K tok/s), `vllm bench`
@@ -147,8 +157,10 @@ GLM53_MESH_SHAPE=8,4 GLM53_LONG_N=1048576 GLM53_LONG_B=1 GLM53_PARTITION_USERS=0
 GLM53_MESH_SHAPE=8,4 GLM53_LONG_N=1048576 GLM53_LONG_B=4 GLM53_LONG_USERS=all GLM53_PARTITION_USERS=1 \
   GLM53_PREFILL_PARTITION=heads2users GLM53_PREFILL_EXPERTS=regions GLM53_REGIONS_T=2048 GLM53_PREFILL_QBLOCK=256 \
   pytest models/demos/glm53_flash/tests/test_mesh_long_context.py -s
-# image + text demo on a (2,4) block
+# image + text demo on a (2,4) block (GLM53_MM_CLIP_FRAMES=4: a synthetic 4-frame clip of the image as a video prompt)
 GLM53_MESH_SHAPE=2,4 GLM53_MODEL_EXPERT_DTYPE=bfp4 GLM53_MODEL_EXPERT_DOWN_DTYPE=bfp4 pytest models/demos/glm53_flash/demo/multimodal_demo.py -s
+# served image + video path on a (2,4) block (the vLLM adapter with the plugin-shaped call vs the harness path)
+GLM53_MESH_SHAPE=2,4 GLM53_MODEL_LAYERS=0-3 GLM53_MODEL_B=4 GLM53_VLLM_PREFILL_CHUNK=1024 pytest models/demos/glm53_flash/tests/test_serving_image_mesh.py -s
 ```
 
 A (2,4) block of the Galaxy: `TT_VISIBLE_DEVICES=<8 chips> MESH_DEVICE=P150x8` with the `p150_x8` mesh graph descriptor

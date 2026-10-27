@@ -18,6 +18,11 @@ Flow: model build (layers resident, decode trace captured) -> vision tower built
 replayed until an EOS or ``GLM53_MM_MAX_TOKENS`` -> the answer, TTFT (tower + prefill + first token), decode
 tok/s (per user and aggregate over the ``rows x 1`` slots the step runs) and ``generated/glm53_flash_demo/mm_<tag>.json``.
 
+Video: ``GLM53_MM_VIDEO=<directory of frame images>`` or ``GLM53_MM_CLIP_FRAMES=N`` (a synthetic clip of N
+rotated copies of the image, ``tt/multimodal.py::synthetic_clip``) runs the clip through the same path
+(``encode_multimodal_video`` -> ``video_features``: one tower window per 2-frame temporal group, the features
+scattered at the frames' image-token runs); ``GLM53_MM_FPS`` (2.0).
+
 Knobs: ``GLM53_MM_IMAGE`` (default ``sample_prompts/shapes_hello.png``: a red circle, a blue square, a green
 triangle and the word HELLO), ``GLM53_MM_QUESTION``, ``GLM53_MM_MAX_TOKENS`` (default 64), ``GLM53_MESH_SHAPE``,
 ``GLM53_DEMO_LAYERS``, ``GLM53_MODEL_EXPERT_DTYPE`` / ``GLM53_MODEL_EXPERT_DOWN_DTYPE``, ``GLM53_MODEL_TRACE_MB``,
@@ -53,8 +58,12 @@ from models.demos.glm53_flash.tt.mesh_model import GLM53MeshModel
 from models.demos.glm53_flash.tt.multimodal import (
     build_vision_tower,
     encode_multimodal,
+    encode_multimodal_video,
     image_features,
+    load_frames,
     prefill_multimodal,
+    synthetic_clip,
+    video_features,
 )
 from models.demos.glm53_flash.tt.vision import GLM53VisionConfig
 
@@ -63,6 +72,10 @@ IMAGE = Path(os.environ.get("GLM53_MM_IMAGE", SAMPLE_DIR / "shapes_hello.png"))
 QUESTION = os.environ.get("GLM53_MM_QUESTION", "What shapes and what word are in this image? Answer in one sentence.")
 MAX_TOKENS = int(os.environ.get("GLM53_MM_MAX_TOKENS", "64"))
 THINK = os.environ.get("GLM53_MM_THINK", "0") == "1"
+VIDEO_DIR = os.environ.get("GLM53_MM_VIDEO")  # a directory of frame images
+CLIP_FRAMES = int(os.environ.get("GLM53_MM_CLIP_FRAMES", "0"))  # a synthetic clip of the image instead
+FPS = float(os.environ.get("GLM53_MM_FPS", "2.0"))
+VIDEO = VIDEO_DIR is not None or CLIP_FRAMES > 0
 
 
 @pytest.mark.timeout(14400)
@@ -80,10 +93,19 @@ def test_multimodal_demo(mesh_device):
     proc = AutoProcessor.from_pretrained(str(snapshot))
     tok = proc.tokenizer
     stop = eos_ids(snapshot, tok)
-    ids, pv, grid = encode_multimodal(proc, IMAGE, QUESTION, think=THINK)
+    if VIDEO:
+        frames = load_frames(VIDEO_DIR) if VIDEO_DIR else synthetic_clip(IMAGE, CLIP_FRAMES)
+        question = os.environ.get("GLM53_MM_QUESTION", "What happens in this clip? Answer in one sentence.")
+        ids, pv, grid = encode_multimodal_video(proc, frames, question, fps=FPS, think=THINK)
+        media = f"video {VIDEO_DIR or f'synthetic clip of {IMAGE}'} ({frames.shape[0]} frames, {FPS} fps)"
+    else:
+        question = QUESTION
+        ids, pv, grid = encode_multimodal(proc, IMAGE, question, think=THINK)
+        media = f"image {IMAGE}"
+    features = video_features if VIDEO else image_features
     S = int(ids.numel())
     n_img = int((ids == GLM53VisionConfig.image_token_id).sum())
-    logger.info(f"image {IMAGE} ({grid.tolist()} -> {n_img} image tokens), question {QUESTION!r}: {S} prompt tokens")
+    logger.info(f"{media} ({grid.tolist()} -> {n_img} vision tokens), question {question!r}: {S} prompt tokens")
 
     t0 = time.perf_counter()
     model = GLM53MeshModel(
@@ -109,7 +131,7 @@ def test_multimodal_demo(mesh_device):
     logger.info(f"vision tower built on the mesh in {t_tower_build:.1f} s")
 
     # warm-up (compiles the tower and prefill programs); the state of slot 0 is overwritten by the timed run
-    feats = image_features(mesh_device, pv, grid, tower=tower)
+    feats = features(mesh_device, pv, grid, tower=tower)
     streams, logits_last, _ = prefill_multimodal(model, ids, feats, user=0)
     ttnn.deallocate(streams)
     ttnn.deallocate(logits_last)
@@ -117,7 +139,7 @@ def test_multimodal_demo(mesh_device):
 
     # timed: tower -> prefill -> first token
     t0 = time.perf_counter()
-    feats = image_features(mesh_device, pv, grid, tower=tower)
+    feats = features(mesh_device, pv, grid, tower=tower)
     t_feat = time.perf_counter() - t0
     streams, logits_last, owner_row = prefill_multimodal(model, ids, feats, user=0)
     first = model.first_token(logits_last, owner_row)
@@ -147,15 +169,15 @@ def test_multimodal_demo(mesh_device):
     mean_ms = sum(rate) / len(rate)
     tok_s_user = 1000.0 / mean_ms
     text = tok.decode([t for t in gen if t not in stop], skip_special_tokens=True)
-    logger.info(f"=== ANSWER ({len(gen)} tokens) ===\nQUESTION: {QUESTION}\nANSWER: {text}")
+    logger.info(f"=== ANSWER ({len(gen)} tokens) ===\nQUESTION: {question}\nANSWER: {text}")
     logger.info(
-        f"PERF GLM-5.3-Flash multimodal {len(layers)} layers on {rows}x{cols}: ISL {S} ({n_img} image tokens), "
+        f"PERF GLM-5.3-Flash multimodal {len(layers)} layers on {rows}x{cols}: ISL {S} ({n_img} vision tokens, {media}), "
         f"TTFT {ttft_ms:.0f} ms (tower {t_feat * 1000:.0f} ms); decode step {mean_ms:.2f} ms -> {tok_s_user:.1f} tok/s/user, "
         f"{tok_s_user * U:.0f} tok/s aggregate over {U} slots ({len(rate)} steps, {WARMUP} warm-up)"
     )
     out_dir = Path("generated/glm53_flash_demo")
     out_dir.mkdir(parents=True, exist_ok=True)
-    tag = f"mm_{rows}x{cols}_{IMAGE.stem}_{time.strftime('%Y%m%d_%H%M%S')}"
+    tag = f"mm{'v' if VIDEO else ''}_{rows}x{cols}_{IMAGE.stem}_{time.strftime('%Y%m%d_%H%M%S')}"
     (out_dir / f"{tag}.json").write_text(
         json.dumps(
             {
@@ -164,7 +186,8 @@ def test_multimodal_demo(mesh_device):
                 "mesh": [rows, cols],
                 "expert_dtype": str(EXPERT_DTYPE),
                 "image": str(IMAGE),
-                "question": QUESTION,
+                "video": (VIDEO_DIR or f"synthetic clip x{CLIP_FRAMES}") if VIDEO else None,
+                "question": question,
                 "think": THINK,
                 "isl": S,
                 "image_tokens": n_img,

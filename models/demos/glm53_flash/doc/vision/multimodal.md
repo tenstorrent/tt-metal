@@ -66,6 +66,90 @@ pass of 286 tokens 457 s, decode passes 620-1030 s (16 tokens over three host re
 | `encode_multimodal` | the qwen VL demos' processor-driven prompts | same pattern, keep (`</think>` append is GLM-specific) |
 | the generate / decode loops (`GLM53Model.generate`, mesh test, `multimodal_demo.py`) | `models/tt_transformers/tt/generator.py::Generator` via an adapter like `qwen3_vl/tt/generator.py` | replace when the GLM text stack gets a Generator adapter (not a `TTTransformer`: mHC streams, KDA/DSA state) |
 
+## Video (frames -> tokens -> features)
+
+HF (`Glm5NextProcessor` / `Glm5NextModel.get_video_features`): the video processor samples frames at 2 fps (the
+checkpoint's `fps`, up to `max_frames` 2048), resizes them within the token budget and stacks every 2 consecutive
+frames (`temporal_patch_size`) into one patch group `[h*w, 1176]` (the same patch layout as an image, whose 2
+temporal slices are a duplicated frame), so `video_grid_thw = [[t, h, w]]` with `t = frames / 2` groups. The prompt
+holds, between `<|begin_of_video|>` and `<|end_of_video|>`, one run of `h*w/4` `<|image|>` tokens per group,
+each followed by `<|end_of_image|>` and the text `"<t>.<d> seconds"` (the group's timestamp): the `<|video|>`
+token (154855) exists only in the chat template; every vision token in the ids is `image_token_id` (154854). The
+tower runs the video as `t` images: the grid is flattened to `[1, h, w] * t` (one attention window and one 2D
+rope table per group, no temporal position) and the merged features are scattered into the frames' runs in
+prompt order; an image token belongs to a video when a `<|begin_of_video|>` precedes it without its
+`<|end_of_video|>` (HF `get_placeholder_mask`'s cumsum rule).
+
+| piece | where | what |
+|---|---|---|
+| `encode_prompt` / `encode_multimodal_video(processor, frames, question, fps=2.0)` | host | frames (`[T, H, W, 3]` uint8, a list of images, a directory of frame files: `load_frames`; `synthetic_clip(image, n)` = n rotated copies of one image) + `VideoMetadata(fps)` through the chat template + processor -> ids, `pixel_values_videos [t*h*w, 1176]`, `video_grid_thw [1, 3]`. A 4-frame 448x448 clip -> `[[2, 32, 32]]`, 2048 patches, 512 vision tokens in two runs, 549 tokens |
+| `tt/mm_inputs.py` (`placeholder_runs`, `feature_rows`, `chunk_scatter`, `flatten_grid`, `vision_batches`) | host, no ttnn | image runs vs video spans from the ids; per item the rows its features take (by vLLM placeholder range or by order; a prefix that ends inside an item yields its rows so far); the per-device-chunk split; the grid flattening and the tower's window batching |
+| `vision_features(tower, items, max_patches)` (`video_features`) | device | the flattened windows batched to `max_patches` per tower call (4096 = four 448x448 images / eight temporal groups; a window above the budget runs alone), per item `[n_tokens, 4096]` host features |
+| `multimodal_streams` / `prefill_multimodal` | device | unchanged: the vision rows are all `image_token_id` rows in prompt order, so a video prompt is the image path with more rows |
+
+Per-frame cost (the tower is linear in windows; the (2,4) block measured one 1024-patch window at 60-65 ms): one
+temporal group of a 448x448 clip (2 frames, 1024 patches) costs one image, ~60 ms and 68 KB of fp32 transient per
+patch (`tt/memory_plan.py::VISION_TRANSIENT_BYTES_PER_PATCH`: residual + gate|up + the two SwiGLU slices at the
+MLP peak) = 68 MiB per group, freed before the text layers run; a 16-frame clip = 8 groups = 2048 vision tokens,
+~0.5 s of tower in two 4096-patch calls of 272 MiB each. The HF CPU reference: fp32 tower 3 s / bf16 2 s for the
+2048-patch clip. What the planner reserves: `vision_transient_bytes(batch_patches)` (one tower call's working set)
+in `reserve_bytes`'s transient term (it precedes the layers' transient rather than adding to it), plus the tower's
+weights when they are built per request (`weights_resident=False`); a single window larger than the batch budget
+(the processor allows images up to 8000 tokens = 32000 patches: 2.1 GiB of transient) exceeds the reserve the
+1 M profile models and is the one shape the planner does not cover.
+
+Validation: `tests/test_serving_image_host.py` (the bookkeeping for `t > 1`: runs, flattening, batching, straddling
+chunks), `tests/test_multimodal_video_mesh.py` ((2,4) block: the clip's tower features vs the HF fp32 reference
+`bringup/references/glm53_flash/MMV_shapes_clip4` per group, streams vs HF `inputs_embeds` with the text rows
+bit-exact, prefill + traced decode vs `generate.json` when present), `demo/multimodal_demo.py`
+(`GLM53_MM_CLIP_FRAMES=4` / `GLM53_MM_VIDEO=<frames dir>`). The reference: `reference/hf_multimodal_reference.py
+--clip-frames 4 --generate 0` (features + embeddings in seconds; `--generate 16` adds the 45-layer CPU generation).
+Device runs of the video path are pending a block grant (written device-free on 2026-10-27).
+
+## Served path (vLLM + the TT plugin)
+
+`tt/generator_vllm.py::GLM53FlashForConditionalGeneration` (selected by `TT_MODEL_CLASS_OVERRIDES`; the text class
+`GLM53FlashForCausalLM` is untouched, bit for bit) adds vLLM's `SupportsMultiModal` and registers upstream's
+`Glm5NextMultiModalProcessor` / `Glm5NextProcessingInfo` (`vllm.models.glm5next`, with the Glm4v dummy-inputs
+builder: what upstream's own `Glm5NextForConditionalGeneration` registers), so `vllm serve` accepts `image_url` /
+`video_url` chat content, vLLM's processor produces the pixel patches and expands the placeholders, and the plugin
+(`model_runner._gather_multi_modal_inputs`) forwards per batch row the item lists `pixel_values` /
+`image_grid_thw` / `pixel_values_videos` / `video_grid_thw` plus `mm_placeholder_offsets` / `mm_placeholder_lengths`
+to `prefill_forward`. The adapter:
+
+| step | where |
+|---|---|
+| `initialize_vllm_model`: `GLM53_VLLM_IMAGES` (auto = the class's `supports_multimodal`) builds `VisionRuntime` BEFORE any warm-up capture (a resident tower allocated after a capture could alias a trace's transients); the planner takes the tower's bytes (`vision_tower_bytes`: 1.05 GiB per chip bf16, replicated) as static when resident, else inside the per-request reserve (`vision_transient_bytes`) | `tt/generator_vllm.py`, `tt/memory_plan.py` |
+| `warmup_model_prefill` (eager phase): one dummy 288-token image prompt through the tower + the eager stream prefill into slot 0 (`GLM53_VLLM_WARMUP_MM=1`): the tower's programs, the 512-bucket prefill and the scatter ops compile at boot | `_warmup_multimodal` |
+| `prefill_forward`: rows with items are parsed (`mm_items`) and checked against the prompt (`feature_rows` on the whole prefix `tokens[i, :end]`) before any slot is taken; the plan is forced EAGER (the per-length traces embed the ids inside the capture); `_prefill_one_mm` encodes the items whose rows intersect `[start, end)` once (`VisionRuntime.encode`: eager, temporaries freed, the tower released in the per-request mode), then per 16 K device chunk either the plain text `prefill` (no vision row in the chunk: bit-identical to text) or `chunk_streams` + `prefill_streams(streams, n, user, start)` with the chunk's rows scattered; a straddling item takes its first rows with the first chunk and the rest with the next (`chunk_scatter`); rows past the chunk end are never written | `tt/generator_vllm.py`, `tt/multimodal.py` |
+| decode: unchanged (text tokens) | |
+
+Chunk boundaries: vLLM's scheduler never ends an engine chunk inside a multimodal item (the plugin sets
+`disable_chunked_mm_input` with chunked prefill), which is why the catalog's `max_num_batched_tokens` is 32768 (a
+video item can reach ~31.9 K tokens: the vLLM processor's 30 000 vision-token cap + timestamps); the adapter walks
+a 32 K engine chunk in two 16 K device chunks and tolerates an engine chunk that does end inside an item (the rows
+so far are scattered, the next chunk re-derives the item's rows and re-encodes it). A multimodal prompt is served
+by the eager prefill whatever its length: the 286-token image prompt pads to the 512 bucket instead of the 512
+trace; a traced variant would need per-length `keep` / `img` inputs beside the ids (240 MB bf16 over the 256-2048
+ladder on 8 rows) and is the next optimization.
+
+Memory, the 1 M profile (`tt/memory_plan.py`, planner at 8x4 / user-partitioned / 512 MB trace region): the text
+profile fits 4 users per row at 1 M with 0.12 GiB to spare; the resident tower (1.05 GiB per chip) does not fit
+there (4 users per row reach 944 K), and a per-request tower with the default 4096-patch batch misses by 0.07 GiB
+(its 1.13 GB + 272 MiB of transient exceeds the reserve's 1 M whole-prefix copy). With `GLM53_VLLM_VISION_RESIDENT=0`
+and `GLM53_VLLM_VISION_BATCH_PATCHES=1024` (one 448x448 window per tower call: 1.13 GB + 68 MiB) the transient hides
+under that term and the 1 M x 4 statement stands, at the cost of uploading the tower (1.13 GB per chip, 32 chips)
+on every image request. The 128 K profile keeps the tower resident: 28 users per row still fit beside it; at
+256 K the resident tower costs 16 -> 12 users per row, at 512 K 8 -> 4. Knobs: `GLM53_VLLM_IMAGES`,
+`GLM53_VLLM_VISION_RESIDENT`, `GLM53_VLLM_VISION_BATCH_PATCHES`, `GLM53_VLLM_WARMUP_MM`.
+
+Tests: `tests/test_serving_image_host.py` (host: the plugin contract on fakes, the scatter bookkeeping, the adapter
+with a fake mesh model + fake tower, the class declaration against a fake vLLM api, the planner numbers) and
+`tests/test_serving_image_mesh.py` ((2,4) block: the adapter driven with the plugin-shaped call for the demo image,
+the image straddling a 1024-token chunk boundary and the synthetic clip, against the harness path on the same
+model instance). Not covered: multimodal prompts under the per-row wave prefill (refused), prefix caching of
+multimodal items (declared off), a traced multimodal prefill.
+
 ## Open issues
 
 - The single-chip test yields 3 tokens per ~17-21 min device job (the 1500 s job cap, not a model limit; the
@@ -79,5 +163,5 @@ pass of 286 tokens 457 s, decode passes 620-1030 s (16 tokens over three host re
   tower bar in `test_multimodal.py` is therefore `min(0.995, floor - 0.03)` as in `test_vision.py`.
 - The HF reference runs the tower in fp32 and the text layers in bf16 (the shipped `from_pretrained(bf16)`
   model runs the tower in bf16 too); the TT tower (fp32 activations, bf16 weights) is closer to the fp32 run.
-- Multi-image prompts and video are not wired (one image per prompt; `image_features` already splits per
-  image and `multimodal_streams` concatenates in prompt order, so several images need only the processor call).
+- Multi-image and video prompts are wired (`encode_prompt` takes any order of images, videos and text; the served
+  path takes the plugin's per-item lists); their device runs are pending a block grant.

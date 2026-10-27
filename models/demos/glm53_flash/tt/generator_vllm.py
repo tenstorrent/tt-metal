@@ -61,9 +61,23 @@ bookkeeping stays valid: the device ends in the state it expects). Knobs: ``GLM5
 per slot; 0 = what the planner fits), ``GLM53_VLLM_APC_SNAPSHOT_STORE`` (``device`` ring / ``host`` copies),
 ``GLM53_VLLM_APC_TAIL_SPLIT`` (eager prefills end on the prompt's last 32-boundary first).
 
-Not supported in this draft (declared off): async decode overlap, stochastic device sampling (greedy argmax
+Multimodal serving (image + video prompts; ``GLM53FlashForConditionalGeneration`` at the bottom of this module,
+selected through ``TT_MODEL_CLASS_OVERRIDES``): the class adds vLLM's ``SupportsMultiModal`` and registers
+upstream's ``Glm5NextMultiModalProcessor`` (``vllm.models.glm5next``), so ``vllm serve`` accepts ``image_url`` /
+``video_url`` chat content and the plugin forwards every request's ``pixel_values`` / ``image_grid_thw`` /
+``pixel_values_videos`` / ``video_grid_thw`` items plus their placeholder ranges to ``prefill_forward``
+(``model_runner._gather_multi_modal_inputs``). The adapter encodes the items through the vision tower on device
+(``tt/multimodal.py::VisionRuntime``: resident on the mesh, or built per request inside the prefill reserve),
+scatters the features into the device chunk's input streams at the image-token rows (``tt/mm_inputs.py``: an
+item straddling a 16 K chunk boundary is split at it) and runs ``GLM53MeshModel.prefill_streams`` per chunk. A
+multimodal prompt always takes the EAGER prefill (the per-length traces embed the ids inside the trace, so no
+stream can be injected): a 286-token image prompt pads to the 512 bucket. Knobs: ``GLM53_VLLM_IMAGES`` (auto =
+the class's ``supports_multimodal``; 1 / 0 force), ``GLM53_VLLM_VISION_RESIDENT`` (1), ``GLM53_VLLM_VISION_BATCH_PATCHES``
+(4096), ``GLM53_VLLM_WARMUP_MM`` (1). The text-only class is bit for bit the engine it was.
+
+Not supported (declared off): async decode overlap, stochastic device sampling (greedy argmax
 only: ``max_device_top_k = 1``; other rows sample on host from the logits), speculative decoding, multimodal
-inputs, lane-DP / standard DP (one engine = one mesh).
+prompts under the per-row wave prefill, lane-DP / standard DP (one engine = one mesh).
 """
 
 from __future__ import annotations
@@ -79,6 +93,15 @@ from typing import Any
 import torch
 from loguru import logger
 
+from models.demos.glm53_flash.tt.mm_inputs import (
+    IMAGE_TOKEN_ID,
+    MMItem,
+    chunk_scatter,
+    feature_rows,
+    items_in_range,
+    mm_items,
+    mm_present,
+)
 from models.demos.glm53_flash.tt.vllm_config import (
     APC_ALLOC_CHECK_ENV,
     APC_ENV,
@@ -88,6 +111,7 @@ from models.demos.glm53_flash.tt.vllm_config import (
     APC_TAIL_SPLIT_ENV,
     DEFAULT_BLOCK_SIZE,
     DEFAULT_DEVICE_PREFILL_CHUNK,
+    DEFAULT_VISION_BATCH_PATCHES,
     DEFAULT_WAVE_ROWS,
     PREFIX_BUCKET_ENV,
     TILE,
@@ -113,7 +137,14 @@ from models.demos.glm53_flash.tt.vllm_config import (
 
 HF_ARCHITECTURES = ("Glm5NextForConditionalGeneration", "Glm5NextForCausalLM")
 ADAPTER_TARGET = "models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForCausalLM"
+MM_ADAPTER_TARGET = "models.demos.glm53_flash.tt.generator_vllm:GLM53FlashForConditionalGeneration"
 LATENT_DIM = 512  # kv_lora_rank: the latent page row (the only "KV" vLLM accounts for)
+
+# multimodal serving knobs (read at initialize_vllm_model; the catalog sets them per profile)
+IMAGES_ENV = "GLM53_VLLM_IMAGES"  # "auto" (default): the resolved class decides; "1" / "0" force the tower on / off
+VISION_RESIDENT_ENV = "GLM53_VLLM_VISION_RESIDENT"  # "1": tower weights resident per chip; "0": built per request
+VISION_BATCH_ENV = "GLM53_VLLM_VISION_BATCH_PATCHES"  # the tower's per-call patch budget (whole windows)
+WARMUP_MM_ENV = "GLM53_VLLM_WARMUP_MM"  # "1": one dummy image prompt through the tower + eager prefill at boot
 
 
 def _ttnn():
@@ -167,16 +198,6 @@ def _fabric_capability() -> dict | None:
 
 def _env_flag(name: str, default: str) -> bool:
     return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
-
-
-def _mm_payload_present(kwargs: dict) -> bool:
-    """Whether any prefill row carries multimodal tensors (the plugin's per-row lists hold None for text rows and
-    for items whose payload vLLM stripped as prefix-cached)."""
-    for field in ("pixel_values", "pixel_values_videos", "input_features"):
-        for row in kwargs.get(field) or ():
-            if row is not None and any(item is not None for item in row):
-                return True
-    return False
 
 
 DEFAULT_MESH_CACHE = "/home/ttuser/ashai/glm53/_cache/mesh"  # the model tests' tensorbin weight cache
@@ -331,6 +352,9 @@ class GLM53FlashForCausalLM:
     # Narrowed to the one captured decode width by ``warmup_model_decode`` (fixed user slots: no smaller bucket).
     tt_supported_decode_batch_sizes: tuple[int, ...] = ()
     _HYBRID_KV_CACHE_GROUPS_ENABLED = False
+    # vLLM's multimodal flag (``SupportsMultiModal.supports_multimodal``): False on the text class, True on
+    # ``GLM53FlashForConditionalGeneration``; ``GLM53_VLLM_IMAGES=auto`` follows it
+    supports_multimodal = False
 
     def __init__(
         self,
@@ -339,6 +363,7 @@ class GLM53FlashForCausalLM:
         *,
         pad_token_id: int | None = None,
         prefix_cache_entries: int | None = None,
+        vision=None,
         **vllm_kwargs,
     ):
         # ``**vllm_kwargs`` (``vllm_config`` / ``prefix``) is never used: the plugin constructs the adapter through
@@ -347,6 +372,9 @@ class GLM53FlashForCausalLM:
         # generate runner, so the signature has to advertise the keyword like the tt_transformers adapters do.
         self.model = model
         self.geometry = geometry
+        # the vision tower (``tt/multimodal.py::VisionRuntime`` or a test double with ``encode`` / ``chunk_streams``);
+        # None = text-only: a prompt that arrives with pixel data is refused
+        self.vision = vision
         self.slots = SlotTable(geometry)
         self.blocks = LogicalBlockTable(geometry)
         self.prefill_planner = PrefillPlanner(geometry, traced_available=self._has_prefill_trace)
@@ -386,6 +414,26 @@ class GLM53FlashForCausalLM:
 
     # ================================================================================= construction
     @classmethod
+    def images_enabled(cls) -> bool:
+        """``GLM53_VLLM_IMAGES``: ``auto`` (default) = the resolved class's ``supports_multimodal`` (the multimodal
+        class builds the tower, the text class does not); ``1`` / ``0`` force it."""
+        raw = os.environ.get(IMAGES_ENV, "auto").strip().lower()
+        if raw in ("", "auto"):
+            return bool(getattr(cls, "supports_multimodal", False))
+        return raw in ("1", "true", "yes", "on")
+
+    @classmethod
+    def vision_settings(cls) -> tuple[bool, int]:
+        """``(resident, batch_patches)`` of the served tower: ``GLM53_VLLM_VISION_RESIDENT`` (1; the 1 M profile sets
+        0: the tower is built per request inside the prefill reserve) and ``GLM53_VLLM_VISION_BATCH_PATCHES`` (4096;
+        the 1 M profile sets 1024 so the per-request transient stays under its whole-prefix copy term)."""
+        resident = _env_flag(VISION_RESIDENT_ENV, "1")
+        batch = int(os.environ.get(VISION_BATCH_ENV, str(DEFAULT_VISION_BATCH_PATCHES)))
+        if batch < 1:
+            raise ValueError(f"{VISION_BATCH_ENV}={batch}: the tower's patch budget must be positive")
+        return resident, batch
+
+    @classmethod
     def initialize_vllm_model(
         cls,
         hf_config,
@@ -403,7 +451,14 @@ class GLM53FlashForCausalLM:
             raise ValueError("GLM53FlashForCausalLM runs one engine per mesh (tt_data_parallel must be 1)")
         from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir
         from models.demos.glm53_flash.tt.config import GLM53FlashConfig
-        from models.demos.glm53_flash.tt.memory_plan import BF16_BYTES, BFP4_BYTES, BFP8_BYTES, MemoryPlan
+        from models.demos.glm53_flash.tt.memory_plan import (
+            BF16_BYTES,
+            BFP4_BYTES,
+            BFP8_BYTES,
+            MemoryPlan,
+            vision_tower_bytes,
+            vision_transient_bytes,
+        )
         from models.demos.glm53_flash.tt.mesh_model import GLM53MeshModel
 
         ttnn = _ttnn()
@@ -411,6 +466,26 @@ class GLM53FlashForCausalLM:
         cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
         shape = list(mesh_device.shape)
         rows, cols = int(shape[0]), int(shape[1])
+        # multimodal: the vision tower's bytes enter the planner (resident: static per chip; per request: inside the
+        # prefill reserve together with the tower's transient for one batch of windows)
+        multimodal = cls.images_enabled()
+        vision_resident, vision_batch = cls.vision_settings()
+        vision_static = vision_transient = 0.0
+        if multimodal:
+            from models.demos.glm53_flash.tt.vision import GLM53VisionConfig
+
+            vc = GLM53VisionConfig.from_snapshot(snapshot)
+            tower_bytes = vision_tower_bytes(
+                vc.depth,
+                vc.hidden_size,
+                vc.intermediate_size,
+                vc.out_hidden_size,
+                vc.projection_intermediate_size,
+                vc.patch_dim_padded,
+                vc.head_dim,
+            )
+            vision_static = tower_bytes if vision_resident else 0.0
+            vision_transient = vision_transient_bytes(vision_batch, vision_resident, tower_bytes)
         # the serving envelope's cache layout: user-partitioned over the columns, heads->users prefill (no scratch slot)
         os.environ.setdefault("GLM53_PARTITION_USERS", "1")
         os.environ.setdefault("GLM53_PREFILL_PARTITION", "heads2users")
@@ -443,6 +518,9 @@ class GLM53FlashForCausalLM:
             wave_rows=int(os.environ.get("GLM53_VLLM_WAVE_ROWS", str(DEFAULT_WAVE_ROWS))),
             wave_affinity="row" if getattr(GLM53MeshModel, "wave_per_row_users", False) else "user",
             sp_fallback=_env_flag("GLM53_VLLM_SP_FALLBACK", "1"),
+            multimodal=multimodal,
+            vision_resident=vision_resident,
+            vision_batch_patches=vision_batch,
         )
         geometry.check_max_num_seqs(max_batch_size)
         dt = {"bfp8": ttnn.bfloat8_b, "bfp4": ttnn.bfloat4_b, "bf16": ttnn.bfloat16}
@@ -459,6 +537,8 @@ class GLM53FlashForCausalLM:
             scratch_slot=scratch,
             trace_mb=int(os.environ.get("GLM53_MODEL_TRACE_MB", "512")),
             layers=layers,  # a GLM53_MODEL_LAYERS subset (block tests) is planned at its own depth
+            vision_bytes=vision_static,
+            vision_transient=vision_transient,
         )
         geometry.check_memory_plan(plan)
         logger.info(
@@ -466,6 +546,12 @@ class GLM53FlashForCausalLM:
             f"{geometry.physical_slots} slots), max_seq_len {max_seq_len}, partitioned={partitioned}, planner headroom "
             f"{plan.headroom(int(max_seq_len)) / 2**30:.1f} GiB vs {plan.bytes_for(users_per_row, int(max_seq_len)) / 2**30:.1f} GiB of caches"
             f" ({len(layers)} layers)"
+            + (
+                f"; vision tower {'resident' if vision_resident else 'per request'} ({vision_static / 2**30:.2f} GiB static, "
+                f"{vision_transient / 2**20:.0f} MiB per-request reserve, {vision_batch} patches per call)"
+                if multimodal
+                else "; text only"
+            )
         )
         cache_root = mesh_cache_root()
         t0 = time.perf_counter()
@@ -489,8 +575,15 @@ class GLM53FlashForCausalLM:
                 model.allocate_kda_snapshots(entries, store)  # before any capture: a persistent ring
             if store == "device" and entries:
                 geometry.check_memory_plan(dataclasses.replace(plan, snapshot_entries=entries))
+        vision = None
+        if multimodal:
+            # built here, before any warm-up capture: a resident tower allocated after a capture could alias that
+            # trace's transient buffers; the per-request mode allocates only inside prefill_forward (eager, freed)
+            from models.demos.glm53_flash.tt.multimodal import VisionRuntime
+
+            vision = VisionRuntime(mesh_device, snapshot, resident=vision_resident, max_patches=vision_batch)
         _install_step_profiler()
-        return cls(model, geometry, pad_token_id=cfg.pad_token_id, prefix_cache_entries=entries)
+        return cls(model, geometry, pad_token_id=cfg.pad_token_id, prefix_cache_entries=entries, vision=vision)
 
     @staticmethod
     def _prefix_cache_plan(plan, users_per_row: int, max_seq_len: int) -> tuple[int, str]:
@@ -633,6 +726,8 @@ class GLM53FlashForCausalLM:
                     logger.info(
                         f"GLM53 vLLM: eager wave warm-up ({n} tokens x {g.rows} rows) in {time.perf_counter() - t0:.1f} s"
                     )
+                if self.vision is not None and _env_flag(WARMUP_MM_ENV, "1"):
+                    self._warmup_multimodal()
                 self.already_warmed_up_prefill = True
             return
         if self.trace_id is not None:
@@ -826,6 +921,24 @@ class GLM53FlashForCausalLM:
                 out.append(b)
         return out
 
+    def _warmup_multimodal(self) -> None:
+        """One dummy image prompt (16 text + 256 image + 16 text tokens, the 448x448 geometry) through the tower and
+        the eager stream prefill into slot 0 at boot: compiles the tower's programs (and exercises the per-request
+        build + release), the 512-bucket eager prefill and the scatter ops, so the first image request compiles
+        nothing. Eager phase only (before every capture); slot 0's state is overwritten by its next prompt."""
+        t0 = time.perf_counter()
+        item = self.vision.dummy_item()
+        text = torch.arange(16, dtype=torch.long) % 1000 + 1000
+        ids = torch.cat([text, torch.full((item.n_tokens,), IMAGE_TOKEN_ID, dtype=torch.long), text])
+        n = int(ids.numel())
+        plan = PrefillPlan("eager", PrefillPlanner.walk(0, n, self.geometry.device_prefill_chunk))
+        self._prefill_one_mm(ids, 0, plan, [item], want_logits=False)
+        self._sync()
+        logger.info(
+            f"GLM53 vLLM: multimodal warm-up ({n} tokens, {item.n_tokens} image tokens through the "
+            f"{'resident' if self.vision.resident else 'per-request'} tower) in {time.perf_counter() - t0:.1f} s"
+        )
+
     def _ensure_decode_inputs(self, U: int) -> None:
         if self._decode_inputs_ready:
             return
@@ -851,9 +964,18 @@ class GLM53FlashForCausalLM:
         """One vLLM prefill step: row ``i`` of ``tokens`` ``[B, L]`` is a request whose chunk ``[start_pos[i],
         prompt_lens[i])`` is prefilled into the physical slot of logical slot ``empty_slots[i]`` (allocated here when
         the chunk starts at 0). Prompts go one at a time through the mesh (the sequence-parallel prefill uses every
-        chip). Returns ``logits [B, 1, vocab]`` fp32 (host sampling) or ``(tokens [B, 1], None)`` (device greedy)."""
-        if _mm_payload_present(kwargs):
-            raise NotImplementedError("multimodal prefill is not wired through the vLLM adapter yet")
+        chip). Returns ``logits [B, 1, vocab]`` fp32 (host sampling) or ``(tokens [B, 1], None)`` (device greedy).
+
+        Multimodal rows (the plugin's per-row ``pixel_values`` / ``image_grid_thw`` / ``pixel_values_videos`` /
+        ``video_grid_thw`` item lists + ``mm_placeholder_offsets`` / ``mm_placeholder_lengths``): the items whose
+        placeholder rows intersect the chunk are encoded through the vision tower and scattered into the eager
+        prefill's input streams (``_prefill_one_mm``); a text row of the same batch takes the text path unchanged."""
+        has_mm = mm_present(kwargs)
+        if has_mm and self.vision is None:
+            raise NotImplementedError(
+                "multimodal prompt on a text-only GLM53 engine: serve GLM53FlashForConditionalGeneration "
+                f"(TT_MODEL_CLASS_OVERRIDES) or set {IMAGES_ENV}=1 so the vision tower is built"
+            )
         B = int(tokens.shape[0])
         if prompt_lens is None:
             raise ValueError("prefill_forward needs prompt_lens (the end position of every row's chunk)")
@@ -877,6 +999,7 @@ class GLM53FlashForCausalLM:
         rows_of: dict[int, int] = {}  # logical slot -> row of the call
         items = []  # (i, logical, state, start, end, ids, spans): start = the position the device run begins at
         apc = self.apc
+        media: dict[int, tuple[list[MMItem], torch.Tensor]] = {}  # row -> (its multimodal items, prefix ids [0, end))
         for i in range(B):
             logical = int(empty_slots[i])
             start, end = starts[i], ends[i]
@@ -885,6 +1008,13 @@ class GLM53FlashForCausalLM:
             self.prefill_planner.check_range(start, end)
             spans = mm_spans_of_row(kwargs, i) if apc is not None else []
             state = self.slots.physical(logical)
+            row_items = mm_items(kwargs, i) if has_mm else []
+            if row_items:
+                if self.geometry.rows_independent:
+                    raise NotImplementedError("multimodal prompts under GLM53_VLLM_ROWS_INDEPENDENT are not wired")
+                prefix = tokens[i, :end].reshape(-1).to(torch.long)
+                feature_rows(prefix, row_items)  # the payload must match the prompt before any slot is taken
+                media[i] = (row_items, prefix)
             if start == 0:
                 state = self._allocate_slot(logical)
             elif state is not None and state.phase == "prefill" and state.prefilled_to == start:
@@ -953,11 +1083,20 @@ class GLM53FlashForCausalLM:
         split_tail = apc is not None and self.apc_tail_split
         if not self.geometry.rows_independent:
             for i, logical, state, start, end, ids, spans in items:
-                plan = self.prefill_planner.plan(start, end, enable_trace=enable_trace, split_tail=split_tail)
-                t0 = time.perf_counter()
-                first, last_logits = self._prefill_one(
-                    ids, state.user, plan, want_logits=not wants_tokens, on_chunk=on_chunk(state)
+                mm = media.get(i)
+                # a multimodal prompt takes the eager stream prefill (the traces embed the ids inside the capture)
+                plan = self.prefill_planner.plan(
+                    start, end, enable_trace=enable_trace and mm is None, split_tail=split_tail
                 )
+                t0 = time.perf_counter()
+                if mm is None:
+                    first, last_logits = self._prefill_one(
+                        ids, state.user, plan, want_logits=not wants_tokens, on_chunk=on_chunk(state)
+                    )
+                else:  # no chunk-end snapshots on the multimodal path (a later hit restores a decode snapshot)
+                    first, last_logits = self._prefill_one_mm(
+                        mm[1], state.user, plan, mm[0], want_logits=not wants_tokens
+                    )
                 if apc is not None:
                     apc.record_prefill(state.row, state.user, start, ids, spans)
                 record(i, state, end, first, last_logits)
@@ -965,6 +1104,7 @@ class GLM53FlashForCausalLM:
                     f"GLM53 vLLM: prefill slot {logical} -> user {state.user} (row {state.row}) [{start}, {end}) via "
                     f"{plan.kind} ({len(plan.chunks)} chunk(s)) in {(time.perf_counter() - t0) * 1000:.0f} ms, "
                     f"chunk-end token {first}"
+                    + (f", {len(mm[0])} multimodal item(s): {[it.kind for it in mm[0]]}" if mm is not None else "")
                 )
                 self._apc_alloc_check(f"the prefill [{start}, {end}) of slot {logical} (user {state.user})")
         else:
@@ -1060,6 +1200,56 @@ class GLM53FlashForCausalLM:
         logits = self._eager_last_logits(logits_last, owner_row) if want_logits else None
         self._free(streams)
         self._free(logits_last)
+        return first, logits
+
+    def _prefill_one_mm(self, prefix_ids: torch.Tensor, user: int, plan, mm: list[MMItem], *, want_logits: bool):
+        """``_prefill_one`` for a prompt with multimodal items: ``prefix_ids`` ``[end]`` is the whole prefix up to
+        the end of the chunk (``mm_inputs.feature_rows`` needs it: a video span may open in an earlier chunk),
+        ``plan`` the EAGER device chunks of ``[start, end)``. The items whose placeholder rows intersect the range
+        are encoded once (the tower on device, eager, temporaries freed); every device chunk then takes the text
+        embedding of its ids with the features scattered at its image-token rows (``chunk_streams``), or the plain
+        text ``prefill`` when no vision row falls into it (bit-identical to a text chunk). Rows past the chunk
+        end are never written: a straddling item's remaining rows go with the next chunk."""
+        if self.vision is None:
+            raise NotImplementedError("multimodal prefill without a vision runtime")
+        if plan.kind != "eager":
+            raise ValueError("a multimodal prompt must take the eager prefill (the traces embed the ids)")
+        rows = feature_rows(prefix_ids, mm)
+        needed = items_in_range(rows, plan.start, plan.end)
+        t0 = time.perf_counter()
+        feats = dict(zip(needed, self.vision.encode([mm[k] for k in needed])))
+        t_vision = time.perf_counter() - t0
+        unit = TILE * self.geometry.rows
+        mem_log = os.environ.get(MEM_LOG_ENV, "0") == "1"
+        out = None
+        for s0, e in plan.chunks:
+            if out is not None:
+                self._free(out[0])
+                self._free(out[1])
+            chunk_ids = prefix_ids[s0:e]
+            entries = chunk_scatter(rows, s0, e)
+            if not entries:
+                out = self.model.prefill(chunk_ids, user=user, start=s0)
+            else:
+                pad_to = eager_pad_length(e - s0, unit)
+                streams = self.vision.chunk_streams(
+                    self.model, chunk_ids, [(en, feats[en.item]) for en in entries], pad_to
+                )
+                out = self.model.prefill_streams(streams, e - s0, user=user, start=s0)
+            if mem_log:
+                logger.info(
+                    f"GLM53 vLLM mem: user {user} chunk [{s0}, {e}) done ({sum(en.n for en in entries)} vision rows): "
+                    f"{_dram_line(_mesh_device_of(self.model))}"
+                )
+        streams, logits_last, owner_row = out
+        first = int(self.model.first_token(logits_last, owner_row))
+        logits = self._eager_last_logits(logits_last, owner_row) if want_logits else None
+        self._free(streams)
+        self._free(logits_last)
+        logger.info(
+            f"GLM53 vLLM: vision {len(needed)} of {len(mm)} item(s) ({sum(mm[k].n_tokens for k in needed)} tokens, "
+            f"{sum(mm[k].n_patches for k in needed)} patches) encoded in {t_vision * 1000:.0f} ms for [{plan.start}, {plan.end})"
+        )
         return first, logits
 
     def _traced_last_logits(self, res) -> torch.Tensor:
@@ -1447,3 +1637,75 @@ class GLM53FlashForCausalLM:
 
     def compute_logits(self, hidden_states, **kwargs):  # pragma: no cover - protocol shim
         raise NotImplementedError("TT models return logits from decode_forward")
+
+
+# ===================================================================================== multimodal class
+def _vllm_multimodal_api():
+    """vLLM's multimodal declaration pieces, or None in a process without vLLM (the host tests, the model
+    harness): ``SupportsMultiModal`` and the processor registration decorator for the GLM-5.3-Flash upstream
+    processor (``vllm.models.glm5next``'s ``Glm5NextMultiModalProcessor`` / ``Glm5NextProcessingInfo`` with the
+    Glm4v dummy-inputs builder, exactly what upstream's ``Glm5NextForConditionalGeneration`` registers)."""
+    try:
+        from vllm.model_executor.models.glm4_1v import Glm4vDummyInputsBuilder
+        from vllm.model_executor.models.interfaces import SupportsMultiModal
+        from vllm.models.glm5next.nvidia.multimodal import Glm5NextMultiModalProcessor, Glm5NextProcessingInfo
+        from vllm.multimodal import MULTIMODAL_REGISTRY
+    except ImportError as exc:
+        logger.debug(f"GLM53 vLLM: multimodal class declared without vLLM ({exc})")
+        return None
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        SupportsMultiModal=SupportsMultiModal,
+        register_processor=MULTIMODAL_REGISTRY.register_processor(
+            Glm5NextMultiModalProcessor, info=Glm5NextProcessingInfo, dummy_inputs=Glm4vDummyInputsBuilder
+        ),
+    )
+
+
+def declare_multimodal_class(api=None):
+    """``GLM53FlashForConditionalGeneration``: the adapter served as text + image + video. A SEPARATE class rather
+    than making ``GLM53FlashForCausalLM`` multimodal (the Gemma 4 arrangement): the plugin registers the text class
+    for every Glm5Next architecture and its text-only-ness is load-bearing (without ``SupportsMultiModal`` vLLM leaves
+    ``multimodal_config`` unpopulated, no processor sits in front of the request path, no per-row ``pixel_values``
+    lists reach ``prefill_forward``). Selected per deployment through the generic ``TT_MODEL_CLASS_OVERRIDES``.
+
+    ``api``: ``_vllm_multimodal_api()`` (vLLM present: the class gains ``SupportsMultiModal`` and the upstream
+    ``Glm5NextMultiModalProcessor`` registration, which is what makes ``vllm serve`` accept ``image_url`` /
+    ``video_url`` content) or None (a plain subclass with the same flags, for hosts without vLLM)."""
+    bases = (GLM53FlashForCausalLM,) + ((api.SupportsMultiModal,) if api is not None else ())
+
+    class GLM53FlashForConditionalGeneration(*bases):
+        """GLM-5.3-Flash text + image + video generation on a Blackhole Galaxy mesh for the TT vLLM plugin."""
+
+        supports_multimodal = True  # the SupportsMultiModal ClassVar, restated for the vLLM-less declaration
+        supports_multimodal_raw_input_only = False
+        supports_encoder_tp_data = False
+        supports_mm_device_do_normalize = False
+        requires_raw_input_tokens = False
+
+        @classmethod
+        def get_placeholder_str(cls, modality: str, i: int) -> str | None:
+            """The chat template's media markers (upstream ``Glm4vForConditionalGeneration``): the processor
+            expands ``<|image|>`` to the image tokens and ``<|video|>`` to the per-frame structure."""
+            if modality.startswith("image"):
+                return "<|begin_of_image|><|image|><|end_of_image|>"
+            if modality.startswith("video"):
+                return "<|begin_of_video|><|video|><|end_of_video|>"
+            raise ValueError("Only image or video modality is supported")
+
+        # vLLM nn.Module multimodal protocol shims (the TT runner hands the raw items to prefill_forward instead)
+        def embed_multimodal(self, **kwargs):  # pragma: no cover - protocol shim
+            raise NotImplementedError("TT models encode multimodal items inside prefill_forward")
+
+        def get_language_model(self):  # pragma: no cover - protocol shim
+            raise NotImplementedError("TT models expose no nn.Module language model")
+
+    GLM53FlashForConditionalGeneration.__qualname__ = GLM53FlashForConditionalGeneration.__name__
+    GLM53FlashForConditionalGeneration.__module__ = __name__
+    if api is not None:
+        GLM53FlashForConditionalGeneration = api.register_processor(GLM53FlashForConditionalGeneration)
+    return GLM53FlashForConditionalGeneration
+
+
+GLM53FlashForConditionalGeneration = declare_multimodal_class(_vllm_multimodal_api())

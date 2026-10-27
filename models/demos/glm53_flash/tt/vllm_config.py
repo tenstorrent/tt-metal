@@ -65,6 +65,47 @@ DEFAULT_DEVICE_PREFILL_CHUNK = 16384  # tokens per eager prefill chunk on the 8x
 DEFAULT_BLOCK_SIZE = 32  # the latent page (TtLatentCache.block_size); the vLLM block size must match it
 DEFAULT_WAVE_ROWS = 2048  # rows per mesh row per wave (= today's 16 K chunk on 8 rows: memory-neutral)
 WAVE_AFFINITIES = ("user", "row")
+# the vision tower's per-call patch budget (whole attention windows: images / 2-frame video groups): 4096 patches =
+# four 448x448 images or eight temporal groups of a 448x448 clip per tower call, ~280 MB of fp32 transients
+DEFAULT_VISION_BATCH_PATCHES = 4096
+
+PREFILL_BUCKETS_ENV = "GLM53_PREFILL_BUCKETS"
+# 8192 is deliberately absent: a 1024-row slab per chip (8192 tokens on the 8 rows) puts the KDA sequence-parallel
+# scan's static dataflow buffers (~1005 KiB per core, slab-independent) and the prefill's L1-resident chunk terms
+# (~608 KiB per core at 1024 rows) over the 1.5 MiB L1 ("Statically allocated dataflow buffers ... clash with L1
+# buffers"); slabs <= 512 rows fit and slabs >= ~1216 rows spill the terms to DRAM (the 16384 chunk path).
+# 256..2048 are the traced lengths (their per-length KDA prefill layers exist from the captures) and 16384 the serving
+# chunk (built by the 32 K warm-up), so these buckets cost no DRAM; a 4096 bucket added ~1 GB of per-length buffers
+# at boot and left the 1 M x 32-slot model unable to allocate the indexer's chunk transient (smoke r9, 2026-10-27).
+DEFAULT_PREFILL_BUCKETS = (256, 512, 1024, 2048, 16384)
+
+
+def prefill_buckets(env=None) -> tuple[int, ...]:
+    """``GLM53_PREFILL_BUCKETS``: the eager prefill's padded chunk lengths (default 256,512,1024,2048,16384; ``0`` =
+    pad to the row unit only, the pre-2026-10-27 behaviour). Host-only (shared by the mesh model and the served
+    adapter's multimodal chunks, which pad their streams exactly as the text ``prefill`` pads its ids)."""
+    env = os.environ if env is None else env
+    raw = env.get(PREFILL_BUCKETS_ENV, "")
+    if raw.strip() == "0":
+        return ()
+    if not raw.strip():
+        return DEFAULT_PREFILL_BUCKETS
+    return tuple(sorted(int(v) for v in raw.split(",") if v.strip()))
+
+
+def eager_pad_length(seq_len: int, unit: int, buckets: tuple[int, ...] | None = None) -> int:
+    """Padded length of an eager prefill chunk of ``seq_len`` tokens: the row unit's ceiling, raised to the smallest
+    bucket that holds it (a bucket must be a multiple of ``unit``; above the largest bucket the ceiling stands).
+    Every bucket is warmed at boot (the serving warm-up ladder), so a prompt's odd tail chunk never builds a new
+    per-length ttKDA prefill layer after the trace captures (buffers allocated then are clobbered by replays: the
+    2026-10-27 served hang) and never compiles at request time. The kernels clip to the valid ``seq_len``."""
+    T = -(-int(seq_len) // unit) * unit
+    for b in prefill_buckets() if buckets is None else buckets:
+        if b % unit:
+            raise ValueError(f"prefill bucket {b} is not a multiple of the row unit {unit}")
+        if T <= b:
+            return b
+    return T
 
 
 # ----------------------------------------------------------------------------------------------- geometry
@@ -89,6 +130,12 @@ class ServingGeometry:
     wave_rows: int = DEFAULT_WAVE_ROWS
     wave_affinity: str = "user"
     sp_fallback: bool = True
+    # multimodal serving (image + video prompts through the vision tower, tt/multimodal.py::VisionRuntime): off =
+    # the text-only engine, bit for bit; vision_resident = the tower's weights stay on every chip (planner static
+    # bytes) vs. built per request inside the prefill reserve; vision_batch_patches = the tower's per-call budget
+    multimodal: bool = False
+    vision_resident: bool = True
+    vision_batch_patches: int = DEFAULT_VISION_BATCH_PATCHES
 
     def __post_init__(self):
         if self.rows < 1 or self.cols < 1 or self.users_per_row < 1:
@@ -110,6 +157,8 @@ class ServingGeometry:
         # (not SPMD); at >= 2048 rows only a prompt's first chunk (start 0, no prefix) has dense rows
         if self.wave_rows < DENSE_PREFILL_ROWS or self.wave_rows % TILE:
             raise ValueError(f"wave_rows {self.wave_rows} must be a multiple of {TILE} and >= {DENSE_PREFILL_ROWS}")
+        if self.vision_batch_patches < 1:
+            raise ValueError(f"vision_batch_patches {self.vision_batch_patches} must be positive")
 
     @property
     def users_per_chip(self) -> int:

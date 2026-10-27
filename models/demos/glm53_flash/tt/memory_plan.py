@@ -106,6 +106,63 @@ def weights_bytes_estimate(
     return experts + other
 
 
+def vision_tower_bytes(
+    depth: int = 24,
+    hidden: int = 1024,
+    intermediate: int = 4096,
+    out_hidden: int = 4096,
+    proj_intermediate: int = 10240,
+    patch_dim_padded: int = 1184,
+    head_dim: int = 64,
+    weight_bytes: float = BF16_BYTES,
+) -> float:
+    """Device bytes of the resident vision tower PER CHIP (``tt/vision.py::TtVisionTower``: replicated on every chip
+    of the mesh, ``from_torch`` without a mapper). Matmul weights in ``weight_bytes`` (bf16 by default); the patch
+    embed, biases, norm rows and the rotate-half matrix in fp32 (``act_dtype``). 0.564 B parameters -> 1.13 GB bf16."""
+    f32 = 4.0
+    per_block = (
+        hidden * 3 * hidden * weight_bytes  # qkv
+        + 3 * hidden * f32  # qkv bias
+        + 2 * head_dim * f32  # q / k per-head norms
+        + hidden * hidden * weight_bytes  # proj
+        + hidden * f32  # proj bias
+        + 2 * hidden * f32  # norm1 / norm2
+        + 2 * hidden * intermediate * weight_bytes  # gate | up
+        + 2 * intermediate * f32  # gate / up biases
+        + intermediate * hidden * weight_bytes  # down
+        + hidden * f32  # down bias
+    )
+    merged = 4 * hidden  # the 2x2 merge block the downsample conv reads
+    tail = (
+        patch_dim_padded * hidden * f32  # patch embed (fp32, exact bf16 values)
+        + hidden * f32  # patch bias
+        + head_dim * head_dim * f32  # rotate-half matrix
+        + hidden * f32  # post_layernorm
+        + merged * out_hidden * weight_bytes  # downsample
+        + out_hidden * f32  # downsample bias
+        + out_hidden * out_hidden * weight_bytes  # merger proj
+        + 2 * out_hidden * f32  # merger LayerNorm weight + bias
+        + 2 * out_hidden * proj_intermediate * weight_bytes  # merger gate | up
+        + proj_intermediate * out_hidden * weight_bytes  # merger down
+    )
+    return depth * per_block + tail
+
+
+# the tower's fp32 working set per patch at its peak (the vision MLP: residual [S, 1024] + gate|up [S, 8192] + the two
+# slices [S, 4096] x 2, all fp32 = 68 KB per patch); the attention phase (qkv fp32 + bf16 heads) and the merger stay
+# below it. Measured against the planner only: the tower's temporaries are freed before the text layers run.
+VISION_TRANSIENT_BYTES_PER_PATCH = 4 * 1024 + 4 * 8192 + 2 * 4 * 4096
+
+
+def vision_transient_bytes(patches: int, weights_resident: bool = True, weight_bytes_per_chip: float = 0.0) -> float:
+    """Per-request DRAM the vision path takes beside the caches: the tower's transients for one call of at most
+    ``patches`` patches (``vision_batches``) plus, when the tower is built per request rather than resident, its
+    weights (``weight_bytes_per_chip``). The text prefill's own transient (``reserve_bytes``) never coexists with it:
+    the features are read to the host and the tower's buffers freed before the first layer runs."""
+    weights = 0.0 if weights_resident else weight_bytes_per_chip
+    return patches * VISION_TRANSIENT_BYTES_PER_PATCH + weights
+
+
 def default_prefill_qblock(max_seq_len: int | None) -> int:
     """The sparse prefill's score sub-block rows when ``GLM53_PREFILL_QBLOCK`` is unset: 2048 up to 256 K, 512 at
     512 K, 256 at 1 M. The scorer keeps a [rows, pools] bf16 score block and its ranking copy (``_rank_pools``) live
@@ -125,8 +182,11 @@ def reserve_bytes(
     k: int = 8,
     e_local: int = 72,
     chunk_tokens: int = 16384,
+    vision_transient: float = 0.0,
 ) -> float:
-    """Working set beside the caches during a prefill chunk + the decode trace region."""
+    """Working set beside the caches during a prefill chunk + the decode trace region (``vision_transient``: the
+    multimodal path's per-request working set, ``vision_transient_bytes``, which precedes the layers' transient
+    rather than adding to it)."""
     trace = trace_mb * 2**20
     regions = 3 * (regions_t * k + e_local * TILE) * 4096 * 2  # region buffer, gather table, pick rows (bf16)
     qblock = default_prefill_qblock(isl) if qblock is None else qblock
@@ -142,7 +202,7 @@ def reserve_bytes(
     chunk_ws = 4 * chunk_tokens * 4384 * 4
     # the regions buffers and the score block are released before the attention of a sub-block takes the whole-prefix
     # copy; the observed peak transient at 1 M (QBLOCK 512, regions 2048) was ~1.5 GB with ~1 GB left at the last chunk
-    return trace + misc + max(prefix_copy, regions + score, chunk_ws)
+    return trace + misc + max(prefix_copy, regions + score, chunk_ws, vision_transient)
 
 
 @dataclass(frozen=True)
@@ -163,6 +223,10 @@ class MemoryPlan:
     # this chip (``kda_state_bytes``); counted per chip for EVERY user of the row (``snapshot_bytes_per_chip``)
     kda_state_bytes: float = 0.0
     snapshot_entries: int = 0
+    # multimodal serving: the resident vision tower's weights per chip (static, ``vision_tower_bytes``; 0 when the
+    # tower is built per request or images are off) and the per-request vision working set (``vision_transient_bytes``)
+    vision_bytes: float = 0.0
+    vision_transient: float = 0.0
 
     @classmethod
     def estimate(
@@ -179,6 +243,8 @@ class MemoryPlan:
         dram_bytes: float = P150_DRAM_BYTES,
         layers=None,
         snapshot_entries: int = 0,
+        vision_bytes: float = 0.0,
+        vision_transient: float = 0.0,
     ) -> "MemoryPlan":
         """``layers``: the layer ids the instance builds (None = the whole config); the block tests' 4-layer models
         on 2 rows do not fit the full-depth estimate (the 2-row expert shards alone exceed a chip)."""
@@ -194,6 +260,8 @@ class MemoryPlan:
             trace_mb,
             kda_state_bytes_per_user(cfg, cols),
             int(snapshot_entries),
+            vision_bytes,
+            vision_transient,
         )
 
     @classmethod
@@ -234,7 +302,12 @@ class MemoryPlan:
 
     def headroom(self, isl: int) -> float:
         chunk_tokens = max(16384, self.rows * int(self.wave_rows))  # the SP chunk, or the rows' wave chunks gathered
-        return self.dram_bytes - self.weights_bytes - reserve_bytes(isl, self.trace_mb, chunk_tokens=chunk_tokens)
+        return (
+            self.dram_bytes
+            - self.weights_bytes
+            - self.vision_bytes
+            - reserve_bytes(isl, self.trace_mb, chunk_tokens=chunk_tokens, vision_transient=self.vision_transient)
+        )
 
     def max_wave_rows(self, users_per_row: int, isl: int, step: int = 128) -> int:
         """The largest wave width W (a multiple of ``step``, >= 2048) at which ``users_per_row`` users per row fit
