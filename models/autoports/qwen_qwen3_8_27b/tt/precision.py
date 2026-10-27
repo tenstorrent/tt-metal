@@ -81,4 +81,9 @@ def decoder_policy(config, index):
         raise ValueError('QWEN38_GROUPED_RECURRENCE must be 0 or 1')
     if grouped == '1':
         policy['grouped_recurrence'] = True
+    masked = os.environ.get('QWEN38_MASKED_RECURRENCE', '0')
+    if masked not in ('0', '1'):
+        raise ValueError('QWEN38_MASKED_RECURRENCE must be 0 or 1')
+    if masked == '1':
+        policy['masked_recurrence'] = True
     return policy

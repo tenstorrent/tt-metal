@@ -167,8 +167,15 @@ passed its verifier in308.155s,18responses/zero missing calls, with no upstream-
 fix retrieval. This is a protocol smoke, not an accuracy estimate. The auxiliary
 post-cleanup exporter rejected the new exact overlay digest; its narrow allowlist
 fix passes59 focused tests. Clean B8/C8 SWE8 now runs as CI40554052639 at
-TTIb3c86734fd2311fd0be73afc307be15bffbd0ed0; fixed exporter runtime acceptance
-and the complete clean8 score still need collection.
+TTIb3c86734fd2311fd0be73afc307be15bffbd0ed0 and has completed:7/8
+verifier successes, all8 normal submissions,5718.577s trial envelope. All8
+actual network-phase audits pass; the fixed stable exporter succeeds with
+verified exact files. All349 HTTP requests completed200/tool_calls, with
+204224 outputtokens. One472-token response was omitted from the saved agent
+trajectory after a recovered tool-format error; the server audit accounts for
+it. No upstream-fix retrieval appears in the actual command review. See the
+[compact control receipt](isolated-swe8-control.json). This fixed8 result is
+not a general accuracy estimate or matched GPU-parity claim.
 
 The default-off grouped recurrence passes paired local all64-layer token tests:
 B16 decode13.8087→17.5110 tokens/s/user (1.2681×), B32 clean8.88722→12.81941
@@ -180,7 +187,7 @@ The immutable source-overlay image receipt binds Metal805f873d19d8c21c90757420c8
 `ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:47319d8b11749575cc921bae9c03458d37be2667433d7e8e7e0faa3be7a3d895`.
 The prepared TTI candidate `mvasiljevic/qwen38-swe-grouped-b16-p512-20261027`
 uses resident16, block512, C8, grouped1, medium, and the same isolated protocol.
-Its44 focused isolation tests pass; it has not been dispatched or selected.
+CI40559423498 is running that candidate at TTI32bf15405b77b02765d424e5509fd496705eb02d; it has not been selected.
 Matched clean8 precedes the frozen25-task pilot, then100/500. Native262144
 admission and pinned weights/tokenizer are retained throughout.
 
@@ -190,3 +197,13 @@ The artifact-only tests/audit_swe_isolation.py fails closed on absent flags,
 wrong/missing task identities, public primaries, incomplete phase transitions
 or unsettled/unclean resources. It passes the actual repeat smoke and rejects
 the earlier nonisolated one; protocol success remains separate from rewards.
+
+The default-off [masked recurrent state commit](MASKED_RECURRENCE.md) passes
+full64 strict state/logit/token/qualitative checks and a separate three-repeat
+clean timing pair at8 active requests in16 resident rows:13.87818→15.71310
+tokens/s/user (1.132216×), with unchanged first-token latency. Its matched reduced
+profile and [independent final review](MASKED_FINAL_REVIEW.md) pass. The final
+generic-op output declaration correction has focused strict revalidation;
+original full/profile source hashes are retained. Neither running SWE8 image
+includes this experiment. Large CSV/Tracy captures and raw token arrays remain
+local or in CI artifacts; only code and compact documentation are published.

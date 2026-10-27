@@ -1,0 +1,57 @@
+{
+  "status": "pass",
+  "old_source_sha256": "679a8eb9eb174b4ac7f6ea2bcec0233dcd9f2d284cdc01437bd9589b9a326b52",
+  "final_source_sha256": "f0f9f46ce31ffdf0a6f79de724bf16ba112c1fffd4ed7e2484f886b75d904645",
+  "entire_function_before_io_list_exact": true,
+  "all_reader_writer_compute_runtime_arguments_and_descriptors_exact": true,
+  "function_after_generic_op_call_exact": true,
+  "orders": {
+    "False": {
+      "old": [
+        "q",
+        "k",
+        "v",
+        "decay",
+        "beta",
+        "state",
+        "out",
+        "final"
+      ],
+      "final": [
+        "q",
+        "k",
+        "v",
+        "decay",
+        "beta",
+        "state",
+        "out",
+        "final"
+      ]
+    },
+    "True": {
+      "old": [
+        "q",
+        "k",
+        "v",
+        "decay",
+        "beta",
+        "state",
+        "out",
+        "final",
+        "active_mask"
+      ],
+      "final": [
+        "q",
+        "k",
+        "v",
+        "decay",
+        "beta",
+        "state",
+        "active_mask",
+        "out",
+        "final"
+      ]
+    }
+  },
+  "scope": "Only generic_op IO declaration order changes; kernel source/config/runtime addresses/math unchanged. Actual final tensor is now FP32 state; masked return remains unused."
+}

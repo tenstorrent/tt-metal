@@ -1,0 +1,161 @@
+{
+  "status": "completed isolated control; fixed8 tasks, not general accuracy or GPU parity",
+  "run": 40554052639,
+  "run_url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/40554052639",
+  "metal_source": "805f873d19d8c21c90757420c8da76ad0308cd69",
+  "tti_source": "b3c86734fd2311fd0be73afc307be15bffbd0ed0",
+  "plugin_source": "1badbd02bb6911dfdb59c206bdc00c6c1e8dc0bf",
+  "image_digest": "sha256:47319d8b11749575cc921bae9c03458d37be2667433d7e8e7e0faa3be7a3d895",
+  "weights_tokenizer_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "configuration": {
+    "resident_batch": 8,
+    "harbor_concurrency": 8,
+    "cache_block_physical_prefill": 256,
+    "grouped_recurrence": false,
+    "native_context": 262144,
+    "precision": "head_bfp8_hifi2",
+    "reasoning_effort": "medium",
+    "seed": 1234,
+    "agent_timeout_sec": 6300,
+    "llm_timeout_sec": 3600,
+    "request_output_tokens": 16384
+  },
+  "solved": 7,
+  "denominator": 8,
+  "score_percent": 87.5,
+  "normal_submissions": 8,
+  "trial_envelope_seconds": 5718.577171,
+  "saved_completion_tokens": 203752,
+  "server_audited_completion_tokens": 204224,
+  "http_requests": 349,
+  "http_200_toolcall_completions": 349,
+  "missing_saved_agent_responses": 1,
+  "missing_response_explanation": "One472-token HTTP200/tool_calls response is absent from saved agent trajectory; one recoverable Missing command argument tool-format error is present. Failed task13398 submitted normally. Failed response body unavailable; no task removed.",
+  "isolation": "all8 actual primary internal; transitions true,false,true; owned resources removed; artifact auditor passed",
+  "retrieval_review": "Actual saved commands contain no upstream-fix retrieval. URL appears in one written regression-test comment; pip install antlr fails DNS under isolation. Reviewer/source inspection supports clean network protocol; not a proof against pretraining memorization.",
+  "stable_audit_export": "stable_exact_file_sets_exported; archive/file hashes and two-read mtimes verified; all349starts/ends present",
+  "dataset_identity": {
+    "dataset": "swebench-verified",
+    "version": "1.0",
+    "population": 500,
+    "population_names_sha256": "0821947fc741ed1cd8039af0fcfdf5c6ec69e4f6e4c96bd79c97e50a19a2fd52",
+    "population_sources_sha256": "41482a7f48605870c12e1f3dd46d656740ea40fb9df71e08bdf552e267cf21e4",
+    "source_commits": [
+      "86723674f04e4209ac479d0fb75d9d9f44b4377e"
+    ],
+    "selected_task_names": [
+      "astropy__astropy-13398",
+      "astropy__astropy-13453",
+      "astropy__astropy-14309",
+      "astropy__astropy-7166",
+      "scikit-learn__scikit-learn-13135",
+      "sphinx-doc__sphinx-8459",
+      "sympy__sympy-18698",
+      "sympy__sympy-21612"
+    ],
+    "n_tasks_limit": 8,
+    "registry_file_sha256": "91831a45aee22f7f299f84077c5d79ae8225a7cefedf6a65359231790a81a3b0"
+  },
+  "tasks": [
+    {
+      "task": "astropy__astropy-13398",
+      "checksum": "3e28f3f0b22af6ed382828b5391100aec18268bf859e8b64d99ec8fbe43d1163",
+      "reward": 0.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 5650.481154,
+      "saved_completion_tokens": 82549,
+      "api_calls": 77,
+      "missing_responses": 1
+    },
+    {
+      "task": "astropy__astropy-13453",
+      "checksum": "781503f811e7e3f95641993ca311894f46fc770085b1e561ab5b87e4585a9f88",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 1213.902651,
+      "saved_completion_tokens": 15249,
+      "api_calls": 61,
+      "missing_responses": 0
+    },
+    {
+      "task": "astropy__astropy-14309",
+      "checksum": "9f200334dcd1bbf887de59eb4e097cb699f3d4c4231f89ea44b643c0bb5c7514",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 439.779235,
+      "saved_completion_tokens": 4111,
+      "api_calls": 21,
+      "missing_responses": 0
+    },
+    {
+      "task": "astropy__astropy-7166",
+      "checksum": "f2c39dca6e3f63a22da93c0b3f8f4211374bb08f5629a64718c6a8c9e9349abb",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 507.186445,
+      "saved_completion_tokens": 5216,
+      "api_calls": 20,
+      "missing_responses": 0
+    },
+    {
+      "task": "scikit-learn__scikit-learn-13135",
+      "checksum": "8d22a5cea28b7b67c94275c2866af098502495f5ec73d42d0752fcccf6de9bdd",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 398.993134,
+      "saved_completion_tokens": 4040,
+      "api_calls": 16,
+      "missing_responses": 0
+    },
+    {
+      "task": "sphinx-doc__sphinx-8459",
+      "checksum": "a2491749a5a5055f59e0d73c5edded4f23cf62889059aadc31fa91a3ba431b7a",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 2668.290562,
+      "saved_completion_tokens": 36781,
+      "api_calls": 70,
+      "missing_responses": 0
+    },
+    {
+      "task": "sympy__sympy-18698",
+      "checksum": "b37cd628d9ca81c111945995018ae80d540d79683a37278ce1253fadf0e76833",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 2320.069054,
+      "saved_completion_tokens": 29872,
+      "api_calls": 46,
+      "missing_responses": 0
+    },
+    {
+      "task": "sympy__sympy-21612",
+      "checksum": "8ee326e4be753ae0692f72704f084ff6a503d6ae8af21252d19ef69c27070ef1",
+      "reward": 1.0,
+      "exception": null,
+      "exit_status": "Submitted",
+      "agent_seconds": 1964.374879,
+      "saved_completion_tokens": 25934,
+      "api_calls": 38,
+      "missing_responses": 0
+    }
+  ],
+  "input_sha256": {
+    "isolated-clean8-control-manifest.json": "1fb8fc19e1eb5f2f03539f2e92919e4790d57d61aa4b05ec8f91d5ecb966b395",
+    "isolated-clean8-control-audit.json": "1a589aeb25f841f2bd6e348d8be21c6d35cfbd2eb4aa9cd7e79882c50aaffff8",
+    "isolated-clean8-control-summary.json": "6eb84a6987eb375ddad94d839159be0f0addbbfe10ef72e1977edca0d7bf08b9",
+    "qwen38-http-1793123414178862507.jsonl": "819b599e8a09eaa8417cf9e133771fc7d81cc2ab9376ba72a1fea4c728a8fb3c"
+  },
+  "limits": [
+    "Fixed8 cohort only; optimized B16/512 candidate running separately.",
+    "No matched SWE Verified GPU reference;61.7 card result refers to SWE-bench Pro.",
+    "Trial envelope excludes server startup and artifact export.",
+    "One recovered tool-format error; server audit accounts472 additional outputtokens beyond saved trajectories."
+  ]
+}

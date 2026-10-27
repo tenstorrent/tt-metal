@@ -1,0 +1,95 @@
+{
+  "status": "accepted bounded local masked-stage; serving/SWE promotion pending",
+  "scope": "Reduced real layers0/3 plus embedding/norm/head/sampling/feedback; not all64 layers",
+  "batch": 16,
+  "active_requests": 8,
+  "physical_prefill_chunk": 512,
+  "logical_prompt": 4096,
+  "fixture_cache_context": 8192,
+  "native_context": 262144,
+  "policy": "grouped both arms; masked recurrent commit false/true only",
+  "same_sources_fixture_precision": true,
+  "clock_mhz": 1350,
+  "decode": {
+    "baseline_us": 3723.082962962963,
+    "masked_commit_us": 3540.077037037037,
+    "saved_us": 183.00592592592602,
+    "speedup": 1.0516954642543874,
+    "device_ops": [
+      896,
+      888
+    ],
+    "per_asic_us": [
+      {
+        "0": 3717.157777777778,
+        "1": 3723.082962962963,
+        "2": 3715.105925925926,
+        "3": 3719.88962962963
+      },
+      {
+        "0": 3540.077037037037,
+        "1": 3539.743703703704,
+        "2": 3536.640740740741,
+        "3": 3532.9103703703704
+      }
+    ]
+  },
+  "prefill": {
+    "baseline_us": 283000.7251851852,
+    "masked_commit_us": 283002.2814814815,
+    "device_ops": [
+      7404,
+      7404
+    ]
+  },
+  "timing_basis": "Maximum complete per-device whole-layer firmware envelope, all ops and gaps included. Per-chip cycles / MHz = us; never subtract unsynchronized clocks across ASICs.",
+  "source_sha256": {
+    "tests/profile_swe_reduced.py": "2db20bd8b0cf3fb1c116fc2c04b8133952f51dd699abf63036c5d9ca3db9fdfa",
+    "tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "tt/checkpoint_path.py": "be8db5229a1981e2be818614b6059119d46268bbee9bca879a62f42ca04cdda5",
+    "tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9",
+    "tt/fused_decoder.py": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e",
+    "tt/generator_vllm.py": "4a1bbe43b7ea01752972b54a246f4291508908af4aabfb5069c4623c3bbcf180",
+    "tt/benchmark_phases.py": "05467f323fabefd7b040bbb9619bca80731082bccaec5ba84c45879ce9cf3f4b",
+    "tt/vllm_cache_specs.py": "62b3fe93eb3fd6fe4854d070dafc82bc48696d7698fc6596d7092fcf485b699c",
+    "tt/fused_decode.py": "aaabf3a36c6029bdfbc97ce1342ed3931cd4da729f6a4939dc789ce5db193038",
+    "tt/model.py": "d40b195400d64d379c0f05f9cdf518cd563540448cbe162de63380954c9fb19c",
+    "tt/multichip_decoder.py": "2fe4903b82fd14ea2e315bf05d960d9c6208bc63a4f4dc7e35e2d0b1f558ec6e",
+    "tt/grouped_recurrence.py": "679a8eb9eb174b4ac7f6ea2bcec0233dcd9f2d284cdc01437bd9589b9a326b52",
+    "tt/decode_workspace.py": "bdf291c2e95e6f31a0842076a5a3176989c675035aa460a8bfb572490c4f3d80",
+    "tt/fused_prefill.py": "80de6c24646acd943025cadab48cc70b3fc93e3c83c4d2716c1c2c81df1a18bd",
+    "tt/sampling_ccl.py": "1c652512bb91cec3692d95211c49808fbe1553173155365bf3c73d4414421694",
+    "tt/readiness_contract.py": "88e77d39df257160f5cc48f5f50bca136be0d88290fdee84166bb0754c54dffe",
+    "tt/generator.py": "16ee1b1ed51cde3d9b8d5ffdb0c5ce2ab924ee681445e86442ff2a2cdf9f5495",
+    "tt/lm_head.py": "53140434152bd7b3d9b387cc2bd4968697c32fb5fa03963e8f89c75c0df90c8e",
+    "tt/optimized_decoder.py": "a50bd33ce6001933a41829e236ef61fe5da6133c539aadc7e87d5b1068c86a1c",
+    "tt/precision.py": "36ff97f604e1f5152f81e7b0ae63d98b24c7881bcbb2b07f7be516398adedc6c",
+    "tt/serving_state.py": "014c8faa11389958555af47f71d5f58a8bb6fa38634d1130886bdf43f18f549f",
+    "tt/kernels/writer_grouped_recurrence.cpp": "1f96ea801c20e0a607e6d403e434ac99c97a58abeba1b7ee6acbd29d322b6fe5",
+    "tt/kernels/writer_masked_grouped_recurrence.cpp": "83d2e59c6e9f5802f437ae597722bc175b86665e855fe922f106adcd0d0856ef",
+    "tt/kernels/compute_grouped_recurrence.cpp": "f5f9d0174d712b690f837b884283f9c2878021df49feb2fc809f77183b175abd",
+    "tt/kernels/reader_grouped_recurrence.cpp": "33cb2561427ef9935bb2795c3e089f8c10943846e0147ddf7d46a9d71a4eeb38"
+  },
+  "inputs_sha256": {
+    "masked-baseline-fixed-clock/scope.json": "60a53b97250fe57b2993c7c0627b8f4a087ca7f5b5dad553a66dff689fa562d7",
+    "masked-baseline-fixed-clock/whole_layer_timing.json": "9e72ecb14e3d0424b9f2982426af1c485289e62b90a3f842aceb6d7a37a77f60",
+    "masked-fused-fixed-clock/scope.json": "cd222ee8f919c3e2318da28b1ce6a40892ad0cbbfa42f28d7e826532bf28b108",
+    "masked-fused-fixed-clock/whole_layer_timing.json": "82cd542d118d01c34d730cc313b2a083fa34d477917ee1fd95491bcf514ffde5"
+  },
+  "report_notes": [
+    "Raw measured firmware endpoints complete; no parser assertion disabled.",
+    "Derived reports blank only first per-ASIC predecessor gap fields; timestamps/durations/row identities preserved.",
+    "Fused row-projection scalar HiFi4 label comes from reduction kernel; nested matmul config remainsLoFi.",
+    "Native profiler clock fix matches both arms; original compiled runtime header unchanged.",
+    "Unused all-active trace0 expected because actual8of16 fixture selects masked trace1.",
+    "NFS weight-loading delay precedes measured windows; no serving/profile overlap; no SWE speedup claim."
+  ],
+  "artifacts": "All raw CSV/Tracy/logs remain local; compact summary only.",
+  "final_api_output_order_correction": {
+    "proof": "masked-io-order-proof.json",
+    "final_helper_sha256": "f0f9f46ce31ffdf0a6f79de724bf16ba112c1fffd4ed7e2484f886b75d904645",
+    "earlier_helper_sha256": "679a8eb9eb174b4ac7f6ea2bcec0233dcd9f2d284cdc01437bd9589b9a326b52",
+    "change": "Read-only mask precedes out/final in generic_op IO declaration; final state remains last and is the formally declared output. Kernel/descriptor/runtime-address construction is unchanged.",
+    "validation": "Final B16 real-weight varying-mask replay:72 exact checks,24nonzero inactive-state preservation checks, tracking1/cacheSkip0. Earlier full/profile receipts retain their original source hashes."
+  }
+}

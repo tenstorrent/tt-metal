@@ -1,0 +1,67 @@
+{
+  "strict": {
+    "status": "pass",
+    "scope": "Paired all64-layer fixed-work comparison; not SWE accuracy",
+    "batch": 16,
+    "active_requests": 8,
+    "policy_compared": "masked_recurrence",
+    "states_compared": true,
+    "tokens_exact": true,
+    "continuation_logits_exact": true,
+    "medians": {
+      "baseline": {
+        "ttft_ms": 8773.173808120191,
+        "decode_seconds": 9.15095806797035,
+        "decode_tps_per_user": 13.878328264285026
+      },
+      "masked_commit": {
+        "ttft_ms": 8773.61512905918,
+        "decode_seconds": 8.082468434935436,
+        "decode_tps_per_user": 15.713021463969936
+      }
+    },
+    "decode_speedup": 1.1321984294323384,
+    "inputs_sha256": {
+      "full-b16-active8-baseline-strict.json": "6d6cddccb8374e11fb9ca61857fd0cb9ce0357c97fbd71526b7651fd972e736d",
+      "full-b16-active8-fused-strict.json": "07fcf7a169a2e7fcb36a307a1f20507ab2703217285209c4292ceca6ea798872"
+    }
+  },
+  "clean": {
+    "status": "pass",
+    "scope": "Paired all64-layer fixed-work comparison; not SWE accuracy",
+    "batch": 16,
+    "active_requests": 8,
+    "policy_compared": "masked_recurrence",
+    "states_compared": false,
+    "tokens_exact": true,
+    "continuation_logits_exact": null,
+    "medians": {
+      "baseline": {
+        "ttft_ms": 8770.077743101865,
+        "decode_seconds": 9.15105553297326,
+        "decode_tps_per_user": 13.878180450592957
+      },
+      "masked_commit": {
+        "ttft_ms": 8771.916300989687,
+        "decode_seconds": 8.08242746302858,
+        "decode_tps_per_user": 15.713101117323436
+      }
+    },
+    "decode_speedup": 1.1322162277153618,
+    "inputs_sha256": {
+      "full-b16-active8-baseline-clean.json": "7eec394987ca3b12d8338618f606c5351cbc5b6efab630ecd65596f74c44131f",
+      "full-b16-active8-fused-clean.json": "3578ac651082303444d4b740788355b2d825d596bcebbe545389d35f56588059"
+    }
+  },
+  "status": "accepted bounded local masked-stage; serving/SWE promotion pending",
+  "ci": "Neither live SWE8 image includes masked recurrence; no SWE accuracy claim",
+  "precision": "unchanged",
+  "default": "off",
+  "final_api_output_order_correction": {
+    "proof": "masked-io-order-proof.json",
+    "final_helper_sha256": "f0f9f46ce31ffdf0a6f79de724bf16ba112c1fffd4ed7e2484f886b75d904645",
+    "earlier_helper_sha256": "679a8eb9eb174b4ac7f6ea2bcec0233dcd9f2d284cdc01437bd9589b9a326b52",
+    "change": "Read-only mask precedes out/final in generic_op IO declaration; final state remains last and is the formally declared output. Kernel/descriptor/runtime-address construction is unchanged.",
+    "validation": "Final B16 real-weight varying-mask replay:72 exact checks,24nonzero inactive-state preservation checks, tracking1/cacheSkip0. Earlier full/profile receipts retain their original source hashes."
+  }
+}

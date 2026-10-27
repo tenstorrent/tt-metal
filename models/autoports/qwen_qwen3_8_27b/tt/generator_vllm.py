@@ -60,7 +60,8 @@ class Qwen38ForCausalLM:
         print(f"AUTOPORT_ADAPTER {__file__}:{cls.__name__} layers={obj.model.layer_indices} "
               f"precision={obj.model.precision_config} "
               f"grouped_recurrence_layers={sum(bool(layer.policy.get('grouped_recurrence')) for layer in obj.model.layers)} "
-              f"resident_batch={max_batch_size}", flush=True)
+              f"resident_batch={max_batch_size} "
+              f"masked_recurrence_layers={sum(layer.layer_type == 'linear_attention' and bool(layer.policy.get('masked_recurrence')) for layer in obj.model.layers)}", flush=True)
         if os.environ.get('QWEN38_BENCHMARK_PHASES'):
             from .benchmark_phases import install
             install(obj)

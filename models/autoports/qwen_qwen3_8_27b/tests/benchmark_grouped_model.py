@@ -17,7 +17,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="/data/mvasiljev/weights/Qwen3.8-27B")
     parser.add_argument("--grouped", action="store_true")
+    parser.add_argument("--masked-recurrence", action="store_true")
     parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument("--active-requests", type=int, help="Useful requests; remaining resident rows stay inactive")
     parser.add_argument(
         "--debug-layers", type=int, nargs="+", help="Reduced lifetime-debug fixture; never full-model evidence"
     )
@@ -34,10 +36,14 @@ def main():
     parser.add_argument("--prefill-chunk-size", type=int, default=256)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    active_requests = args.active_requests if args.active_requests is not None else args.batch
+    if not 1 <= active_requests <= args.batch:
+        parser.error("active-requests must be within 1..batch")
     torch.set_num_threads(8)
     ttnn.CONFIG.throw_exception_on_fallback = True
     delta_source = None
     os.environ["QWEN38_GROUPED_RECURRENCE"] = "1" if args.grouped else "0"
+    os.environ["QWEN38_MASKED_RECURRENCE"] = "1" if args.masked_recurrence else "0"
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=128 * 1024**2)
     result = dict(
@@ -48,7 +54,9 @@ def main():
         ),
         layer_indices=args.debug_layers or list(range(64)),
         grouped=args.grouped,
+        masked_recurrence=args.masked_recurrence,
         batch=args.batch,
+        active_requests=active_requests,
         tested_cache_context=args.context,
         supported_model_context=262144,
         length=args.length,
@@ -114,7 +122,7 @@ def main():
             prompt = gen.tokenizer.apply_chat_template(
                 messages, tokenize=True, add_generation_prompt=True, return_dict=False
             )
-            qualitative = gen.generate([prompt[:] for _ in range(args.batch)], args.qualitative_output_tokens)
+            qualitative = gen.generate([prompt[:] for _ in range(active_requests)], args.qualitative_output_tokens)
             result["qualitative"]["outputs"].append(
                 dict(
                     id=item["id"],
@@ -150,7 +158,7 @@ def main():
             body_length += args.length - len(prompt)
         if len(prompt) != args.length:
             raise ValueError("Could not construct the exact-length native chat fixture")
-        prompts = [prompt[:] for _ in range(args.batch)]
+        prompts = [prompt[:] for _ in range(active_requests)]
         result["prompt_sha256"] = hashlib.sha256(json.dumps(prompt).encode()).hexdigest()
         gen.generate(prompts, args.outputs, stop_on_eos=False)
         trace_ids = [str(t) for t in gen.decode_traces.values()] + [

@@ -653,6 +653,7 @@ class MultichipDecoder(OptimizedDecoder):
             valid_fp32 = ttnn.typecast(valid, ttnn.float32)
             decay = ttnn.multiply(decay, valid_fp32)
             beta = ttnn.multiply(beta, valid_fp32)
+        masked_commit = False
         if length > 1:
             physical = ((length + 31) // 32) * 32
             def padded(t):
@@ -690,7 +691,14 @@ class MultichipDecoder(OptimizedDecoder):
             grid = self.mesh_device.compute_with_storage_grid_size()
             kernel_batch = (grid.x * grid.y) // 12
             recurrence = fp32_recurrence
-            if (self.policy.get("grouped_recurrence") and length == 1
+            masked_commit = (self.policy.get("masked_recurrence") and prepared_metadata is None
+                             and not self.policy.get("_prefill_phase")
+                             and 8 <= batch <= 32 and active_mask is not None
+                             and active_mask.dtype == ttnn.bfloat16 and active_mask.layout == ttnn.TILE_LAYOUT
+                             and list(active_mask.shape) == [batch, 1, 1]
+                             and list(active_mask.padded_shape) == [batch, 32, 32]
+                             and not active_mask.is_sharded())
+            if masked_commit or (self.policy.get("grouped_recurrence") and length == 1
                     and not self.policy.get("_prefill_phase") and kernel_batch < batch <= 32):
                 # Independent heads share a core sequentially; arithmetic and state
                 # ownership stay unchanged while avoiding split/concat dispatches.
@@ -702,17 +710,17 @@ class MultichipDecoder(OptimizedDecoder):
                 y_part, state_part = recurrence(
                     q[begin:end], k[begin:end], v[begin:end], decay[begin:end], beta[begin:end],
                     initial_state=state.recurrent[begin:end], output_final_state=True, compute_kernel_config=self.ckc,
-                    # Keep the original state available for inactive prepared
-                    # slots. The FP32 recurrence math is unchanged; only its
-                    # destination differs from the default in-place decode.
-                    inplace_state=(self.policy.get("inplace_recurrence", False)
-                                   and prepared_metadata is None and active_mask is None),
+                    # The masked writer commits active rows only. Prepared
+                    # slots retain the original out-of-place selection path.
+                    inplace_state=(masked_commit or (self.policy.get("inplace_recurrence", False)
+                                   and prepared_metadata is None and active_mask is None)),
+                    **({"active_mask": active_mask} if masked_commit else {}),
                 )
                 ys.append(y_part)
                 states.append(state_part)
             y = ttnn.concat(ys, dim=0) if len(ys) > 1 else ys[0]
             new_state = ttnn.concat(states, dim=0) if len(states) > 1 else states[0]
-        if prepared_metadata is not None or active_mask is not None:
+        if (prepared_metadata is not None or active_mask is not None) and not masked_commit:
             row_active = (prepared_metadata["valid_mask"][:, :1, :] if prepared_metadata is not None
                           else ttnn.to_layout(active_mask, ttnn.TILE_LAYOUT))
             active = ttnn.reshape(row_active, [batch, 1, 1, 1])

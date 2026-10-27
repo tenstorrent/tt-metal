@@ -19,6 +19,7 @@ def fp32_recurrence(
     beta,
     *,
     initial_state,
+    active_mask=None,
     scale=None,
     output_final_state=True,
     compute_kernel_config=None,
@@ -31,6 +32,18 @@ def fp32_recurrence(
     the optional compute_kernel_config argument preserves call-site compatibility.
     """
     batch, length, qheads, key_dim = q.shape
+    masked = active_mask is not None
+    if masked:
+        if length != 1 or not inplace_state:
+            raise ValueError("Masked recurrence requires one decode step and in-place state")
+        if (
+            active_mask.dtype != ttnn.bfloat16
+            or active_mask.layout != ttnn.TILE_LAYOUT
+            or list(active_mask.shape) != [batch, 1, 1]
+            or list(active_mask.padded_shape) != [batch, 32, 32]
+            or active_mask.is_sharded()
+        ):
+            raise ValueError("Masked recurrence requires an interleaved BF16 [B,1,1] tile mask")
     value_heads, value_dim = v.shape[2], v.shape[3]
     if key_dim != 128 or value_dim != 128 or value_heads != 12 or qheads not in (4, 12):
         raise ValueError("FP32 recurrence supports the Qwen3.8-27B head dimensions only")
@@ -113,6 +126,14 @@ def fp32_recurrence(
         )
         for index, tiles in enumerate(cb_sizes)
     ]
+    if masked:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=32,
+                core_ranges=cores,
+                format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=16, data_format=ttnn.uint32, page_size=32)],
+            )
+        )
     reader_ct = [kt, vt, 0]
     # Ring indexing is disabled. A valid dummy accessor keeps the unused template
     # argument well-formed without any scratch buffer or new persistent state.
@@ -121,6 +142,8 @@ def fp32_recurrence(
     writer_ct = [kt, vt, 0]
     for tensor in (out, final):
         writer_ct.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+    if masked:
+        writer_ct.extend(ttnn.TensorAccessorArgs(active_mask).get_compile_time_args())
     rr, wr, cr = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for core_index, core in enumerate(coords):
         h = core_index * heads_per_core
@@ -139,10 +162,13 @@ def fp32_recurrence(
             heads,
         ]
         writer_args = [h, length, out.buffer_address(), final.buffer_address(), heads]
+        if masked:
+            writer_args.extend([count, active_mask.buffer_address()])
         compute_args = [length]
         if heads_per_core > 1:
             reader_args.append(count)
-            writer_args.append(count)
+            if not masked:
+                writer_args.append(count)
             compute_args.append(count)
         rr[core.x][core.y] = reader_args
         wr[core.x][core.y] = writer_args
@@ -163,9 +189,13 @@ def fp32_recurrence(
         else _UPSTREAM + "reader_fused_recurrent_gated_delta_rule.cpp"
     )
     writer_source = (
-        str(kernel_dir / "writer_grouped_recurrence.cpp")
-        if heads_per_core > 1
-        else _UPSTREAM + "writer_fused_recurrent_gated_delta_rule.cpp"
+        str(kernel_dir / "writer_masked_grouped_recurrence.cpp")
+        if masked
+        else (
+            str(kernel_dir / "writer_grouped_recurrence.cpp")
+            if heads_per_core > 1
+            else _UPSTREAM + "writer_fused_recurrent_gated_delta_rule.cpp"
+        )
     )
     compute_source = str(kernel_dir / "compute_grouped_recurrence.cpp") if heads_per_core > 1 else _KERNEL
     descriptor = ttnn.ProgramDescriptor(
@@ -195,6 +225,11 @@ def fp32_recurrence(
         cbs=cbs,
         semaphores=[],
     )
-    ttnn.generic_op([q, k, v, decay, beta, state, out, final], descriptor)
+    inputs = [q, k, v, decay, beta, state]
+    if masked:
+        inputs.append(active_mask)
+    # generic_op declares its last tensor as the output; keep final state last.
+    inputs.extend([out, final])
+    ttnn.generic_op(inputs, descriptor)
     out = ttnn.permute(ttnn.reshape(out, [batch, value_heads, length, value_dim]), (0, 2, 1, 3))
     return out, ttnn.reshape(final, [batch, value_heads, key_dim, value_dim])
