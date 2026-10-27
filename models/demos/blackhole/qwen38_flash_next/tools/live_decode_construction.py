@@ -51,18 +51,10 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.builder import (
     Qwen38TTNNBuilder,
 )
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import Qwen38MeshContract, TensorPlacement
-from models.demos.blackhole.qwen38_flash_next.ttnn.decode import (
-    Qwen38OrdinaryDecodeSession,
-    Qwen38OrdinarySessionStatus,
-    Qwen38OrdinaryStopReason,
-    Qwen38OrdinaryToken,
-)
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import (
     PINNED_CHECKPOINT_REVISION,
     PINNED_TENSOR_MANIFEST_SHA256,
 )
-from models.demos.blackhole.qwen38_flash_next.ttnn.model import LayerObserver
-from models.demos.blackhole.qwen38_flash_next.ttnn.one_token_decode import Qwen38NonqualifyingDecodedToken
 
 MODE = "diagnostic_non_promoting"
 EXPECTED_MESH_SHAPE = (1, 4)
@@ -82,7 +74,6 @@ DIAGNOSTIC_LAYER0_HIDDEN_SHA256 = "33016923963b2b88c83b39368ecfa23bb32de83cb51e2
 DIAGNOSTIC_LAYER0_SELECTED_EXPERTS = (215, 143, 436, 151, 449, 453, 287, 90, 84, 20)
 DIAGNOSTIC_LAYER1_HIDDEN_SHA256 = "c4c10a8cebb37b2694ec78a8929d48aa4b15f218759a2f698b0fec77f7e8bc4e"
 DIAGNOSTIC_LAYER1_SELECTED_EXPERTS = (19, 157, 320, 225, 165, 205, 60, 131, 104, 86)
-DIAGNOSTIC_EOS_TOKEN_IDS = (248_046, 248_044)
 MAX_RETAINED_CPU_ORACLE_BYTES = 1 << 20
 
 Marker = Callable[[str], None]
@@ -278,23 +269,6 @@ def load_retained_cpu_token_oracle(path: Path | None = None) -> Qwen38RetainedCP
         layer1_hidden_sha256=DIAGNOSTIC_LAYER1_HIDDEN_SHA256,
         layer1_selected_experts=DIAGNOSTIC_LAYER1_SELECTED_EXPERTS,
     )
-
-
-def _require_retained_oracle_first_step(
-    oracle: Qwen38RetainedCPUTokenOracle,
-    *,
-    input_token_id: int,
-    output_token_id: int,
-) -> None:
-    if type(oracle) is not Qwen38RetainedCPUTokenOracle:
-        raise TypeError("oracle must be Qwen38RetainedCPUTokenOracle")
-    expected_input = oracle.input_token_ids[0]
-    expected_output = oracle.output_token_ids[0]
-    if input_token_id != expected_input or output_token_id != expected_output:
-        raise LiveDecodeDiagnosticError(
-            f"ordinary first token differs from retained CPU oracle: "
-            f"{input_token_id}->{output_token_id} != {expected_input}->{expected_output}"
-        )
 
 
 def _snapshot_corpus(corpus: DiagnosticBF4Corpus) -> Mapping[Path, FileSignature]:
@@ -884,319 +858,8 @@ def construct_live_decode_diagnostic(
     )
 
 
-@dataclass(frozen=True)
-class Qwen38LiveOrdinarySession:
-    """Persistent owner of one real built target and ordinary session."""
-
-    construction: Qwen38LiveDecodeConstruction
-    built_target: Any
-    builder: Qwen38TTNNBuilder
-    session: Qwen38OrdinaryDecodeSession
-
-    def __post_init__(self) -> None:
-        if self.builder is not self.construction.builder:
-            raise ValueError("live ordinary owner must retain the construction's exact builder")
-        if type(self.session) is not Qwen38OrdinaryDecodeSession:
-            raise TypeError("live ordinary owner must retain the exact ordinary decode session")
-
-    def summary(self) -> dict[str, Any]:
-        return {
-            "mode": MODE,
-            "result": "live_ordinary_session_constructed",
-            "production_qualification": False,
-            "performance_qualification": False,
-            "builder_identity_key": self.builder.identity.key,
-            "target_built": True,
-            "session_constructed": True,
-            "session_status": self.session.status.value,
-            "token_decoded": False,
-        }
-
-
-@dataclass(frozen=True)
-class Qwen38LiveOneTokenDecode:
-    """One real ordinary token emitted from the live diagnostic construction."""
-
-    construction: Qwen38LiveDecodeConstruction
-    decoded: Qwen38NonqualifyingDecodedToken
-    oracle: Qwen38RetainedCPUTokenOracle
-    stop_reason: str
-    timing_ns: Mapping[str, int | str]
-    completed_layers: tuple[int, ...]
-
-    def summary(self) -> dict[str, Any]:
-        return {
-            "mode": MODE,
-            "result": "ordinary_one_token_decoded",
-            "production_qualification": False,
-            "performance_qualification": False,
-            "qualification": self.decoded.qualification,
-            "production_manifest_read": False,
-            "production_manifest_created": False,
-            "bound_records": EXPECTED_RECORD_COUNT,
-            "bound_tensorbins": EXPECTED_TENSORBIN_COUNT,
-            "builder_identity_key": self.construction.builder.identity.key,
-            "expert_residency": self.construction.builder.identity.expert_residency,
-            "qsa_cache_capacity": self.construction.builder.identity.qsa_cache_capacity,
-            "input_token_id": self.decoded.input_token_id,
-            "token_id": self.decoded.token_id,
-            "expected_token_id": self.oracle.output_token_ids[0],
-            "matches_retained_cpu_oracle": self.decoded.token_id == self.oracle.output_token_ids[0],
-            "retained_cpu_oracle_sha256": self.oracle.sha256,
-            "cache_position": self.decoded.cache_position,
-            "stop_reason": self.stop_reason,
-            "timing_ns": dict(self.timing_ns),
-            "layers_executed": self.decoded.layers_executed,
-            "completed_layers": list(self.completed_layers),
-            "terminal_mechanic": self.decoded.terminal_mechanic,
-            "sampling_mechanic": self.decoded.sampling_mechanic,
-            "target_built": True,
-            "session_constructed": True,
-            "session_closed": True,
-            "resident_owner_closed": True,
-            "token_decoded": True,
-        }
-
-
-def decode_live_one_token(
-    construction: Qwen38LiveDecodeConstruction,
-    *,
-    oracle: Qwen38RetainedCPUTokenOracle,
-    input_token_id: int = DIAGNOSTIC_INPUT_TOKEN_ID,
-    eos_token_ids: tuple[int, ...] = DIAGNOSTIC_EOS_TOKEN_IDS,
-    marker: Marker | None = None,
-) -> Qwen38LiveOneTokenDecode:
-    """Construct, use, and close one persistent owner for one greedy token."""
-
-    if type(construction) is not Qwen38LiveDecodeConstruction:
-        raise TypeError("construction must be Qwen38LiveDecodeConstruction")
-    if (
-        type(oracle) is not Qwen38RetainedCPUTokenOracle
-        or oracle.input_token_ids != DIAGNOSTIC_ORACLE_INPUT_TOKEN_IDS
-        or oracle.output_token_ids != DIAGNOSTIC_ORACLE_OUTPUT_TOKEN_IDS
-    ):
-        raise LiveDecodeDiagnosticError("one-token diagnostic requires the retained two-step CPU oracle")
-    if input_token_id != DIAGNOSTIC_INPUT_TOKEN_ID:
-        raise ValueError(f"diagnostic input token must remain pinned to {DIAGNOSTIC_INPUT_TOKEN_ID}")
-    if tuple(eos_token_ids) != DIAGNOSTIC_EOS_TOKEN_IDS:
-        raise ValueError(f"diagnostic EOS tokens must remain pinned to {DIAGNOSTIC_EOS_TOKEN_IDS}")
-    owner = None
-    completed_layers: list[int] = []
-
-    def observe_layer(layer_index: int, residual: Any, state: Any, aux: Any) -> None:
-        del residual, state, aux
-        expected = len(completed_layers)
-        if layer_index != expected:
-            raise LiveDecodeDiagnosticError(
-                f"ordinary layer observer advanced out of order: {layer_index} != {expected}"
-            )
-        _mark(marker, f"before-layer-{layer_index}-synchronize")
-        ttnn.synchronize_device(construction.builder.mesh_device)
-        completed_layers.append(layer_index)
-        _mark(marker, f"after-layer-{layer_index}-device-complete")
-
-    try:
-        owner = construct_live_ordinary_session(
-            construction,
-            eos_token_ids=eos_token_ids,
-            layer_observer=observe_layer,
-            marker=marker,
-        )
-        session = owner.session
-        _mark(marker, "before-token-decode")
-        event = session.begin((input_token_id,), max_new_tokens=1)
-        _mark(marker, "after-token-decode")
-        if type(event) is not Qwen38OrdinaryToken:
-            raise TypeError("ordinary decode returned a non-Qwen38 token record")
-        if event.token_index != 0 or event.cache_position != 1:
-            raise RuntimeError(
-                f"first ordinary emission has index/position {(event.token_index, event.cache_position)}, "
-                "expected (0,1)"
-            )
-        if event.stop_reason not in (Qwen38OrdinaryStopReason.EOS, Qwen38OrdinaryStopReason.MAX_NEW_TOKENS):
-            raise RuntimeError(f"one-token diagnostic did not stop after its first emission: {event.stop_reason!r}")
-        if session.status is not Qwen38OrdinarySessionStatus.FINISHED:
-            raise RuntimeError(f"one-token diagnostic ended with session status {session.status.value!r}")
-        if tuple(completed_layers) != tuple(range(48)):
-            raise RuntimeError(f"one-token diagnostic completed layers {tuple(completed_layers)}, expected 0:47")
-        _require_retained_oracle_first_step(
-            oracle,
-            input_token_id=input_token_id,
-            output_token_id=event.token_id,
-        )
-        decoded = Qwen38NonqualifyingDecodedToken(
-            input_token_id=input_token_id,
-            token_id=event.token_id,
-            cache_position=event.cache_position,
-        )
-        stop_reason = event.stop_reason.value
-        timing_ns = MappingProxyType(
-            {
-                "phase": event.timing.phase.value,
-                "input_token_count": event.timing.input_token_count,
-                "model_call": event.timing.model_call_ns,
-                "explicit_sync": event.timing.explicit_sync_ns,
-                "host_overhead": event.timing.host_overhead_ns,
-                "end_to_end": event.timing.end_to_end_ns,
-            }
-        )
-    finally:
-        if owner is not None and owner.session.status is not Qwen38OrdinarySessionStatus.POISONED:
-            _mark(marker, "before-session-close")
-            close_live_ordinary_owner(owner, marker=marker)
-            if owner.session.status is not Qwen38OrdinarySessionStatus.CLOSED:
-                raise RuntimeError(f"ordinary session close ended with status {owner.session.status.value!r}")
-            _mark(marker, "after-session-close")
-    return Qwen38LiveOneTokenDecode(
-        construction=construction,
-        decoded=decoded,
-        oracle=oracle,
-        stop_reason=stop_reason,
-        timing_ns=timing_ns,
-        completed_layers=tuple(completed_layers),
-    )
-
-
-def construct_live_ordinary_session(
-    construction: Qwen38LiveDecodeConstruction,
-    *,
-    eos_token_ids: tuple[int, ...] = DIAGNOSTIC_EOS_TOKEN_IDS,
-    stop_on_eos: bool = True,
-    layer_observer: LayerObserver | None = None,
-    phase_observer: Marker | None = None,
-    marker: Marker | None = None,
-) -> Qwen38LiveOrdinarySession:
-    """Build and retain the exact builder, target, and ordinary session."""
-
-    if type(construction) is not Qwen38LiveDecodeConstruction:
-        raise TypeError("construction must be Qwen38LiveDecodeConstruction")
-    if tuple(eos_token_ids) != DIAGNOSTIC_EOS_TOKEN_IDS:
-        raise ValueError(f"diagnostic EOS tokens must remain pinned to {DIAGNOSTIC_EOS_TOKEN_IDS}")
-    if type(stop_on_eos) is not bool:
-        raise TypeError("stop_on_eos must be an explicit bool")
-    expected_cache = (
-        construction.production_cache if construction.diagnostic_cache is None else construction.diagnostic_cache
-    )
-    if construction.builder.bf4_cache is not expected_cache:
-        raise LiveDecodeDiagnosticError("builder no longer owns the bound BF4 cache")
-    if construction.builder.expert_streamer is not construction.expert_streamer:
-        raise LiveDecodeDiagnosticError("builder no longer owns the bound diagnostic BF4 streamer")
-    if (
-        construction.builder.identity.expert_residency != "resident"
-        or construction.builder.identity.qsa_cache_capacity not in RESIDENT_QSA_CACHE_CAPACITIES
-        or not isinstance(construction.expert_streamer, Qwen38BF4ResidentSet)
-    ):
-        raise LiveDecodeDiagnosticError(
-            "full ordinary inference requires a resident diagnostic profile (C in "
-            f"{RESIDENT_QSA_CACHE_CAPACITIES}), got "
-            f"{construction.builder.identity.expert_residency}/C{construction.builder.identity.qsa_cache_capacity}"
-        )
-
-    session = None
-    built_target = None
-    try:
-        _mark(marker, "before-target-build")
-        built_target = construction.builder.build_target()
-        _mark(marker, "after-target-build")
-        _mark(marker, "before-target-build-synchronize")
-        ttnn.synchronize_device(construction.builder.mesh_device)
-        _mark(marker, "after-target-build-synchronize")
-        _mark(marker, "before-session-state-allocation")
-        if phase_observer is None:
-            session = Qwen38OrdinaryDecodeSession(
-                built_target,
-                expected_provenance=construction.prepared.provenance,
-                expected_physical_ids=construction.prepared.mesh_contract.physical_ids,
-                expected_identity_key=construction.builder.identity.key,
-                eos_token_ids=eos_token_ids,
-                stop_on_eos=stop_on_eos,
-                layer_observer=layer_observer,
-            )
-        else:
-            session = Qwen38OrdinaryDecodeSession(
-                built_target,
-                expected_provenance=construction.prepared.provenance,
-                expected_physical_ids=construction.prepared.mesh_contract.physical_ids,
-                expected_identity_key=construction.builder.identity.key,
-                eos_token_ids=eos_token_ids,
-                stop_on_eos=stop_on_eos,
-                layer_observer=layer_observer,
-                phase_observer=phase_observer,
-            )
-        if session.allocated_context != construction.builder.identity.qsa_cache_capacity:
-            raise LiveDecodeDiagnosticError(
-                f"ordinary session allocated a C{session.allocated_context} cache, the builder identity admits "
-                f"C{construction.builder.identity.qsa_cache_capacity}"
-            )
-        _mark(marker, "after-session-state-allocation")
-        shared_tt_ccl = construction.builder.tt_ccl
-        if shared_tt_ccl._manager is not None:
-            raise LiveDecodeDiagnosticError("builder TT-CCL manager resolved before diagnostic session preflight")
-        _mark(marker, "before-tt-ccl-resolution")
-        resolved_tt_ccl = shared_tt_ccl._resolve()
-        _mark(marker, "after-tt-ccl-resolution")
-        _mark(marker, "before-tt-ccl-resolution-synchronize")
-        ttnn.synchronize_device(construction.builder.mesh_device)
-        _mark(marker, "after-tt-ccl-resolution-synchronize")
-        if shared_tt_ccl._manager is not resolved_tt_ccl:
-            raise LiveDecodeDiagnosticError("builder TT-CCL proxy lost its resolved manager")
-        return Qwen38LiveOrdinarySession(
-            construction=construction,
-            built_target=built_target,
-            builder=construction.builder,
-            session=session,
-        )
-    except BaseException:
-        if session is not None and session.status is not Qwen38OrdinarySessionStatus.POISONED:
-            _mark(marker, "before-session-close")
-            session.close()
-            _mark(marker, "after-session-close")
-        if (
-            built_target is not None
-            and session is not None
-            and session.status is Qwen38OrdinarySessionStatus.CLOSED
-            and not construction.expert_streamer.closed
-        ):
-            built_target.components.close_resident_experts()
-            ttnn.synchronize_device(construction.builder.mesh_device)
-        raise
-
-
-def close_live_ordinary_owner(
-    owner: Qwen38LiveOrdinarySession,
-    *,
-    marker: Marker | None = None,
-) -> None:
-    """Close one ordinary state owner and its resident graph exactly once."""
-
-    if type(owner) is not Qwen38LiveOrdinarySession:
-        raise TypeError("owner must be the exact Qwen38LiveOrdinarySession")
-    session = owner.session
-    resident_owner = owner.built_target.components.expert_streamer
-    if not isinstance(resident_owner, Qwen38BF4ResidentSet):
-        raise LiveDecodeDiagnosticError("full ordinary owner lacks its resident BF4 graph")
-    if resident_owner.closed:
-        raise LiveDecodeDiagnosticError("resident ordinary graph was already closed")
-    if session.status is Qwen38OrdinarySessionStatus.POISONED:
-        raise LiveDecodeDiagnosticError("cannot release resident weights after an uncertain ordinary transaction")
-    if session.status is not Qwen38OrdinarySessionStatus.CLOSED:
-        session.close()
-    _mark(marker, "before-resident-expert-close")
-    owner.built_target.components.close_resident_experts()
-    ttnn.synchronize_device(owner.builder.mesh_device)
-    _mark(marker, "after-resident-expert-close")
-    if (
-        resident_owner.closed is not True
-        or resident_owner.poisoned is not False
-        or resident_owner.live_tensor_handle_count != 0
-        or resident_owner.resident_layers
-    ):
-        raise LiveDecodeDiagnosticError("resident ordinary graph did not close cleanly")
-
-
 __all__ = [
     "DEFAULT_CPU_ORACLE",
-    "DIAGNOSTIC_EOS_TOKEN_IDS",
     "DIAGNOSTIC_EXPECTED_TOKEN_ID",
     "DIAGNOSTIC_INPUT_TOKEN_ID",
     "DIAGNOSTIC_ORACLE_INPUT_TOKEN_IDS",
@@ -1206,14 +869,9 @@ __all__ = [
     "Qwen38BF4ConsumerCompatibility",
     "Qwen38DiagnosticBF4Cache",
     "Qwen38LiveDecodeConstruction",
-    "Qwen38LiveOrdinarySession",
-    "Qwen38LiveOneTokenDecode",
     "Qwen38PreparedLiveDecodeDiagnostic",
     "Qwen38RetainedCPUTokenOracle",
     "construct_live_decode_diagnostic",
-    "construct_live_ordinary_session",
-    "close_live_ordinary_owner",
-    "decode_live_one_token",
     "load_retained_cpu_token_oracle",
     "missing_bf4_layers",
     "prepare_live_decode_diagnostic",
