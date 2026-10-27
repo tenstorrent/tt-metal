@@ -323,9 +323,6 @@ public:
 private:
     void worker_loop();
 
-    // Takes part in the job `published` names, if that is still the job's current use.
-    void join(uint64_t published) noexcept;
-
     bool has_work() const { return !tasks_.empty() || pool_published_job_.load(std::memory_order_seq_cst) != seen_; }
 
     // Spins briefly, then parks until a producer publishes work or the executor shuts down.
@@ -537,13 +534,6 @@ private:
     std::exception_ptr exception_;
 };
 
-inline void NumaAwareExecutor::join(uint64_t published) noexcept {
-    auto* job = pool_jobs_[published & 0xffffffffULL].get();
-    if (job->hold(static_cast<uint32_t>(published >> 32))) {
-        job->participate(this);
-    }
-}
-
 inline void NumaAwareExecutor::worker_loop() {
     while (true) {
         if (!tasks_.empty()) {
@@ -562,7 +552,10 @@ inline void NumaAwareExecutor::worker_loop() {
         }
         if (const uint64_t published = pool_published_job_.load(std::memory_order_acquire); published != seen_) {
             seen_ = published;
-            join(published);
+            auto* job = pool_jobs_[published & 0xffffffffULL].get();
+            if (job->hold(static_cast<uint32_t>(published >> 32))) {
+                job->participate(this);
+            }
             continue;
         }
         if (shutdown_.load(std::memory_order_acquire)) {
