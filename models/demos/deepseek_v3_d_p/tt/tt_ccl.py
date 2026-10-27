@@ -183,6 +183,8 @@ class TT_CCL:
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
 
+        self.sparse_kv_push = None  # SparseKvPushPlanner, created on first use
+
         # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
         # MoE layer. Created on first use; see get_combine_overlap_semaphores.
         self.combine_overlap_semaphores = None
@@ -453,6 +455,15 @@ class TT_CCL:
                 ),
             )
         return self.mla_chunked_kv_buffers[key]
+
+    def get_sparse_kv_push(self, links: int):
+        """The sparse KVPE push planner; layers run serially and share it."""
+        if self.sparse_kv_push is None:
+            # Imported here: the tt.mla package imports this module.
+            from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner
+
+            self.sparse_kv_push = SparseKvPushPlanner(self.mesh_device, links)
+        return self.sparse_kv_push
 
     def get_mla_sparse_kv_gather_buffer(self, *, seq_len, row_width, dtype, layout):
         """Return the full-capacity output scratch for sparse MLA's SP KV-prefix gather.
