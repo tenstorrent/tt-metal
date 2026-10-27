@@ -14,7 +14,6 @@
 // helper expresses it.
 
 #include <cstdint>
-#include "api/debug/kernel_profiler.hpp"  // permanent stage zones (free when the profiler is off)
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_prefill/device/kernels/matmul_reduce_scatter_prefill_args.hpp"
 
@@ -82,7 +81,6 @@ void kernel_main() {
     uint32_t queue[depth_handoff];
     uint32_t head = 0, outstanding = 0, acked_fwd = 0, acked_bwd = 0;
     auto pop_oldest = [&]() {
-        DeviceZoneScopedN("ACK_WAIT");
         const uint32_t kind = queue[head];
         head = head + 1 == depth_handoff ? 0 : head + 1;
         if (kind == KIND_FWD) {
@@ -110,22 +108,15 @@ void kernel_main() {
             const uint32_t n_valid_w = wave_valid(valid_ext(block_n, chunk_n, in, col0), col_off, cols);
             for (uint32_t i = 0; i < m_valid_w; ++i) {
                 const uint32_t page = (im * chunk_m + row0 + row_off + i) * out_n_tiles + in * chunk_n + col0 + col_off;
-                {
-                    DeviceZoneScopedN("FIN_WAIT");
-                    cb_wait_front(cb_finished, outstanding * P + i * cols + n_valid_w);
-                }
+                cb_wait_front(cb_finished, outstanding * P + i * cols + n_valid_w);
                 for (uint32_t j = 0; j < n_valid_w; ++j) {
                     noc_async_write(slot + (i * cols + j) * tile_bytes, out.get_noc_addr(page + j), tile_bytes);
                 }
             }
             cb_wait_front(cb_finished, (outstanding + 1) * P);
-            DeviceZoneScopedN("WR_BARRIER");
             noc_async_write_barrier();
         } else {
-            {
-                DeviceZoneScopedN("FIN_WAIT");
-                cb_wait_front(cb_finished, (outstanding + 1) * P);
-            }
+            cb_wait_front(cb_finished, (outstanding + 1) * P);
             noc_semaphore_inc(kind == KIND_FWD ? fwd_mailbox : bwd_mailbox, 1);
         }
         queue[(head + outstanding) % depth_handoff] = kind;

@@ -36,7 +36,6 @@
 // -7.7..-11 us. Keep W's ack fused after A (concurrent A-column / W-row multicasts stalled in the NoC, +16..+32 us).
 
 #include <cstdint>
-#include "api/debug/kernel_profiler.hpp"  // permanent stage zones (free when the profiler is off)
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
@@ -278,7 +277,6 @@ void kernel_main() {
     auto w_moves = [&](uint32_t step) { return !resident_w || reloads(step); };
     // DRAM reads of the parts this core sends, into window `dst`
     auto issue_a = [&](uint32_t step, uint32_t dst) {
-        DeviceZoneScopedN("RD_DRAM");
         const uint32_t wave = wave_of(step);
         const uint32_t row_off = wave & 0xFF;
         uint32_t im, in;
@@ -306,7 +304,6 @@ void kernel_main() {
         }
     };
     auto issue_w = [&](uint32_t step, uint32_t dst) {
-        DeviceZoneScopedN("RD_DRAM");
         const uint32_t wave = wave_of(step);
         const uint32_t col_off = (wave >> 8) & 0xFF;
         uint32_t im, in;
@@ -432,96 +429,80 @@ void kernel_main() {
         // step t <= s + cap - 1) was last a multicast source at step t - cap <= s - 1.
         noc_async_writes_flushed();
         try_land();
-        {
-            DeviceZoneScopedN("RD_RESV");
-            reserve_current(
-                s,
-                a_sender,
-                a_moves(s),
-                a_issued,
-                cb_act_k_window,
-                a_window_tiles,
-                a_slot,
-                issue_a,
-                a_base,
-                a_win_bytes);
-            reserve_current(
-                s,
-                w_sender,
-                w_moves(s),
-                w_issued,
-                cb_weight_k_window,
-                w_window_tiles,
-                w_slot,
-                issue_w,
-                w_base,
-                w_win_bytes);
-            if (a_moves(s)) {
-                // my A slot is reserved (free): ack the A senders now, before my own reads land, so no A multicast
-                // waits for a W reader's DRAM barrier
-                if (a_rx) {
-                    rx_ack(mc_a, noc);
-                }
-                if constexpr (mc_a2.active) {
-                    if (a2_rx) {
-                        rx_ack(mc_a2, noc);
-                    }
-                }
+        reserve_current(
+            s, a_sender, a_moves(s), a_issued, cb_act_k_window, a_window_tiles, a_slot, issue_a, a_base, a_win_bytes);
+        reserve_current(
+            s,
+            w_sender,
+            w_moves(s),
+            w_issued,
+            cb_weight_k_window,
+            w_window_tiles,
+            w_slot,
+            issue_w,
+            w_base,
+            w_win_bytes);
+        if (a_moves(s)) {
+            // my A slot is reserved (free): ack the A senders now, before my own reads land, so no A multicast
+            // waits for a W reader's DRAM barrier
+            if (a_rx) {
+                rx_ack(mc_a, noc);
             }
-            if constexpr (!lookahead_after_barrier) {
-                look_ahead_both(s);
-            }
-            if ((a_sender && a_moves(s)) || (w_sender && w_moves(s))) {
-                DeviceZoneScopedN("RD_BARRIER");
-                noc_async_read_barrier_with_trid(trid_of(s), 0);  // this step's reads only
-                if constexpr (two_read_nocs) {
-                    noc_async_read_barrier_with_trid(trid_of(s), 1);
+            if constexpr (mc_a2.active) {
+                if (a2_rx) {
+                    rx_ack(mc_a2, noc);
                 }
-            }
-            if constexpr (lookahead_after_barrier) {
-                // the current step's reads get the DRAM to themselves (the fill: every sender reads step 0 at once);
-                // the look-ahead reads then overlap this step's multicast
-                look_ahead_both(s);
             }
         }
-        {
-            DeviceZoneScopedN("RD_MCAST");
-            const uint32_t a_dst = a_base + a_slot * a_win_bytes;
-            const uint32_t w_dst = w_base + w_slot * w_win_bytes;
-            // CallerManaged: send() returns once the multicast is issued; the source slot is protected by the flush at
-            // the start of the next step (no read targets it before then).
-            if (a_moves(s)) {
-                if (a_tx) {
-                    a_tx->template send<SourceL1Guard::CallerManaged>(
-                        a_dst + a_part_off[0], a_dst + a_part_off[0], a_part_bytes[0]);
+        if constexpr (!lookahead_after_barrier) {
+            look_ahead_both(s);
+        }
+        if ((a_sender && a_moves(s)) || (w_sender && w_moves(s))) {
+            noc_async_read_barrier_with_trid(trid_of(s), 0);  // this step's reads only
+            if constexpr (two_read_nocs) {
+                noc_async_read_barrier_with_trid(trid_of(s), 1);
+            }
+        }
+        if constexpr (lookahead_after_barrier) {
+            // the current step's reads get the DRAM to themselves (the fill: every sender reads step 0 at once);
+            // the look-ahead reads then overlap this step's multicast
+            look_ahead_both(s);
+        }
+        const uint32_t a_dst = a_base + a_slot * a_win_bytes;
+        const uint32_t w_dst = w_base + w_slot * w_win_bytes;
+        // CallerManaged: send() returns once the multicast is issued; the source slot is protected by the flush at
+        // the start of the next step (no read targets it before then).
+        if (a_moves(s)) {
+            if (a_tx) {
+                a_tx->template send<SourceL1Guard::CallerManaged>(
+                    a_dst + a_part_off[0], a_dst + a_part_off[0], a_part_bytes[0]);
+            } else {
+                rx_wait(mc_a, try_land);  // acked after reserve
+            }
+            if constexpr (mc_a2.active) {
+                if (a2_tx) {
+                    a2_tx->template send<SourceL1Guard::CallerManaged>(
+                        a_dst + a_part_off[1], a_dst + a_part_off[1], a_part_bytes[1]);
                 } else {
-                    rx_wait(mc_a, try_land);  // acked after reserve
-                }
-                if constexpr (mc_a2.active) {
-                    if (a2_tx) {
-                        a2_tx->template send<SourceL1Guard::CallerManaged>(
-                            a_dst + a_part_off[1], a_dst + a_part_off[1], a_part_bytes[1]);
-                    } else {
-                        rx_wait(mc_a2, try_land);
-                    }
+                    rx_wait(mc_a2, try_land);
                 }
             }
-            if (w_moves(s)) {
-                if (w_tx) {
-                    w_tx->template send<SourceL1Guard::CallerManaged>(
-                        w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]);
+        }
+        if (w_moves(s)) {
+            if (w_tx) {
+                w_tx->template send<SourceL1Guard::CallerManaged>(
+                    w_dst + w_part_off[0], w_dst + w_part_off[0], w_part_bytes[0]);
+            } else {
+                rx_ack(mc_b, noc);  // fused order: W is acked only once my A landed (A-then-W phases)
+                rx_wait(mc_b, try_land);
+            }
+            if constexpr (mc_b2.active) {
+                if (w2_tx) {
+                    w2_tx->template send<SourceL1Guard::CallerManaged>(
+                        w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]);
                 } else {
-                    rx_ack(mc_b, noc);  // fused order: W is acked only once my A landed (A-then-W phases)
-                    rx_wait(mc_b, try_land);
-                }
-                if constexpr (mc_b2.active) {
-                    if (w2_tx) {
-                        w2_tx->template send<SourceL1Guard::CallerManaged>(
-                            w_dst + w_part_off[1], w_dst + w_part_off[1], w_part_bytes[1]);
-                    } else {
-                        rx_ack(mc_b2, noc);
-                        rx_wait(mc_b2, try_land);
-                    }
+                    rx_ack(mc_b2, noc);
+                    rx_wait(mc_b2, try_land);
                 }
             }
         }
@@ -534,14 +515,11 @@ void kernel_main() {
     for (uint32_t step = 0; step < num_steps; ++step) {
         load_step(step);
     }
-    {
-        DeviceZoneScopedN("ARR_WAIT");  // drain: the arrivals still outstanding after the last load
-        while (land_next < total_entries) {
-            try_land();
-        }
-        while (reported[0] < (slots_fwd ? report_chunks : 0) || reported[1] < (slots_bwd ? report_chunks : 0)) {
-            try_report();  // the upstream ports wait for these credits
-        }
+    while (land_next < total_entries) {
+        try_land();
+    }
+    while (reported[0] < (slots_fwd ? report_chunks : 0) || reported[1] < (slots_bwd ? report_chunks : 0)) {
+        try_report();  // the upstream ports wait for these credits
     }
 
     noc_async_write_barrier();  // the last multicasts have landed before this kernel retires
