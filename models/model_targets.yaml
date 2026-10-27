@@ -10,6 +10,24 @@ description: Centralized perf/accuracy targets for models CI.
 #   Accuracy on an active entry stays enforced.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
+  granite42-30b-qb2:
+    skus:
+      p300x2:
+        entries:
+          - batch_size: 5
+            status: active
+            perf: {}
+            accuracy:
+              # First 10/198 GPQA Diamond questions; preserve the 6/10 release gate.
+              gpqa: 100
+              gpqa_tolerance: 0.4
+            owner_id: U08BGTAMU1W
+            team: models
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
   qwen-image-2.1-p150:
     skus:
       bh_p150:

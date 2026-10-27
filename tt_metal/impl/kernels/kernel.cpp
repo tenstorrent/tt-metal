@@ -667,8 +667,11 @@ std::string ComputeKernel::config_hash() const {
 
 uint64_t Kernel::compute_hash() const {
     tt::StableHasher hasher;
+    hasher.update(static_cast<uint64_t>(this->defines_.size()));
     for (const auto& [define, value] : this->defines_) {
+        hasher.update(static_cast<uint64_t>(define.size()));
         hasher.update(define);
+        hasher.update(static_cast<uint64_t>(value.size()));
         hasher.update(value);
     }
 
@@ -733,7 +736,8 @@ uint64_t Kernel::compute_hash() const {
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
     // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
     // inputs (size_bytes is baked into the generated header, so it MUST be in the cache key).
-    // allocated_address is a per-execution allocation, not part of the binary, so it is omitted.
+    // Details regarding the allocation (allocated_address and shared_allocation_identifier) is omitted,
+    // as it does not affect the generated build artifact.
     hasher.update(static_cast<uint64_t>(this->scratchpad_binding_handles_.size()));
     for (const auto& handle : this->scratchpad_binding_handles_) {
         hasher.update(handle.accessor_name);
@@ -765,10 +769,12 @@ uint64_t Kernel::compute_hash() const {
     // Otherwise, RTAs ["a", "b"] could hash the same as ["ab"].
     hasher.update(static_cast<uint64_t>(this->runtime_arg_names_.size()));
     for (const auto& name : this->runtime_arg_names_) {
+        hasher.update(static_cast<uint64_t>(name.size()));
         hasher.update(name);
     }
     hasher.update(static_cast<uint64_t>(this->common_runtime_arg_names_.size()));
     for (const auto& name : this->common_runtime_arg_names_) {
+        hasher.update(static_cast<uint64_t>(name.size()));
         hasher.update(name);
     }
     ////////////////////////////////////////////////////////////
@@ -820,6 +826,21 @@ uint64_t Kernel::compute_hash() const {
     return hasher.digest();
 }
 
+std::size_t Kernel::logical_runtime_arg_count(const CoreCoord& logical_core) const {
+    TT_FATAL(
+        logical_core.x < this->core_to_runtime_args_.size() &&
+            logical_core.y < this->core_to_runtime_args_[logical_core.x].size(),
+        "Cannot get runtime args for kernel {} that is not placed on core {}",
+        this->name(),
+        logical_core.str());
+    const auto& stored = this->core_to_runtime_args_[logical_core.x][logical_core.y];
+    // Absent storage and a watcher count word with no user args are both a logical zero.
+    if (stored.size() <= this->watcher_count_word_offset_) {
+        return 0;
+    }
+    return stored.size() - this->watcher_count_word_offset_;
+}
+
 std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL(
@@ -847,6 +868,13 @@ std::vector<std::vector<std::vector<uint32_t>>>& Kernel::runtime_args() { return
 std::vector<std::vector<RuntimeArgsData>>& Kernel::runtime_args_data() { return this->core_to_runtime_args_data_; }
 
 std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runtime_args_; }
+
+std::size_t Kernel::logical_common_runtime_arg_count() const {
+    if (this->common_runtime_args_.size() <= this->watcher_count_word_offset_) {
+        return 0;
+    }
+    return this->common_runtime_args_.size() - this->watcher_count_word_offset_;
+}
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 

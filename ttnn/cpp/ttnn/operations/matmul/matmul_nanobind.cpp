@@ -559,7 +559,7 @@ void py_module(nb::module_& mod) {
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =
         tt_serializable_class<MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
             mod, "MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig", R"doc(
-        This program config is a specialized config for very narrow tensors stored in DRAM.
+        This program config multiplies width-sharded L1 activations by width-sharded DRAM weights.
     )doc");
 
     matmul_multi_core_reuse_multicast_dram_sharded_program_config
@@ -583,9 +583,10 @@ void py_module(nb::module_& mod) {
         .def_rw("per_core_M", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_M, R"doc(
             Number of output tiles each core processes along the M dimension.
 
-            Determines how the M dimension is distributed across cores in DRAM-sharded
-            scenarios. This must align with the DRAM sharding pattern to ensure optimal
-            performance and avoid memory access conflicts.
+            Must equal the padded activation height, including fused batch dimensions, divided by
+            its tile height. The weight must contain one shared matrix. Every activation
+            shard contains all M rows. Both pipelines support multiple tile rows, subject to L1
+            capacity for the input/output shards and the program's working buffers.
         )doc")
         .def_rw("per_core_N", &MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig::per_core_N, R"doc(
             Number of output tiles each core processes along the N dimension.
@@ -627,8 +628,13 @@ void py_module(nb::module_& mod) {
             extra cores split K and reduce their partial sums), every core reads its activation rows
             straight from the L1 shards, and in0_block_w is the number of K tiles per streamed
             weight block (any value). Accumulation follows compute_kernel_config: fp32_dest_acc_en
-            keeps each core's whole K in fp32 Dest, otherwise 16-bit Dest with packer L1
-            accumulation in Float16_b. A call that does not qualify runs as if the flag were False.
+            uses fp32 Dest and Float32 partials, otherwise 16-bit Dest and Float16_b partials.
+            For one tile row the fp32 path keeps each column pass's whole K in Dest. For multiple
+            tile rows, each weight block is reused across M before it is released, with bounded
+            activation buffering and packer L1 accumulation between K blocks.
+            Wormhole may partition tall M across two worker groups when narrow column slices
+            would otherwise duplicate activation traffic; each group then reads the weights.
+            A call that does not qualify runs as if the flag were False.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig& config) {
             // Include fused_activation in the repr for full visibility during tracing/debugging.

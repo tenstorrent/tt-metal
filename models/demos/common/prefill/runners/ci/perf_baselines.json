@@ -68,9 +68,9 @@
       "sc1": {
         "probe": "@1M",
         "14kw": {
-          "throughput_tok_s": 4392,
-          "ttft_s": 136.81,
-          "chunk_time_ms": 1171
+          "throughput_tok_s": 4210,
+          "ttft_s": 149.68,
+          "chunk_time_ms": 1220
         }
       }
     }

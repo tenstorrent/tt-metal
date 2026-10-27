@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -42,7 +43,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
         set_ttsync_enables<TRACK_ALL>(ckernel::TRISC_ID);
 
@@ -59,7 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
@@ -102,7 +103,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
             set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
@@ -115,7 +116,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }
@@ -152,18 +153,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_ISOLATE_SFPU
 
-#include "cfg_defines.h"
-#include "cmath_common.h"
-#include "llk_math_common.h"
-#include "llk_math_eltwise_unary_sfpu.h"
-#include "llk_sfpu/ckernel_sfpu_binary.h"
+#include "llk_sfpu/ckernel_sfpu_add.h"
 #include "llk_sfpu/ckernel_sfpu_srcs.h"
 #include "llk_sfpu_srcs_api.h"
-#include "llk_srcs.h"
 #include "params.h"
 
 using namespace ckernel;
-using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -181,36 +176,40 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const std::uint32_t num_tiles = TILE_CNT;
 
-    const DataFormat srcs_format = static_cast<DataFormat>(formats.unpack_S_dst);
+    const DataFormat unpack_S_dst = static_cast<DataFormat>(formats.unpack_S_dst);
+    const DataFormat pack_S_src   = static_cast<DataFormat>(formats.pack_S_src);
 
     {
-        ZONE_SCOPED("INIT")
-        LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS ADD requires matching unpack destination and pack source formats");
+        START_PERF_MEASURE("INIT")
         // FormatConfig has no unpack_T_* fields, so T is unpacked with S's format. Callers must keep
         // stimuli_T_format == stimuli_S_format or T will be read with the wrong format.
-        llk_sfpu_srcs_binary_init(
-            L1_ADDRESS(buffer_S[0]),
-            L1_ADDRESS(buffer_T[0]),
-            static_cast<DataFormat>(formats.unpack_S_src),
-            static_cast<DataFormat>(formats.unpack_S_dst),
-            L1_ADDRESS(buffer_Res[0]),
-            static_cast<DataFormat>(formats.pack_S_src),
-            static_cast<DataFormat>(formats.pack_S_dst),
-            false /*implied_math_format*/);
+        // The SrcS layout is known only at runtime, so init and the tile loop each dispatch once.
+        dispatch_sfpu_srcs_op<AddSrcs>(
+            unpack_S_dst,
+            pack_S_src,
+            [&](auto op)
+            {
+                decltype(op)::init(
+                    L1_ADDRESS(buffer_S[0]),
+                    L1_ADDRESS(buffer_T[0]),
+                    static_cast<DataFormat>(formats.unpack_S_src),
+                    L1_ADDRESS(buffer_Res[0]),
+                    static_cast<DataFormat>(formats.pack_S_dst));
+            });
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
-            dispatch_sfpu_srcs_format(
-                srcs_format,
-                [&](auto format)
+            dispatch_sfpu_srcs_op<AddSrcs>(
+                unpack_S_dst,
+                pack_S_src,
+                [&](auto op)
                 {
-                    using Format = decltype(format);
                     for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                     {
-                        llk_sfpu_srcs_binary(num_tiles, srcs_format, [](int, int, int, int) { calculate_add_srcs<Format::layout>(); });
+                        decltype(op)::run(num_tiles);
                     }
                 });
         }
@@ -244,7 +243,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // PACK_ISOLATE and L1_CONGESTION pack without a math<->pack handshake.
         // Explicitly clear wait_mask because CFG state can persist across run types.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
@@ -263,7 +262,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::SFPU_ISOLATE)
         {
         }

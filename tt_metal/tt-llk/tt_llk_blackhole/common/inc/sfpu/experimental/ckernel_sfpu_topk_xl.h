@@ -570,6 +570,10 @@ inline void record_ce_full(const bool dir)
 
 // Macro i loads LREG4+i, swaps it with LREG i i instructions later and stores it back once the swap has written it;
 // the thread loads and stores LREG0..3 in the slots the scheduled stores leave free.
+//
+// That describes `step_group` and the merge/rebuild bodies. `stride2_len8_loads` / `stride2_len16_loads`
+// deliberately break it: they reprogram the four templates so a macro can host an arbitrary pair, and
+// they use the `VDHi = 0` encoding so a macro can load LREG0..3 as well as LREG4..7.
 namespace topk_xl_fused_macro
 {
 
@@ -652,18 +656,295 @@ inline void step_group()
     TTI_SFPNOP;
 }
 
-constexpr int group_len = 15;
-
-template <int group_2_offset, int inc_dst_addr>
-inline void record_step_group(const bool ascending)
+// Software-pipelined `step_group`. This group's four plain SFPLOADs were issued by the previous
+// iteration (or by `prologue_loads`), and this body prefetches the next group's, so the steady-state
+// body costs 12 issue slots.
+//
+// The three SFPNOPs in `step_group` are not swap padding: they are the slots the macro's own scheduled
+// stores land on. With the macros at slots 0..3 those stores fire at `trigger + delay + 1` = 3, 6, 8
+// and 10 (store delays {2,4,5,6} from `sequence_word`). A regular instruction that collides with a
+// scheduled one on the same sub-unit is silently discarded (SFPLOADMACRO.md:149), so the plain stores
+// have to dodge those slots -- but the prefetch loads do not, because they occupy the load sub-unit
+// rather than the store sub-unit (SFPLOADMACRO.md:13):
+//
+//   slot:        0   1   2   3   4   5   6   7   8   9  10  11
+//   explicit:   M0  M1  M2  M3  S0  S1  P0  S2  P1  S3  P2  P3
+//   macro store:            F0          F1      F2      F3
+//
+// `LREG_i` is consumable at 2i+3 = 3, 5, 7, 9, so the stores at 4, 5, 7 and 9 are all legal: a
+// macro-scheduled SFPSWAP reads on its 1st cycle and writes on its 2nd and has no automatic stalling
+// (SFPSWAP.md:115), so no extra margin is owed.
+//
+// S3 folds the Dst advance, so the prefetches issued ahead of it carry `inc_dst_addr` in their
+// immediates and those after it do not. The pending macro stores are indifferent to that advance: a
+// macro-scheduled SFPSTORE reuses the address computed at its SFPLOADMACRO, "regardless of whether
+// SFPLOADMACRO (or any other intermediate instruction) advanced any RWCs" (SFPLOADMACRO.md:140).
+template <int group_2_offset, int inc_dst_addr, bool ascending>
+inline void step_group_pipelined()
 {
-    if (ascending)
+    static_assert(inc_dst_addr != 0, "a group that does not advance Dst has no next group to prefetch");
+    constexpr int near = ascending ? group_2_offset : 0;
+    constexpr int far  = ascending ? 0 : group_2_offset;
+    TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, (far + 0) | 1);
+    TTI_SFPLOADMACRO((1 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, (far + 4) | 1);
+    TTI_SFPLOADMACRO((2 << 2) | 2, InstrModLoadStore::INT32, ADDR_MOD_7, (far + 8) | 1);
+    TTI_SFPLOADMACRO((3 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, (far + 12) | 1);
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, near + 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, near + 4);
+    // Prefetches ahead of the advancing store address the next group explicitly.
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, near + inc_dst_addr + 0);
+    TTI_SFPSTORE(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, near + 8);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, near + inc_dst_addr + 4);
+    if constexpr (inc_dst_addr == 48)
     {
-        load_replay_buf<Exec>(0, group_len, [] { step_group<group_2_offset, inc_dst_addr, true>(); });
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_1, near + 12);
+    }
+    else if constexpr (inc_dst_addr == 32)
+    {
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_6, near + 12);
     }
     else
     {
-        load_replay_buf<Exec>(0, group_len, [] { step_group<group_2_offset, inc_dst_addr, false>(); });
+        static_assert(inc_dst_addr == 16, "inc_dst_addr must be 16, 32 or 48");
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_5, near + 12);
+    }
+    // Past the advance, so these address the next group implicitly.
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, near + 8);
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, near + 12);
+}
+
+constexpr int pipelined_group_len = 12;
+
+// ── Hosting the stride-2 sort's first swap layer on the loads ────────────────────────────────────
+//
+// `_topk_xl_split_stride2_` loads eight rows and then runs a multi-layer in-register sort. Only the
+// FIRST layer can ride the loads -- every later layer has no load left to attach a macro to -- but
+// that layer is four explicit `SFPSWAP`s, and an explicit swap costs two cycles because the Vector
+// Unit accepts only `SFPNOP` on the cycle after it (`SFPSWAP.md:112`). Hosting it removes those four
+// stalls.
+//
+// Two encoding facts make this work:
+//   * A template is "an arbitrary Vector Unit instruction" (`SFPLOADMACRO.md:59`) written by issuing
+//     that instruction with `VD >= 12` (`SFPCONFIG.md:118`), so a template's `VC` is not confined to
+//     LREG0..3 the way `configure()` happens to leave it.
+//   * `VD = (VDHi << 2) | VDLo` with `Imm10 = (Imm9 << 1) | VDHi`, and the address's low bit "goes
+//     unused" (`SFPLOAD.md:83`). So `VDHi` rides a bit that does not affect addressing: dropping the
+//     `| 1` gives `VDHi = 0`, which lets a macro load LREG0..3 without changing the address.
+//
+// Step 3 of `bitonic_sort_len_8` is `(VC,VD)` = (L1,L0) (L2,L3) (L5,L4) (L6,L7) ascending, and
+// (L0,L1) (L3,L2) (L4,L5) (L7,L6) descending, so all four pairs are hostable once both facts hold.
+template <bool ascending>
+inline void stride2_len8_templates()
+{
+    // Macro m's template supplies VC; the macro's own load supplies VD.
+    if constexpr (ascending)
+    {
+        TTI_SFPSWAP(0, p_sfpu::LREG1, 12, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, 13, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, 14, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG6, 15, p_sfpswap::ALL_ROWS_MAX);
+    }
+    else
+    {
+        TTI_SFPSWAP(0, p_sfpu::LREG0, 12, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, 13, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, 14, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG7, 15, p_sfpswap::ALL_ROWS_MAX);
+    }
+}
+
+// Restores what `configure()` leaves in place, so every later `step_group` still finds its own
+// templates. The Sequence words are untouched throughout, only the four templates move.
+//
+// Two invariants this relies on. `InstructionTemplate[]` lives in `LoadMacroConfig[Lane]`, which is
+// SFPU state shared by all three Tensix threads rather than per-thread; mutating it for the duration
+// of a stage is safe only because MATH issues no `SFPLOADMACRO` in the split schedule (it runs
+// `_topk_xl_split_transpose_`). And the templates are sampled when a macro is ISSUED, not when its
+// scheduled instruction executes, so restoring them with scheduled stores still in flight is safe.
+inline void restore_step_group_templates()
+{
+    TTI_SFPSWAP(0, p_sfpu::LREG0, 12, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG1, 13, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG2, 14, p_sfpswap::ALL_ROWS_MAX);
+    TTI_SFPSWAP(0, p_sfpu::LREG3, 15, p_sfpswap::ALL_ROWS_MAX);
+}
+
+constexpr int stride2_len8_loads_len = 13;
+
+// `load16_rows_x2<2>` in macro form: the four VC rows load plainly first, then the four VD rows load
+// through macros 0..3, whose scheduled swaps fire at slots 5, 7, 9 and 11 (simple delay m, trigger
+// 4+m, fire = trigger + delay + 1) -- each after both of its operands have landed. The trailing NOPs
+// carry the last swap's second cycle, so the caller's leading SFPTRANSP reads settled registers.
+// The macros' scheduled stores write a mid-sort value back to the row each one loaded; the group's
+// own `store16_rows_x2` overwrites all eight afterwards, exactly as `len32_loads` relies on.
+template <bool ascending>
+inline void stride2_len8_loads()
+{
+    if constexpr (ascending)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);
+        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 6);
+        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 10);
+        TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);      // VD = LREG0
+        TTI_SFPLOADMACRO((1 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);     // VD = LREG3
+        TTI_SFPLOADMACRO((2 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 | 1);  // VD = LREG4
+        TTI_SFPLOADMACRO((3 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, 14 | 1); // VD = LREG7
+    }
+    else
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 14);
+        TTI_SFPLOADMACRO((0 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);      // VD = LREG1
+        TTI_SFPLOADMACRO((1 << 2) | 2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);      // VD = LREG2
+        TTI_SFPLOADMACRO((2 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, 6 | 1);  // VD = LREG5
+        TTI_SFPLOADMACRO((3 << 2) | 2, InstrModLoadStore::INT32, ADDR_MOD_7, 10 | 1); // VD = LREG6
+    }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+inline NOINLINE void record_stride2_len8_loads(const bool ascending)
+{
+    if (ascending)
+    {
+        load_replay_buf<Exec>(0, stride2_len8_loads_len, [] { stride2_len8_loads<true>(); });
+    }
+    else
+    {
+        load_replay_buf<Exec>(0, stride2_len8_loads_len, [] { stride2_len8_loads<false>(); });
+    }
+}
+
+// The same trick for `sort_len == 16`, whose first layer is step 4 of `bitonic_sort_len_16_alt_swaps`:
+// (VC,VD) = (L2,L0) (L3,L1) (L6,L4) (L7,L5) ascending and (L0,L2) (L1,L3) (L4,L6) (L5,L7) descending.
+// `sort_len == 4` is absent: `_topk_xl_split_stride2_sort_<4>` issues an SFPTRANSP before
+// `bitonic_sort_len_4`, so the first thing after the load is a transpose. Scheduling that transpose
+// on a macro costs all four Sequence words (three suppressed, one re-delayed) to save one
+// instruction.
+template <bool ascending>
+inline void stride2_len16_templates()
+{
+    if constexpr (ascending)
+    {
+        TTI_SFPSWAP(0, p_sfpu::LREG2, 12, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, 13, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG6, 14, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG7, 15, p_sfpswap::ALL_ROWS_MAX);
+    }
+    else
+    {
+        TTI_SFPSWAP(0, p_sfpu::LREG0, 12, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, 13, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, 14, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, 15, p_sfpswap::ALL_ROWS_MAX);
+    }
+}
+
+constexpr int stride2_len16_loads_len = 13;
+
+// Slot layout as `stride2_len8_loads`, with one difference worth stating: this tail opens with step
+// 3's SWAPS rather than a transpose, so the margin is larger (step 3 reads registers that settled at
+// 6/8/10/12 while it issues from 13). The five NOPs are nonetheless MINIMAL, not merely sufficient:
+// with four, the tail's first explicit SFPSWAP would issue on the cycle right after macro 3's
+// scheduled swap, which the SFPLOADMACRO footnote forbids (Simple and Round must be idle there). A
+// future "the tail only needs L0/L1, drop a NOP" cleanup would break this silently.
+template <bool ascending>
+inline void stride2_len16_loads()
+{
+    if constexpr (ascending)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);
+        TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);
+        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 10);
+        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 14);
+        TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);     // VD = LREG0
+        TTI_SFPLOADMACRO((1 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);     // VD = LREG1
+        TTI_SFPLOADMACRO((2 << 2) | 0, InstrModLoadStore::INT32, ADDR_MOD_7, 2 | 1); // VD = LREG4
+        TTI_SFPLOADMACRO((3 << 2) | 1, InstrModLoadStore::INT32, ADDR_MOD_7, 6 | 1); // VD = LREG5
+    }
+    else
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, 4);
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 6);
+        TTI_SFPLOADMACRO((0 << 2) | 2, InstrModLoadStore::INT32, ADDR_MOD_7, 8);      // VD = LREG2
+        TTI_SFPLOADMACRO((1 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, 12);     // VD = LREG3
+        TTI_SFPLOADMACRO((2 << 2) | 2, InstrModLoadStore::INT32, ADDR_MOD_7, 10 | 1); // VD = LREG6
+        TTI_SFPLOADMACRO((3 << 2) | 3, InstrModLoadStore::INT32, ADDR_MOD_7, 14 | 1); // VD = LREG7
+    }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+inline NOINLINE void record_stride2_len16_loads(const bool ascending)
+{
+    if (ascending)
+    {
+        load_replay_buf<Exec>(0, stride2_len16_loads_len, [] { stride2_len16_loads<true>(); });
+    }
+    else
+    {
+        load_replay_buf<Exec>(0, stride2_len16_loads_len, [] { stride2_len16_loads<false>(); });
+    }
+}
+
+// The four plain loads `step_group_pipelined` expects to already have been issued, for the first group.
+template <int group_2_offset, bool ascending>
+inline void prologue_loads()
+{
+    constexpr int near = ascending ? group_2_offset : 0;
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, near + 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, near + 4);
+    TTI_SFPLOAD(p_sfpu::LREG2, InstrModLoadStore::INT32, ADDR_MOD_7, near + 8);
+    TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_7, near + 12);
+}
+
+template <int group_2_offset>
+inline void prologue_loads_rt(const bool ascending)
+{
+    if (ascending)
+    {
+        prologue_loads<group_2_offset, true>();
+    }
+    else
+    {
+        prologue_loads<group_2_offset, false>();
+    }
+}
+
+template <int group_2_offset, int inc_dst_addr>
+inline void step_group_pipelined_rt(const bool ascending)
+{
+    if (ascending)
+    {
+        step_group_pipelined<group_2_offset, inc_dst_addr, true>();
+    }
+    else
+    {
+        step_group_pipelined<group_2_offset, inc_dst_addr, false>();
+    }
+}
+
+template <int group_2_offset, int inc_dst_addr>
+inline void record_step_group_pipelined(const bool ascending)
+{
+    if (ascending)
+    {
+        load_replay_buf<Exec>(0, pipelined_group_len, [] { step_group_pipelined<group_2_offset, inc_dst_addr, true>(); });
+    }
+    else
+    {
+        load_replay_buf<Exec>(0, pipelined_group_len, [] { step_group_pipelined<group_2_offset, inc_dst_addr, false>(); });
     }
 }
 
@@ -1205,6 +1486,42 @@ inline void bitonic_sort_len_16_alt_swaps(bool ascending)
     }
 }
 
+// `bitonic_sort_len_8` with step 3 removed, for callers whose loads host that layer through macros
+// (see `stride2_len8_loads`). The leading SFPTRANSP is step 3's trailing one.
+inline void bitonic_sort_len_8_tail(bool ascending)
+{
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    if (ascending)
+    {
+        // Step 2 — stride 2.
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG0, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG4, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG5, p_sfpswap::ROWS_01_MAX);
+
+        // Step 1 — stride 1.
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpswap::ROWS_01_MAX);
+    }
+    else
+    {
+        // Step 2 — stride 2.
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, p_sfpswap::ROWS_01_MAX);
+
+        // Step 1 — stride 1.
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ROWS_01_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ROWS_01_MAX);
+    }
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
 // Sort length-16 (alt variant): two halves of (Step 4 + Step 3) separated
 // by a transpose, ending with another transpose. See
 // `bitonic_sort_len_16_alt_swaps` for why this is split.
@@ -1212,6 +1529,41 @@ template <bool fused = true>
 inline void bitonic_sort_len_16_alt(bool ascending)
 {
     bitonic_sort_len_16_alt_swaps<fused>(ascending);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    bitonic_sort_len_16_alt_swaps<fused>(ascending);
+    TTI_SFPTRANSP(0, 0, 0, 0);
+}
+
+// `bitonic_sort_len_16_alt` with the first swaps call's step 4 removed, for callers whose loads host
+// that layer (see `stride2_len16_loads`).
+template <bool fused = true>
+inline void bitonic_sort_len_16_alt_tail(bool ascending)
+{
+    // Unfused step 4 is only two swaps, but `stride2_len16_loads` unconditionally hosts four, so the
+    // unfused form of this tail would strip a layer that was never hosted.
+    static_assert(fused, "the macro-hosted tail exists only for the fused path");
+    if (ascending)
+    {
+        // Step 3 — stride 4.
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, p_sfpswap::ALL_ROWS_MAX);
+        if constexpr (fused)
+        {
+            TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, p_sfpswap::ALL_ROWS_MAX);
+            TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, p_sfpswap::ALL_ROWS_MAX);
+        }
+    }
+    else
+    {
+        // Step 3 — stride 4.
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpswap::ALL_ROWS_MAX);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG3, p_sfpswap::ALL_ROWS_MAX);
+        if constexpr (fused)
+        {
+            TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, p_sfpswap::ALL_ROWS_MAX);
+            TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG7, p_sfpswap::ALL_ROWS_MAX);
+        }
+    }
     TTI_SFPTRANSP(0, 0, 0, 0);
     bitonic_sort_len_16_alt_swaps<fused>(ascending);
     TTI_SFPTRANSP(0, 0, 0, 0);
@@ -1470,6 +1822,61 @@ inline void fused_step_group(const bool ascending)
 //
 // Entry/exit invariant: Fp32_enabled = 1 (needed for 32-bit Dst reads).
 
+// Transpose the 16x16 face RWC.Dst currently points at, then step RWC.Dst on by one face so the next replay
+// lands on the next one. Dst addressing sums the instruction immediate, RWC.Dst and
+// DEST_TARGET_REG_CFG_MATH_Offset, so keeping the face in RWC.Dst leaves the immediates identical for every
+// face and lets one recording serve all eight -- and leaves the MATH offset, which the sort owns, untouched.
+// Exactly transpose_face_body_len Tensix instructions. Nothing checks this: the count below is hand
+// maintained against this body, and if the two ever disagree the recording captures the wrong number
+// of instructions and every replayed face is wrong. Re-count when editing this function.
+inline void transpose_dest_face_32b_body()
+{
+    // Transpose low 16 bits and backup it in SrcA
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float16_b));
+    TTI_MOVD2B(1, 16, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 0);
+    TTI_MOVD2B(1, 20, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 4);
+    TTI_MOVD2B(1, 24, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 8);
+    TTI_MOVD2B(1, 28, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 12);
+
+    TTI_TRNSPSRCB;
+
+    TTI_MOVB2A(0, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 16);
+    TTI_MOVB2A(4, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 20);
+    TTI_MOVB2A(8, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 24);
+    TTI_MOVB2A(12, ADDR_MOD_7, p_movb2a::MOV_4_ROWS, 28);
+
+    // --- Pass 1: hi16 ---
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
+
+    TTI_MOVD2B(0, 16, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 0);
+    TTI_MOVD2B(0, 20, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 4);
+    TTI_MOVD2B(0, 24, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 8);
+    TTI_MOVD2B(0, 28, ADDR_MOD_7, p_movd2b::MOV_4_ROWS, 12);
+
+    TTI_TRNSPSRCB;
+
+    TTI_MOVB2D(0, 16, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, 0);
+    TTI_MOVB2D(0, 20, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, 4);
+    TTI_MOVB2D(0, 24, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, 8);
+    TTI_MOVB2D(0, 28, ADDR_MOD_7, p_movb2d::MOV_4_ROWS, 12);
+
+    // lo16 writeback: Fp32_enabled=0 + SrcA=Float32 -> writes lo16, preserves hi16
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+
+    TTI_MOVA2D(1, 0, ADDR_MOD_7, p_mova2d::MOV_8_ROWS, 0);
+    TTI_MOVA2D(1, 8, ADDR_MOD_5, p_mova2d::MOV_8_ROWS, 8); // ADDR_MOD_5 = dest +16: step to the next face
+
+    // Restore Fp32_enabled=1 for subsequent 32-bit Dst access
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+}
+
+// 5 x RMWCIB (both CFG fields are single-byte masks, so one instruction each) + 8 x MOVD2B + 2 x TRNSPSRCB
+// + 4 x MOVB2A + 4 x MOVB2D + 2 x MOVA2D.
+constexpr std::uint32_t transpose_face_body_len = 25;
+
+// The absolute-offset form, for the unfused index faces and transpose_N_faces, where the face count
+// varies and a recording cannot be replayed across it.
 // Transpose one 16x16 face of 32-bit Dst data at `dst_offset`.
 template <int dst_offset>
 inline void transpose_dest_face_32b()
@@ -1514,6 +1921,18 @@ inline void transpose_dest_face_32b()
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
 }
 
+// Transpose `N` consecutive faces starting at the current RWC.Dst, recording the body once and replaying it.
+template <std::uint32_t N>
+inline void transpose_faces_from_dst()
+{
+    lltt::record<lltt::Exec>(0, transpose_face_body_len);
+    transpose_dest_face_32b_body();
+    for (std::uint32_t face = 1; face < N; face++)
+    {
+        lltt::replay(0, transpose_face_body_len);
+    }
+}
+
 // `enter_transpose_cfg_block` / `leave_transpose_cfg_block` wrap a group of
 // `transpose_8_faces` calls in a single CFG mode switch. Both `transpose_*`
 // helpers need:
@@ -1522,26 +1941,24 @@ inline void transpose_dest_face_32b()
 //   * `ALU_ACC_CTRL_Zero_Flag_disabled_src = 1` so the SrcB → SrcA copy
 //     preserves the upper half-word during the two-pass transpose.
 //
+// They do NOT need `ALU_ACC_CTRL_Zero_Flag_disabled_dst`. `alu.h` scopes that
+// bit broadly -- "disables zero flag reads in DEST" -- but the only Dst reads
+// in this block are the transposes' MOVD2B, and every row they read has just
+// been written, so none is flagged. Leaving it clear is also the safer
+// reading: a flagged row yields zeros rather than whatever it last held.
+//
 // The bitonic work that runs between transposes does not touch either bit,
 // so wrapping the whole batch saves 4 CFG ops per transpose call.
 inline void enter_transpose_cfg_block()
 {
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
     math::_configure_src_zero_flag_(true);
-    if constexpr (!topk_xl_blaze_compat)
-    {
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(1);
-    }
 }
 
 inline void leave_transpose_cfg_block()
 {
     TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
     math::_configure_src_zero_flag_(false);
-    if constexpr (!topk_xl_blaze_compat)
-    {
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_dst_RMW>(0);
-    }
 }
 
 // Transpose all 8 value faces (and, for the unfused path, all 8 index
@@ -1556,19 +1973,20 @@ inline void transpose_8_faces()
         enter_transpose_cfg_block();
     }
 
-    // 8 value faces at +0, +16, ..., +112.
-    transpose_dest_face_32b<0>();
-    transpose_dest_face_32b<16>();
-    transpose_dest_face_32b<32>();
-    transpose_dest_face_32b<48>();
-    transpose_dest_face_32b<64>();
-    transpose_dest_face_32b<80>();
-    transpose_dest_face_32b<96>();
-    transpose_dest_face_32b<112>();
-    if constexpr (!fused)
+    // 8 value faces at +0, +16, ..., +112, walked through RWC.Dst from one recording. The callers reach here
+    // with RWC.Dst == 0; make that explicit rather than implicit, since a stale Dst corrupts silently.
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    if constexpr (!fused && indices_offset == 8 * 16)
     {
-        // Unfused mode keeps the indices in a parallel DST region. Transpose
-        // the 8 index faces so they match the (now-transposed) values.
+        // Unfused mode keeps the indices in a parallel DST region that begins exactly where the eight value
+        // faces end, so the sixteen faces are contiguous and one walk covers both.
+        transpose_faces_from_dst<16>();
+    }
+    else if constexpr (!fused)
+    {
+        transpose_faces_from_dst<8>();
+        // The index region does not abut the value faces here, so these keep the absolute-offset form.
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         transpose_dest_face_32b<indices_offset + 0>();
         transpose_dest_face_32b<indices_offset + 16>();
         transpose_dest_face_32b<indices_offset + 32>();
@@ -1578,6 +1996,11 @@ inline void transpose_8_faces()
         transpose_dest_face_32b<indices_offset + 96>();
         transpose_dest_face_32b<indices_offset + 112>();
     }
+    else
+    {
+        transpose_faces_from_dst<8>();
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     if constexpr (manage_outer_cfg)
     {
@@ -1670,10 +2093,11 @@ inline void transpose_N_faces()
 //   sub-block C: slots [0..7]  = load16_rows_x2<16>
 //                slots [8..15] = store16_rows_x2<16, 32>
 //
-// With TOPK_XL_FUSED_MACRO, sub-block A records one `step_group<64, 16>` in
-// slots [0..14], sub-block B runs `step_group` inline, and a K=2048 sub-block C
-// records its loads in [0..10] and stores in [11..18]; K=1024's C keeps the
-// plain [0..15] layout.
+// With TOPK_XL_FUSED_MACRO, sub-blocks A and B are software-pipelined: A records
+// one `step_group_pipelined<64, 16>` in slots [0..11] behind a `prologue_loads`,
+// and B runs `step_group_pipelined` inline behind its own prologue. A K=2048
+// sub-block C records its loads in [0..10] and stores in [11..18]; K=1024's C
+// keeps the plain [0..15] layout.
 //
 // `dir` is runtime so the sort calls stay inline (the conditional inside
 // them would not fold under replay anyway).
@@ -1690,10 +2114,12 @@ inline void canonical_big_block_with_replay_body(bool dir)
     {
         // ── Sub-block A: `row_scale_factor` × (load<64> + sort_k + store<64, 16>) ──
 #if TOPK_XL_FUSED_MACRO
-        topk_xl_fused_macro::record_step_group<64, 16>(dir);
+        // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
+        topk_xl_fused_macro::prologue_loads_rt<64>(dir);
+        topk_xl_fused_macro::record_step_group_pipelined<64, 16>(dir);
         for (int i = 1; i < row_scale_factor; i++)
         {
-            lltt::replay(0, topk_xl_fused_macro::group_len);
+            lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
         }
 #else
         load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<64>(); });
@@ -1716,11 +2142,21 @@ inline void canonical_big_block_with_replay_body(bool dir)
         // the trailing +16 advance into the last SFPSTORE — saves one
         // math-thread issue per inner iter compared to the original
         // K!=2048 generic body which emitted `store<32, 32> + 2×INCRWC(+8)`.
+#if TOPK_XL_FUSED_MACRO
+        // Pipelined like sub-block A. Its trailing SETRWC reset Dst, so A's final prefetch is stale and this prologue reloads; within B the groups chain.
+        topk_xl_fused_macro::prologue_loads_rt<32>(dir);
+        for (int i = 0; i < (row_scale_factor >> 1); i++)
+        {
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+        }
+#else
         for (int i = 0; i < (row_scale_factor >> 1); i++)
         {
             fused_step_group<32, 16>(dir);
             fused_step_group<32, 48>(dir);
         }
+#endif
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
         // ── Sub-block C: `row_scale_factor` × (load<16> + sort_32 + store<16, 32>) ──
@@ -1876,8 +2312,16 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
         // SFPSTORE, saving one math-thread issue per inner iter.
         for (int i = 0; i < 2; i++)
         {
+#if TOPK_XL_FUSED_MACRO
+            // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction, so each pair re-prologues (see
+            // `step_group_pipelined`).
+            topk_xl_fused_macro::prologue_loads_rt<32>(dir);
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+#else
             fused_step_group<32, 16>(dir);
             fused_step_group<32, 48>(dir);
+#endif
             dir = !dir;
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -1930,10 +2374,12 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
 
     // Stride-2 (load + sort_k + store<2, 16>), N = 8. Recording IS iter 0.
 #if TOPK_XL_FUSED_MACRO
-    topk_xl_fused_macro::record_step_group<2, 16>(dir);
+    // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
+    topk_xl_fused_macro::prologue_loads_rt<2>(dir);
+    topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
     for (int i = 1; i < 8; i++)
     {
-        lltt::replay(0, topk_xl_fused_macro::group_len);
+        lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
     }
 #else
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
@@ -2156,8 +2602,16 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
             // trailing `TTI_INCRWC(+8)` issues PR #567's version had.
             for (int i = 0; i < (row_scale_factor >> 1); i++)
             {
+#if TOPK_XL_FUSED_MACRO
+                // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction, so each pair re-prologues (see
+                // `step_group_pipelined`).
+                topk_xl_fused_macro::prologue_loads_rt<32>(dir);
+                topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
+                topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+#else
                 fused_step_group<32, 16>(dir);
                 fused_step_group<32, 48>(dir);
+#endif
                 // Early-exit sorts each column in isolation, so it suppresses the
                 // inter-pair flip when there is only one pair; the full sort keeps
                 // its historical unconditional flip.
@@ -2216,10 +2670,12 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
 #if TOPK_XL_FUSED_MACRO
     if constexpr (K >= 1024)
     {
-        topk_xl_fused_macro::record_step_group<2, 16>(dir);
+        // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
+        topk_xl_fused_macro::prologue_loads_rt<2>(dir);
+        topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
         for (int i = 1; i < n_iters_stride2; i++)
         {
-            lltt::replay(0, topk_xl_fused_macro::group_len);
+            lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
         }
     }
     else
@@ -3794,7 +4250,8 @@ constexpr int split_n_iters = 2 * split_row_scale<K>;
 
 // PACK, once per row: ADDR_MOD_3 takes the stamp's +4 so ADDR_MOD_6 keeps the sort's +32; ADDR_MOD_4 is the K >= 1024
 // stamp's face skip. With `macros` (default K >= 1024) the row's segments share one fused macro configuration,
-// programmed here; none reprograms it.
+// programmed here. The stride-2 len 8 and len 16 passes swap the four SFPLOADMACRO templates for their own and
+// put these back through restore_step_group_templates; MATH must issue no SFPLOADMACRO while they are swapped.
 template <std::uint32_t K, bool macros = (K >= 1024)>
 inline void _topk_xl_split_sfpu_init_()
 {
@@ -3864,8 +4321,10 @@ inline void _topk_xl_split_sort_head_512_(const std::uint32_t tile_offset, const
 #if TOPK_XL_FUSED_MACRO
     if constexpr (macros)
     {
-        topk_xl_fused_macro::record_step_group<2, 16>(dir);
-        lltt::replay(0, topk_xl_fused_macro::group_len);
+        // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
+        topk_xl_fused_macro::prologue_loads_rt<2>(dir);
+        topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
+        lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
     }
     else
 #endif
@@ -3922,8 +4381,16 @@ inline void _topk_xl_split_sort_head_1024_(const std::uint32_t tile_offset, cons
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
+#if TOPK_XL_FUSED_MACRO
+        // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction, so each pair re-prologues (see
+        // `step_group_pipelined`).
+        topk_xl_fused_macro::prologue_loads_rt<32>(dir);
+        topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
+        topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+#else
         fused_step_group<32, 16>(dir);
         fused_step_group<32, 48>(dir);
+#endif
         if constexpr (!topk_xl_blaze_compat)
         {
             dir = !dir;
@@ -3949,10 +4416,12 @@ inline void _topk_xl_split_sort_head_1024_(const std::uint32_t tile_offset, cons
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
     TTI_SFPCONFIG(0x4444, 0xF, 8);
 #if TOPK_XL_FUSED_MACRO
-    topk_xl_fused_macro::record_step_group<2, 16>(dir);
+    // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
+    topk_xl_fused_macro::prologue_loads_rt<2>(dir);
+    topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
     for (int i = 1; i < 4; i++)
     {
-        lltt::replay(0, topk_xl_fused_macro::group_len);
+        lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
     }
 #else
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
@@ -4011,8 +4480,16 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
 
         for (int i = 0; i < 2; i++)
         {
+#if TOPK_XL_FUSED_MACRO
+            // Pipelined within the pair, which share `dir`; a prefetch's `near` offset depends on the direction, so each pair re-prologues (see
+            // `step_group_pipelined`).
+            topk_xl_fused_macro::prologue_loads_rt<32>(dir);
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 16>(dir);
+            topk_xl_fused_macro::step_group_pipelined_rt<32, 48>(dir);
+#else
             fused_step_group<32, 16>(dir);
             fused_step_group<32, 48>(dir);
+#endif
             dir = !dir;
         }
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
@@ -4050,10 +4527,12 @@ inline void _topk_xl_split_sort_head_2048_(const std::uint32_t tile_offset, cons
     TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0100);
     TTI_SFPCONFIG(0x4444, 0xF, 8);
 #if TOPK_XL_FUSED_MACRO
-    topk_xl_fused_macro::record_step_group<2, 16>(dir);
+    // Pipelined; see `step_group_pipelined`. The last iteration prefetches one group past the end, which only writes LREGs that are dead by then.
+    topk_xl_fused_macro::prologue_loads_rt<2>(dir);
+    topk_xl_fused_macro::record_step_group_pipelined<2, 16>(dir);
     for (int i = 1; i < 8; i++)
     {
-        lltt::replay(0, topk_xl_fused_macro::group_len);
+        lltt::replay(0, topk_xl_fused_macro::pipelined_group_len);
     }
 #else
     load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
@@ -4095,19 +4574,81 @@ inline void _topk_xl_split_stride2_sort_(const bool dir)
 }
 
 // The stride-2 pass between two transposes.
-template <std::uint32_t K, int sort_len>
+//
+// `macros` must match what `_topk_xl_split_sfpu_init_` was given: the sort_len 8 and 16 paths below
+// host their first swap layer on `SFPLOADMACRO`, so they need the Sequence words programmed. With
+// them unprogrammed a macro schedules nothing at all (`SFPLOADMACRO.md:79`), which would silently
+// drop that layer and corrupt the sort without hanging -- so the default is OFF and a caller that
+// has initialised with macros opts in, as `_topk_xl_split_sort_head_512_<macros>` already does.
+template <std::uint32_t K, int sort_len, bool macros = false>
 inline void _topk_xl_split_stride2_(const std::uint32_t tile_offset, const bool dir)
 {
     constexpr int n_iters = split_n_iters<K>;
     _topk_xl_split_begin_(tile_offset);
-    load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
-    _topk_xl_split_stride2_sort_<sort_len>(dir);
-    load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
-    for (int i = 1; i < n_iters; i++)
+#if TOPK_XL_FUSED_MACRO
+    if constexpr (macros && sort_len == 16)
     {
-        lltt::replay(0, 8);
+        // Step 4 of `bitonic_sort_len_16_alt_swaps` rides the loads, same as the sort_len == 8 case.
+        // sort_len == 4 is deliberately absent: its dispatch issues an SFPTRANSP before the sort, so
+        // the first thing after the load is a transpose and there is no swap for a macro to host.
+        constexpr int stores_at = topk_xl_fused_macro::stride2_len16_loads_len;
+        if (dir)
+        {
+            topk_xl_fused_macro::stride2_len16_templates<true>();
+        }
+        else
+        {
+            topk_xl_fused_macro::stride2_len16_templates<false>();
+        }
+        topk_xl_fused_macro::record_stride2_len16_loads(dir);
+        bitonic_sort_len_16_alt_tail(dir);
+        load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
+        for (int i = 1; i < n_iters; i++)
+        {
+            lltt::replay(0, topk_xl_fused_macro::stride2_len16_loads_len);
+            bitonic_sort_len_16_alt_tail(dir);
+            lltt::replay(stores_at, 8);
+        }
+        topk_xl_fused_macro::restore_step_group_templates();
+    }
+    else if constexpr (macros && sort_len == 8)
+    {
+        // Step 3 rides the loads instead of costing four explicit swaps, each of which would stall a
+        // cycle (`SFPSWAP.md:112`). Only this first layer can be hosted -- the later layers have no
+        // load left to attach a macro to. See `stride2_len8_loads` for the two encoding facts it
+        // needs, and note the templates must be put back before the next `step_group` runs.
+        constexpr int stores_at = topk_xl_fused_macro::stride2_len8_loads_len;
+        if (dir)
+        {
+            topk_xl_fused_macro::stride2_len8_templates<true>();
+        }
+        else
+        {
+            topk_xl_fused_macro::stride2_len8_templates<false>();
+        }
+        topk_xl_fused_macro::record_stride2_len8_loads(dir);
+        bitonic_sort_len_8_tail(dir);
+        load_replay_buf<Exec>(stores_at, 8, [] { store16_rows_x2<2, 16>(); });
+        for (int i = 1; i < n_iters; i++)
+        {
+            lltt::replay(0, topk_xl_fused_macro::stride2_len8_loads_len);
+            bitonic_sort_len_8_tail(dir);
+            lltt::replay(stores_at, 8);
+        }
+        topk_xl_fused_macro::restore_step_group_templates();
+    }
+    else
+#endif
+    {
+        load_replay_buf<Exec>(0, 8, [] { load16_rows_x2<2>(); });
         _topk_xl_split_stride2_sort_<sort_len>(dir);
-        lltt::replay(8, 8);
+        load_replay_buf<Exec>(8, 8, [] { store16_rows_x2<2, 16>(); });
+        for (int i = 1; i < n_iters; i++)
+        {
+            lltt::replay(0, 8);
+            _topk_xl_split_stride2_sort_<sort_len>(dir);
+            lltt::replay(8, 8);
+        }
     }
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 }
@@ -4207,6 +4748,78 @@ inline void _topk_xl_split_transpose_(const std::uint32_t tile_offset)
     set_dst_write_addr_offset(tile_offset);
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     transpose_N_faces<2 * split_row_scale<K>, true, 256, false>();
+}
+
+// The first fused chunk in each row runs the full TopK init. Later chunks can
+// use this hot-path reinit because copy init only clobbers ADDR_MOD_0/3 and the
+// MOP, while index stamping additionally changes ADDR_MOD_6 from +32 to +4.
+// Fused sort/merge never consumes ADDR_MOD_0/3/4; ADDR_MOD_1/5 and the other
+// TopK state remain live. Restoring +32 and the fused MOP therefore avoids the
+// two redundant ADDR_MOD writes in every subsequent chunk's full init.
+inline void _topk_large_indices_reinit_fused_after_stamp_()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 32},
+    }
+        .set(ADDR_MOD_6);
+    topk_mop_config<true>();
+}
+
+// The final TopK XL survivor stores FP32 value words followed by UINT32 index
+// words. Mark indices paired with exact -inf values as invalid without
+// disturbing the engine-specific survivor layout.
+inline void _topk_large_indices_mark_neginf_indices_init_()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }
+        .set(ADDR_MOD_0);
+}
+
+template <std::uint32_t K>
+inline void _topk_large_indices_mark_neginf_indices_()
+{
+    static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    constexpr std::uint32_t tiles_per_sequence = K == 2048 ? 2 : 1;
+    constexpr std::uint32_t indices_offset     = tiles_per_sequence * 64;
+    constexpr std::uint32_t iterations         = (K == 512 ? 1 : K == 1024 ? 2 : 4) * 16;
+
+    // LREG2 = fp32 -inf, LREG3 = the invalid-index marker.
+    constexpr std::uint32_t neg_inf_lo         = 0x0000;
+    constexpr std::uint32_t neg_inf_hi         = 0xFF80;
+    constexpr std::uint32_t invalid_index_half = 0xFFFF;
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, neg_inf_lo);
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, neg_inf_hi);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, invalid_index_half);
+    TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, invalid_index_half);
+
+    for (std::uint32_t i = 0; i < iterations; ++i)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::INT32, ADDR_MOD_0, indices_offset);
+        TTI_SFPENCC(0, 0, 0, 0);
+    }
+}
+
+// A K = 2048 segment's unfused result from tiles 0 to 3 to tiles 4 to 7, raw words; ADDR_MOD_0 steps two rows.
+inline void _topk_large_indices_move_segment_result_()
+{
+    constexpr std::uint32_t rows_per_tile      = 64;
+    constexpr std::uint32_t result_tiles       = 4;
+    constexpr std::uint32_t rows_per_access    = 2;
+    constexpr std::uint32_t iterations         = result_tiles * rows_per_tile / rows_per_access;
+    constexpr std::uint32_t destination_offset = result_tiles * rows_per_tile;
+    for (std::uint32_t i = 0; i < iterations; ++i)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, destination_offset);
+    }
 }
 
 } // namespace sfpu

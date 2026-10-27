@@ -86,14 +86,15 @@ ttnn:
     wh_llmbox_civ2: 40
     sim_wh_n150: 695
     sim_bh_p150: 680
+    sim_quasar: 45
   unit:
     wh_llmbox: 50
     wh_galaxy: 125
     bh_galaxy: 40
     bh_p100: 815
-    bh_p150b_civ2: 870
-    wh_n150_civ2: 1040
-    wh_n300_civ2: 1190
+    bh_p150b_civ2: 880
+    wh_n150_civ2: 1050
+    wh_n300_civ2: 1200
     bh_p150b_civ2_viommu: 125
     bh_p300: 60
     bh_quietbox_2: 60
@@ -194,7 +195,7 @@ shield:
     wh_n300_civ2: 10
     bh_p150: 60
   demo:
-    bh_sc4: 360
+    bh_sc4: 380
     bh_sc1: 120
     bh_sc1_high_power: 210
 
@@ -347,7 +348,7 @@ llk:
 
 models:
   agentic_research_tier3:
-    bh_quietbox_2: 137
+    bh_quietbox_2: 182
     bh_p150: 30
   merge_gate:
     wh_galaxy_merge_gate: 5
@@ -429,7 +430,7 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 2355
+    bh_sc1: 2375
     bh_sc1_high_power: 498
     bh_sc4: 60
     wh_n150: 500

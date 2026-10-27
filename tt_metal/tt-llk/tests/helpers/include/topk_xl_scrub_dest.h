@@ -11,9 +11,9 @@
 #include "params.h"
 #include "llk_sfpu/ckernel_sfpu_fill.h"
 
-// MATH only. ZEROACC only sets Dest's zero flags; the words stay. The transpose CFG block
-// disables those flags, so the next kernel's FPU adds onto topk's leftovers.
-// Write real zeros once PACK has released Dest.
+// MATH only. ZEROACC only sets Dest's zero flags; the words stay, so anything that reads Dest without
+// going through those flags still sees topk's leftovers. Write real zeros once PACK has released Dest,
+// so the next kernel starts clean however it reads.
 inline __attribute__((noinline)) void topk_xl_scrub_dest()
 {
     ckernel::tensix_sync();
