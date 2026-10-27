@@ -21,6 +21,7 @@ import math
 import torch
 
 import ttnn
+from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_add_rmsnorm import fused_add_rmsnorm
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.model_config import (
     PAD_TOKEN_ID,
     SEQ_BUCKETS,
@@ -42,6 +43,9 @@ class Layer:
         self.cfg = cfg
         self.attn_norm = loader.norm(f"l{i}_attn_norm", p + "input_layernorm.weight")
         self.ffn_norm = loader.norm(f"l{i}_ffn_norm", p + "post_attention_layernorm.weight")
+        if cfg.fuse_add_norm:
+            self.attn_norm_consts = loader.norm_consts(p + "input_layernorm.weight")
+            self.ffn_norm_consts = loader.norm_consts(p + "post_attention_layernorm.weight")
         self.wqkv = loader.linear(
             f"l{i}_wqkv",
             [p + "self_attn.q_proj.weight", p + "self_attn.k_proj.weight", p + "self_attn.v_proj.weight"],
@@ -65,6 +69,7 @@ class NemotronReranker:
         self.embed = loader.embedding()
         self.layers = [Layer(cfg, loader, i) for i in range(cfg.n_layers)]
         self.final_norm = loader.norm("final_norm", "model.norm.weight")
+        self.final_norm_consts = loader.norm_consts("model.norm.weight") if cfg.fuse_add_norm else None
         self.score_w = loader.score_head()
 
         grid = device.compute_with_storage_grid_size()
@@ -172,12 +177,15 @@ class NemotronReranker:
             x, epsilon=self.cfg.norm_eps, weight=w, compute_kernel_config=self.norm_ckc, memory_config=mem
         )
 
-    def _attention(self, layer, x, B, S, mask, block_map, cos, sin):
+    def _add_norm(self, x, delta, consts):
+        """(x + delta, rmsnorm(x + delta)) in one op."""
+        return fused_add_rmsnorm(x, delta, consts, memory_config=self._mem(x.shape[-2] * x.shape[-3], x.shape[-1]))
+
+    def _attention(self, layer, xn, B, S, mask, block_map, cos, sin):
+        """xn: the attention-normed residual [1, 1, B * S, dim]."""
         cfg = self.cfg
         qc, kc = sdpa_chunks(B, S)
-        xn = self._norm(x, layer.attn_norm)
         qkv = self._linear(xn, layer.wqkv, "qkv")
-        ttnn.deallocate(xn)
         qkv = ttnn.reshape(qkv, [B, 1, S, qkv.shape[-1]])
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
@@ -221,15 +229,13 @@ class NemotronReranker:
         ttnn.deallocate(o)
         return out
 
-    def _mlp(self, layer, x):
-        h = self._norm(x, layer.ffn_norm)
+    def _mlp(self, layer, h):
+        """h: the ffn-normed residual [1, 1, rows, dim]."""
         if self.cfg.fuse_swiglu:
             a = self._linear(h, layer.w13, "ff13s", fuse_swiglu=True)
-            ttnn.deallocate(h)
         else:
             g = self._linear(h, layer.w1, "ff13")
             u = self._linear(h, layer.w3, "ff13")
-            ttnn.deallocate(h)
             # silu(g) * u in one eltwise op: SiLU is applied to g as it is read.
             a = ttnn.mul(
                 g,
@@ -249,17 +255,37 @@ class NemotronReranker:
         cos, sin = self.rot_mats(S)
         x = ttnn.embedding(tokens, self.embed, layout=ttnn.TILE_LAYOUT, dtype=self.cfg.act_dtype)
         x = ttnn.reshape(x, [1, 1, B * S, self.cfg.dim])
-        for layer in self.layers:
-            a = self._attention(layer, x, B, S, mask, block_map, cos, sin)
-            x_new = ttnn.add(x, a, memory_config=self._mem(B * S, self.cfg.dim))
+        if self.cfg.fuse_add_norm and B * S >= self.cfg.fuse_add_norm_min_rows:
+            xn = self._norm(x, self.layers[0].attn_norm)
+            for i, layer in enumerate(self.layers):
+                a = self._attention(layer, xn, B, S, mask, block_map, cos, sin)
+                ttnn.deallocate(xn)
+                x_new, h = self._add_norm(x, a, layer.ffn_norm_consts)
+                ttnn.deallocate(x)
+                ttnn.deallocate(a)
+                m = self._mlp(layer, h)
+                ttnn.deallocate(h)
+                nxt = self.layers[i + 1].attn_norm_consts if i + 1 < len(self.layers) else self.final_norm_consts
+                x, xn = self._add_norm(x_new, m, nxt)
+                ttnn.deallocate(x_new)
+                ttnn.deallocate(m)
             ttnn.deallocate(x)
-            ttnn.deallocate(a)
-            m = self._mlp(layer, x_new)
-            x = ttnn.add(x_new, m, memory_config=self._mem(B * S, self.cfg.dim))
-            ttnn.deallocate(x_new)
-            ttnn.deallocate(m)
-        xn = self._norm(x, self.final_norm)
-        ttnn.deallocate(x)
+        else:
+            for layer in self.layers:
+                xn = self._norm(x, layer.attn_norm)
+                a = self._attention(layer, xn, B, S, mask, block_map, cos, sin)
+                ttnn.deallocate(xn)
+                x_new = ttnn.add(x, a, memory_config=self._mem(B * S, self.cfg.dim))
+                ttnn.deallocate(x)
+                ttnn.deallocate(a)
+                h = self._norm(x_new, layer.ffn_norm)
+                m = self._mlp(layer, h)
+                ttnn.deallocate(h)
+                x = ttnn.add(x_new, m, memory_config=self._mem(B * S, self.cfg.dim))
+                ttnn.deallocate(x_new)
+                ttnn.deallocate(m)
+            xn = self._norm(x, self.final_norm)
+            ttnn.deallocate(x)
         t = self._linear(xn, self.score_w, "score", dtype=ttnn.float32)
         ttnn.deallocate(xn)
         t = ttnn.reshape(t, [B, 1, S, 32])

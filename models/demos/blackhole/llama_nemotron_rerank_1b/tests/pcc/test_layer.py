@@ -35,9 +35,9 @@ def test_decoder_layer(device, hf_model, state_dict, batch, seq_len, n_real):
         x.reshape(1, 1, batch * seq_len, cfg.dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
     layer = model.layers[0]
-    a = model._attention(layer, tt_x, batch, seq_len, mask, block_map, cos, sin)
+    a = model._attention(layer, model._norm(tt_x, layer.attn_norm), batch, seq_len, mask, block_map, cos, sin)
     h = ttnn.add(tt_x, a)
-    out = ttnn.add(h, model._mlp(layer, h))
+    out = ttnn.add(h, model._mlp(layer, model._norm(h, layer.ffn_norm)))
     got = ttnn.to_torch(out).float().reshape(batch, seq_len, cfg.dim)
     # Padded query rows are not used downstream; compare the real tokens only.
     ok, pcc = comp_pcc(ref[:, :n_real], got[:, :n_real], 0.99)

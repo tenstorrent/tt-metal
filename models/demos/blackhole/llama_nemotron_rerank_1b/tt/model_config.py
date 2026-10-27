@@ -81,6 +81,11 @@ class RerankConfig:
     sdpa_block_map: bool = True
     # SDPA writes heads side by side ([B, 1, S, n_heads * head_dim]) so nlp_concat_heads is not needed.
     sdpa_concat_heads: bool = True
+    # Residual add + following RMSNorm as one op (tt/custom_ops/fused_add_rmsnorm) writing both outputs.
+    fuse_add_norm: bool = True
+    # The fused op gives each core whole tile-rows, so below ~2 rows per core the stock add + rms_norm
+    # spread wider and win (1x512: 8.8 vs 9.7 ms; 1x2048: 33.4 vs 42.2 ms; 32x512: 238 vs 226 ms).
+    fuse_add_norm_min_rows: int = 8192
     # minimal_matmul with the swept block sizes instead of ttnn.linear's own config.
     use_minimal_matmul: bool = True
     # FF1 + FF3 + silu(gate) * up as one minimal_matmul (fuse_swiglu) over an interleaved weight.

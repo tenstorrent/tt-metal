@@ -72,6 +72,14 @@ class WeightLoader:
         host = None if w is None else w.float().reshape(1, 1, self.cfg.dim // 32, 32)
         return self._as_tensor(name, host, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
+    def norm_consts(self, key):
+        """(gamma tiles, 1/W scaler, eps) for the fused add + RMSNorm op."""
+        from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_add_rmsnorm import (
+            make_add_norm_constants,
+        )
+
+        return make_add_norm_constants(self._get(key).float(), self.cfg.norm_eps, self.device)
+
     def linear(self, name, keys, dtype, permute_heads=None):
         """[out, in] HF rows (concatenated over ``keys``) -> [1, 1, in, out] device weight."""
         host = None
