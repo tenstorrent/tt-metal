@@ -426,6 +426,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         self.keep_flip = False
         self.in0 = None
         self.in1 = None
+        self.pack_src_from_output = True
 
     def __repr__(self) -> str:
         return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', keep_flip' if self.keep_flip else ''}{', in ' + self.in0.name + ' ' + self.in1.name if self.in0 is not None else ''}{', force ' + self.force_form if self.force_form else ''})"
