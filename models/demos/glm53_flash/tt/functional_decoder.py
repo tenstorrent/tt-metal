@@ -68,6 +68,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -81,6 +82,8 @@ from models.demos.glm53_flash.tt.dsa import (
     sparse_decode_enabled,
 )
 from models.demos.glm53_flash.tt.mesh import GLMMesh
+
+MEM_LOG_LAYERS_ENV = "GLM53_MEM_LOG_LAYERS"  # "1": log the DRAM allocator after every layer's prefill chunk
 
 TILE = 32
 
@@ -492,6 +495,14 @@ class FunctionalDecoder(LightweightModule):
         if self.is_kda:
             self._write_user_kda_state(user, new_state.kda)
         self.next_start[user] = start + seq_len
+        if os.environ.get(MEM_LOG_LAYERS_ENV, "0") == "1":  # which layer grows the resident DRAM per chunk (2026-10-27)
+            mv = ttnn.device.get_memory_view(self.mesh.device, ttnn.BufferType.DRAM)
+            logger.info(
+                f"GLM53 mem/layer {'KDA' if self.is_kda else 'DSA'} chunk [{start}, {start + seq_len}) user {user}: "
+                f"allocated {mv.total_bytes_allocated_per_bank / 2**20:.0f} MiB/bank, free "
+                f"{getattr(mv, 'total_bytes_free_per_bank', 0) / 2**20:.0f}, largest "
+                f"{getattr(mv, 'largest_contiguous_bytes_free_per_bank', 0) / 2**20:.0f}"
+            )
         return out
 
     def _prefill_forward_traced(self, streams: ttnn.Tensor, trace: PrefillTraceCall, user: int, T: int) -> ttnn.Tensor:
