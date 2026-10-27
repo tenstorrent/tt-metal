@@ -226,6 +226,12 @@ void validate_matmul_optional_tensors(
             "Type mismatch between optional output tensor {} & output tensor {}",
             optional_output_tensor_c->dtype(),
             attributes.output_dtype.value());
+        const auto expected_layout = attributes.untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
+        TT_FATAL(
+            optional_output_tensor_c->layout() == expected_layout,
+            "Layout mismatch between optional output tensor {} & output tensor {}",
+            optional_output_tensor_c->layout(),
+            expected_layout);
         TT_FATAL(
             optional_output_tensor_c->memory_config() == attributes.output_mem_config,
             "Memory config mismatch between optional output tensor {} & output "

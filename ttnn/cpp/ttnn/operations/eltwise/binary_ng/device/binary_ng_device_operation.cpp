@@ -498,6 +498,11 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     }
     if (output_tensor.has_value()) {
         validate_tile_shape(*output_tensor, "the output tensor");
+        TT_FATAL(
+            output_tensor->layout() == input_tensor_a.layout(),
+            "Preallocated output tensor layout {} must match input tensor A layout {}",
+            output_tensor->layout(),
+            input_tensor_a.layout());
     }
 }
 
