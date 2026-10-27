@@ -83,9 +83,8 @@ NOC mismatch: chip 26 (0000:c3:00.0, ubb: 3, chip: 3) src eth ch 2 [noc0 2-1, lo
 - `NOC mismatch`: data read back differs from what was written.
 - `NOC timeout`: a write or read barrier did not complete. That source stops
   and its remaining destinations in the batch show as `NOC not run`.
-- `NOC hang`: a source stopped making progress entirely. The test prints the
-  source and destination it was on and exits; reset the boards before running
-  again.
+- `NOC hang`: a source stopped making progress entirely. The line names the
+  destination it was on; its later destinations show as `NOC not run`.
 
 At the end, a `NOC FAILURE SUMMARY` groups failures per chip and NOC:
 - **Recurring sources**: one source failing to several destinations, listed
@@ -93,6 +92,7 @@ At the end, a `NOC FAILURE SUMMARY` groups failures per chip and NOC:
 - **Recurring destinations**: one destination failing from several sources,
   listed with those sources. Points at the destination core's NOC path.
 - **Isolated pairs**: failures whose source and destination both fail only once.
+- **Wedged chips**: chips that hung, with the NOC, batch and reason.
 
 Each section is only printed if it has entries.
 
@@ -106,5 +106,20 @@ chip 26 (0000:c3:00.0, ubb: 3, chip: 3) noc 1: 26 failing pair(s), 1 source(s), 
         dst tensix [noc0 16-3, logical 12-1]
 ```
 
-Failures on every chip are reported in one run. The exception is a `NOC hang`,
-which ends the run.
+Failures on every chip are reported in one run.
+
+## Wedged chips
+A chip is marked wedged when one of its sources stops making progress, or a
+host read of the chip fails or does not return. Each chip is polled
+separately, so a wedged chip does not block the others:
+```
+chip 31 (0000:c8:00.0, ubb: 3, chip: 8) wedged in noc 0 batch 1/3: 1 source(s) stopped making progress; skipping it for the rest of the test
+```
+- The wedged chip is skipped for the remaining batches and NOC phases; every
+  other chip keeps running, so the final report covers the whole system.
+- If the chip can still be read, its results up to the hang are reported,
+  including the `NOC hang` line for the stuck source.
+- Wedged chips can't be closed cleanly, so after the report the test exits
+  with code 1 without the usual teardown. Later tests in the same run (for
+  example `Noc01` after `Noc00`) don't run. Reset the boards before the next
+  run.

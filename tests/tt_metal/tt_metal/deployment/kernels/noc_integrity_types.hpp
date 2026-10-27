@@ -49,6 +49,7 @@ enum : uint32_t {
     NOC_STATUS_DONE,
     NOC_STATUS_WRITE_TIMEOUT,
     NOC_STATUS_READ_TIMEOUT,
+    NOC_STATUS_HANG,  // set by the host when a source stops making progress
 };
 
 [[maybe_unused]]

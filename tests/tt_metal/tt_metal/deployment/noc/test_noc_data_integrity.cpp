@@ -10,7 +10,10 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <map>
 #include <thread>
 
@@ -343,53 +346,147 @@ static vector<uint32_t> read_words(const source& s, uint32_t addr, uint32_t word
         s.device->id(), s.virt, addr, words * sizeof(uint32_t));
 }
 
-static void wait_for_sources(const vector<launched>& runs, uint32_t noc, const params& p) {
+struct wedged_chip {
+    IDevice* device;
+    uint32_t noc;
+    size_t batch;
+    string reason;
+};
+
+struct poll_result {
+    vector<vector<uint32_t>> last_prog;  // per run; empty if the chip could not be read
+    vector<bool> stalled;                // per run: kernel stopped making progress
+    map<ChipId, string> wedged;          // chips to stop using, with the reason
+    set<ChipId> unreadable;              // subset of wedged whose host reads hang or fail
+};
+
+// One polling thread per chip: a host read that never returns only blocks its own chip.
+static poll_result wait_for_sources(const vector<launched>& runs, const params& p) {
     using clock = chrono::steady_clock;
-    const auto stall_limit = chrono::milliseconds(2 * p.timeout_ms + 5000);
+    const int64_t stall_limit_ms = 2 * p.timeout_ms + 5000;
+    auto now_ms = [] { return chrono::duration_cast<chrono::milliseconds>(clock::now().time_since_epoch()).count(); };
 
-    vector<uint32_t> last_hb(runs.size(), ~0u);
-    vector<clock::time_point> last_change(runs.size(), clock::now());
+    struct chip_poll {
+        ChipId chip;
+        vector<size_t> idx;
+        vector<pair<CoreCoord, uint32_t>> targets;  // copied so a detached thread never touches `runs`
+        atomic<int64_t> read_start_ms{-1};
+        atomic<size_t> reading{0};
+        atomic<bool> finished{false};
+        vector<vector<uint32_t>> prog;
+        vector<bool> stalled;
+        string error;
+    };
 
-    for (;;) {
-        bool all_done = true;
-        vector<size_t> stuck;
-        for (size_t i = 0; i < runs.size(); i++) {
-            auto prog = read_words(*runs[i].src, runs[i].layout.progress, NOC_PROGRESS_WORDS);
-            if (prog[NOC_PROGRESS_STATE] == NOC_STATE_DONE || prog[NOC_PROGRESS_STATE] == NOC_STATE_ABORTED) {
+    map<ChipId, shared_ptr<chip_poll>> polls;
+    for (size_t i = 0; i < runs.size(); i++) {
+        ChipId chip = runs[i].src->device->id();
+        auto& cp = polls[chip];
+        if (!cp) {
+            cp = make_shared<chip_poll>();
+            cp->chip = chip;
+        }
+        cp->idx.push_back(i);
+        cp->targets.emplace_back(runs[i].src->virt, runs[i].layout.progress);
+    }
+
+    map<ChipId, thread> threads;
+    for (auto& [chip, cp] : polls) {
+        cp->prog.resize(cp->targets.size());
+        cp->stalled.resize(cp->targets.size(), false);
+        threads[chip] = thread([cp, stall_limit_ms, now_ms] {
+            const size_t n = cp->targets.size();
+            vector<uint32_t> last_hb(n, ~0u);
+            vector<int64_t> last_change(n, now_ms());
+            for (;;) {
+                bool running = false;
+                for (size_t j = 0; j < n; j++) {
+                    if (cp->stalled[j]) {
+                        continue;
+                    }
+                    cp->reading = j;
+                    cp->read_start_ms = now_ms();
+                    try {
+                        cp->prog[j] = MetalContext::instance().get_cluster().read_core<uint32_t>(
+                            cp->chip,
+                            cp->targets[j].first,
+                            cp->targets[j].second,
+                            NOC_PROGRESS_WORDS * sizeof(uint32_t));
+                    } catch (const std::exception& e) {
+                        cp->error = fmt::format("host read failed: {}", e.what());
+                        cp->finished = true;
+                        return;
+                    }
+                    cp->read_start_ms = -1;
+                    const auto& prog = cp->prog[j];
+                    if (prog[NOC_PROGRESS_STATE] == NOC_STATE_DONE || prog[NOC_PROGRESS_STATE] == NOC_STATE_ABORTED) {
+                        continue;
+                    }
+                    if (prog[NOC_PROGRESS_HEARTBEAT] != last_hb[j]) {
+                        last_hb[j] = prog[NOC_PROGRESS_HEARTBEAT];
+                        last_change[j] = now_ms();
+                        running = true;
+                    } else if (now_ms() - last_change[j] > stall_limit_ms) {
+                        cp->stalled[j] = true;
+                    } else {
+                        running = true;
+                    }
+                }
+                if (!running) {
+                    cp->finished = true;
+                    return;
+                }
+                this_thread::sleep_for(chrono::milliseconds(10));
+            }
+        });
+    }
+
+    poll_result res;
+    res.last_prog.resize(runs.size());
+    res.stalled.resize(runs.size(), false);
+
+    set<ChipId> pending;
+    for (const auto& [chip, _] : polls) {
+        pending.insert(chip);
+    }
+    while (!pending.empty()) {
+        this_thread::sleep_for(chrono::milliseconds(50));
+        for (auto it = pending.begin(); it != pending.end();) {
+            const ChipId chip = *it;
+            auto& cp = polls[chip];
+            if (cp->finished) {
+                threads[chip].join();
+                if (!cp->error.empty()) {
+                    res.wedged[chip] = cp->error;
+                    res.unreadable.insert(chip);
+                } else {
+                    size_t n_stalled = 0;
+                    for (size_t j = 0; j < cp->idx.size(); j++) {
+                        res.last_prog[cp->idx[j]] = cp->prog[j];
+                        res.stalled[cp->idx[j]] = cp->stalled[j];
+                        n_stalled += cp->stalled[j];
+                    }
+                    if (n_stalled) {
+                        res.wedged[chip] = fmt::format("{} source(s) stopped making progress", n_stalled);
+                    }
+                }
+                it = pending.erase(it);
                 continue;
             }
-            all_done = false;
-            if (prog[NOC_PROGRESS_HEARTBEAT] != last_hb[i]) {
-                last_hb[i] = prog[NOC_PROGRESS_HEARTBEAT];
-                last_change[i] = clock::now();
-            } else if (clock::now() - last_change[i] > stall_limit) {
-                stuck.push_back(i);
+            const int64_t t = cp->read_start_ms;
+            if (t >= 0 && now_ms() - t > stall_limit_ms) {
+                const auto& r = runs[cp->idx[cp->reading]];
+                res.wedged[chip] =
+                    fmt::format("host read of {} progress did not return after {} ms", src_str(*r.src), now_ms() - t);
+                res.unreadable.insert(chip);
+                threads[chip].detach();
+                it = pending.erase(it);
+                continue;
             }
+            ++it;
         }
-        if (all_done) {
-            return;
-        }
-        if (!stuck.empty()) {
-            for (size_t i : stuck) {
-                const auto& r = runs[i];
-                auto prog = read_words(*r.src, r.layout.progress, NOC_PROGRESS_WORDS);
-                uint32_t d = prog[NOC_PROGRESS_DEST];
-                log_critical(
-                    tt::LogTest,
-                    "NOC hang: {} {} -> {} noc {}: pattern {}, iteration {}, state {:08x}",
-                    chip_str(r.src->device),
-                    src_str(*r.src),
-                    d < r.dests.size() ? dst_str(*r.dests[d]) : fmt::format("dest #{}", d),
-                    noc,
-                    noc_pattern_name(prog[NOC_PROGRESS_PATTERN]),
-                    prog[NOC_PROGRESS_ITERATION],
-                    prog[NOC_PROGRESS_STATE]);
-            }
-            log_critical(tt::LogTest, "Timed out! You probably need to reset the device (tt-smi -glx_reset)");
-            exit(1);
-        }
-        this_thread::sleep_for(chrono::milliseconds(10));
     }
+    return res;
 }
 
 template <typename FIXTURE>
@@ -400,7 +497,8 @@ static vector<failure> run_phase(
     const map<ChipId, vector<dest>>& dests_per_chip,
     const dest_layout& eth_l,
     const dest_layout& tensix_l,
-    const params& p) {
+    const params& p,
+    map<ChipId, wedged_chip>& wedged) {
     /* ==================== */
     const auto& hal = MetalContext::instance().hal();
     const uint32_t idle_eriscs = hal.get_num_risc_processors(HalProgrammableCoreType::IDLE_ETH);
@@ -484,6 +582,9 @@ static vector<failure> run_phase(
                 continue;
             }
             const source& s = *pl.src;
+            if (wedged.contains(s.device->id())) {
+                continue;
+            }
             const size_t last = min(first + MAX_DESTS, pl.dests.size());
 
             launched run{.src = &s, .layout = pl.layout};
@@ -528,6 +629,9 @@ static vector<failure> run_phase(
                 s.device->id(), s.virt, vector<uint32_t>(NOC_PROGRESS_WORDS, 0), pl.layout.progress);
             runs.push_back(std::move(run));
         }
+        if (runs.empty()) {
+            continue;
+        }
 
         log_info(
             tt::LogTest,
@@ -548,24 +652,55 @@ static vector<failure> run_phase(
         }
         log_info(tt::LogTest, "  noc {} batch {}/{}: running", noc, batch + 1, num_batches);
 
-        wait_for_sources(runs, noc, p);
+        poll_result poll = wait_for_sources(runs, p);
 
         for (auto& [mesh, _] : workloads) {
-            fixture->FinishCommands(mesh);
+            if (!poll.wedged.contains(mesh->get_device_ids()[0])) {
+                fixture->FinishCommands(mesh);
+            }
         }
 
         size_t batch_failures = 0;
-        for (const auto& r : runs) {
+        for (size_t i = 0; i < runs.size(); i++) {
+            const auto& r = runs[i];
+            if (poll.unreadable.contains(r.src->device->id())) {
+                continue;
+            }
             auto results = read_words(*r.src, r.layout.results, r.dests.size() * NOC_RESULT_WORDS);
+            const auto& prog = poll.last_prog[i];
             for (size_t d = 0; d < r.dests.size(); d++) {
                 vector<uint32_t> rec(
                     results.begin() + d * NOC_RESULT_WORDS, results.begin() + (d + 1) * NOC_RESULT_WORDS);
+                if (poll.stalled[i] && d == prog[NOC_PROGRESS_DEST]) {
+                    rec[NOC_RESULT_STATUS] = NOC_STATUS_HANG;
+                    rec[NOC_RESULT_PATTERN] = prog[NOC_PROGRESS_PATTERN];
+                    rec[NOC_RESULT_ITERATION] = prog[NOC_PROGRESS_ITERATION];
+                }
                 if (rec[NOC_RESULT_STATUS] == NOC_STATUS_DONE && rec[NOC_RESULT_MISMATCHES] == 0) {
                     continue;
                 }
                 failures.push_back({noc, *r.src, *r.dests[d], r.addrs[d], std::move(rec)});
                 batch_failures++;
             }
+        }
+
+        for (const auto& [chip, reason] : poll.wedged) {
+            IDevice* device = nullptr;
+            for (const auto& r : runs) {
+                if (r.src->device->id() == chip) {
+                    device = r.src->device;
+                    break;
+                }
+            }
+            log_critical(
+                tt::LogTest,
+                "  {} wedged in noc {} batch {}/{}: {}; skipping it for the rest of the test",
+                chip_str(device),
+                noc,
+                batch + 1,
+                num_batches,
+                reason);
+            wedged[chip] = {device, noc, batch + 1, reason};
         }
         log_info(
             tt::LogTest,
@@ -579,7 +714,7 @@ static vector<failure> run_phase(
     return failures;
 }
 
-static void print_failure_summary(const vector<failure>& failures) {
+static void print_failure_summary(const vector<failure>& failures, const map<ChipId, wedged_chip>& wedged) {
     using entry = pair<pair<size_t, size_t>, string>;  // (noc0 y, x) for ordering, label
     struct group {
         IDevice* device;
@@ -658,10 +793,22 @@ static void print_failure_summary(const vector<failure>& failures) {
             }
         }
     }
+    if (!wedged.empty()) {
+        log_critical(tt::LogTest, "Wedged chips (not tested after this point):");
+        for (const auto& [_, w] : wedged) {
+            log_critical(tt::LogTest, "  {}: noc {} batch {}: {}", chip_str(w.device), w.noc, w.batch, w.reason);
+        }
+    }
     log_critical(tt::LogTest, "=============================================================");
 }
 
-static void report(const vector<failure>& failures) {
+struct test_result {
+    vector<failure> failures;
+    map<ChipId, wedged_chip> wedged;
+};
+
+static void report(const test_result& result) {
+    const auto& failures = result.failures;
     for (const auto& f : failures) {
         const auto& rec = f.record;
         string chip = chip_str(f.src.device);
@@ -678,7 +825,15 @@ static void report(const vector<failure>& failures) {
                     rec[NOC_RESULT_ITERATION]);
                 break;
             case NOC_STATUS_NOT_RUN:
-                log_critical(tt::LogTest, "NOC not run: {}: source aborted before this destination", prefix);
+                log_critical(tt::LogTest, "NOC not run: {}: source stopped before this destination", prefix);
+                break;
+            case NOC_STATUS_HANG:
+                log_critical(
+                    tt::LogTest,
+                    "NOC hang: {}: source stopped making progress ({}, iteration {})",
+                    prefix,
+                    noc_pattern_name(rec[NOC_RESULT_PATTERN]),
+                    rec[NOC_RESULT_ITERATION]);
                 break;
             default:
                 log_critical(
@@ -697,15 +852,29 @@ static void report(const vector<failure>& failures) {
         }
     }
 
-    if (failures.empty()) {
+    if (failures.empty() && result.wedged.empty()) {
         return;
     }
     log_critical(tt::LogTest, "{} failing source/destination pairs in total", failures.size());
-    print_failure_summary(failures);
+    print_failure_summary(failures, result.wedged);
+}
+
+// Closing a wedged chip hangs, so skip normal teardown once the report is printed.
+static void exit_if_wedged(const test_result& result) {
+    if (result.wedged.empty()) {
+        return;
+    }
+    log_critical(
+        tt::LogTest,
+        "{} chip(s) wedged; exiting without closing devices. Reset with tt-smi -glx_reset before the next run.",
+        result.wedged.size());
+    fflush(stdout);
+    fflush(stderr);
+    _Exit(1);
 }
 
 template <typename FIXTURE>
-static vector<failure> run_test(
+static test_result run_test(
     FIXTURE* fixture, const vector<shared_ptr<distributed::MeshDevice>>& devices, bool tensix_sources) {
     /* ==================== */
     const params p = get_params();
@@ -761,12 +930,12 @@ static vector<failure> run_test(
         dests_per_chip[device->id()] = std::move(dests);
     }
 
-    vector<failure> failures;
+    test_result result;
     for (uint32_t noc = 0; noc < 2; noc++) {
-        auto f = run_phase(fixture, noc, sources_per_chip, dests_per_chip, eth_l, tensix_l, p);
-        failures.insert(failures.end(), f.begin(), f.end());
+        auto f = run_phase(fixture, noc, sources_per_chip, dests_per_chip, eth_l, tensix_l, p, result.wedged);
+        result.failures.insert(result.failures.end(), f.begin(), f.end());
     }
-    return failures;
+    return result;
 }
 
 }  // namespace deployment_noc
@@ -777,9 +946,10 @@ TEST_F(MeshDispatchFixture, TensixDeploymentNoc00EthSourceIntegrity) {
     }
     print_detected_devices();
 
-    auto failures = deployment_noc::run_test(this, devices_, false);
-    deployment_noc::report(failures);
-    ASSERT_TRUE(failures.empty());
+    auto result = deployment_noc::run_test(this, devices_, false);
+    deployment_noc::report(result);
+    deployment_noc::exit_if_wedged(result);
+    ASSERT_TRUE(result.failures.empty());
 }
 
 TEST_F(MeshDispatchFixture, TensixDeploymentNoc01TensixSourceIntegrity) {
@@ -788,9 +958,10 @@ TEST_F(MeshDispatchFixture, TensixDeploymentNoc01TensixSourceIntegrity) {
     }
     print_detected_devices();
 
-    auto failures = deployment_noc::run_test(this, devices_, true);
-    deployment_noc::report(failures);
-    ASSERT_TRUE(failures.empty());
+    auto result = deployment_noc::run_test(this, devices_, true);
+    deployment_noc::report(result);
+    deployment_noc::exit_if_wedged(result);
+    ASSERT_TRUE(result.failures.empty());
 }
 
 }  // namespace tt::tt_metal
