@@ -45,3 +45,7 @@
   3 e2e passes, continuing only on exit 124/timeout (root commit 5910d21e3a9). Relaunched as `ttp detach chain511c`
   (run dir 2149): adopted 310, e2e.2 submit waiting on blx04's post-job broker gate (chainlib retries).
   Probe: ttp detach --check /home/smarton/fasth3/tt-metal/tt-project/state/runs/2149/chain511c.rc
+- 2026-10-27 00:28 PDT (run 2151): host rebooted 00:25 PDT; chain511c died before e2e.2 was submitted (no job after 310;
+  all e2e.2 submits were refused by blx04's broker gate). JIT cache in ~/fasth3/data/t511/jit survived. blx04 broker in
+  post-boot health gate (fabric check). Relaunched the same driver as `ttp detach chain511d` (run dir 2151); it adopted 310
+  and retries the e2e.2 submit. Probe: ttp detach --check /home/smarton/fasth3/tt-metal/tt-project/state/runs/2151/chain511d.rc
