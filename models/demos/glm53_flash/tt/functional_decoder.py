@@ -202,17 +202,18 @@ class FunctionalDecoder(LightweightModule):
         self.max_seq_len = max_seq_len
         self.cache = None
         self.partition = bool(partition_users) and self.mesh.cols > 1
-        if not layer.is_kda:
-            self.cache = TtLatentCache(
-                self.device,
-                self.cfg,
-                max_batch=max_batch,
-                max_seq_len=max_seq_len,
-                block_size=block_size,
-                mesh=self.mesh,
-                partition_users=partition_users,
-                prefill_partition=prefill_partition,
-            )
+        # GLM53_CACHES_LAST=1 (placement experiment, 2026-10-27): the DSA cache is NOT allocated here but by
+        # ``allocate_cache`` once every layer's weights are resident (mesh_model), so the bank-sharded expert weights of
+        # all 45 layers land contiguously below the caches instead of interleaving with eleven ~1 GiB caches at 1 M
+        self._cache_args = dict(
+            max_batch=max_batch,
+            max_seq_len=max_seq_len,
+            block_size=block_size,
+            partition_users=partition_users,
+            prefill_partition=prefill_partition,
+        )
+        if not layer.is_kda and os.environ.get("GLM53_CACHES_LAST", "0") != "1":
+            self.allocate_cache()
         # persistent batched KDA state (max_batch slots): prefill writes slot `user`, decode reads
         # and updates all slots in place, so captured decode traces always see the live state.
         self.kda_batched: KdaState | None = None
@@ -220,6 +221,22 @@ class FunctionalDecoder(LightweightModule):
             self.kda_batched = layer.attn.allocate_state(max_batch)
         # chunked prefill bookkeeping: the position the next chunk of each user must start at
         self.next_start: list[int] = [0] * max_batch
+
+    def allocate_cache(self) -> None:
+        """Allocate this DSA layer's latent cache (``TtLatentCache``); a no-op for KDA layers or when it exists."""
+        if self.is_kda or self.cache is not None:
+            return
+        a = self._cache_args
+        self.cache = TtLatentCache(
+            self.device,
+            self.cfg,
+            max_batch=a["max_batch"],
+            max_seq_len=a["max_seq_len"],
+            block_size=a["block_size"],
+            mesh=self.mesh,
+            partition_users=a["partition_users"],
+            prefill_partition=a["prefill_partition"],
+        )
 
     @classmethod
     def from_state_dict(

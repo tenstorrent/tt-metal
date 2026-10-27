@@ -271,6 +271,13 @@ class GLM53MeshModel:
             self.layers.append(dec)
             self.build_times[i] = time.time() - t0
             logger.info(f"mesh model: layer {i} built in {self.build_times[i]:.1f} s (host load {t1 - t0:.1f} s)")
+        if os.environ.get("GLM53_CACHES_LAST", "0") == "1":
+            t0 = time.time()
+            for dec in self.layers:
+                dec.allocate_cache()
+            logger.info(
+                f"mesh model: GLM53_CACHES_LAST=1: the DSA caches allocated after every weight in {time.time() - t0:.1f} s"
+            )
         self.positions: DecodePositions | None = None
         self.ids_dev: ttnn.Tensor | None = None
         # GLM53_DECODE_PACKED_INPUTS: the one-upload decode inputs (allocated by ``warmup_decode``, before any capture)
