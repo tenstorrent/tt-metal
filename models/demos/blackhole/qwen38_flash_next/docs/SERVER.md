@@ -19,8 +19,7 @@ This page covers what the flags do not: start-up, the request rules, `/health`, 
   MoE layer; `--prepare-only --bf4-stage-limit N` converts at most N layers per run and resumes. The cache is keyed by
   the checkpoint, the converter's sources and the mesh's DRAM bank count and order, not by the tt-metal revision.
   Every start re-packs one expert and compares it with the cache; a mismatch is refused, naming the layer, expert and
-  tensor. `--bf4-corpus DIR --bf4-corpus-verification FILE` uses a CPU-staged corpus (`tools/stage_full_bf4_cpu.py`,
-  `tools/verify_full_bf4_cpu.py`) instead.
+  tensor.
 - **READY**: the weights load, the traces are captured, the acceptance records replay
   ([NUMERICS.md](NUMERICS.md)), then the server writes `READY` and listens.
 

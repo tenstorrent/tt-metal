@@ -4,14 +4,13 @@
 """Runtime admission: the server runs on the ttnn built from this checkout.
 
 The interpreter's ``ttnn`` package and compiled extension must come from this repository; the checkout's git head and
-tree and the extension's SHA-256 are the runtime identity the run records.  ``prepare_cpu`` then binds the checkpoint,
-the caches and the optional CPU-staged BF4 corpus.
+tree and the extension's SHA-256 are the runtime identity the run records.  ``prepare_cpu`` then binds the checkpoint
+and the caches.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
 import subprocess
 from pathlib import Path
@@ -24,7 +23,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction imp
     DEFAULT_CPU_ORACLE,
     Qwen38RetainedCPUTokenOracle,
     load_retained_cpu_token_oracle,
-    prepare_live_decode_diagnostic,
+    prepare_live_decode,
 )
 from models.demos.blackhole.qwen38_flash_next.tools.resident_decode import ResidentDecodeError
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_MAX_QSA_CACHE_CAPACITY
@@ -194,18 +193,15 @@ def prepare_cpu(
     hardware_profile: ResidentHardwareProfile,
     identity: dict[str, Any] | None = None,
 ) -> tuple[Any, Qwen38RetainedCPUTokenOracle]:
-    """Bind the checkpoint, the cache roots, the optional CPU-staged BF4 corpus and the CPU oracle.  The resident
-    build follows ``--allocated-context`` (its default when the caller has none); the profile's route must be resolved
+    """Bind the checkpoint, the cache roots and the CPU oracle.  The resident build follows ``--allocated-context`` (its default when the caller has none); the profile's route must be resolved
     by now."""
 
     if hardware_profile.route is None:
         raise RuntimeAdmissionError(f"profile {hardware_profile.lane} has no route yet; resolve it before preparing")
     if identity is None:
         identity = declared_runtime(args) if getattr(args, "tt_metal_sha", None) is not None else admit_runtime(args)
-    producer_argument = getattr(args, "bf4_producer_identity", None)
-    producer = None if producer_argument is None else json.loads(Path(producer_argument).read_text(encoding="utf-8"))
     marker("before-cpu-preparation")
-    prepared = prepare_live_decode_diagnostic(
+    prepared = prepare_live_decode(
         checkpoint_root=args.checkpoint,
         component_cache_root=args.component_cache_root,
         routed_bf4_scratch_root=args.routed_bf4_scratch_root,
@@ -215,9 +211,6 @@ def prepare_cpu(
         runtime_sha256=identity["extension_sha256"],
         allocated_context=getattr(args, "allocated_context", RESIDENT_MAX_QSA_CACHE_CAPACITY),
         physical_ids=hardware_profile.route,
-        bf4_corpus_root=getattr(args, "bf4_corpus", None),
-        bf4_corpus_verification=getattr(args, "bf4_corpus_verification", None),
-        bf4_producer=producer,
         marker=marker,
     )
     oracle = load_retained_cpu_token_oracle(getattr(args, "cpu_oracle", None) or DEFAULT_CPU_ORACLE)

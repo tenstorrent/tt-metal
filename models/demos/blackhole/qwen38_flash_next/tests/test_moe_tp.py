@@ -11,8 +11,7 @@ them, admitted or refused. The block-form slab (128 tokens per ``moe_compute`` c
 refuses its one call) matches the reference on every row, and its routed partial is the 128-row worker's per block.
 
 Run:  pytest models/demos/blackhole/qwen38_flash_next/tests/test_moe_tp.py -v -s
-Env:  MODEL_WEIGHTS_DIR, MESH_DEVICE="(1, 4)", QWEN38_CACHE_ROOT (skipped without it); QWEN38_BF4_CORPUS with
-      QWEN38_BF4_CORPUS_VERIFICATION when the experts come from the CPU-staged corpus
+Env:  MODEL_WEIGHTS_DIR, MESH_DEVICE="(1, 4)", QWEN38_CACHE_ROOT (skipped without it)
 """
 
 import os

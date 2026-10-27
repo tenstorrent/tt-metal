@@ -18,7 +18,7 @@ import torch
 from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING
 
 import ttnn
-from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import DIAGNOSTIC_INPUT_TOKEN_ID
+from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import ORACLE_INPUT_TOKEN_ID
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TP_SIZE, replicate_tensor_2d_mesh_mapper
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import LOCAL_VOCAB_SIZE, TOKEN_ROW_SHAPE
 
@@ -57,7 +57,7 @@ REPLAY_LOOP_HOST_IO_CALLS = ("copy_host_to_device_tensor", "from_device", "from_
 # embedding against the host-token path on every coordinate's real and
 # sentinel rows.
 SEQUENTIAL_TRACE_WARM_EMBEDDING_TOKEN_IDS = tuple(
-    DIAGNOSTIC_INPUT_TOKEN_ID + shard * LOCAL_VOCAB_SIZE for shard in range(TP_SIZE)
+    ORACLE_INPUT_TOKEN_ID + shard * LOCAL_VOCAB_SIZE for shard in range(TP_SIZE)
 )
 
 

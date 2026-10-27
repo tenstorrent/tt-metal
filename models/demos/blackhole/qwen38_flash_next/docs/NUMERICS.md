@@ -47,7 +47,7 @@ in the run directory. The records carry their own system turn in their prompt id
   rsqrt scales the fp32 partial, and the gate operand has one bf16 rounding where `gr_read`'s chain has two.
 - **Device sampler**: draws from the same law as the host sampler over the same candidate row.
 - **Images**: tolerance class against the CPU reference; text requests are unchanged with the tower resident.
-- **BF4 experts**: every cached payload is byte-equal to the CPU-staged corpus (`tools/stage_full_bf4_cpu.py`).
+- **BF4 experts**: the cache holds the host packer's bytes; every start re-packs one expert and compares it bitwise.
 
 ## Buffer lifetimes
 

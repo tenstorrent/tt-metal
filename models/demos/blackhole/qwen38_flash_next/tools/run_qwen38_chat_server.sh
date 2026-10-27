@@ -29,8 +29,6 @@
 #   --acceptance-only       replay acceptance, write evidence and stop (requires --acceptance or --acceptance-prompts)
 #   --prepare-only          build the BF4 expert cache (convert the missing layers) and stop; --bf4-stage-limit N
 #                           converts at most N layers per run (resumable)
-#   --bf4-corpus DIR --bf4-corpus-verification FILE
-#                           a CPU-staged corpus (tools/stage_full_bf4_cpu.py) instead of the first-start conversion
 #   --serve-seconds N       stop after N seconds (default: until SIGTERM)
 #   --python PATH           the interpreter that imports ttnn (default: <checkout>/python_env/bin/python)
 #   --validate-only         run the checks and the CPU preparation, do not open the mesh
@@ -58,11 +56,11 @@ readonly REPO_ROOT="$(cd -- "$MODEL_DIR/../../../.." && pwd -P)"
 readonly SERVER="$HERE/qwen38_chat_server.py"
 
 die() { printf 'run_qwen38_chat_server: %s\n' "$*" >&2; exit 2; }
-usage() { sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 profile= instance=0 devices= checkpoint= cache_root= allocated_context=32768 mtp= port=8000 host=0.0.0.0 long_chunks=
 prefill_slab=
-acceptance= acceptance_prompts= require_json_96= acceptance_only= prepare_only= bf4_stage_limit= bf4_corpus= bf4_corpus_verification=
+acceptance= acceptance_prompts= require_json_96= acceptance_only= prepare_only= bf4_stage_limit=
 serve_seconds= python= validate_only= prefill_mode=chunked sampling=1 stall_seconds=300
 agreement_reference= agreement_parts= agreement_items= agreement_full_logits=
 while [[ $# -gt 0 ]]; do
@@ -86,8 +84,6 @@ while [[ $# -gt 0 ]]; do
         --acceptance-only) acceptance_only=1; shift ;;
         --prepare-only) prepare_only=1; shift ;;
         --bf4-stage-limit) bf4_stage_limit=${2-}; shift 2 ;;
-        --bf4-corpus) bf4_corpus=${2-}; shift 2 ;;
-        --bf4-corpus-verification) bf4_corpus_verification=${2-}; shift 2 ;;
         --serve-seconds) serve_seconds=${2-}; shift 2 ;;
         --python) python=${2-}; shift 2 ;;
         --prefill-mode) prefill_mode=${2-}; shift 2 ;;
@@ -107,12 +103,10 @@ done
 [[ -z "$devices" || "$devices" =~ ^[0-9]+,[0-9]+,[0-9]+,[0-9]+$ ]] || die "--devices must be four device nodes, e.g. 4,5,6,7"
 [[ -z "$bf4_stage_limit" || "$bf4_stage_limit" =~ ^[1-9][0-9]*$ ]] || die "--bf4-stage-limit must be a positive integer"
 [[ "$stall_seconds" =~ ^[0-9]+$ ]] || die "--stall-seconds must be a whole number of seconds (0 disables the watchdog)"
-[[ -z "$bf4_corpus" && -z "$bf4_corpus_verification" || -n "$bf4_corpus" && -n "$bf4_corpus_verification" ]] \
-    || die "--bf4-corpus and --bf4-corpus-verification go together"
 [[ -z "$acceptance" || -z "$acceptance_prompts" ]] || die "--acceptance and --acceptance-prompts are alternatives"
 [[ -z "${TT_METAL_HOME:-}" || "$(cd -- "$TT_METAL_HOME" && pwd -P)" == "$REPO_ROOT" ]] \
     || die "TT_METAL_HOME=$TT_METAL_HOME is not this checkout ($REPO_ROOT); unset it or run that checkout's launcher"
-for name in checkpoint cache_root acceptance_prompts bf4_corpus bf4_corpus_verification python agreement_reference agreement_full_logits; do
+for name in checkpoint cache_root acceptance_prompts python agreement_reference agreement_full_logits; do
     [[ -z "${!name}" || "${!name}" == /* ]] || printf -v "$name" '%s/%s' "$PWD" "${!name}"
 done
 cd "$REPO_ROOT"  # from here on the real ttnn package comes first, not the model's own ttnn/
@@ -158,7 +152,6 @@ mkdir -p "$caches/components" "$cache_root/caches/bf4-experts" "$caches/model-io
 export TT_METAL_HOME="$REPO_ROOT"
 export TT_VISIBLE_DEVICES="$visible_devices"
 [[ -z "$descriptor" ]] || export TT_MESH_GRAPH_DESC_PATH="$descriptor"
-export QWEN38_HARDWARE_MODE=diagnostic_non_promoting
 export TT_METAL_TRACE_ALLOC_TRACKING=1
 export TT_METAL_CACHE="$cache_root/jit-cache"
 export TT_METAL_LOGS_PATH="$run_dir/metal-logs"
@@ -199,7 +192,6 @@ fi
 [[ -z "$require_json_96" ]] || args+=(--require-json-96)
 [[ -z "$prepare_only" ]] || args+=(--prepare-only)
 [[ -z "$bf4_stage_limit" ]] || args+=(--bf4-stage-limit "$bf4_stage_limit")
-[[ -z "$bf4_corpus" ]] || args+=(--bf4-corpus "$bf4_corpus" --bf4-corpus-verification "$bf4_corpus_verification")
 [[ -z "$validate_only" ]] || args+=(--validate-only)
 if [[ -n "$agreement_reference" ]]; then
     [[ -n "$sampling" ]] || die "--agreement-reference needs the sampled server (drop --no-sampling)"

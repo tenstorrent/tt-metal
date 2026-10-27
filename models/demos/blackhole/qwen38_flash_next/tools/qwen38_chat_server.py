@@ -56,7 +56,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.evidence_records import (
     write_result,
 )
 from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import (
-    construct_live_decode_diagnostic,
+    construct_live_decode,
     missing_bf4_layers,
 )
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import Qwen38ChatRequestRejected
@@ -2070,20 +2070,6 @@ def _parser() -> argparse.ArgumentParser:
         parser.add_argument(f"--{name}", type=Path, required=True)
     runtime_admission.add_arguments(parser)
     parser.add_argument(
-        "--bf4-corpus",
-        type=Path,
-        default=None,
-        help="a CPU-staged BF4 expert corpus root (tools/stage_full_bf4_cpu.py); without it the production cache "
-        "under --routed-bf4-scratch-root is used and the missing layers are converted on the first start",
-    )
-    parser.add_argument("--bf4-corpus-verification", type=Path, default=None, help="the corpus's verification.json")
-    parser.add_argument(
-        "--bf4-producer-identity",
-        type=Path,
-        default=None,
-        help="JSON with the corpus's expected source_head, runtime and checkpoint (pins what the record claims)",
-    )
-    parser.add_argument(
         "--bf4-stage-limit",
         type=int,
         default=None,
@@ -2353,7 +2339,6 @@ def main() -> int:
 
     for name, expected in (
         ("TT_VISIBLE_DEVICES", hardware_profile.visible_devices),
-        ("QWEN38_HARDWARE_MODE", "diagnostic_non_promoting"),
         ("TT_METAL_TRACE_ALLOC_TRACKING", "1"),
     ):
         if os.environ.get(name) != expected:
@@ -2564,7 +2549,7 @@ def main() -> int:
         if args.prepare_only:
             # The caches only: the builder converts the missing BF4 layers (bounded by --bf4-stage-limit) and the
             # run stops; a later start finds them.  The component and model-I/O caches fill at the first target build.
-            construction = construct_live_decode_diagnostic(
+            construction = construct_live_decode(
                 prepared,
                 mesh_device=mesh,
                 collective_topology=ttnn.Topology.Linear,
@@ -2574,7 +2559,7 @@ def main() -> int:
             )
             missing = missing_bf4_layers(construction.builder)
             report["prepare"] = {
-                "bf4_cache_root": str(construction.production_cache.root),
+                "bf4_cache_root": str(construction.bf4_cache.root),
                 "bf4_admission": construction.bf4_admission,
                 "staged_bf4_layers": [list(slot) for slot in construction.staged_bf4_layers],
                 "missing_bf4_layers": [list(slot) for slot in missing],

@@ -7,9 +7,9 @@ the ``tt/`` torch references beside them, and the transfers between the two.  Th
 tests are the same layers on the mesh.
 
 Env: MODEL_WEIGHTS_DIR (or QWEN38_CHECKPOINT, or HF_MODEL resolved through the local Hugging Face cache) names the
-checkpoint.  QWEN38_CACHE_ROOT is needed only for the routed experts: the BF4 cache under ``<root>/caches/bf4-experts``,
-or the CPU-staged corpus QWEN38_BF4_CORPUS with QWEN38_BF4_CORPUS_VERIFICATION.  GDN and QSA weights are converted
-into ``<root>/caches/<label>/components`` when the root is set and into the test's temporary directory otherwise.
+checkpoint.  QWEN38_CACHE_ROOT is needed only for the routed experts: the BF4 cache under ``<root>/caches/bf4-experts``.
+GDN and QSA weights are converted into ``<root>/caches/<label>/components`` when the root is set and into the test's
+temporary directory otherwise.
 """
 
 from __future__ import annotations
@@ -23,12 +23,8 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.checkpoint import Qwen38Checkpoint
 from models.demos.blackhole.qwen38_flash_next.config import Qwen38Placement
-from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import (
-    Qwen38DiagnosticBF4Cache,
-    prepare_live_decode_diagnostic,
-)
+from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import prepare_live_decode
 from models.demos.blackhole.qwen38_flash_next.tools.runtime_admission import git_identity, sha256_of
-from models.demos.blackhole.qwen38_flash_next.ttnn.bf4 import Qwen38BF4Streamer
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_DEFAULT_QSA_CACHE_CAPACITY, Qwen38TTNNBuilder
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     FABRIC_CONFIG,
@@ -125,7 +121,7 @@ class Qwen38TPHarness:
         """The provenance-bound builder and one built backbone layer.
 
         Skips when QWEN38_CACHE_ROOT is unset or the layer's BF4 record is not in the cache.  The builder is
-        ``construct_live_decode_diagnostic``'s, streamed instead of resident: the layer's experts are loaded for
+        ``construct_live_decode``'s, streamed instead of resident: the layer's experts are loaded for
         the call and released after it (the device component gate's configuration), so no preload of all 48 layers.
         """
 
@@ -133,10 +129,8 @@ class Qwen38TPHarness:
             pytest.skip(
                 "QWEN38_CACHE_ROOT unset: the routed experts need the BF4 expert cache under caches/bf4-experts"
             )
-        corpus_root = os.environ.get("QWEN38_BF4_CORPUS")
-        corpus_verification = os.environ.get("QWEN38_BF4_CORPUS_VERIFICATION")
         extension = Path(ttnn._ttnn.__file__).resolve()
-        prepared = prepare_live_decode_diagnostic(
+        prepared = prepare_live_decode(
             checkpoint_root=self.checkpoint.root,
             component_cache_root=self.component_cache_root,
             routed_bf4_scratch_root=self.caches / "bf4-experts",
@@ -145,8 +139,6 @@ class Qwen38TPHarness:
             runtime_extension=extension,
             runtime_sha256=sha256_of(extension),
             physical_ids=self.contract.physical_ids,
-            bf4_corpus_root=None if corpus_root is None else Path(corpus_root),
-            bf4_corpus_verification=None if corpus_verification is None else Path(corpus_verification),
         )
         builder = Qwen38TTNNBuilder(
             checkpoint=prepared.checkpoint,
@@ -159,15 +151,6 @@ class Qwen38TPHarness:
             expert_residency="streamed",
             qsa_cache_capacity=prepared.qsa_cache_capacity,
         )
-        if prepared.corpus is not None:
-            builder.bf4_cache = Qwen38DiagnosticBF4Cache(
-                production_cache=builder.bf4_cache,
-                corpus=prepared.corpus,
-                artifact_signatures=prepared.artifact_signatures,
-                compatibility=prepared.bf4_consumer_compatibility,
-                mesh_device=self.mesh_device,
-            )
-            builder.expert_streamer = Qwen38BF4Streamer(builder.bf4_cache, self.mesh_device)
         if builder.bf4_cache.verify_layer("backbone", layer_index) is None:
             pytest.skip(
                 f"BF4 expert layer {layer_index} is not in the cache under {self.caches / 'bf4-experts'}; "

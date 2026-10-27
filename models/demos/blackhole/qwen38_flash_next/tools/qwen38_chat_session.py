@@ -40,7 +40,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.evidence_records import Mark
 from models.demos.blackhole.qwen38_flash_next.tools.hardware_profiles import ResidentHardwareProfile
 from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import (
     Qwen38LiveDecodeConstruction,
-    construct_live_decode_diagnostic,
+    construct_live_decode,
 )
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_prefill_driver import (
     Qwen38ChunkPrefill,
@@ -3183,7 +3183,7 @@ def construct_chain(
 ) -> Qwen38TracedChain:
     """Live construction on the open mesh (missing BF4 layers converted first), then the chain open."""
 
-    construction = construct_live_decode_diagnostic(
+    construction = construct_live_decode(
         prepared,
         mesh_device=mesh,
         collective_topology=ttnn.Topology.Linear,
