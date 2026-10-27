@@ -49,9 +49,22 @@ def test_idle_baseline_keeps_out_run_samples(legacy, expect_clean):
     # baseline is the idle current; legacy widens it into the runs, as the published analysis did.
     raw = samples(0, 100, 50.0) + samples(100, 200, 20.0) + samples(200, 300, 50.0)
     runs = [interval("3x2", 0, 100), interval("3x3", 200, 300)]
-    base, count = ember_parser.compute_pause_base_currents(raw, runs, trim_ms=5.0, legacy=legacy)
+    base, count, _settle_ms = ember_parser.compute_pause_base_currents(raw, runs, trim_ms=5.0, legacy=legacy)
     assert count[0] > 0
     assert (base[0] == pytest.approx(20.0)) == expect_clean
+
+
+@pytest.mark.parametrize("legacy, expected", [(False, 20.0), (True, None)])
+def test_idle_baseline_leaves_out_the_ramp_down(legacy, expected):
+    # After a run the current takes a while to settle: 40 A for the first 300 ms of a 1 s pause,
+    # then 20 A idle. Updated mode leaves the ramp-down out; legacy averages all of it.
+    raw = samples(0, 100, 50.0) + samples(100, 400, 40.0) + samples(400, 1100, 20.0) + samples(1100, 1200, 50.0)
+    runs = [interval("3x2", 0, 100), interval("3x3", 1100, 1200)]
+    base, _count, settle_ms = ember_parser.compute_pause_base_currents(raw, runs, trim_ms=1.0, legacy=legacy)
+    if expected is None:
+        assert base[0] > 25.0 and settle_ms[0] == 0.0
+    else:
+        assert base[0] == pytest.approx(expected) and settle_ms[0] == pytest.approx(300.0, abs=2.0)
 
 
 @pytest.mark.parametrize("legacy, expected", [(False, -2.0), (True, 0.0)])

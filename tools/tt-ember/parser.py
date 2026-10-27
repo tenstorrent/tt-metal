@@ -1057,33 +1057,63 @@ def drop_startup_transient(
     # the tolerance meaningful there and stops quantisation noise from looking like a spike.
     tol = max(SETTLE_TOL_FLOOR_A, SETTLE_TOL_MADS * mad)
 
-    t0 = samples[0].ts
-    confirm = timedelta(milliseconds=SETTLE_CONFIRM_MS)
-    cutoff = t0 + timedelta(milliseconds=budget_ms)
+    settled_at = settled_index(samples, steady, tol, budget_ms, SETTLE_CONFIRM_MS)
+    if settled_at is None or settled_at == 0:
+        return samples, 0.0
 
-    settled_at = None
+    removed_ms = (samples[settled_at].ts - samples[0].ts).total_seconds() * 1000.0
+    return samples[settled_at:], removed_ms
+
+
+def settled_index(
+    samples: List[Sample], steady: float, tol: float, budget_ms: float, confirm_ms: float
+) -> Optional[int]:
+    """Index of the first sample, within budget_ms of the first, from which the current stays
+    within tol of steady for confirm_ms; None if there is none."""
+    t0 = samples[0].ts
+    confirm = timedelta(milliseconds=confirm_ms)
+    cutoff = t0 + timedelta(milliseconds=budget_ms)
     for i, s in enumerate(samples):
         if s.ts > cutoff:
             break
         if abs(s.tdc_a - steady) > tol:
             continue
         # Candidate: require every sample within the confirmation run to be settled too.
-        ok = True
-        for t in samples[i:]:
-            if t.ts - s.ts > confirm:
-                break
-            if abs(t.tdc_a - steady) > tol:
-                ok = False
-                break
-        if ok:
-            settled_at = i
-            break
+        if all(abs(t.tdc_a - steady) <= tol for t in samples[i:] if t.ts - s.ts <= confirm):
+            return i
+    return None
 
+
+# drop_pause_settling: the most of a pause it may drop, and how long the current must stay
+# settled (well above the 20 ms sample spacing at the default 50 Hz).
+PAUSE_SETTLE_MAX_FRACTION = 0.6
+PAUSE_SETTLE_CONFIRM_MS = 200.0
+
+
+def drop_pause_settling(samples: List[Sample]) -> Tuple[List[Sample], float]:
+    """Drop the ramp-down at the start of an idle pause.
+
+    The current does not drop to the idle level the moment a run ends: on an n150 it stays near
+    the run's level for about a second (41 A against a 27-29 A idle floor) before it settles.
+    Averaging the whole pause then puts the baseline several amps above idle, and every
+    dynamic current reads low by that much. The idle level is the median of the back half of
+    the pause; leading samples are dropped until the current stays within the tolerance of it
+    for PAUSE_SETTLE_CONFIRM_MS, at most PAUSE_SETTLE_MAX_FRACTION of the pause. If it never
+    settles inside that, nothing is dropped.
+
+    Returns the surviving samples and how many milliseconds were removed.
+    """
+    if len(samples) < SETTLE_MIN_SAMPLES:
+        return samples, 0.0
+    span_ms = (samples[-1].ts - samples[0].ts).total_seconds() * 1000.0
+    back_half = [s.tdc_a for s in samples[len(samples) // 2 :]]
+    steady = float(np.median(back_half))
+    mad = float(np.median([abs(c - steady) for c in back_half]))
+    tol = max(SETTLE_TOL_FLOOR_A, SETTLE_TOL_MADS * mad)
+    settled_at = settled_index(samples, steady, tol, span_ms * PAUSE_SETTLE_MAX_FRACTION, PAUSE_SETTLE_CONFIRM_MS)
     if settled_at is None or settled_at == 0:
         return samples, 0.0
-
-    removed_ms = (samples[settled_at].ts - t0).total_seconds() * 1000.0
-    return samples[settled_at:], removed_ms
+    return samples[settled_at:], (samples[settled_at].ts - samples[0].ts).total_seconds() * 1000.0
 
 
 def samples_in_interval(
@@ -1116,10 +1146,13 @@ def compute_pause_base_currents(
     intervals: List[ProgramInterval],
     trim_ms: float,
     legacy: bool = False,
-) -> Tuple[List[float], List[int]]:
+) -> Tuple[List[float], List[int], List[float]]:
+    """Mean current of each pause between runs, the number of samples it used, and how many ms
+    of ramp-down at the start of the pause were left out (updated mode only)."""
     trim_delta = timedelta(milliseconds=trim_ms)
     pause_base_currents: List[float] = []
     pause_sample_counts: List[int] = []
+    pause_settle_ms: List[float] = []
 
     for i in range(len(intervals) - 1):
         # Shrink the pause by the trim on both sides, away from the runs, so no sample from
@@ -1135,15 +1168,21 @@ def compute_pause_base_currents(
         if next_start <= prev_end:
             pause_base_currents.append(float("nan"))
             pause_sample_counts.append(0)
+            pause_settle_ms.append(0.0)
             continue
 
         pause_samples = samples_in_interval(raw_samples, prev_end, next_start)
+        # Legacy mode averages the whole pause, ramp-down included, as the published analysis did.
+        settle_ms = 0.0
+        if not legacy:
+            pause_samples, settle_ms = drop_pause_settling(pause_samples)
         pause_currents = [s.tdc_a for s in pause_samples]
 
         pause_base_currents.append(safe_mean(pause_currents))
         pause_sample_counts.append(len(pause_samples))
+        pause_settle_ms.append(settle_ms)
 
-    return pause_base_currents, pause_sample_counts
+    return pause_base_currents, pause_sample_counts, pause_settle_ms
 
 
 def attach_dynamic_baseline(
@@ -1322,7 +1361,7 @@ def compute_interval_metrics(
             }
         )
 
-    pause_base_currents, pause_sample_counts = compute_pause_base_currents(
+    pause_base_currents, pause_sample_counts, pause_settle_ms = compute_pause_base_currents(
         raw_samples=raw_samples,
         intervals=intervals,
         trim_ms=trim_ms,
@@ -1339,10 +1378,13 @@ def compute_interval_metrics(
 
     # base_current_a comes from a single reference pause (the one right after the first
     # interval -- see attach_dynamic_baseline). base_pause_samples reports that pause's sample
-    # count on every row, so a thin reference pause shows up as a quality flag for the whole run.
+    # count on every row, so a thin reference pause shows up as a quality flag for the whole run,
+    # and base_pause_settle_ms how much of its start was left out as ramp-down.
     reference_pause_samples = pause_sample_counts[0] if pause_sample_counts else 0
+    reference_settle_ms = pause_settle_ms[0] if pause_settle_ms else 0.0
     for r in results:
         r["base_pause_samples"] = reference_pause_samples
+        r["base_pause_settle_ms"] = reference_settle_ms
 
     return results
 
@@ -1432,6 +1474,7 @@ def save_interval_csv(results: List[Dict[str, object]], csv_path: Path) -> None:
         "dynamic_charge_peak_as",
         "dynamic_charge_peak_mah",
         "base_pause_samples",
+        "base_pause_settle_ms",
         "settle_trim_ms",
     ]
 

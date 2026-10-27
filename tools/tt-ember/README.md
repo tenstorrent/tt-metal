@@ -40,8 +40,8 @@ scripts alike: `updated` (the default) or `legacy`, which reproduces how the pub
 results were measured. Every script inherits it from the environment, so to recreate those
 results run `export LONG_MATMUL_MODE=legacy` first. `parser.py` also takes `--mode`. See
 `long_matmul`'s README for what each mode changes in the workload; in the analysis, `legacy`
-keeps the idle-pause window widened by the trim, floors dynamic current at 0, and uses the
-trimmed window for pJ/FLOP.
+keeps the idle-pause window widened by the trim and averages all of it, including the ramp-down
+after a run, floors dynamic current at 0, and uses the trimmed window for pJ/FLOP.
 
 The mode does not change the telemetry rate. The published captures polled every 50 us; to
 match them (and so the peak-current figures, which are maxima over the samples), pass
@@ -98,7 +98,7 @@ It returns the app's or the parser's exit code when one of them fails, and its o
 
 ### `parser.py` — Analysis Engine
 
-Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 29-column CSV, and produces 13 matplotlib figures (with `--program-log`; without it, only `telemetry_overview.png`). It exits with code 10 when the outputs are written but a run is unusable (a grid with no telemetry samples, no idle pause to measure the base current in, or lost profiler markers), and with code 11 for telemetry from several devices unless `--device-id` says which one to use.
+Can be run standalone against a previously captured telemetry log. Parses raw voltage, current, and power samples, bins them into time slots, computes per-interval metrics, writes a 30-column CSV, and produces 13 matplotlib figures (with `--program-log`; without it, only `telemetry_overview.png`). It exits with code 10 when the outputs are written but a run is unusable (a grid with no telemetry samples, no idle pause to measure the base current in, or lost profiler markers), and with code 11 for telemetry from several devices unless `--device-id` says which one to use.
 
 ```bash
 python3 parser.py \
@@ -236,7 +236,7 @@ output_root/subdir/
   summary.txt                      application stdout
   launcher.log                     auto.py orchestration log
   run_complete.json                written last, once the run succeeded; its settings
-  program_intervals.csv            per-interval metrics (29 columns)
+  program_intervals.csv            per-interval metrics (30 columns)
   Figures/
     telemetry_overview.png         3-panel time series: VCORE / TDC / TDP
     duration_vs_avg_current.png
@@ -281,7 +281,7 @@ The correlation between power measurements and program intervals relies entirely
 
 ### Metric Definitions
 
-**Base current** (`base_current_a`) is the mean TDC measured during the 5-second idle pause after the first program interval, used as one fixed reference for every interval of the run. It represents the irreducible power floor of the system — memory retention, voltage regulator overhead, clocking infrastructure, and thermal management — and is used to isolate the compute contribution from all other metrics.
+**Base current** (`base_current_a`) is the mean TDC measured during the 5-second idle pause after the first program interval, used as one fixed reference for every interval of the run. The current takes about a second after a run to settle to the idle level, so the default `updated` mode leaves that ramp-down out (at most 60% of the pause, reported as `base_pause_settle_ms`); `legacy` averages the whole pause, as the published analysis did. It represents the irreducible power floor of the system — memory retention, voltage regulator overhead, clocking infrastructure, and thermal management — and is used to isolate the compute contribution from all other metrics.
 
 **Duration** (`window_s`) is the wall-clock length of the trimmed measurement window. `sample_count` records how many telemetry samples fall within it and serves as a quality indicator.
 
