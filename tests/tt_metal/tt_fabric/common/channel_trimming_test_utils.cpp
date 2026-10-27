@@ -51,7 +51,8 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
         connection_dst = FabricNodeId(src_fabric_node_id.mesh_id, first_hop_neighbors[0]);
     }
 
-    const auto& available_links = get_forwarding_link_indices(src_fabric_node_id, connection_dst);
+    const auto& available_links = get_forwarding_link_indices(
+        *BaseFabricFixture::devices_map_.at(src_physical), src_fabric_node_id, connection_dst);
     if (available_links.empty()) {
         return UnicastTrafficResult{{}, {}, FabricNodeId(MeshId{0}, 0), FabricNodeId(MeshId{0}, 0), 0, true};
     }
