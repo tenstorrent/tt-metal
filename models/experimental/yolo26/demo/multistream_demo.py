@@ -314,7 +314,11 @@ def ring_views(shm, slots, batch):
 
 
 def prep_worker(rank, workers, args, layout, shm_name, slots, free_q, work_q, ready_q, start, t0, stop):
-    """Letterbox the current frame of each stream of this worker's passes into free ring slots, paced at --fps."""
+    """
+    Letterbox the current frame of each stream of this worker's passes into free ring slots, paced at --fps. Pass b
+    of a tick is captured b / passes of a tick after the tick starts (like free-running cameras), unless
+    --synchronized-capture, where all streams are captured at the start of the tick.
+    """
     per_chip, B, chips = layout
     clips = load_clips(args.videos, per_chip, args.max_frames)
     table = stream_table(clips, chips * per_chip, chips)
@@ -325,15 +329,16 @@ def prep_worker(rank, workers, args, layout, shm_name, slots, free_q, work_q, re
     ready_q.put(rgba[0][0].shape[:2])
     start.wait()
     period = 1.0 / args.fps
+    passes = per_chip // B
     tick = 0
-    mine = [b for b in range(per_chip // B) if b % workers == rank]
+    mine = [b for b in range(passes) if b % workers == rank]
     while not stop.is_set():
-        due = t0.value + tick * period
-        now = time.perf_counter()
-        if due > now:
-            time.sleep(due - now)
-        captured = time.perf_counter()
         for b in mine:
+            due = t0.value + tick * period + (0 if args.synchronized_capture else b * period / passes)
+            now = time.perf_counter()
+            if due > now:
+                time.sleep(due - now)
+            captured = time.perf_counter()
             while True:
                 try:
                     slot = free_q.get(timeout=0.5)
@@ -426,64 +431,82 @@ class PrepPool:
 
 def render_process(make_display, args, num_streams, chips, render_q, ready_q):
     """
-    Separate process: draw the newest completed tick (older ones are skipped if drawing falls behind), serve MJPEG,
-    record. make_display(args, num_streams, chips) gives an object with canvas, tile(s, frame_idx, dets, fps) and
+    Separate process: as soon as results arrive (merging any that queued meanwhile), their tiles are drawn and the
+    mosaic is composed and published as MJPEG; the latest mosaic is recorded on a fixed --fps clock (real-time video).
+    On-screen latency is per result: capture of a tile's frame to the publication of the first mosaic showing it.
+    make_display(args, num_streams, chips) gives an object with canvas, tile(s, frame_idx, dets, fps) and
     panel(stats, counts).
     """
     display = make_display(args, num_streams, chips)
     mjpeg = Mjpeg(args.port) if args.port else None
     writer = Recorder(args.record, display.canvas.shape[1], display.canvas.shape[0], args.fps) if args.record else None
     ready_q.put("ready")
-    latencies, shown, all_latencies = deque(maxlen=200), deque(), []
-    t_start = last = None
+    period = 1.0 / args.fps
+    counts, captured = [0] * num_streams, [None] * num_streams
+    stats, recent, all_latencies, composed = {}, deque(maxlen=20 * num_streams), [], deque()
+    recorded, next_record, last = 0, None, None
+    shown = {"latency_ms": 0.0, "display_fps": 0.0}  # renderer-side stats, carried across updates
     finished = False
     while not finished:
-        msg = render_q.get()
+        timeout = None if next_record is None else max(0.0, next_record - time.perf_counter())
+        msgs = []
         try:
-            while msg is not None:
-                newer = render_q.get_nowait()
-                if newer is None:
-                    finished = True
-                    break
-                msg = newer
+            msgs.append(render_q.get(timeout=timeout))
+            while True:
+                msgs.append(render_q.get_nowait())
         except queue.Empty:
             pass
-        if msg is None:
-            break
-        captured, latest, fps, stats = msg
-        for s, r in enumerate(latest):
-            if r is not None:
-                display.tile(s, r[0], r[1], fps[s])
+        fresh = set()
+        for msg in msgs:
+            if msg is None:
+                finished = True
+                break
+            updates, stats = msg
+            for s, frame_idx, dets, fps, cap in updates:
+                display.tile(s, frame_idx, dets, fps)
+                counts[s], captured[s] = len(dets), cap
+                fresh.add(s)
+        if fresh and "stream_fps" in stats:
+            display.panel({**stats, **shown}, counts)
+            if mjpeg:
+                mjpeg.publish(cv2.imencode(".jpg", display.canvas, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes())
+            now = time.perf_counter()
+            ages = [(now - captured[s]) * 1000 for s in fresh]
+            recent.extend(ages)
+            all_latencies.extend(ages)
+            shown["latency_ms"] = float(np.median(recent))
+            composed.append(now)
+            while now - composed[0] > 2.0:
+                composed.popleft()
+            shown["display_fps"] = len(composed) / min(2.0, max(now - composed[0], period))
+            last = display.canvas
+            next_record = next_record or now
         now = time.perf_counter()
-        t_start = t_start or now
-        latencies.append((now - captured) * 1000)
-        all_latencies.append(latencies[-1])
-        shown.append(now)
-        while now - shown[0] > 2.0:
-            shown.popleft()
-        stats["latency_ms"] = float(np.median(latencies))
-        stats["display_fps"] = len(shown) / (min(2.0, now - t_start) or 1e-3)
-        display.panel(stats, [len(r[1]) if r else 0 for r in latest])
-        if mjpeg:
-            mjpeg.publish(cv2.imencode(".jpg", display.canvas, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes())
-        if writer:
-            writer.write(display.canvas)
-        last = display.canvas
+        if next_record is not None and now >= next_record and last is not None:
+            if writer:
+                writer.write(last)
+            recorded += 1
+            next_record += period
+            if next_record < now:  # fell behind: skip instead of bursting
+                next_record = now + period
     if writer:
         writer.close()
     if args.snapshot and last is not None:
         cv2.imwrite(args.snapshot, last)
-    ready_q.put((float(np.median(all_latencies)) if all_latencies else 0.0, len(all_latencies)))
+    ready_q.put((float(np.median(all_latencies)) if all_latencies else 0.0, recorded))
 
 
-def run_device_loop(device, runner, out_list, prep_q, post_q, t_end, images_per_batch):
+def run_device_loop(device, runner, out_list, prep_q, post_q, t_end, images_per_batch, wait_next=0.0):
     """
     Run queued host batches until t_end. prep_q items end with the host input tensor; each item is handed to post_q
     with the host outputs in place of the input once their read has finished.
 
-    CQ1 uploads the next batch while CQ0 runs the trace; outputs go DRAM -> host on CQ1. When the next batch is not
-    ready yet (end of a tick), the device would idle anyway: the current batch is read first and both outstanding
-    batches are handed over before waiting, instead of holding them until the next tick's input arrives.
+    CQ1 uploads the next batch while CQ0 runs the trace; outputs go DRAM -> host on CQ1, queued after the next
+    upload so that the upload overlaps the current trace. A batch is handed over as soon as the trace after it is
+    queued (not after the next input arrives). If no next batch arrives within wait_next seconds (end of a tick), the
+    device would idle anyway: the current batch is read and handed over before waiting. With staggered capture, wait_next
+    of one capture interval keeps the upload-first order (a read queued first would hold the upload until the trace
+    ends).
     """
     staging, l1_input = runner.tt_image_res, runner.input_tensor
     read_event = ttnn.record_event(device, 1)
@@ -502,19 +525,24 @@ def run_device_loop(device, runner, out_list, prep_q, post_q, t_end, images_per_
         dram = [ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG) for t in out_list]
         last_op_event = ttnn.record_event(device, 0)
 
+        # Hand the previous batch over now, before waiting for the next input: its read was queued last iteration
+        # and this trace is already queued behind it, so the device stays busy while the host waits
+        if in_flight is not None:
+            ttnn.event_synchronize(in_flight[0])
+            post_q.put(in_flight[1])
+            in_flight = None
+
         current = item
         try:
-            item = prep_q.get_nowait()
+            item = prep_q.get(timeout=wait_next) if wait_next > 0 else prep_q.get_nowait()
         except queue.Empty:
             item = None
         if item is None:
             ttnn.wait_for_event(1, last_op_event)
             host = [ttnn.from_device(t, blocking=False, cq_id=1) for t in dram]
             read_event = ttnn.record_event(device, 1)
-            for event, done in ([in_flight] if in_flight else []) + [(read_event, current[:-1] + (host,))]:
-                ttnn.event_synchronize(event)
-                post_q.put(done)
-            in_flight = None
+            ttnn.event_synchronize(read_event)
+            post_q.put(current[:-1] + (host,))
             item = prep_q.get()
             ttnn.wait_for_event(1, first_op_event)
             ttnn.copy_host_to_device_tensor(item[-1], staging, 1)
@@ -527,11 +555,6 @@ def run_device_loop(device, runner, out_list, prep_q, post_q, t_end, images_per_
             ttnn.wait_for_event(1, last_op_event)
             host = [ttnn.from_device(t, blocking=False, cq_id=1) for t in dram]
             read_event = ttnn.record_event(device, 1)
-
-            # Hand the previous batch's outputs over once their read has finished (the current trace runs meanwhile)
-            if in_flight is not None:
-                ttnn.event_synchronize(in_flight[0])
-                post_q.put(in_flight[1])
             in_flight = (read_event, current[:-1] + (host,))
         processed += images_per_batch
     if in_flight is not None:
@@ -552,7 +575,7 @@ def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, 
 
     pool = PrepPool(args, per_chip, chips, B, args.prep_workers)
     ctx = mp.get_context("spawn")
-    render_q, ready_q = ctx.Queue(maxsize=8), ctx.Queue()
+    render_q, ready_q = ctx.Queue(), ctx.Queue()  # every pass's update is applied, so none may be dropped
     renderer = ctx.Process(
         target=render_process, args=(make_display, args, num_streams, chips, render_q, ready_q), daemon=True
     )
@@ -570,7 +593,13 @@ def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, 
     runner.capture_trace_2cq()
     shapes = [(h, w) for _, h, w in infra.output_tensor["boxes"]]
     anchors, strides = anchor_grid(SIZE)
-    ready_q.get()
+    while True:  # the renderer loads and resizes its clips meanwhile; stop if it died
+        try:
+            ready_q.get(timeout=5)
+            break
+        except queue.Empty:
+            if not renderer.is_alive():
+                raise RuntimeError("render process exited during start-up (see its traceback above)")
 
     prep_q = queue.Queue(maxsize=2 * nb)
     post_q = queue.Queue()  # decode keeps up easily; unbounded so the device loop never waits
@@ -579,8 +608,7 @@ def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, 
     letterbox = Letterbox(*pool.src_hw, SIZE)
 
     def post():
-        """Decode every pass and free its ring slot; when a tick's nb passes are in, send it to the renderer."""
-        latest = [None] * num_streams
+        """Decode every pass, free its ring slot and send its streams' results to the renderer."""
         updates = [deque() for _ in range(num_streams)]
         pending, done_ticks, images = {}, deque(), deque()
         while (item := post_q.get()) is not None:
@@ -591,13 +619,17 @@ def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, 
             now = time.perf_counter()
             if captured - t_start > 2.0:
                 pass_latency[b].append((now - captured) * 1000)
+            sent = []
             for j, s in enumerate(ids):
                 src = letterbox.to_source(people[j][:, :4]) if len(people[j]) else np.zeros((0, 4))
-                latest[s] = (frame_idx[j], np.concatenate((src, people[j][:, 4:]), 1) if len(people[j]) else [])
+                dets = np.concatenate((src, people[j][:, 4:]), 1) if len(people[j]) else []
                 u = updates[s]
                 u.append(now)
                 while now - u[0] > 1.0:
                     u.popleft()
+                fps = (len(u) - 1) / (u[-1] - u[0]) if len(u) > 1 and u[-1] > u[0] else 0.0
+                sent.append((s, frame_idx[j], dets, fps, captured))
+            render_q.put((sent, dict(stats)))
             images.append((now, mesh_batch))
             pending[tick] = pending.get(tick, 0) + 1
             if pending[tick] < nb:
@@ -610,11 +642,6 @@ def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, 
                 images.popleft()
             window = min(2.0, now - t_start) or 1e-3
             stats.update(stream_fps=len(done_ticks) / window, total_fps=sum(n for _, n in images) / window)
-            fps = [(len(u) - 1) / (u[-1] - u[0]) if len(u) > 1 and u[-1] > u[0] else 0.0 for u in updates]
-            try:
-                render_q.put_nowait((captured, list(latest), fps, dict(stats)))
-            except queue.Full:
-                pass
 
     poster = threading.Thread(target=post, daemon=True)
     poster.start()
@@ -623,7 +650,11 @@ def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, 
 
     processed = 0
     try:
-        processed = run_device_loop(device, runner, [infra.packed], prep_q, post_q, t_start + args.duration, mesh_batch)
+        # staggered capture: the next batch is due one capture interval after the current one
+        wait_next = 0.0 if args.synchronized_capture else 1.0 / (args.fps * nb)
+        processed = run_device_loop(
+            device, runner, [infra.packed], prep_q, post_q, t_start + args.duration, mesh_batch, wait_next
+        )
     finally:
         elapsed = time.perf_counter() - t_start
         post_q.put(None)
@@ -642,7 +673,7 @@ def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, 
             f"{num_streams} streams on {chips} chip(s), target {args.fps} FPS each: processed {processed} images in "
             f"{elapsed:.1f} s = {processed / elapsed:.1f} images/s = {processed / elapsed / num_streams:.1f} FPS per "
             f"stream; last window {stats}; capture-to-results median per pass (chip 1 cameras): {groups}; "
-            f"on screen (median ms, frames shown): {shown}"
+            f"on screen per tile (median ms, frames recorded): {shown}"
         )
         runner.release()
 
@@ -659,6 +690,11 @@ def add_common_args(ap):
     ap.add_argument("--port", type=int, default=8090, help="MJPEG port, 0 = off")
     ap.add_argument("--record", default="", help="record the mosaic to this .mp4")
     ap.add_argument("--snapshot", default="", help="save the last mosaic frame to this .jpg")
+    ap.add_argument(
+        "--synchronized-capture",
+        action="store_true",
+        help="capture all streams at the start of each tick (default: each pass's cameras at their own phase)",
+    )
 
 
 def main():

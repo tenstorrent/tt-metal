@@ -50,6 +50,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0028 | 80 streams × 30 FPS on all 4 QB2 chips (same 20 clips on each chip), live demo + recording | 2026-10-27 | DONE: dp=4 mesh, batch 4/chip, outputs packed on device, host prep in worker processes: 2399.2 images/s = 30.0 FPS per stream for 60 s with recording; ceiling 2598.5 images/s (32.5 FPS/stream); capture hang hit 2× (OPEN, see YOLO26-0025) |
 | YOLO26-0029 | Per-camera-group latency of the multiplexed demo; cut it | 2026-10-27 | DONE (1 chip): CAM 17-20 46.9 → 39.6 ms, on screen 50.9 → 43.4 ms at 600 images/s; 4 chips: on screen 57-61 ms, unchanged within noise (device at ~92 % of its ceiling) |
 | YOLO26-0030 | Batch > 4 on one chip using DRAM (8 / 16 / 20); does 20 streams x 30 FPS hold at batch 20? | 2026-10-27 | DONE (branch yolov26_dram_batch): hybrid grouped forward, model-only b8 731.3 / b16 729.8 / b20 716.4 FPS vs b4 683.1, PCC intact; demo at b20 29.9 FPS but 108 ms latency (b4: 30.0 FPS, 39 ms) |
+| YOLO26-0031 | Cut end-to-end latency of the 1-chip 20-stream demo further | 2026-10-27 | DONE: capture-to-results 10.9 ms for every camera (was 17-40 ms by group), on screen 23.2 ms (was 43.4), 30.0 FPS kept; staggered capture, earlier hand-over, event-driven render |
 
 ## Entries
 
@@ -930,3 +931,45 @@ INFERRED: at a paced 30 FPS a tick's 20 frames exist only when the tick starts, 
 8-channel input) cannot overlap the previous pass; upload + a ~28 ms pass fill the 33.3 ms tick, the queue fills and
 latency rises to ~3 ticks. The +5 % ceiling only shows when inputs queue ahead (as with `--fps 40`). Batch 4 keeps
 30 FPS with less than half the latency; batch 8 (if the stream count is a multiple of 8) would be the next to try.
+
+### YOLO26-0031 — 1-chip demo latency, second round (appended 2026-10-27)
+
+Scope: 1 chip only (user decision during this entry). METHOD: `multistream_demo.py`, yolo26s, batch 4, 20 streams ×
+30 FPS, 30 s, chip reset before each run; per-pass capture-to-results medians from the demo's summary log; recording
+on unless noted.
+
+Changes and MEASURED effect (capture-to-results by camera group; on screen):
+1. Staggered capture (`prep_worker`): pass b of a tick is captured b / 5 of a tick after the tick starts, like
+   free-running cameras; `--synchronized-capture` keeps the old behaviour. With an unchanged device loop: no effect
+   on throughput.
+2. REFUTED: device loop with uploads alone on CQ1 and trace + read on CQ0 (read the packed output directly). 586.4
+   images/s = 29.3 FPS, every group 118-121 ms in both capture modes: a read on CQ0 holds CQ0 until the host has
+   taken the data (~0.7 ms per pass more), which saturates the chip. Reverted.
+3. Bounded wait for the next batch (`wait_next` = one capture interval, 6.7 ms, when staggered): the read stays
+   queued after the next upload, so uploads keep overlapping traces. Staggered: every group 16.3-16.6 ms, 30.0 FPS.
+   Synchronized: 14.4 → 35.8 ms by group (as before).
+4. Hand over the previous batch as soon as the current trace is queued, not after the next input arrives (READ: a
+   result ready ~9 ms after capture waited in the loop until the next batch had arrived and been uploaded).
+   Staggered: CAM 01-04 10.8, 05-08 10.6, 09-12 10.8, 13-16 11.4, 17-20 11.1 ms; synchronized 16.9 → 36.3 ms.
+5. Renderer: tiles update per pass as results arrive (no waiting for a whole tick); the mosaic is composed and
+   published whenever new results are in (merging those queued meanwhile) and recorded on a fixed 30 FPS clock.
+   On-screen latency is now measured per result, from its capture to the publication (after JPEG encode) of the
+   first mosaic showing it. Earlier on-screen numbers (YOLO26-0026..0030) were taken per tick before the encode and
+   from the last group's capture, so they are not comparable one-to-one.
+   - Intermediate, fixed 60 Hz composition, measured before encode: 19.6 ms (not comparable, superseded).
+   - Final (`scratchpad/lat_v6.*`): 18000 images in 30.0 s = 599.9 images/s = 30.0 FPS; capture-to-results
+     10.7-11.5 ms by group; on screen 23.2 ms; 924 frames recorded in 30.8 s (real time); live view composed
+     ~121 times/s.
+6. Prep split per image across workers (every worker letterboxes part of every pass): 1 chip, 4 workers 16.5 /
+   24.8 ms, 2 workers 16.6 / 24.1 ms vs 16.7 / 25.9 ms with whole passes per worker (before change 4): no gain on
+   1 chip; reverted to whole passes per worker (kept as `scratchpad/bench/ms_split_prep.py`).
+
+Also: start-up now raises if the render process dies before it is ready (a renderer that failed to bind port 8090,
+right after a killed run, left the main process waiting until the 540 s timeout).
+
+Summary (1 chip, 20 × 30 FPS, MEASURED): before this entry CAM 01-04 17.3 … CAM 17-20 39.6 ms, on screen 43.4 ms
+(old method); after, 10.7-11.5 ms for every camera, on screen 23.2 ms (per-result method). INFERRED remaining
+budget: ~6.1 ms trace + upload / copy / read / decode ≈ 4.8 ms to results; on screen + ~12 ms for transfer to the
+renderer, tile + panel drawing (~2 ms) and the 2340×1152 JPEG encode (~6 ms).
+Not re-measured on 4 chips with these changes (`multichip_demo.py` shares the pipeline; earlier this entry, 4 chips
+with changes 1-3: 26.5 ms to results, 36.4 ms on screen).
