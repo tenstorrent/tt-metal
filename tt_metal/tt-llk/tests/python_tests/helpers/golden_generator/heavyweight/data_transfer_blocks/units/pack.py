@@ -72,10 +72,15 @@ class Pack:
         The unpack side has ``Unpack.is_valid_src_format`` for the mirror of
         this. Without it a Float16 Dest packed to Float32, or an Int32 Dest
         packed to a float, returns bytes that decode to believable numbers for
-        a conversion the hardware refuses to perform. Narrowing on the way out
-        is the ordinary case and always legal -- a Float32 Dest reaches every
-        float and MX format; it is *widening*, and crossing between integer
-        and float, that the packer cannot do.
+        a conversion the hardware refuses to perform.
+
+        Narrowing out is the ordinary case -- a Float32 Dest reaches every
+        float and MX format. What the packer will not do is upcast to a 32-bit
+        output, so no 16-bit Dest produces Float32, or cross between integer
+        and float. The integer rows are tighter than either rule implies and
+        are worth reading rather than inferring: Int32 reaches Int8 and UInt8
+        but *not* Int16, and Int16 and the 8-bit formats reach only
+        themselves.
         """
         if not self.to_l1_formats:
             return
