@@ -507,10 +507,13 @@ struct SDPATestConfig {
     float result_rtol = 2e-2F;
     float intermediate_atol = 2e-2F;
     float intermediate_rtol = 2e-2F;
+    bool return_intermediates = true;
+    std::optional<uint32_t> seed;  // input RNG seed; unset = fresh from the context generator
     std::string test_name = "SDPA Test";
 };
 
-void run_sdpa_test(const SDPATestConfig& config) {
+// kernel_output, when given, receives the kernel's output so callers can compare runs with each other.
+void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_output = nullptr) {
     using namespace ttml;
 
     ASSERT_GT(config.num_query_heads, 0U) << "num_query_heads must be greater than zero";
@@ -525,8 +528,7 @@ void run_sdpa_test(const SDPATestConfig& config) {
     const uint32_t head_dim_kv = config.key_value_dim / config.num_key_heads;
     const uint32_t head_dim_v = effective_value_dim / config.num_key_heads;
 
-    auto& rng = ttml::autograd::ctx().get_generator();
-    uint32_t seed = rng();
+    const uint32_t seed = config.seed.has_value() ? config.seed.value() : ttml::autograd::ctx().get_generator()();
 
     const std::array<std::size_t, 4> query_shape{
         config.batch_size, config.num_query_heads, config.sequence_length, head_dim_q};
@@ -566,7 +568,7 @@ void run_sdpa_test(const SDPATestConfig& config) {
     auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
     auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
     auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
-    const bool return_intermediates = true;
+    const bool return_intermediates = config.return_intermediates;
 
     // For Causal mask_type: kernel generates mask on-the-fly, we pass std::nullopt
     // For Arbitrary mask_type: we pass attn_mask tensor to kernel
@@ -594,7 +596,16 @@ void run_sdpa_test(const SDPATestConfig& config) {
         config.program_config);
     xt::xarray<float> result_xtensor =
         core::to_xtensor(result[0].value());  // Kernel returns (B, H, S, D) - heads NOT fused
-    xt::xarray<float> interm_xtensor = core::to_xtensor(result[1].value());
+    if (kernel_output != nullptr) {
+        *kernel_output = result_xtensor;
+    }
+    xt::xarray<float> interm_xtensor;
+    if (return_intermediates) {
+        ASSERT_TRUE(result[1].has_value()) << "intermediates requested but not returned in " << config.test_name;
+        interm_xtensor = core::to_xtensor(result[1].value());
+    } else {
+        ASSERT_FALSE(result[1].has_value()) << "intermediates returned although not requested in " << config.test_name;
+    }
 
     // Run composite SDPA implementation with split tensors - output is (B, H, S, D)
     // Composite always needs the mask tensor for comparison (even when kernel generates it on-the-fly)
@@ -674,14 +685,17 @@ void run_sdpa_test(const SDPATestConfig& config) {
     ASSERT_EQ(result_xtensor.shape(), float_result.shape()) << "Kernel result shape mismatch in " << config.test_name;
     ASSERT_EQ(composite_result_xtensor.shape(), float_result.shape())
         << "Composite result shape mismatch in " << config.test_name;
-    ASSERT_EQ(interm_xtensor.shape(), float_intermediates.shape())
-        << "Intermediate shape mismatch in " << config.test_name;
+    if (return_intermediates) {
+        ASSERT_EQ(interm_xtensor.shape(), float_intermediates.shape())
+            << "Intermediate shape mismatch in " << config.test_name;
+    }
 
     // Compute MSE for validation
     float mse_kernel_vs_composite = compute_mse(result_xtensor, composite_result_xtensor);
     float mse_kernel_vs_float = compute_mse(result_xtensor, float_result);
     float mse_composite_vs_float = compute_mse(composite_result_xtensor, float_result);
-    float mse_kernel_vs_composite_interm = compute_mse(interm_xtensor, composite_interm_xtensor);
+    float mse_kernel_vs_composite_interm =
+        return_intermediates ? compute_mse(interm_xtensor, composite_interm_xtensor) : 0.0F;
 
     // Primary validation: Kernel vs Composite (most reliable - both use same implementation approach)
     EXPECT_TRUE(xt::allclose(result_xtensor, composite_result_xtensor, config.result_atol, config.result_rtol))
@@ -702,10 +716,12 @@ void run_sdpa_test(const SDPATestConfig& config) {
             << "Composite vs Float result comparison failed in " << config.test_name
             << " (MSE: " << mse_composite_vs_float << ")";
 
-        EXPECT_TRUE(
-            xt::allclose(interm_xtensor, float_intermediates, config.intermediate_atol, config.intermediate_rtol))
-            << "Intermediate result comparison failed in " << config.test_name;
-    } else {
+        if (return_intermediates) {
+            EXPECT_TRUE(
+                xt::allclose(interm_xtensor, float_intermediates, config.intermediate_atol, config.intermediate_rtol))
+                << "Intermediate result comparison failed in " << config.test_name;
+        }
+    } else if (return_intermediates) {
         // Float implementation unreliable, compare intermediates between kernel and composite instead
         EXPECT_TRUE(
             xt::allclose(interm_xtensor, composite_interm_xtensor, config.intermediate_atol, config.intermediate_rtol))
@@ -1459,12 +1475,33 @@ void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sw
         SDPATestConfig config = base;
         config.program_config = {
             .q_chunk_size = knobs.q_chunk_size,
+// Every chunking computes the same fp32 math in a different order and rounds once to bf16, so besides the
+// reference checks each row is held against the default pick: a mean absolute gap of 5e-4 is a few
+// bf16 ULP at the ~0.03-0.1 output magnitudes here, where the 2e-2 reference tolerance would let a
+// uniform few-percent rescale error through.
+constexpr float kCrossChunkingMeanAbsTol = 5e-4F;
+
             .k_chunk_size = knobs.k_chunk_size,
+    if (!base.seed.has_value()) {
+        base.seed = ttml::autograd::ctx().get_generator()();  // every row sees the same inputs
+    }
+    xt::xarray<float> default_output;
+    {
+        SDPATestConfig config = base;
+        config.program_config = {};
+        config.test_name = base.test_name + "_default";
+        SCOPED_TRACE(config.test_name);
+        run_sdpa_test(config, &default_output);
+    }
             .heads_per_item = knobs.heads_per_item};
         config.test_name =
             fmt::format("{}_q{}_k{}_h{}", base.test_name, knobs.q_chunk_size, knobs.k_chunk_size, knobs.heads_per_item);
         SCOPED_TRACE(config.test_name);
-        run_sdpa_test(config);
+        xt::xarray<float> output;
+        run_sdpa_test(config, &output);
+        const float mean_abs_gap = xt::mean(xt::abs(output - default_output))();
+        EXPECT_LT(mean_abs_gap, kCrossChunkingMeanAbsTol)
+            << config.test_name << " differs from the default chunking by " << mean_abs_gap << " on average";
     }
 }
 
