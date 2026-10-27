@@ -27,7 +27,7 @@
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
 
-// The fabric manifest's model. The collector fills in what the router builders know. The chip pass resolves each
+// The fabric manifest's model. The router pass fills in what the router builders know. The topology pass resolves each
 // router's channels against ControlPlane, the cluster and the chip's other routers, and builds the meshes. The
 // describe file fills the run, fabric, arch and types, and the writer turns the whole model into JSON.
 namespace tt::tt_fabric::manifest {
