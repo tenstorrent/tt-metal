@@ -155,6 +155,19 @@ notes:
     this golden has per-chunk dumps only for its step_dump_layers; any test that reads a non-step layer''s per-chunk dump
     or block input must use what the golden has for that layer (final state, kv_cache), never skip a layer. Report in your
     commit message: the derived values on both specs, and per test which layers are compared fully vs on the final state.'
+- id: OV-16
+  tasks:
+  - K.1
+  status: open
+  t: '2026-10-27T23:40:06'
+  text: 'OWNER DECISION B (2026-10-27): test_adapter_acks'' window_kv check compares every layer''s window KV on the positions
+    the reference drift measures (drift-s10240.json contract_state_window_kv_L*: the final ring = the LAST 128 positions),
+    with that drift''s limit; today it compares all positions against a limit derived from the last 128 only (L20 0.981
+    vs 0.990; L21, L24 similar). Accuracy over all positions stays covered by the ladder''s per-layer err. Change only the
+    compared positions, never a limit or a golden. K.1''s paths now include tests/bringup/contract. Status: test_runner_smoke
+    PASSED 23:18 on this tree (Paris through tt-d-gen; the stand-in decode hang was the test''s mesh opened without the
+    fabric router config, fixed by harness.open_mesh F202): do not touch test_runner_smoke.py; test_contract / test_kv_layout
+    passed before (19:20).'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
