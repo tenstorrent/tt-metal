@@ -39,6 +39,7 @@ the ``TtDecoderLayer`` v1 sequence-parallel form); ``decode_forward`` runs one r
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -49,6 +50,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.dsa import (
+    HostLatentCache,
     SparseDecodeMeta,
     TtDSA,
     TtLatentCache,
@@ -151,16 +153,22 @@ class TtMTPBlock(LightweightModule):
                 weight_cache_path=weight_cache_path,
             )
         )
-        # the MTP's own autoregressive state: latent cache + pooled-key index (``TtLatentCache.index``)
-        self.cache = TtLatentCache(
-            device,
-            cfg,
-            max_batch=max_batch,
-            max_seq_len=max_seq_len,
-            block_size=block_size,
-            mesh=self.mesh,
-            partition_users=partition_users,
-        )
+        # the MTP's own autoregressive state: latent cache + pooled-key index (``TtLatentCache.index``). cache_only (the
+        # prefill server, one user): the latent rows go to host memory (``HostLatentCache``: the replicated 1 GiB per
+        # chip at 1 M positions ran the server's 1 M warm-up out of DRAM, G53F-0227); GLM53F_MTP_HOST_LATENT=0 keeps
+        # the device cache (the A/B of the two)
+        if cache_only and max_batch == 1 and os.environ.get("GLM53F_MTP_HOST_LATENT", "1") == "1":
+            self.cache = HostLatentCache(device, cfg, max_seq_len=max_seq_len, block_size=block_size, mesh=self.mesh)
+        else:
+            self.cache = TtLatentCache(
+                device,
+                cfg,
+                max_batch=max_batch,
+                max_seq_len=max_seq_len,
+                block_size=block_size,
+                mesh=self.mesh,
+                partition_users=partition_users,
+            )
         self.next_start: list[int] = [0] * max_batch
         # norms: HiFi4 with fp32 accumulation (``TtDecoderLayer.norm_compute``); the glue matmul: the bfp8 policy
         self.norm_compute = ttnn.init_device_compute_kernel_config(

@@ -700,6 +700,42 @@ class TtLatentCache:
         ttnn.experimental.slice_write(rm, a.rows, [0, 0, row0, 0], [1, 1, row0 + n, self.latent_dim], [1, 1, 1, 1])
 
 
+class HostLatentCache:
+    """A write-only latent cache for ONE user whose rows live in HOST memory (tt-blaze G53F-0227): the prefill server's
+    MTP layer fills its latent rows only to export them, never to attend over them, so the mesh-replicated device cache
+    of ``TtLatentCache`` (1 GiB per chip at 1 M positions: the 1 M warm-up then ran out of DRAM beside the trunk) is
+    not needed. ``fill`` reads each chunk's latent from the first replica into ``host_latent`` (the same bf16 values the
+    paged fill would copy: ``paged_fill_cache`` is a raw tile copy); the pooled-key index stays on device, because the
+    indexer maintains it from the chunk input (``TtDSAIndexer.maintain_prefill``). Duck-types the part of
+    ``TtLatentCache`` that ``TtDSA.prefill_state`` and the seed export (``_dsa_state_host``) use."""
+
+    def __init__(self, device, cfg: GLM53FlashConfig, *, max_seq_len: int, block_size: int = 32, mesh: GLMMesh):
+        self.device = device
+        self.mesh = mesh
+        self.block_size = block_size
+        self.max_batch = 1
+        self.blocks_per_seq = -(-max_seq_len // block_size)
+        self.rows_per_user = self.blocks_per_seq * block_size
+        self.latent_dim = cfg.kv_lora_rank
+        self.host_latent = torch.zeros(self.rows_per_user, self.latent_dim, dtype=torch.bfloat16)
+        self.index = TtIndexCache(device, cfg, max_batch=1, max_seq_len=self.rows_per_user, mesh=mesh)
+
+    def fill(self, c: ttnn.Tensor, user: int, *, start: int = 0, slot=None):
+        """Chunk latent ``c`` [1,1,T,L] (replicated) -> host rows [start, start + T) of ``user`` 0."""
+        if user != 0 or slot is not None:
+            raise ValueError(f"HostLatentCache holds user 0 only, host-addressed (got user {user}, slot {slot})")
+        T = int(c.shape[-2])
+        if start % self.block_size or start + T > self.rows_per_user:
+            raise ValueError(f"rows [{start}, {start + T}) vs block {self.block_size} / length {self.rows_per_user}")
+        self.host_latent[start : start + T] = self.mesh.to_host(c)[0, 0].to(torch.bfloat16)
+
+    def prefix_sync(self, user: int, start: int, chunk_c: ttnn.Tensor | None):
+        """No prefix arena: nothing attends over these rows."""
+
+    def release_prefix(self, user: int | None = None):
+        """No prefix arena."""
+
+
 @dataclass
 class _PrefixArena:
     """One DSA layer's persistent ROW_MAJOR latent copy of the prompt in flight (``TtLatentCache.prefix_rows_rm``):

@@ -183,7 +183,10 @@ def _replicated_rows_host(model: GLM53MeshModel, t: ttnn.Tensor, nb: int) -> tor
 def _dsa_state_host(model: GLM53MeshModel, dec, S: int) -> dict[str, torch.Tensor]:
     """Slot 0's latent rows [S, 512] (identity page table), plus the indexer pool cache and raw rings."""
     c = dec.cache
-    lat = _replicated_rows_host(model, c.cache, -(-S // 32)).reshape(-1, int(c.cache.shape[-1]))[:S]
+    if getattr(c, "host_latent", None) is not None:  # HostLatentCache (the server's MTP layer, G53F-0227)
+        lat = c.host_latent[:S]
+    else:
+        lat = _replicated_rows_host(model, c.cache, -(-S // 32)).reshape(-1, int(c.cache.shape[-1]))[:S]
     out = {"latent": lat.contiguous().to(torch.bfloat16)}
     idx = getattr(c, "index", None) or getattr(dec, "index", None)
     if idx is None:
