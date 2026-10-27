@@ -47,7 +47,7 @@ void reject_conflicting_dram_receivers(
     const std::vector<CoreCoord>& senders,
     const std::vector<std::vector<CoreCoord>>& receivers_per_sender) {
     const Cluster& cluster = mesh_device.impl().metal_env().get_cluster();
-    for (const IDevice* device : mesh_device.get_devices()) {
+    for (const IDevice* device : mesh_device.impl().get_devices()) {
         const metal_SocDescriptor& soc_desc = cluster.get_soc_desc(device->id());
         std::unordered_map<uint32_t, CoreCoord> sender_by_index;
         for (const CoreCoord& sender_logical : senders) {
@@ -97,7 +97,7 @@ std::vector<PrefetcherPipe> CreatePrefetcherPipesForTensorPrefetcher(
             "DRAM receivers are Quasar CCEs and need a PrefetcherPipeL1Source::DramReceiverZone space; for worker "
             "receivers pass a CoreRangeSet per bank");
     }
-    const std::vector<IDevice*> devices = mesh_device->get_devices();
+    const std::vector<::tt::tt_metal::Device*> devices = mesh_device->impl().get_devices();
     TT_FATAL(!devices.empty(), "Cannot carve DRAM-receiver PrefetcherPipes for a mesh with no local devices");
     std::vector<CoreCoord> senders;
     std::vector<std::vector<CoreCoord>> receivers_per_sender;
