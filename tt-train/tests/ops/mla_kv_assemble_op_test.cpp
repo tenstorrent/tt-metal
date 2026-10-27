@@ -8,6 +8,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <ostream>
 #include <string>
 #include <vector>
 #include <xtensor-blas/xlinalg.hpp>
@@ -126,10 +128,15 @@ void expect_fw_matches(
 }
 
 void expect_bw_matches(
-    const ttnn::Tensor& dkv_up, const ttnn::Tensor& dk_pe, const BwOutputs& expected, const std::string& label) {
+    const std::optional<ttnn::Tensor>& dkv_up,
+    const std::optional<ttnn::Tensor>& dk_pe,
+    const BwOutputs& expected,
+    const std::string& label) {
+    ASSERT_TRUE(dkv_up.has_value()) << label << "/dkv_up was not computed";
+    ASSERT_TRUE(dk_pe.has_value()) << label << "/dk_pe was not computed";
     // dkv_up is a pure copy → bit-exact; dk_pe is a BF16 head-axis reduction → tolerant.
-    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(dkv_up), expected.dkv_up, 0.0, 0.0)) << label << "/dkv_up";
-    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(dk_pe), expected.dk_pe, /*rtol=*/5e-3, /*atol=*/5e-3))
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(dkv_up.value()), expected.dkv_up, 0.0, 0.0)) << label << "/dkv_up";
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(dk_pe.value()), expected.dk_pe, /*rtol=*/5e-3, /*atol=*/5e-3))
         << label << "/dk_pe";
 }
 
@@ -310,8 +317,8 @@ TEST_F(MLAKVAssembleTest, BackwardCacheHitWithFreshTensors_TwoCoreGroups) {
     EXPECT_EQ(device->num_program_cache_entries(), entries_before_b) << "launch B must reuse launch A's program";
     EXPECT_NE(dK_b.buffer()->address(), dK_a.buffer()->address()) << "dK";
     EXPECT_NE(dV_b.buffer()->address(), dV_a.buffer()->address()) << "dV";
-    EXPECT_NE(dkv_up_b.buffer()->address(), dkv_up_a.buffer()->address()) << "dkv_up";
-    EXPECT_NE(dk_pe_b.buffer()->address(), dk_pe_a.buffer()->address()) << "dk_pe";
+    EXPECT_NE(dkv_up_b->buffer()->address(), dkv_up_a->buffer()->address()) << "dkv_up";
+    EXPECT_NE(dk_pe_b->buffer()->address(), dk_pe_a->buffer()->address()) << "dk_pe";
     const auto expected_b = reference_bw(dK_b, dV_b, shape);
     expect_bw_matches(dkv_up_b, dk_pe_b, expected_b, "launch B (cache hit)");
     expect_bw_matches(dkv_up_a, dk_pe_a, expected_a, "launch A after launch B");
@@ -319,8 +326,97 @@ TEST_F(MLAKVAssembleTest, BackwardCacheHitWithFreshTensors_TwoCoreGroups) {
     const auto entries_before_c = device->num_program_cache_entries();
     const auto [dkv_up_c, dk_pe_c] = launch(dK_a, dV_a);
     EXPECT_EQ(device->num_program_cache_entries(), entries_before_c) << "launch C must reuse launch A's program";
-    EXPECT_NE(dkv_up_c.buffer()->address(), dkv_up_b.buffer()->address()) << "dkv_up C vs B";
-    EXPECT_NE(dk_pe_c.buffer()->address(), dk_pe_b.buffer()->address()) << "dk_pe C vs B";
+    EXPECT_NE(dkv_up_c->buffer()->address(), dkv_up_b->buffer()->address()) << "dkv_up C vs B";
+    EXPECT_NE(dk_pe_c->buffer()->address(), dk_pe_b->buffer()->address()) << "dk_pe C vs B";
     expect_bw_matches(dkv_up_c, dk_pe_c, expected_a, "launch C (cache hit on launch A's inputs)");
     expect_bw_matches(dkv_up_b, dk_pe_b, expected_b, "launch B after launch C");
 }
+
+// ============================================================================
+// Skipping one grad in the backward kernel
+// ============================================================================
+// mla_kv_assemble_bw takes a flag for each of dkv_up and dk_pe. A skipped grad is nullopt; the kernel drops its reads,
+// its CBs and its writes, and for dk_pe the compute kernel too. Each row requests one grad.
+// ============================================================================
+
+namespace {
+
+struct MLAKVAssembleBwSkipCase {
+    std::string name;
+    bool compute_grad_kv_up = true;
+    bool compute_grad_k_pe = true;
+};
+
+// gtest prints a failing row's parameter through this; without it the row prints as raw bytes.
+void PrintTo(const MLAKVAssembleBwSkipCase& c, std::ostream* os) {
+    *os << c.name;
+}
+
+}  // namespace
+
+class MLAKVAssembleBwSkipTest : public ::testing::TestWithParam<MLAKVAssembleBwSkipCase> {
+protected:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+// The requested grad must equal the one from the full backward bit for bit: the kernel does the same per-tile work
+// either way. The flags are compile-time, so the first skipping run must compile its own program; a second run with
+// other live inputs must hit that program and read and write the new buffers.
+TEST_P(MLAKVAssembleBwSkipTest, RequestedGradMatchesFullBackward) {
+    const MLAKVAssembleBwSkipCase& c = GetParam();
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    // 4 heads with 2 rope tiles; B * S / 32 = 4 blocks.
+    const AssembleShape shape{"skip", 2, 64, 4, 128, 64, 128};
+    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
+    // Both sets stay alive, so the second cannot land at the first's addresses.
+    const auto dK_first = make_input(shape.batch, shape.n_heads, shape.seq_len, qk_head, 11U);
+    const auto dV_first = make_input(shape.batch, shape.n_heads, shape.seq_len, shape.v_dim, 12U);
+    const auto dK_second = make_input(shape.batch, shape.n_heads, shape.seq_len, qk_head, 21U);
+    const auto dV_second = make_input(shape.batch, shape.n_heads, shape.seq_len, shape.v_dim, 22U);
+
+    const auto run = [&shape](const ttnn::Tensor& dK, const ttnn::Tensor& dV, bool kv_up, bool k_pe) {
+        auto [dkv_up, dk_pe] = ttml::metal::mla_kv_assemble_bw(
+            dK, dV, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim, kv_up, k_pe);
+        return std::vector<std::optional<ttnn::Tensor>>{dkv_up, dk_pe};
+    };
+    const size_t grad_idx = c.compute_grad_kv_up ? 0U : 1U;
+    const xt::xarray<float> expected_first =
+        ttml::core::to_xtensor(run(dK_first, dV_first, true, true)[grad_idx].value());
+    const xt::xarray<float> expected_second =
+        ttml::core::to_xtensor(run(dK_second, dV_second, true, true)[grad_idx].value());
+
+    const auto entries_before = device->num_program_cache_entries();
+    const auto skip_first = run(dK_first, dV_first, c.compute_grad_kv_up, c.compute_grad_k_pe);
+    const auto entries_after_first = device->num_program_cache_entries();
+    EXPECT_EQ(entries_after_first, entries_before + 1U)
+        << c.name << ": the skipping run must compile exactly one program of its own";
+    const auto skip_second = run(dK_second, dV_second, c.compute_grad_kv_up, c.compute_grad_k_pe);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_first)
+        << c.name << ": the second skipping run at identical shapes missed the program cache";
+
+    for (const auto* grads : {&skip_first, &skip_second}) {
+        EXPECT_EQ((*grads)[0].has_value(), c.compute_grad_kv_up) << c.name << ": dkv_up presence";
+        EXPECT_EQ((*grads)[1].has_value(), c.compute_grad_k_pe) << c.name << ": dk_pe presence";
+        ASSERT_TRUE((*grads)[grad_idx].has_value()) << c.name;
+    }
+    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(skip_first[grad_idx].value()), expected_first)))
+        << c.name << ": requested grad differs from the full backward";
+    EXPECT_TRUE(xt::all(xt::equal(ttml::core::to_xtensor(skip_second[grad_idx].value()), expected_second)))
+        << c.name << ": cache-hit grad differs from the full backward on the second inputs (stale address?)";
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    MLAKVAssembleBwSkipCases,
+    MLAKVAssembleBwSkipTest,
+    ::testing::Values(
+        MLAKVAssembleBwSkipCase{.name = "KvUpOnly", .compute_grad_k_pe = false},
+        MLAKVAssembleBwSkipCase{.name = "KPeOnly", .compute_grad_kv_up = false}),
+    [](const ::testing::TestParamInfo<MLAKVAssembleBwSkipCase>& info) { return info.param.name; });

@@ -7,6 +7,19 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
+// Which outputs to produce. A skipped output has no CBs, and dV is only read for dkv_up.
+#ifdef COMPUTE_GRAD_KV_UP
+constexpr bool compute_grad_kv_up = true;
+#else
+constexpr bool compute_grad_kv_up = false;
+#endif
+
+#ifdef COMPUTE_GRAD_K_PE
+constexpr bool compute_grad_k_pe = true;
+#else
+constexpr bool compute_grad_k_pe = false;
+#endif
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
     const uint32_t dK_addr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -36,7 +49,8 @@ void kernel_main() {
     const auto dK_addr_gen = TensorAccessor(dK_args, dK_addr);
     const auto dV_addr_gen = TensorAccessor(dV_args, dV_addr);
 
-    const uint32_t tile_bytes = get_tile_size(cb_dkpe_in);
+    // dK and dV share a data format; take the tile size from an input CB that exists.
+    const uint32_t tile_bytes = get_tile_size(compute_grad_k_pe ? cb_dkpe_in : cb_dknope);
 
     constexpr uint32_t end_of_batch_jump_k = ((n_heads - 1U) * Ts + 1U) * Th;
     constexpr uint32_t end_of_batch_jump_v = ((n_heads - 1U) * Ts + 1U) * Tv;
@@ -48,9 +62,15 @@ void kernel_main() {
             const uint32_t head_dk = dK_block_base + h * k_HtWt;
             const uint32_t head_dv = dV_block_base + h * v_HtWt;
 
-            read_full_row_tiles(cb_dknope, dK_addr_gen, Tn, block_size, tile_bytes, head_dk);
-            read_tiles_by_row(cb_dkpe_in, dK_addr_gen, head_dk + Tn, Tr, tile_bytes, Tr);
-            read_full_row_tiles(cb_dv, dV_addr_gen, Tv, block_size, tile_bytes, head_dv);
+            if constexpr (compute_grad_kv_up) {
+                read_full_row_tiles(cb_dknope, dK_addr_gen, Tn, block_size, tile_bytes, head_dk);
+            }
+            if constexpr (compute_grad_k_pe) {
+                read_tiles_by_row(cb_dkpe_in, dK_addr_gen, head_dk + Tn, Tr, tile_bytes, Tr);
+            }
+            if constexpr (compute_grad_kv_up) {
+                read_full_row_tiles(cb_dv, dV_addr_gen, Tv, block_size, tile_bytes, head_dv);
+            }
         }
 
         ++sb;

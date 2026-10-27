@@ -7,6 +7,19 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
+// Which outputs to produce. A skipped output has no CBs and placeholder accessor args.
+#ifdef COMPUTE_GRAD_KV_UP
+constexpr bool compute_grad_kv_up = true;
+#else
+constexpr bool compute_grad_kv_up = false;
+#endif
+
+#ifdef COMPUTE_GRAD_K_PE
+constexpr bool compute_grad_k_pe = true;
+#else
+constexpr bool compute_grad_k_pe = false;
+#endif
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
     const uint32_t dkv_up_addr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -32,25 +45,30 @@ void kernel_main() {
     const auto dkv_up_addr_gen = TensorAccessor(dkv_up_args, dkv_up_addr);
     const auto dk_pe_addr_gen = TensorAccessor(dk_pe_args, dk_pe_addr);
 
-    const uint32_t tile_bytes = get_tile_size(cb_dkpe_out);
+    // Both outputs share a data format; take the tile size from an output CB that exists.
+    const uint32_t tile_bytes = get_tile_size(compute_grad_k_pe ? cb_dkpe_out : cb_dknope);
 
     for (uint32_t block = 0U; block < num_blocks; ++block) {
-        for (uint32_t h = 0U; h < n_heads; ++h) {
-            const uint32_t dkv_head_base = dkv_up_block_base + h * kv_per_head;
+        if constexpr (compute_grad_kv_up) {
+            for (uint32_t h = 0U; h < n_heads; ++h) {
+                const uint32_t dkv_head_base = dkv_up_block_base + h * kv_per_head;
 
-            // dkv_up = [dK_nope | dV] ← cb_dknope then cb_dv. All in block_size chunks.
-            write_full_row_tiles(cb_dknope, dkv_up_addr_gen, Tn, block_size, tile_bytes, dkv_head_base);
-            write_full_row_tiles(cb_dv, dkv_up_addr_gen, Tv, block_size, tile_bytes, dkv_head_base + Tn);
+                // dkv_up = [dK_nope | dV] ← cb_dknope then cb_dv. All in block_size chunks.
+                write_full_row_tiles(cb_dknope, dkv_up_addr_gen, Tn, block_size, tile_bytes, dkv_head_base);
+                write_full_row_tiles(cb_dv, dkv_up_addr_gen, Tv, block_size, tile_bytes, dkv_head_base + Tn);
+            }
         }
 
-        // dk_pe ← Tr tiles produced by the compute kernel (head-axis sum); one burst + one barrier.
-        cb_wait_front(cb_dkpe_out, Tr);
-        const uint32_t l1_kpe = get_read_ptr(cb_dkpe_out);
-        for (uint32_t w = 0U; w < Tr; ++w) {
-            noc_async_write_page(dk_pe_block_base + w, dk_pe_addr_gen, l1_kpe + w * tile_bytes);
+        if constexpr (compute_grad_k_pe) {
+            // dk_pe ← Tr tiles produced by the compute kernel (head-axis sum); one burst + one barrier.
+            cb_wait_front(cb_dkpe_out, Tr);
+            const uint32_t l1_kpe = get_read_ptr(cb_dkpe_out);
+            for (uint32_t w = 0U; w < Tr; ++w) {
+                noc_async_write_page(dk_pe_block_base + w, dk_pe_addr_gen, l1_kpe + w * tile_bytes);
+            }
+            noc_async_write_barrier();
+            cb_pop_front(cb_dkpe_out, Tr);
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_dkpe_out, Tr);
 
         // Outputs are flat across blocks, so the advance is constant.
         dkv_up_block_base += n_heads * kv_per_head;

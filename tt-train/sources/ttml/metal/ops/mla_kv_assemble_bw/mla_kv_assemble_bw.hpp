@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <tuple>
 
 #include "metal/ttnn_all_includes.hpp"
@@ -25,13 +26,16 @@ namespace ttml::metal {
 //
 // Per-head dims and S must be tile-aligned.
 //
-// Returns: {dkv_up, dk_pe}
-std::tuple<ttnn::Tensor, ttnn::Tensor> mla_kv_assemble_bw(
+// Returns: {dkv_up, dk_pe}. A grad that is not requested is nullopt and its kernel work is skipped; at least one must
+// be requested. dV is only read for dkv_up.
+std::tuple<std::optional<ttnn::Tensor>, std::optional<ttnn::Tensor>> mla_kv_assemble_bw(
     const ttnn::Tensor& dK,
     const ttnn::Tensor& dV,
     uint32_t n_heads,
     uint32_t qk_nope_dim,
     uint32_t qk_rope_dim,
-    uint32_t v_dim);
+    uint32_t v_dim,
+    bool compute_grad_kv_up = true,
+    bool compute_grad_k_pe = true);
 
 }  // namespace ttml::metal
