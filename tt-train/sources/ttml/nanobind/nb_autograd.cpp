@@ -255,7 +255,10 @@ void py_module(nb::module_& m) {
         py_auto_context.def("get_gradient_mode", &AutoContext::get_gradient_mode, "Get gradient mode");
         py_auto_context.def(
             "open_device",
-            [](AutoContext& self, nb::object mesh_shape_obj, nb::object device_ids_obj) {
+            [](AutoContext& self,
+               nb::object mesh_shape_obj,
+               nb::object device_ids_obj,
+               std::size_t num_command_queues) {
                 tt::tt_metal::distributed::MeshShape mesh_shape(1, 1);
 
                 if (!mesh_shape_obj.is_none()) {
@@ -275,10 +278,11 @@ void py_module(nb::module_& m) {
                     device_ids = nb::cast<std::vector<int>>(device_ids_obj);
                 }
 
-                self.open_device(mesh_shape, device_ids);
+                self.open_device(mesh_shape, device_ids, num_command_queues);
             },
             nb::arg("mesh_shape") = nb::none(),
             nb::arg("device_ids") = nb::none(),
+            nb::arg("num_command_queues") = 1,
             "Open a mesh device");
         py_auto_context.def("close_device", &AutoContext::close_device, "Close mesh device");
         py_auto_context.def("get_device", &AutoContext::get_device, nb::rv_policy::reference, "Get mesh device");
