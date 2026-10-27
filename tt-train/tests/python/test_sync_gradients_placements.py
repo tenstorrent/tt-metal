@@ -195,29 +195,33 @@ class TestFSDP:
         )
         assert _reduce_set(head, (dp, fsdp)) == {dp}
 
-    def test_fully_shard_refuses_a_collapsed_shard_label(self, fsdp_mesh, expect_error):
-        """A parameter carrying the collapsed ``{2}, [Shard(2)]`` label of the whole-mesh 1-D mapper is sharded over
-        every mesh axis at once, so ``fully_shard`` refuses it with the collapsed-label error, whatever index the
-        FSDP axis has: the placement count is checked before any index is read."""
+    def test_collapsed_shard_label_reads_as_sharded_on_the_fsdp_axis(self, fsdp_mesh, expect_error):
+        """The whole-mesh 1-D mapper's collapsed ``{2}, [Shard(2)]`` reads per axis as ``is_sharded_on_axis`` reads it:
+        Shard on the fsdp axis, Replicate on the size-1 dp axis. So ``fully_shard`` refuses it as already sharded on
+        "fsdp", eager and lazy, as it refuses the N-D ``[Replicate, Shard(2)]``. Negative control: main read it as
+        Replicate on the fsdp axis and sharded the parameter again."""
         from ttml import fsdp as fsdp_module
+        from ttml.modules.parameter import replace_lazy_mapper
 
+        mesh_shape = tuple(fsdp_mesh.shape)
         linear = LinearLayer(DIM, DIM, has_bias=False)
         weight = linear.weight.tensor.get_value(NATIVE)
         coords = list(weight.tensor_topology().mesh_coords())
         weight.update_tensor_topology(
             ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(2)], coords)
         )
-        with expect_error(RuntimeError, "collapsed 1-D topology label"):
+        assert len(_placements(weight)) == 1, "precondition: collapsed 1-D label"
+        for axis in range(len(mesh_shape)):
+            fsdp_reading = fsdp_module._already_fsdp_sharded(_placements(weight), axis, mesh_shape)
+            assert fsdp_reading == is_sharded_on_axis(weight, axis), f"mesh axis {axis}"
+        with expect_error(RuntimeError, "already sharded on mesh axis 'fsdp'"):
             ttml.fsdp.fully_shard(linear)
 
-        n_axes = len(fsdp_mesh.shape)
-        with expect_error(RuntimeError, "collapsed 1-D topology label"):  # FSDP axis at index 0
-            fsdp_module._already_fsdp_sharded([ttnn.PlacementShard(2)], 0, n_axes)
-        assert fsdp_module._already_fsdp_sharded([ttnn.PlacementReplicate()], 0, n_axes) is False
-        assert fsdp_module._already_fsdp_sharded([ttnn.PlacementReplicate(), ttnn.PlacementShard(2)], 1, n_axes) is True
-        assert (
-            fsdp_module._already_fsdp_sharded([ttnn.PlacementReplicate(), ttnn.PlacementShard(2)], 0, n_axes) is False
-        )
+        with ttml.lazy_init():
+            lazy = LinearLayer(DIM, DIM, has_bias=False)
+        replace_lazy_mapper(lazy.weight, ttml.core.distributed.shard_tensor_to_mesh_mapper(_device(), 2, None))
+        with expect_error(RuntimeError, "already sharded on mesh axis"):
+            ttml.fsdp.fully_shard(lazy)
 
 
 # --- DDP on [1, 2] ("tp", "dp") ---------------------------------------------------------------------------------
