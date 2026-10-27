@@ -24,7 +24,7 @@ struct ReduceAffineTransformsOperation {
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
-std::pair<Tensor, Tensor> reduce_affine_transforms(
+Tensor reduce_affine_transforms(
     const Tensor& summaries,
     uint32_t,
     const tt::tt_metal::MemoryConfig&,

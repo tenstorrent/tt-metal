@@ -47,40 +47,42 @@ FORCE_INLINE void send_affine_pair(
     ready.up(noc, target_x, target_y, 1);
 }
 
-// Empty ranks contribute the affine identity (I, 0) to the distributed prefix.
-// The unused remote buffer provides one FLOAT32 scratch tile; compute has exited.
-template <uint32_t Kt, uint32_t Vt, typename AAccessor, typename BAccessor, typename DFB>
+// Empty ranks contribute the affine identity to the distributed prefix: (0, 0) in complement form.
+// The unused remote buffer provides one zeroed scratch tile; compute has exited.
+template <uint32_t Kt, uint32_t Vt, typename OutputAccessor, typename DFB>
 FORCE_INLINE void write_identity_transform(
-    Noc& noc, DFB& scratch, uint32_t head, const AAccessor& output_a, const BAccessor& output_b) {
-    constexpr uint32_t a_tiles = Kt * Kt;
-    constexpr uint32_t b_tiles = Kt * Vt;
-    constexpr uint32_t face_rows = tt::constants::FACE_HEIGHT;
-    constexpr uint32_t face_cols = tt::constants::FACE_WIDTH;
-    constexpr uint32_t faces_per_row = tt::constants::TILE_WIDTH / face_cols;
-    constexpr uint32_t bottom_right_face_offset = (faces_per_row + 1) * tt::constants::FACE_HW;
-    constexpr uint32_t fp32_one_bits = __builtin_bit_cast(uint32_t, 1.0f);
-
+    Noc& noc, DFB& scratch, uint32_t head, const OutputAccessor& output, uint32_t page_bytes) {
+    constexpr uint32_t head_tiles = Kt * (Kt + Vt);
     scratch.reserve_back(1);
-    const uint32_t tile_bytes = scratch.get_entry_size();
-    noc.async_write_zeros(scratch, tile_bytes);
+    noc.async_write_zeros(scratch, scratch.get_entry_size());
     noc.write_zeros_l1_barrier();
-    for (uint32_t tile = 0; tile < b_tiles; ++tile) {
-        noc.async_write(scratch, output_b, tile_bytes, {}, {.page_id = head * b_tiles + tile});
+    for (uint32_t tile = 0; tile < head_tiles; ++tile) {
+        noc.async_write(scratch, output, page_bytes, {}, {.page_id = head * head_tiles + tile});
     }
-    // Finish the zero writes before reusing the tile for the identity matrix.
     noc.async_write_barrier();
-    auto* words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch.get_write_ptr());
-    for (uint32_t row = 0; row < Kt; ++row) {
-        for (uint32_t col = 0; col < Kt; ++col) {
-            const uint32_t diagonal_bits = row == col ? fp32_one_bits : 0;
-            // A tile's diagonal lies in its top-left and bottom-right faces.
-            for (uint32_t r = 0; r < face_rows; ++r) {
-                const uint32_t diagonal_offset = r * face_cols + r;
-                words[diagonal_offset] = diagonal_bits;
-                words[bottom_right_face_offset + diagonal_offset] = diagonal_bits;
+}
+
+// Write the published head transform, Kt rows of E (Kt tiles each) then Kt rows of B (Vt tiles each), into the
+// packed [1, B*H, K, K+V] rows [E | B].
+template <uint32_t Kt, uint32_t Vt, typename OutputAccessor, typename DFB>
+FORCE_INLINE void write_published_transform(Noc& noc, DFB& published, uint32_t head, const OutputAccessor& output) {
+    constexpr uint32_t row_tiles = Kt + Vt;
+    const uint32_t tile_bytes = published.get_entry_size();
+    for (uint32_t half = 0; half < 2; ++half) {
+        const uint32_t columns = half == 0 ? Kt : Vt;
+        const uint32_t first_column = half == 0 ? 0 : Kt;
+        for (uint32_t row = 0; row < Kt; ++row) {
+            published.wait_front(columns);
+            for (uint32_t column = 0; column < columns; ++column) {
+                noc.async_write(
+                    published,
+                    output,
+                    tile_bytes,
+                    {.offset_bytes = column * tile_bytes},
+                    {.page_id = (head * Kt + row) * row_tiles + first_column + column});
             }
-            noc.async_write(scratch, output_a, tile_bytes, {}, {.page_id = head * a_tiles + row * Kt + col});
             noc.async_write_barrier();
+            published.pop_front(columns);
         }
     }
 }
@@ -124,14 +126,15 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t b_tiles = Kt * Vt;
 
     const auto summaries_accessor = TensorAccessor(tensor::summaries);
-    const auto output_a_accessor = TensorAccessor(tensor::output_a);
-    const auto output_b_accessor = TensorAccessor(tensor::output_b);
+    const auto output_accessor = TensorAccessor(tensor::output);
     DataflowBuffer initial_a(dfb::initial_a);
     DataflowBuffer initial_b(dfb::initial_b);
     DataflowBuffer send_a(dfb::send_a);
     DataflowBuffer send_b(dfb::send_b);
     DataflowBuffer remote_a(dfb::remote_a);
     DataflowBuffer remote_b(dfb::remote_b);
+    DataflowBuffer identity(dfb::identity);
+    DataflowBuffer published(dfb::output);
     Noc noc;
     Semaphore ready(sem::ready);
     Semaphore arrival(sem::arrival);
@@ -158,15 +161,19 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         chronology.push_back(1);
     }
     const uint32_t active = topology.head_groups(G);
+    const uint32_t head = worker_index / G;
     if (active == 0) {
         if (group == 0) {
-            write_identity_transform<Kt, Vt>(noc, remote_a, worker_index / G, output_a_accessor, output_b_accessor);
+            write_identity_transform<Kt, Vt>(noc, remote_a, head, output_accessor, published.get_entry_size());
         }
         return;
     }
     if (group >= active) {
         return;
     }
+    // The last active group composes the whole head and publishes it, in its last step. Every group forms A = E + I.
+    const bool publishes = group + 1 == active;
+    kda::seed_identity_tile(noc, identity);
 
     initial_a.reserve_back(a_tiles);
     initial_b.reserve_back(b_tiles);
@@ -191,6 +198,10 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
             ready.wait_min(ready_target);
             remote_a.push_back(a_tiles);
             remote_b.push_back(b_tiles);
+            // Compute publishes before it releases the next prefix to send, so drain the published rows first.
+            if (publishes && 2 * distance >= active) {
+                write_published_transform<Kt, Vt>(noc, published, head, output_accessor);
+            }
             send_a.wait_front(2 * a_tiles);
             send_b.wait_front(2 * b_tiles);
             send_a.pop_front(a_tiles);
@@ -201,26 +212,10 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
         synchronize_head_stage<G>(worker_index, group, active, completed_stages, noc, arrival, release);
     }
 
+    // A single active group publishes its copied summary; there is no composition stage.
+    if (publishes && active == 1) {
+        write_published_transform<Kt, Vt>(noc, published, head, output_accessor);
+    }
     send_a.wait_front(a_tiles);
     send_b.wait_front(b_tiles);
-    if (group + 1 == active) {
-        const uint32_t head = worker_index / G;
-        for (uint32_t tile = 0; tile < a_tiles; tile++) {
-            noc.async_write(
-                send_a,
-                output_a_accessor,
-                send_a.get_entry_size(),
-                {.offset_bytes = tile * send_a.get_entry_size()},
-                {.page_id = head * a_tiles + tile});
-        }
-        for (uint32_t tile = 0; tile < b_tiles; tile++) {
-            noc.async_write(
-                send_b,
-                output_b_accessor,
-                send_b.get_entry_size(),
-                {.offset_bytes = tile * send_b.get_entry_size()},
-                {.page_id = head * b_tiles + tile});
-        }
-        noc.async_write_barrier();
-    }
 }

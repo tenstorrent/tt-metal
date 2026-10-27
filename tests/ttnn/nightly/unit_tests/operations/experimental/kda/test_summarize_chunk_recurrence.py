@@ -354,7 +354,9 @@ def test_summarize_chunk_recurrence_tail_and_init_select_distinct_programs(
             nrmse_threshold=0.005,
         )
         if tail and init:
-            assert_bit_identical(identity.bfloat16(), host[1].bfloat16(), name="unsplit tail slots hold (I, 0)")
+            assert_bit_identical(
+                identity.bfloat16(), host[1].bfloat16(), name="unsplit tail slots hold the identity (0, 0)"
+            )
         ttnn.deallocate(summaries)
 
 

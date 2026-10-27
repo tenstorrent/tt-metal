@@ -43,7 +43,7 @@ void check_compute_config(const DeviceComputeKernelConfig& config, std::string_v
 void check_fp32_state_compute_config(
     const DeviceComputeKernelConfig& config, tt::ARCH arch, std::string_view operation_name);
 
-// Affine summaries are one tensor [S, N, K, K+V] holding K rows of [A | B] per transform: slot 0 holds head
+// Affine summaries are one tensor [S, N, K, K+V] holding K rows of [E | B] (E = A - I) per transform: slot 0 holds head
 // transforms and slot 1, when present, tail transforms. Kernels address it by page through TensorAccessor.
 struct PackedSummaryShape {
     uint32_t slots;
