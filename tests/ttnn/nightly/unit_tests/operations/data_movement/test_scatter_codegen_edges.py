@@ -6,8 +6,9 @@
 # test_scatter_codegen_routing.py does not reach: the demotion predicate's axis spelling, small
 # row-axis shapes, an output placement that differs from the input's, empty operands, the bf16
 # reduce path, the unknown reduce string, the out-of-scope clauses that stay native, the index
-# dtypes, an explicit core grid, host-resident operands, an operand padded past tile rounding and
-# a row-major call whose resident sticks no longer fit the L1 that is actually free.
+# dtypes, an explicit core grid, host-resident operands, an operand padded past tile rounding, the
+# calls whose resident sticks or pending copies no longer fit the L1 that is actually free, and
+# the program-cache key that follows the L1 frontier.
 
 import pytest
 import torch
@@ -172,21 +173,31 @@ def test_scatter_codegen_host_operands_raise_like_native(device, expect_error):
         _force_codegen(xt, -1, it, st)
 
 
-def test_scatter_codegen_over_padded_tile_operand_stays_native(device, expect_error):
+@pytest.mark.parametrize("operand", ["input", "index", "src"])
+def test_scatter_codegen_over_padded_tile_operand_stays_native(device, operand, expect_error):
     # tilize_with_val_padding can pad a TILE operand past tile rounding. The codegen TILE factories
     # count pages from that padded shape while the output they allocate and the page map they fold
     # assume tile-rounded padding of the logical shape, so such an operand must stay native, whose
-    # untilize-with-unpadding bookend strips the padding before anything is scattered.
+    # untilize-with-unpadding bookend strips the padding before anything is scattered. The gate
+    # checks all three operands, so each is padded in turn.
     shape = [1, 8, 30, 30]
     x = torch.rand(shape, dtype=torch.bfloat16)
     index = _unique_index(shape, 3, shape[3])
     src = torch.rand(shape, dtype=torch.bfloat16)
-    xt = ttnn.tilize_with_val_padding(
-        ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), [1, 8, 64, 64], 0.0
-    )
-    assert list(xt.padded_shape) == [1, 8, 64, 64]
-    it = ttnn.from_torch(index, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    st = ttnn.from_torch(src, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def padded(host, dtype):
+        t = ttnn.tilize_with_val_padding(
+            ttnn.from_torch(host, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), [1, 8, 64, 64], 0
+        )
+        assert list(t.padded_shape) == [1, 8, 64, 64]
+        return t
+
+    def plain(host, dtype):
+        return ttnn.from_torch(host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    xt = padded(x, ttnn.bfloat16) if operand == "input" else plain(x, ttnn.bfloat16)
+    it = padded(index, ttnn.int32) if operand == "index" else plain(index, ttnn.int32)
+    st = padded(src, ttnn.bfloat16) if operand == "src" else plain(src, ttnn.bfloat16)
     out, added = _run_auto_against_native(device, xt, it, st, -1)
     assert_equal(torch.scatter(x, 3, index.to(torch.int64), src), ttnn.to_torch(out))
     assert added == 0, "auto routed an over-padded TILE operand to codegen; expected native"
@@ -220,9 +231,10 @@ def test_scatter_codegen_row_major_sliced_source_counts_against_live_l1(device):
     # the source's own placement. With the source in L1 that slice is pending when the route is
     # chosen, so the live-L1 gate must charge it: an equal amount of L1 that is already allocated
     # (the blocker) leaves the route on codegen, the same amount still pending must send it native.
-    # 180000 bf16 elements: an input and output stick of 360 kB each fit beside a 720 kB L1 source on
-    # Blackhole, but not beside that source plus its 360 kB slice.
-    width = 180000
+    # Sized from the device's L1 bank so the same two routes hold on Wormhole and Blackhole: four
+    # resident sticks (source, blocker, input, output) take 8/9 of the bank and fit; the wide source,
+    # its slice, input and output take 10/9 and do not.
+    width = (ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank // 9) // 32 * 32
     xt, it, _ = _make_case([1, width], [1, width], -1, ttnn.ROW_MAJOR_LAYOUT, device)
 
     def in_l1(t):
@@ -343,3 +355,93 @@ def test_scatter_codegen_out_of_scope_cases_stay_native(device, input_dtype, lay
     kwargs = {} if reduce is None else {"reduce": reduce}
     _, added = _run_auto_against_native(device, xt, it, st, -1, **kwargs)
     assert added == 0, "auto routed an out-of-scope case to codegen; expected native"
+
+
+def test_scatter_codegen_index_empty_on_a_non_scatter_axis_stays_native(device):
+    # An index with a zero extent on a non-scatter axis against a non-empty input is a no-op native
+    # answers with a copy of the input; the gate sends it there on the index's volume before any
+    # codegen host arithmetic could divide by that extent.
+    x = torch.rand([2, 3, 4], dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    it = ttnn.from_torch(
+        torch.zeros([2, 0, 4], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    st = ttnn.from_torch(
+        torch.zeros([2, 0, 4], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    device.clear_program_cache()
+    native_error = _error_of(lambda: _force_native(xt, -1, it, st))
+    entries_before = device.num_program_cache_entries()
+    auto_error = _error_of(lambda: ttnn.scatter(xt, -1, it, st))
+    assert auto_error == native_error, "auto diverged from native on an empty index"
+    assert device.num_program_cache_entries() == entries_before, "auto routed an empty index to codegen"
+
+
+@pytest.mark.parametrize(
+    "shape,index_shape,dim",
+    [([1, 1, 32, 64], [1, 1, 32, 32], 10), ([1, 1, 32, 64], [1, 1, 32, 32], -10), ([2] * 9 + [64], [2] * 9 + [32], -1)],
+    ids=["dim=10", "dim=-10", "rank-10"],
+)
+def test_scatter_codegen_out_of_range_dim_and_deep_rank_follow_native(device, shape, index_shape, dim):
+    # The uint16 rows of test_scatter_failing_cases never reach these clauses because the index dtype
+    # rejects them first. With an int32 index the dim clause and the page-rank clause are what keep
+    # the call off codegen: auto must raise or answer exactly as native, with no codegen entry built.
+    xt, it, st = _make_case(
+        shape, index_shape, dim if -len(shape) <= dim < len(shape) else -1, ttnn.TILE_LAYOUT, device
+    )
+    device.clear_program_cache()
+    native_error = _error_of(lambda: _force_native(xt, dim, it, st))
+    entries_before = device.num_program_cache_entries()
+    auto_error = _error_of(lambda: ttnn.scatter(xt, dim, it, st))
+    assert auto_error == native_error, "auto diverged from native"
+    if native_error is None:
+        assert_equal(ttnn.to_torch(_force_native(xt, dim, it, st)), ttnn.to_torch(ttnn.scatter(xt, dim, it, st)))
+    assert device.num_program_cache_entries() == entries_before, "auto routed to codegen; expected native"
+
+
+def test_scatter_codegen_sharded_output_stays_native(device):
+    # The factories size the output CB from an interleaved page, so a sharded output placement is
+    # outside the call contract and must route native; the values alone cannot tell the routes apart.
+    xt, it, st = _make_case([1, 1, 32, 64], [1, 1, 32, 32], -1, ttnn.TILE_LAYOUT, device)
+    sharded = ttnn.create_sharded_memory_config(
+        [1, 1, 32, 64], core_grid=ttnn.CoreGrid(x=1, y=1), strategy=ttnn.ShardStrategy.HEIGHT
+    )
+    _, added = _run_auto_against_native(device, xt, it, st, -1, memory_config=sharded)
+    assert added == 0, "auto routed a sharded output placement to codegen; expected native"
+
+
+def test_scatter_codegen_row_major_output_in_another_buffer_type_stays_native(device):
+    # The ROW_MAJOR factories size the output stick from the input's own aligned page, which only
+    # holds when both live in the same buffer type; a DRAM input with an L1 output routes native.
+    xt, it, st = _make_case([1, 1, 32, 64], [1, 1, 32, 32], -1, ttnn.ROW_MAJOR_LAYOUT, device)
+    assert xt.memory_config().buffer_type == ttnn.BufferType.DRAM
+    out, added = _run_auto_against_native(device, xt, it, st, -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1
+    assert added == 0, "auto routed a ROW_MAJOR call with a mismatched output buffer type to codegen; expected native"
+
+
+def test_scatter_codegen_program_cache_key_follows_the_l1_frontier(device):
+    # The ROW_MAJOR factory sizes its index/src chunk from the L1 free when the program is built, and
+    # the program hash keys on that chunk: a program cached against a clear L1 must not be replayed
+    # once an unrelated L1 tensor has moved the frontier, or its CBs would land on that tensor. Two
+    # sticks take the bank less 64 kB, so a 48 kB blocker turns the default 8192-element chunk into
+    # a smaller one and the second forced call has to build a second program.
+    bank = ttnn.get_memory_view(device, ttnn.BufferType.L1).total_bytes_per_bank
+    width = ((bank - 65536) // 4) // 32 * 32
+    xt, it, st = _make_case([1, width], [1, width], -1, ttnn.ROW_MAJOR_LAYOUT, device)
+    device.clear_program_cache()
+    golden = ttnn.to_torch(_force_native(xt, -1, it, st))
+    entries_before = device.num_program_cache_entries()
+    assert_equal(golden, ttnn.to_torch(_force_codegen(xt, -1, it, st)))
+    assert device.num_program_cache_entries() == entries_before + 1
+    blocker = ttnn.from_torch(
+        torch.zeros([1, 24576], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    out = _force_codegen(xt, -1, it, st)
+    ttnn.deallocate(blocker)
+    assert_equal(golden, ttnn.to_torch(out))
+    assert device.num_program_cache_entries() == entries_before + 2, "a moved L1 frontier replayed the cached program"
