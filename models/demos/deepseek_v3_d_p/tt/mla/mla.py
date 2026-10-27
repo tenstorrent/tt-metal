@@ -1164,7 +1164,7 @@ class ttMLA:
         assert (
             seq_len_local == self.active_seq_len_local
         ), f"TP gather was preallocated for {self.active_seq_len_local} local tokens, got {seq_len_local}"
-        x = ttnn.experimental.reduce_scatter_minimal_async(
+        scattered = ttnn.experimental.reduce_scatter_minimal_async(
             x,
             persistent_output_buffers=None,
             dim=3,
@@ -1175,8 +1175,12 @@ class ttMLA:
             topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
         )
+        # Free the input now: the caller's reference would keep it alive across the gather. On its first
+        # call the gather allocates persistent L1 counters top-down, and a live L1 input (Kimi's q_a tune)
+        # pins them below it, into ring_mla's static CB range.
+        ttnn.deallocate(x)
         return ttnn.experimental.high_bw_all_gather(
-            x,
+            scattered,
             dim=3,
             output_tensor=gather_output,
             cluster_axis=self.tp_axis,
