@@ -132,6 +132,9 @@ class DeepSeekV41DecoderLayer(DeepSeekV4DecoderLayer):
         if self.engram is not None:
             self.engram.wkv.fetch_weights()
         self.self_attn.prefetch_weights()
+        # None when ``fused_experts`` runs the shared expert from DRAM itself.
+        if self.mlp.shared_experts is None:
+            return
         down = self.mlp.shared_experts.down_proj
         if down.use_prefetcher:
             down.fetch_weights()

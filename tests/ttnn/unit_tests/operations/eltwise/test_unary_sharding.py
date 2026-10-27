@@ -557,10 +557,10 @@ def test_unary_rm_interleaved(device, shape, torch_dtype, ttnn_dtype):
 
 @pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
 def test_unary_rm_block_shard(device, torch_dtype, ttnn_dtype):
-    """Test block-sharded ROW_MAJOR with non-tile-aligned shard shape (32, 80).
+    """Test block-sharded ROW_MAJOR with shard shape (32, 80).
 
-    Shard element count (2560) is not a multiple of tile_hw (1024), so
-    get_shard_specs returns nullopt and the interleaved path is used instead.
+    The shard width is not a multiple of 32, so it cannot be paged as 1x32
+    chunks. get_shard_specs returns nullopt and the interleaved path is used.
     TensorAccessor resolves sharded addresses correctly via page_id.
     """
     torch.manual_seed(42)

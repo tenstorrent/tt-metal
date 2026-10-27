@@ -35,7 +35,7 @@ from typing import Optional
 import torch
 import ttnn
 
-from models.experimental.deepseek_v4_flash.tt.common import DeepSeekV4Module, width_sharded_l1_config
+from models.experimental.deepseek_v4_flash.tt.common import CCL_TOPOLOGY, DeepSeekV4Module, width_sharded_l1_config
 from models.experimental.deepseek_v4_flash.tt.decode.attention import _decode_activation, _tp_cluster_axis
 from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import ring_prefetch
 from models.experimental.deepseek_v4_flash.tt.decode.hyperconnection import _HC_COLLAPSE_CORES
@@ -223,7 +223,7 @@ class DeepSeekV41Engram(DeepSeekV4Module):
         if self.tp_size > 1:
             partial = kv
             kv = ttnn.experimental.deepseek.width_sharded_all_reduce(
-                partial, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=ttnn.Topology.Ring
+                partial, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
             )
             ttnn.deallocate(partial)
 

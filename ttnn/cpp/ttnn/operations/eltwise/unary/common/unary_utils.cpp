@@ -521,6 +521,43 @@ DramReadPlan get_dram_read_plan(
         device->num_dram_channels());
 }
 
+namespace {
+
+bool rm_shard_is_full_tile(const tt::tt_metal::TensorSpec& spec) {
+    const auto& shard = *get_shard_spec(spec);
+    const uint64_t shard_elements = static_cast<uint64_t>(shard.shape[0]) * shard.shape[1];
+    return shard_elements % spec.tile().get_tile_hw() == 0;
+}
+
+bool rm_shard_width_is_chunkable(const tt::tt_metal::TensorSpec& spec) {
+    return get_shard_spec(spec)->shape[1] % tt::constants::TILE_WIDTH == 0;
+}
+
+}  // namespace
+
+std::optional<tt::tt_metal::Tile> row_major_sharded_1x32_tile(
+    const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec) {
+    if (input_spec.layout() != tt::tt_metal::Layout::ROW_MAJOR ||
+        output_spec.layout() != tt::tt_metal::Layout::ROW_MAJOR) {
+        return std::nullopt;
+    }
+    const bool input_sharded = input_spec.memory_config().is_sharded() && get_shard_spec(input_spec).has_value();
+    const bool output_sharded = output_spec.memory_config().is_sharded() && get_shard_spec(output_spec).has_value();
+    if (!input_sharded && !output_sharded) {
+        return std::nullopt;
+    }
+    const bool input_short = input_sharded && !rm_shard_is_full_tile(input_spec);
+    const bool output_short = output_sharded && !rm_shard_is_full_tile(output_spec);
+    if (!input_short && !output_short) {
+        return std::nullopt;
+    }
+    if ((input_sharded && !rm_shard_width_is_chunkable(input_spec)) ||
+        (output_sharded && !rm_shard_width_is_chunkable(output_spec))) {
+        return std::nullopt;
+    }
+    return tt::tt_metal::Tile({1u, tt::constants::TILE_WIDTH});
+}
+
 std::optional<UnaryShardSpecs> get_shard_specs(
     const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec) {
     const bool input_sharded = input_spec.memory_config().is_sharded();
@@ -534,27 +571,28 @@ std::optional<UnaryShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    // For ROW_MAJOR layout, shard element count must be a multiple of tile_hw
-    // for the sharded borrowed-DFB path to work (it requires whole-tile pages).
-    // Fall back to the interleaved path otherwise.
-    // Each shard row is its own page, padded up to the L1 alignment, so the dense tile pages the
+    // A 32x32 page cannot alias a shorter ROW_MAJOR shard. When the shard width is a
+    // multiple of 32 the factory pages it as 1x32 instead (see row_major_sharded_1x32_tile).
+    // Anything narrower still takes the interleaved kernel, which is the only reader that
+    // can gather a partial chunk.
+    // Each shard row is its own page, padded up to the L1 alignment, so the dense pages the
     // borrowed DFB walks only line up with the buffer when that padding is zero.
     if (input_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
         auto fits_borrowed_dfb = [](const tt::tt_metal::TensorSpec& spec) {
-            const auto& shard = *get_shard_spec(spec);
-            const auto tile_hw = spec.tile().get_tile_hw();
-            const uint64_t shard_elements = static_cast<uint64_t>(shard.shape[0]) * shard.shape[1];
-            return shard_elements % tile_hw == 0 &&
+            return get_shard_spec(spec).has_value() &&
                    spec.compute_page_size_bytes() % tt::tt_metal::hal::get_l1_alignment() == 0;
         };
-
-        if ((input_sharded && !fits_borrowed_dfb(input_spec)) || (output_sharded && !fits_borrowed_dfb(output_spec))) {
+        const bool pages_as_1x32 = row_major_sharded_1x32_tile(input_spec, output_spec).has_value();
+        auto fits = [&](const tt::tt_metal::TensorSpec& spec) {
+            return fits_borrowed_dfb(spec) && (pages_as_1x32 || rm_shard_is_full_tile(spec));
+        };
+        if ((input_sharded && !fits(input_spec)) || (output_sharded && !fits(output_spec))) {
             static std::once_flag warn_flag;
             std::call_once(warn_flag, [] {
                 log_warning(
                     tt::LogOp,
-                    "Unary: ROW_MAJOR shard element count is not tile-aligned or its rows are not L1-aligned; "
-                    "falling back to interleaved path");
+                    "Unary: ROW_MAJOR shard is not a whole tile or a 1x32-pageable width, or its rows are not "
+                    "L1-aligned; falling back to interleaved path");
             });
             return std::nullopt;
         }

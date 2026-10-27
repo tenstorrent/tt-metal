@@ -113,11 +113,19 @@ namespace ttnn::experimental::deepseek::moe {
 //   memory_config:    optional output memory config. Defaults to the input's, except for a
 //                     replicated input, whose L1 HEIGHT_SHARDED replica has no meaningful output
 //                     layout: there the default is DRAM interleaved.
+//   shared_gate_up_weights / shared_down_weights: optional always-active shared expert, added to
+//                     the output with weight 1 for every token. gate_up is [H, 2*Is] with gate/up
+//                     interleaved per I-tile, DRAM ND-sharded [H, 64]; down is [Is, H], DRAM
+//                     ND-sharded [32, 64]. Is and the dtype are independent of the routed experts'.
+//                     Only the 6-expert path runs it: its I-tiles are dealt round-robin over the 6
+//                     groups, and each group's down partial joins the existing group-0 reduce.
+//   shared_swiglu_limit: clamp limit for the shared expert's SwiGLU; defaults to swiglu_limit,
+//                     and +inf leaves it unclamped.
 //
 // Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE, or ROW_MAJOR when B == 1):
 //   act       = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit),
 //               where [gate, up] = x @ gate_up_w[hit_ids[i]];
-//   output[b] = sum_i w[b, hit_ids[i]] * (act[b] @ down_w[hit_ids[i]]),
+//   output[b] = sum_i w[b, hit_ids[i]] * (act[b] @ down_w[hit_ids[i]]) (+ the shared expert),
 // with hit_ids the routing-selected experts in ascending order and w the normalized weights above
 // (zero for a token that did not select the expert). Down weights stay 64-way ND-sharded along H.
 // Gate_up is one [gate_32 | up_32] DRAM shard per I-tile, so TP's smaller local I yields fewer
@@ -143,6 +151,9 @@ Tensor fused_experts(
     bool two_hub_gather = true,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& routing_indices = std::nullopt,
-    const std::optional<Tensor>& ranking_scores = std::nullopt);
+    const std::optional<Tensor>& ranking_scores = std::nullopt,
+    const std::optional<Tensor>& shared_gate_up_weights = std::nullopt,
+    const std::optional<Tensor>& shared_down_weights = std::nullopt,
+    std::optional<float> shared_swiglu_limit = std::nullopt);
 
 }  // namespace ttnn::experimental::deepseek::moe

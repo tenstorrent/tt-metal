@@ -75,6 +75,7 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
 from models.experimental.deepseek_v41_flash.tt.prefill.model import DeepSeekV41PrefillModel
 from models.experimental.deepseek_v41_flash.tt.vision import extend_embedding, image_mask
 from models.experimental.deepseek_v4_flash.tt.common import (
+    CCL_TOPOLOGY,
     _HIFI4,
     _MASK_NEG,
     _profile,
@@ -1412,7 +1413,7 @@ class DeepSeekV41Model(DeepSeekV4Model):
                 pkt = sm["pkt"]
                 ttnn.experimental.recv_async_h2d(pkt, self._pkt_socket)
                 if self.tp_size > 1:
-                    pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=ttnn.Topology.Ring)
+                    pkt = ttnn.broadcast(pkt, ttnn.MeshCoordinate(0, 0), cluster_axis=1, topology=CCL_TOPOLOGY)
             elif recv:
                 _, receiver = self.submesh_socket_pairs[(ids[li - 1], stage)]
                 ttnn.experimental.recv_direct_async(sm["streams_in"], receiver)

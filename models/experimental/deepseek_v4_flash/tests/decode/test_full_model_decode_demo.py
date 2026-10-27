@@ -244,7 +244,7 @@ def _assert_prefetch_rings(model: DeepSeekV4Model) -> None:
         assert q_a_ring is not None, "q_a must stream through the prefetcher"
         assert not hasattr(layer.attn_hc.fn, "global_cb"), "attention hyper-connection fn must not use a GCB"
         assert not hasattr(layer.ffn_hc.fn, "global_cb"), "FFN hyper-connection fn must not use a GCB"
-        if model.tp_size > 1:
+        if model.tp_size > 1 and layer.mlp.shared_experts is not None:
             shared = layer.mlp.shared_experts
             assert (
                 not shared.gate_proj.use_prefetcher and not shared.up_proj.use_prefetcher

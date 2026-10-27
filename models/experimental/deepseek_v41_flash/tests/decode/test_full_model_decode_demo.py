@@ -66,6 +66,7 @@ from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import ENG
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import engram_table_nbytes
 from models.experimental.deepseek_v41_flash.tt.model import DeepSeekV41Model
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
+from models.experimental.deepseek_v4_flash.tt.common import _profile
 from models.experimental.deepseek_v4_flash.tt.decode.attention import CSA_INDEX_BLOCK_SIZE
 from models.experimental.deepseek_v4_flash.tt.decode.decode_prefetch import (
     DECODE_GCB_GROUP,
@@ -243,7 +244,7 @@ def _assert_prefetch_rings(model: DeepSeekV41Model) -> None:
         assert q_a_ring is not None, "q_a must stream through the prefetcher"
         assert not hasattr(layer.attn_hc.fn, "global_cb"), "attention hyper-connection fn must not use a GCB"
         assert not hasattr(layer.ffn_hc.fn, "global_cb"), "FFN hyper-connection fn must not use a GCB"
-        if model.tp_size > 1:
+        if model.tp_size > 1 and layer.mlp.shared_experts is not None:
             shared = layer.mlp.shared_experts
             assert (
                 not shared.gate_proj.use_prefetcher and not shared.up_proj.use_prefetcher
@@ -354,6 +355,9 @@ def _build_and_prefill(
         # [1, 1, vocab], lm_head in-trace and read back off the D2H socket
         logits = model.decode_traced(prompt_ids[prompt_idx], pos).reshape(1, -1).float()
         next_id = int(logits[0].argmax().item())
+        # decode_traced returns once the step's output is read, so no replay is parked on a recv here.
+        for sm in model.submeshes_io:
+            _profile(sm["device"])
     logger.info(f"prefill ({real_len} tokens at pos {start_pos}) -> token id {next_id} {tokenizer.decode([next_id])!r}")
     logger.info(f"pool usage after prefill: {model.session_usage()}")
 
@@ -487,11 +491,17 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         posted = 0  # gen_positions handed to replay_traced_ahead
         fed = 0  # packets written to the H2D socket
         read = 0  # outputs read back off the D2H socket
+        # Under the device profiler its DRAM buffers have to be read before they fill, and a read syncs every
+        # submesh, which deadlocks against replays parked on in-trace recv. So the window stops at each
+        # ``replay_ahead`` boundary instead of sliding: once that block is read back, nothing is in flight.
+        profiling = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
 
         def refill_replay(step: int) -> None:
             """Keep one window of traces posted: the current step and the ones after."""
             nonlocal posted
             want = min(len(gen_positions), step - 1 + replay_ahead)
+            if profiling:
+                want = min(want, ((step - 1) // replay_ahead + 1) * replay_ahead)
             if want > posted:
                 model.replay_traced_ahead(gen_positions[posted:want])
                 posted = want
@@ -530,6 +540,10 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
                 if next_id == eos_id:
                     logger.info("hit EOS; stopping")
                     break
+                if profiling and step > 1 and (step - 1) % replay_ahead == 0:
+                    assert read == posted, f"profiler read with {posted - read} replay(s) still in flight"
+                    for sm in model.submeshes_io:
+                        _profile(sm["device"])
                 # Top the window up before feeding, so the device is already parked on
                 # in-trace recv for this step and the next ones.
                 refill_replay(step)

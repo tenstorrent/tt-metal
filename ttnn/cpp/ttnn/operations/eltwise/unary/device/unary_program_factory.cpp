@@ -211,8 +211,14 @@ void enumerate_core_rt_args(
     const uint32_t num_cores_total =
         zero_start_grid ? compute_with_storage_grid.x * compute_with_storage_grid.y : all_device_cores.num_cores();
 
-    const uint32_t tile_height = output.tensor_spec().tile().get_height();
-    const uint32_t tile_width = output.tensor_spec().tile().get_width();
+    // A short ROW_MAJOR shard (one row of 32 columns, for example) is not a 32x32 tile.
+    // Page it as 1x32 so the sharded CB aliases the bytes in place. Dividing that shard by
+    // a 32x32 page yields zero pages, and the compute kernel then waits forever.
+    const auto rm_1x32_tile = has_sharding ? row_major_sharded_1x32_tile(input.tensor_spec(), output.tensor_spec())
+                                           : std::optional<tt::tt_metal::Tile>{};
+    const auto spec_tile = output.tensor_spec().tile();
+    const uint32_t tile_height = rm_1x32_tile ? rm_1x32_tile->get_height() : spec_tile.get_height();
+    const uint32_t tile_width = rm_1x32_tile ? rm_1x32_tile->get_width() : spec_tile.get_width();
     const uint32_t tile_hw = tile_height * tile_width;
 
     const auto input_df = cb_dataformat_for(input.dtype());
@@ -241,7 +247,7 @@ void enumerate_core_rt_args(
     }
     const uint32_t out_num_tiles =
         rm_interleaved ? (k.total_rows + k.rows_per_tile - 1) / k.rows_per_tile : output.physical_volume() / tile_hw;
-    const uint32_t oWt = output.padded_shape()[-1] / output.tensor_spec().tile().get_width();
+    const uint32_t oWt = output.padded_shape()[-1] / tile_width;
 
     std::vector<CoreCoord> cores;
     if (has_sharding) {
@@ -257,8 +263,13 @@ void enumerate_core_rt_args(
                                        const auto& tensor) -> std::function<uint32_t(CoreCoord)> {
             if (is_row_major) {
                 auto df = cb_dataformat_for(tensor.dtype());
-                uint32_t ts = tile_size(df);
+                uint32_t ts = rm_1x32_tile ? rm_1x32_tile->get_tile_size(df) : tile_size(df);
                 uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
+                TT_FATAL(
+                    ts > 0 && shard_bytes % ts == 0,
+                    "ROW_MAJOR shard size in bytes ({}) must be a multiple of the unary page size ({})",
+                    shard_bytes,
+                    ts);
                 uint32_t pages = shard_bytes / ts;
                 return [pages](CoreCoord) -> uint32_t { return pages; };
             }
@@ -497,18 +508,22 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     }
 
     // For ROW_MAJOR interleaved: use tile_size DFB entries and group/chunk rows.
-    // For sharded ROW_MAJOR or TILE layout: DFB entry is always tile_size.
+    // A short sharded ROW_MAJOR shard is paged as 1x32 (see row_major_sharded_1x32_tile);
+    // every other sharded layout keeps a 32x32 entry.
     const bool rm_interleaved = is_row_major && !has_sharding;
-    const uint32_t input_dfb_page_size = single_tile_size;
-    const uint32_t output_dfb_page_size = single_tile_size_output;
+    const auto rm_1x32_tile = has_sharding ? row_major_sharded_1x32_tile(input.tensor_spec(), output.tensor_spec())
+                                           : std::optional<tt::tt_metal::Tile>{};
+    const uint32_t input_dfb_page_size = rm_1x32_tile ? rm_1x32_tile->get_tile_size(dfb_data_format) : single_tile_size;
+    const uint32_t output_dfb_page_size =
+        rm_1x32_tile ? rm_1x32_tile->get_tile_size(dfb_data_format_output) : single_tile_size_output;
 
-    auto shard_pages = [](const tt::tt_metal::ShardSpec& spec, const Tensor& t, bool rm) -> uint32_t {
+    auto shard_pages = [&](const tt::tt_metal::ShardSpec& spec, const Tensor& t, bool rm) -> uint32_t {
         if (rm) {
             auto df = cb_dataformat_for(t.dtype());
-            uint32_t ts = tile_size(df);
+            uint32_t ts = rm_1x32_tile ? rm_1x32_tile->get_tile_size(df) : tile_size(df);
             uint32_t shard_bytes = spec.shape[0] * spec.shape[1] * datum_size(df);
-            TT_ASSERT(
-                shard_bytes % ts == 0,
+            TT_FATAL(
+                ts > 0 && shard_bytes % ts == 0,
                 "ROW_MAJOR shard size in bytes ({}) must be a multiple of DFB page size ({})",
                 shard_bytes,
                 ts);
@@ -550,6 +565,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         // Two bursts, so the next burst moves while compute works on the last one.
         .num_entries = src_num_tiles_per_shard.value_or(2 * read_burst(plan.flow)),
         .data_format_metadata = dfb_data_format_for_input,
+        .tile_format_metadata = rm_1x32_tile,
         .borrowed_from = src_sharded ? std::optional<TensorParamName>(INPUT) : std::nullopt,
     });
 
@@ -559,6 +575,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
             .entry_size = input_dfb_page_size,
             .num_entries = 2,
             .data_format_metadata = dfb_data_format,
+            .tile_format_metadata = rm_1x32_tile,
         });
     }
 
@@ -567,6 +584,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
         .entry_size = output_dfb_page_size,
         .num_entries = dst_num_tiles_per_shard.value_or(2 * write_burst(plan.flow)),
         .data_format_metadata = dfb_data_format_output,
+        .tile_format_metadata = rm_1x32_tile,
         .borrowed_from = dst_sharded ? std::optional<TensorParamName>(OUTPUT) : std::nullopt,
     });
 

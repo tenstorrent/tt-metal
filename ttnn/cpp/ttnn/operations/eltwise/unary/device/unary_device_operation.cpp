@@ -351,12 +351,17 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const auto shard_specs = get_shard_specs(input_tensor.tensor_spec(), output_spec);
     std::optional<uint32_t> src_shard_vol = std::nullopt;
     std::optional<uint32_t> dst_shard_vol = std::nullopt;
+    const bool rm_sharded_1x32 =
+        shard_specs.has_value() && row_major_sharded_1x32_tile(input_tensor.tensor_spec(), output_spec).has_value();
     if (shard_specs.has_value()) {
-        const auto tile_hw = input_tensor.tensor_spec().tile().get_tile_hw();
+        // 1x32 pages: a one-row shard is smaller than tile_hw, so dividing by the 32x32 tile
+        // collapses every such shard to the same volume and would reuse the wrong program.
+        const auto tile_hw =
+            rm_sharded_1x32 ? tt::constants::TILE_WIDTH : input_tensor.tensor_spec().tile().get_tile_hw();
         if (input_tensor.is_sharded()) {
             src_shard_vol = shard_specs->input_shard_spec.numel() / tile_hw;
         }
-        const auto out_tile_hw = output_spec.tile().get_tile_hw();
+        const auto out_tile_hw = rm_sharded_1x32 ? tt::constants::TILE_WIDTH : output_spec.tile().get_tile_hw();
         dst_shard_vol = shard_specs->output_shard_spec.numel() / out_tile_hw;
     }
 
@@ -408,6 +413,7 @@ ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         // output_spec.
         distribution_key(
             output_spec, tensor_args.output_tensor.has_value() ? &*tensor_args.output_tensor : nullptr, "output"),
+        rm_sharded_1x32,
         src_shard_vol,
         dst_shard_vol,
         // The DRAM read flow selects kernel defines, dataflow buffers and semaphores.
