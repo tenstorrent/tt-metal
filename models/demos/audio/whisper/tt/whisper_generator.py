@@ -107,6 +107,62 @@ MAX_PROMPT_TOKENS = 224  # Maximum number of tokens allowed in prompt
 STREAM_MAX_HOLD_TOKENS = 8
 
 
+@dataclass
+class SpecialTokenIds:
+    """Whisper special-token IDs resolved per model variant.
+
+    large-v2 and large-v3 / large-v3-turbo do NOT share the same IDs: v3 added the
+    ``<|yue|>`` (Cantonese) language token, which shifts every special token after the
+    language block -- ``<|startofprev|>``, ``<|nospeech|>``, ``<|notimestamps|>`` and the
+    timestamp range -- up by one relative to v2. The module-level ``*_TOKEN_ID`` constants
+    above are the large-v3 reference values; prefer these resolved IDs in all code paths.
+    """
+
+    eos: int
+    startoftranscript: int
+    startofprev: int
+    no_speech: int
+    notimestamps: int
+    timestamp_begin: int
+    timestamp_end: int
+
+
+def resolve_special_token_ids(config, generation_config, tokenizer) -> SpecialTokenIds:
+    """Derive Whisper special-token IDs from the tokenizer and generation config.
+
+    Deriving these (instead of hard-coding the large-v3 values) keeps the generator
+    correct for large-v2, large-v3 and large-v3-turbo. ``<|nospeech|>`` sits immediately
+    before ``<|notimestamps|>``; the 1500 timestamp tokens (``<|0.00|>`` .. ``<|30.00|>``)
+    sit immediately after it.
+    """
+
+    def tid(name):
+        tok = tokenizer.convert_tokens_to_ids(name)
+        return tok if isinstance(tok, int) and tok >= 0 else None
+
+    notimestamps = getattr(generation_config, "no_timestamps_token_id", None)
+    if notimestamps is None:
+        notimestamps = tid("<|notimestamps|>")
+    if notimestamps is None:
+        # Fall back to the large-v3 layout if the tokenizer is unexpectedly bare.
+        notimestamps = NOTIMESTAMPS_TOKEN_ID
+
+    startoftranscript = getattr(config, "decoder_start_token_id", None) or tid("<|startoftranscript|>")
+    startofprev = tid("<|startofprev|>")
+    if startofprev is None:
+        startofprev = notimestamps - 2
+
+    return SpecialTokenIds(
+        eos=config.eos_token_id,
+        startoftranscript=startoftranscript,
+        startofprev=startofprev,
+        no_speech=notimestamps - 1,
+        notimestamps=notimestamps,
+        timestamp_begin=notimestamps + 1,
+        timestamp_end=notimestamps + 1500,
+    )
+
+
 class EncoderTraceState:
     """Holds captured encoder traces keyed by ``trace_key`` (``batch_size_per_device``) for ``run_encoder_traced_or_eager``.
 
@@ -295,6 +351,10 @@ class WhisperGenerator:
         self.feature_extractor = feature_extractor
         self.ttnn_linear_weight = ttnn_linear_weight
         self.generation_config = generation_config
+        # Resolve Whisper special-token IDs from the tokenizer / generation config so the
+        # generator is correct across variants. large-v2 uses a different special-token
+        # layout than large-v3 / large-v3-turbo (v3 added the <|yue|> language token).
+        self.special_ids = resolve_special_token_ids(self.config, self.generation_config, self.processor.tokenizer)
         self.input_mesh_mapper = input_mesh_mapper
         self.output_mesh_composer = output_mesh_composer
         self.weights_mesh_mapper = weights_mesh_mapper
@@ -1039,13 +1099,13 @@ class WhisperGenerator:
         # When return_timestamps=True, remove <|notimestamps|> to allow timestamp generation
         if return_timestamps_for_prefix:
             # Remove notimestamps token if present
-            forced_decoder_ids = [(pos, tok) for pos, tok in forced_decoder_ids if tok != NOTIMESTAMPS_TOKEN_ID]
+            forced_decoder_ids = [(pos, tok) for pos, tok in forced_decoder_ids if tok != self.special_ids.notimestamps]
         else:
             # Add notimestamps token if not present (at the appropriate position)
-            if not any(tok == NOTIMESTAMPS_TOKEN_ID for _, tok in forced_decoder_ids):
+            if not any(tok == self.special_ids.notimestamps for _, tok in forced_decoder_ids):
                 # Find the last position and add notimestamps after it
                 max_pos = max((pos for pos, _ in forced_decoder_ids), default=0)
-                forced_decoder_ids.append((max_pos + 1, NOTIMESTAMPS_TOKEN_ID))
+                forced_decoder_ids.append((max_pos + 1, self.special_ids.notimestamps))
 
         # When prompt is provided, the sequence becomes:
         # <|startofprev|> -> [prompt tokens] -> <|startoftranscript|> -> <|language|> -> <|task|> -> ...
@@ -1059,11 +1119,11 @@ class WhisperGenerator:
                 prompt_tokens = prompt_tokens[:MAX_PROMPT_TOKENS]
 
             # Build forced tokens dict
-            forced_tokens_dict = {0: STARTOFPREV_TOKEN_ID}
+            forced_tokens_dict = {0: self.special_ids.startofprev}
             for i, token in enumerate(prompt_tokens):
                 forced_tokens_dict[i + 1] = token
             # Add <|startoftranscript|> after prompt
-            forced_tokens_dict[len(prompt_tokens) + 1] = STARTOFTRANSCRIPT_TOKEN_ID
+            forced_tokens_dict[len(prompt_tokens) + 1] = self.special_ids.startoftranscript
             # Offset for the rest of the forced decoder ids
             prompt_offset = len(prompt_tokens) + 1  # +1 for <|startofprev|>
 
@@ -1162,7 +1222,7 @@ class WhisperGenerator:
 
             with torch.no_grad():
                 probs = torch.softmax(next_token_logits, dim=-1)
-                no_speech_probs = probs[:, NO_SPEECH_TOKEN_ID]
+                no_speech_probs = probs[:, self.special_ids.no_speech]
 
                 log_probs.append(
                     torch.log_softmax(next_tokens_scores, dim=-1)
@@ -1398,7 +1458,7 @@ class WhisperGenerator:
                 if next_token_logits is not None:
                     with torch.no_grad():
                         probs = torch.softmax(next_token_logits, dim=-1)
-                        no_speech_probs = probs[:, NO_SPEECH_TOKEN_ID]
+                        no_speech_probs = probs[:, self.special_ids.no_speech]
 
             total_decode_time += time.time() - start_iter
             # Calculate throughput based on tokens generated (not including prefix)
@@ -1628,8 +1688,9 @@ class WhisperGenerator:
 
         return True, "quality_good"
 
-    @staticmethod
-    def _extract_timestamps_from_tokens(token_ids: torch.Tensor, processor, audio_duration: float = None) -> List[dict]:
+    def _extract_timestamps_from_tokens(
+        self, token_ids: torch.Tensor, processor, audio_duration: float = None
+    ) -> List[dict]:
         """
         Extract timestamps from generated token IDs and segment the text.
         """
@@ -1641,12 +1702,12 @@ class WhisperGenerator:
 
         for i, token in enumerate(tokens):
             # Stop processing at EOS token to avoid repetitive tokens
-            if token == EOS_TOKEN_ID:
+            if token == self.special_ids.eos:
                 break
 
-            if TIMESTAMP_TOKEN_START <= token <= TIMESTAMP_TOKEN_END:
+            if self.special_ids.timestamp_begin <= token <= self.special_ids.timestamp_end:
                 # This is a timestamp token
-                timestamp_seconds = (token - TIMESTAMP_TOKEN_START) * 0.02
+                timestamp_seconds = (token - self.special_ids.timestamp_begin) * 0.02
 
                 # If we have accumulated text tokens, create a segment
                 if current_text_tokens:

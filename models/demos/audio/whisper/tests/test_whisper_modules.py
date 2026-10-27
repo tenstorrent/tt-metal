@@ -22,13 +22,19 @@ from models.common.utility_functions import (
     torch_random,
 )
 from models.demos.audio.whisper.tt import ttnn_optimized_functional_whisper
-from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
+from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
+    WHISPER_L1_SMALL_SIZE,
+    WHISPER_TRACE_REGION_SIZE,
+    init_kv_cache,
+)
 from models.demos.audio.whisper.tt.whisper_generator import EncoderTraceState, run_encoder_traced_or_eager
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # MODEL_NAME = "openai/whisper-base"
-MODEL_NAME = "distil-whisper/distil-large-v3"
+# Override via WHISPER_TEST_MODEL to run the PCC suite against another variant
+# (e.g. openai/whisper-large-v2, openai/whisper-large-v3, openai/whisper-large-v3-turbo).
+MODEL_NAME = os.environ.get("WHISPER_TEST_MODEL", "distil-whisper/distil-large-v3")
 
 
 def whisper_config_for_tests(model_name: str) -> WhisperConfig:
@@ -666,10 +672,14 @@ def test_ttnn_whisper(
     if len(last_hidden_state.shape) == 4:
         last_hidden_state = last_hidden_state.squeeze(1)
 
+    # Full-size Whisper (large-v2 / large-v3: 32 decoder layers) accumulates more bf16 rounding
+    # across the stack than distil-large-v3 (2 decoder layers), so the end-to-end hidden-state PCC
+    # floor is slightly lower. Op-level PCCs stay >0.999 and greedy decode is unaffected.
+    is_full_large_decoder = config.decoder_layers > 8
     if is_blackhole():
-        expec_out_pcc = 0.990
+        expec_out_pcc = 0.985 if is_full_large_decoder else 0.990
     else:  # wormhole_b0
-        expec_out_pcc = 0.991
+        expec_out_pcc = 0.985 if is_full_large_decoder else 0.991
     _, pcc_message = assert_with_pcc(expected_last_hidden_state, last_hidden_state, expec_out_pcc)
     logger.info(f"Output PCC: {pcc_message}")
 
@@ -681,7 +691,9 @@ def test_ttnn_whisper(
 @pytest.mark.parametrize("num_decode_iterations", [5])
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": 1000000, "num_command_queues": 2}],
+    # Use the production trace-region size: the decode trace for a full-size decoder (large-v2 /
+    # large-v3: 32 layers) exceeds the small region that was enough for distil-large-v3 (2 layers).
+    [{"l1_small_size": WHISPER_L1_SMALL_SIZE, "trace_region_size": WHISPER_TRACE_REGION_SIZE, "num_command_queues": 2}],
     indirect=True,
 )
 def test_traced_decoder_executor(
