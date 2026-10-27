@@ -508,6 +508,8 @@ struct EdmChannelWorkerInterface : EdmChannelWorkerConnection<WORKER_HANDSHAKE_N
         uint8_t edm_read_counter_initial_value) :
         Connection{worker_location_info_ptr, 0, connection_live_semaphore, sender_sync_noc_cmd_buf} {
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_read_counter)) = edm_read_counter_initial_value;
+        *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->credit_mode)) =
+            connection_interface::kernel_credit_mode;
         static_cast<DERIVED*>(this)->reset_counters();
     }
 
