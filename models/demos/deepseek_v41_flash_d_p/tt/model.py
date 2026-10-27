@@ -15,7 +15,7 @@ Resting layout between steps (components.yaml header, tt/layout.py): per chip (r
     attn_in / attn_norm / ffn_in   [1, 1, S/SP, H/TP] (hidden split; bf16 under BF16_ACTIVATIONS=on, else fp32)
     q_resid / kv                   [1, 1, S/SP, 1280] (bf16 under BF16_ACTIVATIONS=on, else fp32) / [1, 1, S/SP, 512]
                                    bf16 (row-split, TP-replicated)
-    ffn_norm                       [1, 1, S/SP, H] fp32 (whole rows, replicated over TP)
+    ffn_norm                       [1, 1, S/SP, H] fp32 (whole rows, replicated over TP; MOE_HEAD=fused: [S/SP, H/TP])
     experts_out / shared_out       the fp32 partials [1, 1, S/SP, H] before the one MoE exchange (moe_add sums them,
                                    then one exact all_gather + SFPU add over TP: components.yaml moe_add notes)
 
@@ -327,7 +327,9 @@ class TtDS41Block:
         self.fused = model.fused  # MHC_FUSED=on (P.14): hc + collapse in one program, residuals emit the next hc row
         self.fold = ccl.glue_fold()  # GLUE_FOLD=on (P.19)
         self.attn_norm = build_norm(mesh, ck, cfg, i, "attn_norm")
-        self.ffn_norm = build_norm(mesh, ck, cfg, i, "ffn_norm")
+        # (MOE_IMPL=block, MOE_HEAD=fused: the fused head gathers x over TP itself - ffn_norm keeps the column split)
+        fused_head = settings.get("MOE_IMPL") == "block" and settings.get("MOE_HEAD") == "fused"
+        self.ffn_norm = build_norm(mesh, ck, cfg, i, "ffn_norm", gather=False if fused_head else None)
         self.attn_res = build_residual(cfg)
         self.ffn_res = build_residual(cfg, step="ffn_residual")
         # attention input: one fused [wq_a | wkv] projection for q_a and kv

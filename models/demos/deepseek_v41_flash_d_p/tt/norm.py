@@ -185,9 +185,14 @@ NORM_WEIGHTS = {"attn_norm": "attn_norm.weight", "ffn_norm": "ffn_norm.weight"}
 GATHERED_NORMS = {"ffn_norm"}
 
 
-def build_norm(mesh, ck, cfg, layer: int, step: str) -> TtDistributedRmsNorm:
+def build_norm(mesh, ck, cfg, layer: int, step: str, gather: bool | None = None) -> TtDistributedRmsNorm:
+    """gather: None = GATHERED_NORMS; False on ffn_norm: the column split kept (MOE_HEAD=fused gathers x itself), in
+    FFN_NORM_DTYPE."""
     w = ck.weight(f"layers.{layer}.{NORM_WEIGHTS[step]}", torch.float32)
-    gather = step in GATHERED_NORMS
+    gathered = step in GATHERED_NORMS
+    gather = gathered if gather is None else gather
     # BF16_ACTIVATIONS=on (P.20): attn_norm writes bf16 (the GPU code's RMSNorm .to(dtype)); ffn_norm: FFN_NORM_DTYPE
     dtype = None if gather else act_dtype()
+    if gathered and not gather:
+        dtype = ttnn.bfloat16 if settings.get("FFN_NORM_DTYPE") == "bf16" else None
     return TtDistributedRmsNorm(mesh, w, cfg.eps, gather=gather, dtype=dtype)

@@ -41,6 +41,59 @@ Expert numbering: the block puts expert `b` on chip `b // epc` (row-major); our 
 our slots and permutes the router's rows (gate weight, bias) to match (`expert_permutation`), so the weight cache is
 the flat path's.
 
+## The fused head (MOE_HEAD=fused)
+
+Setting `MOE_HEAD` (env `DS41_MOE_HEAD`, read only under `MOE_IMPL=block`): `ops` (default, everything above) or
+`fused` (owner decision 2026-10-27 "go with fused head"; `ops` stays the default until the owner has seen the A/B).
+The head becomes one program a chip (tt/fused_head.py HeadSE3): x gathered over TP on its ports straight into the
+shared expert engine (bfp8, LoFi, clamped SiLU 10) with its row reduce-scatter to the owners, the router (logits HiFi3
+on the engine, fp32 partial sums in a fixed order, sqrt(softplus) + bias, top 6, weights / sum x 1.5), the routing
+exchange, the combine planner and dispatch prep. The exchange (dispatch, flat experts + combine) and the ops tail are
+unchanged. Planned on the 2x2: engine 10 x 8 cores, 2 row chunks, router on the engine, predicted 584 us a layer.
+
+What differs from the ops head:
+- x: ffn_norm keeps the column split `[S/SP, H/TP]` (tt/norm.py `build_norm(gather=False)`, tt/model.py) - the head
+  gathers x itself, so ffn_norm's all-gather goes (0.59 vs 1.02 ms a chunk). Same values (the gather is a move).
+- Router: Marko's fused router with a new score option (`RouterSpec.score` / `RouterStream(score=)`, default
+  `sigmoid`: his models unchanged): `sqrtsoftplus` = `softplus_tile` built with `INP_FLOAT32` (the fp32 polynomial,
+  as stock `ttnn.softplus` on fp32 and our `ROUTER_SOFTPLUS=fp32` fork option) then `sqrt_tile`, fp32 in DEST. Its
+  bitonic top-K now sorts K's power of two (K 6: the top 8, rows take the first 6; K 4 / 8 / 16 / 32 unchanged).
+- Combine order: the head's planner (routing_a2a's) writes no order table, so D7's fixed order is not available.
+  The combine snaps each term to 2^-19 instead (Marko's `combine_snap`: exact fp32 sums in any order while sums stay
+  under 2^24 x 2^-19 = 32; DS41's routed sums peak at 5.4 on the s4096 golden; per-term error < 1e-6). The block now
+  refuses `combine_deterministic` with the fused head.
+- Shared expert at LoFi (D5): the engine takes its fidelity as a parameter; `FusedHead.fits` only refused LoFi by
+  policy, now accepted. The router's logits stay HiFi3 (fixed in the engine kernel).
+- Other changes to Marko's code, defaults unchanged: the engine's down K step `KBD` defaults to the largest divisor
+  <= 8 of I's tiles (DS41: 36 tiles a chip -> 6; was a fixed 8 the planner could not fit); routing_stream's X port
+  direction on a TP line of 2 (modulo 2 both neighbours looked like +1); the head's outputs kept across forwards with
+  the ops tail too (freed, they came back at new addresses between layers and the prepared program was rebuilt every
+  layer: clean wall 863 ms a chunk before this fix). Carried as-is from Marko @ 856d97d5864:
+  `ttnn/ttnn/operations/matmul_reduce_scatter/` and `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp`
+  (se_rs.py imports its `plan_transport`; Python + JIT kernels, no C++ build).
+- Fits the 2x2 as is: 2 links a direction (what the block uses), `l1_small_size` 24576 (arena 1256 KB of the device's
+  1279 KB cap).
+
+Measured on the 2x2 (chunk 2048, 8 layers, rung `last`, chunk [53248, 55296)):
+
+| path | device ms / chunk | MoE section ms | clean wall ms / chunk |
+|---|---|---|---|
+| flat (MOE_IMPL=flat) | 65.74 | - | 138.0 |
+| block, ops head | 66.9 | 22.03 | 160.6 |
+| block, fused head | 61.97 | 17.45 | 102.2 |
+
+The profiler's real-time mode charges programs by device-operation id, and `run_prepared` launches through
+`device_operation::launch`: the head's program shows in the experts section as "(other)" (2 programs a chip,
+0.69 ms a layer with the dispatch), as the ops head's prepared exchange launches did (3 a chip, 0.21 ms). So the
+"~0.5 ms a layer missing" note below does not hold for this profiler; both heads' numbers include those programs.
+
+Accuracy: block alone (test_moe_block, dsv41_flash-2048) PCC 0.9904 vs host (ops head 0.9903); traced 48 replays PCC
+min 0.9903, 0 of 34 same-routing replays differ bitwise; ladder L.s4096 / L.last / L.s55296 pass with every metric
+within ~1% of the ops head's (e.g. L.s55296 err_layer_L24 0.0281 vs 0.0280, limit 0.0445). Router unit test
+(tests/test_fused_head_parts.py::test_router_sqrtsoftplus, MOE_MESH=2x2): picks equal float64's on every token clear
+of noise, 99.4-100% of all tokens, weights within 1.0e-3 (half a bf16 ulp), LoFi shared expert PCC 0.9996. Logs and
+scripts: /localdev/dnijemcevic/bringup/fused_head_2026-10-27/.
+
 ## Decisions and where they are implemented
 
 | # | Decision | Where |
@@ -48,7 +101,7 @@ the flat path's.
 | D1 | A/B on the 2x2 behind `MOE_IMPL` (default `flat`, unchanged) | tt/settings.py `MOE_IMPL`; tt/model.py `TtDS41Block.__init__` / `_fns` |
 | D2 | x reaches the block gathered; ffn_norm unchanged | moe_block.py `MoEOptions.x_gathered` (`_x_shape`, `_head`: no x all-gather, router fed `mesh_partition(x, dim=3)`, x not freed); adapter `block_options()` |
 | D3 | Marko's ops router with DS41's gate weight, bias, route scale 1.5, top 6 | moe_block.py `Router` (unchanged); adapter `host()` (bf16 gate, fp32 bias recentred as tt/router.py, rows permuted), `block_model()` (asserts the config's top-k, H, I, route scale, limit against `DSV41_FLASH`) |
-| D4 | ops head | adapter `block_options()`: `head="ops"` (`x_gathered` also requires it) |
+| D4 | ops head; fused head behind `MOE_HEAD` (owner 2026-10-27) | adapter `block_options()`: `head="ops"` (`x_gathered` also requires it), `MOE_HEAD=fused`: `head="fused"`, `combine_snap` (section above) |
 | D5 | shared expert LoFi, bfp8 weights | adapter `block_dtypes()`: `MoEDtypes(shared_fidelity=LoFi)`; bfp8 is the block's default. The block already had the fidelity option: no block change |
 | D6 | Marko's expert layout (owner change 2026-10-27, after the flat-path A/B 65.74 vs 68.10 ms / chunk) | DS41's `EXPERTS_LAYOUT` (default `marko`, copied from 979579fee03): tt/experts.py `TtExperts.flat_op` / `flat_layout`; the adapter gives the block that layout (`MoELayer.build(..., layout=)`, new `RoutedExperts(layout=)` so the exchange plans with it) and asserts `marko` equals the block's `RoutedExperts.layout_of`. `legacy` also works (the exchange then plans with LEGACY: untested) |
 | D7 | fixed combine order | moe_block.py `MoEOptions.combine_deterministic` -> `TokenExchange(deterministic=)` -> `TtK3TokenSplitMoE(deterministic=True)` (the exchange's det planner); adapter `block_options()` |
@@ -84,9 +137,8 @@ MATMUL_FIDELITY does not reach the router (HiFi4 in the block).
 - Our device params: `l1_small_size` 24576 (Marko's tests use 0: 24 KB less L1 for the arenas) and fabric payload
   10880 B (the block needs >= 10272).
 - 2 links a direction (the exchange's ports are built for 2; the 2x2 has 4).
-- The bring-up profiler on this branch does not wrap `ttnn.bringup.run_prepared` (Marko's branch does, in the
-  framework's testing/profiler.py; not carried): the exchange's planner / prep / zero / dispatch launches (~0.5 ms a
-  layer on his measurements) are missing from the experts step's device time. Wall time is unaffected.
+- (Checked 2026-10-27: does not apply - see the fused head section.) The bring-up profiler on this branch does not wrap
+  `ttnn.bringup.run_prepared` (Marko's branch does, in op mode); the real-time mode still charges those programs.
 - Component and swap tests (bringup/hooks.py `_device_step_fn`) build the flat modules step by step, so they never
   exercise the block. Covering it needs a framework change: one step `moe` (inputs `ffn_norm`, output `mlp_out`)
   instead of router / experts / shared_expert / moe_add in the block graph (or a hook that lets a model fuse steps for

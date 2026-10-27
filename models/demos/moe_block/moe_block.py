@@ -443,6 +443,10 @@ class MoEBlock(LightweightModule):
         fits = FusedHead.fits(g, model, dtypes)
         assert options.head != "fused" or fits is True, f"the fused head: {fits}"
         self.head_mode = "fused" if options.head == "fused" or (options.head == "auto" and fits is True) else "ops"
+        # (the fused head plans the combine itself - routing_a2a's planner writes no order table: combine_snap instead)
+        assert not (
+            options.combine_deterministic and self.head_mode == "fused"
+        ), "combine_deterministic: the ops head's planner (the fused head's has no fixed order; combine_snap)"
         assert (
             not options.experts_during_dispatch or self.head_mode == "fused"
         ), "experts_during_dispatch: the fused head (its dispatch prep hands the exchange the dispatch buffer)"
@@ -560,8 +564,10 @@ class MoEBlock(LightweightModule):
             f"{g.tokens_per_chip} owned a chip), {g.experts_per_chip} experts a chip, routed width {model.routed_width}; "
             f"{self.summary}; flat layout {self.experts.layout_fields}; dtypes {dtypes}; options {options}"
         )
-        if self.fused is not None:  # (the fused tail frees nothing of the head's: its outputs are reused each forward)
-            self.fused.head.persist = self.tail is not None or owners
+        # (the fused head's outputs reused each forward, either tail: freed, they come back at other addresses between a
+        # model's layers and the prepared program is rebuilt every call, ~90 ms of host)
+        if self.fused is not None:
+            self.fused.head.persist = True
 
     def _mark(self, name):
         if self.stage_hook is not None:
@@ -840,8 +846,7 @@ class MoEBlock(LightweightModule):
                 return y_own
             y = ttnn.add(y_own, se)
             ttnn.deallocate(y_own)
-            if not (self.fused is not None and getattr(self.fused.head, "persist", False)):  # (the head's, reused)
-                ttnn.deallocate(se)
+            self._free_se(se)
             mark("add")
             return y
         if self.latent is not None:
@@ -854,20 +859,24 @@ class MoEBlock(LightweightModule):
             if se is not None:
                 y = ttnn.add(out, se)
                 ttnn.deallocate(out)
-                ttnn.deallocate(se)
+                self._free_se(se)
                 out = y
                 mark("add")
             return out
         if se is not None:  # (the shared expert's owner rows, added before the all-to-all carries both)
             y = ttnn.add(y_own, se)
             ttnn.deallocate(y_own)
-            ttnn.deallocate(se)
+            self._free_se(se)
             y_own = y
             mark("add")
         out = self._tp_a2a(y_own, cat_dim=2, split_dim=3)  # back to the width split [S/SP, H/TP]
         ttnn.deallocate(y_own)
         mark("tail_a2a")
         return out
+
+    def _free_se(self, se):
+        if not (self.fused is not None and getattr(self.fused.head, "persist", False)):  # (the head's, reused)
+            ttnn.deallocate(se)
 
     # ---- TP collectives (cluster axis 1: a line, or a ring on a torus that wraps it) ----
     def _tp_topology(self):
@@ -1086,15 +1095,16 @@ class FusedHead:
         if act.kind not in ("silu", "situ", "clamped_silu"):
             return f"shared activation {act.kind}"
         rc = model.router
-        if rc.score_func != "sigmoid" or not rc.normalize_topk or rc.expert_groups != 1:
-            return "router: sigmoid scores, normalized top-K, no expert groups"
+        if rc.score_func not in ("sigmoid", "sqrtsoftplus") or not rc.normalize_topk or rc.expert_groups != 1:
+            return "router: sigmoid / sqrtsoftplus scores, normalized top-K, no expert groups"
         # (lines or rings on either axis - the gather's / RS's / routing exchange's ring schedules; 2 links: the
         # exchange's ports and the tail's K halves are a link each)
         if g.links != 2:
             return f"{g.links} links (built for 2)"
-        hifi = (ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4)
-        if dtypes.shared_weights != ttnn.bfloat8_b or dtypes.shared_fidelity not in hifi:
-            return "shared expert: bf8 weights at HiFi2 / 3 / 4"
+        # (LoFi: the engine's own fidelity - DeepSeek-V4.1's choice; the router's logits stay HiFi3 either way)
+        fids = (ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4)
+        if dtypes.shared_weights != ttnn.bfloat8_b or dtypes.shared_fidelity not in fids:
+            return "shared expert: bf8 weights at LoFi / HiFi2 / 3 / 4"
         return True
 
     def __init__(
@@ -1149,6 +1159,7 @@ class FusedHead:
                 ordered=deterministic,
                 split=split,
                 on_engine={"auto": None, "engine": True, "router_cores": False}[router],
+                score=model.router.score_func,
             ),
             latent=latent,
             # (the planner's row capacity: the head's (2 S K + 32 EPC: the router cores' L1), within the exchange's
