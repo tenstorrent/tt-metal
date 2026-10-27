@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
-"""Quasar Q17: a tiled ttnn.slice leaves dirty DM-cache lines that later corrupt a width-sharded RMSNorm.
+"""Quasar Q10: a tiled ttnn.slice leaves dirty DM-cache lines that later corrupt a width-sharded RMSNorm.
 
 The slice reader keeps its index odometer in a Scratchpad written through the DM cache. Those dirty L2 lines
 outlive the program; the sharded RMSNorm writer's reduce-scaler fill flushes the cached alias of its tile and
