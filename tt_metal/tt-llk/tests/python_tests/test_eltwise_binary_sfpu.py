@@ -1225,6 +1225,8 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs)
 
 _QUANT_INT8_MIN = -127
 _QUANT_INT8_MAX = 127
+_QUANT_UINT8_MAX = 255
+_QUANT_INT8_BIAS = 0x80  # the offset-128 pack's bias; also the int8 byte of -128
 _QUANT_OPS = [
     MathOperation.SfpuQuant,
     MathOperation.SfpuRequant,
@@ -1236,10 +1238,14 @@ QUANT_SWEEP = dict(
 )
 
 
-def _run_quant(
+def _run_sfpu_binary_word_pairs(
     mathop,
-    sign_magnitude,
+    in0_words,
+    in1_words,
+    zero_point_bits,
+    output_format,
     *,
+    sign_magnitude=False,
     is_perf=False,
     perf_report=None,
     run_types=None,
@@ -1247,9 +1253,94 @@ def _run_quant(
     iterations=32,
     approx_mode=ApproximationMode.No,
 ):
+    """Run *mathop* on (in0, in1) tile pairs of raw 32-bit words; return the in0-tile result words.
+
+    The result overwrites the in0 tile; the in1 tiles are packed back untouched and checked to round-trip.
+    """
+    pairs = in0_words.size // _ELEMENTS_PER_TILE
+    assert pairs * _ELEMENTS_PER_TILE == in0_words.size == in1_words.size
+    tile_cnt_A = 2 * pairs
+    input_dimensions = (
+        [32 * tile_cnt_A // 4, 128] if tile_cnt_A % 4 == 0 else [32 * tile_cnt_A, 32]
+    )
+    staged = np.empty((pairs, 2, _ELEMENTS_PER_TILE), dtype=np.int32)
+    staged[:, 0, :] = in0_words.reshape(pairs, _ELEMENTS_PER_TILE)
+    staged[:, 1, :] = in1_words.reshape(pairs, _ELEMENTS_PER_TILE)
+    src_A = torch.from_numpy(staged.reshape(-1).copy())
+
+    formats = InputOutputFormat(DataFormat.Int32, output_format)
+    dest_acc = DestAccumulation.Yes
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    )
+    run_types = _resolve_perf_args(is_perf, perf_report, run_types)
+    test_config_kwargs = {
+        "test_name": "sources/sfpu_binary_test.cpp",
+        "formats": formats,
+        "templates": [
+            generate_input_dim(input_dimensions, input_dimensions),
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(approx_mode),
+            ITERATIONS(iterations),
+            BROADCAST_TYPE(LlkBroadcastType.None_),
+            SFPU_BCAST_DIM(LlkBroadcastType.None_),
+            # The shared math driver reads this for every op. These ops do not use it.
+            SFPU_DST_ROUNDING_MODE(),
+            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
+        ],
+        "runtimes": [
+            TILE_COUNT(tile_cnt_A),
+            NUM_BLOCKS(num_blocks),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
+            NUM_FACES(),
+            ZERO_POINT(zero_point_bits),
+        ],
+        "variant_stimuli": StimuliConfig(
+            src_A,
+            DataFormat.Int32,
+            src_A[:_ELEMENTS_PER_TILE],
+            DataFormat.Int32,
+            output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=1,
+            tile_count_res=tile_cnt_A,
+            twos_complement=True,
+        ),
+        "dest_acc": dest_acc,
+        "unpack_to_dest": True,
+        "disable_format_inference": True,
+        "compile_time_formats": True,
+    }
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
+    )
+    fc = configuration.formats_config[0]
+    fc.pack_src = output_format
+    fc.pack_dst = output_format
+    fc.pack_S_src = output_format
+    fc.pack_S_dst = output_format
+    if is_perf:
+        configuration.run(perf_report)
+        return None
+
+    res = configuration.run().result
+    if output_format == DataFormat.Float32:
+        words = fp32_bits_as_int32(torch.tensor(res, dtype=torch.float32).flatten())
+    else:
+        words = torch.tensor(res, dtype=torch.int32).flatten()
+    words = words.numpy().reshape(pairs, 2, _ELEMENTS_PER_TILE)
+    assert np.array_equal(
+        words[:, 1, :].reshape(-1), in1_words
+    ), f"{mathop.name}: the untouched in1 tiles did not round-trip bit-exactly"
+    return words[:, 0, :].reshape(-1).copy()
+
+
+def _run_quant(mathop, sign_magnitude, **run_kwargs):
     """Stage the Quasar quant stimuli on the shared WH/BH binary kernel."""
     n = _ELEMENTS_PER_TILE
-    tile_cnt_A = 2
     is_dequant = mathop == MathOperation.SfpuDequant
     a_is_int = mathop != MathOperation.SfpuQuant
     output_format = DataFormat.Float32 if is_dequant else DataFormat.Int32
@@ -1277,14 +1368,8 @@ def _run_quant(
     else:
         a_staged = fp32_bits_as_int32(a_float)
 
-    src_A = torch.cat((a_staged, fp32_bits_as_int32(scale)))
-    input_dimensions = [64, 32]
-    formats = InputOutputFormat(DataFormat.Int32, output_format)
-    dest_acc = DestAccumulation.Yes
-
     if is_dequant:
         golden_active = ((a_float - zero_point) * scale).to(torch.float32)
-        out_dtype = torch.float32
     else:
         prod = a_float * scale + zero_point
         # SFPSTOCHRND rounds ties away from zero. torch.round ties to even, so
@@ -1308,70 +1393,25 @@ def _run_quant(
         assert (
             golden_active[neg_zero] == 0
         ).all(), f"{mathop.name} negative-zero lanes must stay +0"
-        out_dtype = torch.int32
 
     zp_for_kernel = -zero_point if is_dequant else zero_point
     zp_bits = struct.unpack("<I", struct.pack("<f", zp_for_kernel))[0]
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    words = _run_sfpu_binary_word_pairs(
+        mathop,
+        a_staged.numpy().astype(np.int32),
+        fp32_bits_as_int32(scale).numpy(),
+        zp_bits,
+        output_format,
+        sign_magnitude=sign_magnitude,
+        **run_kwargs,
     )
-    run_types = _resolve_perf_args(is_perf, perf_report, run_types)
-    test_config_kwargs = {
-        "test_name": "sources/sfpu_binary_test.cpp",
-        "formats": formats,
-        "templates": [
-            generate_input_dim(input_dimensions, input_dimensions),
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(approx_mode),
-            ITERATIONS(iterations),
-            BROADCAST_TYPE(LlkBroadcastType.None_),
-            SFPU_BCAST_DIM(LlkBroadcastType.None_),
-            # The shared math driver reads this for every op. Quant does not use it.
-            SFPU_DST_ROUNDING_MODE(),
-            SIGN_MAGNITUDE_FORMAT(sign_magnitude),
-        ],
-        "runtimes": [
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(),
-            ZERO_POINT(zp_bits),
-        ],
-        "variant_stimuli": StimuliConfig(
-            src_A,
-            DataFormat.Int32,
-            src_A[:n],
-            DataFormat.Int32,
-            output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=1,
-            tile_count_res=tile_cnt_A,
-            twos_complement=True,
-        ),
-        "dest_acc": dest_acc,
-        "unpack_to_dest": True,
-        "disable_format_inference": True,
-        "compile_time_formats": True,
-    }
-    configuration = create_test_or_perf_config(
-        is_perf=is_perf,
-        run_types=run_types,
-        test_config_kwargs=test_config_kwargs,
-    )
-    fc = configuration.formats_config[0]
-    fc.pack_src = output_format
-    fc.pack_dst = output_format
-    fc.pack_S_src = output_format
-    fc.pack_S_dst = output_format
-    if is_perf:
-        configuration.run(perf_report)
+    if words is None:
         return
-
-    res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=out_dtype).flatten()
+    res_tensor = torch.from_numpy(words)
+    if is_dequant:
+        res_tensor = res_tensor.view(torch.float32)
     assert passed_test(
-        golden_active, res_tensor[:n], output_format
+        golden_active, res_tensor, output_format
     ), f"{mathop.name} sign_magnitude={sign_magnitude} mismatch"
 
 
@@ -1381,13 +1421,8 @@ def test_eltwise_binary_sfpu_quant(mathop, sign_magnitude, **run_kwargs):
 
 
 # =============================================================================
-# Quant family, 8-bit entry points. The eight quantization.h wrappers the rows above do
-# not reach: uint8 / int8 output (quant_init / requant_init OUTPUT_FORMAT) and int8 input
-# (requant_init / dequant_init INT8_INPUT). Same layout as _run_quant -- operand A in the
-# even tile, the fp32 scale in the odd tile, raw Int32 words both ways -- so every output
-# word (int32, uint8-in-a-word or int8 byte) is compared bit for bit against an exact
-# emulation. Production instantiates all eight with SIGN_MAGNITUDE_FORMAT = false, so the
-# runner hardcodes it and the tests have no sign_magnitude axis.
+# Quant family, 8-bit entry points: the quantization.h wrappers with uint8 / int8 output or int8
+# input, on raw Int32 words against an exact emulation. Production runs them without sign-magnitude.
 # =============================================================================
 
 _QUANT_BYTE_OPS = [
@@ -1445,11 +1480,7 @@ def _bits_f32(words) -> np.ndarray:
 
 
 def _exact_f32(fr: Fraction):
-    """The fp32 equal to *fr*; +-inf past FLT_MAX; None when finite but not representable.
-
-    Only exact conversions are accepted, so the golden never models the SFPU's fp32
-    rounding: the sweep stimuli are built so every multiply-add result is exact.
-    """
+    """The fp32 equal to *fr*; +-inf past FLT_MAX; None when finite but not representable."""
     if abs(fr) > _F32_MAX:
         return np.float32(np.inf) if fr > 0 else np.float32(-np.inf)
     f = np.float32(float(fr))
@@ -1466,12 +1497,9 @@ def _round_half_away(fr: Fraction) -> tuple[int, bool]:
 def _quant_byte_golden(mathop, in0_words, scale_words, zero_point_bits):
     """Bit-exact emulation of one 8-bit quant entry point on raw Int32 words.
 
-    Returns (expected words, defined mask, tie mask). A lane is *defined* when the result
-    follows from the kernel's documented semantics without an unspecified hardware choice:
-    finite operands, an exact fp32 multiply-add, no rounding tie, and -- on the unclamped
-    FP32_TO_UINT8 path -- a non-negative value (a negative one returns its magnitude).
-    Ties are reported separately so the caller asserts the hardware's tie rule instead of
-    assuming one.
+    Returns (expected words, defined mask, tie mask). A lane is undefined when the result needs an
+    unspecified hardware choice: a non-finite operand, an inexact fp32 multiply-add, or a negative
+    value on the unclamped FP32_TO_UINT8 path. Ties are returned so the caller asserts the tie rule.
     """
     in0_words = np.asarray(in0_words, dtype=np.int32)
     scales = _bits_f32(scale_words)
@@ -1484,7 +1512,7 @@ def _quant_byte_golden(mathop, in0_words, scale_words, zero_point_bits):
         defined[:] = False
         return expected, defined, tie
     zp_fr = Fraction(zp)
-    bias = Fraction(128) if mathop in _QUANT_INT8_OUT else Fraction(0)
+    bias = Fraction(_QUANT_INT8_BIAS) if mathop in _QUANT_INT8_OUT else Fraction(0)
     in0_f32 = _bits_f32(in0_words) if mathop in _QUANT_FP32_IN else None
 
     def saturate(i, v_inf):
@@ -1492,14 +1520,14 @@ def _quant_byte_golden(mathop, in0_words, scale_words, zero_point_bits):
         if mathop in _QUANT_FP32_OUT:
             expected[i] = _f32_bits([v_inf])[0]
         elif mathop in _QUANT_INT8_OUT:
-            expected[i] = 0x7F if v_inf > 0 else 0x80
+            expected[i] = _QUANT_INT8_MAX if v_inf > 0 else _QUANT_INT8_BIAS
         elif mathop in _QUANT_UINT8_OUT:
             if v_inf > 0:
-                expected[i] = 255
+                expected[i] = _QUANT_UINT8_MAX
             else:
                 defined[i] = False  # magnitude of -inf on the unclamped uint8 path
         else:
-            expected[i] = 127 if v_inf > 0 else -127
+            expected[i] = _QUANT_INT8_MAX if v_inf > 0 else _QUANT_INT8_MIN
 
     for i in range(n):
         s = float(scales[i])
@@ -1518,13 +1546,11 @@ def _quant_byte_golden(mathop, in0_words, scale_words, zero_point_bits):
             a_fr = Fraction(a)
         elif mathop in _QUANT_INT8_IN:
             # The byte as the UInt8 unpacker delivers it, after the kernel's `^ 0x80` unbias.
-            a_fr = Fraction((int(in0_words[i]) & 0xFF) ^ 0x80)
+            a_fr = Fraction((int(in0_words[i]) & 0xFF) ^ _QUANT_INT8_BIAS)
         else:
             a_fr = Fraction(int(in0_words[i]))
             if a_fr == -(2**31):
-                # INT32_MIN has no sign-magnitude encoding; the input SFPCAST+SFPSETSGN
-                # turns it into -0, which casts to 0.0 (pre-existing, not reachable from
-                # ttnn's int8-range requant).
+                # No sign-magnitude encoding: the input SFPCAST + SFPSETSGN turns it into -0.
                 defined[i] = False
                 continue
 
@@ -1555,33 +1581,31 @@ def _quant_byte_golden(mathop, in0_words, scale_words, zero_point_bits):
         if mathop in _QUANT_INT8_OUT:
             # max(v, 0) -> FP32_TO_UINT8 (saturating [0, 255]) -> ^ 0x80
             r, tie[i] = _round_half_away(max(v_fr, Fraction(0)))
-            expected[i] = min(r, 255) ^ 0x80
+            expected[i] = min(r, _QUANT_UINT8_MAX) ^ _QUANT_INT8_BIAS
         elif mathop in _QUANT_UINT8_OUT:
             if v_fr < 0:
                 defined[i] = False  # unclamped FP32_TO_UINT8: returns the magnitude
                 continue
             r, tie[i] = _round_half_away(v_fr)
-            expected[i] = min(r, 255)
+            expected[i] = min(r, _QUANT_UINT8_MAX)
         else:
             # FP32_TO_INT8: sign-magnitude with a 7-bit magnitude, saturates at +-127.
             r, tie[i] = _round_half_away(v_fr)
-            expected[i] = min(max(r, -127), 127)
+            expected[i] = min(max(r, _QUANT_INT8_MIN), _QUANT_INT8_MAX)
     return expected, defined, tie
 
 
-# Scales are powers of two in [1/8, 4] so an operand with at most 4 fractional bits keeps
-# the multiply-add exact in fp32. Ties are avoided by construction: fp32 inputs are odd
-# sixteenths, so a*s has an odd/128 .. odd/4 fractional part and the integer zero-point
-# keeps it that way; integer inputs get a zero-point with a 1/16 fraction instead, so a*s
-# (a multiple of 1/8) plus 1/16 is always odd/16. Neither is ever .5 or a whole number.
+# Power-of-two scales and odd-sixteenth (fp32) or 1/16-offset zero-point (integer) operands keep
+# every multiply-add exact in fp32 and never land on a .5 tie.
 _QUANT_BYTE_SCALES = np.array([0.125, 0.25, 0.5, 1.0, 2.0, 4.0], dtype=np.float32)
 
 
 def _quant_byte_sweep_stimuli(mathop, n, generator):
-    """(in0 words, scale words, zero-point bits) reaching both saturation sides."""
+    """(in0 words, scale words, zero-point bits) reaching the saturation sides."""
     scales = generator.choice(_QUANT_BYTE_SCALES, size=n).astype(np.float32)
     if mathop in _QUANT_FP32_IN:
-        # Odd sixteenths in [-512, 512): saturates both sides at every scale.
+        # Odd sixteenths in [-512, 512): int8-out saturates high from s = 0.25 and low from
+        # s = 0.5; uint8-out (|in0|) saturates only high, from s = 0.5.
         k = generator.integers(-4096, 4096, size=n)
         in0 = ((2 * k + 1) / 16.0).astype(np.float32)
         if mathop in _QUANT_UINT8_OUT:
@@ -1589,10 +1613,8 @@ def _quant_byte_sweep_stimuli(mathop, n, generator):
         in0_words = _f32_bits(in0)
         zp = 5.0
     elif mathop in _QUANT_INT8_IN:
-        # Every byte value, as the UInt8 unpacker delivers it: the low byte of a word.
+        # Every byte value; the unbiased byte is in [0, 255], so a negative zero-point reaches the low side.
         in0_words = generator.integers(0, 256, size=n).astype(np.int32)
-        # The unbiased byte is in [0, 255], so a negative zero-point is what reaches the
-        # low saturation side (production folds -128 * scale into it the same way).
         zp = 5.0625 if mathop in _QUANT_UINT8_OUT else -300.0625
         if mathop in _QUANT_FP32_OUT:
             zp = -128.0625  # dequant: the bits of -zero_point
@@ -1674,8 +1696,7 @@ def _assert_quant_byte_lanes(
             for i in idx
         )
 
-    # Ties are asserted against ONE rule rather than assumed: Blackhole SFP_STOCH_RND
-    # FP32_TO_INT8 / FP32_TO_UINT8 rounds half away from zero (sfpi RoundMode::NearestAway).
+    # Blackhole SFP_STOCH_RND FP32_TO_INT8 / FP32_TO_UINT8 rounds half away from zero.
     ties = tie & live
     if ties.any():
         assert np.array_equal(result[ties], expected[ties]), (
@@ -1686,7 +1707,7 @@ def _assert_quant_byte_lanes(
     if undefined.any():
         print(
             f"{mathop.name} {label}: implementation-defined lanes ->\n"
-            + lanes(undefined, 64)
+            + lanes(undefined, limit=64)
         )
     check = defined & ~tie & live
     mismatch = check & (result != expected)
@@ -1696,114 +1717,21 @@ def _assert_quant_byte_lanes(
     )
 
 
-def _run_quant_byte(
-    mathop,
-    in0_words,
-    scale_words,
-    zero_point_bits,
-    *,
-    is_perf=False,
-    perf_report=None,
-    run_types=None,
-    loop_factor=1,
-    iterations=32,
-    approx_mode=ApproximationMode.No,
-):
-    """Run one 8-bit quant entry point on (in0, scale) tile pairs; returns the result words.
-
-    Even tiles carry operand A, odd tiles the fp32 scale, and the result overwrites the
-    even tile; the odd tiles are packed back untouched and checked to round-trip.
-    """
-    pairs = in0_words.size // _ELEMENTS_PER_TILE
-    assert pairs * _ELEMENTS_PER_TILE == in0_words.size == scale_words.size
-    tile_cnt_A = 2 * pairs
-    input_dimensions = (
-        [32 * tile_cnt_A // 4, 128] if tile_cnt_A % 4 == 0 else [32 * tile_cnt_A, 32]
-    )
-    staged = np.empty((pairs, 2, _ELEMENTS_PER_TILE), dtype=np.int32)
-    staged[:, 0, :] = in0_words.reshape(pairs, _ELEMENTS_PER_TILE)
-    staged[:, 1, :] = scale_words.reshape(pairs, _ELEMENTS_PER_TILE)
-    src_A = torch.from_numpy(staged.reshape(-1).copy())
-
+def _run_quant_byte(mathop, in0_words, scale_words, zero_point_bits, **run_kwargs):
+    """Run one 8-bit quant entry point on (in0, scale) tile pairs; returns the result words."""
     output_format = (
         DataFormat.Float32 if mathop in _QUANT_FP32_OUT else DataFormat.Int32
     )
-    formats = InputOutputFormat(DataFormat.Int32, output_format)
-    dest_acc = DestAccumulation.Yes
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
+    return _run_sfpu_binary_word_pairs(
+        mathop, in0_words, scale_words, zero_point_bits, output_format, **run_kwargs
     )
-    run_types = _resolve_perf_args(is_perf, perf_report, run_types)
-    test_config_kwargs = {
-        "test_name": "sources/sfpu_binary_test.cpp",
-        "formats": formats,
-        "templates": [
-            generate_input_dim(input_dimensions, input_dimensions),
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(approx_mode),
-            ITERATIONS(iterations),
-            BROADCAST_TYPE(LlkBroadcastType.None_),
-            SFPU_BCAST_DIM(LlkBroadcastType.None_),
-            SFPU_DST_ROUNDING_MODE(),
-            # Every quantization.h wrapper of these entry points passes false.
-            SIGN_MAGNITUDE_FORMAT(False),
-        ],
-        "runtimes": [
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(),
-            ZERO_POINT(zero_point_bits),
-        ],
-        "variant_stimuli": StimuliConfig(
-            src_A,
-            DataFormat.Int32,
-            src_A[:_ELEMENTS_PER_TILE],
-            DataFormat.Int32,
-            output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=1,
-            tile_count_res=tile_cnt_A,
-            twos_complement=True,
-        ),
-        "dest_acc": dest_acc,
-        "unpack_to_dest": True,
-        "disable_format_inference": True,
-        "compile_time_formats": True,
-    }
-    configuration = create_test_or_perf_config(
-        is_perf=is_perf,
-        run_types=run_types,
-        test_config_kwargs=test_config_kwargs,
-    )
-    fc = configuration.formats_config[0]
-    fc.pack_src = output_format
-    fc.pack_dst = output_format
-    fc.pack_S_src = output_format
-    fc.pack_S_dst = output_format
-    if is_perf:
-        configuration.run(perf_report)
-        return None
-
-    res = configuration.run().result
-    if output_format == DataFormat.Float32:
-        words = fp32_bits_as_int32(torch.tensor(res, dtype=torch.float32).flatten())
-    else:
-        words = torch.tensor(res, dtype=torch.int32).flatten()
-    words = words.numpy().reshape(pairs, 2, _ELEMENTS_PER_TILE)
-    assert np.array_equal(
-        words[:, 1, :].reshape(-1), scale_words
-    ), f"{mathop.name}: the untouched scale tiles did not round-trip bit-exactly"
-    return words[:, 0, :].reshape(-1).copy()
 
 
-# Plain pytest.mark.parametrize for the one-axis tests: the harness's @parametrize hands a
-# lone axis over as a 1-tuple, which the --op filter does not see (test_exponential_clamp_negative
-# makes the same choice). The perf twin adds its own axes and uses QUANT_BYTE_SWEEP.
+# A lone axis goes through plain pytest.mark.parametrize: the harness @parametrize hands it over as a
+# 1-tuple that --op does not see. The perf twin adds its own axes and uses QUANT_BYTE_SWEEP.
 @pytest.mark.parametrize("mathop", _QUANT_BYTE_OPS)
 def test_eltwise_binary_sfpu_quant_byte(mathop, **run_kwargs):
-    """Sweep: eight pairs of exact, tie-free stimuli that reach both saturation sides."""
+    """Sweep: eight pairs of exact, tie-free stimuli that reach the saturation sides."""
     generator = np.random.default_rng(0)
     if run_kwargs.get("is_perf"):
         # One pair, like the quant rows above; the instruction stream is data-independent.
@@ -1817,13 +1745,13 @@ def test_eltwise_binary_sfpu_quant_byte(mathop, **run_kwargs):
     expected, defined, tie = _quant_byte_golden(mathop, in0, sc, zp)
     assert defined.all() and not tie.any(), "sweep stimuli must be exact and tie-free"
     if mathop in _QUANT_INT8_OUT:
-        ends = {0x80, 0x7F}
+        ends = {_QUANT_INT8_BIAS, _QUANT_INT8_MAX}
     elif mathop in _QUANT_UINT8_OUT:
-        ends = {255}
+        ends = {_QUANT_UINT8_MAX}
     elif mathop in _QUANT_FP32_OUT:
         ends = set()
     else:
-        ends = {-127, 127}
+        ends = {_QUANT_INT8_MIN, _QUANT_INT8_MAX}
     assert ends <= set(expected.tolist()), f"{mathop.name} stimuli never saturate"
     result = _run_quant_byte(mathop, in0, sc, zp)
     _assert_quant_byte_lanes(mathop, in0, sc, result, expected, defined, tie, "sweep")
@@ -1832,13 +1760,12 @@ def test_eltwise_binary_sfpu_quant_byte(mathop, **run_kwargs):
 @pytest.mark.parametrize("mathop", _QUANT_BYTE_OPS)
 def test_eltwise_binary_sfpu_quant_byte_special(mathop):
     """Special lanes against zero-point 0: +-0, +-inf, NaN payloads, denormals, FLT_MIN/MAX,
-    the -128 / 127 / 255 edges and exact .5 ties. Its own test (not a second run inside the
-    sweep) so the compile-producer builds its variant too: under --speed-of-light the
-    zero-point is compiled in, and the producer skips after a test's first run.
+    the -128 / 127 / 255 edges and exact .5 ties. A test of its own so --speed-of-light compiles its zero-point.
     """
+    zp = 0
     in0, sc, n_real = _quant_byte_special_stimuli(mathop)
-    expected, defined, tie = _quant_byte_golden(mathop, in0, sc, 0)
-    result = _run_quant_byte(mathop, in0, sc, 0)
+    expected, defined, tie = _quant_byte_golden(mathop, in0, sc, zero_point_bits=zp)
+    result = _run_quant_byte(mathop, in0, sc, zero_point_bits=zp)
     _assert_quant_byte_lanes(
         mathop, in0, sc, result, expected, defined, tie, "special lanes", n_real
     )
@@ -1846,20 +1773,59 @@ def test_eltwise_binary_sfpu_quant_byte_special(mathop):
         TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and mathop == MathOperation.SfpuQuantInt8
     ):
-        # The int8 clamp's NaN handling is implementation-defined, but the Blackhole result
-        # is pinned: SFPMAD canonicalises NaN before the clamp and every payload / sign lands
-        # on 127 (measured, identical before and after the SFPSWAP clamp). A change here
-        # would be a behaviour change for ttnn's int8 quantize, not a free choice.
+        # Pinned on Blackhole: every NaN payload and sign reaches the clamp sign-clear, so it packs to 127.
         nan_lanes = np.isnan(_bits_f32(in0))
         nan_lanes[n_real:] = False
         assert nan_lanes.any()
-        assert (result[nan_lanes] == 0x7F).all(), (
+        assert (result[nan_lanes] == _QUANT_INT8_MAX).all(), (
             "Blackhole QUANT_INT8 NaN lanes must keep the baseline result 127\n"
             + "\n".join(
                 f"  lane {i}: in0={_hex_words([in0[i]])} got={_hex_words([result[i]])}"
-                for i in np.flatnonzero(nan_lanes & (result != 0x7F))[:16]
+                for i in np.flatnonzero(nan_lanes & (result != _QUANT_INT8_MAX))[:16]
             )
         )
+
+
+# =============================================================================
+# _float_to_int32_positive_, the float -> int32 step of the pow kernels, on raw fp32 words.
+# =============================================================================
+
+_INT32_MAX = 2**31 - 1
+
+
+def _float_to_int32_positive_golden(words: np.ndarray) -> np.ndarray:
+    """0 below 1.0, INT32_MAX from 2**31 (incl. inf / NaN), the truncated value between."""
+    exp = ((words.astype(np.int64) >> 23) & 0xFF) - 127
+    man = (words.astype(np.int64) & 0x7FFFFF) | (1 << 23)
+    in_range = np.where(
+        exp >= 23, man << np.clip(exp - 23, 0, 7), man >> np.clip(23 - exp, 0, 23)
+    )
+    return np.where(exp < 0, 0, np.where(exp >= 31, _INT32_MAX, in_range)).astype(
+        np.int32
+    )
+
+
+@pytest.mark.parametrize("mathop", [MathOperation.SfpuFloatToInt32Positive])
+def test_eltwise_binary_sfpu_float_to_int32_positive(mathop):
+    """Every biased exponent (sign clear) with eight mantissas, bit-exact."""
+    generator = np.random.default_rng(0)
+    mantissas = np.concatenate(
+        [[0, 1, 0x400000, 0x7FFFFF], generator.integers(0, 1 << 23, size=4)]
+    )
+    words = ((np.arange(256)[:, None] << 23) | mantissas[None, :]).reshape(-1)
+    words = words.astype(np.int32)
+    expected = _float_to_int32_positive_golden(words)
+    result = _run_sfpu_binary_word_pairs(
+        mathop, words, np.zeros_like(words), 0, DataFormat.Int32
+    )
+    mismatch = np.flatnonzero(result != expected)
+    assert (
+        mismatch.size == 0
+    ), f"{mismatch.size} of {words.size} lanes differ\n" + "\n".join(
+        f"  in={_hex_words([words[i]])} got={_hex_words([result[i]])} "
+        f"expected={_hex_words([expected[i]])}"
+        for i in mismatch[:16]
+    )
 
 
 # =============================================================================

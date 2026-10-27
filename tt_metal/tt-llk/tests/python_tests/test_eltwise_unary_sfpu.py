@@ -965,13 +965,8 @@ def test_eltwise_unary_sfpu_int_shift(
     )
 
 
-# Cat E, negative operands: the sweep above is positive-only (sign-magnitude Dst default), and
-# a positive value shifts the same way under an arithmetic and a logical right shift. The
-# negative lanes are the ones that tell them apart, so this pins that the Int32 right shift
-# propagates the sign -- i.e. that `vInt >> n` lowers to the arithmetic SFPSHFT -- with the
-# operand staged in two's complement, as ttnn feeds the device. Amounts: the identity, one bit,
-# a middle amount, the full width and two out-of-range amounts (clamped to 31, giving -1 for
-# every negative operand). The largest magnitude is exact in fp32, which the stimuli pass through.
+# Negative two's-complement operands, which the positive-only sweep above never shifts: they pin that
+# `vInt >> n` is the arithmetic SFPSHFT. Amounts 32 and 63 clamp to 31 (-1 for every negative lane).
 _RIGHT_SHIFT_SIGNED_VALUES = [
     -1, -2, -3, -255, -256, -65536, -(2**30), -(2**31 - 2**7), 0, 1, 7, 2**30
 ]  # fmt: skip
@@ -981,24 +976,18 @@ _RIGHT_SHIFT_SIGNED_AMOUNTS = [0, 1, 7, 31, 32, 63]
 @parametrize(
     mathop=[MathOperation.RightShift],
     shift_amount=_RIGHT_SHIFT_SIGNED_AMOUNTS,
-    dest_acc=[DestAccumulation.Yes],
-    input_dimensions=[[64, 64]],
 )
 def test_eltwise_unary_sfpu_int_right_shift_signed(
-    mathop: MathOperation,
-    shift_amount: int,
-    dest_acc: DestAccumulation,
-    input_dimensions: list[int],
+    mathop: MathOperation, shift_amount: int
 ):
-    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        dest_acc,
+        InputOutputFormat(DataFormat.Int32, DataFormat.Int32),
+        DestAccumulation.Yes,
         ApproximationMode.No,
         mathop,
         FastMode.No,
-        input_dimensions,
+        [64, 64],
         spec_A=StimuliSpec.custom(
             values=[float(v) for v in _RIGHT_SHIFT_SIGNED_VALUES], seed=0
         ),

@@ -288,9 +288,8 @@ def test_perf_eltwise_unary_sfpu_int32(perf_report, formats, mathop, input_dimen
     )
 
 
-# The unary integer shifts (ckernel_sfpu_unary_shift.h), on their production configuration:
-# Int32 in a 32-bit Dest, unpacked straight to Dest, at the kernel's default shift amount, as
-# test_eltwise_unary_sfpu_int drives them. The instruction stream does not depend on the amount.
+# The Int32 unary shifts in their production configuration (32-bit Dest, unpacked to Dest); the
+# instruction stream does not depend on the shift amount.
 _INT32_SHIFT_OPS = [
     MathOperation.LeftShift,
     MathOperation.RightShift,

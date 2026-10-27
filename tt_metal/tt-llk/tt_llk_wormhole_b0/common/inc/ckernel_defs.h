@@ -375,6 +375,8 @@ enum class BinaryOp : std::uint8_t
     REQUANT_INT8_IN_UINT8_OUT = 58,
     REQUANT_INT8_IN_INT8_OUT  = 59,
     DEQUANT_INT8              = 60,
+    // _float_to_int32_positive_ on raw fp32 words (in0 -> out), the conversion inside the pow kernels.
+    FLOAT_TO_INT32_POSITIVE = 61,
 };
 
 enum class PackMode : std::uint8_t

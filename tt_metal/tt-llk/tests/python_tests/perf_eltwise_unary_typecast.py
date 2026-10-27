@@ -73,11 +73,8 @@ _TYPECAST_PERF_CASES = [
     (DataFormat.Int32, DataFormat.UInt16, DestAccumulation.Yes),
 ]
 
-# The plain-loop (no SFPLOADMACRO) 8/16-bit-output typecasts, at their production dest_acc:
-# ttnn.typecast forces a 32-bit Dest for every 32-bit endpoint and for any UInt8 endpoint
-# (preserve_fp32_precision), so all of these run at dest_acc=Yes. One row per
-# calculate_typecast_* arm: fp32_to_uint8, uint_to_uint8 (Int32 / UInt32 / UInt16 inputs)
-# and uint32_to_uint16 (also serving UInt8 -> UInt16).
+# The plain-loop 8/16-bit-output typecasts, one row per calculate_typecast_* input, at dest_acc=Yes:
+# ttnn.typecast forces a 32-bit Dest for 32-bit and UInt8 endpoints (preserve_fp32_precision).
 _TYPECAST_PLAIN_LOOP_PERF_CASES = [
     (DataFormat.Float32, DataFormat.UInt8, DestAccumulation.Yes),
     (DataFormat.Int32, DataFormat.UInt8, DestAccumulation.Yes),
@@ -124,8 +121,7 @@ def test_perf_eltwise_unary_typecast(
     # kernel keeps the unpack-A acc_to_dest template arg false so this is legal
     # even when dest_acc=Yes. For 16-bit inputs the data is copied SrcA -> Dest
     # by the math datacopy A2D before the SFPU typecast runs.
-    # UInt8 endpoints and UInt16 -> UInt8 also unpack to Dest: ttnn's preserve_fp32_precision
-    # promotes them to a 32-bit Dest (the functional test's _preserve_fp32_precision rule).
+    # UInt8 endpoints also unpack to Dest, as the functional test's _preserve_fp32_precision rule says.
     unpack_to_dest = input_format.is_32_bit() or _preserve_fp32_precision(formats)
 
     configuration = PerfConfig(

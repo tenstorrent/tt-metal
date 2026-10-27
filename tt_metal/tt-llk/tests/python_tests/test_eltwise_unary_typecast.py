@@ -224,12 +224,8 @@ def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
     )
 
 
-# Integer edge lanes for the 8/16-bit-output typecasts. The sweep above keeps integer inputs
-# in 0..255 (see its stimuli note), so it never drives the uint8 wrap of a negative Int32 or
-# of a value past one byte, nor the uint16 saturation of a UInt32 past 65535 -- the branches
-# calculate_typecast_uint_to_uint8 / uint32_to_uint16 exist for. Odd lanes stay in 0..127 so
-# no two adjacent outputs are all-ones: a 0xFFFFFFFF readback word is what the Blackhole NOC
-# reports for a timeout. Int32 is staged in two's complement, as ttnn delivers it.
+# The uint8 wrap and uint16 saturation edges the 0..255 sweep above never reaches. Odd lanes stay in
+# 0..127 so no readback word is all-ones, which is what the Blackhole NOC returns on a timeout.
 _INT_EDGE_PAIRS = [
     InputOutputFormat(DataFormat.Int32, DataFormat.UInt8),
     InputOutputFormat(DataFormat.UInt32, DataFormat.UInt8),
@@ -274,20 +270,16 @@ def _int_edge_spec(in_fmt: DataFormat) -> StimuliSpec:
 @parametrize(
     formats=_INT_EDGE_PAIRS,
     dest_acc=_production_dest_acc,
-    approx_mode=[ApproximationMode.No],
-    input_dimensions=[[32, 32]],
 )
 def test_eltwise_unary_typecast_int_edges(
     formats: InputOutputFormat,
     dest_acc: DestAccumulation,
-    approx_mode: ApproximationMode,
-    input_dimensions: list[int],
 ):
     _run_typecast(
         formats,
         dest_acc,
-        approx_mode,
-        input_dimensions,
+        ApproximationMode.No,
+        [32, 32],
         _int_edge_spec(formats.input_format),
         twos_complement=formats.input_format == DataFormat.Int32,
     )

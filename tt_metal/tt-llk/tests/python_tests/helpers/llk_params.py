@@ -331,6 +331,7 @@ class MathOperation(Enum):
         "REQUANT_INT8_IN_INT8_OUT", MathOpType.SFPU_BINARY
     )
     SfpuDequantInt8 = OpSpec("DEQUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuFloatToInt32Positive = OpSpec("FLOAT_TO_INT32_POSITIVE", MathOpType.SFPU_BINARY)
     # Integer / format-typed binary SFPU ops. cpp_enum_value matches the BinaryOp
     # enumerator (and, lowercased, the SfpuType) so both the dispatch and the coverage
     # guard resolve.
