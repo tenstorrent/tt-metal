@@ -10,18 +10,22 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include <hostdevcommon/fabric_common.h>
+#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <umd/device/types/arch.hpp>
 
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/struct_layout.hpp"
 
 // The fabric manifest's model. The collector fills in what the router builders know, the chip pass (join_chip) adds
@@ -306,12 +310,47 @@ struct LocalSync {
     uint32_t router_channels_mask = 0;
 };
 
-// Information about a chip.
+// Information about a chip. Every chip in the mesh graph is listed, local or not; a chip this rank can't map to a
+// device is remote, and has only its identity.
 struct Chip {
+    // Mesh-local id for the chip.
+    FabricNodeId fabric_node_id{MeshId{0}, 0};
+    // The chip's coordinates in its mesh.
+    std::vector<uint32_t> mesh_coord;
+    // Process-local id for the chip. Null for a remote chip.
+    std::optional<ChipId> physical_chip_id;
+    // Hardware id for the chip. Null for a remote chip.
+    std::optional<uint64_t> asic_id;
     ZPortRole z_port_role = ZPortRole::NONE;
     // Null when the chip has no routers.
     std::optional<LocalSync> local_sync;
     std::vector<Router> routers;
+};
+
+// What carries one VC's sender credits on a mesh, and why the builder moved it to L1 counters.
+struct VcCreditTransport {
+    uint32_t vc = 0;
+    CreditBacking backing = CreditBacking::STREAM_REGISTER;
+    // Empty when the credits use stream registers.
+    std::vector<L1CreditCounterReason> l1_counter_reasons;
+};
+
+// Which axes of a 2D mesh wrap around.
+struct MeshTorus {
+    bool y = false;
+    bool x = false;
+};
+
+// A mesh in the mesh graph, and its chips.
+struct Mesh {
+    MeshId mesh_id{0};
+    std::vector<uint32_t> shape;
+    // 2D meshes only.
+    std::optional<MeshTorus> torus;
+    bool express_routing = false;
+    // Each VC's credit transport, for meshes on this host only. VCs no router has senders on are left out.
+    std::optional<std::vector<VcCreditTransport>> credit_transport;
+    std::vector<Chip> chips;
 };
 
 // The word the router kernel writes every period_iters main-loop iterations: magic | its 16-bit iteration count.
@@ -390,6 +429,92 @@ struct Arch {
     CoreRegisters core_registers;
     // Every struct a schema names, as laid out on this architecture.
     std::vector<StructType> types;
+};
+
+// ============ The whole manifest ============
+
+// This process and the build it runs.
+struct RunInfo {
+    uint32_t host_rank = 0;
+    uint32_t mpi_rank = 0;
+    uint32_t world_size = 1;
+    // When the manifest was written, in UTC, as ISO 8601.
+    std::string written_at;
+    BuildIdentity build;
+};
+
+// The settings fabric was set up with: SetFabricConfig's arguments.
+struct FabricSettings {
+    FabricConfig fabric_config = FabricConfig::DISABLED;
+    FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    // The most routing planes fabric opens per link. Null when it opens all of them.
+    std::optional<uint8_t> num_routing_planes;
+    FabricTensixConfig tensix_config = FabricTensixConfig::DISABLED;
+    FabricUDMMode udm_mode = FabricUDMMode::DISABLED;
+    FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT;
+    FabricRouterConfig router_config;
+};
+
+// This run's fabric: the settings it was set up with, and what FabricContext derived from them.
+struct FabricInfo {
+    FabricSettings config;
+    Topology topology = Topology::Linear;
+    bool is_2d_routing = false;
+    size_t packet_header_size_bytes = 0;
+    size_t max_payload_size_bytes = 0;
+    size_t channel_buffer_size_bytes = 0;
+    // 2D routing only.
+    std::optional<uint32_t> routing_2d_route_buffer_size;
+    // 1D routing only.
+    std::optional<uint32_t> routing_1d_extension_words;
+    bool multi_txq = false;
+};
+
+// The type catalog: every struct and enum a schema names (struct:<Name>, enum:<Name>).
+struct TypeCatalog {
+    std::vector<StructType> structs;
+    std::vector<EnumType> enums;
+};
+
+// One rank's fabric manifest. Each member is one top-level block of the JSON.
+struct Manifest {
+    RunInfo run;
+    FabricInfo fabric;
+    Arch arch;
+    TypeCatalog types;
+    std::vector<Mesh> meshes;
+};
+
+// ============ Vocabulary ============
+
+// One vocabulary list: its name, and the type whose names it holds (an enum, or Content for the field kinds).
+// The vocabulary block consists of several lists, each named by name.
+template <typename T>
+struct VocabularyList {
+    using type = T;
+    std::string_view name;
+};
+
+// The lists in the manifest's vocabulary block. A label is a key whose value is one name from a fixed set, such as a
+// channel's "status"; its list names every value it can hold (channel_status lists every ChannelStatus).
+inline constexpr std::tuple k_vocabulary_lists{
+    VocabularyList<tt::ARCH>{"arch"},
+    VocabularyList<FabricConfig>{"fabric_config"},
+    VocabularyList<FabricReliabilityMode>{"reliability_mode"},
+    VocabularyList<FabricTensixConfig>{"tensix_config"},
+    VocabularyList<FabricUDMMode>{"udm_mode"},
+    VocabularyList<FabricManagerMode>{"fabric_manager_mode"},
+    VocabularyList<Topology>{"fabric_topology"},
+    VocabularyList<CreditBacking>{"credit_backing"},
+    VocabularyList<L1CreditCounterReason>{"l1_credit_counter_reason"},
+    VocabularyList<ZPortRole>{"z_port_role"},
+    VocabularyList<EdgeCapability>{"edge_capability"},
+    VocabularyList<CreditCounterIndexedBy>{"credit_counter_indexed_by"},
+    VocabularyList<StreamRegister>{"stream_register"},
+    VocabularyList<FieldCategory>{"field_category"},
+    VocabularyList<Content>{"field_kind"},
+    VocabularyList<ChannelStatus>{"channel_status"},
+    VocabularyList<tt::tt_metal::DataMovementProcessor>{"erisc_processor"},
 };
 
 }  // namespace tt::tt_fabric::manifest
