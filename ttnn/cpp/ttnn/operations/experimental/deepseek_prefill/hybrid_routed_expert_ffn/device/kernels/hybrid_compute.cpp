@@ -104,6 +104,12 @@ void kernel_main() {
     // its position, and reordering the passes would then leave the units unconfigured -- which
     // hangs the grid with no diagnostic.
     hyb_unified::hyb_hw_startup();
+    // Round FPU results into the bf16 DEST stochastically, for both passes: the default rounding biases
+    // long bf16-DEST accumulations 2-5% high, which compounds across layers into lower end-to-end KV
+    // PCC. The PRNG is reseeded on every launch so the rounding, and so the output, is bitwise
+    // reproducible.
+    UNPACK((_llk_unpack_configure_stoch_rnd_<ckernel::StochRndType::Fpu>()));
+    MATH((ckernel::init_prng_seed(0x5EED1234u)));
     // First pass: every expert above the threshold, on the whole grid.
     hyb_unified::kernel_main();
 #ifdef HYB_RUN_FUSED_PASS

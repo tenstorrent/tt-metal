@@ -445,6 +445,11 @@ void kernel_main() {
     // but because it programs the UNPACK/MATH/PACK config and must precede every compute API call,
     // including the activation init below. Nothing may be inserted above it.
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x_tiles, cb_w_gate, cb_gate_acc);
+    // Round FPU results into the bf16 DEST stochastically: the default rounding biases long bf16-DEST
+    // accumulations 2-5% high, which compounds across layers into lower end-to-end KV PCC. The PRNG
+    // is reseeded on every launch so the rounding, and so the output, is bitwise reproducible.
+    UNPACK((_llk_unpack_configure_stoch_rnd_<ckernel::StochRndType::Fpu>()));
+    MATH((ckernel::init_prng_seed(0x5EED1234u)));
 
     (void)get_arg_val<uint32_t>(0);  // retained runtime slot for cache-compatible argument layout
     const uint32_t kr_rows = get_arg_val<uint32_t>(1);
