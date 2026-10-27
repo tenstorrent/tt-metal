@@ -35,18 +35,13 @@ DEVICE_PARAMS = {"trace_region_size": 150000000}
 
 # VBench quality gate (RUN_VBENCH=1): one prompt per model, rendered at every seed after the timed runs;
 # the prompt's mean over the seeds must clear its floors (models/tt_dit/utils/vbench_bundle.py). Many seeds
-# of one prompt rather than several prompts keeps the gate's render and scoring time down.
-#
-# Floors were set ~0.03-0.06 below the prompt's lowest single-seed score on bh_sc4 4x32 720p (2026-10-24,
-# quad A); the other quad renders different videos, so the mean needs room for that. dynamic_degree is
-# binary per clip: 0.75 tolerates one static seed out of four.
+# of one prompt rather than several prompts keeps the gate's render and scoring time down. dynamic_degree
+# is binary per clip, so its floor on the mean sets how many seeds must move.
 VBENCH_SEEDS = [42, 43, 44, 45]
 VBENCH_GATE = {
-    # Motion is the content, so every seed should clear dynamic_degree. (A cyberpunk-alley prompt rendered
-    # near-static on 3 of 4 seeds, 2026-10-23.)
+    # Motion is the content, so every seed should clear dynamic_degree.
     "t2v": GatePrompt(
         text="Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
-        # Per seed: subject 0.930-0.953, background 0.940-0.975, motion 0.954-0.983, imaging 0.583-0.640.
         thresholds={
             "subject_consistency": 0.88,
             "background_consistency": 0.90,
@@ -55,12 +50,11 @@ VBENCH_GATE = {
             "imaging_quality": 0.55,
         },
     ),
-    # Animates the fractal conditioning image itself; a T2V prompt asks for content the image doesn't
-    # contain and pulled subject consistency to ~0.62. dynamic_degree and imaging_quality are meaningless
-    # on a fractal, so only intra-video consistency is gated (see test_pipeline_wan.py).
+    # Animates the fractal conditioning image itself: a prompt asking for content the image doesn't contain
+    # lowers subject consistency. dynamic_degree and imaging_quality are meaningless on a fractal, so only
+    # intra-video consistency is gated (see test_pipeline_wan.py).
     "i2v": GatePrompt(
         text="A slow, smooth camera push into a glowing fractal pattern, its intricate spiral edges and colors drifting gently.",
-        # Per seed: subject 0.910-0.961, background 0.957-0.982.
         thresholds={"subject_consistency": 0.86, "background_consistency": 0.92},
     ),
 }
