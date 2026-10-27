@@ -38,7 +38,9 @@ the descriptor's.
   prepare). Exact-match patching: an argument that holds an io tensor's address plus an offset is frozen.
 - The bring-up framework's step profiler on this branch does not wrap `run_prepared` (Marko's branch does, in
   models/demos/common/bringup/testing/profiler.py); its launches are missing from per-step device times here.
-- No unit tests of its own yet (bring-up task O.1 adds cases for the model calls).
+- No unit tests of its own. Model cases (tests/, task O.1): each program a model runs through it, built as the model builds
+  it, run by generic_op and prepared with tensors moved, bit-identical, and the determinism check (DeepSeek-V4.1: the
+  fused MoE head, the exchange dispatch).
 
 ## How to call
 ```python
