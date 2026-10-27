@@ -31,8 +31,10 @@ H = int(os.environ.get("GLM_SWEEP_H", "4096"))
 I = int(os.environ.get("GLM_SWEEP_I", "2048"))
 MS = (32, 64, 96, 128, 160, 192, 256, 384, 512, 768, 1024, 2048, 5120)
 ITERS = int(os.environ.get("GLM_SWEEP_ITERS", "10"))
-BFP4_TILE = 576  # bytes: 512 mantissa + 64 shared exponents
-W_BYTES = E * 3 * (H // 32) * (I // 32) * BFP4_TILE
+# GLM_SWEEP_WDT: the flat op's weight dtype (bf4 default; bf8 e.g. a shared expert's)
+WDT = os.environ.get("GLM_SWEEP_WDT", "bf4")
+W_TILE = {"bf4": 576, "bf8": 1088}[WDT]  # bytes: mantissas + shared exponents
+W_BYTES = E * 3 * (H // 32) * (I // 32) * W_TILE
 YRM = os.environ.get("GLM_SWEEP_YRM", "1") == "1"  # 0: y as bfp8 tiles
 DFP32 = os.environ.get("GLM_SWEEP_DFP32", "1") == "1"  # 0: bf16 DEST for the down projection
 # GLM_SWEEP_OP=unified: ttnn.bringup.unified_routed_expert_moe on the same bfp4 experts at LoFi (fp32 DEST, packer L1
@@ -81,7 +83,7 @@ def test_flat_balanced_sweep(device):
                 I=I,
                 gids=[list(range(E))],
                 n_global=NG,
-                wdtype="bf4",
+                wdtype=WDT,
                 act=ACT,
                 pin=1,
                 x_bf16=XBF16,

@@ -2006,3 +2006,16 @@ ffn_norm + routing): calibrate B_c on s4096 (tokens 0-4095), test on s56320 chun
   quiet layers. main's chain (bf8_b y, bf16 product, bf16 running sum in slot order): 3.4x our error.
 - Not yet: combine_snap default (per-model q; K3 real-weight bound unmeasured), model-level run-to-run check (GLM 56k
   twice, every (chunk, layer) compared), an overflow counter in the accumulator.
+
+### Shared expert through the flat routed expert (2026-10-27, one chip, bh-lb-19)
+Why: the head's SE engine (se_engine3) runs ~50% of HiFi2 peak with a ~1.3 us a round handshake floor; the flat expert
+is a 1D DRAM-streaming design without grid-wide per-step syncs - is it a quicker route for the shared expert?
+test_flat_balanced_sweep (new GLM_SWEEP_WDT=bf8), K3's per-chip shared expert: E 1, H 7168, I 1536 (6144 / TP 4), SiTU,
+bfp8 weights, MIMO_FL_FIDELITY=HiFi2, pure DRISC defaults:
+- M 640: 322 us (48 gate / up + 32 down cores); M 1280: 554 us. HiFi2 math floor on 90 compute cores ~170 / ~340 us:
+  53-61% of it. The engine alone at 640 rows (Oct 22-23 probes): 317 us. No win - flat at this M is not DRAM-bound
+  (32% / 25% of 512 GB/s) and only 80 cores work on one expert.
+- Split along I into "experts" over the same rows (E 4 x I 384, E 2 x I 768): the flat plan has no gate / up split
+  for 12 / 24 tile columns (TT_FATAL, flat_routed_expert_plan.cpp:486) - not pursued.
+Reading: at this shape both designs sit near half of HiFi2 peak; the shared expert is math-heavy (M 640), the flat
+expert is built for small-M, DRAM-bound experts. Levers stay inside the engine (fewer / bigger rounds, x arrival).
