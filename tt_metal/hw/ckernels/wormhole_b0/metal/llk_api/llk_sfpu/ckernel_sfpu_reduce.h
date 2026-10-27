@@ -1379,9 +1379,10 @@ inline void init_reduce_sum_avg() {
  * comparison and produces wrong minima/maxima for any non-constant input.
  *
  * Instead we use the same manual load/mask/swap structure as the Int32 path. Masked UInt16 values are
- * always non-negative, so a plain integer SFPSWAP orders them correctly (no sign-magnitude cast needed);
- * we move LREG0-3 -> LREG4-7 to feed the recorded swap buffer. Final, packer-visible results are written
- * with SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16) so the packer reads the low bits.
+ * always non-negative, so a plain integer SFPSWAP orders them correctly (no sign-magnitude cast needed).
+ * Each face is reduced by the recorded LREG4-7 swap buffer and its partial parked in LREG0-3; the cross-row
+ * chain then runs inline on LREG0-3. Final, packer-visible results are written with SFPSTORE mode 9
+ * (SFPSTORE_MOD0_FMT_LO16) so the packer reads the low bits.
  *
  * Reuses init_reduce_max_min_int32()'s 3-swap replay buffer; the swap direction is set on entry. Only a single
  * 32x32 tile is processed per call, matching the column-reduce driver which invokes the kernel per tile.
@@ -1443,26 +1444,22 @@ inline void calculate_reduce_max_min_uint16() {
             TT_SFPMOV(0, p_sfpu::LREG4, PARTIAL_LREG[i], 0);
         }
 
-        // Move the four partials (now in LREG0-3) into LREG4-7 for the transpose + cross-row reduction.
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
-
         // Transpose so the 4 partial results of each column sit in one register, reduce, transpose back.
+        // SFPTRANSP transposes LREG0-3 on their own, so the chain runs in place on the parked partials
+        // (the recorded LREG4-7 window would first need the four partials copied over and the two
+        // results copied back: 6 SFPMOV per face pair).
         TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::replay(0, 3);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG2, p_sfpu::LREG1, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
         TTI_SFPTRANSP(0, 0, 0, 0);
 
         // Swap to combine the two vertically adjacent faces (even and odd columns).
-        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, 1);  // odd columns of face pair
-        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, 1);  // even columns of face pair
-
-        TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG1, 0);
+        TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG2, 1);  // odd columns of face pair -> LREG2
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);  // even columns of face pair -> LREG0
 
         TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_3, top_face_addr);
-        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_3, top_face_addr + ODD_COLUMNS);
+        TT_SFPSTORE(p_sfpu::LREG2, STORE_MODE, ADDR_MOD_3, top_face_addr + ODD_COLUMNS);
     }
 }
 
@@ -1494,7 +1491,8 @@ inline void flip_sign_bits(const std::uint32_t num_tiles) {
  * loaded with plain INT32 (two's-complement bits preserved) and every compare-and-swap is the signed
  * compare-and-swap (_emit_int32_signed_cswap_) instead of a bare sign-magnitude SFPSWAP. The vertical
  * LREG4-7 -> LREG4 reduction reuses the 3-swap replay buffer recorded by init_reduce_max_min_int32_signed
- * (3 * INT32_SIGNED_CSWAP_LEN instructions); the final face-pair combine emits the signed swap inline.
+ * (3 * INT32_SIGNED_CSWAP_LEN instructions); the cross-row chain on the parked partials (LREG0-3) and the
+ * final face-pair combine emit the signed swap inline.
  *
  * Int32 MAX/MIN only supports a single tile (block_rt_dim == 1), which matches this single-tile kernel.
  *
@@ -1542,26 +1540,21 @@ inline void calculate_reduce_max_min_int32_col() {
             TT_SFPMOV(0, p_sfpu::LREG4, PARTIAL_LREG[i], 0);
         }
 
-        // Move the four partials (now in LREG0-3) into LREG4-7 for the transpose + cross-row reduction.
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
-
         // Transpose so the 4 partial results of each column sit in one register, reduce, transpose back.
+        // SFPTRANSP transposes LREG0-3 on their own, so the signed chain runs in place on the parked
+        // partials (see calculate_reduce_max_min_uint16; saves 6 SFPMOV per face pair).
         TTI_SFPTRANSP(0, 0, 0, 0);
-        lltt::replay(0, REPLAY_LEN);
+        _emit_int32_signed_cswap_<p_sfpu::LREG3, p_sfpu::LREG2>();
+        _emit_int32_signed_cswap_<p_sfpu::LREG2, p_sfpu::LREG1>();
+        _emit_int32_signed_cswap_<p_sfpu::LREG1, p_sfpu::LREG0>();
         TTI_SFPTRANSP(0, 0, 0, 0);
 
         // Signed compare-and-swap to combine the two vertically adjacent faces (even and odd columns).
-        _emit_int32_signed_cswap_<p_sfpu::LREG7, p_sfpu::LREG6>();  // odd columns of face pair
-        _emit_int32_signed_cswap_<p_sfpu::LREG5, p_sfpu::LREG4>();  // even columns of face pair
-
-        TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG1, 0);
+        _emit_int32_signed_cswap_<p_sfpu::LREG3, p_sfpu::LREG2>();  // odd columns of face pair -> LREG2
+        _emit_int32_signed_cswap_<p_sfpu::LREG1, p_sfpu::LREG0>();  // even columns of face pair -> LREG0
 
         TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, top_face_addr);
-        TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, top_face_addr + ODD_COLUMNS);
+        TT_SFPSTORE(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_3, top_face_addr + ODD_COLUMNS);
     }
 }
 
