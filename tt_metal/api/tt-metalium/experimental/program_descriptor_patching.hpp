@@ -52,6 +52,7 @@ namespace tt::tt_metal {
 class Program;
 struct ProgramDescriptor;
 class CircularBufferImpl;
+class Kernel;
 
 // ---------------------------------------------------------------------------
 // Resolved binding types — index-based, no raw Buffer* or RuntimeArgsData*
@@ -61,12 +62,15 @@ class CircularBufferImpl;
 // kernel_idx / core / arg_idx identify where to write; tensor_buffer_idx is
 // the index into the collect_tensor_buffers() result from the current call.
 // is_common == true means the arg is in common (non-per-core) runtime args.
+// kernel is that kernel, owned by the program the bindings were resolved against, so a cache hit skips the by-handle
+// lookup.
 struct ResolvedRtArgBinding {
     uint32_t kernel_idx = 0;
     CoreCoord core;  // unused when is_common == true
     uint32_t arg_idx = 0;
     uint32_t tensor_buffer_idx = 0;
     bool is_common = false;
+    Kernel* kernel = nullptr;
 };
 
 // Maps one dynamic CB to its CBHandle and tensor slot.

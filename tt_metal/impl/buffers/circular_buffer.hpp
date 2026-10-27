@@ -11,6 +11,17 @@
 
 namespace tt::tt_metal {
 
+// What set_global_buffer reads from the buffer. A caller rebinding many CBs to one buffer computes it once.
+struct GlobalBufferPlacement {
+    explicit GlobalBufferPlacement(const Buffer& buffer);
+
+    DeviceAddr address;
+    DeviceAddr aligned_size;
+    DeviceAddr aligned_size_per_bank;
+    bool is_l1;
+    bool per_core;  // per-core allocated: the base address depends on the CB's cores
+};
+
 class CircularBufferImpl {
 public:
     CircularBufferImpl(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
@@ -30,6 +41,8 @@ public:
     void set_total_size(uint32_t total_size);
     void set_page_size(uint8_t buffer_index, uint32_t page_size);
     void set_global_buffer(const Buffer& buffer, uint32_t total_size, uint32_t address_offset);
+    void set_global_buffer(
+        const Buffer& buffer, uint32_t total_size, uint32_t address_offset, const GlobalBufferPlacement& placement);
 
     const std::unordered_set<uint8_t>& buffer_indices() const { return config_.buffer_indices(); }
     const std::unordered_set<uint8_t>& local_buffer_indices() const { return config_.local_buffer_indices(); }

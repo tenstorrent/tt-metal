@@ -24,6 +24,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/buffers/circular_buffer.hpp"
+#include "kernels/kernel.hpp"
 #include "program_impl.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
@@ -31,6 +32,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <unordered_set>
@@ -121,6 +123,7 @@ ResolvedBindings resolve_bindings(
     };
 
     for (uint32_t k = 0; k < static_cast<uint32_t>(desc.kernels.size()); ++k) {
+        Kernel* kernel = program.impl().get_kernel(k).get();
         for (const auto& b : desc.kernels[k].buffer_bindings) {
             auto& data = GetRuntimeArgs(program, k, b.core);
 
@@ -139,7 +142,7 @@ ResolvedBindings resolve_bindings(
                 b.arg_idx < data.size() ? data[b.arg_idx] : 0u,
                 b.buffer->address());
 
-            result.rt_args.push_back({k, b.core, b.arg_idx, find_idx(b.buffer, "buffer_bindings"), false});
+            result.rt_args.push_back({k, b.core, b.arg_idx, find_idx(b.buffer, "buffer_bindings"), false, kernel});
         }
 
         for (const auto& b : desc.kernels[k].common_buffer_bindings) {
@@ -155,7 +158,7 @@ ResolvedBindings resolve_bindings(
                 b.arg_idx < data.size() ? data[b.arg_idx] : 0u,
                 b.buffer->address());
 
-            result.rt_args.push_back({k, {}, b.arg_idx, find_idx(b.buffer, "common_buffer_bindings"), true});
+            result.rt_args.push_back({k, {}, b.arg_idx, find_idx(b.buffer, "common_buffer_bindings"), true, kernel});
         }
     }
 
@@ -255,8 +258,14 @@ void apply_resolved_bindings(
         const bool group_changed = first || b.is_common != prev_is_common || b.kernel_idx != prev_kernel_idx ||
                                    (!b.is_common && b.core != prev_core);
         if (group_changed) {
-            current_data = b.is_common ? &GetCommonRuntimeArgs(program, b.kernel_idx)
-                                       : &GetRuntimeArgs(program, b.kernel_idx, b.core);
+            if (b.kernel != nullptr) {
+                // GetRuntimeArgs without the by-handle lookup, which a program of many kernels pays per group.
+                current_data =
+                    b.is_common ? &b.kernel->common_runtime_args_data() : &b.kernel->runtime_args_data(b.core);
+            } else {
+                current_data = b.is_common ? &GetCommonRuntimeArgs(program, b.kernel_idx)
+                                           : &GetRuntimeArgs(program, b.kernel_idx, b.core);
+            }
             prev_is_common = b.is_common;
             prev_kernel_idx = b.kernel_idx;
             prev_core = b.core;
@@ -264,6 +273,9 @@ void apply_resolved_bindings(
         }
         (*current_data)[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
     }
+    // A program's dynamic CBs are often carved out of one buffer, so its placement is read once per run of them.
+    const Buffer* placement_buffer = nullptr;
+    std::optional<GlobalBufferPlacement> placement;
     for (const auto& cb : bindings.cbs) {
         if (cb.circular_buffer == nullptr) {
             UpdateDynamicCircularBufferAddress(
@@ -273,8 +285,12 @@ void apply_resolved_bindings(
         // UpdateDynamicCircularBufferAddress without the by-handle lookup, which a CB-heavy program pays per CB.
         TT_FATAL(
             !cb.circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
-        cb.circular_buffer->set_global_buffer(
-            *current_buffers[cb.tensor_buffer_idx], cb.circular_buffer->size(), cb.address_offset);
+        const Buffer& buffer = *current_buffers[cb.tensor_buffer_idx];
+        if (placement_buffer != &buffer) {
+            placement.emplace(buffer);
+            placement_buffer = &buffer;
+        }
+        cb.circular_buffer->set_global_buffer(buffer, cb.circular_buffer->size(), cb.address_offset, *placement);
     }
 }
 
