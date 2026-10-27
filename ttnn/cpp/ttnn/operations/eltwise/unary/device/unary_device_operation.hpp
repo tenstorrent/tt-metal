@@ -39,11 +39,13 @@ struct UnaryDeviceOperation {
         std::optional<Tensor> output_tensor;
     };
 
+    // Runs on operation_attributes.worker_grid, which the prim picks from the worker cores in force.
     struct ProgramFactory {
         static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            tensor_return_value_t& output,
+            const CoreRangeSet& worker_cores);
 
         // Cache-hit re-apply of all per-dispatch state (per-core args + tensor bindings, which also back the
         // sharded-path DFB addresses), since the hash excludes volume. See the .cpp.
@@ -51,7 +53,8 @@ struct UnaryDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output,
-            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+            const CoreRangeSet& worker_cores);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;

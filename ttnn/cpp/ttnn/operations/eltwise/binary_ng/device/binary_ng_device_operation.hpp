@@ -140,11 +140,13 @@ struct BinaryNgDeviceOperation {
         ttsl::hash::hash_t to_hash() const;
     };
 
+    // Runs on operation_attributes.worker_grid, which the prim picks from the worker cores in force.
     struct ProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& c);
+            tensor_return_value_t& c,
+            const CoreRangeSet& worker_cores);
 
         // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer
         // addresses), since compute_program_hash excludes the tensor volume. Correct by construction —
@@ -154,7 +156,8 @@ struct BinaryNgDeviceOperation {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& c,
-            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate,
+            const CoreRangeSet& worker_cores);
     };
 
     using program_factory_t = std::variant<ProgramFactory>;

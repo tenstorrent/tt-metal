@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_device_operation.hpp"
+#include "ttnn/worker_cores.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
@@ -128,17 +129,24 @@ ShardSpec generate_shard_spec_specless(
 }
 }  // namespace utils
 
+// Inside a worker-cores scope (scoped_worker_cores) the scope's cores are the workers: they stand in for the
+// sub-device holding a shard grid and for sub-device 0.
 CoreRangeSet get_worker_grid(
     const Tensor& input_tensor_a,
     const Tensor* input_tensor_b,
     const std::optional<Tensor>& output_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    const MemoryConfig& memory_config_actual) {
+    const MemoryConfig& memory_config_actual,
+    const std::optional<CoreRangeSet>& scoped_worker_cores) {
     // If sub_core_grids is provided, use it directly
     if (sub_core_grids.has_value()) {
         log_debug(tt::LogOp, "Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();
+    }
+    if (scoped_worker_cores.has_value()) {
+        log_debug(tt::LogOp, "Using the worker-cores scope for worker grid {}", scoped_worker_cores->str());
+        return *scoped_worker_cores;
     }
 
     auto* device = input_tensor_a.device();
@@ -756,7 +764,13 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                                           // dtype depending on which LLK is meant to be used.
         output_dtype,
         ttnn::operations::binary_ng::get_worker_grid(
-            input_tensor_a, &input_tensor_b, output_tensor, memory_config, resolved_sub_core_grids, mem_config_actual),
+            input_tensor_a,
+            &input_tensor_b,
+            output_tensor,
+            memory_config,
+            resolved_sub_core_grids,
+            mem_config_actual,
+            ttnn::get_scoped_worker_cores(*input_tensor_a.device())),
         std::nullopt,
         resolved_sub_core_grids,
         sub_device_id,
@@ -870,7 +884,13 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         input_tensor_a.dtype(),
         output_dtype,
         ttnn::operations::binary_ng::get_worker_grid(
-            input_tensor_a, nullptr, output_tensor, memory_config, resolved_sub_core_grids, mem_config_actual),
+            input_tensor_a,
+            nullptr,
+            output_tensor,
+            memory_config,
+            resolved_sub_core_grids,
+            mem_config_actual,
+            ttnn::get_scoped_worker_cores(*input_tensor_a.device())),
         std::nullopt,
         resolved_sub_core_grids,
         sub_device_id,

@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/worker_cores.hpp"
 #include <algorithm>
 #include <ranges>
 #include <tt-metalium/math.hpp>
@@ -12,6 +13,14 @@
 namespace ttnn::operations::matmul {
 
 namespace {
+
+// The grid an automatic config may spread over: the bounding box of the worker cores in force (ttnn/worker_cores.hpp),
+// which outside a worker-cores scope is the whole compute grid.
+CoreCoord available_grid(const tt::tt_metal::distributed::MeshDevice& device) {
+    const auto scoped_worker_cores = ttnn::get_scoped_worker_cores(device);
+    return scoped_worker_cores.has_value() ? scoped_worker_cores->bounding_box().grid_size()
+                                           : device.compute_with_storage_grid_size();
+}
 
 // Ensure there are always symmetrical values. Different paths use different
 // index ordering (0,1 vs 1,0) to meet test PCC requirements.
@@ -336,7 +345,7 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
     const std::optional<tt::tt_metal::ShardSpec>& user_shard_spec = std::nullopt) {
     using namespace tt;
     auto* device = input_tensor_a.device();
-    auto grid_size = compute_with_storage_grid_size.value_or(device->compute_with_storage_grid_size());
+    auto grid_size = compute_with_storage_grid_size.value_or(available_grid(*device));
 
     const auto& a_shape_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
     const auto& b_shape_padded = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
@@ -463,7 +472,7 @@ MatmulProgramConfig create_matmul_program_config(
         "The last two dimensions of the first tensor and the last dimension "
         "of the second tensor must be a multiple of "
         "tile size");
-    auto core_coord = input_tensor_a.device()->compute_with_storage_grid_size();
+    auto core_coord = available_grid(*input_tensor_a.device());
     bool has_user_core_coord = user_core_coord.has_value();
     if (has_user_core_coord) {
         auto x = user_core_coord.value().x;
@@ -955,7 +964,7 @@ inline MatmulProgramConfig generate_matmul_program_config(
             output_dtype);
     }
     tt::tt_metal::distributed::MeshDevice* device = input_tensor_a.device();
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = available_grid(*device);
     return create_simple_matmul_program_config(
         input_tensor_a,
         input_tensor_b,

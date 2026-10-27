@@ -650,10 +650,15 @@ tt::tt_metal::CoreRangeSet get_worker_grid(
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids) {
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::CoreRangeSet>& scoped_worker_cores) {
     if (sub_core_grids.has_value()) {
         log_debug(tt::LogOp, "Unary: Using provided sub_core_grids for worker grid {}", sub_core_grids->str());
         return sub_core_grids.value();
+    }
+    if (scoped_worker_cores.has_value()) {
+        log_debug(tt::LogOp, "Unary: Using the worker-cores scope {} for worker grid", scoped_worker_cores->str());
+        return small_tensor_grid(op_chain, input_tensor, output_tensor, memory_config, *scoped_worker_cores);
     }
 
     // A sharded tensor's grid is in shard_spec or in nd_shard_spec when the config is ND_SHARDED

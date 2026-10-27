@@ -76,12 +76,15 @@ DramReadPlan get_dram_read_plan(
     const tt::tt_metal::CoreRangeSet& worker_grid);
 
 // The cores an op runs on: sub_core_grids, a shard grid, or the device's workers, fewer for small DRAM tensors.
+// Inside a worker-cores scope (scoped_worker_cores) the scope's cores are the workers: they stand in for the
+// sub-device holding a shard grid and for sub-device 0.
 tt::tt_metal::CoreRangeSet get_worker_grid(
     const std::vector<EltwiseUnaryWithParam>& op_chain,
     const Tensor& input_tensor,
     const std::optional<Tensor>& output_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids);
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::CoreRangeSet>& scoped_worker_cores = std::nullopt);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
     const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape);

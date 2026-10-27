@@ -14,6 +14,7 @@
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"
 #include "ttnn/global_circular_buffer.hpp"
 #include "ttnn/prefetcher_pipe.hpp"
+#include "ttnn/worker_cores.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/reflection.hpp"
 #include "tt_stl/unreachable.hpp"
@@ -22,6 +23,19 @@
 namespace ttnn::prim {
 
 namespace {
+
+// Places a config's grid at the corner of the worker cores in force (ttnn/worker_cores.hpp), sized by their bounding
+// box where the config has no grid of its own; outside a worker-cores scope, at (0, 0) on the whole compute grid.
+void normalize_on_worker_cores(
+    operations::matmul::MatmulProgramConfig& program_config, const tt::tt_metal::distributed::MeshDevice& device) {
+    const auto scoped_worker_cores = ttnn::get_scoped_worker_cores(device);
+    if (!scoped_worker_cores.has_value()) {
+        operations::matmul::normalize_program_config(program_config, device.compute_with_storage_grid_size());
+        return;
+    }
+    const auto bounding_box = scoped_worker_cores->bounding_box();
+    operations::matmul::normalize_program_config(program_config, bounding_box.grid_size(), bounding_box.start_coord);
+}
 
 using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
@@ -2654,8 +2668,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         attributes.transpose_b,
         bias_single_tile_size,
         attributes);
-    operations::matmul::normalize_program_config(
-        chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
+    normalize_on_worker_cores(chosen_program_config, *input_tensor_a.device());
 
     // ---- universal checks, part 2: need the chosen program config ----
     // First, so pipes on a config that never reads them fail on that rather than on its own checks.
@@ -2837,8 +2850,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
             attributes);
         // Soft-normalize so downstream variant code can safely read allowed_worker_cores; the warning
         // for missing allowed_worker_cores was emitted at the entry point above.
-        operations::matmul::normalize_program_config(
-            chosen_program_config, input_tensor_a.device()->compute_with_storage_grid_size());
+        normalize_on_worker_cores(chosen_program_config, *input_tensor_a.device());
         return std::visit(
             [&](const auto& program_config) -> MatmulDeviceOperation::spec_return_value_t {
                 using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -3330,8 +3342,7 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
             bias_single_tile_size,
             normalized_attributes);
     }
-    operations::matmul::normalize_program_config(
-        normalized_attributes.program_config.value(), input_tensor_a.device()->compute_with_storage_grid_size());
+    normalize_on_worker_cores(normalized_attributes.program_config.value(), *input_tensor_a.device());
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
         normalized_attributes, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
 }
@@ -3352,8 +3363,7 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
             bias_single_tile_size,
             normalized_attributes);
     }
-    operations::matmul::normalize_program_config(
-        normalized_attributes.program_config.value(), input_tensors.at(0).device()->compute_with_storage_grid_size());
+    normalize_on_worker_cores(normalized_attributes.program_config.value(), *input_tensors.at(0).device());
     // validate requires optional_input_tensors.size() == 1; this path has no bias.
     return ttnn::device_operation::launch<MatmulDeviceOperation>(
         normalized_attributes, {input_tensors, {std::nullopt}, {optional_output_tensor}});

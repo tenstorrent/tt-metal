@@ -18,7 +18,10 @@ using namespace tt::tt_metal;
 using namespace tt::tt_metal::experimental;
 
 ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_program_artifacts(
-    const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
+    const TypecastParams& args,
+    const TypecastInputs& tensor_args,
+    Tensor& output,
+    const tt::tt_metal::CoreRangeSet& worker_cores) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -29,6 +32,12 @@ ttnn::device_operation::ProgramArtifacts TypecastShardedProgramFactory::create_p
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
     uint32_t ncores = shard_spec.num_cores();
+    // Each core casts its own shard in place, so the work goes wherever the shards are.
+    TT_FATAL(
+        worker_cores.contains(all_cores),
+        "typecast: the input is sharded on {}, outside the worker cores {}; reshard it onto them first",
+        all_cores,
+        worker_cores);
 
     const auto* device = input.device();
 

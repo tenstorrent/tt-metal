@@ -915,9 +915,18 @@ void for_each_core_runtime_args(
 
 // Implements c = a op b
 tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_descriptor(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& c,
+    const CoreRangeSet& worker_cores) {
     using namespace tt;
     using namespace tt::tt_metal;
+
+    TT_FATAL(
+        worker_cores.contains(operation_attributes.worker_grid),
+        "BinaryNg: worker grid {} reaches outside the worker cores {}",
+        operation_attributes.worker_grid,
+        worker_cores);
 
     ProgramDescriptor desc;
 
@@ -1549,7 +1558,8 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& c,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/,
+    const CoreRangeSet& /*worker_cores*/) {
     // Re-apply ALL per-dispatch state to the cached program on a program-cache hit (the descriptor-era
     // override_runtime_arguments()).  compute_program_hash EXCLUDES the tensor volume, so one cached
     // program is reused across differently-shaped and differently-allocated (incl. in-place, out=x)

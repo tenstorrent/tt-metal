@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "unary_device_operation.hpp"
+#include "ttnn/worker_cores.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/device_operation.hpp"
@@ -425,7 +426,12 @@ Tensor unary(
         optional_output_tensor.has_value() ? optional_output_tensor->memory_config() : (output_memory_config);
 
     auto worker_grid = ttnn::operations::unary::get_worker_grid(
-        op_chain, input, optional_output_tensor, std::optional<MemoryConfig>(output_memory_config), sub_core_grids);
+        op_chain,
+        input,
+        optional_output_tensor,
+        std::optional<MemoryConfig>(output_memory_config),
+        sub_core_grids,
+        ttnn::get_scoped_worker_cores(*input.device()));
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .op_chain = op_chain,

@@ -6826,7 +6826,8 @@ void MatmulMultiCoreReuseMcast1DProgramFactory::override_runtime_arguments(
 ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFactory::create_program_artifacts(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const tt::tt_metal::CoreRangeSet& worker_cores) {
     using namespace tt;
     using namespace operations::matmul::utilities;
 
@@ -6892,6 +6893,14 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast1DProgramFacto
     // gather_in0 runs on the activation's shard grid rather than on a rectangle of the worker grid,
     // so none of the grid placement below applies to it.
     if (gather_in0) {
+        TT_FATAL(
+            worker_cores.contains(a.shard_spec().value().grid) && worker_cores.contains(program_config.hop_cores),
+            "matmul_multicore_reuse_mcast_1d: gather_in0 runs on the activation's shard grid {} and hop cores {}, "
+            "which "
+            "must lie on the worker cores {}",
+            a.shard_spec().value().grid,
+            program_config.hop_cores,
+            worker_cores);
         return reuse_mcast_1d_optimized_helpers::create_program_gather_in0_artifacts(
             device,
             compute_kernel_config,

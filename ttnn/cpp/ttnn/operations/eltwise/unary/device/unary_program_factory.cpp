@@ -463,11 +463,18 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
 ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    tensor_return_value_t& output,
+    const CoreRangeSet& worker_cores) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::tt_metal::experimental;
     using namespace CMAKE_UNIQUE_NAMESPACE;
+
+    TT_FATAL(
+        worker_cores.contains(operation_attributes.worker_grid),
+        "Unary: worker grid {} reaches outside the worker cores {}",
+        operation_attributes.worker_grid,
+        worker_cores);
 
     const auto& input = tensor_args.input;
     const auto& ops_chain = operation_attributes.op_chain;
@@ -812,7 +819,8 @@ tt::tt_metal::experimental::ProgramRunArgs UnaryDeviceOperation::ProgramFactory:
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/,
+    const CoreRangeSet& /*worker_cores*/) {
     // The TILE-layout hash omits shape, so the work split, start ids and accessor shape args all vary
     // between hits. Return the full run args from make_run_args, the same builder create_program_artifacts
     // uses: every runtime arg on every core, plus both tensor arguments.The tensor arguments refresh the

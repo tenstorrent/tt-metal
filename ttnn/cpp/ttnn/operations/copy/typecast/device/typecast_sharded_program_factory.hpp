@@ -11,7 +11,10 @@ namespace ttnn::prim {
 
 struct TypecastShardedProgramFactory {
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
-        const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output);
+        const TypecastParams& args,
+        const TypecastInputs& tensor_args,
+        Tensor& output,
+        const tt::tt_metal::CoreRangeSet& worker_cores);
 };
 
 }  // namespace ttnn::prim

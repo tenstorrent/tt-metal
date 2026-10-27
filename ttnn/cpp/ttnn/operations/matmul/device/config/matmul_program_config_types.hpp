@@ -111,12 +111,16 @@ using MatmulProgramConfig = std::variant<
 // Ensures allowed_worker_cores is populated on every config variant that supports it.
 // If allowed_worker_cores is already set, it is left unchanged.  Otherwise it is
 // synthesized from compute_with_storage_grid_size (or from the device grid for
-// MatmulMultiCoreProgramConfig).  After this call, factories can read
+// MatmulMultiCoreProgramConfig), placed at `start_core`: the corner of the worker cores in
+// force, (0, 0) outside a worker-cores scope.  After this call, factories can read
 // config.allowed_worker_cores.value() unconditionally.
-inline void normalize_program_config(MatmulProgramConfig& config, const tt::tt_metal::CoreCoord& device_grid) {
-    auto make_crs = [](const tt::tt_metal::CoreCoord& grid) {
-        return tt::tt_metal::CoreRangeSet(
-            tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(grid.x - 1, grid.y - 1)));
+inline void normalize_program_config(
+    MatmulProgramConfig& config,
+    const tt::tt_metal::CoreCoord& device_grid,
+    const tt::tt_metal::CoreCoord& start_core = tt::tt_metal::CoreCoord(0, 0)) {
+    auto make_crs = [&start_core](const tt::tt_metal::CoreCoord& grid) {
+        return tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(
+            start_core, tt::tt_metal::CoreCoord(start_core.x + grid.x - 1, start_core.y + grid.y - 1)));
     };
     std::visit(
         [&](auto& c) {

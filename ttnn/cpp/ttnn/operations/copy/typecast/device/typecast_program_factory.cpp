@@ -80,7 +80,10 @@ ComputeHardwareConfig make_compute_config(
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_artifacts(
-    const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
+    const TypecastParams& args,
+    const TypecastInputs& tensor_args,
+    Tensor& output,
+    const tt::tt_metal::CoreRangeSet& worker_cores) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -118,9 +121,17 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
     const uint32_t entries_per_page =
         is_row_major ? tt::div_up(input_page_size / tt::datum_size(cb_data_format_input), TILE_HW) : 1u;
 
-    const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    // This factory also takes sharded inputs the sharded factory cannot, so sub_core_grids is honoured here too.
+    if (args.sub_core_grids.has_value()) {
+        TT_FATAL(
+            worker_cores.contains(*args.sub_core_grids),
+            "typecast: sub_core_grids {} reach outside the worker cores {}",
+            *args.sub_core_grids,
+            worker_cores);
+    }
+    const CoreRangeSet& cores = args.sub_core_grids.has_value() ? *args.sub_core_grids : worker_cores;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_items_per_core_group_1, num_items_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages, is_row_major);
+        tt::tt_metal::split_work_to_cores(cores, num_pages, is_row_major);
     (void)num_cores;
 
     // ---- Resource names ----
@@ -258,7 +269,10 @@ ttnn::device_operation::ProgramArtifacts TypecastProgramFactory::create_program_
 
 // For sub_core_grids
 ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_program_artifacts(
-    const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
+    const TypecastParams& args,
+    const TypecastInputs& tensor_args,
+    Tensor& output,
+    const tt::tt_metal::CoreRangeSet& worker_cores) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -266,6 +280,11 @@ ttnn::device_operation::ProgramArtifacts TypecastSubgridProgramFactory::create_p
     const auto& sub_core_grids = args.sub_core_grids;
 
     TT_FATAL(sub_core_grids.has_value(), "sub_core_grids cannot be null");
+    TT_FATAL(
+        worker_cores.contains(*sub_core_grids),
+        "typecast: sub_core_grids {} reach outside the worker cores {}",
+        *sub_core_grids,
+        worker_cores);
 
     tt::DataFormat cb_data_format = cb_dataformat_for(input.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);

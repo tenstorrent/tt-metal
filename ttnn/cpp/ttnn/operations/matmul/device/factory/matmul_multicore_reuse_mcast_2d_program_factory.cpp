@@ -1970,7 +1970,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
 ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFactory::create_program_artifacts(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value) {
+    std::vector<ttnn::Tensor>& tensor_return_value,
+    const tt::tt_metal::CoreRangeSet& /*worker_cores*/) {
     using namespace tt;
     using namespace operations::matmul::utilities;
 

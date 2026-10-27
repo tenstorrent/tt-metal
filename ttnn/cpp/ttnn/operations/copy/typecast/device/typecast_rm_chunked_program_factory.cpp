@@ -66,7 +66,10 @@ ChunkSizeConfig calculate_chunk_config(
 }  // anonymous namespace
 
 ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::create_program_artifacts(
-    const TypecastParams& args, const TypecastInputs& tensor_args, Tensor& output) {
+    const TypecastParams& args,
+    const TypecastInputs& tensor_args,
+    Tensor& output,
+    const tt::tt_metal::CoreRangeSet& worker_cores) {
     using namespace tt;
     using namespace tt::tt_metal;
 
@@ -101,11 +104,9 @@ ttnn::device_operation::ProgramArtifacts TypecastRowMajorChunkedProgramFactory::
     const uint32_t full_chunks_per_row = chunk_config.full_chunks_per_row;
     const uint32_t partial_chunks_per_row = chunk_config.partial_chunks_per_row;
 
-    const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-
     // Split work by rows (each core handles complete rows with both full and partial chunks)
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows, true);
+        tt::tt_metal::split_work_to_cores(worker_cores, num_rows, true);
     (void)num_cores;
 
     // ---- Resource names ----

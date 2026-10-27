@@ -34,10 +34,14 @@ struct MatmulMultiCoreReuseMcast1DProgramFactory {
         const ttnn::prim::MatmulInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
 
+    // Runs on as much of the config's grid as the problem needs, from its allowed_worker_cores corner, which the
+    // prim sizes from the worker cores and puts at their corner (normalize_on_worker_cores). gather_in0 runs on the
+    // activation's shard grid instead, which must lie on the worker cores.
     static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const ttnn::prim::MatmulParams& operation_attributes,
         const ttnn::prim::MatmulInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+        std::vector<ttnn::Tensor>& tensor_return_value,
+        const tt::tt_metal::CoreRangeSet& worker_cores);
 };
 
 struct MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory {
