@@ -1998,9 +1998,24 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53
+    # [determinism probe] Repeat the leg on the same four hosts (one job = one quad) and compare
+    # the full-precision per-rank PCC across repeats. Every repeat runs even if one fails.
+    echo "determinism probe hostfile: $(awk 'NF && $1 !~ /^#/ {printf "%s ", $1}' /etc/ttop/hostfile)"
+    BASE_SUMMARIES="${PREFILL_SUMMARIES}"
+    REPEATS=4
+    first_rc=0
+    for i in $(seq 1 "${REPEATS}"); do
+      echo "===== determinism repeat ${i}/${REPEATS} start $(date -u +%H:%M:%S) ====="
+      export PREFILL_SUMMARIES="${BASE_SUMMARIES}/repeat${i}"
+      mkdir -p "${PREFILL_SUMMARIES}"
+      rc=0
+      bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 || rc=$?
+      echo "===== determinism repeat ${i}/${REPEATS} rc=${rc} end $(date -u +%H:%M:%S) ====="
+      [ "${first_rc}" -ne 0 ] || first_rc="${rc}"
+    done
+    exit "${first_rc}"
   test_type: prefill_runner_kv_pcc
-  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace, glm53_sc4_det_repeat]
   test_group: disagg_prefill
   skus:
     bh_sc4:
@@ -2008,7 +2023,8 @@
       # lightning indexer scores the whole prefix and so grows with depth, plus a 143M-entry KV chunk
       # table for rank 0 to merge and serialize -- and then spends ~7 min unwinding the mesh.
       # Counts against the shield/demo budget together with the Kimi entry.
-      timeout: 60
+      # [determinism probe] 4 repeats x ~25 min.
+      timeout: 150
       tier: 1
       release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
