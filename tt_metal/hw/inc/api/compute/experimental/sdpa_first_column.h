@@ -10,6 +10,7 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/softplus.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
+#include "ckernel_sfpu_recip.h"
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
@@ -71,12 +72,13 @@ void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, 
         beta_reciprocal,
         threshold);
 }
+#endif
 
-#ifdef ARCH_WORMHOLE
+#if defined(ARCH_WORMHOLE) && (defined(TRISC_MATH) || defined(TRISC_PACK))
 // Inlines the VectorMode::C traversal instead of the generic unary SFPU launcher, whose larger replay program
 // would overwrite the no-mop matmul region.
 ALWI void recip_tile_first_column_wh_idst0_direct() {
-    recip_tile_init();
+    SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, DST_ACCUM_MODE));
     TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
     math::set_addr_mod_base();
 
@@ -92,7 +94,6 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU);
     math::clear_addr_mod_base();
 }
-#endif
 #endif
 
 }  // namespace ckernel
