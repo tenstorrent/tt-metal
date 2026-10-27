@@ -39,8 +39,36 @@ from models.demos.common.bringup.testing.harness import begin_chunk
 from models.demos.common.bringup.testing.host_transfers import HostTransfers
 from models.demos.common.bringup.testing.ladder import check_states, rel
 
-WALL_RUNS = 20  # F114: timed runs of the clean wall measurement
-WALL_WARM = 10  # F114b: warm-up runs not counted (new buffer-address combinations miss the program cache; ~10 here)
+WALL_RUNS = 10  # F114: timed runs of the clean wall measurement (F196: every one with program-cache misses refused)
+WALL_WARM = 10  # F114b: warm-up runs when the mesh cannot count its program cache (selftests); else F196 below
+WALL_MAX_WARM = 100  # F196: warm-up runs at most; warm = a run that adds no program-cache entry
+
+
+def cache_entries(mesh) -> int | None:
+    """F196: the mesh's program-cache size (None when the mesh cannot tell: a selftest's)."""
+    f = getattr(mesh, "num_program_cache_entries", None)
+    return int(f()) if f else None
+
+
+def misses_allowed(mesh, allowed: bool) -> None:
+    """F196: refuse program-cache misses (a miss then raises), so a timed run is proven fully warm."""
+    f = getattr(mesh, "set_program_cache_misses_allowed", None)
+    if f:
+        f(allowed)
+
+
+def warm_up(mesh, one_run) -> dict:
+    """F196 (owner 2026-10-27): run until a run adds no program-cache entry (new buffer-address combinations miss the
+    cache for a while; the fixed 10 of F114b was a guess), at most WALL_MAX_WARM. Returns the runs' walls and entries.
+    """
+    entries, walls = [cache_entries(mesh)], []
+    limit = WALL_MAX_WARM if entries[0] is not None else WALL_WARM
+    for _ in range(limit):
+        walls.append(one_run())
+        entries.append(cache_entries(mesh))
+        if entries[-1] is not None and entries[-1] == entries[-2]:
+            return {"walls": walls, "entries": entries, "warm": True}
+    return {"walls": walls, "entries": entries, "warm": entries[0] is None}
 
 
 def profile_rung(s) -> str:
@@ -342,14 +370,33 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
             "TT_METAL_DEVICE_PROFILER"
         ), "BRINGUP_PROFILE_WALL=1 runs with the device profiler off"
         walls, gaps = [], []
-        for _ in range(WALL_RUNS):
+
+        def one_run():
             reload()
             gap[0] = 0.0
             t0 = time.time()
             run()
-            walls.append(round((time.time() - t0 - gap[0]) * 1e3, 1))
             gaps.append(round(gap[0] * 1e3, 1))
-        kept = sorted(walls[WALL_WARM:] or walls)
+            return round((time.time() - t0 - gap[0]) * 1e3, 1)
+
+        w = warm_up(mesh, one_run)
+        metrics.record("chunk_wall_warm_runs", len(w["walls"]))
+        metrics.record("chunk_wall_warm_ms", w["walls"])
+        if w["entries"][0] is not None:
+            metrics.record("program_cache_entries", w["entries"][-1])
+            metrics.record("program_cache_entries_runs", w["entries"])
+        assert w["warm"], (
+            f"F196: not warm after {len(w['walls'])} runs: every run still adds program-cache entries "
+            f"({w['entries'][-5:]}); a program keyed on something that changes every run (an address, a position)"
+        )
+        misses_allowed(mesh, False)  # F196: a timed run that completes hit the cache for every program
+        try:
+            for _ in range(WALL_RUNS):
+                walls.append(one_run())
+        finally:
+            misses_allowed(mesh, True)
+        metrics.record("chunk_wall_cache_hits_only", int(w["entries"][0] is not None))
+        kept = sorted(walls)
         med = kept[len(kept) // 2]
         metrics.record("chunk_wall_ms", med)
         metrics.record("chunk_wall_ms_runs", walls)
@@ -357,8 +404,10 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         metrics.record("chunk_wall_gap_ms", sorted(gaps)[len(gaps) // 2])
         metrics.record("chunk_wall_clean", 1)
         print(
-            f"PROFILE wall (device profiler off, gap uploads excluded): {walls} ms, median of the last "
-            f"{len(kept)} {med}; gap uploads {sorted(gaps)[len(gaps) // 2]} ms"
+            f"PROFILE wall (device profiler off, gap uploads excluded): warm after {len(w['walls'])} runs "
+            f"(program cache {w['entries'][0]} -> {w['entries'][-1]} entries; warm-up walls {w['walls']} ms); "
+            f"{len(walls)} timed runs, cache misses refused: {walls} ms, median {med}; gap uploads "
+            f"{sorted(gaps)[len(gaps) // 2]} ms"
         )
         if os.environ.get("BRINGUP_QUICK") == "1":  # F122: the quick A/B also checks every layer against the golden
             reload()
