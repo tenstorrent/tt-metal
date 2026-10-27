@@ -6,7 +6,9 @@
 // tile, row by row from the ROW_MAJOR [1, 32 heads, rows, 256] sparse output.  CBs: 0 gate (1 tile), 1 attention
 // (1 tile), 3 row scratch (64 B per lane, one tile of room).
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "../../qsa_block/kernels/tile_rows.h"
 
@@ -27,32 +29,40 @@ void kernel_main() {
     const auto attention = TensorAccessor(attention_args, attention_addr);  // page = one head row of 256 bf16
     const auto qg = TensorAccessor(qg_args, qg_addr);                       // page = one tile of the qg shard
     using tile_rows::tile_bytes;
+    const Noc noc;
     CircularBuffer(cb_gate).reserve_back(1);
     CircularBuffer(cb_att).reserve_back(1);
     CircularBuffer(cb_row).reserve_back(1);
-    const uint32_t gate_l1 = get_write_ptr(cb_gate), attention_l1 = get_write_ptr(cb_att),
-                   row_l1 = get_write_ptr(cb_row);
+    // cb_row is scratch: reserved once and never pushed
+    const uint32_t attention_l1 = CircularBuffer(cb_att).get_write_ptr(),
+                   row_l1 = CircularBuffer(cb_row).get_write_ptr();
     {
-        noc_async_read_page(qg_first + 2 * head_tiles * head + gate_first_tile + column, qg, gate_l1);
+        noc.async_read(
+            qg,
+            CircularBuffer(cb_gate),
+            qg.get_aligned_page_size(),
+            {.page_id = qg_first + 2 * head_tiles * head + gate_first_tile + column},
+            {});
         tile_rows::fill_words(attention_l1, tile_bytes / 4, 0);  // rows past the sparse output's are zero padding
     }
     {
         // every lane's 64-byte window of the head's row lands in the scratch (64-byte aligned), then the RISC places
         // its two 32-byte halves into the tile's faces (tile_rows::chunk_offset)
         for (uint32_t lane = 0; lane < rows; ++lane) {
-            noc_async_read(
-                attention.get_noc_addr(head * rows + lane, column * window_bytes),
-                row_l1 + lane * window_bytes,
-                window_bytes);
+            noc.async_read(
+                attention,
+                CoreLocalMem<uint32_t>(row_l1),
+                window_bytes,
+                {.page_id = head * rows + lane, .offset_bytes = column * window_bytes},
+                {.offset_bytes = lane * window_bytes});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         invalidate_l1_cache();
         for (uint32_t lane = 0; lane < rows; ++lane) {
             for (uint32_t half = 0; half < 2; ++half) {
-                volatile tt_l1_ptr uint32_t* src_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                const CoreLocalMem<const volatile uint32_t> src_words(
                     row_l1 + lane * window_bytes + half * tile_rows::half_row_bytes);
-                volatile tt_l1_ptr uint32_t* dst_words =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(attention_l1 + tile_rows::chunk_offset(lane, half));
+                const CoreLocalMem<volatile uint32_t> dst_words(attention_l1 + tile_rows::chunk_offset(lane, half));
                 for (uint32_t k = 0; k < tile_rows::half_row_bytes / 4; ++k) {
                     dst_words[k] = src_words[k];
                 }

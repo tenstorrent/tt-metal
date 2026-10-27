@@ -13,7 +13,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include "api/dataflow/noc_semaphore.h"
+#include "api/semaphore.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "../../qsa_block/kernels/main_tail_cbs.h"
 #include "rows_kv_cbs.h"
@@ -35,37 +36,55 @@ void kernel_main() {
     const auto value = TensorAccessor(value_args, value_addr);
     const auto position_page = TensorAccessor(position_args, position_addr);
     const auto rows_page = TensorAccessor(rows_args, rows_addr);
+    const Noc noc;
     Semaphore<> key_rotated_handoff(key_rotated_semaphore_id), key_normalized_handoff(key_normalized_semaphore_id);
 
     // the tile's first position P and the row count R (uint32 [1, 1, 1, 1] each) and the value tiles into pack slots
     // 0..7
     CircularBuffer(cb_kv_pos).reserve_back(1);
     CircularBuffer(cb_pack).reserve_back(pack_tiles);
-    const uint32_t kv_pos_l1 = get_write_ptr(cb_kv_pos), pack_l1 = get_write_ptr(cb_pack);
-    noc_async_read_page(0, position_page, kv_pos_l1);
-    noc_async_read_page(0, rows_page, kv_pos_l1 + row_count_offset_bytes);
+    // cb_pack is scratch: reserved once and never pushed (the key cores write pack tiles 8..15 into it remotely)
+    const CoreLocalMem<volatile uint32_t> kv_pos(CircularBuffer(cb_kv_pos).get_write_ptr());
+    const uint32_t pack_l1 = CircularBuffer(cb_pack).get_write_ptr();
+    noc.async_read(position_page, CircularBuffer(cb_kv_pos), position_page.get_aligned_page_size(), {.page_id = 0}, {});
+    noc.async_read(
+        rows_page,
+        CircularBuffer(cb_kv_pos),
+        rows_page.get_aligned_page_size(),
+        {.page_id = 0},
+        {.offset_bytes = row_count_offset_bytes});
     {
         for (uint32_t c = 0; c < head_tiles; ++c) {
-            noc_async_read_page(value_first_tile + c, value, pack_l1 + c * tile_bytes);
+            noc.async_read(
+                value,
+                CoreLocalMem<uint32_t>(pack_l1),
+                value.get_aligned_page_size(),
+                {.page_id = value_first_tile + c},
+                {.offset_bytes = c * tile_bytes});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         invalidate_l1_cache();
     }
-    const uint32_t first_position = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kv_pos_l1);
-    const uint32_t rows_read = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kv_pos_l1 + row_count_offset_bytes);
+    const uint32_t first_position = kv_pos[0];
+    const uint32_t rows_read = kv_pos[row_count_offset_bytes / sizeof(uint32_t)];
     const uint32_t rows = rows_read < tile_rows::rows_per_tile ? rows_read : tile_rows::rows_per_tile;
     const uint32_t block = first_position & ~31u;
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kv_pos_l1 + 4) = block;  // the writer reads the block start here
+    kv_pos[1] = block;  // the writer reads the block start here
     CircularBuffer(cb_kv_pos).push_back(1);
 
     // the current block, read back
     CircularBuffer(cb_block).reserve_back(block_pages);
-    const uint32_t block_l1 = get_write_ptr(cb_block);
+    const uint32_t block_l1 = CircularBuffer(cb_block).get_write_ptr();
     {
         for (uint32_t k = 0; k < tile_rows::rows_per_tile; ++k) {
-            noc_async_read(cache.get_noc_addr(block + k, 0), block_l1 + k * query_row_bytes, query_row_bytes);
+            noc.async_read(
+                cache,
+                CircularBuffer(cb_block),
+                query_row_bytes,
+                {.page_id = block + k, .offset_bytes = 0},
+                {.offset_bytes = k * query_row_bytes});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
         invalidate_l1_cache();
     }
     {
@@ -75,7 +94,7 @@ void kernel_main() {
     }
     // this pass's rows into the current block; the crossing rows into the next block's zero rows
     CircularBuffer(cb_next).reserve_back(block_pages);
-    const uint32_t next_l1 = get_write_ptr(cb_next);
+    const uint32_t next_l1 = CircularBuffer(cb_next).get_write_ptr();
     if (!single_row) {
         tile_rows::fill_words(next_l1, block_pages * query_row_bytes / 4, 0u);
     }
