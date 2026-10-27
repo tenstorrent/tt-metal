@@ -17,10 +17,10 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
-# First entry is the default; membership is the validation. mistral4 is PP4-only, so sc1 only.
+# First entry is the default; membership is the validation. These models support sc1 only.
 case "${MODEL}" in
-  mistral4) MODEL_CONFIGS="sc1" ;;
-  *)        MODEL_CONFIGS="sc4 sc1" ;;
+  mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
+  *)                   MODEL_CONFIGS="sc4 sc1" ;;
 esac
 CONFIG="${2:-${MODEL_CONFIGS%% *}}"
 case " ${MODEL_CONFIGS} " in
@@ -71,6 +71,9 @@ SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
 
 case "${MODEL}" in
+  gptoss120b)
+    source "${TT_METAL_HOME}/models/demos/gpt_oss_d_p/scripts/ci/runner_config.sh"
+    ;;
   llama31)
     source "${TT_METAL_HOME}/models/demos/llama_3p1_8b_d_p/scripts/ci/runner_config.sh"
     ;;

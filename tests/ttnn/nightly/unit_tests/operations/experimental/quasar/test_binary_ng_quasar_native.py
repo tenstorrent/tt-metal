@@ -7,7 +7,7 @@
 Routing is read from the inspector's kernels.yaml, which names the kernel SOURCES actually bound. That
 is the only observable that separates the two factories at this stage -- they are a mechanical copy of
 each other, so cycles, values and the active-core set are identical by construction. The native tests
-compare bits with the bf16 oracle; the fallback test uses the shared _run helper (golden + PCC floor +
+compare bits with the bf16 oracles; the fallback test uses the shared _run helper (golden + PCC floor +
 constant-output guard).
 
 The native factory is the default on Quasar, and TTNN_QSR_NATIVE=0 turns it off. The tests read that state
@@ -40,8 +40,12 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import ulp_distance
-from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import _on_quasar, _run
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    _add_goldens,
+    _matches_none,
+    _run,
+)
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 # Resolve the inspector output the way the runtime does: <logs_dir>/generated/inspector, where
 # logs_dir is TT_METAL_LOGS_PATH if set, else the root dir (TT_METAL_HOME, else cwd). See
@@ -63,7 +67,7 @@ _INTERLEAVED_SHAPE = (32 * 32, 40 * 32)
 def _native_enabled():
     # On Quasar unless TTNN_QSR_NATIVE=0, matching native_tuning() in binary_ng_utils.cpp, which refuses any value but
     # 0 and 1. Off Quasar the gate refuses every op, so the native tests skip there.
-    return _on_quasar() and os.environ.get("TTNN_QSR_NATIVE", "") != "0"
+    return is_quasar() and os.environ.get("TTNN_QSR_NATIVE", "") != "0"
 
 
 # The rule's value of every knob left unset. Mirrors resolve_native_config in binary_ng_utils.cpp: a test whose
@@ -152,9 +156,9 @@ def _noc_split(tiles, clusters=_CLUSTERS):
     return [per_cluster + 1] * extra + [per_cluster] * (clusters - extra)
 
 
-def _wrong_tiles(got, golden):
-    """The 32x32 tiles of a 2D output in which any element differs from the oracle by at least one ULP."""
-    differ = ulp_distance(got, golden) > 0
+def _wrong_tiles(got, goldens):
+    """The 32x32 tiles of a 2D output in which any element matches none of the oracles."""
+    differ = _matches_none(got, goldens)
     height, width = differ.shape[-2:]
     return int(differ.reshape(-1, height // 32, 32, width // 32, 32).any(dim=4).any(dim=2).sum())
 
@@ -176,7 +180,7 @@ _PARENT_KNOBS = {k: v for k, v in os.environ.items() if k.startswith("TTNN_QSR_"
 
 
 class _WrongOutput(Exception):
-    """An op ran to completion on the expected factory, and its output differs from the bf16 oracle."""
+    """An op ran to completion on the expected factory, and its output differs from the bf16 oracles."""
 
 
 # Above output ring stride 1 compute batching runs, but only one tile of each batch comes out right.
@@ -190,13 +194,13 @@ def _expectation_marks(expected_wrong):
     return [_BATCHED_XFAIL] if expected_wrong > 0 else []
 
 
-def _matches_prediction(got, golden, expected_wrong, what):
-    """Assert that exactly the predicted number of output tiles differ from the oracle; 0 means exact.
+def _matches_prediction(got, goldens, expected_wrong, what):
+    """Assert that exactly the predicted number of output tiles differ from the oracles; 0 means exact.
 
     Returns True when the output is wrong as predicted.
     """
-    wrong = _wrong_tiles(got, golden)
-    total = golden.numel() // (32 * 32)
+    wrong = _wrong_tiles(got, goldens)
+    total = got.numel() // (32 * 32)
     assert wrong == expected_wrong, f"{what}: {wrong} of {total} tiles differ, the prediction is {expected_wrong}"
     return wrong > 0
 
@@ -249,16 +253,10 @@ _BENCHMARK_WRONG = _batched_wrong_tiles(_noc_split(32 * 40), _PARENT_KNOBS, _NOC
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.xfail(_BENCHMARK_WRONG > 0, raises=_WrongOutput, strict=True, reason=_BATCHED_REASON)
 def test_native_output_matches_the_prediction(device):
-    """bf16 add on this slice is EXACT, so compare bits rather than PCC.
-
-    fp32_dest_acc_en is false for bf16 and HiFi4 is fidelity-inert for FPU add, so the device result
-    equals torch's bf16 add bit-for-bit. The int16 view is required, not cosmetic: torch.equal on
-    floats reports False for NaN vs itself. randn produces no NaN/Inf, so that path stays unexercised.
-    The rule batches nothing beside a DRAM operand, so the output is exact unless the invocation sets a batch.
-    """
+    """bf16 add on this slice is exact: the output equals one of _FPU_ADD_ROUNDINGS bit for bit, except the
+    tiles that a set batch leaves wrong."""
     out, ta, tb = _add_returning_operands(device)
-    golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
-    if _matches_prediction(ttnn.to_torch(out), golden, _BENCHMARK_WRONG, "32x40 tiles"):
+    if _matches_prediction(ttnn.to_torch(out), _add_goldens(ta, tb), _BENCHMARK_WRONG, "32x40 tiles"):
         raise _WrongOutput("32x40 tiles: wrong as predicted")
 
 
@@ -278,9 +276,7 @@ def test_native_factory_is_engaged(device):
 
 @pytest.mark.skipif(_native_enabled(), reason="negative control runs with TTNN_QSR_NATIVE=0")
 def test_fallback_factory_is_engaged(device):
-    # The skips read the arch from the environment, and the gate reads it from the device. On Quasar without
-    # ARCH_NAME=quasar the native tests would skip and this test would fail on the native kernels.
-    assert _on_quasar() == (device.arch() == ttnn.device.Arch.QUASAR), "on Quasar, set ARCH_NAME=quasar"
+    assert is_quasar() == (device.arch() == ttnn.device.Arch.QUASAR), "ttnn.get_arch_name() disagrees with the device"
     _run_benchmark_add(device)
     sources = bound_kernel_sources()
     assert [s for s in sources if "kernels_qsr/" in s] == [], "fallback run bound native kernels"
@@ -349,7 +345,8 @@ _NATIVE_ARMS = [(1, 1, 1), (4, 4, 2), (1, 4, 4), (4, 4, 1), (2, 4, 2)]
 _ARM_SRC = """
 import json, os, pathlib, sys
 import torch, ttnn
-from tests.ttnn.utils_for_testing import ulp_distance
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    _add_goldens, _matches_none)
 
 TILE_COUNTS = json.loads(os.environ["ARM_TILE_COUNTS"])
 
@@ -364,9 +361,7 @@ try:
         tb = ttnn.from_torch(torch.randn((32, tiles * 32), dtype=torch.float32), **cfg)
         out = ttnn.experimental.quasar.add(ta, tb, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                                            dtype=ttnn.bfloat16)
-        golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
-        got = ttnn.to_torch(out)
-        differ = ulp_distance(got, golden) > 0
+        differ = _matches_none(ttnn.to_torch(out), _add_goldens(ta, tb))
         if differ.any():
             h, w = differ.shape[-2:]
             wrong = int(differ.reshape(-1, h // 32, 32, w // 32, 32).any(dim=4).any(dim=2).sum())
@@ -423,24 +418,23 @@ def _check_arm(p, what, expect_wrong=None):
             f"{what}: the wrong tiles are not the predicted ones (label: count), "
             f"measured {measured}, predicted {expect_wrong}\n{p.stdout}"
         )
-        raise _WrongOutput(f"{what}: output differs from the bf16 oracle as predicted\n{p.stdout}")
+        raise _WrongOutput(f"{what}: output differs from the bf16 oracles as predicted\n{p.stdout}")
     assert p.returncode == 0, f"{what} failed:\n{p.stdout}\n{p.stderr[-2000:]}"
 
 
 def _add_one_row(device, tiles, seed):
-    """One (1 x tiles) add. Returns (output, bf16 oracle).
+    """One (1 x tiles) add. Returns (output, bf16 oracles).
 
     A 1-tile-tall shape is a legitimate one-dimensional sweep here because the native reader walks
     page = start_tile_id + k -- a pure linear index -- so behaviour depends on the tile COUNT alone and
     not on how it factors into height x width.
 
-    The golden is rounded to bf16, not left in fp32: the device packs bf16, and the sum of two bf16
+    The goldens are rounded to bf16, not left in fp32: the device packs bf16, and the sum of two bf16
     values needs 9 mantissa bits where bf16 has 8, so an fp32 comparison reports ~54% mismatch on
     random data purely from rounding.
     """
     out, ta, tb = _add_returning_operands(device, h_tiles=1, w_tiles=tiles, seed=seed)
-    golden = (ttnn.to_torch(ta).float() + ttnn.to_torch(tb).float()).to(torch.bfloat16)
-    return ttnn.to_torch(out), golden
+    return ttnn.to_torch(out), _add_goldens(ta, tb)
 
 
 def _parent_prediction(tiles):
@@ -453,8 +447,8 @@ def _parent_prediction(tiles):
 )
 def test_native_uneven_tile_counts_match_the_prediction(device, tiles):
     before = set(bound_kernel_sources())
-    got, golden = _add_one_row(device, tiles, seed=tiles)
-    wrong_as_predicted = _matches_prediction(got, golden, _parent_prediction(tiles), f"{tiles} tiles")
+    got, goldens = _add_one_row(device, tiles, seed=tiles)
+    wrong_as_predicted = _matches_prediction(got, goldens, _parent_prediction(tiles), f"{tiles} tiles")
 
     # Without this the test is a false green: the shape could have been rejected by some OTHER gate
     # condition, silently run the single-threaded fallback, and pass. Assert on THIS op's new bindings,
@@ -864,8 +858,8 @@ def _config_params(configs, cases):
 _SHARD_ARM_SRC = """
 import collections, csv, json, os, pathlib, sys
 import torch, ttnn
-from tests.ttnn.utils_for_testing import ulp_distance
-from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import _ULP
+from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    _FPU_ADD_ROUNDINGS, _ULP, _matches_none)
 
 SHARDS = json.loads(os.environ["ARM_SHARDS"])
 EXPECT = os.environ["ARM_EXPECT"]
@@ -893,15 +887,16 @@ def truncate_to_bf16(x):
     return (x.contiguous().view(torch.int32) & -65536).view(torch.float32).to(torch.bfloat16)
 
 
-# op -> (the op, its extra arguments, the exact result, the kernel's rounding of it to bf16). The FPU kernel
-# rounds to nearest even. The SFPU kernel runs multiply out of fast mode, which truncates, and divide, which
-# rounds to nearest even.
-OPS = {"add": (ttnn.experimental.quasar.add, {}, torch.add, round_to_bf16),
-       "subtract": (ttnn.experimental.quasar.subtract, {}, torch.subtract, round_to_bf16),
-       "multiply": (ttnn.experimental.quasar.multiply, {}, torch.multiply, truncate_to_bf16),
-       "multiply_fast": (ttnn.experimental.quasar.multiply, {"fast_and_approximate_mode": True}, torch.multiply,
-                         round_to_bf16),
-       "divide": (ttnn.experimental.quasar.divide, {}, torch.divide, round_to_bf16)}
+# op -> (the op, its extra arguments, the kernel's bf16 results from the operands; an element is right when it
+# matches one). The FPU kernel adds and subtracts as _FPU_ADD_ROUNDINGS says, and multiplies with rounding to nearest
+# even. The SFPU kernel runs multiply out of fast mode, which truncates, and divide, which rounds to nearest even.
+OPS = {"add": (ttnn.experimental.quasar.add, {}, _FPU_ADD_ROUNDINGS),
+       "subtract": (ttnn.experimental.quasar.subtract, {},
+                    tuple(lambda a, b, rounding=rounding: rounding(a, -b) for rounding in _FPU_ADD_ROUNDINGS)),
+       "multiply": (ttnn.experimental.quasar.multiply, {}, (lambda a, b: truncate_to_bf16(torch.multiply(a, b)),)),
+       "multiply_fast": (ttnn.experimental.quasar.multiply, {"fast_and_approximate_mode": True},
+                         (lambda a, b: round_to_bf16(torch.multiply(a, b)),)),
+       "divide": (ttnn.experimental.quasar.divide, {}, (lambda a, b: round_to_bf16(torch.divide(a, b)),))}
 
 
 def square(x):
@@ -909,38 +904,32 @@ def square(x):
     return truncate_to_bf16(x * x).float()
 
 
-# act ->(the op's activation arguments, the output from the operands, the exact op and its rounding). SQUARE
+# act ->(the op's activation arguments, the output from the operands and one of the op's roundings). SQUARE
 # chains on a, on b, on both or on the result; a lone RELU on the result runs in the packer, on the rounded result.
 # RELU on a, and RELU on the result beside a chain, run on the SFPU.
 SQUARE, RELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE), ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
-ACTS = {None: ({}, lambda a, b, exact, rounding: rounding(exact(a, b))),
-        "lhs": ({"input_tensor_a_activations": [SQUARE]},
-                lambda a, b, exact, rounding: rounding(exact(square(a), b))),
-        "rhs": ({"input_tensor_b_activations": [SQUARE]},
-                lambda a, b, exact, rounding: rounding(exact(a, square(b)))),
+ACTS = {None: ({}, lambda a, b, op: op(a, b)),
+        "lhs": ({"input_tensor_a_activations": [SQUARE]}, lambda a, b, op: op(square(a), b)),
+        "rhs": ({"input_tensor_b_activations": [SQUARE]}, lambda a, b, op: op(a, square(b))),
         "both": ({"input_tensor_a_activations": [SQUARE], "input_tensor_b_activations": [SQUARE]},
-                 lambda a, b, exact, rounding: rounding(exact(square(a), square(b)))),
-        "post": ({"activations": [SQUARE]},
-                 lambda a, b, exact, rounding: square(rounding(exact(a, b)).float()).to(torch.bfloat16)),
-        "relu": ({"activations": [RELU]}, lambda a, b, exact, rounding: torch.relu(rounding(exact(a, b)))),
-        "relu_lhs": ({"input_tensor_a_activations": [RELU]},
-                     lambda a, b, exact, rounding: rounding(exact(torch.relu(a), b))),
+                 lambda a, b, op: op(square(a), square(b))),
+        "post": ({"activations": [SQUARE]}, lambda a, b, op: square(op(a, b).float()).to(torch.bfloat16)),
+        "relu": ({"activations": [RELU]}, lambda a, b, op: torch.relu(op(a, b))),
+        "relu_lhs": ({"input_tensor_a_activations": [RELU]}, lambda a, b, op: op(torch.relu(a), b)),
         "relu_chain": ({"input_tensor_a_activations": [SQUARE], "activations": [RELU]},
-                       lambda a, b, exact, rounding: torch.relu(rounding(exact(square(a), b))))}
+                       lambda a, b, op: torch.relu(op(square(a), b)))}
 
 
 # On fp32 operands every op runs on the SFPU kernel and keeps the fp32 result: within _ULP of torch's, the bound the
 # suites check too.
-OPS_FP32 = {"add": (ttnn.experimental.quasar.add, {}, torch.add, lambda x: x),
-            "subtract": (ttnn.experimental.quasar.subtract, {}, torch.subtract, lambda x: x),
-            "multiply": (ttnn.experimental.quasar.multiply, {}, torch.multiply, lambda x: x),
-            "divide": (ttnn.experimental.quasar.divide, {}, torch.divide, lambda x: x)}
+OPS_FP32 = {"add": (ttnn.experimental.quasar.add, {}, (torch.add,)),
+            "subtract": (ttnn.experimental.quasar.subtract, {}, (torch.subtract,)),
+            "multiply": (ttnn.experimental.quasar.multiply, {}, (torch.multiply,)),
+            "divide": (ttnn.experimental.quasar.divide, {}, (torch.divide,))}
 ACTS_FP32 = {None: ACTS[None],
-             "lhs": ({"input_tensor_a_activations": [SQUARE]},
-                     lambda a, b, exact, rounding: rounding(exact(a * a, b))),
-             "rhs": ({"input_tensor_b_activations": [SQUARE]},
-                     lambda a, b, exact, rounding: rounding(exact(a, b * b))),
-             "relu": ({"activations": [RELU]}, lambda a, b, exact, rounding: torch.relu(rounding(exact(a, b))))}
+             "lhs": ({"input_tensor_a_activations": [SQUARE]}, lambda a, b, op: op(a * a, b)),
+             "rhs": ({"input_tensor_b_activations": [SQUARE]}, lambda a, b, op: op(a, b * b)),
+             "relu": ({"activations": [RELU]}, lambda a, b, op: torch.relu(op(a, b)))}
 DTYPES = {"bfloat16": ttnn.bfloat16, "float32": ttnn.float32}
 profile_csv = root / "generated" / "profiler" / ".logs" / "profile_log_device.csv"
 if (EXPECT_NEOS or EXPECT_DMS) and profile_csv.exists():
@@ -989,9 +978,10 @@ try:
         cfg = dict(dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
         ta = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=mem, **cfg)
         tb = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=b_mem, **cfg)
-        op_fn, op_extra, exact, rounding = (OPS_FP32 if fp32 else OPS)[opts.get("op", "add")]
+        op_fn, op_extra, results = (OPS_FP32 if fp32 else OPS)[opts.get("op", "add")]
         act_kwargs, model = (ACTS_FP32 if fp32 else ACTS)[opts.get("act")]
-        golden = model(ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float(), exact, rounding)
+        a, b = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
+        goldens = [model(a, b, op) for op in results]
         cached = device.num_program_cache_entries()
         op_kwargs = {}
         if "grid" in opts:
@@ -1018,9 +1008,9 @@ try:
             keep.extend([ta, tb, out])
         got = ttnn.to_torch(out)
         # Integer ULP distance per element, as production measures it: the sign of a zero does not count. A bf16
-        # model is the kernel's exact rounding; fp32 allows the op's measured bound.
+        # golden is one of the kernel's exact roundings; fp32 allows the op's measured bound.
         bound = _ULP[ttnn.float32][opts.get("op", "add")] if fp32 else 0
-        differ = ulp_distance(got, golden) > bound
+        differ = _matches_none(got, goldens, bound)
         if differ.any():
             # Pad a partial last tile row or column with matches, so that the mask holds whole tiles.
             differ = torch.nn.functional.pad(differ, (0, -differ.shape[-1] % 32, 0, -differ.shape[-2] % 32))
@@ -1825,11 +1815,8 @@ _OP_CASES = [
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 @pytest.mark.parametrize("name, knobs", _config_params(_MIXED_CONFIGS, _OP_CASES))
 def test_native_other_ops_match_the_prediction(name, knobs):
-    """subtract, multiply and divide must run native in every kind of mix and give the predicted output.
-
-    The oracle is the exact result as the kernel rounds it: to nearest even on the FPU kernel and for divide, by
-    truncation for the SFPU multiply. A wrong op define or a wrong DST slot fails the comparison, which is exact.
-    """
+    """subtract, multiply and divide must run native in every kind of mix and give the predicted output, exactly as
+    each kernel rounds (OPS in _SHARD_ARM_SRC), so a wrong op define or DST slot fails."""
     p = _run_shard_arm([case[0] for case in _OP_CASES], expect="qsr", timeout=1800, knobs=knobs)
     _check_arm(p, f"subtract, multiply and divide, {name}", expect_wrong=_expect_wrong(_OP_CASES, knobs))
 
@@ -1952,7 +1939,7 @@ _FP32_TAIL_CONFIGS = {name: _BORROWED_CONFIGS_C2[name] for name in ("rule-n1", "
 def test_native_fp32_ops_match_the_prediction(name, knobs):
     """fp32 add, subtract, multiply and divide must run native in every kind of mix and give the predicted output.
 
-    The oracle is torch's fp32 result, and divide may differ from it by one fp32 step. A batch larger than a
+    The oracle is torch's fp32 result, within _ULP. A batch larger than a
     32-bit DST section holds overwrites the section the packer reads.
     """
     p = _run_shard_arm([case[0] for case in _FP32_CASES], expect="qsr", timeout=1800, knobs=knobs)

@@ -667,8 +667,11 @@ std::string ComputeKernel::config_hash() const {
 
 uint64_t Kernel::compute_hash() const {
     tt::StableHasher hasher;
+    hasher.update(static_cast<uint64_t>(this->defines_.size()));
     for (const auto& [define, value] : this->defines_) {
+        hasher.update(static_cast<uint64_t>(define.size()));
         hasher.update(define);
+        hasher.update(static_cast<uint64_t>(value.size()));
         hasher.update(value);
     }
 
@@ -733,7 +736,8 @@ uint64_t Kernel::compute_hash() const {
     // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
     // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
     // inputs (size_bytes is baked into the generated header, so it MUST be in the cache key).
-    // allocated_address is a per-execution allocation, not part of the binary, so it is omitted.
+    // Details regarding the allocation (allocated_address and shared_allocation_identifier) is omitted,
+    // as it does not affect the generated build artifact.
     hasher.update(static_cast<uint64_t>(this->scratchpad_binding_handles_.size()));
     for (const auto& handle : this->scratchpad_binding_handles_) {
         hasher.update(handle.accessor_name);
@@ -765,10 +769,12 @@ uint64_t Kernel::compute_hash() const {
     // Otherwise, RTAs ["a", "b"] could hash the same as ["ab"].
     hasher.update(static_cast<uint64_t>(this->runtime_arg_names_.size()));
     for (const auto& name : this->runtime_arg_names_) {
+        hasher.update(static_cast<uint64_t>(name.size()));
         hasher.update(name);
     }
     hasher.update(static_cast<uint64_t>(this->common_runtime_arg_names_.size()));
     for (const auto& name : this->common_runtime_arg_names_) {
+        hasher.update(static_cast<uint64_t>(name.size()));
         hasher.update(name);
     }
     ////////////////////////////////////////////////////////////
