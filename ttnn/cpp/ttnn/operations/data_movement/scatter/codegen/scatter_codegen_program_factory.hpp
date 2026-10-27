@@ -26,9 +26,9 @@ using ScatterPageMap = std::array<uint32_t, kScatterPageMapSize>;
 
 // Number of leading page dimensions a tensor of this (already-normalized) logical shape folds to:
 // TILE drops the last two dims (W, H) and replaces H with its tile-row count; ROW_MAJOR drops only
-// the last dim (W). Both leave `rank - 1` page dimensions for rank >= 2, and a single unit dimension
+// the last dim (W). Either way `rank - 1` page dimensions for rank >= 2, and a single unit dimension
 // for rank <= 1.
-uint32_t scatter_page_rank(const ttnn::Shape& shape, bool tiled);
+uint32_t scatter_page_rank(const ttnn::Shape& shape);
 
 // Builds the fixed-width logical-prefix page map shared by every reader: [rank, input_dims
 // (zero-padded to kScatterMaxPageRank with 1s), index_dims (likewise)]. `tiled` selects between the
@@ -78,19 +78,18 @@ uint64_t scatter_output_aligned_page_size(
 // allocated buffer) must agree on, since Buffer::aligned_page_size() rounds page_size() up to a
 // BufferType-only device alignment (tt_metal/impl/buffers/buffer.cpp) with no dependence on which
 // dimension the stick was drawn from.
-uint64_t scatter_rm_stick_page_bytes(const Tensor& tensor, uint32_t stick_elems);
+uint64_t scatter_rm_aligned_stick_bytes(const Tensor& tensor, uint32_t stick_elems);
 
-// The STATIC per-core CB budget: the allocator-managed L1 bank, ignoring what is live in it, so a
-// buffer allocated between two evaluations cannot change the answer. What supported_by_codegen()
-// plans against, because it is evaluated at the router and again in the prim's validate with this
-// call's own create_output_tensors() in between; the forced entry and direct prim callers see
-// nothing else.
+// The STATIC per-core CB budget: the allocator's L1 bank, ignoring what is live in it, so a buffer
+// allocated between two evaluations cannot change the answer. What supported_by_codegen() plans
+// against, because it is evaluated at the router and again in the prim's validate with this call's
+// own create_output_tensors() in between; the forced entry and direct prim callers see nothing else.
 uint64_t scatter_static_l1(const Tensor& input_tensor);
 
-// The per-core CB ceiling the next program will actually find: the static budget less whatever is
-// live in L1 right now. Read by the routing gates that deduct this call's own pending allocations
-// (is_demoted()'s detour check, codegen_plan_fits_live_l1), by compute_program_hash on every call so
-// a moved frontier keys a fresh plan, and by the factories that size CBs from it.
+// The per-core CB ceiling the next program will actually find: get_max_l1_space(), the bank less
+// whatever is live in L1 right now. Read by the routing gates that deduct this call's own pending
+// allocations (is_demoted()'s detour check, codegen_plan_fits_live_l1), by compute_program_hash on
+// every call so a moved frontier keys a fresh plan, and by the factories that size CBs from it.
 uint64_t scatter_usable_l1(const Tensor& input_tensor);
 
 // Whether the TILE interleaved plan's four-CB footprint -- Wt_output-deep output and input, one-tile
