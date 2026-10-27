@@ -9,6 +9,7 @@
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/binary/binary_composite.hpp>
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>
+#include <ttnn/operations/eltwise/ternary/ternary.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <vector>
@@ -263,14 +264,34 @@ autograd::TensorPtr mul(const autograd::TensorPtr& a, float b) {
     return a * b;
 }
 
+namespace {
+
+// The computation of ttnn::min_bw / ttnn::max_bw, which always return both grads; here each grad is computed only when
+// its input requires it. Ties split the grad evenly between a and b.
+template <bool is_max>
+void min_or_max_backward(const autograd::TensorPtr& a, const autograd::TensorPtr& b, const autograd::TensorPtr& out) {
+    if (!autograd::any_requires_grad(a, b)) {
+        return;
+    }
+    const auto& grad = out->get_grad();
+    const auto diff = ttnn::subtract(b->get_value(), a->get_value());
+    // Selects rather than mask multiplies: in float32, 0 * inf and 0 * nan are NaN.
+    const auto tie = ttnn::where(ttnn::eqz(diff), ttnn::multiply(grad, 0.5F), 0.0F);
+    // a wins where b - a < 0 for max and where b - a > 0 for min; b wins in the other case.
+    if (a->get_requires_grad()) {
+        a->add_grad(ttnn::where(is_max ? ttnn::ltz(diff) : ttnn::gtz(diff), grad, tie));
+    }
+    if (b->get_requires_grad()) {
+        b->add_grad(ttnn::where(is_max ? ttnn::gtz(diff) : ttnn::ltz(diff), grad, tie));
+    }
+}
+
+}  // namespace
+
 autograd::TensorPtr min(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
     out->set_value(ttnn::minimum(a->get_value(), b->get_value()));
-    autograd::GradFunction grad = [a, b, out]() {
-        auto res = ttnn::min_bw(out->get_grad(), a->get_value(), b->get_value());
-        a->add_grad(res[0]);
-        b->add_grad(res[1]);
-    };
+    autograd::GradFunction grad = [a, b, out]() { min_or_max_backward</* is_max */ false>(a, b, out); };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
     return out;
 }
@@ -278,11 +299,7 @@ autograd::TensorPtr min(const autograd::TensorPtr& a, const autograd::TensorPtr&
 autograd::TensorPtr max(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
     out->set_value(ttnn::maximum(a->get_value(), b->get_value()));
-    autograd::GradFunction grad = [a, b, out]() {
-        auto res = ttnn::max_bw(out->get_grad(), a->get_value(), b->get_value());
-        a->add_grad(res[0]);
-        b->add_grad(res[1]);
-    };
+    autograd::GradFunction grad = [a, b, out]() { min_or_max_backward</* is_max */ true>(a, b, out); };
     out->set_node(autograd::add_backward_node(std::move(grad), out, a, b));
     return out;
 }

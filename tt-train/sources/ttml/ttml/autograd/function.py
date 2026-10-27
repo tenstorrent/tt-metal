@@ -34,10 +34,14 @@ class FunctionContext:
             input, = ctx.saved_tensors
             scale = ctx.scale  # Retrieve non-tensor value
             ...
+
+    ctx.needs_input_grad holds one bool per input to forward(), True for each tensor that requires grad (always
+    False for non-tensors), as in PyTorch. backward() can use it to skip the grads nobody needs.
     """
 
     def __init__(self):
         self._saved_tensors: List[Any] = []
+        self.needs_input_grad: Tuple[bool, ...] = ()
 
     def save_for_backward(self, *tensors) -> None:
         """Save tensors for use in backward pass.
@@ -174,7 +178,8 @@ class Function:
         Returns:
             Gradient(s) w.r.t. tensor inputs. Must return same number of
             gradients as there were tensor inputs to forward().
-            Use None for inputs that don't need gradients.
+            Use None for inputs that don't need gradients; ctx.needs_input_grad
+            tells which those are.
         """
         raise NotImplementedError("Subclasses must implement backward()")
 
@@ -192,6 +197,7 @@ class Function:
             Output tensor(s) from forward().
         """
         ctx = FunctionContext()
+        ctx.needs_input_grad = tuple(hasattr(inp, "get_requires_grad") and inp.get_requires_grad() for inp in inputs)
 
         # Get the AutoContext instance
         auto_context = cpp.autograd.AutoContext.get_instance()
