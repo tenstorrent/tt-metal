@@ -312,7 +312,13 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         }
         constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
         TT_FATAL(out_shape[-2] % TILE_H == 0, "output M ({}) must be tile-aligned", out_shape[-2]);
-        TT_FATAL(out_shape[-2] >= x_shape[-2], "output M ({}) must be >= x M ({})", out_shape[-2], x_shape[-2]);
+        // Without x_row_index buffer row r reads x row r; with it, x is the token-ordered input and the output can
+        // have fewer rows than x (x_row_index covers every output row, checked below).
+        TT_FATAL(
+            op.x_indexed || out_shape[-2] >= x_shape[-2],
+            "output M ({}) must be >= x M ({}) when x is not indexed",
+            out_shape[-2],
+            x_shape[-2]);
     }
 
     TT_FATAL(

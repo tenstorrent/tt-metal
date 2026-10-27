@@ -192,8 +192,9 @@ void kernel_main() {
     // x_indexed: buffer row r of an expert region reads x row x_row_index[r] (x is the token-ordered input).
     constexpr bool x_indexed = get_compile_time_arg_val(36) != 0;
     constexpr uint32_t cb_x_row_idx = get_compile_time_arg_val(37);
+    constexpr uint32_t x_rows = get_compile_time_arg_val(38);
 
-    constexpr uint32_t x_accessor_offset = 38;
+    constexpr uint32_t x_accessor_offset = 39;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -655,15 +656,19 @@ void kernel_main() {
                                 if constexpr (x_indexed) {
                                     stick =
                                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_idx_l1)[m * TILE_HEIGHT + r];
+                                    // An index past x is a caller bug: leave the row stale rather than read past x.
+                                    ASSERT(stick < x_rows);
                                 } else {
                                     stick = x_start_stick + row_base + r;
                                 }
-                                noc_read.async_read(
-                                    x_acc_rm,
-                                    CoreLocalMem<uint32_t>(l1_x),
-                                    rm_kblock_bytes,
-                                    {.page_id = stick, .offset_bytes = col_off_bytes},
-                                    {});
+                                if (!x_indexed || stick < x_rows) {
+                                    noc_read.async_read(
+                                        x_acc_rm,
+                                        CoreLocalMem<uint32_t>(l1_x),
+                                        rm_kblock_bytes,
+                                        {.page_id = stick, .offset_bytes = col_off_bytes},
+                                        {});
+                                }
                                 l1_x += rm_kblock_bytes;
                             }
                             // Skip the padding sticks in this tile-row (stale L1, dropped).

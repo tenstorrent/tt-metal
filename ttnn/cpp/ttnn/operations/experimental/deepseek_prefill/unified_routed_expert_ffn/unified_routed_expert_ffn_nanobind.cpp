@@ -69,10 +69,12 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 (MeshDevice.lowest_occupied_compute_l1_address()) to fit the blocking around them.
             x_row_index (ttnn.Tensor, optional): UINT32 ROW_MAJOR row of one entry per buffer row. With it,
                 dispatched_buffer is the token-ordered ROW_MAJOR input and buffer row r reads its row
-                x_row_index[r] (no dispatch gather); the output has one row per entry.
+                x_row_index[r] (no dispatch gather); the output has one row per entry. An entry past the
+                input's last row is not read (that output row is garbage).
             output_row_major (bool, optional): ROW_MAJOR bf16 output instead of TILE bf8 (ROW_MAJOR
                 dispatched_buffer only). Rows outside every expert region stay uninitialized.
             zero_output_row (int, optional): with output_row_major, one output row the op sets to zeros.
+                It must not hold a routed token (it is never written with expert output).
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token

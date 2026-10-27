@@ -12,7 +12,9 @@ row a combine points other chips' slots at). With l1_end the op's circular buffe
 so buffers another component keeps resident in L1 above it can stay allocated.
 
 Each case runs the same routing through the default mode (the host gathers the dispatched buffer) and through the
-new mode, and checks both against a torch reference of every expert's rows.
+new mode, and checks both against a torch reference of every expert's rows. The "ragged" routing has token counts
+that end inside a tile (the last tile-row of each region is partly padding) and a token-ordered input with more rows
+than the output.
 """
 
 import pytest
@@ -31,11 +33,11 @@ SINGLE_CHIP_MESH_PARAMS = [
 
 EMB = 2880  # gpt-oss hidden size
 HIDDEN = 2880  # gpt-oss expert intermediate size
-NUM_TOKENS = 256  # token-ordered input rows
-COUNTS = [96, 160, 64, 128]  # tokens routed to each local expert (different per expert)
-MAX_TOKENS = max(COUNTS)  # region stride
-SPARE = len(COUNTS) * MAX_TOKENS  # the spare tile past every region
-ROWS = SPARE + ttnn.TILE_SIZE
+# (token-ordered input rows, tokens routed to each local expert)
+ROUTINGS = {
+    "aligned": (256, [96, 160, 64, 128]),
+    "ragged": (1024, [97, 161, 33, 127]),
+}
 L1_HELD_BYTES = 176 * 1024  # per core, about what gpt-oss's DFlash keeps resident across a prefill
 PCC = 0.97
 
@@ -63,13 +65,18 @@ def _hold_l1(mesh_device, held_bytes):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert op is Blackhole-only")
+@pytest.mark.parametrize("routing", list(ROUTINGS))
 @pytest.mark.parametrize("hold_l1", [False, True], ids=["whole_l1", "l1_end"])
 @pytest.mark.parametrize(
     "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )
-def test_row_index_row_major_output(mesh_device, device_params, hold_l1):
+def test_row_index_row_major_output(mesh_device, device_params, hold_l1, routing):
     torch.manual_seed(5)
+    NUM_TOKENS, COUNTS = ROUTINGS[routing]
     E = len(COUNTS)
+    MAX_TOKENS = -(-max(COUNTS) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE  # region stride, whole tiles
+    SPARE = E * MAX_TOKENS  # the spare tile past every region
+    ROWS = SPARE + ttnn.TILE_SIZE
     weights = [
         {
             "gate_proj": torch.randn(HIDDEN, EMB) * 0.08,
