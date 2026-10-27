@@ -21,7 +21,6 @@ using namespace tt::tt_metal::experimental;
 // share a CMake target, where same-named anonymous-namespace constants collide under a unity build.
 namespace group_attn_matmul_metal2 {
 const KernelSpecName READER{"reader"};
-const KernelSpecName READER_MCAST_ONLY{"reader_mcast_only"};
 const KernelSpecName WRITER{"writer"};
 const KernelSpecName COMPUTE{"compute"};
 
@@ -275,109 +274,98 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
         writer_defines.emplace("OUT_SHARDED", "1");
     }
 
-    // The reader runs on every active core, mcast senders and receivers alike. When q_heads < 32 the
-    // cores q_heads..31 only take part in the multicast: no compute or writer work, and the reader
-    // both pushes and pops in1 there to keep its write pointer in step with the mcast grid. Those
-    // cores get a second KernelSpec of the same source that holds both ends of in1, in a work unit
-    // of its own; the main reader is in1's producer alongside compute.
-    auto make_reader = [&](const KernelSpecName& unique_id, bool mcast_only) {
-        KernelSpec reader{
-            .unique_id = unique_id,
-            .source =
-                "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/"
-                "reader_mcast_transformer_group_attn_matmul.cpp",
-            .compiler_options = {.defines = reader_defines},
-            .dfb_bindings =
-                {
-                    // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
-                    DFBBinding{
-                        .dfb_spec_name = IN1,
-                        .accessor_name = "in1",
-                        .endpoint_type = DFBEndpointType::PRODUCER,
-                    },
+    // All three kernels run on every device core, as before; the flags steer the cores without work.
+    // On the mcast-only cores (q_heads..31 when q_heads < 32) compute and writer return at once and
+    // the reader both pushes and pops in1 to keep its write pointer in step with the mcast grid; it
+    // stays in1's producer there (the kernel-side FIFO ops do not depend on the binding's role).
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/"
+            "reader_mcast_transformer_group_attn_matmul.cpp",
+        .compiler_options = {.defines = reader_defines},
+        .dfb_bindings =
+            {
+                // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
+                DFBBinding{
+                    .dfb_spec_name = IN1,
+                    .accessor_name = "in1",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-            .semaphore_bindings =
-                {
-                    SemaphoreBinding{
-                        .semaphore_spec_name = IN1_MCAST_SENDER_SEM,
-                        .accessor_name = "in1_mcast_sender",
-                    },
-                    SemaphoreBinding{
-                        .semaphore_spec_name = IN1_MCAST_RECEIVER_SEM,
-                        .accessor_name = "in1_mcast_receiver",
-                    },
+            },
+        .semaphore_bindings =
+            {
+                SemaphoreBinding{
+                    .semaphore_spec_name = IN1_MCAST_SENDER_SEM,
+                    .accessor_name = "in1_mcast_sender",
                 },
-            .compile_time_args =
-                {
-                    {"transpose_hw", static_cast<uint32_t>(transpose_hw_bool)},
-                    {"row_major", static_cast<uint32_t>(operation_attributes.row_major)},
-                    {"out_subblock_w", operation_attributes.out_subblock_w},
+                SemaphoreBinding{
+                    .semaphore_spec_name = IN1_MCAST_RECEIVER_SEM,
+                    .accessor_name = "in1_mcast_receiver",
                 },
-            .runtime_arg_schema =
-                {
-                    .runtime_arg_names =
-                        {"has_work_for_mcast_kv_heads",
-                         "has_work_for_q_heads",
-                         "Mt",
-                         "Nt",
-                         "num_kv_heads",
-                         "in1_CKtNt",
-                         "in1_CKtNt_mul_32",
-                         "blocks",
-                         "in1_start_id",
-                         "in0_block_w",
-                         "out_block_w",
-                         "in1_num_subblocks",
-                         "in1_num_blocks",
-                         "in1_block_num_tiles",
-                         "Nt_bytes",
-                         "in1_block_w_tile_bytes",
-                         "out_last_subblock_w",
-                         "in1_last_block_w_tile_read_bytes",
-                         "in1_last_block_addr_skip",
-                         "in1_mcast_dest_noc_start_x",
-                         "in1_mcast_dest_noc_start_y",
-                         "in1_mcast_dest_noc_end_x",
-                         "in1_mcast_dest_noc_end_y",
-                         "in1_mcast_num_dests",
-                         "in1_mcast_num_cores",
-                         "in1_mcast_grid_size",
-                         "in1_mcast_sender_size_bytes",
-                         "in1_mcast_sender_id",
-                         "in1_mcast_sender_num_x",
-                         "in1_mcast_sender_num_y"},
-                },
-            .hw_config = reader_hw_config,
-            .advanced_options = {.num_runtime_varargs = in1_mcast_sender_num_x + in1_mcast_sender_num_y},
-        };
-        if (mcast_only) {
-            reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = IN1,
-                .accessor_name = "in1",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            });
-        }
-        if (in1_is_sharded) {
-            // The resident in1 shard is only read in place through its base address: the reader is
-            // the one kernel that touches it, so it holds both ends.
-            reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = IN2,
-                .accessor_name = "in2",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            });
-            reader.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = IN2,
-                .accessor_name = "in2",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-            });
-        } else {
-            reader.tensor_bindings.push_back(TensorBinding{
-                .tensor_parameter_name = INPUT_B,
-                .accessor_name = "src1",
-            });
-        }
-        return reader;
+            },
+        .compile_time_args =
+            {
+                {"transpose_hw", static_cast<uint32_t>(transpose_hw_bool)},
+                {"row_major", static_cast<uint32_t>(operation_attributes.row_major)},
+                {"out_subblock_w", operation_attributes.out_subblock_w},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {"has_work_for_mcast_kv_heads",
+                     "has_work_for_q_heads",
+                     "Mt",
+                     "Nt",
+                     "num_kv_heads",
+                     "in1_CKtNt",
+                     "in1_CKtNt_mul_32",
+                     "blocks",
+                     "in1_start_id",
+                     "in0_block_w",
+                     "out_block_w",
+                     "in1_num_subblocks",
+                     "in1_num_blocks",
+                     "in1_block_num_tiles",
+                     "Nt_bytes",
+                     "in1_block_w_tile_bytes",
+                     "out_last_subblock_w",
+                     "in1_last_block_w_tile_read_bytes",
+                     "in1_last_block_addr_skip",
+                     "in1_mcast_dest_noc_start_x",
+                     "in1_mcast_dest_noc_start_y",
+                     "in1_mcast_dest_noc_end_x",
+                     "in1_mcast_dest_noc_end_y",
+                     "in1_mcast_num_dests",
+                     "in1_mcast_num_cores",
+                     "in1_mcast_grid_size",
+                     "in1_mcast_sender_size_bytes",
+                     "in1_mcast_sender_id",
+                     "in1_mcast_sender_num_x",
+                     "in1_mcast_sender_num_y"},
+            },
+        .hw_config = reader_hw_config,
+        .advanced_options = {.num_runtime_varargs = in1_mcast_sender_num_x + in1_mcast_sender_num_y},
     };
+    if (in1_is_sharded) {
+        // The resident in1 shard is only read in place through its base address: the reader is
+        // the one kernel that touches it, so it holds both ends.
+        reader.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = IN2,
+            .accessor_name = "in2",
+            .endpoint_type = DFBEndpointType::PRODUCER,
+        });
+        reader.dfb_bindings.push_back(DFBBinding{
+            .dfb_spec_name = IN2,
+            .accessor_name = "in2",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+        });
+    } else {
+        reader.tensor_bindings.push_back(TensorBinding{
+            .tensor_parameter_name = INPUT_B,
+            .accessor_name = "src1",
+        });
+    }
 
     KernelSpec writer{
         .unique_id = WRITER,
@@ -530,10 +518,8 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
     uint32_t g1_numcores = core_group_1.num_cores();
 
     KernelRunArgs reader_run_args{.kernel = READER};
-    KernelRunArgs reader_mcast_only_run_args{.kernel = READER_MCAST_ONLY};
     KernelRunArgs writer_run_args{.kernel = WRITER};
     KernelRunArgs compute_run_args{.kernel = COMPUTE};
-    std::vector<CoreRange> mcast_only_ranges;
 
     uint32_t num_blocks_written = 0;
     for (uint32_t i = 0; i < cores.size(); ++i) {
@@ -548,11 +534,9 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
         const uint32_t mcast_num_cores_for_core = mcast_num_cores - static_cast<uint32_t>(i < mcast_num_cores);
         const uint32_t in1_mcast_num_dests =
             Q_HEADS < TILE_HEIGHT ? std::min(mcast_num_cores_for_core, num_active_cores - 1) : mcast_num_dests - 1;
-        const bool mcast_only = has_work_for_mcast_kv_heads == 1 && has_work_for_q_heads == 0;
 
-        KernelRunArgs& reader_run_args_for_core = mcast_only ? reader_mcast_only_run_args : reader_run_args;
         AddRuntimeArgsForNode(
-            reader_run_args_for_core.runtime_arg_values,
+            reader_run_args.runtime_arg_values,
             core,
             {
                 {"has_work_for_mcast_kv_heads", has_work_for_mcast_kv_heads},
@@ -593,84 +577,54 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
                 {"in1_mcast_sender_num_x", in1_mcast_sender_num_x},
                 {"in1_mcast_sender_num_y", in1_mcast_sender_num_y},
             });
-        reader_run_args_for_core.advanced_options.runtime_varargs[core] = in1_mcast_sender_noc_varargs;
+        reader_run_args.advanced_options.runtime_varargs[core] = in1_mcast_sender_noc_varargs;
 
-        if (mcast_only) {
-            mcast_only_ranges.emplace_back(core, core);
-        } else {
-            AddRuntimeArgsForNode(
-                writer_run_args.runtime_arg_values,
-                core,
-                {
-                    {"has_work_for_q_heads", has_work_for_q_heads},
-                    {"Mt", Mt},
-                    {"Kt", Kt},
-                    {"Nt", Nt},
-                    {"MtKt", MtKt},
-                    {"blocks", num_output_blocks_per_core},
-                    {"in0_start_id", num_blocks_written * MtKt},
-                    {"out_start_id", num_blocks_written * MtNt},
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {
+                {"has_work_for_q_heads", has_work_for_q_heads},
+                {"Mt", Mt},
+                {"Kt", Kt},
+                {"Nt", Nt},
+                {"MtKt", MtKt},
+                {"blocks", num_output_blocks_per_core},
+                {"in0_start_id", num_blocks_written * MtKt},
+                {"out_start_id", num_blocks_written * MtNt},
 
-                    {"in0_block_w", in0_block_w},
-                    {"in1_num_subblocks", in1_num_subblocks},
-                    {"in1_num_blocks", in1_num_blocks},
-                    {"out_num_tiles", MtNt},
+                {"in0_block_w", in0_block_w},
+                {"in1_num_subblocks", in1_num_subblocks},
+                {"in1_num_blocks", in1_num_blocks},
+                {"out_num_tiles", MtNt},
 
-                    {"bfloat16_row_bytes", bfloat16_row_bytes},
-                    {"bfloat16_Nt_bytes", bfloat16_Nt_bytes},
-                    {"bfloat16_last_row_bytes_read", bfloat16_last_row_bytes_read},
-                });
+                {"bfloat16_row_bytes", bfloat16_row_bytes},
+                {"bfloat16_Nt_bytes", bfloat16_Nt_bytes},
+                {"bfloat16_last_row_bytes_read", bfloat16_last_row_bytes_read},
+            });
 
-            AddRuntimeArgsForNode(
-                compute_run_args.runtime_arg_values,
-                core,
-                {
-                    {"has_work_for_q_heads", has_work_for_q_heads},
-                    {"batch", num_output_blocks_per_core},
-                    {"Mt", Mt},
-                    {"num_kv_heads_skip", kv_heads_id * in1_block_num_tiles_per_kv_heads},
-                    {"num_kv_heads_remaining", (KV_HEADS - kv_heads_id) * in1_block_num_tiles_per_kv_heads},
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values,
+            core,
+            {
+                {"has_work_for_q_heads", has_work_for_q_heads},
+                {"batch", num_output_blocks_per_core},
+                {"Mt", Mt},
+                {"num_kv_heads_skip", kv_heads_id * in1_block_num_tiles_per_kv_heads},
+                {"num_kv_heads_remaining", (KV_HEADS - kv_heads_id) * in1_block_num_tiles_per_kv_heads},
 
-                    {"in0_block_w", in0_block_w},
-                    {"out_subblock_h", out_subblock_h},
-                    {"in1_num_subblocks", in1_num_subblocks},
-                    {"in1_num_blocks", in1_num_blocks},
-                    {"in0_block_num_tiles", in0_block_num_tiles},
-                    {"in1_block_num_tiles", in1_block_num_tiles},
-                    {"out_num_tiles", MtNt},
+                {"in0_block_w", in0_block_w},
+                {"out_subblock_h", out_subblock_h},
+                {"in1_num_subblocks", in1_num_subblocks},
+                {"in1_num_blocks", in1_num_blocks},
+                {"in0_block_num_tiles", in0_block_num_tiles},
+                {"in1_block_num_tiles", in1_block_num_tiles},
+                {"out_num_tiles", MtNt},
 
-                    {"in0_subblock_num_tiles", in0_subblock_num_tiles},
-                    {"in1_per_core_w", in1_per_core_w},
-                });
-        }
+                {"in0_subblock_num_tiles", in0_subblock_num_tiles},
+                {"in1_per_core_w", in1_per_core_w},
+            });
 
         num_blocks_written += num_output_blocks_per_core;
-    }
-
-    // ---- Work units ----
-    const CoreRangeSet mcast_only_cores = CoreRangeSet(std::move(mcast_only_ranges)).merge_ranges();
-    const CoreRangeSet main_cores = all_device_cores.subtract(mcast_only_cores);
-
-    Group<KernelSpec> kernels;
-    kernels.push_back(make_reader(READER, /*mcast_only=*/false));
-    kernels.push_back(std::move(writer));
-    kernels.push_back(std::move(compute));
-    Group<WorkUnitSpec> work_units;
-    work_units.push_back(WorkUnitSpec{
-        .name = "main",
-        .kernels = {READER, WRITER, COMPUTE},
-        .target_nodes = main_cores,
-    });
-    ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
-    if (!mcast_only_cores.empty()) {
-        kernels.push_back(make_reader(READER_MCAST_ONLY, /*mcast_only=*/true));
-        work_units.push_back(WorkUnitSpec{
-            .name = "mcast_only",
-            .kernels = {READER_MCAST_ONLY},
-            .target_nodes = mcast_only_cores,
-        });
-        run_args.kernel_run_args.push_back(std::move(reader_mcast_only_run_args));
     }
 
     Group<DataflowBufferSpec> dataflow_buffers;
@@ -685,7 +639,7 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
 
     ProgramSpec spec{
         .name = "group_attn_matmul",
-        .kernels = std::move(kernels),
+        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dataflow_buffers),
         .semaphores = {std::move(in1_mcast_sender_sem), std::move(in1_mcast_receiver_sem)},
         .tensor_parameters =
@@ -694,9 +648,18 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
                 TensorParameter{.unique_id = INPUT_B, .spec = b.tensor_spec()},
                 TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
             },
-        .work_units = std::move(work_units),
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER, WRITER, COMPUTE},
+                    .target_nodes = all_device_cores,
+                },
+            },
     };
 
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
     run_args.tensor_args = {
         {INPUT_A, a_mesh},
         {INPUT_B, b_mesh},

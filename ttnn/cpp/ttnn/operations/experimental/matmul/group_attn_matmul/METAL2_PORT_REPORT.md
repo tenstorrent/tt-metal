@@ -8,32 +8,31 @@ the three kernels); references into the ported code are against this branch; `df
 
 ## Outcome
 
-**CAPITULATED on one shape — handoff point 1; everything else PORTED and verified.** The op's single factory
-(`GroupAttnMatmulProgramFactory`) and its three owned kernels are converted and run correctly on every
-`q_heads >= 32` configuration (the only ones production Falcon-7B uses). The invoker's decision on the audit's
-Question 1 — express `in1` on the mcast-only cores (`q_heads < 32`) with a second same-source reader `KernelSpec`
-bound PRODUCER + CONSUMER in its own `WorkUnitSpec`, and no `allow_instance_multi_binding` — is what the factory
-builds, and the framework's spec validator rejects that shape at program construction, before any device work,
-on every `q_heads < 32` configuration. Per the invoker's instruction the port stops there: the exact rejection and
-the analysis are under *Handoff points*, the shape is committed as instructed, and the decision goes back to the
-invoker. A `q_heads >= 32` call never emits the second work unit, so the rest of the port is fully exercised.
+**PORTED** — the op's single factory (`GroupAttnMatmulProgramFactory`) and its three owned kernels converted;
+the full `group_attn_matmul` selection passes with the counts of the legacy build. One structural decision was
+re-made mid-port: the audit's Question-1 shape for `in1` on the mcast-only cores (a second same-source reader
+`KernelSpec` bound PRODUCER + CONSUMER in its own `WorkUnitSpec`) was built as instructed, rejected by the spec
+validator on every `q_heads < 32` configuration, recorded as handoff point 1 and handed back; the invoker chose
+the legacy placement (option (a) below), which is what the final factory builds. The rejected shape lives in the
+branch history (commit `99af85c19e0`).
 
 Verification on a Blackhole p150b (device 0), Watcher on (`TT_METAL_WATCHER=10`), Metal 2.0 legality checks
 forced on (every `skip_validation` site set `false` in the working tree, `METAL2_CHECKS_FORCED` markers present
 in every log — scaffolding only, not in the diff):
 
-| Suite (`tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py -k group_attn_matmul`, `-q --timeout 600`) | Legacy (`0df0dde3316`, same build flags, same env) | Ported |
-|---|---|---|
-| all four `test_group_attn_matmul*` functions, 454 selected cases (300 `test_attn_matmul*` deselected) | **322 passed, 132 skipped** (all skips are the exhaustive test's own guards at `:656` / `:659`), 0 failed, 4:30 | **204 passed, 118 failed, 132 skipped**, 2:14 |
-| of which `q_heads >= 32` (`32` × 120 cases, `48` × 42, `64` × 42: every sharding / orientation / buffer-type / optional-output combination, program-cache sweeps, bf16 and fp32 with 32-bit accumulation) | 204 passed | **204 passed** |
-| of which `q_heads < 32` (`test_group_attn_matmul` `q=16` × 16, `test_group_attn_matmul_fp32` `q=2` × 2, `test_group_attn_matmul_with_program_cache` `q=10` × 16, exhaustive `q=16` × 42 and `q=24` × 42) | 118 passed | **118 failed**, every one with the same `TT_FATAL` from `ValidateDFBEndpointPlacement` at the first (cache-miss) dispatch, before any kernel runs — handoff point 1 |
+| Suite (`tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py -k group_attn_matmul -q --timeout 600 --tb=short`) | Legacy (`0df0dde3316`, same build flags, same env) | Ported, final shape (option (a)) | Ported, rejected shape (commit `99af85c19e0`) |
+|---|---|---|---|
+| all four `test_group_attn_matmul*` functions, 454 selected cases (300 `test_attn_matmul*` deselected) | **322 passed, 132 skipped, 0 failed**, 4:30 | **322 passed, 132 skipped, 0 failed**, 1:34 | 204 passed, 118 failed, 132 skipped |
+| of which `q_heads >= 32` (`32` × 120, `48` × 42, `64` × 42: every sharding / orientation / buffer-type / optional-output combination, program-cache sweeps, bf16 and fp32 with 32-bit accumulation) | 204 passed | 204 passed | 204 passed |
+| of which `q_heads < 32` (`test_group_attn_matmul` `q=16` × 16, `test_group_attn_matmul_fp32` `q=2` × 2, `test_group_attn_matmul_with_program_cache` `q=10` × 16, exhaustive `q=16` × 42 and `q=24` × 42 — the mcast-only-core protocol) | 118 passed | **118 passed** | 118 failed, all with the handoff-1 `TT_FATAL` at the first (cache-miss) dispatch, before any kernel ran |
 
-No Watcher error, no hang, no timeout in either run; the `METAL2_CHECKS_FORCED` marker appears in every log
-(42 in the smoke run, 782 in the full run).
+The 132 skips are the exhaustive test's own guards (`test_attn_matmul.py:656`, `:659`) in every run. No Watcher
+error, no hang, no timeout in any run; the `METAL2_CHECKS_FORCED` marker appears in every log (1000 occurrences
+in the final run).
 
-Not run: Wormhole; the Falcon demos (`models/demos/falcon7b_common`, `ttnn_falcon7b`, `t3000/falcon40b`) — the
-40B one is the production `q_heads = 16` shape, i.e. the blocked one. No bit-exact capture against the legacy
-build was done (the attn_matmul port did one; here the device time went to the full sweep).
+Not run: Wormhole; the Falcon demos (`models/demos/falcon7b_common`, `ttnn_falcon7b`, `t3000/falcon40b`). No
+bit-exact capture against the legacy build was done (the attn_matmul port did one; here the device time went to
+the full sweep, twice).
 
 ## Provenance
 
@@ -67,7 +66,20 @@ same tensor arguments).
 
 ## Handoff points
 
-### 1. `in1` on the mcast-only cores: the validator rejects the two-`KernelSpec` split (Metal 2.0 API / validator owners; invoker decision)
+### 1. `in1` on the mcast-only cores: the validator rejects the two-`KernelSpec` split — **Decision: option (a), taken by the invoker**
+
+**Decision and rationale (invoker, after reading this entry):** take option (a), legacy placement. The validator
+rejects the node-set split on the two rules cited below (per-role kind uniformity, self-loop set equality); the
+multi-binding flag would not admit it either; (b) introduces an undeclarable L1-ordering dependency; (d) is out
+of port scope. (a) is validator-legal, needs no flag, is byte-identical to the legacy behaviour on Gen1, and the
+118 then-failing `q_heads < 32` tests verify it empirically. The debt — a consumer FIFO op (`reader:327-328`)
+issued by a PRODUCER-bound DM kernel on the mcast-only cores, sanctioned by no document and not viable on
+Gen2 — is accepted for the Gen1 port and handed to the Quasar-uplift audit, which must redesign this op's mcast
+protocol anyway (DM self-loop on `in2`, hand-built multicast). **Final shape:** one `WorkUnitSpec` over the whole
+device grid with all three kernels, `in1` bound reader PRODUCER / compute CONSUMER on every node; the
+`READER_MCAST_ONLY` spec, its work unit and its run-args are gone; no kernel edit. The analysis that led there is
+kept below as the record, and feeds two open items (Metal 2.0 API owners; Quasar-uplift audit).
+
 
 **Where:** `device/group_attn_matmul_program_factory.cpp`, `make_reader(READER_MCAST_ONLY, /*mcast_only=*/true)`
 and the `mcast_only` `WorkUnitSpec` (emitted only when `q_heads < 32`).
@@ -114,7 +126,7 @@ expressed by re-arranging the same bindings:
   — but so would the DM self-loop on `in2` and the hand-built multicast, and this op's mcast protocol needs a
   Quasar redesign regardless. The recipe's stop-signal text ("the validator's check is satisfied by adjusting
   the *binding* declaration on the host ... a tile produced and never consumed is harmless") is the closest
-  sanction. **This is the shape I would recommend for the Gen1 port.**
+  sanction. This was the recommendation, and the shape the invoker chose.
 - **(b) Relay DFB, as `matmul_multicore_reuse_mcast_2d_program_factory.cpp` does for `in0` (`in0_relay`).** A
   second `DataflowBufferSpec` with `in1`'s geometry, self-looped by `READER_MCAST_ONLY` under the same accessor
   name `in1` (kernel source unchanged); `in1` keeps reader → compute. Validator-legal. But the multicast
@@ -132,15 +144,15 @@ expressed by re-arranging the same bindings:
   compute kernel does not cover, and the self-loop equality to "per node"), or give `DataflowBufferSpec` a way to
   pin two DFBs to one offset so (b) becomes declarable. Either is an API-owner change.
 
-**State of the branch:** the instructed shape is committed; switching to (a) or (b) is a factory-only change
-(no kernel edits). All `q_heads >= 32` configurations pass on the committed shape.
+**State of the branch:** commit `99af85c19e0` carries the instructed (rejected) shape, 204 passed / 118 failed on
+it; the following commit switches the factory to (a) — a factory-only change — and the full selection passes.
 
 No other handoff: no boundary-rule violation (no `sem::` / `tensor::` handle leaves the op's kernels), no
 kernel-lib gap, no removed pybind surface, no out-of-directory kernel edit.
 
 ## Successes
 
-- **Audit brief → port, 1:1 apart from the handoff.** Every other item mapped directly: the three conditional
+- **Audit brief → port, 1:1 apart from handoff point 1.** Every other item mapped directly: the three conditional
   tensor bindings paired with the `IN0_SHARDED` / `IN1_SHARDED` / `OUT_SHARDED` defines and the matching
   `borrowed_from` DFBs (all eight sharding combinations of `test_group_attn_matmul` pass), the conditional `in2`
   DFB with its two self-loop bindings, the two `SemaphoreSpec`s on the full grid read as `sem::` tokens (the
@@ -204,8 +216,20 @@ kernel-lib gap, no removed pybind surface, no out-of-directory kernel edit.
   `my_y[…]` with `CoreLocalMem` operands) in the reader's sharded `in1` staging copy and the writer's row gather;
   the multicasts sourced from peeked addresses (`in2`'s read pointer, `in1`'s write pointer) with the
   `DataflowBuffer` as destination; the reader's write-pointer peek after each `reserve_back`. All belong to a
-  post-port style / semantic pass. Whatever resolves handoff point 1 adds to this list (a role-crossing FIFO op
-  under option (a), a declaration-order dependency under (b)).
+  post-port style / semantic pass. **Added by the handoff-1 decision (Quasar-uplift audit):** on the mcast-only
+  cores (`q_heads..31` when `q_heads < 32`) the reader — bound PRODUCER of `in1` — also issues `pop_front`
+  (`reader:327-328`), a consumer FIFO op from a producer binding; Gen1's role-free circular-buffer lowering
+  executes it as legacy did, Gen2's credit machinery would not. The mcast protocol of this op (same-CB send and
+  receive, `CoreLocalMem` sources from peeked addresses) needs a Quasar redesign in any case.
+- **For the Metal 2.0 API owners (from handoff point 1):** the audit, brief and recipe all read the DFB endpoint
+  invariant as per-node only and missed the per-role *kind* condition (`dataflow_buffer_spec.hpp:43`,
+  `dfb.cpp:440-470`) and the undocumented self-loop set-equality rule (`dfb.cpp:575-625`, not relaxed by
+  `allow_instance_multi_binding`). The shape they forbid — a same-source DM `KernelSpec` holding the consumer
+  role on a disjoint node set where no compute kernel runs — is the natural expression of mcast senders without
+  compute work (this op; the 2D matmul port's `in0_relay`). Either admit it (relax the kind check when the extra
+  consumer is a self-loop participant on nodes the compute consumer does not cover, and the equality rule to
+  per-node), or document the rule and give `DataflowBufferSpec` a way to pin two DFBs to one offset so the relay
+  shape becomes declarable.
 - **Hardware config note:** both DM specs use the TTNN reader / writer helpers because the legacy resolved
   triples (`RISCV_1` + `preferred_noc_for_dram_read(arch)` = `NOC_0`; `RISCV_0` + the other NOC) equal the
   defaults by value as of `0df0dde3316`. The mcast rectangle's start / end orientation (`factory:382-385`) is now
@@ -230,8 +254,8 @@ kernel-lib gap, no removed pybind surface, no out-of-directory kernel edit.
   - The writer's `out_subblock_w` CTA and the `onetile` constants in writer and compute are unused; kept.
 - **Candidate later cleanup (not port work):** the vararg coordinate vectors are identical on every node and
   could be common runtime varargs; the `has_work_*` flags are the only per-core values on the idle cores.
-- **Test coverage notes:** the three `q_heads < 32` parametrizations (`16` in `test_group_attn_matmul` and the
-  exhaustive test, `24` in the exhaustive test, `2` in `test_group_attn_matmul_fp32`) are the only coverage of
-  the mcast-only protocol and are all blocked by handoff point 1; re-run the full selection after it is
-  resolved. Nothing passes `dst_full_sync_en=True`; `test_group_attn_matmul_fp32` is the only caller of
+- **Test coverage notes:** the `q_heads < 32` parametrizations (`16` in `test_group_attn_matmul` and the
+  exhaustive test, `24` in the exhaustive test, `10` in `test_group_attn_matmul_with_program_cache`, `2` in
+  `test_group_attn_matmul_fp32` — 118 cases) are the only coverage of the mcast-only protocol; they pass on the
+  final shape. Nothing passes `dst_full_sync_en=True`; `test_group_attn_matmul_fp32` is the only caller of
   `math_approx_mode=True` and the kernel runs no SFPU op, so neither knob is observable.

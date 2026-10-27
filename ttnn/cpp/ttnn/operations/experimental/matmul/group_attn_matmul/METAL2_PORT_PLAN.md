@@ -111,6 +111,12 @@ factory, so no intra-op sharing. All three convert in place.
 
 ## Planned Spec Shape
 
+> **Final shape differs from this plan in one point.** The M-node placement split planned below (`READER_MCAST_ONLY`,
+> the `mcast_only` work unit) was built as planned and rejected by the spec validator (see *Deferred / Flagged* and
+> `METAL2_PORT_REPORT.md`, handoff point 1); the invoker then chose the legacy placement: **three** `KernelSpec`s,
+> **one** `WorkUnitSpec` over the whole device grid, `in1` bound reader PRODUCER / compute CONSUMER on every node.
+> The text below is kept as the record of the plan that was executed first.
+
 *Filled in during the planning step.* 1:1 with legacy except for the M-node placement split below (a decision the
 invoker made on the audit's Question 1).
 
@@ -254,7 +260,7 @@ For each legacy RTA / CTA that disappears in the port:
 
 ## Deferred / Flagged
 
-- **Validator rule known at planning time.** The DFB validator
+- **Validator rule known at planning time (confirmed at run time; resolved by the invoker's option (a) decision).** The DFB validator
   (`tt_metal/impl/metal2_host_api/program_spec/validation/resource/dfb.cpp:605-625`) requires, for any DFB that
   some `KernelSpec` self-loops, that the set of PRODUCER `KernelSpec`s equal the set of CONSUMER `KernelSpec`s. For
   `IN1` the planned shape has producers `{READER, READER_MCAST_ONLY}` and consumers `{COMPUTE, READER_MCAST_ONLY}`,
