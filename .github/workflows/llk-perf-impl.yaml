@@ -59,6 +59,11 @@ on:
         required: false
         default: ""
         type: string
+      stage2-thresholds:
+        description: 'With stage2-baseline-ref: {"<arch>": {"threshold": ..., "module_thresholds": ...}}'
+        required: false
+        default: "{}"
+        type: string
       debug-symbols:
         description: "Build the ELFs with -g"
         required: false
@@ -445,6 +450,8 @@ jobs:
         env:
           TIMEOUT_MINUTES: ${{ matrix.test-group.timeout }}
           LLK_PERF_RUN_TYPES: ${{ inputs.perf-run-types }}
+          THRESHOLD: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].threshold }}
+          MODULE_THRESHOLDS: ${{ fromJSON(inputs.stage2-thresholds)[env.CHIP_ARCH].module_thresholds }}
         run: |
           # 2 min stay for the uploads.
           export LLK_STAGE2_DEADLINE=$(( JOB_START_EPOCH + (TIMEOUT_MINUTES - 2) * 60 ))

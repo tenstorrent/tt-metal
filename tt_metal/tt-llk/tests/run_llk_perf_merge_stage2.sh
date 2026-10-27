@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 # Merge gate stage 2, in a leg after stage 1: re-measure this leg's regressions on both commits at 5 code positions.
-# Usage: CHIP_ARCH=<arch> LLK_STAGE2_DEADLINE=<epoch s> run_llk_perf_merge_stage2.sh <baseline dir> <out dir>
+# Usage: CHIP_ARCH=<arch> THRESHOLD=<x> [MODULE_THRESHOLDS=<m=x,...>] LLK_STAGE2_DEADLINE=<epoch s> run_llk_perf_merge_stage2.sh <baseline dir> <out dir>
 set -euo pipefail
 
 BASELINE="$(realpath -m "${1:?usage: run_llk_perf_merge_stage2.sh <baseline dir> <out dir>}")"
@@ -18,13 +18,7 @@ if [[ ! -f "$BASELINE/baseline.csv" ]]; then
   exit 0
 fi
 
-# The merge gate's thresholds (merge-gate.yaml).
-case "$CHIP_ARCH" in
-  blackhole) THRESHOLD=0.02 MODULE_THRESHOLDS="" ;;
-  wormhole) THRESHOLD=0.13 MODULE_THRESHOLDS="perf_matmul=0.25,perf_math_matmul=0.25" ;;
-  *) echo "Unknown CHIP_ARCH '$CHIP_ARCH'" >&2; exit 2 ;;
-esac
-COMPARE=(--threshold "$THRESHOLD" --min-cycles 30 --module-threshold "$MODULE_THRESHOLDS")
+COMPARE=(--threshold "${THRESHOLD:?}" --min-cycles 30 --module-threshold "${MODULE_THRESHOLDS:-}")
 
 python3 "$LLK/perf/regression_compare.py" "${COMPARE[@]}" \
   --current "$LLK/perf_data/runs/**/*.csv" --baseline "$BASELINE/**/*.csv" \
