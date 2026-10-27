@@ -299,27 +299,6 @@ bool codegen_can_serve(
            scatter_ns::supported_by_codegen(input_tensor, dim, index_tensor, source_tensor, reduction_mode);
 }
 
-// The live-L1 half of routing, asked last and on the same original tensors: whether the ROW_MAJOR
-// plan fits the L1 free right now. Kept apart from codegen_can_serve() because the forced entry
-// and the prim's validate consult the static scope only. Resolves the call's memory config and
-// reduce string for scatter_ns::codegen_plan_fits_live_l1.
-bool call_fits_live_l1(
-    const Tensor& input_tensor,
-    const int32_t& dim,
-    const Tensor& index_tensor,
-    const Tensor& source_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::string>& opt_reduction_string) {
-    const auto output_mem_config = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
-    return scatter_ns::codegen_plan_fits_live_l1(
-        input_tensor,
-        dim,
-        index_tensor,
-        source_tensor,
-        scatter_reduction_mode(opt_reduction_string),
-        output_mem_config);
-}
-
 // The existing native implementation, unconditionally. Callers that have already been routed here
 // enter this rather than re-entering ttnn::scatter, so a call routed to native cannot be routed a
 // second time and land on codegen.
@@ -424,21 +403,12 @@ Tensor scatter_codegen_dispatch(
     const auto input_tensor_rank = input_tensor.logical_shape().rank();
 
     const int32_t normalized_dim = dim < 0 ? dim + input_tensor_rank : dim;
-    TT_FATAL(
-        normalized_dim >= 0 && normalized_dim < static_cast<int32_t>(input_tensor_rank),
-        "scatter: dim {} is out of range for tensor rank {}",
-        dim,
-        input_tensor_rank);
 
     check_support(input_tensor, index_tensor, source_tensor, normalized_dim);
     validate_inputs(input_tensor, index_tensor, source_tensor, normalized_dim, opt_reduction_string);
 
-    // No empty-shape passthrough here: supported_by_codegen() already rejects rank <= 0 (an empty
-    // ttnn::Shape{} has rank 0), so an empty-shape call never reaches this function through the
-    // auto route's codegen_can_serve() gate, and scatter_force_codegen() must TT_FATAL on it rather
-    // than silently answering from host state -- a passthrough here would swallow that forced call
-    // without ever invoking ttnn::prim::scatter_codegen. The passthrough itself lives in
-    // scatter_native() only.
+    // The empty-shape passthrough lives in scatter_native() only: the gates keep empty operands off
+    // this leg, and the forced entry must fail on them rather than answer from host state.
     const auto original_layout = input_tensor.layout();
 
     const bool input_tensor_is_dim_last_idx = (normalized_dim == input_tensor_rank - 1);
@@ -549,6 +519,7 @@ Tensor scatter(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     namespace detail = ttnn::operations::data_movement::detail;
     namespace scatter_ns = ttnn::operations::data_movement::scatter;
+    using ttnn::operations::data_movement::CMAKE_UNIQUE_NAMESPACE::scatter_reduction_mode;
 
     const MemoryConfig final_memory_config{
         output_memory_config.has_value() ? output_memory_config.value() : input_tensor.memory_config()};
@@ -571,8 +542,15 @@ Tensor scatter(
         detail::codegen_can_serve(
             input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string) &&
         !scatter_ns::is_demoted(input_tensor, dim, index_tensor, source_tensor, final_memory_config) &&
-        detail::call_fits_live_l1(
-            input_tensor, dim, index_tensor, source_tensor, output_memory_config, opt_reduction_string);
+        // Live L1 is asked last and only here: the forced entry and the prim's validate consult
+        // the static scope alone.
+        scatter_ns::codegen_plan_fits_live_l1(
+            input_tensor,
+            dim,
+            index_tensor,
+            source_tensor,
+            scatter_reduction_mode(opt_reduction_string),
+            final_memory_config);
 
     return use_codegen ? detail::scatter_codegen_dispatch(
                              input_tensor,
