@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ckernel_addrmod.h"
+#include "ckernel_sfpu_dest.h"
 #include "ckernel_sfpu_srcs.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
@@ -50,6 +51,13 @@ inline void calculate_square() {
         calculate_unary_operands<SquareMath, 1 /*ITERATIONS*/>(Input{}, Output{});
     }
 }
+
+/** @brief Dest square op type: keeps the ADDR_MOD_6 store loop of @ref calculate_square. */
+template <int ITERATIONS = SFPU_ITERATIONS>
+struct SquareDest : SfpuDestUnaryOp<SquareDest<ITERATIONS>> {
+    static void init_op() { init_square(); }
+    static void calculate() { calculate_square<ITERATIONS>(); }
+};
 
 /** @brief SrcS square op type; Sfpi only. */
 template <sfpi::DataLayout LAYOUT, SfpuImpl IMPL = SfpuImpl::Sfpi>
