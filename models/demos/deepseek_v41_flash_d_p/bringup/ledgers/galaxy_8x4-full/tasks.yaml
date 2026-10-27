@@ -327,6 +327,43 @@ tasks:
       smoke_device_ok: == 1
   device: true
   paths: *id001
+- id: FIX.5
+  title: 'Owner order (2026-10-27): ttnn.bringup.flat_routed_expert_with_program misses the program cache on e'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - W.1
+  gate:
+    cmd: BRINGUP_TASK=W.1 BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'Owner order (2026-10-27): ttnn.bringup.flat_routed_expert_with_program misses the program cache on every run,
+      fix it IN THE OP. Evidence (overseer census, /scratch/dnijemcevic/posprof/census.json + census0.log; F196/F197 in testing/profile.py):
+      one 40-layer 5120 chunk at position 0 on 8x4, 6 consecutive runs after compile: program-cache entries +40, +40, +20,
+      +40, +38, +20 a run, ALL charged to flat_routed_expert_with_program (every other op hits); 30 runs never converge (249
+      -> 831 entries). Host wall tracks the misses (+20 runs 15-19 s, +40 runs 26-32 s: ~0.5 s of host work per miss). Cause:
+      device/flat_with_program_device_operation.hpp:33 FlatWithProgramParams.addrs = ''every buffer address the program bakes
+      in: the cache key ... so a cache hit never needs a patch''; compute_program_hash hashes p.addrs and counts_addr, so
+      a call whose activation buffers (x / y / arena / counts) land at a new allocator address builds a new program. Do: make
+      every per-call buffer address (input, output, arena, counts, the extra program''s buffers) a runtime argument patched
+      on a hit (override_runtime_arguments / the cached workload''s runtime args), and remove addresses from the program hash;
+      weights'' addresses may stay baked only if they are fixed for the model''s lifetime (state why). No shortcut: do not
+      disable the program cache, do not pin the model''s activations at fixed addresses to dodge the key, do not change values
+      (bit-identical outputs vs the current op on the same inputs: check it). Measure and report: (1) BRINGUP_PROFILE_WALL=1
+      test_profile.py on the seed rung (F196: warm = a run adds no program-cache entry, then 10 timed runs with misses refused)
+      converges, with the number of warm-up runs and the entry counts; (2) the fork''s tests/unit on a Galaxy chip all pass
+      (as FIX.2); (3) the op''s per-call host time before / after on a hit. Gate: W.1 (accuracy unchanged).'
+    gate_tasks:
+    - W.1
 - id: K.1
   title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
   step: contract

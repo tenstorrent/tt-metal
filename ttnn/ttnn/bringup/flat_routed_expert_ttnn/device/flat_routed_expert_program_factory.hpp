@@ -70,6 +70,14 @@ struct FlatRoutedExpertProgramFactory {
         const FlatRoutedExpertParams& operation_attributes,
         const FlatRoutedExpertInputs& tensor_args,
         Tensor& tensor_return_value);
+
+    // Every buffer address of this call into `program` (what override_runtime_arguments does; flat_with_program's
+    // patch_addresses re-applies it on the program it appended to).
+    static void apply_addresses(
+        tt::tt_metal::Program& program,
+        const FlatRoutedExpertSharedVariables& shared_variables,
+        const FlatRoutedExpertInputs& tensor_args,
+        const Tensor& tensor_return_value);
 };
 
 }  // namespace ttnn::operations::bringup::flat_routed_expert

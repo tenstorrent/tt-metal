@@ -339,7 +339,9 @@ class WeightedCombine:
             ttnn.Shape([P * self.S_pass, H]), out_dtype, ttnn.ROW_MAJOR_LAYOUT, mesh, DRAM
         )
         self.combines = {}  # (arena, words) addresses -> per pass (run, desc, l1_args), and the zero program
-        self.seen = set()  # flat_routed_expert_with_program program-cache keys seen (a hit needs no descriptor)
+        self.seen = (
+            set()
+        )  # (EXPERTS_PROGRAM_KEY=addresses) the op's program-cache keys seen (a hit needs no descriptor)
         self.empty = ttnn.MeshProgramDescriptor()
         self.key0 = 9_100_000 + (id(self) % 100_000) * 8
         # the column barrier after the zeroing (built once; its semaphore persistent in L1_SMALL) and its io tensor
@@ -469,27 +471,44 @@ class WeightedCombine:
         if self.R > 1:  # (the barrier: every chip of the column zeroed its arena before any combine row lands)
             ttnn.generic_op([self.tick], self.barrier[0])
         a = lambda t: 0 if t is None else int(t.buffer_address())  # noqa: E731
+        patch = settings.get("EXPERTS_PROGRAM_KEY") == "patch"
         for p, (run, desc, l1_args, desc_arena) in enumerate(runs):
             pl = pls[p]
-            key = (
-                id(fe),
-                p,
-                a(xg),
-                a(arena),
-                a(words),
-                a(relay_words),
-                a(pl["counts"]),
-                a(pl["token_index"]),
-                fidelity,
-            )
-            if key in self.seen:
-                extra = self.empty
-            else:
-                if desc_arena is not arena:  # (the CBs bind the arena's buffer: rebind to this call's)
-                    desc = run.rebind(arena)
-                    runs[p][1], runs[p][3] = desc, arena
+            if patch:
+                # (FIX.5: the op keys its program without addresses and patches them on a hit; the combine's own
+                # runtime args come from its descriptor, copied in only when extra_addrs differ from the cached
+                # program's: the descriptor is passed by reference, no copy; its arena CBs the op binds itself)
                 extra = desc
-                self.seen.add(key)
+                extra_addrs = [
+                    a(arena),
+                    a(words),
+                    a(self.y),
+                    a(self.out),
+                    a(pl["plan"]),
+                    a(pl["table"]),
+                    a(pl.get("dord")),
+                ]
+            else:
+                extra_addrs = []
+                key = (
+                    id(fe),
+                    p,
+                    a(xg),
+                    a(arena),
+                    a(words),
+                    a(relay_words),
+                    a(pl["counts"]),
+                    a(pl["token_index"]),
+                    fidelity,
+                )
+                if key in self.seen:
+                    extra = self.empty
+                else:
+                    if desc_arena is not arena:  # (the CBs bind the arena's buffer: rebind to this call's)
+                        desc = run.rebind(arena)
+                        runs[p][1], runs[p][3] = desc, arena
+                    extra = desc
+                    self.seen.add(key)
             ttnn.bringup.flat_routed_expert_with_program(
                 xg,
                 pl["counts"],
@@ -518,6 +537,8 @@ class WeightedCombine:
                 relay_words=relay_words,
                 math_fidelity=fidelity,
                 weights_nk=fe.weights_nk,
+                patch_addresses=patch,
+                extra_addrs=extra_addrs,
             )
         for t in (arena, relay_words, words):
             dealloc(t)

@@ -186,7 +186,9 @@ ttnn::Tensor flat_routed_expert_with_program(
     const std::vector<std::vector<uint32_t>>& l1_args,
     const std::optional<ttnn::Tensor>& relay_words,
     uint32_t math_fidelity,
-    bool weights_nk) {
+    bool weights_nk,
+    bool patch_addresses,
+    const std::vector<uint32_t>& extra_addrs) {
     using namespace tt::tt_metal;
     // (math_fidelity / weights_nk: as flat_routed_expert's, DeepSeek-V4.1 P.8; defaults 0 / false = the program before)
     FlatRoutedExpertConfig cfg{
@@ -237,36 +239,43 @@ ttnn::Tensor flat_routed_expert_with_program(
     }
     FlatWithProgramParams p{
         .flat = cfg,
-        // (an empty extra: the caller expects a program-cache hit, where the program is reused as is)
+        // (an empty extra: the caller expects a program-cache hit, where the program is reused as is. A non-owning
+        // view of the caller's descriptor, valid for this call: the op reads it only inside this launch - a copy is
+        // a whole program set, ~7 ms of host a call)
         .extra = extra.mesh_programs.empty()
                      ? nullptr
-                     : std::make_shared<const tt::tt_metal::experimental::MeshProgramDescriptor>(extra),
+                     : std::shared_ptr<const tt::tt_metal::experimental::MeshProgramDescriptor>(
+                           std::shared_ptr<const tt::tt_metal::experimental::MeshProgramDescriptor>{}, &extra),
         .collector = collector,
         .counts_addr = counts_addr,
         .writers = writers,
         .extra_key = extra_key,
-        .l1_args = l1_args};
+        .l1_args = l1_args,
+        .patch_addresses = patch_addresses,
+        .extra_addrs = extra_addrs};
     if (!l1_args.empty()) {
         setenv("MIMO_FL_Y_L1", "1", 0);  // (the writers' args and SE_Y_L1)
+    }
+    if (!patch_addresses) {  // (the address-keyed mode: every baked address in the key)
         for (const auto& v : l1_args) {
             p.addrs.insert(p.addrs.end(), v.begin(), v.end());
         }
-    }
-    for (const ttnn::Tensor* tt : std::initializer_list<const ttnn::Tensor*>{
-             &x,
-             &counts,
-             &regions,
-             &global_expert_ids,
-             &gate_up_weights,
-             &down_weights,
-             &done_words,
-             &arena,
-             &words,
-             &y}) {
-        p.addrs.push_back(static_cast<uint32_t>(tt->buffer()->address()));
-    }
-    for (const auto* o : {&reader_down_weights, &token_index}) {
-        p.addrs.push_back(o->has_value() ? static_cast<uint32_t>((*o)->buffer()->address()) : 0u);
+        for (const ttnn::Tensor* tt : std::initializer_list<const ttnn::Tensor*>{
+                 &x,
+                 &counts,
+                 &regions,
+                 &global_expert_ids,
+                 &gate_up_weights,
+                 &down_weights,
+                 &done_words,
+                 &arena,
+                 &words,
+                 &y}) {
+            p.addrs.push_back(static_cast<uint32_t>(tt->buffer()->address()));
+        }
+        for (const auto* o : {&reader_down_weights, &token_index}) {
+            p.addrs.push_back(o->has_value() ? static_cast<uint32_t>((*o)->buffer()->address()) : 0u);
+        }
     }
     p.flat_key = {
         cfg.hidden,
