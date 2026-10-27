@@ -12,7 +12,6 @@ discovers, opens, closes or resets a device and never configures fabric.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import stat
 from collections.abc import Callable
@@ -44,33 +43,9 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import (
 
 EXPECTED_MESH_SHAPE = (1, 4)
 EXPECTED_SLOTS = tuple(("backbone", index) for index in range(BACKBONE_LAYERS)) + (("mtp", 0),)
-# The retained two-step CPU oracle (the greedy tokens of prompt "2" through the torch reference, 48 layers,
-# with the layer-0/1 hidden digests and expert selections): shipped in tree, the first live token is checked against it.
-DEFAULT_CPU_ORACLE = Path(__file__).with_name("acceptance") / "cpu-oracle-two-step.jsonl"
-ORACLE_PROMPT_TEXT = "2"
-ORACLE_INPUT_TOKEN_ID = 17
-ORACLE_EXPECTED_TOKEN_ID = 15
-ORACLE_INPUT_TOKEN_IDS = (ORACLE_INPUT_TOKEN_ID, ORACLE_EXPECTED_TOKEN_ID)
-ORACLE_OUTPUT_TOKEN_IDS = (ORACLE_EXPECTED_TOKEN_ID, 16)
-ORACLE_LAYER0_HIDDEN_SHA256 = "33016923963b2b88c83b39368ecfa23bb32de83cb51e2ff25096173935da1aaf"
-ORACLE_LAYER0_SELECTED_EXPERTS = (215, 143, 436, 151, 449, 453, 287, 90, 84, 20)
-ORACLE_LAYER1_HIDDEN_SHA256 = "c4c10a8cebb37b2694ec78a8929d48aa4b15f218759a2f698b0fec77f7e8bc4e"
-ORACLE_LAYER1_SELECTED_EXPERTS = (19, 157, 320, 225, 165, 205, 60, 131, 104, 86)
-MAX_RETAINED_CPU_ORACLE_BYTES = 1 << 20
 
 Marker = Callable[[str], None]
 FileSignature = tuple[int, int, int, int, int]
-
-
-def _canonical_physical_ids(physical_ids: Any) -> tuple[int, int, int, int]:
-    if (
-        not isinstance(physical_ids, tuple)
-        or len(physical_ids) != 4
-        or any(isinstance(value, bool) or type(value) is not int or value < 0 for value in physical_ids)
-        or len(set(physical_ids)) != 4
-    ):
-        raise ValueError(f"physical_ids must be four distinct non-negative ints, got {physical_ids!r}")
-    return physical_ids
 
 
 def _require_hex(value: Any, length: int, label: str) -> str:
@@ -121,123 +96,6 @@ def _stream_sha256(path: Path, *, expected_bytes: int | None = None) -> str:
     finally:
         if descriptor is not None:
             os.close(descriptor)
-
-
-@dataclass(frozen=True)
-class Qwen38RetainedCPUTokenOracle:
-    """Exact token contract extracted from the retained two-step CPU oracle."""
-
-    source: Path
-    sha256: str
-    input_token_ids: tuple[int, int]
-    output_token_ids: tuple[int, int]
-    layer0_hidden_sha256: str
-    layer0_selected_experts: tuple[int, ...]
-    layer1_hidden_sha256: str
-    layer1_selected_experts: tuple[int, ...]
-
-    def summary(self) -> dict[str, Any]:
-        return {
-            "source": str(self.source),
-            "sha256": self.sha256,
-            "raw_text": ORACLE_PROMPT_TEXT,
-            "input_token_ids": list(self.input_token_ids),
-            "output_token_ids": list(self.output_token_ids),
-            "first_step": {
-                "input_token_id": self.input_token_ids[0],
-                "expected_token_id": self.output_token_ids[0],
-            },
-            "continuation_step": {
-                "input_token_id": self.input_token_ids[1],
-                "expected_token_id": self.output_token_ids[1],
-            },
-            "first_step_layer0": {
-                "hidden_sha256": self.layer0_hidden_sha256,
-                "selected_experts": list(self.layer0_selected_experts),
-            },
-            "first_step_layer1": {
-                "hidden_sha256": self.layer1_hidden_sha256,
-                "selected_experts": list(self.layer1_selected_experts),
-            },
-        }
-
-
-def load_retained_cpu_token_oracle(path: Path | None = None) -> Qwen38RetainedCPUTokenOracle:
-    """Read and validate the two-step CPU oracle log (its lifecycle, layer coverage, token chain and the layer-0/1
-    anchors) without invoking its producer; the digest is recorded, not pinned.  ``None``: the shipped oracle."""
-
-    path = DEFAULT_CPU_ORACLE if path is None else Path(path)
-    try:
-        metadata = path.lstat()
-        source = path.resolve(strict=True)
-    except OSError as error:
-        raise LiveDecodeConstructionError(f"retained CPU oracle is unavailable: {path}") from error
-    if not stat.S_ISREG(source.lstat().st_mode):
-        raise LiveDecodeConstructionError(f"retained CPU oracle is not a regular file: {path}")
-    if metadata.st_size <= 0 or metadata.st_size > MAX_RETAINED_CPU_ORACLE_BYTES:
-        raise LiveDecodeConstructionError(f"retained CPU oracle size is invalid: {metadata.st_size}")
-    try:
-        payload = source.read_bytes()
-    except OSError as error:
-        raise LiveDecodeConstructionError("retained CPU oracle cannot be read") from error
-    digest = hashlib.sha256(payload).hexdigest()
-    try:
-        events = [json.loads(line) for line in payload.decode("utf-8").splitlines()]
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise LiveDecodeConstructionError("retained CPU oracle is not complete JSONL") from error
-    if not events or any(not isinstance(event, dict) for event in events):
-        raise LiveDecodeConstructionError("retained CPU oracle contains a non-object event")
-    decodes = sorted((event for event in events if event.get("event") == "decode"), key=lambda event: event.get("step"))
-    layer_events = [event for event in events if event.get("event") == "layer"]
-    layer_keys = [(event.get("step"), event.get("layer")) for event in layer_events]
-    expected_layer_keys = {(step, layer) for step in range(2) for layer in range(48)}
-    starts = [event for event in events if event.get("event") == "start"]
-    completes = [event for event in events if event.get("event") == "complete"]
-    if (
-        len(starts) != 1
-        or starts[0].get("layers") != 48
-        or starts[0].get("execution") != "CPU integration oracle; no TT device opened"
-        or len(decodes) != 2
-        or len(completes) != 1
-        or completes[0].get("steps") != 2
-        or completes[0].get("final_position") != 2
-        or len(layer_events) != 96
-        or len(set(layer_keys)) != 96
-        or set(layer_keys) != expected_layer_keys
-    ):
-        raise LiveDecodeConstructionError("retained CPU oracle lifecycle/layer coverage differs")
-    inputs = tuple(event.get("input_token") for event in decodes)
-    outputs = tuple(event.get("output_token") for event in decodes)
-    if inputs != ORACLE_INPUT_TOKEN_IDS or outputs != ORACLE_OUTPUT_TOKEN_IDS:
-        raise LiveDecodeConstructionError(f"retained CPU oracle token chain differs: {inputs} -> {outputs}")
-    layer0_events = [event for event in layer_events if event.get("step") == 0 and event.get("layer") == 0]
-    if len(layer0_events) != 1:
-        raise LiveDecodeConstructionError("retained CPU oracle lacks one unique first-step layer-0 anchor")
-    layer0 = layer0_events[0]
-    if (
-        layer0.get("hidden_sha256") != ORACLE_LAYER0_HIDDEN_SHA256
-        or tuple(layer0.get("selected_experts", ())) != ORACLE_LAYER0_SELECTED_EXPERTS
-    ):
-        raise LiveDecodeConstructionError("retained CPU oracle first-step layer-0 anchor differs")
-    layer1_events = [event for event in layer_events if event.get("step") == 0 and event.get("layer") == 1]
-    if len(layer1_events) != 1:
-        raise LiveDecodeConstructionError("retained CPU oracle lacks one unique first-step layer-1 anchor")
-    layer1 = layer1_events[0]
-    if (
-        layer1.get("hidden_sha256") != ORACLE_LAYER1_HIDDEN_SHA256
-        or tuple(layer1.get("selected_experts", ())) != ORACLE_LAYER1_SELECTED_EXPERTS
-    ):
-        raise LiveDecodeConstructionError("retained CPU oracle first-step layer-1 anchor differs")
-    return Qwen38RetainedCPUTokenOracle(
-        source=source,
-        sha256=digest,
-        input_token_ids=ORACLE_INPUT_TOKEN_IDS,
-        output_token_ids=ORACLE_OUTPUT_TOKEN_IDS,
-        layer0_hidden_sha256=ORACLE_LAYER0_HIDDEN_SHA256,
-        layer0_selected_experts=ORACLE_LAYER0_SELECTED_EXPERTS,
-        layer1_hidden_sha256=ORACLE_LAYER1_HIDDEN_SHA256,
-        layer1_selected_experts=ORACLE_LAYER1_SELECTED_EXPERTS,
-    )
 
 
 @dataclass(frozen=True)
@@ -297,7 +155,13 @@ def prepare_live_decode(
 
     _require_hex(tt_metal_sha, 40, "tt_metal_sha")
     _require_hex(runtime_sha256, 64, "runtime_sha256")
-    physical_ids = _canonical_physical_ids(physical_ids)
+    if (
+        not isinstance(physical_ids, tuple)
+        or len(physical_ids) != 4
+        or any(isinstance(value, bool) or type(value) is not int or value < 0 for value in physical_ids)
+        or len(set(physical_ids)) != 4
+    ):
+        raise ValueError(f"physical_ids must be four distinct non-negative ints, got {physical_ids!r}")
     if allocated_context not in RESIDENT_QSA_CACHE_CAPACITIES:
         raise ValueError(f"allocated_context must be one of {RESIDENT_QSA_CACHE_CAPACITIES}, got {allocated_context!r}")
 
@@ -367,7 +231,6 @@ def construct_live_decode(
     marker: Marker | None = None,
     bf4_stage_limit: int | None = None,
     require_complete: bool = True,
-    decode_dram_workers_per_bank: int | None = None,
 ) -> Qwen38LiveDecodeConstruction:
     """Construct and attach the real live builder, then stop before target build.
 
@@ -394,7 +257,6 @@ def construct_live_decode(
         collective_topology=collective_topology,
         expert_residency=prepared.expert_residency,
         qsa_cache_capacity=prepared.qsa_cache_capacity,
-        decode_dram_workers_per_bank=decode_dram_workers_per_bank,
     )
     _mark(marker, "after-live-builder-construction")
     bf4_cache = builder.bf4_cache
@@ -423,8 +285,8 @@ def construct_live_decode(
     if missing and require_complete:
         raise LiveDecodeConstructionError(
             f"the BF4 cache under {bf4_cache.root} lacks {len(missing)} of {len(EXPECTED_SLOTS)} layers "
-            f"({', '.join(f'{namespace}:{index}' for namespace, index in missing[:8])}{'...' if len(missing) > 8 else ''}); "
-            f"{len(staged)} staged this run"
+            f"({', '.join(f'{namespace}:{index}' for namespace, index in missing[:8])}"
+            f"{'...' if len(missing) > 8 else ''}); {len(staged)} staged this run"
         )
 
     if require_complete:
@@ -447,18 +309,10 @@ def construct_live_decode(
 
 
 __all__ = [
-    "DEFAULT_CPU_ORACLE",
     "LiveDecodeConstructionError",
-    "ORACLE_EXPECTED_TOKEN_ID",
-    "ORACLE_INPUT_TOKEN_ID",
-    "ORACLE_INPUT_TOKEN_IDS",
-    "ORACLE_OUTPUT_TOKEN_IDS",
-    "ORACLE_PROMPT_TEXT",
     "Qwen38LiveDecodeConstruction",
     "Qwen38PreparedLiveDecode",
-    "Qwen38RetainedCPUTokenOracle",
     "construct_live_decode",
-    "load_retained_cpu_token_oracle",
     "missing_bf4_layers",
     "prepare_live_decode",
 ]

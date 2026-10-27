@@ -2076,9 +2076,6 @@ def _parser() -> argparse.ArgumentParser:
         help="convert at most N missing BF4 layers this run (a host that bounds a job's wall time; resumable)",
     )
     parser.add_argument(
-        "--cpu-oracle", type=Path, default=None, help="the two-step CPU oracle (default: the shipped one)"
-    )
-    parser.add_argument(
         "--device-nodes",
         default=None,
         help="four KMD device nodes for a profile on other chips of a larger host, e.g. 4,5,6,7",
@@ -2360,9 +2357,7 @@ def main() -> int:
         route=list(hardware_profile.route),
         nodes=list(hardware_profile.route_nodes),
     )
-    prepared, _oracle = runtime_admission.prepare_cpu(
-        args, marker=marker, hardware_profile=hardware_profile, identity=runtime
-    )
+    prepared = runtime_admission.prepare_cpu(args, marker=marker, hardware_profile=hardware_profile, identity=runtime)
     template = Qwen38OfficialChatTemplate(prepared.checkpoint.root)
     records = load_acceptance_records(args.acceptance_prompts) if args.acceptance_prompts is not None else []
     records = slab_records_admitted(records, slab_rows=args.prefill_slab)

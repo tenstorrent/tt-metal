@@ -19,12 +19,7 @@ from typing import Any
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.tools.evidence_records import Marker
 from models.demos.blackhole.qwen38_flash_next.tools.hardware_profiles import ResidentHardwareProfile
-from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import (
-    DEFAULT_CPU_ORACLE,
-    Qwen38RetainedCPUTokenOracle,
-    load_retained_cpu_token_oracle,
-    prepare_live_decode,
-)
+from models.demos.blackhole.qwen38_flash_next.tools.live_decode_construction import prepare_live_decode
 from models.demos.blackhole.qwen38_flash_next.tools.resident_decode import ResidentDecodeError
 from models.demos.blackhole.qwen38_flash_next.ttnn.builder import RESIDENT_MAX_QSA_CACHE_CAPACITY
 
@@ -192,9 +187,9 @@ def prepare_cpu(
     marker: Marker,
     hardware_profile: ResidentHardwareProfile,
     identity: dict[str, Any] | None = None,
-) -> tuple[Any, Qwen38RetainedCPUTokenOracle]:
-    """Bind the checkpoint, the cache roots and the CPU oracle.  The resident build follows ``--allocated-context`` (its default when the caller has none); the profile's route must be resolved
-    by now."""
+) -> Any:
+    """Bind the checkpoint and the cache roots.  The resident build follows ``--allocated-context`` (its default when
+    the caller has none); the profile's route must be resolved by now."""
 
     if hardware_profile.route is None:
         raise RuntimeAdmissionError(f"profile {hardware_profile.lane} has no route yet; resolve it before preparing")
@@ -213,6 +208,5 @@ def prepare_cpu(
         physical_ids=hardware_profile.route,
         marker=marker,
     )
-    oracle = load_retained_cpu_token_oracle(getattr(args, "cpu_oracle", None) or DEFAULT_CPU_ORACLE)
     marker("after-cpu-preparation")
-    return prepared, oracle
+    return prepared
