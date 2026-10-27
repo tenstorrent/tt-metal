@@ -159,7 +159,7 @@ class TransformerBlock(LightweightModule):
             self.ff_norm = None
         else:
             self.ff_norm = DistributedNorm(
-                NormClass(
+                LayerNorm(
                     device=mesh_device,
                     dim=args.dim,
                     eps=args.norm_eps,
