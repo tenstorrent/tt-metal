@@ -8,6 +8,8 @@ import numpy as np
 import torch
 from loguru import logger
 
+from models.tt_dit.pipelines.wan.pipeline_wan_i2v import center_crop_to_aspect
+
 
 def check_output_sanity(frames, *, num_frames, height, width, log=True):
     """Guard against a distributed pipeline that 'runs' but emits corrupt/blank/frozen frames.
@@ -65,7 +67,8 @@ def check_first_frame_matches_seed(frames, *, seed_image, width, height, pcc_flo
     Args:
         frames: decoded video array/tensor, shape (num_frames, height, width, 3), batch dim removed.
         seed_image: the PIL seed image conditioned into frame 0.
-        width, height: target resolution; the seed is resized to this before comparison.
+        width, height: target resolution; the seed is center-cropped to its aspect ratio and
+            resized to it before comparison, as the pipeline does.
         pcc_floor: minimum Pearson correlation. Provisional floor -- catches a totally-broken
             conditioning path (near-zero correlation); a healthy round-trip correlates well above it.
             Tighten once real values are observed.
@@ -74,7 +77,8 @@ def check_first_frame_matches_seed(frames, *, seed_image, width, height, pcc_flo
     if isinstance(f0, torch.Tensor):
         f0 = f0.cpu().numpy()
     f0 = np.asarray(f0).astype(np.float64)
-    seed = np.asarray(seed_image.convert("RGB").resize((width, height))).astype(np.float64)
+    seed = center_crop_to_aspect(seed_image.convert("RGB"), width, height).resize((width, height))
+    seed = np.asarray(seed).astype(np.float64)
     assert f0.shape == seed.shape, f"frame-0 shape {f0.shape} != seed shape {seed.shape}"
     pcc = float(np.corrcoef(f0.ravel(), seed.ravel())[0, 1])
     logger.info(f"I2V frame-0 vs seed-image correlation (PCC) = {pcc:.4f}")
