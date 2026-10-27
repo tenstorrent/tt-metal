@@ -39,7 +39,7 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  *
  * Unpack-to-dest counterpart of @ref _llk_unpack_unary_operand_init_ (llk_unpack_unary_operand.h), which only unpacks to
  * SrcA / SrcB. The two families are independent: this one owns its MOP (@ref _llk_unpack_unary_operand_to_dest_mop_config_)
- * and its DEST handshake is the semaphore protocol of the section calls.
+ * and its DEST handshake is the semaphore protocol of the section calls, or dest-dvalid (see the last @note).
  *
  * Per-op init: programs the transpose config and the MOP only. It does not touch the DEST bank tracking, so it is
  * safe to call inside a tile loop; the once-per-program bank reset lives in @ref _llk_unpack_dest_init_.
@@ -68,6 +68,10 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  *       each below N would still admit a third section into a two-bank DEST (tt-metal #58903). tt-metal runs this
  *       sequence in tile_regs_acquire / tile_regs_commit (llk_unpack_wait_for_dest_available /
  *       llk_unpack_dest_section_done, quasar llk_unpack_common_api.h).
+ * @note Dest-dvalid form (the standalone tt-llk tests): the tile / block calls carry no synchronization, so they can be
+ *       bracketed with the dest-dvalid handshake instead. Run @ref _llk_unpack_dest_init_ once so the bank tile offset
+ *       stays 0, never call @ref _llk_unpack_dest_section_advance_ (dest-dvalid moves this client between banks in
+ *       hardware), and close each section with @ref _llk_unpack_dest_dvalid_section_done_.
  */
 inline void _llk_unpack_unary_operand_to_dest_init_(const std::uint32_t buf_desc_id)
 {
