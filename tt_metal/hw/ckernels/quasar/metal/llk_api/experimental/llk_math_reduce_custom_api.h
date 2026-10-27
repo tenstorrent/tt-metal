@@ -37,7 +37,7 @@ inline void llk_math_reduce_block_max_row_init(
     static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandA)));
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandB)));
-    _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, is_fp32_dest_acc_en>(
+    _configure_default_alu_data_format_state_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(
         srcA_format, srcB_format);
     _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(block_ct_dim, tensor_shape);
 }
