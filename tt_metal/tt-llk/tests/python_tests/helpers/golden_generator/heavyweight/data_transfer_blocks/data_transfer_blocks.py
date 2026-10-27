@@ -47,7 +47,6 @@ from .arch import (
     WormholeArch,
 )
 from .l1_support import L1Buffer, L1Support
-from .pack_effects import PackEdgeMask
 
 # Re-exported so the operations layer keeps importing the register rules from
 # the blocks that apply them, rather than reaching past them into storage.
@@ -69,6 +68,7 @@ from .storage import (  # noqa: F401
 )
 from .units import Fpu
 from .units.pack import UnmodelledHardwareWarning  # noqa: F401
+from .units.pack_effects import PackEdgeMask
 
 
 class DataTransferBlocks:

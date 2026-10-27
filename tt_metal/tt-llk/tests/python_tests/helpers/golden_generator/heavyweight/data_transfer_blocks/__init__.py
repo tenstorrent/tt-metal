@@ -16,16 +16,16 @@ from .data_transfer_blocks import (
 )
 from .l1_codec import pack_to_l1, unpack_from_l1
 from .l1_support import L1Buffer, L1Support
-from .pack_effects import (
+from .storage import DEST_STORAGE_FORMATS, SRC_STORAGE_FORMATS
+from .units import Fpu, Pack, Unpack
+from .units.pack import UnmodelledHardwareWarning
+from .units.pack_effects import (
     EdgeMaskMode,
     PackEdgeMask,
     apply_pack_effects,
     apply_relu,
     is_deterministic,
 )
-from .storage import DEST_STORAGE_FORMATS, SRC_STORAGE_FORMATS
-from .units import Fpu, Pack, Unpack
-from .units.pack import UnmodelledHardwareWarning
 
 __all__ = [
     "DEST_STORAGE_FORMATS",
