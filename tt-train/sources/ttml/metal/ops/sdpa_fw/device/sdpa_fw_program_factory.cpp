@@ -186,9 +186,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     const uint32_t num_available_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     // The program config in tiles: Sq_chunk_t query tile-rows of heads_per_item heads are processed
-    // together against one pass over K/V, Sk_chunk_t K/V tiles per step. Unset knobs are picked by the
-    // cost model (sdpa_fw_config.cpp); the ring SDPA path builds the program directly, so the knobs are
-    // checked here as well as in validate.
+    // together against one pass over K/V, Sk_chunk_t K/V tiles per step. Unset knobs follow the shape rule in
+    // sdpa_fw_config.cpp; the ring SDPA path builds the program directly, so the knobs are checked here as
+    // well as in validate.
     const SDPAForwardShape shape = shape_of(query, key, value, mask_type, args.has_gate, args.return_intermediates);
     const SDPAForwardChunks chunks =
         resolve_chunks(args.program_config, shape, l1_budget_bytes(device), num_available_cores);
