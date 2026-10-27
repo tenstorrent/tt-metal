@@ -1612,3 +1612,22 @@ def test_step_result_reads_logits_through_its_reader():
     bare = ServingStepResult((1, 5), 1024, 1, torch.zeros(1, 5), torch.zeros(1, 6), None)
     with pytest.raises(RuntimeError, match="no logits reader"):  # allow-pytest.raises (pure)
         bare.logits_to_host()
+
+
+# --- packed verify KV write: the sharded-layout probe must run whenever the per-position loop runs ---
+
+
+@pytest.mark.parametrize(
+    "kv_staging, embed_idx, is_kv_shared, expected",
+    [
+        (None, None, False, True),  # no staging: the loop, probe needed
+        ("staging", None, False, True),  # staging attached but a positional write: still the loop
+        ("staging", "embed", False, False),  # loop-free staging fill: no probe
+        (None, "embed", False, True),  # embed index without staging cannot fill loop-free
+        ("staging", None, True, False),  # shared-KV layers write nothing
+    ],
+)
+def test_the_packed_write_probe_follows_the_fallback_loop(kv_staging, embed_idx, is_kv_shared, expected):
+    from models.demos.gemma4.tt.attention.decode import packed_write_takes_fallback_loop
+
+    assert packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared) is expected

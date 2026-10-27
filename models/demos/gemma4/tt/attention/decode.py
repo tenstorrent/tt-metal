@@ -62,6 +62,18 @@ def _sdpa_max_cores_per_head_kwargs() -> dict:
     return {"max_cores_per_head_batch": int(v)} if v else {}
 
 
+def packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared):
+    """True when ``packed_decode_forward`` writes the KV rows through the per-position
+    ``paged_update_cache`` loop, which needs the probed height-sharded layout.
+
+    The loop-free staging fill runs only with BOTH a staging buffer and an embed
+    index; a caller that keeps the staging buffer attached but writes by position
+    (``kv_write_idxs``, no embed index) still takes the loop, so the probe must not
+    be skipped on the presence of staging alone (serving records hit that case).
+    """
+    return (not is_kv_shared) and (kv_staging is None or embed_idx is None)
+
+
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
     """Hashable key for the q_sharded_mem cache. Captures every input that
     affects ``nlp_create_qkv_heads_decode``'s output shard spec."""
@@ -777,7 +789,7 @@ def packed_decode_forward(
     # emits; the spec depends only on shape constants, so probe once and cache.
     cache_key = _q_sharded_mem_key(B, qkv_dim, config, weights, tp)
     q_sharded_mem = _Q_SHARDED_MEM_CACHE.get(cache_key)
-    if q_sharded_mem is None and kv_staging is None and not is_kv_shared:
+    if q_sharded_mem is None and packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared):
         probe = ttnn.slice(xqkv, [0, 0, 0, 0], [1, 1, B, qkv_dim])
         q_probe, k_probe, v_probe = split_qkv_heads_decode(
             probe, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
