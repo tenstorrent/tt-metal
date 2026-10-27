@@ -194,3 +194,37 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
   Framework gap noted: a card's dirty state kept only in /tmp does not survive a node's /tmp cleanup (the 18:37 wipe and
   this job start); candidate F-entry at the next boundary (keep the markers under /scratch or check the box at launch).
 - Watch + heartbeat cron (:07/:37) armed; Stop hook present in ~/.claude/settings.json.
+- 06:41 FIX.4 PASS 655d1d2716a (attempt 1; gate W.1 kept from the agent's final check, which ran on the final code with
+  every layer a cache hit). Diff review: tt/experts.py passes FlatRoutedExpert cache_prefix + a weights callable (miss
+  only), keyed by revision, mesh, scaled/real, layer, EXPERTS_IMPL, stored-tensor descriptors; completion marker with
+  file sizes + bfp4_stats (a killed dump repacks, not loads a truncated file). No fork change. Miss path vectorised,
+  exactness checks kept (one per stack). Evidence: perf_experts_load.py::test_host_weights_identical (all 384 experts,
+  layer 0: every bf16 tensor torch.equal to the old loop), W.1 metrics identical to the last digit, device tensors of
+  devices 0 / 31 equal hit vs miss. W.1 model load 1057 s -> 65.6 s (all hits); a miss is still ~117 s / layer (75 %
+  the fork's bfp4 packing; follow-up, not now: one-time cost per layer). Disk 7.1 GiB / layer bfp4 (~285 GiB for 40;
+  /scratch 2.1 TB free). New Setting EXPERTS_WEIGHT_CACHE (on). Accepted: honest, no shortcut, values unchanged.
+  M.1's first run pays 32 misses (~62 min of load), later runs ~5 min. Seed box: the cache path is mesh-keyed; no
+  change to the 2x2's numerics (QB re-verify list unchanged).
+- 06:42 M.1 started (precheck: the s10240 ladder over 40 layers).
+- 07:22:28 INFRA (overseer, not the run): the overseer's Claude process exited while idle (last turn ended 07:15:57,
+  Stop hook passed, no command of mine running; the watch bz0eyrc49 was killed with it). The run was untouched (M.1
+  precheck went on). The owner restarted the session at 07:23:46 (run_overseer_continue.sh, --resume). Evidence: the
+  pane (tmux %1) ended at 07:22:28, the same second as the owner's ssh client attached to it (pts/2 from 10.32.64.6,
+  07:14:19-07:22:28) disconnected; /tmp/claude-4338 and the tmux server intact (not a /tmp cleanup), no OOM (411 GB
+  free), Stop hook ran in 40 ms with no error. Likely: keys or EOF from the dropping client reached Claude's TUI
+  (an exit on Ctrl-C/Ctrl-D leaves no transcript marker); not provable with user-level logs. Fix at the launcher
+  (/scratch/dnijemcevic, outside the repo), whatever the cause: overseer_guard.sh sets remain-on-exit + a pane-died
+  hook on tmux "overseer" that runs overseer_respawn.sh, which resumes the SAME session (id in overseer_session) with a
+  "you were restarted" prompt; held by overseer.nostart or after >3 exits in 15 min (crash loop); kill-session ends it
+  for good. run_overseer.sh now starts with --session-id and records it; autoresume.sh sets the guard on every start.
+  Applied to the live pane now; mechanism tested on a throwaway tmux session. Owner tip: detach with C-b d before
+  closing the ssh window. Watch + heartbeat cron re-armed.
+- 07:42 M.1 precheck STOPPED on pytest-timeout (3600 s) while still building the expert weight cache (cold: 32
+  layers x ~117 s; 35 of 40 layers cached when killed). The framework retried the unit once by itself (F170); the retry
+  loads 35 layers from the cache (~1 s each) and misses 5 (~10 min). Classification: framework (a 3600 s precheck
+  timeout cannot cover a first cold-cache load of 40 layers); no waste beyond the one-time cache build, which the
+  retry keeps. Candidate fix at the next boundary: the precheck/gate timeout scales with the uncached layer count, or
+  the cache is warmed as its own step before a full-model gate.
+- 07:44 owner: push the branch (the QB does not see /data). Push FAILED: no GitHub credentials on this node (https
+  asks for a username; no ssh key; gh not logged in). Asked the owner.
+- 07:48 owner logged gh in on this node (account djordjenTT); pushed dnijemcevic/model_bringup 34d20d4ee70..655d1d2716a (fast-forward, 16 commits up to FIX.4) for the QB re-verify of FIX.1, FIX.2, W.1 fabric.
