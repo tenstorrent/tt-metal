@@ -581,6 +581,10 @@ inline void _sfpu_exp_fp32_load_imm32_() {
  * @param exp_base_scale_factor: fp16b scale, read when SCALE_EN.
  * @note Requires exp_init<false, scale, clamp, true> (LREG12..14 and ADDR_MOD_6). Writes LREG0..7 and replay
  * slots [0, 15 + SCALE_EN).
+ * @note LREG12..14 are the SFPU's shared programmable constants (sfpi::vConstFloatPrgm0..2). Other SFPU ops'
+ * inits (reciprocal, tanh, sqrt, typecast, reduce, ...) reprogram them, so any such init between exp_init and
+ * this call makes the body read their values as 1/ln2 and -ln2: re-run exp_init after it. This is the same
+ * contract as the bf16 body (_sfpu_exp_21f_bf16_tti_), which takes LREG12..13 from exp_init the same way.
  */
 template <bool SCALE_EN, int ITERATIONS>
 inline void _sfpu_exp_fp32_accurate_tti_(const std::uint32_t exp_base_scale_factor) {

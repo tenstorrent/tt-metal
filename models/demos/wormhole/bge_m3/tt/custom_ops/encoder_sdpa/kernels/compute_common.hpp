@@ -883,11 +883,17 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     // whose polynomial implementation loads the constants it consumes into LREGs in the tile body; it
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
+    // That holds for exp_tile_first_column only. The regular exp_tile (the commented-out call in the
+    // loop) reads vConstFloatPrgm0..2 as programmed by exp_tile_init, and that init overwrites the
+    // reciprocal constant set here. Restoring that call needs exp_tile_init and sfpu_reciprocal_init
+    // re-run inside the loop, each directly before its tile call.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
+        // Restoring this exp_tile call needs exp_tile_init and sfpu_reciprocal_init re-run per iteration;
+        // see the sfpu_reciprocal_init comment above the loop.
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument

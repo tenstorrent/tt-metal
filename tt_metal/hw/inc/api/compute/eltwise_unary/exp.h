@@ -29,6 +29,8 @@ enum class InputClamping : uint8_t {
  * Template scale parameter is used when approx is true and exp_tile is called with scale_en set to
  * true.
  *
+ * Also programs the SFPU's shared programmable constants (vConstFloatPrgm0..2) that exp_tile's body
+ * reads; see the note on exp_tile.
  */
 template <
     bool approx = false,
@@ -47,6 +49,12 @@ ALWI void exp_tile_init() {
  * in the DST register. The DST register buffer must be in an
  * acquired state via an *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
+ *
+ * On Wormhole and Blackhole the body reads the SFPU's shared programmable constants
+ * (vConstFloatPrgm0..2, LREG12..14) as programmed by exp_tile_init. Other SFPU ops' inits
+ * (recip_tile_init among them) reprogram the same registers, so call exp_tile_init again after
+ * any other SFPU init before the next exp_tile. Interleaving ops without their inits silently
+ * returns wrong values; there is no assert.
  *
  * Return value: None
  *
