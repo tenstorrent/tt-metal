@@ -27,6 +27,9 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
     CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    // MxFp4 operands: matmul_init left the unpacker and ALU on the 2x-packed src format (MxFp4_2x_B); restore the table
+    // formats before another op unpacks through SrcA/SrcB. A no-op for every other format.
+    mm_uninit(in0_cb_id, in1_cb_id);
     // Reconfigure input
     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
     copy_init(mm_partials_cb_id);

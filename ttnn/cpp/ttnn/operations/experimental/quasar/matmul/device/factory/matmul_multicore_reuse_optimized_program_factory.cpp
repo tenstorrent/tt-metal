@@ -134,9 +134,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     // format without it, which rounds partial sums through a block-float output (e.g. two K blocks).
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
 
-    tt::DataFormat interm0_data_format = packer_l1_acc_en
-                                             ? (fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)
-                                             : (fp32_dest_acc_en ? tt::DataFormat::Float32 : output_data_format);
+    tt::DataFormat interm0_data_format = operations::experimental::quasar::matmul::utilities::get_interm_data_format(
+        packer_l1_acc_en, fp32_dest_acc_en, output_data_format);
 
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
@@ -151,16 +150,12 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     bool in1_is_sharded = in1_buffer.is_sharded();
     bool output_is_sharded = output.is_sharded();
 
-    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on Blackhole's
-    // 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at that padded
-    // stride, so the in0/in1 DFBs must hold pages at the aligned stride and the reader/unpacker walk
-    // tiles at the same stride. This is a no-op when the tile is already aligned. Sharded DFBs are
-    // backed by the tensor buffer and keep their natural page size.
-    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
-    uint32_t in0_aligned_tile_size =
-        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
-    uint32_t in1_aligned_tile_size =
-        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+    // Quasar: tiles sit in the ring at their own size. The unpacker walks the ring at the hardware stride of
+    // the L1 format (1056 B for an 8-bit MX tile, not its 64 B DRAM-aligned page of 1088 B), so a DRAM-aligned
+    // stride would put every tile after the first where the unpacker does not look. The TensorAccessor handles
+    // the DRAM page stride; bf16 / fp32 tiles are 64 B multiples anyway.
+    const uint32_t in0_aligned_tile_size = in0_single_tile_size;
+    const uint32_t in1_aligned_tile_size = in1_single_tile_size;
 
     // DFB sizes
     uint32_t in0_block_num_tiles = per_core_M_per_batch * in0_block_w;

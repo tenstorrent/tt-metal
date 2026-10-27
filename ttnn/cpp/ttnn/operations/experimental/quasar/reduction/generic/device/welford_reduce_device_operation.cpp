@@ -27,7 +27,7 @@ void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to Std/Var reductions must be tilized");
     TT_FATAL(
         tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-            tensor_args.dtype() == DataType::BFLOAT8_B,
+            tensor_args.dtype() == DataType::BFLOAT8_B || is_mx(tensor_args.dtype()),
         "Only FLOAT32, BFLOAT16, and BFLOAT8_B are supported for Std/Var reduction - got {}",
         tensor_args.dtype());
     TT_FATAL(

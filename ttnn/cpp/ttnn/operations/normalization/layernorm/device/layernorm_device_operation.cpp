@@ -82,9 +82,12 @@ void LayerNormDeviceOperation::validate_on_program_cache_miss(
             a.logical_shape()[-1],
             tile_width);
     }
+    // MX (Quasar): the unpacker expands MX tiles to Float16_b and every intermediate ring is Float16_b / Float32,
+    // so the kernels see MX only at the input and (for an MX output dtype) at the pack.
     TT_FATAL(
-        a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B,
-        "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
+        a.dtype() == DataType::FLOAT32 or a.dtype() == DataType::BFLOAT16 or a.dtype() == DataType::BFLOAT8_B or
+            is_mx(a.dtype()),
+        "Input tensor must be FLOAT32, BFLOAT16, BFLOAT8_B or an MX format, got: {}",
         a.dtype());
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");

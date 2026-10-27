@@ -52,7 +52,8 @@ bool is_softmax_general_w_small_available(
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     // Must match the format logic in softmax_program_factory_general_w_small
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
+    auto mask_scaler_format =
+        (data_format == tt::DataFormat::Bfp8_b || is_mx(tensor.dtype())) ? tt::DataFormat::Float16_b : data_format;
 
     auto tile_size = tt::tile_size(data_format);
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
@@ -93,7 +94,8 @@ bool is_softmax_general_h_small_available(
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     // Must match the format logic in softmax_program_factory_general_h_small
     auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
+    auto mask_scaler_format =
+        (data_format == tt::DataFormat::Bfp8_b || is_mx(tensor.dtype())) ? tt::DataFormat::Float16_b : data_format;
 
     auto tile_size = tt::tile_size(data_format);
     auto intermed_tile_size = tt::tile_size(intermed_data_format);
@@ -182,8 +184,8 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         tensors_args.input_tensor.dtype() == DataType::FLOAT32 ||
             tensors_args.input_tensor.dtype() == DataType::BFLOAT16 ||
-            tensors_args.input_tensor.dtype() == DataType::BFLOAT8_B,
-        "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
+            tensors_args.input_tensor.dtype() == DataType::BFLOAT8_B || is_mx(tensors_args.input_tensor.dtype()),
+        "Input tensor must be FLOAT32, BFLOAT16, BFLOAT8_B or an MX format, got: {}",
         tensors_args.input_tensor.dtype());
 
     // subblock_w == 0 reaches `block_w % subblock_w` in the mask branch below, a modulo by zero on

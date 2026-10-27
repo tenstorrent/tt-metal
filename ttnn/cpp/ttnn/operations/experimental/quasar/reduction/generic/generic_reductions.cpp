@@ -525,6 +525,22 @@ Tensor reduce(
     const ttnn::PadValue fill_pad_value = input_tensor_arg.dtype() == tt::tt_metal::DataType::INT32
                                               ? ttnn::PadValue{std::bit_cast<uint32_t>(pad_value)}
                                               : ttnn::PadValue{pad_value};
+    // MX inputs: tiled H / W reductions only (no implicit tile padding, no N / C transpose or permute), as in the
+    // mainline reduction.
+    if (is_mx(input_tensor_arg.dtype())) {
+        TT_FATAL(is_tiled, "MX reductions need TILE layout input, got {}", input_tensor_arg.layout());
+        TT_FATAL(
+            input_tensor_arg.logical_shape()[-2] % tt::constants::TILE_HEIGHT == 0 &&
+                input_tensor_arg.logical_shape()[-1] % tt::constants::TILE_WIDTH == 0,
+            "MX reductions need tile-aligned H and W (no implicit tile padding), got shape {}",
+            input_tensor_arg.logical_shape());
+        const int rank = static_cast<int>(input_tensor_arg.logical_shape().rank());
+        for (const int d : dim) {
+            const int axis = d < 0 ? d + rank : d;
+            TT_FATAL(
+                axis == rank - 1 || axis == rank - 2, "MX reductions support the H and W axes only, got dim {}", d);
+        }
+    }
     auto input_tensor =
         is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, fill_pad_value) : input_tensor_arg;
 
