@@ -35,13 +35,21 @@ usage() {
 Usage: $(basename "$0") [OPTIONS]
 
 Run Quasar emulator regression tests defined in a YAML file, batching entries
-marked back2back: true into single invocations when they share the same group,
-config, env, runner, and gtest_repeat settings.
+marked back2back: true into single invocations.
+
+Gtest entries batch when they share group, config, env, and gtest_repeat.
+Pytest entries batch when they share config, env, and gtest_repeat, even across
+different files or different filters in one file. Named filters become node ids
+in one pytest command
+(pytest file_a.py::test_one file_a.py::test_two file_b.py ...).
+Env key order does not matter.
+A single pytest process shares one simulator config and one environment, so
+entries that differ there stay in separate commands.
 
 YAML entries default to runner: gtest (binary under build/test/tt_metal/<group>).
 Set runner: pytest for Python tests (group is a .py path relative to TT_METAL_HOME;
 filter is the pytest node id after ::). Omit filter (or use "") to run all tests in the
-gtest binary / pytest file. back2back is not supported for pytest.
+gtest binary / pytest file.
 
 Required environment variables:
   TT_METAL_SIMULATOR_BASE   Base path containing simulator build directories
@@ -212,10 +220,6 @@ while IFS=$'\t' read -r group filter configs envvars gtest_repeat back2back runn
     if ! is_valid_runner "$runner"; then
         echo "ERROR: invalid runner '$runner' for test '$filter' in group '$group'"
         echo "       Supported runners: ${VALID_RUNNERS[*]}"
-        exit 1
-    fi
-    if [[ "$runner" == "pytest" && "$back2back" == "true" ]]; then
-        echo "ERROR: back2back is not supported for pytest (group '$group', filter '$filter')"
         exit 1
     fi
     if [[ "$runner" == "pytest" && -n "$gtest_repeat" ]]; then
@@ -611,13 +615,24 @@ record_gtest_result() {
 }
 
 # Parse pytest --junitxml and record one summary line per test case.
+# Args after junit_file are group/filter pairs (one pytest file per group).
 record_pytest_result() {
-    local config="$1" group="$2" label="$3" elapsed="$4" rc="$5" junit_file="$6"
-    shift 6
-    local filters=("$@")
-    local named_filters=() f
-    for f in "${filters[@]}"; do
-        [[ -n "$f" ]] && named_filters+=("$f")
+    local config="$1" label="$2" elapsed="$3" rc="$4" junit_file="$5"
+    shift 5
+    local -a groups=() filters=()
+    while [[ $# -ge 2 ]]; do
+        groups+=("$1")
+        filters+=("$2")
+        shift 2
+    done
+
+    local -A seen_groups=()
+    local n_groups=0 g
+    for g in "${groups[@]}"; do
+        if [[ -z "${seen_groups[$g]:-}" ]]; then
+            seen_groups["$g"]=1
+            n_groups=$((n_groups + 1))
+        fi
     done
 
     local inv_passed=0 inv_failed=0 inv_skipped=0
@@ -643,17 +658,35 @@ record_pytest_result() {
         esac
     }
 
+    record_pytest_targets() {
+        local status="$1" test_time="$2" i
+        if [[ ${#groups[@]} -eq 0 ]]; then
+            record_one_result "$status" "$label" "$test_time"
+            return
+        fi
+        for i in "${!groups[@]}"; do
+            record_one_result "$status" "[$config] pytest $(pytest_node_id "${groups[$i]}" "${filters[$i]}")" "$test_time"
+        done
+    }
+
     if [[ -f "$junit_file" ]]; then
         local count=0
         while IFS=$'\t' read -r classname testname test_time has_failure has_skipped; do
             [[ -z "$testname" ]] && continue
-            local status=PASS
+            local status=PASS shown
             if [[ "$has_skipped" == "true" ]]; then
                 status=SKIP
             elif [[ "$has_failure" == "true" ]]; then
                 status=FAIL
             fi
-            record_one_result "$status" "[$config] $group $testname" "$test_time"
+            if [[ $n_groups -gt 1 && -n "$classname" ]]; then
+                shown="[$config] pytest ${classname}::${testname}"
+            elif [[ $n_groups -gt 1 ]]; then
+                shown="[$config] pytest $testname"
+            else
+                shown="[$config] ${groups[0]:-} $testname"
+            fi
+            record_one_result "$status" "$shown" "$test_time"
             count=$((count + 1))
         done < <(yq -p=xml -oy -r '
             .testsuites.testsuite.testcase
@@ -667,24 +700,12 @@ record_pytest_result() {
         if [[ $count -eq 0 ]]; then
             local no_match_status=SKIP
             [[ $rc -ne 0 ]] && no_match_status=FAIL
-            if [[ ${#named_filters[@]} -gt 0 ]]; then
-                for f in "${named_filters[@]}"; do
-                    record_one_result "$no_match_status" "[$config] pytest $group::$f" "$(fmt_duration "$elapsed"), no tests ran"
-                done
-            else
-                record_one_result "$no_match_status" "$label" "$(fmt_duration "$elapsed"), no tests ran"
-            fi
+            record_pytest_targets "$no_match_status" "$(fmt_duration "$elapsed"), no tests ran"
         fi
     else
         local status=PASS
         [[ $rc -ne 0 ]] && status=FAIL
-        if [[ ${#named_filters[@]} -gt 0 ]]; then
-            for f in "${named_filters[@]}"; do
-                record_one_result "$status" "[$config] pytest $group::$f" "$(fmt_duration "$elapsed")"
-            done
-        else
-            record_one_result "$status" "$label" "$(fmt_duration "$elapsed")"
-        fi
+        record_pytest_targets "$status" "$(fmt_duration "$elapsed")"
     fi
 
     if [[ $rc -ne 0 && $inv_failed -eq 0 ]]; then
@@ -722,9 +743,37 @@ print_summary() {
     echo "========================================="
 }
 
+# Env maps compare equal regardless of YAML key order. Values are joined with
+# ENV_SEP the same way they were serialized, then sorted.
+canonical_env() {
+    local envvars="$1"
+    [[ "$envvars" == "$EMPTY_ENV" || -z "$envvars" ]] && { printf '%s' "$EMPTY_ENV"; return; }
+    local -a pairs=()
+    local untrimmed_pair pair out="" p
+    while IFS= read -r -d "$ENV_SEP" untrimmed_pair || [[ -n "$untrimmed_pair" ]]; do
+        pair="${untrimmed_pair%"${untrimmed_pair##*[![:space:]]}"}"
+        [[ -z "$pair" ]] && continue
+        pairs+=("$pair")
+    done <<< "$envvars"
+    while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        if [[ -z "$out" ]]; then
+            out="$p"
+        else
+            out="${out}${ENV_SEP}${p}"
+        fi
+    done < <(printf '%s\n' "${pairs[@]}" | LC_ALL=C sort)
+    printf '%s' "$out"
+}
+
 batch_key() {
     local group="$1" config="$2" envvars="$3" gtest_repeat="$4" runner="$5"
-    echo "${group}${SEP}${config}${SEP}${envvars}${SEP}${gtest_repeat}${SEP}${runner}"
+    if [[ "$runner" == "pytest" ]]; then
+        # Different pytest files share one process when config and env match.
+        echo "pytest${SEP}${config}${SEP}$(canonical_env "$envvars")${SEP}${gtest_repeat}"
+    else
+        echo "${group}${SEP}${config}${SEP}${envvars}${SEP}${gtest_repeat}${SEP}${runner}"
+    fi
 }
 
 apply_env_vars() {
@@ -801,10 +850,22 @@ format_test_label() {
     echo "$label"
 }
 
+# Args after label are group/filter pairs. Gtest pairs share one group; pytest
+# pairs may name different files that run in one pytest process.
 run_test_invocation() {
-    local runner="$1" group="$2" config="$3" envvars="$4" gtest_repeat="$5" label="$6"
-    shift 6
-    local filters=("$@")
+    local runner="$1" config="$2" envvars="$3" gtest_repeat="$4" label="$5"
+    shift 5
+    local -a groups=() filters=()
+    if [[ $# -lt 2 || $(( $# % 2 )) -ne 0 ]]; then
+        echo "ERROR: internal: run_test_invocation expected group/filter pairs"
+        exit 1
+    fi
+    while [[ $# -ge 2 ]]; do
+        groups+=("$1")
+        filters+=("$2")
+        shift 2
+    done
+    local group="${groups[0]}"
 
     local sim_path
     sim_path="$(simulator_path_for_config "$config")"
@@ -817,17 +878,27 @@ run_test_invocation() {
     echo "--- [$run_num] $label ---"
 
     if [[ "$runner" == "pytest" ]]; then
-        local pyfile="$TT_METAL_HOME/$group"
-        if [[ ! -f "$pyfile" ]]; then
-            echo "  SKIP: pytest file not found: $pyfile"
-            skipped=$((skipped + 1))
-            results+=("SKIP  $label  (pytest file not found)")
-            return
-        fi
         if ! command -v pytest &>/dev/null; then
             echo "  SKIP: pytest not found on PATH"
             skipped=$((skipped + 1))
             results+=("SKIP  $label  (pytest not found)")
+            return
+        fi
+        local -a missing=()
+        local -A seen_missing=()
+        local g pyfile
+        for g in "${groups[@]}"; do
+            pyfile="$TT_METAL_HOME/$g"
+            if [[ ! -f "$pyfile" && -z "${seen_missing[$pyfile]:-}" ]]; then
+                seen_missing["$pyfile"]=1
+                missing+=("$pyfile")
+            fi
+        done
+        if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "  SKIP: pytest file not found:"
+            printf '    %s\n' "${missing[@]}"
+            skipped=$((skipped + 1))
+            results+=("SKIP  $label  (pytest file not found)")
             return
         fi
     else
@@ -854,16 +925,11 @@ run_test_invocation() {
     local -a node_ids=()
     local combined_filter="" cmd_display=""
     if [[ "$runner" == "pytest" ]]; then
-        local f
-        for f in "${filters[@]}"; do
-            # Use absolute $pyfile (same path as the existence check) so pytest
-            # collects correctly even when cwd is not TT_METAL_HOME.
-            node_ids+=("$(pytest_node_id "$pyfile" "$f")")
+        local i
+        for i in "${!groups[@]}"; do
+            # Absolute path so pytest collects correctly even when cwd is not TT_METAL_HOME.
+            node_ids+=("$(pytest_node_id "$TT_METAL_HOME/${groups[$i]}" "${filters[$i]}")")
         done
-        # No filters (or a single empty filter) -> run the whole file.
-        if [[ ${#node_ids[@]} -eq 0 ]]; then
-            node_ids+=("$pyfile")
-        fi
         cmd_display="pytest ${node_ids[*]}"
         echo "  CMD: $cmd_display"
     else
@@ -883,15 +949,26 @@ run_test_invocation() {
 
     local result_file=""
     local log_file=""
-    local log_stem
-    local group_stem
-    group_stem="$(sanitize_name "$group")"
-    if [[ ${#filters[@]} -eq 1 && -n "${filters[0]}" ]]; then
-        log_stem="$(sanitize_name "${filters[0]}")"
-    elif [[ ${#filters[@]} -le 1 ]]; then
-        log_stem="all"
-    else
+    local log_stem group_stem g n_groups=0
+    local -A seen_log_groups=()
+    for g in "${groups[@]}"; do
+        if [[ -z "${seen_log_groups[$g]:-}" ]]; then
+            seen_log_groups["$g"]=1
+            n_groups=$((n_groups + 1))
+        fi
+    done
+    if [[ "$runner" == "pytest" && $n_groups -gt 1 ]]; then
+        group_stem="pytest"
         log_stem="back2back_${run_num}"
+    else
+        group_stem="$(sanitize_name "$group")"
+        if [[ ${#filters[@]} -eq 1 && -n "${filters[0]}" ]]; then
+            log_stem="$(sanitize_name "${filters[0]}")"
+        elif [[ ${#filters[@]} -le 1 ]]; then
+            log_stem="all"
+        else
+            log_stem="back2back_${run_num}"
+        fi
     fi
     local max_attempts=$((1 + EMU_HOSTNAME_MAX_RETRIES))
     local attempt=1
@@ -968,7 +1045,12 @@ run_test_invocation() {
 
     local elapsed=$((SECONDS - test_start))
     if [[ "$runner" == "pytest" ]]; then
-        record_pytest_result "$config" "$group" "$label" "$elapsed" "$rc" "$result_file" "${filters[@]}"
+        local -a pairs=()
+        local i
+        for i in "${!groups[@]}"; do
+            pairs+=("${groups[$i]}" "${filters[$i]}")
+        done
+        record_pytest_result "$config" "$label" "$elapsed" "$rc" "$result_file" "${pairs[@]}"
     else
         record_gtest_result "$config" "$group" "$label" "$elapsed" "$rc" "$result_file" "${filters[@]}"
     fi
@@ -980,6 +1062,7 @@ run_test_invocation() {
 }
 
 clear_back2back_batch() {
+    batch_groups=()
     batch_filters=()
     batch_group=""
     batch_config=""
@@ -989,12 +1072,37 @@ clear_back2back_batch() {
     batch_key_current=""
 }
 
-flush_back2back_batch() {
-    [[ ${#batch_filters[@]} -eq 0 ]] && return
+# Mixing empty (run-all) and named filters in one invocation would drop the
+# run-all entry for gtest, and would run a pytest file twice. Pytest may mix
+# those across different files (file_a.py file_b.py::test_name).
+back2back_filters_are_mixed() {
+    if [[ "$batch_runner" == "pytest" ]]; then
+        local -A file_has_empty=() file_has_named=()
+        local i f g mixed=false
+        for i in "${!batch_filters[@]}"; do
+            g="${batch_groups[$i]}"
+            f="${batch_filters[$i]}"
+            if [[ -z "$f" ]]; then
+                file_has_empty["$g"]=1
+            else
+                file_has_named["$g"]=1
+            fi
+        done
+        if [[ ${#file_has_empty[@]} -gt 0 ]]; then
+            for g in "${!file_has_empty[@]}"; do
+                if [[ -n "${file_has_named[$g]:-}" ]]; then
+                    mixed=true
+                    echo "ERROR: back2back batch for pytest file '$g' (config '$batch_config') mixes empty filter (run all) with named filters"
+                fi
+            done
+        fi
+        if [[ "$mixed" == true ]]; then
+            echo "       Give every entry for that file a filter, or keep the run-all entry out of this batch."
+            return 0
+        fi
+        return 1
+    fi
 
-    # Mixing empty (run-all) and named filters in one gtest invocation is illegal:
-    # combine_gtest_filters would drop or corrupt the empty entries (e.g. "" + "*Foo*"
-    # becomes just "*Foo*"), so "run everything" would silently not happen.
     local has_empty=false has_named=false f
     for f in "${batch_filters[@]}"; do
         if [[ -z "$f" ]]; then
@@ -1013,15 +1121,24 @@ flush_back2back_batch() {
             fi
         done
         echo "       Give every entry a filter, or keep run-all entries in their own non-mixed batch."
+        return 0
+    fi
+    return 1
+}
+
+flush_back2back_batch() {
+    [[ ${#batch_filters[@]} -eq 0 ]] && return
+
+    if back2back_filters_are_mixed; then
         exit 1
     fi
 
     run_num=$((run_num + 1))
-    local label
+    local label i
     if [[ "$batch_runner" == "pytest" && ${#batch_filters[@]} -gt 1 ]]; then
         local -a nodes=()
-        for f in "${batch_filters[@]}"; do
-            nodes+=("$(pytest_node_id "$batch_group" "$f")")
+        for i in "${!batch_filters[@]}"; do
+            nodes+=("$(pytest_node_id "${batch_groups[$i]}" "${batch_filters[$i]}")")
         done
         label="[$batch_config] pytest back2back(${#batch_filters[@]}): ${nodes[*]}"
     else
@@ -1029,18 +1146,23 @@ flush_back2back_batch() {
         if [[ ${#batch_filters[@]} -gt 1 ]]; then
             filter_summary="back2back(${#batch_filters[@]}): $(combine_gtest_filters "${batch_filters[@]}")"
         fi
-        label="$(format_test_label "$batch_runner" "$batch_config" "$batch_group" "$filter_summary" "$batch_gtest_repeat")"
+        label="$(format_test_label "$batch_runner" "$batch_config" "${batch_groups[0]}" "$filter_summary" "$batch_gtest_repeat")"
     fi
 
     # Capture and clear before invoking so an INT mid-run cannot re-enter with
     # the same filters and launch a duplicate test/emulator.
+    local -a groups_to_run=("${batch_groups[@]}")
     local -a filters_to_run=("${batch_filters[@]}")
-    local group="$batch_group" config="$batch_config"
+    local -a pair_args=()
+    local config="$batch_config"
     local envvars="$batch_envvars" gtest_repeat="$batch_gtest_repeat"
     local runner="$batch_runner"
+    for i in "${!filters_to_run[@]}"; do
+        pair_args+=("${groups_to_run[$i]}" "${filters_to_run[$i]}")
+    done
     clear_back2back_batch
 
-    run_test_invocation "$runner" "$group" "$config" "$envvars" "$gtest_repeat" "$label" "${filters_to_run[@]}"
+    run_test_invocation "$runner" "$config" "$envvars" "$gtest_repeat" "$label" "${pair_args[@]}"
 }
 
 # Ctrl-C must not flush/re-run a batch: batch_filters used to remain set until
@@ -1079,7 +1201,9 @@ gtest_emu_conflict_lines=""
 active_gtest_pid=""
 active_tracked_sim_pid=""
 
-# Back-to-back batch state
+# Back-to-back batch state. batch_groups is parallel to batch_filters so pytest
+# can pass several files to one process. Gtest batches still share one group.
+declare -a batch_groups=()
 declare -a batch_filters=()
 batch_group=""
 batch_config=""
@@ -1111,12 +1235,13 @@ for entry in "${test_entries[@]}"; do
         batch_envvars="$envvars"
         batch_gtest_repeat="$gtest_repeat"
         batch_runner="$runner"
+        batch_groups+=("$group")
         batch_filters+=("$filter")
     else
         flush_back2back_batch
         run_num=$((run_num + 1))
         label="$(format_test_label "$runner" "$config" "$group" "$filter" "$gtest_repeat")"
-        run_test_invocation "$runner" "$group" "$config" "$envvars" "$gtest_repeat" "$label" "$filter"
+        run_test_invocation "$runner" "$config" "$envvars" "$gtest_repeat" "$label" "$group" "$filter"
     fi
 done
 
