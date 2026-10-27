@@ -1683,10 +1683,12 @@ void TensorPrefetcherManager::worker_loop() {
     // 8 consecutive pages in one write bring that to ~0.12 us a page, and longer runs gain little while
     // holding back the publish that lets the senders start.
     constexpr uint32_t kMaxPagesPerSocketWrite = 8;
-    // Requests spread over the per-socket queues at a time. A trace replay hands the worker every request
+    // Requests spread over the per-socket queues per pass. A trace replay hands the worker every request
     // it captured at once; spreading only the next few lets the first pages go out without waiting for
-    // the rest of the burst to be spread, while still giving each socket a full write per pass.
-    constexpr size_t kMaxTakenRequests = 2 * kMaxPagesPerSocketWrite;
+    // the rest of the burst to be spread, while still giving each socket a full write per pass. The bound
+    // is per pass rather than on requests not yet fully written: a socket with no room must not hold back
+    // other sockets' requests, as its sender's consumers may be waiting on theirs.
+    constexpr size_t kMaxRequestsTakenPerPass = 2 * kMaxPagesPerSocketWrite;
 
     // A request taken off pending_, with the number of its socket pages not yet written.
     struct TakenRequest {
@@ -1755,10 +1757,10 @@ void TensorPrefetcherManager::worker_loop() {
     std::vector<distributed::H2DSocket*> staged;
     staged.reserve(sockets_.size());
     while (true) {
-        // A pass that starts with nothing unsent writes one page per socket, so that a request on its own,
-        // or the first of a burst, is published without waiting for the pages behind it.
-        const bool nothing_unsent = std::ranges::all_of(unsent, [](const auto& pages) { return pages.empty(); });
-        const bool starting_idle = nothing_unsent && incoming.empty();
+        // A pass that starts with nothing left to send writes one page per socket, so that a request on its
+        // own, or the first of a burst, is published without waiting for the pages behind it.
+        const bool starting_idle =
+            incoming.empty() && std::ranges::all_of(unsent, [](const auto& pages) { return pages.empty(); });
         if (starting_idle || has_pending_.load()) {
             std::unique_lock<std::mutex> lk(queue_mu_);
             if (starting_idle) {
@@ -1777,13 +1779,14 @@ void TensorPrefetcherManager::worker_loop() {
             }
             has_pending_.store(false);
         }
-        while (!incoming.empty() && taken.size() < kMaxTakenRequests) {
+        for (size_t taken_this_pass = 0; taken_this_pass < kMaxRequestsTakenPerPass && !incoming.empty();
+             ++taken_this_pass) {
             take_request(std::move(incoming.front()));
             incoming.pop_front();
         }
 
         // Stage each socket's next pages in one write, then publish them all with one pair of fences.
-        const uint32_t max_pages = nothing_unsent ? 1u : kMaxPagesPerSocketWrite;
+        const uint32_t max_pages = starting_idle ? 1u : kMaxPagesPerSocketWrite;
         for (size_t socket_index = 0; socket_index < unsent.size(); ++socket_index) {
             auto& pages = unsent[socket_index];
             if (pages.empty()) {
