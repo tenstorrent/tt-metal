@@ -41,9 +41,17 @@ MEDIAN_IDX = 4
 MASK_FILL = -1e9
 
 # CONTRACT §7 item 1, option (a): bucket context lengths and their (padded S, masked SDPA chunk).
+# ttnn SDPA returns wrong values (masked or not) when the q-chunk count s_pad / chunk is odd and > 1 at B = 16 or 32
+# (fine at B = 2 and 64): 160/32, 384/128, 640/128, 1088/64, 1152/128 all fail (job 933). Every row here has an even
+# count or a single chunk; tests/pcc/test_sdpa_mask.py checks each at the batches the model runs.
 BUCKETS = (2048, 3072, 4096, 8192, 16384, 32768)
-PAD_TABLE = {2048: (128, 128), 3072: (160, 32), 4096: (256, 128), 8192: (384, 128), 16384: (640, 128),
-             32768: (1088, 64)}
+PAD_TABLE = {2048: (128, 128), 3072: (256, 128), 4096: (256, 128), 8192: (384, 64), 16384: (640, 64),
+             32768: (1088, 32)}
+
+
+def chunk_count_ok(s_pad: int, chunk: int) -> bool:
+    n = s_pad // chunk
+    return s_pad % chunk == 0 and (n == 1 or n % 2 == 0)
 
 
 def checkpoint_path() -> str:

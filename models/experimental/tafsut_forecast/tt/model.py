@@ -29,8 +29,11 @@ DRAM = ttnn.DRAM_MEMORY_CONFIG
 def sdpa_chunks(s_pad: int, ctx_len: int | None) -> int:
     """Masked k-chunk from the per-shape table (CONTRACT §7 item 1); never chosen by catching exceptions."""
     if ctx_len in df.PAD_TABLE and df.PAD_TABLE[ctx_len][0] == s_pad:
-        return df.PAD_TABLE[ctx_len][1]
-    return max(c for c in (32, 64, 128) if s_pad % c == 0)
+        chunk = df.PAD_TABLE[ctx_len][1]
+    else:
+        chunk = max(c for c in (32, 64, 128) if df.chunk_count_ok(s_pad, c))
+    assert df.chunk_count_ok(s_pad, chunk), (s_pad, chunk)  # the odd-chunk-count SDPA bug (dataflow.PAD_TABLE)
+    return chunk
 
 
 def rope_matrix() -> torch.Tensor:

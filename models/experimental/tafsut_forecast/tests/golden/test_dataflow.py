@@ -62,6 +62,6 @@ def test_bucket_table():
     for b in df.BUCKETS:
         s = b // df.PATCH + df.NFUT + 1
         s_pad, chunk = df.PAD_TABLE[b]
-        assert s <= s_pad and s_pad % chunk == 0 and s_pad % 32 == 0
+        assert s <= s_pad and df.chunk_count_ok(s_pad, chunk) and s_pad % 32 == 0
     assert df.bucket_len(2049) == 3072 and df.bucket_len(4931) == 8192 and df.bucket_len(40000) == 32768
     assert math.ceil(1100 / 32) == 35
