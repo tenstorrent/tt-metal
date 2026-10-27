@@ -21,7 +21,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.compressed_sparse_attention import TtCS
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA
 from models.demos.deepseek_v3_d_p.tt.mla.sliding_window_attention import TtSWA
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 
@@ -83,7 +82,7 @@ class TtV4Block(LightweightModule):
         dispatch_buffer_capacity_factor: int = 2,
         gate_fallback_mode: Optional[GateComputeMode] = None,
         routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        routed_expert_weights_dtype=ttnn.bfloat8_b,  # experiment: MXFP4 checkpoint values are exact in bfp8
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
