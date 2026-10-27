@@ -77,7 +77,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             bfd_a, bfd_b, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_unpack*/); // tiny-tiles not yet supported with reduce
         for (std::uint32_t i = 0; i < TILE_CNT; ++i)
         {
-            _llk_unpack_reduce_(i, 0, ckernel::DEFAULT_TENSOR_SHAPE);
+            _llk_unpack_reduce_<POOL_TYPE, REDUCE_DIM>(i, 0, ckernel::DEFAULT_TENSOR_SHAPE);
         }
     }
 }
