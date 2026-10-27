@@ -237,18 +237,24 @@ void write_dram_sender_l1(
         device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, dram_sender_l1_noc_addr(mesh_device, local_addr));
 }
 
+DramCoreL1Address dram_core_l1_address(
+    const distributed::MeshDevice& mesh_device, IDevice* device, const CoreCoord& dram_logical, DeviceAddr local_addr) {
+    return DramCoreL1Address{
+        .virtual_core = device->virtual_core_from_logical_core(dram_logical, CoreType::DRAM),
+        .noc_addr = mesh_device.impl().metal_env().get_hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) +
+                    static_cast<uint64_t>(local_addr),
+    };
+}
+
 void write_dram_core_l1(
     const distributed::MeshDevice& mesh_device,
     IDevice* device,
     const CoreCoord& dram_logical,
     DeviceAddr local_addr,
     std::span<const std::byte> bytes) {
-    const uint64_t write_addr =
-        mesh_device.impl().metal_env().get_hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM) +
-        static_cast<uint64_t>(local_addr);
-    const CoreCoord virtual_core = device->virtual_core_from_logical_core(dram_logical, CoreType::DRAM);
+    const DramCoreL1Address target = dram_core_l1_address(mesh_device, device, dram_logical, local_addr);
     mesh_device.impl().metal_env().get_cluster().write_core(
-        device->id(), tt_cxy_pair(device->id(), virtual_core), bytes, write_addr);
+        device->id(), tt_cxy_pair(device->id(), target.virtual_core), bytes, target.noc_addr);
 }
 
 uint32_t package_dram_core_index(const metal_SocDescriptor& soc_desc, const CoreCoord& dram_logical) {

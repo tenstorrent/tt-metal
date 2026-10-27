@@ -122,6 +122,16 @@ void write_dram_sender_l1(
     DeviceAddr local_addr,
     std::span<const std::byte> bytes);
 
+struct DramCoreL1Address {
+    CoreCoord virtual_core;
+    uint64_t noc_addr;
+};
+
+// Where DRAM-logical core `dram_logical`'s own L1 on `device`, at DRISC-L1 address `local_addr`, is
+// reached over NOC, wherever the sender endpoints run.
+DramCoreL1Address dram_core_l1_address(
+    const distributed::MeshDevice& mesh_device, IDevice* device, const CoreCoord& dram_logical, DeviceAddr local_addr);
+
 // Write `bytes` into DRAM-logical core `dram_logical`'s own L1 on `device`, at DRISC-L1 address
 // `local_addr`, wherever the sender endpoints run: a DRAM receiver's config page.
 void write_dram_core_l1(
