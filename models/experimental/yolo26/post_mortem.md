@@ -51,6 +51,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0029 | Per-camera-group latency of the multiplexed demo; cut it | 2026-10-27 | DONE (1 chip): CAM 17-20 46.9 → 39.6 ms, on screen 50.9 → 43.4 ms at 600 images/s; 4 chips: on screen 57-61 ms, unchanged within noise (device at ~92 % of its ceiling) |
 | YOLO26-0030 | Batch > 4 on one chip using DRAM (8 / 16 / 20); does 20 streams x 30 FPS hold at batch 20? | 2026-10-27 | DONE (branch yolov26_dram_batch): hybrid grouped forward, model-only b8 731.3 / b16 729.8 / b20 716.4 FPS vs b4 683.1, PCC intact; demo at b20 29.9 FPS but 108 ms latency (b4: 30.0 FPS, 39 ms) |
 | YOLO26-0031 | Cut end-to-end latency of the 1-chip 20-stream demo further | 2026-10-27 | DONE: capture-to-results 10.9 ms for every camera (was 17-40 ms by group), on screen 23.2 ms (was 43.4), 30.0 FPS kept; staggered capture, earlier hand-over, event-driven render |
+| YOLO26-0032 | Batch 20 (all 20 cameras in one pass) on 1 chip: minimize its latency | 2026-10-27 | DONE: capture-to-results 61.7 → 44.0 ms (all cameras alike), on screen 66.0 → 52.4 ms with live view, 30.0 FPS; batch 4 also 10.9 → 9.4 ms / 23.2 → 20.7 ms |
 
 ## Entries
 
@@ -973,3 +974,46 @@ budget: ~6.1 ms trace + upload / copy / read / decode ≈ 4.8 ms to results; on 
 renderer, tile + panel drawing (~2 ms) and the 2340×1152 JPEG encode (~6 ms).
 Not re-measured on 4 chips with these changes (`multichip_demo.py` shares the pipeline; earlier this entry, 4 chips
 with changes 1-3: 26.5 ms to results, 36.4 ms on screen).
+
+### YOLO26-0032 — batch 20, one pass per tick: latency (appended 2026-10-27)
+
+Goal (user): capture and run all 20 cameras at once (batch 20, grouped DRAM path of YOLO26-0030) with the least
+latency; not to beat batch 4. METHOD: `multistream_demo.py --batch-size 20`, 1 chip, 20 × 30 FPS, chip reset before
+each run; timelines from instrumented scratch copies (`scratchpad/bench/ms_tl3.py`, `ms_tl4.py`).
+
+MEASURED start (code of YOLO26-0031): 599.5 images/s = 30.0 FPS, capture-to-results 61.7 ms, on screen 66.0 ms
+(108 ms in YOLO26-0030 before the 0031 changes). Lower load made it worse (25 FPS 68.6 ms, 28 FPS 63.9 ms): not
+saturation. Timeline: frames letterboxed at 4.1 ms, picked up by the device loop at 16.9 ms, trace queued at 22.3 ms,
+handed over at 59.3 ms.
+
+1. `from_torch` copied the 65.5 MB ring slot on a single device (10.85 ms, MEASURED `ft_bench.py`; 12.7 ms in the
+   demo under the GIL), while with a mesh mapper it aliases the buffer (`ShardTensorToMesh` on the 1×1 device:
+   0.10 ms, later writes visible). The demo now always passes a mesh mapper (safe: a slot is reused only after its
+   upload completed). MEASURED: batch 20 49.6 / 53.9 ms; batch 4 9.5 / 12.6 ms (port off).
+2. REFUTED: uploader thread on CQ1 + main thread on CQ0 (events passed through queues): 445.6 images/s =
+   22.3 FPS, 217 ms. Issuing ttnn commands from two threads serializes / contends (cf. YOLO26-0029 attempt 1).
+3. Single-pass device loop (`run_device_loop_single`, used when there is one pass per tick): outputs read on CQ0
+   right after the trace (one ~0.7 ms read per tick), so CQ1 carries only uploads; per tick: queue copy + trace +
+   read, wait for the next batch and upload it (overlapping the end of the pass), then hand this batch over.
+   (Before, the read sat on CQ1 behind the next tick's upload and the hand-over came after the next trace.)
+   MEASURED: 46.0 / 50.4 ms.
+4. Frame prep split per image over the workers (YOLO26-0031 item 6, re-applied; default 4 workers): with one pass
+   per tick one worker letterboxed all 20 frames (4.2 ms). MEASURED: batch 20 44.4 / 48.7 ms; batch 4 9.3 / 12.5 ms.
+5. Defect found: with 4 prep workers the live view failed to bind port 8090/8091 ("Address already in use").
+   READ / MEASURED: every process importing the Tracy-enabled ttnn opens a Tracy listener on the first free port from
+   8086 (`TracyProfiler.cpp`), so main + 4 workers + renderer took 8086-8091 (a spawned child seen listening on
+   *:8090 with Tracy threads). Fix: each spawned process gets its own `TRACY_PORT` (18086+) at start.
+
+Timeline after the changes (MEASURED, median after capture): letterboxed 2.8 ms, loop has it 3.6, upload written
+10.0 (6.4 ms host write of 65.5 MB; 4.63 ms = 14.2 GB/s alone, `up_bench.py`), copy + trace + read queued 10.5, read
+done 43.4 (≈ 33 ms on device vs 27.9 ms model-only; staging → input copy 0.33 ms, `copy_bench.py`; INFERRED: the
+next tick's upload overlapping the pass), decoded 44.5.
+
+Final (MEASURED, 60 s, live MJPEG on, no recording):
+| | capture → results | on screen | throughput |
+|---|---|---|---|
+| batch 20 (1 pass per tick) | 44.0 ms, all 20 cameras | 52.4 ms | 599.9 images/s = 30.0 FPS |
+| batch 4 (5 staggered passes) | 9.4 ms, every group | 20.7 ms | 600.0 images/s = 30.0 FPS |
+Snapshot (batch 20) checked: tile counts equal panel rows, 30.0 FPS on every tile.
+Remaining for batch 20 (INFERRED): upload (5/8 of the 8-channel input is padding) and the ~31 ms pass; going lower
+would need a smaller input or splitting the trace so groups start before the whole batch has been uploaded.

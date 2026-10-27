@@ -298,6 +298,25 @@ class Display:
             text(f"{n:2d}", PANEL_W - 56, y + 13)
 
 
+_tracy_ports = iter(range(18086, 18186))
+
+
+def start_process(proc):
+    """
+    Start a spawned process with its own Tracy port. Every process that imports a Tracy-enabled ttnn listens on
+    the first free port from 8086 up, so 6 demo processes take 8086-8091 and the MJPEG port could be gone.
+    """
+    previous = os.environ.get("TRACY_PORT")
+    os.environ["TRACY_PORT"] = str(next(_tracy_ports))
+    try:
+        proc.start()
+    finally:
+        if previous is None:
+            del os.environ["TRACY_PORT"]
+        else:
+            os.environ["TRACY_PORT"] = previous
+
+
 def stream_table(clips, num_streams, chips):
     """
     Stream s -> (clip entry, start frame). clips: load_clips(..., per_chip streams); the copies of an entry on
@@ -315,9 +334,10 @@ def ring_views(shm, slots, batch):
 
 def prep_worker(rank, workers, args, layout, shm_name, slots, free_q, work_q, ready_q, start, t0, stop):
     """
-    Letterbox the current frame of each stream of this worker's passes into free ring slots, paced at --fps. Pass b
-    of a tick is captured b / passes of a tick after the tick starts (like free-running cameras), unless
-    --synchronized-capture, where all streams are captured at the start of the tick.
+    Letterbox this worker's share (images j with j % workers == rank) of every pass into the pass's ring slot, paced
+    at --fps. Pass b of a tick is captured b / passes of a tick after the tick starts (like free-running cameras),
+    unless --synchronized-capture, where all streams are captured at the start of the tick. Every worker takes the
+    slots from its own copy of the free list, in the same order, so all workers of a pass write the same slot.
     """
     per_chip, B, chips = layout
     clips = load_clips(args.videos, per_chip, args.max_frames)
@@ -330,10 +350,10 @@ def prep_worker(rank, workers, args, layout, shm_name, slots, free_q, work_q, re
     start.wait()
     period = 1.0 / args.fps
     passes = per_chip // B
+    mine = range(rank, chips * B, workers)
     tick = 0
-    mine = [b for b in range(passes) if b % workers == rank]
     while not stop.is_set():
-        for b in mine:
+        for b in range(passes):
             due = t0.value + tick * period + (0 if args.synchronized_capture else b * period / passes)
             now = time.perf_counter()
             if due > now:
@@ -346,26 +366,28 @@ def prep_worker(rank, workers, args, layout, shm_name, slots, free_q, work_q, re
                 except queue.Empty:
                     if stop.is_set():
                         return
-            ids = [g * per_chip + b * B + i for g in range(chips) for i in range(B)]
-            frame_idx = []
-            for j, s in enumerate(ids):
-                clip, offset = table[s]
+            done = []
+            for j in mine:
+                g, i = divmod(j, B)
+                clip, offset = table[g * per_chip + b * B + i]
                 f = (tick + offset) % len(rgba[clip])
                 letterbox.fill(ring[slot, j], rgba[clip][f])
-                frame_idx.append(f)
-            work_q.put((tick, b, ids, frame_idx, captured, slot))
+                done.append((j, f))
+            work_q.put((tick, b, slot, captured, done))
         tick += 1
 
 
 class PrepPool:
     """
     Host input preparation in worker processes. Each mesh pass b of a tick holds image j = chip g * B + i of stream
-    g * per_chip + b * B + i; passes are split round-robin over the workers. Buffers live in a shared-memory ring
-    whose letterbox padding (114 in RGB) is written once; a slot is free again once its pass has been read back.
+    g * per_chip + b * B + i; the images of every pass are split over the workers, so a pass is ready after
+    1 / workers of its letterboxing (matters with one pass per tick: one worker took 4.2 ms for 20 images). Buffers live in a shared-memory ring whose letterbox padding (114 in RGB) is
+    written once; a slot is free again once its pass has been read back.
     """
 
     def __init__(self, args, per_chip, chips, batch_size, workers):
-        self.batch = chips * batch_size
+        self.batch, self.per_chip, self.B, self.chips = chips * batch_size, per_chip, batch_size, chips
+        self.workers = min(workers, self.batch)
         self.slots = 2 * (per_chip // batch_size) + 6
         self.shm = shared_memory.SharedMemory(
             create=True, size=self.slots * self.batch * SIZE * SIZE * UINT8_INPUT_CHANNELS
@@ -374,52 +396,64 @@ class PrepPool:
         self.ring[..., :3] = 114
         self.ring[..., 3:] = 0
         ctx = mp.get_context("spawn")
-        self.free_q, self.work_q, self.ready_q = ctx.Queue(), ctx.Queue(), ctx.Queue()
+        self.free_qs = [ctx.Queue() for _ in range(self.workers)]
+        self.work_q, self.ready_q = ctx.Queue(), ctx.Queue()
         for k in range(self.slots):
-            self.free_q.put(k)
+            self.release(k)
         self.start_event, self.stop, self.t0 = ctx.Event(), ctx.Event(), ctx.Value("d", 0.0)
         self.halt = threading.Event()
         layout = (per_chip, batch_size, chips)
         self.procs = [
             ctx.Process(
                 target=prep_worker,
-                args=(rank, workers, args, layout, self.shm.name, self.slots, self.free_q, self.work_q)
+                args=(rank, self.workers, args, layout, self.shm.name, self.slots, self.free_qs[rank], self.work_q)
                 + (self.ready_q, self.start_event, self.t0, self.stop),
                 daemon=True,
             )
-            for rank in range(workers)
+            for rank in range(self.workers)
         ]
         for p in self.procs:
-            p.start()
+            start_process(p)
 
     def start(self, prep_q, mesh_mapper=None):
         """
-        Wait for the workers, start the ticks and feed ring slots as host tensors (no copy) to prep_q. Returns the
-        time of the first tick; src_hw is the source frame size.
+        Wait for the workers, start the ticks and feed each completed pass's ring slot as a host tensor (no copy) to
+        prep_q. Returns the time of the first tick; src_hw is the source frame size.
         """
         self.src_hw = [self.ready_q.get() for _ in self.procs][0]
         self.t0.value = time.perf_counter() + 0.1
         self.start_event.set()
+        B, per_chip = self.B, self.per_chip
 
         def feed():
+            parts = {}
             while not self.halt.is_set():
                 try:
-                    tick, b, ids, frame_idx, captured, slot = self.work_q.get(timeout=0.5)
+                    tick, b, slot, captured, done = self.work_q.get(timeout=0.5)
                 except queue.Empty:
                     continue
+                got = parts.setdefault((tick, b), [slot, captured, []])
+                got[1] = min(got[1], captured)
+                got[2] += done
+                if len(got[2]) < self.batch:
+                    continue
+                del parts[(tick, b)]
+                frame_idx = [f for _, f in sorted(got[2])]
+                ids = [g * per_chip + b * B + i for g in range(self.chips) for i in range(B)]
                 host = ttnn.from_torch(
                     torch.from_numpy(self.ring[slot]).reshape(self.batch, 1, SIZE, SIZE * UINT8_INPUT_CHANNELS),
                     dtype=ttnn.uint8,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=mesh_mapper,
                 )
-                prep_q.put((tick, b, ids, frame_idx, captured, slot, host))
+                prep_q.put((tick, b, ids, frame_idx, got[1], slot, host))
 
         threading.Thread(target=feed, daemon=True).start()
         return self.t0.value
 
     def release(self, slot):
-        self.free_q.put(slot)
+        for q in self.free_qs:
+            q.put(slot)
 
     def close(self):
         self.stop.set()
@@ -563,6 +597,39 @@ def run_device_loop(device, runner, out_list, prep_q, post_q, t_end, images_per_
     return processed
 
 
+def run_device_loop_single(device, runner, out_list, prep_q, post_q, t_end, images_per_batch):
+    """
+    Device loop for one batch per tick (e.g. all 20 streams at once). The outputs are read on CQ0 right after the
+    trace (one read per tick costs ~0.7 ms), so CQ1 carries only uploads and the next batch's upload never queues
+    behind a read. Per tick: queue this batch's copy, trace and read; wait for the next batch (it arrives shortly
+    before this pass ends) and upload it, overlapping the end of the pass; then hand this batch over.
+    (Uploading and handing over from two threads was much slower: 22 FPS, 217 ms.)
+    """
+    staging, l1_input = runner.tt_image_res, runner.input_tensor
+
+    def upload(item, staging_free):
+        ttnn.wait_for_event(1, staging_free)
+        ttnn.copy_host_to_device_tensor(item[-1], staging, 1)
+        return ttnn.record_event(device, 1)
+
+    item = prep_q.get()
+    written = upload(item, runner.op_event)
+    processed = 0
+    while time.perf_counter() < t_end:
+        ttnn.wait_for_event(0, written)
+        ttnn.copy(staging, l1_input)
+        staging_free = ttnn.record_event(device, 0)
+        ttnn.execute_trace(device, runner.tid, cq_id=0, blocking=False)
+        host = [ttnn.from_device(t, blocking=False, cq_id=0) for t in out_list]
+        read = ttnn.record_event(device, 0)
+        current, item = item, prep_q.get()
+        written = upload(item, staging_free)
+        ttnn.event_synchronize(read)
+        post_q.put(current[:-1] + (host,))
+        processed += images_per_batch
+    return processed
+
+
 def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, mesh_composer=None):
     """
     The whole demo on an open device or mesh: per_chip streams on each of chips chips, batch args.batch_size per chip.
@@ -579,7 +646,7 @@ def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, 
     renderer = ctx.Process(
         target=render_process, args=(make_display, args, num_streams, chips, render_q, ready_q), daemon=True
     )
-    renderer.start()
+    start_process(renderer)
 
     runner = YOLO26PerformantRunner(device, B, SIZE, args.variant)
     infra, model_run = runner.runner_infra, runner.runner_infra.run
@@ -604,7 +671,8 @@ def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, 
     prep_q = queue.Queue(maxsize=2 * nb)
     post_q = queue.Queue()  # decode keeps up easily; unbounded so the device loop never waits
     stats, pass_latency = {}, [[] for _ in range(nb)]
-    t_start = pool.start(prep_q, mesh_mapper)
+    # A mesh mapper makes from_torch alias the ring slot instead of copying it (one chip: 10.9 ms for batch 20)
+    t_start = pool.start(prep_q, mesh_mapper or ttnn.ShardTensorToMesh(device, dim=0))
     letterbox = Letterbox(*pool.src_hw, SIZE)
 
     def post():
@@ -652,9 +720,11 @@ def run_pipeline(device, args, chips, per_chip, make_display, mesh_mapper=None, 
     try:
         # staggered capture: the next batch is due one capture interval after the current one
         wait_next = 0.0 if args.synchronized_capture else 1.0 / (args.fps * nb)
-        processed = run_device_loop(
-            device, runner, [infra.packed], prep_q, post_q, t_start + args.duration, mesh_batch, wait_next
-        )
+        loop_args = (device, runner, [infra.packed], prep_q, post_q, t_start + args.duration, mesh_batch)
+        if nb == 1:
+            processed = run_device_loop_single(*loop_args)
+        else:
+            processed = run_device_loop(*loop_args, wait_next)
     finally:
         elapsed = time.perf_counter() - t_start
         post_q.put(None)
@@ -683,7 +753,7 @@ def add_common_args(ap):
     ap.add_argument("--variant", default="yolo26s")
     ap.add_argument("--fps", type=int, default=30, help="target FPS per stream")
     ap.add_argument("--batch-size", type=int, default=4, help="images per chip per pass")
-    ap.add_argument("--prep-workers", type=int, default=2, help="processes letterboxing frames")
+    ap.add_argument("--prep-workers", type=int, default=4, help="processes letterboxing frames")
     ap.add_argument("--duration", type=float, default=60, help="seconds to run")
     ap.add_argument("--conf", type=float, default=0.35, help="person confidence threshold")
     ap.add_argument("--max-frames", type=int, default=1500, help="frames decoded per clip (loops)")
