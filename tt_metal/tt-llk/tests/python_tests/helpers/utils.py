@@ -12,19 +12,15 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import pytest
 import torch
 from filelock import FileLock
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .format_config import DataFormat, FormatConfig
-from .llk_params import ReduceDimension, format_dict
+from .llk_params import format_dict
 from .logger import logger
-from .target_config import TestTargetConfig
 from .tile_constants import (
     DEFAULT_TILE_C_DIM,
     DEFAULT_TILE_R_DIM,
-    MAX_FACE_R_DIM,
 )
 from .tile_shape import construct_tile_shape
 from .ulp import (
@@ -1201,22 +1197,3 @@ def create_directories(dirs: list[Path]):
     with lock:
         for dir in dirs:
             os.makedirs(dir, exist_ok=True)
-
-
-_TTSIM_PACR_ZERO_WRITE_REASON = (
-    "ttsim does not implement PACR ZeroWrite (UnimplementedFunctionality: tensix_pacr: "
-    "zero_write=1), which WH uses to zero face 1 of partial-face BFP Row/Scalar reduce "
-    "packs. Runs on silicon."
-)
-
-
-def skip_ttsim_partial_face_bfp_zero_write(tile_shape, output_format, reduce_dim):
-    if (
-        TestTargetConfig().run_simulator
-        and get_chip_architecture() == ChipArchitecture.WORMHOLE
-        and tile_shape.face_r_dim < MAX_FACE_R_DIM
-        and output_format
-        in {DataFormat.Bfp8, DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b}
-        and reduce_dim in {ReduceDimension.Row, ReduceDimension.Scalar}
-    ):
-        pytest.skip(_TTSIM_PACR_ZERO_WRITE_REASON)

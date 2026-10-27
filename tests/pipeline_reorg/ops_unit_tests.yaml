@@ -175,13 +175,13 @@
     --timeout=600
   skus:
     wh_n150_civ2:
-      timeout: 20
+      timeout: 10
     wh_n300_civ2:
-      timeout: 20
+      timeout: 10
     bh_p100:
-      timeout: 20
+      timeout: 10
     bh_p150b_civ2:
-      timeout: 20
+      timeout: 10
   owner_id: U08ADLJ4PLP # Aleksandar Stancov
   team: ttnn
   budget_type: unit
