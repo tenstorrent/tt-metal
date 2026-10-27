@@ -530,13 +530,19 @@ def grouped_program(device, chunk, heads, splits):
     )
 
 
-@pytest.mark.parametrize("heads, splits", [(2, 1), (4, 1), (1, 3), (2, 15)], ids=["g2", "g4", "s3", "g2s15"])
-def test_chunked_mla_prefill_pair_split_grouped_ksplit(device, heads, splits, function_level_defaults, reset_seeds):
+@pytest.mark.parametrize(
+    "heads, splits, chunk",
+    [(2, 1, 256), (4, 1, 128), (1, 3, 256), (2, 15, 256)],
+    ids=["g2", "g4_c128", "s3", "g2s15"],  # four heads' accumulators at chunk 256 exceed L1
+)
+def test_chunked_mla_prefill_pair_split_grouped_ksplit(
+    device, heads, splits, chunk, function_level_defaults, reset_seeds
+):
     """The pair split on the grouped-heads / K split program (SDPAProgramConfig.q_heads_per_unit / k_splits): each
     chip matches the pair-split reference, LSE included (with a K split the merge forms it from the pieces'
     statistics), the merged pair equals full attention, every start shares the programs, and return_lse=False gives
     the same output. At start 0 chip 1's first 64 rows see no key (output 0, lse -1e30) and most K slices are empty."""
-    seq, chunk, n = 512, 256, 3072
+    seq, n = 512, 3072
     q = torch.randn(1, NH, n, DK)
     caches = PairSplitCaches(device, n)
     program = grouped_program(device, chunk, heads, splits)
