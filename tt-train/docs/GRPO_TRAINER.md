@@ -130,6 +130,7 @@ backends are the keys of `ROLLOUT_BACKENDS`:
 |-------------------|--------|-----------------|
 | `"ttml_in_process_sync"` | `python script.py` | One process. `TTMLRolloutSampler` generates with the trainer's own model. |
 | `"ttt_remote_sync"` | `tt-run --rank-binding ... python script.py` | Rank 0 trains. Rank 1 generates with `TTTRolloutSampler` (tt-transformers, traced decode) behind `MPIRolloutServer`. |
+| `"ttt_remote_async"` | `tt-run --rank-binding ... python script.py` | Rank 0 trains on the batches rank 1 sends. Rank 1 generates and scores continuously with `TTTRolloutSampler` behind `AsyncRolloutServer`, using the newest weights it has received. |
 
 The user script is the same in both modes:
 
@@ -183,6 +184,30 @@ Rules and limitations of `ttt_remote_sync`:
   of a cross-rank exchange, prints the traceback and calls `os._exit(1)`.
   Cross-rank calls have no deadlines, so a stuck peer still hangs the other
   rank.
+
+In `ttt_remote_async` the ranks no longer take turns:
+
+- **Rank 0 (trainer)** builds an `AsyncRemoteRolloutBatchSource`. It pops scored
+  batches from a `RolloutQueue`, drops a batch whose weight version is more than
+  `max_staleness` optimizer steps behind the policy, and pushes the policy weights
+  through a `ThreadedWeightBridge` every `weight_sync_every` steps, as version `step`.
+- **Rank 1 (rollout)** also calls `dataset_func`. Its `AsyncRolloutServer` walks the
+  prompts in batches, wrapping around, installs the newest received weights before
+  each batch, generates, scores with the reward functions, and pushes the batch.
+  It waits only for the first weights and stops when rank 0 finishes.
+
+Rules and limitations of `ttt_remote_async`, on top of those of `ttt_remote_sync`:
+
+- **Rewards run on rank 1**, between generations. Reward functions with side
+  effects or state see rank 1's copy of the script.
+- **Rank 0 trains on one device.** Both meshes are opened with 2 command queues:
+  the bridge copies weights on CQ1 while generation and training use CQ0.
+- **Staleness is counted in optimizer steps.** With `num_iterations = k`, a batch
+  generated one push behind has staleness `k`. Dropped batches are reported as
+  `rollouts_dropped` and don't shorten training: rank 1 keeps generating until
+  rank 0 has trained on the planned number of batches.
+- **A weight push waits while the previous push has not been consumed.** Rank 1
+  installs weights only between batches, so a push can wait up to one generation.
 
 ---
 
@@ -297,9 +322,10 @@ from ttml.trainers import GRPOConfig
 | `min_lr_rate` | `float \| None` | `None` | `lr_scheduler_kwargs={"min_lr_rate": ...}` | Final LR as a fraction of the base LR; required for `"cosine_with_min_lr"`, ignored otherwise. |
 | `use_clip_grad_norm` | `bool` | `False` | `max_grad_norm > 0` | Clip the gradient norm before `optimizer.step()`. TRL clips by default (`max_grad_norm=1.0`), so a ported config trains unclipped unless this is set. Raises in `_setup` when any parameter is sharded (FSDP/TP). |
 | `clip_grad_norm_max_norm` | `float` | `1.0` | `max_grad_norm` | Maximum gradient norm when `use_clip_grad_norm` is set. |
-| `rollout_backend` | `str` | — | *(no direct equivalent)* | Which sampler generates and where it runs: `"ttml_in_process_sync"` or `"ttt_remote_sync"`; see [Rollout modes](#rollout-modes). Required in `grpo_config`. |
+| `rollout_backend` | `str` | — | *(no direct equivalent)* | Which sampler generates and where it runs: `"ttml_in_process_sync"`, `"ttt_remote_sync"` or `"ttt_remote_async"`; see [Rollout modes](#rollout-modes). Required in `grpo_config`. |
+| `max_staleness` | `int` | `0` | *(no direct equivalent)* | `ttt_remote_async` only: drop a batch generated with weights more than this many optimizer steps older than the policy. |
 | `weight_sync_every` | `int` | `1` | *(no direct equivalent)* | `ttt_remote_sync` only: push the policy weights to the rollout rank at a generation-batch boundary once *N* optimizer steps have passed since the last push. |
-| `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `ttt_remote_sync`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `top_k` (default 32), `top_p` (default 1.0). |
+| `remote_rollout` | `RemoteRolloutConfig \| None` | `None` | *(no direct equivalent)* | Rollout rank settings, required for `ttt_remote_sync` and `ttt_remote_async`. `get_grpo_config` reads it from the top-level `remote_rollout_config` YAML section: `mesh_shape`, `max_batch_size` (per tt-transformers model), `max_seq_len`, and optional `top_k` (default 32), `top_p` (default 1.0), `rollout_queue_capacity` (`ttt_remote_async` only, default 2). |
 | `output_dir` | `str` | — | `output_dir` | Directory for logs, metrics CSV, and checkpoints. |
 | `checkpointing` | `bool` | — | *(use `save_steps`)* | Whether to save checkpoints during training. |
 | `checkpoint_interval` | `int` | — | *(use `save_steps`)* | Save a checkpoint every *N* optimizer steps (when `checkpointing=True`). |
