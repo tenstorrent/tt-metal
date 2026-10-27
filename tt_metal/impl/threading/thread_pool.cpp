@@ -612,7 +612,7 @@ public:
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
                 context_id, physical_devices[i]->id(), completion_, i, published_, jobs_.data()));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
-            map_device(physical_devices[i]->id(), i);
+            map_worker_to_device(i, physical_devices[i]->id());
         }
     }
     // Constructor accepting the number of threads to spawn. The threads in this pool will be bound to a specific CPU
@@ -625,7 +625,7 @@ public:
             workers_.emplace_back(
                 std::make_unique<NumaAwareExecutor>(context_id, i, completion_, i, published_, jobs_.data()));
             phys_device_to_thread_id_[i] = i;
-            map_device(i, i);
+            map_worker_to_device(i, i);
         }
     }
 
@@ -738,7 +738,7 @@ private:
         return nullptr;
     }
 
-    void map_device(uint32_t device_id, uint32_t worker) {
+    void map_worker_to_device(uint32_t worker, uint32_t device_id) {
         if (worker_of_device_.size() <= device_id) {
             worker_of_device_.resize(device_id + 1, ParallelJob::NONE);
         }
