@@ -158,9 +158,8 @@ void kernel_main() {
                 // Now slice the row according to width slice parameters
                 // Copy sliced elements to the beginning of the buffer
                 if (slice_start_w != 0 || slice_step_w != 1 || slice_end_w != input_w) {
-                    // Need to reorganize the data in the buffer. The lock covers this core's stores to the
-                    // entry: on Quasar it makes them reach SRAM before push_back hands the entry to the
-                    // writer; on Wormhole and Blackhole it does nothing.
+                    // Need to reorganize the data in the buffer. Hold a write lock while this core rewrites
+                    // the entry, so its stores are visible before push_back hands the entry to the writer.
                     auto lock = dfb_out.scoped_write_lock(1);
                     auto src_ptr = lock.get_ptr<volatile uint8_t>();
                     auto dst_ptr = lock.get_ptr<volatile uint8_t>();
