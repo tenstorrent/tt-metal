@@ -13,7 +13,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/moe_gate_sqrt_softplus.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #ifdef TRISC_MATH
 #include "sfpi.h"
@@ -33,9 +33,9 @@ void kernel_main() {
     constexpr uint32_t cb_bias = tt::CBIndex::c_1;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    CircularBuffer x_cb(cb_x);
-    CircularBuffer bias_cb(cb_bias);
-    CircularBuffer out_cb(cb_out);
+    DataflowBuffer x_cb(cb_x);
+    DataflowBuffer bias_cb(cb_bias);
+    DataflowBuffer out_cb(cb_out);
 
     // Both input CBs must share a data format: compute_kernel_hw_startup / copy_init configure the
     // unpacker from cb_x, and copy_tile only updates the L1 address per call, not the THCON
