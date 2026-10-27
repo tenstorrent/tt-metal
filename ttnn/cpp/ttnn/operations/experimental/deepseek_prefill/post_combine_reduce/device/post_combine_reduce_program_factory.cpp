@@ -248,6 +248,7 @@ tt::tt_metal::ProgramDescriptor PostCombineReduceProgramFactory::create_descript
     reader_compile_time_args.push_back(static_cast<uint32_t>(row_indexed ? 1 : 0));
     reader_compile_time_args.push_back(operation_attributes.skip_row);
     reader_compile_time_args.push_back(row_index_aligned_page_size);
+    reader_compile_time_args.push_back(row_indexed ? static_cast<uint32_t>(combine_output.padded_shape()[0]) : 0);
     tt::tt_metal::TensorAccessorArgs(row_index_buffer).append_to(reader_compile_time_args);
 
     // Compute compile-time args. The skip-mode toggle is appended last so the
