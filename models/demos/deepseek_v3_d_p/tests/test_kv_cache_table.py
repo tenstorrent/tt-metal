@@ -385,6 +385,8 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
 @pytest.mark.parametrize("seq_len", [5 * 1024, 10 * 1024], ids=["seq5k", "seq10k"])
 @pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
 @pytest.mark.parametrize("num_layers", [1, 2], ids=["1layer", "2layers"])
+# (num_key_value_heads, head_dim) of the Kimi-K2.x DFlash and the Kimi-K3 DSpark drafters.
+@pytest.mark.parametrize("num_kv_heads, head_dim", [(8, 128), (16, 64)], ids=["dflash", "dspark"])
 @pytest.mark.skipif(not is_blackhole(), reason="DFlash is Blackhole-only")
 @pytest.mark.timeout(0)
 def test_dflash_kv_cache_mock(
@@ -392,6 +394,8 @@ def test_dflash_kv_cache_mock(
     seq_len,
     num_users,
     num_layers,
+    num_kv_heads,
+    head_dim,
     device_params,
 ):
     """DFlash analogue of test_kimi_kv_cache_mock (mock caches -> table -> readback). Global cache shape
@@ -401,9 +405,6 @@ def test_dflash_kv_cache_mock(
     mesh_shape = list(mesh_device.shape)
     sp_factor, tp_factor = mesh_shape[sp_axis], mesh_shape[tp_axis]
 
-    # dflash_drafter_config: head_dim 128, num_key_value_heads 8. 8 / tp(4) = 2 heads per chip.
-    head_dim = 128
-    num_kv_heads = 8
     heads_per_chip = num_kv_heads // tp_factor
     batch = num_users * num_layers
 
@@ -463,7 +464,7 @@ def test_dflash_kv_cache_mock(
         tt_k.buffer_address() != tt_v.buffer_address()
     ), "K and V must be distinct allocations for the per-config base address to mean anything"
 
-    CHUNK_SIZE_BYTES = (head_dim // 32) * 1088  # [1, 1, 32, 128] bfp8 = 4 tiles, 1024 + 64 bytes each
+    CHUNK_SIZE_BYTES = (head_dim // 32) * 1088  # [1, 1, 32, head_dim] bfp8: 1024 + 64 bytes a tile
     K_BASE, V_BASE = 0, num_kv_heads  # config id order == the src<->dst migration contract
 
     def table_config():

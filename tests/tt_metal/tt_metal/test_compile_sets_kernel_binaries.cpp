@@ -20,6 +20,7 @@
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "tt_memory.h"
 #include "tt_metal/jit_build/build_env_manager.hpp"
@@ -138,7 +139,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
         }
         TT_FATAL(compute_kernel != nullptr && riscv0_kernel != nullptr && riscv1_kernel != nullptr, "Error");
 
-        auto mask = BuildEnvManager::get_instance(extract_context_id(device))
+        auto mask = BuildEnvManager::get_instance(device->impl().get_context_id())
                         .get_device_build_env(device->build_id())
                         .build_key();
         program.impl().compile(device);
@@ -156,7 +157,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
         for (size_t i = 0; i < num_devices; i++) {
             for (const auto& kernel_name : kernel_names) {
                 std::filesystem::remove_all(
-                    BuildEnvManager::get_instance(extract_context_id(devices_[i].get()))
+                    BuildEnvManager::get_instance(devices_[i]->impl().get_context_id())
                         .get_device_build_env(devices_[i]->build_id())
                         .build_env.get_out_kernel_root_path() +
                     kernel_name);
@@ -180,7 +181,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                 auto* device = devices_[i].get();
                 auto& program = new_programs[i];
                 for (int j = 0; j < num_compiles; j++) {
-                    auto mask = BuildEnvManager::get_instance(extract_context_id(device))
+                    auto mask = BuildEnvManager::get_instance(device->impl().get_context_id())
                                     .get_device_build_env(device->build_id())
                                     .build_key();
                     program.impl().compile(device);
@@ -211,12 +212,12 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                     TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask), "Error");
 
                     std::string kernel_name = get_latest_kernel_binary_path(
-                        BuildEnvManager::get_instance(extract_context_id(device))
+                        BuildEnvManager::get_instance(device->impl().get_context_id())
                             .get_device_build_env(device->build_id())
                             .build_env.get_out_kernel_root_path(),
                         riscv0_kernel);
                     std::string brisc_hex_path =
-                        BuildEnvManager::get_instance(extract_context_id(device))
+                        BuildEnvManager::get_instance(device->impl().get_context_id())
                             .get_kernel_build_state(device->build_id(), programmable_core_index, dm_class_idx, 0)
                             .get_target_out_path(kernel_name);
                     const ll_api::memory& brisc_binary =
@@ -225,12 +226,12 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                         brisc_binary == *brisc_binaries.at(mask).at(0),
                         "Expected saved BRISC binary to be the same as binary in persistent cache");
                     kernel_name = get_latest_kernel_binary_path(
-                        BuildEnvManager::get_instance(extract_context_id(device))
+                        BuildEnvManager::get_instance(device->impl().get_context_id())
                             .get_device_build_env(device->build_id())
                             .build_env.get_out_kernel_root_path(),
                         riscv1_kernel);
                     std::string ncrisc_hex_path =
-                        BuildEnvManager::get_instance(extract_context_id(device))
+                        BuildEnvManager::get_instance(device->impl().get_context_id())
                             .get_kernel_build_state(device->build_id(), programmable_core_index, dm_class_idx, 1)
                             .get_target_out_path(kernel_name);
                     auto load_type = (device->arch() == tt::ARCH::WORMHOLE_B0)
@@ -242,13 +243,13 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                         "Expected saved NCRISC binary to be the same as binary in persistent cache");
                     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                         kernel_name = get_latest_kernel_binary_path(
-                            BuildEnvManager::get_instance(extract_context_id(device))
+                            BuildEnvManager::get_instance(device->impl().get_context_id())
                                 .get_device_build_env(device->build_id())
                                 .build_env.get_out_kernel_root_path(),
                             compute_kernel);
                         std::string trisc_id_str = std::to_string(trisc_id);
                         std::string trisc_hex_path =
-                            BuildEnvManager::get_instance(extract_context_id(device))
+                            BuildEnvManager::get_instance(device->impl().get_context_id())
                                 .get_kernel_build_state(
                                     device->build_id(), programmable_core_index, compute_class_idx, trisc_id)
                                 .get_target_out_path(kernel_name);

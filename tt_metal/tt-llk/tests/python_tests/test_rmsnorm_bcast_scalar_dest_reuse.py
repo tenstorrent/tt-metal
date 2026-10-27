@@ -58,8 +58,13 @@ itself cannot corrupts the fp32 result into alternating datums.
 import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
-from helpers.golden_generators import EltwiseBinaryGolden, round_to_dest_width
+from helpers.golden_generators import (
+    TILE_DIM,
+    EltwiseBinaryGolden,
+    round_to_dest_width,
+)
 from helpers.llk_params import (
     DestAccumulation,
     MathFidelity,
@@ -81,6 +86,10 @@ pytestmark = [skip_for_wormhole, skip_for_quasar]
 
 ELEMENTS_PER_TILE = 1024
 ELEMENTS_PER_FACE = 256
+
+# Operand range of the main sweep: wide enough that a MOVD2B fetching the wrong row cannot land
+# on a numerically similar scalar. Also used for the seed tile around a hand-placed scalar.
+OPERAND_LOW, OPERAND_HIGH = -4.0, 4.0
 
 # Same-in-same-out: this test is about the MOP and the MOVD2B scalar path, not about format
 # conversion, so a mixed pair would only add unpack/pack noise.
@@ -136,8 +145,7 @@ def _clear_dest_values(mathop):
 
 
 def _skip_unsupported(formats, dest_acc):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if (
         formats.input_format == DataFormat.Float16_b
         and dest_acc == DestAccumulation.Yes
@@ -157,25 +165,34 @@ def _run(
     num_faces=4,
     clear_dest=False,
     unpack_full_transpose=False,
+    clobber_unpa_x_end=False,
+    preserve_src_zero_flag=False,
+    operands=None,
 ):
     """Compile+run one variant.
 
     Returns ``(device, seen_A, seed, scalar)``, all as fp32 tensors/scalars quantised the
     way the device saw them. ``seed`` is the tile the datacopy left in DEST[0] and is what
     the accumulating ELWMUL path adds onto.
+
+    ``operands`` replaces the generated ``(src_A, src_B)`` -- shaped ``[num_tiles * 32, 32]``
+    and ``[32, 32]``, already in the input format -- for tests that need specific values.
     """
     torch.manual_seed(0)
 
-    # src_B carries the broadcast scalar at element [0]. Spread over a wide range so a
-    # MOVD2B that fetched the wrong row cannot land on a numerically similar value.
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=[num_tiles * 32, 32],
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=[32, 32],
-        spec_A=StimuliSpec.uniform(low=-4.0, high=4.0),
-        spec_B=StimuliSpec.uniform(low=-4.0, high=4.0),
-    )
+    if operands is None:
+        # src_B carries the broadcast scalar at element [0].
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=[num_tiles * TILE_DIM, TILE_DIM],
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=[TILE_DIM, TILE_DIM],
+            spec_A=StimuliSpec.uniform(low=OPERAND_LOW, high=OPERAND_HIGH),
+            spec_B=StimuliSpec.uniform(low=OPERAND_LOW, high=OPERAND_HIGH),
+        )
+    else:
+        src_A, src_B = operands
+        tile_cnt_A, tile_cnt_B = num_tiles, 1
 
     configuration = TestConfig(
         "sources/rmsnorm_bcast_scalar_dest_reuse_test.cpp",
@@ -188,6 +205,8 @@ def _run(
                 rmsnorm_num_faces=num_faces,
                 clear_dest=clear_dest,
                 unpack_full_transpose=unpack_full_transpose,
+                rmsnorm_clobber_unpa_x_end=clobber_unpa_x_end,
+                rmsnorm_preserve_src_zero_flag=preserve_src_zero_flag,
             ),
         ],
         runtimes=[],
@@ -499,4 +518,114 @@ def test_rmsnorm_bcast_scalar_dest_reuse_unpack_full_transpose(
         f"unpack_full_transpose mismatch (op={mathop.name}, "
         f"fidelity={math_fidelity.name}, scalar={scalar:.6f}) -- the transpose-fold path "
         "is the axis blaze's version of rmsnorm.h added"
+    )
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=OPS,
+    num_tiles=[1, 2],
+)
+def test_rmsnorm_bcast_scalar_dest_reuse_reprograms_srca_x_span(
+    formats, dest_acc, mathop, num_tiles
+):
+    """The unpack init must program the X span on unpacker A, the one its MOP reads L1 with;
+    the driver leaves it at a one-row span first, as ``_llk_unpack_A_top32_rm_init_`` does.
+    """
+    _skip_unsupported(formats, dest_acc)
+
+    device, seen_A, _seed, scalar = _run(
+        formats,
+        dest_acc,
+        mathop,
+        MathFidelity.LoFi,
+        num_tiles,
+        clear_dest=True,
+        clobber_unpa_x_end=True,
+    )
+    golden = _expected(seen_A, scalar, mathop, MathFidelity.LoFi, formats.output_format)
+
+    assert passed_test(golden, device, formats.output_format), (
+        f"rmsnorm result is wrong after unpacker A was left at a one-row X span "
+        f"(op={mathop.name}, num_tiles={num_tiles}, scalar={scalar:.6f}) -- the unpack init "
+        "did not re-program x_end on unpacker A, the unpacker its MOP reads L1 with"
+    )
+
+
+# bf16 denormals are multiples 1..127 of 2^-133; SrcA is 2^100 * [1, 4) so a kept denormal shows up.
+BF16_DENORMAL_MIN = 2.0**-133
+BF16_DENORMAL_MANTISSAS = 1 << 7
+DENORMAL_SRCA_SCALE = 2.0**100
+DENORMAL_SRCA_LOW, DENORMAL_SRCA_HIGH = 1.0, 4.0
+TINY_NORMAL_SCALAR = (
+    2.0**-100
+)  # positive control: a bf16 normal that must not be flushed
+
+
+@pytest.mark.parametrize("math_fidelity", _fidelities(MathOperation.Elwmul))
+@pytest.mark.parametrize("scalar_kind", ["denormal", "tiny_normal"])
+def test_rmsnorm_bcast_scalar_dest_reuse_flushes_denormal_scalar_after_keep_flag(
+    math_fidelity, scalar_kind
+):
+    """The math init must restore the Src zero flag a preceding copy_init left at keep: a denormal
+    scalar must flush to all-zero output, and the tiny-normal control on the same sequence must not.
+    """
+    formats = FORMATS[0]
+    assert formats.input_format == DataFormat.Float16_b
+    dest_acc = DestAccumulation.No
+    num_tiles = 1
+
+    torch.manual_seed(0)
+    src_A = (
+        torch.rand(num_tiles * TILE_DIM, TILE_DIM)
+        * (DENORMAL_SRCA_HIGH - DENORMAL_SRCA_LOW)
+        + DENORMAL_SRCA_LOW
+    ) * DENORMAL_SRCA_SCALE
+    src_B = torch.rand(TILE_DIM, TILE_DIM) * (OPERAND_HIGH - OPERAND_LOW) + OPERAND_LOW
+    if scalar_kind == "denormal":
+        src_B[0, 0] = (
+            BF16_DENORMAL_MIN * torch.randint(1, BF16_DENORMAL_MANTISSAS, (1,)).item()
+        )
+    else:
+        src_B[0, 0] = TINY_NORMAL_SCALAR
+    src_A = src_A.to(torch.bfloat16)
+    src_B = src_B.to(torch.bfloat16)
+    assert src_B[0, 0].item() != 0.0, "scalar did not survive the bf16 cast"
+
+    device, seen_A, _seed, _scalar = _run(
+        formats,
+        dest_acc,
+        MathOperation.Elwmul,
+        math_fidelity,
+        num_tiles,
+        clear_dest=True,
+        preserve_src_zero_flag=True,
+        operands=(src_A, src_B),
+    )
+
+    if scalar_kind == "denormal":
+        kept = torch.count_nonzero(device).item()
+        assert kept == 0, (
+            f"denormal broadcast scalar was not flushed (fidelity={math_fidelity.name}): "
+            f"{kept} nonzero outputs, max |value| {device.abs().max().item():.3e} -- the "
+            "math init left the Src zero flag at keep"
+        )
+        return
+
+    golden = _expected(
+        seen_A,
+        TINY_NORMAL_SCALAR,
+        MathOperation.Elwmul,
+        math_fidelity,
+        formats.output_format,
+    )
+    assert torch.count_nonzero(device).item() == device.numel(), (
+        f"tiny normal scalar 2^-100 produced zero outputs (fidelity={math_fidelity.name}) -- "
+        "the scalar did not reach SrcB or the MOP did not run, so the denormal case above "
+        "would pass for the wrong reason"
+    )
+    assert passed_test(golden, device, formats.output_format), (
+        f"tiny normal scalar 2^-100 product mismatch (fidelity={math_fidelity.name}) under "
+        "the keep-flag sequence"
     )

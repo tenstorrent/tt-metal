@@ -1446,7 +1446,7 @@ Selu:
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 8}]}
 SfpuAddTopRow:
 - {output: Float32, measured: 0, note: '0 ULP, 1 variant / 2048 lanes -- the whole sweep'}
-- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs this row''s output wildcard'}
+- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0}
 SfpuAddcdiv:
 - {output: Float16_b, measured: 1, note: 'max 1 ULP, 4 variants / 16384 lanes'}
@@ -1499,7 +1499,7 @@ SfpuBinaryMax:
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0}
-- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs this row''s output wildcard'}
+- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float16, dest: 'Yes', measured: 1}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0}
@@ -1516,7 +1516,7 @@ SfpuBinaryMin:
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0}
-- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs this row''s output wildcard'}
+- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float16, dest: 'Yes', measured: 1}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0}
@@ -1552,7 +1552,7 @@ SfpuElwEq:
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0}
-- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs this row''s output wildcard'}
+- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float16, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0}
@@ -1571,7 +1571,7 @@ SfpuElwGe:
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0}
-- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs this row''s output wildcard'}
+- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float16, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0}
@@ -1590,7 +1590,7 @@ SfpuElwGt:
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0}
-- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs this row''s output wildcard'}
+- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float16, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0}
@@ -1609,7 +1609,7 @@ SfpuElwLe:
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0}
-- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs this row''s output wildcard'}
+- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float16, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0}
@@ -1628,7 +1628,7 @@ SfpuElwLt:
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0}
-- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs this row''s output wildcard'}
+- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float16, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0}
@@ -1647,7 +1647,7 @@ SfpuElwNe:
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0}
-- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs this row''s output wildcard'}
+- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float16, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0}
@@ -1742,7 +1742,7 @@ SfpuIsclose:
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0}
-- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs this row''s output wildcard'}
+- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0}
 SfpuLerp:
@@ -1767,7 +1767,7 @@ SfpuMask:
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0}
-- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (fp32_no_dest_acc_skip_reason), so no run backs this row''s output wildcard'}
+- {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0}
 SfpuSnakeBeta:

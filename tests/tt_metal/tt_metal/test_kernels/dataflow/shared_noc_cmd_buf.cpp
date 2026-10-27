@@ -38,7 +38,7 @@ void kernel_main() {
     if constexpr (signal_done_early) {
 #if defined(WATCHER_KERNEL_SLOW_DISPATCH)
         // Slow dispatch has no dispatcher to notify; the host polls this signal.
-        GET_MAILBOX_ADDRESS_DEV(go_messages[0])->signal = RUN_MSG_DONE;
+        GET_MAILBOX_ADDRESS_DEV(go_messages[0].slot[0])->signal = RUN_MSG_DONE;
 #else
         signal_completion_before_hang();
 #endif

@@ -5,10 +5,10 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import FACE_DIM, TILE_DIM
 from helpers.llk_params import (
-    DestAccumulation,
     UnpackerEngine,
     format_dict,
 )
@@ -276,11 +276,7 @@ def test_sfpu_welfords_two_pass_quasar(formats, scenario_name):
     """Shifted two-pass per-column mean / population variance (the _two_pass_* helpers)."""
     scenario = SCENARIOS[scenario_name]
     scenario.validate()
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        else DestAccumulation.No
-    )
+    dest_acc = dest_acc_for(formats.input_format)
     torch_format = format_dict[formats.input_format]
     tile_count = scenario.tile_count
     dims = [TILE_DIM, tile_count * TILE_DIM]

@@ -18,6 +18,10 @@ namespace ttnn {
 class Tensor;
 }  // namespace ttnn
 
+namespace tt::tt_metal {
+class TensorTopology;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::distributed {
 class MeshDevice;
 }  // namespace tt::tt_metal::distributed
@@ -37,6 +41,21 @@ std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 compute_output_placements_and_shape(const std::vector<std::reference_wrapper<const ttnn::Tensor>>& tensors);
+
+/**
+ * The same union over TensorTopology labels instead of tensors. The tensor overload above is this function
+ * applied to each tensor's tensor_topology(); it exists so a device operation that knows what one of its
+ * operands WILL be labelled (a collective's result feeding a fused matmul) can take the union of that label
+ * with the labels of its other operands, rather than re-implementing the rule. Semantics: among the labels of
+ * the highest distribution rank, the first Shard seen on a mesh axis wins and a tensor dim already claimed by
+ * another axis reads Replicate; the distribution shape is the per-axis maximum; lower-rank sharded labels are
+ * dropped; fully-replicated labels only decide the rank when nothing is sharded.
+ */
+std::pair<
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+    tt::tt_metal::distributed::MeshShape>
+compute_output_placements_and_shape(
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& topologies);
 
 /**
  * Non-template implementation of tensor coordinate extraction.

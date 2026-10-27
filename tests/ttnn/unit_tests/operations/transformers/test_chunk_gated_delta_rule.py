@@ -71,9 +71,10 @@ PCC_STATE = 0.99999
 # Tensor parallelism (TP) distributes both head sets, so (Hk/TP, HV/TP) and the GQA group
 # drive the shape of the kernel inputs.
 # Hk = 16 caps TP at 16 for every model in the family.
-# BH = batch * HV/TP determines the amount of work per core in the scan part. In consequence,
-# the test skips a shape whose BH exceeds the grid. On an 11x10 Blackhole chip that is for
-# the hv128_tp1 case only (128 heads > 110 cores).
+# BH = batch * HV/TP determines the amount of work per core in the scan part. The phased scan
+# takes one core per head, so above the grid (hv128_tp1's 128 heads, or batch 16 at TP-4, on an
+# 11x10 Blackhole chip) the op runs the shape as fused head waves; the test skips a shape only
+# when no fused geometry exists for it either (the op's wave plan is empty).
 # Note that hv128_tp1 is a rather unrealistic deployment (2.4T model with TP1).
 # --------------------------------------------------------------------------------------------
 _QWEN_GDN_HK = 16  # linear_num_key_heads, invariant across the family
@@ -86,6 +87,8 @@ _REGIME_SHAPES = [
     pytest.param(1, 16, 48, 128, 128, id="single_dev"),  # Qwen3.6-27B single-device shape (GQA group 3)
     pytest.param(1, 12, 12, 128, 128, id="no_gqa"),  # no GQA: group 1, so the head-map is the identity
     pytest.param(2, 4, 12, 128, 128, id="batch2"),  # batch > 1: BH = 24 independent scans
+    pytest.param(8, 4, 12, 128, 128, id="batch8", marks=_hw_only),  # BH = 96: more heads than one program holds
+    pytest.param(16, 4, 12, 128, 128, id="batch16", marks=_hw_only),  # BH = 192: more heads than the grid has cores
     pytest.param(1, 4, 12, 128, 64, id="v64"),  # Small V: V=64
     pytest.param(1, 4, 12, 128, 32, id="v32"),  # Small V: V=32
 ]
@@ -330,8 +333,15 @@ def _check_vs_recurrent_reference(
     ), f"num_v_heads ({num_v_heads}) must be a multiple of num_k_heads ({num_k_heads}) for the GQA head-map"
 
     grid = device.compute_with_storage_grid_size()
-    if B * num_v_heads > grid.x * grid.y:
-        pytest.skip(f"BH={B * num_v_heads} exceeds the {grid.x}x{grid.y} grid (scan needs a core per head)")
+    BH = B * num_v_heads
+    if BH > grid.x * grid.y:
+        # Above the grid the phased scan cannot run (one core per head) and the op dispatches the fused head
+        # waves instead; the shape is out of reach only when no fused geometry fits it at all.
+        from ttnn._ttnn.operations import transformer as _t
+
+        waves = _t.chunk_gdn_fused_wave_plan(grid.x, grid.y, BH, -(-T // CHUNK), Dv // 32)[0]
+        if not waves:
+            pytest.skip(f"BH={BH} exceeds the {grid.x}x{grid.y} grid and no fused geometry fits it (no wave plan)")
 
     # Inputs in the op's numeric regime: q/k L2-normalized upstream (the GDN layer normalizes over
     # the head dim), beta in (0,1) from a sigmoid, g <= 0 from -softplus.
