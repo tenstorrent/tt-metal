@@ -34,10 +34,10 @@ void kernel_main() {
     DataflowBuffer gate(cb_gate);
     DataflowBuffer up(cb_up);
     DataflowBuffer silu(cb_silu);
-    DataflowBuffer inter(cb_inter);
+    DataflowBuffer intermediate(cb_inter);
     DataflowBuffer scalar(cb_scalar);
-    DataflowBuffer sig(cb_sig);
-    DataflowBuffer sig_bcast(cb_sig_bcast);
+    DataflowBuffer sigmoid(cb_sig);
+    DataflowBuffer sigmoid_bcast(cb_sig_bcast);
 
     // ---- eltwise_sfpu.cpp, SFPU_OP_CHAIN_0 = silu ----
     compute_kernel_hw_startup(cb_gate, cb_silu);
@@ -58,7 +58,7 @@ void kernel_main() {
     // ---- eltwise_binary_sfpu_no_bcast.cpp, MUL ----
     silu.wait_front(1);
     up.wait_front(1);
-    inter.reserve_back(1);
+    intermediate.reserve_back(1);
     mul_binary_tile_init();
     tile_regs_acquire();
     reconfig_data_format_srca(cb_up, cb_silu);
@@ -75,12 +75,12 @@ void kernel_main() {
     tile_regs_release();
     silu.pop_front(1);
     up.pop_front(1);
-    inter.push_back(1);
+    intermediate.push_back(1);
 
     if (has_scalar) {
         // ---- eltwise_sfpu.cpp, SFPU_OP_CHAIN_0 = sigmoid (vector mode RC, accurate) ----
         scalar.wait_front(1);
-        sig.reserve_back(1);
+        sigmoid.reserve_back(1);
         reconfig_data_format_srca(cb_up, cb_scalar);
         copy_init(cb_scalar);
         tile_regs_acquire();
@@ -93,11 +93,11 @@ void kernel_main() {
         pack_tile(0, cb_sig);
         tile_regs_release();
         scalar.pop_front(1);
-        sig.push_back(1);
+        sigmoid.push_back(1);
 
         // ---- eltwise_binary_sfpu_col_bcast.cpp: the broadcast operand through unary_bcast<COL> ----
-        sig.wait_front(1);
-        sig_bcast.reserve_back(1);
+        sigmoid.wait_front(1);
+        sigmoid_bcast.reserve_back(1);
         pack_reconfig_data_format(cb_sig_bcast);
         compute_kernel_hw_startup(cb_sig, cb_sig_bcast);
         unary_bcast_init<BroadcastType::COL>(cb_sig);
@@ -107,7 +107,7 @@ void kernel_main() {
         tile_regs_wait();
         pack_tile(0, cb_sig_bcast);
         tile_regs_release();
-        sig.pop_front(1);
-        sig_bcast.push_back(1);
+        sigmoid.pop_front(1);
+        sigmoid_bcast.push_back(1);
     }
 }

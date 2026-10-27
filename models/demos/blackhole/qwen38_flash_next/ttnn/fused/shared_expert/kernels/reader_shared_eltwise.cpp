@@ -14,7 +14,7 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    const uint32_t gus_addr = get_arg_val<uint32_t>(0);
+    const uint32_t gate_up_scalar_addr = get_arg_val<uint32_t>(0);
     const uint32_t tile = get_arg_val<uint32_t>(1);
     const uint32_t has_scalar = get_arg_val<uint32_t>(2);
 
@@ -24,8 +24,8 @@ void kernel_main() {
     constexpr uint32_t gate_tiles = get_named_compile_time_arg_val("gate_tiles");
     constexpr uint32_t tile_bytes = 2048;
 
-    constexpr auto gus_args = TensorAccessorArgs<0, 0>();
-    const auto gus = TensorAccessor(gus_args, gus_addr);
+    constexpr auto gate_up_scalar_args = TensorAccessorArgs<0, 0>();
+    const auto gate_up_scalar = TensorAccessor(gate_up_scalar_args, gate_up_scalar_addr);
 
     Noc noc;
     DataflowBuffer gate(cb_gate);
@@ -35,12 +35,17 @@ void kernel_main() {
     {
         gate.reserve_back(1);
         up.reserve_back(1);
-        noc.async_read(gus, CoreLocalMem<uint32_t>(gate.get_write_ptr()), tile_bytes, {.page_id = tile}, {});
-        noc.async_read(gus, CoreLocalMem<uint32_t>(up.get_write_ptr()), tile_bytes, {.page_id = gate_tiles + tile}, {});
+        noc.async_read(gate_up_scalar, CoreLocalMem<uint32_t>(gate.get_write_ptr()), tile_bytes, {.page_id = tile}, {});
+        noc.async_read(
+            gate_up_scalar, CoreLocalMem<uint32_t>(up.get_write_ptr()), tile_bytes, {.page_id = gate_tiles + tile}, {});
         if (has_scalar) {
             scalar.reserve_back(1);
             noc.async_read(
-                gus, CoreLocalMem<uint32_t>(scalar.get_write_ptr()), tile_bytes, {.page_id = 2 * gate_tiles}, {});
+                gate_up_scalar,
+                CoreLocalMem<uint32_t>(scalar.get_write_ptr()),
+                tile_bytes,
+                {.page_id = 2 * gate_tiles},
+                {});
         }
         noc.async_read_barrier();
         gate.push_back(1);
