@@ -17,6 +17,7 @@ from ttml.common.utils import (
     no_grad,
     repeat_interleave,
     resolve_pad_token_id,
+    resolve_stop_token_ids,
     round_up_to_tile,
     run_mode,
 )
@@ -249,22 +250,6 @@ class TTMLRolloutSampler(RolloutSampler):
             self._batch_layout.mapper,
         )
 
-    def _get_stop_ids(self) -> set:
-        """Union of the tokenizer's EOS/PAD ids plus any chat-template stop
-        tokens present in the vocab (across llama-3 and qwen3 templates).
-        """
-        tokenizer = self._tokenizer
-        stop_ids: set = set()
-        if tokenizer.eos_token_id is not None:
-            stop_ids.add(int(tokenizer.eos_token_id))
-        if tokenizer.pad_token_id is not None:
-            stop_ids.add(int(tokenizer.pad_token_id))
-        for tok in ("<|eot_id|>", "<|end_of_text|>", "<|eom_id|>", "<|im_end|>", "<|endoftext|>"):
-            tid = tokenizer.convert_tokens_to_ids(tok)
-            if tid is not None and tid >= 0 and tid != tokenizer.unk_token_id:
-                stop_ids.add(int(tid))
-        return stop_ids
-
     # --------------------------------------------------------------
     # Main entrypoint
     # --------------------------------------------------------------
@@ -316,7 +301,7 @@ class TTMLRolloutSampler(RolloutSampler):
                 logprobs=np.zeros((B, max_len), dtype=np.float32),
             )
 
-        stop_ids = self._get_stop_ids()
+        stop_ids = resolve_stop_token_ids(self._tokenizer)
         stop_arr = np.fromiter(stop_ids, dtype=np.int32) if stop_ids else np.empty(0, dtype=np.int32)
 
         # --------------------------------------------------------------

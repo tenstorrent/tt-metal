@@ -283,6 +283,22 @@ def resolve_pad_token_id(tokenizer) -> int:
     return int(pad)
 
 
+def resolve_stop_token_ids(tokenizer) -> set:
+    """Union of the tokenizer's EOS/PAD ids plus any chat-template stop
+    tokens present in the vocab (across llama-3 and qwen3 templates).
+    """
+    stop_ids: set = set()
+    if tokenizer.eos_token_id is not None:
+        stop_ids.add(int(tokenizer.eos_token_id))
+    if tokenizer.pad_token_id is not None:
+        stop_ids.add(int(tokenizer.pad_token_id))
+    for tok in ("<|eot_id|>", "<|end_of_text|>", "<|eom_id|>", "<|im_end|>", "<|endoftext|>"):
+        tid = tokenizer.convert_tokens_to_ids(tok)
+        if tid is not None and tid >= 0 and tid != tokenizer.unk_token_id:
+            stop_ids.add(int(tid))
+    return stop_ids
+
+
 def repeat_interleave(items, n: int) -> list:
     """Repeat each item ``n`` times in place: ``[a, b]`` -> ``[a, a, b, b]``."""
     return [item for item in items for _ in range(n)]
