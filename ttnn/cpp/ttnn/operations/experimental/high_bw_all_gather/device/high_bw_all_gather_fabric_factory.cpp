@@ -404,7 +404,7 @@ GatherPlan build_gather_plan(
                 }
                 auto& links = forwarding_links[chip_index][ring * 2 + direction];
                 links = tt::tt_fabric::get_forwarding_link_indices(
-                    mesh_device->get_fabric_node_id(chip), mesh_device->get_fabric_node_id(*downstream));
+                    *mesh_device, mesh_device->get_fabric_node_id(chip), mesh_device->get_fabric_node_id(*downstream));
                 TT_FATAL(
                     !links.empty(),
                     "high_bw_all_gather: {} -> {} is not a direct fabric neighbour (fabric config {})",

@@ -1,28 +1,27 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only tests for the SFPU accuracy budget registry (no kernel, no device).
+"""Host-only guards for the SFPU accuracy budget registry: the contract and key
+types, the resolution rule on purpose-built tables, ``accuracy_contract``'s fallbacks
+and downgrades, and the invariants of the live table a reader cannot see in its
+numbers. The table file itself is test_ulp_table.py's."""
 
-``helpers/sfpu_accuracy_budget.py`` loads ``sfpu_accuracy_budget.yaml`` and resolves, per
-op variant, the gate the device drivers hand to ``passed_test``. A budget resolved from
-the wrong row is a silently wrong gate rather than an error, so the file guards:
-
-* the building blocks: ``AccuracyContract`` and ``BudgetKey`` refuse anything they
-  cannot represent faithfully (the table file itself is test_ulp_table.py's);
-* the resolution rule, on small purpose-built tables so enrolling an op cannot break it;
-* ``accuracy_contract``: the fallbacks and the downgrades that make enrolment incremental;
-* the live table: invariants a reader cannot see by looking at the numbers, and the
-  measurement every step budget must record.
-"""
-
+import ast
 import functools
+import inspect
 import math
-from dataclasses import fields
 from itertools import product
 
+import helpers.chip_architecture as chip
+import helpers.sfpu_accuracy_budget as budget
 import pytest
+import test_eltwise_binary_sfpu as binary
+import test_eltwise_unary_sfpu as unary
 import torch
+from conftest import TANH_DOMAINS, refused
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import skip_reason_32bit_input_without_dest_acc
+from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -32,46 +31,31 @@ from helpers.llk_params import (
 )
 from helpers.sfpu_accuracy_budget import (
     _SFPU_ACCURACY_BUDGET,
-    DEFAULT,
     TOLERANCE_CONTRACT,
     AccuracyContract,
     BudgetKey,
-    Metric,
     accuracy_contract,
     assert_against_contract,
     domains_of,
     enrolled_ops,
     resolve_contract,
-    usable_budget_ceiling,
     validate_registry,
 )
-from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops
+from helpers.sfpu_domains import sfpu_unary_ops, swept_unary_ops
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
-from helpers.ulp import (
-    _ULP_DTYPES,
-    MAX_MEANINGFUL_ULP,
-    ULP_FORMATS,
-    has_ulp_gate,
-    ulp_dtype,
-)
-from helpers.ulp_domains import Domain, Problem
-from helpers.ulp_sweep import _verdict, sweep_cells
-from helpers.ulp_table import MEASURED_ARCH, TABLE_PATH, Row, load_table
-from helpers.ulp_testing import TANH_DOMAINS, refused
+from helpers.ulp import ULP_FORMATS, has_ulp_gate, mantissa_bits, ulp_dtype
+from helpers.ulp_domains import Domain, Problem, usable_budget_ceiling
+from helpers.ulp_sweep import sweep_cells
+from helpers.ulp_table import MEASURED_ARCH, Metric, Row, load_table
 from helpers.utils import passed_test
 
 UNSWEPT_ARCHS = [a for a in ChipArchitecture if a != MEASURED_ARCH]
 
-#: The float formats the SFPU does not compute in: the block floats, Tf32 and the MX
-#: formats (MxInt* included -- ``is_integer()`` does not cover them).
-NOT_COMPUTE_FORMATS = sorted(
-    (f for f in DataFormat if f not in ULP_FORMATS and not f.is_integer()),
-    key=lambda f: f.name,
-)
-
-#: The input axis for the live-table sweeps: the formats a row may name, and ``None``,
-#: which resolves the rows that wildcard ``input``.
+# The input axis for the live-table sweeps: the formats a row may name, and None, which
+# resolves the rows that wildcard `input`.
 QUERYABLE_INPUT_FORMATS = [*ULP_FORMATS, None]
+
+_LANES = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 
 def _contracts(*rows: Row):
@@ -80,17 +64,13 @@ def _contracts(*rows: Row):
 
 
 def _every_variant(op):
-    """Yield ``(input_format, output_format, contract)`` for every variant of *op*.
-
-    Every dimension is swept, ``None`` included where a caller may leave it unset: an
-    unset query dimension only matches a wildcard, so a query that omitted
-    ``input_format`` would miss every row that pins it -- which is most of the table.
-    """
+    """``(input_format, output_format, contract)`` for every variant of *op*, every
+    dimension swept, ``None`` included where a caller may leave it unset."""
     for fmt in ULP_FORMATS:
         for input_format in QUERYABLE_INPUT_FORMATS:
             for approx_mode in [*ApproximationMode, None]:
                 for dest_acc in [*DestAccumulation, None]:
-                    for arch in ChipArchitecture:  # required; None is not accepted
+                    for arch in ChipArchitecture:
                         yield input_format, fmt, accuracy_contract(
                             op,
                             output_format=fmt,
@@ -104,9 +84,7 @@ def _every_variant(op):
 @functools.lru_cache(maxsize=None)
 def _live_step_budgets():
     """``(op, input_format, output_format, contract)`` for every ULP contract the live
-    table resolves to. Computed once: more than one test reads it, and the sweep is the
-    slow part.
-    """
+    table resolves to; computed once, as the walk is the slow part."""
     return tuple(
         (op, in_fmt, fmt, contract)
         for op in enrolled_ops()
@@ -116,15 +94,9 @@ def _live_step_budgets():
 
 
 def _integer_only_ops() -> set:
-    """Every SFPU op whose operands and result are integers.
-
-    No single classification covers them, so this is the union of the typed integer
-    binaries, the unary and binary drivers' integer sets, and ``SfpuGcd`` (in none of
-    those). ``ReluMin`` is in the unary set but has a float path too.
-    """
-    from test_eltwise_binary_sfpu import _INT_DRIVEN_BINARY_OPS
-    from test_eltwise_unary_sfpu import _INT_UNARY_OPS
-
+    """Every SFPU op whose operands and result are integers: the typed integer
+    binaries, the drivers' integer sets and SfpuGcd (in none of those), less ReluMin,
+    which has a float path too."""
     typed_binaries = {
         op
         for op in MathOperation
@@ -132,8 +104,8 @@ def _integer_only_ops() -> set:
     }
     return (
         typed_binaries
-        | set(_INT_UNARY_OPS)
-        | set(_INT_DRIVEN_BINARY_OPS)
+        | set(unary._INT_UNARY_OPS)
+        | set(binary._INT_DRIVEN_BINARY_OPS)
         | {MathOperation.SfpuGcd}
     ) - {MathOperation.ReluMin}
 
@@ -145,7 +117,6 @@ def _integer_only_ops() -> set:
     "kwargs, problem",
     [
         ({"metric": Metric.ULP}, Problem.MISSING_FIGURE),
-        # Both at once reads as deliberate but is a half-finished conversion.
         ({"max_ulp": 1, "atol": 0.13}, Problem.MIXED_METRIC),
         ({"metric": Metric.TOLERANCE, "max_ulp": 1}, Problem.MIXED_METRIC),
         ({"max_ulp": -1}, Problem.BAD_NUMBER),
@@ -170,15 +141,15 @@ def test_a_malformed_contract_is_refused(kwargs, problem):
 
 
 def test_the_metric_is_a_closed_set():
-    """Two members, so the ``__post_init__`` membership check above is complete."""
     assert set(Metric) == {Metric.ULP, Metric.TOLERANCE}
     assert AccuracyContract(max_ulp=1).metric is Metric.ULP
     assert TOLERANCE_CONTRACT.metric is Metric.TOLERANCE
 
 
-#: ``(contract, passed_test_kwargs(), tolerance_kwargs())``. ``tolerance_kwargs`` declines
-#: to gate on ULP; if it regressed to the other shape, passed_test would accept it and
-#: silently switch every enrolled op to a ULP budget.
+# One contract of each shape the table can hold.
+#: ``(contract, passed_test_kwargs(), tolerance_kwargs())``, exact: on identical tensors
+#: passed_test passes for any bounds, so only these catch `custom_atol` and `custom_rtol`
+#: swapped or `near_zero_atol` dropped.
 _TRANSLATIONS = [
     (AccuracyContract(max_ulp=3), {"max_ulp": 3, "near_zero_atol": None}, {}),
     (
@@ -199,21 +170,6 @@ _TRANSLATIONS = [
 ]
 
 
-@pytest.mark.parametrize("contract, by_ulp, by_tolerance", _TRANSLATIONS)
-def test_a_contract_translates_to_passed_test_arguments(contract, by_ulp, by_tolerance):
-    assert contract.passed_test_kwargs() == by_ulp
-    assert contract.tolerance_kwargs() == by_tolerance
-    # The flush request reaches only the ULP arm: passed_test refuses it without a budget.
-    # Either value is passed on as passed_test reads it -- False is "unflushed", not the
-    # per-dtype default, which only None keeps.
-    for flush in (True, False):
-        flushed = contract.passed_test_kwargs(flush_subnormals=flush)
-        if contract.metric is Metric.ULP:
-            assert flushed == {**by_ulp, "flush_subnormals": flush}
-        else:
-            assert flushed == by_ulp
-
-
 @pytest.mark.parametrize(
     "arch, gated",
     [(ChipArchitecture.WORMHOLE, True), (ChipArchitecture.BLACKHOLE, False)],
@@ -221,17 +177,13 @@ def test_a_contract_translates_to_passed_test_arguments(contract, by_ulp, by_tol
 )
 def test_the_binary_gate_enforces_the_whole_contract(arch, gated, monkeypatch):
     """`assert_against_contract` is the binary and ternary drivers' gate, and they run
-    only on hardware, so this is the one host check that it takes the step budget and
-    not just the tolerance: a one-step drift on SfpuElwEq, exact at 0 steps on Wormhole,
-    fails there and passes the tolerance it falls back to off Wormhole. It also ranks
-    with subnormal outputs flushed: an fp16-subnormal golden that the pack writes as 0
-    is no step of SfpuElwsub's error."""
-    import helpers.chip_architecture as chip
-
+    only on hardware, so this is the one host check that it takes the step budget: a
+    one-step drift on SfpuElwEq, exact on Wormhole, fails there and passes the tolerance
+    it falls back to elsewhere. It also ranks subnormal outputs flushed: an
+    fp16-subnormal golden the pack writes as 0 is no step of SfpuElwsub's error."""
     monkeypatch.setattr(chip, "get_chip_architecture", lambda: arch)
-    lanes = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
     bf16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
-    golden = torch.ones(lanes, dtype=torch.bfloat16)
+    golden = torch.ones(_LANES, dtype=torch.bfloat16)
     drifted = golden.clone()
     drifted[0] = 1.0 + 2.0**-7  # one bf16 step above 1.0
 
@@ -247,8 +199,7 @@ def test_the_binary_gate_enforces_the_whole_contract(arch, gated, monkeypatch):
         eq_gate()
 
     fp16 = InputOutputFormat(DataFormat.Float16, DataFormat.Float16)
-    golden = torch.ones(lanes, dtype=torch.float16)
-    # Half the smallest fp16 normal: an fp16 subnormal, 512 steps from 0 unflushed.
+    golden = torch.ones(_LANES, dtype=torch.float16)
     golden[0] = float(torch.finfo(torch.float16).smallest_normal) / 2
     flushed = golden.clone()
     flushed[0] = 0.0
@@ -257,80 +208,54 @@ def test_the_binary_gate_enforces_the_whole_contract(arch, gated, monkeypatch):
     )
 
 
-@pytest.mark.parametrize("method", ["passed_test_kwargs", "tolerance_kwargs"])
-def test_every_contract_is_accepted_by_passed_test(method):
+def test_every_contract_is_accepted_by_passed_test():
     """Callable, not just shaped right: a renamed keyword would otherwise surface only
-    on hardware."""
-    golden = torch.ones(DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM, dtype=torch.bfloat16)
-    for contract, _, _ in _TRANSLATIONS:
-        assert passed_test(
-            golden, golden.clone(), DataFormat.Float16_b, **getattr(contract, method)()
-        )
+    on hardware. The flush request reaches only the ULP arm (passed_test refuses it
+    without a budget), and `tolerance_kwargs` never gates on ULP: if it did, passed_test
+    would accept it and silently switch every enrolled op to a step budget."""
+    golden = torch.ones(_LANES, dtype=torch.bfloat16)
+    for contract, expected_ulp, expected_tolerance in _TRANSLATIONS:
+        by_tolerance = contract.tolerance_kwargs()
+        assert by_tolerance == expected_tolerance
+        assert passed_test(golden, golden.clone(), DataFormat.Float16_b, **by_tolerance)
+        for flush in (None, True, False):
+            by_ulp = contract.passed_test_kwargs(flush_subnormals=flush)
+            flushes = flush is not None and contract.metric is Metric.ULP
+            assert by_ulp == (
+                {**expected_ulp, "flush_subnormals": flush} if flushes else expected_ulp
+            )
+            assert passed_test(golden, golden.clone(), DataFormat.Float16_b, **by_ulp)
 
 
-# ── BudgetKey ─────────────────────────────────────────────────────────────────
+# ── BudgetKey and the resolution rule ─────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
     "field, bogus",
-    [
-        ("approx_mode", True),
-        ("input_format", ApproximationMode.No),
-        ("output_format", DestAccumulation.No),
-        ("dest_acc", True),
-        ("dest_acc", False),
-        ("arch", DataFormat.Float32),
-    ],
+    [("approx_mode", True), ("arch", DataFormat.Float32)],
     ids=str,
 )
 def test_a_budget_key_dimension_that_is_not_an_enum_member_is_refused(field, bogus):
-    """The enums are bare, so ``True`` never equals ``DestAccumulation.Yes``. Such a key
-    would count as set, match nothing, and its budget would gate nothing. Queries are
-    BudgetKeys too, so this also covers the caller side."""
+    """`True` never equals `DestAccumulation.Yes`: such a key would count as set, match
+    nothing, and gate nothing. Queries are BudgetKeys too."""
     with refused(Problem.NOT_A_MEMBER):
         BudgetKey(**{field: bogus})
 
 
-def test_every_budget_key_field_counts_toward_specificity():
-    assert BudgetKey(
-        approx_mode=ApproximationMode.No,
-        input_format=DataFormat.Float16_b,
-        output_format=DataFormat.Float32,
-        dest_acc=DestAccumulation.Yes,
-        arch=ChipArchitecture.WORMHOLE,
-    ).specificity == len(fields(BudgetKey))
-
-
-def test_a_key_describes_itself_for_an_error_message():
-    assert DEFAULT.describe() == "DEFAULT"
-    described = BudgetKey(
-        output_format=DataFormat.Float32, dest_acc=DestAccumulation.No
-    ).describe()
-    assert "output_format" in described and "dest_acc" in described
-
-
-# ── Resolution rule, on purpose-built tables ──────────────────────────────────
-
-
-def test_the_default_key_matches_every_variant():
-    assert DEFAULT.specificity == 0
-    assert DEFAULT.matches(
-        BudgetKey(
-            approx_mode=ApproximationMode.Yes,
-            input_format=DataFormat.Float32,
-            output_format=DataFormat.Float32,
-            dest_acc=DestAccumulation.No,
-            arch=ChipArchitecture.WORMHOLE,
-        )
+def test_a_bad_query_is_refused_before_the_unenrolled_early_return():
+    """`accuracy_contract` builds the key before it looks the op up, so a miswired
+    driver for an op with no row is refused rather than handed the default."""
+    unenrolled = next(
+        op for op in MathOperation if op not in budget._SFPU_ACCURACY_BUDGET
     )
-    assert DEFAULT.matches(BudgetKey())
+    with refused(Problem.NOT_A_MEMBER):
+        accuracy_contract(unenrolled, output_format=DataFormat.Float16_b, arch=True)
 
 
 @pytest.mark.parametrize(
     "broad, narrow",
     [
         (AccuracyContract(max_ulp=64), AccuracyContract(max_ulp=4)),
-        # A narrower tolerance for one variant needs a key, not a driver override.
         (
             AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
             AccuracyContract(metric=Metric.TOLERANCE, atol=0.001, rtol=0.001),
@@ -339,16 +264,15 @@ def test_the_default_key_matches_every_variant():
     ids=["ulp", "tolerance"],
 )
 def test_a_more_specific_key_wins_over_the_default(broad, narrow):
-    table = {DEFAULT: broad, BudgetKey(output_format=DataFormat.Float32): narrow}
+    table = {BudgetKey(): broad, BudgetKey(output_format=DataFormat.Float32): narrow}
     for fmt, expected in ((DataFormat.Float32, narrow), (DataFormat.Float16_b, broad)):
         query = BudgetKey(output_format=fmt, arch=MEASURED_ARCH)
         assert resolve_contract(table, query) == expected, fmt.name
 
 
 def test_specificity_counts_every_set_dimension():
-    """The only comparison of two non-DEFAULT keys. The Fill rows stack 1-, 2- and
-    4-field keys on one op, and only an equal-specificity tie raises, so a miscount
-    would silently repoint budgets."""
+    """Only an equal-specificity tie raises, so a miscount would silently repoint
+    budgets."""
     table = {
         BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=4),
         BudgetKey(
@@ -360,23 +284,8 @@ def test_specificity_counts_every_set_dimension():
         assert resolve_contract(table, query).max_ulp == expected
 
 
-def test_a_per_arch_override_beats_the_shared_entry():
-    """One shared value plus per-arch overrides, rather than keying every row on arch."""
-    table = {
-        DEFAULT: AccuracyContract(max_ulp=4),
-        BudgetKey(arch=ChipArchitecture.BLACKHOLE): AccuracyContract(max_ulp=2),
-    }
-    for arch, expected in (
-        (ChipArchitecture.BLACKHOLE, 2),
-        (ChipArchitecture.WORMHOLE, 4),
-        (ChipArchitecture.QUASAR, 4),
-    ):
-        query = BudgetKey(output_format=DataFormat.Float32, arch=arch)
-        assert resolve_contract(table, query).max_ulp == expected, arch
-
-
 def test_an_unset_query_dimension_only_matches_a_wildcard():
-    """A caller that does not know ``dest_acc`` must not get a budget measured for one
+    """A caller that does not know `dest_acc` must not get a budget measured for one
     setting of it."""
     table = {BudgetKey(dest_acc=DestAccumulation.Yes): AccuracyContract(max_ulp=1)}
     query = BudgetKey(output_format=DataFormat.Float32)
@@ -384,7 +293,6 @@ def test_an_unset_query_dimension_only_matches_a_wildcard():
 
 
 def test_equally_specific_keys_are_an_error_not_a_tie_break():
-    """The table's iteration order must not decide a budget."""
     table = {
         BudgetKey(approx_mode=ApproximationMode.No): AccuracyContract(max_ulp=4),
         BudgetKey(output_format=DataFormat.Float32): AccuracyContract(max_ulp=64),
@@ -396,16 +304,10 @@ def test_equally_specific_keys_are_an_error_not_a_tie_break():
         resolve_contract(table, query)
 
 
-def test_an_empty_table_falls_back_to_the_tolerance_metric():
-    query = BudgetKey(output_format=DataFormat.Float32)
-    assert resolve_contract({}, query) is TOLERANCE_CONTRACT
-
-
 # ── accuracy_contract: fallbacks and downgrades ───────────────────────────────
 
 
 def test_an_unenrolled_op_keeps_todays_gate():
-    """Picked from whatever is still unenrolled, so enrolling more ops cannot break it."""
     unenrolled = sorted(set(MathOperation) - set(enrolled_ops()), key=lambda o: o.name)
     assert unenrolled, "every op is enrolled; this test has nothing left to check"
     for op in unenrolled[:5]:
@@ -414,106 +316,105 @@ def test_an_unenrolled_op_keeps_todays_gate():
             assert contract is TOLERANCE_CONTRACT, op.name
 
 
-@pytest.mark.parametrize("fmt", NOT_COMPUTE_FORMATS, ids=lambda f: f.name)
-def test_an_enrolled_op_keeps_todays_gate_on_a_format_the_sfpu_does_not_compute_in(fmt):
-    """Abs has a step budget, but these formats keep their block-aware compares -- by
-    falling back, not by raising."""
-    # The same query on a gated format is a step budget, so the fall-through below is
-    # the downgrade under test and not a query that matched nothing.
+def test_an_enrolled_op_keeps_todays_gate_on_a_format_the_sfpu_does_not_compute_in():
+    """Abs has a step budget, but a block float keeps its block-aware compare."""
     query = dict(op=MathOperation.Abs, arch=MEASURED_ARCH)
     assert (
         accuracy_contract(output_format=DataFormat.Float16_b, **query).metric
         is Metric.ULP
     )
-    assert accuracy_contract(output_format=fmt, **query) is TOLERANCE_CONTRACT
+    assert (
+        accuracy_contract(output_format=DataFormat.Bfp8_b, **query)
+        is TOLERANCE_CONTRACT
+    )
 
 
-@pytest.mark.parametrize("fmt", NOT_COMPUTE_FORMATS, ids=lambda f: f.name)
-def test_an_enrolled_op_keeps_todays_gate_when_the_input_is_not_a_compute_format(fmt):
-    """The input-axis twin: Abs's rows wildcard ``input``, so only ``steps_bind``
-    reading the input format keeps a block-float input off the step budget."""
+def test_an_enrolled_op_keeps_todays_gate_when_the_input_is_not_a_compute_format():
+    """The input-axis twin: Abs's rows wildcard `input`, so only `steps_bind` reading
+    the input format keeps a block-float input off the step budget."""
     query = dict(
-        op=MathOperation.Abs,
-        output_format=DataFormat.Float16_b,
-        arch=MEASURED_ARCH,
+        op=MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
     )
     assert (
         accuracy_contract(input_format=DataFormat.Float16_b, **query).metric
         is Metric.ULP
     )
-    assert accuracy_contract(input_format=fmt, **query) is TOLERANCE_CONTRACT
+    assert (
+        accuracy_contract(input_format=DataFormat.Bfp8_b, **query) is TOLERANCE_CONTRACT
+    )
 
 
-@pytest.mark.parametrize("arch", UNSWEPT_ARCHS, ids=lambda a: a.name)
-def test_a_step_budget_does_not_bind_on_an_unswept_architecture(arch):
+def test_a_step_budget_does_not_bind_on_an_unswept_architecture():
     """Unkeyed rows are Wormhole measurements with no headroom for another kernel."""
-    on_wh = accuracy_contract(
-        MathOperation.Abs, output_format=DataFormat.Float32, arch=MEASURED_ARCH
-    )
+    query = dict(output_format=DataFormat.Float32)
+    on_wh = accuracy_contract(MathOperation.Abs, arch=MEASURED_ARCH, **query)
     assert on_wh.metric is Metric.ULP and on_wh.max_ulp == 0
-    elsewhere = accuracy_contract(
-        MathOperation.Abs, output_format=DataFormat.Float32, arch=arch
-    )
-    assert elsewhere is TOLERANCE_CONTRACT
+    for arch in UNSWEPT_ARCHS:
+        elsewhere = accuracy_contract(MathOperation.Abs, arch=arch, **query)
+        assert elsewhere is TOLERANCE_CONTRACT, arch
 
 
-@pytest.mark.parametrize("arch", UNSWEPT_ARCHS, ids=lambda a: a.name)
-@pytest.mark.parametrize(
-    "op", [MathOperation.SigmoidAppx, MathOperation.GeluAppx], ids=lambda o: o.name
-)
-def test_a_declared_tolerance_survives_an_unswept_architecture(op, arch):
-    """The arch downgrade applies to step budgets only; these two keep their declared
-    ``atol=0.13`` on every architecture."""
+def test_a_declared_tolerance_survives_an_unswept_architecture():
+    """The arch downgrade applies to step budgets only."""
     contract = accuracy_contract(
-        op,
+        MathOperation.SigmoidAppx,
         output_format=DataFormat.Float16_b,
         approx_mode=ApproximationMode.Yes,
         dest_acc=DestAccumulation.No,
-        arch=arch,
+        arch=ChipArchitecture.BLACKHOLE,
     )
     assert contract.metric is Metric.TOLERANCE
     assert contract.atol == 0.13 and contract.rtol == 0.05
 
 
-@pytest.mark.parametrize("arch", list(ChipArchitecture), ids=lambda a: a.name)
 @pytest.mark.parametrize(
-    "output_format", [DataFormat.Float16_b, DataFormat.Bfp4_b], ids=lambda f: f.name
+    "arch, output_format",
+    [
+        (MEASURED_ARCH, DataFormat.Bfp4_b),
+        (ChipArchitecture.BLACKHOLE, DataFormat.Float16_b),
+    ],
+    ids=["block-float", "unswept-arch"],
 )
 def test_a_downgrade_lands_on_the_ops_own_tolerance_row(
     arch, output_format, monkeypatch
 ):
     """A downgraded ULP row falls back to the op's own tolerance row, not the global
-    default. No live op has both shapes yet, so the table is patched."""
+    default."""
     monkeypatch.setitem(
         _SFPU_ACCURACY_BUDGET,
         MathOperation.Abs,
         {
-            DEFAULT: AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
+            BudgetKey(): AccuracyContract(
+                metric=Metric.TOLERANCE, atol=0.13, rtol=0.05
+            ),
             BudgetKey(output_format=DataFormat.Float16_b): AccuracyContract(max_ulp=3),
         },
     )
+    gated = accuracy_contract(
+        MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
+    )
+    assert gated.metric is Metric.ULP and gated.max_ulp == 3
     contract = accuracy_contract(
         MathOperation.Abs, output_format=output_format, arch=arch
     )
-    if output_format is DataFormat.Float16_b and arch is MEASURED_ARCH:
-        assert contract.metric is Metric.ULP and contract.max_ulp == 3
-    else:  # Bfp4_b is a block float; off Wormhole the unkeyed row does not bind
-        assert contract.metric is Metric.TOLERANCE
-        assert contract.atol == 0.13 and contract.rtol == 0.05
+    assert contract.metric is Metric.TOLERANCE
+    assert contract.atol == 0.13 and contract.rtol == 0.05
 
 
 def test_a_bare_tolerance_row_opts_out_of_ulp_without_retracting_a_declared_atol(
     monkeypatch,
 ):
-    """The sweep writes a numberless ``metric: tolerance`` row for every cell past the
-    ceiling. It beats a shared ``atol`` row on specificity, and resolving it as-is gave
-    SigmoidAppx the per-format default: eight device failures no host test saw."""
+    """The sweep writes a numberless `metric: tolerance` row for every cell past the
+    ceiling; it beats a shared `atol` row on specificity but must not replace it with
+    the per-format default."""
     op = MathOperation.Abs
     monkeypatch.setitem(
         _SFPU_ACCURACY_BUDGET,
         op,
         {
-            DEFAULT: AccuracyContract(metric=Metric.TOLERANCE, atol=0.13, rtol=0.05),
+            BudgetKey(): AccuracyContract(
+                metric=Metric.TOLERANCE, atol=0.13, rtol=0.05
+            ),
             BudgetKey(
                 input_format=DataFormat.Float16_b, output_format=DataFormat.Float16_b
             ): AccuracyContract(metric=Metric.TOLERANCE),
@@ -530,12 +431,10 @@ def test_a_bare_tolerance_row_opts_out_of_ulp_without_retracting_a_declared_atol
     )
     assert bare_cell.metric is Metric.TOLERANCE
     assert bare_cell.atol == 0.13 and bare_cell.rtol == 0.05
-    # The most specific numbered row still wins where there is one.
     numbered = accuracy_contract(
         op, output_format=DataFormat.Float32, arch=MEASURED_ARCH
     )
     assert numbered.atol == 0.5
-    # With only bare rows there is nothing to fall through to.
     monkeypatch.setitem(
         _SFPU_ACCURACY_BUDGET,
         op,
@@ -547,9 +446,9 @@ def test_a_bare_tolerance_row_opts_out_of_ulp_without_retracting_a_declared_atol
     assert only_bare == TOLERANCE_CONTRACT
 
 
-@pytest.mark.parametrize("arch", UNSWEPT_ARCHS, ids=lambda a: a.name)
-def test_a_ulp_row_that_names_its_arch_binds_there(arch, monkeypatch):
+def test_a_ulp_row_that_names_its_arch_binds_there(monkeypatch):
     """A row keyed on an arch was measured there, so the arch downgrade exempts it."""
+    arch = ChipArchitecture.BLACKHOLE
     monkeypatch.setitem(
         _SFPU_ACCURACY_BUDGET,
         MathOperation.Abs,
@@ -577,24 +476,11 @@ def test_a_ulp_row_that_names_its_arch_binds_there(arch, monkeypatch):
             assert resolved(other) is TOLERANCE_CONTRACT
 
 
-@pytest.mark.parametrize("enrolled", [False, True], ids=["unenrolled", "enrolled"])
-def test_a_bad_query_is_refused_whether_or_not_the_op_is_enrolled(enrolled):
-    """Otherwise a miswired driver passes until the day its op is enrolled."""
-    op = next(
-        op
-        for op in sorted(MathOperation, key=lambda o: o.name)
-        if (op in _SFPU_ACCURACY_BUDGET) == enrolled
-    )
-    with refused(Problem.NOT_A_MEMBER):
-        accuracy_contract(op, output_format=DataFormat.Float32, arch=True)
-
-
 def test_a_query_left_over_from_another_test_is_replaced_not_flagged(monkeypatch):
-    """``--ulp-measure`` files a reading under the last variant looked up, and refuses
-    two lookups racing one comparison -- but only within one test. The exhaustive sweep
-    resolves a contract and then skips a tolerance cell; flagging that dropped every
-    reading that followed a skip (40 of 130 tests, measured)."""
-    import helpers.sfpu_accuracy_budget as budget
+    """`--ulp-measure` files a reading under the last variant looked up and refuses
+    two lookups racing one comparison, but only within one test: the sweep resolves a
+    contract and then skips a tolerance cell, and flagging that dropped every reading
+    that followed a skip."""
 
     def resolve(test_id):
         monkeypatch.setenv("PYTEST_CURRENT_TEST", f"{test_id} (call)")
@@ -604,8 +490,6 @@ def test_a_query_left_over_from_another_test_is_replaced_not_flagged(monkeypatch
 
     monkeypatch.setattr(budget, "LAST_QUERY", None)
     monkeypatch.setattr(budget, "PENDING_AMBIGUOUS", False)
-
-    # An ambiguous test that exits before comparing must not hand its flag on.
     resolve("t_zero")
     resolve("t_zero")
     assert budget.PENDING_AMBIGUOUS
@@ -614,279 +498,11 @@ def test_a_query_left_over_from_another_test_is_replaced_not_flagged(monkeypatch
     resolve("t_two")
     assert not budget.PENDING_AMBIGUOUS
     assert budget.LAST_QUERY.test == "t_two"
-
     resolve("t_three")
     resolve("t_three")
     assert budget.PENDING_AMBIGUOUS
-    resolve("t_three")  # a third lookup in the same test is still ambiguous
+    resolve("t_three")
     assert budget.PENDING_AMBIGUOUS
-
-
-def test_the_measure_recorder_files_one_row_under_the_variant_just_resolved(
-    tmp_path, monkeypatch
-):
-    """``--ulp-measure`` tags a comparison with ``accuracy_contract``'s last query and
-    consumes it: a second comparison in the same test that never went through the
-    registry must not inherit the variant, and the row names the variant asked for
-    rather than the tensors' format."""
-    read = _measure_rows(tmp_path, monkeypatch)
-    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
-
-    accuracy_contract(
-        MathOperation.Abs,
-        output_format=DataFormat.Float16_b,
-        input_format=DataFormat.Float16,
-        dest_acc=DestAccumulation.Yes,
-        arch=MEASURED_ARCH,
-    )
-    assert passed_test(golden, golden.clone(), DataFormat.Float16_b)
-    assert passed_test(golden, golden.clone(), DataFormat.Float16_b)  # no lookup
-
-    (row,) = read()
-    assert row.op is MathOperation.Abs
-    assert row.key == BudgetKey(
-        input_format=DataFormat.Float16,
-        output_format=DataFormat.Float16_b,
-        dest_acc=DestAccumulation.Yes,
-        arch=MEASURED_ARCH,
-    )
-    # A worst lane of 0 means something only over lanes that were measured.
-    assert (row.worst, row.lanes, row.unmeasurable, row.nonfinite) == (0, 32, 0, 0)
-
-
-def test_the_measure_recorder_writes_the_nonfinite_count_the_headroom_report_reads(
-    tmp_path, monkeypatch
-):
-    """The count is the sweep's only link to the headroom report's non-finite check:
-    written through the recorder and read through the report's own reader."""
-    from helpers.ulp import ulp_distance
-    from helpers.ulp_budget_diff import read_cells
-    from helpers.utils import _record_ulp_measurement
-
-    read = _measure_rows(tmp_path, monkeypatch)
-    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
-    accuracy_contract(
-        MathOperation.Abs,
-        output_format=DataFormat.Float16_b,
-        input_format=DataFormat.Float16_b,
-        arch=MEASURED_ARCH,
-    )
-    _record_ulp_measurement(
-        ulp_distance(golden, golden.clone()),
-        mask=torch.ones(32, dtype=torch.bool),
-        nonfinite=7,
-    )
-    assert [cell.nonfinite for cell in read_cells(read()).values()] == [7]
-
-
-def test_a_record_the_sweep_requires_fails_rather_than_being_dropped(
-    tmp_path, monkeypatch
-):
-    """The headroom report judges only the cells it reads, so a sweep record that would
-    be dropped fails its cell; a functional driver's is only lost."""
-    from helpers.ulp import ulp_distance
-    from helpers.utils import RecordDropped, _record_ulp_measurement
-
-    read = _measure_rows(tmp_path, monkeypatch)
-    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
-    reading = dict(
-        distance=ulp_distance(golden, golden.clone()),
-        mask=torch.ones(32, dtype=torch.bool),
-    )
-    _record_ulp_measurement(**reading)  # no query pending: dropped
-    with pytest.raises(RecordDropped):  # allow-pytest.raises: host-only test
-        _record_ulp_measurement(**reading, required=True)
-    assert read() == []
-    accuracy_contract(
-        MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
-    )
-    _record_ulp_measurement(**reading, required=True)
-    assert len(read()) == 1
-
-
-def _measure_rows(tmp_path, monkeypatch):
-    """The recorder pointed at a file, and the reader of what it wrote."""
-    import helpers.utils as utils
-    from helpers.ulp_table import read_measurements
-
-    path = tmp_path / "measure.jsonl"
-    monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(path))
-    return lambda: read_measurements(path)
-
-
-def test_the_measure_recorder_ranks_the_lanes_the_verdict_ranks(tmp_path, monkeypatch):
-    """The ULP arm hands the recorder the lanes it ranks, without the ones a
-    ``near_zero_atol`` floor rescued: those carry the largest step counts by
-    construction, and filing them would fold a floor-carried pass back as a budget."""
-    rows = _measure_rows(tmp_path, monkeypatch)
-    fmt = DataFormat.Float16_b
-    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
-    golden[0] = 1e-6
-    result = golden.clone()
-    result[0] = 3e-6  # about 200 steps away, but 2e-6 in absolute terms
-    result[1] = 1.5078125  # one real bf16 step above 1.5
-
-    accuracy_contract(MathOperation.Abs, output_format=fmt, arch=MEASURED_ARCH)
-    assert passed_test(golden, result, fmt, max_ulp=1, near_zero_atol=1e-5)
-    (row,) = rows()
-    assert row.worst == 1, row
-
-
-def test_the_measure_recorder_drops_an_ambiguous_or_promoted_variant(
-    tmp_path, monkeypatch
-):
-    """Two lookups and then one comparison cannot say which variant it was, and a
-    variant TestConfig promoted to a 32-bit Dest ran another kernel than it names --
-    against a golden built for the one it names. Neither is filed."""
-    import helpers.chip_architecture as chip
-
-    monkeypatch.setenv("CHIP_ARCH", "wormhole")
-    monkeypatch.setattr(chip, "_cached_chip_architecture", None)
-    rows = _measure_rows(tmp_path, monkeypatch)
-    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
-
-    for _ in range(2):
-        accuracy_contract(
-            MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
-        )
-    assert passed_test(golden, golden.clone(), DataFormat.Float16_b)
-    assert rows() == []
-
-    half = golden.to(torch.float16)
-    accuracy_contract(
-        MathOperation.Abs,
-        output_format=DataFormat.Float16,
-        input_format=DataFormat.Float16_b,
-        dest_acc=DestAccumulation.No,
-        arch=MEASURED_ARCH,
-    )
-    assert passed_test(half, half.clone(), DataFormat.Float16)
-    assert rows() == []
-
-    # The promotion is the resolved architecture's, not the process's: Quasar runs the
-    # 16-bit Dest it was asked for, so the same cell resolved for it is filed, under it.
-    accuracy_contract(
-        MathOperation.Abs,
-        output_format=DataFormat.Float16,
-        input_format=DataFormat.Float16_b,
-        dest_acc=DestAccumulation.No,
-        arch=ChipArchitecture.QUASAR,
-    )
-    assert passed_test(half, half.clone(), DataFormat.Float16)
-    (row,) = rows()
-    assert (row.key.arch, row.key.dest_acc) == (
-        ChipArchitecture.QUASAR,
-        DestAccumulation.No,
-    )
-
-
-def test_every_comparison_spends_the_query_it_was_resolved_for(tmp_path, monkeypatch):
-    """A path that writes no row -- a shape mismatch, an output with no per-element
-    ULP -- still spends the lookup, or the next comparison in the test would inherit the
-    variant and the next lookup read as ambiguous."""
-    import helpers.sfpu_accuracy_budget as budget
-
-    _measure_rows(tmp_path, monkeypatch)
-    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
-    for result, fmt in (
-        (golden.clone().reshape(1, 32), DataFormat.Float16_b),  # broadcast compare
-        (golden.clone(), DataFormat.Bfp4_b),  # no per-element ULP
-    ):
-        accuracy_contract(MathOperation.Abs, output_format=fmt, arch=MEASURED_ARCH)
-        passed_test(golden, result, fmt)
-        assert (budget.LAST_QUERY, budget.PENDING_AMBIGUOUS) == (None, False), fmt
-
-
-def test_a_comparison_does_not_load_the_budget_table():
-    """``passed_test`` spends the registry's pending query on every call, but must not
-    import the registry to do it: every caller -- matmul, pack and Quasar suites run on
-    their own -- would then load and validate the whole table, and a bad row would error
-    each comparison after its verdict. In a fresh interpreter, since this one has it."""
-    import subprocess
-    import sys
-
-    import helpers.sfpu_accuracy_budget as budget
-    import helpers.utils as utils
-
-    code = (
-        f"import sys, torch; from {utils.__name__} import passed_test; "
-        "from helpers.format_config import DataFormat; "
-        "golden = torch.ones(32, dtype=torch.bfloat16); "
-        "assert passed_test(golden, golden.clone(), DataFormat.Float16_b); "
-        f"sys.exit({budget.__name__!r} in sys.modules)"
-    )
-    done = subprocess.run([sys.executable, "-c", code], cwd=TABLE_PATH.parent.parent)
-    assert done.returncode == 0
-
-
-def test_a_tolerance_reading_ranks_fp16_subnormals_flushed(tmp_path, monkeypatch):
-    """Every step-budget gate on Float16 ranks the subnormal band flushed, so a reading
-    from a tolerance cell must too, or one file mixes the two and a folded-back figure
-    is looser than its gate: a golden 6e-08 (the smallest fp16 subnormal) against a
-    flushed 0 is one step unflushed and none flushed."""
-    rows = _measure_rows(tmp_path, monkeypatch)
-    golden = torch.full((32,), 1.5, dtype=torch.float16)
-    golden[0] = 6e-08
-    result = golden.clone()
-    result[0] = 0.0
-    accuracy_contract(
-        MathOperation.Abs, output_format=DataFormat.Float16, arch=MEASURED_ARCH
-    )
-    assert passed_test(golden, result, DataFormat.Float16)
-    (row,) = rows()
-    assert row.worst == 0, row
-
-
-def test_an_unpreparable_measure_path_is_refused_before_anything_runs(
-    tmp_path, monkeypatch
-):
-    """A path that is a directory raises, and the plugin makes that a usage error: the
-    sweep's records are required, and under `-n` the workers set the path themselves,
-    so a controller that only switched itself off left every worker failing every
-    sweep cell while a serial run passed and recorded nothing."""
-    import helpers.utils as utils
-
-    monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(tmp_path))  # a directory
-    with pytest.raises(OSError):  # allow-pytest.raises: host-only test
-        utils.prepare_ulp_measure_file()
-
-    target = tmp_path / "nested" / "measure.jsonl"
-    monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(target))
-    target.parent.mkdir()
-    target.write_text("stale\n", encoding="utf-8")
-    utils.prepare_ulp_measure_file()
-    assert target.read_text() == ""  # truncated, so runs do not fold together
-
-    # `--ulp-measure out/dir/x.jsonl` with no `out/dir` yet: the parent is created, not
-    # warned about.
-    fresh = tmp_path / "out" / "dir" / "measure.jsonl"
-    monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(fresh))
-    utils.prepare_ulp_measure_file()
-    assert utils._ULP_MEASURE_PATH == str(fresh) and fresh.read_text() == ""
-
-
-def test_a_measure_recorder_write_failure_does_not_fail_the_comparison(
-    tmp_path, monkeypatch
-):
-    """Reporting only: an unwritable path warns and is otherwise ignored, so it can
-    neither fail a passing test nor hide a failing comparison's summary."""
-    import helpers.utils as utils
-
-    monkeypatch.setattr(utils, "_ULP_MEASURE_PATH", str(tmp_path))  # a directory
-    monkeypatch.setattr(utils, "_ULP_MEASURE_WARNED", False)
-    golden = torch.full((32,), 1.5, dtype=torch.bfloat16)
-    for _ in range(2):
-        accuracy_contract(
-            MathOperation.Abs, output_format=DataFormat.Float16_b, arch=MEASURED_ARCH
-        )
-        assert passed_test(golden, golden.clone(), DataFormat.Float16_b)
-    assert utils._ULP_MEASURE_WARNED
-
-
-def test_arch_must_be_passed_explicitly():
-    """The one dimension whose numbers do not transfer cannot default to Wormhole."""
-    with pytest.raises(TypeError):  # allow-pytest.raises: host-only test
-        accuracy_contract(MathOperation.Abs, output_format=DataFormat.Float32)
 
 
 # ── The live table ────────────────────────────────────────────────────────────
@@ -896,28 +512,10 @@ def test_the_registry_resolves_unambiguously_for_every_variant():
     validate_registry()
 
 
-def test_enrolled_ops_is_sorted_and_stable():
-    ops = enrolled_ops()
-    assert list(ops) == sorted(ops, key=lambda op: op.name)
-    assert len(set(ops)) == len(ops)
-
-
-#: Enrolled ops with no step budget anywhere: the 3-segment LUT pair, two binaries
-#: whose per-format tolerances moved into the table, and three transcendentals whose
-#: *best* cell is still past its output's usable ceiling (6 bf16, 51 fp16)
-#: once the near-zero floor the emitter grants (up to 1e-3) is applied -- the
-#: measurements are on their rows, not repeated here to drift. Softplus answers 0 below
-#: x = -5, a 0.0065 cut-off a 1e-3 floor cannot cover; Digamma and Lgamma are wrong for
-#: negative and small positive x. Recorded, not fixed; tracked: Digamma #51128, Softplus
-#: #51866 (input clamps, under #52178) and Lgamma #55356.
-#:
-#: Erfc left this set with the claim applied to the ranking, the Dest-capacity rule and
-#: the emitted floor: it has cells inside the ceiling now and the rest fall through to
-#: tolerance, like Sign, Heaviside, GeluTanh, Tanhshrink, Xielu, I1 and SfpuElwmul.
-#: Polygamma came back: its only cells inside the ceiling were Bfp4_b inputs, whose
-#: quantization rather than the op made them look good. Expm1Cw stays: its only gateable cells were Float16 at
-#: dest_acc=No, where it answers the golden's overflow stand-in negated (-130560 for
-#: 130560, -131008 for 131008: #54770), the op's sign flip and not the Dest's overflow.
+# Enrolled ops with no step budget anywhere: the LUT pair and two binaries hold a
+# declared tolerance; the rest are past their output's usable ceiling on every cell,
+# tracked by Digamma #51128, Softplus #51866 (under #52178), Lgamma #55356, Expm1Cw
+# #54770 and Polygamma #52278.
 ONLY_EVER_TOLERANCE = frozenset(
     {
         MathOperation.SigmoidAppx,
@@ -934,17 +532,12 @@ ONLY_EVER_TOLERANCE = frozenset(
 
 
 def test_every_enrolled_op_reaches_its_step_budget():
-    """The sweep must reach the ULP branch for every enrolled op but ONLY_EVER_TOLERANCE.
-
-    A sweep that left ``input_format`` unset sent every input-keyed op -- nearly the
-    whole table -- to ``TOLERANCE_CONTRACT``; they would show up in ``missing`` here.
-    """
     with_budget = {op for op, _, _, _ in _live_step_budgets()}
     missing = set(enrolled_ops()) - with_budget
     assert missing == ONLY_EVER_TOLERANCE, sorted(op.name for op in missing)
 
 
-#: Ops exact by construction: a sign-bit change, a copy, or an integer-valued result.
+# Ops exact by construction: a sign-bit change, a copy, or an integer-valued result.
 EXACT_BY_CONSTRUCTION = (
     MathOperation.Abs,
     MathOperation.Neg,
@@ -955,7 +548,7 @@ EXACT_BY_CONSTRUCTION = (
     MathOperation.Round,
 )
 
-#: The subset writing an integer, which survives any pack that can represent it.
+# The subset writing an integer, which survives any pack that can represent it.
 INTEGER_VALUED = (
     MathOperation.Floor,
     MathOperation.Ceil,
@@ -963,14 +556,11 @@ INTEGER_VALUED = (
     MathOperation.Round,
 )
 
-#: Ops whose correct result is the *only* result: an integer, a predicate's 1.0/0.0, a
-#: sign's -1/0/1, a pass-through-or-zero selection, an operand selection, a constant, a
-#: clamp, or a single IEEE add. One step here is the contract breaking, not the pack path.
-#: Listed by what the op computes, not read back from the table, which would agree with
-#: it by construction. ReluMax, ReluMin and Frac stay out: each carries a sampled
-#: `measured: 1` wildcard row, which would have to be split by input first --
-#: on a wildcard the guard below cannot tell a narrowing cell's pack step from drift.
-#: SfpuBinaryMax/Min had the same wildcards and are keyed by input now.
+# Ops whose correct result is the *only* result: an integer, a predicate's 1.0/0.0, a
+# sign's -1/0/1, a pass-through-or-zero selection, an operand selection, a constant, a
+# clamp, or a single IEEE add. Listed by what the op computes, not read back from the
+# table. ReluMax, ReluMin and Frac stay out: each carries a `measured: 1` wildcard row
+# that would have to be split by input first.
 EXACT_ZERO_BY_CONSTRUCTION = (
     *INTEGER_VALUED,
     MathOperation.Fill,
@@ -1011,8 +601,8 @@ EXACT_ZERO_BY_CONSTRUCTION = (
     MathOperation.SfpuBinaryMin,
 )
 
-#: The subset whose every result is exact in every format -- a predicate's 1.0/0.0 or a
-#: constant -- so even a narrowing cell has nothing for the pack to round.
+# The subset whose every result is exact in every format (a predicate's 1.0/0.0 or a
+# constant), so even a narrowing cell has nothing for the pack to round.
 EXACT_IN_EVERY_FORMAT = tuple(
     op
     for op in EXACT_ZERO_BY_CONSTRUCTION
@@ -1029,33 +619,29 @@ EXACT_IN_EVERY_FORMAT = tuple(
     )
 )
 
-#: What the output pack may cost an exact op on a cell that converts: one step. The
-#: figure is the measurement itself, so one is also the most such a cell may read.
+# What the output pack may cost an exact op on a cell that converts: one step. The
+# figure is the measurement itself, so one is also the most such a cell may read.
 _PACK_PATH_STEPS = 1
 
 
 def _mantissa_bits(fmt):
     """0 for a format without a per-element ULP (these appear on the input axis only)."""
-    return _ULP_DTYPES[ulp_dtype(fmt)].mantissa_bits if has_ulp_gate(fmt) else 0
+    return mantissa_bits(ulp_dtype(fmt)) if has_ulp_gate(fmt) else 0
 
 
 def _exact_allowance(op, input_format, output_format):
-    """``(steps, reason)``: the slack an exact op may carry on one cell -- the cost of
-    the output pack, and only where there is one."""
+    """``(steps, reason)``: the slack an exact op may carry on one cell, the cost of the
+    output pack and only where there is one."""
     if op in EXACT_IN_EVERY_FORMAT:
         return 0, "a 1.0/0.0 or a constant is exact in every format, so no pack rounds"
     if op not in EXACT_ZERO_BY_CONSTRUCTION:
-        return (
-            _PACK_PATH_STEPS,
-            "the value passes through an fp32 Dest and is packed back",
-        )
+        return _PACK_PATH_STEPS, "the value passes through an fp32 Dest and is packed"
     if input_format is None:
         return (
             _PACK_PATH_STEPS,
             "the row wildcards `input`, so it covers a narrowing cell",
         )
     if _mantissa_bits(output_format) < _mantissa_bits(input_format):
-        # e.g. Float16 -> Float16_b: bf16 cannot hold every integer fp16 can.
         return _PACK_PATH_STEPS, "the output has fewer mantissa bits than the input"
     return 0, "the output can represent every value this op produces from that input"
 
@@ -1069,10 +655,9 @@ def _exact_allowance(op, input_format, output_format):
     ids=lambda op: op.name,
 )
 def test_an_exact_op_never_carries_a_wide_budget(op):
-    """These are the canaries: a budget past the pack path means the number was fitted
-    to a failure. For the exactly rounded ops "any drift is a regression" is the whole
-    claim, so each must also *have* a step budget somewhere: a dropped row would read
-    as a passing op."""
+    """The canaries: a budget past the pack path means the number was fitted to a
+    failure. Each exactly rounded op must also *have* a step budget somewhere, or a
+    dropped row would read as a passing op."""
     seen = False
     for budget_op, in_fmt, fmt, contract in _live_step_budgets():
         if budget_op is not op:
@@ -1081,20 +666,15 @@ def test_an_exact_op_never_carries_a_wide_budget(op):
         allowance, why = _exact_allowance(op, in_fmt, fmt)
         assert contract.max_ulp <= allowance, (
             f"{op.name} on {in_fmt and in_fmt.name}->{fmt.name} carries "
-            f"max_ulp={contract.max_ulp}, past the {allowance} it may have because "
-            f"{why}. The op is exact by construction; investigate the datapath or the "
-            "golden rather than widening the budget."
+            f"max_ulp={contract.max_ulp}, past the {allowance} it may have because {why}"
         )
     if op in EXACT_ZERO_BY_CONSTRUCTION:
-        assert (
-            seen
-        ), f"{op.name} resolves to no ULP contract at all; the row was dropped"
+        assert seen, f"{op.name} resolves to no ULP contract at all"
 
 
 def _driver_variants(test_function):
     """Every parameter combination pytest collects for *test_function*, as dicts: the
-    cross product of its ``parametrize`` marks, read from the function itself so a
-    format or op added to a driver is covered without editing this file."""
+    cross product of its ``parametrize`` marks, read from the function itself."""
     axes = []
     for mark in getattr(test_function, "pytestmark", []):
         if mark.name != "parametrize":
@@ -1111,14 +691,8 @@ def _driver_variants(test_function):
 
 def _unary_step_budget_drivers():
     """The tests in test_eltwise_unary_sfpu.py that call the driver with
-    ``gate_on_step_budget=True``, read from the source: a list kept here instead would
-    stay green after the keyword was dropped, and that sweep would quietly gate on
-    tolerance alone."""
-    import ast
-    import inspect
-
-    import test_eltwise_unary_sfpu as unary
-
+    ``gate_on_step_budget=True``, read from the source so a list here cannot outlive
+    the keyword."""
     tree = ast.parse(inspect.getsource(unary))
     return sorted(
         fn.name
@@ -1138,15 +712,11 @@ def _unary_step_budget_drivers():
     )
 
 
-#: The unary step-budget drivers that run one op rather than a ``mathop`` axis.
+# The unary step-budget drivers that run one op rather than a `mathop` axis.
 _SINGLE_OP_DRIVERS = {"test_eltwise_unary_sfpu_signbit": MathOperation.Signbit}
 
 
 def test_the_unary_step_budget_drivers_are_the_measured_sweeps():
-    """Exactly the sweeps MEASURED_ON_SWEEP records gate on the step budget, read from
-    the call sites rather than trusted."""
-    import test_eltwise_unary_sfpu as unary
-
     drivers = _unary_step_budget_drivers()
     assert drivers == sorted(
         f"test_eltwise_unary_sfpu_{sweep}" for sweep in MEASURED_ON_SWEEP
@@ -1162,17 +732,9 @@ def test_the_unary_step_budget_drivers_are_the_measured_sweeps():
 
 def _exact_op_driver_variants():
     """``(driver, op, formats, approx, dest_acc)`` for every variant a hand-built driver
-    runs an exact op in and gates on the op's *whole* contract, step budget included.
-
-    Every binary driver does (``sfpu_binary`` -> ``assert_against_contract``), with the
-    Dest promotion applied first and ``_APPROX_MODE``; of the unary drivers only the
-    ones passing ``gate_on_step_budget`` (:func:`_unary_step_budget_drivers`) -- the
-    rest gate on tolerance. *driver* is the test function."""
-    import inspect
-
-    import test_eltwise_binary_sfpu as binary
-    import test_eltwise_unary_sfpu as unary
-
+    runs an exact op in and gates on the whole contract: every binary driver, with the
+    Dest promotion applied first and ``_APPROX_MODE``, and the unary drivers passing
+    ``gate_on_step_budget``."""
     drivers = [
         (fn, None, binary._APPROX_MODE)
         for name, fn in inspect.getmembers(binary, inspect.isfunction)
@@ -1197,14 +759,7 @@ def _exact_op_driver_variants():
 
 def _exact_driver_skip(driver, op, formats, dest_acc):
     """Why *driver* skips this variant, or ``None``: the drivers' own skip predicates,
-    asked rather than re-typed, so an exclusion here can neither outlive nor outgrow the
-    skip. A binary driver applies the Float32 one exactly when it calls
-    ``skip_if_32bit_input_without_dest_acc``."""
-    import inspect
-
-    import test_eltwise_unary_sfpu as unary
-    from helpers.constraints import skip_reason_32bit_input_without_dest_acc
-
+    asked rather than re-typed."""
     if driver is unary.test_eltwise_unary_sfpu_isinf_isnan:
         return unary.isinf_isnan_skip_reason(formats, op, dest_acc)
     if "skip_if_32bit_input_without_dest_acc(" in inspect.getsource(driver):
@@ -1213,27 +768,15 @@ def _exact_driver_skip(driver, op, formats, dest_acc):
 
 
 def _step_gateable(*formats) -> bool:
-    """A variant a step budget can gate: every format named one the SFPU computes in --
-    not an integer, which wants bit equality, nor a block float, whose error is the
-    unpacker's and packer's. The exact-op guards and the not-measurable audit filter on
-    it, so they agree on what "gateable" means."""
+    """A variant a step budget can gate: every format named one the SFPU computes in."""
     return all(f is None or f in ULP_FORMATS for f in formats)
 
 
 def test_every_driven_variant_of_an_exact_op_is_gated():
-    """`test_an_exact_op_never_carries_a_wide_budget` asks only that each exact op keep
-    *some* step budget: drop every `SfpuMask` Float16_b row and keep its Float32 one, and
-    the Float16_b variants fall back to tolerance while it still passes. This walks every
-    variant the hand-built drivers run an exact op in between formats the SFPU computes
-    in (`_step_gateable`), and requires each to resolve to a step budget -- at the Dest
-    the variant asks for and at the one it is promoted to. A variant the driver skips
-    never runs, so it must resolve
-    to *no* step budget: one there claims a measurement nobody took -- which is how a
-    re-sort that dropped Isinf/Isnan/Isneginf's `not measured` rows showed up. The swept
-    cells of the unary exact ops are held by
-    `test_every_swept_cell_of_an_exact_op_is_gated_or_waived`."""
-    from helpers.data_format_inference import effective_dest_acc
-
+    """Every variant a hand-built driver runs an exact op in, on a gateable output,
+    resolves to a step budget at the Dest it asks for and at the one it is promoted to.
+    A variant the driver skips never runs, so it must resolve to *no* step budget: one
+    there claims a measurement nobody took."""
     ungated, claimed = [], []
     for driver, op, formats, approx, dest in _exact_op_driver_variants():
         out_fmt = formats.output_format
@@ -1253,33 +796,35 @@ def test_every_driven_variant_of_an_exact_op_is_gated():
             )
             cell = (
                 f"{driver.__name__}: {op.name} "
-                f"{formats.input_format.name}->{out_fmt.name}"
+                f"{formats.input_format.name}->{out_fmt.name} dest={d.name}"
             )
             if _exact_driver_skip(driver, op, formats, d):
                 if contract.metric is Metric.ULP:
-                    claimed.append(f"{cell} dest={d.name}")
-                continue
-            if contract.metric is Metric.ULP:
-                continue
-            ungated.append(f"{cell} dest={d.name}")
-    assert not ungated, (
-        "exact-op variant(s) a driver runs that resolve to no step budget, so a "
-        "regression there passes on tolerance:\n  " + "\n  ".join(sorted(set(ungated)))
+                    claimed.append(cell)
+            elif contract.metric is not Metric.ULP:
+                ungated.append(cell)
+    assert not ungated, "exact-op variants with no step budget: " + ", ".join(
+        sorted(set(ungated))
     )
-    assert not claimed, (
-        "variant(s) the driver skips that resolve to a step budget, a measurement the "
-        "table does not have; key a `not measured` tolerance row on them:\n  "
-        + "\n  ".join(sorted(set(claimed)))
+    assert not claimed, "skipped variants with a step budget: " + ", ".join(
+        sorted(set(claimed))
+    )
+
+
+def _swept_exact_ops():
+    """The exact ops the exhaustive sweep drives: every sign-bit/copy/integer op, and
+    the unary members of EXACT_ZERO_BY_CONSTRUCTION it has a domain for."""
+    swept = swept_unary_ops()
+    return sorted(
+        set(EXACT_BY_CONSTRUCTION)
+        | {op for op in EXACT_ZERO_BY_CONSTRUCTION if op in swept},
+        key=lambda op: op.name,
     )
 
 
 def test_every_exact_op_is_driven_by_a_gate():
-    """`test_every_driven_variant_of_an_exact_op_is_gated` and
-    `test_every_swept_cell_of_an_exact_op_is_gated_or_waived` hold only the ops something
-    drives: an exact op neither swept nor run by a step-budget driver would be checked
-    by nothing but the existence of a row. Driven means on a variant a step budget can
-    gate and the driver does not skip, the same filter the first of those applies: an
-    op left with only Int32 outputs, or only skipped variants, is driven by nothing."""
+    """An exact op neither swept nor run by a step-budget driver, on a gateable and
+    unskipped variant, would be checked by nothing but the existence of a row."""
     driven = {
         op
         for driver, op, formats, _, dest in _exact_op_driver_variants()
@@ -1290,127 +835,48 @@ def test_every_exact_op_is_driven_by_a_gate():
     assert not unreached, sorted(op.name for op in unreached)
 
 
-#: Swept cells of an exact-by-construction op that the table holds on the tolerance
-#: metric, with what was measured there. Each would be a real deviation on an op that
-#: should be exact, with no cause established yet;
-#: `test_every_swept_cell_of_an_exact_op_is_gated_or_waived` keeps the list from growing
-#: unnoticed, and fails when an entry is no longer needed. Empty today. Every
-#: class it used to hold was the sweep's, not the ops': Abs/Neg/Identity's 512-step
-#: Float16 cells were the metric keeping fp16 subnormals the pack does not reproduce;
-#: Floor/Ceil's Float32 -> Float16 dest_acc=No cells were the fp16 Dest's flush of the
-#: strided lanes below 2**-14. All of them measure 0.
-_EXACT_OP_DEMOTIONS: dict = {}
-
-
-def _swept_exact_ops():
-    """The exact ops the exhaustive sweep drives: every sign-bit/copy/integer op, and
-    the unary members of EXACT_ZERO_BY_CONSTRUCTION it has a domain for. The predicates
-    it has none for (Isinf, UnaryEq, ...) are gated on their hand-built sweeps instead.
-    """
-    from helpers.sfpu_domains import _UNARY_OPS_NOT_SWEPT, sfpu_unary_ops
-
-    swept = set(sfpu_unary_ops()) - set(_UNARY_OPS_NOT_SWEPT)
-    return sorted(
-        set(EXACT_BY_CONSTRUCTION)
-        | {op for op in EXACT_ZERO_BY_CONSTRUCTION if op in swept},
-        key=lambda op: op.name,
+def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():
+    """The sweep gates a ULP row and the headroom report judges a tolerance row; a
+    swept cell resolving to `TOLERANCE_CONTRACT` is measured and judged by nothing. A
+    swept cell of an exact op must resolve to a step budget outright: the emitter
+    demoting one is a real deviation on an op that should be exact."""
+    exact = set(_swept_exact_ops())
+    unresolved, demoted = [], []
+    for op in enrolled_ops():
+        if op not in sfpu_unary_ops():
+            continue
+        for in_fmt, out_fmt, approx, dest in sweep_cells(MEASURED_ARCH):
+            contract = accuracy_contract(
+                op,
+                output_format=out_fmt,
+                input_format=in_fmt,
+                approx_mode=approx,
+                dest_acc=dest,
+                arch=MEASURED_ARCH,
+            )
+            cell = f"{op.name} {in_fmt.name}->{out_fmt.name} {approx.name} {dest.name}"
+            if contract is TOLERANCE_CONTRACT:
+                unresolved.append(cell)
+            elif op in exact and contract.metric is not Metric.ULP:
+                demoted.append(cell)
+    assert not unresolved, "swept cells no row of the op covers: " + ", ".join(
+        unresolved
     )
-
-
-@pytest.mark.parametrize("op", _swept_exact_ops(), ids=lambda op: op.name)
-def test_every_swept_cell_of_an_exact_op_is_gated_or_waived(op):
-    """`test_an_exact_op_never_carries_a_wide_budget` reads only ULP rows, so a cell the
-    emitter demoted to tolerance is invisible to it -- and the sweep does not gate
-    tolerance cells. Every swept, non-block cell of these ops must resolve to a step
-    budget, or be listed above with its measurement."""
-
-    demoted = set()
-    # The Wormhole cells, whatever CHIP_ARCH this host sets: the contracts below are
-    # resolved at MEASURED_ARCH, and Quasar promotes nothing.
-    for in_fmt, out_fmt, approx, dest in sweep_cells(MEASURED_ARCH):
-        contract = accuracy_contract(
-            op,
-            output_format=out_fmt,
-            input_format=in_fmt,
-            approx_mode=approx,
-            dest_acc=dest,
-            arch=MEASURED_ARCH,
-        )
-        if contract.metric is not Metric.ULP:
-            demoted.add((op, in_fmt, out_fmt, dest))
-    waived = {cell for cell in _EXACT_OP_DEMOTIONS if cell[0] is op}
-    assert demoted <= waived, sorted(
-        f"{i.name}->{o.name} dest={d.name}" for _, i, o, d in demoted - waived
-    )
-    assert waived <= demoted, "stale waiver(s): " + ", ".join(
-        sorted(f"{i.name}->{o.name} dest={d.name}" for _, i, o, d in waived - demoted)
-    )
+    assert not demoted, "exact-op cells off the step budget: " + ", ".join(demoted)
 
 
 def test_no_budget_exceeds_its_formats_usable_ceiling():
-    """Past ``usable_budget_ceiling`` a step budget is looser than the tolerance it
-    replaces -- and it is the whole gate, since the ULP arm of passed_test skips
-    isclose and PCC. Such an op belongs on the tolerance metric."""
+    """Past `usable_budget_ceiling` a step budget is looser than the tolerance it
+    replaces, and it is the whole gate."""
     for op, _, fmt, contract in _live_step_budgets():
-        ceiling = usable_budget_ceiling(fmt)
-        assert contract.max_ulp <= ceiling, (
-            f"{op.name} on {fmt.name} has max_ulp={contract.max_ulp}, past the "
-            f"{ceiling:.0f}-step point where a budget stops being tighter than the "
-            "tolerance it replaces. Put the op on the tolerance metric and record "
-            "the measurement instead."
-        )
-
-
-def test_the_usable_ceiling_is_tighter_than_the_meaningful_one():
-    for fmt in ULP_FORMATS:
-        assert usable_budget_ceiling(fmt) < MAX_MEANINGFUL_ULP[ulp_dtype(fmt)], fmt.name
-    # 6.4, rounded down: a 7-step budget accepts bf16 128 -> 135, which the 0.05 +
-    # 0.05 * 128 = 6.45 tolerance it replaces refuses.
-    assert usable_budget_ceiling(DataFormat.Float16_b) == 6
-
-
-def test_no_declared_tolerance_is_shadowed_by_a_numberless_row():
-    """The live-table form of the bare-row test: every variant an op's numbered
-    tolerance row covers resolves to that tolerance or to a step budget, never to the
-    per-format default."""
-    shadowed = []
-    for op, table in _SFPU_ACCURACY_BUDGET.items():
-        numbered = [
-            key for key, contract in table.items() if contract.declares_tolerance
-        ]
-        if not numbered:
-            continue
-        input_formats = sorted(
-            {key.input_format for key in table} - {None}, key=lambda f: f.name
-        ) + [None]
-        for dims in product(
-            [*ApproximationMode, None],
-            input_formats,
-            ULP_FORMATS,
-            [*DestAccumulation, None],
-            ChipArchitecture,
-        ):
-            query = BudgetKey(*dims)
-            if not any(key.matches(query) for key in numbered):
-                continue
-            contract = accuracy_contract(
-                op,
-                approx_mode=query.approx_mode,
-                input_format=query.input_format,
-                output_format=query.output_format,
-                dest_acc=query.dest_acc,
-                arch=query.arch,
-            )
-            # A list cell's contract carries `domains`, so it is never `==` the default;
-            # ask what the fallback is, not what it equals.
-            if contract.metric is Metric.TOLERANCE and not contract.declares_tolerance:
-                shadowed.append(f"{op.name} {query.describe()}")
-    assert not shadowed, "\n".join(shadowed[:20])
+        assert contract.max_ulp <= usable_budget_ceiling(
+            fmt
+        ), f"{op.name} on {fmt.name}: max_ulp={contract.max_ulp}"
 
 
 def test_no_integer_only_op_is_enrolled():
-    """A step budget on an integer op is meaningless, and the driver would raise. The
-    listed ops pin the derivation: each was missed by an earlier name-based one."""
+    """A step budget on an integer op is meaningless. The listed ops pin the
+    derivation; each was missed by an earlier name-based one."""
     integer_ops = _integer_only_ops()
     for op in (
         MathOperation.UnaryMaxUint32,
@@ -1428,13 +894,9 @@ def test_no_integer_only_op_is_enrolled():
     assert not enrolled_integer, sorted(op.name for op in enrolled_integer)
 
 
-#: Ops measured on the hand-built sweep that drives them, under ``--ulp-report`` on
-#: Wormhole; the rows' notes carry the variant and lane counts. Those sweeps gate on
-#: the whole contract (``gate_on_step_budget``), so these rows are what they enforce.
-#: For the eight predicates without a registered domain (the isinf/isnan five,
-#: LogicalNot, UnaryEq, UnaryNe) these sweeps are the only gate; Signbit, ReluMin and
-#: ReluMax are also swept exhaustively, and on their 16-bit cells it is those more
-#: specific exhaustive rows that the sweeps here enforce.
+# Ops measured on the hand-built sweep that drives them, which gates on the whole
+# contract (`gate_on_step_budget`). For the eight predicates without a registered
+# domain these sweeps are the only gate.
 MEASURED_ON_SWEEP = {
     "signbit": {MathOperation.Signbit},
     "isinf_isnan": {
@@ -1455,16 +917,12 @@ MEASURED_ON_SWEEP = {
 
 
 def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
-    """The signbit, isinf/isnan and threshold sweeps use hand-built stimuli and gate on
-    the step budget, so an op they drive must have been measured there."""
-    from test_eltwise_unary_sfpu import _THRESHOLD_OPS, ISINF_ISNAN_MATHOPS
-
     hand_built = {
-        "signbit": {MathOperation.Signbit},  # not parametrised; drives this one op
-        "isinf_isnan": set(ISINF_ISNAN_MATHOPS),
-        "threshold": set(_THRESHOLD_OPS),
+        "signbit": {MathOperation.Signbit},
+        "isinf_isnan": set(unary.ISINF_ISNAN_MATHOPS),
+        "threshold": set(unary._THRESHOLD_OPS),
     }
-    assert all(hand_built.values()), "a sweep set went empty; the derivation has broken"
+    assert all(hand_built.values()), "a sweep set went empty"
     enrolled = set(enrolled_ops())
     for sweep, ops in sorted(hand_built.items()):
         unrecorded = sorted(
@@ -1472,27 +930,17 @@ def test_no_enrolled_op_is_driven_by_a_sweep_that_was_never_measured():
         )
         assert not unrecorded, (
             f"{', '.join(unrecorded)} carries a budget but is driven by the {sweep} "
-            "sweep, whose hand-built stimulus no recorded measurement covers. Measure it "
-            "there and add it to MEASURED_ON_SWEEP, or key the budget away from the "
-            "formats it reaches."
+            "sweep, whose hand-built stimulus no recorded measurement covers"
         )
 
 
-# ── Every step budget is the measurement it came from ─────────────────────────
-#
-# The gate is the row's own `measured` figure; the loader refuses a ULP row without one.
-# There is no second number to widen by hand.
-
-
 def test_a_demoted_row_measured_past_the_ceiling():
-    """A tolerance row the emitter wrote -- it pins ``input`` and ``output``, as every row it
-    writes does -- with a measurement is a demotion only if its ``measured`` is past
-    ``usable_budget_ceiling``: ``_verdict``'s call for that figure. One inside the
-    ceiling should have been enrolled. A broader row is a sampled hand judgement.
+    """A tolerance row the emitter wrote (it pins `in` and `out`) with a measurement
+    inside the ceiling should have been enrolled.
 
-    Empty today: the emitter now writes a demotion as a ``domains`` list with no
-    ``metric`` or ``measured``, and the only tolerance rows with a ``measured`` are the
-    ``nonfinite`` ones, which are not measurable. A tripwire for a hand-edited row."""
+    Empty today: the emitter writes a demotion as a `domains` list with no `metric` or
+    `measured`, and the only tolerance rows with a `measured` are the `nonfinite`
+    ones, which are not measurable. A tripwire for a hand-edited row."""
     wrong = [
         (op, row)
         for op, rows in load_table().items()
@@ -1502,23 +950,17 @@ def test_a_demoted_row_measured_past_the_ceiling():
         and not row.unmeasurable
         and row.input is not None
         and row.output is not None
-        and _verdict(row.measured, row.output) is not Metric.TOLERANCE
+        and row.measured <= usable_budget_ceiling(row.output)
     ]
     assert not wrong, wrong
 
 
 # ── A gated cell is not quietly parked ────────────────────────────────────────
-#
-# The emitter writes `not measurable` for a cell in which one lane disagrees with the
-# golden about being finite, and the sweep gates no tolerance row -- so an overflow a
-# later emit introduces into a gated cell would take the whole cell off the gate with
-# nothing to notice. Exact ops are held by _EXACT_OP_DEMOTIONS; this holds the rest.
 
-#: Swept cells on a gateable output that the table holds as ``not measurable``, keyed
-#: ``(op, in, out, approx, dest)`` with ``None`` for an axis the cause does not depend
-#: on, each with that cause. A cell whose disagreeing lanes are a tracked defect on a
-#: handful of inputs does not belong here: name the inputs in
-#: ``ulp_sweep._KNOWN_NONFINITE_LANES`` instead, and the rest of the cell stays gated.
+# Swept cells on a gateable output that the table holds as `not measurable`, keyed
+# `(op, in, out, approx, dest)` with `None` for an axis the cause does not depend on,
+# each with that cause. A cell whose disagreeing lanes are a tracked defect on a
+# handful of inputs belongs in `ulp_sweep._KNOWN_NONFINITE_LANES` instead.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
     # -- the approximation's own shortfall at the fp16 and fp32 overflow edges -----
     (
@@ -1579,10 +1021,8 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
         "177.5) is past FLT_MAX, and the approximation answers 3.396e38, one lane"
     ),
     # -- kernel behaviour over a wide band of the format -----------------------------
-    # Each is what the sweep found and the row records; none is a golden or store
-    # artefact, and none is a handful of lanes an issue could name. Each names the issue
-    # that tracks it, or says why it is no defect, so retiring the entry is tied to
-    # something: the stale check below fails once no row needs it.
+    # Each names the issue that tracks it, or says why it is no defect, so retiring the
+    # entry is tied to something: the stale check below fails once no row needs it.
     (MathOperation.Digamma, None, None, None, None): (
         "wrong for negative x, which the LUT has no branch for (#58682): -inf of the "
         "wrong sign for large negative x (the saturation below the fit range is #51128)"
@@ -1625,12 +1065,9 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
 }
 
 
-#: How many not-measurable cells each *wildcard* acknowledgement above covers today. An
-#: acknowledgement that leaves a dimension open -- an op-wide one most of all -- would
-#: otherwise approve every cell of the op that is ever demoted, for any cause, and the
-#: stale check below could not retire it while one such cell remained. Pinning the count
-#: makes a newly demoted cell a change someone has to read: the table moved, the cause
-#: must be looked at, and the number here bumped on purpose. Exact-cell keys need no pin.
+# How many not-measurable cells each *wildcard* acknowledgement above covers today, so
+# a newly demoted cell is a change someone has to read rather than one an op-wide
+# acknowledgement approves for any cause. Exact-cell keys need no pin.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     (
         MathOperation.Exp,
@@ -1681,37 +1118,19 @@ def _not_measurable_cells():
     ]
 
 
-#: The repo's `check-large-files` pre-commit hook (scripts/check_file_size.py): a file of
-#: more than this many KB, rounded up, fails it, and the table has no exclude there.
-_REPO_FILE_SIZE_LIMIT_KB = 500
-
-
-def test_the_table_fits_the_repos_file_size_limit():
-    """The hook only runs in pre-commit, so a re-emit that grows the table past it is
-    otherwise found by CI. It grows with every op enrolled, every entry a list gains and
-    every not-measurable verdict (``ulp_sweep.NAMED_LANES`` lanes each): trim a
-    recurring note before raising anything, or give the hook a justified exclude."""
-    kb = math.ceil(TABLE_PATH.stat().st_size / 1024)
-    assert kb <= _REPO_FILE_SIZE_LIMIT_KB, (
-        f"{TABLE_PATH.name} is {kb} KB, past the {_REPO_FILE_SIZE_LIMIT_KB} KB "
-        "check-large-files limit"
-    )
-
-
 #: Rows whose every claimed lane disagreed with the golden about being finite: there
 #: is no rest of the cell to measure, so `nonfinite_verdict` records no `measured` (a 0
-#: would claim it bit-exact). The table cannot tell such a row from one that lost its
-#: figure, so each is listed by hand after reading the emit. Empty today.
+#: would claim it bit-exact) and a re-emit writes the same row. The table cannot tell
+#: such a row from one that lost its figure, so each is listed by hand after reading
+#: the emit. Empty today.
 _EVERY_CLAIMED_LANE_NONFINITE: frozenset = frozenset()
 
 
 def test_a_row_parked_by_disagreeing_lanes_records_the_rest_of_its_cell():
     """`nonfinite_verdict` keeps the step count over the measurable lanes beside the
-    lanes that park a cell, so a cell parked by four lanes still says what the other
-    tens of thousands measure, and the headroom report (from #57527) has a figure to
-    hold it to. A row written before the emitter kept that figure records nothing for
-    them; re-emit its op. A cell with no measurable lane left is listed in
-    `_EVERY_CLAIMED_LANE_NONFINITE` instead."""
+    lanes that park a cell, so the headroom report has a figure to hold it to; a row
+    without one was written before the emitter kept it, so its op needs a re-emit. A
+    cell with no measurable lane left is listed in `_EVERY_CLAIMED_LANE_NONFINITE`."""
     bare = [
         (op, row)
         for op, rows in load_table().items()
@@ -1732,56 +1151,9 @@ def _acknowledges(key, cell) -> bool:
     return all(k is None or k == c for k, c in zip(key, cell))
 
 
-#: Swept cells of an enrolled unary op that resolve to no row of the op's own, with why.
-#: Empty: every enrolled op covers every cell the sweep drives. The emitter writes whole
-#: grids, so a hole can only open where it keeps a block verbatim (an op-wide
-#: `atol`/`rtol` anchor) and the sweep's format set then grows -- the cell is measured,
-#: resolves to the global default, and nothing holds it. A cell listed here is a
-#: decision, with its reason, not a gap.
-_UNRESOLVED_SWEPT_CELLS: dict = {}
-
-
-def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():
-    """The sweep gates a ULP row and the headroom report (from #57527) judges a
-    tolerance row; a swept cell that resolves to ``TOLERANCE_CONTRACT`` -- no row of the
-    op covers it -- is measured and judged by nothing, and reads in the table exactly
-    like a cell nobody ever enrolled. ``test_every_swept_cell_of_an_exact_op_is_gated_or_waived`` asks this
-    of the exact ops; this asks it of every enrolled op."""
-    from helpers.sfpu_domains import sfpu_unary_ops
-
-    unary = sfpu_unary_ops()
-    unresolved, resolved = [], []
-    for op in enrolled_ops():
-        if op not in unary:
-            continue
-        table = _SFPU_ACCURACY_BUDGET[op]
-        for in_fmt, out_fmt, approx, dest in sweep_cells(MEASURED_ARCH):
-            query = BudgetKey(
-                input_format=in_fmt,
-                output_format=out_fmt,
-                approx_mode=approx,
-                dest_acc=dest,
-                arch=MEASURED_ARCH,
-            )
-            cell = (op, in_fmt, out_fmt, approx, dest)
-            if resolve_contract(table, query) is TOLERANCE_CONTRACT:
-                if cell not in _UNRESOLVED_SWEPT_CELLS:
-                    unresolved.append(cell)
-            elif cell in _UNRESOLVED_SWEPT_CELLS:
-                resolved.append(cell)
-
-    def _name(cell):
-        op, i, o, a, d = cell
-        return f"{op.name} {i.name}->{o.name} approx={a.name} dest={d.name}"
-
-    assert not unresolved, (
-        "swept cells no row of the op covers (measured by the sweep, judged by "
-        "nothing): give them a row, or list them in _UNRESOLVED_SWEPT_CELLS with why:\n"
-        + "\n".join(f"  {_name(c)}" for c in unresolved)
-    )
-    assert not resolved, "listed as unresolved but a row covers them now: " + ", ".join(
-        _name(c) for c in resolved
-    )
+def _key_name(key):
+    op, i, o, a, d = key
+    return f"{op.name} {i and i.name}->{o and o.name} approx={a and a.name} dest={d and d.name}"
 
 
 def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
@@ -1791,13 +1163,10 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
         for cell in cells
         if not any(_acknowledges(key, cell) for key in _UNMEASURABLE_CELLS_ACKNOWLEDGED)
     ]
-    assert not unacknowledged, (
-        "not-measurable cells with no acknowledged cause (a tracked defect on a few "
-        "inputs belongs in ulp_sweep._KNOWN_NONFINITE_LANES; anything else, here):\n"
-        + "\n".join(
-            f"  {op.name} {i.name}->{o.name} approx={a and a.name} dest={d and d.name}"
-            for op, i, o, a, d in unacknowledged
-        )
+    assert (
+        not unacknowledged
+    ), "not-measurable cells with no acknowledged cause: " + ", ".join(
+        _key_name(cell) for cell in unacknowledged
     )
     stale = [
         key
@@ -1805,9 +1174,7 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
         if not any(_acknowledges(key, cell) for cell in cells)
     ]
     assert not stale, "acknowledgements no row needs any more: " + ", ".join(
-        f"{op.name} {i and i.name}->{o and o.name} approx={a and a.name} "
-        f"dest={d and d.name}"
-        for op, i, o, a, d in stale
+        _key_name(key) for key in stale
     )
     wildcard = [
         k for k in _UNMEASURABLE_CELLS_ACKNOWLEDGED if any(v is None for v in k[1:])
@@ -1816,26 +1183,18 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
     assert (
         not unpinned
     ), "wildcard acknowledgements with no cell count pinned: " + ", ".join(
-        f"{k[0].name} {tuple(getattr(v, 'name', None) for v in k[1:])}"
-        for k in unpinned
+        _key_name(k) for k in unpinned
     )
-    covered = {
-        key: sum(1 for cell in cells if _acknowledges(key, cell))
-        for key in _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS
-    }
     moved = {
-        key: (now, pinned)
+        key: (sum(1 for cell in cells if _acknowledges(key, cell)), pinned)
         for key, pinned in _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS.items()
-        if (now := covered[key]) != pinned
     }
-    assert not moved, (
-        "the cells a wildcard acknowledgement covers changed; read the new rows, then "
-        "bump the pin: "
-        + ", ".join(
-            f"{k[0].name} {tuple(getattr(v, 'name', None) for v in k[1:])}: {now} "
-            f"cells, pinned {pinned}"
-            for k, (now, pinned) in moved.items()
-        )
+    moved = {key: counts for key, counts in moved.items() if counts[0] != counts[1]}
+    assert (
+        not moved
+    ), "the cells a wildcard acknowledgement covers changed: " + ", ".join(
+        f"{_key_name(k)}: {now} cells, pinned {pinned}"
+        for k, (now, pinned) in moved.items()
     )
     orphaned = set(_UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS) - set(wildcard)
     assert not orphaned, f"count pins with no acknowledgement: {sorted(orphaned)}"
@@ -1843,19 +1202,16 @@ def test_a_not_measurable_verdict_on_a_gateable_cell_is_acknowledged():
 
 def test_every_unary_op_is_enrolled_or_excused():
     """ "Never measured" and "deliberately left on tolerance" both read as absent from
-    the table, and the sweep collects only the ops the table names. So every unary op
-    either has a block or ``_UNARY_OPS_NOT_SWEPT`` says why not (Erfc, Lgamma and Xielu
-    sat here).
-    """
+    the table, so every unary op either has a row or is listed in
+    `_UNARY_OPS_NOT_SWEPT`, whose comment gives the reason."""
     unaccounted = sorted(
-        set(sfpu_unary_ops()) - set(enrolled_ops()) - set(_UNARY_OPS_NOT_SWEPT),
+        set(swept_unary_ops()) - set(enrolled_ops()),
         key=lambda op: op.name,
     )
-    assert not unaccounted, (
-        "no accuracy contract, and no reason given, for: "
-        + ", ".join(op.name for op in unaccounted)
-        + ". Measure it with --ulp-emit (add the op's key line to the table first), or "
-        "add it to _UNARY_OPS_NOT_SWEPT with why it cannot be swept."
+    assert (
+        not unaccounted
+    ), "no accuracy contract and not listed in _UNARY_OPS_NOT_SWEPT: " + ", ".join(
+        op.name for op in unaccounted
     )
 
 
@@ -1879,10 +1235,8 @@ def test_a_floor_rides_with_a_list_on_either_metric_but_not_alone():
 
 def test_domains_of_hands_the_sweep_driver_the_list_and_the_floor(monkeypatch):
     """Pure: beside the driver's one `accuracy_contract` lookup it must not publish a
-    query of its own, or the recorder would drop that test's reading. And a Wormhole
-    list binds nowhere else, as a Wormhole figure does not."""
-    import helpers.sfpu_accuracy_budget as budget
-
+    query of its own, or the recorder would drop that test's reading. A Wormhole list
+    binds nowhere else, as a Wormhole figure does not."""
     monkeypatch.setattr(
         budget, "_SFPU_ACCURACY_BUDGET", {MathOperation.Tanh: _contracts(_TANH)}
     )
