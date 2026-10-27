@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <any>
 #include <cstdint>
 #include <tuple>
 
@@ -148,9 +149,12 @@ struct BinaryNgDeviceOperation {
 
         // Cache-hit re-apply of all per-dispatch state (per-core args + tensor-backed CB/buffer
         // addresses), since compute_program_hash excludes the tensor volume. Correct by construction —
-        // re-derives from the same shared builder create_descriptor() uses, no address inference. See the .cpp.
+        // re-derives from the same shared builder create_descriptor() uses, no address inference. `state`
+        // carries the last hit's builder inputs, so a hit that repeats them only rewrites buffer addresses.
+        // See the .cpp.
         static void override_runtime_arguments(
             tt::tt_metal::Program& program,
+            std::any& state,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& c,

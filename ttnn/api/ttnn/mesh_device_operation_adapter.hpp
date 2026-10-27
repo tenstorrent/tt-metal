@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <algorithm>
+#include <any>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -383,6 +384,9 @@ public:
             // Non-empty when the factory used emplace_runtime_args() with
             // Buffer* args (or, for the WorkloadDescriptor variant, declared any CB buffer binding).
             tt::tt_metal::ResolvedBindings resolved_bindings;
+            // What a factory's stateful override_runtime_arguments() keeps between hits of this
+            // program (see has_stateful_override_runtime_arguments). Empty for every other factory.
+            std::any override_state;
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -461,15 +465,47 @@ public:
         //
         // Only the factory is probed.  An override_runtime_arguments() on the DeviceOperation is
         // IGNORED — it compiles, and it is never invoked.
-        static consteval bool has_override_runtime_arguments() {
+        // The same hook taking a std::any& first: state the factory keeps per cached program between
+        // hits, empty on the first. It lets a factory skip re-deriving what has not changed since the
+        // last hit, as long as it can tell exactly what that is.
+        static consteval bool has_stateful_override_runtime_arguments() {
             return requires(
                 tt::tt_metal::Program& program,
+                std::any& state,
                 const operation_attributes_t& attrs,
                 const tensor_args_t& tensor_args,
                 tensor_return_value_t& tensor_return_value,
                 const std::optional<ttnn::MeshCoordinate>& coord) {
+                DescriptorFactory::override_runtime_arguments(
+                    program, state, attrs, tensor_args, tensor_return_value, coord);
+            };
+        }
+
+        static consteval bool has_override_runtime_arguments() {
+            return has_stateful_override_runtime_arguments() || requires(
+                                                                    tt::tt_metal::Program& program,
+                                                                    const operation_attributes_t& attrs,
+                                                                    const tensor_args_t& tensor_args,
+                                                                    tensor_return_value_t& tensor_return_value,
+                                                                    const std::optional<ttnn::MeshCoordinate>& coord) {
                 DescriptorFactory::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value, coord);
             };
+        }
+
+        static void call_override_runtime_arguments(
+            tt::tt_metal::Program& program,
+            shared_variables_t& sv,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRange& coordinate_range) {
+            const std::optional<ttnn::MeshCoordinate> coord(coordinate_range.start_coord());
+            if constexpr (has_stateful_override_runtime_arguments()) {
+                DescriptorFactory::override_runtime_arguments(
+                    program, sv.override_state, attrs, tensor_args, tensor_return_value, coord);
+            } else {
+                DescriptorFactory::override_runtime_arguments(program, attrs, tensor_args, tensor_return_value, coord);
+            }
         }
 
         // Same hook declared at DeviceOperation scope, which the adapter no longer probes.
@@ -669,12 +705,8 @@ public:
                     }
                     // Cache hit never rebuilds; re-apply hash-excluded args via the override hook.
                     if constexpr (has_override_runtime_arguments()) {
-                        DescriptorFactory::override_runtime_arguments(
-                            program,
-                            attrs,
-                            tensor_args,
-                            tensor_return_value,
-                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                        call_override_runtime_arguments(
+                            program, sv, attrs, tensor_args, tensor_return_value, coordinate_range);
                     } else {
                         apply_dynamic_runtime_args_if_declared(
                             program, attrs, tensor_args, tensor_return_value, coordinate_range);
@@ -685,12 +717,8 @@ public:
                     // every runtime arg AND every tensor-backed CB address — for the current tensors.
                     // No resolve_bindings (address inference) and no get_dynamic; correct by
                     // construction for in-place, mixed-aliasing, and work-set shifts.
-                    DescriptorFactory::override_runtime_arguments(
-                        program,
-                        attrs,
-                        tensor_args,
-                        tensor_return_value,
-                        std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                    call_override_runtime_arguments(
+                        program, sv, attrs, tensor_args, tensor_return_value, coordinate_range);
 #ifdef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
                     // Same regression net as the legacy fast path: assert the op's override reproduced a
                     // full rebuild exactly (rt-args AND CB addresses).

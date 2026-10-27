@@ -16,6 +16,9 @@
 #include <tt-metalium/math.hpp>
 
 #include <algorithm>
+#include <any>
+#include <array>
+#include <string>
 #include <variant>
 #include <vector>
 using namespace tt::tt_metal;
@@ -25,6 +28,22 @@ namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::binary_ng;
+
+// What override_runtime_arguments keeps between hits of one cached program: the builder inputs it last
+// applied that the program hash leaves out, and where the buffer addresses sit among the args it wrote.
+struct OverrideState {
+    struct BufferSlot {
+        CoreCoord core;
+        uint32_t arg_idx = 0;
+        uint8_t kernel = 0;   // reader 0, writer 1, compute 2
+        uint8_t operand = 0;  // a 0, b 1, c 2
+    };
+    std::string key;
+    std::optional<tt::tt_metal::TensorSpec> a_spec;
+    std::optional<tt::tt_metal::TensorSpec> b_spec;
+    std::optional<tt::tt_metal::TensorSpec> c_spec;
+    std::vector<BufferSlot> buffer_slots;
+};
 
 // For rank > 5 dims will be collapsed into a single dim
 uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
@@ -1444,6 +1463,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
 void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
+    std::any& state,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& c,
@@ -1500,19 +1520,74 @@ void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
         }
     };
 
-    for_each_core_runtime_args(
-        operation_attributes,
-        a,
-        b,
-        c,
-        [&](const CoreCoord& core,
-            const RuntimeArgList& reader_args,
-            const RuntimeArgList& writer_args,
-            const RuntimeArgList& compute_args) {
-            apply(core_args(reader_args_by_core, core), reader_args);
-            apply(core_args(writer_args_by_core, core), writer_args);
-            apply(core_args(compute_args_by_core, core), compute_args);
-        });
+    // The builder's output is a function of the program hash's inputs, which a hit already shares, and of
+    // the inputs compared below. When they match the last hit's, every per-core arg the builder would write
+    // is the one already in the program, except the buffer-address slots: those alone are rewritten, from
+    // the operands they were recorded for. The comparison is exact: the tensor specs by value, the small
+    // fields by their canonical encoding -- not a 64-bit hash, since ttsl's hash of a variant folds the
+    // active index in additively and the scalar 0 (uint32) and -1 (int32) hash alike.
+    Buffer* const a_buffer_now = a.buffer();
+    Buffer* const b_buffer_now = b.has_value() ? b->buffer() : nullptr;
+    Buffer* const c_buffer_now = c.buffer();
+    std::string key = ttsl::hash::canonical_key(
+        operation_attributes.scalar,
+        operation_attributes.post_activations,
+        operation_attributes.input_dtype,
+        operation_attributes.rtol,
+        operation_attributes.atol,
+        operation_attributes.equal_nan,
+        operation_attributes.op_params,
+        a_buffer_now == c_buffer_now,
+        b_buffer_now == c_buffer_now,
+        a_buffer_now == b_buffer_now);
+    auto* hit_state = std::any_cast<CMAKE_UNIQUE_NAMESPACE::OverrideState>(&state);
+    const auto same_spec = [](const std::optional<tt::tt_metal::TensorSpec>& last, const Tensor* now) {
+        return now == nullptr ? !last.has_value() : last.has_value() && *last == now->tensor_spec();
+    };
+    if (hit_state != nullptr && hit_state->key == key && same_spec(hit_state->a_spec, &a) &&
+        same_spec(hit_state->b_spec, b.has_value() ? &*b : nullptr) && same_spec(hit_state->c_spec, &c)) {
+        std::array<std::vector<std::vector<tt::tt_metal::RuntimeArgsData>>*, 3> tables{
+            &reader_args_by_core, &writer_args_by_core, &compute_args_by_core};
+        const std::array<Buffer*, 3> operands{a_buffer_now, b_buffer_now, c_buffer_now};
+        for (const auto& slot : hit_state->buffer_slots) {
+            core_args(*tables[slot.kernel], slot.core)[slot.arg_idx] =
+                static_cast<uint32_t>(operands[slot.operand]->address());
+        }
+    } else {
+        CMAKE_UNIQUE_NAMESPACE::OverrideState recorded{
+            .key = std::move(key),
+            .a_spec = a.tensor_spec(),
+            .b_spec = b.has_value() ? std::optional<tt::tt_metal::TensorSpec>{b->tensor_spec()} : std::nullopt,
+            .c_spec = c.tensor_spec()};
+        const auto record = [&](uint8_t kernel, const CoreCoord& core, const RuntimeArgList& args) {
+            for (uint32_t arg_idx = 0; arg_idx < static_cast<uint32_t>(args.size()); ++arg_idx) {
+                const auto* buffer = std::get_if<tt::tt_metal::Buffer*>(&args[arg_idx]);
+                if (buffer == nullptr) {
+                    continue;
+                }
+                // Aliased operands share a buffer and are written the same address whichever one is recorded.
+                const uint8_t operand = *buffer == c_buffer_now ? 2 : (*buffer == a_buffer_now ? 0 : 1);
+                recorded.buffer_slots.push_back({core, arg_idx, kernel, operand});
+            }
+        };
+        for_each_core_runtime_args(
+            operation_attributes,
+            a,
+            b,
+            c,
+            [&](const CoreCoord& core,
+                const RuntimeArgList& reader_args,
+                const RuntimeArgList& writer_args,
+                const RuntimeArgList& compute_args) {
+                apply(core_args(reader_args_by_core, core), reader_args);
+                apply(core_args(writer_args_by_core, core), writer_args);
+                apply(core_args(compute_args_by_core, core), compute_args);
+                record(kReaderKernelIdx, core, reader_args);
+                record(kWriterKernelIdx, core, writer_args);
+                record(kComputeKernelIdx, core, compute_args);
+            });
+        state = std::move(recorded);
+    }
 
     // Re-point tensor-backed (globally-allocated) circular buffers at the CURRENT buffers, by CBIndex.
     // binary_ng convention: c_0 = input_a, c_1 = input_b, c_2 = output.  Addressing by CBIndex (not by
