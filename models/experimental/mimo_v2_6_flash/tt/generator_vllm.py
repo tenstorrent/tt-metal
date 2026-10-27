@@ -133,7 +133,7 @@ from ..reference.spec_decode import (
     plan_mtp,
     plan_verify_passes,
 )
-from .attention import PAIR_SPLIT_OPS, page_table_width
+from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped
 from .device_sampler import CANDIDATES_PER_CHIP, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
@@ -1173,7 +1173,8 @@ class MiMoV2ForCausalLM:
             groups = None
             if DRAFT_GROUPS > 1:  # each row in its request's draft group
                 groups = {first + s: g for s, g in self._draft_groups(lane, live).items() if g is not None}
-            passes = plan_verify_passes(active, groups=groups)
+            # The grouped verify attention scans each group's KV once: one request per group (verify_grouped).
+            passes = plan_verify_passes(active, groups=groups, aligned=KV_PAIR_SPLIT and verify_grouped())
             lanes.append(passes)
             lane_sources = sources[lane] = draft_sources(passes)
             # The draft sources run one pass: its chain row goes with it, a block per source.

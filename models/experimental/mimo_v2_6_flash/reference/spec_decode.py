@@ -77,11 +77,13 @@ class VerifyPass:
         return sum(p >= 0 for p in self.positions)
 
 
-def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SLOTS):
+def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SLOTS, aligned=False):
     """rows: (row, tokens [1 + K], positions [1 + K], num_valid_drafts) of a lane's active rows, in batch order.
     Returns the lane's passes. A row takes columns 0 .. num_valid_drafts, in consecutive slots of one pass. With draft
     groups (``group_slots`` < ``slots``) each row starts a group: its own (``groups`` {row: group}, the request's
-    sticky group) in the first pass where that group is free, or the first free group."""
+    sticky group) in the first pass where that group is free, or the first free group. ``aligned`` (the grouped
+    verify attention, one KV scan per group: tt/attention.py verify_grouped): without draft groups too, each row
+    starts a pass of its own, so every group of slots holds one request."""
     passes = []
     multi = group_slots < slots
 
@@ -104,7 +106,7 @@ def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SL
                 passes.append(p)
             first = g * group_slots
         else:
-            if not passes or passes[-1].used + width > slots:
+            if not passes or passes[-1].used + width > slots or (aligned and passes[-1].used > 0):
                 passes.append(VerifyPass())
             p = passes[-1]
             first = p.used

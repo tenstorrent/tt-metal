@@ -72,6 +72,16 @@ def test_a_joining_request_gets_its_own_pass():
     assert draft_source(passes) is None
 
 
+def test_aligned_rows_never_share_a_group():
+    """``aligned`` (the grouped verify attention scans each group's KV once): rows that would share a pass
+    (test_rows_share_a_pass_while_they_fit) get a pass each without draft groups. With draft groups each row starts
+    its own group anyway."""
+    rows = [(0, [1, 2, -1, -1], [5, 6, -1, -1], 1), (1, [3, -1, -1, -1], [9, -1, -1, -1], 0)]
+    passes = plan_verify_passes(rows, slots=4, group_slots=4, aligned=True)
+    assert [p.positions for p in passes] == [[5, 6, -1, -1], [9, -1, -1, -1]]
+    assert [p.table_rows for p in passes] == [[0, 0, None, None], [1, None, None, None]]
+
+
 def test_plan_rejects_a_block_wider_than_a_pass(expect_error):
     with expect_error(ValueError, "4 drafts need 5 slots, a pass has 4"):
         plan_verify_passes([(0, [1] * 5, [1, 2, 3, 4, 5], 4)])
