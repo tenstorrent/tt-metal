@@ -30,6 +30,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import shared_memory
 
 import cv2
@@ -202,6 +203,58 @@ class Mjpeg:
         with self.cond:
             self.jpeg = jpeg
             self.cond.notify_all()
+
+
+class StripJpeg:
+    """
+    One baseline JPEG of an image, encoded as horizontal strips on several threads (cv2.imencode releases the GIL)
+    and joined with restart markers. Each strip is a whole number of 16-row MCU rows (4:2:0) encoded with the same
+    quality and standard Huffman tables, and a restart marker resets the DC prediction, so the strips' entropy-coded
+    data can follow each other under the first strip's header (height patched, DRI added). ~6 ms for the 2340 x 1152
+    mosaic on one thread.
+    """
+
+    MCU = 16
+
+    def __init__(self, height, width, strips=4, quality=80):
+        mcu_rows = -(-height // self.MCU)
+        per = -(-mcu_rows // strips)
+        self.bounds = [(r * self.MCU, min(height, (r + per) * self.MCU)) for r in range(0, mcu_rows, per)]
+        self.restart = per * -(-width // self.MCU)  # MCUs per strip (the last strip may be shorter)
+        self.height = height
+        self.params = [cv2.IMWRITE_JPEG_QUALITY, quality, cv2.IMWRITE_JPEG_OPTIMIZE, 0]
+        self.pool = ThreadPoolExecutor(len(self.bounds))
+
+    @staticmethod
+    def _split(jpeg):
+        """(header up to and including the SOS segment, entropy-coded data without EOI)."""
+        i = 2  # after SOI
+        while True:
+            marker, length = jpeg[i + 1], int.from_bytes(jpeg[i + 2 : i + 4], "big")
+            i += 2 + length
+            if marker == 0xDA:  # SOS
+                return jpeg[:i], jpeg[i:-2]
+
+    def encode(self, img):
+        parts = list(
+            self.pool.map(lambda b: cv2.imencode(".jpg", img[b[0] : b[1]], self.params)[1].tobytes(), self.bounds)
+        )
+        header, first = self._split(parts[0])
+        header = bytearray(header)
+        i = 2
+        while True:  # patch the frame height in SOF0, insert DRI before SOS
+            marker, length = header[i + 1], int.from_bytes(header[i + 2 : i + 4], "big")
+            if marker == 0xC0:
+                header[i + 5 : i + 7] = self.height.to_bytes(2, "big")
+            if marker == 0xDA:
+                header[i:i] = b"\xff\xdd\x00\x04" + self.restart.to_bytes(2, "big")
+                break
+            i += 2 + length
+        out = [bytes(header), first]
+        for k, part in enumerate(parts[1:]):
+            out += [bytes([0xFF, 0xD0 + k % 8]), self._split(part)[1]]
+        out.append(b"\xff\xd9")
+        return b"".join(out)
 
 
 class Recorder:
@@ -466,16 +519,19 @@ class PrepPool:
 def render_process(make_display, args, num_streams, chips, render_q, ready_q):
     """
     Separate process: as soon as results arrive (merging any that queued meanwhile), their tiles are drawn and the
-    mosaic is composed and published as MJPEG; the latest mosaic is recorded on a fixed --fps clock (real-time video).
+    mosaic is published as MJPEG (JPEG encoded in parallel strips, panel redrawn at most 10 times a second); the
+    latest mosaic is recorded on a fixed --fps clock (real-time video).
     On-screen latency is per result: capture of a tile's frame to the publication of the first mosaic showing it.
     make_display(args, num_streams, chips) gives an object with canvas, tile(s, frame_idx, dets, fps) and
     panel(stats, counts).
     """
     display = make_display(args, num_streams, chips)
     mjpeg = Mjpeg(args.port) if args.port else None
+    jpeg = StripJpeg(*display.canvas.shape[:2]) if mjpeg else None
     writer = Recorder(args.record, display.canvas.shape[1], display.canvas.shape[0], args.fps) if args.record else None
     ready_q.put("ready")
     period = 1.0 / args.fps
+    panel_period, panel_at = 0.1, 0.0  # the panel (~2 ms) is redrawn at most 10 times a second
     counts, captured = [0] * num_streams, [None] * num_streams
     stats, recent, all_latencies, composed = {}, deque(maxlen=20 * num_streams), [], deque()
     recorded, next_record, last = 0, None, None
@@ -501,9 +557,11 @@ def render_process(make_display, args, num_streams, chips, render_q, ready_q):
                 counts[s], captured[s] = len(dets), cap
                 fresh.add(s)
         if fresh and "stream_fps" in stats:
-            display.panel({**stats, **shown}, counts)
+            if time.perf_counter() - panel_at >= panel_period:
+                display.panel({**stats, **shown}, counts)
+                panel_at = time.perf_counter()
             if mjpeg:
-                mjpeg.publish(cv2.imencode(".jpg", display.canvas, [cv2.IMWRITE_JPEG_QUALITY, 80])[1].tobytes())
+                mjpeg.publish(jpeg.encode(display.canvas))
             now = time.perf_counter()
             ages = [(now - captured[s]) * 1000 for s in fresh]
             recent.extend(ages)

@@ -55,6 +55,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0033 | How did batch 4 reach ~9.4 ms per camera group? Is it async? (summary of 0026-0032) | 2026-10-27 | ANSWERED: pipelined across processes and both command queues; no group queues behind another; chip work unchanged (~6 ms per batch of 4) |
 | YOLO26-0034 | Batch 20 before / after table; how batch 20 combines L1 and DRAM | 2026-10-27 | ANSWERED: 108.3 → 44.6 ms (all cameras), on screen 110.7 → 53.0 ms; every layer computes in L1 in groups (4 above 20×20, 8 at 20×20), DRAM only holds full-batch stage tensors |
 | YOLO26-0035 | Why on-screen latency exceeds capture-to-results, and by different amounts per configuration; synchronized batch 4 | 2026-10-27 | ANSWERED: ~9 ms fixed display work (panel ~2 ms, JPEG ~6 ms) plus up to one compose of waiting when the renderer is busy; synchronized batch 4 11.5 → 35.3 ms by set |
+| YOLO26-0036 | Cut the on-screen (display) overhead: parallel strip JPEG + panel at 10 Hz | 2026-10-27 | DONE: on screen bs4 staggered 21.4 → 11.3 ms, bs4 synchronized 34.2 → 24.6, bs20 53.0 → 48.0; live-view image identical; panel may lag tiles ≤ 100 ms |
 
 ## Entries
 
@@ -1148,3 +1149,30 @@ the smaller gap only because it updates the screen 5× less often.
   not included.
 - To shrink it: the JPEG encode first (smaller live-view image or lower quality), then the panel (redraw it less
   often than the tiles); both cut the fixed part and the waiting.
+
+### YOLO26-0036 — display overhead: parallel strip JPEG and panel at 10 Hz (appended 2026-10-27)
+
+Chosen from the options in YOLO26-0035 (user): 3a (encode in parallel) and 2 (panel less often). The recording is
+unaffected by both (it takes the raw full-resolution mosaic and encodes with ffmpeg).
+
+1. `StripJpeg` (`demo/multistream_demo.py`): the live-view JPEG is encoded as 4 horizontal strips on 4 threads
+   (`cv2.imencode` releases the GIL) and joined into one baseline JPEG: each strip is a whole number of 16-row MCU
+   rows (4:2:0), all strips share quality 80 and the standard Huffman tables (no optimize), restart markers between
+   strips reset the DC prediction, the first strip's header gets the full height and a DRI segment. MEASURED
+   (`scratchpad/bench/strip_check.py`, the 2340×1152 demo snapshot): the merged JPEG decodes to the same pixels as a
+   single-pass encode (max difference 0), 495 vs 495 KB; single-thread 3.85 ms, 2 strips 2.03 ms, 4 strips 1.04 ms,
+   6 strips 0.75 ms → 4 strips used.
+2. Side panel redrawn at most every 100 ms (was every update); tiles still update on every result. Trade-off seen in
+   the snapshot: a panel row can lag its tile by up to 100 ms (e.g. CAM 16 tile 1, panel 0).
+
+MEASURED (1 chip, 20 × 30 FPS, 60 s, live view on; capture → results unchanged):
+| | bs=4, 20 streams (staggered) | bs=4, 20 streams (synchronized) | bs=20, 20 streams (one pass) |
+|---|---|---|---|
+| capture → results | 9.4 ms every set | 11.2 / 16.8 / 22.5 / 28.1 / 35.0 ms by set | 44.4 ms |
+| on screen before (YOLO26-0035) | 21.4 ms | 34.2 ms | 53.0 ms |
+| on screen now | 11.3 ms | 24.6 ms | 48.0 ms |
+| throughput | 600.0 images/s | 600.0 images/s | 599.9 images/s |
+(on screen = median over all cameras' results, capture → first published live-view frame showing them.)
+INFERRED: staggered bs4 gap 12 → ~2 ms: with ~1 ms encode and ~0.2 ms tiles a compose is shorter than the 6.7 ms
+between sets, so results no longer wait for a previous compose; bs20 gap 8.4 → 3.6 ms (one compose per tick, encode
+~6 → ~1 ms, panel skipped on most ticks... at 30 updates/s every third tick redraws it).
