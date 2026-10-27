@@ -51,7 +51,7 @@ void kernel_main() {
 
         // inv = rsqrt(sum_j rowsum(sq_j) / 128 + eps), column 0
         cb_wait_front(cb_sq, 4);
-        reconfig_data_format(cb_sq, cb_scaler);
+        reconfig_data_format(cb_scaler, cb_sq);  // row-sum reduce: scaler -> SrcA, data -> SrcB (MVMUL)
         pack_reconfig_data_format(cb_inv);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sq, cb_scaler, cb_inv);
         cb_reserve_back(cb_inv, 1);
