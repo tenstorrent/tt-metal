@@ -311,11 +311,11 @@ SDPAForwardSchedule schedule_pieces(
         }
     }
 
-    // Longest first. A sender or whole item goes to the least loaded core. A merger runs its own steps,
-    // then waits for its senders' partials, then merges: it goes to the core where it ends earliest, at
-    // most kMaxMergersPerCore per core (one semaphore each). Per core the senders run first, in assignment
-    // order, which fixes when each partial is ready; mergers sort by their own steps so their senders (which
-    // carry at least as many) are placed before them.
+    // Longest first, in two passes. Senders and whole items go to the least loaded core. Then each merger
+    // goes where it ends earliest given its own steps, when its senders' partials are ready and the core's
+    // load, at most kMaxMergersPerCore per core (one semaphore each). The kernels run a core's senders
+    // first, in this assignment order, which is what fixes when each partial is ready; then the whole items;
+    // then the mergers, in their assignment order. So the placement sees the loads the kernels will see.
     const double merge = merge_us(shape, chunks, num_cores);
     std::vector<uint32_t> order(pieces.size());
     std::iota(order.begin(), order.end(), 0U);
@@ -327,6 +327,22 @@ SDPAForwardSchedule schedule_pieces(
     std::vector<double> loads(num_cores, 0.0);
     std::vector<double> sender_load(num_cores, 0.0);  // the senders' part of the load, they run first
     std::vector<double> finish(pieces.size(), 0.0);   // senders: when the partial is in scratch
+    std::vector<uint32_t> seq(pieces.size(), 0U);     // assignment order, the kernels' order within a role
+    uint32_t next_seq = 0U;
+    for (const uint32_t p : order) {
+        Piece& piece = pieces[p];
+        if (piece.unit.role == UnitRole::Merger) {
+            continue;
+        }
+        const uint32_t best = static_cast<uint32_t>(std::min_element(loads.begin(), loads.end()) - loads.begin());
+        piece.core = best;
+        seq[p] = next_seq++;
+        loads[best] += piece.cost;
+        if (piece.unit.role == UnitRole::Sender) {
+            sender_load[best] += piece.cost;
+            finish[p] = sender_load[best];
+        }
+    }
     std::vector<uint32_t> mergers(num_cores, 0U);
     std::vector<uint32_t> cut_of_piece(pieces.size(), 0U);
     for (uint32_t c = 0; c < cuts.size(); ++c) {
@@ -337,13 +353,6 @@ SDPAForwardSchedule schedule_pieces(
     for (const uint32_t p : order) {
         Piece& piece = pieces[p];
         if (piece.unit.role != UnitRole::Merger) {
-            const uint32_t best = static_cast<uint32_t>(std::min_element(loads.begin(), loads.end()) - loads.begin());
-            piece.core = best;
-            loads[best] += piece.cost;
-            if (piece.unit.role == UnitRole::Sender) {
-                sender_load[best] += piece.cost;
-                finish[p] = sender_load[best];
-            }
             continue;
         }
         const Cut& cut = cuts[cut_of_piece[p]];
@@ -366,9 +375,11 @@ SDPAForwardSchedule schedule_pieces(
         }
         TT_FATAL(best < num_cores, "sdpa schedule: no core can take another merger");
         piece.core = best;
+        seq[p] = next_seq++;
         loads[best] = best_end;
         ++mergers[best];
     }
+
     // Scratch slots (consecutive per item) and semaphores (per merger on its core).
     SDPAForwardSchedule schedule;
     std::vector<uint32_t> sem_on_core(num_cores, 0U);
@@ -385,24 +396,33 @@ SDPAForwardSchedule schedule_pieces(
         schedule.num_slots += cut.n - 1U;
     }
 
-    // Per core: senders, then whole items folded into runs, then mergers.
+    // Per core: senders in assignment order, then whole items folded into runs, then mergers in
+    // assignment order.
     schedule.per_core.assign(num_cores, {});
+    std::vector<std::vector<uint32_t>> senders(num_cores);
     std::vector<std::vector<uint32_t>> whole_items(num_cores);
-    std::vector<CoreUnits> merger_units(num_cores);
-    for (const Piece& piece : pieces) {
+    std::vector<std::vector<uint32_t>> merger_pieces(num_cores);
+    for (uint32_t p = 0; p < pieces.size(); ++p) {
+        const Piece& piece = pieces[p];
         switch (piece.unit.role) {
-            case UnitRole::Sender: schedule.per_core[piece.core].push_back(piece.unit); break;
+            case UnitRole::Sender: senders[piece.core].push_back(p); break;
             case UnitRole::Whole: whole_items[piece.core].push_back(piece.unit.item); break;
-            case UnitRole::Merger: merger_units[piece.core].push_back(piece.unit); break;
+            case UnitRole::Merger: merger_pieces[piece.core].push_back(p); break;
         }
     }
+    auto by_seq = [&](uint32_t a, uint32_t b) { return seq[a] < seq[b]; };
     for (uint32_t core = 0; core < num_cores; ++core) {
+        std::sort(senders[core].begin(), senders[core].end(), by_seq);
+        for (const uint32_t p : senders[core]) {
+            schedule.per_core[core].push_back(pieces[p].unit);
+        }
         std::sort(whole_items[core].begin(), whole_items[core].end());
         for (const uint32_t item : whole_items[core]) {
             append_item(schedule.per_core[core], item);
         }
-        for (const WorkUnit& unit : merger_units[core]) {
-            schedule.per_core[core].push_back(unit);
+        std::sort(merger_pieces[core].begin(), merger_pieces[core].end(), by_seq);
+        for (const uint32_t p : merger_pieces[core]) {
+            schedule.per_core[core].push_back(pieces[p].unit);
         }
     }
     if (!fits_runtime_args(schedule.per_core)) {
