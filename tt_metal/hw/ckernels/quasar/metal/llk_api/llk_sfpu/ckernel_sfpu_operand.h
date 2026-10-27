@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <type_traits>
+#include <utility>
+
 #include "sfpi.h"
 #include "sfpu_reg.h"
 
@@ -28,13 +31,9 @@ sfpi_inline auto sfpu_operand_access(int index) {
 }  // namespace detail
 
 /**
- * @brief Load/store policy using SFPI's layout and vector-type conversions.
+ * @brief Load/store policy between a register LAYOUT and a VALUE vector type.
  *
- * LAYOUT is the register-file representation, VALUE the vector type it converts to (e.g. F16b
- * with vFloat). SFPI enforces the legal pairs.
- *
- * @tparam STORE_ADDR_MODE: NOINC (default) or a Dest ADDR_MOD_* that advances the cursor; the
- *         caller programs that mode. SrcS stores must use NOINC.
+ * @tparam STORE_ADDR_MODE: NOINC (default) or a Dest ADDR_MOD_*; SrcS stores must use NOINC.
  */
 template <sfpi::DataLayout LAYOUT, typename VALUE, int STORE_ADDR_MODE = sfpi::SFPSTORE_ADDR_MODE_NOINC>
 struct SfpiFormat {
@@ -56,12 +55,9 @@ struct SfpiFormat {
 };
 
 /**
- * @brief One SFPU input or output operand: register file, format policy and base offset.
+ * @brief One SFPU operand: register file, format and base offset.
  *
- * Indices are SFPI steps (one step = SFP_ROWS rows), not tile indices or raw addresses. Dest is
- * relative to the current cursor; SrcS to UnpackSrcS's base. An operand never advances the Dest
- * cursor (unless FORMAT's store mode does) and never completes SrcS slices; the caller owns
- * traversal and synchronization.
+ * Indices are SFPI steps (SFP_ROWS rows each), not tile indices.
  */
 template <SfpuReg REG, typename FORMAT>
 class SfpuOperand {
@@ -81,5 +77,42 @@ public:
 private:
     int base_offset_;
 };
+
+/**
+ * @brief output[d] = MATH::apply(input[d]) for d < ITERATIONS, on Dest or SrcS operands.
+ *
+ * @tparam MATH: Math policy with a static apply().
+ */
+template <typename MATH, int ITERATIONS, typename Input, typename Output>
+sfpi_inline void calculate_unary_operands(const Input& input, const Output& output) {
+    static_assert(ITERATIONS > 0, "A unary SFPU op requires at least one SFPI access");
+    static_assert(
+        std::is_same_v<decltype(MATH::apply(std::declval<typename Input::value_type>())), typename Output::value_type>,
+        "MATH::apply must map the input operand's value type to the output operand's value type");
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        output.store(d, MATH::apply(input.load(d)));
+    }
+}
+
+/**
+ * @brief output[d] = MATH::apply(input0[d], input1[d]) for d < ITERATIONS, on Dest or SrcS operands.
+ *
+ * @tparam MATH: Math policy with a static apply().
+ */
+template <typename MATH, int ITERATIONS, typename Input0, typename Input1, typename Output>
+sfpi_inline void calculate_binary_operands(const Input0& input0, const Input1& input1, const Output& output) {
+    static_assert(ITERATIONS > 0, "A binary SFPU op requires at least one SFPI access");
+    static_assert(
+        std::is_same_v<
+            decltype(MATH::apply(
+                std::declval<typename Input0::value_type>(), std::declval<typename Input1::value_type>())),
+            typename Output::value_type>,
+        "MATH::apply must map the input operands' value types to the output operand's value type");
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        output.store(d, MATH::apply(input0.load(d), input1.load(d)));
+    }
+}
 
 }  // namespace ckernel::sfpu
