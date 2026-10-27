@@ -118,6 +118,28 @@ TEST_F(ScatterCodegenPrimFixture, RejectsADestinationOfAnotherShapeDtypeLayoutOr
     }
 }
 
+TEST_F(ScatterCodegenPrimFixture, RejectsTransposedTilesOnAProgramCacheHit) {
+    // A Tile's attribute values carry its shape and faces but not its transpose flags, so operands in
+    // transposed 32x32 tiles hash like default-tile ones: the second call below hits the first
+    // call's program, and only the hit-time checks keep its tiles off the fixed-face readers.
+    device_->enable_program_cache();
+    const Operands plain = make_operands(device_, 64);
+    EXPECT_NO_THROW(run(plain, std::nullopt));
+    const tt::tt_metal::Tile transposed({32, 32}, /*transpose_tile=*/true);
+    const auto with_tile = [&](const Tensor& t) {
+        const tt::tt_metal::TensorSpec spec(
+            t.logical_shape(),
+            tt::tt_metal::TensorLayout(
+                t.dtype(), tt::tt_metal::PageConfig(Layout::TILE, transposed), t.memory_config()));
+        return ttnn::create_device_tensor(spec, device_);
+    };
+    const Operands transposed_ops{with_tile(plain.input), with_tile(plain.index), with_tile(plain.src)};
+    EXPECT_FALSE(
+        supported_by_codegen(transposed_ops.input, -1, transposed_ops.index, transposed_ops.src, kReductionNone));
+    EXPECT_THROW(run(transposed_ops, std::nullopt), std::exception);
+    device_->disable_and_clear_program_cache();
+}
+
 // A device opened with an L1_SMALL region: the allocator's L1 bank stops below that region, and the
 // occupancy query the live budget reads never reports the buffers living in it.
 class ScatterCodegenL1SmallFixture : public TTNNFixtureBase {
