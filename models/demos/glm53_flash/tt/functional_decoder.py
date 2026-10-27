@@ -390,8 +390,11 @@ class FunctionalDecoder(LightweightModule):
     def _dense_bound(self, host_positions: list[int]) -> list[int]:
         return [min(p, self.layer.attn.dense_exact_max_pos) for p in host_positions]
 
-    def update_decode_positions(self, dp: DecodePositions, host_positions: list[int]):
-        """Refresh the persistent position tensors in place (trace-replay safe)."""
+    def update_decode_positions(self, dp: DecodePositions, host_positions: list[int], *, upload: bool = True):
+        """Refresh the persistent position tensors in place (trace-replay safe): ``3 + users_per_chip`` (+1 with
+        ``dense_positions``, +1 per sparse tensor) ``copy_host_to_device_tensor`` calls. ``upload=False`` keeps the
+        host bookkeeping only (``dp.host``, the sparse regime refresh / guard): the packed decode inputs
+        (``GLM53_DECODE_PACKED_INPUTS``, ``GLM53MeshModel.load_decode_inputs``) carry the device values."""
         if len(host_positions) != self.total_users:
             raise ValueError(f"{len(host_positions)} positions for {self.total_users} user slots")
         P = self.cfg.index_kpool
@@ -406,7 +409,10 @@ class FunctionalDecoder(LightweightModule):
         if dp.dense_positions is not None:
             updates.append((dp.dense_positions, self._dense_bound(host_positions)))
         if dp.sparse is not None:
-            dp.sparse.update(host_positions, self.cfg, mesh=self.mesh, partition=self.partition)
+            dp.sparse.update(host_positions, self.cfg, mesh=self.mesh, partition=self.partition, upload=upload)
+        if not upload:
+            dp.host = list(host_positions)
+            return
         for t, vals in updates:
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(

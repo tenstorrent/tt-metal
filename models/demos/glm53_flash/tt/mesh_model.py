@@ -11,6 +11,7 @@ Memory per chip at 8x4: experts 42 layers x 7.7 GB / 32 ~ 10 GB, non-expert weig
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from pathlib import Path
@@ -21,10 +22,12 @@ from loguru import logger
 import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
+from models.demos.glm53_flash.tt.dsa import dense_exact_max_pos
 from models.demos.glm53_flash.tt.embedding import TtEmbedding
 from models.demos.glm53_flash.tt.functional_decoder import DecodePositions, FunctionalDecoder, PrefillTraceCall
 from models.demos.glm53_flash.tt.mesh import GLMMesh
 from models.demos.glm53_flash.tt.model_head import TtModelHead
+from models.demos.glm53_flash.tt.packed_inputs import UINT32, PackedDecodeLayout
 from models.demos.glm53_flash.tt.trace_prefill import (
     DEFAULT_LENGTHS,
     PrefillSlot,
@@ -71,6 +74,108 @@ def eager_pad_length(seq_len: int, unit: int, buckets: tuple[int, ...] | None = 
         if T <= b:
             return b
     return T
+
+
+PACKED_INPUTS_ENV = "GLM53_DECODE_PACKED_INPUTS"
+
+
+def packed_inputs_enabled() -> bool:
+    """``GLM53_DECODE_PACKED_INPUTS=1``: one packed host->device upload per decode step (``tt/packed_inputs.py``)
+    instead of the per-field refreshes. Default off until validated on the device
+    (``tests/test_decode_packed_inputs_mesh.py``)."""
+    return os.environ.get(PACKED_INPUTS_ENV, "0") == "1"
+
+
+class PackedDecodeInputs:
+    """The device side of ``GLM53_DECODE_PACKED_INPUTS`` (layout: ``tt/packed_inputs.py``): one persistent int32
+    ``[1, 1, H, W]`` ROW_MAJOR segment per chip, refreshed with ONE ``copy_host_to_device_tensor`` per step
+    (``upload``), and the trace-safe unpack that copies every field into the EXISTING persistent decode inputs at
+    the start of the decode step (``unpack``): one ``ttnn.bitcast`` of the segment to uint32 (the ids / tail_pool /
+    valid_len fields), then per field a ROW_MAJOR ``ttnn.slice`` (row fields ``[1,1,1,n]``, column fields
+    ``[1,1,n,1]``), a free ``ttnn.reshape`` view to the field's shape (the last dim is unchanged) and a ``ttnn.copy``
+    into the field tensor; the consumers of ``DecodePositions`` / ``SparseDecodeMeta`` / ``ids_dev`` never change.
+    Allocate it before any trace capture (``GLM53MeshModel.warmup_decode``)."""
+
+    def __init__(self, mesh: GLMMesh, layout: PackedDecodeLayout, host: torch.Tensor):
+        self.mesh = mesh
+        self.layout = layout
+        if tuple(host.shape) != layout.host_shape:
+            raise ValueError(f"packed host tensor {tuple(host.shape)} is not {layout.host_shape}")
+        self.host = host
+        self.dev = ttnn.from_torch(
+            host.contiguous(),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mapper(),
+        )
+
+    def mapper(self):
+        """Dim 2 (the stacked segments) over the chips: one segment per chip in row-major chip order with the user
+        partition (``ShardTensorToMesh``), one per row replicated over the columns otherwise, none on one chip
+        (``load_ids``' placement)."""
+        if self.layout.segment_cols > 1:
+            return self.mesh.shard_2d(2, 2)
+        if self.mesh.rows > 1:
+            return self.mesh.shard_rows(2)
+        return None
+
+    def upload(self, host: torch.Tensor):
+        """The step's packed host values -> the persistent device segments (one ``copy_host_to_device_tensor``)."""
+        if tuple(host.shape) != self.layout.host_shape:
+            raise ValueError(f"packed host tensor {tuple(host.shape)} is not {self.layout.host_shape}")
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                host.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.mapper()
+            ),
+            self.dev,
+        )
+        self.host = host
+
+    def targets(self, ids_dev: ttnn.Tensor, dp: DecodePositions) -> dict[str, ttnn.Tensor]:
+        """The persistent field tensors the unpack writes, keyed like ``layout.fields``."""
+        lay = self.layout
+        t = {"ids": ids_dev, "positions": dp.positions, "pool_ids": dp.pool_ids, "ring_slots": dp.ring_slots}
+        if lay.dense != (dp.dense_positions is not None):
+            raise ValueError(
+                f"packed layout dense={lay.dense} but the positions carry "
+                f"{'a' if dp.dense_positions is not None else 'no'} dense_positions tensor"
+            )
+        if lay.dense:
+            t["dense_positions"] = dp.dense_positions
+        sp = dp.sparse
+        if sp is not None:
+            t["cur_pos"] = sp.cur_pos
+            t["tail_pool"] = sp.tail_pool
+            if sp.valid_len_rows is not None:
+                t["valid_len_rows"] = sp.valid_len_rows
+            if lay.per_user_valid_len:
+                if len(sp.valid_len) != lay.users_per_chip:
+                    raise ValueError(f"{len(sp.valid_len)} valid_len tensors for {lay.users_per_chip} users per chip")
+                for u, vt in enumerate(sp.valid_len):
+                    t[f"valid_len[{u}]"] = vt
+        return t
+
+    def unpack(self, ids_dev: ttnn.Tensor, dp: DecodePositions):
+        """Device ops only (captured with the decode step): every field of the segment into its persistent tensor."""
+        fields = self.layout.fields
+        u32 = ttnn.bitcast(self.dev, ttnn.uint32)
+        for name, dst in self.targets(ids_dev, dp).items():
+            f = fields[name]
+            want = ttnn.uint32 if f.dtype == UINT32 else ttnn.int32
+            if dst.dtype != want or dst.layout != ttnn.ROW_MAJOR_LAYOUT:
+                raise ValueError(
+                    f"packed field {name}: the persistent tensor is {dst.dtype} {dst.layout}, expected {want} ROW_MAJOR"
+                )
+            if math.prod(list(dst.shape)) != f.n:
+                raise ValueError(f"packed field {name}: {f.n} values for a persistent tensor of shape {dst.shape}")
+            s = ttnn.slice(u32 if f.dtype == UINT32 else self.dev, list(f.start), list(f.end))
+            shape = list(dst.shape)
+            v = s if list(s.shape) == shape else ttnn.reshape(s, shape)
+            ttnn.copy(v, dst)
+            ttnn.deallocate(s)
+        ttnn.deallocate(u32)
 
 
 class GLM53MeshModel:
@@ -166,6 +271,10 @@ class GLM53MeshModel:
             logger.info(f"mesh model: layer {i} built in {self.build_times[i]:.1f} s (host load {t1 - t0:.1f} s)")
         self.positions: DecodePositions | None = None
         self.ids_dev: ttnn.Tensor | None = None
+        # GLM53_DECODE_PACKED_INPUTS: the one-upload decode inputs (allocated by ``warmup_decode``, before any capture)
+        # and the last token ids they carry (``[rows*B]`` int32, padded); None = the direct per-field refreshes
+        self.packed: PackedDecodeInputs | None = None
+        self._host_ids: torch.Tensor | None = None
         # the traced prefill's device-side user slot (tt/trace_prefill.py): allocated here, before any trace
         # capture, because a persistent tensor allocated after a capture may alias that trace's transient buffers
         self.prefill_slot: PrefillSlot | None = PrefillSlot.allocate(self.mesh, self.layers) if self.layers else None
@@ -181,22 +290,98 @@ class GLM53MeshModel:
         return ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
 
     def load_ids(self, ids: torch.Tensor):
+        """The step's token ids -> the persistent ``ids_dev`` (one row-sharded ``copy_host_to_device_tensor``). With
+        the packed inputs (``self.packed``) the ids go into the packed segment instead (re-uploaded with the current
+        positions; ``load_decode_inputs`` is the one-upload form of ``load_ids`` + ``set_positions``)."""
         host = self.embedding.tokens_to_host(ids, pad_to=self.total_users)
+        if self.packed is not None:
+            self._host_ids = host.reshape(-1)
+            self.packed.upload(self.packed.layout.pack(self._host_ids, self.positions.host))
+            return
+        self._load_ids_direct(host)
+
+    def _load_ids_direct(self, host: torch.Tensor):
         mapper = self.mesh.shard_rows(3) if self.mesh.rows > 1 else None
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mapper), self.ids_dev
         )
 
     def set_positions(self, host_positions: list[int]):
+        """The step's positions -> the persistent ``DecodePositions`` (``update_decode_positions``: the per-field
+        refreshes, or, with the packed inputs, the host bookkeeping + one packed upload with the current ids)."""
+        if self.positions is None:
+            self.positions = self.layers[0].make_decode_positions(host_positions)
+        elif self.packed is not None:
+            self.layers[0].update_decode_positions(self.positions, host_positions, upload=False)
+            self.packed.upload(self.packed.layout.pack(self._host_ids, host_positions))
+        else:
+            self.layers[0].update_decode_positions(self.positions, host_positions)
+
+    def load_decode_inputs(self, ids: torch.Tensor, host_positions: list[int]):
+        """``load_ids`` + ``set_positions`` of one decode step. With ``GLM53_DECODE_PACKED_INPUTS=1`` (after
+        ``warmup_decode``) this is ONE ``copy_host_to_device_tensor`` of the packed segments (``tt/packed_inputs.py``)
+        plus the host bookkeeping of ``update_decode_positions``; otherwise the direct per-field refreshes."""
+        if self.packed is None:
+            self.load_ids(ids)
+            self.set_positions(host_positions)
+            return
+        self._host_ids = self.embedding.tokens_to_host(ids, pad_to=self.total_users).reshape(-1)
+        self.layers[0].update_decode_positions(self.positions, host_positions, upload=False)
+        self.packed.upload(self.packed.layout.pack(self._host_ids, host_positions))
+
+    def packed_layout(self) -> PackedDecodeLayout:
+        """The packed layout of this model (``self.positions`` must exist: it decides ``dense``). The per-user
+        ``valid_len`` list is unpacked only when something reads it (the unbatched top-k, ``GLM53_TOPK_BATCHED=0``)."""
+        if self.positions is None:
+            raise RuntimeError("set_positions first")
+        dec = self.layers[0]
+        return PackedDecodeLayout(
+            rows=self.mesh.rows,
+            cols=self.mesh.cols,
+            users_per_row=self.max_batch,
+            index_kpool=self.cfg.index_kpool,
+            index_select_pools=self.cfg.index_select_pools,
+            dense_max_pos=dense_exact_max_pos(self.cfg),
+            partition=dec.partition,
+            dense=self.positions.dense_positions is not None,
+            per_user_valid_len=os.environ.get("GLM53_TOPK_BATCHED", "1") != "1",
+        )
+
+    def _stage_decode_inputs(self, ids: torch.Tensor, host_positions: list[int]):
+        """The warm-ups' input staging: the direct uploads (allocating the persistent inputs on the first call) and,
+        with the knob, the packed segments holding the same values (allocated on the first call: before any capture)."""
+        host = self.embedding.tokens_to_host(ids, pad_to=self.total_users)
+        if self.ids_dev is None:
+            self.ids_dev = self.ids_to_device(ids)
+        else:
+            self._load_ids_direct(host)
         if self.positions is None:
             self.positions = self.layers[0].make_decode_positions(host_positions)
         else:
             self.layers[0].update_decode_positions(self.positions, host_positions)
+        self._host_ids = host.reshape(-1)
+        if self.packed is None and packed_inputs_enabled():
+            layout = self.packed_layout()
+            self.packed = PackedDecodeInputs(self.mesh, layout, layout.pack(self._host_ids, host_positions))
+            logger.info(
+                f"mesh model: {PACKED_INPUTS_ENV}=1: packed decode inputs {layout.segment_shape} int32 per chip "
+                f"({layout.segments} segments, {len(layout.fields)} fields, users/chip {layout.users_per_chip})"
+            )
+        elif self.packed is not None:
+            self.packed.upload(self.packed.layout.pack(self._host_ids, host_positions))
+
+    def _unpack_inputs(self, ids_dev: ttnn.Tensor, positions: DecodePositions):
+        """The packed inputs' device-side unpack when the step runs on the model's persistent inputs."""
+        if self.packed is not None and ids_dev is self.ids_dev and positions is self.positions:
+            self.packed.unpack(ids_dev, positions)
 
     # ------------------------------------------------------------------ step
     def decode_step(self, ids_dev: ttnn.Tensor, positions: DecodePositions, keep_layer_outputs: bool = False):
         """ids [1,1,1,B] (per row) -> (streams after the last layer [1,1,B,16384], logits, greedy ids).
-        ``keep_layer_outputs`` (eager diagnostics only) keeps every layer's output in ``self.layer_outputs``."""
+        ``keep_layer_outputs`` (eager diagnostics only) keeps every layer's output in ``self.layer_outputs``.
+        With the packed inputs the step starts with their device-side unpack into ``ids_dev`` / ``positions``
+        (when they are the model's persistent inputs: device ops, captured with the step)."""
+        self._unpack_inputs(ids_dev, positions)
         streams = self.embedding(ids_dev)
         self.layer_outputs = []
         last = len(self.layers) - 1
@@ -372,20 +557,18 @@ class GLM53MeshModel:
         self.prefill_traces = {}
 
     def ids_to_host(self, ids: ttnn.Tensor) -> torch.Tensor:
-        """greedy ids [1,1,B,1] uint32 per chip -> [rows*B] int64."""
+        """greedy ids [1,1,B,1] uint32 per chip -> [rows*B] int64: one chip read per mesh row (the first column;
+        the columns hold the same ids after the head's all-gather), not one per chip."""
         t = self.mesh.to_host(ids, rows=2 if self.mesh.rows > 1 else None)
         return t.view(torch.int32).reshape(-1).long()
 
     # ------------------------------------------------------------------ trace
     def warmup_decode(self, ids: torch.Tensor, host_positions: list[int]):
-        """Allocate the persistent decode inputs (once) and run one eager decode step (compiles the
-        programs, creates every lazily built constant) so that ``capture_prefill`` and ``capture`` can
-        follow in either order with nothing allocated after a capture. Consumes the token."""
-        if self.ids_dev is None:
-            self.ids_dev = self.ids_to_device(ids)
-        else:
-            self.load_ids(ids)
-        self.set_positions(host_positions)
+        """Allocate the persistent decode inputs (once; with ``GLM53_DECODE_PACKED_INPUTS=1`` the packed segments
+        too) and run one eager decode step (compiles the programs, the packed unpack included, creates every lazily
+        built constant) so that ``capture_prefill`` and ``capture`` can follow in either order with nothing
+        allocated after a capture. Consumes the token."""
+        self._stage_decode_inputs(ids, host_positions)
         for t in self.decode_step(self.ids_dev, self.positions):
             if t is not None:
                 ttnn.deallocate(t)
@@ -468,6 +651,7 @@ class GLM53MeshModel:
         ``capture_with_draft``). ``hn`` is returned for diagnostics (the eager MTP re-run of a test)."""
         if self.mtp is None:
             raise RuntimeError("attach_mtp first")
+        self._unpack_inputs(ids_dev, positions)  # the main step's inputs; the MTP positions stay direct uploads
         streams = self.embedding(ids_dev)
         last = len(self.layers) - 1
         for k, dec in enumerate(self.layers):
@@ -484,13 +668,11 @@ class GLM53MeshModel:
         return logits, ids, draft, hn
 
     def warmup_decode_with_draft(self, ids: torch.Tensor, host_positions: list[int]):
-        """``warmup_decode`` for the draft step: allocates the persistent inputs (ids, both position sets) and
-        runs one eager step (compiles the programs, builds the lazy constants). Consumes the token."""
-        if self.ids_dev is None:
-            self.ids_dev = self.ids_to_device(ids)
-        else:
-            self.load_ids(ids)
-        self.set_spec_positions(host_positions)
+        """``warmup_decode`` for the draft step: allocates the persistent inputs (ids, both position sets; the
+        packed segments with the knob) and runs one eager step (compiles the programs, builds the lazy constants).
+        Consumes the token."""
+        self._stage_decode_inputs(ids, host_positions)
+        self.set_mtp_positions(host_positions)
         for t in self.decode_step_with_draft(self.ids_dev, self.positions, self.mtp_positions):
             ttnn.deallocate(t)
         ttnn.synchronize_device(self.device)

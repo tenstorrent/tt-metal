@@ -410,6 +410,12 @@ class _FakeMeshModel:
         assert len(positions) == self.total_users
         self._fed_pos = list(positions)
 
+    def load_decode_inputs(self, ids, positions):
+        """The one-call input load (``GLM53MeshModel.load_decode_inputs``: one packed upload with the knob)."""
+        self.calls.append(("load_decode_inputs", len(positions)))
+        self.load_ids(ids)
+        self.set_positions(positions)
+
     def _step(self):
         self.calls.append(("decode", self._fed_ids.tolist(), list(self._fed_pos)))
         for s in range(self.total_users):
@@ -635,6 +641,39 @@ def test_decode_permutes_rows_onto_physical_slots_and_back():
     assert events == [] and host.on_host
     toks = a.process_decode_output_host(host, is_tokens=True)
     assert [int(toks[i, 0]) for i in range(3)] == [_next_token(4, 302), _next_token(5, 102), _next_token(6, 42)]
+
+
+def test_decode_loads_inputs_with_one_call_per_step():
+    """Every decode step stages its inputs through the model's ``load_decode_inputs`` (one packed upload with
+    ``GLM53_DECODE_PACKED_INPUTS=1``); a model without it gets the ``load_ids`` + ``set_positions`` pair."""
+    a, m = _adapter()
+    t = torch.full((1, 40), 5, dtype=torch.int32)
+    a.prefill_forward(t, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1))
+    before = len([c for c in m.calls if c[0] == "load_decode_inputs"])
+    kw = dict(reload_inputs=True, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False)
+    for step in range(3):
+        a.decode_forward(
+            torch.tensor([[1], [0], [0], [0]], dtype=torch.int32),
+            torch.tensor([40 + step, -1, -1, -1]),
+            sampling_params=_greedy(4),
+            **kw,
+        )
+    loads = [c for c in m.calls if c[0] == "load_decode_inputs"]
+    assert len(loads) - before == 3 and all(c[1] == m.total_users for c in loads)
+    assert m._fed_pos[a.slots.physical(0).user] == 42
+
+    class _NoSingleLoad(_FakeMeshModel):
+        load_decode_inputs = None  # an older model surface: the adapter falls back to the pair
+
+    b, mb = _adapter(model_cls=_NoSingleLoad)
+    b.prefill_forward(t, prompt_lens=[40], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1))
+    out = b.decode_forward(
+        torch.tensor([[1], [0], [0], [0]], dtype=torch.int32),
+        torch.tensor([40, -1, -1, -1]),
+        sampling_params=_greedy(4),
+        **kw,
+    )
+    assert int(out[0, 0]) == _next_token(1, 40) and not [c for c in mb.calls if c[0] == "load_decode_inputs"]
 
 
 def test_decode_reload_contract_is_enforced():

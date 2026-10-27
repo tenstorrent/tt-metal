@@ -54,6 +54,7 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
 from models.demos.glm53_flash.tt.matmul_configs import PREFILL_ROW_BLOCK, DecodeLinear, prefill_linear
 from models.demos.glm53_flash.tt.mesh import TP_AXIS, GLMMesh, single_chip
+from models.demos.glm53_flash.tt.packed_inputs import sparse_host_values
 
 TILE = 32
 CORES_PER_USER_DECODE = 4
@@ -349,16 +350,10 @@ class SparseDecodeMeta:
 
     @staticmethod
     def host_values(positions: list[int], cfg: GLM53FlashConfig):
-        """(valid [B], tail [B,1,1,1], cur_pos [B]) as host tensors."""
-        P, K = cfg.index_kpool, cfg.index_select_pools
+        """(valid [B], tail [B,1,1,1], cur_pos [B]) as host tensors (the per-user formulas live in
+        ``packed_inputs.sparse_host_values``, shared with the packed decode inputs)."""
         B = len(positions)
-        valid, tail, cur = [], [], []
-        for u, a in enumerate(positions):
-            n, t = (a + 1) // P, (a + 1) % P
-            dense = n < K
-            valid.append(max(n, K))
-            tail.append(n)
-            cur.append(a if dense else P * K - 1 + t)
+        valid, tail, cur = sparse_host_values(positions, cfg.index_kpool, cfg.index_select_pools)
         return (
             torch.tensor(valid, dtype=torch.int64),
             torch.tensor(tail, dtype=torch.int64).reshape(B, 1, 1, 1),
@@ -403,10 +398,20 @@ class SparseDecodeMeta:
             all_dense=dense_regime(positions, cfg),
         )
 
-    def update(self, positions: list[int], cfg: GLM53FlashConfig, mesh: GLMMesh | None = None, partition: bool = False):
+    def update(
+        self,
+        positions: list[int],
+        cfg: GLM53FlashConfig,
+        mesh: GLMMesh | None = None,
+        partition: bool = False,
+        *,
+        upload: bool = True,
+    ):
         """Refresh every tensor in place for the new positions (trace-replay safe). Refuses to leave the dense
         regime while the last graph built on this meta is the dense-skip one (``graph_regime == "dense"``): the
-        caller must re-capture under the new ``regime`` (or ``clear_graph_regime`` for an eager flow) first."""
+        caller must re-capture under the new ``regime`` (or ``clear_graph_regime`` for an eager flow) first.
+        ``upload=False`` keeps the host bookkeeping (the regime guard, ``host``, ``all_dense``) and skips the device
+        copies: the packed decode inputs (``GLM53_DECODE_PACKED_INPUTS``, ``tt/packed_inputs.py``) carry the values."""
         R, C = self._chips(mesh, partition)
         B = self.users_per_chip
         assert len(positions) == R * C * B, (len(positions), R, C, B)
@@ -419,6 +424,16 @@ class SparseDecodeMeta:
                 "that graph would attend densely (not HF semantics). Re-capture the decode trace under "
                 "SparseDecodeMeta.regime == 'sparse' (or clear_graph_regime() for an eager flow) before updating."
             )
+        if upload:
+            self._upload(positions, cfg, mesh, partition)
+        self.host = list(positions)
+        self.all_dense = all_dense
+
+    def _upload(self, positions: list[int], cfg: GLM53FlashConfig, mesh: GLMMesh | None, partition: bool):
+        """The device copies of ``update``: ``valid_len[u]`` (one per user), ``tail_pool``, ``valid_len_rows``,
+        ``cur_pos`` (``3 + users_per_chip`` ``copy_host_to_device_tensor`` calls)."""
+        R, C = self._chips(mesh, partition)
+        B = self.users_per_chip
         valid, tail, cur = self.host_values(positions, cfg)
         mapper = _meta_mapper(mesh, partition)
         vmapper = mesh.shard_2d(0, 1 if C > 1 else None) if mesh is not None and (R > 1 or C > 1) else None
@@ -440,8 +455,6 @@ class SparseDecodeMeta:
         if self.valid_len_rows is not None:
             put(valid.reshape(-1, 1).contiguous(), ttnn.uint32, self.valid_len_rows)
         put(cur, ttnn.int32, self.cur_pos)
-        self.host = list(positions)
-        self.all_dense = all_dense
 
 
 class TtLatentCache:
