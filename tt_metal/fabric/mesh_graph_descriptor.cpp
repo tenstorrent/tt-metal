@@ -2586,21 +2586,26 @@ void MeshGraphDescriptor::populate_pinnings() {
 
 void MeshGraphDescriptor::validate_pipeline_descriptors(
     const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
+    // Each pipeline is checked on its own. A stage id only has to be unique inside that pipeline.
     std::unordered_set<std::string> names;
     for (const auto& pipeline : proto.pipeline_descriptors()) {
+        // A pipeline name must be non-empty and unique in the MGD.
         if (pipeline.name().empty() || !names.insert(pipeline.name()).second) {
             error_messages.push_back(fmt::format("pipeline name '{}' is empty or repeated", pipeline.name()));
         }
+        // A pipeline must declare at least one stage.
         if (pipeline.stages_size() == 0) {
             error_messages.push_back(fmt::format("pipeline '{}': must declare at least one stage", pipeline.name()));
         }
 
         std::unordered_set<std::string> ids;
         for (const auto& stage : pipeline.stages()) {
+            // A stage id must be non-empty and unique inside its pipeline.
             if (stage.id().empty() || !ids.insert(stage.id()).second) {
                 error_messages.push_back(
                     fmt::format("pipeline '{}': stage id '{}' is empty or repeated", pipeline.name(), stage.id()));
             }
+            // A stage shape must be rank 2, and both dims must be greater than 0.
             const auto& dims = stage.shape().dims();
             if (dims.size() != 2 || dims[0] <= 0 || dims[1] <= 0) {
                 error_messages.push_back(fmt::format(
@@ -2608,16 +2613,18 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
             }
         }
 
-        // In-degree, out-degree, roots, and whether a branch is a chain are all accepted.
+        // Not checked: in-degree, out-degree, how many roots, forks, dead ends, and repeated edges.
         for (const auto& edge : pipeline.edges()) {
+            // An edge must name stages declared in the same pipeline.
             if (!ids.contains(edge.src()) || !ids.contains(edge.dst())) {
                 error_messages.push_back(fmt::format(
                     "pipeline '{}': edge {} -> {} names an unknown stage", pipeline.name(), edge.src(), edge.dst()));
             }
+            // A stage may not have an edge to itself.
             if (edge.src() == edge.dst()) {
                 error_messages.push_back(fmt::format("pipeline '{}': self-edge on '{}'", pipeline.name(), edge.src()));
             }
-            // Omitted policy is STRICT. An explicit value has to be STRICT too.
+            // An omitted policy means STRICT. An explicit policy other than STRICT is rejected.
             if (edge.has_policy() && edge.policy() != proto::Policy::STRICT) {
                 error_messages.push_back(fmt::format(
                     "pipeline '{}': edge {} -> {} policy is {}; every edge is STRICT",
