@@ -140,49 +140,54 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
         yield
     finally:
         report_path.mkdir(parents=True, exist_ok=True)
-
-        if enable_graph_report:
-            if not ttnn.graph.is_graph_capture_active():
-                logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
-            else:
-                if ttnn.distributed_context_is_initialized():
-                    rank = int(ttnn.distributed_context_get_rank())
-                    world_size = int(ttnn.distributed_context_get_size())
+        try:
+            if enable_graph_report:
+                if not ttnn.graph.is_graph_capture_active():
+                    logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
                 else:
-                    rank, world_size = 0, 1
-                if world_size > 1:
-                    json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
-                else:
-                    json_path = report_path / "graph_capture.json"
-                ttnn.graph.end_graph_capture_to_file(str(json_path))
-                if ttnn.distributed_context_is_initialized():
-                    ttnn.distributed_context_barrier()
-                try:
-                    if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
-                        import_report(report_path, report_path)
-                        (report_path / "graph_capture.json").unlink(missing_ok=True)
-                        for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
-                            p.unlink(missing_ok=True)
-                finally:
-                    # Release the other ranks even if rank 0's import raised, or they wait here forever.
+                    if ttnn.distributed_context_is_initialized():
+                        rank = int(ttnn.distributed_context_get_rank())
+                        world_size = int(ttnn.distributed_context_get_size())
+                    else:
+                        rank, world_size = 0, 1
+                    if world_size > 1:
+                        json_path = report_path / _rank_capture_name(rank, world_size)
+                    else:
+                        json_path = report_path / "graph_capture.json"
+                    ttnn.graph.end_graph_capture_to_file(str(json_path))
                     if ttnn.distributed_context_is_initialized():
                         ttnn.distributed_context_barrier()
-
-            if enable_detailed_buffer_report:
+                    try:
+                        if (
+                            not ttnn.distributed_context_is_initialized()
+                            or int(ttnn.distributed_context_get_rank()) == 0
+                        ):
+                            import_report(report_path, report_path)
+                            (report_path / "graph_capture.json").unlink(missing_ok=True)
+                            for p in sorted(report_path.glob("graph_capture_*_of_*.json")):
+                                p.unlink(missing_ok=True)
+                    finally:
+                        # Release the other ranks even if rank 0's import raised, or they wait here forever.
+                        if ttnn.distributed_context_is_initialized():
+                            ttnn.distributed_context_barrier()
+            elif enable_comparison_mode and ttnn.graph.has_comparison_records():
+                ttnn.graph.flush_comparison_records_to_db(report_path)
+        finally:
+            # Also when rank 0's import raised: tracing left on would leak into later tests, and the config is still
+            # worth having next to the captures a failed import leaves in place.
+            if enable_graph_report and enable_detailed_buffer_report:
                 ttnn.graph.disable_detailed_buffer_tracing()
-        elif enable_comparison_mode and ttnn.graph.has_comparison_records():
-            ttnn.graph.flush_comparison_records_to_db(report_path)
 
-        if ttnn.distributed_context_is_initialized():
-            rank = int(ttnn.distributed_context_get_rank())
-            world_size = int(ttnn.distributed_context_get_size())
-        else:
-            rank, world_size = 0, 1
-        if world_size > 1:
-            config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
-        else:
-            config_path = report_path / "config.json"
-        ttnn.save_config_to_json_file(config_path)
+            if ttnn.distributed_context_is_initialized():
+                rank = int(ttnn.distributed_context_get_rank())
+                world_size = int(ttnn.distributed_context_get_size())
+            else:
+                rank, world_size = 0, 1
+            if world_size > 1:
+                config_path = report_path / f"config_{rank+1}_of_{world_size}.json"
+            else:
+                config_path = report_path / "config.json"
+            ttnn.save_config_to_json_file(config_path)
 
 
 def sanitize_git_remote_url(url: str) -> str:
@@ -318,64 +323,107 @@ def _report_rank(report, path: Path) -> int:
     return int(r)
 
 
-def _discover_report_json_files(report_path: Path) -> list[Path]:
+class _ReportFile(NamedTuple):
+    """A capture file to import. ``rank`` and ``world_size`` come from a ``graph_capture_<r>_of_<N>.json`` name
+    (``rank`` is the 0-based distributed rank, one less than ``<r>``); both are None for any other name."""
+
+    path: Path
+    rank: Optional[int] = None
+    world_size: Optional[int] = None
+
+
+def _rank_capture_name(rank: int, world_size: int) -> str:
+    """File name the pytest fixture writes for 0-based distributed ``rank`` of ``world_size`` ranks."""
+    return f"graph_capture_{rank + 1}_of_{world_size}.json"
+
+
+# Matches only names _rank_capture_name produces, not their sidecars (graph_capture_1_of_2.python_io.json).
+_RANK_CAPTURE_NAME_RE = re.compile(r"^graph_capture_(\d+)_of_(\d+)\.json$", re.IGNORECASE)
+
+
+def _parse_report_file(path: Path) -> _ReportFile:
+    m = _RANK_CAPTURE_NAME_RE.match(path.name)
+    if m is None:
+        return _ReportFile(path)
+    return _ReportFile(path, int(m.group(1)) - 1, int(m.group(2)))
+
+
+def _discover_report_json_files(report_path: Path) -> list[_ReportFile]:
     """
     List graph capture JSON files to import.
 
     Prefer ``graph_capture_<rank>_of_<world>.json`` (multi-host). The loose glob
     ``graph_capture_*_of_*.json`` also matches sidecars like
-    ``graph_capture_0_of_1.python_io.json`` (a list, not a report dict), so we
+    ``graph_capture_1_of_2.python_io.json`` (a list, not a report dict), so we
     keep only names that match the main capture file pattern. Those captures must
     come from a single run and cover every rank (see ``_check_rank_captures_complete``).
 
     Otherwise all ``*.json`` except ``config.json`` and ``*.python_io.json``.
     """
     if report_path.is_file():
-        return [report_path]
-    loose = sorted(report_path.glob("graph_capture_*_of_*.json"))
-    main_captures = [p for p in loose if re.match(r"^graph_capture_\d+_of_\d+\.json$", p.name, re.IGNORECASE)]
-    if main_captures:
-
-        def _capture_sort_key(p: Path):
-            m = re.match(r"^graph_capture_(\d+)_of_(\d+)\.json$", p.name, re.IGNORECASE)
-            return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
-
-        main_captures = sorted(main_captures, key=_capture_sort_key)
-        _check_rank_captures_complete(report_path, [_capture_sort_key(p) for p in main_captures])
-        return main_captures
+        return [_parse_report_file(report_path)]
+    rank_captures = [
+        rf for rf in map(_parse_report_file, report_path.glob("graph_capture_*_of_*.json")) if rf.rank is not None
+    ]
+    if rank_captures:
+        _check_rank_captures_complete(report_path, rank_captures)
+        return sorted(rank_captures, key=lambda rf: rf.rank)
     skip = {"config.json"}
-    return sorted(
-        p
-        for p in report_path.glob("*.json")
+    return [
+        _ReportFile(p)
+        for p in sorted(report_path.glob("*.json"))
         if p.name not in skip
         and not p.name.endswith(PYTHON_IO_SIDECAR_SUFFIX)
         and not p.name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
         and p.name != COMPARISON_RECORDS_FALLBACK_NAME
-    )
+    ]
 
 
-def _check_rank_captures_complete(report_path: Path, rank_and_world_sizes: list[tuple[int, int]]) -> None:
-    """Raise unless ``graph_capture_<r>_of_<N>.json`` names cover ranks 1..N of exactly one world size.
+# Missing ranks named in the error before it falls back to a count, so a bogus world size can't build a huge message.
+_MAX_MISSING_CAPTURES_LISTED = 8
+
+
+def _check_rank_captures_complete(report_path: Path, rank_captures: list[_ReportFile]) -> None:
+    """Raise unless the ``graph_capture_<r>_of_<N>.json`` captures hold every rank of one run exactly once.
 
     Rank 0 merges whatever capture files it can see in its own report directory, so a rank whose file landed
     elsewhere (a host-local report directory, or a timestamped directory name that differs between hosts)
-    would otherwise just be missing from the DB with no error.
+    would otherwise just be missing from the DB with no error. Leftover or copied files would be merged in
+    just as silently, so ranks outside the run and ranks named twice are rejected too.
     """
-    world_sizes = sorted({world_size for _, world_size in rank_and_world_sizes})
+    world_sizes = sorted({rf.world_size for rf in rank_captures})
     if len(world_sizes) > 1:
         raise ValueError(
             f"Graph capture files in {report_path} come from runs with different world sizes {world_sizes}; "
             "remove the stale graph_capture_*_of_*.json files before importing"
         )
     world_size = world_sizes[0]
-    found = {rank for rank, _ in rank_and_world_sizes}
-    missing = sorted(set(range(1, world_size + 1)) - found)
-    if missing:
-        missing_names = ", ".join(f"graph_capture_{rank}_of_{world_size}.json" for rank in missing)
+    out_of_range = sorted(rf.path.name for rf in rank_captures if not 0 <= rf.rank < world_size)
+    if out_of_range:
         raise ValueError(
-            f"Graph capture files for {len(missing)} of {world_size} ranks are missing from {report_path}: "
-            f"{missing_names}. Every rank must write to the same report directory (a filesystem shared by all "
-            "hosts, and the same report_path on every rank)"
+            f"Graph capture files in {report_path} name ranks outside 1..{world_size}: {', '.join(out_of_range)}"
+        )
+    paths_by_rank = defaultdict(list)
+    for rf in rank_captures:
+        paths_by_rank[rf.rank].append(rf.path.name)
+    repeated = [sorted(names) for _, names in sorted(paths_by_rank.items()) if len(names) > 1]
+    if repeated:
+        raise ValueError(
+            f"Graph capture files in {report_path} name the same rank more than once: "
+            + "; ".join(" and ".join(names) for names in repeated)
+        )
+    num_missing = world_size - len(paths_by_rank)
+    if num_missing:
+        missing = (rank for rank in range(world_size) if rank not in paths_by_rank)
+        missing_names = [
+            _rank_capture_name(rank, world_size) for _, rank in zip(range(_MAX_MISSING_CAPTURES_LISTED), missing)
+        ]
+        if num_missing > len(missing_names):
+            missing_names.append(f"and {num_missing - len(missing_names)} more")
+        raise ValueError(
+            f"Graph capture files for {num_missing} of {world_size} ranks are missing from {report_path}: "
+            f"{', '.join(missing_names)}. Every rank must write to the same report directory (a filesystem shared "
+            "by all hosts, and the same report_path on every rank)"
         )
 
 
@@ -2300,16 +2348,28 @@ def import_report(
 
     Returns:
         Path to created database
+
+    Raises:
+        ValueError: If the ``graph_capture_<r>_of_<N>.json`` captures in a directory don't hold every rank of one
+            run exactly once (a rank missing, ranks from runs of different sizes, a rank outside 1..N, or a rank
+            named twice), or if a capture's metadata rank or world size disagrees with its file name. A database
+            that was already in ``output_dir`` is left as it was, and none is created.
     """
     report_path = Path(report_path)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path = output_dir / db_name
 
-    _remove_stale_database_if_needed(db_path)
+    # Before touching any existing DB, so a bad set of captures leaves the output directory as it was.
+    try:
+        report_files = _discover_report_json_files(report_path)
+    except ValueError as e:
+        if db_path.exists():
+            raise ValueError(f"{e}. {db_path} was not updated") from e
+        raise
 
-    # Before touching the DB, so a missing rank fails the import without leaving an empty database behind.
-    report_files = _discover_report_json_files(report_path)
+    _remove_stale_database_if_needed(db_path)
+    db_existed = db_path.exists()
 
     # Create graphs directory if generating SVGs
     graphs_dir = None
@@ -2319,6 +2379,7 @@ def import_report(
 
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+    imported = False
 
     try:
         _prev_trace = sys.gettrace()
@@ -2352,7 +2413,7 @@ def import_report(
         import_index_by_rank: dict[int, int] = {}
 
         # Keep the discovery order: a plain sort would put graph_capture_10_of_16 before graph_capture_2_of_16.
-        for idx, rpath in enumerate(report_files):
+        for idx, (rpath, file_rank, file_world_size) in enumerate(report_files):
             stats = {}
             with open(rpath, "r") as f:
                 report = json.load(f)
@@ -2374,6 +2435,11 @@ def import_report(
             import_index_by_rank[rank] = file_index_for_rank + 1
 
             report_world_size = int((report.get("metadata") or {}).get("world_size", 1))
+            if file_rank is not None and (rank, report_world_size) != (file_rank, file_world_size):
+                raise ValueError(
+                    f"{rpath} holds rank {rank} of world size {report_world_size} in its metadata, but its name says "
+                    f"rank {file_rank} of {file_world_size}"
+                )
 
             devices_data = report.get("devices", [])
             # Normalize device IDs to 0-based sequential indices so the visualizer
@@ -2649,11 +2715,16 @@ def import_report(
         if generate_svgs:
             summary.append(f"  - {total_stats['svgs']} SVG visualizations in {graphs_dir}/")
         logger.info("\n".join(summary))
+        imported = True
 
     finally:
         sys.settrace(_prev_trace)
         sys.setprofile(_prev_profile)
         conn.close()
+        # A failed import commits no rows, so an existing DB is left as it was; one this call created holds only the
+        # schema and would pass for a report, so remove it.
+        if not imported and not db_existed:
+            db_path.unlink(missing_ok=True)
 
     return db_path
 
@@ -2670,7 +2741,8 @@ Examples:
     # Import single report
     python -m ttnn.graph_report report.json ./visualizer_db/
 
-    # Merge all graph_capture_*_of_*.json under a directory (multi-host)
+    # Merge all graph_capture_*_of_*.json under a directory (multi-host).
+    # Fails if any rank's capture is missing, or the captures come from different runs.
     python -m ttnn.graph_report ./reports/ ./visualizer_db/
 
     # Import with SVG visualization generation
