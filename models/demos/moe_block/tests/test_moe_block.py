@@ -350,6 +350,8 @@ def test_moe_block_traced(mesh_device, device_params, model, chunk, timing):
         experts_drisc=os.environ.get("MOE_EXPERTS_DRISC", "1") != "0",  # (test-only: A/B)
         experts_during_dispatch=bool(int(os.environ.get("MOE_EDD", "0"))),
         residual=os.environ.get("MOE_RESIDUAL", "sp_tp"),  # (owners: each chip's own tokens at full width)
+        # (test-only: MOE_COMBINE_SNAP=-14 -> the combine's terms snapped to multiples of 2^-14)
+        combine_snap=2.0 ** int(os.environ["MOE_COMBINE_SNAP"]) if os.environ.get("MOE_COMBINE_SNAP") else None,
     )
     block = MoEBlock(mesh_device, m, chunk, w, WeightCache(path=None, layer=0), options=opts)
     g = block.geometry
@@ -367,8 +369,10 @@ def test_moe_block_traced(mesh_device, device_params, model, chunk, timing):
     ]
     x_in = block.input_buffer()
     # k -> (routing rows, reference output); a replay whose routing differs from its x's first (a near tie: the router
-    # fin's sum order is the landing order unless MoEOptions.deterministic) is checked against its own routing's
+    # fin sums in landing order only with MoEOptions(deterministic=False), A/B) is checked against its own routing's
     refs, flips = {}, []
+    firsts, bits = {}, []  # (x k -> its first output; per replay of an x seen before with the same routing: elements
+    # that differ bitwise from that first output - the sums' order dependence)
 
     def check(out, k, tag):
         y = ttnn.to_torch(out, mesh_composer=composer).reshape(T, H).float()
@@ -388,6 +392,11 @@ def test_moe_block_traced(mesh_device, device_params, model, chunk, timing):
             ref = refs[k]
         p_dev = pcc(y, ref[1])
         assert p_dev > 0.98, f"{tag} (x {k}): block output off (PCC {p_dev:.5f})"
+        rk = (k, tuple(hash(a.numpy().tobytes()) for a in rows))
+        if rk in firsts:
+            bits.append(int((y != firsts[rk]).sum()))
+        else:
+            firsts[rk] = y
         return p_dev
 
     # eager first (every program built and loaded, the DRISC senders started), on the input buffer as traced
@@ -425,6 +434,11 @@ def test_moe_block_traced(mesh_device, device_params, model, chunk, timing):
                 f"MoEBlock {model} traced: {i + 1} replays checked, PCC min {min(ps):.5f}; routing differed from the "
                 f"x's first in {len(flips)} ({sum(flips)} rows)"
             )
+    if bits:
+        logger.info(
+            f"MOE_BITS {model}: {len(bits)} replays of an x with the same routing: {sum(b > 0 for b in bits)} differ "
+            f"bitwise from that x's first, {sum(bits)} elements in all (max {max(bits)} a replay, of {T * H})"
+        )
     # timing
     REP = 20
     ttnn.synchronize_device(mesh_device)

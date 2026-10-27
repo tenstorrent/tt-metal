@@ -24,7 +24,9 @@ fabric always drains. Counters are cumulative across calls; a ring's slots resta
 source's rows wait for this call's layout from the home, so a call never lands in another call's carving).
 """
 
+import math
 import os
+import struct
 from dataclasses import dataclass
 
 import torch
@@ -271,7 +273,9 @@ void kernel_main() {
 """
 
 # the weighted accumulate: each row times its gate weight (HiFi4, scalar broadcast from the weight CB's element 0) into
-# DEST (fp32), packed onto the token's fp32 sum with packer L1 accumulation (scratch_l1acc_precision.py: exact)
+# DEST (fp32), packed onto the token's fp32 sum with packer L1 accumulation (scratch_l1acc_precision.py: exact). snap_q
+# (SNAP): each product first rounded on the SFPU to a multiple of q, so every fp32 add is exact while the partial sums
+# stay below 2^24 q - the sum is then the same in any landing order
 _ACC_COMPUTE_W = (
     _ACC_COMPUTE.replace(
         "        const uint32_t t = read_tile_value(cb_meta, 0, 0);\n        cb_pop_front(cb_meta, 1);",
@@ -284,7 +288,9 @@ _ACC_COMPUTE_W = (
     )
     .replace(
         '#include "api/compute/reconfig_data_format.h"',
-        '#include "api/compute/reconfig_data_format.h"\n#include "api/compute/bcast.h"',
+        '#include "api/compute/reconfig_data_format.h"\n#include "api/compute/bcast.h"\n'
+        '#include "api/compute/eltwise_unary/binop_with_scalar.h"\n'
+        "constexpr uint32_t SNAP = __SNAP__;  // (fp32 bits of C; 0: off)",
     )
     .replace(
         "    constexpr uint32_t MAXT = get_compile_time_arg_val(5);",
@@ -300,13 +306,22 @@ _ACC_COMPUTE_W = (
     )
     .replace(
         "            for (uint32_t j = 0; j < nj; ++j) copy_tile(cb_row, j0 + j, j);",
-        "            for (uint32_t j = 0; j < nj; ++j) mul_tiles_bcast_scalar(cb_row, cb_w, j0 + j, 0, j);",
+        "            if constexpr (SNAP) mul_bcast_scalar_init(cb_row, cb_w);\n"
+        "            for (uint32_t j = 0; j < nj; ++j) mul_tiles_bcast_scalar(cb_row, cb_w, j0 + j, 0, j);\n"
+        "            if constexpr (SNAP) {  // every term to a multiple of q: (v + C) - C, C = 1.5 x 2^23 q\n"
+        "                binop_with_scalar_tile_init();\n"
+        "                for (uint32_t j = 0; j < nj; ++j) {\n"
+        "                    add_unary_tile(j, SNAP);\n"
+        "                    sub_unary_tile(j, SNAP);\n"
+        "                }\n"
+        "            }",
     )
     .replace(
         "        seen[t] = 1;\n        cb_pop_front(cb_row, NT);",
         "        seen[t] = 1;\n        cb_pop_front(cb_row, NT);\n        cb_pop_front(cb_w, 1);",
     )
 )
+assert _ACC_COMPUTE_W.count("add_unary_tile(j, SNAP)") == 1
 assert _ACC_COMPUTE_W.count("cb_pop_front(cb_w, 1)") == 2 and "mul_tiles_bcast_scalar" in _ACC_COMPUTE_W
 assert "end marker" in _ACC_COMPUTE_W and "__DEVPLAN__ || r < n_rows" in _ACC_COMPUTE_W
 
@@ -1561,6 +1576,15 @@ def combine_auto(
     return {**best, "fits": True, "modes": modes} if best else dict(fits=False, why="; ".join(why), modes=modes)
 
 
+def _snap_bits(q):
+    """SNAP: the fp32 bits of C = 1.5 x 2^23 q ((v + C) - C rounds v to a multiple of q for |v| < 2^22 q), 0 off."""
+    if not q:
+        return 0
+    e = math.log2(q)
+    assert e == int(e), f"snap_q {q}: a power of two"
+    return struct.unpack("<I", struct.pack("<f", 1.5 * 2.0 ** (e + 23)))[0]
+
+
 def sparse_combine_rf_prepare(
     mesh_device,
     S,
@@ -1592,6 +1616,7 @@ def sparse_combine_rf_prepare(
     local_keep=8,
     fill_sink=None,
     landing="rings",
+    snap_q=None,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -1605,7 +1630,9 @@ def sparse_combine_rf_prepare(
     combine_plan (the planner's per-call counts and hand-off table, on the device): the kernels read their counts from
     the plan, rows_by_chip only places the cores. deterministic (with l1 and a devplan holding the planner's "dord"
     order table, combine_plan det=): every accumulator takes its rows in a fixed (source schedule entry, source chip)
-    order, so the sums are bit-identical from call to call. ports_per_direction (with l1 and a devplan from
+    order, so the sums are bit-identical from call to call. snap_q (a power of two): every term rounded to a multiple of
+    q before its add (_ACC_COMPUTE_W SNAP) - bit-identical sums in any order while every partial sum is below 2^24 q,
+    no fixed order needed. ports_per_direction (with l1 and a devplan from
     combine_plan port_luts(per_direction=True)): one port core per direction, its sender driving every link of that
     direction (a row goes out on its link (accumulator + source + home) % L; credit snapshots on link 0, so they stay in
     order): half the port cells with two links. acc_on_ports (with l1): the ports sit on accumulator cells (the A
@@ -1909,6 +1936,7 @@ def sparse_combine_rf_prepare(
         "__U0__": str(U0),
         "__PROF__": str(int(prof)),
         "__ABL__": pr.abl,
+        "__SNAP__": str(_snap_bits(snap_q)),
         "__INJB__": str(inj_b),
         "__CREDTHR__": pr.credthr,
         "__CREDIDLE__": str(cred_idle),

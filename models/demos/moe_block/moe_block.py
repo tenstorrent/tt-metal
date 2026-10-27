@@ -132,7 +132,13 @@ class MoEOptions:
     # the dispatch inside the experts' program (the combine's port kernels' first phase): the weights stream from the
     # dispatch start, the experts' x reads wait until every port of the chip has its rows in (fused head only)
     experts_during_dispatch: bool = False
-    deterministic: bool = False  # fixed sum order, bit-identical runs (debug)
+    # the head's router fin: the TP partial logits summed in a fixed order (the predicted landing order - bit-identical
+    # runs); False: in landing order (A/B only - the logits' last bits, near-tie picks and routing weights vary)
+    deterministic: bool = True
+    # the combine's sums: every routed term rounded to a multiple of this q (a power of two) before its fp32 add, so a
+    # token's sum is bit-identical in any landing order while every partial sum stays below 2^24 q (GLM-5.3-Flash:
+    # 2^-14, its largest calibrated sum ~2^8.4); None: plain fp32 adds in landing order
+    combine_snap: float | None = None
     # the head: "fused" one program a chip (tt/fused_head.py: x all-gather, shared expert + reduce-scatter, router,
     # routing exchange + planner, dispatch prep, latent; its rows in chunks where one does not fit L1); "ops" a program
     # a stage; "auto": fused where it fits (FusedHead.fits)
@@ -446,7 +452,13 @@ class MoEBlock(LightweightModule):
 
             acc = planned_accumulators(mesh_device, self.experts.op.plan, (g.tp_wraps, g.sp_wraps))
         self.exchange = TokenExchange(
-            mesh_device, g, model, self.experts, dispatch_in_program=options.experts_during_dispatch, accumulators=acc
+            mesh_device,
+            g,
+            model,
+            self.experts,
+            dispatch_in_program=options.experts_during_dispatch,
+            accumulators=acc,
+            combine_snap=options.combine_snap,
         )
         self.stage_hook = None  # (profiling: called with the stage name after every stage)
         self.keep_taps = False  # (debug: keep the last call's routing rows for taps(); "device": as a device tensor -
@@ -626,7 +638,14 @@ class MoEBlock(LightweightModule):
             self.router = Router(mesh, g, m, weights.router, dtypes)
             if m.shared_expert_hidden_dim is not None:
                 self.shared = SharedExpert(mesh, g, m, weights.shared, dtypes)
-        self.exchange = TokenExchange(mesh, g, m, self.experts, dispatch_in_program=options.experts_during_dispatch)
+        self.exchange = TokenExchange(
+            mesh,
+            g,
+            m,
+            self.experts,
+            dispatch_in_program=options.experts_during_dispatch,
+            combine_snap=options.combine_snap,
+        )
         self._warm_up()
 
     OPS_KEEP = 16 * 1024  # (L1 a core the ops' one-time words take at the top: ~3 KB at M3 on Galaxy)
@@ -1054,7 +1073,7 @@ class FusedHead:
         model: MoEModel,
         w: MoEWeights,
         l1_hole=None,
-        deterministic=False,
+        deterministic=True,
         accumulators=12,
         router="auto",
         layout=None,
@@ -1089,7 +1108,7 @@ class FusedHead:
             num_links=g.links,
             rs_dim=-1 if latent else -2,  # (K3: the latent up lands the width split, the shared output too)
             rs_mode="fused",
-            # (deterministic: the router fin's sum in a fixed order)
+            # (deterministic: the router fin's sum in a fixed order, the predicted landing order)
             router=RouterSpec(
                 E=E * model.router.fold,
                 K=K,
@@ -1458,9 +1477,17 @@ class TokenExchange:
     rebuilt (with a warning) only if L1 allocated since moved the arena."""
 
     def __init__(
-        self, mesh, g: Geometry, model: MoEModel, experts: RoutedExperts, dispatch_in_program=False, accumulators=None
+        self,
+        mesh,
+        g: Geometry,
+        model: MoEModel,
+        experts: RoutedExperts,
+        dispatch_in_program=False,
+        accumulators=None,
+        combine_snap=None,
     ):
         self.mesh, self.g, self.model, self.experts = mesh, g, model, experts
+        self.combine_snap = combine_snap
         self.dispatch_in_program = dispatch_in_program
         self.accumulators = accumulators  # (the combine's, planned with the fused head; None: its own choice)
         self.block = None
@@ -1488,6 +1515,7 @@ class TokenExchange:
             combine_auto_cfg=True,
             combine_accumulators=self.accumulators,
             dispatch_in_program=self.dispatch_in_program,
+            combine_snap=self.combine_snap,
         )
         self.builds += 1
 

@@ -29,8 +29,9 @@ class RouterSpec:
     # (on the engine: its W streams start once every router core has its partials - their DRAM reads would crowd the
     # partials' writes; None: the head's choice, HeadSE3.router_w_gate)
     w_gate: bool | None = None
-    # (the fin sums the sources' partials in slot order: bit-identical runs; else in landing order - see RouterStream)
-    ordered: bool = False
+    # (the fin sums the sources' partials in a fixed order - the predicted landing order: bit-identical runs; False in
+    # landing order, A/B only - see RouterStream)
+    ordered: bool = True
     fold: int = 1  # (E candidates, expert = candidate // fold: the joint rows carry experts - MoEModel's RouterConfig)
     # (a row tile's experts over two router cores - the fin and the top-K over half the tiles each, merged on the
     # first: router_stream's split; the logits on the engine, the second cores in the column left of the movers)

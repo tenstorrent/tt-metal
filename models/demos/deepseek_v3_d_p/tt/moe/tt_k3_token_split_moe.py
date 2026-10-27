@@ -194,6 +194,7 @@ class TtK3TokenSplitMoE:
         combine_auto_cfg=False,
         combine_accumulators=None,
         dispatch_in_program=False,
+        combine_snap=None,
     ):
         """routed_only (GLM-5.3-Flash hack): only the routed experts and their combine - no router (the caller's top-k
         goes to routed()), no latent projections (d.latent = d.H: the dispatch rows are x), no shared expert; the
@@ -725,6 +726,7 @@ class TtK3TokenSplitMoE:
             l1=dict(writers=wcores, words=int(self.words.buffer_address())),
             devplan=dict(plan=probe.outs["plan"], table=probe.outs["table"], dord=probe.outs.get("dord"), top_k=d.K),
             deterministic=deterministic,
+            snap_q=combine_snap,
             acc_on_ports=acc_on_ports,
             piece_max=max(7168, 2 * d.latent),  # (the L1 hand-off: one piece a row; a fabric payload >= row + 32 B)
             shared_rows=dict(tensor=self.y_se, axis=self.shared_axis) if self.shared_tp else None,

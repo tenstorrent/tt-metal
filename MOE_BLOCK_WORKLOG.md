@@ -1981,3 +1981,28 @@ ffn_norm + routing): calibrate B_c on s4096 (tokens 0-4095), test on s56320 chun
   flips. Int32 h = 1: 1e-7 to 3e-5 flips, the same order as today's fp32 order dependence (two orders differ on ~1e-6).
 - Not checked: bfp4 experts' outputs (gain 1.01, so same magnitudes), other texts, K3 (no weights here). Device cost
   (two SFPU adds a tile on the accumulators) not measured.
+
+### Deterministic block: combine snap + fixed-order router fin (2026-10-27, bh-lb-19)
+- Combine: MoEOptions.combine_snap (q, a power of two; sparse_combine_rf_prepare(snap_q=)): after the weighted multiply
+  each term goes (v + C) - C on the SFPU (C = 1.5 x 2^23 q, two add_unary / sub_unary a tile) - a multiple of q, so
+  every packer fp32 L1 add is exact while partial sums stay < 2^24 q and the sum is the same in any landing order.
+  ISA docs: packer FP32 L1 accumulate and SFPMAD are IEEE RNE with denormal flush - the exactness argument holds.
+  Guarantee for an element: |term| < 2^22 q and sum |term| < 2^24 q (q 2^-14: 1024 / ~3x GLM's calibrated max 2^8.4).
+- Router fin: was in landing order unless MoEOptions.deterministic (slot order). Now always a fixed order by default:
+  RouterStream._arrival_order - the predicted landing order (a source's send position - farthest first - then hops),
+  passed as reader args; MoEOptions.deterministic default True (False: landing order, A/B only). The SE gate / up's
+  shard order was already fixed (x_gather3's watcher raises ranks in a host-fixed order). First run hung at the fused
+  head's first call: the routing planner read its args at a hard-coded 4 + G + 2 + 4 - now ab0 + nab + 2 + 4.
+- Traced, device profiler, slowest chip (programs in order, us):
+| | head | dispatch | experts + combine | tail | bitwise-different replays (same x, same routing) |
+| GLM 2x4 5120 before (landing / no snap) | 1084-1086 | 461-463 | 1375-1378 | 26 / 37 | 0 of 34 |
+| GLM snap + fixed fin | 1084-1086 | 460-461 | 1376-1378 | 26 / 37 | 0 of 34; 0 of 186 (200 replays) |
+| K3 ring4 640 before | 456-458 | 57-58 | 1151-1152 | 113-119 | 4 of 34 (114 el.); 16 of 186 (162 el.) at 200 |
+| K3 snap only | 452-459 | 55-58 | 1150-1152 | 111-117 | 0 of 34; 0 of 186 at 200 |
+| K3 snap + fixed fin | 455-457 | 56-57 | 1149-1151 | 113-120 | 0 of 34 |
+  PCC min unchanged (GLM 0.98686, K3 0.99612). Random weights: q 2^-14 not calibrated for them (PCC unchanged).
+- Offline (GLM real weights, zz_combine_snap_offline.py + scratch combine_global_q.py): one global q 2^-14 costs
+  0-7% combine rel error over plain fp32 (quiet layers 4 / 12 / 20 most), 2^-13 ~ bf16-rounded terms, 2^-12 +60% in
+  quiet layers. main's chain (bf8_b y, bf16 product, bf16 running sum in slot order): 3.4x our error.
+- Not yet: combine_snap default (per-model q; K3 real-weight bound unmeasured), model-level run-to-run check (GLM 56k
+  twice, every (chunk, layer) compared), an overflow counter in the accumulator.
