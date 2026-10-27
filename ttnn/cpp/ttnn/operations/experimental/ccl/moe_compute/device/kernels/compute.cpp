@@ -39,6 +39,15 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     WAYPOINT("NSMD");
 }
 
+#ifdef TRISC_MATH
+// The pack thread has released every dest half, so its activation is done with the SFPU.
+ALWI void wait_packs_done() {
+    tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0) {
+    }
+}
+#endif
+
 #if defined(TRISC_PACK) || defined(TRISC_MATH)
 ALWI void moe_fill_sfpu(uint32_t idst, float value) {
     SFPU_UNARY_INIT(fill);
@@ -425,7 +434,7 @@ void kernel_main() {
             // front-packed zero W2 rows) rather than stale data from a prior expert.
             if (is_shared_expert) {
                 tile_regs_acquire();
-                // The pack thread's last SFPU work was the activation of this chunk.
+                MATH((::detail::wait_packs_done()));
                 MATH((__builtin_rvtt_peer_ran(
                     reinterpret_cast<void*>(&::detail::pack_init_activation<activation_type>))));
                 MATH((__builtin_rvtt_peer_ran(
