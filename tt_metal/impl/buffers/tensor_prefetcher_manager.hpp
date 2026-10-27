@@ -358,9 +358,10 @@ private:
     // How long the worker waits on a TL1 request ring that takes no page before it gives up on that sender. Set by
     // start() before the worker runs.
     std::chrono::steady_clock::duration request_ring_no_progress_limit_{};
-    // Whether the worker also gives up on a STOP page at that limit while its sender still runs. Only when
-    // TT_METAL_OPERATION_TIMEOUT_SECONDS is set, so stop() reaches WaitProgramDone and that times out.
-    bool request_ring_stop_bounded_ = false;
+    // Whether the worker also gives up at that limit on a sender that still runs. Only when
+    // TT_METAL_OPERATION_TIMEOUT_SECONDS is set, so stop() reaches WaitProgramDone and that times out. Otherwise
+    // only a sender that never started is given up on.
+    bool give_up_on_running_senders_ = false;
     // Set by the worker when it gives up on a sender, so stop() reports the requests it dropped.
     std::atomic<bool> worker_gave_up_on_sender_{false};
     // Request pages the worker dropped because their sender had exited, so stop() can report them.

@@ -263,7 +263,7 @@ uint8_t read_go_message_signal(const MetalContext& metal, const IDevice* device,
     return go_message.view().signal();
 }
 
-// Whether the CCE sender's status says it is still in its request loop, so a STOP may yet reach it. A status that
+// Whether the CCE sender's status says it is still in its request loop, so a page may yet reach it. A status that
 // cannot be read is unknown and counts as running. Called on the host worker thread, so a failed read is not thrown;
 // Tl1RingTransport::target_exited, which reads the same status earlier in the pass, logs it.
 bool cce_sender_running(
@@ -1270,7 +1270,7 @@ void TensorPrefetcherManager::start(const experimental::TensorPrefetcherConfig& 
                 ? std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                       std::chrono::duration<float>(timeout_seconds))
                 : std::chrono::duration_cast<std::chrono::steady_clock::duration>(kDefaultRequestRingNoProgressLimit);
-        request_ring_stop_bounded_ = timeout_seconds > 0.0f;
+        give_up_on_running_senders_ = timeout_seconds > 0.0f;
         build_cce_sender_programs(quasar_config.wait_budget_cycles);
         zero_cce_sender_control_blocks();
         transport_ =
@@ -2009,8 +2009,8 @@ void TensorPrefetcherManager::worker_loop() {
     // Endpoints whose request ring took no page for request_ring_no_progress_limit_: every later page to one is dropped
     // but STOP.
     std::vector<bool> given_up_endpoints(devices_.size() * num_senders_, false);
-    // Endpoints whose STOP the worker has logged as retained past that limit.
-    std::vector<bool> stop_retention_logged(devices_.size() * num_senders_, false);
+    // Endpoints whose pages the worker has logged as retained past that limit.
+    std::vector<bool> retention_logged(devices_.size() * num_senders_, false);
     while (true) {
         Request req;
         {
@@ -2119,28 +2119,32 @@ void TensorPrefetcherManager::worker_loop() {
                     dropped_request_pages_.fetch_add(1);
                     return true;
                 });
-                // A ring that drains slowly takes pages and so never reaches the limit. Without an operation timeout,
-                // STOP stays while the sender may still run: dropped, it would leave the sender running for good.
-                // With one, STOP is dropped too, and stop()'s WaitProgramDone times out on that sender.
+                // A sender frees a ring slot only once it has handled the command in it, so a ring also takes no page
+                // while its sender sits in a legitimate credit, CQ or drain wait, which wait_budget_cycles = 0 never
+                // bounds. Without an operation timeout, every page stays while the sender may still run: dropped, a
+                // page loses its data, and a dropped STOP leaves the sender running for good. With one, the page is
+                // dropped, and stop()'s WaitProgramDone times out on that sender.
                 const std::chrono::steady_clock::duration without_progress =
                     std::chrono::steady_clock::now() - request_taken;
                 if (request_ring && without_progress >= request_ring_no_progress_limit_) {
                     std::erase_if(next_pending, [&](const TargetEndpoint& target) {
                         const uint8_t command = req.sender_pages[target.page_index].front();
-                        if (command == DRAM_PREFETCHER_CMD_STOP && !request_ring_stop_bounded_ &&
+                        if (!give_up_on_running_senders_ &&
                             cce_sender_running(
                                 *mesh_device_,
                                 devices_[target.endpoint_index / num_senders_],
                                 sender_logical_cores_[target.endpoint_index % num_senders_],
                                 cce_control_base_)) {
-                            if (!stop_retention_logged[target.endpoint_index]) {
-                                stop_retention_logged[target.endpoint_index] = true;
-                                log_error(
+                            if (!retention_logged[target.endpoint_index]) {
+                                retention_logged[target.endpoint_index] = true;
+                                log_warning(
                                     tt::LogMetal,
                                     "Tensor prefetcher: the request ring of {} took no page for {:.0f} s; keeping its "
-                                    "STOP page until it does, because TT_METAL_OPERATION_TIMEOUT_SECONDS is unset",
+                                    "command {} page and later pages while it runs, because "
+                                    "TT_METAL_OPERATION_TIMEOUT_SECONDS is unset",
                                     sender_name(target),
-                                    std::chrono::duration<float>(without_progress).count());
+                                    std::chrono::duration<float>(without_progress).count(),
+                                    command);
                             }
                             return false;
                         }
