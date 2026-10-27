@@ -878,7 +878,7 @@ tt::tt_metal::ProgramDescriptor build_all_to_all_async_generic_program_descripto
         first[cluster_axis] = 0;
         second[cluster_axis] = 1;
         const auto hop = tt::tt_fabric::get_neighbor_eth_directions(
-            device->get_fabric_node_id(first), device->get_fabric_node_id(second));
+            *device, device->get_fabric_node_id(first), device->get_fabric_node_id(second));
         const auto expected = cluster_axis == 1 ? tt::tt_fabric::eth_chan_directions::EAST
                                                 : tt::tt_fabric::eth_chan_directions::SOUTH;
         use_multicast_initialization = !hop.empty() && hop.front() == expected;
