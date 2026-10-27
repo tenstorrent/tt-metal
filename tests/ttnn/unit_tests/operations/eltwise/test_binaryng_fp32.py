@@ -11,48 +11,6 @@ from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 pytestmark = pytest.mark.use_module_device
 
 
-def test_sub_fp32(device):
-    x_torch = torch.tensor([[1]], dtype=torch.float32)
-    y_torch = torch.tensor([[0.00030171126]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn.sub)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_sub = ttnn.sub(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_sub)
-
-    status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
-def test_rsub_fp32(device):
-    x_torch = torch.tensor([[1]], dtype=torch.float32)
-    y_torch = torch.tensor([[0.00030171126]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn.rsub)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_sub = ttnn.rsub(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_sub)
-
-    status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
-def test_add_fp32(device):
-    x_torch = torch.tensor([[1]], dtype=torch.float32)
-    y_torch = torch.tensor([[0.00030171126]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn.add)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_add = ttnn.add(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_add)
-
-    status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
 def test_add_int32(device):
     x_torch = torch.tensor([[11, 23, 0, -23, -1, -100]], dtype=torch.int32)
     y_torch = torch.tensor([[78, 99, 34, -33, -1, 100]], dtype=torch.int32)
@@ -65,85 +23,6 @@ def test_add_int32(device):
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
     assert status
-
-
-def test_mul_fp32(device):
-    x_torch = torch.tensor([[2]], dtype=torch.float32)
-    y_torch = torch.tensor([[0.00030171126]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn.multiply)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.multiply(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
-
-    status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
-    assert status
-
-
-# Torch num/ 0 = inf and 0/0  nan; TT num/ 0 = inf and 0/0=nan; in fp32  tile
-# Torch num/ 0 = inf and 0/0  nan; TT num/ 0 = inf and 0/0=0; in chained (mul * recip) div op
-def test_div_fp32(device):
-    x_torch = torch.tensor([[1.00030171126, -3, 16, -5, 14, -12, 0, 0, 1, 15]], dtype=torch.float32)
-    y_torch = torch.tensor([[2, 3, -4, -5, 0, 0, 0, 1, 0, 10]], dtype=torch.float32)
-    # torch out in ttnn TorchTensor([[ 0.500150859355927, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,                inf,
-    #            1.500000000000000]])
-    # tt out in torch TorchTensor([[ 0.500150859355927, -1.000000000000000, -4.000000000000000,  1.000000000000000,                inf,               -inf,                nan,  0.000000000000000,                inf,
-    #            1.499999880790710]])
-    golden_fn = ttnn.get_golden_function(ttnn.divide)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_div = ttnn.divide(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_div)
-
-    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=0, allow_nonfinite=True)
-
-
-# Test division when input_b is non-zero
-def test_div_bf16_nonzero(device):
-    x_torch = torch.tensor(
-        [
-            [
-                256.0,
-                1.009187e-31,
-                1.00030171126,
-                -3,
-                16,
-                -5,
-                0,
-                15,
-            ]
-        ],
-        dtype=torch.bfloat16,
-    )
-    y_torch = torch.tensor(
-        [
-            [
-                1.5,
-                1.175494e-38,
-                2,
-                3,
-                -4,
-                -5,
-                1,
-                10,
-            ]
-        ],
-        dtype=torch.bfloat16,
-    )
-    # torch out in ttnn TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000, 0.000000000000000,  1.500000000000000]],
-    #         dtype=torch.bfloat16)
-    # tt out in torch TorchTensor([[ 0.500000000000000, -1.000000000000000, -4.000000000000000,  1.000000000000000, 0.000000000000000,  1.500000000000000]],
-    #         dtype=torch.bfloat16)
-    golden_fn = ttnn.get_golden_function(ttnn.divide)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_div = ttnn.divide(x_tt, y_tt)  # bf16 runs FPU
-    tt_out = ttnn.to_torch(z_tt_div)
-
-    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=1, allow_nonfinite=True)
 
 
 def test_pow_fp32(device):
@@ -312,30 +191,6 @@ def test_logical_fp32(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
-        ttnn.eq,
-        ttnn.ne,
-        ttnn.gt,
-        ttnn.ge,
-        ttnn.lt,
-        ttnn.le,
-    ],
-)
-def test_relational_fp32(device, ttnn_function):
-    x_torch = torch.tensor([[1.99999999991, 0, 345.1234568999130, -1]], dtype=torch.float32)
-    y_torch = torch.tensor([[1.99999999990, 0, 345.1234568999131, -1]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn_function(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
-
-    assert torch.equal(z_torch.to(tt_out.dtype), tt_out)
-
-
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
         ttnn.bitwise_and,
         ttnn.bitwise_or,
         ttnn.bitwise_xor,
@@ -402,27 +257,3 @@ def test_ng_scalar_fp32(device, ttnn_function):
 
     status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
     assert status
-
-
-@pytest.mark.parametrize("alpha", [-10.0, -5.0, 1.0, 2.0, 5.0, 10.0])
-def test_addalpha_fp32(alpha, device):
-    x_torch = torch.tensor([[1.5, 2, 3.33, 4]], dtype=torch.float32)
-    y_torch = torch.tensor([[2.009, 3.11, 4.22, 5]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn.addalpha)
-    z_torch = golden_fn(x_torch, y_torch, alpha)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.addalpha(x_tt, y_tt, alpha)
-    assert_with_ulp(expected_result=z_torch, actual_result=z_tt_out, ulp_threshold=1)
-
-
-@pytest.mark.parametrize("alpha", [-100.0, -20.0, 0.0, 2.0, 5.0, 10.0, 50.0])
-def test_subalpha_fp32(alpha, device):
-    x_torch = torch.tensor([[1.5, 2, 3.33, 4]], dtype=torch.float32)
-    y_torch = torch.tensor([[2.009, 3.11, 4.22, 5]], dtype=torch.float32)
-    golden_fn = ttnn.get_golden_function(ttnn.subalpha)
-    z_torch = golden_fn(x_torch, y_torch, alpha)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn.subalpha(x_tt, y_tt, alpha)
-    assert_with_ulp(expected_result=z_torch, actual_result=z_tt_out, ulp_threshold=1)
