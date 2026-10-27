@@ -64,18 +64,13 @@ ALWI void sfpu_reduce_min_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
 }
 
 // SFPU cross-tile add. Int32 uses add_int_tile; Float32 uses add_binary_tile for
-// accurate fp32 accumulation. add_binary_tile is unavailable on Quasar, so guard
-// it with ARCH_QUASAR to avoid template lookup failures.
+// accurate fp32 accumulation.
 template <DataFormat format>
 ALWI void sfpu_reduce_sum_fold_init() {
     if constexpr (format == DataFormat::Int32) {
         add_int_tile_init();
     } else {
-#ifndef ARCH_QUASAR
         add_binary_tile_init();
-#else
-        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU reduce is not supported on Quasar");
-#endif
     }
 }
 
@@ -84,11 +79,7 @@ ALWI void sfpu_reduce_sum_fold_tile(uint32_t a, uint32_t b, uint32_t out) {
     if constexpr (format == DataFormat::Int32) {
         add_int_tile<format>(a, b, out);
     } else {
-#ifndef ARCH_QUASAR
         add_binary_tile(a, b, out);
-#else
-        static_assert(format == DataFormat::Int32, "Accurate fp32 SFPU reduce is not supported on Quasar");
-#endif
     }
 }
 
