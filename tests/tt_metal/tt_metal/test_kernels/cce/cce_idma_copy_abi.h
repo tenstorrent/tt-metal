@@ -100,15 +100,9 @@ inline constexpr uint32_t kStreamStop = 0x57095709u;
 
 // Operand kinds. kKindOwnTl1: the kernel's own TL1; the selector is the kernel's own CCE index, so the iDMA operand is
 // that CCE's package SPA and the hart checks the data through its uncached alias. kKindSramSpa: another CCE's TL1 at
-// its package SPA; the selector is that CCE's index. kKindGddr: GDDR at a chiplet offset; the selector is
-// pack_gddr_selector(local Mimir, target Mimir).
+// its package SPA; the selector is that CCE's index. kKindGddr: GDDR at a chiplet offset; the selector is the target
+// Mimir, and the CCE's host-written route table picks the D2D port.
 inline constexpr uint32_t kKindOwnTl1 = 0, kKindSramSpa = 1, kKindGddr = 2;
-inline constexpr uint32_t kGddrLocalShift = 16, kGddrTargetMask = 0xFFFFu;
-constexpr uint32_t pack_gddr_selector(uint32_t local_mimir, uint32_t target_mimir) {
-    return (local_mimir << kGddrLocalShift) | target_mimir;
-}
-constexpr uint32_t gddr_selector_local(uint32_t selector) { return selector >> kGddrLocalShift; }
-constexpr uint32_t gddr_selector_target(uint32_t selector) { return selector & kGddrTargetMask; }
 
 // MIM-407 backend (request VC) per source/destination pair. A copy from local SRAM uses the destination's column; a
 // copy from anywhere else uses kBackendFromRemote.

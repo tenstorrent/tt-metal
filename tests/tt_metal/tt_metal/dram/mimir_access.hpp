@@ -47,9 +47,22 @@ inline constexpr uint64_t kCceSramSpaBase = 0x1280000000ULL;
 inline constexpr uint64_t kCceSramTileStride = 0x400000ULL;
 inline constexpr uint64_t kAnchorBytes = 128 * kKiB;
 
-inline uint64_t host_cce_gddr_address(uint32_t local_mimir, uint32_t mimir_index, uint64_t offset) {
-    const uint64_t route_base =
-        (local_mimir == 0 && mimir_index != local_mimir) ? kCceGddrD2d1SpaBase : kCceGddrSpaBase;
+// The SPA a CCE on `source_mimir` issues for GDDR on `mimir_index`, routed as the host's CceSpaRoutes route it: local
+// GDDR on D2D0, a peer on its mimir_channels route, and with no topology Mimir 0 reaches peers on D2D1.
+inline uint64_t host_cce_gddr_address(
+    const metal_SocDescriptor& soc, uint32_t source_mimir, uint32_t mimir_index, uint64_t offset) {
+    uint32_t port = 0;
+    const auto& channels = soc.get_arch_descriptor().get_mimir_channels();
+    if (mimir_index != source_mimir && channels.empty()) {
+        port = source_mimir == 0 ? 1 : 0;
+    } else if (mimir_index != source_mimir) {
+        for (const auto& route : channels.at(source_mimir).routes) {
+            if (route.peer_instance == mimir_index) {
+                port = route.d2d;
+            }
+        }
+    }
+    const uint64_t route_base = port == 0 ? kCceGddrSpaBase : kCceGddrD2d1SpaBase;
     return route_base + static_cast<uint64_t>(mimir_index) * kCceGddrMimirStride + offset;
 }
 
@@ -296,8 +309,8 @@ struct CopyEndpoint {
 
 inline CopyEndpoint own_tl1(uint64_t tl1_offset) { return {CopyKind::OwnTl1, 0, tl1_offset}; }
 
-inline CopyEndpoint gddr(uint32_t local_mimir, uint32_t target_mimir, uint64_t chiplet_offset) {
-    return {CopyKind::Gddr, cce_copy_ops_abi::pack_gddr_selector(local_mimir, target_mimir), chiplet_offset};
+inline CopyEndpoint gddr(uint32_t target_mimir, uint64_t chiplet_offset) {
+    return {CopyKind::Gddr, target_mimir, chiplet_offset};
 }
 
 inline CopyEndpoint sram_spa(uint32_t target_cce_index, uint64_t tl1_offset) {
@@ -502,15 +515,7 @@ inline ::testing::AssertionResult run_cce_copy_ops(
         for (const CopyOp& op : launch.table.ops()) {
             const uint64_t bytes = static_cast<uint64_t>(op.num_words) * sizeof(uint32_t);
             for (const CopyEndpoint* endpoint : {&op.source, &op.destination}) {
-                if (endpoint->kind == CopyKind::Gddr) {
-                    TT_FATAL(
-                        cce_copy_ops_abi::gddr_selector_local(endpoint->selector) ==
-                            mimir_index_for_cce(launch.cce_index),
-                        "CCE {} Gddr endpoint names local Mimir {}, expected Mimir {}",
-                        launch.cce_index,
-                        cce_copy_ops_abi::gddr_selector_local(endpoint->selector),
-                        mimir_index_for_cce(launch.cce_index));
-                } else {
+                if (endpoint->kind != CopyKind::Gddr) {
                     TT_FATAL(
                         endpoint->offset >= tl1_test_base() && endpoint->offset + bytes <= tl1_test_end(),
                         "CCE {} TL1 endpoint [0x{:x}, +{} B) is outside the test area [0x{:x}, 0x{:x})",
@@ -666,7 +671,8 @@ inline MimirDramAddressInfo mimir_dram_address(
     info.size = size;
     const uint32_t num_mimirs = static_cast<uint32_t>(soc.get_num_dram_channels());
     for (uint32_t source_mimir = 0; source_mimir < num_mimirs; ++source_mimir) {
-        info.spa_by_source_mimir.push_back(host_cce_gddr_address(source_mimir, info.mimir_index, info.chiplet_offset));
+        info.spa_by_source_mimir.push_back(
+            host_cce_gddr_address(soc, source_mimir, info.mimir_index, info.chiplet_offset));
     }
     return info;
 }

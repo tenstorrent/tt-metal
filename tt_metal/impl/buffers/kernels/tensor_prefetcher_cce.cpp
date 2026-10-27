@@ -147,7 +147,7 @@ void deliver_chunk(
     // port, which a Rocket core does not cache, but that is not confirmed against RTL. The host makes the tensor's
     // DRAM writes land before it releases a WAIT_CQ (SDMeshCommandQueue::enqueue_write_dram_core_counter).
     const volatile uint32_t* source = reinterpret_cast<const volatile uint32_t*>(
-        experimental::cce_gddr_address(context.mimir, context.mimir, context.view_offset + view_byte_offset));
+        experimental::cce_gddr_address(context.mimir, context.view_offset + view_byte_offset));
     volatile uint32_t* stage = remote_cb::own_tl1_word(stage_slot_addr);
     const uint32_t num_words = bytes / sizeof(uint32_t);
     for (uint32_t word = 0; word < num_words; ++word) {

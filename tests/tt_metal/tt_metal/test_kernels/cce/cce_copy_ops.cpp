@@ -12,10 +12,7 @@ namespace abi = cce_copy_ops_abi;
 static bool resolve_endpoint(uint32_t kind, uint32_t selector, uint64_t offset, uint64_t& address) {
     switch (kind) {
         case abi::kKindOwnTl1: address = offset + static_cast<uint64_t>(MEM_L1_UNCACHED_BASE); return true;
-        case abi::kKindGddr:
-            address = experimental::cce_gddr_address(
-                abi::gddr_selector_local(selector), abi::gddr_selector_target(selector), offset);
-            return true;
+        case abi::kKindGddr: address = experimental::cce_gddr_address(selector, offset); return true;
         case abi::kKindSramSpa: address = experimental::cce_sram_address(selector, offset); return true;
         default: return false;
     }

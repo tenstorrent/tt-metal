@@ -282,7 +282,7 @@ TEST_P(MimirLocalDram, CceWritesTl1ToDram) {
                     hart,
                     CopyOp{
                         .source = own_tl1(tl1_data(hart)),
-                        .destination = gddr(local_mimir, local_mimir, chiplet_offset),
+                        .destination = gddr(local_mimir, chiplet_offset),
                         .num_words = region_words}));
             }
 
@@ -348,7 +348,7 @@ TEST_P(MimirLocalDram, CceReadsDramToTl1) {
                     cce_index,
                     hart,
                     CopyOp{
-                        .source = gddr(local_mimir, local_mimir, chiplet_offset),
+                        .source = gddr(local_mimir, chiplet_offset),
                         .destination = own_tl1(tl1_data(hart) + kGuardBytes),
                         .num_words = region_words}));
             }
@@ -420,12 +420,12 @@ TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
 
                 CopyOpTable table;
                 table.add(CopyOp{
-                    .source = gddr(local_mimir, local_mimir, source_chiplet),
+                    .source = gddr(local_mimir, source_chiplet),
                     .destination = own_tl1(tl1_data(hart) + kGuardBytes),
                     .num_words = region_words});
                 table.add(CopyOp{
                     .source = own_tl1(tl1_data(hart) + kGuardBytes),
-                    .destination = gddr(local_mimir, local_mimir, destination_chiplet),
+                    .destination = gddr(local_mimir, destination_chiplet),
                     .num_words = region_words});
                 launches.push_back(CceCopyLaunch{.cce_index = cce_index, .hart = hart, .table = table});
             }
@@ -528,7 +528,7 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
                         hart,
                         CopyOp{
                             .source = own_tl1(tl1_data(hart)),
-                            .destination = gddr(local_mimir, local_mimir, chiplet_offset),
+                            .destination = gddr(local_mimir, chiplet_offset),
                             .num_words = size_words}));
                 }
                 std::vector<CceCopyResult> results;
@@ -555,7 +555,7 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
                         hart,
                         CopyOp{
                             .source = own_tl1(shared_source_tl1(hart)),
-                            .destination = gddr(local_mimir, local_mimir, shared_chiplet_offset),
+                            .destination = gddr(local_mimir, shared_chiplet_offset),
                             .num_words = size_words}));
                 }
                 std::vector<CceCopyResult> shared_results;
@@ -639,18 +639,18 @@ TEST_P(MimirLocalDram, RepeatedAndOverlappingPerHart) {
                 const std::vector<CopyOp> ops = {
                     CopyOp{
                         .source = own_tl1(source_a_tl1),
-                        .destination = gddr(local_mimir, local_mimir, region_chiplet),
+                        .destination = gddr(local_mimir, region_chiplet),
                         .num_words = kCopyWords},
                     CopyOp{
                         .source = own_tl1(source_b_tl1),
-                        .destination = gddr(local_mimir, local_mimir, region_chiplet + kOverlapShiftBytes),
+                        .destination = gddr(local_mimir, region_chiplet + kOverlapShiftBytes),
                         .num_words = kCopyWords},
                     CopyOp{
-                        .source = gddr(local_mimir, local_mimir, region_chiplet),
+                        .source = gddr(local_mimir, region_chiplet),
                         .destination = own_tl1(result_c_tl1 + kGuardBytes),
                         .num_words = kCopyWords},
                     CopyOp{
-                        .source = gddr(local_mimir, local_mimir, region_chiplet + kOverlapShiftBytes),
+                        .source = gddr(local_mimir, region_chiplet + kOverlapShiftBytes),
                         .destination = own_tl1(result_d_tl1 + kGuardBytes),
                         .num_words = kCopyWords}};
 

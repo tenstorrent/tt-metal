@@ -209,8 +209,7 @@ std::vector<uint32_t> batch_args(const metal_SocDescriptor& soc, const GddrBatch
     args[abi::kArgSrcOffsetLo] = static_cast<uint32_t>(source_offset);
     args[abi::kArgSrcOffsetHi] = static_cast<uint32_t>(source_offset >> 32);
     args[abi::kArgDstKind] = abi::kKindGddr;
-    args[abi::kArgDstSelector] =
-        abi::pack_gddr_selector(mimir_index_for_cce(batch.cce_index), mimir_of_view(soc, view));
+    args[abi::kArgDstSelector] = mimir_of_view(soc, view);
     args[abi::kArgDstOffsetLo] = static_cast<uint32_t>(chiplet_offset);
     args[abi::kArgDstOffsetHi] = static_cast<uint32_t>(chiplet_offset >> 32);
     args[abi::kArgNumElements] = batch.num_commands;
@@ -497,7 +496,7 @@ KernelOperand kernel_operand(const metal_SocDescriptor& soc, uint32_t issuing_cc
         case EndpointKind::Gddr:
             return {
                 abi::kKindGddr,
-                abi::pack_gddr_selector(mimir_index_for_cce(issuing_cce), mimir_of_view(soc, endpoint.view)),
+                mimir_of_view(soc, endpoint.view),
                 chiplet_offset_of(soc, endpoint.view, endpoint.offset)};
     }
     return {};

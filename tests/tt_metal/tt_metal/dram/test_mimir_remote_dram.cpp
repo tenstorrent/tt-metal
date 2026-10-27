@@ -184,7 +184,7 @@ MimirTransferRecord make_gddr_record(
     MimirTransferRecord record;
     record.source = std::move(source);
     record.destination = std::move(destination);
-    record.requested_address = host_cce_gddr_address(source_mimir, dest_mimir, chiplet_offset);
+    record.requested_address = host_cce_gddr_address(soc, source_mimir, dest_mimir, chiplet_offset);
     record.destination_local_address = tt::umd::mimir_local_address_windows(soc).dram_base + chiplet_offset;
     record.predicted_stages = {
         {"issued SPA", record.requested_address},
@@ -577,10 +577,8 @@ RunOutcome write_from_tl1_anchor(
         CceCopyLaunch launch;
         launch.cce_index = run.source_cce;
         launch.hart = transfer.hart;
-        launch.table.add(CopyOp{
-            own_tl1(transfer.tl1_offset),
-            gddr(run.source_mimir, run.dest_mimir, transfer.chiplet_offset),
-            kEveryAnchorWords});
+        launch.table.add(
+            CopyOp{own_tl1(transfer.tl1_offset), gddr(run.dest_mimir, transfer.chiplet_offset), kEveryAnchorWords});
         launches.push_back(std::move(launch));
         records.push_back(transfer.record);
         expected_xors.push_back(xor_of(transfer.pattern));
@@ -654,10 +652,8 @@ RunOutcome read_to_tl1_anchor(
         CceCopyLaunch launch;
         launch.cce_index = run.source_cce;
         launch.hart = transfer.hart;
-        launch.table.add(CopyOp{
-            gddr(run.source_mimir, run.dest_mimir, transfer.chiplet_offset),
-            own_tl1(transfer.tl1_offset),
-            kEveryAnchorWords});
+        launch.table.add(
+            CopyOp{gddr(run.dest_mimir, transfer.chiplet_offset), own_tl1(transfer.tl1_offset), kEveryAnchorWords});
         launches.push_back(std::move(launch));
         records.push_back(transfer.record);
         expected_xors.push_back(xor_of(transfer.pattern));
@@ -739,18 +735,16 @@ RunOutcome round_trip_anchor(
         CceCopyLaunch write_launch;
         write_launch.cce_index = run.source_cce;
         write_launch.hart = transfer.hart;
-        write_launch.table.add(CopyOp{
-            own_tl1(transfer.tl1_offset),
-            gddr(run.source_mimir, run.dest_mimir, transfer.chiplet_offset),
-            kEveryAnchorWords});
+        write_launch.table.add(
+            CopyOp{own_tl1(transfer.tl1_offset), gddr(run.dest_mimir, transfer.chiplet_offset), kEveryAnchorWords});
         write_launches.push_back(std::move(write_launch));
         write_records.push_back(transfer.record);
 
         CceCopyLaunch read_back_launch;
         read_back_launch.cce_index = run.source_cce;
         read_back_launch.hart = transfer.read_back_hart;
-        read_back_launch.table.add(CopyOp{
-            gddr(run.source_mimir, run.dest_mimir, transfer.chiplet_offset), own_tl1(tl1_b_offset), kEveryAnchorWords});
+        read_back_launch.table.add(
+            CopyOp{gddr(run.dest_mimir, transfer.chiplet_offset), own_tl1(tl1_b_offset), kEveryAnchorWords});
         read_back_launches.push_back(std::move(read_back_launch));
         read_back_records.push_back(transfer.read_back_record);
         expected_xors.push_back(xor_of(transfer.pattern));
@@ -860,7 +854,7 @@ RunOutcome check_traffic_case(
     CceCopyLaunch launch;
     launch.cce_index = run.source_cce;
     launch.hart = hart;
-    launch.table.add(CopyOp{own_tl1(tl1_offset), gddr(run.source_mimir, run.dest_mimir, chiplet_offset), words});
+    launch.table.add(CopyOp{own_tl1(tl1_offset), gddr(run.dest_mimir, chiplet_offset), words});
     std::vector<CceCopyLaunch> launches{launch};
     std::vector<CceCopyResult> results;
     std::vector<MimirTransferRecord> records{record};
@@ -899,7 +893,7 @@ RunOutcome check_traffic_case(
     CceCopyLaunch read_launch;
     read_launch.cce_index = run.source_cce;
     read_launch.hart = read_hart;
-    read_launch.table.add(CopyOp{gddr(run.source_mimir, run.dest_mimir, chiplet_offset), own_tl1(tl1_b_offset), words});
+    read_launch.table.add(CopyOp{gddr(run.dest_mimir, chiplet_offset), own_tl1(tl1_b_offset), words});
     std::vector<CceCopyLaunch> read_launches{read_launch};
     std::vector<CceCopyResult> read_results;
     std::vector<MimirTransferRecord> read_records{read_record};
@@ -1093,7 +1087,7 @@ TEST(MimirRemoteMixed, Concurrent) {
         } else {
             launch.table.add(CopyOp{
                 own_tl1(transfer.source_tl1_offset),
-                gddr(mimir_index_for_cce(transfer.source_cce), transfer.dest_mimir, transfer.chiplet_offset),
+                gddr(transfer.dest_mimir, transfer.chiplet_offset),
                 kEveryAnchorWords});
         }
         launches.push_back(std::move(launch));
@@ -1175,10 +1169,8 @@ TEST(MimirRemoteMixed, Concurrent) {
             log_transfer(read_record);
             read_records.push_back(read_record);
         } else {
-            launch.table.add(CopyOp{
-                gddr(source_mimir, transfer.dest_mimir, transfer.chiplet_offset),
-                own_tl1(tl1_b_offset),
-                kEveryAnchorWords});
+            launch.table.add(
+                CopyOp{gddr(transfer.dest_mimir, transfer.chiplet_offset), own_tl1(tl1_b_offset), kEveryAnchorWords});
             if (transfer.target == MixedTransfer::Target::RemoteDram) {
                 const MimirTransferRecord read_record = make_gddr_record(
                     soc,
