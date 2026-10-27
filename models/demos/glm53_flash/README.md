@@ -85,13 +85,22 @@ prompts), greedy determinism across rounds through the chat template (thinking o
 (TTFT 26.5 / 52.6 / 78.6 / 104.8 s: the sequence-parallel prefill serves prompts one after another at ~2.5 K tok/s), `vllm bench`
 128 x 128 tokens at 32 requests (4 at a time) 32/32.
 
-Open: (1) served decode = 372 ms per token at 4 users against the 65 ms traced device step: 156 ms inside the adapter (the Python
-page-table row check, fixed; per-step uploads of the ids and 11 position tensors to all 32 chips, replaced by one packed upload under
-`GLM53_DECODE_PACKED_INPUTS=1`, device validation pending; a 32-chip id readback, now one chip per row) and ~220 ms in the plugin
-runner under the 32-request benchmark (profiled next); (2) a 65 536-token `vllm bench` random prompt hangs the eager regions prefill
-in its 3rd 16 K chunk inside the ttnn KDA `reduce_affine_transforms` op (4 chips wait on a cross-chip semaphore while their row
-peers move on; tt-triage captured; natural-text prompts pass), so the 64 K random benchmark point is excluded until the op is fixed;
-(3) 32 distinct 1 M users need the per-row prefill ownership (`doc/mesh/row_ownership.md`).
+Served decode (2026-10-27, `vllm bench` 128 x 128 tokens, 32 requests 4 at a time): 192 ms per token = 5.2 tok/s per user after
+the Python page-table check was removed (372 ms before). The step is the traced replay at the 1 M-capacity model (148 ms) plus ~41 ms
+of host work (32-chip id readback and 11 per-step position uploads to every chip: one packed upload and one read per row under
+`GLM53_DECODE_PACKED_INPUTS=1`, device validation pending). The replay costs 148 ms against 65 ms in the harness at a short cache
+because the sparse-decode custom ops (index scorer, top-k, pool gather) and the compact attention scale with the pool CAPACITY
+(8192 pools at 1 M) instead of the live pools: +1.06 ms per DSA layer per step (per-op profiles under `_logs/mesh/profiler/`);
+bounding them by a per-step runtime pool count is in progress.
+
+Open: (1) the KDA chronology scalars were allocated after the trace captures and clobbered by decode replays (the served 64 K random
+prompt hung the ttnn KDA `reduce_affine_transforms` op twice, wedging the mesh): fixed with persistent per-mesh scalars written in
+place plus an allocation guard after captures (`tt/kda.py`), validated; a second hang right after that prompt's last chunk is open
+(a fresh-slot reproducer on the block passes at 2175, 2176, 65514 and 65536 tokens; slot reuse is next), so the 64 K random
+benchmark point stays excluded; (2) eager prefill chunks pad to 256/512/1024/2048/16384 (`GLM53_PREFILL_BUCKETS`): a 1024-row slab
+per chip (6.4-9.6 K-token single chunks on the 8x4) overflows L1 with the KDA scan's static buffers, and a 4096 bucket costs ~1 GB of
+DRAM the 1 M x 32-slot model does not have; (3) 32 distinct 1 M users need the per-row prefill ownership
+(`doc/mesh/row_ownership.md`).
 
 ## How to run
 
