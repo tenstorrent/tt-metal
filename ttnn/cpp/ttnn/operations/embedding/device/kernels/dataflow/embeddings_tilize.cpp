@@ -90,6 +90,53 @@ void kernel_main() {
             dfb_in0.reserve_back(this_chunk_tiles);
             uint32_t l1_write_addr = dfb_in0.get_write_ptr();
 
+#if !defined PADDED && !defined BINARY
+            // Rows whose token equals the previous row's (token_type_ids of a single-segment batch are all 0,
+            // repeated padding) would all fetch one weight page from the same DRAM bank. Fetch each run of equal
+            // tokens once and replicate the landed row locally.
+            bool any_follower = false;
+            input_token_t prev_token = 0;
+            for (uint32_t k = 0; k < tile_height; ++k) {
+                input_token_t token;
+                {
+                    auto index_lock = index_scratch.scoped_lock(k, 1);
+                    token = index_scratch[k];
+                }
+                if (k > 0 && token == prev_token) {
+                    any_follower = true;
+                } else {
+                    read_token_async(
+                        noc, token, weights, l1_write_addr, weight_chunk_size, weight_chunk_offset, weight_offset);
+                }
+                prev_token = token;
+                l1_write_addr += weight_chunk_size;
+            }
+            noc.async_read_barrier();
+            if (any_follower) {
+                uint32_t row_addr = dfb_in0.get_write_ptr();
+                uint32_t leader_addr = row_addr;
+                for (uint32_t k = 0; k < tile_height; ++k) {
+                    input_token_t token;
+                    {
+                        auto index_lock = index_scratch.scoped_lock(k, 1);
+                        token = index_scratch[k];
+                    }
+                    if (k > 0 && token == prev_token) {
+                        noc.async_read(
+                            CoreLocalMem<uint32_t>(reinterpret_cast<uint32_t*>(leader_addr)),
+                            CoreLocalMem<uint32_t>(reinterpret_cast<uint32_t*>(row_addr)),
+                            weight_chunk_size,
+                            {.offset_bytes = 0},
+                            {});
+                    } else {
+                        leader_addr = row_addr;
+                    }
+                    prev_token = token;
+                    row_addr += weight_chunk_size;
+                }
+                noc.async_read_barrier();
+            }
+#else
             for (uint32_t k = 0; k < tile_height; ++k) {
                 input_token_t token;
                 {
@@ -104,6 +151,7 @@ void kernel_main() {
                 l1_write_addr += weight_chunk_size;
             }
             noc.async_read_barrier();
+#endif
             dfb_in0.push_back(this_chunk_tiles);
         }
 
