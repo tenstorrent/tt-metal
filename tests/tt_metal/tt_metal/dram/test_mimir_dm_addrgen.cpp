@@ -108,9 +108,8 @@ uint64_t result_word64(const std::vector<uint32_t>& words, uint32_t index64) {
 }
 
 void run_case(const AddrgenCase& addrgen_case) {
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     check_tl1_layout();
 
     const uint64_t status_offset = tl1_done_block(kHart);

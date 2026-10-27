@@ -260,9 +260,8 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
     if (const std::string skip_reason = dram_unary_skip_reason(cce_index); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     check_tl1_layout();
 
     const metal_SocDescriptor& soc = soc_desc_of(device);
@@ -332,7 +331,7 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
     const SemaphoreIds semaphores = create_semaphores(device, program, layout);
     const std::vector<CceKernelLaunch> launches = launches_for(layout, semaphores);
     add_cce_kernels(device, program, launches);
-    detail::CompileProgram(device, program, /*force_slow_dispatch=*/true);
+    program.impl().compile(device, /*force_slow_dispatch=*/true);
     program.impl().finalize_offsets(device);
     const uint64_t filled_offset = semaphore_tl1_offset(program, semaphores.filled);
     const uint64_t drained_offset = semaphore_tl1_offset(program, semaphores.drained);

@@ -1032,9 +1032,8 @@ protected:
 // Saturate high-water asserts.
 TEST_P(MimirTridProbe, PendingVisible) {
     const uint32_t cce_index = GetParam();
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
     const GddrBatch batch{
@@ -1049,9 +1048,8 @@ TEST_P(MimirTridProbe, PendingVisible) {
 // 32 commands over trids 0-15 twice, so up to 32 outstanding; records the VC-space stall cycles. Non-gating.
 TEST_P(MimirTridProbe, DepthBeyond16) {
     const uint32_t cce_index = GetParam();
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
     const GddrBatch batch{
@@ -1069,9 +1067,8 @@ TEST_P(MimirTridProbe, DepthBeyond16) {
 TEST_P(MimirTridProbe, Width) {
     constexpr uint32_t kWideTrid = 17;
     const uint32_t cce_index = GetParam();
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
     const GddrBatch batch{
@@ -1107,9 +1104,8 @@ TEST_P(MimirTridProbe, Scope) {
     constexpr uint32_t kObserverHart = 1;
     constexpr uint32_t kTrid = 5;
     const uint32_t cce_index = GetParam();
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     check_tl1_layout();
     const metal_SocDescriptor& soc = soc_desc_of(device);
     record_descriptor_properties(soc);
@@ -1169,9 +1165,8 @@ INSTANTIATE_TEST_SUITE_P(MM43, MimirTridProbe, ::testing::Range(0u, kMaxCces), c
 class MimirTridTest {
 protected:
     IDevice* open_device() {
-        IDevice* device = CreateDevice(0);
-        TT_FATAL(device != nullptr, "CreateDevice(0) returned no device");
-        device_closer_ = std::make_unique<ScopedDevice>(device);
+        device_closer_ = std::make_unique<ScopedDevice>();
+        IDevice* device = device_closer_->device();
         check_tl1_layout();
         record_descriptor_properties(soc_desc_of(device));
         return device;

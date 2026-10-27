@@ -179,7 +179,7 @@ void update_echo_arguments(
     Program program = CreateProgram();
     const KernelHandle kernel = create_echo_kernel(program, logical_core, hart, arguments.ct_marker);
     set_echo_arguments(program, kernel, logical_core, arguments);
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    launch_program_and_wait(device, program);
     return check_echo_slot(hart, read_echo_slots(device, cce_index), arguments);
 }
 
@@ -193,9 +193,8 @@ TEST_P(MimirKernelLoad, MinimalKernelExecutes) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
     }
 
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_guard{device};
+    ScopedDevice device_guard;
+    IDevice* device = device_guard.device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const CoreCoord logical_core = logical_cce_core(soc_desc_of(device), cce_index);
@@ -208,14 +207,14 @@ TEST_P(MimirKernelLoad, MinimalKernelExecutes) {
         kNullKernelPath,
         logical_core,
         DramConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
-    detail::LaunchProgram(device, null_program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    launch_program_and_wait(device, null_program);
 
     const EchoArguments arguments = make_echo_arguments(cce_index, kEchoCtMarkerBase + cce_index);
     Program echo_program = CreateProgram();
     const KernelHandle echo_kernel = create_echo_kernel(echo_program, logical_core, hart, arguments.ct_marker);
     set_echo_arguments(echo_program, echo_kernel, logical_core, arguments);
     poison_echo_slots(device, cce_index);
-    detail::LaunchProgram(device, echo_program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    launch_program_and_wait(device, echo_program);
 
     EXPECT_TRUE(check_echo_slot(hart, read_echo_slots(device, cce_index), arguments));
 }
@@ -228,9 +227,8 @@ TEST_P(MimirKernelLoad, EachHartAlone) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
     }
 
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_guard{device};
+    ScopedDevice device_guard;
+    IDevice* device = device_guard.device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const CoreCoord logical_core = logical_cce_core(soc_desc_of(device), cce_index);
@@ -243,7 +241,7 @@ TEST_P(MimirKernelLoad, EachHartAlone) {
         for (uint32_t poisoned_cce = 0; poisoned_cce < topology.num_cces; poisoned_cce++) {
             poison_echo_slots(device, poisoned_cce);
         }
-        detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+        launch_program_and_wait(device, program);
         for (uint32_t read_cce = 0; read_cce < topology.num_cces; read_cce++) {
             const std::vector<uint32_t> echo_block = read_echo_slots(device, read_cce);
             for (uint32_t slot_hart = 0; slot_hart < cce_hart_count(); slot_hart++) {
@@ -265,9 +263,8 @@ TEST_P(MimirKernelLoad, ArgsReplaceStale) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
     }
 
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_guard{device};
+    ScopedDevice device_guard;
+    IDevice* device = device_guard.device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const CoreCoord logical_core = logical_cce_core(soc_desc_of(device), cce_index);
@@ -282,7 +279,7 @@ TEST_P(MimirKernelLoad, ArgsReplaceStale) {
     }
 
     poison_echo_slots(device, cce_index);
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    launch_program_and_wait(device, program);
     const std::vector<uint32_t> first_block = read_echo_slots(device, cce_index);
     for (uint32_t hart = 0; hart < cce_hart_count(); hart++) {
         EXPECT_TRUE(check_echo_slot(hart, first_block, first_arguments[hart]));
@@ -295,7 +292,7 @@ TEST_P(MimirKernelLoad, ArgsReplaceStale) {
     }
 
     poison_echo_slots(device, cce_index);
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    launch_program_and_wait(device, program);
     const std::vector<uint32_t> updated_block = read_echo_slots(device, cce_index);
     for (uint32_t hart = 0; hart < cce_hart_count(); hart++) {
         EXPECT_TRUE(check_echo_slot(hart, updated_block, updated_arguments[hart]));
@@ -316,9 +313,8 @@ TEST_P(MimirKernelLoad, FirmwareKeepsRunningAcrossReopen) {
 
     constexpr uint32_t hart = 0;
     constexpr uint32_t launches_per_session = 4;
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_guard{device};
+    ScopedDevice device_guard;
+    IDevice* device = device_guard.device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const CoreCoord logical_core = logical_cce_core(soc_desc_of(device), cce_index);
@@ -331,9 +327,8 @@ TEST_P(MimirKernelLoad, FirmwareKeepsRunningAcrossReopen) {
     }
 
     device_guard.close();
-    device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice reopened_guard{device};
+    ScopedDevice reopened_guard;
+    device = reopened_guard.device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     arguments.runtime[0] = sequence;
@@ -349,9 +344,8 @@ TEST(MimirKernelLoad, SameBinaryAllCcesUnicast) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
 
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_guard{device};
+    ScopedDevice device_guard;
+    IDevice* device = device_guard.device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     const metal_SocDescriptor& soc = soc_desc_of(device);
@@ -375,7 +369,7 @@ TEST(MimirKernelLoad, SameBinaryAllCcesUnicast) {
     for (uint32_t cce_index = 0; cce_index < num_cces; cce_index++) {
         poison_echo_slots(device, cce_index);
     }
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    launch_program_and_wait(device, program);
 
     for (uint32_t cce_index = 0; cce_index < num_cces; cce_index++) {
         const std::vector<uint32_t> echo_block = read_echo_slots(device, cce_index);
@@ -403,9 +397,8 @@ class MimirDmRuntimeArgs : public ::testing::TestWithParam<uint32_t> {};
 TEST_P(MimirDmRuntimeArgs, IllegalTooManyRuntimeArgs) {
     MIMIR_SKIP_UNLESS_EMU();
     const uint32_t cce_index = GetParam();
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     constexpr uint32_t hart = 0;
@@ -452,7 +445,7 @@ TEST_P(MimirDmRuntimeArgs, IllegalTooManyRuntimeArgs) {
     SetRuntimeArgs(program, kernel, logical_core, runtime_args);
     SetCommonRuntimeArgs(program, kernel, common_args);
     poison_echo_slots(device, cce_index);
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    launch_program_and_wait(device, program);
     EXPECT_TRUE(check_echo_slot(hart, read_echo_slots(device, cce_index), arguments))
         << ceiling_unique_count << " unique and " << ceiling_common_count << " common args";
 }
@@ -466,9 +459,8 @@ std::vector<uint32_t> words_of(const RuntimeArgsData& args) {
 TEST_P(MimirDmRuntimeArgs, IllegallyModifyRuntimeArgs) {
     MIMIR_SKIP_UNLESS_EMU();
     const uint32_t cce_index = GetParam();
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
     constexpr uint32_t hart = 0;
@@ -478,7 +470,7 @@ TEST_P(MimirDmRuntimeArgs, IllegallyModifyRuntimeArgs) {
     const KernelHandle kernel = create_echo_kernel(program, logical_core, hart, arguments.ct_marker);
     set_echo_arguments(program, kernel, logical_core, arguments);
     poison_echo_slots(device, cce_index);
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    launch_program_and_wait(device, program);
     EXPECT_TRUE(check_echo_slot(hart, read_echo_slots(device, cce_index), arguments));
 
     EXPECT_ANY_THROW(

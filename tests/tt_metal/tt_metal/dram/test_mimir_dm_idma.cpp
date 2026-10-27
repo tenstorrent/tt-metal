@@ -544,9 +544,8 @@ TEST_P(MimirDmIdma, Copy) {
     if (const std::string skip_reason = idma_skip_reason(idma_case); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    IDevice* device = CreateDevice(0);
-    ASSERT_NE(device, nullptr);
-    ScopedDevice device_closer(device);
+    ScopedDevice device_closer;
+    IDevice* device = device_closer.device();
     check_tl1_layout();
     if (is_remote_case(idma_case)) {
         ASSERT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();

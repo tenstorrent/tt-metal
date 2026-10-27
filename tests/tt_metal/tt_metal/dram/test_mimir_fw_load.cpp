@@ -167,7 +167,7 @@ void launch_null_kernel(IDevice* device, const std::vector<uint32_t>& cce_indice
     for (uint32_t cce_index : cce_indices) {
         add_null_kernel(program, device, cce_index);
     }
-    detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+    launch_program_and_wait(device, program);
 }
 
 // An earlier process's firmware stays in TL1, and the released harts would run it.
@@ -193,8 +193,8 @@ TEST(MimirFwLoad, LoadAndReachInitDone) {
     }
     const tt::Cluster& cluster = MetalContext::instance().get_cluster();
     ASSERT_NO_FATAL_FAILURE(zero_firmware_windows(cluster));
-    IDevice* device = CreateDevice(0);
-    ScopedDevice device_guard(device);
+    ScopedDevice device_guard;
+    IDevice* device = device_guard.device();
     for (uint32_t cce_index = 0; cce_index < emu_cce_count(); ++cce_index) {
         expect_cce_initialized(cluster, kFwLoadChip, cce_index);
     }
@@ -225,8 +225,8 @@ TEST(MimirFwLoad, LoadAndReachInitDone) {
 
 TEST(MimirFwLoad, ImageManifest) {
     MIMIR_SKIP_UNLESS_EMU();
-    IDevice* device = CreateDevice(0);
-    ScopedDevice device_guard(device);
+    ScopedDevice device_guard;
+    IDevice* device = device_guard.device();
 
     const MetalContext& context = MetalContext::instance();
     const Hal& hal = context.hal();
@@ -288,8 +288,8 @@ TEST(MimirFwLoad, AllCcesIndependent) {
     if (cce_count < 2) {
         GTEST_SKIP() << "Configured descriptor exposes " << cce_count << " CCEs.";
     }
-    IDevice* device = CreateDevice(0);
-    ScopedDevice device_guard(device);
+    ScopedDevice device_guard;
+    IDevice* device = device_guard.device();
     const tt::Cluster& cluster = MetalContext::instance().get_cluster();
 
     for (uint32_t cce_index = 0; cce_index < cce_count; ++cce_index) {
@@ -328,15 +328,15 @@ TEST_P(MimirFwLaunch, NoOpLaunchCompletes) {
     if (cce_index >= emu_cce_count()) {
         GTEST_SKIP() << "Configured descriptor exposes only " << emu_cce_count() << " CCEs.";
     }
-    IDevice* device = CreateDevice(0);
-    ScopedDevice device_guard(device);
+    ScopedDevice device_guard;
+    IDevice* device = device_guard.device();
     const tt::Cluster& cluster = MetalContext::instance().get_cluster();
 
     Program program = CreateProgram();
     add_null_kernel(program, device, cce_index);
     constexpr uint32_t kLaunchRepeats = 2;
     for (uint32_t repeat = 0; repeat < kLaunchRepeats; ++repeat) {
-        detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true, /*force_slow_dispatch=*/true);
+        launch_program_and_wait(device, program);
         // The firmware skips a kernel whose enable bit is clear and still reports DONE.
         EXPECT_NE(read_launch_enables(cluster, device->id(), cce_index), 0u) << "launch " << repeat;
     }
@@ -357,8 +357,8 @@ TEST(MimirFwReinit, ReloadsOnEveryOpen) {
     }
 
     for (uint32_t cycle = 0; cycle < kReinitCycles; ++cycle) {
-        IDevice* device = CreateDevice(0);
-        ScopedDevice device_guard(device);
+        ScopedDevice device_guard;
+        IDevice* device = device_guard.device();
         const tt::Cluster& cluster = MetalContext::instance().get_cluster();
 
         for (uint32_t cce_index = 0; cce_index < cce_count; ++cce_index) {
@@ -390,9 +390,8 @@ TEST(MimirFwLoadNegative, SkipLoadNeverDone) {
     ASSERT_NO_FATAL_FAILURE(zero_firmware_windows(cluster));
 
     try {
-        IDevice* device = CreateDevice(0);
-        ScopedDevice device_guard(device);
-        ADD_FAILURE() << "CreateDevice succeeded without loading CCE firmware";
+        ScopedDevice device_guard;
+        ADD_FAILURE() << "Device open succeeded without loading CCE firmware";
     } catch (const std::exception& error) {
         EXPECT_NE(std::string(error.what()).find("failed to initialize DRAM FW"), std::string::npos)
             << "unexpected error: " << error.what();
