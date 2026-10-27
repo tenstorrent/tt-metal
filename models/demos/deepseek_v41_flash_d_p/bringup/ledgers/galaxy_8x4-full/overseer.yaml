@@ -1,0 +1,178 @@
+# Overseer notes (models/demos/common/bringup/overseer.py): written by the overseer, read by every agent.
+notes:
+- id: OV-1
+  tasks:
+  - W.1
+  - M.1
+  status: open
+  t: '2026-10-26T10:41:59'
+  text: 'Chunk 5120 on 8x4 gives 640 tokens per mesh row and 160 query rows per chip after the head->seq reshard (5120/8/4),
+    not the 512 the plan gate checked at chunk 16384 (plan.md ## Boxes). 160 is a whole number of 32-row tiles and of 32-token
+    records, but no gate has exercised it: derive every per-chip row count from the mesh and the chunk, and check sparse_sdpa,
+    the ring indexer and the served-record sub-blocks at 160 rows. This is also the first run of the 4-column TP paths (hidden
+    share 1280, all_to_all over 4 columns); loudbox_2x4 never ran.'
+- id: OV-2
+  tasks:
+  - W.1
+  status: open
+  t: '2026-10-26T13:42:11'
+  text: 'The overseer stopped attempt 2 (port): W.1 had already passed and committed (9582c9d); attempt 2 was started only
+    because the overseer file supervision.md was flagged as outside the allowed paths (framework bug: the seeded ledger
+    dir is not exempt). The attempt deleted results/W.1.json and edited state.json, which an agent must never touch. Nothing
+    to do for W.1.'
+- id: OV-3
+  tasks:
+  - '*'
+  status: open
+  t: '2026-10-26T14:06:33'
+  text: 'Owner rule (2026-10-26): never pad, duplicate or otherwise inflate work to get around a kernel or fork limit (e.g.
+    zero-padding a weight to a size an op accepts). That is a performance penalty in a model meant to be realistic. Extend
+    or fix the kernel / fork instead (forks first), with its own tests; if that is impossible in the step, stop and say
+    so.'
+- id: OV-4
+  tasks:
+  - FIX.1
+  status: open
+  t: '2026-10-26T14:35:55'
+  text: 'The overseer stopped attempt 1 (overseer): Time: the before/after timing is not the goal of FIX.1. Do the kernel
+    change first: extend the flat_routed_expert gate/up split to 18 / 36 tile columns and a non-block-multiple down K, remove
+    every shared-expert pad, fork unit tests, then the W.1 gate. Timing: at most one plain profile (test_profile.py) section
+    time for the shared expert after the change, no device profiler per-op mode (it syncs per op; minutes per layer). X.1
+    measures performance properly.'
+- id: OV-5
+  tasks:
+  - FIX.1
+  status: open
+  t: '2026-10-26T14:41:12'
+  text: 'No timing in FIX.1 at all (supersedes OV-4 and the fix job text): kernel change, fork unit tests, W.1 gate. Performance
+    is measured at X.1 as usual.'
+- id: OV-6
+  tasks:
+  - FIX.1
+  status: open
+  t: '2026-10-26T14:49:57'
+  text: 'Owner (supersedes OV-5): measure the change with the device profiler (TT_METAL_DEVICE_PROFILER=1; the real-time
+    profiler fails on devices 7/10 here): the shared-expert flat_routed_expert call alone at the real per-chip shape (640
+    rows, 8x4 TP 4: 576 columns), padded (1280) vs unpadded, a few warm calls each, device kernel time per call. One op,
+    not the model and not every layer. Report both numbers in the commit message.'
+- id: OV-7
+  tasks:
+  - O.1
+  - Z.1
+  status: open
+  t: '2026-10-26T15:29:53'
+  text: 'FIX.1 (c9217573868) left two review items in ttnn.bringup.flat_routed_expert: flat_routed_expert_plan.cpp:275-276
+    read MIMO_FL_GU_SPLIT / MIMO_FL_GU_BF16 from the environment (settings lint): mark each a pure diagnostic knob or remove
+    it. The fork''s model cases still hold the old padded shared-expert call (tests/cases.py deepseek_v41_flash_d_p-2x2-shared-expert-s1024-i1280):
+    append the unpadded calls the model now makes (I 1152 on 2x2, I 576 on 8x4 / 4x4), keep the old case.'
+- id: OV-8
+  tasks:
+  - FIX.3
+  status: open
+  t: '2026-10-26T17:30:28'
+  text: 'The overseer stopped attempt 2 (overseer): Overseer routing error, not yours: the RT-profiler check is a host/box
+    check and moves into the framework (launch preflight), so no model code changes for FIX.3. The overseer reverts tt/rt_profiler_check.py,
+    the hooks.py and settings.py edits. Keep your root-cause knowledge (known_issues DS41-120, known_issues_detail, BREADCRUMBS,
+    repo_map) but make it point at the framework check instead of tt/rt_profiler_check.py / RT_PROFILER_CHECK. Change no
+    code; the gate then reuses its units.'
+- id: OV-9
+  tasks:
+  - FIX.3
+  status: open
+  t: '2026-10-26T17:32:09'
+  text: 'The RT-profiler host check now lives in the framework (F194): models/demos/common/bringup/orchestrator.py iommu_mismatch()
+    / iommu_problem(): a PREFLIGHT warning at every launch, and a profiling task (step perf or test_profile.py) does not
+    start on a box with mixed IOMMU domains. The overseer reverted tt/rt_profiler_check.py and the hooks.py / settings.py
+    edits (your copy: /scratch/dnijemcevic/rt_profiler_check.agent.py). Point DS41-120 (known_issues.md, its detail section,
+    BREADCRUMBS, repo_map) at F194 instead, and fix the two knowledge-format problems the check reported (DS41-120 lacks
+    ''Found:''; its detail section heading missing). Change no code.'
+- id: OV-10
+  tasks:
+  - L.smoke
+  status: open
+  t: '2026-10-27T08:42:18'
+  text: 'The overseer stopped attempt 1 (fix): L.smoke failed on a framework limit, not model code: testing/smoke.py run_smoke
+    decodes a fixed max_new=8 tokens; DeepSeek-V4.1 thinks first (device: ''We need answer one word. Capital of'', coherent;
+    the CPU smoke at R.1 needed 24 tokens: ''...Capital of France = Paris...</think>Paris''). The overseer fixes the framework;
+    no model change.'
+fixes:
+- id: FIX.1
+  title: 'Owner order: no padding to get around a kernel limit'
+  gate:
+  - W.1
+  status: placed
+  t: '2026-10-26T14:06:33'
+  text: 'Owner order: no padding to get around a kernel limit. Remove the shared-expert zero-padding in tt/shared_expert.py
+    (ipad = max(ipart, 33 tiles) rounded to DOWN_K: TP 4 576 -> 1280 = 2.2x, TP 2 1152 -> 1280) and extend the ttnn.bringup
+    flat_routed_expert fork instead: its gate/up split plan (flat_routed_expert_plan.cpp:433, no gate/up split for N tile
+    columns) must handle the real per-chip widths (18 tile columns at TP 4, 36 at TP 2) and a down-projection K that is
+    not a multiple of its block, with no padded lanes. Add fork unit tests at 18 and 36 tile columns (and the routed experts
+    widths), keep both boxes working (derive from shapes), update the fork README/CHANGELOG and DS41-115/DS41-76. Measure
+    the shared expert section time before and after (plain profile, chunk 5120, layers of W.1).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-26T14:14:35'
+- id: FIX.2
+  title: Root-cause the flat_routed_expert first-call hangs on a Galaxy (Blackhole p150b, 12x10 grid) found b
+  gate:
+  - W.1
+  status: placed
+  t: '2026-10-26T15:14:14'
+  text: 'Root-cause the flat_routed_expert first-call hangs on a Galaxy (Blackhole p150b, 12x10 grid) found by FIX.1 regression:
+    11 tests hang on first call, e.g. test_flat_expert_indexed_shapes[mimo], the six test_flat_uneven_split cases, glm_e12
+    (DS41-119: hangs on the code before FIX.1 too). Reproduce each on one Galaxy chip with a short dispatch timeout, find
+    the actual cause (tt-triage / the stuck core and kernel, not a guess), and fix it in the fork so every case runs on
+    the Galaxy and still on the 2x2 QuietBox; no case skipped or special-cased for the box. Also make the 4 test-builder
+    asserts that hard-code the p150 11x10 grid derive the grid from the device. Done when tests/unit/ passes on a Galaxy
+    chip except failures shown to be identical on the QuietBox baseline (list them with evidence), plus the W.1 gate. Record
+    the cause in the fork CHANGELOG and known_issues (DS41-119).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-26T15:25:41'
+- id: FIX.3
+  title: 'Root-cause the real-time profiler failure on this Galaxy: every 8x4 mesh open logs "Real-time profil'
+  gate:
+  - B.1
+  - W.1
+  status: placed
+  t: '2026-10-26T15:21:23'
+  text: 'Root-cause the real-time profiler failure on this Galaxy: every 8x4 mesh open logs "Real-time profiler disabled
+    on device 7 / 10: D2H socket construction failed (Failed to pin pages for DMA buffer ... size 0x201000 ... flags 0x4:
+    Invalid argument)", always devices 7 and 10 (B.1, W.1, M.1 logs). Host facts: KMD 2.11.0, iommu=pt (passthrough), 1412
+    x 2 MB hugepages, HugePages_Free 0 while a mesh is open; the buffer is 2 MB + 4 KB. Hypothesis to test, not assume:
+    under iommu=pt the pin needs physically contiguous memory and a 2 MB + 4 KB buffer only pins when it happens to be contiguous
+    (or the hugepages run out by device 7 / 10). Find the actual cause with evidence (pin a buffer of that size per device,
+    hugepage use per device during open, the D2H socket allocation code), fix it at its cause in tt_metal (or the framework
+    if the cause is ours), so the real-time profiler runs on all 32 chips; add a check that reports a profiler that failed
+    to start before a perf task relies on it. Record the cause and fix in known_issues.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-26T15:25:41'
+- id: FIX.4
+  title: 'Routed-expert weights: use the flat-expert fork''s laid-out weight cache and a fast miss path'
+  gate:
+  - W.1
+  status: placed
+  t: '2026-10-26T22:17:50'
+  text: 'Every test process spends ~113 s PER LAYER in TtExperts._load_block/_load_flat (M.1 precheck log 2026-10-26 22:07-22:15:
+    between create_global_expert_idx_table and EXPERTS_FLAT, 113 s each of L00..L03; everything else of a layer ~5 s). 40
+    layers = ~75 min of host work before every M.1 / ladder / K.1 / X.* run. Cause: tt/experts.py builds every expert with
+    fp4_dequant + per-tensor torch.equal asserts + _bfp8_exact in Python, then FlatRoutedExpert packs and uploads the layout,
+    with no cache. The fork already supports it (ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py: cache_prefix=
+    and weights as a CALLABLE only called on a cache miss; plan-hashed file names; GLM-5.3 models/demos/glm53_flash_d_p/tt/experts_ag.py:325
+    uses it). Do: (1) pass cache_prefix (under the run''s weight-cache dir, keyed by the checkpoint actually loaded: revision
+    + scaled/real + layer + EXPERTS_IMPL) and a callable that does the current dequant + checks, so a hit skips all host
+    dequant/packing; on a bfp4 hit keep bfp4_stats correct (cache them next to the weights) or document why not needed;
+    (2) profile the miss path (one layer, CPU, nice 19) and cut its cost honestly (vectorised dequant over all experts of
+    a chip, one exactness check per stacked tensor instead of per matrix, no repeated .float() copies); no change to values
+    or layout (bit-identical tensors; the exactness asserts stay on the miss path). Same check for dense weights (DENSE_BFP8,
+    ~5 s/layer) only if cheap. Report: per-layer load time miss before/after and hit, W.1 load wall time miss vs hit. Gate:
+    W.1 must still pass; run it twice (second run must hit the cache).'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  placed: '2026-10-27T05:38:57'
+classified:
+  L.smoke:
+    kind: framework
+    why: ''
+    t: '2026-10-27T08:49:15'
