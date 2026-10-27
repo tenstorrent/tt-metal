@@ -225,7 +225,7 @@ put them in a per-model **manifest** in your package and point the binding at it
 
 ```json
 // models/demos/my_model/tt/runners/manifests/my_model.json
-{ "env": { "PREFILL_MODEL": "my_model", "PREFILL_MAX_SEQ_LEN": "256000", "PREFILL_NUM_USERS": "86" } }
+{ "env": { "PREFILL_MODEL": "my_model", "PREFILL_MAX_SEQ_LEN": "262144", "PREFILL_NUM_USERS": "86" } }
 ```
 
 The manifest has two jobs, and only two: it names the model (the one thing the adapter cannot
@@ -257,8 +257,13 @@ swapping the manifest. (The runner reads only the manifest's `env` block; see `_
 and exports its descriptor; the producer (prefill_producer.py / the scheduler) connects by
 `PREFILL_H2D_SERVICE_ID` and pushes token chunks. The shared env (`PREFILL_MODEL`, `PREFILL_SP/TP`,
 `PREFILL_CHUNK_SIZE`, `PREFILL_NUM_USERS`, `PREFILL_MAX_SEQ_LEN`, `PREFILL_H2D_SERVICE_ID`) must match on
-both so the byte layout agrees. `PREFILL_MAX_SEQ_LEN` sizes the per-user cache (default 11 chunks) and
+both so the byte layout agrees. `PREFILL_MAX_SEQ_LEN` sizes the per-user cache (default 16 chunks) and
 must be ≥ `chunks * PREFILL_CHUNK_SIZE`, else the runner asserts when a chunk overruns a slot.
+
+Your adapter's `allocate_kv_cache` must pass `bank_aligned=True` to the model's KV allocator, and the
+allocator must call `check_kv_bank_aligned` (common/prefill/runners/kv_bank_alignment.py) on the per-device
+row count, so every slot and layer starts on DRAM bank 0. Nothing enforces this for a new adapter. `PREFILL_MAX_SEQ_LEN` must be a multiple of stripes × 32 × the DRAM
+bank count, where stripes is the number of devices a token row is split over (2048 for SP=8 on 8 banks).
 
 ```bash
 # terminal A — runner (creates the H2D service, exports the descriptor, serves):

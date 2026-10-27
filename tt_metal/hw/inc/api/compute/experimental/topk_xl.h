@@ -6,13 +6,15 @@
 
 // Define TOPK_XL_BLAZE_COMPAT consistently for all TRISCs before including this
 // header to use the Blaze-managed protocol. It disables SFPLOADMACRO, leaves
-// destination zero flags and generic-sort SrcB validity to the caller, and uses
-// PACK replay slots [0, 3) for index extraction. The caller must serialize MATH
+// generic-sort SrcB validity to the caller, and uses PACK replay slots [0, 3)
+// for index extraction. The caller must serialize MATH
 // and PACK SFPU/replay access and preserve ADDR_MOD_7 = zero advance across it.
 // Use topk_xl_copy_tile_init_short after configuring formats in that pipeline.
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
+// Self-guards its own MATH and PACK sections, so one include serves all three threads.
+#include "sfpu/experimental/ckernel_sfpu_topk_xl_split.h"
 #include "api/compute/tile_move_copy.h"
 #ifdef TRISC_UNPACK
 #ifdef ARCH_BLACKHOLE
@@ -259,6 +261,56 @@ ALWI void topk_xl_copy_tile(
     }
     UNPACK(TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0));
 }
+
+/**
+ * The halves of topk_xl_copy_tile / topk_xl_copy_tile_init, for a caller whose threads do not walk the same
+ * loop. The combined entries above emit only the calling thread's arm anyway, so each half generates the same
+ * instructions -- these just make the thread split explicit instead of implying it from the caller's guard.
+ */
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void topk_xl_copy_tile_init_unpack(std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::SRCA>(cbid, call_line);
+    UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(cbid)));
+    UNPACK((llk_unpack_topk_xl_copy_init(cbid)));
+}
+
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void topk_xl_copy_tile_init_math(std::uint32_t cbid, std::uint32_t call_line = __builtin_LINE()) {
+    state_configure<Operand::SRCA>(cbid, call_line);
+    MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(cbid, cbid)));
+    MATH((llk_math_topk_xl_copy_init(cbid)));
+}
+
+template <std::uint32_t K>
+ALWI void topk_xl_copy_tile_unpack(
+    std::uint32_t in_cb_id, std::uint32_t in_tile_index_base, std::uint32_t num_elements) {
+    constexpr std::uint32_t elements_per_tile = TILE_R_DIM * TILE_C_DIM;
+    if constexpr (K <= elements_per_tile) {
+        UNPACK((llk_unpack_topk_xl_copy_one_tile_unpack(in_cb_id, in_tile_index_base, num_elements)));
+    } else {
+        const std::uint32_t n1 = num_elements < elements_per_tile ? num_elements : elements_per_tile;
+        const std::uint32_t n2 = num_elements > elements_per_tile ? (num_elements - elements_per_tile) : 0;
+        UNPACK((llk_unpack_topk_xl_copy_one_tile_unpack(in_cb_id, in_tile_index_base, n1)));
+        UNPACK((llk_unpack_topk_xl_copy_one_tile_unpack(in_cb_id, in_tile_index_base + 1, n2)));
+    }
+    UNPACK(TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0));
+}
+
+template <std::uint32_t K>
+ALWI void topk_xl_copy_tile_math(
+    std::uint32_t in_cb_id, std::uint32_t dst_start_tile_index, std::uint32_t num_elements) {
+    constexpr std::uint32_t elements_per_tile = TILE_R_DIM * TILE_C_DIM;
+    if constexpr (K <= elements_per_tile) {
+        MATH((llk_math_topk_xl_copy_one_tile_math(in_cb_id, dst_start_tile_index, num_elements)));
+    } else {
+        const std::uint32_t n1 = num_elements < elements_per_tile ? num_elements : elements_per_tile;
+        const std::uint32_t n2 = num_elements > elements_per_tile ? (num_elements - elements_per_tile) : 0;
+        MATH((llk_math_topk_xl_copy_one_tile_math(in_cb_id, dst_start_tile_index, n1)));
+        MATH((llk_math_topk_xl_copy_one_tile_math(in_cb_id, dst_start_tile_index + 1, n2)));
+    }
+}
+
+ALWI void topk_xl_unpack_set_srcb_dummy_valid() { UNPACK((llk_unpack_set_srcb_dummy_valid())); }
 
 /**
  * Initializes the state for adding LSB indices to the topk_xl_copy_tile output.
@@ -534,6 +586,91 @@ template <std::uint32_t K>
 ALWI void topk_xl_separate_indices_row_major_advance_chunk_base() {
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_separate_indices_row_major_advance_chunk_base<K>()));
 }
+
+// topk_large_indices survivor epilogue, dispatched to MATH, the conventional thread for SFPU work. A row split
+// across MATH and PACK runs the same routines on PACK instead, through the *_at_split entries below.
+ALWI void topk_large_indices_reinit_fused_after_stamp() {
+    MATH((llk_math_eltwise_unary_sfpu_topk_large_indices_reinit_fused_after_stamp()));
+}
+
+ALWI void topk_large_indices_mark_neginf_indices_init() {
+    MATH((llk_math_eltwise_unary_sfpu_topk_large_indices_mark_neginf_indices_init()));
+}
+
+template <std::uint32_t K>
+ALWI void topk_large_indices_mark_neginf_indices(std::uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_topk_large_indices_mark_neginf_indices<K>(idst)));
+}
+
+// Thread-agnostic prefetch eligibility query; callable from code compiled for all three threads.
+template <std::uint32_t K>
+ALWI bool topk_xl_split_can_prefetch(std::uint32_t num_chunks) {
+    return topk_xl_split::can_prefetch<K>(num_chunks);
+}
+
+// One thread's share of a split row. The body loops inside the scheduler, so off-thread these cost nothing.
+ALWI void topk_xl_split_sfpu_init_once() { MATH((llk_math_sfpu_init_once())); }
+
+template <std::uint32_t K, typename CopyChunk>
+ALWI void topk_xl_split_math_row(
+    std::uint32_t num_chunks, CopyChunk&& copy_chunk, bool first_prefetched = false, bool prefetch_next = false) {
+    MATH((
+        topk_xl_split::math_row<K>(num_chunks, static_cast<CopyChunk&&>(copy_chunk), first_prefetched, prefetch_next)));
+}
+
+template <std::uint32_t K, typename Epilogue>
+ALWI void topk_xl_split_pack_row(std::uint32_t num_chunks, bool mirror_last, Epilogue&& epilogue) {
+    PACK((topk_xl_split::pack_row<K>(num_chunks, mirror_last, static_cast<Epilogue&&>(epilogue))));
+}
+
+ALWI void topk_xl_split_post_token() { MATH((topk_xl_split::post_token())); }
+
+ALWI void topk_xl_split_take_math_token() { PACK((topk_xl_split::take_math_token())); }
+
+// Called from inside a pack_row epilogue, which is compiled on every thread, so these must self-dispatch too.
+template <std::uint32_t K, bool stall_after = false>
+ALWI void topk_xl_split_indices(std::uint32_t seg_base) {
+    PACK((topk_xl_split::split_indices<K, stall_after>(seg_base)));
+}
+
+ALWI void topk_large_indices_mark_neginf_indices_init_at_split() {
+    PACK((llk_math_eltwise_unary_sfpu_topk_large_indices_mark_neginf_indices_init()));
+}
+
+template <std::uint32_t K>
+ALWI void topk_large_indices_mark_neginf_indices_at_split() {
+    PACK((llk_math_eltwise_unary_sfpu_topk_large_indices_mark_neginf_indices_at_split<K>()));
+}
+
+template <std::uint32_t K>
+ALWI void topk_large_indices_move_segment_result_at_split() {
+    PACK((llk_math_eltwise_unary_sfpu_topk_large_indices_move_segment_result_at_split<K>()));
+}
+
+// Accumulator handover between segments. Each is one thread's half, so a caller needs no thread guard.
+ALWI void topk_xl_split_release_accumulator() { MATH((topk_xl_split::release_accumulator())); }
+
+template <typename MoveAcc>
+ALWI void topk_xl_split_hold_accumulator(MoveAcc&& move_acc) {
+    PACK((topk_xl_split::hold_accumulator(static_cast<MoveAcc&&>(move_acc))));
+}
+
+// The MATH/PACK row split: each call is one thread's half of the handshake.
+//
+// topk_xl_split_begin raises the two Tensix semaphores it shares with PACK (FPU_SFPU, UNPACK_MATH_DONE) to a
+// max count of 15, which the schedule needs to run ahead. topk_xl_split_end puts them back to the default of
+// 1. Every begin needs an end on every exit path, or the next op on this core inherits max-15 semaphores.
+ALWI void topk_xl_split_begin() { MATH((topk_xl_split::start())); }
+
+ALWI void topk_xl_split_wait_start() { PACK((topk_xl_split::wait_start())); }
+
+ALWI void topk_xl_split_end() { MATH((topk_xl_split::finish())); }
+
+template <bool fp32_dest_acc>
+ALWI void topk_xl_split_release_dest_bank0() {
+    PACK((topk_xl_split::release_dest_bank0<fp32_dest_acc>()));
+}
+
 // END TOPK_LARGE_INDICES ADDITION: row-major UINT32 index split compute API.
 
 }  // namespace ckernel
