@@ -17,8 +17,8 @@ namespace ttml::metal {
  * heads_per_item: query heads of one K/V group processed together, so one K/V read serves all of
  *                 them (GQA reuse, more L1); must divide the group size q_heads / kv_heads.
  * max_pieces:     a causal work item heavier than its fair share of a core is cut into up to this many
- *                 pieces along its K/V steps, computed on different cores and merged (1 = never cut,
- *                 at most 63).
+ *                 pieces along its K/V steps, computed on different cores and merged (0 = 4, 1 = never
+ *                 cut, at most 63). Above 1 the L1 check also reserves the partials' circular buffers.
  * num_cores:      cores to use (at most the compute grid).
  */
 struct SDPAForwardProgramConfig {

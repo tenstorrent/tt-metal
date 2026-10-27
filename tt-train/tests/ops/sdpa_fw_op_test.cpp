@@ -1819,8 +1819,9 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_ChunkKnobs_None_DiffVDim_Gate) {
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitUnits) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
-    // Few heavy items on many cores: every item is heavier than a core's fair share, so the schedule cuts
-    // them into step ranges computed on different cores and merged. 2 heads, S=2048 -> 32 items of 128 rows.
+    // Few heavy items on many cores: the late items are heavier than a core's fair share, so the schedule
+    // cuts them into step ranges computed on different cores and merged. 2 heads, S=2048: 32 items of 128
+    // rows when pinned, 128 items of one tile-row when the shape rule picks (it shrinks Sq to fill the cores).
     const SDPATestConfig base{
         .batch_size = 1U,
         .sequence_length = 2048U,

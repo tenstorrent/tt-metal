@@ -452,9 +452,9 @@ SDPAForwardSchedule make_schedule(
     const uint32_t total_items = num_work_items(shape, chunks);
     TT_FATAL(num_cores > 0, "make_schedule: num_cores must be > 0");
     if (shape.mask_type == AttentionMaskType::Causal) {
-        for (uint32_t pieces = max_pieces; pieces >= 1U; pieces = (pieces > 1U) ? 1U : 0U) {
+        for (const uint32_t pieces : {max_pieces, 1U}) {
             if (pieces == 1U && num_cores > total_items) {
-                break;
+                break;  // uncut items can not keep more cores busy than there are items
             }
             SDPAForwardSchedule schedule = schedule_pieces(shape, chunks, num_cores, pieces);
             if (!schedule.per_core.empty()) {
