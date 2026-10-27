@@ -36,13 +36,6 @@ def _layer_kwargs(parameters, i):
     return TTResNet.layer_kwargs(i, **config)
 
 
-def _block_kwargs(parameters, i):
-    """``_layer_kwargs`` without the layer's own ``per_camera``, for a whole-batch TTBottleneck."""
-    kwargs = _layer_kwargs(parameters, i)
-    assert not kwargs.pop("per_camera"), f"layer {i} runs per camera; test it through TTResLayer"
-    return kwargs
-
-
 def _check(torch_output, ttnn_model, ttnn_output):
     assert (
         ttnn_output.dtype == ttnn_model.output_dtype
@@ -71,13 +64,15 @@ def test_bottleneck_layer1(device, reset_seeds, reference_and_parameters):
 def test_bottleneck_layer3(device, reset_seeds, reference_and_parameters):
     reference_model, parameters = reference_and_parameters
     torch_input = torch.randn(NUM_CAMS, 512, IMAGE_HEIGHT // 8, IMAGE_WIDTH // 8)
-    torch_output = reference_model.layer3[0].eval()(torch_input)
+    torch_output = reference_model.layer3[1].eval()(reference_model.layer3[0].eval()(torch_input))
 
-    ttnn_model = TTBottleneck(
-        parameters.conv_args.layer3[0],
-        parameters["res_model"]["layer3"][0],
+    # layer3's first two blocks, run as TTResNet runs layer3: the first on the whole batch, the
+    # second on a group of cameras at a time in L1.
+    ttnn_model = TTResLayer(
+        [parameters.conv_args.layer3[j] for j in range(2)],
+        [parameters["res_model"]["layer3"][j] for j in range(2)],
         device,
-        **_block_kwargs(parameters, 2),
+        **_layer_kwargs(parameters, 2),
     )
     ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
     _check(torch_output, ttnn_model, ttnn_output)
@@ -91,11 +86,13 @@ def test_bottleneck_layer4(device, reset_seeds, reference_and_parameters):
     torch_input = torch.randn(NUM_CAMS, 1024, IMAGE_HEIGHT // 16, IMAGE_WIDTH // 16)
     torch_output = reference_model.layer4[0].eval()(torch_input)
 
+    kwargs = _layer_kwargs(parameters, 3)
+    assert kwargs.pop("cameras") is None, "layer4 runs per camera; test it through TTResLayer"
     ttnn_model = TTBottleneck(
         parameters.conv_args.layer4[0],
         parameters["res_model"]["layer4"][0],
         device,
-        **_block_kwargs(parameters, 3),
+        **kwargs,
     )
     ttnn_output = ttnn_model(to_conv_layout(torch_input, device, ttnn.bfloat16))
     _check(torch_output, ttnn_model, ttnn_output)
