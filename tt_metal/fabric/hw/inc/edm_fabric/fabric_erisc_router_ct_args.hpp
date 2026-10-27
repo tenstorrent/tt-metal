@@ -694,6 +694,13 @@ static_assert(
         (to_receiver_packets_sent_counters_base_address != 0 && local_sender_packets_sent_counters_base_address != 0),
     "packets-sent counter addresses must be valid when STREAM_REGISTERS_AVAILABLE is 0");
 
+// Downstream free slots without stream registers: one 16-byte slot per downstream router adapter, VC0's
+// VC0_DOWNSTREAM_EDM_SIZE first, then VC1's. The downstream router writes its read count there.
+constexpr size_t local_downstream_read_counters_base_address = NAMED_CT_ARG("LOCAL_DOWNSTREAM_READ_COUNTERS_BASE_ADDR");
+static_assert(
+    stream_registers_available || local_downstream_read_counters_base_address != 0,
+    "downstream read counter address must be valid when STREAM_REGISTERS_AVAILABLE is 0");
+
 // ============================================================================
 // Host signal args (named; always available, 0 when wait_for_host_signal is false)
 // ============================================================================
