@@ -1108,3 +1108,18 @@ chips; one reset), r6 = a/b/c PASS + the profile: per decode step `vllm_config.c
 outside this directory). Stage verdicts of the day: B5 off (chip-0 capture-determinism assert + 0.9995 < 0.9998 block gate in both
 modes), block knob set a no-op (78.3 vs 78.4 ms), MTP block rerun 2/3 (reject-all commit m=0 ring rows pcc 0.50), prefix-incremental
 long test dies in a page-table bound (non-default path), ABLOCK flip waits for the two queued 8x4 gates.
+
+### 2026-10-27 02:00-03:45: hang root cause, served numbers, capacity scaling
+
+AutoTriage of the r6 capture: the KDA chronology scalars (`scalar(49152)`) were allocated AFTER the trace captures and clobbered by
+~1200 decode replays; ttKDA then derived an interval longer than `sp_size x local_rows` on SP rank 0, its coordinator waited for
+5 arrivals from a 4-worker head and its out-of-table NoC write wedged the chips. Fix: persistent per-mesh `chrono_scalar` pair,
+`scalar()` refuses to allocate after a capture, `GLMMesh.allocations_frozen` after every capture. r10 then prefilled the 65 536-token
+random prompt through the chunk that hung before; a new hang followed in the first decode step after it (not reproduced by the block
+reproducer at 2175 / 2176 / 65514 / 65536 tokens in a fresh slot; slot reuse queued). r8 confirmed the KDA SP prefill L1 window
+(1024-row slabs) on the 8x4; r9 showed a 4096 bucket costs the 1 M x 32-slot DRAM headroom (buckets 256/512/1024/2048/16384).
+Served step 372 -> 192 ms per token (`check_row` iterated the [32768] block-table row in Python); profile inside the benchmark:
+replay 148 + read 26 + positions 13 + ids 2 ms. DSA layer per-op profile at 1 M vs short capacity: 2.94 vs 1.88 ms, all of the
+delta in the sparse-decode custom ops (#556 731 vs 139 us, #557 228 vs 73, #560 167 vs 20) and the compact SDPA (73 vs 19):
+capacity-scaling loops, being bounded by a per-step live-pool count. KDA layer 1.49 ms at 1 M (short pending). Spec K=3 on the
+8x4 at 32 users: lossless, 2.81 accepted drafts, x0.55 with the v1 blend commit.
