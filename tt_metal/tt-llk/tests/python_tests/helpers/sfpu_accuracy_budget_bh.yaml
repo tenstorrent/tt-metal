@@ -5,8 +5,8 @@
 # Written by `test_unary_sfpu_ulp.py --ulp-emit` and helpers/ulp_table.dump_table.
 
 Abs:
-- {measured: 1, note: 'wh figure, no bh driver reaches this row; wh: max 1 ULP on Float16/Float16_b, 80 variants'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; wh: max 0 ULP, 32 variants'}
+- {metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; wh: max 1 ULP on Float16/Float16_b, 80 variants'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; wh: max 0 ULP, 32 variants'}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
@@ -147,7 +147,7 @@ Cbrt:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 2}]}
 Ceil:
-- {measured: 0, note: 'wh figure, no bh driver reaches this row; wh: 0 ULP, as Floor'}
+- {metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; wh: 0 ULP, as Floor'}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
@@ -246,15 +246,19 @@ Elu:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 9}]}
 EqualZero:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Erf:
 - {input: Float16, output: Float16, approx: 'No', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 7}]}
 - {input: Float16, output: Float16, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 17}]}
@@ -407,20 +411,24 @@ Expm1Cw:
 - {input: Float32, output: Float32, dest: 'No', metric: TOLERANCE, measured: 65536, nonfinite: 8498, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=88.9815: 2.72492e+38 -> inf; x=89.5995: inf -> -1)'}
 - {input: Float32, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 9, nonfinite: 8655, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=89.2905: inf -> -1; x=89.5995: inf -> -1)'}
 Fill:
-- {output: Float16, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 115 variants / 2.09M lanes'}
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 115 variants / 2.09M lanes'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 115 variants / 2.09M lanes'}
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {output: Float16, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 115 variants / 2.09M lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 115 variants / 2.09M lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 115 variants / 2.09M lanes'}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Floor:
-- {measured: 0, note: 'wh figure, no bh driver reaches this row; wh: 0 ULP, 156 variants each, all four output formats x both dest_acc'}
+- {metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; wh: 0 ULP, 156 variants each, all four output formats x both dest_acc'}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
@@ -450,8 +458,8 @@ Fmod:
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Frac:
 - {output: Float16, metric: TOLERANCE, measured: 384, note: 'wh figure, no bh driver reaches this row; max 384 ULP, 40 variants / 737k lanes, past the 51-step ceiling'}
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; 1 ULP, 44 variants / 754k lanes'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 36 variants / 606k lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; 1 ULP, 44 variants / 754k lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 36 variants / 606k lanes'}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
@@ -550,25 +558,33 @@ GeluTanh:
 - {input: Float32, output: Float32, dest: 'No', near_zero_atol: 1.4994293451309204e-07, domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, dest: 'Yes', near_zero_atol: 1.8119690992079995e-07, domains: [{low: -.inf, high: .inf, ulp: 30650}]}
 GreaterThanEqualZero:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 GreaterThanZero:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Hardmish:
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
@@ -584,15 +600,19 @@ Hardmish:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 Hardshrink:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Hardsigmoid:
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
@@ -623,15 +643,19 @@ Hardtanh:
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Heaviside:
 - {metric: TOLERANCE, measured: 1048576001, note: 'wh figure, no bh driver reaches this row; exact except -0.0; max 1048576001 ULP Float32, 16001 Float16_b'}
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 I0:
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -16.0}, {low: -16.0, high: 16.0, ulp: 10}, {low: 16.0, high: .inf}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 7284, nonfinite: 5418, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-553.5: inf -> 3.34965e+38; x=-553: inf -> 3.28319e+38)'}
@@ -674,8 +698,8 @@ I1:
 - {input: Float32, output: Float32, approx: 'Yes', dest: 'No', metric: TOLERANCE, measured: 35651584, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
 - {input: Float32, output: Float32, approx: 'Yes', dest: 'Yes', metric: TOLERANCE, measured: 40083139, nonfinite: 31120, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-3.40282e+38: -inf -> -1.15477e+37; x=-3.38132e+38: -inf -> -1.15477e+37)'}
 Identity:
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; wh: max 1 ULP, 4 variants'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; wh: max 0 ULP'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; wh: max 1 ULP, 4 variants'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; wh: max 0 ULP'}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
@@ -690,76 +714,84 @@ Identity:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Isfinite:
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
-- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
-- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 Isinf:
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, dest: 'Yes', metric: TOLERANCE, note: 'not measured: this unpack hands the SFPU a NaN as the infinity of its sign, so the predicate reads that infinity''s answer on NaN lanes; the isinf/isnan sweep skips the cell'}
-- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 Isnan:
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, dest: 'Yes', metric: TOLERANCE, note: 'not measured: this unpack hands the SFPU a NaN as the infinity of its sign, so the predicate reads that infinity''s answer on NaN lanes; the isinf/isnan sweep skips the cell'}
-- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 Isneginf:
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, dest: 'Yes', metric: TOLERANCE, note: 'not measured: this unpack hands the SFPU a NaN as the infinity of its sign, so the predicate reads that infinity''s answer on NaN lanes; the isinf/isnan sweep skips the cell'}
-- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 Isposinf:
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, dest: 'Yes', metric: TOLERANCE, note: 'not measured: this unpack hands the SFPU a NaN as the infinity of its sign, so the predicate reads that infinity''s answer on NaN lanes; the isinf/isnan sweep skips the cell'}
-- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 LessThanEqualZero:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 LessThanZero:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Lgamma:
 - {input: Float16, output: Float16, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -1024.0}, {low: -1024.0, high: 0.5, ulp: 54238}, {low: 0.5, high: 1.0, ulp: 42}, {low: 1.0, high: 2.0, ulp: 9040}, {low: 2.0, high: 8192.0, ulp: 9}, {low: 8192.0, high: .inf}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -1024.0}, {low: -1024.0, high: 0.5, ulp: 35454}, {low: 0.5, high: 1.0, ulp: 5}, {low: 1.0, high: 2.0, ulp: 29804}, {low: 2.0, high: .inf, ulp: 1}]}
@@ -817,13 +849,13 @@ LogWithBase:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 1}]}
 LogicalNot:
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
-- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
-- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
@@ -869,8 +901,8 @@ Mish:
 - {input: Float32, output: Float32, approx: 'Yes', dest: 'No', near_zero_atol: 8.757432913626042e-37, domains: [{low: -.inf, high: .inf, ulp: 131072}]}
 - {input: Float32, output: Float32, approx: 'Yes', dest: 'Yes', near_zero_atol: 8.989530987207056e-37, domains: [{low: -.inf, high: .inf, ulp: 113075}]}
 Neg:
-- {measured: 1, note: 'wh figure, no bh driver reaches this row; wh: max 1 ULP on Float16/Float16_b, 80 variants'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; wh: max 0 ULP, 32 variants'}
+- {metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; wh: max 1 ULP on Float16/Float16_b, 80 variants'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; wh: max 0 ULP, 32 variants'}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
@@ -885,15 +917,19 @@ Neg:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 NotEqualZero:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Polygamma:
 - {input: Float16, output: Float16, approx: 'No', dest: 'Yes', metric: TOLERANCE, measured: 51184, nonfinite: 61, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-7.99609: inf -> -0.117615; x=-7.00391: inf -> -0.144897)'}
 - {input: Float16, output: Float16, approx: 'Yes', dest: 'Yes', metric: TOLERANCE, measured: 51171, nonfinite: 73, note: 'not measurable: lanes disagreeing with the golden about being finite (golden -> result: x=-7.99609: inf -> -0.11676; x=-7.00391: inf -> -0.147339)'}
@@ -990,9 +1026,9 @@ Reciprocal:
 - {input: Float32, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 90138}]}
 ReluMax:
-- {output: Float16, measured: 1, note: 'wh figure, no bh driver reaches this row; 1 ULP, 40 variants / 737k lanes'}
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; 1 ULP, 48 variants / 770k lanes'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 40 variants / 623k lanes'}
+- {output: Float16, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; 1 ULP, 40 variants / 737k lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; 1 ULP, 48 variants / 770k lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 40 variants / 623k lanes'}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
@@ -1007,18 +1043,22 @@ ReluMax:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 ReluMin:
-- {output: Float16, measured: 1, note: 'wh figure, no bh driver reaches this row; 1 ULP, 40 variants / 737k lanes'}
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; 1 ULP, 48 variants / 770k lanes'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 40 variants / 623k lanes'}
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {output: Float16, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; 1 ULP, 40 variants / 737k lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; 1 ULP, 48 variants / 770k lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 40 variants / 623k lanes'}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Remainder:
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
@@ -1118,24 +1158,24 @@ Selu:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 8}]}
 SfpuAddTopRow:
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 1 variant / 2048 lanes -- the whole sweep'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 1 variant / 2048 lanes -- the whole sweep'}
 - {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 2k lanes'}
 SfpuAddcdiv:
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 4 variants / 16384 lanes'}
-- {output: Float32, measured: 1280, note: 'wh figure, no bh driver reaches this row; max 1280 ULP, 2 variants / 8192 lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 4 variants / 16384 lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 1280, note: 'wh figure, no bh driver reaches this row; max 1280 ULP, 2 variants / 8192 lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 12k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 3 variants / 12k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 1280, note: 'bh: max 1280 ULP, 3 variants / 12k lanes'}
 SfpuAddcmul:
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 2 variants / 8192 lanes'}
-- {output: Float32, measured: 96, note: 'wh figure, no bh driver reaches this row; max 96 ULP, 1 variant / 4096 lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 2 variants / 8192 lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 96, note: 'wh figure, no bh driver reaches this row; max 96 ULP, 1 variant / 4096 lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 1, note: 'bh: max 1 ULP, 1 variants / 4k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 96, note: 'bh: max 96 ULP, 1 variants / 4k lanes'}
 SfpuAtan2:
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 9 variants / 246k lanes'}
-- {output: Float32, measured: 65536, note: 'wh figure, no bh driver reaches this row; max 65536 ULP, 9 variants / 246k lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 9 variants / 246k lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 65536, note: 'wh figure, no bh driver reaches this row; max 65536 ULP, 9 variants / 246k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 2, note: 'bh: max 2 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 131072, note: 'bh: max 131072 ULP, 3 variants / 98k lanes'}
@@ -1143,16 +1183,16 @@ SfpuAtan2:
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 3 variants / 49k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 3, note: 'bh: max 3 ULP, 3 variants / 49k lanes'}
 SfpuBinaryFmod:
-- {output: Float16, measured: 4, note: 'wh figure, no bh driver reaches this row; max 4 ULP fp16-subnormals flushed (442 unflushed), 7 variants'}
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 19 variants / 541k lanes'}
-- {output: Float32, measured: 32768, note: 'wh figure, no bh driver reaches this row; max 32768 ULP, 19 variants / 491k lanes'}
-- {input: Float16, output: Float16, dest: 'No', measured: 4, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 32768, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row; max 4 ULP fp16-subnormals flushed (442 unflushed), 7 variants'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 19 variants / 541k lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 32768, note: 'wh figure, no bh driver reaches this row; max 32768 ULP, 19 variants / 491k lanes'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 32768, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 5 variants / 164k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 5 variants / 164k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 5 variants / 164k lanes'}
@@ -1160,50 +1200,50 @@ SfpuBinaryFmod:
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 5 variants / 82k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 16, note: 'bh: max 16 ULP, 5 variants / 66k lanes'}
 SfpuBinaryMax:
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 11 variants / 306k lanes'}
-- {input: Float16, output: Float16, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 11 variants / 306k lanes'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
-- {input: Float32, output: Float16, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 49k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 44k lanes'}
 SfpuBinaryMin:
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 11 variants / 309k lanes'}
-- {input: Float16, output: Float16, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 11 variants / 309k lanes'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
-- {input: Float32, output: Float16, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 49k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 47k lanes'}
 SfpuBinaryRemainder:
-- {output: Float16, measured: 4, note: 'wh figure, no bh driver reaches this row; max 4 ULP fp16-subnormals flushed (442 unflushed), 7 variants'}
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 19 variants / 541k lanes'}
-- {output: Float32, measured: 32768, note: 'wh figure, no bh driver reaches this row; max 32768 ULP, 19 variants / 491k lanes'}
-- {input: Float16, output: Float16, dest: 'No', measured: 4, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 32768, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row; max 4 ULP fp16-subnormals flushed (442 unflushed), 7 variants'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 19 variants / 541k lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 32768, note: 'wh figure, no bh driver reaches this row; max 32768 ULP, 19 variants / 491k lanes'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 32768, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 5 variants / 164k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 5 variants / 164k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 5 variants / 164k lanes'}
@@ -1211,148 +1251,148 @@ SfpuBinaryRemainder:
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 5 variants / 82k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 16, note: 'bh: max 16 ULP, 5 variants / 66k lanes'}
 SfpuElwEq:
-- {output: Float16, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
-- {input: Float32, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 49k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 47k lanes'}
 SfpuElwGe:
-- {output: Float16, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
-- {input: Float32, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 49k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 47k lanes'}
 SfpuElwGt:
-- {output: Float16, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
-- {input: Float32, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 49k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 47k lanes'}
 SfpuElwLe:
-- {output: Float16, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
-- {input: Float32, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 49k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 47k lanes'}
 SfpuElwLt:
-- {output: Float16, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
-- {input: Float32, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 49k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 47k lanes'}
 SfpuElwNe:
-- {output: Float16, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float32, dest: 'No', metric: TOLERANCE, note: 'not measured: every binary driver skips a 32-bit input at dest_acc=No (skip_reason_32bit_input_without_dest_acc), so no run backs this row''s output wildcard'}
-- {input: Float32, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 49k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 47k lanes'}
 SfpuElwadd:
-- {output: Float16, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 26 variants / 676k lanes'}
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 32 variants / 840k lanes'}
-- {output: Float32, measured: 65536, note: 'wh figure, no bh driver reaches this row; max 65536 ULP, 30 variants / 831k lanes'}
-- {input: Float16, output: Float16, dest: 'No', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 26 variants / 676k lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 32 variants / 840k lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 65536, note: 'wh figure, no bh driver reaches this row; max 65536 ULP, 30 variants / 831k lanes'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 1, note: 'bh: max 1 ULP, 9 variants / 201k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 5 variants / 100k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 6 variants / 197k lanes'}
 - {input: Float16_b, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
-- {input: Float32, output: Float16, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 5 variants / 82k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 7 variants / 78k lanes'}
 SfpuElwdiv:
-- {output: Float16, measured: 4, note: 'wh figure, no bh driver reaches this row; max 4 ULP on the div sweep, fp16-subnormals flushed (305 unflushed), 5 variants'}
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP on the div sweep (0 on the edge sweep), 14 variants'}
-- {output: Float32, measured: 32768, note: 'wh figure, no bh driver reaches this row; max 32768 ULP on the div sweep (0 on the edge sweep), 14 variants'}
-- {input: Float16, output: Float16, dest: 'No', measured: 4, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 32768, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 4, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row; max 4 ULP on the div sweep, fp16-subnormals flushed (305 unflushed), 5 variants'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP on the div sweep (0 on the edge sweep), 14 variants'}
+- {output: Float32, metric: TOLERANCE, measured: 32768, note: 'wh figure, no bh driver reaches this row; max 32768 ULP on the div sweep (0 on the edge sweep), 14 variants'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 32768, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 4 variants / 131k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 4 variants / 131k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 4 variants / 131k lanes'}
@@ -1361,9 +1401,9 @@ SfpuElwdiv:
 - {input: Float32, output: Float32, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 4 variants / 57k lanes'}
 SfpuElwmul:
 - {metric: TOLERANCE, measured: 936116225, note: 'wh figure, no bh driver reaches this row; max 936116225 ULP Float32 / 14285 Float16_b / 816 Float16'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 4, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 1, note: 'bh: max 1 ULP, 8 variants / 199k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 5 variants / 100k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 6 variants / 197k lanes'}
@@ -1375,16 +1415,16 @@ SfpuElwpow:
 - {output: Float16_b, metric: TOLERANCE, rtol: 0.15}
 - {output: Float32, metric: TOLERANCE, rtol: 0.15}
 SfpuElwrsub:
-- {output: Float16, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP fp16-subnormals flushed (140 unflushed), 22 variants'}
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 28 variants / 836k lanes'}
-- {output: Float32, measured: 65536, note: 'wh figure, no bh driver reaches this row; max 65536 ULP, 28 variants / 829k lanes'}
-- {input: Float16, output: Float16, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP fp16-subnormals flushed (140 unflushed), 22 variants'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 28 variants / 836k lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 65536, note: 'wh figure, no bh driver reaches this row; max 65536 ULP, 28 variants / 829k lanes'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 6 variants / 197k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 98k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 6 variants / 197k lanes'}
@@ -1392,16 +1432,16 @@ SfpuElwrsub:
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 5 variants / 82k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 5 variants / 76k lanes'}
 SfpuElwsub:
-- {output: Float16, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP fp16-subnormals flushed (140 unflushed), 26 variants'}
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 32 variants / 840k lanes'}
-- {output: Float32, measured: 65536, note: 'wh figure, no bh driver reaches this row; max 65536 ULP, 30 variants / 831k lanes'}
-- {input: Float16, output: Float16, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'No', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float16_b, dest: 'Yes', measured: 1, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16, output: Float32, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16, dest: 'Yes', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP fp16-subnormals flushed (140 unflushed), 26 variants'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 32 variants / 840k lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 65536, note: 'wh figure, no bh driver reaches this row; max 65536 ULP, 30 variants / 831k lanes'}
+- {input: Float16, output: Float16, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'No', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float16_b, dest: 'Yes', metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16, output: Float32, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16, dest: 'Yes', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 1, note: 'bh: max 1 ULP, 8 variants / 199k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 5 variants / 100k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 6 variants / 197k lanes'}
@@ -1409,8 +1449,8 @@ SfpuElwsub:
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 5 variants / 82k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 7 variants / 78k lanes'}
 SfpuIsclose:
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 81920 lanes'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 81920 lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 81920 lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 81920 lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 33k lanes'}
@@ -1419,14 +1459,14 @@ SfpuIsclose:
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 16k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 16k lanes'}
 SfpuLerp:
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 4 variants / 16384 lanes'}
-- {output: Float32, measured: 3072, note: 'wh figure, no bh driver reaches this row; max 3072 ULP, 2 variants / 8192 lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 4 variants / 16384 lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 3072, note: 'wh figure, no bh driver reaches this row; max 3072 ULP, 2 variants / 8192 lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 2 variants / 8k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 1, note: 'bh: max 1 ULP, 2 variants / 8k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 3072, note: 'bh: max 3072 ULP, 2 variants / 8k lanes'}
 SfpuLogsigmoid:
-- {output: Float16_b, measured: 2, note: 'wh figure, no bh driver reaches this row; max 2 ULP, 3 variants / 81920 lanes'}
-- {output: Float32, measured: 131072, note: 'wh figure, no bh driver reaches this row; max 131072 ULP, 3 variants / 81920 lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 2, note: 'wh figure, no bh driver reaches this row; max 2 ULP, 3 variants / 81920 lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 131072, note: 'wh figure, no bh driver reaches this row; max 131072 ULP, 3 variants / 81920 lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 2, note: 'bh: max 2 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 2, note: 'bh: max 2 ULP, 1 variants / 33k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 131072, note: 'bh: max 131072 ULP, 1 variants / 33k lanes'}
@@ -1434,8 +1474,8 @@ SfpuLogsigmoid:
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 2, note: 'bh: max 2 ULP, 1 variants / 16k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 89026, note: 'bh: max 89026 ULP, 1 variants / 16k lanes'}
 SfpuMask:
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 6144 lanes'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 6144 lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 6144 lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 3 variants / 6144 lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 2k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 2k lanes'}
 - {input: Float16_b, output: Float32, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 2k lanes'}
@@ -1444,8 +1484,8 @@ SfpuMask:
 - {input: Float32, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 2k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 2k lanes'}
 SfpuSnakeBeta:
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 4 variants / 16384 lanes'}
-- {output: Float32, measured: 4, note: 'wh figure, no bh driver reaches this row; max 4 ULP, 2 variants / 8192 lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 4 variants / 16384 lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row; max 4 ULP, 2 variants / 8192 lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'No', measured: 0, note: 'bh: max 0 ULP, 3 variants / 12k lanes'}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 3 variants / 12k lanes'}
 - {input: Float32, output: Float32, dest: 'Yes', measured: 5, note: 'bh: max 5 ULP, 3 variants / 12k lanes'}
@@ -1497,27 +1537,35 @@ SigmoidAppx:
 - {input: Float32, output: Float32, dest: 'Yes', near_zero_atol: 0.001, domains: [{low: -.inf, high: -8.0, ulp: 0}, {low: -8.0, high: -1.0, ulp: 1030807176}, {low: -1.0, high: 1.0, ulp: 327323}, {low: 1.0, high: 4.0, ulp: 1995972}, {low: 4.0, high: .inf, ulp: 299452}]}
 Sign:
 - {metric: TOLERANCE, measured: 1056964609, note: 'wh figure, no bh driver reaches this row; exact except -0.0; max 1056964609 ULP Float32, 16129 Float16_b'}
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Signbit:
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 16 variants / 65536 lanes'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 16 variants / 65536 lanes'}
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 16 variants / 65536 lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 16 variants / 65536 lanes'}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Silu:
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', near_zero_atol: 9.874152546907215e-37, domains: [{low: -.inf, high: .inf, ulp: 1}]}
@@ -1643,8 +1691,8 @@ Sqrt:
 - {input: Float32, output: Float32, approx: 'Yes', dest: 'No', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, approx: 'Yes', dest: 'Yes', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 14751}]}
 SqrtCustom:
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 5 variants / 20480 lanes'}
-- {output: Float32, measured: 65536, note: 'wh figure, no bh driver reaches this row; max 65536 ULP, 5 variants / 20480 lanes'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; max 1 ULP, 5 variants / 20480 lanes'}
+- {output: Float32, metric: TOLERANCE, measured: 65536, note: 'wh figure, no bh driver reaches this row; max 65536 ULP, 5 variants / 20480 lanes'}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: .inf, ulp: 88}]}
@@ -1659,8 +1707,8 @@ SqrtCustom:
 - {input: Float32, output: Float32, dest: 'No', near_zero_atol: 1.9481757786848908e-19, domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: 4.253529586511731e+37, ulp: 65536}, {low: 4.253529586511731e+37, high: .inf, ulp: 10616832}]}
 - {input: Float32, output: Float32, dest: 'Yes', near_zero_atol: 1.954353396143984e-19, domains: [{low: -.inf, high: 0.0}, {low: 0.0, high: 4.253529586511731e+37, ulp: 90}, {low: 4.253529586511731e+37, high: .inf, ulp: 10598486}]}
 Square:
-- {measured: 4, note: 'wh figure, no bh driver reaches this row; wh: Float16 max 4 ULP, 40 variants'}
-- {output: Float16_b, measured: 1, note: 'wh figure, no bh driver reaches this row; wh: max 1 ULP, 40 variants'}
+- {metric: TOLERANCE, measured: 4, note: 'wh figure, no bh driver reaches this row; wh: Float16 max 4 ULP, 40 variants'}
+- {output: Float16_b, metric: TOLERANCE, measured: 1, note: 'wh figure, no bh driver reaches this row; wh: max 1 ULP, 40 variants'}
 - {output: Float32, metric: TOLERANCE, measured: 65536, note: 'wh figure, no bh driver reaches this row; wh: max 65536 ULP @ dest_acc=No / 32768 @ dest_acc=Yes, 32 variants'}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -256.0}, {low: -256.0, high: 256.0, ulp: 1}, {low: 256.0, high: .inf}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
@@ -1762,18 +1810,22 @@ Tanhshrink:
 Threshold:
 - {output: Float16, metric: TOLERANCE, note: '0 ULP, 116 variants / 2.10M lanes, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so that run measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on these keys)'}
 - {output: Float16_b, metric: TOLERANCE, note: '0 ULP, 116 variants / 2.10M lanes, but on uniform(-5, 5) against THRESHOLD_T=5.0 the pass-through branch never fires, so that run measured only the constant 10.0, not the pack rounding of a passed-through x (Identity reads 1 step on these keys)'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 116 variants / 2.10M lanes'}
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; 0 ULP, 116 variants / 2.10M lanes'}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 0}, {low: 65536.0, high: .inf}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 Trunc:
-- {measured: 0, note: 'wh figure, no bh driver reaches this row; wh: 0 ULP, as Floor'}
+- {metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row; wh: 0 ULP, as Floor'}
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
@@ -1788,56 +1840,72 @@ Trunc:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 UnaryEq:
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
-- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
-- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 UnaryGe:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 UnaryGt:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 UnaryLe:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 UnaryLt:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 UnaryMax:
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
@@ -1853,23 +1921,27 @@ UnaryMax:
 - {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 - {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 UnaryMin:
-- {input: Float16, output: Float16, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float16, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16, domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float16_b, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16, domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float16_b, domains: [{low: -.inf, high: .inf, ulp: 0}]}
-- {input: Float32, output: Float32, domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float16_b, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: -65536.0}, {low: -65536.0, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float16_b, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'No', domains: [{low: -.inf, high: .inf, ulp: 0}]}
+- {input: Float32, output: Float32, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}
 UnaryNe:
-- {output: Float16_b, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {output: Float32, measured: 0, note: 'wh figure, no bh driver reaches this row'}
-- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float16_b, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {output: Float32, metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
-- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float16_b, output: Float32, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float16_b, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
-- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', measured: 0, note: 'wh figure, no bh driver reaches this row'}
+- {input: Float32, output: Float16_b, approx: 'No', dest: 'No', metric: TOLERANCE, measured: 0, note: 'wh figure, no bh driver reaches this row'}
 - {input: Float32, output: Float16_b, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'No', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}
 - {input: Float32, output: Float32, approx: 'No', dest: 'Yes', measured: 0, note: 'bh: max 0 ULP, 1 variants / 4k lanes'}

@@ -6,6 +6,10 @@ one serializer that writes it, and the measurement records."""
 
 import json
 import math
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -22,10 +26,12 @@ from helpers.ulp_table import (
     Metric,
     Reading,
     Row,
+    arch_of_table,
     dump_table,
     from_plain,
     load_table,
     read_table,
+    table_arch,
     write_table_file,
 )
 
@@ -214,6 +220,52 @@ def test_a_falsy_document_that_is_not_a_mapping_is_not_an_empty_table(text):
 @pytest.mark.parametrize("text", ["", "# only a comment\n", "null"], ids=repr)
 def test_an_empty_document_is_an_empty_table(text):
     assert read_table(text) == {}
+
+
+@pytest.mark.parametrize(
+    "chip, table",
+    [
+        (ChipArchitecture.WORMHOLE, ChipArchitecture.WORMHOLE),
+        (ChipArchitecture.BLACKHOLE, ChipArchitecture.BLACKHOLE),
+        (ChipArchitecture.QUASAR, ChipArchitecture.WORMHOLE),
+    ],
+    ids=lambda a: a.value,
+)
+def test_each_chip_reads_the_table_it_is_meant_to(chip, table):
+    """Every accuracy test derives its expectation from `MEASURED_ARCH`, so nothing
+    else would notice a mapping that sent Blackhole to Wormhole's table."""
+    assert table_arch(chip) is table
+    assert arch_of_table(TABLE_PATHS[table]) is table
+
+
+@pytest.mark.parametrize(
+    "name, arch",
+    [
+        ("sfpu_accuracy_budget_wh.yaml", ChipArchitecture.WORMHOLE),
+        ("base_sfpu_accuracy_budget_bh.yaml", ChipArchitecture.BLACKHOLE),
+        ("budget.yaml", None),
+    ],
+)
+def test_a_table_file_names_its_architecture(name, arch):
+    """`ulp_budget_diff` judges a table under the architecture its name says, a CI
+    copy of it included, and refuses to guess for any other name."""
+    assert arch_of_table(Path("/tmp") / name) is arch
+
+
+def test_importing_the_table_tools_does_not_ask_the_chip():
+    """A host with no card and no `CHIP_ARCH` (the report's host tests, `python -m
+    helpers.ulp_budget_diff`) imports the table, the sweep and the guard; resolving the
+    session's architecture there would open the device. In a fresh interpreter, with
+    the chip query made to fail."""
+    code = (
+        "import helpers.chip_architecture as chip; "
+        "chip.get_chip_architecture = lambda: (_ for _ in ()).throw(SystemExit(3)); "
+        "import helpers.ulp_table, helpers.ulp_sweep, helpers.ulp_budget_diff"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "CHIP_ARCH"}
+    python_tests = next(iter(TABLE_PATHS.values())).parent.parent
+    done = subprocess.run([sys.executable, "-c", code], cwd=python_tests, env=env)
+    assert done.returncode == 0
 
 
 @pytest.mark.parametrize("path", TABLE_PATHS.values(), ids=lambda p: p.stem[-2:])

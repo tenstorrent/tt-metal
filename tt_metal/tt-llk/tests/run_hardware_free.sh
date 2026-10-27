@@ -37,8 +37,13 @@ pytest "${COMMON[@]}" -n auto --maxprocesses=8 --dist=worksteal \
 export CHIP_ARCH=blackhole
 # A directory plus -k, not two files: file args outside the rootdir leave classname empty in the junit report.
 pytest "${COMMON[@]}" ../hardware_free \
-    -k "test_gathering_config or test_out_of_tree_contract or accuracy" \
+    -k "test_gathering_config or test_out_of_tree_contract" \
     --junitxml=pytest-report-hardware-free-blackhole.xml \
+    || pytest_exit=$?
+# The accuracy suite by its directory, not by -k: a renamed directory fails here rather than selecting nothing.
+pytest "${COMMON[@]}" -n auto --maxprocesses=8 --dist=worksteal \
+    ../hardware_free/accuracy \
+    --junitxml=pytest-report-hardware-free-blackhole-accuracy.xml \
     || pytest_exit=$?
 
 exit "$pytest_exit"

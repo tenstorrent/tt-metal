@@ -4,7 +4,7 @@
 """Which contract one variant of an SFPU op is held to.
 
 The rows of the table (``sfpu_accuracy_budget_wh.yaml`` or ``_bh.yaml``, the file of the
-chip this session targets: :data:`~.ulp_table.TABLE_PATH`) are keyed on the formats,
+chip this session targets: :data:`~.ulp_table.TABLE_PATHS`) are keyed on the formats,
 approximation mode, Dest accumulation and architecture; an unset dimension matches any
 value and the most specific key wins. An op with no row gets :data:`TOLERANCE_CONTRACT`.
 A step budget binds only between the formats the SFPU computes in and on the

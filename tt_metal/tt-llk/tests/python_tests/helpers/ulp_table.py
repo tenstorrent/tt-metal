@@ -10,6 +10,7 @@ The table is data, one file per architecture it was measured on
 else with a typed :class:`TableError`.
 """
 
+import functools
 import json
 import math
 import types
@@ -34,10 +35,11 @@ from .ulp_domains import (
     usable_budget_ceiling,
 )
 
-# One table per architecture the sweep has measured on. Every unkeyed row of a file is a
-# measurement on that file's architecture, and a session reads the file of the chip it
-# targets; Quasar, with no table of its own, reads Wormhole's, whose step budgets bind
-# nowhere else (:func:`steps_bind`).
+# One table per architecture the sweep has measured on. Every unkeyed step budget of a
+# file binds on that file's architecture only (:func:`steps_bind`), and a session reads
+# the file of the chip it targets; Quasar, with no table of its own, reads Wormhole's,
+# where none binds. A figure carried over from another architecture's table is written
+# as a tolerance row with its ``measured``, which binds nowhere.
 TABLE_PATHS = {
     ChipArchitecture.WORMHOLE: Path(__file__).with_name("sfpu_accuracy_budget_wh.yaml"),
     ChipArchitecture.BLACKHOLE: Path(__file__).with_name(
@@ -51,9 +53,33 @@ def table_arch(arch: ChipArchitecture) -> ChipArchitecture:
     return arch if arch in TABLE_PATHS else ChipArchitecture.WORMHOLE
 
 
-# The architecture every unkeyed row of this session's table was measured on.
-MEASURED_ARCH = table_arch(get_chip_architecture())
-TABLE_PATH = TABLE_PATHS[MEASURED_ARCH]
+def arch_of_table(path: Path) -> ChipArchitecture | None:
+    """The architecture of the table file *path* by its name (a copy such as
+    ``base_sfpu_accuracy_budget_bh.yaml`` included), or ``None``."""
+    name = Path(path).name
+    found = [arch for arch, table in TABLE_PATHS.items() if name.endswith(table.name)]
+    return found[0] if len(found) == 1 else None
+
+
+@functools.cache
+def measured_arch() -> ChipArchitecture:
+    """The architecture every unkeyed row of this session's table was measured on.
+    Asked of the chip on first use, not at import, so a host-only tool that never
+    resolves a variant needs neither ``CHIP_ARCH`` nor a card; fixed from then on."""
+    return table_arch(get_chip_architecture())
+
+
+def __getattr__(name: str) -> Any:
+    """``MEASURED_ARCH``, ``OTHER_ARCH`` (an architecture this session's table is not
+    for) and ``TABLE_PATH`` (its file), resolved on first access (PEP 562). Code in this
+    module calls :func:`measured_arch`: a global lookup never reaches here."""
+    if name == "MEASURED_ARCH":
+        return measured_arch()
+    if name == "OTHER_ARCH":
+        return next(a for a in ChipArchitecture if a is not measured_arch())
+    if name == "TABLE_PATH":
+        return TABLE_PATHS[measured_arch()]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class Metric(Enum):
@@ -230,15 +256,20 @@ def most_specific(
     return winners[0]
 
 
-def steps_bind(key: BudgetKey, query: BudgetKey) -> bool:
+def steps_bind(
+    key: BudgetKey, query: BudgetKey, arch: ChipArchitecture | None = None
+) -> bool:
     """Whether a step budget on the row keyed *key* binds the variant *query*: every
     format named is one the SFPU computes in, and the variant runs on the architecture
-    the row was measured on (:data:`MEASURED_ARCH` for a row that names none)."""
+    the row was measured on: for a row that names none, the table's *arch* (default:
+    this session's, :func:`measured_arch`)."""
     formats_ok = all(
         fmt is None or fmt in ULP_FORMATS
         for fmt in (query.input_format, query.output_format)
     )
-    return formats_ok and (query.arch == MEASURED_ARCH or key.arch is not None)
+    if not formats_ok:
+        return False
+    return key.arch is not None or query.arch == (arch or measured_arch())
 
 
 @dataclass(frozen=True)
@@ -555,8 +586,10 @@ def read_table(text: str) -> Table:
     return table
 
 
-def load_table(path: Path = TABLE_PATH) -> Table:
-    return read_table(Path(path).read_text(encoding="utf-8"))
+def load_table(path: Path | None = None) -> Table:
+    """The table at *path*, by default this session's."""
+    path = TABLE_PATHS[measured_arch()] if path is None else Path(path)
+    return read_table(path.read_text(encoding="utf-8"))
 
 
 class _Dumper(yaml.SafeDumper):
@@ -594,12 +627,13 @@ def dump_table(table: Table) -> str:
     )
 
 
-def write_table_file(table: Table, path: Path = TABLE_PATH) -> None:
-    """Dump *table* to *path* after reading the dump back: a table that would not load is
-    never written."""
+def write_table_file(table: Table, path: Path | None = None) -> None:
+    """Dump *table* to *path* (by default this session's table) after reading the dump
+    back: a table that would not load is never written."""
     text = dump_table(table)
     validate_contracts(contracts_of(read_table(text)))
-    Path(path).write_text(text, encoding="utf-8")
+    path = TABLE_PATHS[measured_arch()] if path is None else Path(path)
+    path.write_text(text, encoding="utf-8")
 
 
 # ── Measurement records (--ulp-measure) ──────────────────────────────────────

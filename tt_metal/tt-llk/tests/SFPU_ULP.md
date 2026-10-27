@@ -28,7 +28,9 @@ CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py --op MyOp --compile-consumer
 
 The same three commands with `CHIP_ARCH=blackhole` measure and gate the op on a
 Blackhole card and write `sfpu_accuracy_budget_bh.yaml`; each table is its own
-measurement, and an op enrolled in one is enrolled in the other by its own rows.
+measurement, and an op enrolled in one is enrolled in the other by its own rows. A
+not-measurable cell parked on one table only is acknowledged for that architecture
+(step 4).
 
 `--op` matches the op name exactly; `-k Exp` would also run and rewrite `Exp2`,
 `ExpWithBase`, `Expm1` and `Expm1Cw`.
@@ -57,11 +59,14 @@ infinity or NaN is fed: the unpack flushes a subnormal, so a lane there would me
 flush rather than the op. The domain is not clipped to the op's safe range: undefined
 inputs reach the hardware and are masked out afterwards. An exponent-B input packed to
 `Float16` needs a 32-bit Dest on Wormhole and Blackhole, so those cells run at
-`dest_acc=Yes` only (`ulp_sweep.sweep_cells`). On Blackhole no cell that would hold
-fp16 in a 16-bit Dest (a `Float16` input, or a `Float16` output from `Float32`, at
-`dest_acc=No`) is swept: the SFPU answers garbage there and the functional driver
-skips the same cells (`ulp_sweep.fp16_dest_unusable`), so the Blackhole table has no
-row for them.
+`dest_acc=Yes` only (`ulp_sweep.sweep_cells`). On Blackhole no cell that holds fp16 in
+a 16-bit Dest (a `Float16` input, or a `Float16` output from `Float32`, at
+`dest_acc=No`) is swept, since the SFPU reads garbage there (#62654,
+`ulp_sweep.fp16_dest_unusable`). The emitter keeps `dest` pinned on a pair swept at one
+Dest for that reason, so no row of the Blackhole table covers those cells. No functional
+driver runs a `Float16` unary cell either; the unary driver's `_skip_bh_unless_fp32` is
+a separate, broader Blackhole skip (every `dest_acc=No` variant but
+`Float32 -> Float32`).
 
 The binary, ternary and scalar rows, and the hand-built unary sweeps, are measured over
 their own drivers' stimuli, and those drivers gate on the whole contract. No functional
@@ -127,6 +132,9 @@ fp16 subnormals the pack does not reproduce.
      rounding (`Softplus` answers 0 below x = -5), and stays a hand decision.
    - `measured: N`, no `metric` — a row a functional driver sampled; it holds the cell
      to exactly `N` steps.
+   - `metric: TOLERANCE, measured: N`, noted `wh figure, no bh driver reaches this row`
+     — in `_bh.yaml` only: a cell no Blackhole driver reaches keeps Wormhole's figure for
+     reference, and binds nowhere.
    - `metric: TOLERANCE, measured: N` — a cell past `usable_budget_ceiling`, where a
      step budget would no longer be tighter than the tolerance it replaces. The op keeps
      tolerance + PCC there, and the headroom report holds it to `N`.
@@ -135,7 +143,11 @@ fp16 subnormals the pack does not reproduce.
      were measurable. On a gateable output the row must be acknowledged with its cause
      in `test_sfpu_accuracy_budget._UNMEASURABLE_CELLS_ACKNOWLEDGED`, unless the cause is
      a tracked defect on a handful of inputs, which belongs in `_KNOWN_NONFINITE_LANES`
-     so the rest of the cell keeps its gate.
+     so the rest of the cell keeps its gate. A cell parked on one architecture's table
+     only is acknowledged in `_UNMEASURABLE_CELLS_ACKNOWLEDGED_ON[arch]`, and a wildcard
+     acknowledgement that parks a different number of cells there is pinned in
+     `_UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON[arch]`; the other architecture's pass
+     fails a shared entry no row of its table needs as stale.
 
 5. **Gate on it.** Re-run without `--ulp-emit`, then the host guards:
 
@@ -153,13 +165,15 @@ fp16 subnormals the pack does not reproduce.
 - **Typed data with one writer.** Every row is a `ulp_table.Row`, an enum is written by
   its member name, and `dump_table` writes the whole file in one order; a hand edit must
   leave the file as the writer would
-  (`test_the_table_on_disk_is_exactly_what_the_serializer_writes`). To normalise one:
-  `python -c "from helpers.ulp_table import *; write_table_file(load_table(), TABLE_PATH)"`.
+  (`test_the_table_on_disk_is_exactly_what_the_serializer_writes`, both files in both
+  passes). To normalise them:
+  `python -c "from helpers.ulp_table import *; [write_table_file(load_table(p), p) for p in TABLE_PATHS.values()]"`.
   A refused row raises `TableError`, whose `problem` says why.
 - **The measurement is the number.** A ULP row's gate is its `measured` figure, and the
   loader refuses one without it. A worse measurement is a raised gate, recorded by a
   re-emit in a change of its own; `python -m helpers.ulp_budget_diff diff --base <old>
-  --head <new>` lists every cell a change loosens.
+  --head <new>` lists every cell a change loosens, judged under the architecture the
+  `--head` file's name says (`--arch` to name it).
 - **Most specific key wins.** Key fields are `input`, `output`, `approx`, `dest` and
   `arch`, all optional; two rows matching one variant equally specifically are refused.
 - **A row holds for the configuration it was measured in**: `FAST_MODE(No)` and
@@ -167,10 +181,12 @@ fp16 subnormals the pack does not reproduce.
 - **The list is the statement.** A `domains` row carries no `measured` or `metric` and
   pins the `input` and `output` it was measured on. An entry never widens or narrows
   what the op claims; it reports where the claim holds, and at what figure.
-- **Budgets do not transfer between architectures.** Every unkeyed number is a
-  measurement on its table's architecture (`ulp_table.MEASURED_ARCH`, the chip the
-  session targets); on a chip with no table of its own (Quasar reads Wormhole's) an op
-  falls back to tolerance unless a row names that `arch`.
+- **Budgets do not transfer between architectures.** Every unkeyed step budget is a
+  measurement on its table's architecture and binds there only (`ulp_table.steps_bind`;
+  a session's table is `MEASURED_ARCH`'s, resolved from `CHIP_ARCH` on first use, not
+  at import). On a chip with no table of its own (Quasar reads Wormhole's) an op falls
+  back to tolerance unless a row names that `arch`, and a figure one table carries over
+  from the other is a tolerance row.
 - **An exact op may not carry a wide budget.** Sign-bit ops, copies, integer results,
   predicates and constant fills are the canaries:
   `test_an_exact_op_never_carries_a_wide_budget` holds their budgets to the pack path's
@@ -228,9 +244,14 @@ two others are gated at 3. `log` answers nothing below 0 and is 1 step from 0 up
   ```bash
   CHIP_ARCH=wormhole pytest test_unary_sfpu_ulp.py -n auto --ulp-measure=ulp.jsonl
   python -m helpers.ulp_budget_diff headroom --table helpers/sfpu_accuracy_budget_wh.yaml --measured ulp.jsonl
+
+  CHIP_ARCH=blackhole pytest test_unary_sfpu_ulp.py -n auto --ulp-measure=ulp.jsonl
+  python -m helpers.ulp_budget_diff headroom --table helpers/sfpu_accuracy_budget_bh.yaml --measured ulp.jsonl
   ```
 
-  Each line of `ulp.jsonl` is one `ulp_table.Measurement`.
+  Each line of `ulp.jsonl` is one `ulp_table.Measurement`. The report judges a table
+  under the architecture its file name says, not the shell's `CHIP_ARCH` (`--arch` for a
+  file named otherwise), and needs no card.
 - **`--ulp-measure` can fail the sweep**: the sweep's records are required, since the
   headroom report judges only the cells it reads, so a sweep cell whose record is not
   written fails (`RecordDropped`), and a path that cannot be prepared is a usage error.
@@ -272,8 +293,15 @@ do not say.
 - **`SfpuBinaryFmod` and `SfpuBinaryRemainder`** share an implementation and measure
   identically. **`SfpuMask`** selects an input or zero and never computes a value, so it
   is exact like the predicates.
-- **`Erfc`** is tracked by #51137 (input clamp, under #52178), the one issue no code
-  names.
+- **`Erfc`** is tracked by #51137 (input clamp, under #52178).
+- **Blackhole `Reciprocal`**, precise, `Float32` (and `Float16_b`) to `Float32` at a
+  32-bit Dest, is gated at 88242 (90174) steps over its whole range although it is 1
+  step below |x| = 2^109: the last refinement of `_calculate_reciprocal_fast_24b_5c_`
+  stops correcting once 1/x is small enough, and the top binades rise to the
+  approximate mode's figure (#62655). The list is split only where a figure
+  crosses the ceiling, so those binades set the cell's gate. Wormhole is 1 step
+  throughout.
 - The not-measurable rows are explained op by op in
-  `test_sfpu_accuracy_budget._UNMEASURABLE_CELLS_ACKNOWLEDGED`, and the lanes a tracked
-  defect names in `ulp_sweep._KNOWN_NONFINITE_LANES`.
+  `test_sfpu_accuracy_budget._UNMEASURABLE_CELLS_ACKNOWLEDGED` (and `_ON[arch]` for one
+  table's own), and the lanes a tracked defect names in
+  `ulp_sweep._KNOWN_NONFINITE_LANES`.

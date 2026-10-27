@@ -9,7 +9,6 @@ import math
 import pytest
 from conftest import TANH_DOMAINS
 from helpers import ulp_budget_diff
-from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.ulp_budget_diff import (
@@ -24,6 +23,8 @@ from helpers.ulp_budget_diff import (
 from helpers.ulp_domains import Domain
 from helpers.ulp_table import (
     MEASURED_ARCH,
+    OTHER_ARCH,
+    TABLE_PATHS,
     BudgetKey,
     Measurement,
     Metric,
@@ -202,11 +203,10 @@ def test_a_declared_tolerance_that_may_loosen_is_a_regression(base_row, head_row
 def test_an_unkeyed_budget_binds_only_on_the_measured_arch():
     """Elsewhere the registry hands the cell its tolerance, so a raise there loosens
     nothing; a row naming the arch binds there."""
-    other = next(a for a in ChipArchitecture if a is not MEASURED_ARCH)
     unkeyed = Row(input=F16B, output=F16B, measured=3)
-    keyed = Row(input=F16B, output=F16B, arch=other, measured=5)
+    keyed = Row(input=F16B, output=F16B, arch=OTHER_ARCH, measured=5)
     changes = compare(_table(unkeyed), _table(unkeyed, keyed))
-    assert [(c.kind, c.cell[1].arch) for c in changes] == [(Kind.GATED, other)]
+    assert [(c.kind, c.cell[1].arch) for c in changes] == [(Kind.GATED, OTHER_ARCH)]
 
 
 @pytest.mark.parametrize(
@@ -270,6 +270,7 @@ def test_diff_exit_status(tmp_path, head, flags, status):
     write_table_file(_BASE, base_path)
     write_table_file(head, head_path)
     argv = ["diff", "--base", str(base_path), "--head", str(head_path), *flags]
+    argv += ["--arch", MEASURED_ARCH.value]
     assert main(argv) == status
 
 
@@ -633,6 +634,7 @@ def test_headroom_exit_status(tmp_path):
     table, measured = tmp_path / "table.yaml", tmp_path / "measured.jsonl"
     write_table_file(_table(Row(input=F16B, output=F16B, measured=1)), table)
     argv = ["headroom", "--table", str(table), "--measured", str(measured)]
+    argv += ["--arch", MEASURED_ARCH.value]
     for worst, status in ((1, 0), (9, 1)):
         measured.write_text(_measured(worst).to_json() + "\n")
         assert main(argv) == status
@@ -647,3 +649,31 @@ def test_headroom_exit_status(tmp_path):
     assert main(argv) == 2
     measured.write_text(_measured(1).to_json() + "\n")
     assert main(argv[:2] + [str(tmp_path / "absent.yaml")] + argv[3:]) == 2
+
+
+@pytest.mark.parametrize("arch", list(TABLE_PATHS), ids=lambda a: a.value)
+def test_headroom_judges_a_table_by_the_architecture_its_file_names(tmp_path, arch):
+    """A plain row binds only on its table's architecture. Judged under the shell's
+    `CHIP_ARCH` instead, the other table's wildcard plain rows would stop binding and a
+    reading past one would pass as "not judged"; the file name says which it is."""
+    table = tmp_path / TABLE_PATHS[arch].name
+    write_table_file(_table(Row(output=F16B, measured=1)), table)
+    measured = tmp_path / "measured.jsonl"
+    cell = BudgetKey(
+        input_format=F16B, output_format=F16B, approx_mode=NO, dest_acc=D_NO, arch=arch
+    )
+    measured.write_text(Measurement(op=ABS, key=cell, worst=9, lanes=1).to_json())
+    argv = ["headroom", "--table", str(table), "--measured", str(measured)]
+    assert main(argv) == 1
+    other = next(a for a in TABLE_PATHS if a is not arch)
+    assert main([*argv, "--arch", other.value]) == 0  # --arch overrides the name
+
+
+def test_a_table_whose_name_names_no_architecture_needs_arch(tmp_path):
+    """Exit 2 rather than fall back to the shell's `CHIP_ARCH` or a card."""
+    base, head = tmp_path / "base.yaml", tmp_path / "head.yaml"
+    for path in (base, head):
+        write_table_file(_BASE, path)
+    argv = ["diff", "--base", str(base), "--head", str(head)]
+    assert main(argv) == 2
+    assert main([*argv, "--arch", MEASURED_ARCH.value]) == 0
