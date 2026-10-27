@@ -7,7 +7,6 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/embedding/embedding.hpp"
 #include "ttnn/operations/embedding_backward/embedding_backward.hpp"
 
@@ -16,7 +15,7 @@ namespace ttml::ops {
 autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight) {
     // prepare for embedding
     auto weight_tensor = weight->get_value();
-    weight_tensor = ttnn::untilize(weight_tensor);
+    /* TODO(nuked-op untilize): passthrough */ (void)0;
 
     auto embeddings =
         ttnn::embedding(tensor->get_value(), weight_tensor, /* pad_token */ std::nullopt, ttnn::Layout::TILE);

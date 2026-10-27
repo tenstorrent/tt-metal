@@ -21,8 +21,6 @@
 #include <ttnn/operations/data_movement/reshape_view/reshape.hpp>
 #include <ttnn/operations/data_movement/slice/slice.hpp>
 #include <ttnn/operations/data_movement/transpose/transpose.hpp>
-#include <ttnn/operations/experimental/conv3d/conv3d.hpp>
-#include <ttnn/operations/experimental/conv3d/prepare_conv3d_weights.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
 #include <vector>
 
@@ -62,7 +60,7 @@ struct Conv3dGeometry {
         return dilation[i] * (kernel[i] - 1U) + 1U;
     }
     [[nodiscard]] uint32_t c_in_block() const {
-        return ttnn::operations::experimental::conv3d::default_c_in_block(kernel_volume());
+        return tt::constants::TILE_WIDTH /* TODO(nuked-op conv3d): default_c_in_block(kernel_volume()) */;
     }
     [[nodiscard]] uint32_t padded_activation(uint32_t channels) const {
         return tt::round_up(channels, c_in_block());
@@ -133,10 +131,8 @@ struct PreparedWeight {
 // count.
 PreparedWeight prepare_weight(const ttnn::Tensor& raw_layout_weight) {
     const auto& shape = raw_layout_weight.logical_shape();
-    const uint32_t c_in_block =
-        ttnn::operations::experimental::conv3d::default_c_in_block(shape[2] * shape[3] * shape[4]);
-    auto prepared = ttnn::operations::experimental::conv3d::prepare_conv3d_weights(
-        raw_layout_weight, /*groups=*/1U, c_in_block, /*alignment=*/c_in_block, raw_layout_weight.device());
+    const uint32_t c_in_block = tt::constants::TILE_WIDTH /* TODO(nuked-op conv3d): default_c_in_block */;
+    auto prepared = raw_layout_weight /* TODO(nuked-op conv3d): prepare_conv3d_weights passthrough */;
     // The kernel accepts only the rank-2 prepared form from device.
     if (prepared.logical_shape().rank() != 2U) {
         throw std::logic_error(fmt::format(
@@ -289,7 +285,7 @@ ttnn::Tensor zero_upsample_spatial_dim(
 // The kernel tilizes one output block into TILE_HEIGHT matmul rows, so the block is sized to fill a tile: W first,
 // then H, then D, keeping the product within one tile so the circular buffers stay single-tile. Ragged edges are
 // clamped by the kernel.
-Conv3dDims output_block(
+[[maybe_unused]] Conv3dDims output_block(
     const ttnn::Tensor& input_row_major,
     const Conv3dDims& kernel,
     const Conv3dDims& stride,
@@ -316,34 +312,7 @@ ttnn::Tensor run_ttnn_conv3d(
     const Conv3dDims& stride,
     const Conv3dDims& padding,
     const Conv3dDims& dilation) {
-    const Conv3dDims block = output_block(input_row_major, kernel, stride, padding, dilation);
-    const ttnn::experimental::prim::Conv3dConfig config(
-        /*weights_dtype=*/input_row_major.dtype(),
-        /*output_layout=*/ttnn::Layout::ROW_MAJOR,
-        /*T_out_block=*/block[0],
-        /*W_out_block=*/block[2],
-        /*H_out_block=*/block[1],
-        /*C_out_block=*/kCOutBlock,
-        prepared_weight.c_in_block,
-        dilation,
-        /*alignment=*/prepared_weight.c_in_block,
-        input_row_major.device()->compute_with_storage_grid_size());
-    return ttnn::experimental::conv3d(
-        input_row_major,
-        prepared_weight.tensor,
-        /*device=*/std::nullopt,
-        bias_tile,
-        config,
-        input_row_major.dtype(),
-        output_channels,
-        kernel,
-        stride,
-        padding,
-        dilation,
-        /*padding_mode=*/"zeros",
-        /*groups=*/1U,
-        /*memory_config=*/std::nullopt,
-        core::ComputeKernelConfig::precise());
+    return input_row_major /* TODO(nuked-op conv3d): passthrough */;
 }
 
 ttnn::Tensor conv3d_input_grad(

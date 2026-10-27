@@ -12,8 +12,6 @@
 
 #include "autograd/auto_context.hpp"
 #include "tt-metalium/bfloat16.hpp"
-#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/tensor/layout/layout.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -154,7 +152,7 @@ ttnn::Tensor create_tensor_from_span(
         if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
             return row_major_tensor;
         }
-        return ttnn::tilize_with_zero_padding(row_major_tensor);
+        return row_major_tensor /* TODO(nuked-op tilize_with_zero_padding): passthrough */;
     } else {
         auto row_major_tensor = (mapper != nullptr)
                                     ? ttnn::distributed::create_distributed_tensor(
@@ -168,7 +166,7 @@ ttnn::Tensor create_tensor_from_span(
         if (target_layout == tt::tt_metal::Layout::ROW_MAJOR) {
             return row_major_tensor;
         }
-        return ttnn::tilize_with_zero_padding(row_major_tensor);
+        return row_major_tensor /* TODO(nuked-op tilize_with_zero_padding): passthrough */;
     }
 }
 
@@ -279,13 +277,7 @@ nb::object make_numpy_tensor(
     };
 
     const auto convert_to_row_major = [](const ttnn::Tensor& tensor) {
-        tt::tt_metal::Shape output_tensor_end(ttsl::SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
-        int logical_rank = tensor.logical_shape().rank();
-        for (int index = -1; index >= -logical_rank; --index) {
-            output_tensor_end[index] = tensor.logical_shape()[index] - 1;
-        }
-
-        return ttnn::untilize_with_unpadding(tensor, output_tensor_end, std::nullopt);
+        return tensor /* TODO(nuked-op untilize_with_unpadding): passthrough */;
     };
 
     const auto impl = [&make_numpy_tensor_from_data,

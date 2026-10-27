@@ -25,7 +25,6 @@
 #include "metal/ops/gumbel_sample/gumbel_sample_constants.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
-#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/rand/rand.hpp"
@@ -1453,7 +1452,7 @@ ttnn::Tensor composite_gumbel_sample(
     if (mask.has_value()) {
         scores = ttnn::subtract(scores, *mask);
     }
-    return ttnn::argmax(ttnn::untilize(scores), /* dim */ 3, /* keepdim */ true);
+    return ttnn::argmax(scores /* TODO(nuked-op untilize): passthrough */, /* dim */ 3, /* keepdim */ true);
 }
 
 }  // namespace

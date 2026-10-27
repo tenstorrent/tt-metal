@@ -137,7 +137,7 @@ ttnn::Tensor from_vector(
         output = ttnn::to_device(output, device, output_mem_config);
 
         if (layout == ttnn::TILE_LAYOUT) {
-            output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
+            /* TODO(nuked-op tilize_with_zero_padding): passthrough */ (void)0;
         }
     }
 
