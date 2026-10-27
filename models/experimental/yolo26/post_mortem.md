@@ -45,6 +45,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0023 | 600 FPS on one chip for yolo26s with PCC intact | 2026-10-23 | DONE: batch 2 per chip, e2e trace+2CQ 603.6 / 603.9 / 604.4 FPS (10 runs); PCC unchanged; batched demo 8/8 matched, checked visually |
 | YOLO26-0024 | Batch > 2 per chip | 2026-10-23 | DONE: max batch 4 (batch-aware conv blocking); e2e batch 4 s 659.7 FPS, n 1092.6 FPS; PCC intact; batch 5 still fails |
 | YOLO26-0025 | dp=4 with batch 2 / 4 per chip | 2026-10-23 | DONE: batch 4/chip n 2561–2571 FPS, s 2347–2404 FPS; batch 2/chip n ~1868, s ~1805; one trace-capture hang (batch 2, n) |
+| YOLO26-0026 | Can one chip serve 20 camera streams at 30 FPS (600 images/s)? Live multi-stream demo | 2026-10-26 | DONE: yolo26s batch 4, 20 CAVIAR shopping-centre streams, 30.0 FPS per stream sustained 60 s with recording (599.4 images/s); ceiling 661 images/s (33 FPS per stream) |
 
 ## Entries
 
@@ -632,3 +633,76 @@ which scales with batch; the traced compute itself shows no mesh overhead (YOLO2
 
 Defect, MEASURED: dp=4 batch 2 yolo26n run 1 hung in `capture_trace_2cq` until the 600 s timeout; the next runs
 (after `tt-smi -r`) passed. Same intermittent hang as YOLO26-0021/0022; root cause still unknown.
+
+### YOLO26-0026 — 20 streams × 30 FPS on one chip, live demo (appended 2026-10-26)
+
+Question: batch 4 gives 660 FPS e2e (YOLO26-0024), i.e. 165 forwards/s of 4 images. Does that carry 20 streams × 30
+FPS = 600 images/s once real frames, letterboxing, decode, drawing and display are in the loop?
+
+Setup:
+- Videos: 20 clips of the CAVIAR shopping-centre set (Lisbon, corridor + shop-front views, 384×288, 25 FPS MPEG-2;
+  homepages.inf.ed.ac.uk/rbf/CAVIARDATA2/, CC BY-SA, credit EC-funded CAVIAR project IST 2001 37540), stored in
+  `/home/ttuser/sdawle/yolo26_store_videos/`. The server serves ~35 KB/s per connection; downloads needed resume
+  (`curl -C -`) in a retry loop.
+- `demo/multistream_demo.py`: clips decoded into memory at start (≤ 1800 frames each, looped; video decode is NOT in
+  the measured path). A pacing thread emits a tick every 1/30 s and builds 5 host batches of 4 letterboxed uint8
+  frames; the main thread runs the YOLO26PerformantRunner trace with the same 2CQ pattern as the perf test (upload of
+  batch k+1 on CQ1 overlaps trace k on CQ0, outputs to DRAM and read back on CQ1), waits on the read event of batch
+  k only after trace k+1 is queued; a post thread decodes class 0 (person, conf > 0.35, one2one head, no NMS), draws
+  a 5×4 mosaic + side panel (per-camera count, 10 s average, total, stream FPS, latency), serves MJPEG on :8090 and
+  optionally records.
+
+MEASURED (yolo26s, batch 4, chip 0, reset before each run; FPS = images processed / wall time; latency = tick
+capture → mosaic published, median of the last 200 ticks):
+
+| Run | Target | Achieved | Latency |
+|---|---|---|---|
+| first version, 300 frames/clip, no MJPEG | 600 images/s | 421.3 images/s = 21.1 FPS/stream | 74 ms |
+| host path optimized (below), MJPEG on, 30 s | 600 | 599.5 = 30.0 FPS/stream | 48 ms |
+| same, target 35 FPS/stream (above capacity), 30 s | 700 | **661.2 = 33.1 FPS/stream** (ceiling) | 112 ms |
+| full clips (≤1800 frames), no recording, 30 s | 600 | 599.6 = 30.0 | 48 ms |
+| + recording with cv2 mp4v in the post thread, 60 s | 600 | 504.9 = 25.2 | 289 ms |
+| + recording via ffmpeg libx264 veryfast subprocess, 60 s | 600 | 548.7 = 27.4 | 273 ms |
+| + ffmpeg ultrafast, 4 threads, nice 10, 60 s | 600 | **599.4 = 30.0** (36000 images, 1800/1800 frames recorded) | 90 ms |
+
+The 661 images/s ceiling equals the perf test's 659.7 FPS at batch 4: with the host path fixed, the demo pipeline
+costs no throughput; 20 × 30 FPS runs with ~10 % headroom.
+
+Host-path defects found and fixed (MEASURED, `scratchpad/host_bench.py`, per batch of 4 unless noted):
+- Letterbox wrote RGB per channel into the 8-channel input (strided numpy writes): 3.53 ms. Frames are converted once
+  at load to RGB + zero 4th byte, resized as RGBA and written as one uint32 per pixel: 0.46 ms. (The 4th byte is 0;
+  the stem weights for channels 3..7 are zero-padded anyway.)
+- Decode cast all 80 class channels to fp32 before slicing: 2.61 ms → slice first: 1.87 ms.
+- Per tick the host work (5 × prep + 5 × decode + tiles 0.7 + panel 2.0 + JPEG 6.0 ms) shares the Python GIL with the
+  device loop; before the fixes it was ~35 ms per 33.3 ms tick, hence 21 FPS.
+- Snapshot stored a reference to the live canvas: tiles of the next, partial tick overwrote it after the panel was
+  drawn, so panel and tile counts disagreed in the saved image (live MJPEG unaffected). Now copies.
+- Recording: cv2 mp4v encode of 2340×1152 in the post thread cost ~5 FPS/stream; x264 in a subprocess at default
+  threading took all 16 cores; capped to 4 threads at low priority it no longer affects throughput.
+- A "device capacity" readout (batch / loop time minus queue wait) read 1588 images/s while paced: the trace is
+  asynchronous, so host loop time is not device time. Removed rather than shown wrong.
+
+Visual check: `yolo26_demo_outputs/multistream/snapshot.jpg` (end of run) and `frame_25s.jpg` (from the recording):
+people boxed in corridor and shop-front views, tile counts equal panel counts, mannequins (CAM 20) not counted.
+Recording: `yolo26_demo_outputs/multistream/yolo26s_20streams_1chip.mp4` (60 s, 2340×1152, H.264).
+
+Limits: per-frame detection counts, no tracking (a person is counted in every frame they appear in); clips are
+25 FPS sources played at 30 FPS; decode of 20 live camera streams is not included (would take additional host cores
+or hardware decode).
+
+### YOLO26-0026 addendum (2026-10-27) — inference decoupled from rendering; per-tile FPS
+
+- MEASURED, after adding a per-tile FPS readout: recording + live MJPEG, 60 s, two runs: 28.6 and 28.3 FPS per
+  stream, latency 264–266 ms; same build without recording 30.0 FPS, 48 ms; recording without MJPEG 30.0 FPS, 49 ms.
+  The earlier 30.0 FPS with recording + MJPEG (entry above) was at the edge of the host budget.
+- ROOT CAUSE (READ, code): one post thread both decoded and rendered (draw 20 tiles + panel, JPEG encode, 8 MB copy
+  to the recorder) and `post_q` was bounded, so when rendering took longer than a 33 ms tick the device loop blocked
+  on `post_q.put`: the display throttled inference, all streams together (they are batched in lockstep). The latency
+  climbs because frames wait in the queues. The 33 FPS/stream headroom (661 images/s) is chip-side; it does not
+  cover extra host work.
+- FIX: three threads. `post` decodes every batch (~2 ms) into a shared latest-result state (unbounded queue, never
+  blocks the device loop); `render` draws only the newest completed tick, so a slow display skips display frames
+  instead of slowing inference. Panel shows inference stream FPS and display FPS separately; each tile shows that
+  stream's measured result rate over the last second (top right).
+- MEASURED (recording + live MJPEG, 60 s): 599.3 and 599.4 images/s = 30.0 FPS per stream, display 30.0 FPS,
+  latency 53–54 ms, 1799/1800 frames recorded. Per-tile readouts 30.0–30.1 FPS.
