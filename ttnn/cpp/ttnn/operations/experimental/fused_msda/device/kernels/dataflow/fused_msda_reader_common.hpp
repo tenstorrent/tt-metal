@@ -716,7 +716,7 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                         push_point_geometry(j + 1);
                     }
                     fused_msda_gather::gather_rows<ReaderGatherCfg>(
-                        noc, value_acc, pt, 0, fused_msda_gather::SPLIT_ROW);
+                        noc, value_acc, pt, 0, fused_msda_gather::SPLIT_ROW<ValueAccessor>);
                     noc.async_read_barrier();
                     // The writer also reads this point's corner tile, so it is
                     // popped only after done.

@@ -46,14 +46,19 @@ constexpr uint32_t POINT_ARGS_WORDS = sizeof(PointArgs) / sizeof(uint32_t);
 // Split gather: the reader takes rows [0, SPLIT_ROW), the writer the rest. A
 // tail block with v_rows <= SPLIT_ROW leaves the writer only zeroing.
 //
-// 16 is measured on Blackhole (D = 32: SCA in test_encoder_layer_perf.py
-// bev_100x100 and nuscenes_base in test_fused_msda_perf.py); 15 and 17 are 1-10%
-// slower. The time is not linear in the split, so re-measure rather than derive
-// it. test_fused_msda_v1_masks_out_of_bounds_corners
-// puts v_rows on SPLIT_ROW and SPLIT_ROW + 1 through its own copy of this value;
-// change both together.
-constexpr uint32_t SPLIT_ROW = 16;
-static_assert(SPLIT_ROW > 0 && SPLIT_ROW < fused_msda_tile_layout::TILE_MAX_ROWS);
+// Empirical: op device time on Blackhole, tiled geometry, D = 32 (SCA in
+// test_encoder_layer_perf.py bev_100x100 and nuscenes_base in
+// test_fused_msda_perf.py); a row either way is 1-10% slower. The time is not
+// linear in the split, so re-measure rather than derive it. Both RISCs take
+// the row from the same accessor type, so they agree on which rows they own.
+// test_fused_msda_v1_masks_out_of_bounds_corners puts v_rows on the split
+// through its own copy of these values; change both together.
+constexpr uint32_t SPLIT_ROW_L1 = 16;
+constexpr uint32_t SPLIT_ROW_DRAM = 15;
+static_assert(SPLIT_ROW_L1 > 0 && SPLIT_ROW_L1 < fused_msda_tile_layout::TILE_MAX_ROWS);
+static_assert(SPLIT_ROW_DRAM > 0 && SPLIT_ROW_DRAM < fused_msda_tile_layout::TILE_MAX_ROWS);
+template <typename ValueAccessor>
+constexpr uint32_t SPLIT_ROW = ValueAccessor::is_dram ? SPLIT_ROW_DRAM : SPLIT_ROW_L1;
 
 // Split-gather handshake. Per point, in the same (tile, level, point) order on
 // both RISCs:

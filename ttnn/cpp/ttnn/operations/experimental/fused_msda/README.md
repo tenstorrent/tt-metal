@@ -515,12 +515,12 @@ block: the reader rows `[0, SPLIT_ROW)`, the writer rows `[SPLIT_ROW, 32)`,
 through `fused_msda_gather::gather_rows` (`msda_gather_rows.hpp`, which also
 documents the handshake and how `SPLIT_ROW` was chosen).
 Per point the reader posts the point's arguments to `gather_mailbox` and bumps
-the `ready` semaphore, then pushes the next point's geometry tiles while the
-writer gathers; the writer gathers its rows, barriers and bumps `done`; the
-reader gathers its own rows and waits for `done` before it pops `x0` / `y0` and
-pushes the block. Because the reader also builds the geometry tiles, it takes
-fewer rows than the writer. Both counters only grow, and launch restarts them
-from their initial value.
+the `ready` semaphore, then (per-point geometry) pushes the next point's
+geometry tiles while the writer gathers; the writer gathers its rows, barriers and bumps `done`; the
+reader gathers its own rows and waits for `done` before it pops the corner tile
+and pushes the block. The split row is measured, not derived: 16 / 16 with
+`value` in L1 and 15 / 17 with `value` in DRAM. Both counters only grow, and
+launch restarts them from their initial value.
 
 Sharing one CB block between the reader and the writer follows conv2d's
 `split_reader_cb_shared` mode, where the reader reserves the block, the writer

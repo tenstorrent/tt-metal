@@ -122,7 +122,11 @@ void kernel_main() {
                 gather_ready.wait(++gather_seq);
                 const auto pt = fused_msda_gather::fetch_point(gather_mailbox_l1);
                 fused_msda_gather::gather_rows<WriterGatherCfg>(
-                    noc, value_acc, pt, fused_msda_gather::SPLIT_ROW, fused_msda_tile_layout::TILE_MAX_ROWS);
+                    noc,
+                    value_acc,
+                    pt,
+                    fused_msda_gather::SPLIT_ROW<decltype(value_acc)>,
+                    fused_msda_tile_layout::TILE_MAX_ROWS);
                 noc.async_read_barrier();
                 // Keeps the plain zero stores above ahead of the done store;
                 // see the ordering note in msda_gather_rows.hpp.
