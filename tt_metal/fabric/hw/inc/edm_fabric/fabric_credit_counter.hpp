@@ -83,6 +83,15 @@ FORCE_INLINE void fabric_credit_counter_add_with_state(
         InlineWriteDst::REG>(0, counter.reg_addr, cmd_buf, noc);
 }
 
+// Software credits: write a producer's free-running write count @p write_count into the SenderChannelProducerCursor
+// write_counter at L1 address @p write_counter_addr on core (@p noc_x, @p noc_y), once every non-posted write this core
+// issued on @p noc has landed. Posted writes are not covered.
+FORCE_INLINE void fabric_publish_producer_write_count(
+    uint8_t noc_x, uint8_t noc_y, uint32_t write_counter_addr, uint32_t write_count, uint8_t noc = noc_index) {
+    noc_async_writes_flushed(noc);
+    noc_inline_dw_write<InlineWriteDst::L1>(get_noc_addr(noc_x, noc_y, write_counter_addr, noc), write_count, 0xF, noc);
+}
+
 // A producer connecting to a router found @p router_credit_mode (EDMChannelWorkerLocationInfo::credit_mode) differ from
 // its own: the router would poll a credit nobody writes. Never returns; the waypoint names the hang for the watcher.
 [[noreturn]] inline void fabric_credit_mode_mismatch(uint32_t /*router_credit_mode*/) {
