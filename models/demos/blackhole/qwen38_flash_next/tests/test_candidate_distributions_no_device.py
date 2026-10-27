@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The batched candidate distributions of one MTP pass, without a device.
+"""The batched candidate distributions of one MTP pass and ``accept_pass`` on them, without a device.
 
 Every batched row equals the per-row ``candidate_distribution`` bitwise and falls back or refuses where it does;
-``accept_pass`` on the batched rows equals the per-row acceptance to the draw.
+``accept_pass`` on the batched rows equals the per-row acceptance to the draw, with each row's history, the fallback
+to the full rows and the request's ledger.
 """
 
 from __future__ import annotations
@@ -15,6 +16,13 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_sampling import (
+    SAMPLING_PEAK_LIMIT,
+    sampling_host_rows,
+    sampling_logits,
+    sampling_parameters,
+    sampling_verify_head,
+)
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling as step
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_v2
 from models.demos.blackhole.qwen38_flash_next.ttnn import speculative_sampling as spec
@@ -38,49 +46,26 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import (
 )
 
 K = 4
-PEAK_LIMIT = 200_000  # peaks below the tokenizer size
 
 
-# --- synthetic passes ---------------------------------------------------------------------------------------------------
-
-
-def _logits(seed: int, *, peaks: int = 24, lift: float = 16.0, spread: float = 8.0, shift: float = 2.0) -> torch.Tensor:
-    generator = torch.Generator().manual_seed(seed)
-    row = torch.randn(VOCAB_SIZE, generator=generator) * 2.5 + shift
-    ids = torch.randperm(PEAK_LIMIT, generator=generator)[:peaks]
-    row[ids] = lift + torch.rand(peaks, generator=generator) * spread
-    return row.to(torch.bfloat16)
+# --- synthetic passes -------------------------------------------------------------------------------------------------
 
 
 def _tie_row(seed: int) -> torch.Tensor:
     """Shard 0's k-th value ties with unread ids: the guard fails at ``top_k`` 32 (and below, the kept minimum sits at
     the floor whenever the tie fills the kept set)."""
 
-    row = _logits(seed)
+    row = sampling_logits(seed, below_tokenizer=True)
     row[: SAMPLING_CANDIDATES_PER_DEVICE + 10] = 25.0
     return row
 
 
-def _custom(**fields) -> Qwen38SamplingParameters:
-    base = {"temperature": 1.0, "top_p": 1.0, "top_k": 20, "presence_penalty": 0.0, "seed": 0}
-    base.update(fields)
-    return Qwen38SamplingParameters(**base)
-
-
-def _pass_logits(seed: int, *, rows: int = K + 1, **fields) -> list[torch.Tensor]:
-    return [_logits(seed * 100 + row, **fields) for row in range(rows)]
-
-
-def _negative_pass_logits(seed: int) -> list[torch.Tensor]:
-    """Rows whose every candidate is negative (the noise around -40, forty peaks in [-20, -12]: about ten per shard, so
-    the shards' top-32 hold them all and the kept set stays above the floor): the repetition rule multiplies them."""
-
-    return _pass_logits(seed, peaks=40, lift=-20.0, spread=8.0, shift=-40.0)
+def _pass_logits(seed: int, **fields) -> list[torch.Tensor]:
+    return [sampling_logits(seed * 100 + row, below_tokenizer=True, **fields) for row in range(K + 1)]
 
 
 def _candidate_rows(rows_logits: list[torch.Tensor]) -> Qwen38CandidateRows:
-    host = torch.stack([Qwen38CandidateRow.emulate(logits).to_host_row().reshape(-1) for logits in rows_logits])
-    return Qwen38CandidateRows.from_host_rows(host)
+    return Qwen38CandidateRows.from_host_rows(sampling_host_rows(rows_logits))
 
 
 def _argmaxes(rows_logits: list[torch.Tensor]) -> list[int]:
@@ -120,13 +105,13 @@ def _committed(rows: Qwen38CandidateRows, tokens: list[int]) -> list[int]:
 PROCESSORS = {
     "thinking": Qwen38SamplingParameters.official_thinking(seed=3),
     "non_thinking": Qwen38SamplingParameters.official_non_thinking(seed=5),
-    "top_k_1": _custom(top_k=1, temperature=2.0, seed=9),
-    "top_k_32_nucleus_min_p": _custom(top_k=32, top_p=0.9, min_p=0.05, temperature=0.8, seed=7),
-    "cold_nucleus": _custom(top_k=20, top_p=0.5, temperature=0.3, seed=13),
-    "presence": _custom(top_k=20, presence_penalty=0.9, seed=15),
-    "frequency": _custom(top_k=24, frequency_penalty=0.4, temperature=1.1, seed=17),
-    "repetition": _custom(top_k=28, repetition_penalty=1.25, seed=19),
-    "all_penalties_min_p": _custom(
+    "top_k_1": sampling_parameters(top_k=1, temperature=2.0, seed=9),
+    "top_k_32_nucleus_min_p": sampling_parameters(top_k=32, top_p=0.9, min_p=0.05, temperature=0.8, seed=7),
+    "cold_nucleus": sampling_parameters(top_k=20, top_p=0.5, temperature=0.3, seed=13),
+    "presence": sampling_parameters(top_k=20, presence_penalty=0.9, seed=15),
+    "frequency": sampling_parameters(top_k=24, frequency_penalty=0.4, temperature=1.1, seed=17),
+    "repetition": sampling_parameters(top_k=28, repetition_penalty=1.25, seed=19),
+    "all_penalties_min_p": sampling_parameters(
         top_k=30,
         top_p=0.95,
         min_p=0.02,
@@ -139,7 +124,7 @@ PROCESSORS = {
 }
 
 
-# --- the per-row reference and the bitwise comparison ------------------------------------------------------------------
+# --- the per-row reference and the bitwise comparison -----------------------------------------------------------------
 
 
 def _reference(
@@ -218,7 +203,9 @@ def test_negative_candidate_scores_take_the_repetition_rules_multiplying_branch_
     parameters = PROCESSORS[processor]
     exact = 0
     for seed in range(4):
-        rows_logits = _negative_pass_logits(60 + seed)
+        # Every candidate negative (the noise around -40, forty peaks in [-20, -12]: about ten per shard, so the
+        # shards' top-32 hold them all and the kept set stays above the floor): the repetition rule multiplies them.
+        rows_logits = _pass_logits(60 + seed, peaks=40, lift=-20.0, spread=8.0, shift=-40.0)
         rows = _candidate_rows(rows_logits)
         assert bool((rows.values < 0).all())  # every candidate score negative: a hit is multiplied, not divided
         tokens = _argmaxes(rows_logits)
@@ -245,9 +232,13 @@ def test_every_admitted_top_k_matches_the_per_row_function() -> None:
     exact = 0
     for top_k in range(1, SAMPLING_CANDIDATES_PER_DEVICE + 1):
         for parameters in (
-            _custom(top_k=top_k),
-            _custom(top_k=top_k, top_p=0.85, min_p=0.03, temperature=0.75, presence_penalty=0.6, seed=top_k),
-            _custom(top_k=top_k, frequency_penalty=0.2, repetition_penalty=1.1, temperature=1.3, seed=top_k),
+            sampling_parameters(top_k=top_k),
+            sampling_parameters(
+                top_k=top_k, top_p=0.85, min_p=0.03, temperature=0.75, presence_penalty=0.6, seed=top_k
+            ),
+            sampling_parameters(
+                top_k=top_k, frequency_penalty=0.2, repetition_penalty=1.1, temperature=1.3, seed=top_k
+            ),
         ):
             batched = candidate_distributions(
                 rows, parameters, token_history=committed, row_tokens=tokens, prompt_tokens=3
@@ -262,7 +253,10 @@ def test_guard_failures_fall_back_on_the_same_rows_with_the_same_message() -> No
     rows_logits[3] = _tie_row(3003)
     rows = _candidate_rows(rows_logits)
     tokens = _argmaxes(rows_logits)
-    for parameters in (_custom(top_k=32, seed=23), _custom(top_k=32, top_p=0.9, presence_penalty=1.0, seed=24)):
+    for parameters in (
+        sampling_parameters(top_k=32, seed=23),
+        sampling_parameters(top_k=32, top_p=0.9, presence_penalty=1.0, seed=24),
+    ):
         batched = candidate_distributions(rows, parameters, token_history=[1, 2, 3], row_tokens=tokens, prompt_tokens=2)
         assert [isinstance(outcome, Qwen38CandidateFallback) for outcome in batched.outcomes] == [
             False,
@@ -280,35 +274,42 @@ def test_refusals_and_whole_pass_fallbacks_match_the_per_row_function(expect_err
     rows = _candidate_rows(rows_logits)
     tokens = _argmaxes(rows_logits)
     committed = [1, 2, 3]
-    for parameters in (_custom(top_k=0), _custom(presence_penalty=-0.5), _custom(frequency_penalty=-0.1)):
+    for parameters in (
+        sampling_parameters(top_k=0),
+        sampling_parameters(presence_penalty=-0.5),
+        sampling_parameters(frequency_penalty=-0.1),
+    ):
         batched = candidate_distributions(rows, parameters, token_history=committed, row_tokens=tokens, prompt_tokens=1)
         assert _assert_bitwise(batched, _reference(rows, parameters, committed, tokens, 1)) == (0, K + 1)
     with expect_error(Qwen38SamplingError, match="exceeds the candidate limit"):
-        candidate_distributions(rows, _custom(top_k=33), token_history=committed, row_tokens=tokens)
+        candidate_distributions(rows, sampling_parameters(top_k=33), token_history=committed, row_tokens=tokens)
     with expect_error(ValueError, match="temperature > 0"):
-        candidate_distributions(rows, _custom(temperature=0.0), token_history=committed, row_tokens=tokens)
+        candidate_distributions(rows, sampling_parameters(temperature=0.0), token_history=committed, row_tokens=tokens)
     with expect_error(ValueError, match="prompt_tokens must be an integer in \\[0, 4\\]"):
-        candidate_distributions(rows, _custom(), token_history=committed, row_tokens=tokens, prompt_tokens=5)
+        candidate_distributions(
+            rows, sampling_parameters(), token_history=committed, row_tokens=tokens, prompt_tokens=5
+        )
     with expect_error(ValueError, match="prompt_tokens"):  # the per-row function raises for row 0 too
-        candidate_distribution(rows.row(0), _custom(), token_history=[*committed, tokens[0]], prompt_tokens=5)
+        candidate_distribution(
+            rows.row(0), sampling_parameters(), token_history=[*committed, tokens[0]], prompt_tokens=5
+        )
     with expect_error(ValueError, match="one token per row"):
-        candidate_distributions(rows, _custom(), token_history=committed, row_tokens=tokens[:-1])
+        candidate_distributions(rows, sampling_parameters(), token_history=committed, row_tokens=tokens[:-1])
     with expect_error(TypeError, match="integer token IDs"):
-        candidate_distributions(rows, _custom(), token_history=[1, 2.5], row_tokens=tokens)
+        candidate_distributions(rows, sampling_parameters(), token_history=[1, 2.5], row_tokens=tokens)
     with expect_error(ValueError, match="outside"):
-        candidate_distributions(rows, _custom(), token_history=[1, VOCAB_SIZE], row_tokens=tokens)
+        candidate_distributions(rows, sampling_parameters(), token_history=[1, VOCAB_SIZE], row_tokens=tokens)
     with expect_error(TypeError, match="integer token IDs"):
-        candidate_distributions(rows, _custom(), token_history=committed, row_tokens=[*tokens[:-1], True])
+        candidate_distributions(rows, sampling_parameters(), token_history=committed, row_tokens=[*tokens[:-1], True])
     with expect_error(TypeError, match="Qwen38CandidateRows"):
-        candidate_distributions(rows.row(0), _custom(), token_history=committed, row_tokens=tokens)
+        candidate_distributions(rows.row(0), sampling_parameters(), token_history=committed, row_tokens=tokens)
     # an empty committed stream: the rows' histories are the pass's own tokens
     batched = candidate_distributions(rows, PROCESSORS["all_penalties_min_p"], row_tokens=tokens, prompt_tokens=0)
     assert _assert_bitwise(batched, _reference(rows, PROCESSORS["all_penalties_min_p"], [], tokens, 0))[0] >= K
 
 
 def test_candidate_rows_parse_like_the_per_row_parser(expect_error) -> None:
-    rows_logits = _pass_logits(9)
-    host = torch.stack([Qwen38CandidateRow.emulate(logits).to_host_row().reshape(-1) for logits in rows_logits])
+    host = sampling_host_rows(_pass_logits(9))
     rows = Qwen38CandidateRows.from_host_rows(host)
     assert rows.rows == K + 1 and rows.values.dtype == torch.float32 and rows.ids.dtype == torch.int64
     for row in range(K + 1):
@@ -337,10 +338,8 @@ def test_candidate_rows_parse_like_the_per_row_parser(expect_error) -> None:
         Qwen38CandidateRows.from_host_rows(host.to(torch.float64))
 
 
-def test_row_distribution_unchecked_construction_is_the_batched_builders_shortcut(expect_error) -> None:
-    tokens, probabilities = torch.tensor([1, 1]), torch.tensor([0.5, 0.5])
-    with expect_error(ValueError, match="every token once"):
-        Qwen38RowDistribution(tokens, probabilities)
+def test_row_distribution_unchecked_construction_is_the_batched_builders_shortcut() -> None:
+    tokens, probabilities = torch.tensor([1, 1]), torch.tensor([0.5, 0.5])  # the validation refuses the repeat
     assert Qwen38RowDistribution(tokens, probabilities, False).tokens is tokens
     rows_logits = _pass_logits(10)
     rows = _candidate_rows(rows_logits)
@@ -352,7 +351,7 @@ def test_row_distribution_unchecked_construction_is_the_batched_builders_shortcu
         Qwen38RowDistribution(distribution.tokens, distribution.probabilities)
 
 
-# --- accept_pass on the batched rows is the per-row acceptance to the draw ---------------------------------------------
+# --- accept_pass on the batched rows is the per-row acceptance to the draw --------------------------------------------
 
 
 class _FakeChain:
@@ -363,17 +362,6 @@ class _FakeChain:
     def mtp_read_full_logits_rows(self) -> torch.Tensor:
         self.full_reads += 1
         return self.full_rows
-
-
-def _head(rows_logits: list[torch.Tensor], drafts: list[int]) -> mtp_v2.Qwen38TTNNVerifyHeadReadback:
-    argmaxes = _argmaxes(rows_logits)
-    accepted = 0
-    while accepted < len(drafts) and argmaxes[accepted] == drafts[accepted]:
-        accepted += 1
-    candidate_rows = torch.stack(
-        [Qwen38CandidateRow.emulate(logits).to_host_row().reshape(-1) for logits in rows_logits]
-    )
-    return mtp_v2.Qwen38TTNNVerifyHeadReadback(accepted, argmaxes[accepted], tuple(argmaxes), candidate_rows)
 
 
 def _accept_pass_per_row(session, request, prompt_tokens, tokens, head) -> mtp_v2.Qwen38TTNNVerifyDecision:
@@ -422,11 +410,12 @@ def _accept_pass_per_row(session, request, prompt_tokens, tokens, head) -> mtp_v
 
 def _same_decision(
     parameters: Qwen38SamplingParameters, committed: list[int], prompt: int, tokens: list[int], rows_logits: list
-) -> tuple[mtp_v2.Qwen38TTNNVerifyDecision, int]:
-    """Both implementations on the same pass from the same seed; the shared decision and the full-logit reads."""
+) -> tuple[mtp_v2.Qwen38TTNNVerifyDecision, step.Qwen38SamplingRequest, int]:
+    """Both implementations on the same pass from the same seed; the shared decision, the request ``accept_pass``
+    decided for and its full-logit reads."""
 
     full_rows = torch.stack([logits.to(torch.float32) for logits in rows_logits])
-    head = _head(rows_logits, tokens[1:])
+    head = sampling_verify_head(rows_logits, tokens[1:])
     sessions = [SimpleNamespace(committed=list(committed), chain=_FakeChain(full_rows)) for _ in range(2)]
     requests = [step.Qwen38SamplingRequest(parameters) for _ in range(2)]
     new = step.accept_pass(sessions[0], requests[0], prompt, tokens, head)
@@ -436,7 +425,53 @@ def _same_decision(
     assert torch.equal(requests[0].generator.get_state(), requests[1].generator.get_state())  # the same draws consumed
     assert requests[0].mtp == requests[1].mtp
     assert sessions[0].chain.full_reads == sessions[1].chain.full_reads == int(bool(new.statistics["fallbacks"]))
-    return new, sessions[0].chain.full_reads
+    return new, requests[0], sessions[0].chain.full_reads
+
+
+def test_accept_pass_uses_the_committed_stream_plus_the_earlier_rows_as_each_rows_history() -> None:
+    parameters = sampling_parameters(presence_penalty=1.5, frequency_penalty=0.5, repetition_penalty=1.1, seed=17)
+    prompt = [5, 6, 7]
+    committed = prompt + [11, 12]
+    rows_logits = [sampling_logits(200 + row, peaks=8, below_tokenizer=True) for row in range(K + 1)]
+    tokens = _argmaxes(rows_logits)
+    tokens[1] = tokens[2]  # a draft repeated inside the pass (row 2's own argmax): row 2's history counts it twice
+    # The per-row reference: the design's histories (committed + tokens[: row + 1]) and the request's draws.
+    decision, request, full_reads = _same_decision(parameters, committed, len(prompt), tokens, rows_logits)
+    assert decision.statistics["fallbacks"] == 0 == full_reads and request.mtp.passes == 1
+    assert request.mtp.draws == decision.statistics["draws"]
+    # Row 2's history holds the draft twice: its presence and frequency penalties lower that token's probability.
+    row, history = Qwen38CandidateRow.emulate(rows_logits[2]), committed + tokens[:3]
+    plain = candidate_distribution(row, sampling_parameters(seed=17), token_history=history, prompt_tokens=len(prompt))
+    penalized = candidate_distribution(row, parameters, token_history=history, prompt_tokens=len(prompt))
+    assert penalized.probability(tokens[1]) < plain.probability(tokens[1])
+    # The prompt's tokens are exempt from the additive penalties but not from the repetition rule.
+    row, history = Qwen38CandidateRow.emulate(rows_logits[0]), committed + tokens[:1]
+    exempt = candidate_distribution(row, parameters, token_history=history, prompt_tokens=len(committed) + 1)
+    output = candidate_distribution(row, parameters, token_history=history, prompt_tokens=0)
+    assert exempt.probability(tokens[0]) >= output.probability(tokens[0])
+    assert request.as_dict()["mtp"] is None  # the session marks the request drafted; until then no counters
+    request.mtp_drafting = "drafted"
+    reported = request.as_dict()["mtp"]
+    assert reported["passes"] == 1 and reported["rows_drawn"] == len(decision.statistics["acceptance_probabilities"])
+    assert sum(reported["acceptance_probability_histogram"]) == reported["rows_drawn"]
+
+
+def test_accept_pass_falls_back_to_the_full_rows_exactly_where_the_candidate_guard_fails(expect_error) -> None:
+    parameters = sampling_parameters(top_k=32, seed=23)
+    rows_logits = [sampling_logits(300 + row, peaks=8, below_tokenizer=True) for row in range(4)]
+    rows_logits[1][: SAMPLING_CANDIDATES_PER_DEVICE + 10] = 25.0  # shard 0's k-th value ties with unread ids
+    tokens = _argmaxes(rows_logits)
+    rows_logits[0][tokens[1]] = 60.0  # row 0 all but surely accepts d_1, so row 1 is built and falls back
+    with expect_error(Qwen38CandidateFallback):  # the guard fails on row 1
+        candidate_distribution(
+            Qwen38CandidateRow.emulate(rows_logits[1]), parameters, token_history=[1, 2, *tokens[:2]]
+        )
+    decision, request, full_reads = _same_decision(parameters, [1, 2], 2, tokens, rows_logits)
+    assert decision.accepted >= 1 and decision.statistics["fallbacks"] == 1 == full_reads == request.mtp.fallbacks
+    with expect_error(ValueError, match="candidate rows"):
+        step.accept_pass(
+            SimpleNamespace(committed=[1, 2]), request, 2, tokens[:-1], sampling_verify_head(rows_logits, tokens[1:])
+        )
 
 
 @pytest.mark.parametrize("processor", ["thinking", "non_thinking", "all_penalties_min_p", "top_k_1", "cold_nucleus"])
@@ -461,7 +496,7 @@ def test_accept_pass_is_the_per_row_acceptance_for_every_seed(processor: str) ->
         if seed % 6 == 2:
             committed.append(tokens[1])
         prompt = (3, len(committed), len(committed) + 1)[seed % 3]
-        decision, full_reads = _same_decision(parameters, committed, prompt, tokens, rows_logits)
+        decision, _, full_reads = _same_decision(parameters, committed, prompt, tokens, rows_logits)
         accepted_seen.add(decision.accepted)
         fallback_passes += full_reads
     assert len(accepted_seen) >= 3, accepted_seen  # rejections at several rows and passes accepting every draft
@@ -472,11 +507,11 @@ def test_a_fallback_row_past_the_first_rejection_is_neither_counted_nor_read() -
     rows_logits = _pass_logits(40)
     rows_logits[2] = _tie_row(4002)
     tokens = _argmax_drafts(rows_logits)
-    tokens[1] = PEAK_LIMIT + 1  # a draft no candidate row holds: row 0 rejects it with probability 1
-    parameters = _custom(top_k=32, seed=41)
+    tokens[1] = SAMPLING_PEAK_LIMIT + 1  # a draft no candidate row holds: row 0 rejects it with probability 1
+    parameters = sampling_parameters(top_k=32, seed=41)
     rows = _candidate_rows(rows_logits)
     batched = candidate_distributions(rows, parameters, token_history=[1, 2], row_tokens=tokens, prompt_tokens=2)
     assert isinstance(batched.outcomes[2], Qwen38CandidateFallback)  # known to the builder
-    decision, full_reads = _same_decision(parameters, [1, 2], 2, tokens, rows_logits)
+    decision, _, full_reads = _same_decision(parameters, [1, 2], 2, tokens, rows_logits)
     assert decision.accepted == 0 and decision.statistics["fallbacks"] == 0 and full_reads == 0  # never asked for
     assert decision.statistics["draws"] == 2 and decision.statistics["acceptance_probabilities"] == (0.0,)

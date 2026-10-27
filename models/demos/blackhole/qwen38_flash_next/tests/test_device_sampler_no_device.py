@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_sampling import sampling_logits, sampling_parameters
 from models.demos.blackhole.qwen38_flash_next.ttnn import device_sampler as ds
 from models.demos.blackhole.qwen38_flash_next.ttnn.embedding import (
     SAMPLING_CANDIDATE_ROW_SHAPE,
@@ -32,7 +33,6 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import (
 )
 
 K = SAMPLING_CANDIDATES_PER_DEVICE
-PEAK_IDS = (95_859, 248_044, 248_319, 7, 62_086, 131_071)
 TF32_SIGNIFICANT_BITS = 11
 TEMPERATURES = (0.1, 0.5, 0.7, 1.0, 1.5, 4.0)
 TOP_PS = (0.5, 0.8, 0.95, 1.0)
@@ -41,25 +41,8 @@ MIN_PS = (0.0, 0.05, 1.0)
 EDGE_UNIFORMS = (0.0, 2.0**-24, 1.0 - 2.0**-24)
 
 
-def _logits(seed: int, *, peaks: int = 24, scale: float = 2.5) -> torch.Tensor:
-    """A bf16 logit row at model scale: a wide body plus a few dozen peaks (some at the probe ids)."""
-
-    generator = torch.Generator().manual_seed(seed)
-    row = torch.randn(VOCAB_SIZE, generator=generator) * scale + 2.0
-    ids = torch.randperm(VOCAB_SIZE, generator=generator)[:peaks].tolist() + list(PEAK_IDS)
-    row[ids] = 16.0 + torch.rand(len(ids), generator=generator) * 8.0
-    return row.to(torch.bfloat16)
-
-
 def _host_row(bf16: torch.Tensor) -> torch.Tensor:
     return Qwen38CandidateRow.emulate(bf16).to_host_row()
-
-
-def _tf32(x: torch.Tensor) -> torch.Tensor:
-    x = x.to(torch.float32)
-    _, exponent = torch.frexp(x)
-    quantum = torch.ldexp(torch.ones_like(x), exponent - TF32_SIGNIFICANT_BITS)
-    return torch.round(x / quantum) * quantum
 
 
 # --- a torch model of the device ops the composite uses ------------------------------------------------------
@@ -217,7 +200,12 @@ class FakeTTNN:
     def _fpu_inputs(self, *tensors: torch.Tensor) -> None:
         for data in tensors:
             self.fpu_inputs.append(data)
-            assert torch.equal(_tf32(data), data), "an FPU stage read a value that is not TF32-exact"
+            x = data.to(torch.float32)
+            _, exponent = torch.frexp(x)
+            quantum = torch.ldexp(torch.ones_like(x), exponent - TF32_SIGNIFICANT_BITS)
+            assert torch.equal(
+                torch.round(x / quantum) * quantum, data
+            ), "an FPU stage read a value that is not TF32-exact"
 
     def sum(self, tensor, dim, keepdim=True, memory_config=None):
         self.ops.append("sum")
@@ -287,7 +275,7 @@ def test_composite_on_the_device_model_equals_the_reference_bitwise(fake) -> Non
     cases = 0
     tokens = Counter()
     for seed in range(6):
-        host_row = _host_row(_logits(seed, scale=2.5 + seed))
+        host_row = _host_row(sampling_logits(seed, scale=2.5 + seed))
         values, ids = ds.candidate_row_lanes(host_row)
         for policy in _policies():
             table = ds.weight_table(policy.temperature)
@@ -303,7 +291,7 @@ def test_composite_on_the_device_model_equals_the_reference_bitwise(fake) -> Non
 
 
 def test_many_draws_on_one_row_follow_the_reference_and_cover_the_kept_set(fake) -> None:
-    host_row = _host_row(_logits(11))
+    host_row = _host_row(sampling_logits(11))
     values, ids = ds.candidate_row_lanes(host_row)
     policy = ds.Qwen38DeviceSamplerPolicy(temperature=1.0, top_k=20, top_p=0.95, min_p=0.0)
     stream = UniformStream(7)
@@ -322,7 +310,7 @@ def test_many_draws_on_one_row_follow_the_reference_and_cover_the_kept_set(fake)
 
 def test_greedy_flag_selects_the_resolves_row_bitwise_whatever_the_parameters(fake) -> None:
     for seed, greedy_id in ((1, 95_859), (2, 0), (3, 248_319), (4, 62_086)):
-        bf16 = _logits(seed)
+        bf16 = sampling_logits(seed)
         bf16[95_859] = bf16[248_044] = 40.0  # a cross-shard tie: the resolve's owner rule decides, not the sampler
         host_row = _host_row(bf16)
         for policy in list(_policies())[::37]:
@@ -339,7 +327,7 @@ def test_greedy_flag_selects_the_resolves_row_bitwise_whatever_the_parameters(fa
 
 
 def test_ties_are_broken_by_lane_order_and_exchange_only_equal_logits(fake) -> None:
-    bf16 = _logits(5, peaks=0)
+    bf16 = sampling_logits(5, peaks=0)
     bf16[:K] = 25.0  # shard 0: a whole tie group at the top, straddling top_k and top_p
     bf16[62_080 : 62_080 + 8] = 25.0  # shard 1: the same value
     bf16[124_160 : 124_160 + 40] = 24.0  # shard 2: a tie at its 32nd value (topk picks members)
@@ -360,13 +348,8 @@ def test_ties_are_broken_by_lane_order_and_exchange_only_equal_logits(fake) -> N
             # The same tie rule as the host samplers (lowest global id): the candidate sampler on the same row
             # agrees; against the full vocabulary the token has the same bf16 logit (the read set at shard 2's
             # 32nd value is torch.topk's choice among the tie).
-            parameters = Qwen38SamplingParameters(
-                temperature=policy.temperature,
-                top_p=policy.top_p,
-                top_k=policy.top_k,
-                presence_penalty=0.0,
-                seed=3,
-                min_p=policy.min_p,
+            parameters = sampling_parameters(
+                temperature=policy.temperature, top_p=policy.top_p, top_k=policy.top_k, seed=3, min_p=policy.min_p
             )
             try:
                 candidate = sample_candidates(
@@ -391,17 +374,9 @@ def test_ties_are_broken_by_lane_order_and_exchange_only_equal_logits(fake) -> N
         assert _run_composite(fake, host_row, 0, policy, uniform)[0] == expected.token_id
 
 
-class _OneShot:
-    """A UniformStream stand-in that yields one fixed draw (so the host sampler consumes the same ``u``)."""
-
-    def __init__(self, uniform: float, seed: int = 3) -> None:
-        self.uniform, self.seed = uniform, seed
-
-    def next_uniform(self) -> float:
-        return self.uniform
-
-
 def _one_shot(uniform: float) -> UniformStream:
+    """A UniformStream of seed 3 that yields one fixed draw (so the host sampler consumes the same ``u``)."""
+
     stream = UniformStream(3)
     stream.next_uniform = lambda: uniform  # type: ignore[method-assign]
     return stream
@@ -419,7 +394,7 @@ def test_table_and_prefix_invariants(expect_error) -> None:
         assert float(table[1]) < ds.WEIGHT_ONE  # the grid resolves one step at the largest temperature
     with expect_error(ValueError, match="temperature"):
         ds.weight_table(4.5)
-    host_row = _host_row(_logits(9))
+    host_row = _host_row(sampling_logits(9))
     values, ids = ds.candidate_row_lanes(host_row)
     for policy in list(_policies())[::7]:
         sample = ds.device_sampler_reference(values, ids, policy, 0.25)
@@ -443,15 +418,16 @@ def test_policy_routing_from_parameters(expect_error) -> None:
     assert policy == ds.Qwen38DeviceSamplerPolicy(temperature=1.0, top_k=20, top_p=0.95, min_p=0.0)
     # Penalties, temperature above the table's range and top_k 0 keep the host loop.
     assert ds.Qwen38DeviceSamplerPolicy.from_parameters(Qwen38SamplingParameters.official_non_thinking(seed=1)) is None
-    base = {"temperature": 1.0, "top_p": 1.0, "top_k": 20, "presence_penalty": 0.0, "seed": 0}
-    assert (
-        ds.Qwen38DeviceSamplerPolicy.from_parameters(Qwen38SamplingParameters(**{**base, "temperature": 4.5})) is None
-    )
-    assert ds.Qwen38DeviceSamplerPolicy.from_parameters(Qwen38SamplingParameters(**{**base, "top_k": 0})) is None
-    assert ds.Qwen38DeviceSamplerPolicy.from_parameters(Qwen38SamplingParameters(**{**base, "top_k": 33})) is None
-    for penalty in ({"frequency_penalty": 0.1}, {"presence_penalty": 1.5}, {"repetition_penalty": 1.1}):
-        assert ds.Qwen38DeviceSamplerPolicy.from_parameters(Qwen38SamplingParameters(**{**base, **penalty})) is None
-    assert ds.Qwen38DeviceSamplerPolicy.from_parameters(Qwen38SamplingParameters(**{**base, "min_p": 0.1})).min_p == 0.1
+    for host in (
+        {"temperature": 4.5},
+        {"top_k": 0},
+        {"top_k": 33},
+        {"frequency_penalty": 0.1},
+        {"presence_penalty": 1.5},
+        {"repetition_penalty": 1.1},
+    ):
+        assert ds.Qwen38DeviceSamplerPolicy.from_parameters(sampling_parameters(**host)) is None
+    assert ds.Qwen38DeviceSamplerPolicy.from_parameters(sampling_parameters(min_p=0.1)).min_p == 0.1
     for bad in ({"top_k": 0}, {"top_k": 33}, {"top_p": 0.0}, {"min_p": 1.5}, {"temperature": 0.0}):
         with expect_error(ValueError):
             ds.Qwen38DeviceSamplerPolicy(**{"temperature": 1.0, "top_k": 20, "top_p": 1.0, "min_p": 0.0, **bad})
@@ -462,43 +438,18 @@ def test_policy_routing_from_parameters(expect_error) -> None:
 # --- T5: the reference against the host sampler under the same draw ----------------------------------------------
 
 
-def _classify(values, ids, policy, uniform, actual: int, host: int) -> str:
-    """Why the device reference and the host sampler chose differently: an equal-logit exchange, or a draw / top-p
-    boundary within the weight quantization."""
-
-    if float(values[(ids == actual).nonzero()[0, 0]]) == float(values[(ids == host).nonzero()[0, 0]]):
-        return "equal_logit_exchange"
-    order = torch.sort(values, descending=True, stable=True).indices
-    scaled = (values[order][: policy.top_k] / policy.temperature).to(torch.float64)
-    probabilities = torch.softmax(scaled, dim=0)
-    cumulative = torch.cumsum(probabilities, dim=0)
-    tolerance = 2.0**-9
-    if bool((torch.abs(cumulative - uniform) < tolerance).any()):
-        return "draw_within_quantization_of_a_boundary"
-    if bool((torch.abs(cumulative - policy.top_p) < tolerance).any()):
-        return "top_p_boundary_within_quantization"
-    if policy.min_p > 0 and bool((torch.abs(probabilities / probabilities[0] - policy.min_p) < tolerance).any()):
-        return "min_p_boundary_within_quantization"
-    return "unclassified"
-
-
 def test_reference_agrees_with_the_host_sampler_except_at_quantization_boundaries() -> None:
     classes = Counter()
     total = 0
     stream = UniformStream(20260906)
     for seed in range(8):
-        bf16 = _logits(40 + seed, scale=2.5 + seed % 3)
+        bf16 = sampling_logits(40 + seed, scale=2.5 + seed % 3)
         host_row = _host_row(bf16)
         row = Qwen38CandidateRow.from_host_row(host_row)
         values, ids = ds.candidate_row_lanes(host_row)
         for policy in list(_policies())[::5]:
-            parameters = Qwen38SamplingParameters(
-                temperature=policy.temperature,
-                top_p=policy.top_p,
-                top_k=policy.top_k,
-                presence_penalty=0.0,
-                seed=3,
-                min_p=policy.min_p,
+            parameters = sampling_parameters(
+                temperature=policy.temperature, top_p=policy.top_p, top_k=policy.top_k, seed=3, min_p=policy.min_p
             )
             for _ in range(8):
                 uniform = stream.next_uniform()
@@ -508,8 +459,24 @@ def test_reference_agrees_with_the_host_sampler_except_at_quantization_boundarie
                 total += 1
                 if host.token_id == expected.token_id:
                     classes["agree"] += 1
+                    continue
+                # Why they chose differently: an equal-logit exchange, or a draw / top-p / min-p boundary within the
+                # weight quantization.
+                order = torch.sort(values, descending=True, stable=True).indices
+                probabilities = torch.softmax((values[order][: policy.top_k] / policy.temperature).double(), dim=0)
+                cumulative, tolerance = torch.cumsum(probabilities, dim=0), 2.0**-9
+                if float(values[ids == expected.token_id][0]) == float(values[ids == host.token_id][0]):
+                    classes["equal_logit_exchange"] += 1
+                elif bool((torch.abs(cumulative - uniform) < tolerance).any()):
+                    classes["draw_within_quantization_of_a_boundary"] += 1
+                elif bool((torch.abs(cumulative - policy.top_p) < tolerance).any()):
+                    classes["top_p_boundary_within_quantization"] += 1
+                elif policy.min_p > 0 and bool(
+                    (torch.abs(probabilities / probabilities[0] - policy.min_p) < tolerance).any()
+                ):
+                    classes["min_p_boundary_within_quantization"] += 1
                 else:
-                    classes[_classify(values, ids, policy, uniform, expected.token_id, host.token_id)] += 1
+                    classes["unclassified"] += 1
     # The same read row, the same tie rule (lowest global id): the two differ only at the quantization boundaries.
     assert classes["unclassified"] == 0 and classes["equal_logit_exchange"] == 0, classes
     assert classes["agree"] / total >= 0.995, classes
@@ -519,7 +486,7 @@ def test_reference_agrees_with_the_host_sampler_except_at_quantization_boundarie
 def test_kept_distribution_is_close_to_the_filtered_softmax() -> None:
     worst = 0.0
     for seed in range(20):
-        host_row = _host_row(_logits(60 + seed, scale=2.0 + seed % 4))
+        host_row = _host_row(sampling_logits(60 + seed, scale=2.0 + seed % 4))
         values, ids = ds.candidate_row_lanes(host_row)
         for policy in (
             ds.Qwen38DeviceSamplerPolicy(temperature=1.0, top_k=20, top_p=0.95, min_p=0.0),
@@ -560,7 +527,7 @@ def test_uniform_stream_vectors_exactness_and_independence(expect_error) -> None
         with expect_error(ValueError):
             UniformStream(bad)
     # The host samplers consume the stream in place of a torch generator: one draw per sampled token.
-    row = Qwen38CandidateRow.emulate(_logits(2))
+    row = Qwen38CandidateRow.emulate(sampling_logits(2))
     parameters = Qwen38SamplingParameters.official_thinking(seed=5)
     stream = UniformStream(5)
     sample = sample_candidates(row, parameters, generator=stream)

@@ -10,6 +10,12 @@ import inspect
 import pytest
 import torch
 
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_sampling import (
+    SamplingFakeChain,
+    SamplingFakeExtension,
+    sampling_history_logits,
+    sampling_parameters,
+)
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling as step
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_protocol import THINK_END_ID
 from models.demos.blackhole.qwen38_flash_next.ttnn import device_sampler as ds
@@ -25,77 +31,12 @@ EOS = (248_046, 248_044)
 TOKENIZER_SIZE = 248_077
 
 
-def _logits_for(history: list[int], *, eos_at: int | None = None) -> torch.Tensor:
-    generator = torch.Generator().manual_seed(len(history) * 7919 + (history[-1] if history else 0))
-    row = torch.randn(VOCAB_SIZE, generator=generator) * 2.0
-    peaks = torch.randperm(VOCAB_SIZE, generator=generator)[:8]
-    row[peaks] = 12.0 + torch.rand(8, generator=generator) * 6.0
-    if eos_at is not None and len(history) >= eos_at:
-        row[EOS[0]] = 60.0
-    return row.to(torch.bfloat16)
-
-
-class FakeChain:
-    """The traced chain's primitives; TAIL(t) 'computes' the row of the logits after the tokens written so far."""
-
-    def __init__(self, prefix: list[int], *, eos_at: int | None = None) -> None:
-        self.inputs = list(prefix)  # every token HEAD consumed
-        self.eos_at = eos_at
-        self.log: list[str] = []
-        self.tails = 0
-        self.row: int | None = None
-
-    def logits(self) -> torch.Tensor:
-        return _logits_for(self.inputs, eos_at=self.eos_at)
-
-    def write_token_row(self, token_id: int) -> None:
-        self.log.append(f"write:{token_id}")
-        self.row = token_id
-
-    def execute_head(self, residue: int) -> None:
-        self.log.append(f"head:{residue}")
-        self.inputs.append(self.row)
-
-    def execute_tail(self, residue: int) -> None:
-        self.log.append(f"tail:{residue}")
-        self.tails += 1
-        self.row = int(torch.argmax(self.logits().to(torch.float32)))
-
-    def refresh_ple_row(self, token_id: int, context):
-        self.log.append(f"ple:{token_id}")
-        return (token_id, 0 if context is None else context[0])
-
-    def record_event(self):
-        self.log.append("event")
-        return object()
-
-    def event_synchronize(self, event) -> None:
-        self.log.append("sync")
-
-    def read_token_row(self) -> int:
-        self.log.append("read_token_row")
-        return self.row
-
-
-class FakeSampling:
-    def __init__(self, chain: FakeChain) -> None:
-        self.chain = chain
-        self.full_reads = 0
-
-    def read_candidate_row(self) -> Qwen38CandidateRow:
-        self.chain.log.append("read_row")
-        return Qwen38CandidateRow.emulate(self.chain.logits())
-
-    def read_full_logits(self, residue: int) -> torch.Tensor:
-        self.full_reads += 1
-        self.chain.log.append(f"full_gather:{residue}")
-        return self.chain.logits().to(torch.float32)
-
-
 class FakeSession:
+    chain_class, sampling_class = SamplingFakeChain, SamplingFakeExtension
+
     def __init__(self, prefix: list[int], *, eos_at: int | None = None) -> None:
-        self.chain = FakeChain(prefix, eos_at=eos_at)
-        self.sampling = FakeSampling(self.chain)
+        self.chain = self.chain_class(prefix, eos_at=eos_at)
+        self.sampling = self.sampling_class(self.chain)
         self.committed = list(prefix)
         self.ple_context = None
 
@@ -164,7 +105,7 @@ def test_same_seed_same_stream_and_the_sample_carries_logprobs() -> None:
 
 def test_top_k_zero_takes_the_full_vocabulary_fallback_every_step() -> None:
     session = FakeSession([4])
-    parameters = Qwen38SamplingParameters(temperature=0.8, top_p=0.9, top_k=0, presence_penalty=0.0, seed=3)
+    parameters = sampling_parameters(temperature=0.8, top_p=0.9, top_k=0, seed=3)
     request = _request(parameters)
     items = _run(session, request, 6, clock_ns=lambda: 0)
     assert session.sampling.full_reads == 6 and request.clocks.fallbacks == 6
@@ -173,7 +114,7 @@ def test_top_k_zero_takes_the_full_vocabulary_fallback_every_step() -> None:
     assert gathers[:4] == ["full_gather:0", "full_gather:1", "full_gather:2", "full_gather:3"]
     # And it is the reference sampler on the same logits and generator state.
     expected = sample_full_vocabulary(
-        _logits_for([4]).to(torch.float32), parameters, token_history=[4], generator=torch.Generator().manual_seed(3)
+        sampling_history_logits([4]).float(), parameters, token_history=[4], generator=torch.Generator().manual_seed(3)
     )
     assert items[0][0] == expected.token_id
 
@@ -182,24 +123,23 @@ def test_presence_penalty_counts_the_requests_output_not_the_prompt() -> None:
     # top_k 1 makes the sampled token the penalized argmax.  The fake row depends on the prompt's length and last
     # token only, so the prompt can hold the top peak of its own row.
     last = 3
-    top = int(torch.argmax(_logits_for([0, last]).to(torch.float32)))
+    top = int(torch.argmax(sampling_history_logits([0, last]).to(torch.float32)))
     prefix = [top, last]
-    parameters = Qwen38SamplingParameters(temperature=1.0, top_p=1.0, top_k=1, presence_penalty=2.0, seed=1)
+    parameters = sampling_parameters(top_k=1, presence_penalty=2.0, seed=1)
     session, request = FakeSession(prefix), _request(parameters)
     tokens = [token for token, _ in _run(session, request, 3)]
     # The prompt's `top` is not penalized: the first token is the row's argmax.  Under the whole-history rule it
     # would have lost 2.0 and the argmax would have moved.
     assert tokens[0] == top
-    assert (
-        sample_full_vocabulary(_logits_for(prefix).to(torch.float32), parameters, token_history=prefix).token_id != top
-    )
+    whole_history = sample_full_vocabulary(sampling_history_logits(prefix).float(), parameters, token_history=prefix)
+    assert whole_history.token_id != top
     # Every step is the reference over the committed history with the prompt exempt (the last token is the
     # unconsumed length read, chosen the same way).
     generator = torch.Generator().manual_seed(1)
     for index, token in enumerate(tokens):
         history = prefix + tokens[:index]
         expected = sample_full_vocabulary(
-            _logits_for(history).to(torch.float32),
+            sampling_history_logits(history).to(torch.float32),
             parameters,
             token_history=history,
             prompt_tokens=len(prefix),
@@ -344,7 +284,7 @@ def test_logprobs_fields_and_the_content_item_shape(expect_error) -> None:
     for document in ({"logprobs": "yes"}, {"logprobs": True, "top_logprobs": 21}, {"top_logprobs": 2}):
         with expect_error(step.Qwen38SamplingRequestError):
             step.logprobs_from_request(document)
-    sample = sample_full_vocabulary(_logits_for([1]).to(torch.float32), THINKING, top_logprobs=2)
+    sample = sample_full_vocabulary(sampling_history_logits([1]).to(torch.float32), THINKING, top_logprobs=2)
     item = step.logprobs_content_item(sample, sample.token_id, lambda token: f"<{token}>")
     assert item["token"] == f"<{sample.token_id}>" and item["logprob"] == sample.logprob
     assert item["bytes"] == list(f"<{sample.token_id}>".encode()) and len(item["top_logprobs"]) == 2
@@ -356,14 +296,24 @@ def test_logprobs_fields_and_the_content_item_shape(expect_error) -> None:
 # --- the chain extension's shape ------------------------------------------------------------------------------------
 
 
-def test_chain_extension_runs_the_greedy_epilogue_unchanged_before_the_row() -> None:
-    body = inspect.getsource(step.Qwen38SamplingChainExtension._epilogue)  # eager in the warm, captured in TAIL
-    greedy = (  # the resolve writes the persistent token row itself (into=): the greedy epilogue's last op
-        "greedy_candidates(logits)",
-        "resolve_greedy_on_device(candidates, into=token_row_io)",
+def test_chain_extension_runs_the_greedy_epilogue_unchanged_before_the_row_and_the_sampler_after_it() -> None:
+    body = inspect.getsource(step.Qwen38SamplingChainExtension._epilogue)  # eager in the warm pass, captured in TAIL
+    host_branch, device_branch = body.split("if self.sampler is None:")
+    order = [
+        host_branch.index(f)
+        for f in (
+            "greedy_candidates(logits)",
+            "resolve_greedy_on_device(candidates, into=token_row_io)",  # the greedy row lands in place, one program
+            "sampling_candidates(",
+        )
+    ]
+    assert order == sorted(order) and "self.sample(" not in host_branch and "ttnn.copy(" not in host_branch
+    # without the sampler the greedy row is the token row
+    assert "return candidates, row, greedy_row, greedy_row" in device_branch
+    # the composite or the one-program kernel, by the registry, then its token into the resident row
+    assert device_branch.index("self.sample(row, greedy_row, self.sampler)") < device_branch.index(
+        "ttnn.copy(token_row, token_row_io)"
     )
-    positions = [body.index(fragment) for fragment in greedy]
-    assert positions == sorted(positions) and body.index("sampling_candidates(") > positions[-1]
     assert step.RESIDUE_CLASSES == 4
     primitives = ("read_candidate_row", "read_full_logits", "warm", "release", "mark_corruptible")
     assert all(hasattr(step.Qwen38SamplingChainExtension, name) for name in primitives)
@@ -372,20 +322,28 @@ def test_chain_extension_runs_the_greedy_epilogue_unchanged_before_the_row() -> 
         step.Qwen38SamplingChainExtension.read_candidate_row
     )
     assert "ttnn.deallocate(gathered)" in inspect.getsource(step.Qwen38SamplingChainExtension._gather)
+    capture = inspect.getsource(step.Qwen38SamplingChainExtension.capture_epilogue)
     warm = inspect.getsource(step.Qwen38SamplingChainExtension.warm)
-    assert (
-        "self._epilogue(logits, token_row_io)" in warm and "self._gather(logits)" in warm
-    )  # the capture's own epilogue
+    assert "self._epilogue(trace_output.logits, token_row_io)" in capture
+    assert "self._epilogue(logits, token_row_io)" in warm and "self._gather(logits)" in warm  # the capture's epilogue
     assert "ids_equal_up_to_boundary_ties" in warm and "raise RuntimeError" in warm
+    loop = inspect.getsource(step.generate_sampled_on_device)
+    assert "sampler.write_uniform(request.next_uniform())" in loop and loop.index(
+        "chain.execute_head(residue)"
+    ) < loop.index("sampler.write_uniform") < loop.index("chain.execute_tail(residue)")
+    assert (
+        "read_candidate_row"
+        not in loop.split("def reference_token")[1].split("produced = 0")[1].split("verify_each_step")[0]
+    )
 
 
-# --- the device-sampled loop: the greedy loop plus one draw write per step ---------------------------------------------
+# --- the device-sampled loop: the greedy loop plus one draw write per step --------------------------------------------
 
 
 class FakeDeviceSampler:
     """The device sampler's constants: records the policy and draw writes the loop makes."""
 
-    def __init__(self, chain: "FakeDeviceChain") -> None:
+    def __init__(self, chain: SamplingFakeChain) -> None:
         self.chain = chain
         self.policy = ds.Qwen38DeviceSamplerPolicy.greedy_policy()
         self.uniform = 0.0
@@ -401,12 +359,12 @@ class FakeDeviceSampler:
         self.chain.log.append(f"u:{uniform}")
 
 
-class FakeDeviceChain(FakeChain):
+class FakeDeviceChain(SamplingFakeChain):
     """TAIL chooses the token the way the device composite does: the greedy id under the flag, else the reference."""
 
-    def __init__(self, prefix: list[int], sampler_holder: dict, *, eos_at: int | None = None) -> None:
+    def __init__(self, prefix: list[int], *, eos_at: int | None = None) -> None:
         super().__init__(prefix, eos_at=eos_at)
-        self.sampler_holder = sampler_holder
+        self.sampler = None  # the sampling's constants
         self.row_history: list[torch.Tensor] = []  # the candidate row TAIL(t) computed, for the host replay
 
     def execute_tail(self, residue: int) -> None:
@@ -415,29 +373,21 @@ class FakeDeviceChain(FakeChain):
         logits = self.logits()
         host_row = Qwen38CandidateRow.emulate(logits).to_host_row()
         self.row_history.append(host_row)
-        sampler = self.sampler_holder["sampler"]
+        sampler = self.sampler
         if sampler.policy.greedy:
             self.row = int(torch.argmax(logits.to(torch.float32)))
         else:
             values, ids = ds.candidate_row_lanes(host_row)
             self.row = ds.device_sampler_reference(values, ids, sampler.policy, sampler.uniform).token_id
 
-    def read_token_row_nonblocking(self):
-        self.log.append("read_nonblocking")
-        return self.row
 
-    @staticmethod
-    def pending_value(pending) -> int:
-        return pending
-
-
-class FakeDeviceSampling(FakeSampling):
+class FakeDeviceSampling(SamplingFakeExtension):
     presence_on_device = False  # the composite's constants: no device history
+    sampler_class = FakeDeviceSampler
 
     def __init__(self, chain: FakeDeviceChain) -> None:
         super().__init__(chain)
-        self.sampler = FakeDeviceSampler(chain)
-        chain.sampler_holder["sampler"] = self.sampler
+        self.sampler = chain.sampler = self.sampler_class(chain)
 
     def device_policy_of(self, request):
         return request.device_policy(presence_on_device=self.presence_on_device)
@@ -454,16 +404,17 @@ class FakeDeviceSampling(FakeSampling):
 
 
 class FakeDeviceSession(FakeSession):
+    chain_class, sampling_class = FakeDeviceChain, FakeDeviceSampling
+
     def __init__(self, prefix: list[int], *, eos_at: int | None = None) -> None:
-        holder: dict = {}
-        self.chain = FakeDeviceChain(prefix, holder, eos_at=eos_at)
-        self.sampling = FakeDeviceSampling(self.chain)
-        self.committed = list(prefix)
-        self.ple_context = None
+        super().__init__(prefix, eos_at=eos_at)
         self.row_token = None
 
-    def prompt(self, tokens: list[int]) -> None:
-        for token in tokens:
+    def start(self, request, prompt: list[int]) -> None:
+        """The request start (the policy and the first draw), then the prompt: its last TAIL chooses x_0."""
+
+        self.sampling.begin_request(request)
+        for token in prompt:
             self._forced_step(token)
 
 
@@ -484,9 +435,9 @@ def _run_device(session: FakeDeviceSession, request, max_new_tokens: int, *, pre
 
 def test_device_loop_is_the_greedy_loop_plus_a_draw_write_and_replays_the_reference() -> None:
     session, request = FakeDeviceSession([1, 2]), _request()
-    session.sampling.begin_request(request)  # request start: the policy and the first draw, before the prompt
+    session.start(request, [])  # request start: the policy and the first draw, before the prompt
     assert session.chain.log == ["policy:sampled", f"u:{request.uniforms[0]}"] and len(request.uniforms) == 1
-    session.prompt([3])  # the prompt's last TAIL chooses x_0 under the request's policy and u_0
+    session._forced_step(3)  # the prompt's last TAIL chooses x_0 under the request's policy and u_0
     start = len(session.chain.log)
     items = _run_device(session, request, 5)
     tokens = [token for token, _ in items]
@@ -516,19 +467,16 @@ def test_device_loop_is_the_greedy_loop_plus_a_draw_write_and_replays_the_refere
     assert request.as_dict()["device_path"] and request.as_dict()["draws"] == 5
     # The same seed gives the same stream on a fresh session; a different seed differs.
     again, again_request = FakeDeviceSession([1, 2]), _request()
-    again.sampling.begin_request(again_request)
-    again.prompt([3])
+    again.start(again_request, [3])
     assert [t for t, _ in _run_device(again, again_request, 5)] == tokens
     other, other_request = FakeDeviceSession([1, 2]), _request(Qwen38SamplingParameters.official_thinking(seed=78))
-    other.sampling.begin_request(other_request)
-    other.prompt([3])
+    other.start(other_request, [3])
     assert [t for t, _ in _run_device(other, other_request, 5)] != tokens
 
 
 def test_device_loop_verifies_each_step_when_asked_and_rewrites_a_stale_continuation(expect_error) -> None:
     session, request = FakeDeviceSession([4]), _request()
-    session.sampling.begin_request(request)
-    session.prompt([5])
+    session.start(request, [5])
     items = _run_device(session, request, 6, verify_each_step=True)
     assert len(items) == 6 and request.verified_steps == 4  # tokens 1..4 of the loop; x_0 at entry, x_5 by the read
     assert session.chain.log.count("read_row") == 5
@@ -560,21 +508,18 @@ def test_device_loop_verifies_each_step_when_asked_and_rewrites_a_stale_continua
 
 def test_device_loop_finishes_like_the_greedy_loop(expect_error) -> None:
     session, request = FakeDeviceSession([5, 6], eos_at=4), _request()
-    session.sampling.begin_request(request)
-    session.prompt([7])
+    session.start(request, [7])
     items = _run_device(session, request, 32)
     assert items[-1] == (EOS[0], "stop") and session.chain.log[-1] == "read_token_row"
     assert session.committed[-1] == EOS[0]
     session, request = FakeDeviceSession([1]), _request()
-    session.sampling.begin_request(request)
-    session.prompt([2])
+    session.start(request, [2])
     items = _run_device(session, request, 6, think_budget=2)
     tokens = [token for token, _ in items]
     assert tokens[2] == THINK_END_ID and request.samples[2] is None and len(request.samples) == 5
     polls = []
     session, request = FakeDeviceSession([1]), _request()
-    session.sampling.begin_request(request)
-    session.prompt([2])
+    session.start(request, [2])
     items = _run_device(
         session, request, 8, should_stop=lambda: (polls.append(1), "halt" if len(polls) == 3 else None)[1]
     )
@@ -606,9 +551,7 @@ class FakeFusedSampler(FakeDeviceSampler):
 class FakeFusedChain(FakeDeviceChain):
     """The fused sampler's TAIL: the presence penalty from the device history, its draw's bit set, the row's guard."""
 
-    def __init__(self, prefix: list[int], sampler_holder: dict) -> None:
-        super().__init__(prefix, sampler_holder)
-        self.guard = False
+    guard = False
 
     def logits(self) -> torch.Tensor:
         return _ramp_logits()
@@ -618,7 +561,7 @@ class FakeFusedChain(FakeDeviceChain):
         self.tails += 1
         host_row = Qwen38CandidateRow.emulate(self.logits()).to_host_row()
         self.row_history.append(host_row)
-        sampler = self.sampler_holder["sampler"]
+        sampler = self.sampler
         values, ids = ds.candidate_row_lanes(host_row)
         seen = torch.tensor([int(token_id) in sampler.history for token_id in ids.tolist()], dtype=torch.bool)
         sample = ds.device_sampler_reference(values, ids, sampler.policy, sampler.uniform, seen=seen)
@@ -628,11 +571,7 @@ class FakeFusedChain(FakeDeviceChain):
 
 class FakeFusedSampling(FakeDeviceSampling):
     presence_on_device = True
-
-    def __init__(self, chain: FakeFusedChain) -> None:
-        FakeSampling.__init__(self, chain)
-        self.sampler = FakeFusedSampler(chain)
-        chain.sampler_holder["sampler"] = self.sampler
+    sampler_class = FakeFusedSampler
 
     def rewrite_history(self, emitted) -> None:
         self.chain.log.append("history")
@@ -647,22 +586,15 @@ class FakeFusedSampling(FakeDeviceSampling):
 
 
 class FakeFusedSession(FakeDeviceSession):
-    def __init__(self, prefix: list[int]) -> None:
-        holder: dict = {}
-        self.chain = FakeFusedChain(prefix, holder)
-        self.sampling = FakeFusedSampling(self.chain)
-        self.committed = list(prefix)
-        self.ple_context = None
-        self.row_token = None
+    chain_class, sampling_class = FakeFusedChain, FakeFusedSampling
 
 
 def test_device_loop_samples_a_guarded_presence_row_over_the_full_vocabulary() -> None:
     session = FakeFusedSession([1, 2])
     request = _request(Qwen38SamplingParameters.official_non_thinking(seed=5))
-    session.sampling.begin_request(request)
+    session.start(request, [3])
     penalty = request.device_policy(presence_on_device=True).presence_penalty
     assert penalty == 1.5, penalty
-    session.prompt([3])
     start = len(session.chain.log)
     tokens = [token for token, _ in _run_device(session, request, 40, verify_each_step=True)]
     log = session.chain.log[start:]
@@ -706,12 +638,7 @@ def test_device_policy_routing_and_begin_request_for_greedy_and_host_loop_reques
     assert thinking.device_policy() == ds.Qwen38DeviceSamplerPolicy(temperature=1.0, top_k=20, top_p=0.95, min_p=0.0)
     assert _request(top_logprobs=2).device_policy() is None and _request(logprobs=True).device_policy() is None
     assert _request(Qwen38SamplingParameters.official_non_thinking(seed=1)).device_policy() is None  # presence 1.5
-    assert (
-        _request(
-            Qwen38SamplingParameters(temperature=0.8, top_p=0.9, top_k=0, presence_penalty=0.0, seed=3)
-        ).device_policy()
-        is None
-    )
+    assert _request(sampling_parameters(temperature=0.8, top_p=0.9, top_k=0, seed=3)).device_policy() is None
     session = FakeDeviceSession([1])
     session.sampling.begin_request(None)  # a greedy request: the flag, no draw
     assert session.chain.log == ["policy:greedy"]
@@ -720,37 +647,3 @@ def test_device_policy_routing_and_begin_request_for_greedy_and_host_loop_reques
     assert session.chain.log == ["policy:greedy", "policy:greedy"] and host_loop.uniforms == []
     assert not host_loop.as_dict()["device_path"]
     assert set(_request().as_dict()) >= {"device_path", "draws", "first_token_rewrites", "verified_steps"}
-
-
-def test_device_sampler_epilogue_runs_after_the_row_and_the_host_branch_is_unchanged() -> None:
-    body = inspect.getsource(step.Qwen38SamplingChainExtension._epilogue)  # eager in the warm pass, captured in TAIL
-    host_branch, device_branch = body.split("if self.sampler is None:")
-    order = [
-        host_branch.index(f)
-        for f in (
-            "greedy_candidates(logits)",
-            "resolve_greedy_on_device(candidates, into=token_row_io)",  # the greedy row lands in place, one greedy_tail program
-            "sampling_candidates(",
-        )
-    ]
-    assert order == sorted(order) and "self.sample(" not in host_branch and "ttnn.copy(" not in host_branch
-    assert (
-        "return candidates, row, greedy_row, greedy_row" in device_branch
-    )  # without the sampler the greedy row is the token row
-    assert device_branch.index("self.sample(row, greedy_row, self.sampler)") < device_branch.index(
-        "ttnn.copy(token_row, token_row_io)"
-    )  # the composite or the one-program kernel, by the registry, then its token into the resident row
-    capture = inspect.getsource(step.Qwen38SamplingChainExtension.capture_epilogue)
-    warm = inspect.getsource(step.Qwen38SamplingChainExtension.warm)
-    assert (
-        "self._epilogue(trace_output.logits, token_row_io)" in capture
-        and "self._epilogue(logits, token_row_io)" in warm
-    )
-    loop = inspect.getsource(step.generate_sampled_on_device)
-    assert "sampler.write_uniform(request.next_uniform())" in loop and loop.index(
-        "chain.execute_head(residue)"
-    ) < loop.index("sampler.write_uniform") < loop.index("chain.execute_tail(residue)")
-    assert (
-        "read_candidate_row"
-        not in loop.split("def reference_token")[1].split("produced = 0")[1].split("verify_each_step")[0]
-    )

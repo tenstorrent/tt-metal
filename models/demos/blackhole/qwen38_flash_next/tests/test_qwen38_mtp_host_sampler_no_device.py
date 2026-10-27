@@ -5,7 +5,7 @@
 
 The sampler default is the host sampler under ``--mtp`` (the MTP chain's tail resolves the greedy token for the draft
 row), ``--device-sampler`` with ``--mtp`` is refused, the session binds no device policy without a sampler, and the
-drafting admission admits a sampled request that arrives without the device loop."""
+drafting admission admits a sampled request that arrives without the device loop and names the ones it refuses."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from models.demos.blackhole.qwen38_flash_next.tests.fakes_sampling import sampling_parameters
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_server as server
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_sampling as step
@@ -43,18 +44,26 @@ def test_the_device_sampler_is_refused_with_mtp_and_without_sampling(expect_erro
         server.effective_device_sampler(SimpleNamespace(sampling=False, mtp=None, device_sampler=True))
 
 
-def test_a_sampled_request_on_an_mtp_server_is_admitted_to_the_host_pass_loop():
-    mtp = SimpleNamespace(sampled=True)
+def test_a_sampled_request_on_an_mtp_server_is_admitted_to_the_host_pass_loop_and_the_refusals_are_named():
+    sampled, off = SimpleNamespace(sampled=True), SimpleNamespace(sampled=False)
     for profile in (Qwen38SamplingParameters.official_thinking, Qwen38SamplingParameters.official_non_thinking):
         request = step.Qwen38SamplingRequest(profile(seed=1))
         assert request.uniforms == []  # no sampler: begin_request never ran, no device policy or draw was bound
-        assert step.drafting_admission(mtp, request, device_loop=False) is None  # admitted: the pass loop drafts
-    assert (
-        step.drafting_admission(
-            mtp, step.Qwen38SamplingRequest(Qwen38SamplingParameters.official_thinking(seed=1)), device_loop=True
-        )
-        == "refused: device sampler loop"
-    )
+        assert step.drafting_admission(sampled, request, device_loop=False) is None  # admitted: the pass loop drafts
+    thinking = step.Qwen38SamplingRequest(Qwen38SamplingParameters.official_thinking(seed=1))
+    assert step.drafting_admission(sampled, thinking) is None
+    assert step.drafting_admission(sampled, thinking, device_loop=True) == "refused: device sampler loop"
+    assert step.drafting_admission(sampled, None) is None and step.drafting_admission(None, None) is None
+    assert step.drafting_admission(None, thinking) == "refused: no MTP chain"
+    assert step.drafting_admission(off, thinking) == "refused: no split verify captured"
+    for request, reason in (
+        (step.Qwen38SamplingRequest(sampling_parameters(top_k=0)), "refused: top_k 0"),
+        (step.Qwen38SamplingRequest(sampling_parameters(presence_penalty=-0.5)), "refused: penalty raises logits"),
+        (step.Qwen38SamplingRequest(sampling_parameters(repetition_penalty=0.9)), "refused: penalty raises logits"),
+        (step.Qwen38SamplingRequest(thinking.parameters, logprobs=True), "refused: logprobs"),
+        (step.Qwen38SamplingRequest(thinking.parameters, top_logprobs=2), "refused: logprobs"),
+    ):
+        assert step.drafting_admission(sampled, request) == reason
 
 
 def test_the_server_and_the_session_wire_the_host_sampler_on_an_mtp_chain():

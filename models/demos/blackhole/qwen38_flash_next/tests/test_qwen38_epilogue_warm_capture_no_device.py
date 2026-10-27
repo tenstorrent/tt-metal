@@ -75,9 +75,8 @@ class FakeCandidateRow:
         return None
 
 
-def extension_with_fakes(monkeypatch):
-    """The extension without a device: the sampler set, every device read replaced, the sample call recorded."""
-
+def test_device_sampler_warm_and_capture_ask_for_the_same_programs(monkeypatch):
+    # The extension without a device: the sampler set, every device read replaced, the sample call recorded.
     ext = object.__new__(step.Qwen38SamplingChainExtension)
     ext.lm_head = FakeLMHead()
     ext.constants = SimpleNamespace(readback_row=FakeTensor("readback row"))
@@ -101,11 +100,6 @@ def extension_with_fakes(monkeypatch):
         step, "device_sampler_reference", lambda *args, **kwargs: SimpleNamespace(token_id=7, guard=False)
     )
     monkeypatch.setattr(step.Qwen38CandidateRow, "emulate", staticmethod(lambda full: None))
-    return ext, keys
-
-
-def test_device_sampler_warm_and_capture_ask_for_the_same_programs(monkeypatch):
-    ext, keys = extension_with_fakes(monkeypatch)
     token_row_io = FakeTensor("resident token row")
     ext.warm(logits=None, token_row_io=token_row_io, label="warm")
     warm_keys, warm_copies = set(keys), set(step.ttnn.copies)
@@ -119,23 +113,12 @@ def test_device_sampler_warm_and_capture_ask_for_the_same_programs(monkeypatch):
     assert trace_token_row.role == "token row" and ext.trace_rows[-1].role == "candidate row"
 
 
-# --- the MTP chain's tail epilogue: one function, warm == capture across the served contexts ---------------------------
-
-
-class FakeMTPModel:
-    def __init__(self, context: int):
-        self.context = context
-        self.model_io = SimpleNamespace(embedding=SimpleNamespace())
-
-
-class FakeAlignment:
-    """Records the MTP layer's row call: the residual / RoPE / QSA position placements it sees."""
-
-    def __init__(self, log):
-        self.log = log
+# --- the MTP chain's tail epilogue: one function, warm == capture across the served contexts --------------------------
 
 
 def _fake_mtp_step_row(model, alignment, inputs, residual, resolved_row, *, rope, qsa_position):
+    """Records the MTP layer's row call: the residual / RoPE / QSA position placements it sees."""
+
     alignment.log.append(
         ("mtp_row", model.context, residual.placement, rope.placement, qsa_position.placement, resolved_row.placement)
     )
@@ -160,19 +143,6 @@ class FakeMTPLMHead:
         return FakeTensor("resolved token row")
 
 
-def _mtp_output(context: int, *, retained: bool):
-    """The step's output as the warm step (eager, retain_mtp_inputs=True) and the capture (retained) hand it over: the
-    same producer, so the same placements; ``context`` rides on the QSA position inputs."""
-
-    tag = "capture" if retained else "warm"
-    return SimpleNamespace(
-        logits=FakeTensor("logits", "bf16 TILE DRAM vocab shards"),
-        residual=FakeTensor(f"{tag} residual", "bf16 TILE DRAM [1,4,1,640] branch-major"),
-        rope=FakeTensor(f"{tag} rope", "bf16 TILE DRAM rope rows"),
-        qsa_position=FakeTensor(f"{tag} qsa position", f"int32 ROW_MAJOR DRAM position inputs c{context}"),
-    )
-
-
 @pytest.mark.parametrize("context", [32768, 65536, 131072, 262144])
 @pytest.mark.parametrize("sampling", ["none", "chain row", "folded row"])
 def test_mtp_tail_epilogue_records_the_same_programs_for_the_warm_step_and_the_capture(monkeypatch, context, sampling):
@@ -181,18 +151,21 @@ def test_mtp_tail_epilogue_records_the_same_programs_for_the_warm_step_and_the_c
     extension = (
         None if sampling == "none" else SimpleNamespace(candidate_row=sampling == "folded row", constants=object())
     )
+    model = SimpleNamespace(context=context, model_io=SimpleNamespace(embedding=SimpleNamespace()))
     logs = []
-    for retained in (False, True):
+    for tag in ("warm", "capture"):
+        # The step's output as the warm step (eager, retain_mtp_inputs=True) and the capture (retained) hand it over:
+        # the same producer, so the same placements; ``context`` rides on the QSA position inputs.
+        output = SimpleNamespace(
+            logits=FakeTensor("logits", "bf16 TILE DRAM vocab shards"),
+            residual=FakeTensor(f"{tag} residual", "bf16 TILE DRAM [1,4,1,640] branch-major"),
+            rope=FakeTensor(f"{tag} rope", "bf16 TILE DRAM rope rows"),
+            qsa_position=FakeTensor(f"{tag} qsa position", f"int32 ROW_MAJOR DRAM position inputs c{context}"),
+        )
         log = []
-        chain_mtp = SimpleNamespace(alignment=FakeAlignment(log), step_inputs=SimpleNamespace())
-        token_row_io = FakeTensor("resident token row")
+        chain_mtp = SimpleNamespace(alignment=SimpleNamespace(log=log), step_inputs=SimpleNamespace())
         candidates, token_row, row = session.mtp_tail_epilogue(
-            FakeMTPModel(context),
-            FakeMTPLMHead(log),
-            chain_mtp,
-            _mtp_output(context, retained=retained),
-            token_row_io,
-            extension,
+            model, FakeMTPLMHead(log), chain_mtp, output, FakeTensor("resident token row"), extension
         )
         log.append(("copy", tuple(session.ttnn.copies[-1])))
         assert candidates.role == "greedy candidates" and token_row.role == "resolved token row"
