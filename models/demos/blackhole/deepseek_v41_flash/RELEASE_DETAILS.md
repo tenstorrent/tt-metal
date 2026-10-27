@@ -153,7 +153,7 @@ The previous release already shipped the 262,144-token / 16-user and the 1,048,5
 | 4 users at 1,048,576 tokens | Spec and image input existed in `c9cfb00`; **new**: long-prompt measurements and the fixes above | `assets/runtime_spec_b4_k5_1048576*.json` | 1,000,028-token prompt completes (candidate): TTFT 1711-1781 s, TPOT 37.4 ms; needles of 100k tokens at the start and the end answer correctly (116-169 s); not measured before: any prompt above 100,020 tokens |
 | 16 users at 262,144 tokens | Spec existed in `c9cfb00`; **new**: long-prompt measurement | `assets/runtime_spec_b16_k5_262144_vision.json` | 250,028-token prompt: TTFT 283-292 s, TPOT 31.5-31.6 ms; needles of 100k at start and end correct |
 | Batched serving speed against `c9cfb00` | Same settings as `c9cfb00` by default (APC off, budget 67,584) | default | 16 users: 16 x ISL 1,024 within 1.3 %, 16 x ISL 8,192 +5.2 % TTFT / -5.0 % tok/s (within the repeat spread); 4 users: 42-47 % lower TTFT, 25-34 % lower TPOT at 4 requests (see Performance) |
-| Image input | Not new (16 images per prompt, also at 1M in `c9cfb00`) | `_vision` specs / default 262,144 spec | 48 random images, 16 concurrent: 48/48 numbers, 48/48 colours at 16 users (46/48 colours at 4 users / 1M) |
+| Image input | Per-prompt limit raised from 16 to 250 | `_vision` specs and the catalog defaults (`--limit-mm-per-prompt {"image": 250}`) | 4 users / 1,048,576, vision on: 250 numbered images (256 x 192, 48,778 prompt tokens) in one prompt: 250/250 labels back in order, 62 s, first token after 52 s; 251 images: HTTP 400 |
 | Index-key hand-off offset | **Fixed** for the column-sharded prefill key FIFO: the offset used the per-column length (negative for a 100,033-token prompt, decode read zero keys for the early entries) | automatic | needle at the start of a 100,033-token prompt answers correctly on 16 users and 4 users; whether answers of `c9cfb00` were affected was not tested |
 
 Limits of this release: APC is off by default because of its cost (the catalog of the image, tt-inference-server `4743e018`, and the default runtime specs agree on this); making APC cheap (asynchronous snapshots, `ssinghal/dsv4p1-apc-fast`), packing several prompts into one prefill call (`ssinghal/dsv4p1-pf-pack`) and paged-prefill APC (`PAGED_PREFILL_APC_DESIGN.md`, branch `ssinghal/dsv4p1-paged-apc-design`) are next-release work and not part of this image. Everything not listed with a measurement above was not measured for this release.
@@ -201,8 +201,8 @@ Spec decode (k = 5, lossless) now runs at 262,144 tokens (16 users) and 1,048,57
 
 ### 3. Image input
 
-- Up to **16 images per prompt** (was 4). The model card sets no limit; this is the server's `--limit-mm-per-prompt {"image": 16}`. A request with more is refused with an OpenAI-style HTTP 400 error:
-  `{"error": {"message": "At most 16 image(s) may be provided in one prompt. (parameter=image)", "type": "BadRequestError", "param": "image", "code": 400}}` and the server keeps serving.
+- Up to **250 images per prompt** (16 in the previous image, 4 before that). The model card sets no limit; this is the server's `--limit-mm-per-prompt {"image": 250}`. A request with more is refused with an OpenAI-style HTTP 400 error:
+  `{"error": {"message": "At most 250 image(s) may be provided in one prompt. (parameter=image)", "type": "BadRequestError", "param": "image", "code": 400}}` and the server keeps serving.
 - An image is at most `max_image_tokens` = 1,024 tokens (31 x 31 token grid, about 1302 x 1302 pixels, 8,649 ViT patches); larger images are resized, keeping the aspect ratio.
 - Works together with speculative decoding and with the long-context configurations above that list image input: verified at 16 users / 262,144 tokens and 4 users / 524,288 tokens.
 - At 4 users and 1,048,576 tokens image input needed a fix of the prefill trace capture (the vision tower, about 22 MB per DRAM bank, left no contiguous 21 MB block for the 160 MiB reduce-scatter buffer). The Engram reduce-scatter is now split into 4 pieces along the hidden dimension when `DSV41_VISION=1`; the result is the same up to bf16 summation order (test `tests/test_engram_rs_split.py`, PCC at least 0.99995). Verified in this image at 4 users / 1,048,576 tokens: image checks, 100,020-token needle, GSM8K, and with APC on.
@@ -313,7 +313,7 @@ Each configuration was served once and every test ran against that one server (n
 | 20,020-token prompt, code found | 4817, 23.5 s | 4817, 32.3 s | 4817, 27.1 s |
 | 100,020-token needle at the end / at the start | 4817 / 4817 (115.7 / 117.1 s) | 4817 / 4817 (157.7 / 159.2 s) | 4817 / 4817 (132.4 / 134.0 s) |
 | Image checks (1 / 2 images, 4 image + 4 text at once, streaming) | pass | not applicable | pass |
-| 16 images in one prompt, one maximum-size image, 17 images -> HTTP 400 | pass | not applicable | pass |
+| Many images in one prompt (image `a06adeba8f1-91da919e-dd4fbc6`): 16 images, 250 images, 251 images -> HTTP 400 | not run | pass: 16/16 labels; 250/250 labels in order (62 s, first token after 52 s); 251 -> HTTP 400; text request afterwards fine | not run |
 | 16-concurrent image stress, 48 random images (number / colours) | 16/16, 48/48, 48/48 | not applicable | 16/16, 48/48, 48/48 |
 | Overload: 4 x slots requests at once, two waves | 64/64 on 16 slots, both waves | 16/16 on 4 slots, both waves | 16/16 on 4 slots, both waves |
 | Serving API (23 checks) | 23/23 | 23/23 | 23/23 |
@@ -330,7 +330,7 @@ Each configuration was served once and tested against that server (tools in `too
 | Test | 16 users / 262,144, images (default spec) | 16 users / 262,144, images, APC + budget 4,096 | 4 users / 1,048,576, images, APC + budget 4,096 |
 |---|---|---|---|
 | Sanity, 20,020-token prompt, 100,020-token needle | pass | not run | pass |
-| Image checks, 16 images in one prompt, 17 images -> HTTP 400, 16-concurrent image stress | pass | pass (vision suite) | pass |
+| Many images in one prompt (image `a06adeba8f1-91da919e-dd4fbc6`): 16 images, 250 images, 251 images -> HTTP 400 | not run | not run | pass: 16/16 labels; 250/250 labels in order (62 s, first token after 52 s); 251 -> HTTP 400; text request afterwards fine |
 | Prefix sweep (needle prefix, cold then hits): 8k / 32k / 100k tokens | not applicable | correct at 32k and 100k; 8k other-suffix hit wrong (cold and same-prompt hit right) | correct at 16k and 100k |
 | GSM8K 8-shot, workflow (flexible-extract) | 94.09 % | 95.60 % | not run |
 | GSM8K 8-shot, sampled, 256 questions, own client | not run | 98.4 % and 97.7 % | on the branch (prior to the image): 96.9 % |

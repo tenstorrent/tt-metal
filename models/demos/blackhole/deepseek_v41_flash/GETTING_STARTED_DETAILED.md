@@ -218,7 +218,7 @@ Tested at 4x the user count, two waves: every answer was correct.
 ## Image input
 
 Use a vision spec (see Configurations).
-It adds `limit-mm-per-prompt {"image": 16}`, `mm-processor-cache-gb 0`, `chat-template-content-format openai` and `DSV41_VISION=1`.
+It adds `limit-mm-per-prompt {"image": 250}`, `mm-processor-cache-gb 0`, `chat-template-content-format openai` and `DSV41_VISION=1`.
 The vision tower takes about 22 MB of DRAM per bank.
 Text requests run at the same speed as without it.
 
@@ -235,8 +235,8 @@ curl -s http://localhost:8000/v1/chat/completions -H "Content-Type: application/
 
 | Limit | Value |
 |---|---|
-| Images per prompt | **16**. The model card sets no limit. This is the server setting. |
-| Error for more | HTTP 400, `{"error": {"message": "At most 16 image(s) may be provided in one prompt. (parameter=image)", "type": "BadRequestError", "param": "image", "code": 400}}`. The server keeps serving. |
+| Images per prompt | **250**. The model card sets no limit. This is the server setting. |
+| Error for more | HTTP 400, `{"error": {"message": "At most 250 image(s) may be provided in one prompt. (parameter=image)", "type": "BadRequestError", "param": "image", "code": 400}}`. The server keeps serving. |
 | One image | At most 1,024 tokens: a 31 x 31 grid, 42 x 42 pixels per token, about 1302 x 1302 pixels. Larger images are resized. |
 | Token cost | 16 small images (512 x 384): about 3,150 tokens. One full-size image: about 1,000. |
 
