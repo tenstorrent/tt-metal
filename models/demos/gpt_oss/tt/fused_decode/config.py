@@ -146,6 +146,26 @@ def fused_decode_supported(mesh_device, mesh_config, hf_config, use_throughput_e
 QKV_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 OPROJ_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
 ROUTER_DECODE_WEIGHT_DTYPE = ttnn.bfloat8_b
+# Routed expert weights of the decode MoE streams (ExpertGateUpStream / ExpertDownStream): bfloat4_b, or bfloat8_b for
+# the layers in GPT_OSS_ROUTED_DECODE_BF8_LAYERS ("all", "" or a comma list of layer ids; default ""). bf8 holds the
+# MXFP4 checkpoint values exactly, bf4 rounds ~20% of them (12.8% relative error on layer 10's down weights) and
+# flattens the next-token distribution; a bf8 layer streams 1.9x the expert bytes.
+ROUTED_DECODE_BF8_LAYERS_ENV = "GPT_OSS_ROUTED_DECODE_BF8_LAYERS"
+
+
+def routed_decode_bf8_layers():
+    """Raw GPT_OSS_ROUTED_DECODE_BF8_LAYERS spec (recorded in the weight-cache marker)."""
+    return os.getenv(ROUTED_DECODE_BF8_LAYERS_ENV, "").strip()
+
+
+def routed_decode_weights_dtype(layer_idx):
+    """Routed expert weight dtype of one layer's decode streams: bfloat8_b for the layers in the bf8 list."""
+    spec = routed_decode_bf8_layers()
+    if spec == "all":
+        return ttnn.bfloat8_b
+    layers = {int(v) for v in spec.split(",") if v.strip() != ""}
+    return ttnn.bfloat8_b if layer_idx is not None and int(layer_idx) in layers else ttnn.bfloat4_b
+
 
 # Streamed-op worker cores per DRAM bank (swept on the full model): dense projections are bank-bandwidth bound
 # at 1; the routed gate|up (3 column pairs per bank) and down (12 columns per bank) gain from 3 and 2.

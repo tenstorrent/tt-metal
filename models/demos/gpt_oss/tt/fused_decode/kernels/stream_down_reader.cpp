@@ -28,12 +28,16 @@ void kernel_main() {
     constexpr uint32_t num_sel = get_compile_time_arg_val(4);
     constexpr uint32_t expert_stride = get_compile_time_arg_val(5);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(6);
-    constexpr auto idx_args = TensorAccessorArgs<7>();
+    constexpr uint32_t page_bytes = get_compile_time_arg_val(7);
+    constexpr auto idx_args = TensorAccessorArgs<8>();
 
     constexpr uint32_t seg_bytes = seg_tiles * tile_bytes;
     constexpr uint32_t block_tiles = num_sel * seg_tiles;
     constexpr uint32_t block_bytes = num_sel * seg_bytes;
-    static_assert(seg_bytes <= NOC_MAX_BURST_SIZE, "one expert segment must fit one NOC packet");
+    // A segment is read in packets of page_bytes (whole tiles): one packet in BFP4, several in BFP8.
+    constexpr uint32_t pages_per_seg = seg_bytes / page_bytes;
+    static_assert(pages_per_seg * page_bytes == seg_bytes, "page size must divide the segment");
+    static_assert(page_bytes <= NOC_MAX_BURST_SIZE, "one page must fit one NOC packet");
 
     cb_reserve_back(cb_idx, 1);
     const uint32_t idx_l1 = get_write_ptr(cb_idx);
@@ -48,7 +52,7 @@ void kernel_main() {
 
     const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
-    noc_async_read_one_packet_set_state<true>(w_base, seg_bytes, vc);
+    noc_async_read_one_packet_set_state<true>(w_base, page_bytes, vc);
 
     constexpr uint32_t num_buffers = 3;
     constexpr uint32_t extra_in_flight = 1;
@@ -63,8 +67,12 @@ void kernel_main() {
     for (uint32_t c = 0; c < cols; ++c) {
         noc_async_read_set_trid(trid);
         for (uint32_t e = 0; e < num_sel; ++e) {
-            noc_async_read_one_packet_with_state_with_trid(w_base, offsets[e] + c * seg_bytes, l1_write, trid);
-            l1_write += seg_bytes;
+            uint32_t src = offsets[e] + c * seg_bytes;
+            for (uint32_t p = 0; p < pages_per_seg; ++p) {
+                noc_async_read_one_packet_with_state_with_trid(w_base, src, l1_write, trid);
+                src += page_bytes;
+                l1_write += page_bytes;
+            }
         }
         if (free_blocks == num_buffers - extra_in_flight) {
             noc_async_read_barrier_with_trid(trid_to_wait);

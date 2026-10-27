@@ -59,6 +59,7 @@ class Experts:
         tensor_cache_path=None,
         indexed_decode=False,
         dense_decode_tokens=None,
+        decode_weight_dtype=None,
     ):
         """
         Initialize expert layers.
@@ -77,10 +78,12 @@ class Experts:
             dense_decode_tokens: Batched decode with this many tokens per device (fused_decode.config
                 dense_moe_decode_supported): every expert is computed for every token by two DRAM-sharded matmuls
                 over all experts side by side (decode_forward_dense).
+            decode_weight_dtype: Weight dtype of the fused decode streams (indexed_decode; default weight_dtype).
         """
         self.config = config
         self.mesh_config = mesh_config
         self.weight_dtype, self.tensor_cache_path = weight_dtype, tensor_cache_path
+        self.decode_weight_dtype = decode_weight_dtype or weight_dtype
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.program_config = program_config
@@ -113,7 +116,7 @@ class Experts:
                 config=config,
                 state_dict=state_dict,
                 mesh_config=mesh_config,
-                weight_dtype=weight_dtype,
+                weight_dtype=self.decode_weight_dtype,
                 tensor_cache_path=tensor_cache_path,
             )
             self.decode_stream = ccl_manager.get_decode_expert_stream(
@@ -122,6 +125,7 @@ class Experts:
                 config.num_experts_per_tok,
                 config.swiglu_limit,
                 config.alpha,
+                weight_dtype=self.decode_weight_dtype,
             )
 
         self.dense_decode_weights = None
