@@ -356,6 +356,21 @@ TABLE = {
         "ttnn.add, then the chip's hidden slice (exact fp32, K-30); reduce_scatter = one CCL whose FPU add reads fp32 "
         "at about TF32",
     ),
+    "MOE_IMPL": Setting(
+        "flat",
+        ("flat", "block"),
+        "the MoE layer (tt/MOE_BLOCK.md; owner decisions 2026-10-27, reports/moe_block_decisions_2026-10-27.md, an A/B "
+        "on the 2x2, the Galaxy keeps flat meanwhile). flat = today's steps: router (ROUTER_IMPL), routed experts "
+        "(flat op + weighted combine), shared expert (flat op), moe_add. block = Marko Staletovic's MoE block "
+        "(models/demos/moe_block, tt/moe_block_adapter.py) for all four, in the experts step: x as ffn_norm gathers it "
+        "(D2: the block's x_gathered input, ffn_norm unchanged); the block's ops router (D3: partial logits over H/TP, "
+        "reduce-scatter, softplus + sqrt, router_topk) with this model's gate weight, recentred selection bias, route "
+        "scale 1.5, top 6; the ops head (D4); the shared expert as ttnn matmuls at LoFi with bfp8 weights (D5); the "
+        "routed experts as our FlatRoutedExpert (bfp4, weights_nk, our weight cache, EXPERTS_LAYOUT: D6, marko = the "
+        "block's own layout_of) in the block's "
+        "token exchange (owner dispatch, flat experts + combine in one program) with the fixed combine order (D7: the "
+        "exchange's deterministic planner); EXPERTS_PRECISION=glm only (D8); FABRIC_2D lines (D10). Not measured yet",
+    ),
     # ---- mHC (tt/mhc.py, tt/residual.py)
     "RESIDUAL_MIX": Setting(
         "fused",
