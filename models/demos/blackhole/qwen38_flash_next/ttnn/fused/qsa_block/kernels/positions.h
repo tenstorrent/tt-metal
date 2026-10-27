@@ -23,17 +23,17 @@ inline void read_positions(
     uint32_t scratch) {
     noc_async_read_page(0, block_start, scratch);
     for (uint32_t u = 0; u < rows; ++u) {
-        noc_async_read_page(u, hit, scratch + 128 + u * TILE_BYTES);
+        noc_async_read_page(u, hit, scratch + 128 + u * tile_bytes);
     }
     noc_async_read_barrier();
     invalidate_l1_cache();
     volatile tt_l1_ptr uint32_t* starts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
     for (uint32_t u = 0; u < rows; ++u) {
         uint32_t row = 0;
-        for (uint32_t r = 0; r < TILE_ROWS; ++r) {
-            const volatile tt_l1_ptr uint16_t* e =
-                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch + 128 + u * TILE_BYTES + chunk_offset(r, 0));
-            if (e[0] == 0x3F80) {
+        for (uint32_t r = 0; r < rows_per_tile; ++r) {
+            const volatile tt_l1_ptr uint16_t* hit_row =
+                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch + 128 + u * tile_bytes + chunk_offset(r, 0));
+            if (hit_row[0] == 0x3F80) {
                 row = r;
             }
         }

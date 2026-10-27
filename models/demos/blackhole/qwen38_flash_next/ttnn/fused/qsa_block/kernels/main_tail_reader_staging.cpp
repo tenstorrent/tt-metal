@@ -9,6 +9,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "main_tail_cbs.h"
@@ -17,62 +18,66 @@
 using namespace main_tail;
 
 void kernel_main() {
-    const uint32_t stg_addr = get_arg_val<uint32_t>(0);
-    const uint32_t v_addr = get_arg_val<uint32_t>(1);
-    const uint32_t pos_addr = get_arg_val<uint32_t>(2);
-    const uint32_t hit_addr = get_arg_val<uint32_t>(3);
+    const uint32_t staging_addr = get_arg_val<uint32_t>(0);
+    const uint32_t value_addr = get_arg_val<uint32_t>(1);
+    const uint32_t block_start_addr = get_arg_val<uint32_t>(2);
+    const uint32_t row_hit_addr = get_arg_val<uint32_t>(3);
     const uint32_t rows = get_arg_val<uint32_t>(4);
-    const uint32_t v_first = get_arg_val<uint32_t>(5);
+    const uint32_t value_first_tile = get_arg_val<uint32_t>(5);
     const uint32_t lane_first = get_arg_val<uint32_t>(6);
     const uint32_t lane_count = get_arg_val<uint32_t>(7);
-    constexpr auto stg_args = TensorAccessorArgs<0>();
-    constexpr auto v_args = TensorAccessorArgs<stg_args.next_compile_time_args_offset()>();
-    constexpr auto pos_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
-    constexpr auto hit_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
-    const auto stg = TensorAccessor(stg_args, stg_addr);
-    const auto v = TensorAccessor(v_args, v_addr);
-    const auto pos = TensorAccessor(pos_args, pos_addr);
-    const auto hit = TensorAccessor(hit_args, hit_addr);
-    Semaphore<> sem_krot(SEM_KROT), sem_knorm(SEM_KNORM);
+    constexpr auto staging_args = TensorAccessorArgs<0>();
+    constexpr auto value_args = TensorAccessorArgs<staging_args.next_compile_time_args_offset()>();
+    constexpr auto block_start_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
+    constexpr auto row_hit_args = TensorAccessorArgs<block_start_args.next_compile_time_args_offset()>();
+    const auto staging = TensorAccessor(staging_args, staging_addr);
+    const auto value = TensorAccessor(value_args, value_addr);
+    const auto block_start = TensorAccessor(block_start_args, block_start_addr);
+    const auto row_hit = TensorAccessor(row_hit_args, row_hit_addr);
+    Semaphore<> key_rotated_handoff(key_rotated_semaphore_id), key_normalized_handoff(key_normalized_semaphore_id);
 
-    cb_reserve_back(CB_ONES, 1);
-    tile_rows::fill_words(get_write_ptr(CB_ONES), TILE_BYTES / 4, 0x3F803F80u);
-    cb_push_back(CB_ONES, 1);
-    cb_reserve_back(CB_POS_R, 1);
-    cb_reserve_back(CB_POSCR, 1);
-    cb_reserve_back(CB_PACK, PACK_TILES);
-    const uint32_t pos_l1 = get_write_ptr(CB_POS_R), pack_l1 = get_write_ptr(CB_PACK);
+    CircularBuffer(cb_ones).reserve_back(1);
+    tile_rows::fill_words(get_write_ptr(cb_ones), tile_bytes / 4, 0x3F803F80u);
+    CircularBuffer(cb_ones).push_back(1);
+    CircularBuffer(cb_pos_r).reserve_back(1);
+    CircularBuffer(cb_poscr).reserve_back(1);
+    CircularBuffer(cb_pack).reserve_back(pack_tiles);
+    const uint32_t positions_l1 = get_write_ptr(cb_pos_r), pack_l1 = get_write_ptr(cb_pack);
     tile_rows::read_positions(
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1), pos, hit, rows, get_write_ptr(CB_POSCR));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1),
+        block_start,
+        row_hit,
+        rows,
+        get_write_ptr(cb_poscr));
     {
-        for (uint32_t c = 0; c < HEAD_TILES; ++c) {
-            noc_async_read_page(v_first + c, v, pack_l1 + c * TILE_BYTES);
+        for (uint32_t c = 0; c < head_tiles; ++c) {
+            noc_async_read_page(value_first_tile + c, value, pack_l1 + c * tile_bytes);
         }
         noc_async_read_barrier();
         invalidate_l1_cache();
     }
-    volatile tt_l1_ptr uint32_t* positions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1);
+    volatile tt_l1_ptr uint32_t* positions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1);
     {
-        sem_krot.wait_min(1);
-        sem_knorm.wait_min(1);
+        key_rotated_handoff.wait_min(1);
+        key_normalized_handoff.wait_min(1);
         invalidate_l1_cache();
     }
 
     for (uint32_t i = 0; i < lane_count; ++i) {
         const uint32_t lane = lane_first + i;
         const uint32_t slot = positions[lane] & 31;
-        cb_reserve_back(CB_STG, PACK_TILES);
-        const uint32_t stg_l1 = get_write_ptr(CB_STG);
-        for (uint32_t c = 0; c < PACK_TILES; ++c) {
-            noc_async_read_page(lane * PACK_TILES + c, stg, stg_l1 + c * TILE_BYTES);
+        CircularBuffer(cb_stg).reserve_back(pack_tiles);
+        const uint32_t staging_l1 = get_write_ptr(cb_stg);
+        for (uint32_t c = 0; c < pack_tiles; ++c) {
+            noc_async_read_page(lane * pack_tiles + c, staging, staging_l1 + c * tile_bytes);
         }
         noc_async_read_barrier();
         invalidate_l1_cache();
-        for (uint32_t c = 0; c < PACK_TILES; ++c) {
-            copy_tile_row(pack_l1 + c * TILE_BYTES, lane, stg_l1 + c * TILE_BYTES, slot, true);
+        for (uint32_t c = 0; c < pack_tiles; ++c) {
+            copy_tile_row(pack_l1 + c * tile_bytes, lane, staging_l1 + c * tile_bytes, slot, true);
         }
-        cb_push_back(CB_STG, PACK_TILES);
+        CircularBuffer(cb_stg).push_back(pack_tiles);
     }
-    sem_krot.set(0);
-    sem_knorm.set(0);
+    key_rotated_handoff.set(0);
+    key_normalized_handoff.set(0);
 }

@@ -9,7 +9,7 @@
 using namespace main_tail;
 
 void kernel_main() {
-    CircularBuffer(CB_SCALAR).wait_front(1);
-    compute_kernel_hw_startup(CB_ROT, CB_SCALAR, CB_ROT_NEG);
-    rope64_rows<CB_IN, CB_ROT, CB_COS, CB_SIN, CB_SCALAR, CB_ROT_NEG, CB_XCOS, CB_RSIN, CB_OUT>(1);
+    CircularBuffer(cb_scalar).wait_front(1);
+    compute_kernel_hw_startup(cb_rot, cb_scalar, cb_rot_neg);
+    rope64_rows<cb_in, cb_rot, cb_cos, cb_sin, cb_scalar, cb_rot_neg, cb_xcos, cb_rsin, cb_out>(1);
 }

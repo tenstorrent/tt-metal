@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // ttnn.rms_norm(x bf16, weight bf16, eps) under an fp32 dest, call for call: layernorm.cpp's RMSNORM + FUSE_GAMMA
-// path (x*x on the FPU packed fp32, SUM reduce against the 1.0 scaler then the SFPU 1/W, + eps, rsqrt, x * rsqrt
-// packed fp32, * gamma packed bf16) on the same CB formats, so it is bitwise against the op.
-// CBs: c_in x (bf16, Wt), c_scaler (bf16, 1, never popped), c_eps (bf16, 1, never popped), c_gamma (bf16, Wt, never
-// popped), c_xmm2 (fp32, Wt), c_ex2 (fp32, 1), c_ex2pe (fp32, 1), c_fusion (fp32, 2*block), c_out (bf16, Wt).
+// path (x*x on the FPU packed fp32, SUM reduce against the 1.0 scaler then the SFPU 1/width, + eps, rsqrt, x * rsqrt
+// packed fp32, * gamma packed bf16) on the same CB formats, so it is bitwise against the op. width / width_tiles are
+// the op's W / Wt.
+// CBs: c_in x (bf16, width_tiles), c_scaler (bf16, 1, never popped), c_eps (bf16, 1, never popped), c_gamma (bf16,
+// width_tiles, never popped), c_xmm2 (fp32, width_tiles), c_ex2 (fp32, 1), c_ex2pe (fp32, 1), c_fusion (fp32,
+// 2*block), c_out (bf16, width_tiles).
 // The caller runs compute_kernel_hw_startup once; the kernel must be compiled with fp32_dest_acc_en.
 
 #pragma once
@@ -27,8 +29,8 @@
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 
 template <
-    uint32_t Wt,
-    uint32_t W,
+    uint32_t width_tiles,
+    uint32_t width,
     uint32_t c_in,
     uint32_t c_scaler,
     uint32_t c_eps,
@@ -48,18 +50,18 @@ inline void rms_norm_rows(uint32_t rows) {
     DataflowBuffer in(c_in), scaler(c_scaler), eps(c_eps), gamma(c_gamma), xmm2(c_xmm2), ex2(c_ex2), ex2pe(c_ex2pe),
         fusion(c_fusion), out(c_out);
     eps.wait_front(1);
-    const auto total_buffer_size = generic::blocks(Wt, block_size).total_with_remainder();
+    const auto total_buffer_size = generic::blocks(width_tiles, block_size).total_with_remainder();
 
     for (uint32_t r = 0; r < rows; ++r) {
         reconfig_data_format(c_in, c_in);
         pack_reconfig_data_format(c_xmm2);
         mul_init(c_in, c_in);
-        for (auto block : generic::blocks(Wt, block_size)) {
+        for (auto block : generic::blocks(width_tiles, block_size)) {
             in.wait_front(block.start() + block.full_block_size());
             tile_regs_acquire();
             for (auto i : block.local()) {
-                const auto g = block.to_global(i);
-                mul_tiles(c_in, c_in, g, g, i);
+                const auto global_tile = block.to_global(i);
+                mul_tiles(c_in, c_in, global_tile, global_tile, i);
             }
             tile_regs_commit();
             xmm2.reserve_back(block.full_block_size());
@@ -73,7 +75,7 @@ inline void rms_norm_rows(uint32_t rows) {
         reconfig_data_format(c_in, c_xmm2, c_in, c_scaler);
 
         numeric::row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, true, policies::FullBlockWithPopPolicy>(
-            xmm2, scaler, ex2, W, Wt, block_size, 32);
+            xmm2, scaler, ex2, width, width_tiles, block_size, 32);
 
         ex2.wait_front(1);
         reconfig_data_format(c_ex2, c_eps);
@@ -92,7 +94,7 @@ inline void rms_norm_rows(uint32_t rows) {
         ex2pe.push_back(1);
 
         ex2pe.wait_front(1);
-        for (auto block : generic::blocks(Wt, block_size)) {
+        for (auto block : generic::blocks(width_tiles, block_size)) {
             reconfig_data_format(c_in, c_ex2pe);
             pack_reconfig_data_format(c_fusion);
             fusion.reserve_back(block.full_block_size());

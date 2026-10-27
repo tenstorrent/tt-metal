@@ -9,6 +9,6 @@
 using namespace main_tail;
 
 void kernel_main() {
-    compute_kernel_hw_startup(CB_X, CB_X, CB_XMM2);
-    rms_norm_rows<HEAD_TILES, 256, CB_X, CB_SCALER, CB_EPS, CB_GAMMA, CB_XMM2, CB_EX2, CB_EX2PE, CB_FUSION, CB_N>(1);
+    compute_kernel_hw_startup(cb_x, cb_x, cb_xmm2);
+    rms_norm_rows<head_tiles, 256, cb_x, cb_scaler, cb_eps, cb_gamma, cb_xmm2, cb_ex2, cb_ex2pe, cb_fusion, cb_n>(1);
 }

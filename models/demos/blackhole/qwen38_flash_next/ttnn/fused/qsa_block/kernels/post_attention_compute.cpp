@@ -10,59 +10,60 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/activations.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    constexpr uint32_t CB_GATE = 0, CB_ATT = 1, CB_SIG = 2, CB_OUT = 16, HEAD_TILES = 8, GROUP = 4;
-    compute_kernel_hw_startup(CB_GATE, CB_ATT, CB_SIG);
-    cb_wait_front(CB_GATE, HEAD_TILES);
-    cb_wait_front(CB_ATT, HEAD_TILES);
+    constexpr uint32_t cb_gate = 0, cb_att = 1, cb_sig = 2, cb_out = 16, head_tiles = 8, group_tiles = 4;
+    compute_kernel_hw_startup(cb_gate, cb_att, cb_sig);
+    CircularBuffer(cb_gate).wait_front(head_tiles);
+    CircularBuffer(cb_att).wait_front(head_tiles);
 
     {
-        reconfig_data_format(CB_GATE, CB_GATE);
-        pack_reconfig_data_format(CB_SIG);
+        reconfig_data_format(cb_gate, cb_gate);
+        pack_reconfig_data_format(cb_sig);
         sigmoid_tile_init<false>();
-        for (uint32_t b = 0; b < HEAD_TILES; b += GROUP) {
-            cb_reserve_back(CB_SIG, GROUP);
+        for (uint32_t b = 0; b < head_tiles; b += group_tiles) {
+            CircularBuffer(cb_sig).reserve_back(group_tiles);
             tile_regs_acquire();
-            copy_init(CB_GATE);
-            for (uint32_t i = 0; i < GROUP; ++i) {
-                copy_tile(CB_GATE, b + i, i);
+            copy_init(cb_gate);
+            for (uint32_t i = 0; i < group_tiles; ++i) {
+                copy_tile(cb_gate, b + i, i);
                 sigmoid_tile<VectorMode::RC, false, false>(i);
             }
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t i = 0; i < GROUP; ++i) {
-                pack_tile(i, CB_SIG);
+            for (uint32_t i = 0; i < group_tiles; ++i) {
+                pack_tile(i, cb_sig);
             }
             tile_regs_release();
-            cb_push_back(CB_SIG, GROUP);
+            CircularBuffer(cb_sig).push_back(group_tiles);
         }
-        cb_pop_front(CB_GATE, HEAD_TILES);
+        CircularBuffer(cb_gate).pop_front(head_tiles);
     }
 
     {
-        cb_wait_front(CB_SIG, HEAD_TILES);
-        pack_reconfig_data_format(CB_OUT);
+        CircularBuffer(cb_sig).wait_front(head_tiles);
+        pack_reconfig_data_format(cb_out);
         mul_binary_tile_init();
-        for (uint32_t b = 0; b < HEAD_TILES; b += 2) {
-            cb_reserve_back(CB_OUT, 2);
+        for (uint32_t b = 0; b < head_tiles; b += 2) {
+            CircularBuffer(cb_out).reserve_back(2);
             tile_regs_acquire();
-            copy_init(CB_ATT);
-            copy_tile(CB_ATT, b, 0);
-            copy_tile(CB_ATT, b + 1, 2);
-            copy_init(CB_SIG);
-            copy_tile(CB_SIG, b, 1);
+            copy_init(cb_att);
+            copy_tile(cb_att, b, 0);
+            copy_tile(cb_att, b + 1, 2);
+            copy_init(cb_sig);
+            copy_tile(cb_sig, b, 1);
             mul_binary_tile<false>(0, 1, 0);
-            copy_tile(CB_SIG, b + 1, 3);
+            copy_tile(cb_sig, b + 1, 3);
             mul_binary_tile<false>(2, 3, 2);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, CB_OUT);
-            pack_tile(2, CB_OUT);
+            pack_tile(0, cb_out);
+            pack_tile(2, cb_out);
             tile_regs_release();
-            cb_push_back(CB_OUT, 2);
+            CircularBuffer(cb_out).push_back(2);
         }
-        cb_pop_front(CB_SIG, HEAD_TILES);
-        cb_pop_front(CB_ATT, HEAD_TILES);
+        CircularBuffer(cb_sig).pop_front(head_tiles);
+        CircularBuffer(cb_att).pop_front(head_tiles);
     }
 }

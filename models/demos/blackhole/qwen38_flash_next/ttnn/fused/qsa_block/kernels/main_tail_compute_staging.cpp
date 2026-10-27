@@ -9,6 +9,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "main_tail_cbs.h"
 
@@ -16,37 +17,37 @@ using namespace main_tail;
 
 void kernel_main() {
     const uint32_t lane_count = get_arg_val<uint32_t>(0);
-    compute_kernel_hw_startup(CB_STG, CB_ONES, CB_STGC);
-    cb_wait_front(CB_ONES, 1);
+    compute_kernel_hw_startup(cb_stg, cb_ones, cb_stgc);
+    CircularBuffer(cb_ones).wait_front(1);
     for (uint32_t i = 0; i < lane_count; ++i) {
-        cb_wait_front(CB_STG, PACK_TILES);
-        cb_reserve_back(CB_STGC, PACK_TILES);
-        cb_reserve_back(CB_STGW, PACK_TILES);
-        reconfig_data_format(CB_STG, CB_ONES);
-        pack_reconfig_data_format(CB_STGC);
+        CircularBuffer(cb_stg).wait_front(pack_tiles);
+        CircularBuffer(cb_stgc).reserve_back(pack_tiles);
+        CircularBuffer(cb_stgw).reserve_back(pack_tiles);
+        reconfig_data_format(cb_stg, cb_ones);
+        pack_reconfig_data_format(cb_stgc);
         mul_binary_tile_init();
-        for (uint32_t t = 0; t < PACK_TILES; ++t) {
+        for (uint32_t t = 0; t < pack_tiles; ++t) {
             tile_regs_acquire();
-            copy_init(CB_STG);
-            copy_tile(CB_STG, t, 0);
-            copy_init(CB_ONES);
-            copy_tile(CB_ONES, 0, 1);
+            copy_init(cb_stg);
+            copy_tile(cb_stg, t, 0);
+            copy_init(cb_ones);
+            copy_tile(cb_ones, 0, 1);
             mul_binary_tile<false>(0, 1, 0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(0, CB_STGC);
+            pack_tile(0, cb_stgc);
             tile_regs_release();
         }
-        cb_push_back(CB_STGC, PACK_TILES);
-        cb_push_back(CB_STGW, PACK_TILES);
-        cb_pop_front(CB_STG, PACK_TILES);
+        CircularBuffer(cb_stgc).push_back(pack_tiles);
+        CircularBuffer(cb_stgw).push_back(pack_tiles);
+        CircularBuffer(cb_stg).pop_front(pack_tiles);
 
-        reconfig_data_format(CB_STGC, CB_STGC);
-        pack_reconfig_data_format(CB_RM);
+        reconfig_data_format(cb_stgc, cb_stgc);
+        pack_reconfig_data_format(cb_rm);
         compute_kernel_lib::untilize<
-            PACK_TILES,
-            CB_STGC,
-            CB_RM,
+            pack_tiles,
+            cb_stgc,
+            cb_rm,
             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);

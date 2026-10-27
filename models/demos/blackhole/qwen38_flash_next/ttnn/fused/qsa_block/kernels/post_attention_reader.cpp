@@ -9,48 +9,49 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "tile_rows.h"
 
 void kernel_main() {
-    const uint32_t att_addr = get_arg_val<uint32_t>(0);
+    const uint32_t attention_addr = get_arg_val<uint32_t>(0);
     const uint32_t qg_addr = get_arg_val<uint32_t>(1);
     const uint32_t rows = get_arg_val<uint32_t>(2);
     const uint32_t head = get_arg_val<uint32_t>(3);
     const uint32_t qg_first = get_arg_val<uint32_t>(4);
-    constexpr uint32_t CB_GATE = 0, CB_ATT = 1, CB_ROW = 3, HEAD_TILES = 8, GATE_FIRST = 8;
-    constexpr auto att_args = TensorAccessorArgs<0>();
-    constexpr auto qg_args = TensorAccessorArgs<att_args.next_compile_time_args_offset()>();
-    const auto att = TensorAccessor(att_args, att_addr);
+    constexpr uint32_t cb_gate = 0, cb_att = 1, cb_row = 3, head_tiles = 8, gate_first_tile = 8;
+    constexpr auto attention_args = TensorAccessorArgs<0>();
+    constexpr auto qg_args = TensorAccessorArgs<attention_args.next_compile_time_args_offset()>();
+    const auto attention = TensorAccessor(attention_args, attention_addr);
     const auto qg = TensorAccessor(qg_args, qg_addr);
-    using tile_rows::ROW_BYTES;
-    using tile_rows::TILE_BYTES;
+    using tile_rows::half_row_bytes;
+    using tile_rows::tile_bytes;
 
-    cb_reserve_back(CB_GATE, HEAD_TILES);
-    cb_reserve_back(CB_ATT, HEAD_TILES);
-    const uint32_t gate_l1 = get_write_ptr(CB_GATE), att_l1 = get_write_ptr(CB_ATT);
+    CircularBuffer(cb_gate).reserve_back(head_tiles);
+    CircularBuffer(cb_att).reserve_back(head_tiles);
+    const uint32_t gate_l1 = get_write_ptr(cb_gate), attention_l1 = get_write_ptr(cb_att);
     {
         Noc noc;
-        DataflowBuffer att_cb(CB_ATT);
-        noc.async_write_zeros(att_cb, HEAD_TILES * TILE_BYTES);
+        DataflowBuffer attention_cb(cb_att);
+        noc.async_write_zeros(attention_cb, head_tiles * tile_bytes);
         noc.write_zeros_l1_barrier();
     }
     {
-        for (uint32_t t = 0; t < HEAD_TILES; ++t) {
-            noc_async_read_page(qg_first + 2 * HEAD_TILES * head + GATE_FIRST + t, qg, gate_l1 + t * TILE_BYTES);
+        for (uint32_t t = 0; t < head_tiles; ++t) {
+            noc_async_read_page(qg_first + 2 * head_tiles * head + gate_first_tile + t, qg, gate_l1 + t * tile_bytes);
         }
         // DRAM reads land whole (64-byte aligned) rows in the scratch; the RISC places the chunks into the tile faces
-        cb_reserve_back(CB_ROW, 1);
-        const uint32_t row_l1 = get_write_ptr(CB_ROW);
+        CircularBuffer(cb_row).reserve_back(1);
+        const uint32_t row_l1 = get_write_ptr(cb_row);
         for (uint32_t lane = 0; lane < rows; ++lane) {
-            noc_async_read(att.get_noc_addr(head * rows + lane, 0), row_l1, HEAD_TILES * 2 * ROW_BYTES);
+            noc_async_read(attention.get_noc_addr(head * rows + lane, 0), row_l1, head_tiles * 2 * half_row_bytes);
             noc_async_read_barrier();
             invalidate_l1_cache();
-            tile_rows::place_row(row_l1, att_l1, HEAD_TILES, lane);
+            tile_rows::place_row(row_l1, attention_l1, head_tiles, lane);
         }
         noc_async_read_barrier();
-        cb_push_back(CB_GATE, HEAD_TILES);
-        cb_push_back(CB_ATT, HEAD_TILES);
+        CircularBuffer(cb_gate).push_back(head_tiles);
+        CircularBuffer(cb_att).push_back(head_tiles);
     }
 }

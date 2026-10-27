@@ -7,7 +7,7 @@
 // for tiles.  CBs: 0 device chunks, 1 zero, 2 mask, 3 sum, 16 out (bf16).  Runtime args: 0 rows, 1 chunks on this core.
 
 #include "api/compute/common.h"
-#include "api/compute/cb_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -16,44 +16,44 @@
 void kernel_main() {
     const uint32_t rows = get_arg_val<uint32_t>(0);
     const uint32_t chunks = get_arg_val<uint32_t>(1);
-    constexpr uint32_t CB_IN = 0, CB_ZERO = 1, CB_MASK = 2, CB_SUM = 3, CB_OUT = 16, DEVICES = 4;
-    compute_kernel_hw_startup(CB_IN, CB_ZERO, CB_SUM);
-    cb_wait_front(CB_ZERO, 1);
+    constexpr uint32_t cb_in = 0, cb_zero = 1, cb_mask = 2, cb_sum = 3, cb_out = 16, devices = 4;
+    compute_kernel_hw_startup(cb_in, cb_zero, cb_sum);
+    CircularBuffer(cb_zero).wait_front(1);
     for (uint32_t r = 0; r < rows * chunks;
          ++r) {  // the reader streams the core's chunks one after another, rows within a chunk
-        cb_wait_front(CB_IN, DEVICES);
-        cb_reserve_back(CB_SUM, 1);
-        reconfig_data_format(CB_IN, CB_ZERO);
-        pack_reconfig_data_format(CB_SUM);
+        CircularBuffer(cb_in).wait_front(devices);
+        CircularBuffer(cb_sum).reserve_back(1);
+        reconfig_data_format(cb_in, cb_zero);
+        pack_reconfig_data_format(cb_sum);
         tile_regs_acquire();
-        add_init(CB_IN, CB_ZERO, true);
-        for (uint32_t d = 0; d < DEVICES; ++d) {
-            add_tiles(CB_IN, CB_ZERO, d, 0, 0);
+        add_init(cb_in, cb_zero, true);
+        for (uint32_t d = 0; d < devices; ++d) {
+            add_tiles(cb_in, cb_zero, d, 0, 0);
         }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, CB_SUM);
+        pack_tile(0, cb_sum);
         tile_regs_release();
-        cb_push_back(CB_SUM, 1);
-        cb_pop_front(CB_IN, DEVICES);
+        CircularBuffer(cb_sum).push_back(1);
+        CircularBuffer(cb_in).pop_front(devices);
 
-        cb_wait_front(CB_SUM, 1);
-        cb_wait_front(CB_MASK, 1);
-        cb_reserve_back(CB_OUT, 1);
-        pack_reconfig_data_format(CB_OUT);
+        CircularBuffer(cb_sum).wait_front(1);
+        CircularBuffer(cb_mask).wait_front(1);
+        CircularBuffer(cb_out).reserve_back(1);
+        pack_reconfig_data_format(cb_out);
         tile_regs_acquire();
-        copy_init(CB_SUM);
-        copy_tile(CB_SUM, 0, 0);
-        copy_init(CB_MASK);
-        copy_tile(CB_MASK, 0, 1);
+        copy_init(cb_sum);
+        copy_tile(cb_sum, 0, 0);
+        copy_init(cb_mask);
+        copy_tile(cb_mask, 0, 1);
         add_binary_tile_init();
         add_binary_tile<ckernel::DstRoundingMode::NearestEven>(0, 1, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, CB_OUT);
+        pack_tile(0, cb_out);
         tile_regs_release();
-        cb_push_back(CB_OUT, 1);
-        cb_pop_front(CB_SUM, 1);
-        cb_pop_front(CB_MASK, 1);
+        CircularBuffer(cb_out).push_back(1);
+        CircularBuffer(cb_sum).pop_front(1);
+        CircularBuffer(cb_mask).pop_front(1);
     }
 }

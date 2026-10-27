@@ -8,6 +8,7 @@
 // row r chunk c at page (d * rows + r) * total + c).
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "tile_rows.h"
 
@@ -18,30 +19,30 @@ void kernel_main() {
     const uint32_t first_chunk = get_arg_val<uint32_t>(3);
     const uint32_t chunks = get_arg_val<uint32_t>(4);
     const uint32_t total_chunks = get_arg_val<uint32_t>(5);  // pages per device row in the gathered tensor
-    constexpr uint32_t CB_IN = 0, CB_ZERO = 1, CB_MASK = 2, DEVICES = 4, CHUNK_BYTES = tile_rows::TILE_BYTES;
+    constexpr uint32_t cb_in = 0, cb_zero = 1, cb_mask = 2, devices = 4, chunk_bytes = tile_rows::tile_bytes;
     constexpr auto gathered_args = TensorAccessorArgs<0>();
     constexpr auto mask_args = TensorAccessorArgs<gathered_args.next_compile_time_args_offset()>();
     const auto gathered = TensorAccessor(gathered_args, gathered_addr);
     const auto mask = TensorAccessor(mask_args, mask_addr);
 
-    cb_reserve_back(CB_ZERO, 1);
-    tile_rows::fill_words(get_write_ptr(CB_ZERO), CHUNK_BYTES / 4, 0);
-    cb_push_back(CB_ZERO, 1);
+    CircularBuffer(cb_zero).reserve_back(1);
+    tile_rows::fill_words(get_write_ptr(cb_zero), chunk_bytes / 4, 0);
+    CircularBuffer(cb_zero).push_back(1);
     for (uint32_t chunk = first_chunk; chunk < first_chunk + chunks; ++chunk) {
         for (uint32_t r = 0; r < rows; ++r) {
-            cb_reserve_back(CB_IN, DEVICES);
-            cb_reserve_back(CB_MASK, 1);
-            const uint32_t in_l1 = get_write_ptr(CB_IN);
-            for (uint32_t d = 0; d < DEVICES; ++d) {
+            CircularBuffer(cb_in).reserve_back(devices);
+            CircularBuffer(cb_mask).reserve_back(1);
+            const uint32_t in_l1 = get_write_ptr(cb_in);
+            for (uint32_t d = 0; d < devices; ++d) {
                 noc_async_read(  // device d's row r, chunk c = one 2 KB page of the gathered pages
                     gathered.get_noc_addr((d * rows + r) * total_chunks + chunk, 0),
-                    in_l1 + d * CHUNK_BYTES,
-                    CHUNK_BYTES);
+                    in_l1 + d * chunk_bytes,
+                    chunk_bytes);
             }
-            noc_async_read(mask.get_noc_addr(r, chunk * CHUNK_BYTES), get_write_ptr(CB_MASK), CHUNK_BYTES);
+            noc_async_read(mask.get_noc_addr(r, chunk * chunk_bytes), get_write_ptr(cb_mask), chunk_bytes);
             noc_async_read_barrier();
-            cb_push_back(CB_IN, DEVICES);
-            cb_push_back(CB_MASK, 1);
+            CircularBuffer(cb_in).push_back(devices);
+            CircularBuffer(cb_mask).push_back(1);
         }
     }
 }

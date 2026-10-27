@@ -9,6 +9,7 @@
 // peer x, 8 peer y, 9 lane_first, 10 lane_count, 11 do_query.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "index_tail_cbs.h"
 #include "positions.h"
@@ -19,8 +20,8 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t ring_addr = get_arg_val<uint32_t>(1);
     const uint32_t cache_addr = get_arg_val<uint32_t>(2);
-    const uint32_t pos_addr = get_arg_val<uint32_t>(3);
-    const uint32_t hit_addr = get_arg_val<uint32_t>(4);
+    const uint32_t block_start_addr = get_arg_val<uint32_t>(3);
+    const uint32_t row_hit_addr = get_arg_val<uint32_t>(4);
     const uint32_t rows = get_arg_val<uint32_t>(5);
     const uint32_t lane_tile_rows = get_arg_val<uint32_t>(6);
     const uint32_t peer_x = get_arg_val<uint32_t>(7);
@@ -31,77 +32,82 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<0>();
     constexpr auto ring_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto cache_args = TensorAccessorArgs<ring_args.next_compile_time_args_offset()>();
-    constexpr auto pos_args = TensorAccessorArgs<cache_args.next_compile_time_args_offset()>();
-    constexpr auto hit_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
+    constexpr auto block_start_args = TensorAccessorArgs<cache_args.next_compile_time_args_offset()>();
+    constexpr auto row_hit_args = TensorAccessorArgs<block_start_args.next_compile_time_args_offset()>();
     const auto out = TensorAccessor(out_args, out_addr);
     const auto ring = TensorAccessor(ring_args, ring_addr);
     const auto cache = TensorAccessor(cache_args, cache_addr);
-    const auto pos = TensorAccessor(pos_args, pos_addr);
-    const auto hit = TensorAccessor(hit_args, hit_addr);
-    volatile tt_l1_ptr uint32_t* ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_READY));
-    const uint64_t peer_sem_q = get_noc_addr(peer_x, peer_y, get_semaphore(SEM_Q));
-    const uint64_t peer_sem_k = get_noc_addr(peer_x, peer_y, get_semaphore(SEM_K));
+    const auto block_start = TensorAccessor(block_start_args, block_start_addr);
+    const auto row_hit = TensorAccessor(row_hit_args, row_hit_addr);
+    volatile tt_l1_ptr uint32_t* ready =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_semaphore_id));
+    const uint64_t peer_sem_q = get_noc_addr(peer_x, peer_y, get_semaphore(query_semaphore_id));
+    const uint64_t peer_sem_k = get_noc_addr(peer_x, peer_y, get_semaphore(key_semaphore_id));
     // the peer's CBs sit at the same L1 addresses (every CB is declared on both cores and these are unused here)
-    const uint64_t peer_in_q = get_noc_addr(peer_x, peer_y, get_write_ptr(CB_IN_Q));
-    const uint64_t peer_rot_q = get_noc_addr(peer_x, peer_y, get_write_ptr(CB_ROT_Q));
-    const uint64_t peer_in_k = get_noc_addr(peer_x, peer_y, get_write_ptr(CB_IN_K));
-    const uint64_t peer_rot_k = get_noc_addr(peer_x, peer_y, get_write_ptr(CB_ROT_K));
+    const uint64_t peer_in_q = get_noc_addr(peer_x, peer_y, get_write_ptr(cb_in_q));
+    const uint64_t peer_rot_q = get_noc_addr(peer_x, peer_y, get_write_ptr(cb_rot_q));
+    const uint64_t peer_in_k = get_noc_addr(peer_x, peer_y, get_write_ptr(cb_in_k));
+    const uint64_t peer_rot_k = get_noc_addr(peer_x, peer_y, get_write_ptr(cb_rot_k));
 
-    cb_reserve_back(CB_POS_W, 1);
-    cb_reserve_back(CB_POSCW, 1);
-    const uint32_t pos_l1 = get_write_ptr(CB_POS_W);
+    CircularBuffer(cb_pos_w).reserve_back(1);
+    CircularBuffer(cb_poscw).reserve_back(1);
+    const uint32_t positions_l1 = get_write_ptr(cb_pos_w);
     tile_rows::read_positions(
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1), pos, hit, rows, get_write_ptr(CB_POSCW));
-    volatile tt_l1_ptr uint32_t* positions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_l1);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1),
+        block_start,
+        row_hit,
+        rows,
+        get_write_ptr(cb_poscw));
+    volatile tt_l1_ptr uint32_t* positions = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(positions_l1);
 
     if (do_query) {
-        cb_wait_front(CB_NQ, HEAD_TILES);
-        const uint32_t l1 = get_read_ptr(CB_NQ);
-        noc_async_write(l1, peer_in_q, ROPE_TILES * TILE_BYTES);
-        noc_async_write(l1 + TILE_BYTES, peer_rot_q, TILE_BYTES);
-        noc_async_write(l1, peer_rot_q + TILE_BYTES, TILE_BYTES);
-        for (uint32_t c = ROPE_TILES; c < HEAD_TILES; ++c) {
-            noc_async_write_page(c, out, l1 + c * TILE_BYTES);
+        CircularBuffer(cb_nq).wait_front(head_tiles);
+        const uint32_t l1 = get_read_ptr(cb_nq);
+        noc_async_write(l1, peer_in_q, rope_tiles * tile_bytes);
+        noc_async_write(l1 + tile_bytes, peer_rot_q, tile_bytes);
+        noc_async_write(l1, peer_rot_q + tile_bytes, tile_bytes);
+        for (uint32_t c = rope_tiles; c < head_tiles; ++c) {
+            noc_async_write_page(c, out, l1 + c * tile_bytes);
         }
         noc_async_write_barrier();
         noc_semaphore_inc(peer_sem_q, 1);
-        cb_pop_front(CB_NQ, HEAD_TILES);
+        CircularBuffer(cb_nq).pop_front(head_tiles);
     }
 
     for (uint32_t i = 0; i < lane_count; ++i) {
         const uint32_t lane = lane_first + i;
-        cb_wait_front(CB_RINGW, HEAD_TILES);
+        CircularBuffer(cb_ringw).wait_front(head_tiles);
         {
-            const uint32_t l1 = get_read_ptr(CB_RINGW);
-            for (uint32_t c = 0; c < HEAD_TILES; ++c) {
-                noc_async_write_page(lane * HEAD_TILES + c, ring, l1 + c * TILE_BYTES);
+            const uint32_t l1 = get_read_ptr(cb_ringw);
+            for (uint32_t c = 0; c < head_tiles; ++c) {
+                noc_async_write_page(lane * head_tiles + c, ring, l1 + c * tile_bytes);
             }
             noc_async_write_barrier();
         }
-        cb_pop_front(CB_RINGW, HEAD_TILES);
+        CircularBuffer(cb_ringw).pop_front(head_tiles);
 
-        cb_wait_front(CB_NK, HEAD_TILES);
+        CircularBuffer(cb_nk).wait_front(head_tiles);
         {
-            const uint32_t l1 = get_read_ptr(CB_NK);
+            const uint32_t l1 = get_read_ptr(cb_nk);
             noc_semaphore_wait_min(ready, i + 1);
-            noc_async_write(l1, peer_in_k, ROPE_TILES * TILE_BYTES);
-            noc_async_write(l1 + TILE_BYTES, peer_rot_k, TILE_BYTES);
-            noc_async_write(l1, peer_rot_k + TILE_BYTES, TILE_BYTES);
+            noc_async_write(l1, peer_in_k, rope_tiles * tile_bytes);
+            noc_async_write(l1 + tile_bytes, peer_rot_k, tile_bytes);
+            noc_async_write(l1, peer_rot_k + tile_bytes, tile_bytes);
             noc_async_write_barrier();
             noc_semaphore_inc(peer_sem_k, 1);
             const uint32_t row = positions[lane] >> 2;
             const uint32_t tile_row = lane * lane_tile_rows + (row >> 5);
-            for (uint32_t c = ROPE_TILES; c < HEAD_TILES; ++c) {
+            for (uint32_t c = rope_tiles; c < head_tiles; ++c) {
                 for (uint32_t half = 0; half < 2; ++half) {
                     noc_async_write(
-                        l1 + c * TILE_BYTES + chunk_offset(0, half),
-                        cache.get_noc_addr(tile_row * HEAD_TILES + c, chunk_offset(row & 31, half)),
-                        ROW_BYTES);
+                        l1 + c * tile_bytes + chunk_offset(0, half),
+                        cache.get_noc_addr(tile_row * head_tiles + c, chunk_offset(row & 31, half)),
+                        half_row_bytes);
                 }
             }
             noc_async_write_barrier();
         }
-        cb_pop_front(CB_NK, HEAD_TILES);
+        CircularBuffer(cb_nk).pop_front(head_tiles);
     }
     noc_semaphore_set(ready, 0);
     noc_async_atomic_barrier();

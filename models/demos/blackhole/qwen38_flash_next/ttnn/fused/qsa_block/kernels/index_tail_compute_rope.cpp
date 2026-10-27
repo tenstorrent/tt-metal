@@ -13,12 +13,12 @@ using namespace index_tail;
 void kernel_main() {
     const uint32_t lane_count = get_arg_val<uint32_t>(0);
     const uint32_t do_query = get_arg_val<uint32_t>(1);
-    CircularBuffer(CB_SCALAR).wait_front(1);
-    compute_kernel_hw_startup(CB_ROT_Q, CB_SCALAR, CB_ROT_NEG);
+    CircularBuffer(cb_scalar).wait_front(1);
+    compute_kernel_hw_startup(cb_rot_q, cb_scalar, cb_rot_neg);
     if (do_query) {
-        rope64_rows<CB_IN_Q, CB_ROT_Q, CB_COS, CB_SIN, CB_SCALAR, CB_ROT_NEG, CB_XCOS, CB_RSIN, CB_OUT_Q>(1);
+        rope64_rows<cb_in_q, cb_rot_q, cb_cos, cb_sin, cb_scalar, cb_rot_neg, cb_xcos, cb_rsin, cb_out_q>(1);
     }
     for (uint32_t i = 0; i < lane_count; ++i) {
-        rope64_rows<CB_IN_K, CB_ROT_K, CB_BCOS, CB_BSIN, CB_SCALAR, CB_ROT_NEG, CB_XCOS, CB_RSIN, CB_OUT_K>(1);
+        rope64_rows<cb_in_k, cb_rot_k, cb_bcos, cb_bsin, cb_scalar, cb_rot_neg, cb_xcos, cb_rsin, cb_out_k>(1);
     }
 }

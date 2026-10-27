@@ -16,33 +16,33 @@
 using namespace main_tail;
 
 void kernel_main() {
-    const uint32_t x_addr = get_arg_val<uint32_t>(0);
+    const uint32_t projection_addr = get_arg_val<uint32_t>(0);
     const uint32_t gamma_addr = get_arg_val<uint32_t>(1);
-    const uint32_t first = get_arg_val<uint32_t>(2);
+    const uint32_t first_tile = get_arg_val<uint32_t>(2);
     constexpr uint32_t eps_bits = get_compile_time_arg_val(0);
-    constexpr auto x_args = TensorAccessorArgs<1>();
-    constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
-    const auto x = TensorAccessor(x_args, x_addr);
+    constexpr auto projection_args = TensorAccessorArgs<1>();
+    constexpr auto gamma_args = TensorAccessorArgs<projection_args.next_compile_time_args_offset()>();
+    const auto projection = TensorAccessor(projection_args, projection_addr);
     const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
     {
-        dataflow_kernel_lib::prepare_reduce_scaler<CB_SCALER, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
             1.0f);
-        generate_bcast_col_scalar(CircularBuffer(CB_EPS), eps_bits);
-        cb_reserve_back(CB_ZERO, 1);
-        tile_rows::fill_words(get_write_ptr(CB_ZERO), TILE_BYTES / 4, 0);
-        cb_push_back(CB_ZERO, 1);
+        generate_bcast_col_scalar(CircularBuffer(cb_eps), eps_bits);
+        CircularBuffer(cb_zero).reserve_back(1);
+        tile_rows::fill_words(get_write_ptr(cb_zero), tile_bytes / 4, 0);
+        CircularBuffer(cb_zero).push_back(1);
     }
 
     {
-        cb_reserve_back(CB_GAMMA, HEAD_TILES);
-        cb_reserve_back(CB_X, HEAD_TILES);
-        for (uint32_t c = 0; c < HEAD_TILES; ++c) {
-            noc_async_read_page(c, gamma, get_write_ptr(CB_GAMMA) + c * TILE_BYTES);
-            noc_async_read_page(first + c, x, get_write_ptr(CB_X) + c * TILE_BYTES);
+        CircularBuffer(cb_gamma).reserve_back(head_tiles);
+        CircularBuffer(cb_x).reserve_back(head_tiles);
+        for (uint32_t c = 0; c < head_tiles; ++c) {
+            noc_async_read_page(c, gamma, get_write_ptr(cb_gamma) + c * tile_bytes);
+            noc_async_read_page(first_tile + c, projection, get_write_ptr(cb_x) + c * tile_bytes);
         }
         noc_async_read_barrier();
-        cb_push_back(CB_GAMMA, HEAD_TILES);
-        cb_push_back(CB_X, HEAD_TILES);
+        CircularBuffer(cb_gamma).push_back(head_tiles);
+        CircularBuffer(cb_x).push_back(head_tiles);
     }
 }

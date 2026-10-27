@@ -11,11 +11,12 @@
 // core's rows: row_first, row_first + row_step, ... below rows).
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t ids_addr = get_arg_val<uint32_t>(0);
-    const uint32_t off_addr = get_arg_val<uint32_t>(1);
+    const uint32_t offsets_addr = get_arg_val<uint32_t>(1);
     const uint32_t sentinel_addr = get_arg_val<uint32_t>(2);
     const uint32_t keep_addr = get_arg_val<uint32_t>(3);
     const uint32_t fill_addr = get_arg_val<uint32_t>(4);
@@ -25,54 +26,58 @@ void kernel_main() {
     const uint32_t offset_rows = get_arg_val<uint32_t>(8);
     const uint32_t row_first = get_arg_val<uint32_t>(9);
     const uint32_t row_step = get_arg_val<uint32_t>(10);
-    constexpr uint32_t COLS = 256, IDS = COLS / 4, TAIL = 32, LAST_SLICE = 7, EXPANDED = 2048;
+    constexpr uint32_t slice_columns = 256, slice_ids = slice_columns / 4, sentinel_columns = 32, last_slice = 7,
+                       expanded_columns = 2048;
     constexpr auto ids_args = TensorAccessorArgs<0>();
-    constexpr auto off_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
-    constexpr auto sentinel_args = TensorAccessorArgs<off_args.next_compile_time_args_offset()>();
+    constexpr auto offsets_args = TensorAccessorArgs<ids_args.next_compile_time_args_offset()>();
+    constexpr auto sentinel_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
     constexpr auto keep_args = TensorAccessorArgs<sentinel_args.next_compile_time_args_offset()>();
     constexpr auto fill_args = TensorAccessorArgs<keep_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<fill_args.next_compile_time_args_offset()>();
     const auto ids = TensorAccessor(ids_args, ids_addr);
-    const auto off = TensorAccessor(off_args, off_addr);
+    const auto offsets = TensorAccessor(offsets_args, offsets_addr);
     const auto sentinel = TensorAccessor(sentinel_args, sentinel_addr);
     const auto keep = TensorAccessor(keep_args, keep_addr);
     const auto fill = TensorAccessor(fill_args, fill_addr);
     const auto out = TensorAccessor(out_args, out_addr);
 
-    const uint32_t cols = COLS + (slice == LAST_SLICE ? TAIL : 0);
-    const uint32_t col0 = slice * COLS;
-    cb_reserve_back(0, 1);
-    const uint32_t l1 = get_write_ptr(0);
-    volatile tt_l1_ptr uint32_t* ids_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
-    volatile tt_l1_ptr uint32_t* off_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + 256);
-    volatile tt_l1_ptr uint32_t* sentinel_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + 256 + 1024);
-    volatile tt_l1_ptr uint32_t* keep_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + 256 + 1024 + 128);
-    volatile tt_l1_ptr uint32_t* fill_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + 256 + 1024 + 128 + 1152);
+    const uint32_t columns = slice_columns + (slice == last_slice ? sentinel_columns : 0);
+    const uint32_t first_column = slice * slice_columns;
+    CircularBuffer(0).reserve_back(1);
+    const uint32_t scratch_l1 = get_write_ptr(0);
+    volatile tt_l1_ptr uint32_t* ids_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1);
+    volatile tt_l1_ptr uint32_t* offsets_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + 256);
+    volatile tt_l1_ptr uint32_t* sentinel_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + 256 + 1024);
+    volatile tt_l1_ptr uint32_t* keep_l1 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + 256 + 1024 + 128);
+    volatile tt_l1_ptr uint32_t* fill_l1 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + 256 + 1024 + 128 + 1152);
     volatile tt_l1_ptr uint32_t* out_l1 =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + 256 + 1024 + 128 + 2 * 1152);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + 256 + 1024 + 128 + 2 * 1152);
 
     if (offset_rows == 1) {
-        noc_async_read(off.get_noc_addr(0, col0 * 4), l1 + 256, COLS * 4);
+        noc_async_read(offsets.get_noc_addr(0, first_column * 4), scratch_l1 + 256, slice_columns * 4);
     }
-    if (slice == LAST_SLICE) {
-        noc_async_read(sentinel.get_noc_addr(0, 0), l1 + 256 + 1024, TAIL * 4);
+    if (slice == last_slice) {
+        noc_async_read(sentinel.get_noc_addr(0, 0), scratch_l1 + 256 + 1024, sentinel_columns * 4);
     }
     for (uint32_t r = row_first; r < rows; r += row_step) {
         if (offset_rows != 1) {
-            noc_async_read(off.get_noc_addr(r, col0 * 4), l1 + 256, COLS * 4);  // row r's offsets
+            noc_async_read(
+                offsets.get_noc_addr(r, first_column * 4), scratch_l1 + 256, slice_columns * 4);  // row r's offsets
         }
-        noc_async_read(ids.get_noc_addr(r, slice * IDS * 4), l1, IDS * 4);
-        noc_async_read(keep.get_noc_addr(r, col0 * 4), l1 + 256 + 1024 + 128, cols * 4);
-        noc_async_read(fill.get_noc_addr(r, col0 * 4), l1 + 256 + 1024 + 128 + 1152, cols * 4);
+        noc_async_read(ids.get_noc_addr(r, slice * slice_ids * 4), scratch_l1, slice_ids * 4);
+        noc_async_read(keep.get_noc_addr(r, first_column * 4), scratch_l1 + 256 + 1024 + 128, columns * 4);
+        noc_async_read(fill.get_noc_addr(r, first_column * 4), scratch_l1 + 256 + 1024 + 128 + 1152, columns * 4);
         noc_async_read_barrier();
         invalidate_l1_cache();
-        for (uint32_t i = 0; i < cols; ++i) {
-            const uint32_t column = col0 + i;
-            const uint32_t value =
-                column < EXPANDED ? (ids_l1[i >> 2] << 2) + off_l1[i] : sentinel_l1[column - EXPANDED];
+        for (uint32_t i = 0; i < columns; ++i) {
+            const uint32_t column = first_column + i;
+            const uint32_t value = column < expanded_columns ? (ids_l1[i >> 2] << 2) + offsets_l1[i]
+                                                             : sentinel_l1[column - expanded_columns];
             out_l1[i] = (value & keep_l1[i]) | fill_l1[i];
         }
-        noc_async_write(l1 + 256 + 1024 + 128 + 2 * 1152, out.get_noc_addr(r, col0 * 4), cols * 4);
+        noc_async_write(scratch_l1 + 256 + 1024 + 128 + 2 * 1152, out.get_noc_addr(r, first_column * 4), columns * 4);
         noc_async_write_barrier();
     }
 }

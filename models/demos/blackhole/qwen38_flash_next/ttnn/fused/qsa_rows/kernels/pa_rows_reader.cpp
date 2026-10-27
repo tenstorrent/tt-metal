@@ -6,57 +6,59 @@
 // tile, row by row from the ROW_MAJOR [1, 32 heads, rows, 256] sparse output.  CBs: 0 gate (1 tile), 1 attention
 // (1 tile), 3 row scratch (64 B per lane, one tile of room).
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "../../qsa_block/kernels/tile_rows.h"
 
 namespace {
-constexpr uint32_t CB_GATE = 0, CB_ATT = 1, CB_ROW = 3;
-constexpr uint32_t HEAD_TILES = 8, GATE_FIRST = 8, WINDOW_BYTES = 64;  // 32 bf16 of a 256-column head row
+constexpr uint32_t cb_gate = 0, cb_att = 1, cb_row = 3;
+constexpr uint32_t head_tiles = 8, gate_first_tile = 8, window_bytes = 64;  // 32 bf16 of a 256-column head row
 }  // namespace
 
 void kernel_main() {
-    constexpr auto att_args = TensorAccessorArgs<0>();
-    constexpr auto qg_args = TensorAccessorArgs<att_args.next_compile_time_args_offset()>();
-    const uint32_t att_addr = get_arg_val<uint32_t>(0);
+    constexpr auto attention_args = TensorAccessorArgs<0>();
+    constexpr auto qg_args = TensorAccessorArgs<attention_args.next_compile_time_args_offset()>();
+    const uint32_t attention_addr = get_arg_val<uint32_t>(0);
     const uint32_t qg_addr = get_arg_val<uint32_t>(1);
     const uint32_t rows = get_arg_val<uint32_t>(2);  // the tile's rows in the sparse output (32 on the verify tile)
     const uint32_t head = get_arg_val<uint32_t>(3);
     const uint32_t column = get_arg_val<uint32_t>(4);  // tile column t of the head's 8
     const uint32_t qg_first = get_arg_val<uint32_t>(5);
-    const auto att = TensorAccessor(att_args, att_addr);  // page = one head row of 256 bf16
-    const auto qg = TensorAccessor(qg_args, qg_addr);     // page = one tile of the qg shard
-    using tile_rows::TILE_BYTES;
-    cb_reserve_back(CB_GATE, 1);
-    cb_reserve_back(CB_ATT, 1);
-    cb_reserve_back(CB_ROW, 1);
-    const uint32_t gate_l1 = get_write_ptr(CB_GATE), att_l1 = get_write_ptr(CB_ATT), row_l1 = get_write_ptr(CB_ROW);
+    const auto attention = TensorAccessor(attention_args, attention_addr);  // page = one head row of 256 bf16
+    const auto qg = TensorAccessor(qg_args, qg_addr);                       // page = one tile of the qg shard
+    using tile_rows::tile_bytes;
+    CircularBuffer(cb_gate).reserve_back(1);
+    CircularBuffer(cb_att).reserve_back(1);
+    CircularBuffer(cb_row).reserve_back(1);
+    const uint32_t gate_l1 = get_write_ptr(cb_gate), attention_l1 = get_write_ptr(cb_att),
+                   row_l1 = get_write_ptr(cb_row);
     {
-        noc_async_read_page(qg_first + 2 * HEAD_TILES * head + GATE_FIRST + column, qg, gate_l1);
-        tile_rows::fill_words(att_l1, TILE_BYTES / 4, 0);  // rows past the sparse output's are zero padding
+        noc_async_read_page(qg_first + 2 * head_tiles * head + gate_first_tile + column, qg, gate_l1);
+        tile_rows::fill_words(attention_l1, tile_bytes / 4, 0);  // rows past the sparse output's are zero padding
     }
     {
         // every lane's 64-byte window of the head's row lands in the scratch (64-byte aligned), then the RISC places
         // its two 32-byte halves into the tile's faces (tile_rows::chunk_offset)
         for (uint32_t lane = 0; lane < rows; ++lane) {
             noc_async_read(
-                att.get_noc_addr(head * rows + lane, column * WINDOW_BYTES),
-                row_l1 + lane * WINDOW_BYTES,
-                WINDOW_BYTES);
+                attention.get_noc_addr(head * rows + lane, column * window_bytes),
+                row_l1 + lane * window_bytes,
+                window_bytes);
         }
         noc_async_read_barrier();
         invalidate_l1_cache();
         for (uint32_t lane = 0; lane < rows; ++lane) {
             for (uint32_t half = 0; half < 2; ++half) {
-                volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                    row_l1 + lane * WINDOW_BYTES + half * tile_rows::ROW_BYTES);
-                volatile tt_l1_ptr uint32_t* d =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(att_l1 + tile_rows::chunk_offset(lane, half));
-                for (uint32_t k = 0; k < tile_rows::ROW_BYTES / 4; ++k) {
-                    d[k] = s[k];
+                volatile tt_l1_ptr uint32_t* src_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    row_l1 + lane * window_bytes + half * tile_rows::half_row_bytes);
+                volatile tt_l1_ptr uint32_t* dst_words =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(attention_l1 + tile_rows::chunk_offset(lane, half));
+                for (uint32_t k = 0; k < tile_rows::half_row_bytes / 4; ++k) {
+                    dst_words[k] = src_words[k];
                 }
             }
         }
     }
-    cb_push_back(CB_GATE, 1);
-    cb_push_back(CB_ATT, 1);
+    CircularBuffer(cb_gate).push_back(1);
+    CircularBuffer(cb_att).push_back(1);
 }

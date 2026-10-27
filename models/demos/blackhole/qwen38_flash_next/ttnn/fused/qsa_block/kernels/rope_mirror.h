@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// rotary_embedding_hf.cpp for 64-wide row tiles (Wt 2, half_Wt 1): rotated * (-1) [bcast scalar], * sin, x * cos,
-// add; FPU ops, each packed to a bf16 CB.  Bitwise against the op only under the op's own 16-bit dest (no fp32-dest
-// sequence reproduces the FPU's 16-bit-dest rounding), so the kernel must be compiled with fp32_dest_acc_en off.  The
-// rotated input is the two tiles in swapped order.
+// rotary_embedding_hf.cpp for 64-wide row tiles (width_tiles 2, half_width_tiles 1: the op's Wt, half_Wt): rotated
+// * (-1) [bcast scalar], * sin, x * cos, add; FPU ops, each packed to a bf16 CB.  Bitwise against the op only under
+// the op's own 16-bit dest (no fp32-dest sequence reproduces the FPU's 16-bit-dest rounding), so the kernel must be
+// compiled with fp32_dest_acc_en off.  The rotated input is the two tiles in swapped order.
 // CBs: c_in x (bf16, 2), c_rot rotated x (bf16, 2), c_cos, c_sin (bf16, 2 each, popped), c_scalar (bf16, 1, never
 // popped; element [0,0] = -1), c_rot_neg, c_xcos, c_rsin (bf16, 1 each), c_out (bf16, 2).  The caller runs
 // compute_kernel_hw_startup(c_rot, c_scalar, c_rot_neg) once and waits on c_scalar.
@@ -49,11 +49,11 @@ template <
     uint32_t c_rsin,
     uint32_t c_out>
 inline void rope64_rows(uint32_t rows) {
-    constexpr uint32_t Wt = 2, half_Wt = 1;
+    constexpr uint32_t width_tiles = 2, half_width_tiles = 1;
     CircularBuffer rot_cb(c_rot), rot_neg_cb(c_rot_neg), xcos_cb(c_xcos), rsin_cb(c_rsin), out_cb(c_out);
     for (uint32_t r = 0; r < rows; ++r) {
-        for (uint32_t j = 0; j < Wt; ++j) {
-            if (j < half_Wt) {
+        for (uint32_t j = 0; j < width_tiles; ++j) {
+            if (j < half_width_tiles) {
                 reconfig_data_format(c_rot, c_scalar);
                 pack_reconfig_data_format(c_rot_neg);
                 rot_cb.wait_front(1);

@@ -9,6 +9,7 @@
 // 4 cache rows per lane, 5 blocks.
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -22,10 +23,10 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<scores_args.next_compile_time_args_offset()>();
     const auto scores = TensorAccessor(scores_args, scores_addr);
     const auto out = TensorAccessor(out_args, out_addr);
-    cb_reserve_back(0, 1);
-    const uint32_t l1 = get_write_ptr(0);
-    noc_async_read(scores.get_noc_addr(out_row, lane * cache_rows * 2), l1, blocks * 2);
+    CircularBuffer(0).reserve_back(1);
+    const uint32_t row_l1 = get_write_ptr(0);
+    noc_async_read(scores.get_noc_addr(out_row, lane * cache_rows * 2), row_l1, blocks * 2);
     noc_async_read_barrier();
-    noc_async_write(l1, out.get_noc_addr(out_row, 0), blocks * 2);
+    noc_async_write(row_l1, out.get_noc_addr(out_row, 0), blocks * 2);
     noc_async_write_barrier();
 }

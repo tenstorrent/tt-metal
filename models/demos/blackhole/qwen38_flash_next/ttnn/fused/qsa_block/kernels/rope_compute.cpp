@@ -39,25 +39,26 @@ void kernel_main() {
                 rot_src = 5;
             }
             for (uint32_t k = 0; k < 2; ++k) {
-                const uint32_t a = k == 0 ? rot_src : 0, b = k == 0 ? 3 : 2, o = k == 0 ? 7 : 6;
-                CircularBuffer a_cb(a), b_cb(b), o_cb(o);
-                reconfig_data_format(a, b);
-                pack_reconfig_data_format(o);
-                a_cb.wait_front(1);
-                b_cb.wait_front(1);
-                o_cb.reserve_back(1);
+                const uint32_t in0_cb_id = k == 0 ? rot_src : 0, in1_cb_id = k == 0 ? 3 : 2,
+                               product_cb_id = k == 0 ? 7 : 6;
+                CircularBuffer in0_cb(in0_cb_id), in1_cb(in1_cb_id), product_cb(product_cb_id);
+                reconfig_data_format(in0_cb_id, in1_cb_id);
+                pack_reconfig_data_format(product_cb_id);
+                in0_cb.wait_front(1);
+                in1_cb.wait_front(1);
+                product_cb.reserve_back(1);
                 tile_regs_acquire();
-                mul_init(a, b);
-                mul_tiles(a, b, 0, 0, 0);
+                mul_init(in0_cb_id, in1_cb_id);
+                mul_tiles(in0_cb_id, in1_cb_id, 0, 0, 0);
                 typecast_tile_init<0, 5>();
                 typecast_tile<0, 5, true>(0);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(0, o);
+                pack_tile(0, product_cb_id);
                 tile_regs_release();
-                o_cb.push_back(1);
-                a_cb.pop_front(1);
-                b_cb.pop_front(1);
+                product_cb.push_back(1);
+                in0_cb.pop_front(1);
+                in1_cb.pop_front(1);
             }
             xcos_cb.wait_front(1);
             rsin_cb.wait_front(1);

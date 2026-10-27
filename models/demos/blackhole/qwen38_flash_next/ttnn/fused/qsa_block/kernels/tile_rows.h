@@ -1,29 +1,30 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Row addressing inside a 32x32 bf16 tile (faces 0/1 hold rows 0-15, 2/3 rows 16-31; a row is two 32-byte chunks).
+// Row addressing inside a 32x32 bf16 tile (faces 0/1 hold rows 0-15, 2/3 rows 16-31; a row is two 32-byte chunks,
+// half_row_bytes each).
 
 #pragma once
 
 #include <cstdint>
 
 namespace tile_rows {
-constexpr uint32_t TILE_BYTES = 2048, FACE_BYTES = 512, ROW_BYTES = 32, TILE_ROWS = 32;
+constexpr uint32_t tile_bytes = 2048, face_bytes = 512, half_row_bytes = 32, rows_per_tile = 32;
 
 constexpr uint32_t chunk_offset(uint32_t row, uint32_t half) {
-    return (((row >> 4) << 1) + half) * FACE_BYTES + (row & 15) * ROW_BYTES;
+    return (((row >> 4) << 1) + half) * face_bytes + (row & 15) * half_row_bytes;
 }
 
-// row `src_row` of the tile at `src` -> row `dst_row` of the tile at `dst`, -0.0 canonicalized to +0.0 when `canon`
-inline void copy_tile_row(uint32_t src, uint32_t src_row, uint32_t dst, uint32_t dst_row, bool canon) {
+// row `src_row` of the tile at `src` -> row `dst_row` of the tile at `dst`; -0.0 becomes +0.0 when `canonicalize`
+inline void copy_tile_row(uint32_t src, uint32_t src_row, uint32_t dst, uint32_t dst_row, bool canonicalize) {
     for (uint32_t half = 0; half < 2; ++half) {
-        volatile tt_l1_ptr uint16_t* s =
+        volatile tt_l1_ptr uint16_t* src_chunk =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src + chunk_offset(src_row, half));
-        volatile tt_l1_ptr uint16_t* d =
+        volatile tt_l1_ptr uint16_t* dst_chunk =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst + chunk_offset(dst_row, half));
         for (uint32_t k = 0; k < 16; ++k) {
-            const uint16_t v = s[k];
-            d[k] = (canon && v == 0x8000) ? 0 : v;
+            const uint16_t element = src_chunk[k];
+            dst_chunk[k] = (canonicalize && element == 0x8000) ? 0 : element;
         }
     }
 }
@@ -32,21 +33,21 @@ inline void copy_tile_row(uint32_t src, uint32_t src_row, uint32_t dst, uint32_t
 inline void place_row(uint32_t row_l1, uint32_t tiles_l1, uint32_t tiles, uint32_t dst_row) {
     for (uint32_t t = 0; t < tiles; ++t) {
         for (uint32_t half = 0; half < 2; ++half) {
-            volatile tt_l1_ptr uint32_t* s =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_l1 + t * 2 * ROW_BYTES + half * ROW_BYTES);
-            volatile tt_l1_ptr uint32_t* d =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tiles_l1 + t * TILE_BYTES + chunk_offset(dst_row, half));
-            for (uint32_t k = 0; k < ROW_BYTES / 4; ++k) {
-                d[k] = s[k];
+            volatile tt_l1_ptr uint32_t* src_chunk =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_l1 + t * 2 * half_row_bytes + half * half_row_bytes);
+            volatile tt_l1_ptr uint32_t* dst_chunk =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tiles_l1 + t * tile_bytes + chunk_offset(dst_row, half));
+            for (uint32_t k = 0; k < half_row_bytes / 4; ++k) {
+                dst_chunk[k] = src_chunk[k];
             }
         }
     }
 }
 
-inline void fill_words(uint32_t l1, uint32_t words, uint32_t value) {
-    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1);
+inline void fill_words(uint32_t l1_addr, uint32_t words, uint32_t value) {
+    volatile tt_l1_ptr uint32_t* dst_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr);
     for (uint32_t k = 0; k < words; ++k) {
-        p[k] = value;
+        dst_words[k] = value;
     }
 }
 }  // namespace tile_rows

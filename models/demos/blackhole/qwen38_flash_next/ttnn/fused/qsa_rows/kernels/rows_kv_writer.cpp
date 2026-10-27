@@ -1,11 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// main_tail_rows, the KV core's writer (one core): the current block's 32 row-major rows (CB_BLOCK) to the cache at
-// P & ~31 (page = row), then, unless single_row, the next block's 32 rows (CB_NEXT) at (P & ~31) + 32.  Every row of
+// main_tail_rows, the KV core's writer (one core): the current block's 32 row-major rows (cb_block) to the cache at
+// P & ~31 (page = row), then, unless single_row, the next block's 32 rows (cb_next) at (P & ~31) + 32.  Every row of
 // both blocks is rewritten, as the op chain rewrites them.
 // Compile-time args: TensorAccessorArgs cache.  Runtime args: 0 cache address, 1 single_row.
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "../../qsa_block/kernels/main_tail_cbs.h"
 #include "rows_kv_cbs.h"
@@ -17,26 +18,26 @@ void kernel_main() {
     const uint32_t single_row = get_arg_val<uint32_t>(1);
     constexpr auto cache_args = TensorAccessorArgs<0>();
     const auto cache = TensorAccessor(cache_args, cache_addr);
-    cb_wait_front(CB_KV_POS, 1);
-    const uint32_t block = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(CB_KV_POS) + 4);
-    cb_wait_front(CB_BLOCK, BLOCK_PAGES);
+    CircularBuffer(cb_kv_pos).wait_front(1);
+    const uint32_t block = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_kv_pos) + 4);
+    CircularBuffer(cb_block).wait_front(block_pages);
     {
-        const uint32_t l1 = get_read_ptr(CB_BLOCK);
-        for (uint32_t k = 0; k < tile_rows::TILE_ROWS; ++k) {
-            noc_async_write(l1 + k * QUERY_ROW_BYTES, cache.get_noc_addr(block + k, 0), QUERY_ROW_BYTES);
+        const uint32_t l1 = get_read_ptr(cb_block);
+        for (uint32_t k = 0; k < tile_rows::rows_per_tile; ++k) {
+            noc_async_write(l1 + k * query_row_bytes, cache.get_noc_addr(block + k, 0), query_row_bytes);
         }
         noc_async_write_barrier();
     }
-    cb_pop_front(CB_BLOCK, BLOCK_PAGES);
-    cb_wait_front(CB_NEXT, BLOCK_PAGES);
+    CircularBuffer(cb_block).pop_front(block_pages);
+    CircularBuffer(cb_next).wait_front(block_pages);
     if (!single_row) {
-        const uint32_t l1 = get_read_ptr(CB_NEXT);
-        const uint32_t next = block + tile_rows::TILE_ROWS;
-        for (uint32_t k = 0; k < tile_rows::TILE_ROWS; ++k) {
-            noc_async_write(l1 + k * QUERY_ROW_BYTES, cache.get_noc_addr(next + k, 0), QUERY_ROW_BYTES);
+        const uint32_t l1 = get_read_ptr(cb_next);
+        const uint32_t next = block + tile_rows::rows_per_tile;
+        for (uint32_t k = 0; k < tile_rows::rows_per_tile; ++k) {
+            noc_async_write(l1 + k * query_row_bytes, cache.get_noc_addr(next + k, 0), query_row_bytes);
         }
         noc_async_write_barrier();
     }
-    cb_pop_front(CB_NEXT, BLOCK_PAGES);
-    cb_pop_front(CB_KV_POS, 1);
+    CircularBuffer(cb_next).pop_front(block_pages);
+    CircularBuffer(cb_kv_pos).pop_front(1);
 }
