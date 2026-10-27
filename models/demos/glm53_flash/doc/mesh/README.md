@@ -1243,3 +1243,10 @@ path, one 1 M request) queued.
 TTFT 504.6 s (2076 tok/s), 160 tokens at 95.4 ms per token = 10.5 tok/s per user; DRAM 219 MiB per bank free at the last chunk (largest
 hole 161 MiB; the 512-row run had died at chunk 62 on the 264 MB ranking copy). TIS targets gained the 1 M-context row (c1). Next served
 point: the profile's cap, 1 M x 4 distinct requests (`serve_bench_glm53_1m_c4`, ~40 min), queued after the 8x4 fused spec stages.
+
+15:46 `spec_8x4_K3_fused_r2` (wt_frozen23: fused multi-step KDA commit, V/C/D graphs traced; 45 layers, 32 users = 4 per row, K=3):
+lossless (64/64 tokens identical to plain greedy per user), mean accepted 2.45 drafts = 3.20 tokens per user per iteration, 133 ms per
+iteration -> 41.7 ms per token = 24.0 tok/s per user, 768 tok/s aggregate, against the traced plain step's 70 ms (14.5 tok/s per
+user): x1.68 (the test prints x5.53 against its eager plain loop). The (2,4) block run had shown the traced fused commit bit-equal to
+the eager one. This is the first measured point above 20 tok/s per user; it becomes a README row once a run reports its TTFT with it,
+and reaches serving through the adapter's speculative path (the gemma4_mtp pattern: B(K+1) <= 32 per row, greedy only).

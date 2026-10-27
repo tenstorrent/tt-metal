@@ -70,6 +70,16 @@ image demo's 16 greedy tokens match HF. Targets are the design goals of `~/ashai
 tok/s per user at 256 / 32 / 8 users); the optimization phase is in progress (fused mHC pre-block, the EP32 exchange,
 the sparse decode at long context).
 
+### Speculative decode (MTP draft head)
+
+The checkpoint's MTP layer drafts K tokens per step and the model verifies them in one batched pass (`tt/spec_decode.py`:
+three traced graphs, greedy only, K = min(K, 32 / users-per-row - 1)). Measured 2026-10-27 on the 8x4 (45 layers, 32 users = 4
+per row, K = 3, fused multi-step KDA commit `GLM53_SPEC_COMMIT=fused`, V/C/D traced; `tests/test_mtp_spec.py`): lossless
+against plain greedy (64/64 tokens per user), 2.45 accepted drafts = 3.20 tokens per user per iteration, 133 ms per iteration =
+41.7 ms per token = **24.0 tok/s per user, 768 tok/s aggregate** against the plain traced step's 70 ms (14.5): x1.68. It is not a
+table row yet (the row rule wants TTFT and decode from one run; the spec run reports decode only) and not served (the vLLM
+adapter's speculative path is next). Off by default (`GLM53_SPEC_K` unset).
+
 ## Serving (vLLM + tt-inference-server)
 
 Stack: stock vLLM 0.30.0 + `vllm-tt-plugin` main (the model is registered in the plugin's built-in map on branch
