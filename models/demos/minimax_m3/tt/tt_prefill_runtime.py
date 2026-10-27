@@ -39,7 +39,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utils import block_cyclic_reorder
+from models.demos.minimax_m3.tt.media_injection import inject_media_embeddings
 from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk, pack_forward_tokens, validate_chunks
+from models.demos.minimax_m3.tt.residual import use_sharded_residual
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
 
@@ -102,6 +104,8 @@ class TtPrefillRuntime:
     """Single-rank prefill execution lifecycle: build model -> compile(kv_cache) ->
     prefill_chunk(chunk, kv_cache). Owns the SP=8 × TP=4 ``Model``; the KV cache is engine-owned and
     passed into every call."""
+
+    supports_media = True  # prefill_chunk takes media_rows (the runner's PREFILL_MEDIA)
 
     def __init__(self, mesh_device, hf_config, state_dict: dict, config: TtPrefillRuntimeConfig):
         self.mesh_device = mesh_device
@@ -328,6 +332,21 @@ class TtPrefillRuntime:
             x = ttnn.unsqueeze_to_4D(x)
         return x
 
+    def inject_media_embeddings(self, x_embd: ttnn.Tensor, rows: torch.Tensor, mask: torch.Tensor) -> ttnn.Tensor:
+        """Replace the embedding rows at a chunk's image positions; see tt/media_injection.py."""
+        cfg = self.config
+        assert rows.shape[0] * rows.shape[1] == cfg.forward_tokens_budget, f"rows {tuple(rows.shape)}"
+        return inject_media_embeddings(
+            self.mesh_device,
+            x_embd,
+            rows,
+            mask,
+            mesh_shape=cfg.mesh_shape,
+            sp_axis=cfg.sp_axis,
+            tp_axis=cfg.tp_axis,
+            emb_tp_sharded=use_sharded_residual(),
+        )
+
     def compile(self, kv_cache) -> None:
         """Warm the program cache so no served forward pays a first-run JIT.
 
@@ -386,6 +405,7 @@ class TtPrefillRuntime:
         skip_lm_head: bool = True,
         get_last_token: int = -1,
         metadata_msg=None,
+        media_rows=None,
     ):
         """Prefill ONE chunk ``[actual_start, actual_end)`` into slot ``slot_id``: ``prefill_forward`` with a
         single chunk (forward_tokens_budget == chunk_size). See prefill_forward for the arguments."""
@@ -400,6 +420,7 @@ class TtPrefillRuntime:
             skip_lm_head=skip_lm_head,
             get_last_token=get_last_token,
             metadata_msg=metadata_msg,
+            media_rows=media_rows,
         )
 
     def prefill_forward(
@@ -414,6 +435,7 @@ class TtPrefillRuntime:
         skip_lm_head: bool = True,
         get_last_token: int = -1,
         metadata_msg=None,
+        media_rows=None,
     ):
         """Prefill ONE forward of ``forward_tokens_budget // chunk_size`` ``chunks`` (tt/prefill_chunk.py) into the
         engine-owned ``kv_cache``. Norms, projections and the MoE run once on all rows; the attention core
@@ -447,6 +469,8 @@ class TtPrefillRuntime:
                 (set_layer_completion_sink).
             record_dev: the forward's metadata tensor, unused here.
             metadata_msg: the forward's raw socket metadata tensor, sent as the D2H ack record.
+            media_rows: first rank, one-chunk forwards only: (rows, mask) from build_injection for a chunk with
+                image positions; see inject_media_embeddings. None for a text-only chunk.
         """
         assert d2h_service is None or (
             metadata_msg is not None and len(chunks) == 1
@@ -471,7 +495,11 @@ class TtPrefillRuntime:
         if cfg.is_first_rank:
             x_embd = self._embed_tokens(input_tensor)
             ttnn.deallocate(input_tensor)
+            if media_rows is not None:
+                assert len(chunks) == 1, "media injection takes one chunk per forward"
+                x_embd = self.inject_media_embeddings(x_embd, *media_rows)
         else:
+            assert media_rows is None, "media is injected on the first rank only"
             x_embd = input_tensor
 
         # Whole-cache indexed rope built once (self.rope_indexed); the indexed op picks each chunk's rows

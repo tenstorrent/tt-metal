@@ -95,7 +95,9 @@ def _apply_manifest_env(manifest_path: str) -> dict:
 
 
 METADATA_SIZE_BYTES = 12
-CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
+# Must match the runner: image deployments (PREFILL_MEDIA=1) add media_pending_count, which this producer sends as 0.
+MEDIA_ENABLED = os.environ.get("PREFILL_MEDIA", "0") == "1"
+CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MEDIA_ENABLED else 0)
 
 
 def _load_env_config() -> None:
@@ -121,7 +123,8 @@ _load_env_config()
 
 
 def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
-    return struct.pack("<3I", slot_id, actual_start, actual_end)
+    words = (slot_id, actual_start, actual_end) + ((0,) if MEDIA_ENABLED else ())
+    return struct.pack(f"<{len(words)}I", *words)
 
 
 def _push(service, expect_bytes: int, tokens, mtp_tokens, metadata: bytes) -> None:
