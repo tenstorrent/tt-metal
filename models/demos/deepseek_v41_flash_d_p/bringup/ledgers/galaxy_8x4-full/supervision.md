@@ -235,3 +235,12 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
   L.s10240 started. Dashboard republished (milestone).
 - 08:10 L.s10240 PASS 9960b0b018b (523 s). L.last started.
 - 08:32 L.last PASS af70ec04593 (483 s; top5 1.0, err_final_hidden 0.185 / 0.242). L.s56320 started. DASHBOARD STALE wake: not republished (owner: milestones only; next at the ladder's end).
+- 08:35 L.s56320 PASS ac0f241e2ca (full target 56320, 11 chunks). L.smoke started.
+- 08:42 L.smoke FAIL (529 s): device greedy 8 tokens 'We need answer one word. Capital of' (coherent start of the
+  model's thinking; no 'Paris'). Classified FRAMEWORK: testing/smoke.py run_smoke decodes a fixed max_new=8, while the
+  CPU smoke (intake/check_hf_sanity.py smoke, n=24) needed 24 tokens ('...Capital of France = Paris...</think>Paris').
+  Paused + aborted the L.smoke fix attempt 1 at once (note OV-10; not counted). Owner asked to see the cause first;
+  proposed fix (shared budget 24 / intake.smoke.max_new, CPU-greedy prefix match recorded, selftest, gate --unit
+  L.smoke) awaiting the owner's word. Owner (08:41): pause after L.smoke; then a profile chart of one 5k chunk at
+  0, 50k, 100k, 200k, 500k (500k: check KV memory on 8x4 first); then the owner will rebase onto latest tt-metal
+  (a month-old tt-d-gen is of little use before that), so K.1 waits.
