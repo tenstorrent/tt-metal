@@ -79,13 +79,30 @@ Verification of `afb78699c8b-5b6f9268-dd4fbc6` (results: `dsv4-logs/image_tests/
 | Long-context decode, 768 forced tokens, high-acceptance prompts (host .33) | 64k 96.19 against 78.99 tok/s per user (+22 %), 128k 91.4 against 76.7 (+19 %); the low-acceptance prompts (forced tokens after EOS) depend on the text the model emits and are not a speed comparison |
 | Replay in the server | active: the per-call prefill statistics carry `replays_a_only` (32 for a 16k-token window group, 8 for 4k) and `replay_per_chunk`. The log line `REPLAY: R=2560 ...` is printed by the demo only and does not appear in the server log |
 
-Not run: B=16 / 262,144, full eval workflows beyond GSM8K / GPQA / tau3. AgentX at B=4: TODO (run in progress, expected 13:00-13:45 UTC; fill from its results file, no number yet).
+Not run: B=16 / 262,144, full eval workflows beyond GSM8K / GPQA / tau3. AgentX at B=4: see the section below.
 
 <!-- sources: image_tests/afb78699c8b-5b6f9268-dd4fbc6/results.md, tables and "Server facts" -->
 
 ### Benchmark tables of this image
 
-TODO: ISL x OSL tables up to 1,048,576 tokens, speculation on (`dsv4-logs/bench_1m/` runs 1 to 3; they were taken on the v2.1 image `7ca53f64776-5b6f9268-15bcbd6` according to `bench_1m/PATHS.md`: re-run on this image or label them) and plain decode (speculation off, `dsv4-logs/bench_1m_nospec/`, running). One v2.1 point already exists: 1,048,320-token prompt, 128 output tokens, TTFT 732.6 s (c = 1) and 733.7 s (c = 4), TPOT 75.6 / 134.2 ms (`bench_1m/cache_root_b/workflow_logs/reports_output/benchmarks/report_*.md`).
+The ISL x OSL tables (OSL 128 / 1,024 / 4,096, ISL 128 to 1,048,320, concurrency 1 and 4, speculation on and plain decode) are in `GETTING_STARTED_DETAILED.md`, section Performance. They were measured on the v2.1 image `7ca53f64776-5b6f9268-15bcbd6`, not on this image (`bench_1m/PATHS.md`, `bench_1m_nospec/PATHS.md`). Plain-decode server facts: catalog 1M / B=4 entry without `speculative_config`, DRAM free 596.4 MiB per bank (415.1 with speculation), trace region 24.2 MiB per bank allocated (87.6 with speculation), boot 1,177 s (1,913 s), TPOT 34.0 / 34.0 / 33.9 ms for three single streaming requests (`bench_1m_nospec/sanity_tpot.out`); 58 of 58 points OK. One point: 1M prompt (1,048,320 tokens), 128 output tokens, 1 user: TTFT 732.6 s and TPOT 75.6 ms with speculation, 741.2 s and 93.8 ms plain.
+
+### AgentX at B=4 (InferenceX agentic traces)
+
+tt-inference-server workflow `agentic_traces`, ci mode, the full weka corpus of traces (`inferencex_agentx_semianalysis_cc_traces_weka_062126`), 1M context, this image (v3b), B=4 catalog default on host .34. Results (`dsv4-logs/inferencex_run/PATHS.md`; per-concurrency `ix_metrics.json` and `agentic_sweep.json` in the artifact dir named there):
+
+| Concurrency | 1 | 2 | 4 |
+|---|---|---|---|
+| Requests profiled (OK, errors) | 17 (0) | 30 (0) | 25 (0) |
+| P90 tok/s per user (`p90_e2e_norm_intvty`, includes TTFT) | 0.56 | 3.65 | 3.16 |
+| P50 tok/s per user (same metric) | 6.23 | 20.8 | 13.3 |
+| Decode tok/s per user, P50 (1 / inter-token latency) | 46.1 | 48.9 | 36.2 |
+| TTFT P50 | 33.7 s | 18.7 s | 17.4 s |
+| Prefix-cache hit | 78.0 % | 69.5 % | 67.6 % |
+
+Caveats: the CI profile runs only 17 to 30 requests per point, so the values are small samples and noisy. The prompts are 116k to 335k tokens, so TTFT dominates the P90 metric. The server's prefix-cache hit rate is below the 96 to 99.6 % the client's trace structure allows in theory. No comparison with InferenceX or OpenRouter values is claimed (hardware, speculation acceptance and concurrency differ). The B=16 run was not made.
+
+<!-- sources: dsv4-logs/inferencex_run/PATHS.md; out_agentx_b4_ci_20261027_1023/.../agentic_sweep.json and aiperf_artifacts/*_c{1,2,4}_ci/ix_metrics.json (requests, TTFT P50 33.696 / 18.653 / 17.417 s, decode P50 46.05 / 48.93 / 36.16, e2e_norm P50 6.23 / 20.82 / 13.34); P90 and hit rates as given by the coordinator from the same files (sweep json: c1 P90 0.560, hit 78.0 %) -->
 
 ## Single chunk trace, per-row chunk starts, no admission window (branch `ssinghal/dsv4p1-single`)
 

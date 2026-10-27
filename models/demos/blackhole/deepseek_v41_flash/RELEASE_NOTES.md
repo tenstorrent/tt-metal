@@ -91,9 +91,9 @@ Model maximum, one request, 128 output tokens (previous release):
 | | Previous release | This release |
 |---|---|---|
 | B=16, 250,028-token prompt | TTFT 283 s, TPOT 31.6 ms | not measured on this image |
-| B=4, 1,000,028-token prompt | TTFT 1694 s, TPOT 36.7 ms | TODO (grid, running); a 1,000,000-token needle request takes 396 s (718 s on the v2.1 image, 727 s on the production image) |
+| B=4, 1M-class prompt, 1 user, speculation on (benchmark workflow, ISL 1,048,320, OSL 128, v2.1 image) | TTFT 1694 s, TPOT 36.7 ms (1,000,028-token prompt) | TTFT 732.6 s, TPOT 75.6 ms (plain decode 741.2 s / 93.8 ms); a 1,000,000-token needle request takes 396 s on this image (718 s on v2.1) |
 
-Benchmark tables, ISL x OSL up to 1,048,576 tokens, B=4 / 1M (`GETTING_STARTED_DETAILED.md`, section Performance): speculation on TODO; plain decode (speculation off) TODO. The runs finished so far were measured on the v2.1 image and are not this release's numbers.
+Benchmark tables, ISL x OSL up to 1,048,576 tokens, B=4 / 1M, speculation on and plain decode: `GETTING_STARTED_DETAILED.md`, section Performance. They were measured on the v2.1 image, not on this one (the model-maximum row above too; its prompt is a random 1,048,320-token prompt with low acceptance, not the 1,000,028-token prompt of the previous release row, so TPOT is not comparable).
 
 ## What changed
 

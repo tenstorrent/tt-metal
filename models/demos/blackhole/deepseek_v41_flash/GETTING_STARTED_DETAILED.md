@@ -318,9 +318,84 @@ Limits:
 
 ## Performance
 
-### Benchmark tables of this image (TODO)
+### Benchmark tables of this image: ISL x OSL up to 1,048,576 tokens, speculation on and plain decode
 
-TODO: ISL x OSL tables up to 1,048,576 tokens with speculative decoding on (sources: `dsv4-logs/bench_1m/cache_root*/workflow_logs/reports_output/benchmarks/` once the runs of this image are done; the runs finished so far were taken on the previous image `7ca53f64776-5b6f9268-15bcbd6`, see `bench_1m/PATHS.md`, and must be re-run or labelled as such) and plain decode (speculation off; `dsv4-logs/bench_1m_nospec/`, running). Method as below: `vllm bench serve` from the `benchmarks` workflow of the image, random prompts, 1M catalog default.
+**These tables were measured on the v2.1 image `7ca53f64776-5b6f9268-15bcbd6` (1017 checkpoint, before the replay, drafter, attention-front, lean-CCL and fused-indexer work of this release), not on `afb78699c8b-5b6f9268-dd4fbc6`.** The workflow, the catalog and the checkpoint are the same; decode and prompt processing of this image are faster (see `RELEASE_NOTES.md`).
+
+Setup: B=4 / 1,048,576-token catalog default (`deepseek-v41-flash-1m`, host .32 for spec-on, host .47 for plain decode), `vllm bench serve` through the `benchmarks` workflow of tt-inference-server (branch `ssinghal/dsv4p1-bench-1m`), 58 sweep points, 0 failed requests. Plain decode = the same catalog entry without `speculative_config` (DRAM free 596.4 MiB per bank against 415.1 with speculation, boot 1,177 s against 1,913 s). The 1M rows use ISL 1,048,320 / 1,047,296 / 1,044,224 for OSL 128 / 1,024 / 4,096 because ISL + OSL + 256 must fit in 1,048,576. Concurrency 1 and 4.
+
+Each cell: TTFT / TPOT / tok/s per user / total tok/s, for plain decode | speculation on | speedup of tok/s per user. Source: `dsv4-logs/bench_1m_nospec/table_out.md` (generator `table.py`, raw results in `bench_1m_nospec/cache_root/` and `bench_1m/cache_root`, `cache_root_b`, `cache_root_c`; paths in the two `PATHS.md`).
+
+
+### OSL 128  (cell: TTFT / TPOT / tok/s/user / total tok/s ; plain | spec-on | spec speedup in tok/s/user)
+| ISL | conc | plain | spec-on | speedup |
+|---|---|---|---|---|
+| 128 | 1 | 0.4s / 34.4ms / 29.1 / 54 | 0.4s / 23.2ms / 43.0 / 76 | x1.48 |
+| 128 | 4 | 0.8s / 37.3ms / 26.8 / 185 | 0.5s / 35.2ms / 28.4 / 202 | x1.06 |
+| 1024 | 1 | 1.1s / 37.6ms / 26.6 / 196 | 1.1s / 26.6ms / 37.6 / 256 | x1.41 |
+| 1024 | 4 | 1.7s / 39.3ms / 25.4 / 686 | 1.4s / 43.0ms / 23.3 / 644 | x0.91 |
+| 2048 | 1 | 1.8s / 37.8ms / 26.5 / 332 | 1.8s / 27.8ms / 36.0 / 407 | x1.36 |
+| 2048 | 4 | 2.4s / 39.5ms / 25.3 / 1166 | 2.3s / 53.2ms / 18.8 / 962 | x0.74 |
+| 4096 | 1 | 3.1s / 37.8ms / 26.4 / 533 | 3.2s / 27.1ms / 36.9 / 638 | x1.40 |
+| 4096 | 4 | 3.9s / 40.6ms / 24.7 / 1875 | 3.5s / 83.5ms / 12.0 / 1176 | x0.49 |
+| 8192 | 1 | 5.8s / 38.6ms / 25.9 / 775 | 5.9s / 26.4ms / 37.9 / 904 | x1.46 |
+| 8192 | 4 | 6.7s / 41.4ms / 24.2 / 2783 | 6.2s / 100.0ms / 10.0 / 1751 | x0.41 |
+| 16384 | 1 | 11.2s / 38.7ms / 25.8 / 1025 | 11.3s / 26.6ms / 37.6 / 1128 | x1.46 |
+| 16384 | 4 | 12.0s / 41.5ms / 24.1 / 3827 | 13.2s / 145.7ms / 6.9 / 2060 | x0.28 |
+| 32768 | 1 | 22.0s / 40.0ms / 25.0 / 1215 | 22.0s / 28.6ms / 35.0 / 1283 | x1.40 |
+| 32768 | 4 | 24.8s / 49.2ms / 20.3 / 4233 | 25.7s / 163.7ms / 6.1 / 2798 | x0.30 |
+| 65536 | 1 | 43.9s / 42.6ms / 23.5 / 1333 | 44.2s / 28.5ms / 35.1 / 1372 | x1.49 |
+| 65536 | 4 | 46.3s / 52.2ms / 19.1 / 4963 | 46.7s / 405.9ms / 2.5 / 2668 | x0.13 |
+| 131072 | 1 | 88.7s / 48.2ms / 20.7 / 1384 | 89.0s / 51.1ms / 19.6 / 1375 | x0.94 |
+| 131072 | 4 | 97.1s / 74.7ms / 13.4 / 4922 | 97.0s / 175.6ms / 5.7 / 4395 | x0.43 |
+| 262016 | 1 | 179.4s / 52.3ms / 19.1 / 1409 | 180.3s / 34.8ms / 28.7 / 1419 | x1.50 |
+| 262016 | 4 | 184.6s / 75.4ms / 13.3 / 5401 | 183.5s / 193.8ms / 5.2 / 5030 | x0.39 |
+| 524160 | 1 | 362.7s / 68.0ms / 14.7 / 1412 | 362.1s / 43.6ms / 23.0 / 1426 | x1.56 |
+| 524160 | 4 | 364.2s / 91.0ms / 11.0 / 5581 | 364.2s / 71.7ms / 14.0 / 5608 | x1.27 |
+| 1048320 | 1 | 741.2s / 93.8ms / 10.7 / 1392 | 732.6s / 75.6ms / 13.2 / 1413 | x1.24 |
+| 1048320 | 4 | 732.7s / 156.4ms / 6.4 / 5572 | 733.7s / 134.2ms / 7.4 / 5584 | x1.17 |
+
+### OSL 1024  (cell: TTFT / TPOT / tok/s/user / total tok/s ; plain | spec-on | spec speedup in tok/s/user)
+| ISL | conc | plain | spec-on | speedup |
+|---|---|---|---|---|
+| 128 | 1 | 0.4s / 36.0ms / 27.8 / 31 | 0.4s / 17.5ms / 57.2 / 63 | x2.06 |
+| 128 | 4 | 0.8s / 38.2ms / 26.2 / 115 | 0.5s / 18.9ms / 52.8 / 216 | x2.02 |
+| 1024 | 1 | 1.1s / 37.3ms / 26.8 / 52 | 1.1s / 23.1ms / 43.2 / 83 | x1.61 |
+| 1024 | 4 | 1.6s / 39.6ms / 25.3 / 195 | 1.4s / 25.1ms / 39.8 / 244 | x1.58 |
+| 8192 | 1 | 5.8s / 38.3ms / 26.1 / 205 | 5.9s / 18.5ms / 54.1 / 372 | x2.07 |
+| 8192 | 4 | 6.8s / 40.5ms / 24.7 / 764 | 6.3s / 28.5ms / 35.1 / 911 | x1.42 |
+| 10000 | 1 | 6.8s / 38.2ms / 26.2 / 240 | 6.8s / 18.4ms / 54.3 / 430 | x2.08 |
+| 10000 | 4 | 7.5s / 40.5ms / 24.7 / 902 | 7.2s / 30.3ms / 33.0 / 1022 | x1.34 |
+| 32768 | 1 | 22.1s / 40.0ms / 25.0 / 536 | 22.1s / 35.4ms / 28.2 / 580 | x1.13 |
+| 32768 | 4 | 24.2s / 43.1ms / 23.2 / 1979 | 23.3s / 57.6ms / 17.3 / 1570 | x0.75 |
+| 131072 | 1 | 89.0s / 48.0ms / 20.8 / 957 | 89.0s / 26.4ms / 37.9 / 1139 | x1.82 |
+| 131072 | 4 | 96.3s / 53.0ms / 18.9 / 3509 | 94.5s / 133.8ms / 7.5 / 2245 | x0.40 |
+| 262144 | 1 | 179.9s / 58.9ms / 17.0 / 1096 | 179.7s / 26.8ms / 37.3 / 1271 | x2.20 |
+| 262144 | 4 | 185.8s / 64.0ms / 15.6 / 4188 | 182.2s / 288.8ms / 3.5 / 2182 | x0.22 |
+| 524288 | 1 | 363.9s / 75.1ms / 13.3 / 1192 | 364.7s / 32.5ms / 30.7 / 1320 | x2.31 |
+| 524288 | 4 | 367.2s / 80.9ms / 12.4 / 4668 | 379.5s / 227.4ms / 4.4 / 3106 | x0.36 |
+| 1047296 | 1 | 739.9s / 90.5ms / 11.0 / 1259 | 741.1s / 44.1ms / 22.7 / 1333 | x2.05 |
+| 1047296 | 4 | 729.5s / 97.0ms / 10.3 / 5059 | 839.8s / 590.9ms / 1.7 / 2895 | x0.16 |
+
+### OSL 4096  (cell: TTFT / TPOT / tok/s/user / total tok/s ; plain | spec-on | spec speedup in tok/s/user)
+| ISL | conc | plain | spec-on | speedup |
+|---|---|---|---|---|
+| 128 | 1 | 0.4s / 37.1ms / 27.0 / 28 | 0.4s / 12.5ms / 80.1 / 82 | x2.97 |
+| 128 | 4 | 0.7s / 39.1ms / 25.6 / 105 | 0.6s / 14.5ms / 68.8 / 270 | x2.69 |
+| 1024 | 1 | 1.1s / 37.3ms / 26.8 / 33 | 1.1s / 11.8ms / 84.8 / 104 | x3.17 |
+| 1024 | 4 | 1.6s / 39.4ms / 25.4 / 126 | 1.4s / 16.3ms / 61.2 / 261 | x2.41 |
+| 8192 | 1 | 5.9s / 38.3ms / 26.1 / 75 | 5.9s / 15.5ms / 64.7 / 178 | x2.48 |
+| 8192 | 4 | 6.3s / 40.5ms / 24.7 / 286 | 6.1s / 20.7ms / 48.3 / 471 | x1.95 |
+| 32768 | 1 | 22.0s / 39.8ms / 25.1 / 199 | 22.0s / 14.0ms / 71.6 / 465 | x2.85 |
+| 32768 | 4 | 24.2s / 42.3ms / 23.7 / 747 | 23.2s / 23.7ms / 42.1 / 1174 | x1.78 |
+| 131072 | 1 | 88.5s / 48.1ms / 20.8 / 474 | 89.5s / 76.6ms / 13.0 / 335 | x0.63 |
+| 131072 | 4 | 96.2s / 50.5ms / 19.8 / 1784 | 92.3s / 57.9ms / 17.3 / 1557 | x0.87 |
+| 262144 | 1 | 179.9s / 58.8ms / 17.0 / 633 | 180.7s / 20.5ms / 48.7 / 1006 | x2.87 |
+| 262144 | 4 | 185.9s / 61.4ms / 16.3 / 2435 | 182.3s / 90.3ms / 11.1 / 1869 | x0.68 |
+| 524288 | 1 | 363.4s / 75.0ms / 13.3 / 788 | 366.5s / 34.2ms / 29.3 / 1043 | x2.19 |
+| 524288 | 4 | 367.0s / 77.6ms / 12.9 / 3085 | 370.7s / 141.9ms / 7.0 / 2182 | x0.55 |
+| 1044224 | 1 | 737.8s / 90.1ms / 11.1 / 947 | 738.7s / 34.0ms / 29.4 / 1194 | x2.65 |
+| 1044224 | 4 | 726.8s / 92.8ms / 10.8 / 3788 | 730.1s / 290.8ms / 3.4 / 2034 | x0.32 |
 
 The tables below were measured on earlier images; the heading of each table names its image. They are kept as the long-form record and are not the numbers of this image. The prefix-caching and chunked-prefill numbers are in their own section.
 
