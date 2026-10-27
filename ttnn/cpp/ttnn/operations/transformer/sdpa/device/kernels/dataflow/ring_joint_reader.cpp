@@ -778,13 +778,13 @@ void kernel_main() {
     constexpr uint32_t v_col_offset_t = v_row_Wt - vDHt;
     // Packed K/V where V starts inside K's columns (Gemma4 global: [Krot128 | V512], K = cols 0..512, V = cols
     // 128..640): an injector builds V's first v_from_k_tiles columns from the K tiles it already read and reads
-    // only the rest from DRAM, instead of reading the overlapping columns twice. Packed sources (several ring sources
-    // per K chunk) place K rows by the packed schedule, not by k_slice; the host enables them only with
-    // v_shares_k_buffer, and this path needs the classic layout.
+    // only the rest from DRAM, instead of reading the overlapping columns twice. Only for packed K/V, where V is read
+    // from the K tensor itself (equal row widths, same data format). Packed sources (several ring sources per K chunk)
+    // place K rows by the packed schedule, not by k_slice; the host enables them only with v_shares_k_buffer.
     constexpr uint32_t v_from_k_tiles = v_col_offset_t < DHt ? DHt - v_col_offset_t : 0;
     constexpr bool v_overlaps_k = !v_shares_k_buffer && GROUPED_KV_SOURCE_COUNT == 1 && !has_sliding_window &&
-                                  v_col_offset_t > 0 && v_from_k_tiles > 0 && v_from_k_tiles < vDHt &&
-                                  k_tile_bytes == v_tile_bytes;
+                                  k_row_Wt == v_row_Wt && v_col_offset_t > 0 && v_from_k_tiles > 0 &&
+                                  v_from_k_tiles < vDHt && k_tile_bytes == v_tile_bytes;
     const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, k_row_Wt);
     const auto gathered_k_input_tile_logical =
         TensorTileShape(gathered_kv_batch_dim, NHK, gathered_padded_Nt, k_row_Wt);
