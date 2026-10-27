@@ -391,13 +391,18 @@ _MIXES = {
 @parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 def test_batched_step_perf(mesh_device, reset_seeds):
     """Traced step time of B requests x 2048 tokens vs B unbatched steps at the same prefixes."""
-    chunk_size, lane_counts, capacity = 2048, (1, 2, 4), 262144
+    chunk_size, capacity = 2048, 262144
+    # LOCAL A/B knobs.
+    lane_counts = tuple(int(x) for x in os.environ.get("PERF_LANE_COUNTS", "1,2,4").split(","))
+    wanted_mixes = os.environ.get("PERF_MIXES")
+    mixes = {k: v for k, v in _MIXES.items() if not wanted_mixes or k in wanted_mixes.split(",")}
+    skip_alone = os.environ.get("PERF_SKIP_ALONE") == "1"
     num_slots = max(lane_counts)
     mesh_config, model_args, model = build_batched_model(mesh_device, chunk_size, num_slots, capacity)
 
     # Each slot gets its own window of real text, prefilled up to the deepest prefix any mix asks for, so the
     # cached prefixes hold real KV. A measured step rewrites its own rows with the same tokens.
-    deepest = max(max(mix(num_slots)) for mix in _MIXES.values()) + chunk_size
+    deepest = max(max(mix(num_slots)) for mix in mixes.values()) + chunk_size
     stream = _text_token_stream(_hf_model_id())[0]
     stride = min(100_000, (len(stream) - deepest) // max(1, num_slots - 1))
     assert stride > 0, f"token stream ({len(stream)}) too short for {num_slots} windows of {deepest}"
@@ -415,12 +420,12 @@ def test_batched_step_perf(mesh_device, reset_seeds):
             runner.step([lane(slot, start)])
     logger.info(f"[batching] filled {num_slots} slots to {deepest - chunk_size} tokens in {time.time() - t0:.0f}s")
 
-    for mix_name, mix in _MIXES.items():
+    for mix_name, mix in mixes.items():
         for b in lane_counts:
             prefixes = mix(b)
             lanes = [lane(slot, p) for slot, p in enumerate(prefixes)]
             batched_ms = runner.timed(lanes)
-            alone_ms = [runner.timed([single]) for single in lanes] if b > 1 else [batched_ms]
+            alone_ms = [runner.timed([single]) for single in lanes] if b > 1 and not skip_alone else [batched_ms]
             logger.info(
                 f"[batching] PERF chunk={chunk_size} B={b} mix={mix_name} prefixes={prefixes} "
                 f"batched={batched_ms:.1f}ms unbatched_sum={sum(alone_ms):.1f}ms "

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "api/debug/kernel_profiler.hpp"  // LOCAL PROBE
 #include <cstdint>
 
 #define REDUCE_OP (PoolType::MAX)
@@ -841,6 +842,7 @@ void kernel_main() {
     // instantiates are used, since the program is at the kernel config buffer limit.
     if constexpr (ksplit_enabled) {
         if (ksplit_active) {
+            DeviceZoneScopedN("C_MERGE");  // LOCAL PROBE
             // A single-chunk slice runs only a first K step, which leaves the packer at the QKT@V subblock width;
             // copy_block and max_block_sfpi pack one tile per pack_tile.
             configure_single_tile_pack(cb_max_A);

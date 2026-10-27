@@ -619,6 +619,12 @@ def open_ring_joint_sdpa_runtime(
     mesh_device = None
 
     try:
+        router_config = ttnn.FabricRouterConfig()
+        # LOCAL PROBE: the model's fabric for the halo A/B.
+        if os.environ.get("LANES_AB_FABRIC_PAYLOAD"):
+            router_config.max_packet_payload_size_bytes = int(os.environ["LANES_AB_FABRIC_PAYLOAD"])
+        if os.environ.get("LANES_AB_FABRIC_RING") == "1":
+            fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
         ttnn.set_fabric_config(
             fabric_config,
             ttnn.FabricReliabilityMode.STRICT_INIT,
@@ -626,6 +632,7 @@ def open_ring_joint_sdpa_runtime(
             ttnn.FabricTensixConfig.DISABLED,
             ttnn.FabricUDMMode.DISABLED,
             ttnn.FabricManagerMode.DEFAULT,
+            router_config,
         )
 
         mesh_shape = ttnn.MeshShape(mesh_config.tp_size, mesh_config.sp_size)

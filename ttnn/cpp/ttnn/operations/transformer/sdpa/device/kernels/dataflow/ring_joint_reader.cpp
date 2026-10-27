@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "api/debug/kernel_profiler.hpp"  // LOCAL PROBE
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -874,6 +875,7 @@ void kernel_main() {
             return;
         }
         halo_synchronized = true;
+        DeviceZoneScopedN("SDPA_HALO_WAIT");  // LOCAL PROBE
         // Sliding has a compact write plan (local slab + cyclic predecessor tails).
         const uint32_t synchronization_iters =
             1 + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1];
@@ -1176,6 +1178,7 @@ void kernel_main() {
             // (q_per_core > 1) -> deadlock. Reads Q exactly once per q_iter, so no extra work.
             bool first_k_for_q = true;
             for (uint32_t k_chunk = has_sliding_window ? sliding_band.begin : 0; k_chunk < q_k_loop_count; ++k_chunk) {
+                DeviceZoneScopedN("R_KCHUNK");  // LOCAL PROBE
                 const auto sliding_k_chunk = sliding_q_plan.k_chunk_at(k_chunk);
                 const uint32_t source_ring_id = has_sliding_window ? sliding_k_chunk.source_ring_id : ring_id;
                 const uint32_t source_k_chunk = has_sliding_window ? sliding_k_chunk.source_k_chunk : k_chunk;
@@ -1416,6 +1419,7 @@ void kernel_main() {
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
                 if (first_k_for_q && need_q_read) {
+                    DeviceZoneScopedN("R_Q");  // LOCAL PROBE
                     const auto read_q = [&](const auto& q_gen) {
                         if constexpr (use_q_subblock_push) {
                             for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {

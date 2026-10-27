@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"  // LOCAL PROBE
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -210,7 +211,10 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
 
-    fabric_connection.open();
+    {
+        DeviceZoneScopedN("HW_OPEN");  // LOCAL PROBE
+        fabric_connection.open();
+    }
 
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection =
         send_backward ? fabric_connection.get_backward_connection() : fabric_connection.get_forward_connection();
@@ -266,50 +270,55 @@ void kernel_main() {
         noc_async_writes_flushed();
     };
 
-    for (uint32_t lane = 0; lane < num_lanes; ++lane) {
-        derive_lane(lane);
-        for (uint32_t run_start = 0; run_start < mc_hop_count;) {
-            uint32_t run_end = run_start + 1;
-            if constexpr (multicast) {
-                run_end = ring_joint::chunked_sliding_halo_run_end(mc_origin_rows.data(), run_start, mc_hop_count);
-                ccl_routing_utils::line_multicast_route_info_t route{};
-                route.start_distance_in_hops = static_cast<uint16_t>(ring_joint::chunked_sliding_halo_run_distance(
-                    unicast_route_arg1, mc_hop_count, run_start, run_end, send_backward));
-                route.range_hops = static_cast<uint16_t>(run_end - run_start);
-                ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr, route);
-            }
-            run_start = run_end;
-            for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-                for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
-                    uint32_t tiles_read = input_tile_id_start[input_idx];
-                    const uint32_t tiles_to_read = input_tile_id_end[input_idx];
-                    output_batch_head_base =
-                        (lane * input_batch_head_count[input_idx] + bh_idx) * output_batch_head_stride_pages[input_idx];
-                    while (tiles_read < tiles_to_read) {
-                        const uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                        cb_output.wait_front(packet_size_in_pages);
-                        const size_t l1_read_addr = cb_output.get_read_ptr();
-                        const bool is_last_source_packet = lane + 1 == num_lanes && input_idx + 1 == num_inputs &&
-                                                           bh_idx + 1 == input_batch_head_count[input_idx] &&
-                                                           tiles_read + num_pages_to_read >= tiles_to_read;
-                        const uint32_t signal_pages =
-                            is_last_source_packet ? std::min<uint32_t>(num_pages_to_read, 2) : 0;
-                        const uint32_t plain_pages = num_pages_to_read - signal_pages;
-                        send_pages(input_idx, tiles_read, plain_pages, l1_read_addr, false);
-                        send_pages(
-                            input_idx,
-                            tiles_read + plain_pages,
-                            signal_pages,
-                            l1_read_addr + plain_pages * output_page_size,
-                            true);
-                        tiles_read += num_pages_to_read;
-                        cb_output.pop_front(packet_size_in_pages);
+    {
+        DeviceZoneScopedN("HW_SEND");  // LOCAL PROBE
+        for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+            derive_lane(lane);
+            for (uint32_t run_start = 0; run_start < mc_hop_count;) {
+                uint32_t run_end = run_start + 1;
+                if constexpr (multicast) {
+                    run_end = ring_joint::chunked_sliding_halo_run_end(mc_origin_rows.data(), run_start, mc_hop_count);
+                    ccl_routing_utils::line_multicast_route_info_t route{};
+                    route.start_distance_in_hops = static_cast<uint16_t>(ring_joint::chunked_sliding_halo_run_distance(
+                        unicast_route_arg1, mc_hop_count, run_start, run_end, send_backward));
+                    route.range_hops = static_cast<uint16_t>(run_end - run_start);
+                    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr, route);
+                }
+                run_start = run_end;
+                for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+                    for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
+                        uint32_t tiles_read = input_tile_id_start[input_idx];
+                        const uint32_t tiles_to_read = input_tile_id_end[input_idx];
+                        output_batch_head_base = (lane * input_batch_head_count[input_idx] + bh_idx) *
+                                                 output_batch_head_stride_pages[input_idx];
+                        while (tiles_read < tiles_to_read) {
+                            const uint32_t num_pages_to_read =
+                                std::min(tiles_to_read - tiles_read, packet_size_in_pages);
+                            cb_output.wait_front(packet_size_in_pages);
+                            const size_t l1_read_addr = cb_output.get_read_ptr();
+                            const bool is_last_source_packet = lane + 1 == num_lanes && input_idx + 1 == num_inputs &&
+                                                               bh_idx + 1 == input_batch_head_count[input_idx] &&
+                                                               tiles_read + num_pages_to_read >= tiles_to_read;
+                            const uint32_t signal_pages =
+                                is_last_source_packet ? std::min<uint32_t>(num_pages_to_read, 2) : 0;
+                            const uint32_t plain_pages = num_pages_to_read - signal_pages;
+                            send_pages(input_idx, tiles_read, plain_pages, l1_read_addr, false);
+                            send_pages(
+                                input_idx,
+                                tiles_read + plain_pages,
+                                signal_pages,
+                                l1_read_addr + plain_pages * output_page_size,
+                                true);
+                            tiles_read += num_pages_to_read;
+                            cb_output.pop_front(packet_size_in_pages);
+                        }
                     }
                 }
             }
         }
-    }
 
+    }  // LOCAL PROBE HW_SEND
+    DeviceZoneScopedN("HW_CLOSE");  // LOCAL PROBE
     noc_obj.async_write_barrier();
     // Drain in-flight writes BEFORE closing the EDM connections.
     noc_obj.async_atomic_barrier();

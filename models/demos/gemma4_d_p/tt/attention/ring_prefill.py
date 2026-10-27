@@ -12,6 +12,7 @@ Local layers also apply the sliding window. Every chunk uses this path.
 """
 
 import json
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -307,8 +308,12 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, grid=(11, 10), *,
     """
     num_cores = grid[0] * grid[1]
     if sliding:
-        q_chunk = 128
-        return q_chunk, 128, _k_splits(num_heads * -(-q_slab_tokens // q_chunk), grid), False
+        # LOCAL A/B: GEMMA4_SLIDING_QC / GEMMA4_SLIDING_KSPLIT override the sliding config.
+        q_chunk = int(os.environ.get("GEMMA4_SLIDING_QC", "128"))
+        k_splits = _k_splits(num_heads * -(-q_slab_tokens // q_chunk), grid)
+        if os.environ.get("GEMMA4_SLIDING_KSPLIT"):
+            k_splits = int(os.environ["GEMMA4_SLIDING_KSPLIT"])
+        return q_chunk, 128, k_splits, False
 
     if use_tuned_configs and num_heads == 8 and tuple(grid) == (11, 10):
         tuned = _load_global_ring_sdpa_configs().get(q_slab_tokens * 8)

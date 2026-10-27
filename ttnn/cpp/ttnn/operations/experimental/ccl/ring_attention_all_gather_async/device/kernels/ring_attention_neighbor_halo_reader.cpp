@@ -5,6 +5,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/kernel_profiler.hpp"  // LOCAL PROBE
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
@@ -201,43 +202,50 @@ void kernel_main() {
     CircularBuffer cb_output(cb_output_id);
     const uint32_t cb_fifo_limit = get_local_cb_interface(cb_output_id).fifo_limit;
     const uint32_t cb_fifo_size = get_local_cb_interface(cb_output_id).fifo_size;
-    for (uint32_t lane = 0; lane < num_lanes; ++lane) {
-        derive_lane(lane);
-        for (uint32_t run_start = 0; run_start < mc_hop_count;) {
-            uint32_t run_end = run_start + 1;
-            if constexpr (multicast) {
-                run_end = ring_joint::chunked_sliding_halo_run_end(mc_origin_rows.data(), run_start, mc_hop_count);
-                for (uint32_t input = 0; input < num_inputs; ++input) {
-                    first_origin[input] = mc_origin_rows[run_start] * mc_input_Wt[input];
+    {
+        DeviceZoneScopedN("HR_READ");  // LOCAL PROBE
+        for (uint32_t lane = 0; lane < num_lanes; ++lane) {
+            derive_lane(lane);
+            for (uint32_t run_start = 0; run_start < mc_hop_count;) {
+                uint32_t run_end = run_start + 1;
+                if constexpr (multicast) {
+                    run_end = ring_joint::chunked_sliding_halo_run_end(mc_origin_rows.data(), run_start, mc_hop_count);
+                    for (uint32_t input = 0; input < num_inputs; ++input) {
+                        first_origin[input] = mc_origin_rows[run_start] * mc_input_Wt[input];
+                    }
                 }
-            }
-            run_start = run_end;
-            for (uint32_t input = 0; input < num_inputs; ++input) {
-                for (uint32_t bh = 0; bh < input_batch_head_count[input]; ++bh) {
-                    uint32_t tiles_read = input_tile_start[input];
-                    prefetch_batch_read_tiles<input_page_size, packet_size_in_pages, prefetch_packets, 1>(
-                        noc,
-                        cb_output,
-                        tiles_read,
-                        input_tile_end[input],
-                        cb_fifo_limit,
-                        cb_fifo_size,
-                        input_accessors[input],
-                        [&](uint32_t tile) {
-                            const uint32_t source_tile = tile < halo_pages[input]
-                                                             ? first_origin[input] + tile
-                                                             : second_origin[input] + tile - halo_pages[input];
-                            return input_batch_base[input] + bh * input_stride_pages[input] + source_tile;
-                        });
+                run_start = run_end;
+                for (uint32_t input = 0; input < num_inputs; ++input) {
+                    for (uint32_t bh = 0; bh < input_batch_head_count[input]; ++bh) {
+                        uint32_t tiles_read = input_tile_start[input];
+                        prefetch_batch_read_tiles<input_page_size, packet_size_in_pages, prefetch_packets, 1>(
+                            noc,
+                            cb_output,
+                            tiles_read,
+                            input_tile_end[input],
+                            cb_fifo_limit,
+                            cb_fifo_size,
+                            input_accessors[input],
+                            [&](uint32_t tile) {
+                                const uint32_t source_tile = tile < halo_pages[input]
+                                                                 ? first_origin[input] + tile
+                                                                 : second_origin[input] + tile - halo_pages[input];
+                                return input_batch_base[input] + bh * input_stride_pages[input] + source_tile;
+                            });
+                    }
                 }
             }
         }
-    }
 
+    }  // LOCAL PROBE HR_READ
     if constexpr (collects_arrivals) {
         // Wait for every hop of this halo, not just one: with a multi-hop halo the SDPA must not
         // start its K loop until the whole compact buffer has landed.
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(incoming_ready_sem), arrivals_expected);
+        {
+            DeviceZoneScopedN("HR_ARRIVE");  // LOCAL PROBE
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(incoming_ready_sem), arrivals_expected);
+        }
         constexpr uint32_t predecessor_ring_id = my_ring_id == 0 ? ring_size - 1 : my_ring_id - 1;
         op_signaler.synchronize_workers_and_signal_op(predecessor_ring_id);
         // Consume exactly the arrivals gated on. The wrapping atomic decrement preserves a
