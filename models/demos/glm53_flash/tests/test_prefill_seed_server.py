@@ -17,6 +17,11 @@ frames of ``u32 header length | JSON header | u64 body length | body`` (body = s
 * ``{"op": "needle", "n": N, "depth": d, "env": {...}}`` -- diagnosis (G53F-0170): arg's needle prompt of ~N tokens
   (``test_mesh_long_context.build_needle_ids``), its first token / top-5 and whether it is the needle key's first
   token; ``env`` sets runtime knobs first. Prompts longer than ``GLM53F_PREFILL_CHUNK`` use the chunked prefill.
+* tt-blaze G53F-0249: ``{"op": "prefill", ..., "opts": {"reuse": 1}}`` (or ``GLM53F_SEED_REUSE=1``) reuses the resident
+  caches when the request's prompt equals the LAST prefill's (same ids[:S'], same MTP build, no per-request env knobs and
+  no diagnosis op in between): no prefill, only the export + push into the requested slot (``"reused": 1``,
+  ``prefill_s`` 0). The caches are never written between requests, so the pushed bytes are the fresh prefill's. The ISL x
+  BS table fills 64 ring slots with one prompt this way; a TTFT is only ever read from a fresh (reused = 0) request.
 * ``{"op": "stop"}`` -- stop every rank, answer the driver, then wait for the next ring (the server outlives ring runs;
   ``GLM53F_SEED_SERVER_ONESHOT=1`` exits instead). A ring that dies mid-run (a closed rank or driver socket) is dropped
   the same way, and a connection that closes before its first header is ignored.
@@ -377,6 +382,8 @@ def test_prefill_seed_server(mesh_device):
     driver = None
     pending = [srv]
     request = 0
+    # G53F-0249: the prompt the resident caches hold (None after a diagnosis op / per-request env knobs) and its next token
+    resident = {"key": None, "next_token": None}
     pool = ThreadPoolExecutor(max_workers=48)
     oneshot = os.environ.get("GLM53F_SEED_SERVER_ONESHOT", "0") == "1"
 
@@ -441,6 +448,8 @@ def test_prefill_seed_server(mesh_device):
                 _drop_ring("stop")
                 logger.info(f"[seed-server] READY for the next ring on port {PORT}")
                 continue
+            if hdr["op"] in ("needle", "logits", "verify"):  # they prefill into the resident caches (G53F-0249)
+                resident["key"] = None
             if hdr["op"] == "needle":  # G53F-0170 diagnosis: a needle prompt (arg's builder) -> the first token + top-5
                 from models.demos.glm53_flash.tests import test_mesh_long_context as LC
 
@@ -547,21 +556,36 @@ def test_prefill_seed_server(mesh_device):
             os.environ.update(env_opts)
             if env_opts:
                 rep["env"] = env_opts
+            key = (tuple(ids[:sp]), bool(want_mtp))
+            want_reuse = bool(int((hdr.get("opts") or {}).get("reuse", os.environ.get("GLM53F_SEED_REUSE", "0"))))
+            reused = want_reuse and not env_opts and resident["key"] == key
             ttnn.synchronize_device(mesh_device)
             t1 = time.perf_counter()
-            try:
-                st, lg, owner = _prefill(model, ids[:sp], mtp_next=ids[1 : sp + 1] if want_mtp else None)
-            finally:
+            if reused:  # G53F-0249: the caches already hold this prompt's prefill; export + push only
                 for k, v in env_old.items():
                     if v is None:
                         os.environ.pop(k, None)
                     else:
                         os.environ[k] = v
-            nxt = model.first_token(lg, owner)
-            ttnn.synchronize_device(mesh_device)
-            t2 = time.perf_counter()
-            ttnn.deallocate(lg)
-            ttnn.deallocate(st)
+                nxt = resident["next_token"]
+                t2 = time.perf_counter()
+            else:
+                try:
+                    st, lg, owner = _prefill(model, ids[:sp], mtp_next=ids[1 : sp + 1] if want_mtp else None)
+                finally:
+                    for k, v in env_old.items():
+                        if v is None:
+                            os.environ.pop(k, None)
+                        else:
+                            os.environ[k] = v
+                nxt = model.first_token(lg, owner)
+                ttnn.synchronize_device(mesh_device)
+                t2 = time.perf_counter()
+                ttnn.deallocate(lg)
+                ttnn.deallocate(st)
+                # a request with per-request env knobs leaves caches a plain request must not reuse
+                resident.update(key=None if env_opts else key, next_token=nxt)
+            rep["reused"] = int(reused)
             # device -> host export on this thread (ttnn reads stay single-threaded), then the pushes in parallel
             bodies = {}
 
