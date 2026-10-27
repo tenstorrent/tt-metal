@@ -410,12 +410,13 @@ void ControlPlane::init_control_plane(
     // Every rank must resolve EVERY mesh's fabric type the same way, or the per-mesh edge-port maps diverge and
     // cross-rank inter-mesh validation throws (the controller places a connection on an edge port that a
     // non-owner rank reserved for a torus it never requested). Two cases, both identical on every rank:
-    //   - MGD_DEFAULT: each mesh takes its own declared dim_types (nullopt -> MeshGraph derives per mesh), so meshes
-    //     stay heterogeneous while every rank agrees on each one.
+    //   - MGD_DEFAULT: hand MeshGraph MGD_DEFAULT and let it pull each mesh's own default straight from the
+    //     descriptor (default_fabric_config_from_dim_types per mesh), so meshes stay heterogeneous while every rank
+    //     agrees on each one.
     //   - A concrete config is a process-wide override; it applies uniformly to every mesh (not just the owned one),
     //     so the owned/non-owned split that broke the edge-port maps disappears.
     std::optional<FabricConfig> mesh_graph_fabric_config =
-        fabric_config_from_mgd ? std::nullopt : std::optional<FabricConfig>(config_.fabric_config);
+        fabric_config_from_mgd ? FabricConfig::MGD_DEFAULT : config_.fabric_config;
     this->mesh_graph_ = std::make_unique<MeshGraph>(mgd, mesh_graph_fabric_config, cluster.is_ubb_galaxy());
     this->validate_system_health_against_mesh_graph_policy();
 
