@@ -435,6 +435,7 @@ echo "========================================"
 # when the underlying test failed OR hung, so without it a hang would be reported
 # PASS and skip the device reset. An empty triage log means no hang fired.
 ttrun_precompile_record "$PYTEST_STDOUT_LOG"   # timing-record fields only; never affects the verdict
+ttrun_detect_eth_stuck "$PYTEST_STDOUT_LOG"    # a reset on every exit path below when set
 
 if [[ $EXIT_CODE -eq 0 && ! -s "$TRIAGE_LOG" ]]; then
     ttrun_clear_dirty
@@ -463,7 +464,8 @@ ttrun_detect_hang "$PYTEST_STDOUT_LOG"
 
 # Only reset device when the failure might have left it dirty.
 # Hangs and crashes corrupt device state. Normal test failures (PCC mismatch,
-# assertion errors) and collection errors don't touch the device.
+# assertion errors) and collection errors don't touch the device, except for
+# stuck Ethernet cores (ttrun_detect_eth_stuck above), which reset on every exit path.
 if [[ "$IS_HANG" == true ]]; then
     ttrun_reset_cards
     echo "SAFE_PYTEST_RESULT: HANG (exit code: $EXIT_CODE)"
