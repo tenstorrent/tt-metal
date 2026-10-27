@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Per (lane, head) item: the projection's q/k/v/z/a/b tiles, the three older conv ring slots' q/k/v tiles, the four
-// taps' q/k/v tiles (tile-major: CB_S holds tile t's three slots at 3t.., CB_T its four taps at 4t.., pushed per
+// taps' q/k/v tiles (tile-major: cb_s holds tile t's three slots at 3t.., cb_t its four taps at 4t.., pushed per
 // tile), the head's dt_bias / neg_exp_A tiles, the lane's state tiles, and the lane's row mask; writes
 // the projection's q/k/v tiles into the newest ring slot.  Tile ids: q 4(h/3)+c, k 16+4(h/3)+c, v 32+4h+c,
 // z 80+4h+c, a 128, b 129 (one tile row of the [1,1,rows,4160] projection); state ((lane*12+h)*16 + t).
@@ -14,28 +14,29 @@
 #include "api/tensor/noc_traits.h"
 
 namespace {
-constexpr uint32_t CB_P = 0, CB_S = 1, CB_T = 2, CB_Z = 3, CB_AB = 4, CB_DTNA = 5, CB_W = 6, CB_STATE = 7;
-constexpr uint32_t CB_MASK = 8, CB_SCALER = 9;
-constexpr uint32_t HEADS = 12, HT = 4, QKV_TILES = 12, STATE_TILES = 16;
-constexpr uint32_t K_TILE0 = 16, V_TILE0 = 32, Z_TILE0 = 80, A_TILE = 128, B_TILE = 129;
-constexpr uint32_t BF16_TILE = 2048, FP32_TILE = 4096, FACE_ELEMS = 256;
+constexpr uint32_t cb_p = 0, cb_s = 1, cb_t = 2, cb_z = 3, cb_ab = 4, cb_dtna = 5, cb_w = 6, cb_state = 7;
+constexpr uint32_t cb_mask = 8, cb_scaler = 9;
+constexpr uint32_t value_heads = 12, head_tiles = 4, qkv_tiles = 12, head_state_tiles = 16;
+constexpr uint32_t k_tile0 = 16, v_tile0 = 32, z_tile0 = 80, a_tile = 128, b_tile = 129;
+constexpr uint32_t bf16_tile_bytes = 2048, fp32_tile_bytes = 4096, face_elements = 256;
 
 constexpr uint32_t face_element(uint32_t row, uint32_t col) {
-    return ((row >> 4) * 2 + (col >> 4)) * FACE_ELEMS + (row & 15) * 16 + (col & 15);
+    return ((row >> 4) * 2 + (col >> 4)) * face_elements + (row & 15) * 16 + (col & 15);
 }
 
-template <typename Acc>
-void read_tiles_at(uint32_t l1, const Acc& acc, const uint32_t* ids, uint32_t count, uint32_t tile_bytes) {
+template <typename Accessor>
+void read_tiles_at(uint32_t l1, const Accessor& tensor, const uint32_t* page_ids, uint32_t count, uint32_t tile_bytes) {
     for (uint32_t t = 0; t < count; ++t) {
-        noc_async_read_page(ids[t], acc, l1 + t * tile_bytes);
+        noc_async_read_page(page_ids[t], tensor, l1 + t * tile_bytes);
     }
 }
 
-template <typename Acc>
-uint32_t read_tiles(uint32_t cb, const Acc& acc, const uint32_t* ids, uint32_t count, uint32_t tile_bytes) {
+template <typename Accessor>
+uint32_t read_tiles(
+    uint32_t cb, const Accessor& tensor, const uint32_t* page_ids, uint32_t count, uint32_t tile_bytes) {
     cb_reserve_back(cb, count);
     const uint32_t l1 = get_write_ptr(cb);
-    read_tiles_at(l1, acc, ids, count, tile_bytes);
+    read_tiles_at(l1, tensor, page_ids, count, tile_bytes);
     return l1;
 }
 
@@ -49,57 +50,57 @@ void fill_words(uint32_t l1, uint32_t words, uint32_t value) {
 
 void kernel_main() {
     uint32_t arg = 0;
-    const uint32_t p_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t s0_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t s1_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t s2_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t t0_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t t1_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t t2_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t t3_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t projected_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t slot0_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t slot1_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t slot2_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t tap0_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t tap1_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t tap2_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t tap3_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t dtna_addr = get_arg_val<uint32_t>(arg++);
-    const uint32_t w_addr = get_arg_val<uint32_t>(arg++);
+    const uint32_t norm_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t state_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t newest_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t items = get_arg_val<uint32_t>(arg++);
 
-    constexpr auto p_args = TensorAccessorArgs<1>();
-    constexpr auto s0_args = TensorAccessorArgs<p_args.next_compile_time_args_offset()>();
-    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
-    constexpr auto s2_args = TensorAccessorArgs<s1_args.next_compile_time_args_offset()>();
-    constexpr auto t0_args = TensorAccessorArgs<s2_args.next_compile_time_args_offset()>();
-    constexpr auto t1_args = TensorAccessorArgs<t0_args.next_compile_time_args_offset()>();
-    constexpr auto t2_args = TensorAccessorArgs<t1_args.next_compile_time_args_offset()>();
-    constexpr auto t3_args = TensorAccessorArgs<t2_args.next_compile_time_args_offset()>();
-    constexpr auto dtna_args = TensorAccessorArgs<t3_args.next_compile_time_args_offset()>();
-    constexpr auto w_args = TensorAccessorArgs<dtna_args.next_compile_time_args_offset()>();
-    constexpr auto state_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+    constexpr auto projected_args = TensorAccessorArgs<1>();
+    constexpr auto slot0_args = TensorAccessorArgs<projected_args.next_compile_time_args_offset()>();
+    constexpr auto slot1_args = TensorAccessorArgs<slot0_args.next_compile_time_args_offset()>();
+    constexpr auto slot2_args = TensorAccessorArgs<slot1_args.next_compile_time_args_offset()>();
+    constexpr auto tap0_args = TensorAccessorArgs<slot2_args.next_compile_time_args_offset()>();
+    constexpr auto tap1_args = TensorAccessorArgs<tap0_args.next_compile_time_args_offset()>();
+    constexpr auto tap2_args = TensorAccessorArgs<tap1_args.next_compile_time_args_offset()>();
+    constexpr auto tap3_args = TensorAccessorArgs<tap2_args.next_compile_time_args_offset()>();
+    constexpr auto dtna_args = TensorAccessorArgs<tap3_args.next_compile_time_args_offset()>();
+    constexpr auto norm_args = TensorAccessorArgs<dtna_args.next_compile_time_args_offset()>();
+    constexpr auto state_args = TensorAccessorArgs<norm_args.next_compile_time_args_offset()>();
     constexpr auto newest_args = TensorAccessorArgs<state_args.next_compile_time_args_offset()>();
 
-    const auto p = TensorAccessor(p_args, p_addr);
-    const auto s0 = TensorAccessor(s0_args, s0_addr);
-    const auto s1 = TensorAccessor(s1_args, s1_addr);
-    const auto s2 = TensorAccessor(s2_args, s2_addr);
-    const auto t0 = TensorAccessor(t0_args, t0_addr);
-    const auto t1 = TensorAccessor(t1_args, t1_addr);
-    const auto t2 = TensorAccessor(t2_args, t2_addr);
-    const auto t3 = TensorAccessor(t3_args, t3_addr);
+    const auto p = TensorAccessor(projected_args, projected_addr);
+    const auto slot0 = TensorAccessor(slot0_args, slot0_addr);
+    const auto slot1 = TensorAccessor(slot1_args, slot1_addr);
+    const auto slot2 = TensorAccessor(slot2_args, slot2_addr);
+    const auto tap0 = TensorAccessor(tap0_args, tap0_addr);
+    const auto tap1 = TensorAccessor(tap1_args, tap1_addr);
+    const auto tap2 = TensorAccessor(tap2_args, tap2_addr);
+    const auto tap3 = TensorAccessor(tap3_args, tap3_addr);
     const auto dtna = TensorAccessor(dtna_args, dtna_addr);
-    const auto w = TensorAccessor(w_args, w_addr);
+    const auto norm = TensorAccessor(norm_args, norm_addr);
     const auto state = TensorAccessor(state_args, state_addr);
     const auto newest = TensorAccessor(newest_args, newest_addr);
 
     {
-        uint32_t ids[HT] = {0, 1, 2, 3};
-        read_tiles(CB_W, w, ids, HT, BF16_TILE);
+        uint32_t page_ids[head_tiles] = {0, 1, 2, 3};
+        read_tiles(cb_w, norm, page_ids, head_tiles, bf16_tile_bytes);
         noc_async_read_barrier();
-        cb_push_back(CB_W, HT);
+        cb_push_back(cb_w, head_tiles);
         // reduce scalers (fp32, whole tiles): 1.0 for sums, 1/128 for means
-        cb_reserve_back(CB_SCALER, 2);
-        const uint32_t l1 = get_write_ptr(CB_SCALER);
-        fill_words(l1, FP32_TILE / 4, 0x3F800000u);
-        fill_words(l1 + FP32_TILE, FP32_TILE / 4, 0x3C000000u);
-        cb_push_back(CB_SCALER, 2);
+        cb_reserve_back(cb_scaler, 2);
+        const uint32_t l1 = get_write_ptr(cb_scaler);
+        fill_words(l1, fp32_tile_bytes / 4, 0x3F800000u);
+        fill_words(l1 + fp32_tile_bytes, fp32_tile_bytes / 4, 0x3C000000u);
+        cb_push_back(cb_scaler, 2);
     }
 
     for (uint32_t item = 0; item < items; ++item) {
@@ -107,83 +108,83 @@ void kernel_main() {
         const uint32_t head = get_arg_val<uint32_t>(arg++);
         const uint32_t qk_head = head / 3;
 
-        uint32_t ids[QKV_TILES];
-        for (uint32_t c = 0; c < HT; ++c) {
-            ids[c] = qk_head * HT + c;
-            ids[HT + c] = K_TILE0 + qk_head * HT + c;
-            ids[2 * HT + c] = V_TILE0 + head * HT + c;
+        uint32_t page_ids[qkv_tiles];
+        for (uint32_t c = 0; c < head_tiles; ++c) {
+            page_ids[c] = qk_head * head_tiles + c;
+            page_ids[head_tiles + c] = k_tile0 + qk_head * head_tiles + c;
+            page_ids[2 * head_tiles + c] = v_tile0 + head * head_tiles + c;
         }
-        noc_async_write_barrier();  // the previous item's newest-slot writes have left the CB_P slot
-        // The conv inputs go out per output tile t (P[t], the three slots' tile t at CB_S 3t.., the four taps' tile t
-        // at CB_T 4t..) with one group of reads in flight ahead of each barrier, so the conv starts after one group.
-        cb_reserve_back(CB_P, QKV_TILES);
-        cb_reserve_back(CB_S, 3 * QKV_TILES);
-        cb_reserve_back(CB_T, 4 * QKV_TILES);
-        const uint32_t p_l1 = get_write_ptr(CB_P);
-        const uint32_t s_l1 = get_write_ptr(CB_S);
-        const uint32_t t_l1 = get_write_ptr(CB_T);
+        noc_async_write_barrier();  // the previous item's newest-slot writes have left the cb_p slot
+        // The conv inputs go out per output tile t (P[t], the three slots' tile t at cb_s 3t.., the four taps' tile t
+        // at cb_t 4t..) with one group of reads in flight ahead of each barrier, so the conv starts after one group.
+        cb_reserve_back(cb_p, qkv_tiles);
+        cb_reserve_back(cb_s, 3 * qkv_tiles);
+        cb_reserve_back(cb_t, 4 * qkv_tiles);
+        const uint32_t p_l1 = get_write_ptr(cb_p);
+        const uint32_t s_l1 = get_write_ptr(cb_s);
+        const uint32_t t_l1 = get_write_ptr(cb_t);
         auto issue_group = [&](uint32_t t) {
-            noc_async_read_page(ids[t], p, p_l1 + t * BF16_TILE);
-            noc_async_read_page(ids[t], s0, s_l1 + (3 * t + 0) * BF16_TILE);
-            noc_async_read_page(ids[t], s1, s_l1 + (3 * t + 1) * BF16_TILE);
-            noc_async_read_page(ids[t], s2, s_l1 + (3 * t + 2) * BF16_TILE);
-            noc_async_read_page(ids[t], t0, t_l1 + (4 * t + 0) * BF16_TILE);
-            noc_async_read_page(ids[t], t1, t_l1 + (4 * t + 1) * BF16_TILE);
-            noc_async_read_page(ids[t], t2, t_l1 + (4 * t + 2) * BF16_TILE);
-            noc_async_read_page(ids[t], t3, t_l1 + (4 * t + 3) * BF16_TILE);
+            noc_async_read_page(page_ids[t], p, p_l1 + t * bf16_tile_bytes);
+            noc_async_read_page(page_ids[t], slot0, s_l1 + (3 * t + 0) * bf16_tile_bytes);
+            noc_async_read_page(page_ids[t], slot1, s_l1 + (3 * t + 1) * bf16_tile_bytes);
+            noc_async_read_page(page_ids[t], slot2, s_l1 + (3 * t + 2) * bf16_tile_bytes);
+            noc_async_read_page(page_ids[t], tap0, t_l1 + (4 * t + 0) * bf16_tile_bytes);
+            noc_async_read_page(page_ids[t], tap1, t_l1 + (4 * t + 1) * bf16_tile_bytes);
+            noc_async_read_page(page_ids[t], tap2, t_l1 + (4 * t + 2) * bf16_tile_bytes);
+            noc_async_read_page(page_ids[t], tap3, t_l1 + (4 * t + 3) * bf16_tile_bytes);
         };
         issue_group(0);
-        for (uint32_t t = 0; t < QKV_TILES; ++t) {
-            if (t + 1 < QKV_TILES) {
+        for (uint32_t t = 0; t < qkv_tiles; ++t) {
+            if (t + 1 < qkv_tiles) {
                 issue_group(t + 1);
             }
             noc_async_read_barrier();  // groups <= t + 1 landed; group t goes to the compute, P[t] to the newest slot
-            noc_async_write_page(ids[t], newest, p_l1 + t * BF16_TILE);
-            cb_push_back(CB_P, 1);
-            cb_push_back(CB_S, 3);
-            cb_push_back(CB_T, 4);
+            noc_async_write_page(page_ids[t], newest, p_l1 + t * bf16_tile_bytes);
+            cb_push_back(cb_p, 1);
+            cb_push_back(cb_s, 3);
+            cb_push_back(cb_t, 4);
         }
 
-        uint32_t z_ids[HT];
-        for (uint32_t c = 0; c < HT; ++c) {
-            z_ids[c] = Z_TILE0 + head * HT + c;
+        uint32_t z_ids[head_tiles];
+        for (uint32_t c = 0; c < head_tiles; ++c) {
+            z_ids[c] = z_tile0 + head * head_tiles + c;
         }
-        read_tiles(CB_Z, p, z_ids, HT, BF16_TILE);
-        const uint32_t ab_ids[2] = {A_TILE, B_TILE};
-        const uint32_t ab_l1 = read_tiles(CB_AB, p, ab_ids, 2, BF16_TILE);
-        const uint32_t dtna_ids[2] = {head, HEADS + head};
-        read_tiles(CB_DTNA, dtna, dtna_ids, 2, FP32_TILE);
-        uint32_t state_ids[STATE_TILES];
-        for (uint32_t t = 0; t < STATE_TILES; ++t) {
-            state_ids[t] = (lane * HEADS + head) * STATE_TILES + t;
+        read_tiles(cb_z, p, z_ids, head_tiles, bf16_tile_bytes);
+        const uint32_t ab_ids[2] = {a_tile, b_tile};
+        const uint32_t ab_l1 = read_tiles(cb_ab, p, ab_ids, 2, bf16_tile_bytes);
+        const uint32_t dtna_ids[2] = {head, value_heads + head};
+        read_tiles(cb_dtna, dtna, dtna_ids, 2, fp32_tile_bytes);
+        uint32_t state_ids[head_state_tiles];
+        for (uint32_t t = 0; t < head_state_tiles; ++t) {
+            state_ids[t] = (lane * value_heads + head) * head_state_tiles + t;
         }
-        read_tiles(CB_STATE, state, state_ids, STATE_TILES, FP32_TILE);
+        read_tiles(cb_state, state, state_ids, head_state_tiles, fp32_tile_bytes);
         noc_async_read_barrier();
         {
             // element (lane, head) of the a and b tiles -> element (0, 0): the compute broadcasts [0, 0]
             volatile tt_l1_ptr uint16_t* a = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ab_l1);
-            volatile tt_l1_ptr uint16_t* b = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ab_l1 + BF16_TILE);
+            volatile tt_l1_ptr uint16_t* b = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(ab_l1 + bf16_tile_bytes);
             const uint32_t src = face_element(lane, head);
             a[0] = a[src];
             b[0] = b[src];
         }
-        cb_push_back(CB_Z, HT);
-        cb_push_back(CB_AB, 2);
-        cb_push_back(CB_DTNA, 2);
-        cb_push_back(CB_STATE, STATE_TILES);
+        cb_push_back(cb_z, head_tiles);
+        cb_push_back(cb_ab, 2);
+        cb_push_back(cb_dtna, 2);
+        cb_push_back(cb_state, head_state_tiles);
 
-        cb_reserve_back(CB_MASK, 1);
+        cb_reserve_back(cb_mask, 1);
         {
-            const uint32_t l1 = get_write_ptr(CB_MASK);
-            fill_words(l1, BF16_TILE / 4, 0);
+            const uint32_t l1 = get_write_ptr(cb_mask);
+            fill_words(l1, bf16_tile_bytes / 4, 0);
             volatile tt_l1_ptr uint16_t* elems = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1);
             const uint32_t left = face_element(lane, 0);
             for (uint32_t c = 0; c < 16; ++c) {
                 elems[left + c] = 0x3F80;
-                elems[left + FACE_ELEMS + c] = 0x3F80;
+                elems[left + face_elements + c] = 0x3F80;
             }
         }
-        cb_push_back(CB_MASK, 1);
+        cb_push_back(cb_mask, 1);
     }
     noc_async_write_barrier();
 }

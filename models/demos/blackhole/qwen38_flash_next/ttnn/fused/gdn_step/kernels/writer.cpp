@@ -10,13 +10,13 @@
 #include "api/tensor/noc_traits.h"
 
 namespace {
-constexpr uint32_t CB_OUTS = 25, CB_OUTG = 26;
-constexpr uint32_t HEADS = 12, HT = 4, STATE_TILES = 16;
-constexpr uint32_t BF16_TILE = 2048, FP32_TILE = 4096, FACE_BYTES = 512, HALF_ROW_BYTES = 32;
+constexpr uint32_t cb_outs = 25, cb_outg = 26;
+constexpr uint32_t value_heads = 12, head_tiles = 4, head_state_tiles = 16;
+constexpr uint32_t bf16_tile_bytes = 2048, fp32_tile_bytes = 4096, face_bytes = 512, half_row_bytes = 32;
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t ROWS = get_compile_time_arg_val(0);
+    constexpr uint32_t rows = get_compile_time_arg_val(0);
     constexpr auto state_args = TensorAccessorArgs<1>();
     constexpr auto out_args = TensorAccessorArgs<state_args.next_compile_time_args_offset()>();
     uint32_t arg = 0;
@@ -30,32 +30,33 @@ void kernel_main() {
         const uint32_t lane = get_arg_val<uint32_t>(arg++);
         const uint32_t head = get_arg_val<uint32_t>(arg++);
 
-        cb_wait_front(CB_OUTS, STATE_TILES);
+        cb_wait_front(cb_outs, head_state_tiles);
         {
-            const uint32_t l1 = get_read_ptr(CB_OUTS);
-            for (uint32_t t = 0; t < STATE_TILES; ++t) {
-                noc_async_write_page((lane * HEADS + head) * STATE_TILES + t, state, l1 + t * FP32_TILE);
+            const uint32_t l1 = get_read_ptr(cb_outs);
+            for (uint32_t t = 0; t < head_state_tiles; ++t) {
+                noc_async_write_page(
+                    (lane * value_heads + head) * head_state_tiles + t, state, l1 + t * fp32_tile_bytes);
             }
         }
         noc_async_write_barrier();
-        cb_pop_front(CB_OUTS, STATE_TILES);
+        cb_pop_front(cb_outs, head_state_tiles);
 
-        cb_wait_front(CB_OUTG, HT);
+        cb_wait_front(cb_outg, head_tiles);
         {
-            const uint32_t l1 = get_read_ptr(CB_OUTG);
-            for (uint32_t c = 0; c < HT; ++c) {
-                const uint32_t page = head * HT + c;
-                const uint32_t src = l1 + c * BF16_TILE;
-                if constexpr (ROWS == 1) {
+            const uint32_t l1 = get_read_ptr(cb_outg);
+            for (uint32_t c = 0; c < head_tiles; ++c) {
+                const uint32_t page = head * head_tiles + c;
+                const uint32_t src = l1 + c * bf16_tile_bytes;
+                if constexpr (rows == 1) {
                     noc_async_write_page(page, out, src);
                 } else {
-                    const uint32_t row = ((lane >> 4) * 2) * FACE_BYTES + (lane & 15) * HALF_ROW_BYTES;
-                    noc_async_write(src + row, out.get_noc_addr(page, row), HALF_ROW_BYTES);
-                    noc_async_write(src + row + FACE_BYTES, out.get_noc_addr(page, row + FACE_BYTES), HALF_ROW_BYTES);
+                    const uint32_t row = ((lane >> 4) * 2) * face_bytes + (lane & 15) * half_row_bytes;
+                    noc_async_write(src + row, out.get_noc_addr(page, row), half_row_bytes);
+                    noc_async_write(src + row + face_bytes, out.get_noc_addr(page, row + face_bytes), half_row_bytes);
                 }
             }
         }
         noc_async_write_barrier();
-        cb_pop_front(CB_OUTG, HT);
+        cb_pop_front(cb_outg, head_tiles);
     }
 }
