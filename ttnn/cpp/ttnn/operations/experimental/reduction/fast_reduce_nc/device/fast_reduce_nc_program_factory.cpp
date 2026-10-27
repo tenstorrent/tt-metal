@@ -278,9 +278,8 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const bool sfpu_accumulate =
-        input_data_format == tt::DataFormat::Int32 ||
-        (input_data_format == tt::DataFormat::Float32 && operation_attributes.fp32_sfpu_accumulate);
+    const bool sfpu_accumulate = input_data_format == tt::DataFormat::Int32 ||
+                                 (input_data_format == tt::DataFormat::Float32 && operation_attributes.use_sfpu_reduce);
     const auto* const compute_kernel_file =
         sfpu_accumulate
             ? "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc_sfpu.cpp"

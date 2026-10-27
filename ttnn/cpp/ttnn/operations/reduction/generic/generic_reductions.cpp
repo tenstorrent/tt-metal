@@ -498,43 +498,13 @@ static Tensor std_var_impl(
     return adjust_shape(output_tensor, input_shape, keepdim, dim, non_height_width_dims);
 }
 
-ttnn::DeviceComputeKernelConfig fast_nc_kernel_config(
-    tt::ARCH arch, const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
-    // fp32_dest_acc_en defaults to True here, so always use HiFi3 as default on Wormhole B0.
-    return compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
-        arch,
-        std::nullopt,
-        arch == tt::ARCH::WORMHOLE_B0 ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4,
-        /*default_approx_mode=*/false,
-        /*default_fp32_acc=*/true));
-}
-
-// The fast_reduce_nc kernel an N/C reduction runs on: the FPU one (bf16, bf8_b, fast-mode fp32), the SFPU
-// one (Int32, accurate fp32; needs a 32-bit DEST), or none, in which case the axis is transposed to H.
-enum class FastNcPath { None, Fpu, Sfpu };
-
 template <reduction_common::ReduceType reduce_type>
-FastNcPath fast_nc_path(
-    const Tensor& input,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    bool fast_and_approximate_mode) {
+bool call_fast_nc(DataType dtype) {
     if constexpr (reduce_type != reduction_common::ReduceType::Sum) {
-        return FastNcPath::None;
+        return false;
     }
-    const auto dtype = input.dtype();
-    if (dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B ||
-        (dtype == DataType::FLOAT32 && fast_and_approximate_mode)) {
-        return FastNcPath::Fpu;
-    }
-    if (dtype != DataType::FLOAT32 && dtype != DataType::INT32) {
-        return FastNcPath::None;
-    }
-    const auto arch = input.device()->arch();
-    const bool fp32_dest_acc_en =
-        std::get<2>(ttnn::get_compute_kernel_config_args(arch, fast_nc_kernel_config(arch, compute_kernel_config)));
-    const bool sfpu_supported = dtype == DataType::INT32 || arch != tt::ARCH::QUASAR;
-    return (fp32_dest_acc_en && sfpu_supported) ? FastNcPath::Sfpu : FastNcPath::None;
+    return dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::FLOAT32 ||
+           dtype == DataType::INT32;
 }
 
 Tensor non_height_width_reduce(
@@ -545,12 +515,9 @@ Tensor non_height_width_reduce(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<DataType>& output_dtype = std::nullopt,
     bool fp32_intermediate_stages = false,
-    bool fp32_sfpu_accumulate = false) {
+    bool fast_and_approximate_mode = false) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
     const auto& input_shape = input_tensor.logical_shape();
-    const auto arch = input_tensor.device()->arch();
-    ttnn::DeviceComputeKernelConfig config = fast_nc_kernel_config(arch, compute_kernel_config);
-    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
     auto tensor_to_reduce = input_tensor;
     if (tensor_to_reduce.layout() != Layout::TILE) {
         auto padded_shape = data_movement::pad_to_tile_shape(tensor_to_reduce.padded_shape());
@@ -562,11 +529,11 @@ Tensor non_height_width_reduce(
         dims,
         /*output=*/std::nullopt,
         memory_config,
-        config,
+        compute_kernel_config,
         sub_core_grids,
         output_dtype,
         fp32_intermediate_stages,
-        fp32_sfpu_accumulate);
+        fast_and_approximate_mode);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());
     // fast_reduce_nc keeps the input's padded H/W as logical, so trimming them back only relabels tile
     // padding. Block-float output keeps the slice, which leaves its shared-exponent padding clean.
@@ -702,9 +669,7 @@ Tensor reduce(
          input_tensor.logical_volume() > static_cast<uint64_t>(in_shape[-2]) * in_shape[-1]);
 
     // fast_reduce_nc ignores `scalar` so it can't be used when scalar != 1.0f.
-    const FastNcPath nc_path =
-        fast_nc_path<reduce_type>(input_tensor, compute_kernel_config, fast_and_approximate_mode);
-    if (nc_path != FastNcPath::None && scalar == 1.0f) {
+    if (call_fast_nc<reduce_type>(input_tensor.dtype()) && scalar == 1.0f) {
         auto dims = split_height_width_dims(dim, input_tensor);
         non_height_width_dims = dims.first;
         height_width_dims = dims.second;
@@ -739,7 +704,7 @@ Tensor reduce(
                 sub_core_grids,
                 fast_nc_final_dtype,
                 fast_nc_intermediate_fp32,
-                /*fp32_sfpu_accumulate=*/nc_path == FastNcPath::Sfpu && input_tensor.dtype() == DataType::FLOAT32);
+                fast_and_approximate_mode);
 
             if (height_width_dims.empty()) {
                 return adjust_shape(

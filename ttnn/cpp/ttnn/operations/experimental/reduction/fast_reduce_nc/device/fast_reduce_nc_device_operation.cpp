@@ -66,14 +66,14 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     }
 
     const bool is_int32 = input.dtype() == DataType::INT32;
-    if (is_int32 || args.fp32_sfpu_accumulate) {
+    if (is_int32 || args.use_sfpu_reduce) {
         const auto arch = input.device()->arch();
         TT_FATAL(
-            !args.fp32_sfpu_accumulate || input.dtype() == DataType::FLOAT32,
-            "FastReduceNC fp32_sfpu_accumulate requires FLOAT32 input, got {}",
+            !args.use_sfpu_reduce || input.dtype() == DataType::FLOAT32,
+            "FastReduceNC use_sfpu_reduce requires FLOAT32 input, got {}",
             input.dtype());
         TT_FATAL(
-            !args.fp32_sfpu_accumulate || arch != tt::ARCH::QUASAR,
+            !args.use_sfpu_reduce || arch != tt::ARCH::QUASAR,
             "FastReduceNC accurate FLOAT32 accumulation is not supported on Quasar");
         TT_FATAL(
             std::get<2>(ttnn::get_compute_kernel_config_args(arch, args.compute_kernel_config)),
@@ -184,7 +184,7 @@ Tensor fast_reduce_nc(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<DataType>& output_dtype,
-    bool fp32_sfpu_accumulate) {
+    bool use_sfpu_reduce) {
     using OperationType = ttnn::experimental::prim::FastReduceNCDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -193,7 +193,7 @@ Tensor fast_reduce_nc(
         .compute_kernel_config = compute_kernel_config,
         .sub_core_grids = sub_core_grids,
         .output_dtype = output_dtype,
-        .fp32_sfpu_accumulate = fp32_sfpu_accumulate};
+        .use_sfpu_reduce = use_sfpu_reduce};
     auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args).front();

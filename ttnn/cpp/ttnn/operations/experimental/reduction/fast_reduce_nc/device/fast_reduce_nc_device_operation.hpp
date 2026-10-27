@@ -38,7 +38,7 @@ Tensor fast_reduce_nc(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<DataType>& output_dtype = std::nullopt,
-    bool fp32_sfpu_accumulate = false);
+    bool use_sfpu_reduce = false);
 
 std::vector<Tensor> fast_reduce_nc_split(
     const Tensor& input,

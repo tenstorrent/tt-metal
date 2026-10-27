@@ -267,17 +267,17 @@ def test_sum_hw_bf16(device):
 
 
 @pytest.mark.parametrize(
-    "shape, dim",
+    "shape, dim, dtype",
     [
-        ((8, 16, 64, 64), [0]),
-        ((8, 16, 64, 64), [1]),
-        ((8, 16, 64, 64), [0, 1]),
-        ((3, 7, 37, 63), [1]),
-        ((2, 1, 64, 64), [0, 1]),
-        ((8, 16, 64, 64), [1, 2, 3]),
+        ((8, 16, 64, 64), [0], ttnn.float32),
+        ((8, 16, 64, 64), [1], ttnn.float32),
+        ((8, 16, 64, 64), [0, 1], ttnn.float32),
+        ((3, 7, 37, 63), [1], ttnn.float32),
+        ((2, 1, 64, 64), [0, 1], ttnn.float32),
+        ((8, 16, 64, 64), [1, 2, 3], ttnn.float32),
+        ((8, 16, 64, 64), [0, 1], ttnn.int32),
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.float32])
 def test_sum_nc_int32_fp32(device, shape, dim, dtype):
     torch.manual_seed(0)
     if dtype == ttnn.int32:

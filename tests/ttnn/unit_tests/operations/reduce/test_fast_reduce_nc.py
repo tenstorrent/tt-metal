@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc, comp_pcc
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_ulp
 from tests.ttnn.unit_tests.operations.test_utils import (
     get_compute_kernel_options,
     compute_kernel_options,
@@ -210,7 +210,10 @@ def test_fast_reduce_nc_split_with_prgm_caching(device, shape, dim, split, dtype
         x, output_buffer, _ = get_tensors(
             list(shape), output_shape, device, with_padding=False, use_randint=False, dataformat=dtype
         )
-        full = ttnn.experimental.fast_reduce_nc(x, dims=[dim], output=output_buffer, compute_kernel_config=config)
+        # The split runs on the FPU only, so the full reduction must take the FPU path too to match bit-for-bit.
+        full = ttnn.experimental.fast_reduce_nc(
+            x, dims=[dim], output=output_buffer, compute_kernel_config=config, fast_and_approximate_mode=True
+        )
         assert full.buffer_address() == output_buffer.buffer_address()
         ref = ttnn.to_torch(full)
         left, right = ttnn.experimental.fast_reduce_nc_split(
@@ -238,3 +241,37 @@ def test_fast_reduce_nc_rejects_hw_dims(device, dims, expect_error):
     x, _, _ = get_tensors([1, 1, 32, 128], [1, 1, 32, 128], device, with_padding=False)
     with expect_error(RuntimeError, "FastReduceNC reduces only outer dims"):
         ttnn.experimental.fast_reduce_nc(x, dims=dims)
+
+
+# fp32 sums on the SFPU at full precision unless fast mode is set or fp32_dest_acc_en is off; then the FPU sums tf32.
+@pytest.mark.parametrize("dims", [[0], [0, 1]])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
+@pytest.mark.parametrize("fp32_dest_acc_en", [None, True, False], ids=["default", "acc_on", "acc_off"])
+def test_fast_reduce_nc_fp32(device, dims, fast_and_approximate_mode, fp32_dest_acc_en):
+    torch.manual_seed(0)
+    torch_input = torch.rand((8, 16, 64, 64), dtype=torch.float32)
+    expected = torch.sum(torch_input, dim=dims, keepdim=True)
+    config = (
+        None
+        if fp32_dest_acc_en is None
+        else ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, fp32_dest_acc_en=fp32_dest_acc_en
+        )
+    )
+    x = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(
+        ttnn.experimental.fast_reduce_nc(
+            x, dims=dims, compute_kernel_config=config, fast_and_approximate_mode=fast_and_approximate_mode
+        )
+    )
+    if not fast_and_approximate_mode and fp32_dest_acc_en is not False:
+        assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=2)
+    else:
+        torch.testing.assert_close(actual, expected, rtol=5e-2, atol=0)
+
+
+def test_fast_reduce_nc_int32_requires_fp32_dest_acc(device, expect_error):
+    x = ttnn.from_torch(torch.ones((2, 1, 32, 32), dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device)
+    config = ttnn.init_device_compute_kernel_config(device.arch(), fp32_dest_acc_en=False)
+    with expect_error(RuntimeError, "requires fp32_dest_acc_en"):
+        ttnn.experimental.fast_reduce_nc(x, dims=[0], compute_kernel_config=config)
