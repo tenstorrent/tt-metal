@@ -36,23 +36,50 @@ from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.rope import RotaryTables
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight, substate
 
+# Measured best (q_chunk, k_chunk, grid) per (head_dim, batch, bucket), HiFi2 + fp32 acc, dense mask
+# (E5a sdpa_sweep: doc/optimized_text/README.md). Other shapes use `_sdpa_heuristic`.
+_SDPA_TABLE = {
+    (256, 1, 128): (32, 128, (8, 8)),
+    (512, 1, 128): (64, 128, (8, 8)),
+    (256, 1, 512): (32, 64, (8, 8)),
+    (512, 1, 512): (32, 32, (8, 8)),
+    (256, 1, 2048): (64, 128, None),
+    (512, 1, 2048): (64, 64, None),
+    (256, 8, 512): (128, 128, None),
+    (512, 8, 512): (128, 128, None),
+}
 
-def sdpa_program_config(head_dim: int, seq_len: int) -> ttnn.SDPAProgramConfig:
-    """Chunk sizes adapted from models/demos/gemma4/tt/attention/operations.py:prefill_sdpa_program_config.
 
-    head_dim 512 needs the smaller chunks to fit L1; chunks never exceed the (bucketed) seq_len,
-    and every bucket is a power of two >= 32, so S % chunk == 0.
+def _sdpa_heuristic(head_dim: int, batch: int, num_heads: int, seq_len: int, num_cores: int) -> tuple[int, int, bool]:
+    """q_chunk: the smallest power of two that keeps (batch * heads * S / q_chunk) work units at or
+    below the core count (one Q chunk per core), capped for L1 (hd 512: 128, else 256)."""
+    units = batch * num_heads * seq_len
+    q_chunk = 32
+    cap = 128 if head_dim >= 512 else 256
+    while q_chunk < cap and units / q_chunk > num_cores:
+        q_chunk *= 2
+    return q_chunk, 128, units / q_chunk > 64
+
+
+def sdpa_program_config(
+    head_dim: int, seq_len: int, batch: int = 1, num_heads: int = 4, device_grid=None
+) -> ttnn.SDPAProgramConfig:
+    """Chunk sizes keep every core busy: the op parallelizes over batch x Q heads x Q chunks.
+
+    Every bucket is a power of two >= 32, so S % chunk == 0 for the power-of-two chunks used here.
     """
-    if head_dim >= 512:
-        grid, q_chunk, k_chunk = ttnn.CoreCoord(8, 4), 128, 128
+    gx, gy = (device_grid.x, device_grid.y) if device_grid is not None else (13, 10)
+    key = (head_dim, batch, seq_len)
+    if key in _SDPA_TABLE:
+        q_chunk, k_chunk, grid = _SDPA_TABLE[key]
+        grid = grid or (gx, gy)
     else:
-        grid, q_chunk, k_chunk = ttnn.CoreCoord(8, 8), 256, 128
-    q_chunk = min(q_chunk, seq_len)
-    k_chunk = min(k_chunk, seq_len)
+        q_chunk, k_chunk, full_grid = _sdpa_heuristic(head_dim, batch, num_heads, seq_len, gx * gy)
+        grid = (gx, gy) if full_grid else (min(8, gx), min(8, gy))
     return ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=grid,
-        q_chunk_size=q_chunk,
-        k_chunk_size=k_chunk,
+        compute_with_storage_grid_size=ttnn.CoreCoord(*grid),
+        q_chunk_size=min(q_chunk, seq_len),
+        k_chunk_size=min(k_chunk, seq_len),
         exp_approx_mode=False,
     )
 
@@ -77,8 +104,10 @@ class Attention(LightweightModule):
         self.v_norm = v_norm
         self.rope = rope
         self.compute_kernel_config = compute_kernel_config_hifi4()
+        # HiFi2 + fp32 accumulation: 2.0-2.3x faster than HiFi4 at the tuned chunks, PCC vs an fp32
+        # golden 0.99990+ (E5a sdpa_sweep); fp32_dest_acc off was rejected (PCC 0.9988-0.9995).
         self.sdpa_compute_kernel_config = ttnn.types.BlackholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
@@ -147,23 +176,24 @@ class Attention(LightweightModule):
         ttnn.deallocate(q_n)
         ttnn.deallocate(k_n)
 
-        o = ttnn.transformer.scaled_dot_product_attention(
+        o_cat = ttnn.transformer.scaled_dot_product_attention(
             q_r,
             k_r,
             v_n,
             is_causal=False,
             attn_mask=mask,
             scale=cfg.scaling,
-            program_config=sdpa_program_config(cfg.head_dim, S),
+            program_config=sdpa_program_config(
+                cfg.head_dim, S, x.shape[0], cfg.num_heads, x.device().compute_with_storage_grid_size()
+            ),
             compute_kernel_config=self.sdpa_compute_kernel_config,
             memory_config=dram,
+            output_concat_heads=True,  # [B,1,S,H*hd] directly: no nlp_concat_heads
         )
         ttnn.deallocate(q_r)
         ttnn.deallocate(k_r)
         ttnn.deallocate(v_n)
 
-        o_cat = ttnn.experimental.nlp_concat_heads(o, memory_config=dram)
-        ttnn.deallocate(o)
         out = ttnn.linear(o_cat, self.wo, compute_kernel_config=self.compute_kernel_config, memory_config=dram)
         ttnn.deallocate(o_cat)
         return out
