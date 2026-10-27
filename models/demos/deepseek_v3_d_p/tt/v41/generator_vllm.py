@@ -26,6 +26,7 @@ Environment: ``TT_V41_CHECKPOINT`` (the pinned snapshot; ``weights.resolve_check
 import os
 import time
 from collections import OrderedDict
+from pathlib import Path
 
 import torch
 from loguru import logger
@@ -37,7 +38,8 @@ from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import weight_cache_dir
 from models.demos.deepseek_v3_d_p.tt.v41.batch_decode import TtV41BatchDecoder
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables, V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import ROWS
-from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_modules
+from models.demos.deepseek_v3_d_p.tt.v41.engram import V41EngramTable
+from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_modules, unswap
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import (
     TtV41Transformer,
     V41GenericPrefillTrace,
@@ -250,7 +252,18 @@ class DeepseekV41ForCausalLM:
             f"(chunk {chunk}), {max_batch_size} decode slots ({max_batch_size // sp} per mesh row), {prefill_slots} "
             f"prefill states, mesh {tuple(mesh_device.shape)}"
         )
-        return cls(mesh_device, model, decoder, tokenizer, max_batch_size, prefill_slots)
+        gen = cls(mesh_device, model, decoder, tokenizer, max_batch_size, prefill_slots)
+        gen.weight_cache_root = Path(root)
+        gen._unswap("after the build")  # the layers' weight files pushed the tables into swap (TT_V41_UNSWAP)
+        return gen
+
+    def _unswap(self, where: str) -> None:
+        """``TT_V41_UNSWAP=1``: release the weight cache's page cache and swap the resident
+        Engram tables back in (a swapped table row is a 5 ms major fault on the step's host side)."""
+        # the resident tables (TT_V41_ENGRAM_MMAP=0: anonymous memory, swappable); a mapped table is page cache
+        tables = [e.table.rows for e in self.model.engram.values() if isinstance(e.table, V41EngramTable)]
+        if tables:
+            unswap(tables, getattr(self, "weight_cache_root", None), where)
 
     @classmethod
     def get_max_tokens_all_users(
@@ -642,6 +655,7 @@ class DeepseekV41ForCausalLM:
                     break
             assert "c1" in self.decoder.captures, "the c1 decode step was not captured"
         self.warmed_up = True
+        self._unswap("after the warm-up")
 
     def _warmup_prompt(self, n: int = WARMUP_PROMPT) -> torch.Tensor:
         """The first ``n`` tokens of the text the tests use (``oracle.text_tokens``, with this tokenizer), the text

@@ -739,6 +739,8 @@ class TtV41BatchDecoder(TtV41Decoder):
                 ttnn.synchronize_device(self.mesh_device)
             t3 = time.time()
             capture.controller.replay(blocking=False)
+            if self.stage_probe == "pre":  # the probe copy queued behind the replay
+                self.probe_copy()
             t4 = time.time()
             ttnn.synchronize_device(self.mesh_device)
             t5 = time.time()

@@ -145,6 +145,11 @@ class TtV41Decoder:
         # V41_DECODE_INPUT_TIMING=1: ``last["items"]`` holds the host inputs' and the staging's time per item (ms)
         self.input_timing = os.environ.get("V41_DECODE_INPUT_TIMING", "0") == "1"
         self.items: dict[str, float] = {}
+        # V41_DECODE_STAGE_PROBE=1: a 128-byte copy before the step's staging, timed as
+        # ``stage.probe``: the served step's first host-to-device copy after the replay costs 1.7 to 2.0 ms against
+        # 0.1 in isolation; the probe says whether the cost is the first copy's whatever its size
+        self.stage_probe = os.environ.get("V41_DECODE_STAGE_PROBE", "0")  # "1": before the staging; "pre": after
+        self.probe: tuple | None = None  # the replay's issue, before its sync (``issue_s`` then carries it)
 
     # --- construction ----------------------------------------------------------------------------------
     def _replicated(self, host: torch.Tensor, dtype, layout=ttnn.TILE_LAYOUT, device=True) -> ttnn.Tensor:
@@ -244,6 +249,9 @@ class TtV41Decoder:
                     self.buffers[key] = ttnn.to_device(value, self.mesh_device)
             return
         tick = self._tick("stage")
+        if self.stage_probe == "1":
+            self.probe_copy()
+            tick("probe")
         for key, value in inputs.items():
             if key == "engram":
                 for l, e in value.items():
@@ -254,6 +262,15 @@ class TtV41Decoder:
             else:
                 ttnn.copy_host_to_device_tensor(value, self.buffers[key])
             tick(key)
+
+    def probe_copy(self) -> None:
+        """One 128-byte host-to-device copy (``V41_DECODE_STAGE_PROBE``)."""
+        if self.probe is None:
+            host = self._replicated(
+                torch.zeros(1, 1, 1, 32, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device=False
+            )
+            self.probe = (host, ttnn.to_device(host, self.mesh_device))
+        ttnn.copy_host_to_device_tensor(*self.probe)
 
     def _tick(self, prefix: str):
         """A timer: ``tick(name)`` adds the time since the last tick to ``items[prefix.name]`` (ms) when

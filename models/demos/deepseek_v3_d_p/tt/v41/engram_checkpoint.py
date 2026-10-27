@@ -6,18 +6,22 @@
 
 ``weights.py`` leaves the Engram tensors out. This module reads them: the small ``wkv`` / ``q_weight`` /
 ``k_weight`` of each Engram layer, and the layer's embedding table (384M rows of float8_e4m3fn [256] with
-float8_e8m0fnu [8] scales, ~101 GB per layer in the shard) packed for ``V41EngramTable`` (``engram.pack_rows``:
+float8_e8m0fnu [8] scales, ~101 GB per layer in the shard) packed for ``V41EngramTable``
+(``engram.pack_rows``:
 320 B per row, 123 GB per layer).
 
 ``V41EngramTable`` packs a whole table in one torch pass, which needs the raw table, its scales and the packed
-output resident at once (~224 GB per layer). Here the table is packed in row chunks straight from the safetensors
+output resident at once (~224 GB per layer). Here the table is packed in row chunks straight from the
+safetensors
 shard (``safe_open().get_slice``) into a file under ``TT_V41_WEIGHT_CACHE/engram/`` (one pass per layer, done
 once), and that file is read back into host RAM on every later run (``read_direct``: O_DIRECT reads on a few
 threads straight into the tensor, ~123 GB per layer at the NVMe's rate, 7 GB/s here; ``np.fromfile`` went
 through the page cache, whose reclaim under a full host slowed the second table 6 to 10x).
 The host table is then exactly the branch's ``V41EngramTable`` with a prepacked ``rows`` tensor
-(``V41EngramTable.from_packed``); per chunk the transformer gathers the rows the prompt hashes to and uploads them
-(``TtV41Engram.prepare_host``). ``TT_V41_ENGRAM_MMAP=1`` maps the file instead of reading it (lazy page-ins on a
+(``V41EngramTable.from_packed``); per chunk the transformer gathers the rows the prompt hashes to and uploads
+them
+(``TtV41Engram.prepare_host``). ``TT_V41_ENGRAM_MMAP=1`` maps the file instead of reading it (lazy page-ins on
+a
 host short of RAM; slower first gathers).
 """
 
@@ -69,14 +73,17 @@ def load_engram_weights(ckpt: V41Checkpoint, layer: int) -> dict:
 
 
 def packed_table_path(layer: int, config=DeepSeekV41FlashConfig) -> Path:
-    """The packed table file of ``layer``: rows x ``PACKED_WIDTH`` int16 (the uint16 containers), no header; the
-    row count is in the name, the checkpoint revision too so a different checkpoint cannot be read by mistake."""
+    """The packed table file of ``layer``: rows x ``PACKED_WIDTH`` int16 (the uint16 containers), no header;
+    the
+    row count is in the name, the checkpoint revision too so a different checkpoint cannot be read by
+    mistake."""
     rows = dict(zip(config.ENGRAM_LAYER_IDS, config.ENGRAM_NUM_EMBEDDINGS))[layer]
     return PACKED_DIR / f"layer_{layer}.{CHECKPOINT_REVISION[:12]}.{rows}x{PACKED_WIDTH}.i16"
 
 
 def pack_table_to_file(ckpt: V41Checkpoint, layer: int, path: Path, rows_per_chunk: int = ROWS_PER_CHUNK) -> Path:
-    """Pack ``layer``'s table from its shard into ``path`` in row chunks; written to ``path.tmp`` and renamed, so
+    """Pack ``layer``'s table from its shard into ``path`` in row chunks; written to ``path.tmp`` and renamed,
+    so
     a partial file is never read as complete."""
     names = engram_names(layer)
     shard = ckpt.root / ckpt.weight_map[names["embed"]]
@@ -105,8 +112,10 @@ def pack_table_to_file(ckpt: V41Checkpoint, layer: int, path: Path, rows_per_chu
 
 
 def read_direct(path: Path, threads: int | None = None) -> torch.Tensor:
-    """The whole file as a uint8 tensor, read with O_DIRECT on ``threads`` threads (``TT_V41_ENGRAM_READ_THREADS``,
-    default 8) in ``READ_SLICE`` pieces straight into page-aligned memory: no page-cache copy, so a host whose RAM
+    """The whole file as a uint8 tensor, read with O_DIRECT on ``threads`` threads
+    (``TT_V41_ENGRAM_READ_THREADS``,
+    default 8) in ``READ_SLICE`` pieces straight into page-aligned memory: no page-cache copy, so a host whose
+    RAM
     is nearly full does not reclaim for every page read. A trailing piece short of the block size is read
     buffered. Files whose filesystem refuses O_DIRECT (tmpfs) are read buffered the same way."""
     threads = int(os.environ.get(READ_THREADS, "8")) if threads is None else threads
@@ -160,8 +169,84 @@ def read_direct(path: Path, threads: int | None = None) -> torch.Tensor:
     return out
 
 
+UNSWAP = "TT_V41_UNSWAP"  # 1: release the weight cache's page cache and swap the resident tables back in
+
+
+def vm_swap_kb() -> int:
+    """This process's swapped-out memory (``VmSwap`` of ``/proc/self/status``), kB."""
+    with open("/proc/self/status") as f:
+        for line in f:
+            if line.startswith("VmSwap:"):
+                return int(line.split()[1])
+    return 0
+
+
+def release_page_cache(root: Path) -> tuple[int, int]:
+    """``posix_fadvise(POSIX_FADV_DONTNEED)`` on every regular file under ``root``: the weight cache this
+    process
+    read through the page cache, whose pages otherwise stay and have the kernel swap this process's anonymous
+    memory out instead (the resident Engram tables: 7 GB of one in swap during a served run).
+    Returns (files, bytes advised)."""
+    files = size = 0
+    for dirpath, _, names in os.walk(root):
+        for name in names:
+            path = os.path.join(dirpath, name)
+            try:
+                fd = os.open(path, os.O_RDONLY)
+            except OSError:
+                continue
+            try:
+                size += os.fstat(fd).st_size
+                os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+                files += 1
+            except OSError:
+                pass
+            finally:
+                os.close(fd)
+    return files, size
+
+
+def swap_in(tensors: list[torch.Tensor]) -> float:
+    """Bring the host tensors' pages back from swap: ``madvise(MADV_WILLNEED)`` over each (the kernel reads
+    the
+    swapped pages ahead), then one touch per 4 KB page so the call returns with them resident. Seconds
+    taken."""
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    t0 = time.time()
+    for t in tensors:
+        ptr, nbytes = t.data_ptr(), t.numel() * t.element_size()
+        start = ptr & ~4095
+        libc.madvise(ctypes.c_void_p(start), ctypes.c_size_t(nbytes + (ptr - start)), 3)  # MADV_WILLNEED
+    for t in tensors:
+        flat = t.view(torch.uint8).view(-1) if t.dtype != torch.uint8 else t.view(-1)
+        for start in range(0, flat.numel(), 1 << 30):
+            flat[start : start + (1 << 30) : 4096].sum()  # one byte a page, 1 GB at a time
+    return time.time() - t0
+
+
+def unswap(tables: list[torch.Tensor], root: Path | None, where: str) -> None:
+    """With ``TT_V41_UNSWAP=1``: release ``root``'s page cache (when given) and swap the tables back in,
+    logging
+    ``VmSwap`` before and after."""
+    if os.environ.get(UNSWAP, "0") != "1" or os.environ.get("TT_V41_ENGRAM_MMAP", "0") == "1":
+        return  # a mapped table is page cache: nothing to swap in, and a touch would read the file whole
+    before = vm_swap_kb()
+    t0 = time.time()
+    files, size = release_page_cache(root) if root is not None else (0, 0)
+    t1 = time.time()
+    took = swap_in(tables)
+    logger.info(
+        f"DeepSeek-V4.1-Flash {where}: page cache of {files} files ({size / 1e9:.0f} GB) released in {t1 - t0:.1f} s, "
+        f"{len(tables)} tables swapped in ({took:.1f} s): VmSwap {before / 2**10:.0f} -> {vm_swap_kb() / 2**10:.0f} MB"
+    )
+
+
 def load_packed_table(path: Path, rows: int, resident: bool | None = None) -> torch.Tensor:
-    """uint16 ``[rows, PACKED_WIDTH]`` from a packed table file: read into RAM (``resident``, the default; O_DIRECT
+    """uint16 ``[rows, PACKED_WIDTH]`` from a packed table file: read into RAM (``resident``, the default;
+    O_DIRECT
     unless ``TT_V41_ENGRAM_READ_THREADS=0``), or mapped (``TT_V41_ENGRAM_MMAP=1``)."""
     if resident is None:
         resident = os.environ.get("TT_V41_ENGRAM_MMAP", "0") != "1"
@@ -188,7 +273,8 @@ def engram_table(ckpt: V41Checkpoint, layer: int, config=DeepSeekV41FlashConfig)
 
 
 def build_engram_modules(mesh_device, config, ckpt: V41Checkpoint, layers, tokenizer):
-    """``(engram, engram_hash)`` for ``TtV41Transformer``: a ``TtV41Engram`` with the real table and weights for
+    """``(engram, engram_hash)`` for ``TtV41Transformer``: a ``TtV41Engram`` with the real table and weights
+    for
     every Engram layer in ``layers`` (none -> ``({}, None)``), and the n-gram hasher on the real tokenizer."""
     from models.demos.deepseek_v3_d_p.tt.v41.engram import TtV41Engram, V41EngramHash
 
